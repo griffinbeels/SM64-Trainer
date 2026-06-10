@@ -32,6 +32,7 @@ def format_igt(frames: int) -> str:
 class StarGrabDetector:
     HISTORY_FRAMES = 150      # keep ~5 s of game time
     RESET_GRACE_FRAMES = 30   # a grab < 1 s after an IGT reset concluded the PRIOR attempt
+    DISPLAY_TICK = 1          # Usamune's frozen display shows one tick past the touch frame
 
     def __init__(self):
         self._igt_history: deque[tuple[int, int]] = deque()  # (global_timer, igt_timer)
@@ -93,6 +94,12 @@ class StarGrabDetector:
         could have started a new attempt — in both cases the grab belongs to
         the attempt that was being played, so report that attempt's clock
         extrapolated to the touch frame.
+
+        All paths add DISPLAY_TICK: live comparison (2026-06-10) showed
+        Usamune's frozen on-screen value is exactly one frame ahead of the
+        internal counter sampled at the touch frame (its timer object ticks
+        once more before the display freezes). The API reports the number
+        the player sees.
         """
         post = max(0, curr.igt_timer - (curr.global_timer - touch_frame))
         samples = list(self._igt_history)
@@ -103,6 +110,7 @@ class StarGrabDetector:
                 continue  # running (or paused); not a reset
             # IGT was reset somewhere in the game-frame gap (g_a, g_b].
             if touch_frame <= g_a or post < self.RESET_GRACE_FRAMES:
-                return max(0, igt_a + (touch_frame - g_a)), True
-            return post, False
-        return post, False
+                prior = max(0, igt_a + (touch_frame - g_a))
+                return prior + self.DISPLAY_TICK, True
+            return post + self.DISPLAY_TICK, False
+        return post + self.DISPLAY_TICK, False
