@@ -54,6 +54,14 @@ USAMUNE_TIMER = 0x8033D5DC           # u32, 30 fps frames; live-verified 2026-06
 HUD_TIMER = 0x8033B26C               # u16, frames (vanilla races only)
 HUD_TIMER_RUNNING = 0x8033B25E       # s8 sTimerRunning (vanilla races only)
 
+# SM64 object pool (used by diagnostic tools and timer location).
+# 240 slots of 0x260 bytes; Usamune's practice timers live in object
+# rawData fields, so their addresses depend on slot assignment per level.
+OBJECT_POOL = 0x8033D488     # first slot (STROOP US ObjectStartAddress)
+OBJECT_SIZE = 0x260
+OBJECT_COUNT = 240
+OBJECT_BEHAVIOR = 0x20C      # u32 behavior-script pointer within a slot
+
 # Mario actions entered the moment a star (or key) is grabbed — decomp sm64.h.
 ACT_STAR_DANCE_EXIT = 0x00001302               # live-verified 2026-06-10
 ACT_STAR_DANCE_WATER = 0x00001303

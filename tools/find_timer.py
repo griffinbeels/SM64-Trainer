@@ -19,6 +19,7 @@ import time
 
 from sm64_events.detectors.star_grab import format_igt
 from sm64_events.memory import addresses as A
+from sm64_events.memory.objects import describe
 from sm64_events.memory.pj64 import Pj64Memory
 
 KNOWN_FRAME_COUNTERS = {A.GLOBAL_TIMER}  # exclude; we already track these
@@ -112,6 +113,10 @@ def main() -> None:
     if len(cands) > MAX_CANDIDATES:
         print(f"\n{len(cands)} candidates; showing the first {MAX_CANDIDATES}.")
         cands = cands[:MAX_CANDIDATES]
+
+    print("\nCandidate annotations (object slot / field offset / behavior ptr):")
+    for addr, kind in cands:
+        print(f"  {addr:#010x}/{kind}: {describe(mem, addr)}")
 
     print(f"\nPhase B: live values ({len(cands)} candidates), 2x/s.")
     print("Find the column matching the on-screen timer; it should also")
