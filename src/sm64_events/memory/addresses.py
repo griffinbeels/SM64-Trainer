@@ -4,8 +4,9 @@
 ROM: SM64 US / Usamune v1.93u (Usamune is built on the US ROM).
 All addresses are N64 KSEG0 virtual addresses (0x80000000-based).
 
-Entries marked VERIFY must pass tools/verify_addresses.py before the server
-is trusted with real sessions. Cross-check sources on mismatch:
+Every entry below is live-verified against Usamune v1.93u in PJ64 1.6
+(2026-06-10) via tools/verify_addresses.py. Mark new entries VERIFY until
+they pass that harness. Cross-check sources on mismatch:
   - https://ukikipedia.net/wiki/RAM (US column)
   - SM64 decomp US symbol map (sm64.us.map build artifact)
   - STROOP mapping tables (github.com/SM64-TAS-ABC/STROOP)
@@ -29,8 +30,8 @@ GLOBAL_TIMER = 0x8032D5D4            # u32, +1 per game frame (30 Hz); live-veri
 # gLastCompleted* are adjacent s8 globals but sit 4 bytes apart (IDO aligns
 # each initialized .data global to 4 bytes). Source: STROOP MiscData.xml
 # (offsetUS) + decomp symbol maps; both agree.
-LAST_COMPLETED_COURSE = 0x8032DD80   # s8, 1-based, 0 = castle/none  VERIFY
-LAST_COMPLETED_STAR = 0x8032DD84     # s8, 1-based  VERIFY
+LAST_COMPLETED_COURSE = 0x8032DD80   # s8, 1-based, 0 = castle/none; live-verified 2026-06-10
+LAST_COMPLETED_STAR = 0x8032DD84     # s8, 1-based; live-verified 2026-06-10
 # Trap, do not reuse: 0x8032DDF8 is gCurrLevelNum (s16, LEVEL ids like
 # WF=24, SSL=8) — NOT a course number. We misread it as last-completed
 # once; the harness caught it (course stuck at 0, star tracking level ids).
