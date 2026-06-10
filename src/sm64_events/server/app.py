@@ -24,6 +24,10 @@ _INDEX_HTML = """<!doctype html>
   .ok { background: #1d3a1d; color: #a3e0a3; } .bad { background: #3a1d1d; color: #e0a3a3; }
   li { margin: .25rem 0; list-style: none; } ul { padding: 0; }
   .star { color: #ffd75f; } .meta { color: #6c7686; font-size: .85em; }
+  .src { font-size: .75em; padding: 0 .3em; border-radius: 3px; margin-left: .3em; }
+  .src-result { background: #1d3a1d; color: #a3e0a3; }
+  .src-counter { background: #2d2d3a; color: #a3b0e0; }
+  .src-reconstructed { background: #3a321d; color: #e0cba3; }
 </style></head><body>
 <h1>SM64 Event API <span id="status" class="bad">connecting…</span></h1>
 <p class="meta">Live feed from <code>/ws/events</code>. Grab a star in-game.</p>
@@ -39,7 +43,8 @@ _INDEX_HTML = """<!doctype html>
       const p = ev.payload;
       li.innerHTML = `<span class="star">⭐ ${p.course_name} — ${p.star_name}</span>`
         + ` <b>${p.igt}</b>`
-        + ` <span class="meta">course ${p.course_id} star ${p.star_id}`
+        + `<span class="src src-${p.igt_source}">${p.igt_source}</span>`
+        + ` <span class="meta">${p.igt_frames}f · course ${p.course_id} star ${p.star_id}`
         + `${p.already_collected ? " (already collected)" : ""} · frame ${ev.frame} · #${ev.seq}</span>`;
     } else {
       li.innerHTML = `${ev.type} <span class="meta">frame ${ev.frame} · #${ev.seq}</span>`;
