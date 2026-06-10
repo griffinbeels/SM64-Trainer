@@ -13,6 +13,7 @@ or the SM64 decomp US symbol map, fix addresses.py, and rerun.
 import time
 
 from sm64_events.core.snapshot import SnapshotReader
+from sm64_events.detectors.star_grab import format_igt
 from sm64_events.memory import addresses as A
 from sm64_events.memory.pj64 import Pj64Memory
 
@@ -60,12 +61,15 @@ def main() -> None:
             in_set = (s.mario_action in A.STAR_GRAB_ACTIONS
                       and prev_action not in A.STAR_GRAB_ACTIONS)
             star_id = s.last_completed_star - 1
+            igt = format_igt(max(0, s.hud_timer - s.mario_action_timer))
             tag = (f"  << STAR GRAB: {A.course_name(s.last_completed_course)} / "
                    f"{A.star_name(s.last_completed_course, star_id)} "
-                   f"(grab frame {s.global_timer - s.mario_action_timer})"
+                   f"(grab frame {s.global_timer - s.mario_action_timer}, "
+                   f"igt {igt})"
                    if in_set else "")
+            run_flag = "+" if s.hud_timer_running else " "
             print(f"frame {s.global_timer:>8}  action {s.mario_action:#010x}  "
-                  f"stars {s.num_stars:>3}{tag}")
+                  f"stars {s.num_stars:>3}  igt{run_flag}{s.hud_timer:>6}{tag}")
             prev_action = s.mario_action
         time.sleep(0.016)
 

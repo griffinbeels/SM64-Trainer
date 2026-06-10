@@ -36,6 +36,14 @@ LAST_COMPLETED_STAR = 0x8032DD84     # s8, 1-based  VERIFY
 # once; the harness caught it (course stuck at 0, star tracking level ids).
 CURR_LEVEL = 0x8032DDF8              # s16 gCurrLevelNum
 
+# Vanilla HUD race timer (gHudDisplay.timer), counts 30 fps game frames.
+# Usamune's practice timers (Section Timer etc.) drive THIS variable per the
+# Usamune manual — reading it yields the number shown top-right in-game.
+# u16: wraps at ~36 minutes. Source: decomp level_update.h + STROOP HudData
+# (Mario+0xFC) + hack64 RAM map; struct gHudDisplay at 0x8033B260.
+HUD_TIMER = 0x8033B26C               # u16, frames  VERIFY
+HUD_TIMER_RUNNING = 0x8033B25E       # s8 sTimerRunning, nonzero = counting  VERIFY
+
 # Mario actions entered the moment a star (or key) is grabbed — decomp sm64.h.
 ACT_STAR_DANCE_EXIT = 0x00001302               # live-verified 2026-06-10
 ACT_STAR_DANCE_WATER = 0x00001303

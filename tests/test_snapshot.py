@@ -14,6 +14,8 @@ def test_reader_populates_all_fields():
     mem.write_u16(A.MARIO_NUM_STARS, 57)
     mem.write_u8(A.LAST_COMPLETED_COURSE, 1)
     mem.write_u8(A.LAST_COMPLETED_STAR, 3)
+    mem.write_u16(A.HUD_TIMER, 231)
+    mem.write_u8(A.HUD_TIMER_RUNNING, 1)
 
     snap = SnapshotReader(mem).read()
 
@@ -23,5 +25,7 @@ def test_reader_populates_all_fields():
     assert snap.num_stars == 57
     assert snap.last_completed_course == 1
     assert snap.last_completed_star == 3
+    assert snap.hud_timer == 231
+    assert snap.hud_timer_running is True
     assert snap.wall_time_utc.tzinfo == timezone.utc
     assert (datetime.now(timezone.utc) - snap.wall_time_utc).total_seconds() < 5

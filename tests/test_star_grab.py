@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 
 from sm64_events.core.snapshot import GameSnapshot
-from sm64_events.detectors.star_grab import StarGrabDetector
+from sm64_events.detectors.star_grab import StarGrabDetector, format_igt
 from sm64_events.memory import addresses as A
 
 ACT_IDLE = 0x0C400201  # any non-star-dance action works for tests
@@ -26,7 +26,8 @@ def test_edge_into_star_dance_emits_identified_event():
     prev = snap(num_stars=5)
     curr = snap(mario_action=A.ACT_STAR_DANCE_EXIT, mario_action_timer=2,
                 global_timer=1002, num_stars=6,
-                last_completed_course=1, last_completed_star=3)
+                last_completed_course=1, last_completed_star=3,
+                hud_timer=233, hud_timer_running=True)
     events = StarGrabDetector().process(prev, curr)
     assert len(events) == 1
     ev = events[0]
@@ -38,7 +39,25 @@ def test_edge_into_star_dance_emits_identified_event():
         "star_id": 2,  # game stores 1-based (3); API is 0-based
         "star_name": "Shoot to the Island in the Sky",
         "already_collected": False,
+        "igt_frames": 231,  # back-computed: 233 - 2
+        "igt": "0'07\"70",  # 231 frames at 30 fps
+        "igt_running": True,
     }
+
+
+def test_igt_format():
+    assert format_igt(0) == "0'00\"00"
+    assert format_igt(231) == "0'07\"70"     # the screenshot case
+    assert format_igt(1800) == "1'00\"00"    # exactly one minute
+    assert format_igt(1800 + 65) == "1'02\"16"  # 65 frames = 2s + 5f (16cs)
+
+
+def test_igt_not_running_still_reported():
+    curr = snap(mario_action=A.ACT_STAR_DANCE_EXIT, hud_timer=0,
+                hud_timer_running=False)
+    ev = StarGrabDetector().process(snap(), curr)[0]
+    assert ev.payload["igt_running"] is False
+    assert ev.payload["igt_frames"] == 0
 
 
 def test_already_collected_star_still_fires_with_flag_true():

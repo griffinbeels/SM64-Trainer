@@ -10,6 +10,14 @@ from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.memory.addresses import STAR_GRAB_ACTIONS, course_name, star_name
 
 
+def format_igt(frames: int) -> str:
+    """Usamune/HUD timer display: M'SS"CC (30 fps frames -> centiseconds)."""
+    mins = frames // 1800
+    secs = (frames % 1800) // 30
+    cents = (frames % 30) * 100 // 30
+    return f"{mins}'{secs:02d}\"{cents:02d}"
+
+
 class StarGrabDetector:
     def process(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         entered = (curr.mario_action in STAR_GRAB_ACTIONS
@@ -23,6 +31,10 @@ class StarGrabDetector:
         # course 0. The boot-time "never set" state has star == 0 too, so
         # the star_id guard above already excludes it.
         course_id = curr.last_completed_course
+        # Usamune freezes the displayed timer at the grab; the underlying
+        # counter keeps running, so back-compute to the action-start frame
+        # (same trick as the global-timer frame stamp).
+        igt_frames = max(0, curr.hud_timer - curr.mario_action_timer)
         return [Event(
             type="star_collected",
             frame=max(0, curr.global_timer - curr.mario_action_timer),
@@ -33,5 +45,8 @@ class StarGrabDetector:
                 "star_id": star_id,
                 "star_name": star_name(course_id, star_id),
                 "already_collected": curr.num_stars == prev.num_stars,
+                "igt_frames": igt_frames,
+                "igt": format_igt(igt_frames),
+                "igt_running": curr.hud_timer_running,
             },
         )]
