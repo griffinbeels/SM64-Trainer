@@ -1,6 +1,7 @@
 # src/sm64_events/server/app.py
 """HTTP/WebSocket surface: /ws/events (broadcast), /health, /state."""
 import asyncio
+import logging
 from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -11,12 +12,23 @@ from sm64_events.core.events import Event
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.server.poller import Poller
 
+log = logging.getLogger("sm64.server")
+
+
+def _log_poller_exit(task: asyncio.Task) -> None:
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        log.critical("poll loop died: %r", exc)
+
 
 def create_app(poller: Poller, broadcaster: Broadcaster,
                debug_hooks: bool = False) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         task = asyncio.create_task(poller.run())
+        task.add_done_callback(_log_poller_exit)
         yield
         task.cancel()
         with suppress(asyncio.CancelledError):
@@ -26,19 +38,21 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
 
     @app.get("/health")
     def health():
+        latest = poller.latest
         return {
             "status": "ok",
             "emulator_attached": poller.memory.attached,
             "clients": broadcaster.client_count,
-            "last_frame": poller.latest.global_timer if poller.latest else None,
+            "last_frame": latest.global_timer if latest else None,
         }
 
     @app.get("/state")
     def state():
-        if poller.latest is None:
+        latest = poller.latest
+        if latest is None:
             return {"snapshot": None}
-        d = asdict(poller.latest)
-        d["wall_time_utc"] = poller.latest.wall_time_utc.isoformat().replace("+00:00", "Z")
+        d = asdict(latest)
+        d["wall_time_utc"] = latest.wall_time_utc.isoformat().replace("+00:00", "Z")
         return {"snapshot": d}
 
     @app.websocket("/ws/events")

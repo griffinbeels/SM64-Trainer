@@ -63,13 +63,30 @@ class Poller:
         self._prev = curr
         self.latest = curr
 
+    def _probe(self) -> bool:
+        """Post-attach layout check: refuse to serve a ROM whose reads are
+        impossible for SM64 (e.g. wrong ROM loaded in the emulator)."""
+        try:
+            curr = self.reader.read()
+        except MemoryReadError:
+            self.memory.detach()
+            return False
+        if not _plausible(curr):
+            log.error("memory layout mismatch (impossible values read) — "
+                      "refusing to serve; check ROM / address registry")
+            self.memory.detach()
+            return False
+        return True
+
     async def run(self) -> None:
         while True:
             if not self.memory.attached:
-                if self.memory.attach():
-                    await self.broadcaster.publish(_lifecycle_event("emulator_connected"))
-                else:
+                if not self.memory.attach():
                     await asyncio.sleep(2.0)
                     continue
+                if not self._probe():
+                    await asyncio.sleep(5.0)
+                    continue
+                await self.broadcaster.publish(_lifecycle_event("emulator_connected"))
             await self.tick()
             await asyncio.sleep(self.interval)

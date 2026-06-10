@@ -105,3 +105,30 @@ def test_implausible_snapshot_means_layout_mismatch_and_refusal():
     assert mem.detached is True
     assert b.events == []
     assert p.latest is None
+
+
+def test_probe_accepts_plausible_layout():
+    mem = StubMemory()
+    p = Poller(mem, [], RecordingBroadcaster(), reader=ScriptedReader([snap(1)]))
+    assert p._probe() is True
+    assert mem.detached is False
+
+
+def test_probe_rejects_implausible_layout_and_detaches():
+    mem = StubMemory()
+    bad = GameSnapshot(
+        wall_time_utc=datetime(2026, 6, 10, tzinfo=timezone.utc),
+        global_timer=1, mario_action=0, mario_action_timer=0,
+        num_stars=29999, last_completed_course=0, last_completed_star=0,
+    )
+    p = Poller(mem, [], RecordingBroadcaster(), reader=ScriptedReader([bad]))
+    assert p._probe() is False
+    assert mem.detached is True
+
+
+def test_probe_rejects_read_error_and_detaches():
+    mem = StubMemory()
+    p = Poller(mem, [], RecordingBroadcaster(),
+               reader=ScriptedReader([MemoryReadError("gone")]))
+    assert p._probe() is False
+    assert mem.detached is True
