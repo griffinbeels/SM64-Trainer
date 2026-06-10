@@ -16,6 +16,11 @@ Requires Project64 1.6 running Usamune v1.93u on the same machine.
 
 ## Behavior notes
 
+- `igt` is the **overall** star time (the value Usamune shows at the grab),
+  correct across multi-area levels (e.g. the SSL pyramid). `igt_source`
+  says where it came from: `result` (Usamune's own final-time store —
+  exact), `counter` (running overall counter, back-computed to the touch
+  frame), or `reconstructed` (see below).
 - If a Usamune timer reset races the star touch (reset within ~1 s of the
   grab, e.g. reset-spamming between attempts), the event reports the
   *prior attempt's* time extrapolated to the exact touch frame and sets
