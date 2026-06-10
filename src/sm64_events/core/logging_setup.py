@@ -13,6 +13,8 @@ def configure_logging(log_dir: Path = Path("logs")) -> None:
     )
     formatter.converter = time.gmtime
     root = logging.getLogger()
+    if root.handlers:  # already configured (e.g. uvicorn --reload re-import)
+        return
     root.setLevel(logging.INFO)
     for handler in (logging.FileHandler(log_dir / "sm64_events.log", encoding="utf-8"),
                     logging.StreamHandler()):
