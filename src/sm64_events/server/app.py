@@ -38,7 +38,7 @@ _INDEX_HTML = """<!doctype html>
     if (ev.type === "star_collected") {
       const p = ev.payload;
       li.innerHTML = `<span class="star">⭐ ${p.course_name} — ${p.star_name}</span>`
-        + `${p.igt_running ? ` <b>${p.igt}</b>` : ""}`
+        + ` <b>${p.igt}</b>`
         + ` <span class="meta">course ${p.course_id} star ${p.star_id}`
         + `${p.already_collected ? " (already collected)" : ""} · frame ${ev.frame} · #${ev.seq}</span>`;
     } else {

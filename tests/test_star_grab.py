@@ -27,7 +27,7 @@ def test_edge_into_star_dance_emits_identified_event():
     curr = snap(mario_action=A.ACT_STAR_DANCE_EXIT, mario_action_timer=2,
                 global_timer=1002, num_stars=6,
                 last_completed_course=1, last_completed_star=3,
-                hud_timer=233, hud_timer_running=True)
+                igt_timer=233)
     events = StarGrabDetector().process(prev, curr)
     assert len(events) == 1
     ev = events[0]
@@ -41,7 +41,6 @@ def test_edge_into_star_dance_emits_identified_event():
         "already_collected": False,
         "igt_frames": 231,  # back-computed: 233 - 2
         "igt": "0'07\"70",  # 231 frames at 30 fps
-        "igt_running": True,
     }
 
 
@@ -52,12 +51,11 @@ def test_igt_format():
     assert format_igt(1800 + 65) == "1'02\"16"  # 65 frames = 2s + 5f (16cs)
 
 
-def test_igt_not_running_still_reported():
-    curr = snap(mario_action=A.ACT_STAR_DANCE_EXIT, hud_timer=0,
-                hud_timer_running=False)
+def test_igt_zero_when_timer_unused():
+    curr = snap(mario_action=A.ACT_STAR_DANCE_EXIT, igt_timer=0)
     ev = StarGrabDetector().process(snap(), curr)[0]
-    assert ev.payload["igt_running"] is False
     assert ev.payload["igt_frames"] == 0
+    assert ev.payload["igt"] == "0'00\"00"
 
 
 def test_already_collected_star_still_fires_with_flag_true():

@@ -36,13 +36,22 @@ LAST_COMPLETED_STAR = 0x8032DD84     # s8, 1-based  VERIFY
 # once; the harness caught it (course stuck at 0, star tracking level ids).
 CURR_LEVEL = 0x8032DDF8              # s16 gCurrLevelNum
 
-# Vanilla HUD race timer (gHudDisplay.timer), counts 30 fps game frames.
-# Usamune's practice timers (Section Timer etc.) drive THIS variable per the
-# Usamune manual — reading it yields the number shown top-right in-game.
-# u16: wraps at ~36 minutes. Source: decomp level_update.h + STROOP HudData
-# (Mario+0xFC) + hack64 RAM map; struct gHudDisplay at 0x8033B260.
-HUD_TIMER = 0x8033B26C               # u16, frames  VERIFY
-HUD_TIMER_RUNNING = 0x8033B25E       # s8 sTimerRunning, nonzero = counting  VERIFY
+# Usamune's practice timer (the number shown top-right in-game). Usamune
+# does NOT drive the vanilla HUD timer; it keeps the count in object-pool
+# behavior data. Empirically located with tools/find_timer.py and validated
+# with tools/watch_timer.py on 2026-06-10 across level changes, savestate
+# loads, Usamune level resets, and Timer/Display OFF (counter runs
+# regardless of display settings). Object slot 0, field 0x154 — mirrors of
+# the same value exist in other slots (display objects, 1 frame behind) and
+# an area-epoch sibling runs at a constant offset. Re-locate with the tools
+# above if a Usamune version change ever moves it.
+USAMUNE_TIMER = 0x8033D5DC           # u32, 30 fps frames; live-verified 2026-06-10
+
+# Trap, do not reuse for IGT: the vanilla HUD race timer (gHudDisplay.timer,
+# 0x8033B26C u16) and sTimerRunning (0x8033B25E s8) stay 0 under Usamune's
+# practice timers — verified live. Vanilla races (KtQ etc.) still use them.
+HUD_TIMER = 0x8033B26C               # u16, frames (vanilla races only)
+HUD_TIMER_RUNNING = 0x8033B25E       # s8 sTimerRunning (vanilla races only)
 
 # Mario actions entered the moment a star (or key) is grabbed — decomp sm64.h.
 ACT_STAR_DANCE_EXIT = 0x00001302               # live-verified 2026-06-10
