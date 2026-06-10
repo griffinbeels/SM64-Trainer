@@ -21,19 +21,26 @@ OS_MEM_SIZE = 0x80000318  # u32: 0x400000 or 0x800000
 
 # Mario state (gMarioStates[0]) — source: decomp struct MarioState + STROOP US.
 MARIO_STRUCT = 0x8033B170
-MARIO_ACTION = MARIO_STRUCT + 0x0C        # u32
+MARIO_ACTION = MARIO_STRUCT + 0x0C        # u32; live-verified 2026-06-10
 MARIO_ACTION_TIMER = MARIO_STRUCT + 0x1A  # u16, resets to 0 on action change
-MARIO_NUM_STARS = MARIO_STRUCT + 0xAA     # s16, total star count  VERIFY
+MARIO_NUM_STARS = MARIO_STRUCT + 0xAA     # s16, total star count; live-verified 2026-06-10
 
-GLOBAL_TIMER = 0x8032D5D4            # u32, +1 per game frame (30 Hz)  VERIFY
-LAST_COMPLETED_COURSE = 0x8032DDF8   # s8, 1-based, 0 = none yet  VERIFY
-LAST_COMPLETED_STAR = 0x8032DDF9     # s8, 1-based  VERIFY
+GLOBAL_TIMER = 0x8032D5D4            # u32, +1 per game frame (30 Hz); live-verified 2026-06-10
+# gLastCompleted* are adjacent s8 globals but sit 4 bytes apart (IDO aligns
+# each initialized .data global to 4 bytes). Source: STROOP MiscData.xml
+# (offsetUS) + decomp symbol maps; both agree.
+LAST_COMPLETED_COURSE = 0x8032DD80   # s8, 1-based, 0 = castle/none  VERIFY
+LAST_COMPLETED_STAR = 0x8032DD84     # s8, 1-based  VERIFY
+# Trap, do not reuse: 0x8032DDF8 is gCurrLevelNum (s16, LEVEL ids like
+# WF=24, SSL=8) — NOT a course number. We misread it as last-completed
+# once; the harness caught it (course stuck at 0, star tracking level ids).
+CURR_LEVEL = 0x8032DDF8              # s16 gCurrLevelNum
 
 # Mario actions entered the moment a star (or key) is grabbed — decomp sm64.h.
-ACT_STAR_DANCE_EXIT = 0x00001302
+ACT_STAR_DANCE_EXIT = 0x00001302               # live-verified 2026-06-10
 ACT_STAR_DANCE_WATER = 0x00001303
 ACT_STAR_DANCE_NO_EXIT = 0x00001307
-ACT_FALL_AFTER_STAR_GRAB = 0x00001904  # midair grabs  VERIFY
+ACT_FALL_AFTER_STAR_GRAB = 0x00001904  # midair grabs; live-verified 2026-06-10
 
 STAR_GRAB_ACTIONS = frozenset({
     ACT_STAR_DANCE_EXIT,

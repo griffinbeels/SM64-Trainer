@@ -25,6 +25,14 @@ def make_client() -> TestClient:
     return TestClient(app)
 
 
+def test_index_serves_event_viewer():
+    with make_client() as client:
+        resp = client.get("/")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/html")
+        assert "/ws/events" in resp.text
+
+
 def test_health_reports_unattached():
     with make_client() as client:
         body = client.get("/health").json()

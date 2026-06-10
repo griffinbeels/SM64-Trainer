@@ -7,12 +7,46 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse
 
 from sm64_events.core.events import Event
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.server.poller import Poller
 
 log = logging.getLogger("sm64.server")
+
+_INDEX_HTML = """<!doctype html>
+<html><head><meta charset="utf-8"><title>SM64 Event API</title>
+<style>
+  body { font-family: Consolas, monospace; background: #14161a; color: #d8dee9;
+         max-width: 760px; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.2rem; } #status { padding: .2rem .5rem; border-radius: 4px; }
+  .ok { background: #1d3a1d; color: #a3e0a3; } .bad { background: #3a1d1d; color: #e0a3a3; }
+  li { margin: .25rem 0; list-style: none; } ul { padding: 0; }
+  .star { color: #ffd75f; } .meta { color: #6c7686; font-size: .85em; }
+</style></head><body>
+<h1>SM64 Event API <span id="status" class="bad">connecting…</span></h1>
+<p class="meta">Live feed from <code>/ws/events</code>. Grab a star in-game.</p>
+<ul id="log"></ul>
+<script>
+  const log = document.getElementById("log"), status = document.getElementById("status");
+  const ws = new WebSocket(`ws://${location.host}/ws/events`);
+  ws.onopen = () => { status.textContent = "connected"; status.className = "ok"; };
+  ws.onclose = () => { status.textContent = "disconnected"; status.className = "bad"; };
+  ws.onmessage = (e) => {
+    const ev = JSON.parse(e.data), li = document.createElement("li");
+    if (ev.type === "star_collected") {
+      const p = ev.payload;
+      li.innerHTML = `<span class="star">⭐ ${p.course_name} — ${p.star_name}</span>`
+        + ` <span class="meta">course ${p.course_id} star ${p.star_id}`
+        + `${p.already_collected ? " (already collected)" : ""} · frame ${ev.frame} · #${ev.seq}</span>`;
+    } else {
+      li.innerHTML = `${ev.type} <span class="meta">frame ${ev.frame} · #${ev.seq}</span>`;
+    }
+    log.prepend(li);
+  };
+</script></body></html>
+"""
 
 
 def _log_poller_exit(task: asyncio.Task) -> None:
@@ -35,6 +69,10 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
             await task
 
     app = FastAPI(title="SM64 Event API", lifespan=lifespan)
+
+    @app.get("/", response_class=HTMLResponse)
+    def index():
+        return _INDEX_HTML
 
     @app.get("/health")
     def health():

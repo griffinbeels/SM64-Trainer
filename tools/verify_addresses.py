@@ -55,7 +55,10 @@ def main() -> None:
     while True:
         s = reader.read()
         if s.mario_action != prev_action:
-            in_set = s.mario_action in A.STAR_GRAB_ACTIONS
+            # tag only the EDGE into the grab set (matches detector semantics;
+            # midair grabs pass through two in-set actions but are one grab)
+            in_set = (s.mario_action in A.STAR_GRAB_ACTIONS
+                      and prev_action not in A.STAR_GRAB_ACTIONS)
             star_id = s.last_completed_star - 1
             tag = (f"  << STAR GRAB: {A.course_name(s.last_completed_course)} / "
                    f"{A.star_name(s.last_completed_course, star_id)} "
