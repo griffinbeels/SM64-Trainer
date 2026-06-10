@@ -60,7 +60,7 @@ def main() -> None:
           "UNPAUSED with the Usamune timer visibly counting the whole time.\n")
 
     t_prev = time.perf_counter()
-    prev = read = mem._read_raw(0, size)
+    prev = mem._read_raw(0, size)
     time.sleep(1.0)
     t_curr = time.perf_counter()
     curr = mem._read_raw(0, size)

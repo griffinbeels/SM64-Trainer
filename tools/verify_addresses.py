@@ -14,7 +14,6 @@ import time
 
 from sm64_events.core.snapshot import SnapshotReader
 from sm64_events.detectors.star_grab import StarGrabDetector
-from sm64_events.memory import addresses as A
 from sm64_events.memory.pj64 import Pj64Memory
 
 

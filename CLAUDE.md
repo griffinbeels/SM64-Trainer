@@ -1,157 +1,105 @@
 # sm64_tracker — Claude Development Guide
 
-Read this first, every session. It is the index to the codebase and the
-contract for how work happens here. This project is developed **exclusively
-by Claude**; the human runs the emulator and verifies live behavior. A future
-session has no memory of past ones — these docs ARE the memory.
+This project is developed **exclusively by Claude**; the human runs the
+emulator and verifies live behavior. Future sessions have no memory of past
+ones — this file and `docs/architecture.md` ARE the memory. Keep them lean
+and current: stale documentation is a broken build.
 
 ## What this is
 
 A Python server that reads Super Mario 64 (**Usamune v1.93u** practice ROM)
-memory out of **Project64 1.6** on Windows via `ReadProcessMemory`, detects
-game events (star grabs with exact Usamune timing, game resets), and
-broadcasts them as JSON over WebSocket to any listener (overlays, stats
-tools, the built-in viewer). PJ64 1.6 has no scripting API — external memory
-polling is the only integration path, and every memory address was located
-and live-verified empirically.
-
-Stack: Python 3.12+ managed by **uv** (never pip), FastAPI + uvicorn, pymem,
-pytest. Design docs from the original build: `docs/superpowers/`.
+memory out of **Project64 1.6** (Windows) via `ReadProcessMemory`, detects
+game events — star grabs with exact Usamune timing, game resets — and
+broadcasts JSON over WebSocket. PJ64 1.6 has no scripting API; external
+memory polling is the only path, and every address was located and
+live-verified empirically. Stack: Python 3.12+ via **uv** (never pip),
+FastAPI + uvicorn, pymem, pytest.
 
 ## Commands
 
 ```
-uv sync                                              # install/refresh deps
+uv sync
 uv run pytest -q                                     # MUST pass before any merge
-uv run uvicorn sm64_events.main:app --host 127.0.0.1 --port 8064   # run server
-uv run python tools/verify_addresses.py              # live gate (needs PJ64 + ROM running)
+uv run uvicorn sm64_events.main:app --host 127.0.0.1 --port 8064
+uv run python tools/verify_addresses.py              # live gate (needs PJ64 + ROM)
 ```
 
 ## Module map — where to change what
 
 | To change... | Edit |
 |---|---|
-| Memory addresses, action IDs, course/star names | `src/sm64_events/memory/addresses.py` — THE registry, single source of truth |
-| Endian decoding / typed reads | `src/sm64_events/memory/base.py` — the ONLY place that knows PJ64 byte order |
-| Process attach / RDRAM discovery | `src/sm64_events/memory/pj64.py` |
-| Object-pool decoding helpers | `src/sm64_events/memory/objects.py` |
-| In-memory test double | `src/sm64_events/memory/buffer.py` |
-| Fields sampled each tick | `src/sm64_events/core/snapshot.py` (GameSnapshot + SnapshotReader) |
-| Event envelope / wire format | `src/sm64_events/core/events.py` |
-| Star-grab detection + IGT logic | `src/sm64_events/detectors/star_grab.py` |
-| game_reset detection | `src/sm64_events/detectors/lifecycle.py` |
-| A NEW event type | new file in `detectors/` + wire into `main.py` (recipe below) |
-| Poll loop, attach retry, layout sanity | `src/sm64_events/server/poller.py` |
-| WS fan-out, seq numbers | `src/sm64_events/server/broadcaster.py` |
-| HTTP/WS endpoints | `src/sm64_events/server/app.py` |
-| Built-in viewer UI | `src/sm64_events/ui/index.html` (served live; edit + refresh, no restart) |
-| Wiring / startup | `src/sm64_events/main.py` (composition root — the only cross-zone file) |
-| Logging setup | `src/sm64_events/core/logging_setup.py` |
-| Memory-hunting diagnostics | `tools/` (see docs/architecture.md → Memory hunting) |
+| Memory addresses, action IDs, course/star names, traps | `memory/addresses.py` — THE registry; richly commented, read it |
+| Endian decoding / typed reads | `memory/base.py` — the ONLY place that knows PJ64 byte order |
+| Process attach / RDRAM discovery | `memory/pj64.py` |
+| Object-pool decoding | `memory/objects.py` · test double: `memory/buffer.py` |
+| Fields sampled each tick | `core/snapshot.py` |
+| Event envelope / wire format | `core/events.py` |
+| Star-grab + IGT logic | `detectors/star_grab.py` — docstrings carry the domain rationale |
+| game_reset | `detectors/lifecycle.py` |
+| Poll loop, attach retry, layout sanity | `server/poller.py` |
+| WS fan-out, seq numbers | `server/broadcaster.py` |
+| HTTP/WS endpoints | `server/app.py` |
+| Built-in viewer UI | `ui/index.html` — served per request: edit + refresh, no restart |
+| Wiring / startup / logging | `main.py` (composition root), `core/logging_setup.py` |
+| Memory-hunting diagnostics | `tools/` — playbook in docs/architecture.md |
 
-Tests mirror modules: `tests/test_<module>.py`. Find behavior by reading the
-test file first — they are the executable spec.
+(All paths under `src/sm64_events/` unless noted.) Tests mirror modules:
+`tests/test_<module>.py` — read the test file first; it's the executable spec.
 
 ## Parallel work zones
 
-Zones that can be worked **concurrently without conflicts** (one branch /
-worktree each):
+Safe to work concurrently (one branch/worktree each): **detectors/**,
+**server/**, **ui/**, **memory/ + tools/**, **docs/** — each with its tests.
+**Shared contracts — never edit in two branches at once:** `core/events.py`,
+`core/snapshot.py`, `memory/addresses.py`, `main.py`. Contract changes land
+on master first, then dependent work fans out. Merge with `--no-ff`; run the
+full suite on the merged result; delete the branch.
 
-- **detectors zone**: `detectors/` + `tests/test_<detector>.py`
-- **server zone**: `server/` + `tests/test_poller|broadcaster|app.py`
-- **ui zone**: `src/sm64_events/ui/` (pure frontend; talks to the API over
-  WS/HTTP only — never imports Python code)
-- **memory zone**: `memory/` + `tools/` + their tests
-- **docs zone**: `docs/`, README, this file
+## Domain rules
 
-**Shared contract files — coordinate, never edit in two branches at once:**
-`core/events.py`, `core/snapshot.py`, `memory/addresses.py`, `main.py`.
-If a feature needs a contract change, land that change on master first, then
-fan out the dependent work.
-
-Merge discipline: `git merge --no-ff`, full `uv run pytest -q` on the merged
-result, branch deleted after merge.
-
-## Architecture in one paragraph
-
-`Pj64Memory` (attach + endian-correct reads) → `Poller` at ~60 Hz builds an
-immutable `GameSnapshot` per tick → each detector gets consecutive
-`(prev, curr)` pairs and returns `Event`s → `Broadcaster` assigns seq numbers
-and fans out to WebSocket clients; FastAPI serves `/` (viewer), `/health`,
-`/state`, `/ws/events`. Detectors hold no I/O; the poller holds no game
-logic. **Read `docs/architecture.md` before touching `memory/` or
-`detectors/` — it contains domain knowledge that was expensive to learn.**
-
-## Domain rules — do not break these
-
-1. `addresses.py` is the only home for memory addresses. A new address needs
-   a source comment and must pass `tools/verify_addresses.py` (or a watch
-   session) before events may depend on it. Mark unverified entries `VERIFY`.
-2. PJ64 stores N64 RAM as little-endian 32-bit words. The XOR address math
-   lives in `memory/base.py` only. Never duplicate it.
-3. Star grabs MUST fire on re-collection: detection is an action-EDGE into
-   `STAR_GRAB_ACTIONS`, never save-flag diffing.
-4. IGT comes from the Usamune expansion-RAM globals (`USAMUNE_STAR_RESULT`
-   preferred, `USAMUNE_OVERALL` fallback) — never the vanilla HUD timer
-   (stays 0) and never the object-pool section counter (resets on area
-   warps; slot-dependent). Full story: docs/architecture.md → Timers.
-5. Detectors receive consecutive pairs from one session, may keep bounded
-   internal state, and must self-heal when `global_timer` jumps backward.
-6. Events report the number the player SEES (display conventions like
-   `DISPLAY_TICK` are calibrated in `star_grab.py` — don't "simplify" them).
-7. Read-only: never write to emulator memory.
-8. Timestamps UTC; the primary clock is game frames (30 fps). Wall clock is
-   metadata only.
-9. The poller refuses to emit events on implausible reads (layout mismatch)
-   — keep that guard; it has caught real bugs in our own registry.
+1. New memory address → `addresses.py` only, with source comment, marked
+   `VERIFY` until it passes the live gate with the human.
+2. Star grabs MUST fire on re-collection: action-EDGE detection, never
+   save-flag diffing.
+3. IGT comes from the Usamune expansion-RAM globals (see star_grab.py for
+   the result → counter → reconstructed precedence). Never the vanilla HUD
+   timer, never object-pool addresses (slot-dependent — see addresses.py).
+4. Detectors get consecutive (prev, curr) pairs, may keep bounded internal
+   state, must self-heal when global_timer jumps backward.
+5. Calibration constants (DISPLAY_TICK etc.) encode live-measured behavior —
+   don't "simplify" them; their evidence is in the docstrings.
+6. Read-only: never write to emulator memory.
+7. Timestamps UTC; the primary clock is game frames (30 fps).
+8. Keep the poller's implausible-read refusal — it has caught bugs in our
+   own registry.
 
 ## Recipes
 
-### Add a new event type
-1. Write tests first: `tests/test_<name>.py` with synthetic `GameSnapshot`
-   pairs (copy the `snap(**overrides)` fixture pattern from
-   `tests/test_star_grab.py`).
-2. Create `detectors/<name>.py` with `process(prev, curr) -> list[Event]`.
-3. Need new memory fields? `addresses.py` (with `VERIFY` + source) →
-   defaulted field on `GameSnapshot` → read in `SnapshotReader` → live-verify
-   before trusting.
-4. Wire the detector into the list in `main.py` (order: resets before grabs).
-5. Render it in `ui/index.html` if user-visible; document the payload in
-   README → Event schema.
-6. `uv run pytest -q`; live check via the harness; update the module map
-   above if you added files.
+**Add a new event type:** tests first (`snap(**overrides)` fixture pattern
+from test_star_grab.py) → `detectors/<name>.py` with
+`process(prev, curr) -> list[Event]` → new memory fields go through
+addresses.py (+VERIFY) and a defaulted GameSnapshot field → wire into
+`main.py` (resets before grabs) → render in `ui/index.html` if user-visible
+→ document payload in README → full pytest + live check.
 
-### Locate an unknown memory value (e.g., for a new event)
-Use the three-tool playbook, in order:
-1. `tools/find_timer.py` — finds steadily *ticking* counters (rate-scan).
-2. `tools/hunt_value.py` — Cheat-Engine-style exact-value intersection for
-   *displayed* numbers (ask the human to type what's on screen).
-3. `tools/watch_timer.py` — characterize a candidate across scenarios
-   (level change, savestate, area warp, display off) before trusting it.
-Methodology, war stories, and traps: docs/architecture.md → Memory hunting.
+**Locate an unknown memory value:** `tools/find_timer.py` (ticking
+counters) → `tools/hunt_value.py` (exact displayed values) →
+`tools/watch_timer.py ADDR:u16` (characterize across scenarios). Methodology
+and pitfalls: docs/architecture.md → Memory hunting.
 
-### Build a new UI / consumer
-Connect to `ws://127.0.0.1:8064/ws/events`; every message is the versioned
-envelope in README → Event schema. Initial state: `GET /state`; liveness:
-`GET /health`. A richer frontend should live in the ui zone (or a new
-top-level `frontend/` directory) and must only speak to the HTTP/WS API.
+**Build a UI / consumer:** speak only to the API — `ws://…/ws/events`
+(schema in README), `GET /state` for initial state, `GET /health` for
+liveness. Heavier frontends go in the ui zone or a new top-level dir.
 
-## Definition of done — every change
+## Definition of done — every merge
 
-- [ ] `uv run pytest -q` passes (and new behavior has tests)
-- [ ] new memory reads live-verified with the human via the harness
-- [ ] module map above updated if files were added/moved
-- [ ] README updated if the user-facing surface changed (endpoints, payload)
-- [ ] `docs/architecture.md` updated if domain knowledge was gained
-- [ ] commit messages explain WHY (follow the style in `git log`)
-
-## Documentation contract (this is enforced, not optional)
-
-Because every future session starts from zero, **stale documentation is a
-broken build**. Any merge that adds a module, memory address, event type,
-endpoint, or tool MUST update this file's module map, the README, and (for
-domain knowledge) `docs/architecture.md` in the same branch. When something
-is learned the hard way — a wrong address, a race, a calibration constant, a
-trap — write it into `docs/architecture.md` immediately, with the evidence.
-The registry pattern applies to docs too: one fact, one authoritative place,
-linked from here.
+- `uv run pytest -q` passes; new behavior has tests
+- new memory reads live-verified with the human via the harness
+- this module map updated if files were added/moved; README updated if the
+  consumer-facing surface changed; docs/architecture.md updated if domain
+  knowledge was gained (record hard-won facts WITH their evidence,
+  immediately — the next session has no memory of this one)
+- one fact, one authoritative place: code docstrings for module-local
+  knowledge, addresses.py for memory facts, README for the API surface,
+  architecture.md only for cross-cutting knowledge — link, don't duplicate
+- commit messages explain WHY (follow the style in `git log`)
