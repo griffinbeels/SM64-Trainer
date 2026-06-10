@@ -20,15 +20,26 @@ from sm64_events.detectors.star_grab import format_igt
 from sm64_events.memory import addresses as A
 from sm64_events.memory.pj64 import Pj64Memory
 
-RDRAM_BYTES = 0x400000
 KNOWN_FRAME_COUNTERS = {A.GLOBAL_TIMER}  # exclude; we already track these
 TICK_RANGE = range(25, 36)  # expected delta per 1s sample at 30 fps
 ROUNDS = 3
 MAX_CANDIDATES = 14
 
 
-def read_block(mem: Pj64Memory) -> bytes:
-    return mem._read_raw(0, RDRAM_BYTES)
+def rdram_size(mem: Pj64Memory) -> int:
+    """Scan the full RDRAM (8 MB with expansion pak, else 4 MB)."""
+    size = mem.read_u32(A.OS_MEM_SIZE)
+    if size not in (0x400000, 0x800000):
+        return 0x400000
+    try:
+        mem._read_raw(size - 4, 4)  # confirm the host region is that large
+        return size
+    except Exception:
+        return 0x400000
+
+
+def read_block(mem: Pj64Memory, size: int) -> bytes:
+    return mem._read_raw(0, size)
 
 
 def tick_candidates(prev: bytes, curr: bytes) -> tuple[set[int], set[int]]:
@@ -50,16 +61,18 @@ def main() -> None:
     while not mem.attach():
         print("  not found, retrying in 2s")
         time.sleep(2)
-    print("Attached.\n\nPhase A: scanning for ~30/s counters "
+    size = rdram_size(mem)
+    print(f"Attached. Scanning {size // 0x100000} MB of RDRAM.\n\n"
+          f"Phase A: scanning for ~30/s counters "
           f"({ROUNDS} rounds, 1s apart). Keep the game UNPAUSED with the\n"
           "Usamune timer visibly counting on screen.\n")
 
-    prev = read_block(mem)
+    prev = read_block(mem, size)
     u32s: set[int] | None = None
     u16s: set[int] | None = None
     for round_no in range(ROUNDS):
         time.sleep(1.0)
-        curr = read_block(mem)
+        curr = read_block(mem, size)
         h32, h16 = tick_candidates(prev, curr)
         u32s = h32 if u32s is None else (u32s & h32)
         u16s = h16 if u16s is None else (u16s & h16)
