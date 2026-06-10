@@ -1,0 +1,20 @@
+[project]
+name = "sm64-events"
+version = "0.1.0"
+description = "Event API for SM64 (Usamune v1.93u) running in Project64 1.6"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pymem>=1.13",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.0", "httpx>=0.27"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sm64_events"]
