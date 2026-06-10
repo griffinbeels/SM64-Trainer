@@ -28,6 +28,13 @@ def test_rejects_wrong_rom_base():
     assert looks_like_rdram(reader) is False
 
 
+def test_rejects_invalid_mem_size():
+    reader = fake_reader({A.OS_ROM_BASE: 0xB0000000,
+                          A.OS_MEM_SIZE: 0x200000,
+                          A.OS_TV_TYPE: 1})
+    assert looks_like_rdram(reader) is False
+
+
 def test_rejects_garbage_tv_type():
     reader = fake_reader({A.OS_ROM_BASE: 0xB0000000,
                           A.OS_MEM_SIZE: 0x400000,

@@ -41,6 +41,7 @@ class _MBI64(ctypes.Structure):
 def iter_committed_regions(handle: int) -> Iterator[tuple[int, int]]:
     """Yield (base, size) of readable committed regions, low to high."""
     kernel32 = ctypes.windll.kernel32
+    kernel32.VirtualQueryEx.restype = ctypes.c_size_t
     mbi = _MBI64()
     addr = 0
     while kernel32.VirtualQueryEx(handle, ctypes.c_void_p(addr),
@@ -72,6 +73,7 @@ class Pj64Memory(RdramReader):
         return self._pm is not None and self._rdram_base is not None
 
     def attach(self) -> bool:
+        self._close()
         try:
             self._pm = pymem.Pymem(PROCESS_NAME)
         except pymem.exception.PymemError:
@@ -84,10 +86,18 @@ class Pj64Memory(RdramReader):
                 self._rdram_base = base
                 log.info("attached: RDRAM at host base 0x%X", base)
                 return True
-        self._pm = None  # process found, ROM not loaded yet
+        self._close()  # process found, ROM not loaded yet
         return False
 
     def detach(self) -> None:
+        self._close()
+
+    def _close(self) -> None:
+        if self._pm is not None:
+            try:
+                self._pm.close_process()
+            except pymem.exception.PymemError:
+                pass
         self._pm = None
         self._rdram_base = None
 
