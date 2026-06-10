@@ -13,3 +13,13 @@ Requires Project64 1.6 running Usamune v1.93u on the same machine.
 - Events: `ws://127.0.0.1:8064/ws/events`
 - Health: `http://127.0.0.1:8064/health`
 - Latest snapshot: `http://127.0.0.1:8064/state`
+
+## Known limitations
+
+- Loading a savestate that was *saved during* a star dance re-emits that
+  star's `star_collected` event (the load looks like a fresh grab edge);
+  its `already_collected` flag may be wrong. Savestates saved outside a
+  dance are safe. Usamune section states are typically safe.
+- Bowser-stage key grabs use the same star-dance actions and may emit a
+  `star_collected` with `course_id` 16/17 until a dedicated key event
+  type exists.
