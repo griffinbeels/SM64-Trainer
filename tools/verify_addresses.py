@@ -13,7 +13,7 @@ or the SM64 decomp US symbol map, fix addresses.py, and rerun.
 import time
 
 from sm64_events.core.snapshot import SnapshotReader
-from sm64_events.detectors.star_grab import format_igt
+from sm64_events.detectors.star_grab import StarGrabDetector
 from sm64_events.memory import addresses as A
 from sm64_events.memory.pj64 import Pj64Memory
 
@@ -51,25 +51,25 @@ def main() -> None:
     print("\nPhase 1:", "ALL PASS" if ok else "FAILURES — fix addresses.py first")
 
     print("\nPhase 2: live watch — grab stars and verify identity/timing.")
-    print("(Ctrl+C to quit)\n")
+    print("Star-grab lines come from the REAL StarGrabDetector, so what you")
+    print("see here is exactly what API listeners receive. (Ctrl+C to quit)\n")
+    detector = StarGrabDetector()
+    prev_snap = reader.read()
     prev_action = None
     while True:
         s = reader.read()
+        for ev in detector.process(prev_snap, s):
+            p = ev.payload
+            recon = "  [reconstructed: grab raced an IGT reset]" \
+                if p["igt_reconstructed"] else ""
+            print(f"  >> star_collected: {p['course_name']} / {p['star_name']}"
+                  f"  igt {p['igt']} ({p['igt_frames']}f)"
+                  f"  frame {ev.frame}{recon}")
         if s.mario_action != prev_action:
-            # tag only the EDGE into the grab set (matches detector semantics;
-            # midair grabs pass through two in-set actions but are one grab)
-            in_set = (s.mario_action in A.STAR_GRAB_ACTIONS
-                      and prev_action not in A.STAR_GRAB_ACTIONS)
-            star_id = s.last_completed_star - 1
-            igt = format_igt(max(0, s.igt_timer - s.mario_action_timer))
-            tag = (f"  << STAR GRAB: {A.course_name(s.last_completed_course)} / "
-                   f"{A.star_name(s.last_completed_course, star_id)} "
-                   f"(grab frame {s.global_timer - s.mario_action_timer}, "
-                   f"igt {igt})"
-                   if in_set else "")
             print(f"frame {s.global_timer:>8}  action {s.mario_action:#010x}  "
-                  f"stars {s.num_stars:>3}  igt {s.igt_timer:>8}{tag}")
+                  f"stars {s.num_stars:>3}  igt {s.igt_timer:>8}")
             prev_action = s.mario_action
+        prev_snap = s
         time.sleep(0.016)
 
 

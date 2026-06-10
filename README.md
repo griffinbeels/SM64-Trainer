@@ -14,6 +14,13 @@ Requires Project64 1.6 running Usamune v1.93u on the same machine.
 - Health: `http://127.0.0.1:8064/health`
 - Latest snapshot: `http://127.0.0.1:8064/state`
 
+## Behavior notes
+
+- If a Usamune timer reset races the star touch (reset within ~1 s of the
+  grab, e.g. reset-spamming between attempts), the event reports the
+  *prior attempt's* time extrapolated to the exact touch frame and sets
+  `igt_reconstructed: true`. Normal grabs carry `igt_reconstructed: false`.
+
 ## Known limitations
 
 - Loading a savestate that was *saved during* a star dance re-emits that

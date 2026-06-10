@@ -41,6 +41,7 @@ def test_edge_into_star_dance_emits_identified_event():
         "already_collected": False,
         "igt_frames": 231,  # back-computed: 233 - 2
         "igt": "0'07\"70",  # 231 frames at 30 fps
+        "igt_reconstructed": False,
     }
 
 
@@ -56,6 +57,84 @@ def test_igt_zero_when_timer_unused():
     ev = StarGrabDetector().process(snap(), curr)[0]
     assert ev.payload["igt_frames"] == 0
     assert ev.payload["igt"] == "0'00\"00"
+
+
+def run_pairs(detector, snaps):
+    """Feed consecutive snapshot pairs; return all emitted events."""
+    events = []
+    for prev, curr in zip(snaps, snaps[1:]):
+        events.extend(detector.process(prev, curr))
+    return events
+
+
+def test_igt_reset_racing_grab_reports_prior_attempt_time():
+    # Regression from a live trace (2026-06-10): the player's reset landed
+    # ~3 game frames BEFORE the star touch, so the raw IGT read 5 at the
+    # grab. The event must report the attempt that earned the star:
+    # 185 frames at g=429726, touch at g=429731 -> 190 frames (0'06"33).
+    snaps = [
+        snap(global_timer=429722, igt_timer=181),
+        snap(global_timer=429726, igt_timer=185),
+        snap(global_timer=429729, igt_timer=3),   # Usamune reset hit here
+        snap(global_timer=429730, igt_timer=4),
+        snap(global_timer=429731, igt_timer=5,
+             mario_action=A.ACT_FALL_AFTER_STAR_GRAB, mario_action_timer=0),
+    ]
+    events = run_pairs(StarGrabDetector(), snaps)
+    assert len(events) == 1
+    assert events[0].payload["igt_frames"] == 190
+    assert events[0].payload["igt"] == "0'06\"33"
+    assert events[0].payload["igt_reconstructed"] is True
+    assert events[0].frame == 429731
+
+
+def test_igt_reset_between_touch_and_sample_uses_exact_prior_value():
+    # Touch frame back-computes to BEFORE the reset gap: the prior attempt's
+    # clock extrapolates exactly to the touch.
+    snaps = [
+        snap(global_timer=1000, igt_timer=500),
+        snap(global_timer=1003, igt_timer=1,
+             mario_action=A.ACT_STAR_DANCE_EXIT, mario_action_timer=3),
+    ]
+    events = run_pairs(StarGrabDetector(), snaps)
+    assert events[0].payload["igt_frames"] == 500  # 500 + (1000 - 1000)
+    assert events[0].payload["igt_reconstructed"] is True
+
+
+def test_grab_well_after_reset_is_a_genuine_new_attempt():
+    # A reset in recent history must NOT hijack a grab that happened a full
+    # attempt later (post-reset IGT >= RESET_GRACE_FRAMES).
+    snaps = [
+        snap(global_timer=1000, igt_timer=400),
+        snap(global_timer=1010, igt_timer=5),    # reset
+        snap(global_timer=1050, igt_timer=45),
+        snap(global_timer=1100, igt_timer=95,
+             mario_action=A.ACT_STAR_DANCE_EXIT, mario_action_timer=0),
+    ]
+    events = run_pairs(StarGrabDetector(), snaps)
+    assert events[0].payload["igt_frames"] == 95
+    assert events[0].payload["igt_reconstructed"] is False
+
+
+def test_history_cleared_when_time_jumps_backward():
+    # A savestate load rewinds global_timer; pre-jump IGT samples must not
+    # be used for reconstruction afterwards.
+    d = StarGrabDetector()
+    snaps_before = [
+        snap(global_timer=5000, igt_timer=900),
+        snap(global_timer=5001, igt_timer=901),
+    ]
+    run_pairs(d, snaps_before)
+    snaps_after = [
+        snap(global_timer=5001, igt_timer=901),
+        snap(global_timer=100, igt_timer=50),  # backward jump (savestate)
+        snap(global_timer=110, igt_timer=60,
+             mario_action=A.ACT_STAR_DANCE_EXIT, mario_action_timer=0),
+    ]
+    events = run_pairs(d, snaps_after)
+    assert len(events) == 1
+    assert events[0].payload["igt_frames"] == 60
+    assert events[0].payload["igt_reconstructed"] is False
 
 
 def test_already_collected_star_still_fires_with_flag_true():
