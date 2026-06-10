@@ -17,7 +17,9 @@ class GameSnapshot:
     last_completed_course: int  # 1-based; 0 = castle secret star OR never set
     last_completed_star: int    # 1-based
     # Defaulted fields (added after goal one; defaults keep old call sites valid).
-    igt_timer: int = 0          # Usamune practice-timer frames (USAMUNE_TIMER)
+    igt_overall: int = 0   # Usamune running overall star time (USAMUNE_OVERALL)
+    igt_result: int = 0    # Usamune final star time, written at the grab
+                           # (USAMUNE_STAR_RESULT); 0 before the first grab
 
 
 class SnapshotReader:
@@ -34,5 +36,6 @@ class SnapshotReader:
             num_stars=m.read_s16(A.MARIO_NUM_STARS),
             last_completed_course=m.read_s8(A.LAST_COMPLETED_COURSE),
             last_completed_star=m.read_s8(A.LAST_COMPLETED_STAR),
-            igt_timer=m.read_u32(A.USAMUNE_TIMER),
+            igt_overall=m.read_u16(A.USAMUNE_OVERALL),
+            igt_result=m.read_u16(A.USAMUNE_STAR_RESULT),
         )

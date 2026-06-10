@@ -13,7 +13,8 @@ they pass that harness. Cross-check sources on mismatch:
 """
 
 KSEG0_BASE = 0x80000000
-RDRAM_MIN_SIZE = 0x400000  # 4 MB; SM64 runs without the expansion pak
+RDRAM_MIN_SIZE = 0x400000   # 4 MB; vanilla SM64 runs without the expansion pak
+RDRAM_FULL_SIZE = 0x800000  # 8 MB; Usamune uses expansion-pak RAM for its globals
 
 # libultra osBootConfig — identical for every N64 game; used to find RDRAM.
 OS_TV_TYPE = 0x80000300   # u32: 0 PAL, 1 NTSC, 2 MPAL
@@ -37,16 +38,23 @@ LAST_COMPLETED_STAR = 0x8032DD84     # s8, 1-based; live-verified 2026-06-10
 # once; the harness caught it (course stuck at 0, star tracking level ids).
 CURR_LEVEL = 0x8032DDF8              # s16 gCurrLevelNum
 
-# Usamune's practice timer (the number shown top-right in-game). Usamune
-# does NOT drive the vanilla HUD timer; it keeps the count in object-pool
-# behavior data. Empirically located with tools/find_timer.py and validated
-# with tools/watch_timer.py on 2026-06-10 across level changes, savestate
-# loads, Usamune level resets, and Timer/Display OFF (counter runs
-# regardless of display settings). Object slot 0, field 0x154 — mirrors of
-# the same value exist in other slots (display objects, 1 frame behind) and
-# an area-epoch sibling runs at a constant offset. Re-locate with the tools
-# above if a Usamune version change ever moves it.
-USAMUNE_TIMER = 0x8033D5DC           # u32, 30 fps frames; live-verified 2026-06-10
+# Usamune practice-timer globals — STATIC addresses in expansion RAM
+# (slot-independent, unlike the object-pool counters below). Located
+# empirically via tools/hunt_value.py + a watch session on 2026-06-10.
+USAMUNE_OVERALL = 0x80417C72      # u16, running OVERALL star time: keeps
+                                  # counting across area warps (SSL pyramid
+                                  # etc.); resets with Usamune level resets.
+USAMUNE_STAR_RESULT = 0x80417C74  # u16, written at the star grab with the
+                                  # EXACT final time Usamune displays;
+                                  # persists after the grab. 0 until then.
+# Observed neighbors: 0x80417C70 constant 256; 0x80417C76 written at grab.
+
+# Usamune SECTION (per-area) counter — object-pool behavior field (slot 0
+# +0x154 when observed; mirrors elsewhere). Slot-dependent AND resets on
+# area warps inside a level, so it must NOT be the event IGT source (it
+# under-reported multi-area stars like "Inside the Ancient Pyramid").
+# Kept for diagnostics only.
+USAMUNE_TIMER = 0x8033D5DC           # u32, 30 fps frames; section/area time
 
 # Trap, do not reuse for IGT: the vanilla HUD race timer (gHudDisplay.timer,
 # 0x8033B26C u16) and sTimerRunning (0x8033B25E s8) stay 0 under Usamune's

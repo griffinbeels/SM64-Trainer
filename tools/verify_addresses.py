@@ -67,7 +67,8 @@ def main() -> None:
                   f"  frame {ev.frame}{recon}")
         if s.mario_action != prev_action:
             print(f"frame {s.global_timer:>8}  action {s.mario_action:#010x}  "
-                  f"stars {s.num_stars:>3}  igt {s.igt_timer:>8}")
+                  f"stars {s.num_stars:>3}  igt {s.igt_overall:>6} "
+                  f"result {s.igt_result:>6}")
             prev_action = s.mario_action
         prev_snap = s
         time.sleep(0.016)
