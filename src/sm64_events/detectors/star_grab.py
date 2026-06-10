@@ -19,6 +19,9 @@ class StarGrabDetector:
         star_id = curr.last_completed_star - 1  # game is 1-based, API 0-based
         if star_id < 0:
             return []
+        # course 0 is valid here: castle secret stars (Toad/MIPS) report
+        # course 0. The boot-time "never set" state has star == 0 too, so
+        # the star_id guard above already excludes it.
         course_id = curr.last_completed_course
         return [Event(
             type="star_collected",

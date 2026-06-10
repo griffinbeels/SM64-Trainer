@@ -14,7 +14,7 @@ class GameSnapshot:
     mario_action: int
     mario_action_timer: int
     num_stars: int
-    last_completed_course: int  # 1-based; 0 = no star collected yet
+    last_completed_course: int  # 1-based; 0 = castle secret star OR never set
     last_completed_star: int    # 1-based
 
 
