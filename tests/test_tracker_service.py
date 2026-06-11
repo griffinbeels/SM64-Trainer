@@ -91,7 +91,7 @@ def test_save_pb_inserts_row_and_journals(tmp_path):
 
 def test_save_pb_rejects_missing_attempt(tmp_path):
     db, svc = make(tmp_path)
-    with pytest.raises(ValueError):
+    with pytest.raises(LookupError):
         asyncio.run(svc.save_pb(999, "igt"))
 
 
@@ -119,3 +119,27 @@ def test_degraded_mode_without_db_still_broadcasts(tmp_path):
     asyncio.run(svc.start())
     asyncio.run(svc.publish(star(900)))   # must not raise
     assert svc.session_id is None
+
+
+def test_reproject_emits_target_changed_when_target_reverts(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.set_target(8, 2))
+    asyncio.run(svc.publish(star(900)))            # target moves to (2,2)
+    grab_id = db.attempts()[0].id
+    asyncio.run(svc.clear_attempt(grab_id, reason="accidental"))
+    assert svc.target == (8, 2)
+    tc = [e for e in db.events() if e.type == "target_changed"]
+    assert tc[-1].payload["course_id"] == 8 and tc[-1].payload["star_id"] == 2
+
+
+def test_pipeline_survives_attempt_persist_failure(tmp_path):
+    db, svc = make(tmp_path)
+    original = db.upsert_attempt
+    db.upsert_attempt = lambda a: (_ for _ in ()).throw(RuntimeError("disk full"))
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350)))           # must not raise
+    db.upsert_attempt = original
+    db2 = Database(tmp_path / "t.db")
+    svc2 = TrackerService(db2, Broadcaster())
+    asyncio.run(svc2.start())                      # replay self-heals
+    assert any(a.outcome == "success" for a in db2.attempts())

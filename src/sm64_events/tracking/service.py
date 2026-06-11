@@ -10,7 +10,9 @@ attempt_completed derived event is emitted through the same pipeline
 Commands (set_target, clear/restore, save_pb, new_session) append journal
 events through the same path so the journal stays the single source of
 truth; clear/restore re-run the full projection because their effect is
-retroactive. With db=None the service degrades to broadcast-only."""
+retroactive. With db=None the service degrades to broadcast-only.
+Tracking failures are isolated inside publish() so the poll loop never
+dies (spec §9)."""
 import logging
 from datetime import datetime, timezone
 
@@ -56,10 +58,13 @@ class TrackerService:
         if self.db is None or self.session_id is None:
             return
         try:
-            jid = self.db.append_event(self.session_id, seq, event)
+            await self._track(event, seq)
         except Exception:
-            log.exception("journal write failed; event broadcast only")
-            return
+            log.exception("tracking pipeline failed for %s; event broadcast only",
+                          event.type)
+
+    async def _track(self, event: Event, seq: int) -> None:
+        jid = self.db.append_event(self.session_id, seq, event)
         row = EventRow(id=jid, session_id=self.session_id, seq=seq,
                        type=event.type, frame=event.frame,
                        wall_time_utc=_iso(event.timestamp_utc),
@@ -67,6 +72,9 @@ class TrackerService:
         target_before = self._projector.target
         for attempt in self._projector.feed(row):
             self.db.upsert_attempt(attempt)
+            # The derived event's journal row carries the CURRENT session_id,
+            # which for a cross-session abandon differs from the attempt's own
+            # session_id — the payload's session_id is authoritative.
             await self.publish(self._attempt_completed_event(attempt, event))
         if self._projector.target != target_before:
             await self.publish(Event(
@@ -121,7 +129,7 @@ class TrackerService:
     async def clear_attempt(self, attempt_id: int, reason: str | None = None) -> None:
         db = self._require_db()
         if not any(a.id == attempt_id for a in db.attempts()):
-            raise ValueError(f"no attempt {attempt_id}")
+            raise LookupError(f"no attempt {attempt_id}")
         await self.publish(Event(type="attempt_cleared", frame=0,
                                  timestamp_utc=_now(),
                                  payload={"attempt_id": attempt_id, "reason": reason}))
@@ -136,20 +144,26 @@ class TrackerService:
 
     async def _reproject(self) -> None:
         db = self._require_db()
-        events = db.events()
-        attempts, projector = replay(events)
+        before = self._projector.target
+        attempts, projector = replay(db.events())
         # keep the live session: replayed projector state is authoritative
         self._projector = projector
         db.replace_attempts(attempts)
         await self.publish(Event(type="attempts_invalidated", frame=0,
                                  timestamp_utc=_now(), payload={}))
+        if self._projector.target != before:
+            await self.publish(Event(type="target_changed", frame=0,
+                                     timestamp_utc=_now(),
+                                     payload=self._target_payload()))
 
     async def save_pb(self, attempt_id: int, timer_mode: str) -> dict:
         db = self._require_db()
         if timer_mode not in ("igt", "rta"):
             raise ValueError(f"bad timer_mode {timer_mode!r}")
         attempt = next((a for a in db.attempts() if a.id == attempt_id), None)
-        if attempt is None or attempt.outcome != "success" or attempt.cleared:
+        if attempt is None:
+            raise LookupError(f"no attempt {attempt_id}")
+        if attempt.outcome != "success" or attempt.cleared:
             raise ValueError(f"attempt {attempt_id} is not a saveable success")
         frames = attempt.igt_frames if timer_mode == "igt" else attempt.rta_frames
         if frames is None:
