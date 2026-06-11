@@ -36,10 +36,11 @@ def test_video_rotates_every_segment_and_stamps_utc(tmp_path):
     assert video[0].utc_end == T0 + timedelta(seconds=2)
     assert video[2].utc_end == T0 + timedelta(seconds=5)
     with av.open(str(video[0].path)) as c:    # decodable, full GOP
-        # >= 58 (not == 60): libx264 may hold back 1-2 frames in its B-frame
-        # flush buffer (encoder delay), so the muxed stream can have slightly
-        # fewer decodable frames than were submitted.
-        assert len([f for f in c.decode(video=0)]) >= 58
+        # Exactly 60: zerolatency (libx264) / bf=0 (nvenc) mean no encoder
+        # delay, and _close_video_segment drains via encode(None). The
+        # extractor maps frame i to utc_start + i/fps, so "exactly
+        # seg_frames decodable frames per full segment" IS the contract.
+        assert len([f for f in c.decode(video=0)]) == 60
 
 
 def test_audio_chunks_carry_sample_accurate_ranges(tmp_path):
