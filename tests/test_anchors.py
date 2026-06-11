@@ -8,6 +8,7 @@ from sm64_events.detectors.anchors import BOOT_TIMER_MAX, AnchorDetector
 # a snap-pair that never leaves idle produces mario_acted=False in payloads.
 ACT_IDLE = 0x0C400201
 ACT_WALKING = 0x04000440  # not in PASSIVE_ACTIONS -> counts as "acted"
+ACT_QUICKSAND_DEATH = 0x00021312  # in DEATH_ACTIONS -> involuntary
 
 
 def snap(timer: int, igt: int = 0, action: int = ACT_IDLE) -> GameSnapshot:
@@ -217,3 +218,39 @@ def test_anchor_payloads_carry_acted_tracking_marker():
     assert events[0].payload["acted_tracking"] is True
     events = AnchorDetector().process(snap(5000, igt=900), snap(3000, igt=120))
     assert events[0].payload["acted_tracking"] is True
+
+
+def test_death_action_does_not_emit_mario_acted_or_set_acted():
+    d = AnchorDetector()
+    # AFK then Mario dies to quicksand with zero input: NOT activity
+    assert d.process(snap(1000, igt=100),
+                     snap(1001, igt=101, action=ACT_QUICKSAND_DEATH)) == []
+    events = d.process(snap(1001, igt=500), snap(1002, igt=0))
+    assert events[0].payload["mario_acted"] is False
+
+
+def test_action_after_swallowed_anchor_tick_action_still_emits_event():
+    # a non-passive action ON the anchor tick is swallowed and must not
+    # consume the once-per-period mario_acted budget
+    d = AnchorDetector()
+    events = d.process(snap(1000, igt=500), snap(1001, igt=0, action=ACT_WALKING))
+    assert [e.type for e in events] == ["practice_reset"]
+    events = d.process(snap(1001, igt=1), snap(1002, igt=2, action=ACT_WALKING))
+    assert [e.type for e in events] == ["mario_acted"]
+
+
+def test_streak_survives_equal_timer_tick():
+    d = AnchorDetector()
+    d.process(snap(1000, igt=500), snap(1100, igt=500))   # +100 paused
+    d.process(snap(1100, igt=500), snap(1100, igt=500))   # equal tick: preserved
+    events = d.process(snap(1100, igt=500), snap(1102, igt=0))
+    assert events[0].payload["paused_frames_before"] == 100
+
+
+def test_console_reset_clears_acted_flags():
+    d = AnchorDetector()
+    d.process(snap(1000, igt=100), snap(1001, igt=101, action=ACT_WALKING))  # acted
+    assert d.process(snap(1001, igt=101), snap(50, igt=5)) == []   # console reset
+    # latch cleared: a fresh action emits a fresh event
+    events = d.process(snap(50, igt=5), snap(51, igt=6, action=ACT_WALKING))
+    assert [e.type for e in events] == ["mario_acted"]

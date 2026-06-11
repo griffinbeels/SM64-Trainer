@@ -27,6 +27,9 @@ mario_acted event: emitted once per anchor period at Mario's first
   non-passive action, so the tracking layer can judge activity for closures
   that are NOT anchors (death/abandon/hard reset). Anchors additionally carry
   acted_tracking: true so old journals (no such events) keep legacy semantics.
+  Death actions are involuntary and never count as activity (a same-tick
+  mario_acted would defeat the unacted-death discard); involuntary knockback
+  still counts — accepted limitation.
 
 VERIFY (live gate): confirm with the human that a Usamune SECTION state
 load moves global_timer backward (full-RAM restore). If Usamune implements
@@ -35,7 +38,7 @@ acceptable for attempt tracking, but the payload distinction matters for
 the anchor→outcome clock, so characterize it once on real hardware."""
 from sm64_events.core.events import Event
 from sm64_events.core.snapshot import GameSnapshot
-from sm64_events.memory.addresses import PASSIVE_ACTIONS
+from sm64_events.memory.addresses import DEATH_ACTIONS, PASSIVE_ACTIONS
 
 BOOT_TIMER_MAX = 120   # global_timer below ~4 s after a backward jump = console reset; shared by lifecycle.py
 NEAR_ZERO_IGT = 30     # 30 frames = 1 s at 30 fps; <= so exactly 1 s still counts
@@ -58,7 +61,8 @@ class AnchorDetector:
             self._pause_streak = 0
             return events
         self._update_pause_streak(prev, curr)
-        if curr.mario_action not in PASSIVE_ACTIONS:
+        if (curr.mario_action not in PASSIVE_ACTIONS
+                and curr.mario_action not in DEATH_ACTIONS):
             self._acted = True
             if not self._acted_reported:
                 self._acted_reported = True
@@ -68,7 +72,11 @@ class AnchorDetector:
 
     def _update_pause_streak(self, prev: GameSnapshot, curr: GameSnapshot) -> None:
         if curr.global_timer < prev.global_timer:
-            self._pause_streak = 0   # boot-range backward jump (no anchor fired)
+            # boot-range backward jump (no anchor fired): a console reset —
+            # nothing from before the boot survives, activity included
+            self._pause_streak = 0
+            self._acted = False
+            self._acted_reported = False
         elif curr.igt_overall != prev.igt_overall:
             self._pause_streak = 0   # game logic is running
         elif curr.global_timer > prev.global_timer:
