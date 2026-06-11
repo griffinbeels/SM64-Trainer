@@ -83,6 +83,39 @@ STAR_GRAB_ACTIONS = frozenset({
     ACT_FALL_AFTER_STAR_GRAB,
 })
 
+# Mario death actions -> cause label (decomp include/sm64.h, fetched 2026-06-10).
+# VERIFY (live gate pending). Cause strings are the API vocabulary for
+# attempt outcome_detail; keep them stable.
+DEATH_ACTIONS = {
+    0x00021311: "standing",    # ACT_STANDING_DEATH
+    0x00021312: "quicksand",   # ACT_QUICKSAND_DEATH
+    0x00021313: "electrocution",  # ACT_ELECTROCUTION
+    0x00021314: "suffocation", # ACT_SUFFOCATION
+    0x00021315: "on_stomach",  # ACT_DEATH_ON_STOMACH
+    0x00021316: "on_back",     # ACT_DEATH_ON_BACK
+    0x00021317: "eaten_by_bubba",  # ACT_EATEN_BY_BUBBA
+    0x300032C4: "drowning",    # ACT_DROWNING
+    0x300032C7: "water",       # ACT_WATER_DEATH
+}
+
+# Actions Mario passes through or rests in WITHOUT user input (spawn-in,
+# idle, sleep). Used by AnchorDetector's activity flag: any OTHER action
+# observed since the last anchor means the player actually did something.
+# Camera-only input never changes mario_action -> counts as inactive (the
+# user's requested rule for ignoring no-op resets). VERIFY (live gate pending).
+PASSIVE_ACTIONS = frozenset({
+    0x00000000,  # ACT_UNINITIALIZED
+    0x0C400201,  # ACT_IDLE
+    0x0C400202,  # ACT_START_SLEEPING
+    0x0C000203,  # ACT_SLEEPING
+    0x0C000204,  # ACT_WAKING_UP
+    0x0C400205,  # ACT_PANTING
+    0x00001924,  # ACT_SPAWN_SPIN_AIRBORNE
+    0x00001325,  # ACT_SPAWN_SPIN_LANDING
+    0x00001932,  # ACT_SPAWN_NO_SPIN_AIRBORNE
+    0x00001333,  # ACT_SPAWN_NO_SPIN_LANDING
+})
+
 # ---------------------------------------------------------------------------
 # Name tables (display-only; IDs are the authoritative identity).
 # ---------------------------------------------------------------------------

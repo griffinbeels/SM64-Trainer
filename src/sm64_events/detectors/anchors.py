@@ -12,6 +12,12 @@ state_loaded — savestate / Usamune section-state load: gGlobalTimer jumps
   jumps into the boot range are console resets and belong to game_reset
   (lifecycle.py shares BOOT_TIMER_MAX so exactly one of the two fires).
 
+Both anchor payloads carry mario_acted: whether Mario entered any non-passive
+  action since the last anchor. The tracking layer discards reset-closures of
+  attempts where the player never acted (no-op reset spam, per user feedback).
+  The action transition ON the anchor tick itself is swallowed — it belongs
+  to the warp/spawn, not to either attempt.
+
 VERIFY (live gate): confirm with the human that a Usamune SECTION state
 load moves global_timer backward (full-RAM restore). If Usamune implements
 section states as warps instead, loads will classify as practice_reset —
@@ -19,6 +25,7 @@ acceptable for attempt tracking, but the payload distinction matters for
 the anchor→outcome clock, so characterize it once on real hardware."""
 from sm64_events.core.events import Event
 from sm64_events.core.snapshot import GameSnapshot
+from sm64_events.memory.addresses import PASSIVE_ACTIONS
 
 BOOT_TIMER_MAX = 120   # global_timer below ~4 s after a backward jump = console reset; shared by lifecycle.py
 NEAR_ZERO_IGT = 30     # 30 frames = 1 s at 30 fps; <= so exactly 1 s still counts
@@ -26,17 +33,30 @@ IGT_WRAP_CEILING = 65000  # u16 wrap guard: 65535->0 looks like a reset without 
 
 
 class AnchorDetector:
+    def __init__(self):
+        self._acted = False
+
     def process(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
+        events = self._classify(prev, curr)
+        if events:
+            self._acted = False
+        elif curr.mario_action not in PASSIVE_ACTIONS:
+            self._acted = True
+        return events
+
+    def _classify(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         if curr.global_timer < prev.global_timer:
             if curr.global_timer < BOOT_TIMER_MAX:
                 return []  # console reset — GameResetDetector owns this
             return [Event(type="state_loaded", frame=curr.global_timer,
                           timestamp_utc=curr.wall_time_utc,
-                          payload={"igt_frames_restored": curr.igt_overall})]
+                          payload={"igt_frames_restored": curr.igt_overall,
+                                   "mario_acted": self._acted})]
         if (curr.igt_overall < prev.igt_overall
                 and curr.igt_overall <= NEAR_ZERO_IGT
                 and prev.igt_overall < IGT_WRAP_CEILING):
             return [Event(type="practice_reset", frame=curr.global_timer,
                           timestamp_utc=curr.wall_time_utc,
-                          payload={"igt_frames_before": prev.igt_overall})]
+                          payload={"igt_frames_before": prev.igt_overall,
+                                   "mario_acted": self._acted})]
         return []

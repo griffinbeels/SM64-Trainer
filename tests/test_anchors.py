@@ -4,13 +4,16 @@ from datetime import datetime, timezone
 from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.detectors.anchors import BOOT_TIMER_MAX, AnchorDetector
 
+# ACT_IDLE is a PASSIVE_ACTIONS member — using it as the snap default means
+# a snap-pair that never leaves idle produces mario_acted=False in payloads.
 ACT_IDLE = 0x0C400201
+ACT_WALKING = 0x04000440  # not in PASSIVE_ACTIONS -> counts as "acted"
 
 
-def snap(timer: int, igt: int = 0) -> GameSnapshot:
+def snap(timer: int, igt: int = 0, action: int = ACT_IDLE) -> GameSnapshot:
     return GameSnapshot(
         wall_time_utc=datetime(2026, 6, 10, tzinfo=timezone.utc),
-        global_timer=timer, mario_action=ACT_IDLE, mario_action_timer=0,
+        global_timer=timer, mario_action=action, mario_action_timer=0,
         num_stars=5, last_completed_course=1, last_completed_star=3,
         igt_overall=igt)
 
@@ -20,7 +23,7 @@ def test_igt_drop_to_zero_emits_practice_reset():
     assert len(events) == 1
     ev = events[0]
     assert ev.type == "practice_reset" and ev.frame == 1002
-    assert ev.payload == {"igt_frames_before": 500}
+    assert ev.payload == {"igt_frames_before": 500, "mario_acted": False}
 
 
 def test_igt_drop_to_small_value_still_practice_reset():
@@ -44,7 +47,7 @@ def test_backward_global_timer_emits_state_loaded():
     assert len(events) == 1
     ev = events[0]
     assert ev.type == "state_loaded" and ev.frame == 3000
-    assert ev.payload == {"igt_frames_restored": 120}
+    assert ev.payload == {"igt_frames_restored": 120, "mario_acted": False}
 
 
 def test_backward_jump_into_boot_range_is_left_to_game_reset():
@@ -73,3 +76,54 @@ def test_igt_drop_just_above_threshold_is_silent():
 def test_backward_jump_to_exactly_boot_max_is_state_loaded():
     events = AnchorDetector().process(snap(5000, igt=900), snap(BOOT_TIMER_MAX, igt=5))
     assert len(events) == 1 and events[0].type == "state_loaded"
+
+
+# ---------------------------------------------------------------------------
+# Activity flag tests
+# ---------------------------------------------------------------------------
+
+def test_action_excursion_then_reset_yields_mario_acted_true():
+    d = AnchorDetector()
+    # Frame 1: idle -> walking (non-passive: sets _acted=True)
+    d.process(snap(1000, igt=100), snap(1001, igt=101, action=ACT_WALKING))
+    # Frame 2: reset arrives
+    events = d.process(snap(1001, igt=500), snap(1002, igt=0))
+    assert len(events) == 1
+    assert events[0].payload["mario_acted"] is True
+
+
+def test_activity_flag_resets_after_anchor():
+    d = AnchorDetector()
+    # First excursion + reset
+    d.process(snap(1000, igt=100), snap(1001, igt=101, action=ACT_WALKING))
+    d.process(snap(1001, igt=500), snap(1002, igt=0))  # anchor fires, flag resets
+    # Second pair — no action, then another reset
+    events = d.process(snap(1002, igt=200), snap(1003, igt=0))
+    assert len(events) == 1
+    assert events[0].payload["mario_acted"] is False
+
+
+def test_action_on_anchor_tick_itself_is_swallowed():
+    # prev=idle, curr=walking+igt_drop: anchor fires with mario_acted=False
+    # (the walk on the anchor tick belongs to the warp/spawn, not the attempt)
+    d = AnchorDetector()
+    prev = snap(1000, igt=500)
+    curr = snap(1001, igt=0, action=ACT_WALKING)
+    events = d.process(prev, curr)
+    assert len(events) == 1
+    assert events[0].payload["mario_acted"] is False
+
+
+def test_idle_only_pairs_produce_mario_acted_false_in_state_loaded():
+    events = AnchorDetector().process(snap(5000, igt=900), snap(3000, igt=120))
+    assert events[0].payload["mario_acted"] is False
+
+
+def test_all_passive_spawn_actions_do_not_set_acted():
+    # All spawn actions are passive; cycling through them must not set acted
+    from sm64_events.memory.addresses import PASSIVE_ACTIONS
+    d = AnchorDetector()
+    for action in PASSIVE_ACTIONS:
+        d.process(snap(1000, igt=100), snap(1001, igt=101, action=action))
+    events = d.process(snap(1001, igt=500), snap(1002, igt=0))
+    assert events[0].payload["mario_acted"] is False
