@@ -73,6 +73,20 @@ commands — not on the poll path). Measured: ~6.5 ms @ 100 events, ~23 ms
 @ 1,000 events, ~97 ms @ 5,000 events. Acceptable for an explicit user
 command; would need batching if it became per-tick.
 
+**User-feedback round (2026-06-10 live play).** `DeathDetector`
+(`detectors/death.py`) fires on action-set edge (entry into DEATH_ACTIONS)
+and closes the open attempt as outcome "death". `LevelChangeDetector`
+(`detectors/level.py`) fires on level-id edge and closes open attempts as
+abandoned — no new memory reads required beyond `curr_level`, which was
+already a registered snapshot field. The `mario_acted` activity flag is
+written into `practice_reset` and `state_loaded` anchor payloads by
+`AnchorDetector`; the projector discards anchors with `mario_acted: false`
+as no-op reset spam (they never reach the failure-rate denominator). Strategy
+memory is per-star — switching target stars loads that star's own last-used
+strategy. `PASSIVE_ACTIONS` and `DEATH_ACTIONS` sets are decomp-verified
+constants (see `detectors/death.py`) but remain marked VERIFY pending the
+live gate with the human.
+
 ## Where the deep facts live (authoritative homes)
 
 - **Addresses, provenance, traps** (gCurrLevelNum trap, vanilla-HUD-timer

@@ -63,9 +63,11 @@ Other event types, same envelope:
 | Type | Key payload fields | Meaning |
 |---|---|---|
 | `game_reset` | _(none)_ | Console reset / ROM reload (timer into boot range) |
-| `practice_reset` | `igt_frames_before` | Usamune level reset — attempt anchor; payload carries the failed attempt's IGT |
-| `state_loaded` | `igt_frames_restored` | Savestate / Usamune section-state load — attempt anchor |
-| `attempt_completed` | `attempt_id, session_id, course_id, star_id, course_name, star_name, strat_tag, anchor_type, outcome, outcome_detail, igt_frames, igt, rta_frames` | Derived: an attempt just closed (success / reset / hard_reset / abandoned) |
+| `practice_reset` | `igt_frames_before, mario_acted` | Usamune level reset — attempt anchor; payload carries the failed attempt's IGT and whether Mario entered any non-passive action since the last anchor (no-op resets where `mario_acted: false` are discarded) |
+| `state_loaded` | `igt_frames_restored, mario_acted` | Savestate / Usamune section-state load — attempt anchor; same activity flag as practice_reset |
+| `death` | `cause, igt_frames, level` | Mario died; closes the open attempt as outcome "death" with the cause in outcome_detail |
+| `level_changed` | `from, to` | Level id edge; closes open attempts as abandoned; `from` is 0 on first read after attach |
+| `attempt_completed` | `attempt_id, session_id, course_id, star_id, course_name, star_name, strat_tag, anchor_type, outcome, outcome_detail, igt_frames, igt, rta_frames` | Derived: an attempt just closed (success / reset / death / hard_reset / abandoned) |
 | `target_set` | `course_id, star_id, strat_tag?` | User explicitly set the practice target |
 | `target_changed` | `course_id, star_id, strat_tag` | Practice target moved (auto-follows last valid grab, or set by command) |
 | `attempt_cleared` | `attempt_id, reason` | Attempt tombstoned; `reason` is always present, may be null (triggers full re-projection; `attempts_invalidated` follows) |
@@ -75,6 +77,10 @@ Other event types, same envelope:
 | `attempts_invalidated` | _(none)_ | Full re-projection ran — consumers must refetch `/api/session` |
 | `emulator_connected` | _(none)_ | Attached to PJ64 process |
 | `emulator_disconnected` | _(none)_ | Lost PJ64 process |
+
+**Attempt outcomes:** `success`, `reset`, `death`, `hard_reset`, `abandoned`. `death` and `reset` count toward the default failure rate. `abandoned` (level changed before a grab) and discarded no-op resets (where `mario_acted: false`) never count toward the failure rate. Old journal entries without the `mario_acted` key default to acted (counted as real resets).
+
+**Strategies:** Strategy names are remembered per star — switching the target star loads that star's own last-used strategy, not the previous star's. Known strategies for a star = everything registered via target-setting plus every tag appearing in that star's attempt history. The session view surfaces them in `strategies` (map of `"course_id:star_id"` → list) and `last_strat_by_star` (map → last used), and per-section `strategies` / `last_strat` fields.
 
 ## HTTP API
 

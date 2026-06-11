@@ -36,7 +36,9 @@ uv run python tools/verify_addresses.py              # live gate (needs PJ64 + R
 | Event envelope / wire format | `core/events.py` |
 | Star-grab + IGT logic | `detectors/star_grab.py` — docstrings carry the domain rationale |
 | game_reset | `detectors/lifecycle.py` |
-| Attempt anchors (practice_reset / state_loaded) | `detectors/anchors.py` — docstring covers classification logic and VERIFY note |
+| Attempt anchors (practice_reset / state_loaded) | `detectors/anchors.py` — anchors carry the mario_acted activity flag; docstring covers classification logic and VERIFY note |
+| Death detection | `detectors/death.py` — action-set edge; closes open attempt as outcome "death" |
+| Level-change detection | `detectors/level.py` — level-id edge; closes open attempts as abandoned; curr_level address already registered |
 | Poll loop, attach retry, layout sanity | `server/poller.py` |
 | WS fan-out, seq numbers | `server/broadcaster.py` |
 | HTTP/WS endpoints | `server/app.py` |
