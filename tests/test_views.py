@@ -300,3 +300,14 @@ def test_attempt_json_carries_jump_counts(tmp_path):
     [sec] = view["stars"]
     a = sec["attempts"][0]
     assert a["jumps_total"] == 1 and a["jumps_dustless"] == 1
+
+
+def test_attempt_json_carries_started_utc_and_ended_utc(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350, igt=343)))
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    a = sec["attempts"][0]
+    assert a["started_utc"] is not None
+    assert a["ended_utc"] is not None
