@@ -689,3 +689,39 @@ def test_castle_opened_death_is_discarded():
         jev(4, "death", 1300, {"cause": "standing", "igt_frames": 100}),
     ])
     assert [a.outcome for a in attempts] == ["success"]
+
+
+def test_castle_discarded_attempt_drops_its_rollouts():
+    # addendum §4: castle rollouts must not pollute the star's counts
+    attempts = project([
+        star(1, 900),
+        lvl(2, 1000, 22, 6),
+        jev(3, "practice_reset", 1000, {"igt_frames_before": 900, "mario_acted": True}),
+        jev(4, "rollout", 1100, {"dustless": True, "frames_late": 0, "level": 6}),
+        lvl(5, 1250, 6, 22),
+        jev(6, "practice_reset", 1300, {"igt_frames_before": 0, "mario_acted": True}),
+        star(7, 1700),
+    ])
+    assert [a.outcome for a in attempts] == ["success", "success"]
+    assert attempts[1].rollouts_total == 0
+
+
+def test_castle_state_loaded_anchor_is_flagged_too():
+    attempts = project([
+        star(1, 900),
+        lvl(2, 1000, 22, 6),
+        jev(3, "state_loaded", 3000,
+            {"igt_frames_restored": 120, "mario_acted": True}),
+        jev(4, "practice_reset", 3200, {"igt_frames_before": 100, "mario_acted": True}),
+    ])
+    assert [a.outcome for a in attempts] == ["success"]
+
+
+def test_castle_opened_hard_reset_is_discarded():
+    attempts = project([
+        star(1, 900),
+        lvl(2, 1000, 22, 6),
+        jev(3, "practice_reset", 1000, {"igt_frames_before": 900, "mario_acted": True}),
+        jev(4, "game_reset", 50),
+    ])
+    assert [a.outcome for a in attempts] == ["success"]

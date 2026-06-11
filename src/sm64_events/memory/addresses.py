@@ -156,6 +156,8 @@ PASSIVE_ACTIONS = frozenset({
 # gCurrLevelNum values for the three castle hub levels — decomp
 # levels/level_defines.h. 6 (inside) is live-evidenced by our own journal
 # (every stage exit logs level_changed to=6); 16/26 are decomp-sourced.
+# VERIFY (live gate): 16/26 are decomp-only — check grounds/courtyard
+# entries flag correctly.
 CASTLE_LEVELS = frozenset({6, 16, 26})  # inside, grounds, courtyard
 
 # ---------------------------------------------------------------------------

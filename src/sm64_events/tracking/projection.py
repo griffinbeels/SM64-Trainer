@@ -129,7 +129,7 @@ class Projector:
         self._open = None  # EventRow of the open attempt's anchor
         self._open_acted = False  # mario_acted seen since the last anchor; only meaningful while _open is set
         self._level: int | None = None   # gCurrLevelNum per level_changed; None = unknown (legacy journals)
-        self._open_castle = False        # open attempt was OPENED in a castle hub level
+        self._open_castle = False        # open attempt was OPENED in a castle hub level; only meaningful while _open is set (the open site re-arms it)
         self._rollouts_total = 0
         self._rollouts_dustless = 0
         self._jumps_total = 0

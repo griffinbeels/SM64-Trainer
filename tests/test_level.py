@@ -32,8 +32,28 @@ def test_level_change_emits_event_with_from_and_to():
     assert ev.payload == {"from": 8, "to": 24}
 
 
-def test_same_level_is_silent():
-    assert LevelChangeDetector().process(snap(curr_level=8), snap(curr_level=8)) == []
+def test_first_pair_establishes_level_in_journal():
+    # the establishing event (from may equal to) is what lets the
+    # projector's level tracking survive server restarts
+    events = LevelChangeDetector().process(snap(curr_level=8), snap(curr_level=8))
+    assert len(events) == 1
+    assert events[0].payload == {"from": 8, "to": 8}
+
+
+def test_same_level_silent_after_established():
+    d = LevelChangeDetector()
+    d.process(snap(curr_level=8), snap(curr_level=8))
+    assert d.process(snap(curr_level=8), snap(curr_level=8)) == []
+
+
+def test_reattach_gap_level_change_is_caught():
+    d = LevelChangeDetector()
+    d.process(snap(curr_level=8), snap(curr_level=8))      # established at 8
+    # emulator restarted while the server stayed up: prev is re-seeded from
+    # a fresh read so prev == curr == 6, but the journal still says 8
+    events = d.process(snap(curr_level=6), snap(curr_level=6))
+    assert len(events) == 1
+    assert events[0].payload == {"from": 8, "to": 6}
 
 
 def test_level_change_frame_matches_curr_global_timer():
