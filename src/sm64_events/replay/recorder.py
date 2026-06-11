@@ -101,6 +101,7 @@ class ReplayRecorder:
             self._codec = pick_video_codec()
 
         self._stop_event.clear()
+        self._stopping = False  # restart is supported; stop() sets this (M2 guard)
         self._thread = threading.Thread(
             target=self._attach_loop, name="replay-attach", daemon=True)
         self._thread.start()

@@ -190,3 +190,17 @@ def test_long_gap_becomes_coverage_hole_not_giant_fill(tmp_path):
     assert rec.ring.total_bytes < 5 * 1024 * 1024
     segs = rec.ring.covering("video", T0, cov[1])
     assert len(segs) == 2
+
+
+def test_restart_after_stop_records_again(tmp_path):
+    """R1 regression: stop() sets _stopping; start() must reset it or the
+    recorder is silently dead on restart (recording never goes True)."""
+    video, audio = FakeVideoSource(), FakeAudioSource()
+    rec = make_recorder(tmp_path, video, audio)
+    rec.start()
+    assert wait_for(lambda: rec.status()["recording"])
+    rec.stop()
+    assert rec.status()["recording"] is False
+    rec.start()
+    assert wait_for(lambda: rec.status()["recording"])
+    rec.stop()
