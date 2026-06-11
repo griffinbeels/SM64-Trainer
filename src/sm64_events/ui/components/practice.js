@@ -98,7 +98,7 @@ function StarSection({ sec, t }) {
       ${sec.links.example && html`<a href=${sec.links.example} target="_blank">Example</a>`}
       <span class="pbtag">${pb ? `PB ${pb.display} (${t.clock})` : "no PB yet"}</span>
     </div>
-    <${Timeline} tl=${sec.timeline} />
+    <${Timeline} tl=${sec.timeline} sec=${sec} t=${t} />
     <${AttemptTable} attempts=${sec.attempts} rows=${rows} t=${t} />
     <${HideToggle} hidden=${hidden} showHidden=${showHidden} setShowHidden=${setShowHidden} />
     <div class="chips">
