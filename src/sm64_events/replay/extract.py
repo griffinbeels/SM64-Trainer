@@ -251,11 +251,14 @@ class ClipExtractor:
 
             ok = True
         finally:
-            out.close()
-            # I1: partial-file cleanup — any exception unlinks out_path so a
-            # cached-by-existence lookup never serves a broken file.
-            if not ok:
-                out_path.unlink(missing_ok=True)
+            # I1: partial-file cleanup — unlink runs even when close() itself
+            # raises (e.g. disk-full during trailer write), so a
+            # cached-by-existence lookup (Task 11) never serves a broken file.
+            try:
+                out.close()
+            finally:
+                if not ok:
+                    out_path.unlink(missing_ok=True)
 
         return ClipResult(path=out_path,
                           duration_s=(e - s).total_seconds(),
