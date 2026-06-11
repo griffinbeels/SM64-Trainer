@@ -65,8 +65,8 @@ Other event types, same envelope:
 | `game_reset` | _(none)_ | Console reset / ROM reload (timer into boot range) |
 | `practice_reset` | `igt_frames_before` | Usamune level reset — attempt anchor; payload carries the failed attempt's IGT |
 | `state_loaded` | `igt_frames_restored` | Savestate / Usamune section-state load — attempt anchor |
-| `attempt_completed` | `attempt_id, course_id, star_id, course_name, star_name, strat_tag, anchor_type, outcome, outcome_detail, igt_frames, igt, rta_frames` | Derived: an attempt just closed (success / reset / hard_reset / abandoned) |
-| `target_set` | `course_id, star_id, strat_tag` | User explicitly set the practice target |
+| `attempt_completed` | `attempt_id, session_id, course_id, star_id, course_name, star_name, strat_tag, anchor_type, outcome, outcome_detail, igt_frames, igt, rta_frames` | Derived: an attempt just closed (success / reset / hard_reset / abandoned) |
+| `target_set` | `course_id, star_id, strat_tag?` | User explicitly set the practice target |
 | `target_changed` | `course_id, star_id, strat_tag` | Practice target moved (auto-follows last valid grab, or set by command) |
 | `attempt_cleared` | `attempt_id, reason?` | Attempt tombstoned (triggers full re-projection; `attempts_invalidated` follows) |
 | `attempt_restored` | `attempt_id` | Tombstone undone (triggers full re-projection; `attempts_invalidated` follows) |
