@@ -75,6 +75,8 @@ command; would need batching if it became per-tick.
 
 **Sessions are resumable and hard-deletable.** `POST /api/session/continue` reopens an ended session by clearing its `ended_utc` — new attempts append to it as if it never closed. `DELETE /api/session/{id}` is the journal's one deletion path: it bulk-removes all journal rows whose session matches, then runs a full re-projection; the active session is protected (409). PBs are stored separately and survive. Any `attempt_cleared` events recorded inside the deleted session disappear with it — targets those clears had overridden revert to their pre-clear state in the re-projected view (documented revert, not a bug). Timelines (`timeline` field on each session-view section) are a pure read-over-lifetime-attempts projection: the `TIMELINE_OUTCOMES` registry in `tracking/views.py` maps outcome keys to display properties; `MARKERS` in `ui/components/timeline.js` maps them to SVG shapes. Adding a new marker kind is two registry rows and no other code changes.
 
+**Concurrent-instance incident (2026-06-11).** Two servers polling the same emulator double-journaled every game event; prevention is the msvcrt file-region lock at startup (`storage/instance_lock.py`) — the second instance runs broadcast-only; repair is `tools/dedupe_journal.py` (strict type+frame+payload+5 s window rule; see module docstrings).
+
 **User-feedback round (2026-06-10 live play).** `DeathDetector`
 (`detectors/death.py`) fires on action-set edge (entry into DEATH_ACTIONS)
 and closes the open attempt as outcome "death". `LevelChangeDetector`
@@ -161,13 +163,14 @@ Principles:
 
 ## Roadmap (unbuilt)
 
-Delivered in phase 1: attempt tracking, stats registry, REST API, Practice
-tab UI (features #3, #4, #6, #9, #11 from the spec). Remaining phases per
+Delivered in phase 1 (this branch): attempt tracking, stats registry, REST API, Practice
+tab UI, death/level-change detectors, activity discard, per-star strategies, timelines,
+session continue/delete, PB-glow, single-instance lock (features #3, #4, #6, #9, #11 +
+live-feedback round + incident-response from the spec). Remaining phases per
 `docs/superpowers/specs/2026-06-10-practice-tracker-platform-design.md §11`:
 
-- **Phase 2** — New detectors: RolloutDetector, DeathDetector,
-  LevelChangeDetector. Requires snapshot fields + live VERIFY session.
-  Turns on `dustless_rate` stat and full `outcome_detail` vocabulary.
+- **Phase 2** — RolloutDetector. Requires snapshot fields + live VERIFY session.
+  Turns on `dustless_rate` stat.
 - **Phase 3** — TriggerDetector (door/key-door rows), MenuDetector
   (menu-open address hunt required). Delivers menu-failure attempt outcome.
 - **Phase 4** — Routes storage + probability board + Routes tab.

@@ -22,6 +22,7 @@ uv sync
 uv run pytest -q                                     # MUST pass before any merge
 uv run uvicorn sm64_events.main:app --host 127.0.0.1 --port 8064   # run from repo root (data/ is cwd-relative)
 uv run python tools/verify_addresses.py              # live gate (needs PJ64 + ROM)
+uv run python tools/dedupe_journal.py data/tracker.db          # scan double-journaled events (read-only); add --fix to repair (server must be stopped)
 ```
 
 ## Module map — where to change what
@@ -47,6 +48,9 @@ uv run python tools/verify_addresses.py              # live gate (needs PJ64 + R
 | Event pipeline + commands (journal→project→broadcast) | `tracking/service.py` |
 | Session view payload | `tracking/views.py` |
 | SQLite journal + derived tables | `storage/db.py` |
+| Single-instance guard (broadcast-only fallback) | `storage/instance_lock.py` — Windows msvcrt file-region lock; held for process lifetime |
+| Duplicate-event detection logic | `storage/dedupe.py` — pure fn; used by `tools/dedupe_journal.py` |
+| Journal deduplication repair tool | `tools/dedupe_journal.py` — scan (read-only) or --fix (delete duplicates + re-project; server must be stopped) |
 | Stats | `stats/registry.py` — ONE StatDef per stat; THE registry |
 | Per-star external links | `links.py` |
 | Built-in viewer UI | `ui/index.html` — served per request: edit + refresh, no restart |
@@ -85,6 +89,7 @@ with `--no-ff`; run the full suite on the merged result; delete the branch.
 7. Timestamps UTC; the primary clock is game frames (30 fps).
 8. Keep the poller's implausible-read refusal — it has caught bugs in our
    own registry.
+9. One server instance per db — enforced by `storage/instance_lock.py`; second instances run broadcast-only (events NOT double-recorded).
 
 ## Recipes
 

@@ -17,6 +17,8 @@ else that wants a live feed of the game.
 
 **Run from the repo root** — `data/tracker.db` is created relative to cwd.
 
+A second server started against the same db acquires no lock and runs broadcast-only — game events are never double-recorded.
+
 Requires Project64 1.6 running Usamune v1.93u on the same machine (8 MB /
 expansion-pak memory). The server attaches automatically and reattaches if
 the emulator restarts.
@@ -128,6 +130,7 @@ Deleting the file resets all history.
 | `tools/find_timer.py` | Scan RDRAM for ticking counters |
 | `tools/hunt_value.py` | Find where a displayed number lives (exact-value search) |
 | `tools/watch_timer.py` | Characterize a candidate address across game scenarios |
+| `tools/dedupe_journal.py` | Scan for double-journaled events from concurrent-instance incidents (read-only); `--fix` deletes duplicates and re-projects (server must be stopped first) |
 
 ## Behavior notes
 
