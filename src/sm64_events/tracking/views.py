@@ -113,12 +113,13 @@ def _markers_for(markers_state: dict, course_id: int, star_id: int) -> dict:
             if k.startswith(prefix)}
 
 
-def _progress(attempts, pb_rows, session_meta) -> dict | None:
+def _progress(attempts, pb_ids: set, session_meta) -> dict | None:
     """Completion-time-over-time points (spec §4): non-cleared successes of
     the SCOPED attempt list, grouped by session, chronological. Gold =
     explicitly saved PB rows (every save stays gold even when superseded).
-    rta race rows (rta_frames == 0) ship as-is; the UI filters them."""
-    pb_ids = {(r["attempt_id"], r["timer_mode"]) for r in pb_rows}
+    rta race rows (rta_frames == 0) ship as-is; the UI filters them.
+    Resumed sessions append to their original segment; within-segment id
+    order is still chronological (journal ids are wall-clock monotonic)."""
     by_session: dict[int, list] = {}
     for a in attempts:
         if a.outcome != "success" or a.cleared:
@@ -152,6 +153,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     scoped = all_attempts if scope == "lifetime" else session_attempts
     pb_rows = db.pbs()
     pbs = _current_pbs(pb_rows)
+    pb_ids = {(r["attempt_id"], r["timer_mode"]) for r in pb_rows}
     sessions_list = db.sessions()
     session_meta = {s["id"]: s for s in sessions_list}
     stat_menu = db.get_state("stat_menu", default=DEFAULT_STAT_MENU)
@@ -165,6 +167,11 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             unassigned.append(_attempt_json(a, pbs, clock))
         else:
             seen[(a.course_id, a.star_id)] = None
+
+    # the target star always gets a section (spec §5): setting a target
+    # immediately surfaces its lifetime history, PB, and markers.
+    if service.target and service.target not in seen:
+        seen[service.target] = None
 
     scoped_set = set(scoped)
     for course_id, star_id in seen:
@@ -204,8 +211,17 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "last_strat": service.strat_by_star.get((course_id, star_id)),
             "timeline": _timeline(history),
             "markers_by_strat": _markers_for(markers_state, course_id, star_id),
-            "progress": _progress(in_section, pb_rows, session_meta),
+            "progress": _progress(in_section, pb_ids, session_meta),
         })
+
+    # newest activity first; scoped is journal-id-ordered so the last
+    # assignment per star is its max attempt id. Fresh targets (-1) sort last.
+    last_id: dict[tuple[int, int], int] = {}
+    for a in scoped:
+        if a.course_id is not None:
+            last_id[(a.course_id, a.star_id)] = a.id
+    sections.sort(key=lambda s: last_id.get((s["course_id"], s["star_id"]), -1),
+                  reverse=True)
 
     tgt_c, tgt_s = service.target if service.target else (None, None)
     return {

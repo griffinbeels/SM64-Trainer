@@ -231,11 +231,10 @@ def test_timeline_none_when_only_abandoned(tmp_path):
     asyncio.run(svc.publish(ev("practice_reset", 5000, {"igt_frames_before": 0})))
     asyncio.run(svc.new_session())  # abandons open attempt
     view = build_session_view(db, svc, clock="igt")
-    # session 3 has no attempts for (2,2) in it, so stars is empty
-    # Just verify the helper: build a section with only cleared
-    # (covered by test above). This test verifies the path where
-    # stars list is empty when nothing in current session.
-    assert view["stars"] == []
+    # target (2,2) section is now always present (pinned active star);
+    # nothing in the current session, so its attempt list is empty.
+    [sec] = view["stars"]
+    assert sec["attempts"] == []
 
 
 # -- scope / sessions tests ---------------------------------------------------
@@ -397,3 +396,78 @@ def test_progress_superseded_pbs_stay_gold(tmp_path):
     flags = {p["attempt_id"]: p["is_pb_igt"]
              for p in sec["progress"]["sessions"][0]["points"]}
     assert flags[a343] is True and flags[a350] is True   # every saved PB is gold
+
+
+# -- section ordering + pinned target (spec §5) ---------------------------------
+
+def test_sections_ordered_newest_activity_first(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350, course=2, star_id=2)))
+    asyncio.run(svc.publish(ev("practice_reset", 2000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(2400, course=8, star_id=1, igt=500)))
+    view = build_session_view(db, svc, clock="igt")
+    assert [(s["course_id"], s["star_id"]) for s in view["stars"]] \
+        == [(8, 1), (2, 2)]
+    # fresh activity on (2,2) moves it back to the top
+    asyncio.run(svc.publish(ev("practice_reset", 3000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(3400, course=2, star_id=2)))
+    view2 = build_session_view(db, svc, clock="igt")
+    assert [(s["course_id"], s["star_id"]) for s in view2["stars"]] \
+        == [(2, 2), (8, 1)]
+
+
+def test_target_star_section_always_present(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.set_target(8, 2))           # no attempts anywhere
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    assert (sec["course_id"], sec["star_id"]) == (8, 2)
+    assert sec["attempts"] == [] and sec["timeline"] is None
+    assert sec["progress"] is None
+
+
+def test_each_star_progress_contains_only_its_own_attempts(tmp_path):
+    # rider from Task 5 review: catch a future in_section plumbing slip
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350, course=2, star_id=2, igt=343)))
+    asyncio.run(svc.publish(ev("practice_reset", 2000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(2400, course=8, star_id=1, igt=500)))
+    view = build_session_view(db, svc, clock="igt")
+    by_star = {(s["course_id"], s["star_id"]): s for s in view["stars"]}
+    p22 = by_star[(2, 2)]["progress"]["sessions"][0]["points"]
+    p81 = by_star[(8, 1)]["progress"]["sessions"][0]["points"]
+    assert [p["igt_frames"] for p in p22] == [343]
+    assert [p["igt_frames"] for p in p81] == [500]
+
+
+def test_race_row_ships_in_progress_payload(tmp_path):
+    # rider from Task 5 review: the igt clock needs the same-tick race row
+    # (rta=0); the server must NOT filter it — the UI does, per clock.
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1800, {"igt_frames_before": 380})))
+    asyncio.run(svc.publish(star(1800, igt=380)))      # same tick: rta = 0
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    [p] = sec["progress"]["sessions"][0]["points"]
+    assert p["rta_frames"] == 0 and p["igt_frames"] == 380
+
+
+def test_resumed_session_points_join_their_original_segment(tmp_path):
+    # rider from Task 5 review: continue_session appends to the OLD segment
+    # (one segment per session is the chosen semantic, not global chronology)
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350, igt=343)))
+    asyncio.run(svc.new_session())                       # session 2
+    asyncio.run(svc.publish(ev("practice_reset", 5000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(5400, igt=350)))
+    asyncio.run(svc.continue_session(1))                 # back to session 1
+    asyncio.run(svc.publish(ev("practice_reset", 9000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(9400, igt=330)))
+    view = build_session_view(db, svc, clock="igt", scope="lifetime")
+    [sec] = view["stars"]
+    prog = sec["progress"]
+    assert [s["session_id"] for s in prog["sessions"]] == [1, 2]
+    assert [p["igt_frames"] for p in prog["sessions"][0]["points"]] == [343, 330]
