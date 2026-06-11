@@ -163,7 +163,7 @@ class GdiBitBltVideoSource:
         import queue
         import threading
         self._stop = threading.Event()
-        self._queue = queue.Queue(maxsize=8)  # ~133ms: absorbs rotation spikes at 60fps
+        self._queue = queue.Queue(maxsize=16)  # ~266ms: covers NVENC re-open spikes at the 2s segment rotation
         self._deliver_thread = threading.Thread(
             target=self._deliver_loop, args=(on_frame,),
             name="gdi-deliver", daemon=True)
@@ -201,6 +201,11 @@ class GdiBitBltVideoSource:
         from sm64_events.replay.clock import qpc_100ns
 
         user32, gdi32 = ctypes.windll.user32, ctypes.windll.gdi32
+        # Windows default timer resolution is 15.6 ms - time.sleep() in a
+        # 16.7 ms-period loop quantizes to ~21 ms and the loop runs ~57/s,
+        # CFR-filling 2-3 duplicate frames every second (micro-stutter).
+        # 1 ms resolution + a short spin holds 60.0/s.
+        ctypes.windll.winmm.timeBeginPeriod(1)
         # PJ64 1.6 is DPI-UNAWARE: its real backing surface is its LOGICAL
         # client size (e.g. 1600x1224 at 150% scaling), while a DPI-aware
         # thread sees the scaled physical size (2400x1836) — BitBlt then
@@ -276,13 +281,17 @@ class GdiBitBltVideoSource:
                 next_t += period
                 delay = next_t - _time.perf_counter()
                 if delay > 0:
-                    _time.sleep(delay)
+                    if delay > 0.003:
+                        _time.sleep(delay - 0.002)  # coarse sleep, 1ms timer
+                    while _time.perf_counter() < next_t:
+                        pass                         # sub-ms spin to the tick
                 else:
                     next_t = _time.perf_counter()  # grab overran; resync
         except Exception:
             log.exception("GDI capture loop died")
             on_stopped()
         finally:
+            ctypes.windll.winmm.timeEndPeriod(1)
             if bmp:
                 gdi32.DeleteObject(bmp)
             if mdc:
