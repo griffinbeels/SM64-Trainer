@@ -158,3 +158,61 @@ def test_replay_returns_end_state_projector():
     assert proj.target == (2, 2)
     more = proj.feed(star(3, 1300))
     assert len(more) == 1 and more[0].id == 2 and more[0].outcome == "success"
+
+
+def test_reset_spam_then_grab_uses_last_anchor():
+    attempts = project([
+        jev(1, "practice_reset", 1000, {"igt_frames_before": 0}),
+        jev(2, "practice_reset", 1400, {"igt_frames_before": 380}),
+        star(3, 1500, igt=95),
+    ])
+    assert [a.outcome for a in attempts] == ["reset", "success"]
+    win = attempts[1]
+    assert win.id == 2 and win.anchor_frame == 1400
+    assert win.rta_frames == 100 and win.igt_frames == 95
+
+
+def test_grab_during_open_attempt_records_grabbed_star_not_target():
+    attempts = project([
+        jev(1, "target_set", 0, {"course_id": 8, "star_id": 2}),
+        jev(2, "practice_reset", 1000, {"igt_frames_before": 0}),
+        star(3, 1350, course=2, star_id=2),
+    ])
+    [a] = attempts
+    assert a.id == 2 and (a.course_id, a.star_id) == (2, 2)
+
+
+def test_clearing_a_failure_attempt_only_flags_it():
+    attempts = project([
+        star(1, 900),
+        jev(2, "practice_reset", 1000, {"igt_frames_before": 0}),
+        jev(3, "practice_reset", 1400, {"igt_frames_before": 380}),
+        jev(4, "attempt_cleared", 0, {"attempt_id": 2, "reason": "warmup"}),
+    ])
+    fail = next(a for a in attempts if a.id == 2)
+    assert fail.cleared is True and fail.outcome == "reset"
+    assert (fail.course_id, fail.star_id) == (2, 2)  # attribution unchanged
+
+
+def test_same_tick_reset_race_row_is_pinned():
+    # Documented caveat: rta ~0 while igt carries the prior attempt's
+    # reconstructed time. Consumers prefer igt for such rows.
+    attempts = project([
+        jev(1, "practice_reset", 1400, {"igt_frames_before": 380}),
+        star(2, 1405, igt=380),
+    ])
+    [a] = attempts
+    assert a.outcome == "success" and a.rta_frames == 5 and a.igt_frames == 380
+
+
+def test_strat_tag_explicit_null_clears_but_absent_is_sticky():
+    _, proj = replay([
+        jev(1, "target_set", 0, {"course_id": 8, "star_id": 2, "strat_tag": "x"}),
+        jev(2, "target_set", 0, {"course_id": 8, "star_id": 3}),
+    ])
+    assert proj.strat_tag == "x"
+    _, proj2 = replay([
+        jev(1, "target_set", 0, {"course_id": 8, "star_id": 2, "strat_tag": "x"}),
+        jev(2, "target_set", 0, {"course_id": 8, "star_id": 4, "strat_tag": None}),
+    ])
+    assert proj2.strat_tag is None

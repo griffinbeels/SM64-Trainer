@@ -4,6 +4,24 @@ Two-pass projection: cleared_ids() first, then the sequential Projector —
 so a grab marked "mistake" never moves the practice target, which
 retroactively re-attributes every later failure. Attempt ids are the
 journal id of the attempt's first event: stable across rebuilds.
+
+Caveats (hard-won — keep these current):
+
+1. Same-tick reset-race: when a practice_reset and star_collected land in
+   the same poll tick (anchors run before star_grab), the reset opens a new
+   attempt and the grab closes it with rta near 0 while igt carries the
+   PRIOR attempt's reconstructed time (see star_grab.py docstring) — the
+   row's two clocks legitimately disagree; consumers must prefer igt for
+   such rows.
+
+2. Clearing invariant: attempt_cleared/attempt_restored payloads carry
+   Attempt.id, which is the journal id of the attempt's FIRST event — for
+   an anchored success that is the ANCHOR's id, NOT the star_collected
+   event's id. Clearing by the grab's journal id is a silent no-op.
+
+3. Payload trust: event payloads come from our own detectors/service and
+   are trusted; a KeyError on a required key (course_id/star_id) means a
+   corrupt journal and should fail loud rather than skip rows.
 """
 from dataclasses import dataclass
 
@@ -104,7 +122,8 @@ class Projector:
             course_id=course_id, star_id=star_id, strat_tag=self.strat_tag,
             anchor_type=first.type if is_anchored else "none",
             anchor_frame=first.frame if is_anchored else None,
-            outcome=outcome, outcome_detail=None,
+            outcome=outcome,
+            outcome_detail=None,  # reserved: death cause / menu detail — no Phase 1 producer
             igt_frames=igt_frames, rta_frames=rta,
             started_utc=first.wall_time_utc, ended_utc=close.wall_time_utc,
             cleared=first.id in self._cleared,
