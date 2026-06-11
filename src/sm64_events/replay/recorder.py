@@ -23,6 +23,7 @@ loopback), that is tried; otherwise recording proceeds video-only. The
 chain is config wiring, not policy — main.py decides what the factories
 are."""
 import logging
+import shutil
 import threading
 from typing import Callable, Protocol
 
@@ -91,10 +92,10 @@ class ReplayRecorder:
     def start(self) -> None:
         """Wipe scratch dir, pick codec if needed, start attach loop."""
         scratch = self._cfg.scratch_dir
-        if scratch.exists():
-            for p in scratch.iterdir():
-                if p.is_file():
-                    p.unlink(missing_ok=True)
+        # Recursive: the clip cache (clips/ subdir, owned by ReplayService)
+        # must die with the buffer — a file-only wipe would leave stale clips
+        # that view() then serves against an empty ring after a restart.
+        shutil.rmtree(scratch, ignore_errors=True)
         scratch.mkdir(parents=True, exist_ok=True)
 
         if self._codec is None:

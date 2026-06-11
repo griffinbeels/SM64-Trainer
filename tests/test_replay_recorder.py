@@ -204,3 +204,20 @@ def test_restart_after_stop_records_again(tmp_path):
     rec.start()
     assert wait_for(lambda: rec.status()["recording"])
     rec.stop()
+
+
+def test_startup_wipe_is_recursive_clips_cache_dies_with_buffer(tmp_path):
+    """Final-review fix: a file-only wipe left clips/ alive, so view() served
+    stale clips against an empty ring after a restart."""
+    buf = tmp_path / "buf"
+    clips = buf / "clips"
+    clips.mkdir(parents=True)
+    (buf / "stale.ts").write_bytes(b"junk")
+    (clips / "clip_attempt_1.mp4").write_bytes(b"stale clip")
+    (clips / "clip_attempt_1.json").write_text("{}")
+    rec = make_recorder(tmp_path, FakeVideoSource(), FakeAudioSource(), found=None)
+    rec.start()
+    assert not (buf / "stale.ts").exists()
+    assert not (clips / "clip_attempt_1.mp4").exists()
+    assert not (clips / "clip_attempt_1.json").exists()
+    rec.stop()

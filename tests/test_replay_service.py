@@ -129,3 +129,53 @@ def test_slug_filename_success_and_death():
     d = attempt(outcome="death", igt_frames=120)
     assert slug_filename(d, "Whomp's Fortress", "Chip Off Whomp's Block") == \
         "attempt_0042_whomps-fortress_chip-off-whomps-block_0m04s00_death.mp4"
+
+
+def test_wait_for_tail_blocks_until_coverage_reaches_span_end(tmp_path):
+    """Spec: a View Replay click right after the event waits (bounded) for
+    the segment covering span end. Coverage 'catches up' on the 3rd poll."""
+    import time as _time
+    calls = {"n": 0}
+
+    class GrowingRing:
+        def coverage(self, kind):
+            calls["n"] += 1
+            end = 5 if calls["n"] < 3 else 60
+            return (T0 - timedelta(seconds=60), T0 + timedelta(seconds=end))
+
+    class Rec:
+        def __init__(self):
+            self.ring = GrowingRing()
+        def status(self):
+            return {"recording": True}
+
+    cfg = ReplayConfig(save_root=tmp_path / "replays",
+                       scratch_dir=tmp_path / "buf", extract_wait_s=5.0)
+    svc = ReplayService(cfg=cfg, recorder=Rec(), extractor=FakeExtractor(),
+                        tracker=FakeTracker([attempt()]))
+    t0 = _time.monotonic()
+    svc.view(42)
+    elapsed = _time.monotonic() - t0
+    assert calls["n"] >= 3          # waited until coverage caught up
+    assert elapsed < 4.0            # returned well before the 5 s timeout
+
+
+def test_wait_for_tail_short_circuits_when_not_recording(tmp_path):
+    import time as _time
+
+    class StoppedRec:
+        class _Ring:
+            def coverage(self, kind):
+                return (T0 - timedelta(seconds=60), T0 + timedelta(seconds=1))
+        def __init__(self):
+            self.ring = self._Ring()
+        def status(self):
+            return {"recording": False}
+
+    cfg = ReplayConfig(save_root=tmp_path / "replays",
+                       scratch_dir=tmp_path / "buf", extract_wait_s=5.0)
+    svc = ReplayService(cfg=cfg, recorder=StoppedRec(), extractor=FakeExtractor(),
+                        tracker=FakeTracker([attempt()]))
+    t0 = _time.monotonic()
+    svc.view(42)                    # buffer will never grow; must not wait
+    assert _time.monotonic() - t0 < 1.0
