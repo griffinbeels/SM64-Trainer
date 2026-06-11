@@ -14,6 +14,9 @@ and AAC is encoded once at clip time. Cost: ~0.7 GB/h, comparable to video.
 Frame indexes are wall-clock-locked (index = round(seconds_since_anchor *
 fps), assigned by the recorder), so utc_start of any segment is
 anchor + first_index/fps exactly — no per-frame timestamp bookkeeping.
+Segments are internally contiguous; an index jump forces rotation, so a
+capture gap becomes a segment boundary (a coverage hole in the ring), never
+a mis-stamped duration.
 
 PyAV 17 API notes (verified against av 17.1.0):
 - stream.options = {...} assignment works after add_stream(); no need to pass
@@ -79,6 +82,7 @@ class SegmentWriter:
         self._container = None
         self._stream = None
         self._seg_first_index: int | None = None
+        self._seg_next_index: int | None = None  # enforces per-segment contiguity
         self._seg_frames = 0
         self._seg_n = 0
         self._dims: tuple[int, int] | None = None  # (w, h)
@@ -94,18 +98,38 @@ class SegmentWriter:
 
     # -- video ---------------------------------------------------------------
     def write_video(self, bgra: np.ndarray, frame_index: int) -> None:
+        # yuv420p requires even dimensions; a window dragged to an odd pixel
+        # size would otherwise raise at encode and wedge the segment state.
         h, w = bgra.shape[:2]
+        if (h & 1) or (w & 1):
+            bgra = bgra[:h & ~1, :w & ~1]
+            h, w = bgra.shape[:2]
         if self._container is not None and (
-                (w, h) != self._dims or self._seg_frames >= self._frames_per_seg):
+                (w, h) != self._dims
+                or self._seg_frames >= self._frames_per_seg
+                or frame_index != self._seg_next_index):
             self._close_video_segment()
         if self._container is None:
             self._open_video_segment(frame_index, w, h)
-        vf = av.VideoFrame.from_ndarray(bgra, format="bgra")
-        vf = vf.reformat(format="yuv420p")
-        vf.pts = frame_index - self._seg_first_index
-        for pkt in self._stream.encode(vf):
-            self._container.mux(pkt)
-        self._seg_frames += 1
+        try:
+            vf = av.VideoFrame.from_ndarray(bgra, format="bgra")
+            vf = vf.reformat(format="yuv420p")
+            vf.pts = frame_index - self._seg_first_index
+            for pkt in self._stream.encode(vf):
+                self._container.mux(pkt)
+            self._seg_frames += 1
+            self._seg_next_index = frame_index + 1
+        except Exception:
+            log.exception("encode failed on frame %d — dropping frame, resetting segment", frame_index)
+            try:
+                self._container.close()
+            except Exception:
+                pass
+            try:
+                self._path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            self._container = self._stream = None
 
     def _open_video_segment(self, first_index: int, w: int, h: int) -> None:
         self._seg_n += 1
@@ -116,9 +140,15 @@ class SegmentWriter:
         self._stream.pix_fmt = "yuv420p"
         self._stream.codec_context.time_base = Fraction(1, self._cfg.fps)
         self._stream.codec_context.gop_size = self._frames_per_seg
+        if self._codec == "h264_nvenc":
+            # NVENC defaults to B-frames, which shift the stream's start_time
+            # to +3 frames (0.1 s) and break the extractor's frame0=pts0
+            # contract; they buy nothing at 480p with a 2 s closed GOP.
+            self._stream.options = {"bf": "0"}
         if self._codec == "libx264":
             self._stream.options = {"preset": "ultrafast", "tune": "zerolatency"}
         self._seg_first_index = first_index
+        self._seg_next_index = first_index + 1
         self._seg_frames = 0
         self._dims = (w, h)
         self._path = path
@@ -126,17 +156,26 @@ class SegmentWriter:
     def _close_video_segment(self) -> None:
         if self._container is None:
             return
-        for pkt in self._stream.encode(None):
-            self._container.mux(pkt)
-        self._container.close()
-        fps = self._cfg.fps
-        start = self._clock.anchor_utc + timedelta(
-            seconds=self._seg_first_index / fps)
-        end = start + timedelta(seconds=self._seg_frames / fps)
-        self._on_segment(SegmentInfo(
-            path=self._path, kind="video", utc_start=start, utc_end=end,
-            size_bytes=self._path.stat().st_size))
+        container, stream = self._container, self._stream
+        path, first_index, seg_frames = self._path, self._seg_first_index, self._seg_frames
         self._container = self._stream = None
+        try:
+            for pkt in stream.encode(None):
+                container.mux(pkt)
+            container.close()
+        except Exception:
+            log.exception("flush failed closing segment %s — segment may be incomplete", path)
+            try:
+                container.close()
+            except Exception:
+                pass
+            return
+        fps = self._cfg.fps
+        start = self._clock.anchor_utc + timedelta(seconds=first_index / fps)
+        end = start + timedelta(seconds=seg_frames / fps)
+        self._on_segment(SegmentInfo(
+            path=path, kind="video", utc_start=start, utc_end=end,
+            size_bytes=path.stat().st_size))
 
     # -- audio ---------------------------------------------------------------
     def start_audio(self, t0_utc) -> None:
@@ -144,6 +183,8 @@ class SegmentWriter:
 
     def write_audio(self, pcm_s16: np.ndarray) -> None:
         """pcm_s16: (n, 2) int16 at cfg.audio_rate."""
+        if self._audio_t0 is None:
+            raise RuntimeError("start_audio() not called")
         self._pcm_buf.append(pcm_s16)
         self._pcm_buffered += len(pcm_s16)
         while self._pcm_buffered >= self._chunk_samples:
@@ -168,5 +209,5 @@ class SegmentWriter:
     # -- lifecycle -----------------------------------------------------------
     def close(self) -> None:
         self._close_video_segment()
-        if self._pcm_buffered:
+        if self._audio_t0 is not None and self._pcm_buffered:
             self._flush_audio_chunk(self._pcm_buffered)

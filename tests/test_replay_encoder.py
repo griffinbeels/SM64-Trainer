@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 import av
 import numpy as np
+import pytest
 
 from sm64_events.replay.clock import CaptureClock
 from sm64_events.replay.config import ReplayConfig
@@ -35,6 +36,9 @@ def test_video_rotates_every_segment_and_stamps_utc(tmp_path):
     assert video[0].utc_end == T0 + timedelta(seconds=2)
     assert video[2].utc_end == T0 + timedelta(seconds=5)
     with av.open(str(video[0].path)) as c:    # decodable, full GOP
+        # >= 58 (not == 60): libx264 may hold back 1-2 frames in its B-frame
+        # flush buffer (encoder delay), so the muxed stream can have slightly
+        # fewer decodable frames than were submitted.
         assert len([f for f in c.decode(video=0)]) >= 58
 
 
@@ -67,3 +71,53 @@ def test_dimension_change_rotates_segment(tmp_path):
 
 def test_pick_video_codec_returns_known_codec():
     assert pick_video_codec() in ("h264_nvenc", "libx264")
+
+
+def test_odd_dimensions_are_cropped_not_fatal(tmp_path):
+    segs = []
+    w = make_writer(tmp_path, segs)
+    odd = np.zeros((479, 641, 4), dtype=np.uint8)
+    for i in range(60):
+        w.write_video(odd, frame_index=i)
+    w.close()
+    video = [s for s in segs if s.kind == "video"]
+    assert len(video) == 1
+    with av.open(str(video[0].path)) as c:
+        f = next(iter(c.decode(video=0)))
+        assert (f.width, f.height) == (640, 478)   # cropped to even
+
+
+def test_index_gap_forces_rotation_and_exact_spans(tmp_path):
+    segs = []
+    w = make_writer(tmp_path, segs)
+    for i in range(30):
+        w.write_video(frame(i), frame_index=i)      # 0..29
+    for i in range(45, 60):
+        w.write_video(frame(i), frame_index=i)      # gap: 30..44 missing
+    w.close()
+    video = [s for s in segs if s.kind == "video"]
+    assert len(video) == 2
+    assert video[0].utc_start == T0
+    assert video[0].utc_end == T0 + timedelta(seconds=1.0)    # 30 frames
+    assert video[1].utc_start == T0 + timedelta(seconds=1.5)  # index 45
+    assert video[1].utc_end == T0 + timedelta(seconds=2.0)    # 15 frames
+
+
+def test_audio_before_start_raises(tmp_path):
+    w = SegmentWriter(cfg=CFG, clock=CLK, out_dir=tmp_path,
+                      codec="libx264", on_segment=lambda s: None)
+    with pytest.raises(RuntimeError, match="start_audio"):
+        w.write_audio(np.zeros((48000, 2), dtype=np.int16))
+
+
+def test_nvenc_segments_start_at_pts_zero(tmp_path):
+    if pick_video_codec() != "h264_nvenc":
+        pytest.skip("nvenc not available")
+    segs = []
+    w = SegmentWriter(cfg=CFG, clock=CLK, out_dir=tmp_path,
+                      codec="h264_nvenc", on_segment=segs.append)
+    for i in range(60):
+        w.write_video(frame(i), frame_index=i)
+    w.close()
+    with av.open(str(segs[0].path)) as c:
+        assert (c.streams.video[0].start_time or 0) == 0
