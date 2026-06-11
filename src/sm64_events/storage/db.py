@@ -125,6 +125,12 @@ class Database:
                                (ended_utc, session_id))
             self._conn.commit()
 
+    def reopen_session(self, session_id: int) -> None:
+        with self._lock:
+            self._conn.execute("UPDATE sessions SET ended_utc=NULL WHERE id=?",
+                               (session_id,))
+            self._conn.commit()
+
     def sessions(self) -> list[dict]:
         with self._lock:
             rows = self._conn.execute(

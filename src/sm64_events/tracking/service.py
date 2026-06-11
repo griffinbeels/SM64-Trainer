@@ -209,6 +209,7 @@ class TrackerService:
         if session_id == self.session_id:
             return session_id
         db.end_session(self.session_id, _iso(_now()))
+        db.reopen_session(session_id)   # resumed session is active: no ended_utc
         self.session_id = session_id
         await self.publish(Event(type="session_started", frame=0,
                                  timestamp_utc=_now(),

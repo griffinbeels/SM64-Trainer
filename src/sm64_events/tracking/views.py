@@ -19,7 +19,11 @@ TIMELINE_OUTCOMES = {
 def _timeline(history) -> dict | None:
     """X axis 0 -> longest SUCCESSFUL grab; every qualifying attempt is a
     point at its IGT position. Points may exceed max_frames (a reset later
-    than the best success) — the UI extends the axis as needed."""
+    than the best success) — the UI extends the axis as needed.
+
+    The axis ends at the longest success when one exists, otherwise at the
+    rightmost point; max_is_success=False lets the UI render a provisional
+    axis until a success lands."""
     points = []
     for a in history:
         if a.cleared or a.outcome not in TIMELINE_OUTCOMES:
@@ -34,7 +38,7 @@ def _timeline(history) -> dict | None:
     succ = [p["frames"] for p in points if p["outcome"] == "success"]
     max_frames = max(succ) if succ else max(p["frames"] for p in points)
     return {"max_frames": max_frames, "max_display": format_igt(max_frames),
-            "points": points}
+            "max_is_success": bool(succ), "points": points}
 
 
 def _fmt(value, fmt):
@@ -116,10 +120,11 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         else:
             seen[(a.course_id, a.star_id)] = None
 
+    scoped_set = set(scoped)
     for course_id, star_id in seen:
         history = [a for a in all_attempts
                    if a.course_id == course_id and a.star_id == star_id]
-        in_section = [a for a in history if a in set(scoped)]
+        in_section = [a for a in history if a in scoped_set]
         stats = []
         for sel in stat_menu:
             if sel["key"] not in REGISTRY:

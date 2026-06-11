@@ -167,9 +167,10 @@ def test_timeline_contains_success_reset_death_points(tmp_path):
     assert "success" in outcomes
     assert "reset" in outcomes
     assert "death" in outcomes
-    # max_frames = longest success
+    # max_frames = longest success, flagged as success-derived
     success_frames = [p["frames"] for p in tl["points"] if p["outcome"] == "success"]
     assert tl["max_frames"] == max(success_frames)
+    assert tl["max_is_success"] is True
     # each point has igt string
     assert all("igt" in p and p["frames"] is not None for p in tl["points"])
 
@@ -185,9 +186,24 @@ def test_timeline_reset_longer_than_best_success_max_is_success(tmp_path):
     tl = sec["timeline"]
     # max_frames = 200 (the success), NOT 500
     assert tl["max_frames"] == 200
+    assert tl["max_is_success"] is True
     # but the reset point is still in the list
     reset_pts = [p for p in tl["points"] if p["outcome"] == "reset"]
     assert len(reset_pts) == 1 and reset_pts[0]["frames"] == 500
+
+
+def test_timeline_without_success_max_falls_back_and_is_flagged(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.set_target(2, 2))            # attribute resets to (2,2)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(ev("practice_reset", 1500, {"igt_frames_before": 300})))
+    asyncio.run(svc.publish(ev("practice_reset", 2200, {"igt_frames_before": 450})))
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    tl = sec["timeline"]
+    # no success yet: provisional axis ends at the rightmost point
+    assert tl["max_frames"] == 450
+    assert tl["max_is_success"] is False
 
 
 def test_timeline_cleared_attempts_excluded(tmp_path):

@@ -209,6 +209,15 @@ def test_continue_session_emits_session_started_with_resumed(tmp_path):
     assert resumed_events[0].payload["session_id"] == s1
 
 
+def test_continue_session_reopens_resumed_and_closes_left(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.new_session())            # ends session 1, opens session 2
+    asyncio.run(svc.continue_session(1))      # resume session 1
+    rows = {s["id"]: s for s in db.sessions()}
+    assert rows[1]["ended_utc"] is None       # active again: reopened
+    assert rows[2]["ended_utc"] is not None   # the session we left is closed
+
+
 def test_continue_session_unknown_id_raises_lookup_error(tmp_path):
     db, svc = make(tmp_path)
     with pytest.raises(LookupError):
