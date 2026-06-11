@@ -4,6 +4,7 @@ import { useState } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
 import { StatMenu } from "./statmenu.js";
+import { Timeline } from "./timeline.js";
 
 const html = htm.bind(h);
 
@@ -86,6 +87,7 @@ function StarSection({ sec, t }) {
       ${sec.links.example && html`<a href=${sec.links.example} target="_blank">Example</a>`}
       <span class="pbtag">${pb ? `PB ${pb.display} (${t.clock})` : "no PB yet"}</span>
     </div>
+    <${Timeline} tl=${sec.timeline} />
     <${AttemptTable} attempts=${sec.attempts} rows=${rows} t=${t} />
     <${HideToggle} hidden=${hidden} showHidden=${showHidden} setShowHidden=${setShowHidden} />
     <div class="chips">

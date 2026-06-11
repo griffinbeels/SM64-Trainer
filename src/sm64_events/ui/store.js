@@ -8,20 +8,23 @@ const REFRESH_ON = new Set(["attempt_completed", "attempts_invalidated",
 export function useTracker() {
   const [view, setView] = useState(null);
   const [clock, setClock] = useState(localStorage.getItem("clock") || "igt");
+  const [scope, setScope] = useState(localStorage.getItem("scope") || "session");
   const [feed, setFeed] = useState([]);
   const [connected, setConnected] = useState(false);
 
-  // clockRef keeps refresh's identity stable so the WS effect never restarts
+  // clockRef / scopeRef keep refresh's identity stable so the WS effect never restarts
   const clockRef = useRef(clock);
+  const scopeRef = useRef(scope);
   const everConnected = useRef(false);
   useEffect(() => { clockRef.current = clock; }, [clock]);
+  useEffect(() => { scopeRef.current = scope; }, [scope]);
 
   const refresh = useCallback(async () => {
-    try { setView(await getJSON(`/api/session?clock=${clockRef.current}`)); }
+    try { setView(await getJSON(`/api/session?clock=${clockRef.current}&scope=${scopeRef.current}`)); }
     catch (e) { console.error(e); }
   }, []);
 
-  useEffect(() => { refresh(); }, [clock, refresh]);
+  useEffect(() => { refresh(); }, [clock, scope, refresh]);
 
   useEffect(() => {
     let ws, closed = false;
@@ -48,5 +51,6 @@ export function useTracker() {
   }, [refresh]);   // refresh is now stable -> this effect runs exactly once
 
   const pickClock = (c) => { localStorage.setItem("clock", c); setClock(c); };
-  return { view, clock, pickClock, feed, connected, refresh };
+  const pickScope = (s) => { localStorage.setItem("scope", s); setScope(s); };
+  return { view, clock, pickClock, scope, pickScope, feed, connected, refresh };
 }

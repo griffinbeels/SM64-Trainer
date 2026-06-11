@@ -10,15 +10,41 @@ export function Header({ t }) {
   const v = t.view;
   const tgt = v && v.target;
   const [editing, setEditing] = useState(false);
+  const [managing, setManaging] = useState(false);
+
+  const active = v && v.session.id;
 
   async function newSession() {
     await send("POST", "/api/session/new", {});
     t.refresh();
   }
 
+  async function pickSession(e) {
+    const val = e.target.value;
+    if (val === "lifetime") { t.pickScope("lifetime"); return; }
+    const sid = Number(val);
+    if (sid !== active) {
+      await send("POST", "/api/session/continue", { session_id: sid });
+    }
+    t.pickScope("session");
+    t.refresh();
+  }
+
+  async function removeSession(sid) {
+    if (!window.confirm(`Delete session ${sid} and all its data? This cannot be undone.`)) return;
+    await send("DELETE", `/api/session/${sid}`);
+    t.refresh();
+  }
+
   return html`<div class="bar">
     <span class="dot ${t.connected ? "ok" : "bad"}">${t.connected ? "live" : "offline"}</span>
-    ${v && html`<span class="meta">session ${v.session.id}</span>`}
+    ${v && html`<select value=${t.scope === "lifetime" ? "lifetime" : String(active)}
+                        onchange=${pickSession}>
+      <option value="lifetime">Lifetime</option>
+      ${v.sessions.map((s) => html`<option value=${String(s.id)}>
+        Session ${s.id}${s.id === active ? " ●" : ""} · ${s.attempts}</option>`)}
+    </select>`}
+    ${v && html`<button onclick=${() => setManaging(!managing)} title="manage sessions">…</button>`}
     <button onclick=${newSession} disabled=${!v}>New session</button>
     <span>Target:
       ${tgt && tgt.course_id !== null
@@ -33,6 +59,14 @@ export function Header({ t }) {
         <option value="rta">anchor → grab</option>
       </select>
     </span>
+    ${managing && v && html`<div class="popover">
+      ${v.sessions.map((s) => html`<div style="display:flex;gap:.5rem;align-items:center">
+        <span>Session ${s.id} · ${s.attempts} attempts · ${(s.started_utc || "").slice(0, 10)}</span>
+        ${s.id !== active && html`<button onclick=${() => removeSession(s.id)}>×</button>`}
+        ${s.id === active && html`<span class="meta">active</span>`}
+      </div>`)}
+      <div style="margin-top:.4rem"><button onclick=${() => setManaging(false)}>Close</button></div>
+    </div>`}
     ${editing && v && html`<${TargetEditor} t=${t} close=${() => setEditing(false)} />`}
   </div>`;
 }
