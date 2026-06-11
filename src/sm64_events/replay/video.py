@@ -163,7 +163,7 @@ class GdiBitBltVideoSource:
         import queue
         import threading
         self._stop = threading.Event()
-        self._queue = queue.Queue(maxsize=16)  # ~266ms: covers NVENC re-open spikes at the 2s segment rotation
+        self._queue = queue.Queue(maxsize=24)  # ~280ms at 85 grabs/s: covers NVENC re-open spikes at the 2s rotation
         self._deliver_thread = threading.Thread(
             target=self._deliver_loop, args=(on_frame,),
             name="gdi-deliver", daemon=True)

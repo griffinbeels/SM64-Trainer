@@ -81,6 +81,10 @@ class ReplayRecorder:
         self._clock: CaptureClock | None = None
         self._last_frame: np.ndarray | None = None
         self._last_index: int = -1
+        # observability: what the EYE sees is slots filled vs duplicated
+        self._stat_written = 0   # real frames written to slots
+        self._stat_fills = 0     # CFR duplicates (a missed slot each)
+        self._stat_report_t = 0.0
 
         # status fields (written under _lock or from attach thread only)
         self._recording: bool = False
@@ -260,6 +264,17 @@ class ReplayRecorder:
                      if self._last_frame is not None
                      and target - self._last_index <= max_fill
                      else target)
+        self._stat_fills += max(0, target - fill_from)
+        self._stat_written += 1
+        import time as _t
+        now = _t.monotonic()
+        if now - self._stat_report_t > 30:
+            if self._stat_report_t:
+                log.info("recorder video: %d slots written, %d CFR fills "
+                         "(missed slots) in last 30s",
+                         self._stat_written, self._stat_fills)
+            self._stat_written = self._stat_fills = 0
+            self._stat_report_t = now
 
         for idx in range(fill_from, target):
             with self._lock:
