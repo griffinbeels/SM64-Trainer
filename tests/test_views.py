@@ -516,12 +516,16 @@ def test_strat_set_updates_section_last_strat(tmp_path):
 
 
 def test_duplicate_stored_stat_selections_render_once(tmp_path):
-    # heals dbs that stored duplicates before the write-side dedupe existed
+    # heals dbs that stored duplicates before the write-side dedupe existed;
+    # includes the live-bug case: success_rate stored once with {} and once
+    # with a legacy custom failures set — same chip, must render once.
     db, svc = make(tmp_path)
     seed(svc)
     db.set_state("stat_menu", [
         {"key": "best", "params": {}}, {"key": "best", "params": {}},
         {"key": "success_rate", "params": {}},
+        {"key": "success_rate",
+         "params": {"failures": ["reset", "hard_reset"]}},
     ])
     view = build_session_view(db, svc, clock="igt")
     keys = [s["key"] for s in view["stars"][0]["stats"]]

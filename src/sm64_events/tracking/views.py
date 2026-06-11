@@ -10,13 +10,12 @@ Contract (the UI builds against ALL of this):
   attempts — the UI pins it as the active-star block.
 - Sections carry `markers_by_strat` (spec §3) and `progress` (spec §4,
   scoped successes grouped per session)."""
-import json
-
 from sm64_events.core.timefmt import format_igt
 from sm64_events.links import star_links
 from sm64_events.memory.addresses import (COURSE_NAMES, STAR_NAMES,
                                           course_name, star_name)
-from sm64_events.stats.registry import DEFAULT_STAT_MENU, REGISTRY, compute_stat
+from sm64_events.stats.registry import (DEFAULT_STAT_MENU, REGISTRY,
+                                        compute_stat, selection_id)
 
 # Timeline markers (per-star event graph): outcome -> IGT extractor.
 # Adding a marker kind is one row here (+ a style row in ui timeline.js).
@@ -191,14 +190,14 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                    if a.course_id == course_id and a.star_id == star_id]
         in_section = [a for a in history if a in scoped_set]
         stats = []
-        seen_stat_keys: set[tuple[str, str]] = set()
+        seen_stat_ids: set[str] = set()
         for sel in stat_menu:
             if sel["key"] not in REGISTRY:
                 continue
-            stat_fingerprint = (sel["key"], json.dumps(sel.get("params", {}), sort_keys=True))
-            if stat_fingerprint in seen_stat_keys:
+            sid = selection_id(sel["key"], sel.get("params"))
+            if sid in seen_stat_ids:
                 continue
-            seen_stat_keys.add(stat_fingerprint)
+            seen_stat_ids.add(sid)
             d = REGISTRY[sel["key"]]
             try:
                 value = compute_stat(sel["key"], history, sel.get("params"), clock)

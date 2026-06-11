@@ -373,3 +373,20 @@ def test_statmenu_put_dedupes_exact_selections(tmp_path):
         assert stored == [{"key": "best", "params": {}},
                           {"key": "avg_last_n", "params": {"n": 10}},
                           {"key": "avg_last_n", "params": {"n": 50}}]
+
+
+def test_statmenu_dedupes_param_variants_of_unparameterized_stats(tmp_path):
+    # the user's live bug: success_rate stored once with {} and once with a
+    # legacy custom failures set -> ONE chip; first occurrence wins.
+    client, service, db = make_client(tmp_path)
+    with client:
+        menu = [{"key": "success_rate"},
+                {"key": "success_rate",
+                 "params": {"failures": ["reset", "hard_reset"]}},
+                {"key": "avg_last_n", "params": {"n": 10}},
+                {"key": "avg_last_n", "params": {"n": "10"}},   # str/int collapse
+                {"key": "avg_last_n", "params": {"n": 25}}]
+        assert client.put("/api/statmenu", json={"selections": menu}).status_code == 200
+        stored = client.get("/api/session").json()["stat_menu"]
+        assert [(s["key"], s["params"].get("n")) for s in stored] == [
+            ("success_rate", None), ("avg_last_n", 10), ("avg_last_n", 25)]

@@ -5,7 +5,13 @@ import htm from "htm";
 import { getJSON, send } from "../api.js";
 
 const html = htm.bind(h);
-const keyOf = (s) => `${s.key}:${JSON.stringify(s.params || {})}`;
+// Selection identity — MUST match selection_id() in stats/registry.py:
+// avg_last_n is parameterized by n (each N its own chip); every other stat
+// is identified by key alone, so a stored param variant (e.g. a legacy
+// custom failures set) still matches its checkbox and unchecking removes
+// ALL stored variants of that stat.
+const keyOf = (s) =>
+  s.key === "avg_last_n" ? `${s.key}:${(s.params || {}).n}` : s.key;
 
 export function StatMenu({ t, close }) {
   const [registry, setRegistry] = useState([]);

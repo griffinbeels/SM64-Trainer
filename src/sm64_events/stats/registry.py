@@ -110,6 +110,17 @@ DEFAULT_STAT_MENU = [
 ]
 
 
+def selection_id(key: str, params: dict | None) -> str:
+    """Identity of a stat-menu selection. avg_last_n is parameterized by n
+    (each N is its own chip); every other stat is identified by key alone —
+    params only tune computation (e.g. success_rate's failures set) and must
+    not create visually identical duplicate chips. f-string of n collapses
+    int/str variants ("10" == 10)."""
+    if key == "avg_last_n":
+        return f"{key}:{(params or {}).get('n')}"
+    return key
+
+
 def compute_stat(key: str, attempts: Sequence[Attempt], params: dict,
                  clock: str) -> float | int | None:
     d = REGISTRY[key]
