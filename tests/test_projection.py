@@ -277,3 +277,77 @@ def test_old_journal_without_mario_acted_treats_resets_as_acted():
         jev(3, "practice_reset", 1400, {"igt_frames_before": 380}),
     ])
     assert attempts[1].outcome == "reset"   # rebuild-stable for old data
+
+
+# -- rollout attachment (Phase 2) --------------------------------------------
+
+def rollout(id, frame, dustless):
+    return jev(id, "rollout", frame,
+               {"dustless": dustless, "frames_late": 0 if dustless else 2,
+                "level": 24})
+
+
+def test_rollouts_attach_to_the_attempt_open_when_they_happen():
+    attempts = project([
+        jev(1, "practice_reset", 1000, {"igt_frames_before": 0}),
+        rollout(2, 1100, True),
+        rollout(3, 1200, False),
+        rollout(4, 1250, True),
+        star(5, 1350),
+    ])
+    a = attempts[0]
+    assert a.rollouts_total == 3 and a.rollouts_dustless == 2
+
+
+def test_rollout_counts_reset_between_attempts():
+    attempts = project([
+        jev(1, "practice_reset", 1000, {"igt_frames_before": 0}),
+        rollout(2, 1100, True),
+        jev(3, "practice_reset", 1400, {"igt_frames_before": 380}),
+        star(4, 1700),
+    ])
+    first, second = attempts
+    assert first.rollouts_total == 1 and first.rollouts_dustless == 1
+    assert second.rollouts_total == 0
+
+
+def test_rollouts_attach_to_grab_only_attempt():
+    attempts = project([rollout(1, 800, False), star(2, 900)])
+    assert attempts[0].rollouts_total == 1
+    assert attempts[0].rollouts_dustless == 0
+
+
+def test_rollouts_attach_to_death_closed_attempt():
+    attempts = project([
+        jev(1, "practice_reset", 1000, {"igt_frames_before": 0}),
+        rollout(2, 1100, False),
+        jev(3, "death", 1300, {"cause": "standing", "igt_frames": 290}),
+    ])
+    assert attempts[0].outcome == "death"
+    assert attempts[0].rollouts_total == 1
+    assert attempts[0].rollouts_dustless == 0
+
+
+def test_context_breaks_drop_ambient_rollouts():
+    # rollout in the idle gap, then a level change: must not leak into the
+    # next attempt
+    attempts = project([
+        rollout(1, 700, True),
+        jev(2, "level_changed", 750, {"from": 24, "to": 8}),
+        jev(3, "practice_reset", 1000, {"igt_frames_before": 0}),
+        star(4, 1350),
+    ])
+    assert attempts[0].rollouts_total == 0
+
+
+def test_discarded_noop_reset_drops_its_rollouts():
+    attempts = project([
+        jev(1, "practice_reset", 1000, {"igt_frames_before": 0}),
+        rollout(2, 1100, True),
+        jev(3, "practice_reset", 1400,
+            {"igt_frames_before": 380, "mario_acted": False}),
+        star(4, 1700),
+    ])
+    # the no-op-closed attempt vanished; its rollout must not attach to the grab
+    assert len(attempts) == 1
+    assert attempts[0].rollouts_total == 0

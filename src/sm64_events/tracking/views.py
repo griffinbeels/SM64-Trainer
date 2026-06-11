@@ -73,7 +73,9 @@ def _attempt_json(a, pbs, clock):
             "rta_frames": a.rta_frames,
             "rta": format_igt(a.rta_frames) if a.rta_frames is not None else None,
             "pb_delta_frames": delta, "cleared": a.cleared,
-            "cleared_reason": a.cleared_reason, "ended_utc": a.ended_utc}
+            "cleared_reason": a.cleared_reason, "ended_utc": a.ended_utc,
+            "rollouts_total": a.rollouts_total,
+            "rollouts_dustless": a.rollouts_dustless}
 
 
 def _catalog() -> dict:

@@ -23,9 +23,16 @@ OS_MEM_SIZE = 0x80000318  # u32: 0x400000 or 0x800000
 
 # Mario state (gMarioStates[0]) — source: decomp struct MarioState + STROOP US.
 MARIO_STRUCT = 0x8033B170
+MARIO_PARTICLE_FLAGS = MARIO_STRUCT + 0x08  # u32 particleFlags, re-zeroed every
+                                            # frame; VERIFY (live gate pending)
 MARIO_ACTION = MARIO_STRUCT + 0x0C        # u32; live-verified 2026-06-10
 MARIO_ACTION_TIMER = MARIO_STRUCT + 0x1A  # u16, resets to 0 on action change
 MARIO_NUM_STARS = MARIO_STRUCT + 0xAA     # s16, total star count; live-verified 2026-06-10
+
+# Bit in particleFlags set on every ACT_DIVE_SLIDE frame (the visible dust
+# puffs) — corroborates the rollout detector's action-edge signal.
+# Source: decomp include/sm64.h PARTICLE_DUST. VERIFY (live gate pending).
+PARTICLE_DUST = 1 << 0
 
 GLOBAL_TIMER = 0x8032D5D4            # u32, +1 per game frame (30 Hz); live-verified 2026-06-10
 # gLastCompleted* are adjacent s8 globals but sit 4 bytes apart (IDO aligns
@@ -82,6 +89,20 @@ STAR_GRAB_ACTIONS = frozenset({
     ACT_STAR_DANCE_NO_EXIT,
     ACT_FALL_AFTER_STAR_GRAB,
 })
+
+# Dive -> rollout action chain (decomp include/sm64.h, cross-checked
+# 2026-06-10). Both rollouts are entered ONLY from ACT_DIVE_SLIDE in the
+# decomp (act_dive_slide, on A_PRESSED; forwardVel sign picks the variant).
+# A frame-perfect rollout chains dive_slide -> rollout INSIDE one frame
+# (execute_mario_action loops until the action is stable), so memory shows
+# a direct ACT_DIVE -> ACT_*_ROLLOUT edge with no dive-slide frame — that
+# absence is the "dustless" signal. VERIFY (live gate pending).
+ACT_DIVE = 0x0188088A
+ACT_DIVE_SLIDE = 0x00880456
+ACT_FORWARD_ROLLOUT = 0x010008A6
+ACT_BACKWARD_ROLLOUT = 0x010008AD
+
+ROLLOUT_ACTIONS = frozenset({ACT_FORWARD_ROLLOUT, ACT_BACKWARD_ROLLOUT})
 
 # Mario death actions -> cause label (decomp include/sm64.h, fetched 2026-06-10).
 # VERIFY (live gate pending). Cause strings are the API vocabulary for

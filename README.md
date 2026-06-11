@@ -69,7 +69,8 @@ Other event types, same envelope:
 | `state_loaded` | `igt_frames_restored, mario_acted` | Savestate / Usamune section-state load — attempt anchor; same activity flag as practice_reset |
 | `death` | `cause, igt_frames, level` | Mario died; closes the open attempt as outcome "death" with the cause in outcome_detail |
 | `level_changed` | `from, to` | Level id edge; closes open attempts as abandoned; `from` is 0 on first read after attach |
-| `attempt_completed` | `attempt_id, session_id, course_id, star_id, course_name, star_name, strat_tag, anchor_type, outcome, outcome_detail, igt_frames, igt, rta_frames` | Derived: an attempt just closed (success / reset / death / hard_reset / abandoned) |
+| `rollout` | `dustless, frames_late, level` | Dive→rollout executed. `dustless: true` = frame-perfect (no dive-slide frame ever appeared); otherwise `frames_late` counts the observed dive-slide frames. Rollouts entered from non-dive actions emit nothing. Attaches to the open attempt (`rollouts_total` / `rollouts_dustless`) |
+| `attempt_completed` | `attempt_id, session_id, course_id, star_id, course_name, star_name, strat_tag, anchor_type, outcome, outcome_detail, igt_frames, igt, rta_frames, rollouts_total, rollouts_dustless` | Derived: an attempt just closed (success / reset / death / hard_reset / abandoned) |
 | `target_set` | `course_id, star_id, strat_tag?` | User explicitly set the practice target |
 | `target_changed` | `course_id, star_id, strat_tag` | Practice target moved (auto-follows last valid grab, or set by command) |
 | `attempt_cleared` | `attempt_id, reason` | Attempt tombstoned; `reason` is always present, may be null (triggers full re-projection; `attempts_invalidated` follows) |

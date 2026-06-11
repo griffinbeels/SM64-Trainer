@@ -2,14 +2,16 @@ from sm64_events.stats.registry import REGISTRY, compute_stat, registry_meta
 from sm64_events.tracking.projection import Attempt
 
 
-def attempt(id=1, outcome="success", igt=300, rta=310, cleared=False):
+def attempt(id=1, outcome="success", igt=300, rta=310, cleared=False,
+            rollouts=0, dustless=0):
     return Attempt(id=id, session_id=1, course_id=2, star_id=2, strat_tag=None,
                    anchor_type="practice_reset", anchor_frame=0,
                    outcome=outcome, outcome_detail=None,
                    igt_frames=igt, rta_frames=rta,
                    started_utc="2026-06-10T12:00:00Z",
                    ended_utc="2026-06-10T12:00:10Z",
-                   cleared=cleared, cleared_reason=None)
+                   cleared=cleared, cleared_reason=None,
+                   rollouts_total=rollouts, rollouts_dustless=dustless)
 
 
 SAMPLE = [
@@ -70,3 +72,25 @@ def test_unknown_stat_key_fails_loud():
     import pytest
     with pytest.raises(KeyError):
         compute_stat("nonexistent", SAMPLE, {}, clock="igt")
+
+
+# -- dustless_rate (Phase 2) ---------------------------------------------------
+
+def test_dustless_rate_pools_rollouts_across_attempts():
+    attempts = [
+        attempt(1, rollouts=3, dustless=2),
+        attempt(2, outcome="reset", rollouts=2, dustless=0),  # failures count
+        attempt(3, rollouts=4, dustless=4, cleared=True),     # cleared excluded
+    ]
+    rate = compute_stat("dustless_rate", attempts, {}, clock="igt")
+    assert abs(rate - 0.4) < 1e-9   # (2+0) / (3+2)
+
+
+def test_dustless_rate_none_when_no_rollouts():
+    assert compute_stat("dustless_rate", [attempt(1)], {}, clock="igt") is None
+    assert compute_stat("dustless_rate", [], {}, clock="igt") is None
+
+
+def test_dustless_rate_in_registry_meta():
+    meta = {m["key"]: m for m in registry_meta()}
+    assert meta["dustless_rate"]["fmt"] == "percent"

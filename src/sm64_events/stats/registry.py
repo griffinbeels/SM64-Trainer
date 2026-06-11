@@ -65,6 +65,16 @@ def _success_rate(attempts, params, clock):
     return wins / len(counted)
 
 
+def _dustless_rate(attempts, params, clock):
+    # pools rollouts across attempts regardless of outcome: a rollout
+    # practiced during a failed attempt is still a practiced rollout
+    live = _live(attempts)
+    total = sum(a.rollouts_total for a in live)
+    if total == 0:
+        return None
+    return sum(a.rollouts_dustless for a in live) / total
+
+
 @dataclass(frozen=True)
 class StatDef:
     key: str
@@ -82,6 +92,7 @@ REGISTRY: dict[str, StatDef] = {d.key: d for d in [
     StatDef("success_count", "Successes", "int", _success_count),
     StatDef("success_rate", "Success rate", "percent", _success_rate,
             {"failures": DEFAULT_FAILURES}),
+    StatDef("dustless_rate", "Dustless rate", "percent", _dustless_rate),
 ]}
 
 DEFAULT_STAT_MENU = [
