@@ -264,7 +264,17 @@ real debugging and live OUTSIDE any single module:
   audio. Gap responsibilities: recorder fills gaps <= 1 segment; larger gaps
   become segment boundaries = honest coverage holes in the ring.
 - proc-tap imports as `proctap`; callback delivers (bytes, num_frames=-1);
-  wire on_data at constructor time (start() takes no args).
+  wire on_data at constructor time (start() takes no args). BUT: per-process
+  loopback is a false-healthy trap on this machine — start() succeeds and
+  delivers all-zero PCM (couldn't capture a beep from its OWN process; live
+  beep harness 2026-06-11). System loopback (PyAudioWPatch) verifiably works
+  and is the wired primary. Re-evaluate proctap only with a liveness check.
 - windows-capture: frames expose .frame_buffer/.timespan (no to_numpy);
   @capture.event dispatches on the handler's __name__; timespan is QPC
   100 ns ticks — anchor one (qpc, utc) pair per recording run (clock.py).
+- WINDOW capture of PJ64 1.6 is frozen (~1-6 unique frames/s during play;
+  188 deliveries -> 1 unique image in a 6 s probe): Jabo D3D8 bypasses the
+  DWM per-window surface. MONITOR capture cropped to the DWM extended-frame
+  bounds is the working path (video.py). The process must be per-monitor
+  DPI aware or window (physical px) and monitor (virtualized px) coordinate
+  systems disagree on scaled displays. monitor_index is 1-based.

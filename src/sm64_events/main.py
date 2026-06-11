@@ -11,7 +11,7 @@ from sm64_events.detectors.dust import DustTrickDetector
 from sm64_events.detectors.lifecycle import GameResetDetector
 from sm64_events.detectors.star_grab import StarGrabDetector
 from sm64_events.memory.pj64 import Pj64Memory
-from sm64_events.replay.audio import ProcessAudioSource, SystemAudioSource
+from sm64_events.replay.audio import SystemAudioSource
 from sm64_events.replay.config import ReplayConfig
 from sm64_events.replay.extract import ClipExtractor
 from sm64_events.replay.recorder import ReplayRecorder
@@ -58,12 +58,18 @@ def build():
     if replay_cfg.enabled:
         from sm64_events.replay.encoder import pick_video_codec
         codec = pick_video_codec()
+        # System loopback is PRIMARY (live-audit 2026-06-11): per-process
+        # loopback (proctap) "succeeds" but delivers zeros on this machine —
+        # it couldn't even hear a beep from its own process, an undetectable
+        # false-healthy state. Device-wide loopback verifiably captures the
+        # default output (Elgato Wave:XLR, native 48 kHz). Tradeoff: other
+        # apps' audio bleeds into replays.
         recorder = ReplayRecorder(
             cfg=replay_cfg,
             window_finder=find_window,
             video_factory=WgcVideoSource,
-            audio_factory=ProcessAudioSource,
-            fallback_audio_factory=lambda rate: SystemAudioSource(rate=rate),
+            audio_factory=lambda pid: SystemAudioSource(rate=replay_cfg.audio_rate),
+            fallback_audio_factory=None,
             codec=codec)
         replay = ReplayService(
             cfg=replay_cfg, recorder=recorder,

@@ -121,7 +121,9 @@ operation (bad timer mode, already cleared, non-success outcome, or missing cloc
 
 ### Replay
 
-While the server runs it records the PJ64 window (+ game audio, per-process)
+While the server runs it records the PJ64 window (monitor capture cropped
+to the window — PJ64's D3D8 surface is invisible to per-window capture) plus
+system audio (device-wide loopback; per-process capture proved unreliable)
 into `data/replay_buffer/` (scratch, wiped on startup). Retention defaults to
 the whole session (`ReplayConfig.retention_s`); a hard disk cap (default
 20 GB) evicts oldest footage regardless. PJ64 must run windowed (exclusive

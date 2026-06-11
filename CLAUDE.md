@@ -58,7 +58,7 @@ uv run python tools/dedupe_journal.py data/tracker.db          # scan double-jou
 | UI components, store, API client | `ui/components/` · `ui/store.js` · `ui/api.js` · `ui/app.js`; vendored Preact in `ui/vendor/`; incl. `ui/components/timeline.js` (per-star event graph; marker styles via `MARKERS` registry) · `ui/components/progress.js` (per-star completion-time graph; gold = saved PBs) · `ui/format.js` (shared display formatting — fmtIgt mirrors core/timefmt.py) |
 | Wiring / startup / logging | `main.py` (composition root), `core/logging_setup.py` |
 | Memory-hunting diagnostics | `tools/` — playbook in docs/architecture.md |
-| Replay capture/buffer (window+audio -> segment ring) | `replay/` — `recorder.py` orchestrates (attach loop, CFR conform, audio fallback chain); `clock.py` is THE QPC↔UTC contract; `encoder.py`/`extract.py` docstrings carry the gapless-PCM, NVENC-probe-at-real-size, and wall-clock-pts rationale |
+| Replay capture/buffer (window+audio -> segment ring) | `replay/` — `recorder.py` orchestrates (attach loop, CFR conform, system-loopback audio); `clock.py` is THE QPC↔UTC contract; `encoder.py`/`extract.py` docstrings carry the gapless-PCM, NVENC-probe-at-real-size, and wall-clock-pts rationale |
 | Replay REST surface (status/extract/save/serve) | `server/replay_api.py` — FileResponse for Range/206; same error taxonomy as api.py |
 | Replay player + recording dot | `ui/components/replay.js` |
 
