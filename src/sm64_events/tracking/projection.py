@@ -33,11 +33,20 @@ Caveats (hard-won — keep these current):
    entirely — the player never acted, so the closed attempt is not a real
    attempt. The anchor still opens the next attempt. Old journals lack the
    key; default is True, so rebuilds are stable.
+   Additionally, reset-closures with paused_frames_before >=
+   PAUSE_DISCARD_FRAMES are dropped the same way: a long Usamune-menu pause
+   immediately before the reset means the player went AFK and came back —
+   discarded even when the attempt had real activity (user decision).
+   For attempts opened by an acted_tracking anchor the judgment is
+   event-based (a mario_acted journal event during the attempt) and applies
+   to EVERY non-success closure: reset, death, abandoned, hard_reset.
+   Successes always count.
 
 6. Strategy memory is PER STAR: strat_by_star[(course_id, star_id)] stores
    the last-set strategy for that star independently. Switching targets
    never leaks the previous star's strat. The strat_tag on an attempt is the
-   attributed star's last-remembered strategy at close time.
+   attributed star's last-remembered strategy at close time. strat_set events
+   write the same memory without moving the target.
 
 7. Dust-trick attachment: rollout/jump events accumulate and attach to
    whichever attempt closes next (covers anchored AND grab-only attempts).
@@ -50,8 +59,16 @@ Caveats (hard-won — keep these current):
    frames_late — there, frames_late == 1 IS the frame-perfect input
    (decomp-verified; see detectors/dust.py). _rollout_is_dustless()
    re-derives the classification on replay; new payloads are trusted.
+
+9. Castle attempts: an attempt OPENED while the tracked level is a castle
+   hub (CASTLE_LEVELS) is castle movement — discarded on every non-success
+   closure, never attributed to a star. Judgment is at open time; the
+   closing level_changed updates _level only AFTER its close runs, so exits
+   are judged by the level the attempt lived in. _level starts None
+   (unknown -> attribute) so pre-level-detector journals replay unchanged.
 """
 from dataclasses import dataclass
+from sm64_events.memory.addresses import CASTLE_LEVELS
 
 
 @dataclass(frozen=True)
@@ -79,6 +96,12 @@ class Attempt:
 
 ANCHOR_EVENT_TYPES = ("practice_reset", "state_loaded")
 
+# AFK rule (spec 2026-06-11): a reset/load arriving after >=5 s of pause (the
+# Usamune menu freezes IGT while gGlobalTimer keeps running) closes a run the
+# player walked away from — that is AFK, not a practice reset. Discard applies
+# even when the attempt had real activity before the pause (user decision).
+PAUSE_DISCARD_FRAMES = 150  # 5 s x 30 fps
+
 # Events that delimit attempts; each one zeroes the rollout accumulator
 # after its close runs (see docstring caveat 7).
 BOUNDARY_EVENT_TYPES = frozenset(ANCHOR_EVENT_TYPES) | {
@@ -105,6 +128,9 @@ class Projector:
         self.target: tuple[int, int] | None = None
         self.strat_by_star: dict[tuple[int, int], str | None] = {}
         self._open = None  # EventRow of the open attempt's anchor
+        self._open_acted = False  # mario_acted seen since the last anchor; only meaningful while _open is set
+        self._level: int | None = None   # gCurrLevelNum per level_changed; None = unknown (legacy journals)
+        self._open_castle = False        # open attempt was OPENED in a castle hub level; only meaningful while _open is set (the open site re-arms it)
         self._rollouts_total = 0
         self._rollouts_dustless = 0
         self._jumps_total = 0
@@ -126,6 +152,8 @@ class Projector:
         if ev.type in ANCHOR_EVENT_TYPES:
             closed = self._close_by_reset(ev)
             self._open = ev
+            self._open_acted = False
+            self._open_castle = self._level in CASTLE_LEVELS
             return closed
         if ev.type == "star_collected":
             return self._close_by_grab(ev)
@@ -136,12 +164,23 @@ class Projector:
         if ev.type == "session_started":
             return self._close(ev, outcome="abandoned", igt_frames=None)
         if ev.type == "level_changed":
-            return self._close(ev, outcome="abandoned", igt_frames=None)
+            closed = self._close(ev, outcome="abandoned", igt_frames=None)
+            self._level = ev.payload["to"]
+            return closed
         if ev.type == "target_set":
             c, s = ev.payload["course_id"], ev.payload["star_id"]
             self.target = (c, s)
             if "strat_tag" in ev.payload:
                 self.strat_by_star[(c, s)] = ev.payload["strat_tag"]
+            return []
+        if ev.type == "strat_set":
+            # per-star strategy memory write WITHOUT moving the target
+            # (target_set is the only other writer); explicit null clears.
+            self.strat_by_star[(ev.payload["course_id"], ev.payload["star_id"])] \
+                = ev.payload.get("strat_tag")
+            return []
+        if ev.type == "mario_acted":
+            self._open_acted = True
             return []
         if ev.type == "rollout":
             self._rollouts_total += 1
@@ -164,9 +203,36 @@ class Projector:
             return bool(p.get("dustless"))
         return bool(p.get("dustless")) or p.get("frames_late") == 1
 
+    def _unacted_open(self) -> bool:
+        """No-behavior rule (spec §2): the open attempt came from an
+        acted-tracking anchor and no mario_acted event arrived during it.
+        Legacy anchors (no marker) never match — old journals keep their
+        original semantics. Stale values while _open is None are harmless:
+        the only open-assignment site re-arms the flag."""
+        return (self._open is not None
+                and self._open.payload.get("acted_tracking", False)
+                and not self._open_acted)
+
+    def _open_is_castle(self) -> bool:
+        """Castle rule (addendum 2026-06-11): an attempt opened while Mario
+        was in a castle hub level is castle movement, never a star attempt.
+        _level is None until the first level_changed -> legacy journals
+        (no level detector) replay unchanged."""
+        return self._open is not None and self._open_castle
+
     # -- closers -------------------------------------------------------------
     def _close_by_reset(self, ev) -> list[Attempt]:
-        if not ev.payload.get("mario_acted", True):
+        if ev.payload.get("paused_frames_before", 0) >= PAUSE_DISCARD_FRAMES:
+            # AFK: a long menu pause immediately before the reset — throw the
+            # run out (old journals lack the key -> 0 -> kept). The anchor
+            # still opens the next attempt.
+            self._open = None
+            return []
+        if self._open_is_castle():
+            # castle movement, not a star attempt (addendum): discard
+            self._open = None
+            return []
+        if self._unacted_open() or not ev.payload.get("mario_acted", True):
             # no-op reset spam: the player never acted, so the closed
             # attempt isn't a real attempt — drop it (anchor still opens
             # the next one). Old journals lack the key -> default True.
@@ -189,6 +255,13 @@ class Projector:
         return [attempt]
 
     def _close_by_death(self, ev) -> list[Attempt]:
+        if self._unacted_open():
+            self._open = None
+            return []
+        if self._open_is_castle():
+            # castle movement, not a star attempt (addendum): discard
+            self._open = None
+            return []
         # Deaths count even without an anchor (mirrors grab-only synthesis):
         # a death is always a meaningful failed attempt.
         first = self._open if self._open is not None else ev
@@ -204,6 +277,13 @@ class Projector:
 
     def _close(self, ev, outcome: str, igt_frames: int | None) -> list[Attempt]:
         if self._open is None:
+            return []
+        if self._unacted_open():
+            self._open = None
+            return []
+        if self._open_is_castle():
+            # castle movement, not a star attempt (addendum): discard
+            self._open = None
             return []
         course_id, star_id = self.target if self.target else (None, None)
         strat = self.strat_by_star.get(self.target) if self.target else None

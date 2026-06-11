@@ -100,10 +100,11 @@ def test_stats_registry_and_statmenu(tmp_path):
         assert any(s["key"] == "success_rate" for s in r.json())
         menu = [{"key": "best"}, {"key": "avg_last_n", "params": {"n": 25}}]
         assert client.put("/api/statmenu", json={"selections": menu}).status_code == 200
-        # stored form is normalized: every selection carries a params dict
+        # stored form is normalized: every selection carries a params dict,
+        # and order is canonical (selection_order), not submission order
         assert client.get("/api/session").json()["stat_menu"] == [
-            {"key": "best", "params": {}},
-            {"key": "avg_last_n", "params": {"n": 25}}]
+            {"key": "avg_last_n", "params": {"n": 25}},
+            {"key": "best", "params": {}}]
 
 
 def test_links_endpoint(tmp_path):
@@ -129,6 +130,9 @@ def test_degraded_service_returns_503(tmp_path):
         assert client.get("/api/session").status_code == 503
         assert client.post("/api/target",
                            json={"course_id": 2, "star_id": 2}).status_code == 503
+        assert client.put("/api/markers", json={
+            "course_id": 2, "star_id": 2, "strat_tag": None,
+            "markers": []}).status_code == 503
         assert client.get("/health").json()["db"] == "error"
 
 
@@ -241,3 +245,165 @@ def test_session_delete_past_session_removes_from_sessions_list(tmp_path):
         view = client.get("/api/session").json()
         ids = [s["id"] for s in view["sessions"]]
         assert s1 not in ids
+
+
+# -- timeline markers ----------------------------------------------------------
+
+def test_markers_roundtrip_sorted_by_frames(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)
+        r = client.put("/api/markers", json={
+            "course_id": 2, "star_id": 2, "strat_tag": "cannonless",
+            "markers": [{"frames": 600, "label": "pyramid warp"},
+                        {"frames": 90, "label": "bobomb grab"}]})
+        assert r.status_code == 200 and r.json()["ok"] is True
+        sec = client.get("/api/session").json()["stars"][0]
+        assert sec["markers_by_strat"]["cannonless"] == [
+            {"frames": 90, "label": "bobomb grab"},
+            {"frames": 600, "label": "pyramid warp"}]
+
+
+def test_markers_null_strat_lands_in_empty_key(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)
+        client.put("/api/markers", json={
+            "course_id": 2, "star_id": 2, "strat_tag": None,
+            "markers": [{"frames": 90, "label": "bobomb grab"}]})
+        sec = client.get("/api/session").json()["stars"][0]
+        assert sec["markers_by_strat"][""] == [{"frames": 90, "label": "bobomb grab"}]
+
+
+def test_markers_empty_list_clears(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)
+        client.put("/api/markers", json={
+            "course_id": 2, "star_id": 2, "strat_tag": None,
+            "markers": [{"frames": 90, "label": "x"}]})
+        client.put("/api/markers", json={
+            "course_id": 2, "star_id": 2, "strat_tag": None, "markers": []})
+        sec = client.get("/api/session").json()["stars"][0]
+        assert sec["markers_by_strat"][""] == []
+
+
+def test_markers_validation_422s(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        for bad in ({"frames": -1, "label": "x"},
+                    {"frames": 0, "label": ""},
+                    {"frames": 0, "label": "   "},
+                    {"frames": 0, "label": "y" * 61}):
+            r = client.put("/api/markers", json={
+                "course_id": 2, "star_id": 2, "strat_tag": None,
+                "markers": [bad]})
+            assert r.status_code == 422, bad
+        too_many = [{"frames": i, "label": f"m{i}"} for i in range(31)]
+        assert client.put("/api/markers", json={
+            "course_id": 2, "star_id": 2, "strat_tag": None,
+            "markers": too_many}).status_code == 422
+
+
+def test_markers_label_is_trimmed(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)
+        client.put("/api/markers", json={
+            "course_id": 2, "star_id": 2, "strat_tag": None,
+            "markers": [{"frames": 90, "label": "  bobomb grab  "}]})
+        sec = client.get("/api/session").json()["stars"][0]
+        assert sec["markers_by_strat"][""][0]["label"] == "bobomb grab"
+
+
+def test_markers_put_preserves_other_keys(tmp_path):
+    # the RMW must merge into the dict — a regression to a blind set_state
+    # would clobber every other star/strat's markers and still pass the
+    # single-key tests.
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)
+        client.put("/api/markers", json={
+            "course_id": 2, "star_id": 2, "strat_tag": "cannonless",
+            "markers": [{"frames": 200, "label": "owl"}]})
+        client.put("/api/markers", json={
+            "course_id": 2, "star_id": 2, "strat_tag": None,
+            "markers": [{"frames": 90, "label": "wall jump"}]})
+        sec = client.get("/api/session").json()["stars"][0]
+        assert sec["markers_by_strat"] == {
+            "cannonless": [{"frames": 200, "label": "owl"}],
+            "": [{"frames": 90, "label": "wall jump"}],
+        }
+
+
+def test_strat_endpoint_sets_without_moving_target(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)                                   # target -> (2,2)
+        client.post("/api/target", json={"course_id": 8, "star_id": 2,
+                                         "strat_tag": "carpetless"})
+        r = client.post("/api/strat", json={"course_id": 2, "star_id": 2,
+                                            "strat_tag": "owlless"})
+        assert r.status_code == 200
+        assert service.target == (8, 2)                 # unmoved
+        assert service.strat_by_star[(2, 2)] == "owlless"
+        # registered for the star's dropdown
+        view = client.get("/api/session").json()
+        assert "owlless" in view["strategies"]["2:2"]
+
+
+def test_strat_endpoint_degraded_503(tmp_path):
+    broadcaster = Broadcaster()
+    service = TrackerService(None, broadcaster)
+    poller = Poller(OfflineMemory(), [], service)
+    app = create_app(poller, broadcaster, service=service)
+    with TestClient(app) as client:
+        assert client.post("/api/strat", json={
+            "course_id": 2, "star_id": 2, "strat_tag": "x"}).status_code == 503
+
+
+def test_statmenu_put_dedupes_exact_selections(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        menu = [{"key": "best"}, {"key": "best"},
+                {"key": "avg_last_n", "params": {"n": 10}},
+                {"key": "avg_last_n", "params": {"n": 10}},
+                {"key": "avg_last_n", "params": {"n": 50}}]
+        assert client.put("/api/statmenu", json={"selections": menu}).status_code == 200
+        # stored order is canonical (selection_order), not submission order
+        stored = client.get("/api/session").json()["stat_menu"]
+        assert stored == [{"key": "avg_last_n", "params": {"n": 10}},
+                          {"key": "avg_last_n", "params": {"n": 50}},
+                          {"key": "best", "params": {}}]
+
+
+def test_statmenu_dedupes_param_variants_of_unparameterized_stats(tmp_path):
+    # the user's live bug: success_rate stored once with {} and once with a
+    # legacy custom failures set -> ONE chip; first occurrence wins.
+    client, service, db = make_client(tmp_path)
+    with client:
+        menu = [{"key": "success_rate"},
+                {"key": "success_rate",
+                 "params": {"failures": ["reset", "hard_reset"]}},
+                {"key": "avg_last_n", "params": {"n": 10}},
+                {"key": "avg_last_n", "params": {"n": "10"}},   # str/int collapse
+                {"key": "avg_last_n", "params": {"n": 25}}]
+        assert client.put("/api/statmenu", json={"selections": menu}).status_code == 200
+        # stored order is canonical (selection_order), not submission order
+        stored = client.get("/api/session").json()["stat_menu"]
+        assert [(s["key"], s["params"].get("n")) for s in stored] == [
+            ("avg_last_n", 10), ("avg_last_n", 25), ("success_rate", None)]
+
+
+def test_statmenu_stores_canonical_order(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        menu = [{"key": "success_rate"},
+                {"key": "avg_last_n", "params": {"n": 50}},
+                {"key": "avg_last_n", "params": {"n": 10}},
+                {"key": "best"}]
+        assert client.put("/api/statmenu", json={"selections": menu}).status_code == 200
+        stored = client.get("/api/session").json()["stat_menu"]
+        assert [(s["key"], s["params"].get("n")) for s in stored] == [
+            ("avg_last_n", 10), ("avg_last_n", 50),
+            ("best", None), ("success_rate", None)]
