@@ -38,6 +38,12 @@ Caveats (hard-won — keep these current):
    the last-set strategy for that star independently. Switching targets
    never leaks the previous star's strat. The strat_tag on an attempt is the
    attributed star's last-remembered strategy at close time.
+
+7. Rollout attachment: rollout events accumulate and attach to whichever
+   attempt closes next (covers anchored AND grab-only attempts). Every
+   boundary event (anchor, grab, death, game_reset, session_started,
+   level_changed) zeroes the accumulator after its close runs, so counts
+   never leak across attempts, idle gaps, or discarded no-op resets.
 """
 from dataclasses import dataclass
 
@@ -59,9 +65,17 @@ class Attempt:
     ended_utc: str
     cleared: bool
     cleared_reason: str | None
+    rollouts_total: int = 0      # rollout sub-events during this attempt
+    rollouts_dustless: int = 0
 
 
 ANCHOR_EVENT_TYPES = ("practice_reset", "state_loaded")
+
+# Events that delimit attempts; each one zeroes the rollout accumulator
+# after its close runs (see docstring caveat 7).
+BOUNDARY_EVENT_TYPES = frozenset(ANCHOR_EVENT_TYPES) | {
+    "star_collected", "death", "game_reset", "session_started",
+    "level_changed"}
 
 
 def cleared_ids(events) -> dict[int, str | None]:
@@ -83,6 +97,8 @@ class Projector:
         self.target: tuple[int, int] | None = None
         self.strat_by_star: dict[tuple[int, int], str | None] = {}
         self._open = None  # EventRow of the open attempt's anchor
+        self._rollouts_total = 0
+        self._rollouts_dustless = 0
 
     @property
     def strat_tag(self) -> str | None:
@@ -90,6 +106,13 @@ class Projector:
         return self.strat_by_star.get(self.target) if self.target else None
 
     def feed(self, ev) -> list[Attempt]:
+        closed = self._dispatch(ev)
+        if ev.type in BOUNDARY_EVENT_TYPES:
+            self._rollouts_total = 0
+            self._rollouts_dustless = 0
+        return closed
+
+    def _dispatch(self, ev) -> list[Attempt]:
         if ev.type in ANCHOR_EVENT_TYPES:
             closed = self._close_by_reset(ev)
             self._open = ev
@@ -109,6 +132,11 @@ class Projector:
             self.target = (c, s)
             if "strat_tag" in ev.payload:
                 self.strat_by_star[(c, s)] = ev.payload["strat_tag"]
+            return []
+        if ev.type == "rollout":
+            self._rollouts_total += 1
+            if ev.payload.get("dustless"):
+                self._rollouts_dustless += 1
             return []
         return []
 
@@ -177,7 +205,9 @@ class Projector:
             igt_frames=igt_frames, rta_frames=rta,
             started_utc=first.wall_time_utc, ended_utc=close.wall_time_utc,
             cleared=first.id in self._cleared,
-            cleared_reason=self._cleared.get(first.id))
+            cleared_reason=self._cleared.get(first.id),
+            rollouts_total=self._rollouts_total,
+            rollouts_dustless=self._rollouts_dustless)
 
 
 def replay(events) -> tuple[list[Attempt], Projector]:
