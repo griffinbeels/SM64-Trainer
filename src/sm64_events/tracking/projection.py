@@ -33,6 +33,10 @@ Caveats (hard-won — keep these current):
    entirely — the player never acted, so the closed attempt is not a real
    attempt. The anchor still opens the next attempt. Old journals lack the
    key; default is True, so rebuilds are stable.
+   Additionally, reset-closures with paused_frames_before >=
+   PAUSE_DISCARD_FRAMES are dropped the same way: a long Usamune-menu pause
+   immediately before the reset means the player went AFK and came back —
+   discarded even when the attempt had real activity (user decision).
 
 6. Strategy memory is PER STAR: strat_by_star[(course_id, star_id)] stores
    the last-set strategy for that star independently. Switching targets
@@ -78,6 +82,12 @@ class Attempt:
 
 
 ANCHOR_EVENT_TYPES = ("practice_reset", "state_loaded")
+
+# AFK rule (spec 2026-06-11): a reset arriving after >=5 s of pause (the
+# Usamune menu freezes IGT while gGlobalTimer keeps running) closes a run the
+# player walked away from — that is AFK, not a practice reset. Discard applies
+# even when the attempt had real activity before the pause (user decision).
+PAUSE_DISCARD_FRAMES = 150  # 5 s x 30 fps
 
 # Events that delimit attempts; each one zeroes the rollout accumulator
 # after its close runs (see docstring caveat 7).
@@ -166,6 +176,12 @@ class Projector:
 
     # -- closers -------------------------------------------------------------
     def _close_by_reset(self, ev) -> list[Attempt]:
+        if ev.payload.get("paused_frames_before", 0) >= PAUSE_DISCARD_FRAMES:
+            # AFK: a long menu pause immediately before the reset — throw the
+            # run out (old journals lack the key -> 0 -> kept). The anchor
+            # still opens the next attempt.
+            self._open = None
+            return []
         if not ev.payload.get("mario_acted", True):
             # no-op reset spam: the player never acted, so the closed
             # attempt isn't a real attempt — drop it (anchor still opens

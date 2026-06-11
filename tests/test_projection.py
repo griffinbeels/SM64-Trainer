@@ -420,3 +420,44 @@ def test_new_journal_rollout_one_late_stays_dusty():
     a = attempts[0]
     assert a.rollouts_total == 2
     assert a.rollouts_dustless == 1
+
+
+# -- AFK pause discard (spec §1) ----------------------------------------------
+
+def test_pause_then_reset_discards_closed_attempt():
+    attempts = project([
+        star(1, 900),
+        jev(2, "practice_reset", 1000, {"igt_frames_before": 0, "mario_acted": True}),
+        jev(3, "practice_reset", 1600,
+            {"igt_frames_before": 380, "mario_acted": True,
+             "paused_frames_before": 150}),
+        star(4, 1900, igt=95),
+    ])
+    # the attempt opened at 2 vanished (closed after a >=5 s pause);
+    # the anchor at 3 still opened the attempt the grab closes.
+    assert [a.outcome for a in attempts] == ["success", "success"]
+    assert attempts[1].id == 3
+
+
+def test_pause_below_threshold_keeps_reset():
+    attempts = project([
+        star(1, 900),
+        jev(2, "practice_reset", 1000, {"igt_frames_before": 0, "mario_acted": True}),
+        jev(3, "practice_reset", 1600,
+            {"igt_frames_before": 380, "mario_acted": True,
+             "paused_frames_before": 149}),
+    ])
+    assert attempts[1].outcome == "reset"
+
+
+def test_pause_discard_applies_to_state_loaded_closures():
+    attempts = project([
+        star(1, 900),
+        jev(2, "practice_reset", 1000, {"igt_frames_before": 0, "mario_acted": True}),
+        jev(3, "state_loaded", 800,
+            {"igt_frames_restored": 120, "mario_acted": True,
+             "paused_frames_before": 300}),
+        star(4, 1100, igt=95),
+    ])
+    assert [a.outcome for a in attempts] == ["success", "success"]
+    assert attempts[1].id == 3
