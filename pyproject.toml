@@ -7,6 +7,11 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "pymem>=1.13",
+    "av>=14",
+    "numpy>=1.26",
+    "windows-capture>=2.0.0",
+    "proc-tap>=1.0.0",
+    "pyaudiowpatch>=0.2.12",
 ]
 
 [dependency-groups]
