@@ -40,7 +40,7 @@ uv run python tools/dedupe_journal.py data/tracker.db          # scan double-jou
 | Attempt anchors (practice_reset / state_loaded) | `detectors/anchors.py` — anchors carry the mario_acted activity flag; docstring covers classification logic and VERIFY note |
 | Death detection | `detectors/death.py` — action-set edge; closes open attempt as outcome "death" |
 | Level-change detection | `detectors/level.py` — level-id edge; closes open attempts as abandoned; curr_level address already registered |
-| Rollout detection (dustless) | `detectors/rollout.py` — dive→rollout edge; docstring carries the intra-frame-chaining rationale; counts attach to attempts via projection.py |
+| Dust tricks (dustless rollouts/jumps) | `detectors/dust.py` — TRICKS registry (one row per trick); docstring carries the decomp-verified landing-frame timing model; counts attach to attempts via projection.py |
 | Poll loop, attach retry, layout sanity | `server/poller.py` |
 | WS fan-out, seq numbers | `server/broadcaster.py` |
 | HTTP/WS endpoints | `server/app.py` |

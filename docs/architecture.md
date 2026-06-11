@@ -169,12 +169,18 @@ session continue/delete, PB-glow, single-instance lock (features #3, #4, #6, #9,
 live-feedback round + incident-response from the spec). Remaining phases per
 `docs/superpowers/specs/2026-06-10-practice-tracker-platform-design.md §11`:
 
-- **Phase 2** — RolloutDetector: built (rollout events, per-attempt
-  `rollouts_total`/`rollouts_dustless`, `dustless_rate` stat, UI rate display,
-  schema v2). NOT yet live-verified: `MARIO_PARTICLE_FLAGS`, `PARTICLE_DUST`
-  and the dive/rollout action ids are VERIFY-marked until a human session
-  dive-rollouts while watching `tools/verify_addresses.py` (expect `[DUST]`
-  on dive-slide lines and correct dustless/late classification).
+- **Phase 2** — dust tricks: built (rollout + chained double/triple jump
+  events, per-attempt counts, `dustless_rate`/`dustless_jump_rate` stats, UI
+  rate displays, schema v3). The original "direct dive→rollout edge" model
+  was WRONG — a 50-trial live session + decomp cross-check established that
+  landing transitions run `set_mario_action(...); break;` so one visible
+  landing frame IS the frame-perfect input (evidence quoted in
+  `memory/addresses.py`; model documented in `detectors/dust.py`; old
+  journals re-derive via the projection's compat shim). NOT yet
+  live-verified: `MARIO_PARTICLE_FLAGS`, `PARTICLE_DUST` and the jump-chain
+  action ids are VERIFY-marked until a human session rollouts/chain-jumps
+  while watching `tools/verify_addresses.py` (expect `[DUST]` on dusty
+  slide/landing lines and correct dustless/late classification).
 - **Phase 3** — TriggerDetector (door/key-door rows), MenuDetector
   (menu-open address hunt required). Delivers menu-failure attempt outcome.
 - **Phase 4** — Routes storage + probability board + Routes tab.
