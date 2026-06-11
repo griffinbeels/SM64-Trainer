@@ -122,8 +122,133 @@ def crop_bounds(frame_w: int, frame_h: int,
     return x0, y0, x1, y1
 
 
+class GdiBitBltVideoSource:
+    """GDI BitBlt of the window's CLIENT DC — the working capture path for
+    PJ64 1.6 (Jabo D3D8).
+
+    Why not WGC/DDA: Jabo presents via the legacy BITBLT model (back buffer
+    copied into the window's redirection surface every Present), while WGC
+    and DXGI duplication read the DWM composition path, which Win11 24H2
+    refreshes only on dirty-region/MPO cadence for this app class —
+    live-measured at 1-6 unique frames/s while the game ran at 30 fps.
+    BitBlt from the window DC reads the redirection surface itself (the
+    same mechanism as OBS's "BitBlt (legacy)" window capture, the
+    community-proven method for PJ64 1.6). Bonus: window DC content
+    survives occlusion.
+
+    Runs its own grab thread at cfg-driven fps; frames are stamped with
+    qpc_100ns() at grab time (same timebase as WGC's SystemRelativeTime,
+    so CaptureClock math is unchanged)."""
+
+    _SRCCOPY_CAPTUREBLT = 0x00CC0020 | 0x40000000
+
+    def __init__(self, win: WindowInfo, fps: int = 30):
+        self._win = win
+        self._fps = fps
+        self._stop = None  # threading.Event while running
+        self._thread = None
+
+    def start(self, on_frame, on_stopped) -> None:
+        if self._thread is not None:
+            return  # already capturing
+        import threading
+        _ensure_dpi_aware()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(
+            target=self._loop, args=(on_frame, on_stopped),
+            name="gdi-capture", daemon=True)
+        self._thread.start()
+
+    def _loop(self, on_frame, on_stopped) -> None:
+        import numpy as np
+        from sm64_events.replay.clock import qpc_100ns
+
+        user32, gdi32 = ctypes.windll.user32, ctypes.windll.gdi32
+        hwnd = wt.HWND(self._win.hwnd)
+        hdc = mdc = bmp = None
+        w = h = 0
+        buf = None
+        period = 1.0 / self._fps
+        import time as _time
+        next_t = _time.perf_counter()
+        try:
+            while not self._stop.is_set():
+                if not user32.IsWindow(hwnd):
+                    log.info("GDI capture: window gone")
+                    on_stopped()
+                    return
+                if user32.IsIconic(hwnd):
+                    _time.sleep(period)  # minimized: deliver nothing (gap)
+                    next_t = _time.perf_counter()
+                    continue
+                rect = wt.RECT()
+                user32.GetClientRect(hwnd, ctypes.byref(rect))
+                cw, ch = rect.right & ~1, rect.bottom & ~1
+                if cw < 16 or ch < 16:
+                    _time.sleep(period)
+                    continue
+                if hdc is None:
+                    hdc = user32.GetDC(hwnd)
+                    mdc = gdi32.CreateCompatibleDC(hdc)
+                if (cw, ch) != (w, h):
+                    if bmp:
+                        gdi32.DeleteObject(bmp)
+                    bmp = gdi32.CreateCompatibleBitmap(hdc, cw, ch)
+                    gdi32.SelectObject(mdc, bmp)
+                    w, h = cw, ch
+                    buf = ctypes.create_string_buffer(w * h * 4)
+                    bmi = _BMIH(biSize=ctypes.sizeof(_BMIH), biWidth=w,
+                                biHeight=-h, biPlanes=1, biBitCount=32,
+                                biCompression=0)
+                    self._bmi = bmi
+                ts = qpc_100ns()
+                if not gdi32.BitBlt(mdc, 0, 0, w, h, hdc, 0, 0,
+                                    self._SRCCOPY_CAPTUREBLT):
+                    # DC went stale (display change); recreate next pass
+                    gdi32.DeleteDC(mdc)
+                    user32.ReleaseDC(hwnd, hdc)
+                    hdc = mdc = None
+                    continue
+                gdi32.GetDIBits(mdc, bmp, 0, h, buf, ctypes.byref(self._bmi), 0)
+                arr = np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 4).copy()
+                on_frame(arr, ts)
+                next_t += period
+                delay = next_t - _time.perf_counter()
+                if delay > 0:
+                    _time.sleep(delay)
+                else:
+                    next_t = _time.perf_counter()  # grab+encode overran; resync
+        except Exception:
+            log.exception("GDI capture loop died")
+            on_stopped()
+        finally:
+            if bmp:
+                gdi32.DeleteObject(bmp)
+            if mdc:
+                gdi32.DeleteDC(mdc)
+            if hdc:
+                user32.ReleaseDC(hwnd, hdc)
+
+    def stop(self) -> None:
+        if self._thread is not None:
+            self._stop.set()
+            self._thread.join(timeout=5)
+            self._thread = None
+
+
+class _BMIH(ctypes.Structure):
+    _fields_ = [("biSize", wt.DWORD), ("biWidth", wt.LONG), ("biHeight", wt.LONG),
+                ("biPlanes", wt.WORD), ("biBitCount", wt.WORD),
+                ("biCompression", wt.DWORD), ("biSizeImage", wt.DWORD),
+                ("biXPelsPerMeter", wt.LONG), ("biYPelsPerMeter", wt.LONG),
+                ("biClrUsed", wt.DWORD), ("biClrImportant", wt.DWORD)]
+
+
 class WgcVideoSource:
-    """Monitor capture + per-frame crop to the target window."""
+    """Monitor capture + per-frame crop to the target window.
+
+    NOTE: NOT usable for PJ64 1.6 (frozen content — see GdiBitBltVideoSource
+    docstring); kept for capturing normal flip-model apps."""
 
     def __init__(self, win: WindowInfo):
         self._win = win

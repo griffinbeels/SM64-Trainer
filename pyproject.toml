@@ -12,6 +12,7 @@ dependencies = [
     "windows-capture>=2.0.0",
     "proc-tap>=1.0.0",
     "pyaudiowpatch>=0.2.12",
+    "pycaw>=20251023",
 ]
 
 [dependency-groups]

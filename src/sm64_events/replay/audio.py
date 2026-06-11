@@ -1,25 +1,72 @@
 """Audio sources -> recorder AudioSource protocol.
 
-Primary: proctap per-process WASAPI loopback (pid-scoped: ONLY PJ64 audio,
-no Discord/music bleed), float32 48 kHz stereo -> converted to s16 here so
-everything downstream speaks one PCM dialect.
-Fallback: PyAudioWPatch device-wide loopback (all system audio) — wired by
-main.py as the recorder's fallback_audio_factory.
+Primary (wired in main.py): SystemAudioSource with PID TARGETING — it asks
+Core Audio which render ENDPOINT hosts the target process's audio session
+and loopback-captures THAT device. Live-audit finding (2026-06-11): the
+machine's default output is "System (Elgato Wave:XLR)" but PJ64's session
+lives on "Game (Elgato Wave:XLR)" (Wave Link virtual outputs) — capturing
+the default endpoint recorded pure silence while the user heard the game
+fine. Per-app endpoint routing makes "capture the default device" wrong.
+
+proctap (ProcessAudioSource) is RETIRED from the wiring: per-process
+loopback start()s successfully but delivers all-zero PCM on this machine —
+it could not capture a beep played by its own process (false-healthy,
+undetectable). Kept only for future re-evaluation.
 
 proctap API notes (introspected from installed v0.x):
 - AudioCallback = Callable[[bytes, int], None]  — (pcm_bytes, num_frames)
   num_frames is always -1 in the current implementation (TODO in source).
 - on_data is passed to ProcessAudioCapture.__init__(), NOT to start().
-  start() takes no arguments.
-- Output is always float32, 48000 Hz, 2-channel (stereo), values in [-1, 1].
-
-VERIFY (live gate, Task 15): exact callback cadence and first-callback
-latency; device-loopback sample rate on this machine."""
+- Output is always float32, 48000 Hz, 2-channel (stereo), values in [-1, 1]."""
 import logging
 
 import numpy as np
 
 log = logging.getLogger("sm64.replay")
+
+
+def device_name_hosting_pid(pid: int) -> str | None:
+    """FriendlyName of the active render endpoint whose session list contains
+    `pid`, else None. Pure Core Audio enumeration (pycaw/comtypes); the
+    session→device mapping persists even while the app is silent."""
+    try:
+        import comtypes
+        from comtypes import CLSCTX_ALL
+        from pycaw.api.audiopolicy import IAudioSessionControl2, IAudioSessionManager2
+        from pycaw.api.mmdeviceapi import IMMDeviceEnumerator
+        from pycaw.constants import CLSID_MMDeviceEnumerator
+        from pycaw.pycaw import AudioUtilities
+
+        devenum = comtypes.CoCreateInstance(
+            CLSID_MMDeviceEnumerator, IMMDeviceEnumerator,
+            comtypes.CLSCTX_INPROC_SERVER)
+        coll = devenum.EnumAudioEndpoints(0, 1)  # eRender, DEVICE_STATE_ACTIVE
+        for i in range(coll.GetCount()):
+            dev = coll.Item(i)
+            mgr = dev.Activate(IAudioSessionManager2._iid_, CLSCTX_ALL, None)
+            mgr = mgr.QueryInterface(IAudioSessionManager2)
+            sess_enum = mgr.GetSessionEnumerator()
+            for j in range(sess_enum.GetCount()):
+                ctl2 = sess_enum.GetSession(j).QueryInterface(IAudioSessionControl2)
+                try:
+                    if ctl2.GetProcessId() == pid:
+                        return AudioUtilities.CreateDevice(dev).FriendlyName
+                except Exception:
+                    continue
+    except Exception:
+        log.exception("audio session scan failed")
+    return None
+
+
+def pick_loopback_device(loopback_devices: list[dict], target_name: str | None,
+                         default_name: str) -> dict | None:
+    """Choose the loopback entry matching the endpoint that hosts the target
+    app's session; fall back to the default output. Pure — unit-tested.
+    Loopback device names look like '<endpoint name> [Loopback]'."""
+    def match(name):
+        return next((d for d in loopback_devices if name and name in d["name"]),
+                    None)
+    return match(target_name) or match(default_name)
 
 
 def f32_to_s16(pcm_f32: np.ndarray) -> np.ndarray:
@@ -60,26 +107,34 @@ class ProcessAudioSource:
 
 
 class SystemAudioSource:
+    """Device loopback capture. With a pid, captures the endpoint that
+    actually HOSTS that process's audio session (per-app routing aware);
+    without one, the default output."""
+
     mode = "system"
 
-    def __init__(self, rate: int = 48000):
+    def __init__(self, rate: int = 48000, pid: int | None = None):
         self._rate = rate
+        self._pid = pid
         self._stream = None
         self._pa = None
 
     def start(self, on_pcm) -> None:
         import pyaudiowpatch as pyaudio
 
+        target_name = device_name_hosting_pid(self._pid) if self._pid else None
         self._pa = pyaudio.PyAudio()
         try:
             wasapi = self._pa.get_host_api_info_by_type(pyaudio.paWASAPI)
             speakers = self._pa.get_device_info_by_index(wasapi["defaultOutputDevice"])
-            loopback = next(
-                (d for d in self._pa.get_loopback_device_info_generator()
-                 if speakers["name"] in d["name"]), None)
+            loopback = pick_loopback_device(
+                list(self._pa.get_loopback_device_info_generator()),
+                target_name, speakers["name"])
             if loopback is None:
                 raise RuntimeError("no WASAPI loopback device matches the "
-                                   "default output device")
+                                   "target or default output device")
+            log.info("audio loopback endpoint: %s (app session endpoint: %s)",
+                     loopback["name"], target_name or "unknown -> default")
             if int(loopback["defaultSampleRate"]) != self._rate:
                 log.warning("loopback device rate %s != %s; recording at device "
                             "rate without resample (v1 limitation)",

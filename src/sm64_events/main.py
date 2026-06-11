@@ -16,7 +16,7 @@ from sm64_events.replay.config import ReplayConfig
 from sm64_events.replay.extract import ClipExtractor
 from sm64_events.replay.recorder import ReplayRecorder
 from sm64_events.replay.service import ReplayService
-from sm64_events.replay.video import WgcVideoSource
+from sm64_events.replay.video import GdiBitBltVideoSource
 from sm64_events.replay.window import find_window
 from sm64_events.server.app import create_app
 from sm64_events.server.broadcaster import Broadcaster
@@ -67,8 +67,9 @@ def build():
         recorder = ReplayRecorder(
             cfg=replay_cfg,
             window_finder=find_window,
-            video_factory=WgcVideoSource,
-            audio_factory=lambda pid: SystemAudioSource(rate=replay_cfg.audio_rate),
+            video_factory=lambda win: GdiBitBltVideoSource(win, fps=replay_cfg.fps),
+            audio_factory=lambda pid: SystemAudioSource(
+                rate=replay_cfg.audio_rate, pid=pid),
             fallback_audio_factory=None,
             codec=codec)
         replay = ReplayService(
