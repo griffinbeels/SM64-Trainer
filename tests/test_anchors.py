@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 
 from sm64_events.core.snapshot import GameSnapshot
-from sm64_events.detectors.anchors import AnchorDetector
+from sm64_events.detectors.anchors import BOOT_TIMER_MAX, AnchorDetector
 
 ACT_IDLE = 0x0C400201
 
@@ -55,3 +55,21 @@ def test_state_loaded_takes_priority_over_practice_reset():
     # a load that also restores a near-zero IGT must classify as state_loaded
     events = AnchorDetector().process(snap(5000, igt=900), snap(3000, igt=3))
     assert [e.type for e in events] == ["state_loaded"]
+
+
+def test_u16_wraparound_is_not_a_practice_reset():
+    assert AnchorDetector().process(snap(1000, igt=65535), snap(1002, igt=0)) == []
+
+
+def test_igt_drop_to_threshold_exactly_fires():
+    events = AnchorDetector().process(snap(1000, igt=500), snap(1002, igt=30))
+    assert len(events) == 1 and events[0].type == "practice_reset"
+
+
+def test_igt_drop_just_above_threshold_is_silent():
+    assert AnchorDetector().process(snap(1000, igt=500), snap(1002, igt=31)) == []
+
+
+def test_backward_jump_to_exactly_boot_max_is_state_loaded():
+    events = AnchorDetector().process(snap(5000, igt=900), snap(BOOT_TIMER_MAX, igt=5))
+    assert len(events) == 1 and events[0].type == "state_loaded"
