@@ -106,6 +106,7 @@ function HideToggle({ hidden, showHidden, setShowHidden }) {
 
 function StarSection({ sec, t, ui, pinned }) {
   const [showHidden, setShowHidden] = useState(false);
+  const [visible, setVisible] = useState(10);
   const pb = sec.pb[t.clock];
   const base = showHidden ? sec.attempts
     : sec.attempts.filter((a) => !a.cleared && a.outcome !== "abandoned");
@@ -115,6 +116,7 @@ function StarSection({ sec, t, ui, pinned }) {
       && (a.outcome === "reset" || a.outcome === "hard_reset")))
     .slice()
     .sort(comparator(ui.sort, t.clock));
+  const shown = rows.slice(0, visible);
   return html`<div class="starsec ${pinned ? "active-star" : ""}">
     ${pinned && html`<div class="active-tag">★ ACTIVE STAR</div>`}
     <div class="shead">
@@ -125,7 +127,12 @@ function StarSection({ sec, t, ui, pinned }) {
     </div>
     <${Timeline} tl=${sec.timeline} sec=${sec} t=${t} />
     <${Progress} prog=${sec.progress} clock=${t.clock} />
-    <${AttemptTable} attempts=${sec.attempts} rows=${rows} t=${t} />
+    <${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t} />
+    ${rows.length > visible && html`<button class="meta"
+        style="background:none;border:none;cursor:pointer"
+        onclick=${() => setVisible(visible + 10)}>
+      Show 10 more
+    </button>`}
     <${HideToggle} hidden=${hidden} showHidden=${showHidden} setShowHidden=${setShowHidden} />
     <div class="chips">
       ${sec.stats.map((s) => html`
