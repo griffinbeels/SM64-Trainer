@@ -2,10 +2,13 @@
 """Dust tricks: launch actions chained out of a landing action, where the
 number of visible landing frames measures how late the input was.
 
-THE registry for chainable dust tricks is TRICKS below — adding a trick
-(side flip, long jump...) is one row; detection, payloads, and the live
-verify harness pick it up automatically. Per-attempt aggregation is in
-tracking/projection.py and keys off the event_type.
+THE registry for chainable dust tricks is TRICKS below. Adding a trick
+that POOLS INTO AN EXISTING STAT FAMILY (reuses an event_type like
+"jump") is one row — detection, payloads, aggregation, stats, UI, and the
+live verify harness all pick it up. A trick with its OWN stat family
+(new event_type) additionally needs the per-family fan-out; the exact
+touchpoint list is the "Add a dust trick" recipe in CLAUDE.md.
+Per-attempt aggregation is in tracking/projection.py, keyed off event_type.
 
 Timing model (decomp-verified 2026-06-11, confirmed by a 50-trial live
 session; addresses.py carries the quoted evidence): an air action's landing
