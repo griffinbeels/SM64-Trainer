@@ -71,7 +71,9 @@ class PcmContinuity:
         self._rate = rate
         self._t0 = qpc_start_100ns
         self._delivered = 0
-        self._min_gap = rate // 10  # <100 ms is jitter, not idle
+        # <50 ms is delivery jitter, not idle; also bounds the worst-case
+        # residual audio lag from never-crossing-threshold micro-gaps.
+        self._min_gap = rate // 20
 
     def fill_before(self, qpc_now_100ns: int) -> int:
         expected = int((qpc_now_100ns - self._t0) / 1e7 * self._rate)
@@ -145,6 +147,17 @@ class SystemAudioSource:
 
     def start(self, on_pcm) -> None:
         import pyaudiowpatch as pyaudio
+        from sm64_events.replay.clock import qpc_100ns
+
+        # Epoch FIRST: the writer's audio t0 is stamped (by the recorder)
+        # immediately before this method runs. Everything below — the COM
+        # session scan, device enumeration, stream open — takes seconds, and
+        # any of it spent before the guard's epoch would make every sample
+        # claim an earlier time than it really happened (live bug: clip
+        # audio led video by the ~3 s init cost). With the epoch here, the
+        # init window becomes leading silence and the timeline stays
+        # wall-true end to end.
+        guard = PcmContinuity(self._rate, qpc_100ns())
 
         target_name = device_name_hosting_pid(self._pid) if self._pid else None
         self._pa = pyaudio.PyAudio()
@@ -163,9 +176,6 @@ class SystemAudioSource:
                 log.warning("loopback device rate %s != %s; recording at device "
                             "rate without resample (v1 limitation)",
                             loopback["defaultSampleRate"], self._rate)
-
-            from sm64_events.replay.clock import qpc_100ns
-            guard = PcmContinuity(self._rate, qpc_100ns())
 
             def cb(in_data, frame_count, time_info, status):
                 fill = guard.fill_before(qpc_100ns())

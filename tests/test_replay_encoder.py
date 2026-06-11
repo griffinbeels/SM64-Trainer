@@ -9,7 +9,7 @@ from sm64_events.replay.config import ReplayConfig
 from sm64_events.replay.encoder import SegmentWriter, pick_video_codec
 
 T0 = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
-CFG = ReplayConfig()
+CFG = ReplayConfig(fps=30)  # tests pin the 30fps math; capture default is 60
 CLK = CaptureClock(anchor_qpc_100ns=0, anchor_utc=T0)
 
 

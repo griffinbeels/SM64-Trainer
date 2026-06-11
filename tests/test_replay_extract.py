@@ -10,7 +10,7 @@ from sm64_events.replay.extract import ClipExtractor
 from sm64_events.replay.ring import SegmentRing
 
 T0 = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
-CFG = ReplayConfig()
+CFG = ReplayConfig(fps=30)  # tests pin the 30fps math; capture default is 60
 
 
 def build_buffer(tmp_path, seconds=6):

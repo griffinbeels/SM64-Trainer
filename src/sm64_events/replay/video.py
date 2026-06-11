@@ -136,29 +136,67 @@ class GdiBitBltVideoSource:
     community-proven method for PJ64 1.6). Bonus: window DC content
     survives occlusion.
 
-    Runs its own grab thread at cfg-driven fps; frames are stamped with
-    qpc_100ns() at grab time (same timebase as WGC's SystemRelativeTime,
-    so CaptureClock math is unchanged)."""
+    Two threads: the GRAB loop runs at cfg fps and must never wait on the
+    encoder (at 60 fps the budget is 16.7 ms/frame and a grab alone costs
+    ~9 ms), so frames go through a small queue to a DELIVER thread that
+    calls on_frame (which encodes synchronously in the recorder). If the
+    encoder falls behind, the OLDEST queued frame is dropped and counted —
+    the recorder's CFR fill papers over the hole and the drop counter is
+    logged so sustained overruns are visible instead of mysterious judder.
+
+    Frames are stamped with qpc_100ns() at grab time (same timebase as
+    WGC's SystemRelativeTime, so CaptureClock math is unchanged)."""
 
     _SRCCOPY_CAPTUREBLT = 0x00CC0020 | 0x40000000
 
-    def __init__(self, win: WindowInfo, fps: int = 30):
+    def __init__(self, win: WindowInfo, fps: int = 60):
         self._win = win
         self._fps = fps
         self._stop = None  # threading.Event while running
         self._thread = None
+        self._deliver_thread = None
+        self._queue = None
 
     def start(self, on_frame, on_stopped) -> None:
         if self._thread is not None:
             return  # already capturing
+        import queue
         import threading
         self._stop = threading.Event()
+        self._queue = queue.Queue(maxsize=4)
+        self._deliver_thread = threading.Thread(
+            target=self._deliver_loop, args=(on_frame,),
+            name="gdi-deliver", daemon=True)
+        self._deliver_thread.start()
         self._thread = threading.Thread(
-            target=self._loop, args=(on_frame, on_stopped),
+            target=self._loop, args=(on_stopped,),
             name="gdi-capture", daemon=True)
         self._thread.start()
 
-    def _loop(self, on_frame, on_stopped) -> None:
+    def _deliver_loop(self, on_frame) -> None:
+        import queue
+        while True:
+            item = self._queue.get()
+            if item is None:
+                return
+            on_frame(*item)
+
+    def _enqueue(self, arr, ts) -> bool:
+        """Non-blocking put; drops the OLDEST frame when the encoder lags
+        (newest content wins — a stale frame is worse than a CFR fill)."""
+        import queue
+        try:
+            self._queue.put_nowait((arr, ts))
+            return False
+        except queue.Full:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                pass
+            self._queue.put_nowait((arr, ts))
+            return True
+
+    def _loop(self, on_stopped) -> None:
         import numpy as np
         from sm64_events.replay.clock import qpc_100ns
 
@@ -177,6 +215,9 @@ class GdiBitBltVideoSource:
         w = h = 0
         buf = None
         period = 1.0 / self._fps
+        grabs = drops = 0
+        grab_ms = 0.0
+        last_report = 0.0
         import time as _time
         next_t = _time.perf_counter()
         try:
@@ -210,6 +251,7 @@ class GdiBitBltVideoSource:
                                 biCompression=0)
                     self._bmi = bmi
                 ts = qpc_100ns()
+                t_grab = _time.perf_counter()
                 if not gdi32.BitBlt(mdc, 0, 0, w, h, hdc, 0, 0,
                                     self._SRCCOPY_CAPTUREBLT):
                     # DC went stale (display change); recreate next pass
@@ -219,13 +261,24 @@ class GdiBitBltVideoSource:
                     continue
                 gdi32.GetDIBits(mdc, bmp, 0, h, buf, ctypes.byref(self._bmi), 0)
                 arr = np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 4).copy()
-                on_frame(arr, ts)
+                if self._enqueue(arr, ts):
+                    drops += 1
+                grabs += 1
+                grab_ms += (_time.perf_counter() - t_grab) * 1000
+                now = _time.perf_counter()
+                if now - last_report > 30 and grabs:
+                    log.info("gdi capture: %.1f grabs/s avg %.1f ms, "
+                             "%d encoder-lag drops", grabs / (now - last_report)
+                             if last_report else grabs / 30, grab_ms / grabs, drops)
+                    grabs = drops = 0
+                    grab_ms = 0.0
+                    last_report = now
                 next_t += period
                 delay = next_t - _time.perf_counter()
                 if delay > 0:
                     _time.sleep(delay)
                 else:
-                    next_t = _time.perf_counter()  # grab+encode overran; resync
+                    next_t = _time.perf_counter()  # grab overran; resync
         except Exception:
             log.exception("GDI capture loop died")
             on_stopped()
@@ -242,6 +295,10 @@ class GdiBitBltVideoSource:
             self._stop.set()
             self._thread.join(timeout=5)
             self._thread = None
+        if self._deliver_thread is not None:
+            self._queue.put(None)  # sentinel: drain and exit
+            self._deliver_thread.join(timeout=5)
+            self._deliver_thread = None
 
 
 class _BMIH(ctypes.Structure):

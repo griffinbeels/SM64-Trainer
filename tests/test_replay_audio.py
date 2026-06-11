@@ -38,8 +38,8 @@ def test_pcm_continuity_fills_idle_gaps_only():
     # 1 s in, delivered 1 s of samples: no gap
     g.on_delivered(48000)
     assert g.fill_before(10_000_000) == 0
-    # 100 ms jitter: below threshold, no fill
-    assert g.fill_before(11_000_000) == 0
+    # 40 ms jitter: below the 50 ms threshold, no fill
+    assert g.fill_before(10_400_000) == 0
     # 3 s idle: expected 4 s worth, delivered 1 s -> fill the difference
     fill = g.fill_before(40_000_000)
     assert fill == 48000 * 3

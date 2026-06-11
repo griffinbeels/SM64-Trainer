@@ -45,7 +45,7 @@ class SystemFakeAudioSource(FakeAudioSource):
 
 
 def make_recorder(tmp_path, video, audio, found=WIN, fallback=None):
-    cfg = ReplayConfig(scratch_dir=tmp_path / "buf", attach_poll_s=0.01)
+    cfg = ReplayConfig(scratch_dir=tmp_path / "buf", attach_poll_s=0.01, fps=30)
     return ReplayRecorder(
         cfg=cfg,
         window_finder=lambda title: found,
