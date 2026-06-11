@@ -165,7 +165,7 @@ def create_api_router(service) -> APIRouter:
     def put_statmenu(body: StatMenuBody):
         if service.db is None:
             raise HTTPException(503, "database unavailable")
-        seen_keys: set[str] = set()
+        seen_keys: set[tuple[str, str]] = set()
         deduped = []
         for s in body.selections:
             fingerprint = (s.key, json.dumps(s.params, sort_keys=True))
