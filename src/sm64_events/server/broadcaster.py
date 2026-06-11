@@ -27,7 +27,7 @@ class Broadcaster:
     def unregister(self, ws) -> None:
         self._clients.discard(ws)
 
-    async def publish(self, event: Event) -> None:
+    async def publish(self, event: Event) -> int:
         self._seq += 1
         wire = to_wire(event, self._seq)
         log.info("event %s", json.dumps(wire))
@@ -39,3 +39,4 @@ class Broadcaster:
                 dead.append(ws)
         for ws in dead:
             self._clients.discard(ws)
+        return self._seq
