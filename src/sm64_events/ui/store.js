@@ -1,5 +1,5 @@
 // src/sm64_events/ui/store.js — session state + live WS subscription
-import { useEffect, useState, useCallback } from "preact/hooks";
+import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { getJSON } from "./api.js";
 
 const REFRESH_ON = new Set(["attempt_completed", "attempts_invalidated",
@@ -11,12 +11,16 @@ export function useTracker() {
   const [feed, setFeed] = useState([]);
   const [connected, setConnected] = useState(false);
 
-  const refresh = useCallback(async (c) => {
-    try { setView(await getJSON(`/api/session?clock=${c || clock}`)); }
-    catch (e) { console.error(e); }
-  }, [clock]);
+  // clockRef keeps refresh's identity stable so the WS effect never restarts
+  const clockRef = useRef(clock);
+  useEffect(() => { clockRef.current = clock; }, [clock]);
 
-  useEffect(() => { refresh(); }, [clock]);
+  const refresh = useCallback(async () => {
+    try { setView(await getJSON(`/api/session?clock=${clockRef.current}`)); }
+    catch (e) { console.error(e); }
+  }, []);
+
+  useEffect(() => { refresh(); }, [clock, refresh]);
 
   useEffect(() => {
     let ws, closed = false;
@@ -33,7 +37,7 @@ export function useTracker() {
     }
     connect();
     return () => { closed = true; ws && ws.close(); };
-  }, [refresh]);
+  }, [refresh]);   // refresh is now stable -> this effect runs exactly once
 
   const pickClock = (c) => { localStorage.setItem("clock", c); setClock(c); };
   return { view, clock, pickClock, feed, connected, refresh };
