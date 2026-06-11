@@ -5,6 +5,8 @@ from pathlib import Path
 
 from sm64_events.core.logging_setup import configure_logging
 from sm64_events.detectors.anchors import AnchorDetector
+from sm64_events.detectors.death import DeathDetector
+from sm64_events.detectors.level import LevelChangeDetector
 from sm64_events.detectors.lifecycle import GameResetDetector
 from sm64_events.detectors.star_grab import StarGrabDetector
 from sm64_events.memory.pj64 import Pj64Memory
@@ -28,7 +30,11 @@ def build():
             "database unavailable - running broadcast-only")
         db = None
     service = TrackerService(db, broadcaster)
-    detectors = [GameResetDetector(), AnchorDetector(), StarGrabDetector()]
+    # Order is load-bearing: level changes abandon stale attempts BEFORE the
+    # same tick's igt-reset anchor opens the next one; resets before grabs
+    # (see projection.py docstring on the same-tick race).
+    detectors = [GameResetDetector(), LevelChangeDetector(), AnchorDetector(),
+                 DeathDetector(), StarGrabDetector()]
     poller = Poller(memory, detectors, service)  # service IS the event sink
     return create_app(poller, broadcaster, service=service)
 

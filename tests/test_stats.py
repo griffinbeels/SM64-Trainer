@@ -17,6 +17,7 @@ SAMPLE = [
     attempt(3, outcome="reset", igt=120),
     attempt(4, igt=330, cleared=True),         # cleared: excluded everywhere
     attempt(5, outcome="abandoned"),           # excluded from success_rate
+    attempt(6, outcome="death", igt=150),      # counts in default failure rate
 ]
 
 
@@ -37,8 +38,8 @@ def test_clock_selects_rta():
 
 
 def test_success_rate_default_failures():
-    # 2 successes, 1 reset -> 2/3
-    assert abs(compute_stat("success_rate", SAMPLE, {}, clock="igt") - 2 / 3) < 1e-9
+    # 2 successes, 1 reset, 1 death -> 2/4 = 0.5
+    assert abs(compute_stat("success_rate", SAMPLE, {}, clock="igt") - 0.5) < 1e-9
 
 
 def test_success_rate_custom_failure_set():

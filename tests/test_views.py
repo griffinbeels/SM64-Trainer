@@ -132,3 +132,15 @@ def test_avg_last_n_label_renders_param(tmp_path):
     [sec] = view["stars"]
     labels = [s["label"] for s in sec["stats"]]
     assert "Avg last 10" in labels and "Avg last 50" in labels
+
+
+def test_view_surfaces_strategies_and_last_strat(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.set_target(2, 2, strat_tag="cannonless"))
+    seed(svc)   # grabs (2,2) twice
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    assert sec["strategies"] == ["cannonless"]
+    assert sec["last_strat"] == "cannonless"
+    assert view["strategies"] == {"2:2": ["cannonless"]}
+    assert view["last_strat_by_star"] == {"2:2": "cannonless"}

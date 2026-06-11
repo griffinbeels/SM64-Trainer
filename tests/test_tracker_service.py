@@ -138,6 +138,27 @@ def test_restore_unknown_attempt_raises_lookup_error(tmp_path):
         asyncio.run(svc.restore_attempt(999))
 
 
+def test_set_target_registers_strategy(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.set_target(2, 4, strat_tag="owlless"))
+    asyncio.run(svc.set_target(2, 4, strat_tag="owl"))
+    asyncio.run(svc.set_target(2, 4, strat_tag="owlless"))   # no dup
+    assert db.get_state("strategies", {}) == {"2:4": ["owlless", "owl"]}
+    assert svc.strat_by_star[(2, 4)] == "owlless"
+
+
+def test_death_event_flows_to_death_attempt(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000,
+                               {"igt_frames_before": 0, "mario_acted": True})))
+    asyncio.run(svc.publish(ev("death", 1300,
+                               {"cause": "drowning", "igt_frames": 290, "level": 9})))
+    [a] = db.attempts()
+    assert a.outcome == "death" and a.outcome_detail == "drowning"
+    types = [e.type for e in db.events()]
+    assert "attempt_completed" in types
+
+
 def test_pipeline_survives_attempt_persist_failure(tmp_path):
     db, svc = make(tmp_path)
     original = db.upsert_attempt

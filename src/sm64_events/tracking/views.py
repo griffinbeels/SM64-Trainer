@@ -56,12 +56,24 @@ def _catalog() -> dict:
 _CATALOG = _catalog()
 
 
+def _strategies_for(registered: dict, attempts, course_id: int, star_id: int) -> list[str]:
+    """Registered strategies (ui_state) merged with every strat ever used
+    on this star's attempts — union preserves registration order first."""
+    out = list(registered.get(f"{course_id}:{star_id}", []))
+    for a in attempts:
+        if (a.course_id, a.star_id) == (course_id, star_id) \
+                and a.strat_tag and a.strat_tag not in out:
+            out.append(a.strat_tag)
+    return out
+
+
 def build_session_view(db, service, clock: str) -> dict:
     all_attempts = db.attempts()
     session_attempts = [a for a in all_attempts
                         if a.session_id == service.session_id]
     pbs = _current_pbs(db)
     stat_menu = db.get_state("stat_menu", default=DEFAULT_STAT_MENU)
+    registered = db.get_state("strategies", {})
 
     sections, unassigned = [], []
     seen: dict[tuple[int, int], None] = {}
@@ -104,6 +116,8 @@ def build_session_view(db, service, clock: str) -> dict:
             "pb": pb_json,
             "attempts": [_attempt_json(a, pbs, clock) for a in in_session],
             "stats": stats,
+            "strategies": _strategies_for(registered, all_attempts, course_id, star_id),
+            "last_strat": service.strat_by_star.get((course_id, star_id)),
         })
 
     tgt_c, tgt_s = service.target if service.target else (None, None)
@@ -118,4 +132,7 @@ def build_session_view(db, service, clock: str) -> dict:
         "catalog": _CATALOG,
         "stars": sections,
         "unassigned": unassigned,
+        "strategies": registered,
+        "last_strat_by_star": {f"{c}:{s}": v
+                               for (c, s), v in service.strat_by_star.items()},
     }

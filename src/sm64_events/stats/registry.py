@@ -10,7 +10,7 @@ from typing import Callable, Sequence
 
 from sm64_events.tracking.projection import Attempt
 
-DEFAULT_FAILURES = ["reset", "hard_reset"]  # 'abandoned' excluded by default
+DEFAULT_FAILURES = ["reset", "hard_reset", "death"]  # 'abandoned' excluded by default
 
 
 def _live(attempts: Sequence[Attempt]) -> list[Attempt]:

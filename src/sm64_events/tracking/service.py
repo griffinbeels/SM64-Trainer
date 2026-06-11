@@ -111,6 +111,10 @@ class TrackerService:
     def strat_tag(self):
         return self._projector.strat_tag
 
+    @property
+    def strat_by_star(self) -> dict:
+        return self._projector.strat_by_star
+
     def _require_db(self) -> Database:
         if self.db is None or self.session_id is None:
             raise RuntimeError("database unavailable")
@@ -119,12 +123,19 @@ class TrackerService:
     # -- commands ----------------------------------------------------------------
     async def set_target(self, course_id: int, star_id: int,
                          strat_tag: str | None = None) -> None:
-        self._require_db()
+        db = self._require_db()
         payload = {"course_id": course_id, "star_id": star_id}
         if strat_tag is not None:
             payload["strat_tag"] = strat_tag
         await self.publish(Event(type="target_set", frame=0,
                                  timestamp_utc=_now(), payload=payload))
+        if strat_tag:
+            key = f"{course_id}:{star_id}"
+            strategies = db.get_state("strategies", {})
+            existing = strategies.get(key, [])
+            if strat_tag not in existing:
+                strategies[key] = existing + [strat_tag]
+                db.set_state("strategies", strategies)
 
     async def clear_attempt(self, attempt_id: int, reason: str | None = None) -> None:
         db = self._require_db()
