@@ -58,6 +58,30 @@ def device_name_hosting_pid(pid: int) -> str | None:
     return None
 
 
+class PcmContinuity:
+    """Wall-clock-locks a loopback stream. WASAPI loopback stops delivering
+    packets while the endpoint is idle (no app rendering), which would
+    silently PAUSE a cumulative-sample clock — every later chunk would be
+    stamped earlier than it really happened, shearing clip audio against
+    video. This guard tracks the expected sample position from QPC wall time
+    and says how much silence to inject before a delivery to close the gap.
+    Pure — unit-tested."""
+
+    def __init__(self, rate: int, qpc_start_100ns: int):
+        self._rate = rate
+        self._t0 = qpc_start_100ns
+        self._delivered = 0
+        self._min_gap = rate // 10  # <100 ms is jitter, not idle
+
+    def fill_before(self, qpc_now_100ns: int) -> int:
+        expected = int((qpc_now_100ns - self._t0) / 1e7 * self._rate)
+        gap = expected - self._delivered
+        return gap if gap > self._min_gap else 0
+
+    def on_delivered(self, n_samples: int) -> None:
+        self._delivered += n_samples
+
+
 def pick_loopback_device(loopback_devices: list[dict], target_name: str | None,
                          default_name: str) -> dict | None:
     """Choose the loopback entry matching the endpoint that hosts the target
@@ -140,8 +164,19 @@ class SystemAudioSource:
                             "rate without resample (v1 limitation)",
                             loopback["defaultSampleRate"], self._rate)
 
+            from sm64_events.replay.clock import qpc_100ns
+            guard = PcmContinuity(self._rate, qpc_100ns())
+
             def cb(in_data, frame_count, time_info, status):
-                on_pcm(np.frombuffer(in_data, dtype=np.int16).reshape(-1, 2))
+                fill = guard.fill_before(qpc_100ns())
+                if fill:
+                    log.info("audio idle gap: injecting %.1f s of silence to "
+                             "keep the sample clock wall-true", fill / self._rate)
+                    on_pcm(np.zeros((fill, 2), dtype=np.int16))
+                    guard.on_delivered(fill)
+                data = np.frombuffer(in_data, dtype=np.int16).reshape(-1, 2)
+                on_pcm(data)
+                guard.on_delivered(len(data))
                 return (None, pyaudio.paContinue)
 
             self._stream = self._pa.open(

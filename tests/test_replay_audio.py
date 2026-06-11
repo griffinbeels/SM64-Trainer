@@ -30,3 +30,18 @@ def test_pick_loopback_device_prefers_app_endpoint():
     assert got["index"] == 1
     # nothing matches -> None
     assert pick_loopback_device(devs, "Nope", "AlsoNope") is None
+
+
+def test_pcm_continuity_fills_idle_gaps_only():
+    from sm64_events.replay.audio import PcmContinuity
+    g = PcmContinuity(rate=48000, qpc_start_100ns=0)
+    # 1 s in, delivered 1 s of samples: no gap
+    g.on_delivered(48000)
+    assert g.fill_before(10_000_000) == 0
+    # 100 ms jitter: below threshold, no fill
+    assert g.fill_before(11_000_000) == 0
+    # 3 s idle: expected 4 s worth, delivered 1 s -> fill the difference
+    fill = g.fill_before(40_000_000)
+    assert fill == 48000 * 3
+    g.on_delivered(fill)
+    assert g.fill_before(40_000_000) == 0

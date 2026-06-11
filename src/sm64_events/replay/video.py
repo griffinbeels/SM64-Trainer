@@ -152,7 +152,6 @@ class GdiBitBltVideoSource:
         if self._thread is not None:
             return  # already capturing
         import threading
-        _ensure_dpi_aware()
         self._stop = threading.Event()
         self._thread = threading.Thread(
             target=self._loop, args=(on_frame, on_stopped),
@@ -164,6 +163,15 @@ class GdiBitBltVideoSource:
         from sm64_events.replay.clock import qpc_100ns
 
         user32, gdi32 = ctypes.windll.user32, ctypes.windll.gdi32
+        # PJ64 1.6 is DPI-UNAWARE: its real backing surface is its LOGICAL
+        # client size (e.g. 1600x1224 at 150% scaling), while a DPI-aware
+        # thread sees the scaled physical size (2400x1836) — BitBlt then
+        # copies past the surface into black right/bottom bands (live-
+        # measured: content bounds 1602x1226 inside a 2400x1836 frame).
+        # Thread-local UNAWARE makes GetClientRect/GetDC agree with the
+        # app's actual surface; the physical-size pixels were only DWM
+        # upscaling, not real detail, so this also shrinks grabs 2.25x.
+        user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-1))  # UNAWARE
         hwnd = wt.HWND(self._win.hwnd)
         hdc = mdc = bmp = None
         w = h = 0
