@@ -88,6 +88,17 @@ until the live gate passes.
   PARTICLE_DUST; `particle_flags` is the corroborating read).
   Known suppressors (no event, by design): steep-slope INPUT_ABOVE_SLIDE,
   fall-damage knockback diversion.
+
+  > **CORRECTED 2026-06-11 — the timing model above is wrong; do not
+  > build from it.** Landing transitions run `set_mario_action(...);
+  > break;` (no same-frame re-execution), so a direct
+  > `ACT_DIVE → ACT_*_ROLLOUT` edge is impossible: every rollout shows
+  > ≥ 1 visible dive-slide frame, and exactly ONE visible frame is the
+  > frame-perfect (dustless) input. Disproven by a 50-trial live session,
+  > confirmed against the decomp (evidence quoted in
+  > `src/sm64_events/memory/addresses.py`). Shipped as the generalized
+  > `detectors/dust.py` (TRICKS registry: rollouts + chained double/triple
+  > jumps, `frames_late = visible_landing_frames - 1`).
 - **DeathDetector** → `death {cause, level}` on edge into the death-action
   set; cause derived from which action (the failure-reason vocabulary).
   Health/lives are corroboration only, not the primary signal.

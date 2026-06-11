@@ -101,6 +101,25 @@ addresses.py (+VERIFY) and a defaulted GameSnapshot field → wire into
 `main.py` (resets before grabs) → render in `ui/index.html` if user-visible
 → document payload in README → full pytest + live check.
 
+**Add a dust trick** (landing-cancel chain like rollouts / double jumps):
+- *Same stat family* (another `jump`-type chain, e.g. side flip out of a
+  landing): ONE row in `TRICKS` (`detectors/dust.py`) + action ids in
+  addresses.py (+VERIFY) + a test in test_dust.py. Aggregation, stats, UI
+  all pick it up via the shared event_type. Done.
+- *New stat family* (own `<x>_total`/`<x>_dustless` rate): the above, PLUS
+  the per-family fan-out — Attempt fields + a `_dispatch` branch
+  (tracking/projection.py), an ALTER TABLE migration (storage/db.py:
+  MIGRATIONS + `_ATTEMPT_COLS` + `_attempt_params`), attempt_completed
+  payload (tracking/service.py), `_attempt_json` (tracking/views.py), the
+  row span in ui/components/practice.js, and a one-line
+  `_dust_rate(...)` StatDef (stats/registry.py). Mirror the jumps
+  commits on 2026-06-11 (`git log --grep=jump`); each step has a test to
+  copy. If a THIRD family ever lands, generalize counts to a keyed
+  structure instead of adding more columns.
+- Timing rule (decomp-verified, do NOT re-derive from the spec — its §3
+  model is annotated as wrong): `frames_late = visible_landing_frames - 1`;
+  one visible landing frame IS frame-perfect. Evidence: addresses.py.
+
 **Locate an unknown memory value:** `tools/find_timer.py` (ticking
 counters) → `tools/hunt_value.py` (exact displayed values) →
 `tools/watch_timer.py ADDR:u16` (characterize across scenarios). Methodology

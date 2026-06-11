@@ -2723,6 +2723,15 @@ git commit -m "docs: phase 1 tracker — event schema additions, module map, att
 
 ## Phase 2–4 outlines (separate plans when their turn comes)
 
+> **Phase 2 SHIPPED 2026-06-11** — and its rollout timing model below is
+> superseded: 0 visible dive-slide frames is impossible; ONE visible
+> landing frame is the frame-perfect (dustless) input, `frames_late =
+> visible_frames - 1`. Shipped as the generalized `detectors/dust.py`
+> (rollouts + chained double/triple jumps, schema v3). See the correction
+> note in spec §3 and the evidence in `memory/addresses.py`. health /
+> num_lives / mario_pos snapshot fields were NOT needed and remain
+> unbuilt (mario_pos belongs to Phase 3's door position boxes).
+
 **Phase 2 — New detectors (features #2, full #11).** Snapshot fields `particle_flags` (Mario+0x08 = `0x8033B178`), `health` (+0xAE), `num_lives` (+0xAD), `curr_level`, `mario_pos` (+0x3C) — all VERIFY-gated. `RolloutDetector` (dive→rollout edge; N observed `ACT_DIVE_SLIDE` frames = `frames_late`, 0 = dustless — decomp facts in spec §3) emitting `rollout {dustless, frames_late, level}`; `DeathDetector` (action-set edge, cause payload; death/outcome wiring: death closes attempts as `outcome=death`); `LevelChangeDetector` → `abandoned` outcome activates. Projection extends: `rollout` events while OPEN accumulate `rollouts_total/rollouts_dustless` onto the attempt (new columns, migration v2); `dustless_rate` StatDef. Per-attempt rollout rate in the times table.
 
 **Phase 3 — Triggers + menu (feature #5, menu failure).** `TRIGGERS` registry rows `{name, action_id, level?, position_box?}` with star/key-door actions (`0x1331`/`0x132E`); `TriggerDetector` + `trigger` events; menu-open address hunt with the human (`hunt_value.py`/`watch_timer.py` playbook), then `MenuDetector` + `menu` outcome with configurable buffer.
