@@ -10,5 +10,5 @@ export async function send(method, url, body) {
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!r.ok) throw new Error(`${url}: ${r.status}`);
-  return r.json();
+  return r.status === 204 ? null : r.json();
 }

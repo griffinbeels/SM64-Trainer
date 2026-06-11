@@ -13,6 +13,7 @@ export function useTracker() {
 
   // clockRef keeps refresh's identity stable so the WS effect never restarts
   const clockRef = useRef(clock);
+  const everConnected = useRef(false);
   useEffect(() => { clockRef.current = clock; }, [clock]);
 
   const refresh = useCallback(async () => {
@@ -26,7 +27,14 @@ export function useTracker() {
     let ws, closed = false;
     function connect() {
       ws = new WebSocket(`ws://${location.host}/ws/events`);
-      ws.onopen = () => setConnected(true);
+      ws.onopen = () => {
+        if (everConnected.current) {
+          setFeed((f) => [{ type: "ws_reconnected", seq: "", frame: "",
+                            payload: {} }, ...f].slice(0, 200));
+        }
+        everConnected.current = true;
+        setConnected(true);
+      };
       ws.onclose = () => { setConnected(false);
         if (!closed) setTimeout(connect, 2000); };
       ws.onmessage = (e) => {
