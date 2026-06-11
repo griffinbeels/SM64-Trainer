@@ -18,19 +18,25 @@ inside a clip).
 A/V alignment: both streams are anchored to clamped span start `s`.
 Video first frame >= s; audio sample 0 = s.
 
+Memory: O(1) in clip length for video — exactly one decoded frame is alive at
+a time (whole-attempt clips are the spec use case; minutes of buffered raw
+frames would be GBs). The PCM buffer IS fully assembled up front, but s16
+stereo is small (~46 MB for 4 min) and having it complete before encoding is
+what lets us interleave A/V inside the single video decode pass.
+
 PyAV 17 adjustments vs. the original sketch
 --------------------------------------------
 - Frame timing: use `frame.pts * float(stream.time_base)` not `i / fps`.
   MPEG-TS rescales PTS to 90 kHz (1/90000), so enumerate-index i would be
   correct by coincidence but the PTS-based approach is explicit and handles
   any MPEG-TS time_base.
-- Collect then interleave: collect all video frames (reformatted to yuv420p)
-  and the full PCM buffer first, then create both streams upfront and
-  interleave encoding. Encoding all video first then starting audio at pts=0
-  triggers PyAV's "Cannot rebase to zero time" error because the muxer sees
-  audio timestamps going backward relative to the already-written video wall
-  clock. Interleaving avoids this entirely without requiring packet-level
-  DTS sorting.
+- Interleave A/V encoding: encoding all video first then starting audio at
+  pts=0 triggers PyAV's "Cannot rebase to zero time" mux error because the
+  muxer sees audio timestamps going backward relative to the already-written
+  video wall clock. Both streams are created up front (video dims peeked from
+  the first in-window frame — a cheap partial re-decode of one segment), then
+  one audio block (rate/fps samples) is muxed alongside each video frame so
+  the timeline stays monotone.
 - Layout: `astream.codec_context.layout = "stereo"` (codec_context.channels
   is read-only in PyAV 17).
 - AudioFrame: `from_ndarray(block.reshape(1, -1), format="s16", layout="stereo")`
@@ -62,6 +68,23 @@ class ClipResult:
     truncated: bool
 
 
+def _in_window_frames(segments, s: datetime, e: datetime):
+    """Yield decoded video frames whose wall-clock time falls in [s, e).
+
+    Frame time = seg.utc_start + pts*time_base (MPEG-TS pts origin 0,
+    90 kHz time_base read from the stream). A coverage hole between segments
+    simply skips ahead in wall-clock time — frames on either side still land
+    in order. One frame alive at a time: O(1) memory in clip length.
+    """
+    for seg in segments:
+        with av.open(str(seg.path)) as src:
+            tb = float(src.streams.video[0].time_base)
+            for fr in src.decode(video=0):
+                t = seg.utc_start + timedelta(seconds=fr.pts * tb)
+                if s <= t < e:
+                    yield fr
+
+
 class ClipExtractor:
     def __init__(self, cfg: ReplayConfig, codec: str):
         self._cfg = cfg
@@ -89,31 +112,22 @@ class ClipExtractor:
 
         fps = self._cfg.fps
         rate = self._cfg.audio_rate
+        segments = ring.covering("video", s, e)
 
-        # -- Pass 1: collect video frames (reformatted) ----------------------
-        # Decode each overlapping segment; keep only frames whose wall-clock
-        # time falls in [s, e).  Frame time = seg.utc_start + pts*time_base
-        # (MPEG-TS pts origin 0, 90 kHz time_base).
-        video_frames: list[av.VideoFrame] = []
+        # -- Peek output dims from the first in-window frame ------------------
+        # Both streams must exist before any packet is muxed (interleaving
+        # requirement), and the video stream needs dims. A segment can overlap
+        # [s, e) without contributing a frame (covering() is utc-range overlap,
+        # frames are discrete), so peek the actual first in-window frame; the
+        # partial re-decode of at most a couple of segments is negligible.
         dims: tuple[int, int] | None = None
-        for seg in ring.covering("video", s, e):
-            with av.open(str(seg.path)) as src:
-                vstr = src.streams.video[0]
-                tb = float(vstr.time_base)
-                for fr in src.decode(video=0):
-                    t = seg.utc_start + timedelta(seconds=fr.pts * tb)
-                    if t < s or t >= e:
-                        continue
-                    if dims is None:
-                        dims = (fr.width, fr.height)
-                    video_frames.append(
-                        fr.reformat(width=dims[0], height=dims[1],
-                                    format="yuv420p"))
-
-        if not video_frames:
+        for fr in _in_window_frames(segments, s, e):
+            dims = (fr.width, fr.height)
+            break
+        if dims is None:
             raise ValueError("no decodable video frames in the span")
 
-        # -- Pass 2: assemble PCM buffer -------------------------------------
+        # -- Assemble the PCM buffer (before any encoding) ---------------------
         # Contiguous s16le stereo, aligned to clamped span start `s`.
         # Coverage holes remain silent (zeros already in place).
         total_samples = int((e - s).total_seconds() * rate)
@@ -129,13 +143,7 @@ class ClipExtractor:
             if n > 0:
                 pcm[dst_off:dst_off + n] = data[src_off:src_off + n]
 
-        # -- Pass 3: encode and mux (interleaved) ----------------------------
-        # Create both streams upfront so the muxer sees a valid header before
-        # any packets arrive.  Then interleave audio and video by sending one
-        # audio block (1600 samples = one video frame at 48 kHz/30 fps) for
-        # every video frame — this keeps the muxer's timeline monotone and
-        # avoids the "Cannot rebase to zero time" error that occurs when audio
-        # starts after a fully-flushed video stream.
+        # -- Single streaming pass: decode -> encode video + interleave audio --
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out = av.open(str(out_path), "w", options={"movflags": "+faststart"})
         try:
@@ -154,41 +162,14 @@ class ClipExtractor:
             astream.codec_context.layout = "stereo"
             resampler = av.AudioResampler(format="fltp", layout="stereo",
                                           rate=rate)
-
-            # samples per video frame (interleave granularity)
-            smpv = rate // fps  # 1600 at 48 kHz / 30 fps
             audio_pos = 0
 
-            for v_pts, vf in enumerate(video_frames):
-                # encode one video frame
-                vf.pts = v_pts
-                for pkt in vstream.encode(vf):
-                    out.mux(pkt)
-
-                # encode one interleave-block worth of audio
-                a_end = min(audio_pos + smpv, total_samples)
-                if a_end > audio_pos:
-                    block = pcm[audio_pos:a_end]
-                    if len(block) < _AAC_FRAME_SIZE:
-                        # Pad so AAC never sees a sub-1024 non-final frame
-                        padded = np.zeros((_AAC_FRAME_SIZE, 2), dtype=np.int16)
-                        padded[:len(block)] = block
-                        block = padded
-                    arr = np.ascontiguousarray(block.reshape(1, -1))
-                    af = av.AudioFrame.from_ndarray(arr, format="s16",
-                                                    layout="stereo")
-                    af.sample_rate = rate
-                    af.pts = audio_pos
-                    audio_pos = a_end
-                    for rf in resampler.resample(af):
-                        for pkt in astream.encode(rf):
-                            out.mux(pkt)
-
-            # Encode any remaining audio (tail samples after last video frame)
-            while audio_pos < total_samples:
-                a_end = min(audio_pos + _AAC_FRAME_SIZE, total_samples)
+            def mux_audio(a_end: int) -> None:
+                nonlocal audio_pos
                 block = pcm[audio_pos:a_end]
                 if len(block) < _AAC_FRAME_SIZE:
+                    # Pad so AAC never sees a sub-1024 non-final frame; only
+                    # the tail block can be short, so no mid-clip silence.
                     padded = np.zeros((_AAC_FRAME_SIZE, 2), dtype=np.int16)
                     padded[:len(block)] = block
                     block = padded
@@ -201,6 +182,26 @@ class ClipExtractor:
                 for rf in resampler.resample(af):
                     for pkt in astream.encode(rf):
                         out.mux(pkt)
+
+            # samples per video frame (interleave granularity)
+            smpv = rate // fps  # 1600 at 48 kHz / 30 fps
+            out_pts = 0
+
+            for fr in _in_window_frames(segments, s, e):
+                vf = fr.reformat(width=dims[0], height=dims[1],
+                                 format="yuv420p")
+                vf.pts = out_pts
+                out_pts += 1
+                for pkt in vstream.encode(vf):
+                    out.mux(pkt)
+                # one interleave-block of audio per video frame
+                a_end = min(audio_pos + smpv, total_samples)
+                if a_end > audio_pos:
+                    mux_audio(a_end)
+
+            # Remaining audio (tail samples after the last video frame)
+            while audio_pos < total_samples:
+                mux_audio(min(audio_pos + _AAC_FRAME_SIZE, total_samples))
 
             # Flush video encoder
             for pkt in vstream.encode(None):

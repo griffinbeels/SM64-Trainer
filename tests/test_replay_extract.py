@@ -59,6 +59,22 @@ def test_extract_clamps_and_flags_truncation(tmp_path):
     assert abs(res.duration_s - 2.0) < 0.2
 
 
+def test_extract_full_buffer_streams_all_segments(tmp_path):
+    """Whole-attempt clips are the spec use case: the extractor must stream
+    frames (O(1) memory in clip length), never buffer the span. Cheap proxy:
+    a span covering the entire buffer exercises the multi-segment streaming
+    path end to end."""
+    ring = build_buffer(tmp_path)
+    ex = ClipExtractor(cfg=CFG, codec="libx264")
+    out = tmp_path / "clip.mp4"
+    res = ex.extract(ring, T0, T0 + timedelta(seconds=6), out)
+    assert res.truncated is False
+    assert abs(res.duration_s - 6.0) < 0.2
+    with av.open(str(out)) as c:
+        n = len([f for f in c.decode(video=0)])
+        assert abs(n - 180) <= 3            # 6 s * 30 fps
+
+
 def test_extract_no_footage_raises(tmp_path):
     ring = SegmentRing(retention_s=None, max_bytes=10**9)
     ex = ClipExtractor(cfg=CFG, codec="libx264")
