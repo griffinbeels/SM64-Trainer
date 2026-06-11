@@ -20,7 +20,7 @@ def test_migrations_set_user_version_and_create_tables(tmp_path):
     names = {r["name"] for r in db._conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"events", "sessions", "attempts", "pbs", "ui_state"} <= names
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 3
 
 
 def test_reopening_existing_db_is_idempotent(tmp_path):
@@ -28,7 +28,7 @@ def test_reopening_existing_db_is_idempotent(tmp_path):
     sid = first.insert_session("2026-06-10T12:00:00Z")
     first.close()
     db = make_db(tmp_path)  # second open: migrations must not re-run/crash
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 3
     row = db._conn.execute("SELECT * FROM sessions WHERE id=?", (sid,)).fetchone()
     assert row is not None and row["started_utc"] == "2026-06-10T12:00:00Z"
 
@@ -122,12 +122,13 @@ def test_delete_session_removes_events_and_row_leaves_others(tmp_path):
     assert row2 is not None
 
 
-# -- migration v2: rollout counts (Phase 2) -----------------------------------
+# -- migrations v2+v3: dust-trick counts (Phase 2) ----------------------------
 
-def test_migration_v2_adds_rollout_columns(tmp_path):
+def test_migrations_add_dust_trick_columns(tmp_path):
     db = make_db(tmp_path)
     cols = {r["name"] for r in db._conn.execute("PRAGMA table_info(attempts)")}
-    assert {"rollouts_total", "rollouts_dustless"} <= cols
+    assert {"rollouts_total", "rollouts_dustless",
+            "jumps_total", "jumps_dustless"} <= cols
 
 
 def test_v1_database_upgrades_in_place(tmp_path):
@@ -145,11 +146,12 @@ def test_v1_database_upgrades_in_place(tmp_path):
     conn.commit()
     conn.close()
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 3
     assert db.attempts()[0].rollouts_total == 0   # backfilled default
+    assert db.attempts()[0].jumps_total == 0
 
 
-def test_attempts_round_trip_rollout_counts(tmp_path):
+def test_attempts_round_trip_dust_trick_counts(tmp_path):
     from sm64_events.tracking.projection import Attempt
     db = make_db(tmp_path)
     a = Attempt(id=10, session_id=1, course_id=2, star_id=2, strat_tag=None,
@@ -157,6 +159,7 @@ def test_attempts_round_trip_rollout_counts(tmp_path):
                 outcome_detail=None, igt_frames=343, rta_frames=350,
                 started_utc="2026-06-10T12:00:00Z", ended_utc="2026-06-10T12:00:12Z",
                 cleared=False, cleared_reason=None,
-                rollouts_total=5, rollouts_dustless=3)
+                rollouts_total=5, rollouts_dustless=3,
+                jumps_total=4, jumps_dustless=2)
     db.replace_attempts([a])
     assert db.attempts() == [a]

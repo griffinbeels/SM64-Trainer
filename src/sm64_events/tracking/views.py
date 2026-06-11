@@ -75,7 +75,9 @@ def _attempt_json(a, pbs, clock):
             "pb_delta_frames": delta, "cleared": a.cleared,
             "cleared_reason": a.cleared_reason, "ended_utc": a.ended_utc,
             "rollouts_total": a.rollouts_total,
-            "rollouts_dustless": a.rollouts_dustless}
+            "rollouts_dustless": a.rollouts_dustless,
+            "jumps_total": a.jumps_total,
+            "jumps_dustless": a.jumps_dustless}
 
 
 def _catalog() -> dict:

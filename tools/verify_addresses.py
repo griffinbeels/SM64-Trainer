@@ -13,9 +13,9 @@ or the SM64 decomp US symbol map, fix addresses.py, and rerun.
 import time
 
 from sm64_events.core.snapshot import SnapshotReader
-from sm64_events.detectors.rollout import RolloutDetector
+from sm64_events.detectors.dust import DustTrickDetector
 from sm64_events.detectors.star_grab import StarGrabDetector
-from sm64_events.memory.addresses import ACT_DIVE_SLIDE, PARTICLE_DUST
+from sm64_events.memory.addresses import PARTICLE_DUST
 from sm64_events.memory.pj64 import Pj64Memory
 
 
@@ -52,30 +52,32 @@ def main() -> None:
     print("\nPhase 1:", "ALL PASS" if ok else "FAILURES — fix addresses.py first")
 
     print("\nPhase 2: live watch — grab stars and verify identity/timing;")
-    print("dive-rollout to verify the rollout addresses: a dive-slide line")
-    print("must show [DUST], and rollout lines must match what you input")
-    print("(frame-perfect = dustless). Detector lines come from the REAL")
-    print("detectors, so this is exactly what API listeners receive.")
-    print("(Ctrl+C to quit)\n")
-    detectors = [StarGrabDetector(), RolloutDetector()]
+    print("dive-rollout and double/triple-jump to verify the dust-trick")
+    print("addresses. Expect: one visible slide/landing frame = DUSTLESS")
+    print("(frame perfect); dusty slide/landing frames show [DUST]. Detector")
+    print("lines come from the REAL detectors — exactly what API listeners")
+    print("receive. (Ctrl+C to quit)\n")
+    star_det, dust_det = StarGrabDetector(), DustTrickDetector()
     prev_snap = reader.read()
     prev_action = None
     while True:
         s = reader.read()
-        for ev in detectors[0].process(prev_snap, s):
+        for ev in star_det.process(prev_snap, s):
             p = ev.payload
             recon = "  [reconstructed: grab raced an IGT reset]" \
                 if p["igt_reconstructed"] else ""
             print(f"  >> star_collected: {p['course_name']} / {p['star_name']}"
                   f"  igt {p['igt']} ({p['igt_frames']}f)"
                   f"  frame {ev.frame}{recon}")
-        for ev in detectors[1].process(prev_snap, s):
+        for ev in dust_det.process(prev_snap, s):
             p = ev.payload
-            kind = "DUSTLESS" if p["dustless"] else f"{p['frames_late']} late"
-            print(f"  >> rollout: {kind}  level {p['level']}  frame {ev.frame}")
+            timing = "DUSTLESS" if p["dustless"] else f"{p['frames_late']} late"
+            kind = f" ({p['kind']})" if "kind" in p else ""
+            print(f"  >> {ev.type}{kind}: {timing}"
+                  f"  ({p['landing_frames']} landing frames)"
+                  f"  level {p['level']}  frame {ev.frame}")
         if s.mario_action != prev_action:
-            dust = "  [DUST]" if (s.mario_action == ACT_DIVE_SLIDE
-                                  and s.particle_flags & PARTICLE_DUST) else ""
+            dust = "  [DUST]" if s.particle_flags & PARTICLE_DUST else ""
             print(f"frame {s.global_timer:>8}  action {s.mario_action:#010x}  "
                   f"stars {s.num_stars:>3}  igt {s.igt_overall:>6} "
                   f"result {s.igt_result:>6}{dust}")

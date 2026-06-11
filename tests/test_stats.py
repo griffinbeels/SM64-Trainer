@@ -3,7 +3,7 @@ from sm64_events.tracking.projection import Attempt
 
 
 def attempt(id=1, outcome="success", igt=300, rta=310, cleared=False,
-            rollouts=0, dustless=0):
+            rollouts=0, dustless=0, jumps=0, jumps_dustless=0):
     return Attempt(id=id, session_id=1, course_id=2, star_id=2, strat_tag=None,
                    anchor_type="practice_reset", anchor_frame=0,
                    outcome=outcome, outcome_detail=None,
@@ -11,7 +11,8 @@ def attempt(id=1, outcome="success", igt=300, rta=310, cleared=False,
                    started_utc="2026-06-10T12:00:00Z",
                    ended_utc="2026-06-10T12:00:10Z",
                    cleared=cleared, cleared_reason=None,
-                   rollouts_total=rollouts, rollouts_dustless=dustless)
+                   rollouts_total=rollouts, rollouts_dustless=dustless,
+                   jumps_total=jumps, jumps_dustless=jumps_dustless)
 
 
 SAMPLE = [
@@ -94,3 +95,30 @@ def test_dustless_rate_none_when_no_rollouts():
 def test_dustless_rate_in_registry_meta():
     meta = {m["key"]: m for m in registry_meta()}
     assert meta["dustless_rate"]["fmt"] == "percent"
+
+
+def test_dustless_jump_rate_pools_jumps_across_attempts():
+    attempts = [
+        attempt(1, jumps=2, jumps_dustless=2),
+        attempt(2, outcome="reset", jumps=2, jumps_dustless=0),
+        attempt(3, jumps=4, jumps_dustless=4, cleared=True),   # excluded
+    ]
+    rate = compute_stat("dustless_jump_rate", attempts, {}, clock="igt")
+    assert abs(rate - 0.5) < 1e-9   # (2+0) / (2+2)
+
+
+def test_dustless_jump_rate_none_when_no_jumps():
+    assert compute_stat("dustless_jump_rate", [attempt(1)], {}, clock="igt") is None
+
+
+def test_dust_stats_are_independent():
+    a = [attempt(1, rollouts=2, dustless=0, jumps=2, jumps_dustless=2)]
+    assert compute_stat("dustless_rate", a, {}, clock="igt") == 0.0
+    assert compute_stat("dustless_jump_rate", a, {}, clock="igt") == 1.0
+
+
+def test_dust_rate_labels_distinguish_tricks():
+    meta = {m["key"]: m for m in registry_meta()}
+    assert meta["dustless_rate"]["label"] == "Dustless rollouts"
+    assert meta["dustless_jump_rate"]["label"] == "Dustless jumps"
+    assert meta["dustless_jump_rate"]["fmt"] == "percent"

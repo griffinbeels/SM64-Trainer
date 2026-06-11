@@ -39,11 +39,17 @@ Caveats (hard-won — keep these current):
    never leaks the previous star's strat. The strat_tag on an attempt is the
    attributed star's last-remembered strategy at close time.
 
-7. Rollout attachment: rollout events accumulate and attach to whichever
-   attempt closes next (covers anchored AND grab-only attempts). Every
-   boundary event (anchor, grab, death, game_reset, session_started,
-   level_changed) zeroes the accumulator after its close runs, so counts
+7. Dust-trick attachment: rollout/jump events accumulate and attach to
+   whichever attempt closes next (covers anchored AND grab-only attempts).
+   Every boundary event (anchor, grab, death, game_reset, session_started,
+   level_changed) zeroes the accumulators after its close runs, so counts
    never leak across attempts, idle gaps, or discarded no-op resets.
+
+8. Rollout payload compat: journals written before the corrected timing
+   model (no "landing_frames" key) counted visible slide frames as
+   frames_late — there, frames_late == 1 IS the frame-perfect input
+   (decomp-verified; see detectors/dust.py). _rollout_is_dustless()
+   re-derives the classification on replay; new payloads are trusted.
 """
 from dataclasses import dataclass
 
@@ -65,8 +71,10 @@ class Attempt:
     ended_utc: str
     cleared: bool
     cleared_reason: str | None
-    rollouts_total: int = 0      # rollout sub-events during this attempt
+    rollouts_total: int = 0      # dust-trick sub-events during this attempt
     rollouts_dustless: int = 0
+    jumps_total: int = 0         # chained double/triple jumps
+    jumps_dustless: int = 0
 
 
 ANCHOR_EVENT_TYPES = ("practice_reset", "state_loaded")
@@ -99,6 +107,8 @@ class Projector:
         self._open = None  # EventRow of the open attempt's anchor
         self._rollouts_total = 0
         self._rollouts_dustless = 0
+        self._jumps_total = 0
+        self._jumps_dustless = 0
 
     @property
     def strat_tag(self) -> str | None:
@@ -108,8 +118,8 @@ class Projector:
     def feed(self, ev) -> list[Attempt]:
         closed = self._dispatch(ev)
         if ev.type in BOUNDARY_EVENT_TYPES:
-            self._rollouts_total = 0
-            self._rollouts_dustless = 0
+            self._rollouts_total = self._rollouts_dustless = 0
+            self._jumps_total = self._jumps_dustless = 0
         return closed
 
     def _dispatch(self, ev) -> list[Attempt]:
@@ -135,10 +145,24 @@ class Projector:
             return []
         if ev.type == "rollout":
             self._rollouts_total += 1
-            if ev.payload.get("dustless"):
+            if self._rollout_is_dustless(ev.payload):
                 self._rollouts_dustless += 1
             return []
+        if ev.type == "jump":
+            self._jumps_total += 1
+            if ev.payload.get("dustless"):
+                self._jumps_dustless += 1
+            return []
         return []
+
+    @staticmethod
+    def _rollout_is_dustless(p: dict) -> bool:
+        """Compat shim (docstring caveat 8): old payloads lack
+        landing_frames and misclassified the frame-perfect case —
+        frames_late == 1 meant ONE visible slide frame, which is perfect."""
+        if "landing_frames" in p:
+            return bool(p.get("dustless"))
+        return bool(p.get("dustless")) or p.get("frames_late") == 1
 
     # -- closers -------------------------------------------------------------
     def _close_by_reset(self, ev) -> list[Attempt]:
@@ -207,7 +231,9 @@ class Projector:
             cleared=first.id in self._cleared,
             cleared_reason=self._cleared.get(first.id),
             rollouts_total=self._rollouts_total,
-            rollouts_dustless=self._rollouts_dustless)
+            rollouts_dustless=self._rollouts_dustless,
+            jumps_total=self._jumps_total,
+            jumps_dustless=self._jumps_dustless)
 
 
 def replay(events) -> tuple[list[Attempt], Projector]:

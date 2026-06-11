@@ -285,3 +285,18 @@ def test_attempt_completed_carries_rollout_counts(tmp_path):
     completed = [e for e in db.events() if e.type == "attempt_completed"]
     assert completed[-1].payload["rollouts_total"] == 2
     assert completed[-1].payload["rollouts_dustless"] == 1
+
+
+def test_attempt_completed_carries_jump_counts(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(ev("jump", 1100,
+                               {"dustless": True, "frames_late": 0,
+                                "landing_frames": 1, "kind": "double",
+                                "level": 24})))
+    asyncio.run(svc.publish(star(1350)))
+    a = db.attempts()[0]
+    assert a.jumps_total == 1 and a.jumps_dustless == 1
+    completed = [e for e in db.events() if e.type == "attempt_completed"]
+    assert completed[-1].payload["jumps_total"] == 1
+    assert completed[-1].payload["jumps_dustless"] == 1

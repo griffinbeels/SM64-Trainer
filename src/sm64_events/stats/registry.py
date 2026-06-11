@@ -65,14 +65,20 @@ def _success_rate(attempts, params, clock):
     return wins / len(counted)
 
 
-def _dustless_rate(attempts, params, clock):
-    # pools rollouts across attempts regardless of outcome: a rollout
-    # practiced during a failed attempt is still a practiced rollout
-    live = _live(attempts)
-    total = sum(a.rollouts_total for a in live)
-    if total == 0:
-        return None
-    return sum(a.rollouts_dustless for a in live) / total
+def _dust_rate(total_attr: str, dustless_attr: str):
+    """Dust-trick rate over pooled counts: tricks practiced during failed
+    attempts still count. Returns a compute() for the given count fields."""
+    def compute(attempts, params, clock):
+        live = _live(attempts)
+        total = sum(getattr(a, total_attr) for a in live)
+        if total == 0:
+            return None
+        return sum(getattr(a, dustless_attr) for a in live) / total
+    return compute
+
+
+_dustless_rate = _dust_rate("rollouts_total", "rollouts_dustless")
+_dustless_jump_rate = _dust_rate("jumps_total", "jumps_dustless")
 
 
 @dataclass(frozen=True)
@@ -92,7 +98,9 @@ REGISTRY: dict[str, StatDef] = {d.key: d for d in [
     StatDef("success_count", "Successes", "int", _success_count),
     StatDef("success_rate", "Success rate", "percent", _success_rate,
             {"failures": DEFAULT_FAILURES}),
-    StatDef("dustless_rate", "Dustless rate", "percent", _dustless_rate),
+    StatDef("dustless_rate", "Dustless rollouts", "percent", _dustless_rate),
+    StatDef("dustless_jump_rate", "Dustless jumps", "percent",
+            _dustless_jump_rate),
 ]}
 
 DEFAULT_STAT_MENU = [

@@ -29,8 +29,12 @@ MARIO_ACTION = MARIO_STRUCT + 0x0C        # u32; live-verified 2026-06-10
 MARIO_ACTION_TIMER = MARIO_STRUCT + 0x1A  # u16, resets to 0 on action change
 MARIO_NUM_STARS = MARIO_STRUCT + 0xAA     # s16, total star count; live-verified 2026-06-10
 
-# Bit in particleFlags set on every ACT_DIVE_SLIDE frame (the visible dust
-# puffs) — corroborates the rollout detector's action-edge signal.
+# Bit in particleFlags (the visible dust puffs) — corroborates the dust-
+# trick detector's action-edge signal. Decomp (fetched 2026-06-11): slide
+# actions set it whenever ground contact holds (common_slide_action,
+# GROUND_STEP_NONE); jump landings set it only when forwardVel > 16
+# (common_landing_action) — so a slow late jump shows NO dust even though
+# the input was late; "dustless" is defined by input timing, not the puff.
 # Source: decomp include/sm64.h PARTICLE_DUST. VERIFY (live gate pending).
 PARTICLE_DUST = 1 << 0
 
@@ -90,17 +94,29 @@ STAR_GRAB_ACTIONS = frozenset({
     ACT_FALL_AFTER_STAR_GRAB,
 })
 
-# Dive -> rollout action chain (decomp include/sm64.h, cross-checked
-# 2026-06-10). Both rollouts are entered ONLY from ACT_DIVE_SLIDE in the
-# decomp (act_dive_slide, on A_PRESSED; forwardVel sign picks the variant).
-# A frame-perfect rollout chains dive_slide -> rollout INSIDE one frame
-# (execute_mario_action loops until the action is stable), so memory shows
-# a direct ACT_DIVE -> ACT_*_ROLLOUT edge with no dive-slide frame — that
-# absence is the "dustless" signal. VERIFY (live gate pending).
+# Dust-trick action chains (decomp include/sm64.h, all values quoted
+# verbatim from n64decomp/sm64 master, fetched 2026-06-11).
+#
+# Landing-transition model (decomp-verified 2026-06-11, confirmed live by a
+# 50-trial session): when an air action lands, common_air_action_step /
+# act_dive run `set_mario_action(...); break;` — the landing action is in
+# memory at the END of the landing frame but its function (with its A/B
+# cancel check) first RUNS the next frame. Cancels out of a landing action
+# (act_dive_slide -> rollout, act_jump_land -> double jump) DO re-execute
+# same-frame (`return set_mario_action(...)`). Consequence: every chained
+# trick shows >= 1 visible landing/slide frame; exactly 1 visible frame IS
+# the frame-perfect (dustless) input, and a direct air->launch edge (0
+# visible frames) is impossible. See detectors/dust.py.
+# VERIFY (live gate pending for the jump-chain ids).
 ACT_DIVE = 0x0188088A
 ACT_DIVE_SLIDE = 0x00880456
 ACT_FORWARD_ROLLOUT = 0x010008A6
 ACT_BACKWARD_ROLLOUT = 0x010008AD
+ACT_JUMP = 0x03000880
+ACT_DOUBLE_JUMP = 0x03000881
+ACT_TRIPLE_JUMP = 0x01000882
+ACT_JUMP_LAND = 0x04000470
+ACT_DOUBLE_JUMP_LAND = 0x04000472
 
 ROLLOUT_ACTIONS = frozenset({ACT_FORWARD_ROLLOUT, ACT_BACKWARD_ROLLOUT})
 
