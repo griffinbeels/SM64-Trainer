@@ -90,7 +90,7 @@ function AttemptTable({ attempts, rows, t }) {
   return html`<table>
     ${rows.map((a) => {
       const idx = attempts.indexOf(a);
-      return html`<${AttemptRow} a=${a} t=${t} idx=${idx} />`;
+      return html`<${AttemptRow} key=${a.id} a=${a} t=${t} idx=${idx} />`;
     })}
   </table>`;
 }
@@ -150,7 +150,9 @@ function ControlBar({ ui }) {
 export function Practice({ t }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [showUnassignedHidden, setShowUnassignedHidden] = useState(false);
-  const [sort, setSortState] = useState(localStorage.getItem("sm64.sort") || "newest");
+  const stored = localStorage.getItem("sm64.sort");
+  const [sort, setSortState] = useState(
+    SORT_OPTIONS.some(([k]) => k === stored) ? stored : "newest");
   const [hideResets, setHideResetsState] = useState(
     localStorage.getItem("sm64.hideResets") === "1");
   const ui = {
@@ -182,11 +184,11 @@ export function Practice({ t }) {
     </div>
     ${menuOpen && html`<${StatMenu} t=${t} close=${() => setMenuOpen(false)} />`}
     <${ControlBar} ui=${ui} />
-    ${active && html`<${StarSection} sec=${active} t=${t} ui=${ui} pinned=${true} />`}
+    ${active && html`<${StarSection} key=${`${active.course_id}:${active.star_id}`} sec=${active} t=${t} ui=${ui} pinned=${true} />`}
     ${v.stars.length === 0 && v.unassigned.length === 0
       ? html`<p class="meta">No attempts this session yet — grab a star.</p>` : ""}
-    ${rest.length > 0 && html`<div class="meta listhead">this session — newest first</div>`}
-    ${rest.map((sec) => html`<${StarSection} sec=${sec} t=${t} ui=${ui} pinned=${false} />`)}
+    ${rest.length > 0 && html`<div class="meta listhead">stars — recent activity first</div>`}
+    ${rest.map((sec) => html`<${StarSection} key=${`${sec.course_id}:${sec.star_id}`} sec=${sec} t=${t} ui=${ui} pinned=${false} />`)}
     ${v.unassigned.length > 0 && html`<div class="starsec">
       <div class="shead"><b>No target</b>
         <span class="meta">failures before any star was grabbed or set</span></div>
