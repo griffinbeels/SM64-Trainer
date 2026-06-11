@@ -471,3 +471,35 @@ def test_resumed_session_points_join_their_original_segment(tmp_path):
     prog = sec["progress"]
     assert [s["session_id"] for s in prog["sessions"]] == [1, 2]
     assert [p["igt_frames"] for p in prog["sessions"][0]["points"]] == [343, 330]
+
+
+def test_target_section_under_session_scope_keeps_lifetime_context(tmp_path):
+    # the pinned-block state right after "new session": empty attempt list,
+    # but lifetime timeline/stats still render. A second star with session
+    # activity also pins "fresh targets sort last".
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350, igt=343)))          # target -> (2,2)
+    asyncio.run(svc.new_session())
+    asyncio.run(svc.publish(ev("practice_reset", 5000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(5400, course=8, star_id=1, igt=500)))
+    asyncio.run(svc.set_target(2, 2))
+    view = build_session_view(db, svc, clock="igt", scope="session")
+    assert [(s["course_id"], s["star_id"]) for s in view["stars"]] \
+        == [(8, 1), (2, 2)]                                # fresh target last
+    tgt = view["stars"][1]
+    assert tgt["attempts"] == []                           # nothing this session
+    assert tgt["timeline"] is not None                     # lifetime history
+    stats = {s["key"]: s["value"] for s in tgt["stats"]}
+    assert stats.get("best") == 343                        # lifetime best
+
+
+def test_view_survives_out_of_range_target(tmp_path):
+    # TargetBody has no range validation; the always-materialized target
+    # section must not 500 the view — names fall back, links degrade.
+    db, svc = make(tmp_path)
+    asyncio.run(svc.set_target(99, 42))
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    assert (sec["course_id"], sec["star_id"]) == (99, 42)
+    assert sec["course_name"] and sec["star_name"]         # fallback strings

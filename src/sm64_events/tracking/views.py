@@ -1,5 +1,15 @@
-"""Builds the GET /api/session payload. Times lists are session-scoped;
-stat chips compute over the star's full history (lifetime), per spec §8."""
+"""Builds the GET /api/session payload.
+
+Contract (the UI builds against ALL of this):
+- `scope` selects which attempts drive sections/attempt lists/unassigned:
+  "session" (default) = the active session, "lifetime" = everything.
+  Stat chips and the timeline ALWAYS compute over lifetime history (spec §8).
+- Star sections are ordered newest-activity-first (max scoped attempt id;
+  fresh targets sort last).
+- The practice target's section is ALWAYS present, even with zero scoped
+  attempts — the UI pins it as the active-star block.
+- Sections carry `markers_by_strat` (spec §3) and `progress` (spec §4,
+  scoped successes grouped per session)."""
 from sm64_events.core.timefmt import format_igt
 from sm64_events.links import star_links
 from sm64_events.memory.addresses import (COURSE_NAMES, STAR_NAMES,
