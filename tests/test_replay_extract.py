@@ -83,3 +83,77 @@ def test_extract_no_footage_raises(tmp_path):
         assert False, "expected ValueError"
     except ValueError:
         pass
+
+
+def test_clip_video_duration_matches_span(tmp_path):
+    ring = build_buffer(tmp_path)
+    ex = ClipExtractor(cfg=CFG, codec="libx264")
+    out = tmp_path / "clip.mp4"
+    ex.extract(ring, T0 + timedelta(seconds=1), T0 + timedelta(seconds=5), out)
+    with av.open(str(out)) as c:
+        # Container duration is in microseconds; use it as primary source.
+        # v.duration may be None for some PyAV/MP4 combos, so fall back to
+        # container-level duration for both assertions.
+        container_dur = c.duration / 1_000_000  # us -> s
+        assert abs(container_dur - 4.0) < 0.25  # container duration ~ span
+        v = c.streams.video[0]
+        if v.duration is not None:
+            vdur = float(v.duration * v.time_base)
+            assert abs(vdur - 4.0) < 0.25
+        else:
+            # PyAV version doesn't populate stream duration; container level is
+            # authoritative.
+            assert abs(container_dur - 4.0) < 0.25
+
+
+def build_buffer_with_hole(tmp_path):
+    """0..59 then 105..164: encoder rotates on the index jump -> ~1.5 s hole."""
+    ring = SegmentRing(retention_s=None, max_bytes=10**9)
+    clk = CaptureClock(anchor_qpc_100ns=0, anchor_utc=T0)
+    w = SegmentWriter(cfg=CFG, clock=clk, out_dir=tmp_path / "buf",
+                      codec="libx264", on_segment=ring.add)
+    w.start_audio(t0_utc=T0)
+    tone = np.zeros((48000, 2), dtype=np.int16)
+    for i in range(60):
+        w.write_video(np.full((480, 640, 4), 50, dtype=np.uint8), frame_index=i)
+    for i in range(105, 165):
+        w.write_video(np.full((480, 640, 4), 200, dtype=np.uint8), frame_index=i)
+    for _ in range(6):
+        w.write_audio(tone)
+    w.close()
+    return ring
+
+
+def test_hole_preserves_av_alignment(tmp_path):
+    ring = build_buffer_with_hole(tmp_path)
+    ex = ClipExtractor(cfg=CFG, codec="libx264")
+    out = tmp_path / "clip.mp4"
+    res = ex.extract(ring, T0, T0 + timedelta(seconds=5.5), out)
+    assert abs(res.duration_s - 5.5) < 0.01
+    with av.open(str(out)) as c:
+        v = c.streams.video[0]
+        a = c.streams.audio[0]
+        # Use stream duration when available, else fall back to container.
+        # INTENT: video timeline must span the hole (held frame), matching audio.
+        container_dur = c.duration / 1_000_000  # us -> s
+        if v.duration is not None:
+            vdur = float(v.duration * v.time_base)
+        else:
+            vdur = container_dur
+        if a.duration is not None:
+            adur = float(a.duration * a.time_base)
+        else:
+            adur = container_dur
+        # Video timeline must span the hole (wall-clock-locked pts preserves it)
+        assert abs(vdur - 5.5) < 0.25
+        assert abs(vdur - adur) < 0.3
+
+
+def test_sub_frame_span_raises(tmp_path):
+    ring = build_buffer(tmp_path)
+    ex = ClipExtractor(cfg=CFG, codec="libx264")
+    import pytest
+    with pytest.raises(ValueError):
+        ex.extract(ring, T0 + timedelta(seconds=1),
+                   T0 + timedelta(seconds=1, microseconds=5),
+                   tmp_path / "c.mp4")

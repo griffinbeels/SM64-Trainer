@@ -69,20 +69,30 @@ class ClipResult:
 
 
 def _in_window_frames(segments, s: datetime, e: datetime):
-    """Yield decoded video frames whose wall-clock time falls in [s, e).
+    """Yield (frame, t) tuples for decoded video frames whose wall-clock time
+    falls in [s, e).
 
-    Frame time = seg.utc_start + pts*time_base (MPEG-TS pts origin 0,
+    Frame time t = seg.utc_start + pts*time_base (MPEG-TS pts origin 0,
     90 kHz time_base read from the stream). A coverage hole between segments
     simply skips ahead in wall-clock time — frames on either side still land
     in order. One frame alive at a time: O(1) memory in clip length.
+
+    If a segment file has been evicted from the ring between covering() and
+    open/read, it is silently skipped (the hole is handled by wall-clock-locked
+    pts in the encoder).
     """
     for seg in segments:
-        with av.open(str(seg.path)) as src:
-            tb = float(src.streams.video[0].time_base)
-            for fr in src.decode(video=0):
+        try:
+            # Race: the live ring may evict seg.path between covering() and here
+            src_ctx = av.open(str(seg.path))
+        except (FileNotFoundError, av.error.FileNotFoundError):
+            continue  # evicted segment — becomes a hole; C2 wall-clock pts handles it
+        with src_ctx:
+            tb = float(src_ctx.streams.video[0].time_base)
+            for fr in src_ctx.decode(video=0):
                 t = seg.utc_start + timedelta(seconds=fr.pts * tb)
                 if s <= t < e:
-                    yield fr
+                    yield fr, t
 
 
 class ClipExtractor:
@@ -99,6 +109,16 @@ class ClipExtractor:
 
         A/V alignment invariant: video first frame >= s, audio sample 0 = s.
         Both anchored to clamped span start `s`.
+
+        Wall-clock-locked pts: every video frame is assigned
+        pts = round((t - s).total_seconds() * fps) so coverage holes in the
+        input produce held-last-frame gaps in the output timeline rather than
+        compressing the wall clock. Audio interleave tracks the video pts so
+        the two streams stay aligned across holes.
+
+        Partial-file safety: any exception during encoding unlinks out_path
+        before re-raising, so a cached-by-existence lookup (Task 11) never
+        serves a broken file.
         """
         cov = ring.coverage("video")
         if cov is None:
@@ -114,6 +134,10 @@ class ClipExtractor:
         rate = self._cfg.audio_rate
         segments = ring.covering("video", s, e)
 
+        # M3: guard sub-frame spans before any I/O
+        if int((e - s).total_seconds() * rate) == 0:
+            raise ValueError("span too short to extract")
+
         # -- Peek output dims from the first in-window frame ------------------
         # Both streams must exist before any packet is muxed (interleaving
         # requirement), and the video stream needs dims. A segment can overlap
@@ -121,7 +145,8 @@ class ClipExtractor:
         # frames are discrete), so peek the actual first in-window frame; the
         # partial re-decode of at most a couple of segments is negligible.
         dims: tuple[int, int] | None = None
-        for fr in _in_window_frames(segments, s, e):
+        for fr, _t in _in_window_frames(segments, s, e):
+            # Race: evicted files are skipped inside _in_window_frames
             dims = (fr.width, fr.height)
             break
         if dims is None:
@@ -133,8 +158,12 @@ class ClipExtractor:
         total_samples = int((e - s).total_seconds() * rate)
         pcm = np.zeros((total_samples, 2), dtype=np.int16)
         for chunk in ring.covering("audio", s, e):
-            data = np.frombuffer(chunk.path.read_bytes(),
-                                 dtype=np.int16).reshape(-1, 2)
+            try:
+                # Race: the live ring may evict chunk.path between covering() and here
+                raw = chunk.path.read_bytes()
+            except FileNotFoundError:
+                continue  # evicted audio chunk — leave corresponding region silent
+            data = np.frombuffer(raw, dtype=np.int16).reshape(-1, 2)
             # offset into `data` where the window `s` begins
             src_off = max(0, int((s - chunk.utc_start).total_seconds() * rate))
             # offset into `pcm` where this chunk contributes
@@ -146,6 +175,7 @@ class ClipExtractor:
         # -- Single streaming pass: decode -> encode video + interleave audio --
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out = av.open(str(out_path), "w", options={"movflags": "+faststart"})
+        ok = False
         try:
             vstream = out.add_stream(self._codec, rate=fps)
             vstream.width, vstream.height = dims
@@ -164,12 +194,16 @@ class ClipExtractor:
                                           rate=rate)
             audio_pos = 0
 
+            # samples per video frame (interleave granularity)
+            smpv = rate // fps  # 1600 at 48 kHz / 30 fps
+
             def mux_audio(a_end: int) -> None:
                 nonlocal audio_pos
                 block = pcm[audio_pos:a_end]
                 if len(block) < _AAC_FRAME_SIZE:
-                    # Pad so AAC never sees a sub-1024 non-final frame; only
-                    # the tail block can be short, so no mid-clip silence.
+                    # Per-frame blocks are smpv=1600 >= 1024, so only the tail
+                    # block can be short; pad it so the AAC encoder never sees
+                    # a sub-1024 non-final frame and no mid-clip silence is added.
                     padded = np.zeros((_AAC_FRAME_SIZE, 2), dtype=np.int16)
                     padded[:len(block)] = block
                     block = padded
@@ -183,19 +217,20 @@ class ClipExtractor:
                     for pkt in astream.encode(rf):
                         out.mux(pkt)
 
-            # samples per video frame (interleave granularity)
-            smpv = rate // fps  # 1600 at 48 kHz / 30 fps
-            out_pts = 0
-
-            for fr in _in_window_frames(segments, s, e):
+            for fr, t in _in_window_frames(segments, s, e):
                 vf = fr.reformat(width=dims[0], height=dims[1],
                                  format="yuv420p")
-                vf.pts = out_pts
-                out_pts += 1
+                # C1: decoded MPEG-TS frames carry 90 kHz time_base; fix it so
+                # the encoder reads pts in output (1/fps) units, not 90 kHz.
+                vf.time_base = Fraction(1, fps)
+                # C2: wall-clock-locked pts preserves coverage holes in the
+                # output timeline — sequential pts would compress holes out.
+                vf.pts = round((t - s).total_seconds() * fps)
                 for pkt in vstream.encode(vf):
                     out.mux(pkt)
-                # one interleave-block of audio per video frame
-                a_end = min(audio_pos + smpv, total_samples)
+                # Interleave audio up to the end of this video frame's wall-clock
+                # slot; keying off video pts keeps A/V aligned across holes.
+                a_end = min((vf.pts + 1) * smpv, total_samples)
                 if a_end > audio_pos:
                     mux_audio(a_end)
 
@@ -213,8 +248,14 @@ class ClipExtractor:
             # Flush AAC encoder
             for pkt in astream.encode(None):
                 out.mux(pkt)
+
+            ok = True
         finally:
             out.close()
+            # I1: partial-file cleanup — any exception unlinks out_path so a
+            # cached-by-existence lookup never serves a broken file.
+            if not ok:
+                out_path.unlink(missing_ok=True)
 
         return ClipResult(path=out_path,
                           duration_s=(e - s).total_seconds(),
