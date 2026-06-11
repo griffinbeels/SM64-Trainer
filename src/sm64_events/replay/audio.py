@@ -71,25 +71,36 @@ class SystemAudioSource:
         import pyaudiowpatch as pyaudio
 
         self._pa = pyaudio.PyAudio()
-        wasapi = self._pa.get_host_api_info_by_type(pyaudio.paWASAPI)
-        speakers = self._pa.get_device_info_by_index(wasapi["defaultOutputDevice"])
-        loopback = next(
-            d for d in self._pa.get_loopback_device_info_generator()
-            if speakers["name"] in d["name"])
-        if int(loopback["defaultSampleRate"]) != self._rate:
-            log.warning("loopback device rate %s != %s; recording at device "
-                        "rate without resample (v1 limitation)",
-                        loopback["defaultSampleRate"], self._rate)
+        try:
+            wasapi = self._pa.get_host_api_info_by_type(pyaudio.paWASAPI)
+            speakers = self._pa.get_device_info_by_index(wasapi["defaultOutputDevice"])
+            loopback = next(
+                (d for d in self._pa.get_loopback_device_info_generator()
+                 if speakers["name"] in d["name"]), None)
+            if loopback is None:
+                raise RuntimeError("no WASAPI loopback device matches the "
+                                   "default output device")
+            if int(loopback["defaultSampleRate"]) != self._rate:
+                log.warning("loopback device rate %s != %s; recording at device "
+                            "rate without resample (v1 limitation)",
+                            loopback["defaultSampleRate"], self._rate)
 
-        def cb(in_data, frame_count, time_info, status):
-            on_pcm(np.frombuffer(in_data, dtype=np.int16).reshape(-1, 2))
-            return (None, pyaudio.paContinue)
+            def cb(in_data, frame_count, time_info, status):
+                on_pcm(np.frombuffer(in_data, dtype=np.int16).reshape(-1, 2))
+                return (None, pyaudio.paContinue)
 
-        self._stream = self._pa.open(
-            format=pyaudio.paInt16, channels=2,
-            rate=int(loopback["defaultSampleRate"]),
-            input=True, input_device_index=loopback["index"],
-            stream_callback=cb)
+            self._stream = self._pa.open(
+                format=pyaudio.paInt16, channels=2,
+                rate=int(loopback["defaultSampleRate"]),
+                input=True, input_device_index=loopback["index"],
+                stream_callback=cb)
+        except Exception:
+            # The recorder only stop()s sources whose start() succeeded —
+            # a partial failure here must release the PyAudio COM handle
+            # itself or it leaks until GC.
+            self._pa.terminate()
+            self._pa = None
+            raise
 
     def stop(self) -> None:
         if self._stream is not None:

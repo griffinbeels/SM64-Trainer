@@ -31,6 +31,8 @@ class WgcVideoSource:
         self._control = None
 
     def start(self, on_frame, on_stopped) -> None:
+        if self._control is not None:
+            return  # already capturing; a second start would orphan the first
         from windows_capture import WindowsCapture
 
         capture = WindowsCapture(
