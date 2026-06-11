@@ -1,37 +1,52 @@
 <!doctype html>
-<html><head><meta charset="utf-8"><title>SM64 Event API</title>
+<html><head><meta charset="utf-8"><title>SM64 Practice Tracker</title>
+<script type="importmap">
+{"imports": {
+  "preact": "/ui/vendor/preact.module.js",
+  "preact/hooks": "/ui/vendor/hooks.module.js",
+  "htm": "/ui/vendor/htm.module.js"
+}}
+</script>
 <style>
   body { font-family: Consolas, monospace; background: #14161a; color: #d8dee9;
-         max-width: 760px; margin: 2rem auto; padding: 0 1rem; }
-  h1 { font-size: 1.2rem; } #status { padding: .2rem .5rem; border-radius: 4px; }
+         max-width: 980px; margin: 1.5rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.2rem; margin: 0; }
+  a { color: #6fa8ff; }
+  button { font: inherit; background: #232730; color: #d8dee9; border: 1px solid #3a4150;
+           border-radius: 4px; padding: .15rem .55rem; cursor: pointer; }
+  button:hover { background: #2c3140; }
+  select, input { font: inherit; background: #1b1e24; color: #d8dee9;
+                  border: 1px solid #3a4150; border-radius: 4px; padding: .15rem .3rem; }
+  .bar { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center;
+         background: #1b1e24; border-radius: 6px; padding: .5rem .8rem; margin: .8rem 0; }
+  .dot { padding: .1rem .5rem; border-radius: 4px; font-size: .85em; }
   .ok { background: #1d3a1d; color: #a3e0a3; } .bad { background: #3a1d1d; color: #e0a3a3; }
+  .tabs { display: flex; gap: .3rem; margin: .8rem 0 0 0; }
+  .tab { border: 1px solid #3a4150; border-bottom: none; border-radius: 6px 6px 0 0;
+         padding: .25rem 1rem; cursor: pointer; opacity: .65; }
+  .tab.on { background: #1b1e24; opacity: 1; font-weight: bold; }
+  .pane { border: 1px solid #3a4150; border-radius: 0 6px 6px 6px; padding: .8rem; }
+  .starsec { border: 1px solid #2c3140; border-radius: 8px; padding: .6rem .8rem; margin: 0 0 .8rem 0; }
+  .shead { display: flex; flex-wrap: wrap; gap: .6rem; align-items: baseline; }
+  .shead b { color: #ffd75f; }
+  .meta { color: #6c7686; font-size: .85em; }
+  .pbtag { color: #a3e0a3; margin-left: auto; }
+  table { width: 100%; border-collapse: collapse; margin: .4rem 0; font-size: .92em; }
+  td { padding: .15rem .45rem; border-bottom: 1px dotted #2c3140; }
+  .good { color: #a3e0a3; } .badx { color: #e0a3a3; } .cleared { opacity: .45; text-decoration: line-through; }
+  .chips { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .35rem; }
+  .chip { border: 1px solid #3a4150; border-radius: 999px; padding: .05rem .6rem; font-size: .85em; }
+  .delta-up { color: #e0a3a3; } .delta-down { color: #a3e0a3; }
+  .popover { position: absolute; background: #1b1e24; border: 1px solid #3a4150;
+             border-radius: 6px; padding: .7rem; z-index: 5; }
   li { margin: .25rem 0; list-style: none; } ul { padding: 0; }
-  .star { color: #ffd75f; } .meta { color: #6c7686; font-size: .85em; }
+  .star { color: #ffd75f; }
   .src { font-size: .75em; padding: 0 .3em; border-radius: 3px; margin-left: .3em; }
   .src-result { background: #1d3a1d; color: #a3e0a3; }
   .src-counter { background: #2d2d3a; color: #a3b0e0; }
   .src-reconstructed { background: #3a321d; color: #e0cba3; }
-</style></head><body>
-<h1>SM64 Event API <span id="status" class="bad">connecting…</span></h1>
-<p class="meta">Live feed from <code>/ws/events</code>. Grab a star in-game.</p>
-<ul id="log"></ul>
-<script>
-  const log = document.getElementById("log"), status = document.getElementById("status");
-  const ws = new WebSocket(`ws://${location.host}/ws/events`);
-  ws.onopen = () => { status.textContent = "connected"; status.className = "ok"; };
-  ws.onclose = () => { status.textContent = "disconnected"; status.className = "bad"; };
-  ws.onmessage = (e) => {
-    const ev = JSON.parse(e.data), li = document.createElement("li");
-    if (ev.type === "star_collected") {
-      const p = ev.payload;
-      li.innerHTML = `<span class="star">⭐ ${p.course_name} — ${p.star_name}</span>`
-        + ` <b>${p.igt}</b>`
-        + `<span class="src src-${p.igt_source}">${p.igt_source}</span>`
-        + ` <span class="meta">${p.igt_frames}f · course ${p.course_id} star ${p.star_id}`
-        + `${p.already_collected ? " (already collected)" : ""} · frame ${ev.frame} · #${ev.seq}</span>`;
-    } else {
-      li.innerHTML = `${ev.type} <span class="meta">frame ${ev.frame} · #${ev.seq}</span>`;
-    }
-    log.prepend(li);
-  };
-</script></body></html>
+</style></head>
+<body>
+<div id="app"></div>
+<script type="module" src="/ui/app.js"></script>
+</body></html>

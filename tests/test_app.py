@@ -30,7 +30,9 @@ def test_index_serves_event_viewer():
         resp = client.get("/")
         assert resp.status_code == 200
         assert resp.headers["content-type"].startswith("text/html")
-        assert "/ws/events" in resp.text
+        # New importmap shell: references app.js via importmap, not /ws/events inline
+        assert "/ui/app.js" in resp.text
+        assert "importmap" in resp.text
 
 
 def test_health_reports_unattached():
