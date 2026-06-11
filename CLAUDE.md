@@ -129,6 +129,12 @@ and pitfalls: docs/architecture.md → Memory hunting.
 (schema in README), `GET /state` for initial state, `GET /health` for
 liveness. Heavier frontends go in the ui zone or a new top-level dir.
 
+**Wrap up a feature:** after the merge, run the `create-artifacts` skill
+(`.claude/skills/create-artifacts/`) — it routes the session's mistakes,
+review findings, and unverified assumptions into tests, hooks, point-of-use
+comments, docs, skills, and memories, each placed where the next session
+hits it before repeating the mistake.
+
 ## Definition of done — every merge
 
 - `uv run pytest -q` passes; new behavior has tests

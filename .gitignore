@@ -5,3 +5,4 @@ __pycache__/
 logs/
 .superpowers/
 data/
+.claude/worktrees/
