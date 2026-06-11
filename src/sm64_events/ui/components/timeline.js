@@ -28,7 +28,12 @@ export function parseTimeInput(text) {
   const trimmed = String(text).trim();
   if (trimmed === "") return null;   // Number("") === 0 — must not place a marker at 0'00"00
   const igt = trimmed.match(/^(\d+)'(\d{1,2})"(\d{1,2})$/);
-  if (igt) return (+igt[1] * 60 + +igt[2]) * 30 + Math.round((+igt[3] * 30) / 100);
+  if (igt) {
+    // a single centisecond digit reads as tenths (0'03"5 == 50cs), matching
+    // the always-two-digit display format
+    const cs = igt[3].length === 1 ? +igt[3] * 10 : +igt[3];
+    return (+igt[1] * 60 + +igt[2]) * 30 + Math.round((cs * 30) / 100);
+  }
   const secs = Number(trimmed);
   return Number.isFinite(secs) && secs >= 0 ? Math.round(secs * 30) : null;
 }
@@ -78,10 +83,12 @@ export function Timeline({ tl, sec, t }) {
     save([...markers, { frames, label }]);
   }
   function clickToPlace(e) {
-    // click anywhere on the strip -> open the editor prefilled at that IGT
-    const rect = e.currentTarget.getBoundingClientRect();
-    const frac = (e.clientX - rect.left) / rect.width;
-    const f = Math.round(Math.max(0, Math.min(1, (frac * W - PAD) / (W - 2 * PAD))) * axisMax);
+    // map the click through the SVG's CTM: viewBox 600x44 letterboxes inside
+    // the wider container (preserveAspectRatio "meet"), so bounding-box
+    // fractions are NOT viewBox coordinates.
+    const p = new DOMPoint(e.clientX, e.clientY)
+      .matrixTransform(e.currentTarget.getScreenCTM().inverse());
+    const f = Math.round(Math.max(0, Math.min(1, (p.x - PAD) / (W - 2 * PAD))) * axisMax);
     setForm({ time: (f / 30).toFixed(2), label: form ? form.label : "" });
   }
 
@@ -91,8 +98,8 @@ export function Timeline({ tl, sec, t }) {
       <svg viewBox="0 0 ${W} ${TOT}" style="width:100%;height:${TOT}px;display:block;cursor:crosshair"
            onclick=${clickToPlace}>
         ${markers.map((m) => html`<g>
-          <text x=${x(m.frames)} y="10" fill=${ANNOT} font-size="9"
-                text-anchor="middle">${m.label}</text>
+          <text x=${Math.min(Math.max(x(m.frames), 20), W - 20)} y="10" fill=${ANNOT}
+                font-size="9" text-anchor="middle">${m.label}</text>
           <line x1=${x(m.frames)} y1="13" x2=${x(m.frames)} y2=${BAND + H - 4}
                 stroke=${ANNOT} stroke-width="1.2" stroke-dasharray="3,2">
             <title>${m.label} · ${fmtIgt(m.frames)}</title></line></g>`)}
@@ -116,10 +123,12 @@ export function Timeline({ tl, sec, t }) {
               onclick=${() => save(markers.filter((_, j) => j !== i))}> ×</span></span>`)}
       ${form
         ? html`<span class="chip">
-            <input size="8" placeholder='3 or 0&apos;03"00' value=${form.time}
-                   oninput=${(e) => setForm({ ...form, time: e.target.value })} />
-            <input size="14" placeholder="label" value=${form.label}
-                   oninput=${(e) => setForm({ ...form, label: e.target.value })} />
+            <input size="8" placeholder=${'3 or 0\'03"00'} value=${form.time}
+                   oninput=${(e) => setForm({ ...form, time: e.target.value })}
+                   onkeydown=${(e) => e.key === "Enter" && addFromForm()} />
+            <input size="14" placeholder="label" maxlength="60" value=${form.label}
+                   oninput=${(e) => setForm({ ...form, label: e.target.value })}
+                   onkeydown=${(e) => e.key === "Enter" && addFromForm()} />
             <button onclick=${addFromForm}>add</button>
             <button onclick=${() => setForm(null)}>cancel</button></span>`
         : html`<span class="chip" style="cursor:pointer;border-style:dashed"
