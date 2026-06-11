@@ -5,6 +5,8 @@ Error taxonomy (service exception types are part of the contract):
 LookupError -> 404 (no such attempt), ValueError -> 409 (exists but not
 saveable: bad mode, non-success, cleared, missing clock),
 RuntimeError -> 503 (database unavailable / degraded mode)."""
+import json
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
@@ -149,7 +151,14 @@ def create_api_router(service) -> APIRouter:
     def put_statmenu(body: StatMenuBody):
         if service.db is None:
             raise HTTPException(503, "database unavailable")
-        service.db.set_state("stat_menu", [s.model_dump() for s in body.selections])
+        seen_keys: set[str] = set()
+        deduped = []
+        for s in body.selections:
+            fingerprint = (s.key, json.dumps(s.params, sort_keys=True))
+            if fingerprint not in seen_keys:
+                seen_keys.add(fingerprint)
+                deduped.append(s.model_dump())
+        service.db.set_state("stat_menu", deduped)
         return {"ok": True}
 
     @router.put("/markers")

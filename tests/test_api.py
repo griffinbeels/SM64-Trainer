@@ -333,3 +333,17 @@ def test_markers_put_preserves_other_keys(tmp_path):
             "cannonless": [{"frames": 200, "label": "owl"}],
             "": [{"frames": 90, "label": "wall jump"}],
         }
+
+
+def test_statmenu_put_dedupes_exact_selections(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        menu = [{"key": "best"}, {"key": "best"},
+                {"key": "avg_last_n", "params": {"n": 10}},
+                {"key": "avg_last_n", "params": {"n": 10}},
+                {"key": "avg_last_n", "params": {"n": 50}}]
+        assert client.put("/api/statmenu", json={"selections": menu}).status_code == 200
+        stored = client.get("/api/session").json()["stat_menu"]
+        assert stored == [{"key": "best", "params": {}},
+                          {"key": "avg_last_n", "params": {"n": 10}},
+                          {"key": "avg_last_n", "params": {"n": 50}}]

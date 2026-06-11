@@ -34,7 +34,7 @@ function delta(frames) {
   if (frames === null || frames === undefined) return "";
   const cls = frames > 0 ? "delta-up" : "delta-down";
   const sign = frames > 0 ? "+" : "";
-  return html` <span class=${cls}>${sign}${(frames / 30).toFixed(2)}s vs PB</span>`;
+  return html` <span class=${cls}>${sign}${(frames / 30).toFixed(2)}s</span>`;
 }
 
 function AttemptRow({ a, t, idx }) {

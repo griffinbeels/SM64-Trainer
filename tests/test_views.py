@@ -503,3 +503,16 @@ def test_view_survives_out_of_range_target(tmp_path):
     [sec] = view["stars"]
     assert (sec["course_id"], sec["star_id"]) == (99, 42)
     assert sec["course_name"] and sec["star_name"]         # fallback strings
+
+
+def test_duplicate_stored_stat_selections_render_once(tmp_path):
+    # heals dbs that stored duplicates before the write-side dedupe existed
+    db, svc = make(tmp_path)
+    seed(svc)
+    db.set_state("stat_menu", [
+        {"key": "best", "params": {}}, {"key": "best", "params": {}},
+        {"key": "success_rate", "params": {}},
+    ])
+    view = build_session_view(db, svc, clock="igt")
+    keys = [s["key"] for s in view["stars"][0]["stats"]]
+    assert keys == ["best", "success_rate"]
