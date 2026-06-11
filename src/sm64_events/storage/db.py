@@ -49,12 +49,18 @@ MIGRATIONS = [
     );
     CREATE TABLE IF NOT EXISTS ui_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     """,
+    # v2 — Phase 2: rollout sub-event counts on attempts
+    """
+    ALTER TABLE attempts ADD COLUMN rollouts_total INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE attempts ADD COLUMN rollouts_dustless INTEGER NOT NULL DEFAULT 0;
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
                  "anchor_type", "anchor_frame", "outcome", "outcome_detail",
                  "igt_frames", "rta_frames", "started_utc", "ended_utc",
-                 "cleared", "cleared_reason")
+                 "cleared", "cleared_reason",
+                 "rollouts_total", "rollouts_dustless")
 
 
 class EventRow:
@@ -162,7 +168,8 @@ class Database:
         return (a.id, a.session_id, a.course_id, a.star_id, a.strat_tag,
                 a.anchor_type, a.anchor_frame, a.outcome, a.outcome_detail,
                 a.igt_frames, a.rta_frames, a.started_utc, a.ended_utc,
-                int(a.cleared), a.cleared_reason)
+                int(a.cleared), a.cleared_reason,
+                a.rollouts_total, a.rollouts_dustless)
 
     def replace_attempts(self, attempts: list[Attempt]) -> None:
         with self._lock:

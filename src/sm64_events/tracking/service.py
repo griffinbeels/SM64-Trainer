@@ -95,6 +95,8 @@ class TrackerService:
                          "igt_frames": a.igt_frames,
                          "igt": format_igt(a.igt_frames) if a.igt_frames is not None else None,
                          "rta_frames": a.rta_frames,
+                         "rollouts_total": a.rollouts_total,
+                         "rollouts_dustless": a.rollouts_dustless,
                      })
 
     def _target_payload(self) -> dict:

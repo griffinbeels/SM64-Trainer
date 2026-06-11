@@ -270,3 +270,18 @@ def test_delete_unknown_session_raises_lookup_error(tmp_path):
     db, svc = make(tmp_path)
     with pytest.raises(LookupError):
         asyncio.run(svc.delete_session(999))
+
+
+def test_attempt_completed_carries_rollout_counts(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(ev("rollout", 1100,
+                               {"dustless": True, "frames_late": 0, "level": 24})))
+    asyncio.run(svc.publish(ev("rollout", 1200,
+                               {"dustless": False, "frames_late": 2, "level": 24})))
+    asyncio.run(svc.publish(star(1350)))
+    a = db.attempts()[0]
+    assert a.rollouts_total == 2 and a.rollouts_dustless == 1
+    completed = [e for e in db.events() if e.type == "attempt_completed"]
+    assert completed[-1].payload["rollouts_total"] == 2
+    assert completed[-1].payload["rollouts_dustless"] == 1

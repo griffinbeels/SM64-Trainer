@@ -20,7 +20,7 @@ def test_migrations_set_user_version_and_create_tables(tmp_path):
     names = {r["name"] for r in db._conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"events", "sessions", "attempts", "pbs", "ui_state"} <= names
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 2
 
 
 def test_reopening_existing_db_is_idempotent(tmp_path):
@@ -28,7 +28,7 @@ def test_reopening_existing_db_is_idempotent(tmp_path):
     sid = first.insert_session("2026-06-10T12:00:00Z")
     first.close()
     db = make_db(tmp_path)  # second open: migrations must not re-run/crash
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 2
     row = db._conn.execute("SELECT * FROM sessions WHERE id=?", (sid,)).fetchone()
     assert row is not None and row["started_utc"] == "2026-06-10T12:00:00Z"
 
@@ -120,3 +120,43 @@ def test_delete_session_removes_events_and_row_leaves_others(tmp_path):
     # session 2 still there
     row2 = db._conn.execute("SELECT * FROM sessions WHERE id=?", (s2,)).fetchone()
     assert row2 is not None
+
+
+# -- migration v2: rollout counts (Phase 2) -----------------------------------
+
+def test_migration_v2_adds_rollout_columns(tmp_path):
+    db = make_db(tmp_path)
+    cols = {r["name"] for r in db._conn.execute("PRAGMA table_info(attempts)")}
+    assert {"rollouts_total", "rollouts_dustless"} <= cols
+
+
+def test_v1_database_upgrades_in_place(tmp_path):
+    # a real Phase 1 db (user_version=1) must gain the columns on open
+    import sqlite3
+    from sm64_events.storage.db import MIGRATIONS
+    path = tmp_path / "t.db"
+    conn = sqlite3.connect(str(path))
+    conn.executescript(MIGRATIONS[0])
+    conn.execute("INSERT INTO sessions (started_utc) VALUES ('2026-06-10T12:00:00Z')")
+    conn.execute("INSERT INTO attempts (id, session_id, anchor_type, outcome,"
+                 " started_utc, ended_utc) VALUES (1, 1, 'practice_reset',"
+                 " 'success', 's', 'e')")
+    conn.execute("PRAGMA user_version = 1")
+    conn.commit()
+    conn.close()
+    db = Database(path)
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert db.attempts()[0].rollouts_total == 0   # backfilled default
+
+
+def test_attempts_round_trip_rollout_counts(tmp_path):
+    from sm64_events.tracking.projection import Attempt
+    db = make_db(tmp_path)
+    a = Attempt(id=10, session_id=1, course_id=2, star_id=2, strat_tag=None,
+                anchor_type="practice_reset", anchor_frame=500, outcome="success",
+                outcome_detail=None, igt_frames=343, rta_frames=350,
+                started_utc="2026-06-10T12:00:00Z", ended_utc="2026-06-10T12:00:12Z",
+                cleared=False, cleared_reason=None,
+                rollouts_total=5, rollouts_dustless=3)
+    db.replace_attempts([a])
+    assert db.attempts() == [a]
