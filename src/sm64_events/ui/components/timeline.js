@@ -20,14 +20,16 @@ const W = 600, H = 28, PAD = 8, MID = H / 2, BAND = 16; // BAND: label strip abo
 function fmtIgt(frames) {
   const m = Math.floor(frames / 1800), s = Math.floor((frames % 1800) / 30),
         c = Math.floor(((frames % 30) * 100) / 30);
-  return `${m}'${String(s).padStart(2, "0")}"${String(c).padStart(2, "00")}`;
+  return `${m}'${String(s).padStart(2, "0")}"${String(c).padStart(2, "0")}`;
 }
 
 // "3" / "3.5" (seconds) or 0'03"50 (IGT) -> frames at 30 fps; null = unparseable
 export function parseTimeInput(text) {
-  const igt = String(text).trim().match(/^(\d+)'(\d{1,2})"(\d{1,2})$/);
+  const trimmed = String(text).trim();
+  if (trimmed === "") return null;   // Number("") === 0 — must not place a marker at 0'00"00
+  const igt = trimmed.match(/^(\d+)'(\d{1,2})"(\d{1,2})$/);
   if (igt) return (+igt[1] * 60 + +igt[2]) * 30 + Math.round((+igt[3] * 30) / 100);
-  const secs = Number(String(text).trim());
+  const secs = Number(trimmed);
   return Number.isFinite(secs) && secs >= 0 ? Math.round(secs * 30) : null;
 }
 
