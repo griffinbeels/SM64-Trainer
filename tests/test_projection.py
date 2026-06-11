@@ -351,3 +351,72 @@ def test_discarded_noop_reset_drops_its_rollouts():
     # the no-op-closed attempt vanished; its rollout must not attach to the grab
     assert len(attempts) == 1
     assert attempts[0].rollouts_total == 0
+
+
+# -- jump counts + corrected rollout semantics (Phase 2 fix round) ------------
+
+def jump(id, frame, dustless, kind="double"):
+    fl = 0 if dustless else 1
+    return jev(id, "jump", frame,
+               {"dustless": dustless, "frames_late": fl,
+                "landing_frames": fl + 1, "kind": kind, "level": 24})
+
+
+def new_rollout(id, frame, dustless):
+    fl = 0 if dustless else 1
+    return jev(id, "rollout", frame,
+               {"dustless": dustless, "frames_late": fl,
+                "landing_frames": fl + 1, "level": 24})
+
+
+def test_jumps_attach_to_the_open_attempt():
+    attempts = project([
+        jev(1, "practice_reset", 1000, {"igt_frames_before": 0}),
+        jump(2, 1100, True, kind="double"),
+        jump(3, 1150, False, kind="triple"),
+        star(4, 1350),
+    ])
+    a = attempts[0]
+    assert a.jumps_total == 2 and a.jumps_dustless == 1
+    assert a.rollouts_total == 0
+
+
+def test_jump_counts_reset_between_attempts():
+    attempts = project([
+        jev(1, "practice_reset", 1000, {"igt_frames_before": 0}),
+        jump(2, 1100, True),
+        jev(3, "practice_reset", 1400, {"igt_frames_before": 380}),
+        star(4, 1700),
+    ])
+    first, second = attempts
+    assert first.jumps_total == 1 and second.jumps_total == 0
+
+
+def test_old_journal_rollout_one_frame_late_reprojects_as_dustless():
+    # pre-landing_frames journals counted visible slide frames as
+    # frames_late: 1 visible frame IS frame perfect (the live 50-trial
+    # session that exposed the bug). Replay must fix the classification.
+    attempts = project([
+        jev(1, "practice_reset", 1000, {"igt_frames_before": 0}),
+        jev(2, "rollout", 1100,
+            {"dustless": False, "frames_late": 1, "level": 24}),  # old style
+        jev(3, "rollout", 1200,
+            {"dustless": False, "frames_late": 2, "level": 24}),  # truly late
+        star(4, 1350),
+    ])
+    a = attempts[0]
+    assert a.rollouts_total == 2
+    assert a.rollouts_dustless == 1
+
+
+def test_new_journal_rollout_one_late_stays_dusty():
+    # new-style payloads carry landing_frames and are trusted verbatim
+    attempts = project([
+        jev(1, "practice_reset", 1000, {"igt_frames_before": 0}),
+        new_rollout(2, 1100, False),   # frames_late=1, landing_frames=2
+        new_rollout(3, 1200, True),
+        star(4, 1350),
+    ])
+    a = attempts[0]
+    assert a.rollouts_total == 2
+    assert a.rollouts_dustless == 1

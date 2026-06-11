@@ -97,6 +97,8 @@ class TrackerService:
                          "rta_frames": a.rta_frames,
                          "rollouts_total": a.rollouts_total,
                          "rollouts_dustless": a.rollouts_dustless,
+                         "jumps_total": a.jumps_total,
+                         "jumps_dustless": a.jumps_dustless,
                      })
 
     def _target_payload(self) -> dict:

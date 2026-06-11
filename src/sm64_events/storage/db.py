@@ -54,13 +54,19 @@ MIGRATIONS = [
     ALTER TABLE attempts ADD COLUMN rollouts_total INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE attempts ADD COLUMN rollouts_dustless INTEGER NOT NULL DEFAULT 0;
     """,
+    # v3 — Phase 2 fix round: chained double/triple jump counts
+    """
+    ALTER TABLE attempts ADD COLUMN jumps_total INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE attempts ADD COLUMN jumps_dustless INTEGER NOT NULL DEFAULT 0;
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
                  "anchor_type", "anchor_frame", "outcome", "outcome_detail",
                  "igt_frames", "rta_frames", "started_utc", "ended_utc",
                  "cleared", "cleared_reason",
-                 "rollouts_total", "rollouts_dustless")
+                 "rollouts_total", "rollouts_dustless",
+                 "jumps_total", "jumps_dustless")
 
 
 class EventRow:
@@ -169,7 +175,8 @@ class Database:
                 a.anchor_type, a.anchor_frame, a.outcome, a.outcome_detail,
                 a.igt_frames, a.rta_frames, a.started_utc, a.ended_utc,
                 int(a.cleared), a.cleared_reason,
-                a.rollouts_total, a.rollouts_dustless)
+                a.rollouts_total, a.rollouts_dustless,
+                a.jumps_total, a.jumps_dustless)
 
     def replace_attempts(self, attempts: list[Attempt]) -> None:
         with self._lock:
