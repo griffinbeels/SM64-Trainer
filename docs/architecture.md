@@ -169,8 +169,12 @@ session continue/delete, PB-glow, single-instance lock (features #3, #4, #6, #9,
 live-feedback round + incident-response from the spec). Remaining phases per
 `docs/superpowers/specs/2026-06-10-practice-tracker-platform-design.md §11`:
 
-- **Phase 2** — RolloutDetector. Requires snapshot fields + live VERIFY session.
-  Turns on `dustless_rate` stat.
+- **Phase 2** — RolloutDetector: built (rollout events, per-attempt
+  `rollouts_total`/`rollouts_dustless`, `dustless_rate` stat, UI rate display,
+  schema v2). NOT yet live-verified: `MARIO_PARTICLE_FLAGS`, `PARTICLE_DUST`
+  and the dive/rollout action ids are VERIFY-marked until a human session
+  dive-rollouts while watching `tools/verify_addresses.py` (expect `[DUST]`
+  on dive-slide lines and correct dustless/late classification).
 - **Phase 3** — TriggerDetector (door/key-door rows), MenuDetector
   (menu-open address hunt required). Delivers menu-failure attempt outcome.
 - **Phase 4** — Routes storage + probability board + Routes tab.
