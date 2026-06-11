@@ -100,10 +100,11 @@ def test_stats_registry_and_statmenu(tmp_path):
         assert any(s["key"] == "success_rate" for s in r.json())
         menu = [{"key": "best"}, {"key": "avg_last_n", "params": {"n": 25}}]
         assert client.put("/api/statmenu", json={"selections": menu}).status_code == 200
-        # stored form is normalized: every selection carries a params dict
+        # stored form is normalized: every selection carries a params dict,
+        # and order is canonical (selection_order), not submission order
         assert client.get("/api/session").json()["stat_menu"] == [
-            {"key": "best", "params": {}},
-            {"key": "avg_last_n", "params": {"n": 25}}]
+            {"key": "avg_last_n", "params": {"n": 25}},
+            {"key": "best", "params": {}}]
 
 
 def test_links_endpoint(tmp_path):
@@ -369,10 +370,11 @@ def test_statmenu_put_dedupes_exact_selections(tmp_path):
                 {"key": "avg_last_n", "params": {"n": 10}},
                 {"key": "avg_last_n", "params": {"n": 50}}]
         assert client.put("/api/statmenu", json={"selections": menu}).status_code == 200
+        # stored order is canonical (selection_order), not submission order
         stored = client.get("/api/session").json()["stat_menu"]
-        assert stored == [{"key": "best", "params": {}},
-                          {"key": "avg_last_n", "params": {"n": 10}},
-                          {"key": "avg_last_n", "params": {"n": 50}}]
+        assert stored == [{"key": "avg_last_n", "params": {"n": 10}},
+                          {"key": "avg_last_n", "params": {"n": 50}},
+                          {"key": "best", "params": {}}]
 
 
 def test_statmenu_dedupes_param_variants_of_unparameterized_stats(tmp_path):
@@ -387,6 +389,21 @@ def test_statmenu_dedupes_param_variants_of_unparameterized_stats(tmp_path):
                 {"key": "avg_last_n", "params": {"n": "10"}},   # str/int collapse
                 {"key": "avg_last_n", "params": {"n": 25}}]
         assert client.put("/api/statmenu", json={"selections": menu}).status_code == 200
+        # stored order is canonical (selection_order), not submission order
         stored = client.get("/api/session").json()["stat_menu"]
         assert [(s["key"], s["params"].get("n")) for s in stored] == [
-            ("success_rate", None), ("avg_last_n", 10), ("avg_last_n", 25)]
+            ("avg_last_n", 10), ("avg_last_n", 25), ("success_rate", None)]
+
+
+def test_statmenu_stores_canonical_order(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        menu = [{"key": "success_rate"},
+                {"key": "avg_last_n", "params": {"n": 50}},
+                {"key": "avg_last_n", "params": {"n": 10}},
+                {"key": "best"}]
+        assert client.put("/api/statmenu", json={"selections": menu}).status_code == 200
+        stored = client.get("/api/session").json()["stat_menu"]
+        assert [(s["key"], s["params"].get("n")) for s in stored] == [
+            ("avg_last_n", 10), ("avg_last_n", 50),
+            ("best", None), ("success_rate", None)]

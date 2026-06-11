@@ -121,6 +121,19 @@ def selection_id(key: str, params: dict | None) -> str:
     return key
 
 
+def selection_order(key: str, params: dict | None) -> tuple[int, int]:
+    """Canonical stat-menu display order: REGISTRY insertion order, with
+    avg_last_n variants sub-ordered by n — exactly the stats-menu offer
+    order (statmenu.js), so chips and checkboxes always read the same way."""
+    keys = list(REGISTRY)
+    ki = keys.index(key) if key in REGISTRY else len(keys)
+    try:
+        n = int((params or {}).get("n") or 0)
+    except (TypeError, ValueError):
+        n = 0
+    return (ki, n)
+
+
 def compute_stat(key: str, attempts: Sequence[Attempt], params: dict,
                  clock: str) -> float | int | None:
     d = REGISTRY[key]

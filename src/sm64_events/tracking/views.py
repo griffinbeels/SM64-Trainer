@@ -15,7 +15,8 @@ from sm64_events.links import star_links
 from sm64_events.memory.addresses import (COURSE_NAMES, STAR_NAMES,
                                           course_name, star_name)
 from sm64_events.stats.registry import (DEFAULT_STAT_MENU, REGISTRY,
-                                        compute_stat, selection_id)
+                                        compute_stat, selection_id,
+                                        selection_order)
 
 # Timeline markers (per-star event graph): outcome -> IGT extractor.
 # Adding a marker kind is one row here (+ a style row in ui timeline.js).
@@ -191,7 +192,9 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         in_section = [a for a in history if a in scoped_set]
         stats = []
         seen_stat_ids: set[str] = set()
-        for sel in stat_menu:
+        for sel in sorted(stat_menu,
+                          key=lambda s: selection_order(s.get("key", ""),
+                                                        s.get("params"))):
             if sel["key"] not in REGISTRY:
                 continue
             sid = selection_id(sel["key"], sel.get("params"))

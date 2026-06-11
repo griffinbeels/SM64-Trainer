@@ -9,7 +9,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
 from sm64_events.links import star_links
-from sm64_events.stats.registry import registry_meta, selection_id
+from sm64_events.stats.registry import (registry_meta, selection_id,
+                                        selection_order)
 from sm64_events.tracking.views import build_session_view
 
 
@@ -170,6 +171,7 @@ def create_api_router(service) -> APIRouter:
             if sid not in seen:
                 seen.add(sid)
                 deduped.append(s.model_dump())
+        deduped.sort(key=lambda s: selection_order(s["key"], s.get("params")))
         service.db.set_state("stat_menu", deduped)
         return {"ok": True}
 

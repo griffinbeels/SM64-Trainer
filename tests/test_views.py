@@ -530,3 +530,19 @@ def test_duplicate_stored_stat_selections_render_once(tmp_path):
     view = build_session_view(db, svc, clock="igt")
     keys = [s["key"] for s in view["stars"][0]["stats"]]
     assert keys == ["best", "success_rate"]
+
+
+def test_stat_pills_render_in_canonical_menu_order(tmp_path):
+    db, svc = make(tmp_path)
+    seed(svc)
+    db.set_state("stat_menu", [
+        {"key": "success_rate", "params": {}},
+        {"key": "avg_last_n", "params": {"n": 50}},
+        {"key": "best", "params": {}},
+        {"key": "avg_last_n", "params": {"n": 10}},
+        {"key": "success_count", "params": {}},
+    ])
+    view = build_session_view(db, svc, clock="igt")
+    labels = [(s["key"], s["params"].get("n")) for s in view["stars"][0]["stats"]]
+    assert labels == [("avg_last_n", 10), ("avg_last_n", 50), ("best", None),
+                      ("success_count", None), ("success_rate", None)]
