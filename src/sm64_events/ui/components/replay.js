@@ -29,13 +29,20 @@ export function ReplayPlayer({ attemptId }) {
   if (state.phase === "error")
     return html`<span class="badx">replay unavailable</span>
       <span class="meta"> ${state.message}</span>`;
+  function revealSaved(e) {
+    e.preventDefault();
+    send("POST", "/api/replay/reveal", { path: savedPath });
+  }
+
   return html`<div class="replay-player">
     ${state.truncated && html`<div class="meta">⚠ starts mid-attempt (buffer didn't cover the full span)</div>`}
-    <video controls preload="auto" src=${state.clip_url}></video>
+    <video controls autoplay preload="auto" src=${state.clip_url}
+           ref=${(el) => el && el.play().catch(() => {})}></video>
     <div>
       <button onclick=${saveReplay} disabled=${savedPath !== null}>
         ${savedPath ? "Saved" : "Save Replay"}</button>
-      ${savedPath && html`<span class="meta"> → ${savedPath}</span>`}
+      ${savedPath && html` <a href="#" class="meta replay-path" title="show in Explorer"
+            onclick=${revealSaved}>→ ${savedPath}</a>`}
     </div>
   </div>`;
 }

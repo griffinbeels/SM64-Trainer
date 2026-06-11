@@ -9,6 +9,11 @@ runs sync endpoints in its threadpool — the event loop (poller, websockets)
 never blocks."""
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
+
+
+class RevealBody(BaseModel):
+    path: str
 
 
 def _http(e: Exception) -> HTTPException:
@@ -47,5 +52,13 @@ def create_replay_router(replay) -> APIRouter:
             return replay.save(attempt_id)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
+
+    @router.post("/replay/reveal")
+    def reveal(body: RevealBody):
+        try:
+            replay.reveal(body.path)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True}
 
     return router

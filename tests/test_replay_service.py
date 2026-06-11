@@ -179,3 +179,23 @@ def test_wait_for_tail_short_circuits_when_not_recording(tmp_path):
     t0 = _time.monotonic()
     svc.view(42)                    # buffer will never grow; must not wait
     assert _time.monotonic() - t0 < 1.0
+
+
+def test_reveal_validates_path_is_inside_save_root(tmp_path):
+    opened = []
+    cfg = ReplayConfig(save_root=tmp_path / "replays",
+                       scratch_dir=tmp_path / "buf", extract_wait_s=0.0)
+    svc = ReplayService(cfg=cfg, recorder=FakeRecorder(
+                            (T0 - timedelta(seconds=60), T0 + timedelta(seconds=60))),
+                        extractor=FakeExtractor(), tracker=FakeTracker([attempt()]),
+                        revealer=opened.append)
+    saved = Path(svc.save(42)["path"])
+    svc.reveal(str(saved))
+    assert opened == [saved.resolve()]
+    import pytest
+    with pytest.raises(LookupError):
+        svc.reveal(str(tmp_path / "outside.mp4"))          # outside save_root
+    with pytest.raises(LookupError):
+        svc.reveal(str(cfg.save_root / "nope" / "x.mp4"))  # inside but missing
+    with pytest.raises(LookupError):
+        svc.reveal(str(cfg.save_root / ".." / "escape.mp4"))  # traversal

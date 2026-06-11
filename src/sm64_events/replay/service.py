@@ -27,6 +27,14 @@ def _parse_utc(s: str) -> datetime:
     return datetime.fromisoformat(s.replace("Z", "+00:00"))
 
 
+def _open_explorer_select(path: Path) -> None:
+    """Open File Explorer with the file pre-selected. explorer.exe wants the
+    /select,"path" form as ONE argument string; it always exits 1, so this is
+    fire-and-forget."""
+    import subprocess
+    subprocess.Popen(f'explorer /select,"{path}"')
+
+
 def _slug(s: str) -> str:
     """Lower-case alphanumeric slug; apostrophes are removed (possessives stay
     joined), other non-alnum runs collapse to a single dash."""
@@ -55,17 +63,20 @@ class ReplayService:
     Public surface (consumed by Task 12 router):
       status()           -> dict
       view(attempt_id)   -> dict  {clip_url, duration_s, truncated}
-      save(attempt_id)   -> dict  {path}
+      save(attempt_id)   -> dict  {path, truncated}
+      reveal(path)       -> None  (opens Explorer with the saved file selected)
       clip_path(name)    -> Path  (validated; raises LookupError on bad name)
       lifecycle_start()
       lifecycle_stop()
     """
 
-    def __init__(self, cfg: ReplayConfig, recorder, extractor, tracker):
+    def __init__(self, cfg: ReplayConfig, recorder, extractor, tracker,
+                 revealer=None):
         self.cfg = cfg
         self.recorder = recorder
         self.extractor = extractor
         self.tracker = tracker
+        self._revealer = revealer or _open_explorer_select
         # clips_dir lives inside scratch_dir; it is created in lifecycle_start
         # AFTER recorder.start() so any future recursive wipe by the recorder
         # doesn't evict a directory we created first.
@@ -145,6 +156,16 @@ class ReplayService:
         meta = clip.with_suffix(".json")
         m = json.loads(meta.read_text())
         return {"path": str(dest), "truncated": m["truncated"]}
+
+    def reveal(self, path_str: str) -> None:
+        """Open Explorer with a SAVED clip selected. Only paths inside
+        save_root are allowed — the path comes back from our own save()
+        response, but the endpoint is reachable by anything on localhost."""
+        root = self.cfg.save_root.resolve()
+        p = Path(path_str).resolve()
+        if not p.is_relative_to(root) or not p.is_file():
+            raise LookupError("no such saved replay")
+        self._revealer(p)
 
     def clip_path(self, name: str) -> Path:
         """Return validated Path for serving a clip.

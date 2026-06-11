@@ -27,6 +27,10 @@ class FakeReplayService:
         if attempt_id == 404:
             raise LookupError("no attempt")
         return {"path": "replays/2026-06-11/session_3/x.mp4", "truncated": False}
+    def reveal(self, path: str) -> None:
+        if path == "BAD":
+            raise LookupError("no such saved replay")
+
     def clip_path(self, name: str) -> Path:
         if name != "clip_attempt_42.mp4":
             raise LookupError("no such clip")
@@ -70,3 +74,11 @@ def test_save_passes_truncated_through(tmp_path):
     assert r.status_code == 200
     body = r.json()
     assert body["path"].endswith(".mp4") and body["truncated"] is False
+
+
+def test_reveal_endpoint(tmp_path):
+    c = make_client(tmp_path)
+    r = c.post("/api/replay/reveal", json={"path": "replays/x.mp4"})
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    r = c.post("/api/replay/reveal", json={"path": "BAD"})
+    assert r.status_code == 404
