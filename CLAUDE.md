@@ -39,7 +39,7 @@ uv run python tools/dedupe_journal.py data/tracker.db          # scan double-jou
 | game_reset | `detectors/lifecycle.py` |
 | Attempt anchors (practice_reset / state_loaded) | `detectors/anchors.py` — anchors carry mario_acted + paused_frames_before + acted_tracking; emits the mario_acted event; docstring covers classification, pause streak, and VERIFY notes |
 | Death detection | `detectors/death.py` — action-set edge; closes open attempt as outcome "death" |
-| Level-change detection | `detectors/level.py` — level-id edge; closes open attempts as abandoned; curr_level address already registered |
+| Level-change detection | `detectors/level.py` — stateful: remembers last EMITTED level, journals establishing/corrective events (from may equal to) so projection-side level tracking never runs stale; closes open attempts as abandoned |
 | Dust tricks (dustless rollouts/jumps) | `detectors/dust.py` — TRICKS registry (one row per trick); docstring carries the decomp-verified landing-frame timing model; counts attach to attempts via projection.py |
 | Poll loop, attach retry, layout sanity | `server/poller.py` |
 | WS fan-out, seq numbers | `server/broadcaster.py` |
@@ -52,7 +52,7 @@ uv run python tools/dedupe_journal.py data/tracker.db          # scan double-jou
 | Single-instance guard (broadcast-only fallback) | `storage/instance_lock.py` — Windows msvcrt file-region lock; held for process lifetime |
 | Duplicate-event detection logic | `storage/dedupe.py` — pure fn; used by `tools/dedupe_journal.py` |
 | Journal deduplication repair tool | `tools/dedupe_journal.py` — scan (read-only) or --fix (delete duplicates + re-project; server must be stopped) |
-| Stats | `stats/registry.py` — ONE StatDef per stat; THE registry |
+| Stats | `stats/registry.py` — ONE StatDef per stat; THE registry; also owns chip identity + canonical order (`selection_id`/`selection_order`, mirrored in `ui/components/statmenu.js` keyOf) |
 | Per-star external links | `links.py` |
 | Built-in viewer UI | `ui/index.html` — served per request: edit + refresh, no restart |
 | UI components, store, API client | `ui/components/` · `ui/store.js` · `ui/api.js` · `ui/app.js`; vendored Preact in `ui/vendor/`; incl. `ui/components/timeline.js` (per-star event graph; marker styles via `MARKERS` registry) · `ui/components/progress.js` (per-star completion-time graph; gold = saved PBs) · `ui/format.js` (shared display formatting — fmtIgt mirrors core/timefmt.py) |

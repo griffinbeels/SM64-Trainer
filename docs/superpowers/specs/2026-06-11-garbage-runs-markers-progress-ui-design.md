@@ -1,6 +1,6 @@
 # Garbage-run discard, timeline markers, progress graph, practice-view layout
 
-**Date:** 2026-06-11 · **Status:** approved by user (brainstorming session)
+**Date:** 2026-06-11 · **Status:** implemented + live-audited (merged 2026-06-11; findings in docs/architecture.md → "Practice-quality round"; fork-1 IGT-freeze assumption still VERIFY — see anchors.py)
 
 Five features for the practice tracker, all inside existing seams: no new
 memory addresses, no schema migration, one new journal event type.
