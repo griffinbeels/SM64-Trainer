@@ -42,30 +42,52 @@ function TargetEditor({ t, close }) {
   const tgt = v.target;
   const [course, setCourse] = useState(tgt.course_id ?? 1);
   const [star, setStar] = useState(tgt.star_id ?? 0);
-  const [strat, setStrat] = useState(tgt.strat_tag || "");
-  const courses = v.catalog.courses;
-  const stars = (courses.find((c) => c.id === Number(course)) || { stars: [] }).stars;
+  const lastStratFor = (c, s) => v.last_strat_by_star[`${Number(c)}:${Number(s)}`] ?? "";
+  const stratsFor = (c, s) => v.strategies[`${Number(c)}:${Number(s)}`] || [];
+  const [strat, setStrat] = useState(lastStratFor(course, star));
+  const [adding, setAdding] = useState(false);
+  const [newStrat, setNewStrat] = useState("");
+
+  function pickStar(c, s) {
+    setCourse(c); setStar(s);
+    setStrat(lastStratFor(c, s));   // load the star's own remembered strat
+    setAdding(false);
+  }
 
   async function apply() {
+    const chosen = adding ? newStrat.trim() : strat;
     await send("POST", "/api/target", {
       course_id: Number(course), star_id: Number(star),
-      strat_tag: strat || null,
+      strat_tag: chosen || null,
     });
     close(); t.refresh();
   }
 
+  const courses = v.catalog.courses;
+  const stars = (courses.find((c) => c.id === Number(course)) || { stars: [] }).stars;
+  const options = stratsFor(course, star);
+
   return html`<div class="popover">
     <div>
-      <select value=${course} onchange=${(e) => { setCourse(e.target.value); setStar(0); }}>
+      <select value=${course} onchange=${(e) => pickStar(e.target.value, 0)}>
         ${courses.map((c) => html`<option value=${c.id}>${c.name}</option>`)}
       </select>
-      <select value=${star} onchange=${(e) => setStar(e.target.value)}>
+      <select value=${star} onchange=${(e) => pickStar(course, e.target.value)}>
         ${stars.map((name, i) => html`<option value=${i}>${name}</option>`)}
       </select>
     </div>
     <div style="margin-top:.4rem">
-      <input id="strat-tag" name="strat_tag" placeholder="strat tag (optional)" value=${strat}
-             oninput=${(e) => setStrat(e.target.value)} />
+      ${adding
+        ? html`<input id="strat-tag" name="strat_tag" placeholder="new strategy name"
+                      value=${newStrat} oninput=${(e) => setNewStrat(e.target.value)} />
+               <button onclick=${() => setAdding(false)}>↩</button>`
+        : html`<select value=${strat}
+                       onchange=${(e) => e.target.value === "__new__"
+                         ? setAdding(true) : setStrat(e.target.value)}>
+                 <option value="">(no strategy)</option>
+                 ${options.map((s) => html`<option value=${s}>${s}</option>`)}
+                 <option value="__new__">+ new strategy…</option>
+               </select>`}
       <button onclick=${apply}>Set target</button>
     </div>
   </div>`;
