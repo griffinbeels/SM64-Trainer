@@ -201,25 +201,32 @@ class GdiBitBltVideoSource:
         from sm64_events.replay.clock import qpc_100ns
 
         user32, gdi32 = ctypes.windll.user32, ctypes.windll.gdi32
-        # Windows default timer resolution is 15.6 ms - time.sleep() in a
-        # 16.7 ms-period loop quantizes to ~21 ms and the loop runs ~57/s,
-        # CFR-filling 2-3 duplicate frames every second (micro-stutter).
-        # 1 ms resolution + a short spin holds 60.0/s. Win11 IGNORES
-        # timeBeginPeriod for background processes (timer-resolution
-        # throttling; measured: still 57.5 grabs/s) unless the process
-        # opts out via PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION.
-        class _PPTS(ctypes.Structure):
-            _fields_ = [("Version", wt.ULONG), ("ControlMask", wt.ULONG),
-                        ("StateMask", wt.ULONG)]
-        try:
-            ppts = _PPTS(Version=1, ControlMask=4, StateMask=0)  # 4 = IGNORE_TIMER_RESOLUTION; StateMask 0 = don't throttle
-            ctypes.windll.kernel32.SetProcessInformation(
-                ctypes.windll.kernel32.GetCurrentProcess(),
-                4,  # ProcessPowerThrottling
-                ctypes.byref(ppts), ctypes.sizeof(ppts))
-        except Exception:
-            pass
-        ctypes.windll.winmm.timeBeginPeriod(1)
+        kernel32 = ctypes.windll.kernel32
+        # Pacing a 16.7 ms loop with time.sleep() runs at ~57/s, not 60:
+        # Windows quantizes sleeps to the 15.6 ms timer, and on Win11 BOTH
+        # classic escapes are ignored for background processes (measured:
+        # timeBeginPeriod(1) -> 57.5/s; power-throttling opt-out -> 57.4/s).
+        # The reliable primitive is the HIGH-RESOLUTION WAITABLE TIMER
+        # (Win10 1803+, ~0.5 ms precision, exempt from throttling); a short
+        # spin closes the last fraction of a millisecond. Fallback if
+        # creation fails: pure spin (crude, one busy core, but exact).
+        import time as _time
+        _CREATE_HIGH_RES = 0x00000002
+        _TIMER_ALL_ACCESS = 0x1F0003
+        htimer = kernel32.CreateWaitableTimerExW(
+            None, None, _CREATE_HIGH_RES, _TIMER_ALL_ACCESS)
+        log.info("gdi capture pacing: %s",
+                 "high-res waitable timer" if htimer else "spin fallback")
+
+        def _wait_until(target_t: float) -> None:
+            delay = target_t - _time.perf_counter()
+            if htimer and delay > 0.001:
+                due = ctypes.c_longlong(-int((delay - 0.0005) * 1e7))
+                if kernel32.SetWaitableTimer(htimer, ctypes.byref(due),
+                                             0, None, None, False):
+                    kernel32.WaitForSingleObject(htimer, 0xFFFFFFFF)
+            while _time.perf_counter() < target_t:
+                pass
         # PJ64 1.6 is DPI-UNAWARE: its real backing surface is its LOGICAL
         # client size (e.g. 1600x1224 at 150% scaling), while a DPI-aware
         # thread sees the scaled physical size (2400x1836) — BitBlt then
@@ -237,7 +244,6 @@ class GdiBitBltVideoSource:
         grabs = drops = 0
         grab_ms = 0.0
         last_report = 0.0
-        import time as _time
         next_t = _time.perf_counter()
         try:
             while not self._stop.is_set():
@@ -293,19 +299,16 @@ class GdiBitBltVideoSource:
                     grab_ms = 0.0
                     last_report = now
                 next_t += period
-                delay = next_t - _time.perf_counter()
-                if delay > 0:
-                    if delay > 0.005:
-                        _time.sleep(delay - 0.004)  # coarse sleep, 1ms timer
-                    while _time.perf_counter() < next_t:
-                        pass                         # short spin to the tick
+                if next_t > _time.perf_counter():
+                    _wait_until(next_t)
                 else:
                     next_t = _time.perf_counter()  # grab overran; resync
         except Exception:
             log.exception("GDI capture loop died")
             on_stopped()
         finally:
-            ctypes.windll.winmm.timeEndPeriod(1)
+            if htimer:
+                kernel32.CloseHandle(htimer)
             if bmp:
                 gdi32.DeleteObject(bmp)
             if mdc:
