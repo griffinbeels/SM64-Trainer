@@ -5,6 +5,7 @@ import htm from "htm";
 import { send } from "../api.js";
 import { StatMenu } from "./statmenu.js";
 import { Timeline } from "./timeline.js";
+import { Progress } from "./progress.js";
 
 const html = htm.bind(h);
 
@@ -99,6 +100,7 @@ function StarSection({ sec, t }) {
       <span class="pbtag">${pb ? `PB ${pb.display} (${t.clock})` : "no PB yet"}</span>
     </div>
     <${Timeline} tl=${sec.timeline} sec=${sec} t=${t} />
+    <${Progress} prog=${sec.progress} clock=${t.clock} />
     <${AttemptTable} attempts=${sec.attempts} rows=${rows} t=${t} />
     <${HideToggle} hidden=${hidden} showHidden=${showHidden} setShowHidden=${setShowHidden} />
     <div class="chips">
