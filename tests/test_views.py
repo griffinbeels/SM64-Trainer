@@ -300,3 +300,28 @@ def test_attempt_json_carries_jump_counts(tmp_path):
     [sec] = view["stars"]
     a = sec["attempts"][0]
     assert a["jumps_total"] == 1 and a["jumps_dustless"] == 1
+
+
+# -- timeline markers in the view (spec §3) -------------------------------------
+
+def test_section_carries_markers_by_strat(tmp_path):
+    db, svc = make(tmp_path)
+    seed(svc)
+    db.set_state("timeline_markers", {
+        "2:2:": [{"frames": 90, "label": "wall jump"}],
+        "2:2:cannonless": [{"frames": 200, "label": "owl"}],
+        "8:1:": [{"frames": 50, "label": "other star — excluded"}],
+    })
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    assert sec["markers_by_strat"] == {
+        "": [{"frames": 90, "label": "wall jump"}],
+        "cannonless": [{"frames": 200, "label": "owl"}],
+    }
+
+
+def test_markers_default_empty(tmp_path):
+    db, svc = make(tmp_path)
+    seed(svc)
+    view = build_session_view(db, svc, clock="igt")
+    assert view["stars"][0]["markers_by_strat"] == {}

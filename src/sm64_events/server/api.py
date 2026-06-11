@@ -6,7 +6,7 @@ LookupError -> 404 (no such attempt), ValueError -> 409 (exists but not
 saveable: bad mode, non-success, cleared, missing clock),
 RuntimeError -> 503 (database unavailable / degraded mode)."""
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from sm64_events.links import star_links
 from sm64_events.stats.registry import registry_meta
@@ -43,6 +43,26 @@ class StatSelection(BaseModel):
 
 class StatMenuBody(BaseModel):
     selections: list[StatSelection]
+
+
+class Marker(BaseModel):
+    frames: int = Field(ge=0)
+    label: str
+
+    @field_validator("label")
+    @classmethod
+    def _trim_label(cls, v: str) -> str:
+        v = v.strip()
+        if not 1 <= len(v) <= 60:
+            raise ValueError("label must be 1-60 chars after trimming")
+        return v
+
+
+class MarkersBody(BaseModel):
+    course_id: int
+    star_id: int
+    strat_tag: str | None = None
+    markers: list[Marker] = Field(max_length=30)
 
 
 def _http(e: Exception) -> HTTPException:
@@ -130,6 +150,19 @@ def create_api_router(service) -> APIRouter:
         if service.db is None:
             raise HTTPException(503, "database unavailable")
         service.db.set_state("stat_menu", [s.model_dump() for s in body.selections])
+        return {"ok": True}
+
+    @router.put("/markers")
+    def put_markers(body: MarkersBody):
+        """Replace the marker list for one star+strategy (spec §3)."""
+        if service.db is None:
+            raise HTTPException(503, "database unavailable")
+        key = f"{body.course_id}:{body.star_id}:{body.strat_tag or ''}"
+        state = service.db.get_state("timeline_markers", {})
+        state[key] = sorted(
+            ({"frames": m.frames, "label": m.label} for m in body.markers),
+            key=lambda m: m["frames"])
+        service.db.set_state("timeline_markers", state)
         return {"ok": True}
 
     @router.get("/links/{course_id}/{star_id}")

@@ -105,6 +105,14 @@ def _strategies_for(registered: dict, attempts, course_id: int, star_id: int) ->
     return out
 
 
+def _markers_for(markers_state: dict, course_id: int, star_id: int) -> dict:
+    """strat -> sorted marker list for ONE star, from the ui_state KV
+    (key shape '<course>:<star>:<strat>', '' = no strategy)."""
+    prefix = f"{course_id}:{star_id}:"
+    return {k[len(prefix):]: v for k, v in markers_state.items()
+            if k.startswith(prefix)}
+
+
 def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     all_attempts = db.attempts()
     session_attempts = [a for a in all_attempts
@@ -115,6 +123,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     pbs = _current_pbs(db)
     stat_menu = db.get_state("stat_menu", default=DEFAULT_STAT_MENU)
     registered = db.get_state("strategies", {})
+    markers_state = db.get_state("timeline_markers", {})
 
     sections, unassigned = [], []
     seen: dict[tuple[int, int], None] = {}
@@ -161,6 +170,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "strategies": _strategies_for(registered, all_attempts, course_id, star_id),
             "last_strat": service.strat_by_star.get((course_id, star_id)),
             "timeline": _timeline(history),
+            "markers_by_strat": _markers_for(markers_state, course_id, star_id),
         })
 
     tgt_c, tgt_s = service.target if service.target else (None, None)

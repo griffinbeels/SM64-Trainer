@@ -129,6 +129,9 @@ def test_degraded_service_returns_503(tmp_path):
         assert client.get("/api/session").status_code == 503
         assert client.post("/api/target",
                            json={"course_id": 2, "star_id": 2}).status_code == 503
+        assert client.put("/api/markers", json={
+            "course_id": 2, "star_id": 2, "strat_tag": None,
+            "markers": []}).status_code == 503
         assert client.get("/health").json()["db"] == "error"
 
 
@@ -241,3 +244,72 @@ def test_session_delete_past_session_removes_from_sessions_list(tmp_path):
         view = client.get("/api/session").json()
         ids = [s["id"] for s in view["sessions"]]
         assert s1 not in ids
+
+
+# -- timeline markers ----------------------------------------------------------
+
+def test_markers_roundtrip_sorted_by_frames(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)
+        r = client.put("/api/markers", json={
+            "course_id": 2, "star_id": 2, "strat_tag": "cannonless",
+            "markers": [{"frames": 600, "label": "pyramid warp"},
+                        {"frames": 90, "label": "bobomb grab"}]})
+        assert r.status_code == 200 and r.json()["ok"] is True
+        sec = client.get("/api/session").json()["stars"][0]
+        assert sec["markers_by_strat"]["cannonless"] == [
+            {"frames": 90, "label": "bobomb grab"},
+            {"frames": 600, "label": "pyramid warp"}]
+
+
+def test_markers_null_strat_lands_in_empty_key(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)
+        client.put("/api/markers", json={
+            "course_id": 2, "star_id": 2, "strat_tag": None,
+            "markers": [{"frames": 90, "label": "bobomb grab"}]})
+        sec = client.get("/api/session").json()["stars"][0]
+        assert sec["markers_by_strat"][""] == [{"frames": 90, "label": "bobomb grab"}]
+
+
+def test_markers_empty_list_clears(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)
+        client.put("/api/markers", json={
+            "course_id": 2, "star_id": 2, "strat_tag": None,
+            "markers": [{"frames": 90, "label": "x"}]})
+        client.put("/api/markers", json={
+            "course_id": 2, "star_id": 2, "strat_tag": None, "markers": []})
+        sec = client.get("/api/session").json()["stars"][0]
+        assert sec["markers_by_strat"][""] == []
+
+
+def test_markers_validation_422s(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        for bad in ({"frames": -1, "label": "x"},
+                    {"frames": 0, "label": ""},
+                    {"frames": 0, "label": "   "},
+                    {"frames": 0, "label": "y" * 61}):
+            r = client.put("/api/markers", json={
+                "course_id": 2, "star_id": 2, "strat_tag": None,
+                "markers": [bad]})
+            assert r.status_code == 422, bad
+        too_many = [{"frames": i, "label": f"m{i}"} for i in range(31)]
+        assert client.put("/api/markers", json={
+            "course_id": 2, "star_id": 2, "strat_tag": None,
+            "markers": too_many}).status_code == 422
+
+
+def test_markers_label_is_trimmed(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)
+        client.put("/api/markers", json={
+            "course_id": 2, "star_id": 2, "strat_tag": None,
+            "markers": [{"frames": 90, "label": "  bobomb grab  "}]})
+        sec = client.get("/api/session").json()["stars"][0]
+        assert sec["markers_by_strat"][""][0]["label"] == "bobomb grab"
