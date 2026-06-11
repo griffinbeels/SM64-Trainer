@@ -505,6 +505,16 @@ def test_view_survives_out_of_range_target(tmp_path):
     assert sec["course_name"] and sec["star_name"]         # fallback strings
 
 
+def test_strat_set_updates_section_last_strat(tmp_path):
+    db, svc = make(tmp_path)
+    seed(svc)
+    asyncio.run(svc.set_strat(2, 2, "owlless"))
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    assert sec["last_strat"] == "owlless"
+    assert "owlless" in sec["strategies"]
+
+
 def test_duplicate_stored_stat_selections_render_once(tmp_path):
     # heals dbs that stored duplicates before the write-side dedupe existed
     db, svc = make(tmp_path)

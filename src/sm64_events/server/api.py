@@ -38,6 +38,12 @@ class ContinueBody(BaseModel):
     session_id: int
 
 
+class StratBody(BaseModel):
+    course_id: int = Field(ge=0)
+    star_id: int = Field(ge=0)
+    strat_tag: str | None = None
+
+
 class StatSelection(BaseModel):
     key: str
     params: dict = {}
@@ -116,6 +122,14 @@ def create_api_router(service) -> APIRouter:
     async def target(body: TargetBody):
         try:
             await service.set_target(body.course_id, body.star_id, body.strat_tag)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True}
+
+    @router.post("/strat")
+    async def strat(body: StratBody):
+        try:
+            await service.set_strat(body.course_id, body.star_id, body.strat_tag)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True}

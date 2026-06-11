@@ -45,7 +45,8 @@ Caveats (hard-won — keep these current):
 6. Strategy memory is PER STAR: strat_by_star[(course_id, star_id)] stores
    the last-set strategy for that star independently. Switching targets
    never leaks the previous star's strat. The strat_tag on an attempt is the
-   attributed star's last-remembered strategy at close time.
+   attributed star's last-remembered strategy at close time. strat_set events
+   write the same memory without moving the target.
 
 7. Dust-trick attachment: rollout/jump events accumulate and attach to
    whichever attempt closes next (covers anchored AND grab-only attempts).
@@ -171,6 +172,12 @@ class Projector:
             self.target = (c, s)
             if "strat_tag" in ev.payload:
                 self.strat_by_star[(c, s)] = ev.payload["strat_tag"]
+            return []
+        if ev.type == "strat_set":
+            # per-star strategy memory write WITHOUT moving the target
+            # (target_set is the only other writer); explicit null clears.
+            self.strat_by_star[(ev.payload["course_id"], ev.payload["star_id"])] \
+                = ev.payload.get("strat_tag")
             return []
         if ev.type == "mario_acted":
             self._open_acted = True

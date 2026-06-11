@@ -117,12 +117,31 @@ function StarSection({ sec, t, ui, pinned }) {
     .slice()
     .sort(comparator(ui.sort, t.clock));
   const shown = rows.slice(0, visible);
+
+  async function setStrat(v) {
+    if (v === "__new") {
+      v = (window.prompt("New strategy name:") || "").trim();
+      if (!v) { t.refresh(); return; }   // refresh resets the select to current
+    }
+    await send("POST", "/api/strat", {
+      course_id: sec.course_id, star_id: sec.star_id,
+      strat_tag: v || null,
+    });
+    t.refresh();
+  }
+
   return html`<div class="starsec ${pinned ? "active-star" : ""}">
     ${pinned && html`<div class="active-tag">★ ACTIVE STAR</div>`}
     <div class="shead">
       <b>${sec.course_name} · ${sec.star_name}</b>
       <a href=${sec.links.ukikipedia} target="_blank">RTA Guide</a>
       ${sec.links.example && html`<a href=${sec.links.example} target="_blank">Example</a>`}
+      <select class="meta" value=${sec.last_strat || ""}
+              onchange=${(e) => setStrat(e.target.value)}>
+        <option value="">— no strat —</option>
+        ${sec.strategies.map((s) => html`<option value=${s}>${s}</option>`)}
+        <option value="__new">+ new strat…</option>
+      </select>
       <span class="pbtag">${pb ? `PB ${pb.display} (${t.clock})` : "no PB yet"}</span>
     </div>
     <${Timeline} tl=${sec.timeline} sec=${sec} t=${t} />

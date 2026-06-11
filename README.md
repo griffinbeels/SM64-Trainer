@@ -75,6 +75,7 @@ Other event types, same envelope:
 | `attempt_completed` | `attempt_id, session_id, course_id, star_id, course_name, star_name, strat_tag, anchor_type, outcome, outcome_detail, igt_frames, igt, rta_frames, rollouts_total, rollouts_dustless, jumps_total, jumps_dustless` | Derived: an attempt just closed (success / reset / death / hard_reset / abandoned) |
 | `target_set` | `course_id, star_id, strat_tag?` | User explicitly set the practice target |
 | `target_changed` | `course_id, star_id, strat_tag` | Practice target moved (auto-follows last valid grab, or set by command) |
+| `strat_set` | `course_id, star_id, strat_tag` | Star's active strategy set without moving the target; future closures for that star attribute to it |
 | `attempt_cleared` | `attempt_id, reason` | Attempt tombstoned; `reason` is always present, may be null (triggers full re-projection; `attempts_invalidated` follows) |
 | `attempt_restored` | `attempt_id` | Tombstone undone (triggers full re-projection; `attempts_invalidated` follows) |
 | `pb_saved` | `course_id, star_id, strat_tag, timer_mode, frames, attempt_id` | Personal best recorded |
@@ -102,6 +103,7 @@ All endpoints are under `/api`. JSON in, JSON out.
 | `POST /api/session/continue` `{session_id}` | Resume a previously ended session; new attempts land there |
 | `DELETE /api/session/{id}` | Hard-delete a session and all its data (409 on the active session; PBs survive; clears recorded in the deleted session revert their targets on re-projection) |
 | `POST /api/target` `{course_id, star_id, strat_tag?}` | Set the practice target |
+| `POST /api/strat` `{course_id, star_id, strat_tag?}` | Set a star's active strategy without changing the practice target (null clears) |
 | `POST /api/attempts/{id}/clear` `{reason?}` | Tombstone an attempt (triggers re-projection) |
 | `POST /api/attempts/{id}/restore` | Undo a tombstone (triggers re-projection) |
 | `POST /api/pb` `{attempt_id, timer_mode}` | Save a personal best from a success attempt |

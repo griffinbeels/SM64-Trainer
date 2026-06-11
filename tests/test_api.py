@@ -335,6 +335,32 @@ def test_markers_put_preserves_other_keys(tmp_path):
         }
 
 
+def test_strat_endpoint_sets_without_moving_target(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)                                   # target -> (2,2)
+        client.post("/api/target", json={"course_id": 8, "star_id": 2,
+                                         "strat_tag": "carpetless"})
+        r = client.post("/api/strat", json={"course_id": 2, "star_id": 2,
+                                            "strat_tag": "owlless"})
+        assert r.status_code == 200
+        assert service.target == (8, 2)                 # unmoved
+        assert service.strat_by_star[(2, 2)] == "owlless"
+        # registered for the star's dropdown
+        view = client.get("/api/session").json()
+        assert "owlless" in view["strategies"]["2:2"]
+
+
+def test_strat_endpoint_degraded_503(tmp_path):
+    broadcaster = Broadcaster()
+    service = TrackerService(None, broadcaster)
+    poller = Poller(OfflineMemory(), [], service)
+    app = create_app(poller, broadcaster, service=service)
+    with TestClient(app) as client:
+        assert client.post("/api/strat", json={
+            "course_id": 2, "star_id": 2, "strat_tag": "x"}).status_code == 503
+
+
 def test_statmenu_put_dedupes_exact_selections(tmp_path):
     client, service, db = make_client(tmp_path)
     with client:

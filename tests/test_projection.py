@@ -725,3 +725,36 @@ def test_castle_opened_hard_reset_is_discarded():
         jev(4, "game_reset", 50),
     ])
     assert [a.outcome for a in attempts] == ["success"]
+
+
+# -- strat_set event (per-star strategy without moving the target) ---------------
+
+def test_strat_set_updates_memory_without_moving_target():
+    _, proj = replay([
+        jev(1, "target_set", 0, {"course_id": 8, "star_id": 2, "strat_tag": "x"}),
+        jev(2, "strat_set", 0, {"course_id": 2, "star_id": 2, "strat_tag": "owlless"}),
+    ])
+    assert proj.target == (8, 2)                      # unmoved
+    assert proj.strat_by_star[(2, 2)] == "owlless"
+    assert proj.strat_tag == "x"                      # target's own strat intact
+
+
+def test_strat_set_attributes_future_closures():
+    attempts = project([
+        jev(1, "target_set", 0, {"course_id": 8, "star_id": 2, "strat_tag": "old"}),
+        jev(2, "strat_set", 0, {"course_id": 8, "star_id": 2, "strat_tag": "new"}),
+        jev(3, "practice_reset", 1000, {"igt_frames_before": 0, "mario_acted": True}),
+        jev(4, "practice_reset", 1400, {"igt_frames_before": 380, "mario_acted": True}),
+    ])
+    assert attempts[0].strat_tag == "new"
+
+
+def test_strat_set_null_clears_and_is_not_a_boundary():
+    attempts = project([
+        jev(1, "practice_reset", 1000, {"igt_frames_before": 0}),
+        jev(2, "rollout", 1100, {"dustless": True, "frames_late": 0, "level": 24}),
+        jev(3, "strat_set", 0, {"course_id": 2, "star_id": 2, "strat_tag": None}),
+        star(4, 1350),
+    ])
+    assert attempts[0].rollouts_total == 1            # not zeroed by strat_set
+    assert attempts[0].strat_tag is None
