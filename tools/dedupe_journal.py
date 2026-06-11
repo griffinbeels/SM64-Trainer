@@ -40,7 +40,7 @@ from sm64_events.storage.dedupe import find_duplicates
 
 def _load_rows(db_path: Path, window_seconds: float):
     """Open the db read-only and load GAME event rows.  Returns raw tuples."""
-    uri = db_path.as_uri() + "?mode=ro"
+    uri = db_path.resolve().as_uri() + "?mode=ro"  # as_uri() rejects relative paths
     conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
