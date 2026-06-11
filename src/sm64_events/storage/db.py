@@ -103,6 +103,12 @@ class Database:
             self._conn.commit()
             return cur.lastrowid
 
+    def delete_events(self, ids: list[int]) -> None:
+        with self._lock:
+            self._conn.executemany("DELETE FROM events WHERE id=?",
+                                   [(i,) for i in ids])
+            self._conn.commit()
+
     def events(self) -> list[EventRow]:
         with self._lock:
             rows = self._conn.execute("SELECT * FROM events ORDER BY id").fetchall()
