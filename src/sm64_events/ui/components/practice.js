@@ -128,11 +128,18 @@ function StarSection({ sec, t, ui, pinned }) {
     <${Timeline} tl=${sec.timeline} sec=${sec} t=${t} />
     <${Progress} prog=${sec.progress} clock=${t.clock} />
     <${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t} />
-    ${rows.length > visible && html`<button class="meta"
-        style="background:none;border:none;cursor:pointer"
-        onclick=${() => setVisible(visible + 10)}>
-      Show 10 more
-    </button>`}
+    ${(rows.length > visible || visible > 10) && html`<div>
+      ${rows.length > visible && html`<button class="meta"
+          style="background:none;border:none;cursor:pointer"
+          onclick=${() => setVisible(visible + 10)}>
+        Show 10 more
+      </button>`}
+      ${visible > 10 && html`<button class="meta"
+          style="background:none;border:none;cursor:pointer"
+          onclick=${() => setVisible(Math.max(10, visible - 10))}>
+        Hide last 10
+      </button>`}
+    </div>`}
     <${HideToggle} hidden=${hidden} showHidden=${showHidden} setShowHidden=${setShowHidden} />
     <div class="chips">
       ${sec.stats.map((s) => html`
