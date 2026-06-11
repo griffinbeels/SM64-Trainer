@@ -157,3 +157,45 @@ def test_sub_frame_span_raises(tmp_path):
         ex.extract(ring, T0 + timedelta(seconds=1),
                    T0 + timedelta(seconds=1, microseconds=5),
                    tmp_path / "c.mp4")
+
+
+def test_clip_audio_content_is_faithful_at_60fps(tmp_path):
+    """Regression for the 60fps padding bug: per-video-frame audio blocks
+    (rate//fps = 800 at 60fps) were each zero-padded to AAC's 1024-sample
+    frame, injecting 28% silence mid-clip (distortion + stretch + desync).
+    A pure tone must come back at the same pitch, same duration, and with
+    a sane RMS (padding collapses RMS and splatters the spectrum)."""
+    fps60 = ReplayConfig(fps=60)
+    ring = SegmentRing(retention_s=None, max_bytes=10**9)
+    clk = CaptureClock(anchor_qpc_100ns=0, anchor_utc=T0)
+    w = SegmentWriter(cfg=fps60, clock=clk, out_dir=tmp_path / "buf",
+                      codec="libx264", on_segment=ring.add)
+    w.start_audio(t0_utc=T0)
+    t = np.arange(48000 * 6, dtype=np.float64) / 48000
+    tone = (np.sin(2 * np.pi * 440 * t) * 0.5 * 32767).astype(np.int16)
+    for i in range(6 * 60):
+        w.write_video(np.full((480, 640, 4), (i * 3) % 256, dtype=np.uint8),
+                      frame_index=i)
+    w.write_audio(np.stack([tone, tone], axis=1))
+    w.close()
+
+    ex = ClipExtractor(cfg=fps60, codec="libx264")
+    out = tmp_path / "clip.mp4"
+    res = ex.extract(ring, T0 + timedelta(seconds=1), T0 + timedelta(seconds=5), out)
+    assert abs(res.duration_s - 4.0) < 0.1
+
+    with av.open(str(out)) as c:
+        chunks = [f.to_ndarray() for f in c.decode(audio=0)]
+    mono = np.concatenate([x[0] if x.ndim == 2 else x for x in chunks]).astype(np.float64)
+    # Duration: 4s of 48k samples (AAC priming tolerance)
+    assert abs(len(mono) - 4 * 48000) < 4096
+    # Pitch: FFT peak must be 440 Hz (padding shifts/splatters it)
+    seg = mono[4096:4096 + 96000]
+    spec = np.abs(np.fft.rfft(seg * np.hanning(len(seg))))
+    freq = np.fft.rfftfreq(len(seg), 1 / 48000)
+    peak = freq[np.argmax(spec)]
+    assert abs(peak - 440.0) < 2.0, f"tone came back at {peak:.1f} Hz"
+    # Continuity: a pure tone's RMS is ~0.35 fullscale; 28% injected silence
+    # drags it down and adds 60 Hz AM sidebands
+    rms = np.sqrt(np.mean((seg / np.abs(seg).max()) ** 2))
+    assert rms > 0.6, f"RMS {rms:.2f} - silence chopped into the tone"

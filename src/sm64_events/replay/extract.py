@@ -197,25 +197,34 @@ class ClipExtractor:
             # samples per video frame (interleave granularity)
             smpv = rate // fps  # 1600 at 48 kHz / 30 fps
 
-            def mux_audio(a_end: int) -> None:
-                nonlocal audio_pos
-                block = pcm[audio_pos:a_end]
-                if len(block) < _AAC_FRAME_SIZE:
-                    # Per-frame blocks are smpv=1600 >= 1024, so only the tail
-                    # block can be short; pad it so the AAC encoder never sees
-                    # a sub-1024 non-final frame and no mid-clip silence is added.
-                    padded = np.zeros((_AAC_FRAME_SIZE, 2), dtype=np.int16)
-                    padded[:len(block)] = block
-                    block = padded
+            def _encode_block(block: np.ndarray, pts: int) -> None:
                 arr = np.ascontiguousarray(block.reshape(1, -1))
                 af = av.AudioFrame.from_ndarray(arr, format="s16",
                                                 layout="stereo")
                 af.sample_rate = rate
-                af.pts = audio_pos
-                audio_pos = a_end
+                af.pts = pts
                 for rf in resampler.resample(af):
                     for pkt in astream.encode(rf):
                         out.mux(pkt)
+
+            def mux_audio(a_end: int, final: bool = False) -> None:
+                """Feed the AAC encoder EXACT 1024-sample frames up to a_end,
+                holding any remainder until more PCM is in range. Zero-pad
+                ONLY the true final frame: every padded sample is silence
+                INSERTED into the track — at 60 fps the per-video-frame
+                blocks are rate//fps = 800 < 1024, so the old pad-any-short-
+                block logic stuffed 224 zeros into every block (+28% length,
+                60 Hz chop — the 'distorted, slow, drifting' audio bug)."""
+                nonlocal audio_pos
+                while a_end - audio_pos >= _AAC_FRAME_SIZE:
+                    _encode_block(pcm[audio_pos:audio_pos + _AAC_FRAME_SIZE],
+                                  audio_pos)
+                    audio_pos += _AAC_FRAME_SIZE
+                if final and a_end > audio_pos:
+                    padded = np.zeros((_AAC_FRAME_SIZE, 2), dtype=np.int16)
+                    padded[:a_end - audio_pos] = pcm[audio_pos:a_end]
+                    _encode_block(padded, audio_pos)
+                    audio_pos = a_end
 
             for fr, t in _in_window_frames(segments, s, e):
                 vf = fr.reformat(width=dims[0], height=dims[1],
@@ -234,9 +243,9 @@ class ClipExtractor:
                 if a_end > audio_pos:
                     mux_audio(a_end)
 
-            # Remaining audio (tail samples after the last video frame)
-            while audio_pos < total_samples:
-                mux_audio(min(audio_pos + _AAC_FRAME_SIZE, total_samples))
+            # Remaining audio (tail samples after the last video frame);
+            # only here may the final partial frame be padded.
+            mux_audio(total_samples, final=True)
 
             # Flush video encoder
             for pkt in vstream.encode(None):
