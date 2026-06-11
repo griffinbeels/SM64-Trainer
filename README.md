@@ -115,6 +115,24 @@ operation (bad timer mode, already cleared, non-success outcome, or missing cloc
 > `GET /api/pb` is intentionally absent in phase 1 — current PBs are included in the
 > `/api/session` response.
 
+### Replay
+
+While the server runs it records the PJ64 window (+ game audio, per-process)
+into `data/replay_buffer/` (scratch, wiped on startup). Retention defaults to
+the whole session (`ReplayConfig.retention_s`); a hard disk cap (default
+20 GB) evicts oldest footage regardless. PJ64 must run windowed (exclusive
+fullscreen cannot be captured).
+
+- `GET  /api/replay/status` — `{enabled, recording, window_found, audio_mode, encoder, buffer_start_utc, buffer_end_utc, disk_bytes}`
+- `POST /api/attempts/{id}/replay` — cut (or reuse) the attempt's clip → `{clip_url, duration_s, truncated}`
+- `GET  /api/replay/clips/{name}` — the MP4 (supports HTTP Range; scrubs smoothly)
+- `POST /api/attempts/{id}/replay/save` — copy to `replays/<YYYY-MM-DD>/session_<N>/<slug>.mp4` → `{path, truncated}`
+
+Errors follow the API taxonomy: 404 unknown attempt/clip, 409 no footage /
+span too short, 503 db unavailable. Clips span the whole attempt plus
+padding (3 s before the anchor, 2 s after the closing event); `truncated`
+means the buffer no longer covered part of that span.
+
 ## Data
 
 `data/tracker.db` is a SQLite database created on first run (gitignored). It holds an

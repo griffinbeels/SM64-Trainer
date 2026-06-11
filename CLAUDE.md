@@ -58,6 +58,9 @@ uv run python tools/dedupe_journal.py data/tracker.db          # scan double-jou
 | UI components, store, API client | `ui/components/` · `ui/store.js` · `ui/api.js` · `ui/app.js`; vendored Preact in `ui/vendor/`; incl. `ui/components/timeline.js` (per-star event graph; marker styles via `MARKERS` registry) |
 | Wiring / startup / logging | `main.py` (composition root), `core/logging_setup.py` |
 | Memory-hunting diagnostics | `tools/` — playbook in docs/architecture.md |
+| Replay capture/buffer (window+audio -> segment ring) | `replay/` — `recorder.py` orchestrates (attach loop, CFR conform, audio fallback chain); `clock.py` is THE QPC↔UTC contract; `encoder.py`/`extract.py` docstrings carry the gapless-PCM, NVENC-probe-at-real-size, and wall-clock-pts rationale |
+| Replay REST surface (status/extract/save/serve) | `server/replay_api.py` — FileResponse for Range/206; same error taxonomy as api.py |
+| Replay player + recording dot | `ui/components/replay.js` |
 
 (All paths under `src/sm64_events/` unless noted.) Tests mirror modules:
 `tests/test_<module>.py` — read the test file first; it's the executable spec.
@@ -66,7 +69,7 @@ uv run python tools/dedupe_journal.py data/tracker.db          # scan double-jou
 
 Safe to work concurrently (one branch/worktree each): **detectors/**,
 **server/**, **ui/**, **memory/ + tools/**, **storage/ + stats/ + tracking/**,
-**docs/** — each with its tests. The `storage/+stats/+tracking/` zone shares
+**replay/**, **docs/** — each with its tests. The `storage/+stats/+tracking/` zone shares
 the `Attempt` contract internally; keep it in one branch.
 **Shared contracts — never edit in two branches at once:** `core/events.py`,
 `core/snapshot.py`, `memory/addresses.py`, `tracking/projection.py`, `main.py`.

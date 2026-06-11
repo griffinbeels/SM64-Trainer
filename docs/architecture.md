@@ -186,3 +186,25 @@ live-feedback round + incident-response from the spec). Remaining phases per
 - **Phase 4** — Routes storage + probability board + Routes tab.
 - Dedicated key / grand-star events (Bowser key grabs currently emit
   star_collected with course_id 16/17 — documented limitation).
+
+## Replay capture (2026-06-11)
+
+Self-contained PJ64 window+audio recording into a disk segment ring
+(`replay/` zone; design spec + plan in docs/superpowers/). Facts that cost
+real debugging and live OUTSIDE any single module:
+
+- NVENC rejects tiny encode dimensions with the SAME error (22, EINVAL at
+  avcodec_open2) as a missing driver — capability probes must use realistic
+  sizes (640x480). Evidence: live sweep 64x64 FAIL / 256x256 OK / 640x480 OK.
+- PyAV: decoded MPEG-TS frames keep time_base 1/90000 through reformat();
+  set frame.time_base to the OUTPUT rate before assigning integer pts or the
+  muxer collapses the clip to ~33 ms (silently — frame counts still pass).
+- A/V across capture gaps: video pts must be wall-clock-locked
+  (round((t-s)*fps)) or holes compress the video timeline against real-time
+  audio. Gap responsibilities: recorder fills gaps <= 1 segment; larger gaps
+  become segment boundaries = honest coverage holes in the ring.
+- proc-tap imports as `proctap`; callback delivers (bytes, num_frames=-1);
+  wire on_data at constructor time (start() takes no args).
+- windows-capture: frames expose .frame_buffer/.timespan (no to_numpy);
+  @capture.event dispatches on the handler's __name__; timespan is QPC
+  100 ns ticks — anchor one (qpc, utc) pair per recording run (clock.py).
