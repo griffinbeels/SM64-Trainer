@@ -104,6 +104,7 @@ def test_save_copies_into_date_session_tree(tmp_path):
     assert p.parent.name == "session_3"
     assert p.parent.parent.parent == tmp_path / "replays"
     assert p.name.startswith("attempt_0042_")
+    assert res["truncated"] is False
 
 
 def test_clip_path_validates_names(tmp_path):

@@ -142,7 +142,9 @@ class ReplayService:
                   if a.star_id is not None and a.course_id is not None else "no-star")
         dest = dest_dir / slug_filename(a, c_name, s_name)
         shutil.copy2(clip, dest)
-        return {"path": str(dest)}
+        meta = clip.with_suffix(".json")
+        m = json.loads(meta.read_text())
+        return {"path": str(dest), "truncated": m["truncated"]}
 
     def clip_path(self, name: str) -> Path:
         """Return validated Path for serving a clip.

@@ -34,7 +34,7 @@ def _log_poller_exit(task: asyncio.Task) -> None:
 
 
 def create_app(poller: Poller, broadcaster: Broadcaster,
-               service=None, debug_hooks: bool = False) -> FastAPI:
+               service=None, replay=None, debug_hooks: bool = False) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         if service is not None:
@@ -44,9 +44,13 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
                 log.exception("tracker start failed - degrading to broadcast-only")
                 service.db = None
                 service.session_id = None
+        if replay is not None:
+            replay.lifecycle_start()
         task = asyncio.create_task(poller.run())
         task.add_done_callback(_log_poller_exit)
         yield
+        if replay is not None:
+            replay.lifecycle_stop()
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
@@ -56,6 +60,9 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     app.mount("/ui", StaticFiles(directory=str(_UI_INDEX.parent)), name="ui")
     if service is not None:
         app.include_router(create_api_router(service))
+    if replay is not None:
+        from sm64_events.server.replay_api import create_replay_router
+        app.include_router(create_replay_router(replay))
 
     @app.get("/", response_class=HTMLResponse)
     def index():
