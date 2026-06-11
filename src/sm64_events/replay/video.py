@@ -204,7 +204,21 @@ class GdiBitBltVideoSource:
         # Windows default timer resolution is 15.6 ms - time.sleep() in a
         # 16.7 ms-period loop quantizes to ~21 ms and the loop runs ~57/s,
         # CFR-filling 2-3 duplicate frames every second (micro-stutter).
-        # 1 ms resolution + a short spin holds 60.0/s.
+        # 1 ms resolution + a short spin holds 60.0/s. Win11 IGNORES
+        # timeBeginPeriod for background processes (timer-resolution
+        # throttling; measured: still 57.5 grabs/s) unless the process
+        # opts out via PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION.
+        class _PPTS(ctypes.Structure):
+            _fields_ = [("Version", wt.ULONG), ("ControlMask", wt.ULONG),
+                        ("StateMask", wt.ULONG)]
+        try:
+            ppts = _PPTS(Version=1, ControlMask=4, StateMask=0)  # 4 = IGNORE_TIMER_RESOLUTION; StateMask 0 = don't throttle
+            ctypes.windll.kernel32.SetProcessInformation(
+                ctypes.windll.kernel32.GetCurrentProcess(),
+                4,  # ProcessPowerThrottling
+                ctypes.byref(ppts), ctypes.sizeof(ppts))
+        except Exception:
+            pass
         ctypes.windll.winmm.timeBeginPeriod(1)
         # PJ64 1.6 is DPI-UNAWARE: its real backing surface is its LOGICAL
         # client size (e.g. 1600x1224 at 150% scaling), while a DPI-aware
@@ -281,10 +295,10 @@ class GdiBitBltVideoSource:
                 next_t += period
                 delay = next_t - _time.perf_counter()
                 if delay > 0:
-                    if delay > 0.003:
-                        _time.sleep(delay - 0.002)  # coarse sleep, 1ms timer
+                    if delay > 0.005:
+                        _time.sleep(delay - 0.004)  # coarse sleep, 1ms timer
                     while _time.perf_counter() < next_t:
-                        pass                         # sub-ms spin to the tick
+                        pass                         # short spin to the tick
                 else:
                     next_t = _time.perf_counter()  # grab overran; resync
         except Exception:
