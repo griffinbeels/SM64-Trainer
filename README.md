@@ -82,14 +82,20 @@ Other event types, same envelope:
 
 **Strategies:** Strategy names are remembered per star — switching the target star loads that star's own last-used strategy, not the previous star's. Known strategies for a star = everything registered via target-setting plus every tag appearing in that star's attempt history. The session view surfaces them in `strategies` (map of `"course_id:star_id"` → list) and `last_strat_by_star` (map → last used), and per-section `strategies` / `last_strat` fields.
 
+**Session view payload** (`GET /api/session`) top-level fields include `scope` (`"session"` or `"lifetime"`) and `sessions` (array of all sessions, newest-first, each with `id`, `attempts`, `started_utc`, `ended_utc`). Each star section additionally carries a `timeline` object: `{max_frames, max_display, max_is_success, points:[{frames, igt, outcome, attempt_id}]}`. The axis maximum (`max_frames`) is the longest successful attempt (or the longest attempt overall when `max_is_success` is false, i.e. no successes yet). Points are lifetime — they may exceed `max_frames` on the x-axis.
+
+**Timelines:** Each star section renders a strat map — every success, reset, and death plotted at its IGT position along a shared axis. Extending marker kinds requires two changes: one row in `TIMELINE_OUTCOMES` (`tracking/views.py`) to define the outcome key and color, and one row in `MARKERS` (`ui/components/timeline.js`) to define the SVG shape. Everything else (axis, tooltip, projection) is derived automatically from those two registries.
+
 ## HTTP API
 
 All endpoints are under `/api`. JSON in, JSON out.
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/session?clock=igt\|rta` | Full session view: target, attempts per star, stat chips, PBs, catalog |
+| `GET /api/session?clock=igt\|rta[&scope=session\|lifetime]` | Full session view: target, attempts per star, stat chips, PBs, catalog; `scope=session` (default) shows only the active session, `scope=lifetime` aggregates all sessions |
 | `POST /api/session/new` `{label?}` | Close the current session and open a new one |
+| `POST /api/session/continue` `{session_id}` | Resume a previously ended session; new attempts land there |
+| `DELETE /api/session/{id}` | Hard-delete a session and all its data (409 on the active session; PBs survive; clears recorded in the deleted session revert their targets on re-projection) |
 | `POST /api/target` `{course_id, star_id, strat_tag?}` | Set the practice target |
 | `POST /api/attempts/{id}/clear` `{reason?}` | Tombstone an attempt (triggers re-projection) |
 | `POST /api/attempts/{id}/restore` | Undo a tombstone (triggers re-projection) |

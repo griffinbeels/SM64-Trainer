@@ -38,7 +38,8 @@ export function Header({ t }) {
 
   return html`<div class="bar">
     <span class="dot ${t.connected ? "ok" : "bad"}">${t.connected ? "live" : "offline"}</span>
-    ${v && html`<select value=${t.scope === "lifetime" ? "lifetime" : String(active)}
+    ${v && html`<select id="session-select" name="session"
+                        value=${t.scope === "lifetime" ? "lifetime" : String(active)}
                         onchange=${pickSession}>
       <option value="lifetime">Lifetime</option>
       ${v.sessions.map((s) => html`<option value=${String(s.id)}>
@@ -54,7 +55,7 @@ export function Header({ t }) {
       <button onclick=${() => setEditing(!editing)} disabled=${!v}>▾</button>
     </span>
     <span style="margin-left:auto">Clock:
-      <select value=${t.clock} onchange=${(e) => t.pickClock(e.target.value)}>
+      <select id="clock-select" name="clock" value=${t.clock} onchange=${(e) => t.pickClock(e.target.value)}>
         <option value="igt">Usamune IGT</option>
         <option value="rta">anchor → grab</option>
       </select>

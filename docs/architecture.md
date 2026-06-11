@@ -73,6 +73,8 @@ commands — not on the poll path). Measured: ~6.5 ms @ 100 events, ~23 ms
 @ 1,000 events, ~97 ms @ 5,000 events. Acceptable for an explicit user
 command; would need batching if it became per-tick.
 
+**Sessions are resumable and hard-deletable.** `POST /api/session/continue` reopens an ended session by clearing its `ended_utc` — new attempts append to it as if it never closed. `DELETE /api/session/{id}` is the journal's one deletion path: it bulk-removes all journal rows whose session matches, then runs a full re-projection; the active session is protected (409). PBs are stored separately and survive. Any `attempt_cleared` events recorded inside the deleted session disappear with it — targets those clears had overridden revert to their pre-clear state in the re-projected view (documented revert, not a bug). Timelines (`timeline` field on each session-view section) are a pure read-over-lifetime-attempts projection: the `TIMELINE_OUTCOMES` registry in `tracking/views.py` maps outcome keys to display properties; `MARKERS` in `ui/components/timeline.js` maps them to SVG shapes. Adding a new marker kind is two registry rows and no other code changes.
+
 **User-feedback round (2026-06-10 live play).** `DeathDetector`
 (`detectors/death.py`) fires on action-set edge (entry into DEATH_ACTIONS)
 and closes the open attempt as outcome "death". `LevelChangeDetector`
