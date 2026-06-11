@@ -7,8 +7,8 @@ from sm64_events.core.logging_setup import configure_logging
 from sm64_events.detectors.anchors import AnchorDetector
 from sm64_events.detectors.death import DeathDetector
 from sm64_events.detectors.level import LevelChangeDetector
+from sm64_events.detectors.dust import DustTrickDetector
 from sm64_events.detectors.lifecycle import GameResetDetector
-from sm64_events.detectors.rollout import RolloutDetector
 from sm64_events.detectors.star_grab import StarGrabDetector
 from sm64_events.memory.pj64 import Pj64Memory
 from sm64_events.server.app import create_app
@@ -48,10 +48,10 @@ def build():
     service = TrackerService(db, broadcaster)
     # Order is load-bearing: level changes abandon stale attempts BEFORE the
     # same tick's igt-reset anchor opens the next one; resets before grabs
-    # (see projection.py docstring on the same-tick race); rollouts before
-    # grabs so a same-tick rollout attaches to the attempt the grab closes.
+    # (see projection.py docstring on the same-tick race); dust tricks before
+    # grabs so a same-tick rollout/jump attaches to the attempt the grab closes.
     detectors = [GameResetDetector(), LevelChangeDetector(), AnchorDetector(),
-                 DeathDetector(), RolloutDetector(), StarGrabDetector()]
+                 DeathDetector(), DustTrickDetector(), StarGrabDetector()]
     poller = Poller(memory, detectors, service)  # service IS the event sink
     return create_app(poller, broadcaster, service=service)
 
