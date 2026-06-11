@@ -37,7 +37,7 @@ uv run python tools/dedupe_journal.py data/tracker.db          # scan double-jou
 | Event envelope / wire format | `core/events.py` |
 | Star-grab + IGT logic | `detectors/star_grab.py` — docstrings carry the domain rationale |
 | game_reset | `detectors/lifecycle.py` |
-| Attempt anchors (practice_reset / state_loaded) | `detectors/anchors.py` — anchors carry the mario_acted activity flag; docstring covers classification logic and VERIFY note |
+| Attempt anchors (practice_reset / state_loaded) | `detectors/anchors.py` — anchors carry mario_acted + paused_frames_before + acted_tracking; emits the mario_acted event; docstring covers classification, pause streak, and VERIFY notes |
 | Death detection | `detectors/death.py` — action-set edge; closes open attempt as outcome "death" |
 | Level-change detection | `detectors/level.py` — level-id edge; closes open attempts as abandoned; curr_level address already registered |
 | Dust tricks (dustless rollouts/jumps) | `detectors/dust.py` — TRICKS registry (one row per trick); docstring carries the decomp-verified landing-frame timing model; counts attach to attempts via projection.py |
@@ -55,7 +55,7 @@ uv run python tools/dedupe_journal.py data/tracker.db          # scan double-jou
 | Stats | `stats/registry.py` — ONE StatDef per stat; THE registry |
 | Per-star external links | `links.py` |
 | Built-in viewer UI | `ui/index.html` — served per request: edit + refresh, no restart |
-| UI components, store, API client | `ui/components/` · `ui/store.js` · `ui/api.js` · `ui/app.js`; vendored Preact in `ui/vendor/`; incl. `ui/components/timeline.js` (per-star event graph; marker styles via `MARKERS` registry) |
+| UI components, store, API client | `ui/components/` · `ui/store.js` · `ui/api.js` · `ui/app.js`; vendored Preact in `ui/vendor/`; incl. `ui/components/timeline.js` (per-star event graph; marker styles via `MARKERS` registry) · `ui/components/progress.js` (per-star completion-time graph; gold = saved PBs) · `ui/format.js` (shared display formatting — fmtIgt mirrors core/timefmt.py) |
 | Wiring / startup / logging | `main.py` (composition root), `core/logging_setup.py` |
 | Memory-hunting diagnostics | `tools/` — playbook in docs/architecture.md |
 
