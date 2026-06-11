@@ -49,20 +49,32 @@ export function Progress({ prog, clock }) {
   const withDate = new Date(Math.min(...stamps)).toDateString()
     !== new Date(Math.max(...stamps)).toDateString();
 
-  // segment widths proportional to point count; within a segment, x is
-  // linear wall-clock time for that session
-  const innerW = W - PADL - PADR - GAP * (segs.length - 1);
+  // segment layout: widths proportional to point count, renormalized so the
+  // total NEVER exceeds the band — a fixed 24px floor would overflow the
+  // viewBox at ~14 uniform / ~3 skewed sessions and silently clip the NEWEST
+  // sessions (inline SVG overflow is hidden). Gaps shrink when crowded.
+  // Pinned segments get MIN; the rest share the remainder proportionally,
+  // so the sum is exactly innerW (a borderline flex segment may end a hair
+  // under MIN — bounded, cosmetic, don't "simplify" the renormalization away).
   const total = all.length;
+  const band = W - PADL - PADR;
+  const gap = Math.min(GAP, band / (3 * segs.length));
+  const innerW = band - gap * (segs.length - 1);
+  const MIN = Math.min(24, innerW / segs.length);
+  const pinned = segs.map((s) => innerW * (s.points.length / total) < MIN);
+  const flexN = segs.reduce((n, s, i) => n + (pinned[i] ? 0 : s.points.length), 0);
+  const flexW = innerW - pinned.filter(Boolean).length * MIN;
   let cursor = PADL;
-  const placed = segs.map((s) => {
-    const w = Math.max(innerW * (s.points.length / total), 24);
+  const placed = segs.map((s, i) => {
+    const w = pinned[i] ? MIN : flexW * (s.points.length / flexN);
+    const inset = Math.min(8, w / 4);   // a fixed 8px inset would invert x-order below w=16
     const t0 = Date.parse(s.points[0].t_utc);
     const t1 = Date.parse(s.points[s.points.length - 1].t_utc);
     const left = cursor;
     const xs = s.points.map((p) => t1 > t0
-      ? left + 8 + ((Date.parse(p.t_utc) - t0) / (t1 - t0)) * (w - 16)
+      ? left + inset + ((Date.parse(p.t_utc) - t0) / (t1 - t0)) * (w - 2 * inset)
       : left + w / 2);
-    cursor += w + GAP;
+    cursor += w + gap;
     return { ...s, left, w, xs };
   });
 
@@ -76,9 +88,12 @@ export function Progress({ prog, clock }) {
         <text x=${PADL - 6} y=${y(v) + 3} fill=${TXT} font-size="9"
               text-anchor="end">${fmtIgt(Math.round(v))}</text></g>`)}
       ${placed.map((s, i) => html`<g>
-        ${i > 0 && html`<g stroke=${AXIS} stroke-width="1.4">
-          <line x1=${s.left - GAP + 4} y1=${y(lo) - 6} x2=${s.left - GAP + 10} y2=${y(lo) + 6} />
-          <line x1=${s.left - GAP + 9} y1=${y(lo) - 6} x2=${s.left - GAP + 15} y2=${y(lo) + 6} /></g>`}
+        ${i > 0 && (() => {
+          const gx = s.left - gap / 2;
+          return html`<g stroke=${AXIS} stroke-width="1.4">
+            <line x1=${gx - 5} y1=${y(lo) - 6} x2=${gx + 1} y2=${y(lo) + 6} />
+            <line x1=${gx - 1} y1=${y(lo) - 6} x2=${gx + 5} y2=${y(lo) + 6} /></g>`;
+        })()}
         <polyline fill="none" stroke=${AXIS} stroke-width="1.2"
           points=${s.points.map((p, j) => `${s.xs[j]},${y(p[fKey])}`).join(" ")} />
         ${s.points.map((p, j) => html`<circle cx=${s.xs[j]} cy=${y(p[fKey])}
@@ -86,8 +101,8 @@ export function Progress({ prog, clock }) {
             stroke=${p[pbKey] ? GOLD_RIM : "none"} stroke-width="1">
           <title>${p[pbKey] ? "PB " : ""}${clock === "igt" ? p.igt : p.rta} · ${fmtTick(p.t_utc, true)}</title>
         </circle>`)}
-        <text x=${s.left + s.w / 2} y=${H - 8} fill=${TXT} font-size="9"
-              text-anchor="middle">${fmtTick(s.points[0].t_utc, withDate)}</text>
+        ${s.w >= 60 && html`<text x=${s.left + s.w / 2} y=${H - 8} fill=${TXT} font-size="9"
+              text-anchor="middle">${fmtTick(s.points[0].t_utc, withDate)}</text>`}
       </g>`)}
       ${placed.length === 1 && last.points.length > 1 && html`<text
           x=${W - PADR} y=${H - 8} fill=${TXT} font-size="9" text-anchor="end"
