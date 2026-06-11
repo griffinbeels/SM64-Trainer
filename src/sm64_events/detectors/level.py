@@ -3,7 +3,10 @@
 attempts abandoned by leaving the level (excluded from failure rates)
 instead of letting the next timer reset miscount them as resets.
 Death respawns reload the SAME level id -> no event (correct: a death
-already closed the attempt)."""
+already closed the attempt).
+
+`from` is 0 on the first read after attach (snapshot default), so one event
+fires when the level is first observed — consumers treat it like any change."""
 from sm64_events.core.events import Event
 from sm64_events.core.snapshot import GameSnapshot
 

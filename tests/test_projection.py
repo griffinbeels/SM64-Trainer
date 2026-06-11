@@ -39,8 +39,8 @@ def test_grab_without_anchor_is_a_grab_only_attempt():
 def test_new_anchor_closes_open_attempt_as_reset_failure():
     attempts = project([
         star(1, 900),                                          # sets target
-        jev(2, "practice_reset", 1000, {"igt_frames_before": 0}),
-        jev(3, "practice_reset", 1400, {"igt_frames_before": 380}),
+        jev(2, "practice_reset", 1000, {"igt_frames_before": 0, "mario_acted": True}),
+        jev(3, "practice_reset", 1400, {"igt_frames_before": 380, "mario_acted": True}),
     ])
     assert len(attempts) == 2
     fail = attempts[1]
@@ -88,23 +88,24 @@ def test_session_started_closes_open_attempt_as_abandoned():
 def test_target_set_command_overrides_attribution():
     attempts = project([
         jev(1, "target_set", 0, {"course_id": 8, "star_id": 2, "strat_tag": "carpetless"}),
-        jev(2, "practice_reset", 1000, {"igt_frames_before": 0}),
-        jev(3, "practice_reset", 1400, {"igt_frames_before": 380}),
+        jev(2, "practice_reset", 1000, {"igt_frames_before": 0, "mario_acted": True}),
+        jev(3, "practice_reset", 1400, {"igt_frames_before": 380, "mario_acted": True}),
     ])
     a = attempts[0]
     assert (a.course_id, a.star_id, a.strat_tag) == (8, 2, "carpetless")
 
 
-def test_valid_grab_moves_target_and_strat_persists():
+def test_strat_memory_is_per_star_not_global():
     attempts = project([
-        jev(1, "target_set", 0, {"course_id": 8, "star_id": 2, "strat_tag": "x"}),
-        star(2, 900, course=2, star_id=2),                     # grab WF — target moves
-        jev(3, "practice_reset", 1000, {"igt_frames_before": 0}),
-        jev(4, "practice_reset", 1400, {"igt_frames_before": 380}),
+        jev(1, "target_set", 0, {"course_id": 8, "star_id": 2, "strat_tag": "carpetless"}),
+        star(2, 900, course=2, star_id=2),                     # grab WF: target moves
+        jev(3, "practice_reset", 1000, {"igt_frames_before": 0, "mario_acted": True}),
+        jev(4, "practice_reset", 1400, {"igt_frames_before": 380, "mario_acted": True}),
     ])
+    grab = attempts[0]
     fail = attempts[1]
-    assert (fail.course_id, fail.star_id) == (2, 2)
-    assert fail.strat_tag == "x"   # strat is sticky until changed
+    assert grab.strat_tag is None        # WF has no remembered strat
+    assert fail.strat_tag is None        # failures follow WF's memory, not SSL's
 
 
 def test_cleared_grab_does_not_move_target_retroactively():
@@ -113,8 +114,8 @@ def test_cleared_grab_does_not_move_target_retroactively():
     events = [
         jev(1, "target_set", 0, {"course_id": 8, "star_id": 2}),
         star(2, 900, course=2, star_id=2),                     # accidental
-        jev(3, "practice_reset", 1000, {"igt_frames_before": 0}),
-        jev(4, "practice_reset", 1400, {"igt_frames_before": 380}),
+        jev(3, "practice_reset", 1000, {"igt_frames_before": 0, "mario_acted": True}),
+        jev(4, "practice_reset", 1400, {"igt_frames_before": 380, "mario_acted": True}),
         jev(5, "attempt_cleared", 0, {"attempt_id": 2, "reason": "accidental"}),
     ]
     attempts = project(events)
@@ -134,7 +135,7 @@ def test_unknown_and_derived_event_types_are_ignored():
     attempts = project([
         jev(1, "emulator_connected", 0),
         jev(2, "attempt_completed", 0, {"attempt_id": 99}),
-        jev(3, "level_changed", 0, {"from": 1, "to": 2}),
+        jev(3, "level_changed", 0, {"from": 1, "to": 2}),  # _open is None -> no-op
     ])
     assert attempts == []
 
@@ -151,7 +152,7 @@ def test_cleared_ids_last_action_wins():
 def test_replay_returns_end_state_projector():
     attempts, proj = replay([
         star(1, 900),
-        jev(2, "practice_reset", 1000, {"igt_frames_before": 0}),
+        jev(2, "practice_reset", 1000, {"igt_frames_before": 0, "mario_acted": True}),
     ])
     assert len(attempts) == 1            # the grab closed; the reset is open
     assert isinstance(proj, Projector)
@@ -162,8 +163,8 @@ def test_replay_returns_end_state_projector():
 
 def test_reset_spam_then_grab_uses_last_anchor():
     attempts = project([
-        jev(1, "practice_reset", 1000, {"igt_frames_before": 0}),
-        jev(2, "practice_reset", 1400, {"igt_frames_before": 380}),
+        jev(1, "practice_reset", 1000, {"igt_frames_before": 0, "mario_acted": True}),
+        jev(2, "practice_reset", 1400, {"igt_frames_before": 380, "mario_acted": True}),
         star(3, 1500, igt=95),
     ])
     assert [a.outcome for a in attempts] == ["reset", "success"]
@@ -175,7 +176,7 @@ def test_reset_spam_then_grab_uses_last_anchor():
 def test_grab_during_open_attempt_records_grabbed_star_not_target():
     attempts = project([
         jev(1, "target_set", 0, {"course_id": 8, "star_id": 2}),
-        jev(2, "practice_reset", 1000, {"igt_frames_before": 0}),
+        jev(2, "practice_reset", 1000, {"igt_frames_before": 0, "mario_acted": True}),
         star(3, 1350, course=2, star_id=2),
     ])
     [a] = attempts
@@ -185,8 +186,8 @@ def test_grab_during_open_attempt_records_grabbed_star_not_target():
 def test_clearing_a_failure_attempt_only_flags_it():
     attempts = project([
         star(1, 900),
-        jev(2, "practice_reset", 1000, {"igt_frames_before": 0}),
-        jev(3, "practice_reset", 1400, {"igt_frames_before": 380}),
+        jev(2, "practice_reset", 1000, {"igt_frames_before": 0, "mario_acted": True}),
+        jev(3, "practice_reset", 1400, {"igt_frames_before": 380, "mario_acted": True}),
         jev(4, "attempt_cleared", 0, {"attempt_id": 2, "reason": "warmup"}),
     ])
     fail = next(a for a in attempts if a.id == 2)
@@ -198,21 +199,81 @@ def test_same_tick_reset_race_row_is_pinned():
     # Documented caveat: rta ~0 while igt carries the prior attempt's
     # reconstructed time. Consumers prefer igt for such rows.
     attempts = project([
-        jev(1, "practice_reset", 1400, {"igt_frames_before": 380}),
+        jev(1, "practice_reset", 1400, {"igt_frames_before": 380, "mario_acted": True}),
         star(2, 1405, igt=380),
     ])
     [a] = attempts
     assert a.outcome == "success" and a.rta_frames == 5 and a.igt_frames == 380
 
 
-def test_strat_tag_explicit_null_clears_but_absent_is_sticky():
+def test_strat_memory_per_star_set_clear_and_recall():
     _, proj = replay([
         jev(1, "target_set", 0, {"course_id": 8, "star_id": 2, "strat_tag": "x"}),
         jev(2, "target_set", 0, {"course_id": 8, "star_id": 3}),
     ])
-    assert proj.strat_tag == "x"
+    assert proj.strat_tag is None                      # (8,3) has no memory
+    assert proj.strat_by_star[(8, 2)] == "x"           # (8,2) remembers
     _, proj2 = replay([
         jev(1, "target_set", 0, {"course_id": 8, "star_id": 2, "strat_tag": "x"}),
-        jev(2, "target_set", 0, {"course_id": 8, "star_id": 4, "strat_tag": None}),
+        jev(2, "target_set", 0, {"course_id": 8, "star_id": 3, "strat_tag": "owlless"}),
+        jev(3, "target_set", 0, {"course_id": 8, "star_id": 2}),
     ])
-    assert proj2.strat_tag is None
+    assert proj2.strat_tag == "x"                      # recalled on return
+    _, proj3 = replay([
+        jev(1, "target_set", 0, {"course_id": 8, "star_id": 2, "strat_tag": "x"}),
+        jev(2, "target_set", 0, {"course_id": 8, "star_id": 2, "strat_tag": None}),
+    ])
+    assert proj3.strat_tag is None                     # explicit null clears
+
+
+def test_death_closes_attempt_with_cause_and_igt():
+    attempts = project([
+        jev(1, "practice_reset", 1000, {"igt_frames_before": 0, "mario_acted": True}),
+        jev(2, "death", 1300, {"cause": "drowning", "igt_frames": 290, "level": 9}),
+    ])
+    [a] = attempts
+    assert a.outcome == "death" and a.outcome_detail == "drowning"
+    assert a.igt_frames == 290 and a.rta_frames == 300
+    assert a.id == 1
+
+
+def test_death_without_anchor_synthesizes_attempt():
+    attempts = project([
+        star(1, 900),    # sets target (2,2)
+        jev(2, "death", 1500, {"cause": "standing", "igt_frames": 80, "level": 24}),
+    ])
+    death = attempts[1]
+    assert death.id == 2 and death.anchor_type == "none"
+    assert (death.course_id, death.star_id) == (2, 2)
+    assert death.outcome == "death" and death.rta_frames is None
+
+
+def test_level_change_closes_as_abandoned():
+    attempts = project([
+        star(1, 900),
+        jev(2, "practice_reset", 1000, {"igt_frames_before": 0, "mario_acted": True}),
+        jev(3, "level_changed", 1600, {"from": 24, "to": 6}),
+    ])
+    assert attempts[1].outcome == "abandoned"
+
+
+def test_inactive_reset_closure_is_discarded_entirely():
+    attempts = project([
+        star(1, 900),
+        jev(2, "practice_reset", 1000, {"igt_frames_before": 0, "mario_acted": True}),
+        jev(3, "practice_reset", 1100, {"igt_frames_before": 90, "mario_acted": False}),
+        star(4, 1400, igt=95),
+    ])
+    # the attempt opened at 2 vanished (closed by an inactive reset);
+    # the anchor at 3 opened the attempt the grab closes.
+    assert [a.outcome for a in attempts] == ["success", "success"]
+    assert attempts[1].id == 3
+
+
+def test_old_journal_without_mario_acted_treats_resets_as_acted():
+    attempts = project([
+        star(1, 900),
+        jev(2, "practice_reset", 1000, {"igt_frames_before": 0}),
+        jev(3, "practice_reset", 1400, {"igt_frames_before": 380}),
+    ])
+    assert attempts[1].outcome == "reset"   # rebuild-stable for old data

@@ -5,7 +5,10 @@ Action-edge detection, same philosophy as star_grab: the death actions are
 mutually exclusive, persist for many frames, and identify the CAUSE.
 Payload carries the IGT at death so the tracking layer can record the
 failed attempt's duration. Health/lives corroboration deliberately
-omitted (would need new memory reads); the action set is sufficient."""
+omitted (would need new memory reads); the action set is sufficient.
+
+Stateless: an emulator reconnect mid-death re-fires once (prev resets to a
+fresh pair) — same accepted behavior as star_grab."""
 from sm64_events.core.events import Event
 from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.memory.addresses import DEATH_ACTIONS
