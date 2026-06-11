@@ -11,12 +11,19 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 
+def _qpc_frequency() -> int:
+    freq = ctypes.c_int64()
+    ctypes.windll.kernel32.QueryPerformanceFrequency(ctypes.byref(freq))
+    return freq.value
+
+
+_FREQ = _qpc_frequency()
+
+
 def qpc_100ns() -> int:
     count = ctypes.c_int64()
-    freq = ctypes.c_int64()
     ctypes.windll.kernel32.QueryPerformanceCounter(ctypes.byref(count))
-    ctypes.windll.kernel32.QueryPerformanceFrequency(ctypes.byref(freq))
-    return count.value * 10_000_000 // freq.value
+    return count.value * 10_000_000 // _FREQ
 
 
 @dataclass(frozen=True)
@@ -30,7 +37,7 @@ class CaptureClock:
 
     def utc_of(self, ts_100ns: int) -> datetime:
         return self.anchor_utc + timedelta(
-            microseconds=(ts_100ns - self.anchor_qpc_100ns) / 10)
+            microseconds=(ts_100ns - self.anchor_qpc_100ns) // 10)
 
     def seconds_since_anchor(self, ts_100ns: int) -> float:
         return (ts_100ns - self.anchor_qpc_100ns) / 1e7

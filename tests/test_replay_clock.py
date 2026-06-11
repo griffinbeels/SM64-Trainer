@@ -28,3 +28,9 @@ def test_now_constructor_uses_current_clocks():
     clk = CaptureClock.now()
     assert clk.anchor_utc.tzinfo is timezone.utc
     assert clk.anchor_qpc_100ns > 0
+
+
+def test_pre_anchor_timestamps_map_backward():
+    clk = CaptureClock(anchor_qpc_100ns=30_000_000, anchor_utc=T0)
+    assert clk.seconds_since_anchor(0) == -3.0
+    assert clk.utc_of(0) == T0 - timedelta(seconds=3)
