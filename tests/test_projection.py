@@ -609,3 +609,83 @@ def test_mario_acted_is_not_a_rollout_boundary():
         star(4, 1350),
     ])
     assert attempts[0].rollouts_total == 1
+
+
+# -- castle-opened attempts are never star attempts (addendum Task 3.5) ---------
+
+def lvl(id, frame, from_, to):
+    return jev(id, "level_changed", frame, {"from": from_, "to": to})
+
+
+# the user's exact report: grab -> exit to castle -> enter next painting
+def test_castle_period_after_stage_exit_is_not_a_reset_for_the_star():
+    attempts = project([
+        star(1, 900),
+        lvl(2, 1000, 22, 6),                 # stage exit (same tick as anchor)
+        jev(3, "practice_reset", 1000, {"igt_frames_before": 900, "mario_acted": True}),
+        jev(4, "practice_reset", 1150, {"igt_frames_before": 148, "mario_acted": True}),  # painting entry
+    ])
+    assert [a.outcome for a in attempts] == ["success"]
+
+
+def test_star_select_period_is_not_an_abandon_for_the_star():
+    attempts = project([
+        star(1, 900),
+        lvl(2, 1000, 22, 6),
+        jev(3, "practice_reset", 1000, {"igt_frames_before": 900, "mario_acted": True}),
+        jev(4, "practice_reset", 1150, {"igt_frames_before": 148, "mario_acted": True}),
+        lvl(5, 1250, 6, 22),                 # star select ends, course loads
+    ])
+    assert [a.outcome for a in attempts] == ["success"]
+
+
+def test_attribution_resumes_for_in_level_anchors():
+    attempts = project([
+        star(1, 900),
+        lvl(2, 1000, 22, 6),
+        jev(3, "practice_reset", 1000, {"igt_frames_before": 900, "mario_acted": True}),
+        lvl(4, 1250, 6, 22),
+        jev(5, "practice_reset", 1300, {"igt_frames_before": 0, "mario_acted": True}),   # course load
+        jev(6, "practice_reset", 1700, {"igt_frames_before": 380, "mario_acted": True}), # L-reset
+    ])
+    assert [a.outcome for a in attempts] == ["success", "reset"]
+    assert attempts[1].id == 5 and attempts[1].course_id == 2
+
+
+def test_exit_mid_attempt_is_still_abandoned_for_the_star():
+    # opened in-level, closed by the exit's level_changed: judged by OPEN level
+    attempts = project([
+        star(1, 900),
+        jev(2, "practice_reset", 1000, {"igt_frames_before": 0, "mario_acted": True}),
+        lvl(3, 1600, 22, 6),
+    ])
+    assert attempts[1].outcome == "abandoned" and attempts[1].course_id == 2
+
+
+def test_success_from_castle_anchor_still_counts():
+    attempts = project([
+        lvl(1, 900, 22, 6),
+        jev(2, "practice_reset", 1000, {"igt_frames_before": 0, "mario_acted": True}),
+        star(3, 1500),                       # Toad/MIPS-style grab
+    ])
+    assert attempts[0].outcome == "success"
+
+
+def test_no_level_events_keeps_legacy_attribution():
+    # pre-level-detector journals: _level unknown -> today's semantics
+    attempts = project([
+        star(1, 900),
+        jev(2, "practice_reset", 1000, {"igt_frames_before": 0, "mario_acted": True}),
+        jev(3, "practice_reset", 1400, {"igt_frames_before": 380, "mario_acted": True}),
+    ])
+    assert attempts[1].outcome == "reset" and attempts[1].course_id == 2
+
+
+def test_castle_opened_death_is_discarded():
+    attempts = project([
+        star(1, 900),
+        lvl(2, 1000, 22, 6),
+        jev(3, "practice_reset", 1000, {"igt_frames_before": 900, "mario_acted": True}),
+        jev(4, "death", 1300, {"cause": "standing", "igt_frames": 100}),
+    ])
+    assert [a.outcome for a in attempts] == ["success"]

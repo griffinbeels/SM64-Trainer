@@ -58,8 +58,16 @@ Caveats (hard-won — keep these current):
    frames_late — there, frames_late == 1 IS the frame-perfect input
    (decomp-verified; see detectors/dust.py). _rollout_is_dustless()
    re-derives the classification on replay; new payloads are trusted.
+
+9. Castle attempts: an attempt OPENED while the tracked level is a castle
+   hub (CASTLE_LEVELS) is castle movement — discarded on every non-success
+   closure, never attributed to a star. Judgment is at open time; the
+   closing level_changed updates _level only AFTER its close runs, so exits
+   are judged by the level the attempt lived in. _level starts None
+   (unknown -> attribute) so pre-level-detector journals replay unchanged.
 """
 from dataclasses import dataclass
+from sm64_events.memory.addresses import CASTLE_LEVELS
 
 
 @dataclass(frozen=True)
@@ -120,6 +128,8 @@ class Projector:
         self.strat_by_star: dict[tuple[int, int], str | None] = {}
         self._open = None  # EventRow of the open attempt's anchor
         self._open_acted = False  # mario_acted seen since the last anchor; only meaningful while _open is set
+        self._level: int | None = None   # gCurrLevelNum per level_changed; None = unknown (legacy journals)
+        self._open_castle = False        # open attempt was OPENED in a castle hub level
         self._rollouts_total = 0
         self._rollouts_dustless = 0
         self._jumps_total = 0
@@ -142,6 +152,7 @@ class Projector:
             closed = self._close_by_reset(ev)
             self._open = ev
             self._open_acted = False
+            self._open_castle = self._level in CASTLE_LEVELS
             return closed
         if ev.type == "star_collected":
             return self._close_by_grab(ev)
@@ -152,7 +163,9 @@ class Projector:
         if ev.type == "session_started":
             return self._close(ev, outcome="abandoned", igt_frames=None)
         if ev.type == "level_changed":
-            return self._close(ev, outcome="abandoned", igt_frames=None)
+            closed = self._close(ev, outcome="abandoned", igt_frames=None)
+            self._level = ev.payload["to"]
+            return closed
         if ev.type == "target_set":
             c, s = ev.payload["course_id"], ev.payload["star_id"]
             self.target = (c, s)
@@ -193,12 +206,23 @@ class Projector:
                 and self._open.payload.get("acted_tracking", False)
                 and not self._open_acted)
 
+    def _open_is_castle(self) -> bool:
+        """Castle rule (addendum 2026-06-11): an attempt opened while Mario
+        was in a castle hub level is castle movement, never a star attempt.
+        _level is None until the first level_changed -> legacy journals
+        (no level detector) replay unchanged."""
+        return self._open is not None and self._open_castle
+
     # -- closers -------------------------------------------------------------
     def _close_by_reset(self, ev) -> list[Attempt]:
         if ev.payload.get("paused_frames_before", 0) >= PAUSE_DISCARD_FRAMES:
             # AFK: a long menu pause immediately before the reset — throw the
             # run out (old journals lack the key -> 0 -> kept). The anchor
             # still opens the next attempt.
+            self._open = None
+            return []
+        if self._open_is_castle():
+            # castle movement, not a star attempt (addendum): discard
             self._open = None
             return []
         if self._unacted_open() or not ev.payload.get("mario_acted", True):
@@ -227,6 +251,10 @@ class Projector:
         if self._unacted_open():
             self._open = None
             return []
+        if self._open_is_castle():
+            # castle movement, not a star attempt (addendum): discard
+            self._open = None
+            return []
         # Deaths count even without an anchor (mirrors grab-only synthesis):
         # a death is always a meaningful failed attempt.
         first = self._open if self._open is not None else ev
@@ -244,6 +272,10 @@ class Projector:
         if self._open is None:
             return []
         if self._unacted_open():
+            self._open = None
+            return []
+        if self._open_is_castle():
+            # castle movement, not a star attempt (addendum): discard
             self._open = None
             return []
         course_id, star_id = self.target if self.target else (None, None)
