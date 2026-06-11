@@ -313,3 +313,23 @@ def test_markers_label_is_trimmed(tmp_path):
             "markers": [{"frames": 90, "label": "  bobomb grab  "}]})
         sec = client.get("/api/session").json()["stars"][0]
         assert sec["markers_by_strat"][""][0]["label"] == "bobomb grab"
+
+
+def test_markers_put_preserves_other_keys(tmp_path):
+    # the RMW must merge into the dict — a regression to a blind set_state
+    # would clobber every other star/strat's markers and still pass the
+    # single-key tests.
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)
+        client.put("/api/markers", json={
+            "course_id": 2, "star_id": 2, "strat_tag": "cannonless",
+            "markers": [{"frames": 200, "label": "owl"}]})
+        client.put("/api/markers", json={
+            "course_id": 2, "star_id": 2, "strat_tag": None,
+            "markers": [{"frames": 90, "label": "wall jump"}]})
+        sec = client.get("/api/session").json()["stars"][0]
+        assert sec["markers_by_strat"] == {
+            "cannonless": [{"frames": 200, "label": "owl"}],
+            "": [{"frames": 90, "label": "wall jump"}],
+        }

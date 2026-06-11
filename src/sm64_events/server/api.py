@@ -59,8 +59,8 @@ class Marker(BaseModel):
 
 
 class MarkersBody(BaseModel):
-    course_id: int
-    star_id: int
+    course_id: int = Field(ge=0)
+    star_id: int = Field(ge=0)
     strat_tag: str | None = None
     markers: list[Marker] = Field(max_length=30)
 
@@ -153,8 +153,12 @@ def create_api_router(service) -> APIRouter:
         return {"ok": True}
 
     @router.put("/markers")
-    def put_markers(body: MarkersBody):
-        """Replace the marker list for one star+strategy (spec §3)."""
+    async def put_markers(body: MarkersBody):
+        """Replace the marker list for one star+strategy (spec §3).
+
+        async + no awaits: the read-modify-write on the timeline_markers
+        dict is atomic on the event loop (same pattern as set_target's
+        strategies RMW in tracking/service.py)."""
         if service.db is None:
             raise HTTPException(503, "database unavailable")
         key = f"{body.course_id}:{body.star_id}:{body.strat_tag or ''}"

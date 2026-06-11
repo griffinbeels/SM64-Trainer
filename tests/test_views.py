@@ -325,3 +325,15 @@ def test_markers_default_empty(tmp_path):
     seed(svc)
     view = build_session_view(db, svc, clock="igt")
     assert view["stars"][0]["markers_by_strat"] == {}
+
+
+def test_marker_strat_containing_colon_round_trips(tmp_path):
+    # key shape is '<course>:<star>:<strat>'; the strat is the FULL
+    # remainder after the second colon — protects against a future
+    # "split on ':'" refactor.
+    db, svc = make(tmp_path)
+    seed(svc)
+    db.set_state("timeline_markers", {"2:2:a:b": [{"frames": 10, "label": "x"}]})
+    view = build_session_view(db, svc, clock="igt")
+    assert view["stars"][0]["markers_by_strat"] == {
+        "a:b": [{"frames": 10, "label": "x"}]}
