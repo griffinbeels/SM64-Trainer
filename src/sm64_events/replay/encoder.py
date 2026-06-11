@@ -23,8 +23,9 @@ PyAV 17 API notes (verified against av 17.1.0):
 - av.VideoFrame.from_ndarray(arr, format='bgra').reformat(format='yuv420p')
   works without extra width/height args.
 - pick_video_codec(): CodecContext.create('h264_nvenc', 'w') + .open() is the
-  right probe path; avcodec_open2 error 22 means nvenc is unavailable (driver
-  gate), so we fall back to libx264 silently.
+  right probe path; if avcodec_open2 fails we fall back to libx264. NOTE:
+  error 22 does NOT necessarily mean nvenc is unavailable — see the probe-size
+  caveat in pick_video_codec()'s docstring.
 """
 import logging
 from datetime import timedelta
@@ -43,14 +44,20 @@ log = logging.getLogger("sm64.replay")
 
 def pick_video_codec() -> str:
     """NVENC if the bundled ffmpeg + driver can actually encode (driver >= 570
-    gate per research) — probe with one real frame, not just codec presence."""
+    gate per research) — probe with one real frame, not just codec presence.
+
+    Probe at 640x480 (the actual PJ64 window size), NOT a tiny frame: NVENC
+    rejects dimensions below its minimum encode size with error 22 at
+    avcodec_open2, so a 64x64 probe false-negatives to libx264 on machines
+    where NVENC works fine (live-verified on this machine: 64x64 FAIL,
+    256x256 OK, 640x480 OK)."""
     try:
         ctx = av.CodecContext.create("h264_nvenc", "w")
-        ctx.width, ctx.height = 64, 64
+        ctx.width, ctx.height = 640, 480
         ctx.pix_fmt = "yuv420p"
         ctx.time_base = Fraction(1, 30)
         ctx.open()
-        f = av.VideoFrame(64, 64, "yuv420p")
+        f = av.VideoFrame(640, 480, "yuv420p")
         f.pts = 0
         ctx.encode(f)
         return "h264_nvenc"
