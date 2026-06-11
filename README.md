@@ -68,7 +68,7 @@ Other event types, same envelope:
 | `attempt_completed` | `attempt_id, session_id, course_id, star_id, course_name, star_name, strat_tag, anchor_type, outcome, outcome_detail, igt_frames, igt, rta_frames` | Derived: an attempt just closed (success / reset / hard_reset / abandoned) |
 | `target_set` | `course_id, star_id, strat_tag?` | User explicitly set the practice target |
 | `target_changed` | `course_id, star_id, strat_tag` | Practice target moved (auto-follows last valid grab, or set by command) |
-| `attempt_cleared` | `attempt_id, reason?` | Attempt tombstoned (triggers full re-projection; `attempts_invalidated` follows) |
+| `attempt_cleared` | `attempt_id, reason` | Attempt tombstoned; `reason` is always present, may be null (triggers full re-projection; `attempts_invalidated` follows) |
 | `attempt_restored` | `attempt_id` | Tombstone undone (triggers full re-projection; `attempts_invalidated` follows) |
 | `pb_saved` | `course_id, star_id, strat_tag, timer_mode, frames, attempt_id` | Personal best recorded |
 | `session_started` | `session_id, label?` | New session opened (server start or `/api/session/new`) |
