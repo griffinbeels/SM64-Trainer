@@ -31,6 +31,8 @@ def test_retention_evicts_and_deletes_files(tmp_path):
         ring.add(s)
     # newest end = T0+10 s; retention 4 s keeps segments ending after T0+6 s
     assert not segs[0].path.exists() and not segs[1].path.exists()
+    assert not segs[2].path.exists()   # ends exactly at horizon -> evicted (<=)
+    assert segs[3].path.exists()
     assert segs[4].path.exists()
     cov = ring.coverage("video")
     assert cov is not None and cov[1] == segs[4].utc_end
