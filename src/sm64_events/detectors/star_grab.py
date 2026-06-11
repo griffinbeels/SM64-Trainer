@@ -22,15 +22,8 @@ from collections import deque
 
 from sm64_events.core.events import Event
 from sm64_events.core.snapshot import GameSnapshot
+from sm64_events.core.timefmt import format_igt
 from sm64_events.memory.addresses import STAR_GRAB_ACTIONS, course_name, star_name
-
-
-def format_igt(frames: int) -> str:
-    """Usamune timer display: M'SS"CC (30 fps frames -> centiseconds)."""
-    mins = frames // 1800
-    secs = (frames % 1800) // 30
-    cents = (frames % 30) * 100 // 30
-    return f"{mins}'{secs:02d}\"{cents:02d}"
 
 
 class StarGrabDetector:

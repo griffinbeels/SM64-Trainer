@@ -16,6 +16,7 @@ def test_reader_populates_all_fields():
     mem.write_u8(A.LAST_COMPLETED_STAR, 3)
     mem.write_u16(A.USAMUNE_OVERALL, 600)
     mem.write_u16(A.USAMUNE_STAR_RESULT, 595)
+    mem.write_u16(A.CURR_LEVEL, 24)
 
     snap = SnapshotReader(mem).read()
 
@@ -27,5 +28,6 @@ def test_reader_populates_all_fields():
     assert snap.last_completed_star == 3
     assert snap.igt_overall == 600
     assert snap.igt_result == 595
+    assert snap.curr_level == 24
     assert snap.wall_time_utc.tzinfo == timezone.utc
     assert (datetime.now(timezone.utc) - snap.wall_time_utc).total_seconds() < 5

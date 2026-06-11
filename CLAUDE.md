@@ -20,8 +20,9 @@ FastAPI + uvicorn, pymem, pytest.
 ```
 uv sync
 uv run pytest -q                                     # MUST pass before any merge
-uv run uvicorn sm64_events.main:app --host 127.0.0.1 --port 8064
+uv run uvicorn sm64_events.main:app --host 127.0.0.1 --port 8064   # run from repo root (data/ is cwd-relative)
 uv run python tools/verify_addresses.py              # live gate (needs PJ64 + ROM)
+uv run python tools/dedupe_journal.py data/tracker.db          # scan double-journaled events (read-only); add --fix to repair (server must be stopped)
 ```
 
 ## Module map — where to change what
@@ -36,10 +37,24 @@ uv run python tools/verify_addresses.py              # live gate (needs PJ64 + R
 | Event envelope / wire format | `core/events.py` |
 | Star-grab + IGT logic | `detectors/star_grab.py` — docstrings carry the domain rationale |
 | game_reset | `detectors/lifecycle.py` |
+| Attempt anchors (practice_reset / state_loaded) | `detectors/anchors.py` — anchors carry the mario_acted activity flag; docstring covers classification logic and VERIFY note |
+| Death detection | `detectors/death.py` — action-set edge; closes open attempt as outcome "death" |
+| Level-change detection | `detectors/level.py` — level-id edge; closes open attempts as abandoned; curr_level address already registered |
 | Poll loop, attach retry, layout sanity | `server/poller.py` |
 | WS fan-out, seq numbers | `server/broadcaster.py` |
 | HTTP/WS endpoints | `server/app.py` |
+| REST API + error taxonomy | `server/api.py` — docstring has the LookupError/ValueError/RuntimeError→HTTP mapping |
+| Attempt state machine / projection | `tracking/projection.py` — docstrings carry the two-pass clearing, reset-race row, clear-by-anchor-id invariant |
+| Event pipeline + commands (journal→project→broadcast) | `tracking/service.py` |
+| Session view payload | `tracking/views.py` |
+| SQLite journal + derived tables | `storage/db.py` |
+| Single-instance guard (broadcast-only fallback) | `storage/instance_lock.py` — Windows msvcrt file-region lock; held for process lifetime |
+| Duplicate-event detection logic | `storage/dedupe.py` — pure fn; used by `tools/dedupe_journal.py` |
+| Journal deduplication repair tool | `tools/dedupe_journal.py` — scan (read-only) or --fix (delete duplicates + re-project; server must be stopped) |
+| Stats | `stats/registry.py` — ONE StatDef per stat; THE registry |
+| Per-star external links | `links.py` |
 | Built-in viewer UI | `ui/index.html` — served per request: edit + refresh, no restart |
+| UI components, store, API client | `ui/components/` · `ui/store.js` · `ui/api.js` · `ui/app.js`; vendored Preact in `ui/vendor/`; incl. `ui/components/timeline.js` (per-star event graph; marker styles via `MARKERS` registry) |
 | Wiring / startup / logging | `main.py` (composition root), `core/logging_setup.py` |
 | Memory-hunting diagnostics | `tools/` — playbook in docs/architecture.md |
 
@@ -49,11 +64,13 @@ uv run python tools/verify_addresses.py              # live gate (needs PJ64 + R
 ## Parallel work zones
 
 Safe to work concurrently (one branch/worktree each): **detectors/**,
-**server/**, **ui/**, **memory/ + tools/**, **docs/** — each with its tests.
+**server/**, **ui/**, **memory/ + tools/**, **storage/ + stats/ + tracking/**,
+**docs/** — each with its tests. The `storage/+stats/+tracking/` zone shares
+the `Attempt` contract internally; keep it in one branch.
 **Shared contracts — never edit in two branches at once:** `core/events.py`,
-`core/snapshot.py`, `memory/addresses.py`, `main.py`. Contract changes land
-on master first, then dependent work fans out. Merge with `--no-ff`; run the
-full suite on the merged result; delete the branch.
+`core/snapshot.py`, `memory/addresses.py`, `tracking/projection.py`, `main.py`.
+Contract changes land on master first, then dependent work fans out. Merge
+with `--no-ff`; run the full suite on the merged result; delete the branch.
 
 ## Domain rules
 
@@ -72,6 +89,7 @@ full suite on the merged result; delete the branch.
 7. Timestamps UTC; the primary clock is game frames (30 fps).
 8. Keep the poller's implausible-read refusal — it has caught bugs in our
    own registry.
+9. One server instance per db — enforced by `storage/instance_lock.py`; second instances run broadcast-only (events NOT double-recorded).
 
 ## Recipes
 

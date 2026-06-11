@@ -13,8 +13,10 @@ from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 from sm64_events.core.events import Event
+from sm64_events.server.api import create_api_router
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.server.poller import Poller
 
@@ -32,9 +34,16 @@ def _log_poller_exit(task: asyncio.Task) -> None:
 
 
 def create_app(poller: Poller, broadcaster: Broadcaster,
-               debug_hooks: bool = False) -> FastAPI:
+               service=None, debug_hooks: bool = False) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        if service is not None:
+            try:
+                await service.start()
+            except Exception:
+                log.exception("tracker start failed - degrading to broadcast-only")
+                service.db = None
+                service.session_id = None
         task = asyncio.create_task(poller.run())
         task.add_done_callback(_log_poller_exit)
         yield
@@ -43,6 +52,10 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
             await task
 
     app = FastAPI(title="SM64 Event API", lifespan=lifespan)
+
+    app.mount("/ui", StaticFiles(directory=str(_UI_INDEX.parent)), name="ui")
+    if service is not None:
+        app.include_router(create_api_router(service))
 
     @app.get("/", response_class=HTMLResponse)
     def index():
@@ -56,6 +69,9 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
             "emulator_attached": poller.memory.attached,
             "clients": broadcaster.client_count,
             "last_frame": latest.global_timer if latest else None,
+            "db": ("absent" if service is None
+                   else "error" if service.db is None else "ok"),
+            "session_id": service.session_id if service is not None else None,
         }
 
     @app.get("/state")

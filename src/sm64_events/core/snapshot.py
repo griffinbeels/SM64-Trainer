@@ -20,6 +20,7 @@ class GameSnapshot:
     igt_overall: int = 0   # Usamune running overall star time (USAMUNE_OVERALL)
     igt_result: int = 0    # Usamune final star time, written at the grab
                            # (USAMUNE_STAR_RESULT); 0 before the first grab
+    curr_level: int = 0    # gCurrLevelNum: LEVEL ids (WF=24, SSL=8...), NOT course ids — see addresses.py trap note
 
 
 class SnapshotReader:
@@ -38,4 +39,5 @@ class SnapshotReader:
             last_completed_star=m.read_s8(A.LAST_COMPLETED_STAR),
             igt_overall=m.read_u16(A.USAMUNE_OVERALL),
             igt_result=m.read_u16(A.USAMUNE_STAR_RESULT),
+            curr_level=m.read_s16(A.CURR_LEVEL),
         )
