@@ -24,9 +24,13 @@ def test_migrations_set_user_version_and_create_tables(tmp_path):
 
 
 def test_reopening_existing_db_is_idempotent(tmp_path):
-    make_db(tmp_path).close()
+    first = make_db(tmp_path)
+    sid = first.insert_session("2026-06-10T12:00:00Z")
+    first.close()
     db = make_db(tmp_path)  # second open: migrations must not re-run/crash
     assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 1
+    row = db._conn.execute("SELECT * FROM sessions WHERE id=?", (sid,)).fetchone()
+    assert row is not None and row["started_utc"] == "2026-06-10T12:00:00Z"
 
 
 def test_journal_append_and_read_back(tmp_path):
@@ -62,6 +66,8 @@ def test_attempts_replace_and_read(tmp_path):
     b = a.__class__(**{**a.__dict__, "outcome": "reset"})
     db.upsert_attempt(b)
     assert db.attempts()[0].outcome == "reset"
+    db.replace_attempts([])
+    assert db.attempts() == []
 
 
 def test_pbs_and_ui_state(tmp_path):

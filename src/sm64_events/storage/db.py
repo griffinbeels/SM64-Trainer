@@ -14,13 +14,13 @@ from sm64_events.tracking.projection import Attempt
 MIGRATIONS = [
     # v1
     """
-    CREATE TABLE sessions (
+    CREATE TABLE IF NOT EXISTS sessions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       started_utc TEXT NOT NULL,
       ended_utc TEXT,
       label TEXT
     );
-    CREATE TABLE events (
+    CREATE TABLE IF NOT EXISTS events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       session_id INTEGER NOT NULL REFERENCES sessions(id),
       seq INTEGER NOT NULL,
@@ -29,7 +29,7 @@ MIGRATIONS = [
       wall_time_utc TEXT NOT NULL,
       payload TEXT NOT NULL
     );
-    CREATE TABLE attempts (
+    CREATE TABLE IF NOT EXISTS attempts (
       id INTEGER PRIMARY KEY,
       session_id INTEGER NOT NULL,
       course_id INTEGER, star_id INTEGER, strat_tag TEXT,
@@ -39,13 +39,13 @@ MIGRATIONS = [
       started_utc TEXT NOT NULL, ended_utc TEXT NOT NULL,
       cleared INTEGER NOT NULL DEFAULT 0, cleared_reason TEXT
     );
-    CREATE TABLE pbs (
+    CREATE TABLE IF NOT EXISTS pbs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       course_id INTEGER NOT NULL, star_id INTEGER NOT NULL, strat_tag TEXT,
       timer_mode TEXT NOT NULL, frames INTEGER NOT NULL,
       attempt_id INTEGER, saved_utc TEXT NOT NULL
     );
-    CREATE TABLE ui_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS ui_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     """,
 ]
 
@@ -102,10 +102,11 @@ class Database:
             return cur.lastrowid
 
     def events(self) -> list[EventRow]:
-        rows = self._conn.execute("SELECT * FROM events ORDER BY id").fetchall()
-        return [EventRow(r["id"], r["session_id"], r["seq"], r["type"],
-                         r["frame"], r["wall_time_utc"], json.loads(r["payload"]))
-                for r in rows]
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM events ORDER BY id").fetchall()
+            return [EventRow(r["id"], r["session_id"], r["seq"], r["type"],
+                             r["frame"], r["wall_time_utc"], json.loads(r["payload"]))
+                    for r in rows]
 
     # -- sessions ----------------------------------------------------------
     def insert_session(self, started_utc: str, label: str | None = None) -> int:
@@ -147,9 +148,10 @@ class Database:
             self._conn.commit()
 
     def attempts(self) -> list[Attempt]:
-        rows = self._conn.execute("SELECT * FROM attempts ORDER BY id").fetchall()
-        return [Attempt(**{**{k: r[k] for k in _ATTEMPT_COLS},
-                           "cleared": bool(r["cleared"])}) for r in rows]
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM attempts ORDER BY id").fetchall()
+            return [Attempt(**{**{k: r[k] for k in _ATTEMPT_COLS},
+                               "cleared": bool(r["cleared"])}) for r in rows]
 
     # -- pbs -----------------------------------------------------------------
     def insert_pb(self, course_id: int, star_id: int, strat_tag: str | None,
@@ -165,14 +167,16 @@ class Database:
             return cur.lastrowid
 
     def pbs(self) -> list[dict]:
-        rows = self._conn.execute("SELECT * FROM pbs ORDER BY id").fetchall()
-        return [dict(r) for r in rows]
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM pbs ORDER BY id").fetchall()
+            return [dict(r) for r in rows]
 
     # -- ui_state ------------------------------------------------------------
     def get_state(self, key: str, default):
-        row = self._conn.execute("SELECT value FROM ui_state WHERE key=?",
-                                 (key,)).fetchone()
-        return json.loads(row["value"]) if row else default
+        with self._lock:
+            row = self._conn.execute("SELECT value FROM ui_state WHERE key=?",
+                                     (key,)).fetchone()
+            return json.loads(row["value"]) if row else default
 
     def set_state(self, key: str, value) -> None:
         with self._lock:
