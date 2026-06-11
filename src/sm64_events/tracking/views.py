@@ -28,8 +28,10 @@ def _current_pbs(db) -> dict:
 def _attempt_json(a, pbs, clock):
     pb = pbs.get((a.course_id, a.star_id, clock))
     frames = a.igt_frames if clock == "igt" else a.rta_frames
+    race_row = clock == "rta" and frames == 0  # same-tick reset-race: rta is junk (see projection.py docstring)
     delta = (frames - pb["frames"]
-             if pb and frames is not None and a.outcome == "success" else None)
+             if pb and frames is not None and not race_row and a.outcome == "success"
+             else None)
     return {"id": a.id, "outcome": a.outcome, "outcome_detail": a.outcome_detail,
             "anchor_type": a.anchor_type, "strat_tag": a.strat_tag,
             "igt_frames": a.igt_frames,
@@ -51,6 +53,9 @@ def _catalog() -> dict:
     return {"courses": courses}
 
 
+_CATALOG = _catalog()
+
+
 def build_session_view(db, service, clock: str) -> dict:
     all_attempts = db.attempts()
     session_attempts = [a for a in all_attempts
@@ -59,12 +64,12 @@ def build_session_view(db, service, clock: str) -> dict:
     stat_menu = db.get_state("stat_menu", default=DEFAULT_STAT_MENU)
 
     sections, unassigned = [], []
-    seen: list[tuple[int, int]] = []
+    seen: dict[tuple[int, int], None] = {}
     for a in session_attempts:
         if a.course_id is None:
             unassigned.append(_attempt_json(a, pbs, clock))
-        elif (a.course_id, a.star_id) not in seen:
-            seen.append((a.course_id, a.star_id))
+        else:
+            seen[(a.course_id, a.star_id)] = None
 
     for course_id, star_id in seen:
         history = [a for a in all_attempts
@@ -76,6 +81,7 @@ def build_session_view(db, service, clock: str) -> dict:
                 continue
             d = REGISTRY[sel["key"]]
             value = compute_stat(sel["key"], history, sel.get("params"), clock)
+            # label N-substitution is keyed to avg_last_n; a future parameterized stat needs a label_template field instead
             label = d.label.replace("N", str(sel.get("params", {}).get("n", ""))) \
                 if d.key == "avg_last_n" else d.label
             stats.append({"key": d.key, "label": label,
@@ -106,7 +112,7 @@ def build_session_view(db, service, clock: str) -> dict:
                    "star_name": star_name(tgt_c, tgt_s) if tgt_c is not None else None,
                    "strat_tag": service.strat_tag},
         "stat_menu": stat_menu,
-        "catalog": _catalog(),
+        "catalog": _CATALOG,
         "stars": sections,
         "unassigned": unassigned,
     }

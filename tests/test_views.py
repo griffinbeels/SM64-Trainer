@@ -88,3 +88,47 @@ def test_cleared_attempts_remain_visible_but_flagged(tmp_path):
     [sec] = view["stars"]
     flags = {a["id"]: a["cleared"] for a in sec["attempts"]}
     assert flags[aid] is True
+
+
+def test_rta_clock_path_with_pb_and_race_guard(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350, igt=343)))      # rta = 350
+    aid = db.attempts()[0].id
+    asyncio.run(svc.save_pb(aid, "rta"))
+    asyncio.run(svc.publish(ev("practice_reset", 1400, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1760, igt=355)))      # rta = 360
+    view = build_session_view(db, svc, clock="rta")
+    [sec] = view["stars"]
+    assert sec["pb"]["rta"]["frames"] == 350
+    assert sec["attempts"][-1]["pb_delta_frames"] == 10
+    # same-tick race row: rta delta suppressed
+    asyncio.run(svc.publish(ev("practice_reset", 1800, {"igt_frames_before": 380})))
+    asyncio.run(svc.publish(star(1800, igt=380)))      # rta = 0
+    view2 = build_session_view(db, svc, clock="rta")
+    [sec2] = view2["stars"]
+    assert sec2["attempts"][-1]["rta_frames"] == 0
+    assert sec2["attempts"][-1]["pb_delta_frames"] is None
+
+
+def test_stats_are_lifetime_scoped_but_times_are_session_scoped(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350, igt=343)))
+    asyncio.run(svc.new_session())
+    asyncio.run(svc.publish(ev("practice_reset", 5000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(5400, igt=350)))
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    assert len(sec["attempts"]) == 1                    # this session only
+    stats = {s["key"]: s for s in sec["stats"]}
+    assert stats["best"]["value"] == 343                # lifetime history
+
+
+def test_avg_last_n_label_renders_param(tmp_path):
+    db, svc = make(tmp_path)
+    seed(svc)
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    labels = [s["label"] for s in sec["stats"]]
+    assert "Avg last 10" in labels and "Avg last 50" in labels
