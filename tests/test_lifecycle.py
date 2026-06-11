@@ -13,11 +13,16 @@ def snap(timer: int) -> GameSnapshot:
     )
 
 
-def test_backward_timer_jump_emits_game_reset():
+def test_backward_jump_into_boot_range_emits_game_reset():
     events = GameResetDetector().process(snap(5000), snap(100))
     assert len(events) == 1
     assert events[0].type == "game_reset"
     assert events[0].frame == 100
+
+
+def test_backward_jump_to_midgame_value_is_a_state_load_not_a_reset():
+    # savestate/section-state loads are AnchorDetector's state_loaded
+    assert GameResetDetector().process(snap(5000), snap(3000)) == []
 
 
 def test_forward_progress_is_silent():
