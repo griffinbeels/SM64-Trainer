@@ -1,6 +1,7 @@
 # src/sm64_events/main.py
 """Composition root: registry -> memory -> poller -> detectors -> tracking -> app."""
 import logging
+import sys
 from pathlib import Path
 
 from sm64_events.core.logging_setup import configure_logging
@@ -35,6 +36,9 @@ _instance_lock = None
 def build():
     global _instance_lock
     configure_logging()
+    # Capture threads contend with encode/server threads for the GIL; the
+    # default 5 ms switch interval adds whole-frame latency spikes at 60 fps.
+    sys.setswitchinterval(0.002)
     memory = Pj64Memory()
     broadcaster = Broadcaster()
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)

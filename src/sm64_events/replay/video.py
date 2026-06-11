@@ -240,7 +240,15 @@ class GdiBitBltVideoSource:
         hdc = mdc = bmp = None
         w = h = 0
         buf = None
-        period = 1.0 / self._fps
+        # OVERSAMPLE 1.5x: pacing a 60/s grid exactly is impossible from
+        # Python - after any wait the thread queues for the GIL behind the
+        # encode/audio/server threads (~2-3 ms tax; measured 57.4 grabs/s
+        # across THREE wait mechanisms: sleep, timeBeginPeriod, high-res
+        # timer). A missed slot is a visible 50 ms judder pulse in 30 fps
+        # game content. At 90 grabs/s every 16.7 ms slot gets >=1 grab
+        # despite jitter; the recorder's wall-clock index mapping keeps the
+        # first grab per slot and drops the rest (target <= last_index).
+        period = 1.0 / (self._fps * 1.5)
         grabs = drops = 0
         grab_ms = 0.0
         last_report = 0.0
