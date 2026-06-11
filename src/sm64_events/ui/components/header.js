@@ -64,7 +64,7 @@ function TargetEditor({ t, close }) {
       </select>
     </div>
     <div style="margin-top:.4rem">
-      <input placeholder="strat tag (optional)" value=${strat}
+      <input id="strat-tag" name="strat_tag" placeholder="strat tag (optional)" value=${strat}
              oninput=${(e) => setStrat(e.target.value)} />
       <button onclick=${apply}>Set target</button>
     </div>
