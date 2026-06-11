@@ -71,9 +71,18 @@ class PcmContinuity:
         self._rate = rate
         self._t0 = qpc_start_100ns
         self._delivered = 0
-        # <50 ms is delivery jitter, not idle; also bounds the worst-case
-        # residual audio lag from never-crossing-threshold micro-gaps.
-        self._min_gap = rate // 20
+        # Only TRUE engine idle counts as a gap. Anything under a second is
+        # delivery jitter: WASAPI loopback packets arrive in bursts, the GIL
+        # delays callback dispatch under encode load, and our own 2 s chunk
+        # flush (disk write inside the callback path) stalls the next
+        # delivery 50-150 ms — a tight threshold turned each of those into
+        # spurious silence injected BETWEEN late-but-real packets, dicing
+        # music and inflating the timeline (live: 0.1 s fills at exactly the
+        # 2 s flush cadence). Real idles observed are minutes long; jitter
+        # never exceeds ~0.2 s. One second separates the regimes with 5x
+        # margin both ways. Late packets still count toward 'delivered', so
+        # jitter self-corrects without any fill.
+        self._min_gap = rate
 
     def fill_before(self, qpc_now_100ns: int) -> int:
         expected = int((qpc_now_100ns - self._t0) / 1e7 * self._rate)
