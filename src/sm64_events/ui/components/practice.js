@@ -66,6 +66,10 @@ function AttemptRow({ a, t, idx }) {
         ? html` <span class="meta">(${a.outcome_detail})</span>` : ""}
       ${a.outcome === "success" && time ? html` <b>${time}</b>` : ""}
       ${a.outcome !== "success" && a.igt ? html` <span class="meta">${a.igt} in</span>` : ""}
+      ${a.rollouts_total > 0
+        ? html` <span class="meta">· ${a.rollouts_dustless}/${a.rollouts_total} dustless rollouts</span>` : ""}
+      ${a.jumps_total > 0
+        ? html` <span class="meta">· ${a.jumps_dustless}/${a.jumps_total} dustless jumps</span>` : ""}
     </td>
     <td>${a.outcome === "success" ? delta(a.pb_delta_frames) : ""}</td>
     <td class="meta">${a.strat_tag || ""}</td>
