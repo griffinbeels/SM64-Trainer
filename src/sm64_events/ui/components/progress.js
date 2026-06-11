@@ -5,18 +5,13 @@
 // timeline.js clickToPlace for the letterbox rationale).
 import { h } from "preact";
 import htm from "htm";
+import { fmtIgt } from "../format.js";
 
 const html = htm.bind(h);
 
 const W = 600, H = 170, PADL = 56, PADR = 10, PADT = 12, PADB = 26, GAP = 18;
 const GOLD = "#e0c36a", GOLD_RIM = "#f5e2a8", GREEN = "#a3e0a3",
       GRID = "#262c38", AXIS = "#3a4150", TXT = "#6c7686";
-
-function fmtIgt(frames) {
-  const m = Math.floor(frames / 1800), s = Math.floor((frames % 1800) / 30),
-        c = Math.floor(((frames % 30) * 100) / 30);
-  return `${m}'${String(s).padStart(2, "0")}"${String(c).padStart(2, "0")}`;
-}
 
 // Local-timezone tick label; MM/DD/YY prefix when the graph spans >1 day.
 function fmtTick(iso, withDate) {

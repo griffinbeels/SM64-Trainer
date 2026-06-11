@@ -12,6 +12,24 @@ const html = htm.bind(h);
 const OUTCOME_LABEL = { success: "✔", reset: "✘ reset",
   hard_reset: "✘ hard reset", abandoned: "– abandoned", death: "✘ death" };
 
+const SORT_OPTIONS = [
+  ["newest", "newest first"], ["oldest", "oldest first"],
+  ["fastest", "fastest first"], ["slowest", "slowest first"]];
+
+// Row time on the current clock: completion time for successes, how-far-in
+// for failures. Nulls sort last in both directions.
+function rowTime(a, clock) {
+  return clock === "igt" ? a.igt_frames : a.rta_frames;
+}
+function comparator(sort, clock) {
+  if (sort === "oldest") return (a, b) => a.id - b.id;
+  if (sort === "fastest")
+    return (a, b) => (rowTime(a, clock) ?? Infinity) - (rowTime(b, clock) ?? Infinity);
+  if (sort === "slowest")
+    return (a, b) => (rowTime(b, clock) ?? -Infinity) - (rowTime(a, clock) ?? -Infinity);
+  return (a, b) => b.id - a.id; // newest (default)
+}
+
 function delta(frames) {
   if (frames === null || frames === undefined) return "";
   const cls = frames > 0 ? "delta-up" : "delta-down";
@@ -48,10 +66,6 @@ function AttemptRow({ a, t, idx }) {
         ? html` <span class="meta">(${a.outcome_detail})</span>` : ""}
       ${a.outcome === "success" && time ? html` <b>${time}</b>` : ""}
       ${a.outcome !== "success" && a.igt ? html` <span class="meta">${a.igt} in</span>` : ""}
-      ${a.rollouts_total > 0
-        ? html` <span class="meta">· ${a.rollouts_dustless}/${a.rollouts_total} dustless rollouts</span>` : ""}
-      ${a.jumps_total > 0
-        ? html` <span class="meta">· ${a.jumps_dustless}/${a.jumps_total} dustless jumps</span>` : ""}
     </td>
     <td>${a.outcome === "success" ? delta(a.pb_delta_frames) : ""}</td>
     <td class="meta">${a.strat_tag || ""}</td>
@@ -67,7 +81,7 @@ function AttemptRow({ a, t, idx }) {
 
 // Shared table component used by both StarSection and the unassigned block.
 // attempts: the full ordered list for stable numbering;
-// rows: the filtered subset to actually render.
+// rows: the filtered/sorted subset to actually render.
 function AttemptTable({ attempts, rows, t }) {
   return html`<table>
     ${rows.map((a) => {
@@ -86,13 +100,19 @@ function HideToggle({ hidden, showHidden, setShowHidden }) {
   </button>`;
 }
 
-function StarSection({ sec, t }) {
+function StarSection({ sec, t, ui, pinned }) {
   const [showHidden, setShowHidden] = useState(false);
   const pb = sec.pb[t.clock];
-  const visible = sec.attempts.filter((a) => !a.cleared && a.outcome !== "abandoned");
+  const base = showHidden ? sec.attempts
+    : sec.attempts.filter((a) => !a.cleared && a.outcome !== "abandoned");
   const hidden = sec.attempts.filter((a) => a.cleared || a.outcome === "abandoned");
-  const rows = showHidden ? sec.attempts : visible;
-  return html`<div class="starsec">
+  const rows = base
+    .filter((a) => !(ui.hideResets
+      && (a.outcome === "reset" || a.outcome === "hard_reset")))
+    .slice()
+    .sort(comparator(ui.sort, t.clock));
+  return html`<div class="starsec ${pinned ? "active-star" : ""}">
+    ${pinned && html`<div class="active-tag">★ ACTIVE STAR</div>`}
     <div class="shead">
       <b>${sec.course_name} · ${sec.star_name}</b>
       <a href=${sec.links.ukikipedia} target="_blank">RTA Guide</a>
@@ -110,11 +130,41 @@ function StarSection({ sec, t }) {
   </div>`;
 }
 
+function ControlBar({ ui }) {
+  return html`<div class="bar">
+    <label class="meta">sort${" "}
+      <select value=${ui.sort} onchange=${(e) => ui.setSort(e.target.value)}>
+        ${SORT_OPTIONS.map(([k, label]) => html`<option value=${k}>${label}</option>`)}
+      </select></label>
+    <label class="meta" style="cursor:pointer">
+      <input type="checkbox" checked=${ui.hideResets}
+             onchange=${(e) => ui.setHideResets(e.target.checked)} />
+      ${" "}hide resets <span class="meta">(stats unaffected)</span></label>
+  </div>`;
+}
+
 export function Practice({ t }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [showUnassignedHidden, setShowUnassignedHidden] = useState(false);
+  const [sort, setSortState] = useState(localStorage.getItem("sm64.sort") || "newest");
+  const [hideResets, setHideResetsState] = useState(
+    localStorage.getItem("sm64.hideResets") === "1");
+  const ui = {
+    sort, hideResets,
+    setSort: (v) => { localStorage.setItem("sm64.sort", v); setSortState(v); },
+    setHideResets: (v) => {
+      localStorage.setItem("sm64.hideResets", v ? "1" : "0");
+      setHideResetsState(v);
+    },
+  };
   const v = t.view;
   if (!v) return html`<p class="meta">loading… (server unreachable? check /health)</p>`;
+
+  const tgt = v.target || {};
+  const isActive = (sec) =>
+    sec.course_id === tgt.course_id && sec.star_id === tgt.star_id;
+  const active = tgt.course_id != null ? v.stars.find(isActive) : undefined;
+  const rest = v.stars.filter((sec) => sec !== active);
 
   const unassignedVisible = v.unassigned.filter(
     (a) => !a.cleared && a.outcome !== "abandoned");
@@ -127,9 +177,12 @@ export function Practice({ t }) {
       <button onclick=${() => setMenuOpen(!menuOpen)}>⚙ stats</button>
     </div>
     ${menuOpen && html`<${StatMenu} t=${t} close=${() => setMenuOpen(false)} />`}
+    <${ControlBar} ui=${ui} />
+    ${active && html`<${StarSection} sec=${active} t=${t} ui=${ui} pinned=${true} />`}
     ${v.stars.length === 0 && v.unassigned.length === 0
       ? html`<p class="meta">No attempts this session yet — grab a star.</p>` : ""}
-    ${v.stars.map((sec) => html`<${StarSection} sec=${sec} t=${t} />`)}
+    ${rest.length > 0 && html`<div class="meta listhead">this session — newest first</div>`}
+    ${rest.map((sec) => html`<${StarSection} sec=${sec} t=${t} ui=${ui} pinned=${false} />`)}
     ${v.unassigned.length > 0 && html`<div class="starsec">
       <div class="shead"><b>No target</b>
         <span class="meta">failures before any star was grabbed or set</span></div>

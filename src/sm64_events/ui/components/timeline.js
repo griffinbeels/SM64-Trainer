@@ -3,6 +3,7 @@ import { h } from "preact";
 import { useState } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
+import { fmtIgt } from "../format.js";
 
 const html = htm.bind(h);
 
@@ -16,12 +17,6 @@ const MARKERS = {
 const ANNOT = "#8ab4f8"; // strategy annotation flags (spec §3)
 
 const W = 600, H = 28, PAD = 8, MID = H / 2, BAND = 16; // BAND: label strip above
-
-function fmtIgt(frames) {
-  const m = Math.floor(frames / 1800), s = Math.floor((frames % 1800) / 30),
-        c = Math.floor(((frames % 30) * 100) / 30);
-  return `${m}'${String(s).padStart(2, "0")}"${String(c).padStart(2, "0")}`;
-}
 
 // "3" / "3.5" (seconds) or 0'03"50 (IGT) -> frames at 30 fps; null = unparseable
 export function parseTimeInput(text) {
