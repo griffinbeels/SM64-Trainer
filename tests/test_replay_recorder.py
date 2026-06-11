@@ -140,3 +140,53 @@ def test_startup_wipes_scratch(tmp_path):
     rec.start()
     assert not (buf / "stale.ts").exists()
     rec.stop()
+
+
+def test_begin_capture_failure_still_stops_video_source(tmp_path):
+    """C1: if something raises after video.start() but before _begin_capture
+    completes (e.g. fallback factory constructor blows up), teardown must still
+    be able to reach the already-running video source and stop it.
+    Before the fix _video_source was only assigned at the END of the function,
+    so an exception in between left the WGC session running forever."""
+    video = FakeVideoSource()
+
+    class ExplodingFallbackFactory:
+        def __call__(self, rate):
+            raise RuntimeError("fallback factory exploded")
+
+    cfg = ReplayConfig(scratch_dir=tmp_path / "buf2", attach_poll_s=0.01)
+    rec = ReplayRecorder(
+        cfg=cfg,
+        window_finder=lambda title: WIN,
+        video_factory=lambda win: video,
+        audio_factory=lambda pid: FailingAudioSource(),
+        fallback_audio_factory=ExplodingFallbackFactory(),
+        clock_factory=lambda: CaptureClock(anchor_qpc_100ns=0, anchor_utc=T0),
+        codec="libx264")
+    rec.start()
+    assert wait_for(lambda: video.on_frame is not None)
+    rec.stop()
+    assert video.stopped is True      # the leak: before the fix this stayed False
+
+
+def test_long_gap_becomes_coverage_hole_not_giant_fill(tmp_path):
+    """I2: a ~10-minute delivery gap must NOT cause ~18000 fill encodes.
+    The recorder caps fill at one segment's worth; beyond that it hands the
+    writer the real target index and gap-rotation converts the silence into an
+    honest coverage hole.  Total buffer size stays tiny; two coverage islands
+    are written instead of one giant frozen-video block."""
+    video, audio = FakeVideoSource(), FakeAudioSource()
+    rec = make_recorder(tmp_path, video, audio)
+    rec.start()
+    assert wait_for(lambda: video.on_frame is not None)
+    push_frames(video, 60)                          # indices 0..59 (2 s)
+    push_frames(video, 60, start_index=18060)       # ~10 min later (index 18060)
+    rec.stop()
+    cov = rec.ring.coverage("video")
+    # coverage span reflects true wall-clock of the late frames
+    assert cov is not None
+    assert (cov[1] - cov[0]).total_seconds() > 600
+    # but total encoded footage is tiny — NOT 10 minutes of duplicates
+    assert rec.ring.total_bytes < 5 * 1024 * 1024
+    segs = rec.ring.covering("video", T0, cov[1])
+    assert len(segs) == 2

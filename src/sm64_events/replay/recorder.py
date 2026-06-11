@@ -9,9 +9,12 @@ writer-None re-check happens UNDER the lock (teardown can run between a
 naked check and the write).
 
 CFR conform happens here: frame_index = round(seconds_since_anchor * fps).
-Delivery gaps (WGC only sends frames on change — pause menus, occlusion)
-are filled by re-encoding the last frame at each missing index; backwards/
-duplicate indexes are dropped by the writer. This wall-clock-locks the
+Small delivery gaps (WGC only sends frames on change — pause menus,
+occlusion) are filled by re-encoding the last frame at each missing index,
+up to one segment's worth of frames. Larger gaps are NOT filled: the writer
+receives the real target index, its gap-rotation logic detects the jump and
+rotates segments, converting the silence into an honest coverage hole in the
+ring rather than minutes of frozen duplicate video. This wall-clock-locks the
 video stream, which is what makes utc <-> frame mapping exact.
 
 Audio fallback chain: audio_factory (per-process tap) is tried first; if
@@ -68,6 +71,7 @@ class ReplayRecorder:
         self._stop_event = threading.Event()
         self._window_lost = threading.Event()
         self._thread: threading.Thread | None = None
+        self._stopping: bool = False  # M2: prevents zombie _begin_capture post-stop
 
         # protected by _lock
         self._writer: SegmentWriter | None = None
@@ -103,9 +107,12 @@ class ReplayRecorder:
 
     def stop(self) -> None:
         """Signal attach loop to exit and tear down any active capture."""
+        self._stopping = True  # M2: block any in-flight _begin_capture from racing post-stop
         self._stop_event.set()
         if self._thread is not None:
             self._thread.join(timeout=10)
+            if self._thread.is_alive():
+                log.warning("replay attach thread did not stop within timeout")
             self._thread = None
         self._teardown_capture()
 
@@ -133,6 +140,11 @@ class ReplayRecorder:
     # -- capture setup / teardown --------------------------------------------
 
     def _begin_capture(self, win: WindowInfo) -> None:
+        # M2: bail immediately if stop() already ran — prevents a zombie begin
+        # from racing ahead and resurrecting recording state post-stop.
+        if self._stopping:
+            return
+
         clock = self._clock_factory()
         writer = SegmentWriter(
             self._cfg, clock, self._cfg.scratch_dir, self._codec, self.ring.add)
@@ -143,9 +155,21 @@ class ReplayRecorder:
             self._last_frame = None
             self._last_index = -1
 
-        # Start video — on_stopped signals window loss back to attach loop
+        # Start video — on_stopped signals window loss back to attach loop.
+        # C1: assign _video_source the instant start() succeeds so teardown
+        # can always reclaim it, even if something below raises.
         video = self._video_factory(win)
         video.start(self._on_frame, self._window_lost.set)
+        with self._lock:
+            self._video_source = video
+
+        # I1: set the writer's audio t0 BEFORE wiring any audio callback so a
+        # PCM packet arriving between audio.start() and start_audio() doesn't
+        # hit writer.write_audio()'s "start_audio() not called" guard.
+        # t0 = "writer ready", which is at most one attach-poll interval
+        # earlier than "audio started" — irrelevant vs the ±2-3 s clip padding.
+        with self._lock:
+            writer.start_audio(t0_utc=clock.utc_of(qpc_100ns()))
 
         # Audio fallback chain
         audio: AudioSource | None = None
@@ -169,11 +193,11 @@ class ReplayRecorder:
                 audio = None
                 audio_mode = "none"
 
+        # C1 continued: assign _audio_source immediately after its start()
+        # succeeds so teardown can reclaim it if anything after this raises.
         with self._lock:
-            self._video_source = video
             self._audio_source = audio
             self._audio_mode = audio_mode
-            writer.start_audio(t0_utc=clock.utc_of(qpc_100ns()))
 
         self._recording = True
         log.info("capture started — window=%r audio=%s codec=%s",
@@ -211,6 +235,9 @@ class ReplayRecorder:
     # -- frame callback (library thread) -------------------------------------
 
     def _on_frame(self, bgra: np.ndarray, ts_100ns: int) -> None:
+        # M1: _last_frame and _last_index are written here only; WGC guarantees
+        # a single callback thread, so they need no lock — if that ever changes,
+        # move both inside _lock.
         with self._lock:
             if self._writer is None:
                 return
@@ -222,13 +249,21 @@ class ReplayRecorder:
         if target <= self._last_index:
             return
 
-        # CFR fill: re-encode last known frame for every missing index
-        if self._last_frame is not None:
-            for idx in range(self._last_index + 1, target):
-                with self._lock:
-                    if self._writer is None:
-                        return
-                    self._writer.write_video(self._last_frame, idx)
+        # Fill small delivery gaps (WGC sends frames only on change) by
+        # re-encoding the last frame; beyond one segment's worth, stop
+        # pretending — hand the writer the real index and its gap-rotation
+        # turns the silence into an honest coverage hole in the ring.
+        max_fill = int(self._cfg.fps * self._cfg.segment_s)
+        fill_from = (self._last_index + 1
+                     if self._last_frame is not None
+                     and target - self._last_index <= max_fill
+                     else target)
+
+        for idx in range(fill_from, target):
+            with self._lock:
+                if self._writer is None:
+                    return
+                self._writer.write_video(self._last_frame, idx)
 
         with self._lock:
             if self._writer is None:
@@ -249,6 +284,9 @@ class ReplayRecorder:
     # -- status --------------------------------------------------------------
 
     def status(self) -> dict:
+        # M3: reads of _recording/_window_found/_audio_mode/_codec are unlocked;
+        # CPython attribute reads are atomic, so these are stale-but-never-torn —
+        # acceptable for a polling status surface.
         cov = self.ring.coverage("video")
         return {
             "recording": self._recording,
