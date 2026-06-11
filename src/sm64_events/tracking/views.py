@@ -51,10 +51,10 @@ def _fmt(value, fmt):
     return str(value)
 
 
-def _current_pbs(db) -> dict:
+def _current_pbs(pb_rows: list[dict]) -> dict:
     """(course, star, mode) -> latest pb row."""
     out = {}
-    for row in db.pbs():  # ordered by id: later rows win
+    for row in pb_rows:  # ordered by id: later rows win
         out[(row["course_id"], row["star_id"], row["timer_mode"])] = row
     return out
 
@@ -113,6 +113,36 @@ def _markers_for(markers_state: dict, course_id: int, star_id: int) -> dict:
             if k.startswith(prefix)}
 
 
+def _progress(attempts, pb_rows, session_meta) -> dict | None:
+    """Completion-time-over-time points (spec §4): non-cleared successes of
+    the SCOPED attempt list, grouped by session, chronological. Gold =
+    explicitly saved PB rows (every save stays gold even when superseded).
+    rta race rows (rta_frames == 0) ship as-is; the UI filters them."""
+    pb_ids = {(r["attempt_id"], r["timer_mode"]) for r in pb_rows}
+    by_session: dict[int, list] = {}
+    for a in attempts:
+        if a.outcome != "success" or a.cleared:
+            continue
+        by_session.setdefault(a.session_id, []).append({
+            "t_utc": a.ended_utc,
+            "igt_frames": a.igt_frames,
+            "rta_frames": a.rta_frames,
+            "igt": format_igt(a.igt_frames) if a.igt_frames is not None else None,
+            "rta": format_igt(a.rta_frames) if a.rta_frames is not None else None,
+            "attempt_id": a.id,
+            "is_pb_igt": (a.id, "igt") in pb_ids,
+            "is_pb_rta": (a.id, "rta") in pb_ids,
+        })
+    if not by_session:
+        return None
+    return {"sessions": [
+        {"session_id": sid,
+         "label": session_meta.get(sid, {}).get("label"),
+         "started_utc": session_meta.get(sid, {}).get("started_utc"),
+         "points": pts}
+        for sid, pts in sorted(by_session.items())]}
+
+
 def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     all_attempts = db.attempts()
     session_attempts = [a for a in all_attempts
@@ -120,7 +150,10 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     # scoped determines which attempts drive the seen-set, in_section lists,
     # and unassigned list. Stats always use lifetime (all_attempts).
     scoped = all_attempts if scope == "lifetime" else session_attempts
-    pbs = _current_pbs(db)
+    pb_rows = db.pbs()
+    pbs = _current_pbs(pb_rows)
+    sessions_list = db.sessions()
+    session_meta = {s["id"]: s for s in sessions_list}
     stat_menu = db.get_state("stat_menu", default=DEFAULT_STAT_MENU)
     registered = db.get_state("strategies", {})
     markers_state = db.get_state("timeline_markers", {})
@@ -171,13 +204,14 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "last_strat": service.strat_by_star.get((course_id, star_id)),
             "timeline": _timeline(history),
             "markers_by_strat": _markers_for(markers_state, course_id, star_id),
+            "progress": _progress(in_section, pb_rows, session_meta),
         })
 
     tgt_c, tgt_s = service.target if service.target else (None, None)
     return {
         "session": {"id": service.session_id},
         "scope": scope,
-        "sessions": db.sessions(),
+        "sessions": sessions_list,
         "clock": clock,
         "target": {"course_id": tgt_c, "star_id": tgt_s,
                    "course_name": course_name(tgt_c) if tgt_c is not None else None,

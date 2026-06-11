@@ -337,3 +337,63 @@ def test_marker_strat_containing_colon_round_trips(tmp_path):
     view = build_session_view(db, svc, clock="igt")
     assert view["stars"][0]["markers_by_strat"] == {
         "a:b": [{"frames": 10, "label": "x"}]}
+
+
+# -- progress graph payload (spec §4) -------------------------------------------
+
+def test_progress_groups_successes_by_session_with_pb_flags(tmp_path):
+    db, svc = make(tmp_path)
+    seed(svc)                                   # session 1: igt 343 + igt 350
+    aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    asyncio.run(svc.save_pb(aid, "igt"))
+    asyncio.run(svc.new_session())
+    asyncio.run(svc.publish(ev("practice_reset", 5000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(5400, igt=330)))   # session 2
+    view = build_session_view(db, svc, clock="igt", scope="lifetime")
+    [sec] = view["stars"]
+    prog = sec["progress"]
+    assert [s["session_id"] for s in prog["sessions"]] == [1, 2]
+    s1 = prog["sessions"][0]
+    assert [p["igt_frames"] for p in s1["points"]] == [343, 350]
+    assert [p["is_pb_igt"] for p in s1["points"]] == [True, False]
+    assert all(p["is_pb_rta"] is False for p in s1["points"])
+    p = s1["points"][0]
+    assert p["igt"] == "0'11\"43" and p["attempt_id"] == aid
+    assert p["t_utc"]            # close timestamp present
+    assert s1["started_utc"]     # session metadata present
+
+
+def test_progress_session_scope_limits_to_current_session(tmp_path):
+    db, svc = make(tmp_path)
+    seed(svc)
+    asyncio.run(svc.new_session())
+    asyncio.run(svc.publish(ev("practice_reset", 5000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(5400, igt=330)))
+    view = build_session_view(db, svc, clock="igt", scope="session")
+    [sec] = view["stars"]
+    assert [s["session_id"] for s in sec["progress"]["sessions"]] == [2]
+
+
+def test_progress_excludes_cleared_and_is_none_without_successes(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350, igt=343)))
+    aid = db.attempts()[0].id
+    asyncio.run(svc.clear_attempt(aid, reason="accidental"))
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    assert sec["progress"] is None
+
+
+def test_progress_superseded_pbs_stay_gold(tmp_path):
+    db, svc = make(tmp_path)
+    seed(svc)
+    a343 = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    a350 = next(a.id for a in db.attempts() if a.igt_frames == 350)
+    asyncio.run(svc.save_pb(a350, "igt"))
+    asyncio.run(svc.save_pb(a343, "igt"))     # supersedes a350 as current PB
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    flags = {p["attempt_id"]: p["is_pb_igt"]
+             for p in sec["progress"]["sessions"][0]["points"]}
+    assert flags[a343] is True and flags[a350] is True   # every saved PB is gold
