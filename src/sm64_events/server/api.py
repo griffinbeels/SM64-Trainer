@@ -32,8 +32,13 @@ class SessionBody(BaseModel):
     label: str | None = None
 
 
+class StatSelection(BaseModel):
+    key: str
+    params: dict = {}
+
+
 class StatMenuBody(BaseModel):
-    selections: list[dict]
+    selections: list[StatSelection]
 
 
 def _http(e: Exception) -> HTTPException:
@@ -44,7 +49,7 @@ def _http(e: Exception) -> HTTPException:
     return HTTPException(503, str(e))  # RuntimeError: degraded mode
 
 
-def create_api_router(service, db) -> APIRouter:
+def create_api_router(service) -> APIRouter:
     router = APIRouter(prefix="/api")
 
     @router.get("/session")
@@ -102,7 +107,7 @@ def create_api_router(service, db) -> APIRouter:
     def put_statmenu(body: StatMenuBody):
         if service.db is None:
             raise HTTPException(503, "database unavailable")
-        service.db.set_state("stat_menu", body.selections)
+        service.db.set_state("stat_menu", [s.model_dump() for s in body.selections])
         return {"ok": True}
 
     @router.get("/links/{course_id}/{star_id}")

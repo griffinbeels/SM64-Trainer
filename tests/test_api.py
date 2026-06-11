@@ -100,7 +100,10 @@ def test_stats_registry_and_statmenu(tmp_path):
         assert any(s["key"] == "success_rate" for s in r.json())
         menu = [{"key": "best"}, {"key": "avg_last_n", "params": {"n": 25}}]
         assert client.put("/api/statmenu", json={"selections": menu}).status_code == 200
-        assert client.get("/api/session").json()["stat_menu"] == menu
+        # stored form is normalized: every selection carries a params dict
+        assert client.get("/api/session").json()["stat_menu"] == [
+            {"key": "best", "params": {}},
+            {"key": "avg_last_n", "params": {"n": 25}}]
 
 
 def test_links_endpoint(tmp_path):
@@ -136,3 +139,36 @@ def test_api_absent_when_no_service(tmp_path):
     with TestClient(app) as client:
         assert client.get("/api/session").status_code == 404
         assert client.get("/health").json()["db"] == "absent"
+
+
+def test_statmenu_rejects_shapeless_selections(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.put("/api/statmenu", json={"selections": [{"params": {}}]})
+        assert r.status_code == 422   # key is required
+
+
+def test_bad_stat_params_do_not_500_the_view(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)
+        menu = [{"key": "avg_last_n", "params": {"n": "abc"}}]
+        assert client.put("/api/statmenu", json={"selections": menu}).status_code == 200
+        r = client.get("/api/session")
+        assert r.status_code == 200
+        [sec] = r.json()["stars"]
+        assert sec["stats"][0]["value"] is None
+
+
+def test_replay_failure_degrades_to_broadcast_only(tmp_path, monkeypatch):
+    db = Database(tmp_path / "t.db")
+    broadcaster = Broadcaster()
+    service = TrackerService(db, broadcaster)
+    async def boom():
+        raise RuntimeError("corrupt journal")
+    monkeypatch.setattr(service, "start", boom)
+    poller = Poller(OfflineMemory(), [], service)
+    app = create_app(poller, broadcaster, service=service)
+    with TestClient(app) as client:   # startup must NOT raise
+        assert client.get("/health").json()["db"] == "error"
+        assert client.get("/api/session").status_code == 503

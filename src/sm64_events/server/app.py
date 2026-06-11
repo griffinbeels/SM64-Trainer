@@ -38,7 +38,12 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         if service is not None:
-            await service.start()
+            try:
+                await service.start()
+            except Exception:
+                log.exception("tracker start failed - degrading to broadcast-only")
+                service.db = None
+                service.session_id = None
         task = asyncio.create_task(poller.run())
         task.add_done_callback(_log_poller_exit)
         yield
@@ -50,7 +55,7 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
 
     app.mount("/ui", StaticFiles(directory=str(_UI_INDEX.parent)), name="ui")
     if service is not None:
-        app.include_router(create_api_router(service, service.db))
+        app.include_router(create_api_router(service))
 
     @app.get("/", response_class=HTMLResponse)
     def index():

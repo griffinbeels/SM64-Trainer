@@ -80,7 +80,10 @@ def build_session_view(db, service, clock: str) -> dict:
             if sel["key"] not in REGISTRY:
                 continue
             d = REGISTRY[sel["key"]]
-            value = compute_stat(sel["key"], history, sel.get("params"), clock)
+            try:
+                value = compute_stat(sel["key"], history, sel.get("params"), clock)
+            except (ValueError, TypeError, KeyError):
+                value = None  # bad stored params (e.g. n="abc") must not 500 the view
             # label N-substitution is keyed to avg_last_n; a future parameterized stat needs a label_template field instead
             label = d.label.replace("N", str(sel.get("params", {}).get("n", ""))) \
                 if d.key == "avg_last_n" else d.label
