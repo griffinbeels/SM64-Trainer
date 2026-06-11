@@ -567,3 +567,45 @@ def test_afk_discarded_attempt_drops_its_rollouts():
     ])
     assert len(attempts) == 1
     assert attempts[0].rollouts_total == 0
+
+
+def test_stray_acted_between_attempts_does_not_leak_into_next():
+    # mario_acted with nothing open (castle movement after an abandon) must
+    # not pre-mark the NEXT attempt as acted — the anchor re-arms the flag.
+    attempts = project([
+        tracking_anchor(1, 1000),
+        jev(2, "mario_acted", 1100),
+        jev(3, "level_changed", 1200, {"from": 24, "to": 6}),  # kept (acted)
+        jev(4, "mario_acted", 1250),       # castle movement, nothing open
+        tracking_anchor(5, 1400),
+        jev(6, "death", 1700, {"cause": "standing", "igt_frames": 250}),
+    ])
+    assert [a.outcome for a in attempts] == ["abandoned"]  # death discarded
+
+
+def test_state_loaded_tracking_anchor_is_judged_too():
+    # the activity rule is anchor-type agnostic: savestate-load spam with
+    # zero input is discarded the same as reset spam.
+    attempts = project([
+        star(1, 900),
+        jev(2, "state_loaded", 3000,
+            {"igt_frames_restored": 120, "mario_acted": False,
+             "acted_tracking": True, "paused_frames_before": 0}),
+        jev(3, "state_loaded", 2800,
+            {"igt_frames_restored": 120, "mario_acted": False,
+             "acted_tracking": True, "paused_frames_before": 0}),
+    ])
+    assert [a.outcome for a in attempts] == ["success"]
+
+
+def test_mario_acted_is_not_a_rollout_boundary():
+    # mario_acted must never zero the rollout accumulator — pin it, because
+    # in live streams the latched event precedes the period's rollouts and
+    # an accidental BOUNDARY_EVENT_TYPES addition would be near-invisible.
+    attempts = project([
+        jev(1, "practice_reset", 1000, {"igt_frames_before": 0}),
+        jev(2, "rollout", 1100, {"dustless": True, "frames_late": 0, "level": 24}),
+        jev(3, "mario_acted", 1150),
+        star(4, 1350),
+    ])
+    assert attempts[0].rollouts_total == 1

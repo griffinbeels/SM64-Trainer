@@ -119,7 +119,7 @@ class Projector:
         self.target: tuple[int, int] | None = None
         self.strat_by_star: dict[tuple[int, int], str | None] = {}
         self._open = None  # EventRow of the open attempt's anchor
-        self._open_acted = False  # mario_acted event seen during the open attempt
+        self._open_acted = False  # mario_acted seen since the last anchor; only meaningful while _open is set
         self._rollouts_total = 0
         self._rollouts_dustless = 0
         self._jumps_total = 0
@@ -187,7 +187,8 @@ class Projector:
         """No-behavior rule (spec §2): the open attempt came from an
         acted-tracking anchor and no mario_acted event arrived during it.
         Legacy anchors (no marker) never match — old journals keep their
-        original semantics."""
+        original semantics. Stale values while _open is None are harmless:
+        the only open-assignment site re-arms the flag."""
         return (self._open is not None
                 and self._open.payload.get("acted_tracking", False)
                 and not self._open_acted)
