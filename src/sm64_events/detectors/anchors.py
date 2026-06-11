@@ -18,6 +18,16 @@ Both anchor payloads carry mario_acted: whether Mario entered any non-passive
   The action transition ON the anchor tick itself is swallowed — it belongs
   to the warp/spawn, not to either attempt.
 
+Pause streak: consecutive game frames where global_timer advanced but the
+  overall IGT did not — game logic stopped, i.e. the Usamune pause menu (or a
+  dialog time-stop). Stamped on anchors as paused_frames_before; the tracking
+  layer discards reset-closures after long pauses (AFK rule). Emulator pause
+  freezes BOTH clocks, so it never grows the streak (documented limitation).
+mario_acted event: emitted once per anchor period at Mario's first
+  non-passive action, so the tracking layer can judge activity for closures
+  that are NOT anchors (death/abandon/hard reset). Anchors additionally carry
+  acted_tracking: true so old journals (no such events) keep legacy semantics.
+
 VERIFY (live gate): confirm with the human that a Usamune SECTION state
 load moves global_timer backward (full-RAM restore). If Usamune implements
 section states as warps instead, loads will classify as practice_reset —
@@ -35,14 +45,35 @@ IGT_WRAP_CEILING = 65000  # u16 wrap guard: 65535->0 looks like a reset without 
 class AnchorDetector:
     def __init__(self):
         self._acted = False
+        self._acted_reported = False
+        self._pause_streak = 0
 
     def process(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         events = self._classify(prev, curr)
         if events:
+            # the action transition ON the anchor tick is swallowed — it
+            # belongs to the warp/spawn, not to either attempt
             self._acted = False
-        elif curr.mario_action not in PASSIVE_ACTIONS:
+            self._acted_reported = False
+            self._pause_streak = 0
+            return events
+        self._update_pause_streak(prev, curr)
+        if curr.mario_action not in PASSIVE_ACTIONS:
             self._acted = True
-        return events
+            if not self._acted_reported:
+                self._acted_reported = True
+                return [Event(type="mario_acted", frame=curr.global_timer,
+                              timestamp_utc=curr.wall_time_utc, payload={})]
+        return []
+
+    def _update_pause_streak(self, prev: GameSnapshot, curr: GameSnapshot) -> None:
+        if curr.global_timer < prev.global_timer:
+            self._pause_streak = 0   # boot-range backward jump (no anchor fired)
+        elif curr.igt_overall != prev.igt_overall:
+            self._pause_streak = 0   # game logic is running
+        elif curr.global_timer > prev.global_timer:
+            self._pause_streak += curr.global_timer - prev.global_timer
+        # equal global_timer: polled faster than one frame — no information
 
     def _classify(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         if curr.global_timer < prev.global_timer:
@@ -51,12 +82,16 @@ class AnchorDetector:
             return [Event(type="state_loaded", frame=curr.global_timer,
                           timestamp_utc=curr.wall_time_utc,
                           payload={"igt_frames_restored": curr.igt_overall,
-                                   "mario_acted": self._acted})]
+                                   "mario_acted": self._acted,
+                                   "paused_frames_before": self._pause_streak,
+                                   "acted_tracking": True})]
         if (curr.igt_overall < prev.igt_overall
                 and curr.igt_overall <= NEAR_ZERO_IGT
                 and prev.igt_overall < IGT_WRAP_CEILING):
             return [Event(type="practice_reset", frame=curr.global_timer,
                           timestamp_utc=curr.wall_time_utc,
                           payload={"igt_frames_before": prev.igt_overall,
-                                   "mario_acted": self._acted})]
+                                   "mario_acted": self._acted,
+                                   "paused_frames_before": self._pause_streak,
+                                   "acted_tracking": True})]
         return []

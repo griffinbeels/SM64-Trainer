@@ -23,7 +23,8 @@ def test_igt_drop_to_zero_emits_practice_reset():
     assert len(events) == 1
     ev = events[0]
     assert ev.type == "practice_reset" and ev.frame == 1002
-    assert ev.payload == {"igt_frames_before": 500, "mario_acted": False}
+    assert ev.payload == {"igt_frames_before": 500, "mario_acted": False,
+                          "paused_frames_before": 0, "acted_tracking": True}
 
 
 def test_igt_drop_to_small_value_still_practice_reset():
@@ -47,7 +48,8 @@ def test_backward_global_timer_emits_state_loaded():
     assert len(events) == 1
     ev = events[0]
     assert ev.type == "state_loaded" and ev.frame == 3000
-    assert ev.payload == {"igt_frames_restored": 120, "mario_acted": False}
+    assert ev.payload == {"igt_frames_restored": 120, "mario_acted": False,
+                          "paused_frames_before": 0, "acted_tracking": True}
 
 
 def test_backward_jump_into_boot_range_is_left_to_game_reset():
@@ -127,3 +129,91 @@ def test_all_passive_spawn_actions_do_not_set_acted():
         d.process(snap(1000, igt=100), snap(1001, igt=101, action=action))
     events = d.process(snap(1001, igt=500), snap(1002, igt=0))
     assert events[0].payload["mario_acted"] is False
+
+
+# ---------------------------------------------------------------------------
+# Pause-streak tests (AFK rule, spec §1)
+# ---------------------------------------------------------------------------
+
+def test_pause_streak_stamped_on_practice_reset():
+    d = AnchorDetector()
+    # paused: global_timer advances, igt frozen at 500
+    assert d.process(snap(1000, igt=500), snap(1100, igt=500)) == []
+    assert d.process(snap(1100, igt=500), snap(1200, igt=500)) == []
+    events = d.process(snap(1200, igt=500), snap(1202, igt=0))
+    assert events[0].type == "practice_reset"
+    assert events[0].payload["paused_frames_before"] == 200
+
+
+def test_pause_streak_resets_when_igt_advances():
+    d = AnchorDetector()
+    d.process(snap(1000, igt=500), snap(1100, igt=500))   # +100 paused
+    d.process(snap(1100, igt=500), snap(1101, igt=501))   # igt moved -> 0
+    events = d.process(snap(1101, igt=501), snap(1103, igt=0))
+    assert events[0].payload["paused_frames_before"] == 0
+
+
+def test_pause_streak_stamped_on_state_loaded():
+    d = AnchorDetector()
+    d.process(snap(1000, igt=500), snap(1100, igt=500))   # +100 paused
+    events = d.process(snap(1100, igt=500), snap(900, igt=120))  # backward, mid-range
+    assert events[0].type == "state_loaded"
+    assert events[0].payload["paused_frames_before"] == 100
+
+
+def test_console_reset_path_resets_pause_streak():
+    d = AnchorDetector()
+    d.process(snap(1000, igt=500), snap(1100, igt=500))      # +100 paused
+    assert d.process(snap(1100, igt=500), snap(50, igt=5)) == []  # boot range: no anchor
+    assert d.process(snap(50, igt=5), snap(80, igt=5)) == []      # +30 paused
+    events = d.process(snap(80, igt=5), snap(82, igt=0))
+    assert events[0].payload["paused_frames_before"] == 30        # not 130
+
+
+def test_equal_global_timer_does_not_grow_streak():
+    d = AnchorDetector()
+    d.process(snap(1000, igt=500), snap(1000, igt=500))   # same frame polled twice
+    events = d.process(snap(1000, igt=500), snap(1002, igt=0))
+    assert events[0].payload["paused_frames_before"] == 0
+
+
+def test_streak_resets_after_anchor_fires():
+    d = AnchorDetector()
+    d.process(snap(1000, igt=500), snap(1200, igt=500))   # +200 paused
+    d.process(snap(1200, igt=500), snap(1202, igt=0))     # anchor: stamps 200, resets
+    events = d.process(snap(1202, igt=400), snap(1204, igt=0))
+    assert events[0].payload["paused_frames_before"] == 0
+
+
+# ---------------------------------------------------------------------------
+# mario_acted event tests (spec §2)
+# ---------------------------------------------------------------------------
+
+def test_first_nonpassive_action_emits_mario_acted_event():
+    d = AnchorDetector()
+    events = d.process(snap(1000, igt=100), snap(1001, igt=101, action=ACT_WALKING))
+    assert [e.type for e in events] == ["mario_acted"]
+    assert events[0].frame == 1001
+    assert events[0].payload == {}
+
+
+def test_mario_acted_emitted_once_per_anchor_period():
+    d = AnchorDetector()
+    d.process(snap(1000, igt=100), snap(1001, igt=101, action=ACT_WALKING))
+    assert d.process(snap(1001, igt=101),
+                     snap(1002, igt=102, action=ACT_WALKING)) == []
+
+
+def test_mario_acted_re_emitted_after_anchor():
+    d = AnchorDetector()
+    d.process(snap(1000, igt=100), snap(1001, igt=101, action=ACT_WALKING))
+    d.process(snap(1001, igt=500), snap(1002, igt=0))     # anchor resets the period
+    events = d.process(snap(1002, igt=1), snap(1003, igt=2, action=ACT_WALKING))
+    assert [e.type for e in events] == ["mario_acted"]
+
+
+def test_anchor_payloads_carry_acted_tracking_marker():
+    events = AnchorDetector().process(snap(1000, igt=500), snap(1002, igt=0))
+    assert events[0].payload["acted_tracking"] is True
+    events = AnchorDetector().process(snap(5000, igt=900), snap(3000, igt=120))
+    assert events[0].payload["acted_tracking"] is True
