@@ -163,7 +163,7 @@ class GdiBitBltVideoSource:
         import queue
         import threading
         self._stop = threading.Event()
-        self._queue = queue.Queue(maxsize=4)
+        self._queue = queue.Queue(maxsize=8)  # ~133ms: absorbs rotation spikes at 60fps
         self._deliver_thread = threading.Thread(
             target=self._deliver_loop, args=(on_frame,),
             name="gdi-deliver", daemon=True)

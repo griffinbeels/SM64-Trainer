@@ -143,10 +143,14 @@ class SegmentWriter:
         self._stream.codec_context.time_base = Fraction(1, self._cfg.fps)
         self._stream.codec_context.gop_size = self._frames_per_seg
         if self._codec == "h264_nvenc":
-            # NVENC defaults to B-frames, which shift the stream's start_time
-            # to +3 frames (0.1 s) and break the extractor's frame0=pts0
-            # contract; they buy nothing at 480p with a 2 s closed GOP.
-            self._stream.options = {"bf": "0"}
+            # bf=0: NVENC defaults to B-frames, which shift the stream's
+            # start_time +3 frames and break the extractor's frame0=pts0
+            # contract. preset p1 + ull: at 60 fps the deliver thread has
+            # 16.7 ms per frame for reformat+encode+mux; default preset
+            # averaged just over budget (73 queue drops/30 s measured) —
+            # p1 is several ms faster and visually indistinguishable at
+            # these bitrates.
+            self._stream.options = {"bf": "0", "preset": "p1", "tune": "ull"}
         if self._codec == "libx264":
             self._stream.options = {"preset": "ultrafast", "tune": "zerolatency"}
         self._seg_first_index = first_index

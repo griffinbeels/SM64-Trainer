@@ -54,11 +54,9 @@ def test_audio_pump_orders_fills_and_data_off_callback():
     import time
     import numpy as np
     from sm64_events.replay._system_audio import AudioPump
-    from sm64_events.replay.audio import PcmContinuity
 
     out = []
-    guard = PcmContinuity(rate=48000, qpc_start_100ns=0)
-    pump = AudioPump(48000, lambda a: out.append(a.copy()), guard)
+    pump = AudioPump(48000, lambda a: out.append(a.copy()), 0)
     one = np.ones((480, 2), dtype=np.int16)  # 10ms of "audio"
 
     pump.feed(one.tobytes(), 100_000, 0)          # 10ms mark: no gap
@@ -71,3 +69,16 @@ def test_audio_pump_orders_fills_and_data_off_callback():
     assert np.array_equal(out[0], one)            # first packet, no fill
     assert (out[1] == 0).all() and len(out[1]) > 48000 * 2  # the idle fill
     assert np.array_equal(out[2], one)            # late packet after fill
+
+
+def test_plan_placement_regimes():
+    from sm64_events.replay._system_audio import plan_placement
+    MIN = 12000  # 250 ms at 48 k
+    # in-sequence (tiny jitter either way): append, no fill, no drop
+    assert plan_placement(1000, 1000, 480, MIN) == (0, False)
+    assert plan_placement(900, 1000, 480, MIN) == (0, False)
+    assert plan_placement(1300, 1000, 480, MIN) == (0, False)
+    # engine nap: exact silence fill
+    assert plan_placement(50_000, 1000, 480, MIN) == (49_000, False)
+    # stale packet fully behind the timeline: dropped
+    assert plan_placement(0, 1000, 480, MIN) == (0, True)

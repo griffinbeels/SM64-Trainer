@@ -168,7 +168,7 @@ class SystemAudioSource:
         # audio led video by the ~3 s init cost). With the epoch here, the
         # init window becomes leading silence and the timeline stays
         # wall-true end to end.
-        guard = PcmContinuity(self._rate, qpc_100ns())
+        epoch = qpc_100ns()
 
         target_name = device_name_hosting_pid(self._pid) if self._pid else None
         self._pa = pyaudio.PyAudio()
@@ -188,7 +188,7 @@ class SystemAudioSource:
                             "rate without resample (v1 limitation)",
                             loopback["defaultSampleRate"], self._rate)
 
-            self._pump = AudioPump(self._rate, on_pcm, guard)
+            self._pump = AudioPump(self._rate, on_pcm, epoch)
             pump_feed = self._pump.feed
 
             # REAL-TIME RULE: this callback runs on PortAudio's thread with a
