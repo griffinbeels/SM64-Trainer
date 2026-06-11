@@ -111,6 +111,21 @@ def test_audio_before_start_raises(tmp_path):
         w.write_audio(np.zeros((48000, 2), dtype=np.int16))
 
 
+def test_backwards_frame_index_is_dropped_not_rotated(tmp_path):
+    segs = []
+    w = make_writer(tmp_path, segs)
+    for i in range(10):
+        w.write_video(frame(i), frame_index=i)
+    w.write_video(frame(5), frame_index=5)      # duplicate of an old index
+    for i in range(10, 60):
+        w.write_video(frame(i), frame_index=i)
+    w.close()
+    video = [s for s in segs if s.kind == "video"]
+    assert len(video) == 1                       # no spurious rotation
+    assert video[0].utc_start == T0
+    assert video[0].utc_end == T0 + timedelta(seconds=2)
+
+
 def test_nvenc_segments_start_at_pts_zero(tmp_path):
     if pick_video_codec() != "h264_nvenc":
         pytest.skip("nvenc not available")

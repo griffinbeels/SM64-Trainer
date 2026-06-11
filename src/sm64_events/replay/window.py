@@ -6,7 +6,10 @@ PJ64 1.6 titles itself 'Project64 Version 1.6' (sometimes with the ROM name
 appended), so the default config substring 'Project64' matches both."""
 import ctypes
 import ctypes.wintypes as wt
+import logging
 from dataclasses import dataclass
+
+log = logging.getLogger("sm64.replay")
 
 
 @dataclass(frozen=True)
@@ -41,7 +44,8 @@ def enum_windows() -> list[WindowInfo]:
                               visible=bool(user32.IsWindowVisible(hwnd))))
         return True
 
-    user32.EnumWindows(cb, 0)
+    if not user32.EnumWindows(cb, 0):
+        log.warning("EnumWindows failed; window scan incomplete")
     return out
 
 

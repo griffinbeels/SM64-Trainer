@@ -104,6 +104,8 @@ class SegmentWriter:
         if (h & 1) or (w & 1):
             bgra = bgra[:h & ~1, :w & ~1]
             h, w = bgra.shape[:2]
+        if self._container is not None and frame_index < self._seg_next_index:
+            return  # backwards/duplicate index — drop silently to preserve monotonic utc_end
         if self._container is not None and (
                 (w, h) != self._dims
                 or self._seg_frames >= self._frames_per_seg
@@ -167,6 +169,10 @@ class SegmentWriter:
             log.exception("flush failed closing segment %s — segment may be incomplete", path)
             try:
                 container.close()
+            except Exception:
+                pass
+            try:
+                path.unlink(missing_ok=True)
             except Exception:
                 pass
             return
