@@ -45,12 +45,18 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
                 service.db = None
                 service.session_id = None
         if replay is not None:
-            replay.lifecycle_start()
+            try:
+                replay.lifecycle_start()
+            except Exception:
+                log.exception("replay start failed - continuing without replay")
         task = asyncio.create_task(poller.run())
         task.add_done_callback(_log_poller_exit)
         yield
         if replay is not None:
-            replay.lifecycle_stop()
+            try:
+                replay.lifecycle_stop()
+            except Exception:
+                log.exception("replay stop failed - continuing shutdown")
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task

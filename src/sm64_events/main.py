@@ -11,6 +11,13 @@ from sm64_events.detectors.dust import DustTrickDetector
 from sm64_events.detectors.lifecycle import GameResetDetector
 from sm64_events.detectors.star_grab import StarGrabDetector
 from sm64_events.memory.pj64 import Pj64Memory
+from sm64_events.replay.audio import ProcessAudioSource, SystemAudioSource
+from sm64_events.replay.config import ReplayConfig
+from sm64_events.replay.extract import ClipExtractor
+from sm64_events.replay.recorder import ReplayRecorder
+from sm64_events.replay.service import ReplayService
+from sm64_events.replay.video import WgcVideoSource
+from sm64_events.replay.window import find_window
 from sm64_events.server.app import create_app
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.server.poller import Poller
@@ -46,6 +53,22 @@ def build():
                 "database unavailable - running broadcast-only")
             db = None
     service = TrackerService(db, broadcaster)
+    replay_cfg = ReplayConfig()
+    replay = None
+    if replay_cfg.enabled:
+        from sm64_events.replay.encoder import pick_video_codec
+        codec = pick_video_codec()
+        recorder = ReplayRecorder(
+            cfg=replay_cfg,
+            window_finder=find_window,
+            video_factory=WgcVideoSource,
+            audio_factory=ProcessAudioSource,
+            fallback_audio_factory=lambda rate: SystemAudioSource(rate=rate),
+            codec=codec)
+        replay = ReplayService(
+            cfg=replay_cfg, recorder=recorder,
+            extractor=ClipExtractor(cfg=replay_cfg, codec=codec),
+            tracker=service)
     # Order is load-bearing: level changes abandon stale attempts BEFORE the
     # same tick's igt-reset anchor opens the next one; resets before grabs
     # (see projection.py docstring on the same-tick race); dust tricks before
@@ -53,7 +76,7 @@ def build():
     detectors = [GameResetDetector(), LevelChangeDetector(), AnchorDetector(),
                  DeathDetector(), DustTrickDetector(), StarGrabDetector()]
     poller = Poller(memory, detectors, service)  # service IS the event sink
-    return create_app(poller, broadcaster, service=service)
+    return create_app(poller, broadcaster, service=service, replay=replay)
 
 
 app = build()
