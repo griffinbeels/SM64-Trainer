@@ -45,3 +45,29 @@ def test_pcm_continuity_fills_idle_gaps_only():
     assert fill == 48000 * 3
     g.on_delivered(fill)
     assert g.fill_before(40_000_000) == 0
+
+
+def test_audio_pump_orders_fills_and_data_off_callback():
+    """The pump consumes (bytes, qpc) pairs on its own thread: idle gaps
+    become silence BEFORE the late data, and every delivered byte reaches
+    on_pcm in order."""
+    import time
+    import numpy as np
+    from sm64_events.replay._system_audio import AudioPump
+    from sm64_events.replay.audio import PcmContinuity
+
+    out = []
+    guard = PcmContinuity(rate=48000, qpc_start_100ns=0)
+    pump = AudioPump(48000, lambda a: out.append(a.copy()), guard)
+    one = np.ones((480, 2), dtype=np.int16)  # 10ms of "audio"
+
+    pump.feed(one.tobytes(), 100_000, 0)          # 10ms mark: no gap
+    pump.feed(one.tobytes(), 30_000_000, 0)       # 3s mark: ~3s idle gap
+    deadline = time.monotonic() + 5
+    while len(out) < 3 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    pump.stop()
+    assert len(out) == 3
+    assert np.array_equal(out[0], one)            # first packet, no fill
+    assert (out[1] == 0).all() and len(out[1]) > 48000 * 2  # the idle fill
+    assert np.array_equal(out[2], one)            # late packet after fill

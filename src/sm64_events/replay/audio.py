@@ -153,9 +153,11 @@ class SystemAudioSource:
         self._pid = pid
         self._stream = None
         self._pa = None
+        self._pump = None
 
     def start(self, on_pcm) -> None:
         import pyaudiowpatch as pyaudio
+        from sm64_events.replay._system_audio import AudioPump
         from sm64_events.replay.clock import qpc_100ns
 
         # Epoch FIRST: the writer's audio t0 is stamped (by the recorder)
@@ -186,16 +188,15 @@ class SystemAudioSource:
                             "rate without resample (v1 limitation)",
                             loopback["defaultSampleRate"], self._rate)
 
+            self._pump = AudioPump(self._rate, on_pcm, guard)
+            pump_feed = self._pump.feed
+
+            # REAL-TIME RULE: this callback runs on PortAudio's thread with a
+            # ~21 ms buffer behind it. It must NEVER touch the recorder lock,
+            # the writer, the disk, or logging — any stall drops packets
+            # (measured 6% sustained loss with the old in-callback work).
             def cb(in_data, frame_count, time_info, status):
-                fill = guard.fill_before(qpc_100ns())
-                if fill:
-                    log.info("audio idle gap: injecting %.1f s of silence to "
-                             "keep the sample clock wall-true", fill / self._rate)
-                    on_pcm(np.zeros((fill, 2), dtype=np.int16))
-                    guard.on_delivered(fill)
-                data = np.frombuffer(in_data, dtype=np.int16).reshape(-1, 2)
-                on_pcm(data)
-                guard.on_delivered(len(data))
+                pump_feed(in_data, qpc_100ns(), status)
                 return (None, pyaudio.paContinue)
 
             self._stream = self._pa.open(
@@ -207,6 +208,9 @@ class SystemAudioSource:
             # The recorder only stop()s sources whose start() succeeded —
             # a partial failure here must release the PyAudio COM handle
             # itself or it leaks until GC.
+            if self._pump is not None:
+                self._pump.stop()
+                self._pump = None
             self._pa.terminate()
             self._pa = None
             raise
@@ -216,6 +220,9 @@ class SystemAudioSource:
             self._stream.stop_stream()
             self._stream.close()
             self._stream = None
+        if self._pump is not None:
+            self._pump.stop()
+            self._pump = None
         if self._pa is not None:
             self._pa.terminate()
             self._pa = None
