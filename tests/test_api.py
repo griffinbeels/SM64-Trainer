@@ -172,3 +172,72 @@ def test_replay_failure_degrades_to_broadcast_only(tmp_path, monkeypatch):
     with TestClient(app) as client:   # startup must NOT raise
         assert client.get("/health").json()["db"] == "error"
         assert client.get("/api/session").status_code == 503
+
+
+# -- scope param tests --------------------------------------------------------
+
+def test_session_scope_param_lifetime_echoed(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)
+        r = client.get("/api/session?scope=lifetime")
+        assert r.status_code == 200
+        assert r.json()["scope"] == "lifetime"
+
+
+def test_session_scope_param_invalid_returns_422(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.get("/api/session?scope=bogus")
+        assert r.status_code == 422
+
+
+# -- session continue/delete endpoint tests -----------------------------------
+
+def test_session_continue_happy_path(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)
+        s1 = service.session_id  # = 1
+        # open a new session so s1 is a past session
+        asyncio.run(service.new_session())
+        r = client.post("/api/session/continue", json={"session_id": s1})
+        assert r.status_code == 200
+        assert r.json()["session_id"] == s1
+
+
+def test_session_continue_unknown_returns_404(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.post("/api/session/continue", json={"session_id": 999})
+        assert r.status_code == 404
+
+
+def test_session_delete_active_returns_409(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)
+        active = service.session_id
+        r = client.delete(f"/api/session/{active}")
+        assert r.status_code == 409
+
+
+def test_session_delete_unknown_returns_404(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.delete("/api/session/999")
+        assert r.status_code == 404
+
+
+def test_session_delete_past_session_removes_from_sessions_list(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)
+        s1 = service.session_id  # = 1
+        asyncio.run(service.new_session())  # now active = 2
+        r = client.delete(f"/api/session/{s1}")
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+        view = client.get("/api/session").json()
+        ids = [s["id"] for s in view["sessions"]]
+        assert s1 not in ids

@@ -1,8 +1,10 @@
 """SQLite store: append-only event journal + derived/materialized tables.
 
-The journal is the source of truth; `attempts` is a rebuildable cache of
-tracking.projection.project(events). Sync sqlite3 behind a lock: writes are
-one tiny row per game event, far below any contention threshold."""
+The journal is the source of truth — append-only, except whole-session
+deletion, a user-level operation (delete_session). `attempts` is a
+rebuildable cache of tracking.projection.project(events). Sync sqlite3
+behind a lock: writes are one tiny row per game event, far below any
+contention threshold."""
 import json
 import sqlite3
 import threading
@@ -121,6 +123,26 @@ class Database:
         with self._lock:
             self._conn.execute("UPDATE sessions SET ended_utc=? WHERE id=?",
                                (ended_utc, session_id))
+            self._conn.commit()
+
+    def sessions(self) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT s.id, s.started_utc, s.ended_utc, s.label,"
+                " (SELECT COUNT(*) FROM attempts a WHERE a.session_id = s.id)"
+                "   AS attempts"
+                " FROM sessions s ORDER BY s.id DESC").fetchall()
+            return [dict(r) for r in rows]
+
+    def delete_session(self, session_id: int) -> None:
+        """Hard-deletes the session's journal slice. The attempts cache is
+        NOT touched here — callers must re-project afterwards (the journal
+        is the source of truth). PB rows survive: they carry their frames;
+        a dangling attempt_id is informational only."""
+        with self._lock:
+            self._conn.execute("DELETE FROM events WHERE session_id=?",
+                               (session_id,))
+            self._conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
             self._conn.commit()
 
     # -- attempts (derived cache) -------------------------------------------

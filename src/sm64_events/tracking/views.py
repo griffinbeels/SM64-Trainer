@@ -6,6 +6,36 @@ from sm64_events.memory.addresses import (COURSE_NAMES, STAR_NAMES,
                                           course_name, star_name)
 from sm64_events.stats.registry import DEFAULT_STAT_MENU, REGISTRY, compute_stat
 
+# Timeline markers (per-star event graph): outcome -> IGT extractor.
+# Adding a marker kind is one row here (+ a style row in ui timeline.js).
+# The axis is IGT-based by design: resets/deaths only have an IGT position.
+TIMELINE_OUTCOMES = {
+    "success": lambda a: a.igt_frames,
+    "reset": lambda a: a.igt_frames,
+    "death": lambda a: a.igt_frames,
+}
+
+
+def _timeline(history) -> dict | None:
+    """X axis 0 -> longest SUCCESSFUL grab; every qualifying attempt is a
+    point at its IGT position. Points may exceed max_frames (a reset later
+    than the best success) — the UI extends the axis as needed."""
+    points = []
+    for a in history:
+        if a.cleared or a.outcome not in TIMELINE_OUTCOMES:
+            continue
+        frames = TIMELINE_OUTCOMES[a.outcome](a)
+        if frames is None:
+            continue
+        points.append({"frames": frames, "igt": format_igt(frames),
+                       "outcome": a.outcome, "attempt_id": a.id})
+    if not points:
+        return None
+    succ = [p["frames"] for p in points if p["outcome"] == "success"]
+    max_frames = max(succ) if succ else max(p["frames"] for p in points)
+    return {"max_frames": max_frames, "max_display": format_igt(max_frames),
+            "points": points}
+
 
 def _fmt(value, fmt):
     if value is None:
@@ -67,17 +97,20 @@ def _strategies_for(registered: dict, attempts, course_id: int, star_id: int) ->
     return out
 
 
-def build_session_view(db, service, clock: str) -> dict:
+def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     all_attempts = db.attempts()
     session_attempts = [a for a in all_attempts
                         if a.session_id == service.session_id]
+    # scoped determines which attempts drive the seen-set, in_section lists,
+    # and unassigned list. Stats always use lifetime (all_attempts).
+    scoped = all_attempts if scope == "lifetime" else session_attempts
     pbs = _current_pbs(db)
     stat_menu = db.get_state("stat_menu", default=DEFAULT_STAT_MENU)
     registered = db.get_state("strategies", {})
 
     sections, unassigned = [], []
     seen: dict[tuple[int, int], None] = {}
-    for a in session_attempts:
+    for a in scoped:
         if a.course_id is None:
             unassigned.append(_attempt_json(a, pbs, clock))
         else:
@@ -86,7 +119,7 @@ def build_session_view(db, service, clock: str) -> dict:
     for course_id, star_id in seen:
         history = [a for a in all_attempts
                    if a.course_id == course_id and a.star_id == star_id]
-        in_session = [a for a in history if a.session_id == service.session_id]
+        in_section = [a for a in history if a in set(scoped)]
         stats = []
         for sel in stat_menu:
             if sel["key"] not in REGISTRY:
@@ -114,15 +147,18 @@ def build_session_view(db, service, clock: str) -> dict:
             "star_name": star_name(course_id, star_id),
             "links": star_links(course_id, star_id),
             "pb": pb_json,
-            "attempts": [_attempt_json(a, pbs, clock) for a in in_session],
+            "attempts": [_attempt_json(a, pbs, clock) for a in in_section],
             "stats": stats,
             "strategies": _strategies_for(registered, all_attempts, course_id, star_id),
             "last_strat": service.strat_by_star.get((course_id, star_id)),
+            "timeline": _timeline(history),
         })
 
     tgt_c, tgt_s = service.target if service.target else (None, None)
     return {
         "session": {"id": service.session_id},
+        "scope": scope,
+        "sessions": db.sessions(),
         "clock": clock,
         "target": {"course_id": tgt_c, "star_id": tgt_s,
                    "course_name": course_name(tgt_c) if tgt_c is not None else None,

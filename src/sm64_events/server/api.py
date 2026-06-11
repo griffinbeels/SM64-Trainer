@@ -32,6 +32,10 @@ class SessionBody(BaseModel):
     label: str | None = None
 
 
+class ContinueBody(BaseModel):
+    session_id: int
+
+
 class StatSelection(BaseModel):
     key: str
     params: dict = {}
@@ -53,12 +57,14 @@ def create_api_router(service) -> APIRouter:
     router = APIRouter(prefix="/api")
 
     @router.get("/session")
-    def session(clock: str = "igt"):
+    def session(clock: str = "igt", scope: str = "session"):
         if clock not in ("igt", "rta"):
             raise HTTPException(422, "clock must be igt or rta")
+        if scope not in ("session", "lifetime"):
+            raise HTTPException(422, "scope must be session or lifetime")
         if service.db is None:
             raise HTTPException(503, "database unavailable")
-        return build_session_view(service.db, service, clock=clock)
+        return build_session_view(service.db, service, clock=clock, scope=scope)
 
     @router.post("/session/new")
     async def session_new(body: SessionBody):
@@ -67,6 +73,22 @@ def create_api_router(service) -> APIRouter:
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"session_id": sid}
+
+    @router.post("/session/continue")
+    async def session_continue(body: ContinueBody):
+        try:
+            sid = await service.continue_session(body.session_id)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"session_id": sid}
+
+    @router.delete("/session/{session_id}")
+    async def session_delete(session_id: int):
+        try:
+            await service.delete_session(session_id)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True}
 
     @router.post("/target")
     async def target(body: TargetBody):

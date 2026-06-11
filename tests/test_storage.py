@@ -79,3 +79,44 @@ def test_pbs_and_ui_state(tmp_path):
     assert db.get_state("stat_menu", default=[1]) == [1]
     db.set_state("stat_menu", [{"key": "best"}])
     assert db.get_state("stat_menu", default=None) == [{"key": "best"}]
+
+
+def test_sessions_returns_newest_first_with_attempt_counts(tmp_path):
+    from sm64_events.tracking.projection import Attempt
+    db = make_db(tmp_path)
+    s1 = db.insert_session("2026-06-10T10:00:00Z")
+    s2 = db.insert_session("2026-06-10T11:00:00Z")
+    # upsert two attempts under session 1
+    for i, aid in enumerate([10, 11]):
+        a = Attempt(id=aid, session_id=s1, course_id=2, star_id=2,
+                    strat_tag=None, anchor_type="practice_reset",
+                    anchor_frame=100 * (i + 1), outcome="success",
+                    outcome_detail=None, igt_frames=343, rta_frames=350,
+                    started_utc="2026-06-10T10:00:00Z",
+                    ended_utc="2026-06-10T10:00:10Z",
+                    cleared=False, cleared_reason=None)
+        db.upsert_attempt(a)
+    rows = db.sessions()
+    # newest first
+    assert rows[0]["id"] == s2 and rows[1]["id"] == s1
+    assert rows[1]["attempts"] == 2
+    assert rows[0]["attempts"] == 0
+
+
+def test_delete_session_removes_events_and_row_leaves_others(tmp_path):
+    db = make_db(tmp_path)
+    s1 = db.insert_session("2026-06-10T10:00:00Z")
+    s2 = db.insert_session("2026-06-10T11:00:00Z")
+    db.append_event(s1, seq=1, event=ev())
+    db.append_event(s1, seq=2, event=ev())
+    db.append_event(s2, seq=1, event=ev())
+    assert len(db.events()) == 3
+    db.delete_session(s1)
+    remaining = db.events()
+    assert len(remaining) == 1 and remaining[0].session_id == s2
+    # session row gone
+    row = db._conn.execute("SELECT * FROM sessions WHERE id=?", (s1,)).fetchone()
+    assert row is None
+    # session 2 still there
+    row2 = db._conn.execute("SELECT * FROM sessions WHERE id=?", (s2,)).fetchone()
+    assert row2 is not None

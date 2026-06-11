@@ -200,3 +200,31 @@ class TrackerService:
                                  payload={"session_id": self.session_id,
                                           "label": label}))
         return self.session_id
+
+    async def continue_session(self, session_id: int) -> int:
+        """Resume an old session: new events land in it from now on."""
+        db = self._require_db()
+        if not any(s["id"] == session_id for s in db.sessions()):
+            raise LookupError(f"no session {session_id}")
+        if session_id == self.session_id:
+            return session_id
+        db.end_session(self.session_id, _iso(_now()))
+        self.session_id = session_id
+        await self.publish(Event(type="session_started", frame=0,
+                                 timestamp_utc=_now(),
+                                 payload={"session_id": session_id,
+                                          "resumed": True}))
+        return session_id
+
+    async def delete_session(self, session_id: int) -> None:
+        """Hard-delete a past session's data and re-derive everything.
+        Caveat: clear/restore command events recorded IN the deleted
+        session vanish with it, so attempts they affected in OTHER
+        sessions revert on re-projection."""
+        db = self._require_db()
+        if session_id == self.session_id:
+            raise ValueError("cannot delete the active session")
+        if not any(s["id"] == session_id for s in db.sessions()):
+            raise LookupError(f"no session {session_id}")
+        db.delete_session(session_id)
+        await self._reproject()

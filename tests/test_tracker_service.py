@@ -170,3 +170,94 @@ def test_pipeline_survives_attempt_persist_failure(tmp_path):
     svc2 = TrackerService(db2, Broadcaster())
     asyncio.run(svc2.start())                      # replay self-heals
     assert any(a.outcome == "success" for a in db2.attempts())
+
+
+# -- continue_session tests ---------------------------------------------------
+
+def test_continue_session_routes_new_events_to_old_session(tmp_path):
+    db, svc = make(tmp_path)
+    # Build a star in session 1
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350)))
+    s1 = svc.session_id
+    # Start session 2
+    asyncio.run(svc.new_session())
+    s2 = svc.session_id
+    assert s2 == 2
+    # Continue session 1: new events land in s1
+    asyncio.run(svc.continue_session(s1))
+    assert svc.session_id == s1
+    asyncio.run(svc.publish(ev("practice_reset", 2000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(2400)))
+    # All new journal rows after the continue belong to s1
+    new_rows = [e for e in db.events() if e.type == "star_collected" and e.session_id == s1]
+    assert len(new_rows) == 2
+    # The new attempt's session_id matches s1
+    success_attempts = [a for a in db.attempts() if a.outcome == "success" and a.session_id == s1]
+    assert len(success_attempts) == 2
+
+
+def test_continue_session_emits_session_started_with_resumed(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.new_session())
+    s1 = 1
+    asyncio.run(svc.continue_session(s1))
+    journal = db.events()
+    resumed_events = [e for e in journal
+                      if e.type == "session_started" and e.payload.get("resumed") is True]
+    assert len(resumed_events) == 1
+    assert resumed_events[0].payload["session_id"] == s1
+
+
+def test_continue_session_unknown_id_raises_lookup_error(tmp_path):
+    db, svc = make(tmp_path)
+    with pytest.raises(LookupError):
+        asyncio.run(svc.continue_session(999))
+
+
+def test_continue_session_active_is_noop(tmp_path):
+    db, svc = make(tmp_path)
+    active = svc.session_id
+    before_count = len(db.events())
+    result = asyncio.run(svc.continue_session(active))
+    assert result == active
+    # No new session_started event appended (no-op)
+    after_count = len(db.events())
+    assert after_count == before_count
+
+
+# -- delete_session tests -----------------------------------------------------
+
+def test_delete_session_removes_events_and_reprojects(tmp_path):
+    db, svc = make(tmp_path)
+    # Session 1: one success
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350)))
+    s1_attempt_count = len([a for a in db.attempts() if a.session_id == 1])
+    # Session 2: another success (active)
+    asyncio.run(svc.new_session())
+    asyncio.run(svc.publish(ev("practice_reset", 5000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(5400)))
+    # Delete session 1
+    asyncio.run(svc.delete_session(1))
+    # Session 1 events are gone
+    s1_events = [e for e in db.events() if e.session_id == 1]
+    assert s1_events == []
+    # Session 1 attempts are gone from the cache
+    s1_attempts = [a for a in db.attempts() if a.session_id == 1]
+    assert s1_attempts == []
+    # Session 2 attempts still intact
+    s2_attempts = [a for a in db.attempts() if a.session_id == 2]
+    assert len(s2_attempts) >= 1
+
+
+def test_delete_active_session_raises_value_error(tmp_path):
+    db, svc = make(tmp_path)
+    with pytest.raises(ValueError):
+        asyncio.run(svc.delete_session(svc.session_id))
+
+
+def test_delete_unknown_session_raises_lookup_error(tmp_path):
+    db, svc = make(tmp_path)
+    with pytest.raises(LookupError):
+        asyncio.run(svc.delete_session(999))
