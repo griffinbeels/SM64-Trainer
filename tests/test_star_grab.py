@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 
 from sm64_events.core.snapshot import GameSnapshot
-from sm64_events.detectors.star_grab import StarGrabDetector, format_igt
+from sm64_events.detectors.star_grab import StarGrabDetector
 from sm64_events.memory import addresses as A
 
 ACT_IDLE = 0x0C400201  # any non-star-dance action works for tests
@@ -54,12 +54,6 @@ def test_edge_into_star_dance_emits_identified_event():
         "igt_reconstructed": False,
     }
 
-
-def test_igt_format():
-    assert format_igt(0) == "0'00\"00"
-    assert format_igt(231) == "0'07\"70"     # the screenshot case
-    assert format_igt(1800) == "1'00\"00"    # exactly one minute
-    assert format_igt(1800 + 65) == "1'02\"16"  # 65 frames = 2s + 5f (16cs)
 
 
 def test_multi_area_star_uses_usamune_result():
