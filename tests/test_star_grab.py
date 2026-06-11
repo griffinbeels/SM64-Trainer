@@ -55,7 +55,6 @@ def test_edge_into_star_dance_emits_identified_event():
     }
 
 
-
 def test_multi_area_star_uses_usamune_result():
     # SSL "Inside the Ancient Pyramid" regression: the section counter
     # resets at the area warp, but Usamune writes the exact overall star

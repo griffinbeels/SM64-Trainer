@@ -9,19 +9,69 @@ follow the pointers instead of duplicating here.
 ```
 Project64 1.6 process (Windows)
       │  ReadProcessMemory, ~60 Hz poll (game logic runs at 30 fps)
-┌─────▼──────────┐   GameSnapshot     ┌──────────────┐   Event     ┌───────────────┐
-│ memory/pj64.py  │ ─────────────────▶ │ detectors/*  │ ──────────▶ │ server/        │
-│ attach, RDRAM   │  core/snapshot.py  │ (prev,curr)→ │             │ broadcaster +  │
-│ scan, endian    │                    │ events       │             │ FastAPI + WS   │
-└────────▲───────┘                    └──────────────┘             └──────┬────────┘
-┌────────┴───────┐                                                  ui/index.html,
-│ memory/        │                                                  overlays, stats
-│ addresses.py   │  ← single registry: addresses, actions, names    consumers
-└────────────────┘
+┌─────▼──────────┐   GameSnapshot     ┌──────────────┐   Event
+│ memory/pj64.py  │ ─────────────────▶ │ detectors/*  │ ──────────▶ ─────────────────────────────────────────┐
+│ attach, RDRAM   │  core/snapshot.py  │ (prev,curr)→ │                                                      │
+│ scan, endian    │                    │ events       │                                                      │
+└────────▲───────┘                    └──────────────┘                                                      │
+┌────────┴───────┐                                                                                           ▼
+│ memory/        │                                                                             ┌─────────────────────────┐
+│ addresses.py   │  ← single registry: addresses, actions, names                              │ TrackerService           │
+└────────────────┘                                                                             │ broadcast → journal →   │
+                                                                                               │ project → attempt_      │
+                                                                                               │ completed derived event │
+                                                                                               └──────┬────────┬─────────┘
+                                                                                                      │        │
+                                                                                           ┌──────────▼──┐  ┌──▼────────────┐
+                                                                                           │ storage/    │  │ server/        │
+                                                                                           │ tracker.db  │  │ broadcaster +  │
+                                                                                           │ (journal,   │  │ FastAPI + WS   │
+                                                                                           │ attempts,   │  │ /api/* REST    │
+                                                                                           │ sessions,   │  └──────┬────────┘
+                                                                                           │ pbs)        │         │
+                                                                                           └─────────────┘  ui/index.html,
+                                                                                                            overlays,
+                                                                                                            consumers
 ```
 
 Polling at 60 Hz against 30 fps logic observes every game frame. Detectors
 hold no I/O; the poller holds no game logic; `main.py` wires everything.
+`TrackerService` is the event sink: it broadcasts first (liveness never gated
+on the db), then journals, then feeds the projector; derived `attempt_completed`
+events re-enter the same pipeline (the projector ignores derived types — no
+recursion possible).
+
+## Attempt tracking (phase 1, 2026-06-10)
+
+Design decisions and their evidence — recorded so the choices aren't re-litigated.
+
+**Attempt ID = journal id of the attempt's first event.** Stable across
+full re-projections; survives server restarts. For anchored attempts the
+first event is the anchor (practice_reset or state_loaded), not the
+star_collected. See `tracking/projection.py` docstring — the clearing
+invariant and the reset-race row both turn on this ID definition.
+
+**Two-pass projection for retroactive clearing.**
+`cleared_ids()` runs first (one linear scan) to build a tombstone map;
+then `Projector.feed()` runs sequentially with that map baked in. Effect:
+marking a grab as a mistake (`attempt_cleared`) retroactively re-attributes
+every later failure to the previous valid practice target. Implemented in
+`tracking/projection.py`; semantics in its docstring.
+
+**Broadcast-before-journal ordering** (liveness never gated on the db).
+`TrackerService.publish()` calls `broadcaster.publish()` first, then
+journals, then projects. A DB failure is caught, logged, and swallowed —
+the poll loop never dies (spec §9, `tracking/service.py` docstring).
+
+**Per-event-commit latency.** Each game event is a single-row INSERT
+committed immediately (SQLite WAL mode). Measured worst-case: a 4-commit
+grab tick (anchor + star_collected + attempt_completed + target_changed)
+ran 3.5 ms median / 5.8 ms max, well within the 16.6 ms 60 Hz budget.
+
+**Full re-projection cost** (`_reproject()`, triggered by clear/restore
+commands — not on the poll path). Measured: ~6.5 ms @ 100 events, ~23 ms
+@ 1,000 events, ~97 ms @ 5,000 events. Acceptable for an explicit user
+command; would need batching if it became per-tick.
 
 ## Where the deep facts live (authoritative homes)
 
@@ -85,14 +135,25 @@ Principles:
   endian path.
 - Server: `tick()` is the testable unit; endpoints via TestClient with an
   OfflineMemory stub; WS tested end-to-end through the debug emit route.
+- Tracking: synthetic event sequences fed through `TrackerService` verify
+  attempt outcomes; journal rebuild (`replay(db.events())`) doubles as the
+  projection's correctness oracle — if the rebuilt attempts match the
+  materialized table, the two-pass invariant holds.
+- UI: frontend smoke via Chrome DevTools MCP after each UI change.
 - Live gate: `tools/verify_addresses.py` Phase 2 runs the REAL detector —
   required for any memory-layer change.
 
 ## Roadmap (unbuilt)
 
-- Stats consumer (attempt logs, last-N averages, reset counts) as a
-  separate `/ws/events` client — payload already carries what it needs.
+Delivered in phase 1: attempt tracking, stats registry, REST API, Practice
+tab UI (features #3, #4, #6, #9, #11 from the spec). Remaining phases per
+`docs/superpowers/specs/2026-06-10-practice-tracker-platform-design.md §11`:
+
+- **Phase 2** — New detectors: RolloutDetector, DeathDetector,
+  LevelChangeDetector. Requires snapshot fields + live VERIFY session.
+  Turns on `dustless_rate` stat and full `outcome_detail` vocabulary.
+- **Phase 3** — TriggerDetector (door/key-door rows), MenuDetector
+  (menu-open address hunt required). Delivers menu-failure attempt outcome.
+- **Phase 4** — Routes storage + probability board + Routes tab.
 - Dedicated key / grand-star events (Bowser key grabs currently emit
-  star_collected with course 16/17 — documented limitation).
-- Richer tracker overlay (ui zone or a new top-level frontend/).
-- More detectors: deaths, level entry, coin count.
+  star_collected with course_id 16/17 — documented limitation).

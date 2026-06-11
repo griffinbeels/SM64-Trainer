@@ -20,7 +20,7 @@ FastAPI + uvicorn, pymem, pytest.
 ```
 uv sync
 uv run pytest -q                                     # MUST pass before any merge
-uv run uvicorn sm64_events.main:app --host 127.0.0.1 --port 8064
+uv run uvicorn sm64_events.main:app --host 127.0.0.1 --port 8064   # run from repo root (data/ is cwd-relative)
 uv run python tools/verify_addresses.py              # live gate (needs PJ64 + ROM)
 ```
 
@@ -36,10 +36,19 @@ uv run python tools/verify_addresses.py              # live gate (needs PJ64 + R
 | Event envelope / wire format | `core/events.py` |
 | Star-grab + IGT logic | `detectors/star_grab.py` — docstrings carry the domain rationale |
 | game_reset | `detectors/lifecycle.py` |
+| Attempt anchors (practice_reset / state_loaded) | `detectors/anchors.py` — docstring covers classification logic and VERIFY note |
 | Poll loop, attach retry, layout sanity | `server/poller.py` |
 | WS fan-out, seq numbers | `server/broadcaster.py` |
 | HTTP/WS endpoints | `server/app.py` |
+| REST API + error taxonomy | `server/api.py` — docstring has the LookupError/ValueError/RuntimeError→HTTP mapping |
+| Attempt state machine / projection | `tracking/projection.py` — docstrings carry the two-pass clearing, reset-race row, clear-by-anchor-id invariant |
+| Event pipeline + commands (journal→project→broadcast) | `tracking/service.py` |
+| Session view payload | `tracking/views.py` |
+| SQLite journal + derived tables | `storage/db.py` |
+| Stats | `stats/registry.py` — ONE StatDef per stat; THE registry |
+| Per-star external links | `links.py` |
 | Built-in viewer UI | `ui/index.html` — served per request: edit + refresh, no restart |
+| UI components, store, API client | `ui/components/` · `ui/store.js` · `ui/api.js` · `ui/app.js`; vendored Preact in `ui/vendor/` |
 | Wiring / startup / logging | `main.py` (composition root), `core/logging_setup.py` |
 | Memory-hunting diagnostics | `tools/` — playbook in docs/architecture.md |
 
@@ -49,11 +58,13 @@ uv run python tools/verify_addresses.py              # live gate (needs PJ64 + R
 ## Parallel work zones
 
 Safe to work concurrently (one branch/worktree each): **detectors/**,
-**server/**, **ui/**, **memory/ + tools/**, **docs/** — each with its tests.
+**server/**, **ui/**, **memory/ + tools/**, **storage/ + stats/ + tracking/**,
+**docs/** — each with its tests. The `storage/+stats/+tracking/` zone shares
+the `Attempt` contract internally; keep it in one branch.
 **Shared contracts — never edit in two branches at once:** `core/events.py`,
-`core/snapshot.py`, `memory/addresses.py`, `main.py`. Contract changes land
-on master first, then dependent work fans out. Merge with `--no-ff`; run the
-full suite on the merged result; delete the branch.
+`core/snapshot.py`, `memory/addresses.py`, `tracking/projection.py`, `main.py`.
+Contract changes land on master first, then dependent work fans out. Merge
+with `--no-ff`; run the full suite on the merged result; delete the branch.
 
 ## Domain rules
 
