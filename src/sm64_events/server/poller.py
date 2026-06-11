@@ -58,7 +58,13 @@ class Poller:
             return
         if self._prev is not None:
             for detector in self.detectors:
-                for event in detector.process(self._prev, curr):
+                try:
+                    events = detector.process(self._prev, curr)
+                except Exception:
+                    log.exception("detector %s failed; skipped this tick",
+                                  type(detector).__name__)
+                    continue
+                for event in events:
                     await self.broadcaster.publish(event)
         self._prev = curr
         self.latest = curr

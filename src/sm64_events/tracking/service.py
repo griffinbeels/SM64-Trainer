@@ -136,7 +136,9 @@ class TrackerService:
         await self._reproject()
 
     async def restore_attempt(self, attempt_id: int) -> None:
-        self._require_db()
+        db = self._require_db()
+        if not any(a.id == attempt_id for a in db.attempts()):
+            raise LookupError(f"no attempt {attempt_id}")
         await self.publish(Event(type="attempt_restored", frame=0,
                                  timestamp_utc=_now(),
                                  payload={"attempt_id": attempt_id}))

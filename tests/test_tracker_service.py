@@ -132,6 +132,12 @@ def test_reproject_emits_target_changed_when_target_reverts(tmp_path):
     assert tc[-1].payload["course_id"] == 8 and tc[-1].payload["star_id"] == 2
 
 
+def test_restore_unknown_attempt_raises_lookup_error(tmp_path):
+    db, svc = make(tmp_path)
+    with pytest.raises(LookupError):
+        asyncio.run(svc.restore_attempt(999))
+
+
 def test_pipeline_survives_attempt_persist_failure(tmp_path):
     db, svc = make(tmp_path)
     original = db.upsert_attempt
