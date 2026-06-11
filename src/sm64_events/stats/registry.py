@@ -4,6 +4,7 @@ stat menu renders from registry_meta(); nothing else changes anywhere.
 Every compute() sees attempts already scoped to one star by the caller,
 ordered by attempt id (chronological). Cleared attempts are excluded here,
 in one place. fmt tells the UI how to render: time | percent | int."""
+import copy
 from dataclasses import dataclass, field
 from typing import Callable, Sequence
 
@@ -28,7 +29,10 @@ def _times(attempts: Sequence[Attempt], clock: str) -> list[int]:
 
 
 def _avg_last_n(attempts, params, clock):
-    times = _times(attempts, clock)[-int(params["n"]):]
+    n = int(params["n"])
+    if n <= 0:
+        return None
+    times = _times(attempts, clock)[-n:]
     return sum(times) / len(times) if times else None
 
 
@@ -47,7 +51,7 @@ def _worst(attempts, params, clock):
     return max(times) if times else None
 
 
-def _attempt_count(attempts, params, clock):
+def _success_count(attempts, params, clock):
     return len([a for a in _live(attempts) if a.outcome == "success"])
 
 
@@ -75,7 +79,7 @@ REGISTRY: dict[str, StatDef] = {d.key: d for d in [
     StatDef("avg_lifetime", "Lifetime avg", "time", _avg_lifetime),
     StatDef("best", "Best", "time", _best),
     StatDef("worst", "Worst", "time", _worst),
-    StatDef("attempt_count", "Successes", "int", _attempt_count),
+    StatDef("success_count", "Successes", "int", _success_count),
     StatDef("success_rate", "Success rate", "percent", _success_rate,
             {"failures": DEFAULT_FAILURES}),
 ]}
@@ -94,5 +98,6 @@ def compute_stat(key: str, attempts: Sequence[Attempt], params: dict,
 
 
 def registry_meta() -> list[dict]:
-    return [{"key": d.key, "label": d.label, "fmt": d.fmt, "params": d.params}
+    return [{"key": d.key, "label": d.label, "fmt": d.fmt,
+             "params": copy.deepcopy(d.params)}
             for d in REGISTRY.values()]

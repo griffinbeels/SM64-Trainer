@@ -29,7 +29,7 @@ def test_avg_lifetime_best_worst_count():
     assert compute_stat("avg_lifetime", SAMPLE, {}, clock="igt") == 330
     assert compute_stat("best", SAMPLE, {}, clock="igt") == 300
     assert compute_stat("worst", SAMPLE, {}, clock="igt") == 360
-    assert compute_stat("attempt_count", SAMPLE, {}, clock="igt") == 2
+    assert compute_stat("success_count", SAMPLE, {}, clock="igt") == 2
 
 
 def test_clock_selects_rta():
@@ -55,6 +55,17 @@ def test_registry_meta_is_ui_renderable():
     meta = registry_meta()
     keys = {m["key"] for m in meta}
     assert {"avg_last_n", "avg_lifetime", "best", "worst",
-            "success_rate", "attempt_count"} <= keys
+            "success_rate", "success_count"} <= keys
     for m in meta:
         assert {"key", "label", "fmt", "params"} <= set(m)
+
+
+def test_avg_last_n_nonpositive_n_returns_none():
+    assert compute_stat("avg_last_n", SAMPLE, {"n": 0}, clock="igt") is None
+    assert compute_stat("avg_last_n", SAMPLE, {"n": -5}, clock="igt") is None
+
+
+def test_unknown_stat_key_fails_loud():
+    import pytest
+    with pytest.raises(KeyError):
+        compute_stat("nonexistent", SAMPLE, {}, clock="igt")
