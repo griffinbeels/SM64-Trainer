@@ -32,6 +32,13 @@ function AttemptRow({ a, t, idx }) {
     t.refresh();
   }
   const time = t.clock === "igt" ? a.igt : a.rta;
+  const frames = t.clock === "igt" ? a.igt_frames : a.rta_frames;
+  // Glow when saving would set a new PB: beats the recorded PB, or no PB
+  // exists yet. frames > 0 excludes same-tick race rows (rta=0 junk) whose
+  // "PB" would be meaningless.
+  const pbBeat = a.outcome === "success" && !a.cleared
+    && frames != null && frames > 0
+    && (a.pb_delta_frames === null || a.pb_delta_frames < 0);
   return html`<tr class=${a.cleared ? "cleared" : ""}>
     <td class="meta">#${idx + 1}</td>
     <td class=${a.outcome === "success" ? "good" : "badx"}>
@@ -45,7 +52,7 @@ function AttemptRow({ a, t, idx }) {
     <td class="meta">${a.strat_tag || ""}</td>
     <td style="text-align:right">
       ${a.outcome === "success" && !a.cleared
-        ? html`<button onclick=${savePb}>Save as PB</button> ` : ""}
+        ? html`<button class=${pbBeat ? "pb-glow" : ""} onclick=${savePb}>Save as PB</button> ` : ""}
       ${a.cleared
         ? html`<button onclick=${restore}>undo</button>`
         : html`<button onclick=${clear} title="clear (mistake)">×</button>`}

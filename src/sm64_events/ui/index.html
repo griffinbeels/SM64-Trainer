@@ -38,6 +38,9 @@
   .chips { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .35rem; }
   .chip { border: 1px solid #3a4150; border-radius: 999px; padding: .05rem .6rem; font-size: .85em; }
   .delta-up { color: #e0a3a3; } .delta-down { color: #a3e0a3; }
+  @keyframes pbglow { from { box-shadow: 0 0 3px #ffd75f; } to { box-shadow: 0 0 10px #ffd75f; } }
+  .pb-glow { border-color: #ffd75f; color: #ffd75f;
+             animation: pbglow 0.9s ease-in-out infinite alternate; }
   .popover { position: absolute; background: #1b1e24; border: 1px solid #3a4150;
              border-radius: 6px; padding: .7rem; z-index: 5; }
   li { margin: .25rem 0; list-style: none; } ul { padding: 0; }
