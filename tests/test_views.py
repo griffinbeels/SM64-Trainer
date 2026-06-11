@@ -272,3 +272,17 @@ def test_view_includes_sessions_list_newest_first(tmp_path):
     # session 1 had one attempt
     s1 = next(s for s in sessions if s["id"] == 1)
     assert s1["attempts"] == 1
+
+
+def test_attempt_json_carries_rollout_counts(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(ev("rollout", 1100,
+                               {"dustless": True, "frames_late": 0, "level": 24})))
+    asyncio.run(svc.publish(ev("rollout", 1200,
+                               {"dustless": False, "frames_late": 2, "level": 24})))
+    asyncio.run(svc.publish(star(1350)))
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    a = sec["attempts"][0]
+    assert a["rollouts_total"] == 2 and a["rollouts_dustless"] == 1
