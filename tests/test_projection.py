@@ -461,3 +461,109 @@ def test_pause_discard_applies_to_state_loaded_closures():
     ])
     assert [a.outcome for a in attempts] == ["success", "success"]
     assert attempts[1].id == 3
+
+
+# -- activity rule for all closure types (spec §2) ------------------------------
+
+def tracking_anchor(id, frame, igt_before=0):
+    """Anchor as the NEW detector emits it (acted_tracking marker)."""
+    return jev(id, "practice_reset", frame,
+               {"igt_frames_before": igt_before, "mario_acted": False,
+                "acted_tracking": True, "paused_frames_before": 0})
+
+
+def test_unacted_death_is_discarded_for_tracking_anchors():
+    attempts = project([
+        star(1, 900),
+        tracking_anchor(2, 1000),
+        jev(3, "death", 1300, {"cause": "quicksand", "igt_frames": 290}),
+    ])
+    assert [a.outcome for a in attempts] == ["success"]
+
+
+def test_acted_event_keeps_death():
+    attempts = project([
+        star(1, 900),
+        tracking_anchor(2, 1000),
+        jev(3, "mario_acted", 1100),
+        jev(4, "death", 1300, {"cause": "quicksand", "igt_frames": 290}),
+    ])
+    assert attempts[1].outcome == "death"
+    assert attempts[1].id == 2
+
+
+def test_unacted_abandon_is_discarded_for_tracking_anchors():
+    attempts = project([
+        star(1, 900),
+        tracking_anchor(2, 1000),
+        jev(3, "level_changed", 1600, {"from": 24, "to": 6}),
+    ])
+    assert [a.outcome for a in attempts] == ["success"]
+
+
+def test_unacted_hard_reset_is_discarded_for_tracking_anchors():
+    attempts = project([
+        star(1, 900),
+        tracking_anchor(2, 1000),
+        jev(3, "game_reset", 50),
+    ])
+    assert [a.outcome for a in attempts] == ["success"]
+
+
+def test_unacted_reset_closure_uses_event_not_closer_payload():
+    # closer claims mario_acted True, but the OPENING anchor tracks events
+    # and none arrived -> still dropped (event-based rule wins).
+    attempts = project([
+        star(1, 900),
+        tracking_anchor(2, 1000),
+        jev(3, "practice_reset", 1400,
+            {"igt_frames_before": 380, "mario_acted": True,
+             "acted_tracking": True, "paused_frames_before": 0}),
+    ])
+    assert [a.outcome for a in attempts] == ["success"]
+
+
+def test_success_is_never_discarded():
+    attempts = project([
+        tracking_anchor(1, 1000),
+        star(2, 1350),                       # no mario_acted event, still counts
+    ])
+    assert attempts[0].outcome == "success"
+
+
+def test_acted_state_resets_per_attempt():
+    attempts = project([
+        star(1, 900),
+        tracking_anchor(2, 1000),
+        jev(3, "mario_acted", 1100),
+        jev(4, "death", 1300, {"cause": "standing", "igt_frames": 250}),  # kept
+        tracking_anchor(5, 1400),
+        jev(6, "death", 1700, {"cause": "standing", "igt_frames": 250}),  # dropped
+    ])
+    assert [a.outcome for a in attempts] == ["success", "death"]
+
+
+def test_legacy_anchor_death_closure_is_kept():
+    # old journals have no acted_tracking marker and no mario_acted events:
+    # death/abandon closures keep today's semantics (always counted).
+    attempts = project([
+        star(1, 900),
+        jev(2, "practice_reset", 1000, {"igt_frames_before": 0}),
+        jev(3, "death", 1300, {"cause": "standing", "igt_frames": 290}),
+    ])
+    assert attempts[1].outcome == "death"
+
+
+def test_afk_discarded_attempt_drops_its_rollouts():
+    # twin of test_discarded_noop_reset_drops_its_rollouts for the AFK path:
+    # a rollout inside an AFK-discarded attempt must not leak into the grab.
+    attempts = project([
+        jev(1, "practice_reset", 1000, {"igt_frames_before": 0}),
+        jev(2, "rollout", 1100, {"dustless": True, "frames_late": 0, "level": 24}),
+        jev(3, "practice_reset", 1600,
+            {"igt_frames_before": 380, "mario_acted": True,
+             "paused_frames_before": 200}),
+        star(4, 1900, igt=95),
+    ])
+    assert len(attempts) == 1
+    assert attempts[0].rollouts_total == 0
