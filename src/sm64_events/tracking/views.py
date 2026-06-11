@@ -1,10 +1,22 @@
-"""Builds the GET /api/session payload. Times lists are session-scoped;
-stat chips compute over the star's full history (lifetime), per spec §8."""
+"""Builds the GET /api/session payload.
+
+Contract (the UI builds against ALL of this):
+- `scope` selects which attempts drive sections/attempt lists/unassigned:
+  "session" (default) = the active session, "lifetime" = everything.
+  Stat chips and the timeline ALWAYS compute over lifetime history (spec §8).
+- Star sections are ordered newest-activity-first (max scoped attempt id;
+  fresh targets sort last).
+- The practice target's section is ALWAYS present, even with zero scoped
+  attempts — the UI pins it as the active-star block.
+- Sections carry `markers_by_strat` (spec §3) and `progress` (spec §4,
+  scoped successes grouped per session)."""
 from sm64_events.core.timefmt import format_igt
 from sm64_events.links import star_links
 from sm64_events.memory.addresses import (COURSE_NAMES, STAR_NAMES,
                                           course_name, star_name)
-from sm64_events.stats.registry import DEFAULT_STAT_MENU, REGISTRY, compute_stat
+from sm64_events.stats.registry import (DEFAULT_STAT_MENU, REGISTRY,
+                                        compute_stat, selection_id,
+                                        selection_order)
 
 # Timeline markers (per-star event graph): outcome -> IGT extractor.
 # Adding a marker kind is one row here (+ a style row in ui timeline.js).
@@ -51,10 +63,10 @@ def _fmt(value, fmt):
     return str(value)
 
 
-def _current_pbs(db) -> dict:
+def _current_pbs(pb_rows: list[dict]) -> dict:
     """(course, star, mode) -> latest pb row."""
     out = {}
-    for row in db.pbs():  # ordered by id: later rows win
+    for row in pb_rows:  # ordered by id: later rows win
         out[(row["course_id"], row["star_id"], row["timer_mode"])] = row
     return out
 
@@ -106,6 +118,45 @@ def _strategies_for(registered: dict, attempts, course_id: int, star_id: int) ->
     return out
 
 
+def _markers_for(markers_state: dict, course_id: int, star_id: int) -> dict:
+    """strat -> sorted marker list for ONE star, from the ui_state KV
+    (key shape '<course>:<star>:<strat>', '' = no strategy)."""
+    prefix = f"{course_id}:{star_id}:"
+    return {k[len(prefix):]: v for k, v in markers_state.items()
+            if k.startswith(prefix)}
+
+
+def _progress(attempts, pb_ids: set, session_meta) -> dict | None:
+    """Completion-time-over-time points (spec §4): non-cleared successes of
+    the SCOPED attempt list, grouped by session, chronological. Gold =
+    explicitly saved PB rows (every save stays gold even when superseded).
+    rta race rows (rta_frames == 0) ship as-is; the UI filters them.
+    Resumed sessions append to their original segment; within-segment id
+    order is still chronological (journal ids are wall-clock monotonic)."""
+    by_session: dict[int, list] = {}
+    for a in attempts:
+        if a.outcome != "success" or a.cleared:
+            continue
+        by_session.setdefault(a.session_id, []).append({
+            "t_utc": a.ended_utc,
+            "igt_frames": a.igt_frames,
+            "rta_frames": a.rta_frames,
+            "igt": format_igt(a.igt_frames) if a.igt_frames is not None else None,
+            "rta": format_igt(a.rta_frames) if a.rta_frames is not None else None,
+            "attempt_id": a.id,
+            "is_pb_igt": (a.id, "igt") in pb_ids,
+            "is_pb_rta": (a.id, "rta") in pb_ids,
+        })
+    if not by_session:
+        return None
+    return {"sessions": [
+        {"session_id": sid,
+         "label": session_meta.get(sid, {}).get("label"),
+         "started_utc": session_meta.get(sid, {}).get("started_utc"),
+         "points": pts}
+        for sid, pts in sorted(by_session.items())]}
+
+
 def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     all_attempts = db.attempts()
     session_attempts = [a for a in all_attempts
@@ -113,9 +164,14 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     # scoped determines which attempts drive the seen-set, in_section lists,
     # and unassigned list. Stats always use lifetime (all_attempts).
     scoped = all_attempts if scope == "lifetime" else session_attempts
-    pbs = _current_pbs(db)
+    pb_rows = db.pbs()
+    pbs = _current_pbs(pb_rows)
+    pb_ids = {(r["attempt_id"], r["timer_mode"]) for r in pb_rows}
+    sessions_list = db.sessions()
+    session_meta = {s["id"]: s for s in sessions_list}
     stat_menu = db.get_state("stat_menu", default=DEFAULT_STAT_MENU)
     registered = db.get_state("strategies", {})
+    markers_state = db.get_state("timeline_markers", {})
 
     sections, unassigned = [], []
     seen: dict[tuple[int, int], None] = {}
@@ -125,15 +181,27 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         else:
             seen[(a.course_id, a.star_id)] = None
 
+    # the target star always gets a section (spec §5): setting a target
+    # immediately surfaces its lifetime history, PB, and markers.
+    if service.target and service.target not in seen:
+        seen[service.target] = None
+
     scoped_set = set(scoped)
     for course_id, star_id in seen:
         history = [a for a in all_attempts
                    if a.course_id == course_id and a.star_id == star_id]
         in_section = [a for a in history if a in scoped_set]
         stats = []
-        for sel in stat_menu:
+        seen_stat_ids: set[str] = set()
+        for sel in sorted(stat_menu,
+                          key=lambda s: selection_order(s.get("key", ""),
+                                                        s.get("params"))):
             if sel["key"] not in REGISTRY:
                 continue
+            sid = selection_id(sel["key"], sel.get("params"))
+            if sid in seen_stat_ids:
+                continue
+            seen_stat_ids.add(sid)
             d = REGISTRY[sel["key"]]
             try:
                 value = compute_stat(sel["key"], history, sel.get("params"), clock)
@@ -162,13 +230,24 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "strategies": _strategies_for(registered, all_attempts, course_id, star_id),
             "last_strat": service.strat_by_star.get((course_id, star_id)),
             "timeline": _timeline(history),
+            "markers_by_strat": _markers_for(markers_state, course_id, star_id),
+            "progress": _progress(in_section, pb_ids, session_meta),
         })
+
+    # newest activity first; scoped is journal-id-ordered so the last
+    # assignment per star is its max attempt id. Fresh targets (-1) sort last.
+    last_id: dict[tuple[int, int], int] = {}
+    for a in scoped:
+        if a.course_id is not None:
+            last_id[(a.course_id, a.star_id)] = a.id
+    sections.sort(key=lambda s: last_id.get((s["course_id"], s["star_id"]), -1),
+                  reverse=True)
 
     tgt_c, tgt_s = service.target if service.target else (None, None)
     return {
         "session": {"id": service.session_id},
         "scope": scope,
-        "sessions": db.sessions(),
+        "sessions": sessions_list,
         "clock": clock,
         "target": {"course_id": tgt_c, "star_id": tgt_s,
                    "course_name": course_name(tgt_c) if tgt_c is not None else None,

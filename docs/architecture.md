@@ -91,6 +91,59 @@ strategy. `PASSIVE_ACTIONS` and `DEATH_ACTIONS` sets are decomp-verified
 constants (see `detectors/death.py`) but remain marked VERIFY pending the
 live gate with the human.
 
+## Practice-quality round (2026-06-11)
+
+Garbage-run discards, markers, progress graph, pinned-target UI. Spec:
+`docs/superpowers/specs/2026-06-11-garbage-runs-markers-progress-ui-design.md`
+(decision log there is authoritative); castle fix:
+`docs/superpowers/plans/2026-06-11-castle-reset-attribution-addendum.md`.
+
+**AFK discard rides an inference, not an address.** "Paused in the Usamune
+menu" is inferred as: `igt_overall` frozen while `global_timer` advances
+(game logic stopped). The detector measures the streak
+(`detectors/anchors.py`), the projection owns the threshold
+(`PAUSE_DISCARD_FRAMES = 150`, `tracking/projection.py`) — mechanism/policy
+split. Known limits, accepted by design: pausing the EMULATOR freezes both
+clocks (not caught); dialog/cutscene time-stop also freezes IGT (a 5 s+
+sign-read then reset discards — AFK-adjacent). VERIFY: the menu-freeze
+assumption has not been instrument-confirmed live; if the rule never fires,
+check it with `tools/watch_timer.py` on USAMUNE_OVERALL vs GLOBAL_TIMER
+before reaching for the Phase-3 menu-address hunt.
+
+**Projection rules version themselves per attempt.** New discard semantics
+ride a payload marker on the OPENING anchor (`acted_tracking: true`), so
+attempts opened by old-detector anchors keep legacy semantics and journals
+replay byte-identical forever — no global version flags. Use this pattern
+for every future projection-rule change. Death actions are excluded from
+the activity trigger (a same-tick `mario_acted` would defeat the
+unacted-death discard — caught by tracing the live pipeline, not unit
+tests); water/airborne idle states are NOT in `PASSIVE_ACTIONS`, so an AFK
+drowning after a savestate-load into water still counts (accepted, same
+family as the knockback limitation).
+
+**Corrections flow through the journal, never around it.** The castle rule
+(`projection.py` caveat 9) made projector `_level` freshness load-bearing,
+which exposed that a stateless edge detector misses level changes across
+attach gaps. `LevelChangeDetector` now remembers the last level it EMITTED
+and journals establishing/corrective events (`from` may equal `to`) — the
+journal stays the single source of truth and live state can never diverge
+from rebuild. Never seed live projector state from a snapshot directly.
+`CASTLE_LEVELS` 16/26 (grounds/courtyard) remain VERIFY; 6 is
+journal-evidenced.
+
+**UI engineering invariants (pointers — details live at the code):**
+pixel→SVG coordinate mapping goes through `getScreenCTM().inverse()`, never
+bounding-box fractions (letterboxing; `timeline.js` clickToPlace comment);
+allocation floors must renormalize or they silently clip the newest data
+(`progress.js` segment-layout comment carries the worked thresholds);
+`*.map(component)` over stateful children needs `key=` in this push-driven
+UI or WS reorders migrate form state across stars (wrong-star writes —
+`practice.js`); htm does not decode HTML entities; stat-chip identity AND
+order are registry-owned (`stats/registry.py` `selection_id` /
+`selection_order`, mirrored once in `statmenu.js` keyOf) — never compare
+raw params; `ui/format.js` fmtIgt mirrors `core/timefmt.py` — keep in
+lockstep.
+
 ## Where the deep facts live (authoritative homes)
 
 - **Addresses, provenance, traps** (gCurrLevelNum trap, vanilla-HUD-timer
@@ -181,8 +234,15 @@ live-feedback round + incident-response from the spec). Remaining phases per
   action ids are VERIFY-marked until a human session rollouts/chain-jumps
   while watching `tools/verify_addresses.py` (expect `[DUST]` on dusty
   slide/landing lines and correct dustless/late classification).
+- **Practice-quality round (2026-06-11, delivered):** AFK/no-activity/castle
+  discards, `mario_acted` + `strat_set` events, timeline markers, progress
+  graph, pinned active star, sort/hide-resets/batching controls, stat-chip
+  identity+order registry. See the section above.
 - **Phase 3** — TriggerDetector (door/key-door rows), MenuDetector
   (menu-open address hunt required). Delivers menu-failure attempt outcome.
+  Urgency reduced: the AFK rule already covers the practice-relevant menu
+  case via the IGT-freeze inference; hunt the address only if that inference
+  misfires live.
 - **Phase 4** — Routes storage + probability board + Routes tab.
 - Dedicated key / grand-star events (Bowser key grabs currently emit
   star_collected with course_id 16/17 — documented limitation).

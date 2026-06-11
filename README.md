@@ -65,15 +65,17 @@ Other event types, same envelope:
 | Type | Key payload fields | Meaning |
 |---|---|---|
 | `game_reset` | _(none)_ | Console reset / ROM reload (timer into boot range) |
-| `practice_reset` | `igt_frames_before, mario_acted` | Usamune level reset — attempt anchor; payload carries the failed attempt's IGT and whether Mario entered any non-passive action since the last anchor (no-op resets where `mario_acted: false` are discarded) |
-| `state_loaded` | `igt_frames_restored, mario_acted` | Savestate / Usamune section-state load — attempt anchor; same activity flag as practice_reset |
+| `practice_reset` | `igt_frames_before, mario_acted, paused_frames_before, acted_tracking` | Usamune level reset — attempt anchor; payload carries the failed attempt's IGT and whether Mario entered any non-passive action since the last anchor (no-op resets where `mario_acted: false` are discarded); closures after ≥5 s of pause (paused_frames_before ≥ 150) are discarded as AFK |
+| `state_loaded` | `igt_frames_restored, mario_acted, paused_frames_before, acted_tracking` | Savestate / Usamune section-state load — attempt anchor; same activity flag as practice_reset; same pause/activity discards as practice_reset |
+| `mario_acted` | _(none)_ | Mario's first voluntary action since the last anchor (death actions never count); the tracking layer uses it to judge whether an attempt had any behavior |
 | `death` | `cause, igt_frames, level` | Mario died; closes the open attempt as outcome "death" with the cause in outcome_detail |
-| `level_changed` | `from, to` | Level id edge; closes open attempts as abandoned; `from` is 0 on first read after attach |
+| `level_changed` | `from, to` | Level id edge; closes open attempts as abandoned. May arrive with `from == to`: the detector emits one establishing event on server start and a corrective event after attach gaps (`from` = last *emitted* level, not the previous read) so journal-derived level tracking never runs stale — don't infer "left level X" from `from != to` |
 | `rollout` | `dustless, frames_late, landing_frames, level` | Dive→rollout executed. `landing_frames` = visible dive-slide frames (always ≥ 1: the landing transition takes one frame before inputs are read — decomp-verified); `frames_late = landing_frames - 1`; `dustless: true` ⟺ frame-perfect (`frames_late == 0`). Rollouts whose slide entry wasn't observed (attach race, savestate mid-slide) emit nothing. Attaches to the open attempt (`rollouts_total` / `rollouts_dustless`) |
 | `jump` | `dustless, frames_late, landing_frames, kind, level` | Chained jump executed: `kind: "double"` (jump-land → double jump) or `"triple"` (double-jump-land → triple jump). Same timing semantics as `rollout`; note the visible dust puff additionally requires speed (forwardVel > 16), so `dustless` means frame-perfect timing, not "no puff appeared". Attaches to the open attempt (`jumps_total` / `jumps_dustless`) |
 | `attempt_completed` | `attempt_id, session_id, course_id, star_id, course_name, star_name, strat_tag, anchor_type, outcome, outcome_detail, igt_frames, igt, rta_frames, rollouts_total, rollouts_dustless, jumps_total, jumps_dustless` | Derived: an attempt just closed (success / reset / death / hard_reset / abandoned) |
 | `target_set` | `course_id, star_id, strat_tag?` | User explicitly set the practice target |
 | `target_changed` | `course_id, star_id, strat_tag` | Practice target moved (auto-follows last valid grab, or set by command) |
+| `strat_set` | `course_id, star_id, strat_tag` | Star's active strategy set without moving the target; future closures for that star attribute to it |
 | `attempt_cleared` | `attempt_id, reason` | Attempt tombstoned; `reason` is always present, may be null (triggers full re-projection; `attempts_invalidated` follows) |
 | `attempt_restored` | `attempt_id` | Tombstone undone (triggers full re-projection; `attempts_invalidated` follows) |
 | `pb_saved` | `course_id, star_id, strat_tag, timer_mode, frames, attempt_id` | Personal best recorded |
@@ -82,7 +84,7 @@ Other event types, same envelope:
 | `emulator_connected` | _(none)_ | Attached to PJ64 process |
 | `emulator_disconnected` | _(none)_ | Lost PJ64 process |
 
-**Attempt outcomes:** `success`, `reset`, `death`, `hard_reset`, `abandoned`. `death` and `reset` count toward the default failure rate. `abandoned` (level changed before a grab) and discarded no-op resets (where `mario_acted: false`) never count toward the failure rate. Old journal entries without the `mario_acted` key default to acted (counted as real resets).
+**Attempt outcomes:** `success`, `reset`, `death`, `hard_reset`, `abandoned`. `death` and `reset` count toward the default failure rate. `abandoned` (level changed before a grab) and discarded no-op resets (where `mario_acted: false`) never count toward the failure rate. Old journal entries without the `mario_acted` key default to acted (counted as real resets). Three automatic discards never produce attempt rows at all: reset/load closures arriving after ≥5 s of pause (`paused_frames_before` ≥ 150 — AFK, not practice); for attempts opened by an `acted_tracking` anchor, ANY non-success closure with no `mario_acted` event during the attempt (no behavior = garbage); and attempts OPENED while Mario was in a castle hub level (castle movement, never a star attempt — `CASTLE_LEVELS` in addresses.py). Successes always count.
 
 **Strategies:** Strategy names are remembered per star — switching the target star loads that star's own last-used strategy, not the previous star's. Known strategies for a star = everything registered via target-setting plus every tag appearing in that star's attempt history. The session view surfaces them in `strategies` (map of `"course_id:star_id"` → list) and `last_strat_by_star` (map → last used), and per-section `strategies` / `last_strat` fields.
 
@@ -96,16 +98,18 @@ All endpoints are under `/api`. JSON in, JSON out.
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/session?clock=igt\|rta[&scope=session\|lifetime]` | Full session view: target, attempts per star, stat chips, PBs, catalog; `scope=session` (default) shows only the active session, `scope=lifetime` aggregates all sessions |
+| `GET /api/session?clock=igt\|rta[&scope=session\|lifetime]` | Full session view: target, attempts per star, stat chips, PBs, catalog; `scope=session` (default) shows only the active session, `scope=lifetime` aggregates all sessions; star sections are ordered newest-activity-first, the target's section is always present (pinned active star), and each section carries markers_by_strat (per-strategy timeline annotations) and progress (per-session completion-time points with is_pb flags per clock) |
 | `POST /api/session/new` `{label?}` | Close the current session and open a new one |
 | `POST /api/session/continue` `{session_id}` | Resume a previously ended session; new attempts land there |
 | `DELETE /api/session/{id}` | Hard-delete a session and all its data (409 on the active session; PBs survive; clears recorded in the deleted session revert their targets on re-projection) |
 | `POST /api/target` `{course_id, star_id, strat_tag?}` | Set the practice target |
+| `POST /api/strat` `{course_id, star_id, strat_tag?}` | Set a star's active strategy without changing the practice target (null clears) |
 | `POST /api/attempts/{id}/clear` `{reason?}` | Tombstone an attempt (triggers re-projection) |
 | `POST /api/attempts/{id}/restore` | Undo a tombstone (triggers re-projection) |
 | `POST /api/pb` `{attempt_id, timer_mode}` | Save a personal best from a success attempt |
 | `GET /api/stats/registry` | List all available stat definitions with keys, labels, and default params |
 | `PUT /api/statmenu` `{selections: [{key, params}]}` | Persist the stat chip selection |
+| `PUT /api/markers` `{course_id, star_id, strat_tag?, markers: [{frames, label}]}` | Replace the timeline annotation markers for one star+strategy (max 30; labels 1–60 chars trimmed; replace-the-list, no per-marker ids) |
 | `GET /api/links/{course_id}/{star_id}` | External links for a star (Ukikipedia, etc.) |
 
 **Error taxonomy:** `404` = no such attempt; `409` = attempt exists but is not valid for the

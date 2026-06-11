@@ -3,7 +3,8 @@ import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { getJSON } from "./api.js";
 
 const REFRESH_ON = new Set(["attempt_completed", "attempts_invalidated",
-  "pb_saved", "session_started", "target_changed", "star_collected"]);
+  "pb_saved", "session_started", "target_changed", "star_collected",
+  "strat_set"]);
 
 export function useTracker() {
   const [view, setView] = useState(null);

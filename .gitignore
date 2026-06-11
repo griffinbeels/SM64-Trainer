@@ -7,3 +7,4 @@ logs/
 data/
 replays/
 data/replay_buffer/
+.claude/worktrees/

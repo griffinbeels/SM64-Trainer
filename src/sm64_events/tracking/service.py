@@ -125,6 +125,16 @@ class TrackerService:
         return self.db
 
     # -- commands ----------------------------------------------------------------
+    def _register_strategy(self, db: Database, course_id: int, star_id: int,
+                           strat_tag: str) -> None:
+        """Append strat_tag to the star's registered list (ui_state KV) if new."""
+        key = f"{course_id}:{star_id}"
+        strategies = db.get_state("strategies", {})
+        existing = strategies.get(key, [])
+        if strat_tag not in existing:
+            strategies[key] = existing + [strat_tag]
+            db.set_state("strategies", strategies)
+
     async def set_target(self, course_id: int, star_id: int,
                          strat_tag: str | None = None) -> None:
         db = self._require_db()
@@ -134,12 +144,25 @@ class TrackerService:
         await self.publish(Event(type="target_set", frame=0,
                                  timestamp_utc=_now(), payload=payload))
         if strat_tag:
-            key = f"{course_id}:{star_id}"
-            strategies = db.get_state("strategies", {})
-            existing = strategies.get(key, [])
-            if strat_tag not in existing:
-                strategies[key] = existing + [strat_tag]
-                db.set_state("strategies", strategies)
+            self._register_strategy(db, course_id, star_id, strat_tag)
+
+    async def set_strat(self, course_id: int, star_id: int,
+                        strat_tag: str | None) -> None:
+        """Set a star's active strategy without touching the target."""
+        db = self._require_db()
+        await self.publish(Event(type="strat_set", frame=0,
+                                 timestamp_utc=_now(),
+                                 payload={"course_id": course_id,
+                                          "star_id": star_id,
+                                          "strat_tag": strat_tag}))
+        if strat_tag:
+            self._register_strategy(db, course_id, star_id, strat_tag)
+        if self.target == (course_id, star_id):
+            # the target's strat changed: keep the WS contract honest so
+            # other clients refresh (REFRESH_ON includes target_changed)
+            await self.publish(Event(type="target_changed", frame=0,
+                                     timestamp_utc=_now(),
+                                     payload=self._target_payload()))
 
     async def clear_attempt(self, attempt_id: int, reason: str | None = None) -> None:
         db = self._require_db()
