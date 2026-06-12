@@ -20,7 +20,7 @@ def test_migrations_set_user_version_and_create_tables(tmp_path):
     names = {r["name"] for r in db._conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"events", "sessions", "attempts", "pbs", "ui_state"} <= names
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 5
 
 
 def test_reopening_existing_db_is_idempotent(tmp_path):
@@ -28,7 +28,7 @@ def test_reopening_existing_db_is_idempotent(tmp_path):
     sid = first.insert_session("2026-06-10T12:00:00Z")
     first.close()
     db = make_db(tmp_path)  # second open: migrations must not re-run/crash
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 5
     row = db._conn.execute("SELECT * FROM sessions WHERE id=?", (sid,)).fetchone()
     assert row is not None and row["started_utc"] == "2026-06-10T12:00:00Z"
 
@@ -146,7 +146,7 @@ def test_v1_database_upgrades_in_place(tmp_path):
     conn.commit()
     conn.close()
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 5
     assert db.attempts()[0].rollouts_total == 0   # backfilled default
     assert db.attempts()[0].jumps_total == 0
 
@@ -191,7 +191,11 @@ def test_migration_v4_seeds_ten_segment_definitions(tmp_path):
     assert len(defs) == 10
     lblj = next(d for d in defs if d["name"] == "LBLJ")
     assert lblj["enabled"] is True
-    assert lblj["start_triggers"] == [{"type": "level_enter", "to": 6, "from": 16}]
+    # warp-menu arming (live gate 2026-06-12): fresh DBs seed the
+    # area-scoped attempt_anchor alongside the level edge
+    assert lblj["start_triggers"] == [
+        {"type": "level_enter", "to": 6, "from": 16},
+        {"type": "attempt_anchor", "level": 6, "area": 1}]
     assert lblj["end_triggers"] == [{"type": "level_enter", "to": 17}]
 
 
@@ -251,11 +255,38 @@ def test_v3_database_pb_rows_survive_v4_rebuild(tmp_path):
     conn.commit()
     conn.close()
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 5
     [row] = db.pbs()
     assert row["id"] == 7 and row["frames"] == 500
     assert row["course_id"] == 2 and row["star_id"] == 3
     assert row["segment_id"] is None
+
+
+# -- migration v5: warp-menu arming — LBLJ gains the area-scoped anchor ------
+
+def test_v5_updates_existing_v4_lblj_row_with_area_anchor(tmp_path):
+    """An existing v4 db (created before the warp-menu amendment) carries
+    the OLD LBLJ start_triggers; v5 must rewrite them in place.  (Fresh DBs
+    get the new triggers straight from the edited v4 seed, so the
+    pre-amendment shape is restored by hand here.)"""
+    import sqlite3
+    from sm64_events.storage.db import MIGRATIONS
+    path = tmp_path / "t.db"
+    conn = sqlite3.connect(str(path))
+    for script in MIGRATIONS[:4]:
+        conn.executescript(script)
+    conn.execute("UPDATE segment_defs SET start_triggers="
+                 "'[{\"type\":\"level_enter\",\"to\":6,\"from\":16}]'"
+                 " WHERE id=1 AND name='LBLJ'")
+    conn.execute("PRAGMA user_version = 4")
+    conn.commit()
+    conn.close()
+    db = Database(path)
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    lblj = next(d for d in db.segment_defs() if d["name"] == "LBLJ")
+    assert lblj["start_triggers"] == [
+        {"type": "level_enter", "to": 6, "from": 16},
+        {"type": "attempt_anchor", "level": 6, "area": 1}]
 
 
 def test_failed_migration_rolls_back_schema_and_version(tmp_path, monkeypatch):
@@ -272,7 +303,7 @@ def test_failed_migration_rolls_back_schema_and_version(tmp_path, monkeypatch):
         Database(path)
     check = sqlite3.connect(str(path))
     # (a) version reflects only the successful prefix
-    assert check.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert check.execute("PRAGMA user_version").fetchone()[0] == 5
     # partial application rolled back: first statement did NOT stick
     names = {r[0] for r in check.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
@@ -282,5 +313,5 @@ def test_failed_migration_rolls_back_schema_and_version(tmp_path, monkeypatch):
     fixed = "CREATE TABLE extra (id INTEGER);"
     monkeypatch.setattr(db_mod, "MIGRATIONS", db_mod.MIGRATIONS[:-1] + [fixed])
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 6
     db.close()

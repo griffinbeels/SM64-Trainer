@@ -159,6 +159,7 @@ class Projector:
         self._open = None  # EventRow of the open attempt's anchor
         self._open_acted = False  # mario_acted seen since the last anchor; only meaningful while _open is set
         self._level: int | None = None   # gCurrLevelNum per level_changed; None = unknown (legacy journals)
+        self._area: int | None = None    # gCurrAreaIndex per area_changed; None = unknown (legacy journals)
         self._open_castle = False        # open attempt was OPENED in a castle hub level; only meaningful while _open is set (the open site re-arms it)
         self._rollouts_total = 0
         self._rollouts_dustless = 0
@@ -196,7 +197,7 @@ class Projector:
             self._num_stars = None  # file can change at the title screen: unknown until the next grab
         seg_closed, self.segment_notices = self._segments.feed(
             ev, MatchContext(level=self._level, prev_level=prev_level,
-                             num_stars=self._num_stars))
+                             num_stars=self._num_stars, area=self._area))
         for a in seg_closed:
             # same first-event-id cleared keying as _build (caveat 2/11)
             a = replace(a,
@@ -229,7 +230,16 @@ class Projector:
         if ev.type == "level_changed":
             closed = self._close(ev, outcome="abandoned", igt_frames=None)
             self._level = ev.payload["to"]
+            # _area is deliberately NOT reset here: every level entry is
+            # followed by an establishing area_changed (area.py keys its
+            # last-EMITTED state on (level, area)), which keeps _area honest;
+            # resetting would only widen the unknown window between the two.
             return closed
+        if ev.type == "area_changed":
+            # Tracked area for the segment matcher's area-scoped
+            # attempt_anchor (segments.py — warp-menu arming 2026-06-12).
+            self._area = ev.payload["to"]
+            return []
         if ev.type == "target_set":
             if ev.payload.get("kind") == "segment":
                 self.target = ("segment", ev.payload["segment_id"])

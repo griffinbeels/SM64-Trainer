@@ -93,9 +93,9 @@ PIPE = SegmentDef(id=5, name="BitDW Pipe Entry", enabled=True,
                   guards=[])
 
 
-def ctx(level=None, prev_level=None, num_stars=None):
+def ctx(level=None, prev_level=None, num_stars=None, area=None):
     return MatchContext(level=level, prev_level=prev_level,
-                        num_stars=num_stars)
+                        num_stars=num_stars, area=area)
 
 
 def lblj_arm(engine, jid=10, frame=1000):
@@ -716,3 +716,59 @@ def test_afk_anchor_rebases_without_row():
         ctx(level=17, prev_level=6))
     assert len(closed) == 1
     assert closed[0].outcome == "success" and closed[0].rta_frames == 200
+
+
+# ---------------------------------------------------------------------------
+# Area-scoped attempt_anchor (warp-menu arming, live gate 2026-06-12)
+# The Usamune warp menu (06 01 00) deposits Mario at the castle lobby
+# entrance — equivalent to the grounds→lobby door — emitting only a
+# practice_reset (menu pause → warp → IGT reset; NO level edge), so a
+# level_enter-only LBLJ never arms.  The anchor gains an optional "area"
+# param; area scoping prevents cross-arming (a basement respawn must not
+# arm a lobby-anchored segment).
+# ---------------------------------------------------------------------------
+
+LBLJ_V5 = SegmentDef(
+    id=1, name="LBLJ", enabled=True,
+    start_triggers=[{"type": "level_enter", "to": 6, "from": 16},
+                    {"type": "attempt_anchor", "level": 6, "area": 1}],
+    end_triggers=[{"type": "level_enter", "to": 17}], guards=[])
+
+
+def test_area_scoped_anchor_arms_when_tracked_area_matches():
+    """Warp-menu deposit: practice_reset with ctx(level=6, area=1) — the
+    lobby-scoped anchor must arm LBLJ."""
+    e = SegmentEngine([LBLJ_V5])
+    closed, notices = e.feed(
+        jev(10, "practice_reset", 1000, {"action": 0x0C400201}),
+        ctx(level=6, area=1))
+    assert closed == []
+    assert e.armed_ids() == {1}
+    assert [n["event"] for n in notices] == ["segment_armed"]
+
+
+def test_area_scoped_anchor_does_not_arm_in_other_area():
+    """Basement guard: ctx(level=6, area=3) must NOT arm the lobby-anchored
+    segment — area scoping prevents cross-arming."""
+    e = SegmentEngine([LBLJ_V5])
+    e.feed(jev(10, "practice_reset", 1000, {"action": 0x0C400201}),
+           ctx(level=6, area=3))
+    assert e.armed_ids() == set()
+
+
+def test_area_scoped_anchor_unknown_area_does_not_arm():
+    """Legacy journals (no area events): ctx.area is None — the scoped
+    anchor conservatively does not arm."""
+    e = SegmentEngine([LBLJ_V5])
+    e.feed(jev(10, "practice_reset", 1000, {"action": 0x0C400201}),
+           ctx(level=6))
+    assert e.armed_ids() == set()
+
+
+def test_anchor_without_area_param_matches_any_area():
+    """Compat: an attempt_anchor WITHOUT the area param (all other seeds)
+    keeps matching regardless of ctx.area."""
+    e = SegmentEngine([PIPE])
+    e.feed(jev(20, "practice_reset", 2000, {"action": 0x0C400201}),
+           ctx(level=17, area=2))
+    assert e.armed_ids() == {5}

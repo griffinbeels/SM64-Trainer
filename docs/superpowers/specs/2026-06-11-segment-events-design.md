@@ -61,13 +61,18 @@ trigger type = one registry row.
 - `key_grabbed(level?)` — matches `key_grabbed`
 - `star_grabbed(course?, star?)` — matches `star_collected`
 - `spawned(level?)` — matches `spawned`
-- `attempt_anchor(level)` — matches `practice_reset` OR `state_loaded` while
-  projection's tracked level equals the param. **Why it exists:** a Usamune
-  L-reset reloads the SAME level — no `level_changed` edge — so an in-level
-  segment starting only on `level_enter` would close on the first practice
-  reset and never re-arm. In-level seeds use
+- `attempt_anchor(level, area?)` — matches `practice_reset` OR `state_loaded`
+  while projection's tracked level equals the param. **Why it exists:** a
+  Usamune L-reset reloads the SAME level — no `level_changed` edge — so an
+  in-level segment starting only on `level_enter` would close on the first
+  practice reset and never re-arm. In-level seeds use
   `start: any-of [level_enter(X), attempt_anchor(X)]`, working in both full
-  runs and the savestate/L-reset practice loop.
+  runs and the savestate/L-reset practice loop. The optional `area` param
+  (amendment 2026-06-12, warp-menu arming) additionally requires projection's
+  journal-tracked area (from `area_changed` events) to match — scoping
+  prevents cross-arming (a basement respawn must not arm a lobby-anchored
+  segment); an unknown area (legacy journals) conservatively fails a scoped
+  anchor.
 
 **Guards v1** (predicates over projection context at arm time):
 
@@ -173,7 +178,7 @@ endpoint table updated (consumer-facing surface).
 
 | Name | Start (any-of) | End (any-of) |
 |---|---|---|
-| LBLJ | level_enter(Castle Inside, from=Castle Grounds) | level_enter(BitDW) |
+| LBLJ | level_enter(Castle Inside, from=Castle Grounds) · attempt_anchor(Castle Inside, area=Lobby) [^lblj] | level_enter(BitDW) |
 | MIPS Clip | level_exit(HMC, to=Castle Inside) | level_enter(DDD) |
 | Lakitu Skip | spawned(Castle Grounds) | level_enter(Castle Inside) |
 | BitS Entry | area_enter(Castle Inside, upstairs area) | level_enter(BitS) |
@@ -185,6 +190,8 @@ endpoint table updated (consumer-facing surface).
 | Bowser 3 | level_enter(B3 arena) · attempt_anchor(B3 arena) | key_grabbed(level=34) — grand star via ACT_JUMBO_STAR_CUTSCENE [^b3] |
 
 [^b3]: Amended at the 2026-06-12 live gate: the grand star enters ACT_JUMBO_STAR_CUTSCENE (0x1909), never a star-dance action — star_grabbed was unreachable. numStars unchanged (stayed 17), gLastCompleted* untouched, no star_collected ever fired.
+
+[^lblj]: Amended at the 2026-06-12 live gate (warp-menu arming): the Usamune warp menu (06 01 00) deposits Mario at the castle lobby entrance — equivalent to the grounds→lobby door — emitting only a practice_reset (menu pause → warp → IGT reset; no level edge), so the level_enter-only seed never armed. LBLJ gains attempt_anchor(level=6, area=1); the area scope keeps basement/upstairs respawns from cross-arming. Projection tracks area from journaled area_changed events; migration v5 updates existing DBs in place.
 
 ## Testing
 

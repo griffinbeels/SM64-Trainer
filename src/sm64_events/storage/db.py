@@ -84,7 +84,7 @@ MIGRATIONS = [
     DROP TABLE pbs;
     ALTER TABLE pbs_v2 RENAME TO pbs;
     INSERT INTO segment_defs (name, enabled, start_triggers, end_triggers, guards, created_utc) VALUES
-      ('LBLJ', 1, '[{"type":"level_enter","to":6,"from":16}]', '[{"type":"level_enter","to":17}]', '[]', '2026-06-11T00:00:00Z'),
+      ('LBLJ', 1, '[{"type":"level_enter","to":6,"from":16},{"type":"attempt_anchor","level":6,"area":1}]', '[{"type":"level_enter","to":17}]', '[]', '2026-06-11T00:00:00Z'),
       ('MIPS Clip', 1, '[{"type":"level_exit","from":7,"to":6}]', '[{"type":"level_enter","to":23}]', '[]', '2026-06-11T00:00:00Z'),
       ('Lakitu Skip', 1, '[{"type":"spawned","level":16}]', '[{"type":"level_enter","to":6}]', '[]', '2026-06-11T00:00:00Z'),
       ('BitS Entry', 1, '[{"type":"area_enter","level":6,"area":2}]', '[{"type":"level_enter","to":21}]', '[]', '2026-06-11T00:00:00Z'),
@@ -94,6 +94,18 @@ MIGRATIONS = [
       ('Bowser 1', 1, '[{"type":"level_enter","to":30},{"type":"attempt_anchor","level":30}]', '[{"type":"key_grabbed","level":30}]', '[]', '2026-06-11T00:00:00Z'),
       ('Bowser 2', 1, '[{"type":"level_enter","to":33},{"type":"attempt_anchor","level":33}]', '[{"type":"key_grabbed","level":33}]', '[]', '2026-06-11T00:00:00Z'),
       ('Bowser 3', 1, '[{"type":"level_enter","to":34},{"type":"attempt_anchor","level":34}]', '[{"type":"key_grabbed","level":34}]', '[]', '2026-06-11T00:00:00Z');
+    """,
+    # v5 — warp-menu arming (live gate 2026-06-12): the Usamune warp menu
+    # (06 01 00) deposits Mario at the castle lobby entrance — equivalent to
+    # the grounds→lobby door — emitting only a practice_reset (menu pause →
+    # warp → IGT reset; no level edge), so a level_enter-only LBLJ never
+    # armed.  LBLJ gains an area-scoped attempt_anchor (lobby = area 1;
+    # scoping prevents basement respawns from cross-arming).  Fresh DBs get
+    # the new triggers from the edited v4 seed above; this entry repairs
+    # existing DBs.  Name-guarded so a user-renamed/repurposed row id 1 is
+    # left alone.
+    """
+    UPDATE segment_defs SET start_triggers='[{"type":"level_enter","to":6,"from":16},{"type":"attempt_anchor","level":6,"area":1}]' WHERE id=1 AND name='LBLJ';
     """,
 ]
 

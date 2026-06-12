@@ -94,6 +94,8 @@ class MatchContext:
     level: int | None        # tracked level AFTER this event applied
     prev_level: int | None   # tracked level BEFORE this event
     num_stars: int | None    # last star_collected payload num_stars; None = unknown
+    area: int | None = None  # tracked area AFTER this event (area_changed "to");
+                             # None = unknown (legacy journals without area events)
 
 
 @dataclass(frozen=True)
@@ -162,10 +164,22 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 and (p.get("level") is None
                      or ev.payload["level"] == p["level"])),
     TriggerType("attempt_anchor", "Practice reset / savestate load in level",
-                {"level": {"kind": "level", "required": True}},
+                {"level": {"kind": "level", "required": True},
+                 "area": {"kind": "area", "required": False}},
+                # Optional area scoping prevents cross-arming: a basement
+                # respawn must not arm a lobby-anchored segment.  Added for
+                # warp-menu arming (live gate 2026-06-12): Usamune's warp
+                # menu (06 01 00) deposits Mario at the castle lobby
+                # entrance with only a practice_reset — no level edge — so
+                # LBLJ seeds attempt_anchor(level=6, area=1).  The area
+                # detector journals before the anchor detector (main.py
+                # order), so ctx.area is already the post-warp area when
+                # the anchor arrives.  ctx.area None (legacy journals)
+                # conservatively fails a scoped anchor.
                 lambda p, ev, ctx: ev.type in ("practice_reset",
                                                "state_loaded")
-                and ctx.level == p["level"]),
+                and ctx.level == p["level"]
+                and (p.get("area") is None or ctx.area == p["area"])),
 ]}
 
 
