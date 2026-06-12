@@ -38,13 +38,13 @@ uv run python tools/dedupe_journal.py data/tracker.db          # scan double-jou
 | Star-grab + IGT logic | `detectors/star_grab.py` — docstrings carry the domain rationale |
 | game_reset | `detectors/lifecycle.py` |
 | Attempt anchors (practice_reset / state_loaded) | `detectors/anchors.py` — anchors carry mario_acted + paused_frames_before + acted_tracking; emits the mario_acted event; docstring covers classification, pause streak, and VERIFY notes |
-| Death detection | `detectors/death.py` — action-set edge; closes open attempt as outcome "death" |
+| Death detection | `detectors/death.py` — action-set edge + pending-warp pulse for void-outs (pit falls fire BEFORE level_changed; docstring carries why); closes open attempt as outcome "death" |
 | Level-change detection | `detectors/level.py` — stateful: remembers last EMITTED level, journals establishing/corrective events (from may equal to) so projection-side level tracking never runs stale; closes open attempts as abandoned |
 | Dust tricks (dustless rollouts/jumps) | `detectors/dust.py` — TRICKS registry (one row per trick); docstring carries the decomp-verified landing-frame timing model; counts attach to attempts via projection.py |
 | area_changed / warp_entered / key_grabbed / spawned | `detectors/area.py` · `detectors/warp.py` · `detectors/key.py` · `detectors/spawn.py` — segment-primitive facts; area mirrors level.py's last-EMITTED discipline; key detector guards star_grab from misattributing Bowser keys |
-| Segment defs, trigger vocabulary, matcher FSM | `tracking/segments.py` — ONE registry (TRIGGERS/GUARDS) drives validation, matching, and the /api/segments/vocab endpoint; docstring carries the FSM invariants (closures before arming, guards re-evaluated every arm, silent disarm on foreign level change) |
+| Segment defs, trigger vocabulary, matcher FSM | `tracking/segments.py` — ONE registry (TRIGGERS/GUARDS) drives validation, matching, and the /api/segments/vocab endpoint; docstring carries the FSM invariants (closures before arming, guards re-evaluated every arm, silent disarm on foreign level change, anchor closures re-arm in place, load/door-echo shapes) |
 | Segments builder UI | `ui/components/segments.js` — 100% vocab-driven: adding a trigger type in tracking/segments.py appears in the UI with zero JS changes |
-| Poll loop, attach retry, layout sanity | `server/poller.py` |
+| Poll loop, attach retry, layout sanity, session pause | `server/poller.py` |
 | WS fan-out, seq numbers | `server/broadcaster.py` |
 | HTTP/WS endpoints | `server/app.py` |
 | REST API + error taxonomy | `server/api.py` — docstring has the LookupError/ValueError/RuntimeError→HTTP mapping |
@@ -58,7 +58,7 @@ uv run python tools/dedupe_journal.py data/tracker.db          # scan double-jou
 | Stats | `stats/registry.py` — ONE StatDef per stat; THE registry; also owns chip identity + canonical order (`selection_id`/`selection_order`, mirrored in `ui/components/statmenu.js` keyOf) |
 | Per-star external links | `links.py` |
 | Built-in viewer UI | `ui/index.html` — served per request: edit + refresh, no restart |
-| UI components, store, API client | `ui/components/` · `ui/store.js` · `ui/api.js` · `ui/app.js`; vendored Preact in `ui/vendor/`; incl. `ui/components/timeline.js` (per-star event graph; marker styles via `MARKERS` registry) · `ui/components/progress.js` (per-star completion-time graph; gold = saved PBs) · `ui/format.js` (shared display formatting — fmtIgt mirrors core/timefmt.py) |
+| UI components, store, API client | `ui/components/` · `ui/store.js` · `ui/api.js` · `ui/app.js`; vendored Preact in `ui/vendor/`; incl. `ui/components/timeline.js` (per-star event graph; marker styles via `MARKERS` registry) · `ui/components/progress.js` (per-star completion-time graph; gold = saved PBs; node click → practice.js pickFromGraph reveals + scrolls to the row, auto-opens saved replays) · `ui/format.js` (shared display formatting — fmtIgt mirrors core/timefmt.py) |
 | Wiring / startup / logging | `main.py` (composition root), `core/logging_setup.py` |
 | Memory-hunting diagnostics | `tools/` — playbook in docs/architecture.md |
 | Replay orchestration (attach loop, source wiring, ring, idle gate) | `replay/recorder.py` + player-input tap `replay/activity.py`; `replay/clock.py` is THE QPC↔UTC contract |
@@ -129,6 +129,17 @@ addresses.py (+VERIFY) and a defaulted GameSnapshot field → wire into
 - Timing rule (decomp-verified, do NOT re-derive from the spec — its §3
   model is annotated as wrong): `frames_late = visible_landing_frames - 1`;
   one visible landing frame IS frame-perfect. Evidence: addresses.py.
+
+**Add a user-visible replay setting** (another knob like storage/padding):
+bounds row in `SETTINGS_LIMITS` + plumb `validate_settings`/`save_settings`
+/`apply_settings_file` (replay/config.py) → live-apply + getter in
+`ReplayService.update_settings`/`settings()` → field on `SettingsBody`
+(server/replay_api.py) → input in the recording-dot panel
+(`ui/components/replay.js` BufferSettings) → README settings lines → tests
+in test_replay_{config,service,api}.py. Mirror commits 69bb83d / 29fd542.
+Settings persist in `data/replay_settings.json` (a JSON overlay beats a db
+migration for scalars); corrupt/out-of-range files lose to defaults so the
+server always starts.
 
 **Locate an unknown memory value:** `tools/find_timer.py` (ticking
 counters) → `tools/hunt_value.py` (exact displayed values) →

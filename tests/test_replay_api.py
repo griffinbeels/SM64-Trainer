@@ -54,6 +54,14 @@ class FakeReplayService:
             p.write_bytes(b"\x00" * 2048)
         return p
 
+    def saved_clip_path(self, attempt_id: int) -> Path:
+        if attempt_id != 42:
+            raise LookupError("no saved replay for this attempt")
+        p = self.tmp / "attempt_0042_whomps-fortress_x_0m11s43.mp4"
+        if not p.exists():
+            p.write_bytes(b"\x00" * 2048)
+        return p
+
 
 def make_client(tmp_path):
     app = FastAPI()
@@ -82,6 +90,22 @@ def test_clip_serving_supports_range(tmp_path):
     assert r.headers["content-type"] == "video/mp4"
     assert "accept-ranges" in {k.lower() for k in r.headers}
     assert c.get("/api/replay/clips/evil.txt").status_code == 404
+
+
+def test_saved_replay_serving_supports_range_and_404(tmp_path):
+    c = make_client(tmp_path)
+    r = c.get("/api/replay/saved/42", headers={"Range": "bytes=0-99"})
+    assert r.status_code == 206                      # scrubbable like clips
+    assert r.headers["content-type"] == "video/mp4"
+    assert c.get("/api/replay/saved/99").status_code == 404
+
+
+def test_saved_replay_answers_head_for_existence_probes(tmp_path):
+    # the progress-graph click uses HEAD to decide whether to auto-open the
+    # player (no body transferred) — pin that GET routes serve HEAD
+    c = make_client(tmp_path)
+    assert c.head("/api/replay/saved/42").status_code == 200
+    assert c.head("/api/replay/saved/99").status_code == 404
 
 
 def test_save_passes_truncated_through(tmp_path):

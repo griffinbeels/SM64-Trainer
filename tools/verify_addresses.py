@@ -34,6 +34,7 @@ import time
 
 from sm64_events.core.snapshot import SnapshotReader
 from sm64_events.detectors.area import AreaChangeDetector
+from sm64_events.detectors.death import DeathDetector
 from sm64_events.detectors.dust import DustTrickDetector
 from sm64_events.detectors.key import KeyGrabDetector
 from sm64_events.detectors.spawn import SpawnDetector
@@ -154,10 +155,14 @@ def main() -> None:
     print("(frame perfect); dusty slide/landing frames show [DUST].")
     print("Segment primitives (warp_entered / key_grabbed / spawned / area_changed)")
     print("also print as they fire — use these to work the live-gate checklist above.")
-    print("Detector lines come from the REAL detectors — exactly what API listeners")
+    print("PENDING_WARP_OP gate: fall into a pit (HMC) — expect a warp_op")
+    print("0x13 line and '>> death: fall' BEFORE the level unloads; then die")
+    print("normally (quicksand) and confirm exactly ONE death line. Detector")
+    print("lines come from the REAL detectors — exactly what API listeners")
     print("receive. (Ctrl+C to quit)\n")
     star_det = StarGrabDetector()
     dust_det = DustTrickDetector()
+    death_det = DeathDetector()
     area_det = AreaChangeDetector()
     warp_det = WarpDetector()
     key_det = KeyGrabDetector()
@@ -166,6 +171,12 @@ def main() -> None:
     prev_action = None
     while True:
         s = reader.read()
+        for ev in death_det.process(prev_snap, s):
+            p = ev.payload
+            print(f"  >> death: {p['cause']}  igt {p['igt_frames']}f"
+                  f"  level {p['level']}  frame {ev.frame}")
+        if s.pending_warp_op != prev_snap.pending_warp_op:
+            print(f"frame {s.global_timer:>8}  warp_op {s.pending_warp_op:#06x}")
         for ev in star_det.process(prev_snap, s):
             p = ev.payload
             recon = "  [reconstructed: grab raced an IGT reset]" \

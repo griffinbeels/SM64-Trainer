@@ -138,8 +138,18 @@ allocation floors must renormalize or they silently clip the newest data
 (`progress.js` segment-layout comment carries the worked thresholds);
 `*.map(component)` over stateful children needs `key=` in this push-driven
 UI or WS reorders migrate form state across stars (wrong-star writes —
-`practice.js`); htm does not decode HTML entities; stat-chip identity AND
-order are registry-owned (`stats/registry.py` `selection_id` /
+`practice.js`); inline function refs re-fire on EVERY render in this
+push-driven UI — side effects inside them need explicit once-guards or
+gameplay events trigger them continuously (2nd bug in the render-frequency
+family: `replay.js` autoPlayed comment — paused videos resumed by play());
+the served UI requires an explicit cache policy — `/` and `/ui/*` are
+no-cache via the app.py middleware, or browsers heuristically mix stale
+and fresh module versions (dead-pause-button incident: cached store.js
+without the handler next to fresh header.js with the button); user-facing
+units live in the USER's domain — "frame" = the 30 fps game-logic frame
+(`GAME_FPS`, core/timefmt.py), never the 60 fps encoded rate (frame-step
+needed two presses); htm does not decode HTML entities; stat-chip identity
+AND order are registry-owned (`stats/registry.py` `selection_id` /
 `selection_order`, mirrored once in `statmenu.js` keyOf) — never compare
 raw params; `ui/format.js` fmtIgt mirrors `core/timefmt.py` — keep in
 lockstep.
@@ -172,6 +182,16 @@ break the degeneracy between candidate interpretations, not just confirm
 values match.
 
 ## Memory hunting playbook
+
+For VANILLA statics (no public US map entry, e.g. file-scope `s*` in
+decomp .c files), derive before hunting: a translation unit's FORCE_BSS
+block lays out in declaration order, legacy `D_8033xxxx` names inside the
+block pin the INTERNAL offsets (they encode JP addresses — mind aggregate
+alignment: structs ≥ 8 bytes align to 8), and one already-live-verified
+symbol in the same block pins the absolute US position. Worked example
+with two independent anchors: PENDING_WARP_OP in addresses.py
+(sDelayedWarpOp, derived 2026-06-12 from sTimerRunning = HUD_TIMER_RUNNING).
+Derived addresses are still VERIFY until the live gate.
 
 No public RAM map exists for Usamune internals; locate values empirically:
 
@@ -328,3 +348,31 @@ every wrong theory of the marathon died on one of these numbers:
 first window after spawn ~59 / ~100 ms is a normal init transient),
 `recorder video:` CFR fills (in-process fallback path only),
 `audio pump:` overflow/drops, gc-watchdog pause lines.
+
+**Idle gating + pause layer (2026-06-12).** No-input footage is DISCARDED,
+never produced-then-paused: stopping the ffmpeg child was shipped first
+and reverted — every resume respawned it with a ~0.2 s hole exactly where
+a 0-pre-pad clip begins, and gating raw PCM would have shifted the
+COUNT-BASED audio cursor (silent A/V desync). Gate at the
+completed-artifact boundary (`recorder._on_segment`: both segment kinds
+arrive there; straddlers are kept), keep producers running. The resume
+signal must include the ANCHOR — igt reset / level entry — not just
+movement: Mario stands passive through post-load fade-ins, so
+movement-only resume opened 0-pre-pad clips ~2 s late on a frozen frame
+(`replay/activity.py`). Manual pause (POST /api/pause) outranks the idle
+gate and stops the poller too; AFK pause CANNOT stop the poller, because
+the activity tap that detects the player's return rides it — the watchdog
+may sleep the system, never itself. Precedence and the reason wire format
+live in `server/app.py pause_state`; resume self-heals detectors through
+the reattach contract (`poller.set_paused` clears `_prev`).
+
+**Shutdown is a liveness property** (CTRL+C hung with ffmpeg still
+logging into a dead terminal, 2026-06-12). Every exit link is bounded:
+uvicorn connection drain 3 s (browsers hold keep-alive + `<video>` Range
+connections forever — main.py), replay teardown 15 s on a DAEMON thread
+(deliberately not asyncio.to_thread — executor threads are non-daemon and
+joined at interpreter exit, which recreates the hang one layer down;
+`server/app.py _stop_replay_bounded`), and the OS-level backstop is a
+kill-on-close Job Object assigned to every ffmpeg child
+(`ffmpeg_sink._assign_kill_on_close`, behaviorally tested) — an orphan
+encoder is structurally impossible no matter how Python dies.

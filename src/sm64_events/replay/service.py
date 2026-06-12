@@ -70,12 +70,20 @@ class ReplayService:
 
     Public surface (consumed by Task 12 router):
       status()           -> dict
-      view(attempt_id)   -> dict  {clip_url, duration_s, truncated}
+      view(attempt_id)   -> dict  {clip_url, duration_s, truncated, source, saved_path}
       save(attempt_id)   -> dict  {path, truncated}
       reveal(path)       -> None  (opens Explorer with the saved file selected)
       clip_path(name)    -> Path  (validated; raises LookupError on bad name)
+      saved_clip_path(attempt_id) -> Path  (raises LookupError when not saved)
+      find_saved(attempt_id)      -> Path | None
       lifecycle_start()
       lifecycle_stop()
+
+    Saved replays are indexed by FILENAME, not by db row: slug_filename
+    starts every saved clip with attempt_{id:04d}_, so a glob over
+    save_root is the registry. That keeps the user free to reorganize or
+    delete files in Explorer without anything going stale — the next
+    lookup just sees the filesystem truth.
     """
 
     def __init__(self, cfg: ReplayConfig, recorder, extractor, tracker,
@@ -146,31 +154,66 @@ class ReplayService:
 
     # -- commands ------------------------------------------------------------
 
+    def find_saved(self, attempt_id: int) -> Path | None:
+        """Locate an attempt's saved clip anywhere under save_root (the
+        filename is the index — see class docstring). First match in
+        sorted order wins if the user duplicated a file manually."""
+        root = self.cfg.save_root
+        if not root.exists():
+            return None
+        matches = sorted(root.rglob(f"attempt_{attempt_id:04d}_*.mp4"))
+        return matches[0] if matches else None
+
+    @staticmethod
+    def _saved_meta(saved: Path) -> dict:
+        """Sidecar metadata for a saved clip. Files saved before sidecars
+        existed (pre 2026-06-12) have none: degrade to unknown duration and
+        no truncation banner — the <video> element learns the real duration
+        itself once loaded."""
+        meta = saved.with_suffix(".json")
+        if not meta.exists():
+            return {}
+        return json.loads(meta.read_text())
+
     def view(self, attempt_id: int) -> dict:
         """Return clip metadata, extracting and caching on first call.
 
-        Cache key: clip file + JSON sidecar both exist. Re-extraction is
-        triggered only when either is missing (e.g. scratch_dir wiped on
-        restart — intentional; clip cache dies with the buffer).
+        Source order: scratch cache -> saved file -> ring extraction.
+        The scratch cache (clip + JSON sidecar both exist) dies with the
+        buffer on restart — intentional; after that, a SAVED copy is the
+        only source that can outlive the session, and only when neither
+        exists do we cut from the ring. The saved fallback never shadows
+        a viable extraction: scratch survives any session the ring covers.
         """
         a = self._attempt(attempt_id)
         name = _CLIP_NAME.format(id=attempt_id)
         clip = self.clips_dir / name
         meta = clip.with_suffix(".json")
-        if not (clip.exists() and meta.exists()):
+        saved = self.find_saved(attempt_id)
+        if clip.exists() and meta.exists():
+            m = json.loads(meta.read_text())
+            url, source = f"/api/replay/clips/{name}", "buffer"
+        elif saved is not None:
+            m = self._saved_meta(saved)
+            url, source = f"/api/replay/saved/{attempt_id}", "saved"
+        else:
             start, end = self._span(a)
             self._wait_for_tail(end)
             res = self.extractor.extract(self.recorder.ring, start, end, clip)
-            meta.write_text(json.dumps(
-                {"duration_s": res.duration_s, "truncated": res.truncated}))
-        m = json.loads(meta.read_text())
+            m = {"duration_s": res.duration_s, "truncated": res.truncated}
+            meta.write_text(json.dumps(m))
+            url, source = f"/api/replay/clips/{name}", "buffer"
         # fps = encoded rate (CFR); game_fps = SM64 logic rate — the
         # frame-step UI steps in GAME frames: each spans two encoded
         # frames, so stepping 1/fps changed the image only every 2nd press
-        # (live-reported 2026-06-12).
-        return {"clip_url": f"/api/replay/clips/{name}",
-                "duration_s": m["duration_s"], "truncated": m["truncated"],
-                "fps": self.cfg.fps, "game_fps": GAME_FPS}
+        # (live-reported 2026-06-12). Saved sidecars stamp fps at save
+        # time so old clips step correctly even if the config changes.
+        return {"clip_url": url,
+                "duration_s": m.get("duration_s"),
+                "truncated": m.get("truncated", False),
+                "fps": m.get("fps", self.cfg.fps), "game_fps": GAME_FPS,
+                "source": source,
+                "saved_path": str(saved) if saved is not None else None}
 
     def _wait_for_tail(self, end_utc: datetime) -> None:
         """Bounded wait: a click right after the event can outrace the last
@@ -187,10 +230,18 @@ class ReplayService:
     def save(self, attempt_id: int) -> dict:
         """Persist a clip to the permanent save tree (date/session/).
 
-        Calls view() first so the clip is always extracted before copying;
-        the view() result is cached so a second view() call is a no-op.
+        Idempotent: an attempt that already has a saved file returns it
+        as-is (re-saving with different pads = delete the file in Explorer
+        first). Otherwise view() extracts the clip (cached when already
+        cut) and we copy it out with a metadata sidecar — the sidecar is
+        what makes the clip self-describing in later sessions, after the
+        scratch cache and ring are gone.
         """
         a = self._attempt(attempt_id)
+        existing = self.find_saved(attempt_id)
+        if existing is not None:
+            m = self._saved_meta(existing)
+            return {"path": str(existing), "truncated": m.get("truncated", False)}
         self.view(attempt_id)  # ensure clip exists (cached when already cut)
         clip = self.clips_dir / _CLIP_NAME.format(id=attempt_id)
         ended_local = _parse_utc(a.ended_utc).astimezone()  # folder by local date
@@ -208,8 +259,11 @@ class ReplayService:
                       if a.star_id is not None and a.course_id is not None else "no-star")
         dest = dest_dir / slug_filename(a, c_name, s_name)
         shutil.copy2(clip, dest)
-        meta = clip.with_suffix(".json")
-        m = json.loads(meta.read_text())
+        m = json.loads(clip.with_suffix(".json").read_text())
+        # fps stamped at save time: the step buttons must match the clip's
+        # actual encode rate even if cfg.fps changes in a future version.
+        dest.with_suffix(".json").write_text(
+            json.dumps({**m, "fps": self.cfg.fps}))
         return {"path": str(dest), "truncated": m["truncated"]}
 
     def reveal(self, path_str: str) -> None:
@@ -233,6 +287,15 @@ class ReplayService:
         p = self.clips_dir / name
         if not p.exists():
             raise LookupError("no such clip")
+        return p
+
+    def saved_clip_path(self, attempt_id: int) -> Path:
+        """Saved-clip path for serving. The id is the only input (an int
+        path param) — no name validation needed; the glob can only ever
+        land inside save_root."""
+        p = self.find_saved(attempt_id)
+        if p is None:
+            raise LookupError("no saved replay for this attempt")
         return p
 
     # -- lifecycle (called from app lifespan) --------------------------------

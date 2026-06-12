@@ -257,6 +257,22 @@ def test_level_change_closes_as_abandoned():
     assert attempts[1].outcome == "abandoned"
 
 
+def test_void_fall_death_then_level_exit_yields_one_death_attempt():
+    # HMC pit fall: the pre-warp pulse fires the death BEFORE the level
+    # unloads (death.py), so the spit-out's level_changed closes nothing —
+    # one death attempt, no abandoned twin.
+    attempts = project([
+        jev(1, "target_set", 900, {"course_id": 6, "star_id": 1}),
+        jev(2, "practice_reset", 1000, {"igt_frames_before": 0, "mario_acted": True}),
+        jev(3, "death", 1450, {"cause": "fall", "igt_frames": 430, "level": 7}),
+        jev(4, "level_changed", 1470, {"from": 7, "to": 6}),
+    ])
+    assert [a.outcome for a in attempts] == ["death"]
+    assert attempts[0].outcome_detail == "fall"
+    assert attempts[0].rta_frames == 450
+    assert (attempts[0].course_id, attempts[0].star_id) == (6, 1)
+
+
 def test_inactive_reset_closure_is_discarded_entirely():
     attempts = project([
         star(1, 900),

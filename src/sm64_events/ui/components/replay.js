@@ -51,7 +51,13 @@ export function ReplayPlayer({ attemptId }) {
   useEffect(() => {
     let alive = true;
     send("POST", `/api/attempts/${attemptId}/replay`)
-      .then((r) => alive && setState({ phase: "ready", ...r }))
+      .then((r) => {
+        if (!alive) return;
+        setState({ phase: "ready", ...r });
+        // saved_path persists across sessions (server globs the save tree):
+        // the Save button correctly shows "Saved" for clips saved last week
+        setSavedPath(r.saved_path || null);
+      })
       .catch((e) => alive && setState({ phase: "error", message: String(e) }));
     return () => { alive = false; };
   }, [attemptId]);
@@ -68,6 +74,10 @@ export function ReplayPlayer({ attemptId }) {
   // each game frame spans two near-identical encoded frames, so stepping
   // 1/60 visibly changed the image only every SECOND press (live-reported
   // 2026-06-12 — "have to press twice").
+  // Known caveat (expected, not a bug): capture isn't phase-locked to the
+  // game and presents jitter (~59.90-60.05/s, user-measured) — a game
+  // frame occasionally spans 1 or 3 encoded frames, so once in a while a
+  // single press lands on a duplicate; the next press recovers.
   function step(dir) {
     const v = videoEl.current;
     if (!v) return;
@@ -97,6 +107,7 @@ export function ReplayPlayer({ attemptId }) {
 
   return html`<div class="replay-player">
     ${state.truncated && html`<div class="meta">⚠ starts mid-attempt (buffer didn't cover the full span)</div>`}
+    ${state.source === "saved" && html`<div class="meta">▣ playing the saved replay file (this attempt is no longer in the buffer)</div>`}
     <video controls preload="auto" src=${state.clip_url}
            onplay=${() => setPlaying(true)}
            onpause=${() => setPlaying(false)}

@@ -68,7 +68,7 @@ Other event types, same envelope:
 | `practice_reset` | `igt_frames_before, mario_acted, paused_frames_before, acted_tracking, action, prev_action, frames_since_door` | Usamune level reset — attempt anchor; payload carries the failed attempt's IGT and whether Mario entered any non-passive action since the last anchor (no-op resets where `mario_acted: false` are discarded); closures after ≥5 s of pause (paused_frames_before ≥ 150) are discarded as AFK; `action` = Mario's action at the detection tick; `prev_action` = Mario's action on the PREVIOUS poll tick — the segment engine keys the door-echo clause on `prev_action`: a genuine door crossing has `prev_action` in `DOOR_ACTIONS` (inputs locked during the door animation on the prior tick); an L-reset respawning AT a door has a gameplay `prev_action` (e.g. freefall) and must be treated as a real reset. Fall back to `action` for events journaled before `prev_action` was added; missing both fields → conservative close. `frames_since_door` = game frames since the last door action was observed (None if never seen); the segment engine treats 0–30 as a non-warp door echo (shape d) even when neither action nor prev_action carries door context. |
 | `state_loaded` | `igt_frames_restored, mario_acted, paused_frames_before, acted_tracking, action, prev_action, frames_since_door` | Savestate / Usamune section-state load — attempt anchor; same activity flag as practice_reset; same pause/activity discards as practice_reset; same `action`, `prev_action`, and `frames_since_door` fields as practice_reset for symmetry |
 | `mario_acted` | _(none)_ | Mario's first voluntary action since the last anchor (death actions never count); the tracking layer uses it to judge whether an attempt had any behavior |
-| `death` | `cause, igt_frames, level` | Mario died; closes the open attempt as outcome "death" with the cause in outcome_detail |
+| `death` | `cause, igt_frames, level` | Mario died; closes the open attempt as outcome "death" with the cause in outcome_detail. Causes: the death-action set (`standing`, `quicksand`, `electrocution`, `suffocation`, `on_stomach`, `on_back`, `eaten_by_bubba`, `drowning`, `water`) plus `fall` — a void-out (death barrier / pit), detected from the game's pending-warp pulse *before* the level unloads, so the death always precedes the spit-out's `level_changed` |
 | `level_changed` | `from, to` | Level id edge; closes open attempts as abandoned. May arrive with `from == to`: the detector emits one establishing event on server start and a corrective event after attach gaps (`from` = last *emitted* level, not the previous read) so journal-derived level tracking never runs stale — don't infer "left level X" from `from != to` |
 | `area_changed` | `level, from, to` | Castle area id edge (lobby=1, upstairs=2, basement=3 — areas of level 6). Same establishing/corrective semantics as `level_changed`: emits on server start and after attach gaps (`from` may equal `to`). **Note:** `curr_area` reads 0 until `CURR_AREA` is pinned at the live gate (`tools/hunt_value.py` while in the castle — see Task 17 Step 4). |
 | `warp_entered` | `level, area, action` | Edge into a warp/pipe-entry action on the already-sampled `mario_action`. The community-comparable timing moment for "entered the pipe" segments — the `level_changed` that follows adds constant fade time, so segment end anchors target this event instead. |
@@ -97,6 +97,8 @@ Other event types, same envelope:
 **Session view payload** (`GET /api/session`) top-level fields include `scope` (`"session"` or `"lifetime"`) and `sessions` (array of all sessions, newest-first, each with `id`, `attempts`, `started_utc`, `ended_utc`). Each star section additionally carries a `timeline` object: `{max_frames, max_display, max_is_success, points:[{frames, igt, outcome, attempt_id}]}`. The axis maximum (`max_frames`) is the longest successful attempt (or the longest attempt overall when `max_is_success` is false, i.e. no successes yet). Points are lifetime — they may exceed `max_frames` on the x-axis.
 
 **Timelines:** Each star section renders a strat map — every success, reset, and death plotted at its IGT position along a shared axis. Extending marker kinds requires two changes: one row in `TIMELINE_OUTCOMES` (`tracking/views.py`) to define the outcome key and color, and one row in `MARKERS` (`ui/components/timeline.js`) to define the SVG shape. Everything else (axis, tooltip, projection) is derived automatically from those two registries.
+
+**Progress graph:** Each star section also plots completion time over time (gold = explicitly saved PBs). Nodes are clickable: clicking one reveals that attempt's row in the list below (expanding past the pagination fold if needed), scrolls to it with a brief highlight, and — when the attempt has a saved replay file on disk (`HEAD /api/replay/saved/{id}` succeeds) — auto-opens its replay player as if ▶ had been pressed.
 
 ## HTTP API
 
@@ -147,14 +149,21 @@ regardless. Both storage limits are adjustable live from the UI — click
 the recording dot in the header (shows usage as `rec · 38 min ·
 1.2/20 GB`); changes persist to `data/replay_settings.json` and apply
 immediately. Saved replays under `replays/` are kept forever and never
-evicted. PJ64 must run windowed (exclusive fullscreen cannot be captured).
+evicted — and they stay *watchable* forever: viewing an attempt whose
+footage has left the buffer (later session, evicted, restart) transparently
+serves the saved file instead, so a saved PB replays in any future session
+(switch the UI to lifetime scope to reach old attempts' ▶ buttons). The
+attempt id in the filename is the only link — rename the `attempt_NNNN_`
+prefix and the tracker no longer finds it (reorganizing folders is fine).
+PJ64 must run windowed (exclusive fullscreen cannot be captured).
 
 - `GET  /api/replay/status` — `{enabled, recording, idle, window_found, audio_mode, encoder, buffer_start_utc, buffer_end_utc, disk_bytes, retention_s, max_buffer_bytes}`
 - `GET  /api/replay/settings` — `{retention_s, max_buffer_bytes, pre_pad_s, post_pad_s, save_root, saved_bytes}`
 - `PUT  /api/replay/settings` — body `{retention_s|null, max_buffer_bytes, pre_pad_s?, post_pad_s?}` (null retention = whole session; omitted pads = unchanged); persists + applies immediately (shrinking evicts oldest footage now); 409 outside 60 s–24 h / 1 GiB–1 TiB / pads 0–10 s
-- `POST /api/attempts/{id}/replay` — cut (or reuse) the attempt's clip → `{clip_url, duration_s, truncated, fps, game_fps}` (fps = encoded rate; game_fps = 30 fps SM64 logic, the frame-step unit)
+- `POST /api/attempts/{id}/replay` — cut (or reuse) the attempt's clip → `{clip_url, duration_s, truncated, fps, game_fps, source, saved_path}` (fps = encoded rate; game_fps = 30 fps SM64 logic, the frame-step unit; `source` is `buffer` or `saved`; `saved_path` non-null whenever a saved file exists). Falls back to the saved file when the buffer can't produce the clip; clips saved before 2026-06-12 lack a metadata sidecar → `duration_s` null, `truncated` false
 - `GET  /api/replay/clips/{name}` — the MP4 (supports HTTP Range; scrubs smoothly)
-- `POST /api/attempts/{id}/replay/save` — copy to `replays/<YYYY-MM-DD>/session_<N>/<slug>.mp4` → `{path, truncated}`
+- `GET  /api/replay/saved/{attempt_id}` — a SAVED attempt's MP4 (same Range support); 404 when that attempt has no saved file
+- `POST /api/attempts/{id}/replay/save` — copy to `replays/<YYYY-MM-DD>/session_<N>/<slug>.mp4` plus a `.json` metadata sidecar → `{path, truncated}`. Idempotent: an already-saved attempt returns its existing file (delete it in Explorer first to re-save with new padding)
 
 Errors follow the API taxonomy: 404 unknown attempt/clip, 409 no footage /
 span too short, 503 db unavailable. Clips span the whole attempt plus

@@ -1,8 +1,10 @@
 // src/sm64_events/ui/components/progress.js — completion time over time
 // (spec §4). One segment per session, ⫽ breaks between segments (lifetime);
 // gold = explicitly saved PBs for the current clock. Y: faster = lower.
-// No click interaction; if any is added, map through getScreenCTM (see
-// timeline.js clickToPlace for the letterbox rationale).
+// Click interaction is PER-ELEMENT (onclick on each point's hit circle →
+// onPick(attempt_id)) — that needs no coordinate mapping. Only
+// click-anywhere-position-mapping would need getScreenCTM (see timeline.js
+// clickToPlace for the letterbox rationale).
 import { h } from "preact";
 import htm from "htm";
 import { fmtIgt } from "../format.js";
@@ -22,7 +24,7 @@ function fmtTick(iso, withDate) {
     : time;
 }
 
-export function Progress({ prog, clock }) {
+export function Progress({ prog, clock, onPick }) {
   if (!prog) return "";
   const fKey = clock === "igt" ? "igt_frames" : "rta_frames";
   const pbKey = clock === "igt" ? "is_pb_igt" : "is_pb_rta";
@@ -91,11 +93,19 @@ export function Progress({ prog, clock }) {
         })()}
         <polyline fill="none" stroke=${AXIS} stroke-width="1.2"
           points=${s.points.map((p, j) => `${s.xs[j]},${y(p[fKey])}`).join(" ")} />
-        ${s.points.map((p, j) => html`<circle cx=${s.xs[j]} cy=${y(p[fKey])}
-            r=${p[pbKey] ? 5 : 4.5} fill=${p[pbKey] ? GOLD : GREEN}
-            stroke=${p[pbKey] ? GOLD_RIM : "none"} stroke-width="1">
-          <title>${p[pbKey] ? "PB " : ""}${clock === "igt" ? p.igt : p.rta} · ${fmtTick(p.t_utc, true)}</title>
-        </circle>`)}
+        ${s.points.map((p, j) =>
+          // second circle = transparent hit target ON TOP (a 4.5px dot is a
+          // hostile click target); it owns the tooltip so hover still works
+          html`<g>
+          <circle cx=${s.xs[j]} cy=${y(p[fKey])}
+              r=${p[pbKey] ? 5 : 4.5} fill=${p[pbKey] ? GOLD : GREEN}
+              stroke=${p[pbKey] ? GOLD_RIM : "none"} stroke-width="1" />
+          <circle cx=${s.xs[j]} cy=${y(p[fKey])} r="9" fill="transparent"
+              style=${onPick ? "cursor:pointer" : ""}
+              onclick=${onPick ? () => onPick(p.attempt_id) : null}>
+            <title>${p[pbKey] ? "PB " : ""}${clock === "igt" ? p.igt : p.rta} · ${fmtTick(p.t_utc, true)}${onPick ? " — click to open in the list" : ""}</title>
+          </circle>
+        </g>`)}
         ${s.w >= 60 && html`<text x=${s.left + s.w / 2} y=${H - 8} fill=${TXT} font-size="9"
               text-anchor="middle">${fmtTick(s.points[0].t_utc, withDate)}</text>`}
       </g>`)}

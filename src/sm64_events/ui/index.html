@@ -47,6 +47,9 @@
   @keyframes pbglow { from { box-shadow: 0 0 3px #ffd75f; } to { box-shadow: 0 0 10px #ffd75f; } }
   .pb-glow { border-color: #ffd75f; color: #ffd75f;
              animation: pbglow 0.9s ease-in-out infinite alternate; }
+  /* progress-graph pick: one fading gold pulse lands the eye on the row */
+  @keyframes rowflash { from { background: #3a321d; } to { background: transparent; } }
+  .row-flash td { animation: rowflash 1.6s ease-out; }
   .popover { position: absolute; background: #1b1e24; border: 1px solid #3a4150;
              border-radius: 6px; padding: .7rem; z-index: 5; }
   li { margin: .25rem 0; list-style: none; } ul { padding: 0; }

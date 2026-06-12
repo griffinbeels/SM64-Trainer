@@ -149,6 +149,38 @@ DEATH_ACTIONS = {
     0x300032C7: "water",       # ACT_WATER_DEATH
 }
 
+# Pending warp op (level_update.c sDelayedWarpOp) — the ONLY in-level signal
+# for void-out deaths (death barriers: HMC pits, Bowser arenas...). Those
+# deaths never enter a DEATH_ACTION: decomp check_death_barrier (fetched
+# 2026-06-12) pends WARP_OP_WARP_FLOOR for ~20 game frames (sDelayedWarpTimer
+# = 20), THEN the level unloads, and the life is lost after the warp in the
+# destination's death-exit action. Reading the pulse pre-warp keeps the death
+# event BEFORE level_changed in the journal — the projection then needs no
+# special casing (death closes the open attempt; the exit closes nothing).
+#
+# US address derived 2026-06-12, VERIFY (live gate pending):
+#   level_update.c FORCE_BSS block, declaration order. Internal layout pinned
+#   by BOTH legacy JP names in that block (D_80339ECA, D_80339EE0 — only
+#   consistent with sWarpDest 8-aligned); absolute US position pinned by the
+#   block's LAST member sTimerRunning = 0x8033B25E (HUD_TIMER_RUNNING above,
+#   live-verified). Corroboration: derived sWarpDest = 0x8033B248 matches
+#   STROOP's US warp destination. Walk: sCurrPlayMode 0x8033B238,
+#   sWarpDest 0x8033B248, sDelayedWarpOp 0x8033B252, timer 0x8033B254.
+#   Live check: tools/verify_addresses.py phase 2 prints warp-op changes —
+#   fall into an HMC pit and expect 0 -> 0x13 (~20 frames) plus a
+#   ">> death: fall" detector line BEFORE the level unloads. Also confirm a
+#   normal (quicksand) death does NOT double-fire (Usamune's in-level death
+#   respawn must not pulse 0x13).
+PENDING_WARP_OP = 0x8033B252  # s16 sDelayedWarpOp; 0 = no warp pending
+# Op values (decomp level_update.h): 0x12 WARP_OP_DEATH is the NORMAL death
+# warp, pended ~48 frames AFTER the death action already fired our event —
+# deliberately not consumed (would double-count every death). Levels that
+# define a warp-floor node (TotWC's cloud exit) turn 0x13 into a non-death
+# exit; falling out of those would mislabel as death — characterize at the
+# live gate before excluding by level id.
+WARP_OP_WARP_FLOOR = 0x13  # void-out: resolves to the death node (or game
+                           # over at 0 lives) unless the level has node 0xF3
+
 # Actions Mario passes through or rests in WITHOUT user input (spawn-in,
 # idle, sleep). Used by AnchorDetector's activity flag: any OTHER action
 # observed since the last anchor means the player actually did something.

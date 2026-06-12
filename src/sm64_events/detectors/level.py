@@ -3,7 +3,10 @@
 attempts abandoned by leaving the level (excluded from failure rates)
 instead of letting the next timer reset miscount them as resets.
 Death respawns reload the SAME level id -> no event (correct: a death
-already closed the attempt).
+already closed the attempt). Void-out deaths DO leave the level, but
+their death event fires pre-warp (death.py pending-warp pulse), so the
+spit-out's level_changed finds nothing open — a close here is always a
+true abandon.
 
 The detector remembers the last level it EMITTED, not the last it saw:
 the first processed pair always emits one establishing event (from may
