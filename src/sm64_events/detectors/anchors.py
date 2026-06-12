@@ -33,6 +33,19 @@ Both anchor payloads also carry action: curr.mario_action at the tick the
   Historical events (no prev_action key): .get() returns None → not in
   DOOR_ACTIONS → old conservative close behaviour preserved.
 
+NON-WARP door recency (live gate 2026-06-12, journal seq 26):
+  ACT_PULLING_DOOR (0x1320) and ACT_PUSHING_DOOR (0x1321) end Usamune's
+  section AFTER the door animation completes — the IGT reset is detected
+  1-5 frames after the last door action, when Mario is already idle or
+  landing.  At that point neither prev_action nor action is in DOOR_ACTIONS,
+  so the action-based echo clause cannot classify it.
+  Solution: track the global_timer of the last tick a door action was observed
+  (_last_door_frame).  Anchor payloads gain frames_since_door: how many game
+  frames have elapsed since the most recent door action (None if never seen).
+  The segment engine keys a fourth echo shape on 0 <= frames_since_door <= 30.
+  Self-heal (domain rule 4): if global_timer jumps backward, _last_door_frame
+  is cleared so a stale recency value cannot poison anchors after the jump.
+
 Pause streak: consecutive game frames where global_timer advanced but the
   overall IGT did not — game logic stopped, i.e. the Usamune pause menu (or a
   dialog time-stop). Stamped on anchors as paused_frames_before; the tracking
@@ -53,7 +66,7 @@ acceptable for attempt tracking, but the payload distinction matters for
 the anchor→outcome clock, so characterize it once on real hardware."""
 from sm64_events.core.events import Event
 from sm64_events.core.snapshot import GameSnapshot
-from sm64_events.memory.addresses import DEATH_ACTIONS, PASSIVE_ACTIONS
+from sm64_events.memory.addresses import DEATH_ACTIONS, DOOR_ACTIONS, PASSIVE_ACTIONS
 
 BOOT_TIMER_MAX = 120   # global_timer below ~4 s after a backward jump = console reset; shared by lifecycle.py
 NEAR_ZERO_IGT = 30     # 30 frames = 1 s at 30 fps; <= so exactly 1 s still counts
@@ -65,8 +78,18 @@ class AnchorDetector:
         self._acted = False
         self._acted_reported = False
         self._pause_streak = 0
+        self._last_door_frame: int | None = None
 
     def process(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
+        # Self-heal on backward global_timer jump (domain rule 4): stale door
+        # recency must not cross a savestate rewind boundary.
+        if curr.global_timer < (self._last_door_frame or 0):
+            self._last_door_frame = None
+        # Track the most recent frame where a door action was observed so that
+        # anchors emitted 1-5 frames after the door animation ends can still
+        # be classified as echoes via frames_since_door (non-warp door shape).
+        if curr.mario_action in DOOR_ACTIONS:
+            self._last_door_frame = curr.global_timer
         events = self._classify(prev, curr)
         if events:
             # the action transition ON the anchor tick is swallowed — it
@@ -99,6 +122,14 @@ class AnchorDetector:
         # equal global_timer: polled faster than one frame — no information
 
     def _classify(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
+        # frames_since_door: how many game frames have elapsed since the most
+        # recent tick where a door action was observed.  None if no door has
+        # been seen this anchor period.  The segment engine uses this to
+        # classify non-warp door echoes that land 1-5 frames after the door
+        # action ends (live gate 2026-06-12, journal seq 26).
+        frames_since_door = (
+            (curr.global_timer - self._last_door_frame)
+            if self._last_door_frame is not None else None)
         if curr.global_timer < prev.global_timer:
             if curr.global_timer < BOOT_TIMER_MAX:
                 return []  # console reset — GameResetDetector owns this
@@ -109,7 +140,8 @@ class AnchorDetector:
                                    "paused_frames_before": self._pause_streak,
                                    "acted_tracking": True,
                                    "action": curr.mario_action,
-                                   "prev_action": prev.mario_action})]
+                                   "prev_action": prev.mario_action,
+                                   "frames_since_door": frames_since_door})]
         if (curr.igt_overall < prev.igt_overall
                 and curr.igt_overall <= NEAR_ZERO_IGT
                 and prev.igt_overall < IGT_WRAP_CEILING):
@@ -120,5 +152,6 @@ class AnchorDetector:
                                    "paused_frames_before": self._pause_streak,
                                    "acted_tracking": True,
                                    "action": curr.mario_action,
-                                   "prev_action": prev.mario_action})]
+                                   "prev_action": prev.mario_action,
+                                   "frames_since_door": frames_since_door})]
         return []

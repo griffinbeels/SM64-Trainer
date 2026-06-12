@@ -567,3 +567,63 @@ def test_intra_area_door_echo_with_prev_action_stays_echo():
                        ctx(level=17, prev_level=6))
     assert len(closed) == 1
     assert closed[0].outcome == "success" and closed[0].rta_frames == 245
+
+
+# ---------------------------------------------------------------------------
+# Non-warp door recency echo (live gate 2026-06-12, journal seq 26)
+# NON-WARP doors (ACT_PULLING/PUSHING_DOOR 0x1320/0x1321) end the Usamune
+# section AFTER the animation: the IGT reset arrives 1-5 frames later when
+# Mario is already idle/landing — neither prev_action nor action carries door
+# context at that point.  The frames_since_door recency field bridges the gap.
+# ---------------------------------------------------------------------------
+
+def test_nonwarp_door_section_reset_is_echo():
+    """THE SEQ-26 REGRESSION: LBLJ armed @1000; non-warp door was crossed
+    ~1296 (ACT_PUSHING_DOOR 0x0C400201→0x1321); Usamune resets the section
+    IGT 4 frames later @1300 when Mario is already in FREEFALL_LAND — no door
+    action in prev or curr.  frames_since_door=4 is the recency discriminator.
+    Must NOT close the segment (must stay armed).
+    (Red before fix — this is the live-gate seq-26 bug.)"""
+    e = SegmentEngine([LBLJ])
+    lblj_arm(e, jid=10, frame=1000)
+    # Non-warp door reset: Mario in FREEFALL_LAND, prev=IDLE, but frames_since_door=4
+    closed, _ = e.feed(
+        jev(26, "practice_reset", 1300,
+            {"igt_frames_before": 296,
+             "action": 0x04000440,        # ACT_FREEFALL
+             "prev_action": 0x0C400201,   # ACT_IDLE — not in DOOR_ACTIONS
+             "frames_since_door": 4}),
+        ctx(level=6))
+    assert closed == [], "non-warp door section reset must not close the segment"
+    assert e.armed_ids() == {1}, "segment must remain armed"
+
+
+def test_reset_long_after_door_still_closes():
+    """Same door crossing but frames_since_door=200 (well outside the echo
+    window) → genuine player L-reset → outcome reset, rta 400."""
+    e = SegmentEngine([LBLJ])
+    lblj_arm(e, jid=10, frame=1000)
+    closed, _ = e.feed(
+        jev(27, "practice_reset", 1400,
+            {"igt_frames_before": 400,
+             "action": 0x04000440,
+             "prev_action": 0x0C400201,
+             "frames_since_door": 200}),
+        ctx(level=6))
+    assert len(closed) == 1
+    assert closed[0].outcome == "reset" and closed[0].rta_frames == 400
+
+
+def test_historical_anchor_without_frames_since_door_closes():
+    """Historical events (no frames_since_door key) keep conservative close
+    behaviour — .get() returns None, out-of-window, treated as real reset."""
+    e = SegmentEngine([LBLJ])
+    lblj_arm(e, jid=10, frame=1000)
+    closed, _ = e.feed(
+        jev(28, "practice_reset", 1200,
+            {"igt_frames_before": 200,
+             "action": 0x04000440,
+             "prev_action": 0x0C400201}),  # no frames_since_door key
+        ctx(level=6))
+    assert len(closed) == 1
+    assert closed[0].outcome == "reset" and closed[0].rta_frames == 200

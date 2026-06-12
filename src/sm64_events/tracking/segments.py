@@ -22,7 +22,7 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
   hard_reset rows exist)
 - load-echo rule: Usamune resets IGT on every level/area load, so the
   anchor detector emits a synthetic practice_reset on the same global-timer
-  frame as the triggering transition.  Three echo shapes exist:
+  frame as the triggering transition.  Four echo shapes exist:
     (a) level-entry echo: practice_reset @ arm.start_frame (same tick as the
         level_changed that armed the segment — live gate 2026-06-12, seq 40-45);
     (b) area-door echo: area_changed mid-segment at frame F, then a synthetic
@@ -42,10 +42,21 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
         the IGT drop one tick late, a REAL reset carries curr action=0x1322
         but prev action=the gameplay action when L was pressed (e.g. freefall
         0x04000440). Keying on prev_action correctly distinguishes these.
+    (d) non-warp door recency echo: ACT_PULLING/PUSHING_DOOR (0x1320/0x1321)
+        end Usamune's section AFTER the animation — the IGT reset lands 1-5
+        frames later when Mario is already idle/landing, so neither action nor
+        prev_action carries door context.  Discriminator: the anchor detector
+        stamps frames_since_door (frames since the last door action was
+        observed); 0 <= frames_since_door <= _DOOR_ECHO_WINDOW (30 f) is an
+        echo.  Historical events (no frames_since_door key) fall through to
+        conservative close.  (Live gate 2026-06-12, journal seq 26: door
+        0x1321 ends, result written at the next idle tick, IGT zeroes one tick
+        later — prev=IDLE action=FREEFALL_LAND, no door context in either.)
   Shapes (a) and (b) are detected by _last_transition_frame (ev.frame ==
   _last_transition_frame).  Shape (c) is detected by prev_action (falling
-  back to action) in the anchor payload.  A real player reset always has a
-  gameplay prev_action.
+  back to action) in the anchor payload.  Shape (d) is detected by
+  frames_since_door.  A real player reset always has a gameplay prev_action
+  AND frames_since_door outside the window (or absent).
   KNOWN EDGE (no code): a savestate load INTO A DIFFERENT AREA emits a
   corrective area_changed co-frame with state_loaded; that state_loaded will
   be classified as an echo (segment stays armed).  The negative-rta self-heal
@@ -58,6 +69,12 @@ from typing import Callable
 from sm64_events.memory.addresses import CASTLE_AREA_NAMES, DOOR_ACTIONS, LEVEL_NAMES
 
 _AFK_PAUSE_FRAMES = 150  # mirrors the star-side AFK discard (projection.py)
+
+_DOOR_ECHO_WINDOW = 30  # frames; non-warp doors reset the section 1-5 frames
+# after the door action ends (watch trace 2026-06-12); poll stalls add a few.
+# No human completes a door AND L-resets within a second; misclassifying a
+# borderline instant reset (eaten, segment stays armed) is cheaper than
+# constant false failures on every walk-through door.
 
 # Segment attempt ids live in a disjoint namespace from star attempt ids
 # (which are raw journal ids): id = arm-event journal id + OFFSET * def_id.
@@ -296,6 +313,18 @@ class SegmentEngine:
                     # (journaled before this field was added). Missing both
                     # fields → .get() chain returns None → not in DOOR_ACTIONS
                     # → conservative close behaviour preserved.
+                    pass
+                elif ev.type in ("practice_reset", "state_loaded") \
+                        and ev.payload.get("frames_since_door") is not None \
+                        and 0 <= ev.payload["frames_since_door"] \
+                        <= _DOOR_ECHO_WINDOW:
+                    # Non-warp door recency echo (shape d): ACT_PULLING/
+                    # PUSHING_DOOR ends the section AFTER the animation —
+                    # IGT resets 1-5 frames later with Mario already idle/
+                    # landing, so action and prev_action carry no door
+                    # context.  frames_since_door bridges the gap.
+                    # Historical events (no frames_since_door key): .get()
+                    # returns None → falls through to conservative close.
                     pass
                 elif ev.type in ("practice_reset", "state_loaded"):
                     if ev.payload.get("paused_frames_before", 0) \
