@@ -200,7 +200,7 @@ KEY_GRAB_LEVELS = frozenset({BOWSER_1_ARENA, BOWSER_2_ARENA})
 # n64decomp/sm64 master, fetched 2026-06-11. VERIFY (live gate): which of
 # these fires on the BitDW/BitFS pipe touch and the BitS funnel.
 ACT_DISAPPEARED = 0x00001300       # generic "Mario left the world" (pipes, some warps)
-ACT_TELEPORT_FADE_OUT = 0x00001336  # teleporter/cap-warp fade
+ACT_TELEPORT_FADE_OUT = 0x00001336  # teleporter/cap-warp fade; also fires for in-level teleporters elsewhere — harmless: warp triggers filter by level. VERIFY (live gate pending)
 WARP_ENTRY_ACTIONS = frozenset({ACT_DISAPPEARED, ACT_TELEPORT_FADE_OUT})
 
 # Spawn actions — same decomp fetch. The file-select spawn on Castle Grounds
