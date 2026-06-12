@@ -177,9 +177,10 @@ CASTLE_LEVELS = frozenset({6, 16, 26})  # inside, grounds, courtyard
 # gCurrLevelNum LEVEL ids — decomp levels/level_defines.h DEFINE_LEVEL order
 # (1-based). Cross-validated against three live-verified anchors we already
 # had: WF=24, SSL=8, castle 6/16/26 — all consistent with this table.
-# Live-walked 2026-06-12 gate: 6, 16, 17, 21, 30, 34 confirmed via
-# level_changed payloads. VERIFY (walk-in pending): 7 (HMC), 19 (BitFS),
-# 23 (DDD), 33 (B2 arena) — decomp-sourced, same triple-anchored mapping.
+# Live-walked 2026-06-12 gate (two sessions): 6, 7, 16, 17, 19, 21, 22,
+# 23, 30, 33, 34 all confirmed via level_changed payloads — every id a
+# segment depends on. Only 26 (courtyard, no segment uses it) remains
+# decomp-only.
 # Boot transient: level id 1 (decomp UNKNOWN stub) appears with garbage
 # reads during console resets — inert, matches no trigger.
 LEVEL_NAMES = {
@@ -207,8 +208,9 @@ BOWSER_1_ARENA, BOWSER_2_ARENA, BOWSER_3_ARENA = 30, 33, 34
 # Key grabs enter the same star-dance actions as stars (see STAR_GRAB_ACTIONS
 # comment above). In these two arenas the grab is a KEY, not a star — the
 # key detector claims it and star_grab must ignore it.
-# Live-verified 2026-06-12: key grabs do NOT update gLastCompleted*; the
-# values stayed stale (course=16 star=1 from the prior star) at the gate.
+# Live-verified 2026-06-12, BOTH arenas: key grabs do NOT update
+# gLastCompleted* (B1: stale course=16 star=1 from the prior star;
+# B2: unrelated course=17 star=1 on a fresh 0-star file).
 # The star_grab guard on KEY_GRAB_LEVELS is what prevents misattribution —
 # confirmed that this guard is sufficient; no extra action-id guard needed.
 KEY_GRAB_LEVELS = frozenset({BOWSER_1_ARENA, BOWSER_2_ARENA})
