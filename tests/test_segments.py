@@ -772,3 +772,130 @@ def test_anchor_without_area_param_matches_any_area():
     e.feed(jev(20, "practice_reset", 2000, {"action": 0x0C400201}),
            ctx(level=17, area=2))
     assert e.armed_ids() == {5}
+
+
+# ---------------------------------------------------------------------------
+# Menu-warp pause gate (live-gate amendment 2026-06-12)
+# Usamune menu warps (e.g. 06-01-00) cross areas and emit an area_changed
+# co-frame with their anchor.  The transition-echo guard would previously
+# classify the anchor as a load echo (ev.frame == _last_transition_frame),
+# keeping the segment armed with a STALE start_frame — so success rta was
+# measured from the original arm minutes earlier.
+#
+# Discriminator (journal-proven): menu warps pass through the pause menu —
+# paused_frames_before 13/18/29/890 observed in live logs.  Walked load
+# echoes (level entries, area doors) carry 0-3.  A deliberate menu action
+# is never an involuntary load echo.
+#
+# Fix: the transition-co-frame shape only suppresses if
+# paused_frames_before <= _MENU_PAUSE_FRAMES (5).  Above that threshold the
+# anchor is REAL → close the stale attempt + re-arm at the warp frame.
+# ---------------------------------------------------------------------------
+
+def test_menu_warp_across_areas_rebases_the_attempt():
+    """THE REGRESSION: LBLJ armed via level_changed 16→6 @1000 (+co-frame echo
+    @1000 paused 3 — stays echo); walked door area_changed 1→3 @1500 + echo
+    @1500 paused 2 (still echo, segment stays armed at start_frame 1000);
+    then THE MENU WARP: area_changed 3→1 @2000 + practice_reset @2000
+    paused_frames_before 18 — co-frame but paused > 5 → REAL anchor → closes
+    the stale attempt (reset row, rta 1000) AND re-arms at 2000;
+    level_changed 6→17 @2100 → success rta 100 (NOT 1100).
+
+    Red before fix: transition-echo guard eats the warp anchor as a load echo,
+    success rta is 1100 (measured from original arm at 1000)."""
+    e = SegmentEngine([LBLJ])
+    # arm via castle grounds → lobby transition @1000
+    e.feed(jev(10, "level_changed", 1000, {"from": 16, "to": 6}),
+           ctx(level=6, prev_level=16))
+    # co-frame load echo at arm tick (paused 3 — walked entry) — stays echo
+    e.feed(jev(11, "practice_reset", 1000, {"paused_frames_before": 3,
+                                             "igt_frames_before": 64}),
+           ctx(level=6))
+    assert e.armed_ids() == {1}
+    # walked area door @1500 — echo, segment stays armed at 1000
+    e.feed(jev(12, "area_changed", 1500, {"level": 6, "from": 1, "to": 3}),
+           ctx(level=6, area=3))
+    e.feed(jev(13, "practice_reset", 1500, {"paused_frames_before": 2,
+                                             "igt_frames_before": 30}),
+           ctx(level=6))
+    assert e.armed_ids() == {1}
+    # menu warp: area_changed 3→1 @2000 (sets _last_transition_frame=2000)
+    e.feed(jev(14, "area_changed", 2000, {"level": 6, "from": 3, "to": 1}),
+           ctx(level=6, area=1))
+    # anchor @2000 — co-frame, but paused_frames_before 18 > 5 → REAL
+    closed, _ = e.feed(jev(15, "practice_reset", 2000, {"paused_frames_before": 18,
+                                                          "action": 0x0C400201}),
+                       ctx(level=6))
+    # must close stale attempt as reset with rta 1000 (2000 - 1000)
+    assert len(closed) == 1, f"expected 1 closed attempt, got {len(closed)}"
+    assert closed[0].outcome == "reset"
+    assert closed[0].rta_frames == 1000
+    # segment re-armed at the warp frame 2000
+    assert e.armed_ids() == {1}
+    assert e._armed[1].start_frame == 2000
+    # success times from the warp, not the original arm
+    closed2, _ = e.feed(jev(16, "level_changed", 2100, {"from": 6, "to": 17}),
+                         ctx(level=17, prev_level=6))
+    assert len(closed2) == 1
+    assert closed2[0].outcome == "success"
+    assert closed2[0].rta_frames == 100
+
+
+def test_long_menu_warp_rebases_without_row():
+    """AFK-length pause during menu warp (paused_frames_before 890 — user
+    sat in the menu): no reset row (AFK discard), but segment re-arms at
+    the warp frame 2000.  Success times from 2000."""
+    e = SegmentEngine([LBLJ])
+    lblj_arm(e, jid=10, frame=1000)
+    # area_changed sets _last_transition_frame = 2000
+    e.feed(jev(11, "area_changed", 2000, {"level": 6, "from": 1, "to": 3}),
+           ctx(level=6, area=3))
+    # warp anchor co-frame but paused 890 → REAL, AFK → discard (no row)
+    closed, _ = e.feed(jev(12, "practice_reset", 2000, {"paused_frames_before": 890,
+                                                          "action": 0x0C400201}),
+                       ctx(level=6))
+    assert closed == [], "AFK-level menu warp must not record a row"
+    assert e.armed_ids() == {1}
+    assert e._armed[1].start_frame == 2000
+    # success times from the warp
+    closed2, _ = e.feed(jev(13, "level_changed", 2100, {"from": 6, "to": 17}),
+                         ctx(level=17, prev_level=6))
+    assert len(closed2) == 1
+    assert closed2[0].rta_frames == 100
+
+
+def test_walked_area_door_with_pause_buffer_stays_echo():
+    """Door context (prev_action 0x1321) outranks the pause gate: even with
+    paused_frames_before 40 (above _MENU_PAUSE_FRAMES) a door-action anchor
+    stays echo.  Segment must remain armed at original start_frame."""
+    e = SegmentEngine([LBLJ])
+    lblj_arm(e, jid=10, frame=1000)
+    # NOT a co-frame reset — different frame, so _last_transition_frame guard
+    # is not active.  The intra-area door echo guard (shape c) handles this:
+    # prev_action in DOOR_ACTIONS → echo regardless of pause.
+    closed, _ = e.feed(
+        jev(11, "practice_reset", 1200,
+            {"prev_action": 0x1321, "action": 0x00001322,
+             "paused_frames_before": 40}),
+        ctx(level=6))
+    assert closed == [], "door-context anchor must stay echo despite large pause"
+    assert e.armed_ids() == {1}
+    assert e._armed[1].start_frame == 1000
+
+
+def test_arm_frame_echo_immune_to_pause():
+    """Shape (a) arm-frame echo: co-frame anchor at the same tick as the arm
+    must be suppressed UNCONDITIONALLY, even with paused_frames_before 800
+    (player was paused on the grounds before entering the lobby).
+    No row, stays armed at 3000."""
+    e = SegmentEngine([LBLJ])
+    e.feed(jev(10, "level_changed", 3000, {"from": 16, "to": 6}),
+           ctx(level=6, prev_level=16))
+    # co-frame echo at arm tick — large pause, but still a load echo
+    closed, _ = e.feed(jev(11, "practice_reset", 3000,
+                            {"paused_frames_before": 800,
+                             "igt_frames_before": 64}),
+                       ctx(level=6))
+    assert closed == [], "arm-frame echo must be suppressed regardless of pause"
+    assert e.armed_ids() == {1}
+    assert e._armed[1].start_frame == 3000

@@ -28,46 +28,48 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
   hard_reset rows exist)
 - load-echo rule: Usamune resets IGT on every level/area load, so the
   anchor detector emits a synthetic practice_reset on the same global-timer
-  frame as the triggering transition.  Four echo shapes exist:
-    (a) level-entry echo: practice_reset @ arm.start_frame (same tick as the
-        level_changed that armed the segment — live gate 2026-06-12, seq 40-45);
-    (b) area-door echo: area_changed mid-segment at frame F, then a synthetic
-        practice_reset at the SAME frame F (live report 2026-06-12: LBLJ armed
-        in lobby closed-as-reset at the basement-stairs door);
-    (c) intra-area door echo: NO area_changed (same area on both sides of the
-        door), but Usamune's IGT still resets → anchor fires with Mario in a
-        DOOR_ACTION (0x1320/0x1321/0x1322, inputs locked during door animation,
-        never a player reset). Discriminator: keyed on prev_action when present
-        (the action on the PREVIOUS poll tick must be in DOOR_ACTIONS — the
-        door open animation was already in progress before the IGT drop).
-        Fallback to action for events journaled before prev_action was added.
-        Historical events (no prev_action key): .get() returns None → not in
-        DOOR_ACTIONS → old conservative close behaviour preserved.
-        Race fix (2026-06-12): Usamune L-resets respawn Mario at the level
-        entrance in ACT_WARP_DOOR_SPAWN (0x1322). If the anchor poll catches
-        the IGT drop one tick late, a REAL reset carries curr action=0x1322
-        but prev action=the gameplay action when L was pressed (e.g. freefall
-        0x04000440). Keying on prev_action correctly distinguishes these.
-    (d) non-warp door recency echo: ACT_PULLING/PUSHING_DOOR (0x1320/0x1321)
-        end Usamune's section AFTER the animation — the IGT reset lands 1-5
-        frames later when Mario is already idle/landing, so neither action nor
-        prev_action carries door context.  Discriminator: the anchor detector
-        stamps frames_since_door (frames since the last door action was
-        observed); 0 <= frames_since_door <= _DOOR_ECHO_WINDOW (30 f) is an
-        echo.  Historical events (no frames_since_door key) fall through to
-        conservative close.  (Live gate 2026-06-12, journal seq 26: door
-        0x1321 ends, result written at the next idle tick, IGT zeroes one tick
-        later — prev=IDLE action=FREEFALL_LAND, no door context in either.)
-  Shapes (a) and (b) are detected by _last_transition_frame (ev.frame ==
-  _last_transition_frame).  Shape (c) is detected by prev_action (falling
-  back to action) in the anchor payload.  Shape (d) is detected by
-  frames_since_door.  A real player reset always has a gameplay prev_action
-  AND frames_since_door outside the window (or absent).
+  frame as the triggering transition.  Echo classification uses ORDERED shapes
+  evaluated top-to-bottom; the first match wins:
+    (1) arm-frame echo: ev.frame == arm.start_frame -- suppressed
+        UNCONDITIONALLY.  The level_changed that armed the segment and the
+        anchor it triggers share the same tick; the player may have been
+        paused for minutes before entering (large paused_frames_before normal).
+        (live gate 2026-06-12, seq 40-45)
+    (2) door-context echo: prev_action/action in DOOR_ACTIONS, or
+        frames_since_door 0-30 -- suppressed UNCONDITIONALLY.  Positive
+        evidence of a door animation; pause-buffering at a door then crossing
+        stays an echo.  Subshapes:
+        (2a) intra-area door echo: NO area_changed (same area on both sides),
+             but Usamune IGT resets -> anchor fires in DOOR_ACTION
+             (0x1320/0x1321/0x1322, inputs locked, never a player reset).
+             Keyed on prev_action first (door anim was running the prev tick);
+             fallback to action for old events without prev_action.
+             Race fix (2026-06-12): L-resets respawn in ACT_WARP_DOOR_SPAWN
+             (0x1322); prev_action=gameplay (not a door action) -> closes.
+        (2b) non-warp door recency echo: ACT_PULLING/PUSHING_DOOR end the
+             Usamune section AFTER the animation -- IGT reset arrives 1-5
+             frames later; neither action nor prev_action carries door context.
+             frames_since_door bridges the gap.  Historical events (no key)
+             fall through to conservative close.
+             (live gate 2026-06-12, seq 26)
+    (3) transition co-frame echo: ev.frame == _last_transition_frame AND
+        paused_frames_before <= _MENU_PAUSE_FRAMES (5) -- suppressed.
+        Walked load echoes carry paused_frames_before 0-3; this gate passes
+        them through as echoes.  Menu warps (06-01-00, etc.) are also co-frame
+        but pass through the pause menu: paused_frames_before 13-890 observed
+        (live logs 2026-06-12) -> the pause gate FAILS -> falls through to the
+        real-reset path -> closes the stale attempt and re-arms at the warp
+        frame.  A deliberate menu action is never an involuntary load echo.
+        (live-gate amendment 2026-06-12)
+  Shapes (1)/(3) are detected by frame equality.  Shape (2) is detected by
+  prev_action/action in DOOR_ACTIONS (falling back through the chain) or
+  frames_since_door.  Historical events (no prev_action, no frames_since_door):
+  .get() returns None -> conservative close behaviour preserved.
   KNOWN EDGE (no code): a savestate load INTO A DIFFERENT AREA emits a
   corrective area_changed co-frame with state_loaded; that state_loaded will
-  be classified as an echo (segment stays armed).  The negative-rta self-heal
-  covers the time-jump consequences.  Acceptable: door echoes are constant,
-  this edge is rare.
+  be classified as a co-frame echo if paused_frames_before <= 5.  The
+  negative-rta self-heal covers the time-jump consequences.  Acceptable: door
+  echoes are constant, this edge is rare.
 """
 from dataclasses import dataclass
 from typing import Callable
@@ -75,6 +77,11 @@ from typing import Callable
 from sm64_events.memory.addresses import CASTLE_AREA_NAMES, DOOR_ACTIONS, LEVEL_NAMES
 
 _AFK_PAUSE_FRAMES = 150  # mirrors the star-side AFK discard (projection.py)
+
+_MENU_PAUSE_FRAMES = 5  # walked load echoes carry paused_frames_before 0-3
+# (live logs 2026-06-12); menu warps pass through the pause menu: 13-890
+# observed. A co-frame anchor preceded by a pause is a deliberate menu
+# action, never an involuntary load echo.
 
 _DOOR_ECHO_WINDOW = 30  # frames; non-warp doors reset the section 1-5 frames
 # after the door action ends (watch trace 2026-06-12); poll stalls add a few.
@@ -301,20 +308,30 @@ class SegmentEngine:
                         closed.append(a)
                     self._disarm(d, ev, notices)
                 elif ev.type in ("practice_reset", "state_loaded") \
-                        and ev.frame == self._last_transition_frame:
-                    # Load echo — not a real player reset.  Shapes (a) and (b):
-                    # (a) level-entry echo: practice_reset at arm.start_frame
-                    #     (same tick as the level_changed that armed us —
-                    #     live gate 2026-06-12, seq 40-45);
-                    # (b) area-door echo: area_changed mid-segment at frame F,
-                    #     followed by practice_reset at the SAME frame F
-                    #     (live report 2026-06-12: LBLJ armed in castle lobby
-                    #     closed-as-reset when crossing the basement-stairs
-                    #     door).
-                    # Both shapes share ev.frame == _last_transition_frame.
-                    # Do NOTHING: no closure, no row, no disarm. Fall through
-                    # to the arm phase where an attempt_anchor re-arm
-                    # harmlessly replaces the _Arm with the identical frame.
+                        and ev.frame == arm.start_frame:
+                    # Shape (1) — arm-frame echo: the level_changed that armed
+                    # this segment and the synthetic anchor it triggers share
+                    # the same global-timer tick.  Suppressed UNCONDITIONALLY:
+                    # the player may have been paused on the grounds for
+                    # minutes before entering the lobby — a large
+                    # paused_frames_before here is normal and must not
+                    # reclassify this as a real reset.
+                    # (live gate 2026-06-12, seq 40-45)
+                    pass
+                elif ev.type in ("practice_reset", "state_loaded") \
+                        and ev.frame == self._last_transition_frame \
+                        and ev.payload.get("paused_frames_before", 0) \
+                        <= _MENU_PAUSE_FRAMES:
+                    # Shape (3) — transition co-frame echo (walked area door):
+                    # area_changed mid-segment at frame F, then anchor at F.
+                    # Suppressed only when paused_frames_before <= 5.
+                    # Menu warps (06-01-00, etc.) are co-frame BUT pass through
+                    # the pause menu: paused_frames_before 13-890 observed
+                    # in live logs (2026-06-12).  A co-frame anchor with a
+                    # large pause is a deliberate attempt boundary, not a
+                    # load echo — falls through to the real-reset path below.
+                    # (live report 2026-06-12: LBLJ armed in castle lobby
+                    # closed-as-reset when crossing the basement-stairs door)
                     pass
                 elif ev.type in ("practice_reset", "state_loaded") \
                         and ev.payload.get(
