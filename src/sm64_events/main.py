@@ -108,13 +108,15 @@ def build():
             cfg=replay_cfg, recorder=recorder,
             extractor=ClipExtractor(cfg=replay_cfg, codec=codec),
             tracker=service)
-    # Order is load-bearing: level changes abandon stale attempts BEFORE the
-    # same tick's igt-reset anchor opens the next one; resets before grabs
-    # (see projection.py docstring on the same-tick race); dust tricks before
-    # grabs so a same-tick rollout/jump attaches to the attempt the grab closes.
-    # New primitives slot between level and anchors: area follows level
-    # (same establishing discipline); warp/key/spawn are stateless edges and
-    # must precede grabs so a same-tick key claim beats star attribution.
+    # Order is load-bearing for attempt state: level changes abandon stale
+    # attempts BEFORE the same tick's igt-reset anchor opens the next one;
+    # resets before grabs (see projection.py docstring on the same-tick race);
+    # dust tricks before grabs so a same-tick rollout/jump attaches to the
+    # attempt the grab closes.  New primitives slot between level and anchors:
+    # area follows level (same establishing discipline); warp/key/spawn are
+    # stateless edges — key_grabbed and star_collected cannot co-emit on the
+    # same level (star_grab.py guards KEY_GRAB_LEVELS directly), so their
+    # relative order is informational only.
     # NOTE: area_changed reads curr_area, which is 0 on every live snapshot
     # until the CURR_AREA address is live-pinned (Task 17 gate) — until then
     # area events are inert establishing rows ({from:0,to:0}), by design.
