@@ -12,7 +12,11 @@ export function useTracker() {
   const [scope, setScope] = useState(localStorage.getItem("scope") || "session");
   const [feed, setFeed] = useState([]);
   const [connected, setConnected] = useState(false);
-  const [armedSegs, setArmedSegs] = useState(new Set());
+  // armedOrder: arm recency for the practice page's pinned slot — most recent
+  // arm wins; reconciled from each view fetch (membership authoritative, order
+  // best-effort). armedSegs (Set) and lastArmedSeg are derived from it so all
+  // existing consumers keep working unchanged.
+  const [armedOrder, setArmedOrder] = useState([]);
   // server-owned pause truth: {paused, reason: "manual"|"afk"|null}.
   // Polled (5 s) because "afk" flips server-side without any UI action;
   // the POST response updates it instantly on manual toggles.
@@ -48,10 +52,18 @@ export function useTracker() {
     try {
       const v = await getJSON(`/api/session?clock=${clockRef.current}&scope=${scopeRef.current}`);
       setView(v);
-      // armedSegs: live via WS notices, reconciled from every view fetch —
-      // instant AND cannot stay stale across reconnects.
-      setArmedSegs(new Set(((v && v.segments) || [])
-        .filter((s) => s.armed).map((s) => s.segment_id)));
+      // armedOrder: live via WS notices, reconciled from every view fetch —
+      // instant AND cannot stay stale across reconnects. Keep the existing
+      // order filtered to the view's armed ids, then append any view-armed
+      // ids not already present (order unknown for those — arbitrary append).
+      const viewArmed = new Set(((v && v.segments) || [])
+        .filter((s) => s.armed).map((s) => s.segment_id));
+      setArmedOrder((prev) => {
+        const kept = prev.filter((id) => viewArmed.has(id));
+        const keptSet = new Set(kept);
+        const appended = [...viewArmed].filter((id) => !keptSet.has(id));
+        return [...kept, ...appended];
+      });
     }
     catch (e) { console.error(e); }
   }, []);
@@ -79,10 +91,11 @@ export function useTracker() {
         setFeed((f) => [ev, ...f].slice(0, 200));
         if (REFRESH_ON.has(ev.type)) refresh();
         if (ev.type === "segment_armed") {
-          setArmedSegs((s) => new Set(s).add(ev.payload.segment_id));
+          const id = ev.payload.segment_id;
+          setArmedOrder((prev) => prev.includes(id) ? prev : [...prev, id]);
         } else if (ev.type === "segment_disarmed") {
-          setArmedSegs((s) => { const n = new Set(s);
-            n.delete(ev.payload.segment_id); return n; });
+          const id = ev.payload.segment_id;
+          setArmedOrder((prev) => prev.filter((x) => x !== id));
         }
       };
     }
@@ -92,7 +105,9 @@ export function useTracker() {
 
   const pickClock = (c) => { localStorage.setItem("clock", c); setClock(c); };
   const pickScope = (s) => { localStorage.setItem("scope", s); setScope(s); };
+  const armedSegs = new Set(armedOrder);
+  const lastArmedSeg = armedOrder.length > 0 ? armedOrder[armedOrder.length - 1] : null;
   return { view, clock, pickClock, scope, pickScope, feed, connected,
            refresh, paused: pauseState.paused,
-           pauseReason: pauseState.reason, togglePause, armedSegs };
+           pauseReason: pauseState.reason, togglePause, armedSegs, lastArmedSeg };
 }
