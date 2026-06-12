@@ -160,6 +160,67 @@ PASSIVE_ACTIONS = frozenset({
 # entries flag correctly.
 CASTLE_LEVELS = frozenset({6, 16, 26})  # inside, grounds, courtyard
 
+# --- Segment-event primitives (spec: docs/superpowers/specs/2026-06-11) ----
+
+# gCurrLevelNum LEVEL ids — decomp levels/level_defines.h DEFINE_LEVEL order
+# (1-based). Cross-validated against three live-verified anchors we already
+# had: WF=24, SSL=8, castle 6/16/26 — all consistent with this table.
+# VERIFY (live gate): the ids the segments below depend on — 7 (HMC),
+# 17 (BitDW), 19 (BitFS), 21 (BitS), 23 (DDD), 30/33/34 (Bowser arenas).
+LEVEL_NAMES = {
+    4: "Big Boo's Haunt", 5: "Cool, Cool Mountain", 6: "Castle Inside",
+    7: "Hazy Maze Cave", 8: "Shifting Sand Land", 9: "Bob-omb Battlefield",
+    10: "Snowman's Land", 11: "Wet-Dry World", 12: "Jolly Roger Bay",
+    13: "Tiny-Huge Island", 14: "Tick Tock Clock", 15: "Rainbow Ride",
+    16: "Castle Grounds", 17: "Bowser in the Dark World",
+    18: "Vanish Cap Under the Moat", 19: "Bowser in the Fire Sea",
+    20: "The Secret Aquarium", 21: "Bowser in the Sky",
+    22: "Lethal Lava Land", 23: "Dire, Dire Docks", 24: "Whomp's Fortress",
+    26: "Castle Courtyard", 27: "The Princess's Secret Slide",
+    28: "Cavern of the Metal Cap", 29: "Tower of the Wing Cap",
+    30: "Bowser 1 Arena", 31: "Wing Mario Over the Rainbow",
+    33: "Bowser 2 Arena", 34: "Bowser 3 Arena", 36: "Tall, Tall Mountain",
+}
+
+LEVEL_BITDW, LEVEL_BITFS, LEVEL_BITS = 17, 19, 21
+LEVEL_HMC, LEVEL_DDD = 7, 23
+LEVEL_CASTLE_INSIDE, LEVEL_CASTLE_GROUNDS = 6, 16
+BOWSER_1_ARENA, BOWSER_2_ARENA, BOWSER_3_ARENA = 30, 33, 34
+
+# Key grabs enter the same star-dance actions as stars (see STAR_GRAB_ACTIONS
+# comment above). In these two arenas the grab is a KEY, not a star — the
+# key detector claims it and star_grab must ignore it (B3's grand star IS a
+# star and stays with star_grab). VERIFY (live gate): key-grab behavior of
+# gLastCompletedCourseNum/StarNum.
+KEY_GRAB_LEVELS = frozenset({BOWSER_1_ARENA, BOWSER_2_ARENA})
+
+# Warp-entry actions — decomp include/sm64.h, quoted verbatim from
+# n64decomp/sm64 master, fetched 2026-06-11. VERIFY (live gate): which of
+# these fires on the BitDW/BitFS pipe touch and the BitS funnel.
+ACT_DISAPPEARED = 0x00001300       # generic "Mario left the world" (pipes, some warps)
+ACT_TELEPORT_FADE_OUT = 0x00001336
+WARP_ENTRY_ACTIONS = frozenset({ACT_DISAPPEARED, ACT_TELEPORT_FADE_OUT})
+
+# Spawn actions — same decomp fetch. The file-select spawn on Castle Grounds
+# plays the Lakitu intro (ACT_INTRO_CUTSCENE); leaving that action = player
+# gains control. The SPAWN_* group covers non-intro spawn-ins. VERIFY (live
+# gate): which edge fires on a fresh file-select spawn.
+ACT_INTRO_CUTSCENE = 0x04001301
+ACT_SPAWN_SPIN_AIRBORNE = 0x00001924
+ACT_SPAWN_SPIN_LANDING = 0x00001325
+ACT_SPAWN_NO_SPIN_AIRBORNE = 0x00001932
+ACT_SPAWN_NO_SPIN_LANDING = 0x00001333
+SPAWN_ACTIONS = frozenset({ACT_SPAWN_SPIN_AIRBORNE, ACT_SPAWN_SPIN_LANDING,
+                           ACT_SPAWN_NO_SPIN_AIRBORNE,
+                           ACT_SPAWN_NO_SPIN_LANDING})
+
+# gCurrAreaIndex (s16) — castle lobby/upstairs/basement are AREAS of level 6,
+# not levels. NO static source for this address: locate it live (Step 2)
+# before trusting area events. VERIFY (live gate): address + castle area
+# mapping (expected 1=lobby, 2=upstairs, 3=basement — confirm all three).
+CURR_AREA = 0x0  # PLACEHOLDER-BY-DESIGN: replaced by Step 2's live hunt
+CASTLE_AREA_NAMES = {1: "Lobby", 2: "Upstairs", 3: "Basement"}
+
 # ---------------------------------------------------------------------------
 # Name tables (display-only; IDs are the authoritative identity).
 # ---------------------------------------------------------------------------
