@@ -68,6 +68,29 @@ def build():
         # false-healthy state. Device-wide loopback verifiably captures the
         # default output (Elgato Wave:XLR, native 48 kHz). Tradeoff: other
         # apps' audio bleeds into replays.
+        # Video ENCODING lives in an ffmpeg.exe subprocess when available:
+        # in-process PyAV encoding shared the GIL with capture threads and
+        # the audio pump — every remaining replay glitch class traced to
+        # that coupling (scattered missed slots, rare 100-200 ms gaps,
+        # correlated audio hiccups). Fallback: the in-process writer.
+        import shutil as _shutil
+        import subprocess as _sp
+        video_sink_factory = None
+        _ffmpeg = _shutil.which("ffmpeg")
+        if _ffmpeg:
+            try:
+                _sp.run([_ffmpeg, "-version"], capture_output=True,
+                        timeout=10, check=True,
+                        creationflags=_sp.CREATE_NO_WINDOW)
+                from sm64_events.replay.ffmpeg_sink import FfmpegVideoSink
+                video_sink_factory = (
+                    lambda cfg, on_seg, _f=_ffmpeg: FfmpegVideoSink(
+                        cfg, on_seg, ffmpeg=_f))
+                logging.getLogger("sm64.replay").info(
+                    "video backend: ffmpeg subprocess (%s)", _ffmpeg)
+            except Exception:
+                logging.getLogger("sm64.replay").exception(
+                    "ffmpeg probe failed - using in-process encoder")
         recorder = ReplayRecorder(
             cfg=replay_cfg,
             window_finder=find_window,
@@ -75,7 +98,8 @@ def build():
             audio_factory=lambda pid: SystemAudioSource(
                 rate=replay_cfg.audio_rate, pid=pid),
             fallback_audio_factory=None,
-            codec=codec)
+            codec=codec,
+            video_sink_factory=video_sink_factory)
         replay = ReplayService(
             cfg=replay_cfg, recorder=recorder,
             extractor=ClipExtractor(cfg=replay_cfg, codec=codec),
