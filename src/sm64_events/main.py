@@ -124,4 +124,9 @@ app = build()
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8064)
+    # timeout_graceful_shutdown: browsers hold keep-alive connections open
+    # (5 s status poll, <video> Range requests) and uvicorn's graceful
+    # shutdown waits for them BEFORE running lifespan teardown — without a
+    # deadline CTRL+C appears to hang with ffmpeg still recording (live
+    # incident 2026-06-12).
+    uvicorn.run(app, host="127.0.0.1", port=8064, timeout_graceful_shutdown=3)

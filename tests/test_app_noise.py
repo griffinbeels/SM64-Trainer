@@ -29,3 +29,39 @@ def test_connection_reset_quieted_everything_else_delegates():
     no_exc = {"message": "callback context without exception"}
     _quiet_connection_resets(loop, no_exc)
     assert loop.delegated == [real, no_exc]
+
+
+def test_replay_stop_bounded_abandons_a_wedged_teardown(monkeypatch):
+    """Shutdown liveness (live incident 2026-06-12: CTRL+C hung forever):
+    a wedged replay teardown must not block the event loop past the
+    deadline — the worker is a daemon thread, so abandoning it cannot
+    block interpreter exit either."""
+    import asyncio
+    import time
+
+    from sm64_events.server import app as app_mod
+
+    monkeypatch.setattr(app_mod, "_REPLAY_STOP_DEADLINE_S", 0.2)
+
+    class Wedged:
+        def lifecycle_stop(self):
+            time.sleep(3.0)          # daemon thread sleeps on, harmlessly
+
+    t0 = time.monotonic()
+    asyncio.run(app_mod._stop_replay_bounded(Wedged()))
+    assert time.monotonic() - t0 < 1.5   # gave up at the deadline
+
+
+def test_replay_stop_bounded_fast_path():
+    import asyncio
+
+    from sm64_events.server import app as app_mod
+
+    calls = []
+
+    class Quick:
+        def lifecycle_stop(self):
+            calls.append(1)
+
+    asyncio.run(app_mod._stop_replay_bounded(Quick()))
+    assert calls == [1]

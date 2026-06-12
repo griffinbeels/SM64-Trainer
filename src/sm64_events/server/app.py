@@ -6,6 +6,8 @@ re-read per request so UI edits show on refresh without a server restart.
 """
 import asyncio
 import logging
+import threading
+import time
 from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -31,6 +33,41 @@ def _log_poller_exit(task: asyncio.Task) -> None:
     exc = task.exception()
     if exc is not None:
         log.critical("poll loop died: %r", exc)
+
+
+# Replay teardown joins capture threads and waits for ffmpeg to flush —
+# worst-case tens of seconds of SYNC work. Run inside the event loop it
+# blocks uvicorn's shutdown (and the force-exit CTRL+C path) — live
+# incident 2026-06-12: CTRL+C appeared to hang with ffmpeg still logging.
+_REPLAY_STOP_DEADLINE_S = 15.0
+
+
+async def _stop_replay_bounded(replay) -> None:
+    """Run replay.lifecycle_stop() on a DAEMON thread with a deadline.
+    Deliberately not asyncio.to_thread: executor threads are non-daemon and
+    the interpreter joins them at exit, which would re-introduce the hang
+    we are bounding. If the deadline passes we abandon the worker (daemon —
+    cannot block exit) and rely on the kill-on-close job object to reap
+    ffmpeg (ffmpeg_sink._assign_kill_on_close)."""
+    done = threading.Event()
+
+    def _run():
+        try:
+            replay.lifecycle_stop()
+        except Exception:
+            log.exception("replay stop failed - continuing shutdown")
+        finally:
+            done.set()
+
+    threading.Thread(target=_run, name="replay-stop", daemon=True).start()
+    t0 = time.monotonic()
+    while not done.is_set():
+        if time.monotonic() - t0 > _REPLAY_STOP_DEADLINE_S:
+            log.error("replay stop exceeded %.0f s - abandoning teardown "
+                      "(worker is daemon; ffmpeg is reaped by the "
+                      "kill-on-close job object)", _REPLAY_STOP_DEADLINE_S)
+            return
+        await asyncio.sleep(0.05)
 
 
 def _quiet_connection_resets(loop, context) -> None:
@@ -78,10 +115,7 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
         task.add_done_callback(_log_poller_exit)
         yield
         if replay is not None:
-            try:
-                replay.lifecycle_stop()
-            except Exception:
-                log.exception("replay stop failed - continuing shutdown")
+            await _stop_replay_bounded(replay)
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
