@@ -27,12 +27,19 @@ def test_build_wires_replay_endpoints(monkeypatch, tmp_path):
         lambda: "libx264")
     # Patch Database at the name main.py imported it under so the type
     # annotation in service.py (which already imported the real class) is
-    # unaffected.  Return a sentinel object; TrackerService accepts db=None
+    # unaffected.  Return a sentinel stub; TrackerService accepts db=None
     # too, but a truthy object exercises the normal path.
+    # TrackerService.__init__ now loads segment defs eagerly, so the stub
+    # must answer segment_defs().
     import importlib
     import sm64_events.main as main_mod
     importlib.reload(main_mod)
-    monkeypatch.setattr(main_mod, "Database", lambda path: object())
+
+    class _DbStub:
+        def segment_defs(self):
+            return []
+
+    monkeypatch.setattr(main_mod, "Database", lambda path: _DbStub())
     app = main_mod.build()
     paths = {r.path for r in app.routes}
     assert "/api/replay/status" in paths

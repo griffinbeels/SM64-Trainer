@@ -21,6 +21,7 @@ from sm64_events.core.timefmt import format_igt
 from sm64_events.memory.addresses import course_name, star_name
 from sm64_events.storage.db import Database, EventRow
 from sm64_events.tracking.projection import Projector, replay
+from sm64_events.tracking.segments import SegmentDef, validate_definition
 
 log = logging.getLogger("sm64.tracker")
 
@@ -38,7 +39,15 @@ class TrackerService:
         self.db = db
         self.broadcaster = broadcaster
         self.session_id: int | None = None
-        self._projector = Projector()
+        self._segment_defs = self._load_segment_defs()
+        self._projector = Projector(segments=self._segment_defs)
+
+    def _load_segment_defs(self) -> list[SegmentDef]:
+        if self.db is None:
+            return []
+        return [SegmentDef(**{k: v for k, v in row.items()
+                              if k != "created_utc"})
+                for row in self.db.segment_defs()]
 
     # -- pipeline -------------------------------------------------------------
     async def start(self) -> None:
@@ -46,7 +55,7 @@ class TrackerService:
             log.error("tracker running WITHOUT a database (broadcast-only)")
             return
         events = self.db.events()
-        attempts, self._projector = replay(events)
+        attempts, self._projector = replay(events, segments=self._segment_defs)
         self.db.replace_attempts(attempts)
         self.session_id = self.db.insert_session(_iso(_now()))
         await self.publish(Event(type="session_started", frame=0,
@@ -70,7 +79,19 @@ class TrackerService:
                        wall_time_utc=_iso(event.timestamp_utc),
                        payload=event.payload)
         target_before = self._projector.target
-        for attempt in self._projector.feed(row):
+        closed = self._projector.feed(row)
+        # Drain segment notices IMMEDIATELY, BEFORE the attempt loop:
+        # publishing attempt_completed below re-enters _track, whose nested
+        # feed() RESETS projector.segment_notices — draining after the loop
+        # would silently lose armed/disarmed events. Broadcast-only via
+        # broadcaster.publish (NOT self.publish): notices are ephemeral UI
+        # state and must never be journaled.
+        for n in list(self._projector.segment_notices):
+            await self.broadcaster.publish(Event(
+                type=n["event"], frame=n["frame"],
+                timestamp_utc=event.timestamp_utc,
+                payload={"segment_id": n["segment_id"], "name": n["name"]}))
+        for attempt in closed:
             self.db.upsert_attempt(attempt)
             # The derived event's journal row carries the CURRENT session_id,
             # which for a cross-session abandon differs from the attempt's own
@@ -86,6 +107,9 @@ class TrackerService:
         return Event(type="attempt_completed", frame=close_event.frame,
                      timestamp_utc=close_event.timestamp_utc, payload={
                          "attempt_id": a.id, "session_id": a.session_id,
+                         "kind": "segment" if a.segment_id is not None else "star",
+                         "segment_id": a.segment_id,
+                         "segment_name": self._segment_name(a.segment_id),
                          "course_id": a.course_id, "star_id": a.star_id,
                          "course_name": course_name(a.course_id) if a.course_id is not None else None,
                          "star_name": star_name(a.course_id, a.star_id) if a.course_id is not None else None,
@@ -95,17 +119,30 @@ class TrackerService:
                          "igt_frames": a.igt_frames,
                          "igt": format_igt(a.igt_frames) if a.igt_frames is not None else None,
                          "rta_frames": a.rta_frames,
+                         "rta": format_igt(a.rta_frames) if a.rta_frames is not None else None,
                          "rollouts_total": a.rollouts_total,
                          "rollouts_dustless": a.rollouts_dustless,
                          "jumps_total": a.jumps_total,
                          "jumps_dustless": a.jumps_dustless,
                      })
 
+    def _segment_name(self, segment_id: int | None) -> str | None:
+        if segment_id is None:
+            return None
+        return next((d.name for d in self._segment_defs
+                     if d.id == segment_id), f"segment {segment_id}")
+
     def _target_payload(self) -> dict:
-        # interim: segment targets render as none until Task 12's kind-aware payload
         tgt = self._projector.target
-        c, s = (tgt[1], tgt[2]) if tgt and tgt[0] == "star" else (None, None)
-        return {"course_id": c, "star_id": s,
+        if tgt and tgt[0] == "segment":
+            # course_id/star_id stay present-as-None for shape stability:
+            # the UI header keys off course_id presence for star targets.
+            return {"kind": "segment", "segment_id": tgt[1],
+                    "segment_name": self._segment_name(tgt[1]),
+                    "course_id": None, "star_id": None,
+                    "strat_tag": self._projector.strat_tag}
+        c, s = (tgt[1], tgt[2]) if tgt else (None, None)
+        return {"kind": "star", "course_id": c, "star_id": s,
                 "strat_tag": self._projector.strat_tag}
 
     # -- state ------------------------------------------------------------------
@@ -148,6 +185,24 @@ class TrackerService:
         if strat_tag:
             self._register_strategy(db, course_id, star_id, strat_tag)
 
+    async def set_target_segment(self, segment_id: int,
+                                 strat_tag: str | None = None) -> None:
+        self._require_db()
+        if all(d.id != segment_id for d in self._segment_defs):
+            raise LookupError(f"segment {segment_id} not found")
+        await self.publish(Event(type="target_set", frame=0,
+                                 timestamp_utc=_now(),
+                                 payload={"kind": "segment",
+                                          "segment_id": segment_id}))
+        if strat_tag is not None:
+            # segment strat memory is written via strat_set (the projector
+            # ignores strat_tag inside segment target_set payloads)
+            await self.publish(Event(type="strat_set", frame=0,
+                                     timestamp_utc=_now(),
+                                     payload={"kind": "segment",
+                                              "segment_id": segment_id,
+                                              "strat_tag": strat_tag}))
+
     async def set_strat(self, course_id: int, star_id: int,
                         strat_tag: str | None) -> None:
         """Set a star's active strategy without touching the target."""
@@ -184,10 +239,46 @@ class TrackerService:
                                  payload={"attempt_id": attempt_id}))
         await self._reproject()
 
+    # -- segment definitions ---------------------------------------------------
+    async def create_segment(self, d: dict) -> int:
+        db = self._require_db()
+        validate_definition(d)          # BEFORE insert: invalid defs never land
+        sid = db.insert_segment_def(d["name"], d["start_triggers"],
+                                    d["end_triggers"], d.get("guards", []),
+                                    _iso(_now()),
+                                    enabled=d.get("enabled", True))
+        await self._segments_changed()
+        return sid
+
+    async def update_segment(self, segment_id: int, d: dict) -> None:
+        db = self._require_db()
+        # partial patches (e.g. {"enabled": false}) must validate as the
+        # MERGED definition, not in isolation
+        current = next((r for r in db.segment_defs()
+                        if r["id"] == segment_id), None)
+        if current is None:
+            raise LookupError(f"segment {segment_id} not found")
+        validate_definition({**current, **d})
+        db.update_segment_def(segment_id, **{
+            k: d[k] for k in ("name", "enabled", "start_triggers",
+                              "end_triggers", "guards") if k in d})
+        await self._segments_changed()
+
+    async def delete_segment(self, segment_id: int) -> None:
+        db = self._require_db()
+        db.delete_segment_def(segment_id)
+        await self._segments_changed()
+
+    async def _segments_changed(self) -> None:
+        """Definitions changed retroactively: reload, then re-derive every
+        attempt from the journal (mirrors clear/restore)."""
+        self._segment_defs = self._load_segment_defs()
+        await self._reproject()
+
     async def _reproject(self) -> None:
         db = self._require_db()
         before = self._projector.target
-        attempts, projector = replay(db.events())
+        attempts, projector = replay(db.events(), segments=self._segment_defs)
         # keep the live session: replayed projector state is authoritative
         self._projector = projector
         db.replace_attempts(attempts)
@@ -207,13 +298,17 @@ class TrackerService:
             raise LookupError(f"no attempt {attempt_id}")
         if attempt.outcome != "success" or attempt.cleared:
             raise ValueError(f"attempt {attempt_id} is not a saveable success")
+        if attempt.segment_id is not None and timer_mode != "rta":
+            raise ValueError("segments are RTA-only")
         frames = attempt.igt_frames if timer_mode == "igt" else attempt.rta_frames
         if frames is None:
             raise ValueError(f"attempt {attempt_id} has no {timer_mode} clock")
         db.insert_pb(course_id=attempt.course_id, star_id=attempt.star_id,
                      strat_tag=attempt.strat_tag, timer_mode=timer_mode,
-                     frames=frames, attempt_id=attempt_id, saved_utc=_iso(_now()))
+                     frames=frames, attempt_id=attempt_id, saved_utc=_iso(_now()),
+                     segment_id=attempt.segment_id)
         payload = {"course_id": attempt.course_id, "star_id": attempt.star_id,
+                   "segment_id": attempt.segment_id,
                    "strat_tag": attempt.strat_tag, "timer_mode": timer_mode,
                    "frames": frames, "attempt_id": attempt_id}
         await self.publish(Event(type="pb_saved", frame=0,
