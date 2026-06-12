@@ -81,6 +81,10 @@ class SegmentWriter:
         # video state
         self._container = None
         self._stream = None
+        self._enc = None                 # persistent encoder (one per run)
+        self._enc_dims: tuple[int, int] | None = None
+        self._run_first_index: int | None = None
+        self._seg_base_pts = 0
         self._seg_first_index: int | None = None
         self._seg_next_index: int | None = None  # enforces per-segment contiguity
         self._seg_frames = 0
@@ -97,6 +101,43 @@ class SegmentWriter:
         out_dir.mkdir(parents=True, exist_ok=True)
 
     # -- video ---------------------------------------------------------------
+    # PERSISTENT ENCODER, ROTATING CONTAINERS. The encoder (NVENC session)
+    # opens ONCE per recording run: PyAV holds the GIL through avcodec_open2,
+    # and an NVENC session open measures ~110 ms — opening one per 2 s
+    # segment froze EVERY thread in the process each rotation (grab loop
+    # missed ~6 slots = visible skip; the PortAudio callback starved = audio
+    # crackle; live: "grab stall 92-177 ms" at exactly the rotation cadence,
+    # reproduced standalone by a heartbeat-gap probe). Containers are just
+    # files + muxer state and rotate in ~1 ms. Packets are encoded with
+    # RUN-GLOBAL pts and rebased per segment on mux, preserving the
+    # extractor contract (frame0 = pts0 per segment file); each segment's
+    # first frame is a forced IDR so segments stay independently decodable.
+
+    def _ensure_encoder(self, w: int, h: int) -> None:
+        if self._enc is not None and self._enc_dims == (w, h):
+            return
+        if self._enc is not None:
+            log.info("dimension change %s -> %s: recreating encoder "
+                     "(expected one-off ~110 ms stall)", self._enc_dims, (w, h))
+        ctx = av.CodecContext.create(self._codec, "w")
+        ctx.width, ctx.height = w, h
+        ctx.pix_fmt = "yuv420p"
+        ctx.time_base = Fraction(1, self._cfg.fps)
+        ctx.framerate = Fraction(self._cfg.fps, 1)
+        ctx.gop_size = self._frames_per_seg
+        if self._codec == "h264_nvenc":
+            # bf=0: B-frames shift start_time +3 frames and break the
+            # frame0=pts0 contract. p1+ull: encode must beat 16.7 ms/frame.
+            # forced-idr: pict_type=I at segment starts must be a real IDR
+            # or rotated segments would not be independently decodable.
+            ctx.options = {"bf": "0", "preset": "p1", "tune": "ull",
+                           "forced-idr": "1"}
+        if self._codec == "libx264":
+            ctx.options = {"preset": "ultrafast", "tune": "zerolatency"}
+        ctx.open()
+        self._enc = ctx
+        self._enc_dims = (w, h)
+
     def write_video(self, bgra: np.ndarray, frame_index: int) -> None:
         # yuv420p requires even dimensions; a window dragged to an odd pixel
         # size would otherwise raise at encode and wedge the segment state.
@@ -111,27 +152,58 @@ class SegmentWriter:
                 or self._seg_frames >= self._frames_per_seg
                 or frame_index != self._seg_next_index):
             self._close_video_segment()
-        if self._container is None:
-            self._open_video_segment(frame_index, w, h)
         try:
+            self._ensure_encoder(w, h)
+            if self._container is None:
+                self._open_video_segment(frame_index, w, h)
             vf = av.VideoFrame.from_ndarray(bgra, format="bgra")
             vf = vf.reformat(format="yuv420p")
-            vf.pts = frame_index - self._seg_first_index
-            for pkt in self._stream.encode(vf):
-                self._container.mux(pkt)
+            if self._run_first_index is None:
+                self._run_first_index = frame_index
+            vf.pts = frame_index - self._run_first_index   # run-global pts
+            vf.time_base = Fraction(1, self._cfg.fps)
+            if self._seg_frames == 0:
+                vf.pict_type = 1  # AV_PICTURE_TYPE_I: forced IDR at segment start
+            for pkt in self._enc.encode(vf):
+                self._mux_routed(pkt)
             self._seg_frames += 1
             self._seg_next_index = frame_index + 1
         except Exception:
-            log.exception("encode failed on frame %d — dropping frame, resetting segment", frame_index)
+            log.exception("encode failed on frame %d — dropping frame, "
+                          "resetting segment + encoder", frame_index)
             try:
-                self._container.close()
+                if self._container is not None:
+                    self._container.close()
             except Exception:
                 pass
             try:
-                self._path.unlink(missing_ok=True)
+                if self._path is not None:
+                    self._path.unlink(missing_ok=True)
             except Exception:
                 pass
             self._container = self._stream = None
+            self._enc = None  # recreate on next frame
+
+    def _mux_routed(self, pkt) -> None:
+        """Route an encoder packet into the CURRENT container, rebasing its
+        run-global pts/dts to segment-local so each segment file starts at
+        pts 0 (the extractor contract). Zero-delay configs emit the packet
+        for frame N during encode(N); a straggler from before this segment's
+        base cannot be muxed into an already-closed file — log and drop."""
+        if self._container is None:
+            return
+        base = self._seg_base_pts
+        if pkt.pts is not None and pkt.pts < base:
+            log.warning("late encoder packet (pts %s < segment base %s) "
+                        "dropped — encoder delay unexpectedly nonzero",
+                        pkt.pts, base)
+            return
+        if pkt.pts is not None:
+            pkt.pts -= base
+        if pkt.dts is not None:
+            pkt.dts -= base
+        pkt.stream = self._stream
+        self._container.mux(pkt)
 
     def _open_video_segment(self, first_index: int, w: int, h: int) -> None:
         self._seg_n += 1
@@ -141,20 +213,12 @@ class SegmentWriter:
         self._stream.width, self._stream.height = w, h
         self._stream.pix_fmt = "yuv420p"
         self._stream.codec_context.time_base = Fraction(1, self._cfg.fps)
-        self._stream.codec_context.gop_size = self._frames_per_seg
-        if self._codec == "h264_nvenc":
-            # bf=0: NVENC defaults to B-frames, which shift the stream's
-            # start_time +3 frames and break the extractor's frame0=pts0
-            # contract. preset p1 + ull: at 60 fps the deliver thread has
-            # 16.7 ms per frame for reformat+encode+mux; default preset
-            # averaged just over budget (73 queue drops/30 s measured) —
-            # p1 is several ms faster and visually indistinguishable at
-            # these bitrates.
-            self._stream.options = {"bf": "0", "preset": "p1", "tune": "ull"}
-        if self._codec == "libx264":
-            self._stream.options = {"preset": "ultrafast", "tune": "zerolatency"}
+        if self._enc is not None and self._enc.extradata:
+            self._stream.codec_context.extradata = self._enc.extradata
         self._seg_first_index = first_index
         self._seg_next_index = first_index + 1
+        self._seg_base_pts = (first_index - self._run_first_index
+                              if self._run_first_index is not None else 0)
         self._seg_frames = 0
         self._dims = (w, h)
         self._path = path
@@ -162,19 +226,13 @@ class SegmentWriter:
     def _close_video_segment(self) -> None:
         if self._container is None:
             return
-        container, stream = self._container, self._stream
+        container = self._container
         path, first_index, seg_frames = self._path, self._seg_first_index, self._seg_frames
         self._container = self._stream = None
         try:
-            for pkt in stream.encode(None):
-                container.mux(pkt)
-            container.close()
+            container.close()  # container only — the encoder lives on
         except Exception:
-            log.exception("flush failed closing segment %s — segment may be incomplete", path)
-            try:
-                container.close()
-            except Exception:
-                pass
+            log.exception("close failed for segment %s — discarding", path)
             try:
                 path.unlink(missing_ok=True)
             except Exception:
@@ -218,6 +276,13 @@ class SegmentWriter:
 
     # -- lifecycle -----------------------------------------------------------
     def close(self) -> None:
+        if self._enc is not None and self._container is not None:
+            try:
+                for pkt in self._enc.encode(None):  # end-of-run flush
+                    self._mux_routed(pkt)
+            except Exception:
+                log.exception("encoder flush failed at close")
+        self._enc = None
         self._close_video_segment()
         if self._audio_t0 is not None and self._pcm_buffered:
             self._flush_audio_chunk(self._pcm_buffered)
