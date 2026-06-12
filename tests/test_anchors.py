@@ -26,7 +26,7 @@ def test_igt_drop_to_zero_emits_practice_reset():
     assert ev.type == "practice_reset" and ev.frame == 1002
     assert ev.payload == {"igt_frames_before": 500, "mario_acted": False,
                           "paused_frames_before": 0, "acted_tracking": True,
-                          "action": ACT_IDLE}
+                          "action": ACT_IDLE, "prev_action": ACT_IDLE}
 
 
 def test_igt_drop_to_small_value_still_practice_reset():
@@ -52,7 +52,7 @@ def test_backward_global_timer_emits_state_loaded():
     assert ev.type == "state_loaded" and ev.frame == 3000
     assert ev.payload == {"igt_frames_restored": 120, "mario_acted": False,
                           "paused_frames_before": 0, "acted_tracking": True,
-                          "action": ACT_IDLE}
+                          "action": ACT_IDLE, "prev_action": ACT_IDLE}
 
 
 def test_backward_jump_into_boot_range_is_left_to_game_reset():
@@ -262,25 +262,31 @@ def test_console_reset_clears_acted_flags():
 # action field — door-echo classifier (live gate 2026-06-12)
 # ---------------------------------------------------------------------------
 
-def test_practice_reset_payload_carries_curr_action():
+def test_practice_reset_payload_carries_curr_and_prev_action():
     """The emitted practice_reset payload must include action = curr.mario_action
-    so the segment engine can classify intra-area door echoes (DOOR_ACTIONS)."""
+    AND prev_action = prev.mario_action so the segment engine can correctly
+    classify intra-area door echoes vs L-resets that respawn AT a door.
+    The discriminator keys on prev_action: a door crossing has prev_action in
+    DOOR_ACTIONS (inputs locked on the prior tick); an L-reset has a gameplay
+    prev_action (e.g. ACT_WALKING = the action when L was pressed)."""
     from sm64_events.memory.addresses import ACT_WARP_DOOR_SPAWN
     events = AnchorDetector().process(
-        snap(1000, igt=500),
+        snap(1000, igt=500, action=ACT_WALKING),
         snap(1002, igt=0, action=ACT_WARP_DOOR_SPAWN))
     assert len(events) == 1
     assert events[0].type == "practice_reset"
     assert events[0].payload["action"] == ACT_WARP_DOOR_SPAWN
+    assert events[0].payload["prev_action"] == ACT_WALKING
 
 
-def test_state_loaded_payload_carries_curr_action():
-    """state_loaded payload must also include action for symmetry with
-    practice_reset — consumers classify load echoes the same way."""
+def test_state_loaded_payload_carries_curr_and_prev_action():
+    """state_loaded payload must include both action and prev_action for
+    symmetry with practice_reset — consumers classify load echoes the same way."""
     from sm64_events.memory.addresses import ACT_PULLING_DOOR
     events = AnchorDetector().process(
-        snap(5000, igt=900),
+        snap(5000, igt=900, action=ACT_WALKING),
         snap(3000, igt=120, action=ACT_PULLING_DOOR))
     assert len(events) == 1
     assert events[0].type == "state_loaded"
     assert events[0].payload["action"] == ACT_PULLING_DOOR
+    assert events[0].payload["prev_action"] == ACT_WALKING

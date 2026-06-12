@@ -31,12 +31,21 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
     (c) intra-area door echo: NO area_changed (same area on both sides of the
         door), but Usamune's IGT still resets → anchor fires with Mario in a
         DOOR_ACTION (0x1320/0x1321/0x1322, inputs locked during door animation,
-        never a player reset). Detected via ev.payload.get("action") in
-        DOOR_ACTIONS — historical journal events lack the field, so .get()
-        returns None → not a door → old conservative close behaviour preserved.
+        never a player reset). Discriminator: keyed on prev_action when present
+        (the action on the PREVIOUS poll tick must be in DOOR_ACTIONS — the
+        door open animation was already in progress before the IGT drop).
+        Fallback to action for events journaled before prev_action was added.
+        Historical events (no prev_action key): .get() returns None → not in
+        DOOR_ACTIONS → old conservative close behaviour preserved.
+        Race fix (2026-06-12): Usamune L-resets respawn Mario at the level
+        entrance in ACT_WARP_DOOR_SPAWN (0x1322). If the anchor poll catches
+        the IGT drop one tick late, a REAL reset carries curr action=0x1322
+        but prev action=the gameplay action when L was pressed (e.g. freefall
+        0x04000440). Keying on prev_action correctly distinguishes these.
   Shapes (a) and (b) are detected by _last_transition_frame (ev.frame ==
-  _last_transition_frame).  Shape (c) is detected by the action field in
-  the anchor payload.  A real player reset always has a gameplay action.
+  _last_transition_frame).  Shape (c) is detected by prev_action (falling
+  back to action) in the anchor payload.  A real player reset always has a
+  gameplay prev_action.
   KNOWN EDGE (no code): a savestate load INTO A DIFFERENT AREA emits a
   corrective area_changed co-frame with state_loaded; that state_loaded will
   be classified as an echo (segment stays armed).  The negative-rta self-heal
@@ -271,15 +280,22 @@ class SegmentEngine:
                     # harmlessly replaces the _Arm with the identical frame.
                     pass
                 elif ev.type in ("practice_reset", "state_loaded") \
-                        and ev.payload.get("action") in DOOR_ACTIONS:
+                        and ev.payload.get(
+                            "prev_action",
+                            ev.payload.get("action")) in DOOR_ACTIONS:
                     # Intra-area door echo (shape c): no area_changed fires
                     # (same area on both sides of the door), but Usamune still
                     # resets IGT → anchor fires with Mario in a door action
                     # (0x1320/0x1321/0x1322). Inputs are locked during door
                     # animations, so this can never be a player reset.
-                    # Historical journal events lack the "action" field →
-                    # .get() returns None → not in DOOR_ACTIONS → old
-                    # conservative close behaviour is preserved.
+                    # prev_action is authoritative when present: the door open
+                    # animation must have been running on the PREVIOUS tick too
+                    # (a real L-reset has prev_action = gameplay, not a door
+                    # action — even if curr is 0x1322 due to poll-tick race).
+                    # Fall back to action for events without prev_action
+                    # (journaled before this field was added). Missing both
+                    # fields → .get() chain returns None → not in DOOR_ACTIONS
+                    # → conservative close behaviour preserved.
                     pass
                 elif ev.type in ("practice_reset", "state_loaded"):
                     if ev.payload.get("paused_frames_before", 0) \

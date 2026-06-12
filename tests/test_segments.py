@@ -502,3 +502,68 @@ def test_historical_anchor_without_action_field_closes():
         ctx(level=6))
     assert len(closed) == 1
     assert closed[0].outcome == "reset" and closed[0].rta_frames == 200
+
+
+# ---------------------------------------------------------------------------
+# prev_action discriminator (live race fix 2026-06-12)
+# A Usamune L-reset respawns Mario at the level entrance in
+# ACT_WARP_DOOR_SPAWN (0x1322).  If the anchor poll catches the IGT drop one
+# tick late, a REAL reset carries the door action as curr.mario_action and
+# was incorrectly eaten as a door echo.
+#
+# Discriminator: a genuine door crossing is ALWAYS preceded by the door open
+# animation — prev_action in DOOR_ACTIONS (inputs locked during door anim).
+# An L-reset's prev_action is the gameplay action when the reset was pressed.
+# ---------------------------------------------------------------------------
+
+def test_lreset_respawning_at_door_still_closes():
+    """THE RACE CASE: LBLJ armed @1000; L-reset fires while the poll catches
+    Mario already in ACT_WARP_DOOR_SPAWN (0x1322) — curr action is a door
+    action but prev was freefall (0x04000440).  Must close as reset rta 200.
+    (Red before the fix — this is the live intermittent-miss bug.)"""
+    e = SegmentEngine([LBLJ])
+    lblj_arm(e)
+    closed, _ = e.feed(
+        jev(11, "practice_reset", 1200,
+            {"action": 0x00001322, "prev_action": 0x04000440}),
+        ctx(level=6))
+    assert len(closed) == 1
+    assert closed[0].outcome == "reset" and closed[0].rta_frames == 200
+
+
+def test_door_crossing_prev_action_is_echo():
+    """A door crossing where prev_action itself is in DOOR_ACTIONS (inputs
+    were already locked on the previous poll tick) → genuine door echo, not
+    a player reset.  Segment must stay armed."""
+    e = SegmentEngine([LBLJ])
+    lblj_arm(e)
+    closed, _ = e.feed(
+        jev(11, "practice_reset", 1200,
+            {"action": 0x00001322, "prev_action": 0x00001321}),
+        ctx(level=6))
+    assert closed == []
+    assert e.armed_ids() == {1}
+
+
+def test_intra_area_door_echo_with_prev_action_stays_echo():
+    """Existing intra-area door test shape updated to carry the realistic
+    prev_action=0x1321 (door-open anim on the previous tick).  Still green —
+    segment must remain armed and succeed at rta 245."""
+    e = SegmentEngine([LBLJ])
+    e.feed(jev(10, "level_changed", 92855, {"from": 16, "to": 6}),
+           ctx(level=6, prev_level=16))
+    e.feed(jev(11, "practice_reset", 92855, {"igt_frames_before": 64}),
+           ctx(level=6))
+    assert e.armed_ids() == {1}
+    # intra-area door echo: prev tick was PULLING_DOOR (0x1321) — door anim
+    closed, _ = e.feed(
+        jev(12, "practice_reset", 93025,
+            {"igt_frames_before": 128,
+             "action": 0x00001322, "prev_action": 0x00001321}),
+        ctx(level=6))
+    assert closed == [], "intra-area door echo must not close the segment"
+    assert e.armed_ids() == {1}
+    closed, _ = e.feed(jev(13, "level_changed", 93100, {"from": 6, "to": 17}),
+                       ctx(level=17, prev_level=6))
+    assert len(closed) == 1
+    assert closed[0].outcome == "success" and closed[0].rta_frames == 245

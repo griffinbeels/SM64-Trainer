@@ -19,11 +19,19 @@ Both anchor payloads carry mario_acted: whether Mario entered any non-passive
   to the warp/spawn, not to either attempt.
 
 Both anchor payloads also carry action: curr.mario_action at the tick the
-  anchor was detected. This is a journal FACT that lets consumers classify
-  load echoes — the segment engine ignores anchors where action is a
-  DOOR_ACTION (intra-area castle door), because door animations lock input
-  and Usamune resets IGT on every door crossing, producing a synthetic
-  anchor that is never a player reset.
+  anchor was detected, AND prev_action: prev.mario_action (the action on
+  the PREVIOUS poll tick). Together they let consumers distinguish a genuine
+  door crossing from a Usamune L-reset that respawns Mario AT a door:
+    - Real door crossing: prev_action is in DOOR_ACTIONS (inputs locked
+      during the door open animation — the prior tick was already inside
+      the animation, e.g. ACT_PULLING_DOOR 0x1320 or ACT_PUSHING_DOOR
+      0x1321 or ACT_WARP_DOOR_SPAWN 0x1322).
+    - L-reset at door: prev_action is the gameplay action when the player
+      pressed L (e.g. ACT_FREEFALL 0x04000440), not a door action.
+  The segment engine keys the door-echo clause on prev_action when present,
+  falling back to action for events journaled before this field existed.
+  Historical events (no prev_action key): .get() returns None → not in
+  DOOR_ACTIONS → old conservative close behaviour preserved.
 
 Pause streak: consecutive game frames where global_timer advanced but the
   overall IGT did not — game logic stopped, i.e. the Usamune pause menu (or a
@@ -100,7 +108,8 @@ class AnchorDetector:
                                    "mario_acted": self._acted,
                                    "paused_frames_before": self._pause_streak,
                                    "acted_tracking": True,
-                                   "action": curr.mario_action})]
+                                   "action": curr.mario_action,
+                                   "prev_action": prev.mario_action})]
         if (curr.igt_overall < prev.igt_overall
                 and curr.igt_overall <= NEAR_ZERO_IGT
                 and prev.igt_overall < IGT_WRAP_CEILING):
@@ -110,5 +119,6 @@ class AnchorDetector:
                                    "mario_acted": self._acted,
                                    "paused_frames_before": self._pause_streak,
                                    "acted_tracking": True,
-                                   "action": curr.mario_action})]
+                                   "action": curr.mario_action,
+                                   "prev_action": prev.mario_action})]
         return []
