@@ -88,7 +88,9 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
 from dataclasses import dataclass
 from typing import Callable
 
-from sm64_events.memory.addresses import CASTLE_AREA_NAMES, DOOR_ACTIONS, LEVEL_NAMES
+from sm64_events.memory.addresses import (CASTLE_AREA_NAMES, COURSE_NAMES,
+                                          DOOR_ACTIONS, LEVEL_NAMES,
+                                          STAR_NAMES, star_name)
 
 _ANCHOR_TYPES = ("practice_reset", "state_loaded")  # attempt-anchor events
 
@@ -291,6 +293,13 @@ def vocab() -> dict:
                     "template": g.template} for g in GUARDS.values()],
         "levels": {str(k): v for k, v in sorted(LEVEL_NAMES.items())},
         "castle_areas": {str(k): v for k, v in CASTLE_AREA_NAMES.items()},
+        "courses": {str(k): v for k, v in COURSE_NAMES.items()},
+        # star_id order, via star_name() so courses 1-15 include the
+        # 100-coin star at star_id 6 (star_name owns that rule)
+        "stars": {str(cid): [star_name(cid, s)
+                             for s in range(7 if 1 <= cid <= 15
+                                            else len(STAR_NAMES.get(cid, ())))]
+                  for cid in COURSE_NAMES},
     }
 
 

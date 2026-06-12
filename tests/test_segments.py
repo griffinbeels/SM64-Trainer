@@ -1009,3 +1009,13 @@ def test_vocab_serializes_templates():
     assert by_key["attempt_anchor"]["label"] == (
         "Practice reset / savestate load")
     assert all("template" in t for t in v["triggers"] + v["guards"])
+
+
+def test_vocab_course_and_star_enums():
+    v = vocab()
+    assert v["courses"]["2"] == "Whomp's Fortress"
+    assert v["stars"]["2"][2] == "Shoot into the Wild Blue"
+    assert v["stars"]["1"][6] == "100 Coins"    # main courses: 100-coin star at star_id 6
+    assert len(v["stars"]["1"]) == 7
+    assert v["stars"]["16"] == ["8 Red Coins"]  # Bowser course: one star
+    assert v["stars"]["0"] == []                # Castle Secret: no named stars
