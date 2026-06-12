@@ -5,7 +5,8 @@
   Lakitu Skip start anchor — control begins when the cutscene action ends)
 - kind="spawn": edge INTO a SPAWN_* action (non-intro spawn-ins)
 Spurious grounds spawns (e.g. cannon exits) are harmless: segment starts
-re-arm/disarm without recording rows."""
+re-arm/disarm without recording rows. A savestate saved mid-intro and
+loaded later also fires a spurious kind="intro" — same harmless re-arm."""
 from sm64_events.core.events import Event
 from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.memory.addresses import ACT_INTRO_CUTSCENE, SPAWN_ACTIONS

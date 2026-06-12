@@ -33,6 +33,7 @@ def test_edge_into_spawn_action_emits_spawned_spawn():
     events = SpawnDetector().process(
         snap(), snap(mario_action=ACT_SPAWN_SPIN_AIRBORNE))
     assert events[0].payload["kind"] == "spawn"
+    assert events[0].payload["level"] == LEVEL_CASTLE_GROUNDS
 
 
 def test_idle_to_idle_is_silent():
