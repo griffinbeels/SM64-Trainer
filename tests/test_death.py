@@ -10,6 +10,8 @@ ACT_IDLE = 0x0C400201
 ACT_STANDING_DEATH = 0x00021311
 ACT_DROWNING = 0x300032C4
 ACT_WATER_DEATH = 0x300032C7
+WARP_OP_WARP_FLOOR = 0x13
+WARP_OP_DEATH = 0x12
 
 
 def snap(**overrides) -> GameSnapshot:
@@ -88,3 +90,51 @@ def test_all_death_action_ids_fire(action_id, cause):
     events = DeathDetector().process(snap(), snap(mario_action=action_id))
     assert len(events) == 1, f"Expected death event for {hex(action_id)} ({cause})"
     assert events[0].payload["cause"] == cause
+
+
+# -- void-outs (death barriers): no death ACTION ever runs in-level — the game
+# -- pends WARP_OP_WARP_FLOOR ~20 frames before the level unloads (death.py).
+
+def test_void_warp_floor_edge_emits_fall_death():
+    events = DeathDetector().process(
+        snap(),
+        snap(pending_warp_op=WARP_OP_WARP_FLOOR, igt_overall=512,
+             curr_level=7, global_timer=2000))
+    assert len(events) == 1
+    assert events[0].type == "death"
+    assert events[0].frame == 2000
+    assert events[0].payload == {"cause": "fall", "igt_frames": 512, "level": 7}
+
+
+def test_void_warp_pending_does_not_refire():
+    # the op stays set for ~20 game frames — one event per pulse
+    prev = snap(pending_warp_op=WARP_OP_WARP_FLOOR)
+    curr = snap(pending_warp_op=WARP_OP_WARP_FLOOR, global_timer=1002)
+    assert DeathDetector().process(prev, curr) == []
+
+
+def test_death_warp_op_does_not_fire():
+    # normal deaths pend WARP_OP_DEATH after their death ACTION already fired
+    # the event — reacting to that op would double-count every normal death
+    assert DeathDetector().process(snap(), snap(pending_warp_op=WARP_OP_DEATH)) == []
+
+
+@pytest.mark.parametrize("op", [0x03, 0x11, 0x14])  # warp door, star exit, game over
+def test_other_warp_ops_do_not_fire(op):
+    assert DeathDetector().process(snap(), snap(pending_warp_op=op)) == []
+
+
+def test_action_death_with_simultaneous_warp_op_emits_one_event():
+    curr = snap(mario_action=ACT_STANDING_DEATH,
+                pending_warp_op=WARP_OP_WARP_FLOOR)
+    events = DeathDetector().process(snap(), curr)
+    assert len(events) == 1
+    assert events[0].payload["cause"] == "standing"
+
+
+def test_ongoing_action_death_suppresses_fall_event():
+    # already dying when a warp-floor pulse appears: still one death total
+    prev = snap(mario_action=ACT_STANDING_DEATH)
+    curr = snap(mario_action=ACT_STANDING_DEATH,
+                pending_warp_op=WARP_OP_WARP_FLOOR)
+    assert DeathDetector().process(prev, curr) == []

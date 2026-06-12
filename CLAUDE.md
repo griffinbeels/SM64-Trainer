@@ -38,7 +38,7 @@ uv run python tools/dedupe_journal.py data/tracker.db          # scan double-jou
 | Star-grab + IGT logic | `detectors/star_grab.py` — docstrings carry the domain rationale |
 | game_reset | `detectors/lifecycle.py` |
 | Attempt anchors (practice_reset / state_loaded) | `detectors/anchors.py` — anchors carry mario_acted + paused_frames_before + acted_tracking; emits the mario_acted event; docstring covers classification, pause streak, and VERIFY notes |
-| Death detection | `detectors/death.py` — action-set edge; closes open attempt as outcome "death" |
+| Death detection | `detectors/death.py` — action-set edge + pending-warp pulse for void-outs (pit falls fire BEFORE level_changed; docstring carries why); closes open attempt as outcome "death" |
 | Level-change detection | `detectors/level.py` — stateful: remembers last EMITTED level, journals establishing/corrective events (from may equal to) so projection-side level tracking never runs stale; closes open attempts as abandoned |
 | Dust tricks (dustless rollouts/jumps) | `detectors/dust.py` — TRICKS registry (one row per trick); docstring carries the decomp-verified landing-frame timing model; counts attach to attempts via projection.py |
 | Poll loop, attach retry, layout sanity, session pause | `server/poller.py` |

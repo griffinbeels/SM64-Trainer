@@ -13,6 +13,7 @@ or the SM64 decomp US symbol map, fix addresses.py, and rerun.
 import time
 
 from sm64_events.core.snapshot import SnapshotReader
+from sm64_events.detectors.death import DeathDetector
 from sm64_events.detectors.dust import DustTrickDetector
 from sm64_events.detectors.star_grab import StarGrabDetector
 from sm64_events.memory.addresses import PARTICLE_DUST
@@ -54,14 +55,23 @@ def main() -> None:
     print("\nPhase 2: live watch — grab stars and verify identity/timing;")
     print("dive-rollout and double/triple-jump to verify the dust-trick")
     print("addresses. Expect: one visible slide/landing frame = DUSTLESS")
-    print("(frame perfect); dusty slide/landing frames show [DUST]. Detector")
+    print("(frame perfect); dusty slide/landing frames show [DUST].")
+    print("PENDING_WARP_OP gate: fall into a pit (HMC) — expect a warp_op")
+    print("0x13 line and '>> death: fall' BEFORE the level unloads; then die")
+    print("normally (quicksand) and confirm exactly ONE death line. Detector")
     print("lines come from the REAL detectors — exactly what API listeners")
     print("receive. (Ctrl+C to quit)\n")
-    star_det, dust_det = StarGrabDetector(), DustTrickDetector()
+    star_det, dust_det, death_det = StarGrabDetector(), DustTrickDetector(), DeathDetector()
     prev_snap = reader.read()
     prev_action = None
     while True:
         s = reader.read()
+        for ev in death_det.process(prev_snap, s):
+            p = ev.payload
+            print(f"  >> death: {p['cause']}  igt {p['igt_frames']}f"
+                  f"  level {p['level']}  frame {ev.frame}")
+        if s.pending_warp_op != prev_snap.pending_warp_op:
+            print(f"frame {s.global_timer:>8}  warp_op {s.pending_warp_op:#06x}")
         for ev in star_det.process(prev_snap, s):
             p = ev.payload
             recon = "  [reconstructed: grab raced an IGT reset]" \

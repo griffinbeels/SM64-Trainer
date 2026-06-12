@@ -183,6 +183,16 @@ values match.
 
 ## Memory hunting playbook
 
+For VANILLA statics (no public US map entry, e.g. file-scope `s*` in
+decomp .c files), derive before hunting: a translation unit's FORCE_BSS
+block lays out in declaration order, legacy `D_8033xxxx` names inside the
+block pin the INTERNAL offsets (they encode JP addresses — mind aggregate
+alignment: structs ≥ 8 bytes align to 8), and one already-live-verified
+symbol in the same block pins the absolute US position. Worked example
+with two independent anchors: PENDING_WARP_OP in addresses.py
+(sDelayedWarpOp, derived 2026-06-12 from sTimerRunning = HUD_TIMER_RUNNING).
+Derived addresses are still VERIFY until the live gate.
+
 No public RAM map exists for Usamune internals; locate values empirically:
 
 1. **Rate scan** — `tools/find_timer.py`: keeps addresses ticking 25–65/s

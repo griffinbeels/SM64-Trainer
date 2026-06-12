@@ -22,6 +22,7 @@ class GameSnapshot:
                            # (USAMUNE_STAR_RESULT); 0 before the first grab
     curr_level: int = 0    # gCurrLevelNum: LEVEL ids (WF=24, SSL=8...), NOT course ids — see addresses.py trap note
     particle_flags: int = 0  # Mario particleFlags, re-zeroed each frame; PARTICLE_DUST corroborates dive-slide frames
+    pending_warp_op: int = 0  # sDelayedWarpOp; WARP_OP_WARP_FLOOR = void-out death pending (death.py)
 
 
 class SnapshotReader:
@@ -42,4 +43,5 @@ class SnapshotReader:
             igt_result=m.read_u16(A.USAMUNE_STAR_RESULT),
             curr_level=m.read_s16(A.CURR_LEVEL),
             particle_flags=m.read_u32(A.MARIO_PARTICLE_FLAGS),
+            pending_warp_op=m.read_u16(A.PENDING_WARP_OP),
         )
