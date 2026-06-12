@@ -31,6 +31,17 @@ class FakeReplayService:
         if path == "BAD":
             raise LookupError("no such saved replay")
 
+    def settings(self):
+        return {"retention_s": None, "max_buffer_bytes": 20 * 1024**3,
+                "save_root": "replays", "saved_bytes": 0}
+
+    def update_settings(self, retention_s, max_buffer_bytes):
+        from sm64_events.replay.config import validate_settings
+        validate_settings(retention_s, max_buffer_bytes)  # ValueError -> 409
+        return {"retention_s": retention_s,
+                "max_buffer_bytes": max_buffer_bytes,
+                "save_root": "replays", "saved_bytes": 0}
+
     def clip_path(self, name: str) -> Path:
         if name != "clip_attempt_42.mp4":
             raise LookupError("no such clip")
@@ -74,6 +85,29 @@ def test_save_passes_truncated_through(tmp_path):
     assert r.status_code == 200
     body = r.json()
     assert body["path"].endswith(".mp4") and body["truncated"] is False
+
+
+def test_settings_get_put_and_validation(tmp_path):
+    c = make_client(tmp_path)
+    r = c.get("/api/replay/settings")
+    assert r.status_code == 200
+    assert r.json()["max_buffer_bytes"] == 20 * 1024**3
+
+    r = c.put("/api/replay/settings",
+              json={"retention_s": 600, "max_buffer_bytes": 5 * 1024**3})
+    assert r.status_code == 200 and r.json()["retention_s"] == 600
+
+    r = c.put("/api/replay/settings", json={"max_buffer_bytes": 2 * 1024**3})
+    assert r.status_code == 200
+    assert r.json()["retention_s"] is None            # omitted = whole session
+
+    r = c.put("/api/replay/settings",
+              json={"retention_s": 5, "max_buffer_bytes": 5 * 1024**3})
+    assert r.status_code == 409                       # out of range -> taxonomy
+
+    r = c.put("/api/replay/settings",
+              json={"retention_s": None, "max_buffer_bytes": "x"})
+    assert r.status_code == 422                       # malformed -> pydantic
 
 
 def test_reveal_endpoint(tmp_path):

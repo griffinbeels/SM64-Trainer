@@ -47,9 +47,25 @@ export function ReplayPlayer({ attemptId }) {
   </div>`;
 }
 
-// Header indicator: red = recording, grey = no capture, hidden = replay absent.
+function fmtGB(bytes) {
+  const gb = bytes / 1024 ** 3;
+  return gb >= 10 ? gb.toFixed(0) : gb.toFixed(1);
+}
+
+function fmtSpan(st) {
+  if (!st.buffer_start_utc || !st.buffer_end_utc) return "empty";
+  const s = (new Date(st.buffer_end_utc) - new Date(st.buffer_start_utc)) / 1000;
+  if (s >= 5400) return `${(s / 3600).toFixed(1)} h`;
+  if (s >= 90) return `${Math.round(s / 60)} min`;
+  return `${Math.round(s)} s`;
+}
+
+// Header indicator: red = recording, grey = no capture, hidden = replay
+// absent. Always shows buffer disk use vs cap; click opens the limits panel.
 export function RecordingDot() {
   const [st, setSt] = useState(null);
+  const [open, setOpen] = useState(false);
+  const [tick, setTick] = useState(0); // bump to re-poll immediately
   useEffect(() => {
     let alive = true;
     const poll = () =>
@@ -59,10 +75,85 @@ export function RecordingDot() {
     poll();
     const id = setInterval(poll, 5000);
     return () => { alive = false; clearInterval(id); };
-  }, []);
+  }, [tick]);
   if (st === null) return null;
   const cls = st.recording ? "ok" : "bad";
   const label = st.recording
-    ? `rec · ${st.encoder} · audio ${st.audio_mode}` : "no capture";
-  return html`<span class="dot ${cls}" title="replay buffer">● ${label}</span>`;
+    ? `rec · ${fmtSpan(st)} · ${fmtGB(st.disk_bytes)}/${fmtGB(st.max_buffer_bytes)} GB`
+    : "no capture";
+  return html`<span style="position:relative">
+    <span class="dot ${cls}" style="cursor:pointer"
+          title="replay buffer (${st.encoder} · audio ${st.audio_mode}) — click for storage limits"
+          onclick=${() => setOpen(!open)}>● ${label}</span>
+    ${open && html`<${BufferSettings} st=${st}
+        refresh=${() => setTick((t) => t + 1)}
+        close=${() => setOpen(false)} />`}
+  </span>`;
+}
+
+// Storage-limits panel: the ONLY two knobs that bound buffer disk use
+// (retention + hard cap). PUT applies live (oldest footage evicts now) and
+// persists to data/replay_settings.json.
+function BufferSettings({ st, refresh, close }) {
+  const [info, setInfo] = useState(null);
+  const [mode, setMode] = useState(st.retention_s == null ? "session" : "minutes");
+  const [mins, setMins] = useState(
+    st.retention_s != null ? Math.round(st.retention_s / 60) : 10);
+  const [capGb, setCapGb] = useState(Math.round(st.max_buffer_bytes / 1024 ** 3));
+  const [msg, setMsg] = useState(null);
+  useEffect(() => {
+    getJSON("/api/replay/settings").then(setInfo).catch(() => {});
+  }, []);
+
+  async function apply() {
+    const cap = Number(capGb), m = Number(mins);
+    if (!Number.isFinite(cap) || (mode === "minutes" && !Number.isFinite(m))) {
+      setMsg("enter a number"); return;
+    }
+    try {
+      await send("PUT", "/api/replay/settings", {
+        retention_s: mode === "session" ? null : m * 60,
+        max_buffer_bytes: Math.round(cap * 1024 ** 3),
+      });
+      setMsg("saved ✓ (applies immediately)");
+      refresh();
+    } catch (e) {
+      setMsg(String(e));
+    }
+  }
+
+  const pct = Math.min(100, (st.disk_bytes / st.max_buffer_bytes) * 100);
+  return html`<div class="popover" style="min-width:360px">
+    <div><b>Replay buffer storage</b>
+      <span class="meta"> — oldest footage is evicted past either limit</span></div>
+    <div style="margin:.4rem 0">
+      <div class="meta">${fmtGB(st.disk_bytes)} GB of ${fmtGB(st.max_buffer_bytes)} GB cap
+        · covering ${fmtSpan(st)}</div>
+      <div style="height:6px;background:#2a2f3a;border-radius:3px;margin-top:2px">
+        <div style="height:6px;border-radius:3px;width:${pct}%;background:${pct > 85 ? "#e0a3a3" : "#7aa2f7"}"></div>
+      </div>
+    </div>
+    <div>Keep:
+      <label><input type="radio" name="replay-retention" checked=${mode === "session"}
+        onchange=${() => setMode("session")} /> whole session</label>
+      <label style="margin-left:.5rem"><input type="radio" name="replay-retention"
+        checked=${mode === "minutes"} onchange=${() => setMode("minutes")} /> last</label>
+      <input id="replay-retention-min" name="replay_retention_min" type="number"
+        min="1" max="1440" style="width:4.5rem" value=${mins}
+        disabled=${mode !== "minutes"} oninput=${(e) => setMins(e.target.value)} /> min
+    </div>
+    <div style="margin-top:.3rem">Disk cap:
+      <input id="replay-cap-gb" name="replay_cap_gb" type="number" min="1" max="1024"
+        style="width:4.5rem" value=${capGb}
+        oninput=${(e) => setCapGb(e.target.value)} /> GB
+    </div>
+    ${info && html`<div class="meta" style="margin-top:.3rem">
+      saved replays (kept forever, not part of the buffer):
+      ${fmtGB(info.saved_bytes)} GB in ${info.save_root}\\</div>`}
+    <div style="margin-top:.4rem">
+      <button onclick=${apply}>Apply</button>
+      <button onclick=${close}>Close</button>
+      ${msg && html` <span class="meta">${msg}</span>`}
+    </div>
+  </div>`;
 }

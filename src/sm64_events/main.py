@@ -13,7 +13,7 @@ from sm64_events.detectors.lifecycle import GameResetDetector
 from sm64_events.detectors.star_grab import StarGrabDetector
 from sm64_events.memory.pj64 import Pj64Memory
 from sm64_events.replay.audio import SystemAudioSource
-from sm64_events.replay.config import ReplayConfig
+from sm64_events.replay.config import ReplayConfig, apply_settings_file
 from sm64_events.replay.extract import ClipExtractor
 from sm64_events.replay.recorder import ReplayRecorder
 from sm64_events.replay.service import ReplayService
@@ -57,7 +57,8 @@ def build():
                 "database unavailable - running broadcast-only")
             db = None
     service = TrackerService(db, broadcaster)
-    replay_cfg = ReplayConfig()
+    # User-set storage limits (UI panel) overlay the code defaults.
+    replay_cfg = apply_settings_file(ReplayConfig())
     replay = None
     if replay_cfg.enabled:
         from sm64_events.replay.encoder import pick_video_codec

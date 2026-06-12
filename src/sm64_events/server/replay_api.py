@@ -16,6 +16,11 @@ class RevealBody(BaseModel):
     path: str
 
 
+class SettingsBody(BaseModel):
+    retention_s: float | None = None   # null/omitted = keep the whole session
+    max_buffer_bytes: int
+
+
 def _http(e: Exception) -> HTTPException:
     if isinstance(e, LookupError):
         return HTTPException(404, str(e))
@@ -30,6 +35,18 @@ def create_replay_router(replay) -> APIRouter:
     @router.get("/replay/status")
     def status():
         return replay.status()
+
+    @router.get("/replay/settings")
+    def get_settings():
+        return replay.settings()
+
+    @router.put("/replay/settings")
+    def put_settings(body: SettingsBody):
+        try:
+            return replay.update_settings(body.retention_s,
+                                          body.max_buffer_bytes)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
 
     @router.post("/attempts/{attempt_id}/replay")
     def view(attempt_id: int):

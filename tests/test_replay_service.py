@@ -1,8 +1,11 @@
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sm64_events.replay.config import ReplayConfig
+import pytest
+
+from sm64_events.replay.config import ReplayConfig, apply_settings_file
 from sm64_events.replay.extract import ClipResult
+from sm64_events.replay.ring import SegmentRing
 from sm64_events.replay.service import ReplayService, slug_filename
 from sm64_events.tracking.projection import Attempt
 
@@ -199,3 +202,50 @@ def test_reveal_validates_path_is_inside_save_root(tmp_path):
         svc.reveal(str(cfg.save_root / "nope" / "x.mp4"))  # inside but missing
     with pytest.raises(LookupError):
         svc.reveal(str(cfg.save_root / ".." / "escape.mp4"))  # traversal
+
+
+class RecorderWithRealRing:
+    """Settings tests need a REAL ring (FakeRing has no set_limits)."""
+    def __init__(self):
+        self.ring = SegmentRing(retention_s=None, max_bytes=20 * 1024**3)
+    def status(self):
+        return {}
+
+
+def test_settings_update_validates_persists_and_applies(tmp_path):
+    cfg = ReplayConfig(save_root=tmp_path / "replays",
+                       scratch_dir=tmp_path / "buf",
+                       settings_path=tmp_path / "replay_settings.json")
+    rec = RecorderWithRealRing()
+    svc = ReplayService(cfg=cfg, recorder=rec, extractor=None, tracker=None)
+
+    out = svc.update_settings(600.0, 5 * 1024**3)
+    assert out["retention_s"] == 600.0
+    assert out["max_buffer_bytes"] == 5 * 1024**3
+    assert rec.ring.retention_s == 600.0               # applied live
+    assert rec.ring.max_bytes == 5 * 1024**3
+    # persisted: a fresh startup overlay picks the values up
+    cfg2 = apply_settings_file(cfg)
+    assert cfg2.retention_s == 600.0 and cfg2.max_buffer_bytes == 5 * 1024**3
+
+    with pytest.raises(ValueError):
+        svc.update_settings(5.0, 5 * 1024**3)          # retention below 60 s
+    with pytest.raises(ValueError):
+        svc.update_settings(None, 100)                 # cap below 1 GiB
+    # failed updates must not clobber the persisted file
+    assert apply_settings_file(cfg).retention_s == 600.0
+
+
+def test_settings_reports_saved_bytes_on_demand(tmp_path):
+    cfg = ReplayConfig(save_root=tmp_path / "replays",
+                       scratch_dir=tmp_path / "buf",
+                       settings_path=tmp_path / "replay_settings.json")
+    svc = ReplayService(cfg=cfg, recorder=RecorderWithRealRing(),
+                        extractor=None, tracker=None)
+    assert svc.settings()["saved_bytes"] == 0          # save_root absent -> 0
+    d = tmp_path / "replays" / "2026-06-11" / "session_1"
+    d.mkdir(parents=True)
+    (d / "a.mp4").write_bytes(b"x" * 1000)
+    s = svc.settings()
+    assert s["saved_bytes"] == 1000
+    assert s["save_root"].endswith("replays")

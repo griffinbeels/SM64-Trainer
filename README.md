@@ -128,11 +128,16 @@ hosting PJ64's audio session) into `data/replay_buffer/` (scratch, wiped on
 startup). Video encoding runs in an `ffmpeg` subprocess when ffmpeg is on
 PATH — recommended; the in-process fallback encoder stutters under load
 (why: docs/architecture.md → Replay capture). Retention defaults to the
-whole session (`ReplayConfig.retention_s`); a hard disk cap (default
-20 GB) evicts oldest footage regardless. PJ64 must run windowed (exclusive
-fullscreen cannot be captured).
+whole session; a hard disk cap (default 20 GB) evicts oldest footage
+regardless. Both storage limits are adjustable live from the UI — click
+the recording dot in the header (shows usage as `rec · 38 min ·
+1.2/20 GB`); changes persist to `data/replay_settings.json` and apply
+immediately. Saved replays under `replays/` are kept forever and never
+evicted. PJ64 must run windowed (exclusive fullscreen cannot be captured).
 
-- `GET  /api/replay/status` — `{enabled, recording, window_found, audio_mode, encoder, buffer_start_utc, buffer_end_utc, disk_bytes}`
+- `GET  /api/replay/status` — `{enabled, recording, window_found, audio_mode, encoder, buffer_start_utc, buffer_end_utc, disk_bytes, retention_s, max_buffer_bytes}`
+- `GET  /api/replay/settings` — `{retention_s, max_buffer_bytes, save_root, saved_bytes}`
+- `PUT  /api/replay/settings` — body `{retention_s|null, max_buffer_bytes}` (null = whole session); persists + applies immediately (shrinking evicts oldest footage now); 409 outside 60 s–24 h / 1 GiB–1 TiB
 - `POST /api/attempts/{id}/replay` — cut (or reuse) the attempt's clip → `{clip_url, duration_s, truncated}`
 - `GET  /api/replay/clips/{name}` — the MP4 (supports HTTP Range; scrubs smoothly)
 - `POST /api/attempts/{id}/replay/save` — copy to `replays/<YYYY-MM-DD>/session_<N>/<slug>.mp4` → `{path, truncated}`

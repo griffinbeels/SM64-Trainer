@@ -16,7 +16,8 @@ from pathlib import Path
 
 from sm64_events.core.timefmt import format_igt
 from sm64_events.memory.addresses import course_name, star_name
-from sm64_events.replay.config import ReplayConfig
+from sm64_events.replay.config import (ReplayConfig, save_settings,
+                                       validate_settings)
 
 _CLIP_NAME = "clip_attempt_{id}.mp4"
 # fullmatch pattern — rejects traversal, wrong extension, empty id
@@ -86,6 +87,28 @@ class ReplayService:
 
     def status(self) -> dict:
         return {"enabled": True, **self.recorder.status()}
+
+    def settings(self) -> dict:
+        """Storage limits + where the bytes are. saved_bytes walks save_root
+        on demand (panel-open frequency) — deliberately NOT part of the 5 s
+        status poll."""
+        root = self.cfg.save_root
+        saved = (sum(p.stat().st_size for p in root.rglob("*") if p.is_file())
+                 if root.exists() else 0)
+        return {"retention_s": self.recorder.ring.retention_s,
+                "max_buffer_bytes": self.recorder.ring.max_bytes,
+                "save_root": str(root),
+                "saved_bytes": saved}
+
+    def update_settings(self, retention_s: float | None,
+                        max_buffer_bytes: int) -> dict:
+        """Validate -> persist -> apply live to the ring (evicts immediately).
+        Persist before apply so a write failure can't leave limits applied
+        but not durable."""
+        validate_settings(retention_s, max_buffer_bytes)
+        save_settings(self.cfg.settings_path, retention_s, max_buffer_bytes)
+        self.recorder.ring.set_limits(retention_s, max_buffer_bytes)
+        return self.settings()
 
     def _attempt(self, attempt_id: int):
         if self.tracker.db is None:

@@ -34,6 +34,24 @@ class SegmentRing:
     def total_bytes(self) -> int:
         return self._total_bytes
 
+    @property
+    def retention_s(self) -> float | None:
+        return self._retention_s
+
+    @property
+    def max_bytes(self) -> int:
+        return self._max_bytes
+
+    def set_limits(self, retention_s: float | None, max_bytes: int) -> None:
+        """Live-apply new eviction limits (the UI settings panel) and evict
+        immediately — a user who just shrank the cap expects disk to free
+        now, not when the next segment lands."""
+        with self._lock:
+            self._retention_s = retention_s
+            self._max_bytes = max_bytes
+            if self._segments:
+                self._evict(now=self._segments[-1].utc_end)
+
     def add(self, seg: SegmentInfo) -> None:
         """Assumes utc_end is monotonically non-decreasing across add() calls
         (one writer thread, segments emitted in stream order)."""

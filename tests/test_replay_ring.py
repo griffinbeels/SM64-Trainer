@@ -52,6 +52,26 @@ def test_coverage_none_when_empty():
     assert ring.coverage("video") is None
 
 
+def test_set_limits_applies_live_and_evicts_immediately(tmp_path):
+    """UI settings panel contract: shrinking a limit frees disk NOW, not at
+    the next segment add."""
+    ring = SegmentRing(retention_s=None, max_bytes=10**9)
+    segs = [seg(tmp_path, i, size=100) for i in range(5)]
+    for s in segs:
+        ring.add(s)
+    assert ring.total_bytes == 500
+
+    ring.set_limits(retention_s=None, max_bytes=250)  # user shrank the cap
+    assert ring.total_bytes <= 250
+    assert not segs[0].path.exists() and not segs[1].path.exists()
+    assert segs[4].path.exists()
+    assert ring.max_bytes == 250 and ring.retention_s is None
+
+    ring.set_limits(retention_s=4.0, max_bytes=250)   # now shrink retention
+    # newest end = T0+10 s; horizon T0+6 s evicts segments ending <= +6 s
+    assert ring.coverage("video")[0] >= T0 + timedelta(seconds=6)
+
+
 def test_audio_and_video_tracked_independently_for_query(tmp_path):
     ring = SegmentRing(retention_s=None, max_bytes=10**9)
     ring.add(seg(tmp_path, 0, kind="video"))

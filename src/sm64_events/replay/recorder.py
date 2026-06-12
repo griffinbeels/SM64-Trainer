@@ -349,4 +349,6 @@ class ReplayRecorder:
             "buffer_start_utc": cov[0].isoformat() if cov else None,
             "buffer_end_utc": cov[1].isoformat() if cov else None,
             "disk_bytes": self.ring.total_bytes,
+            "retention_s": self.ring.retention_s,
+            "max_buffer_bytes": self.ring.max_bytes,
         }
