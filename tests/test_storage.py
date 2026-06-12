@@ -20,7 +20,7 @@ def test_migrations_set_user_version_and_create_tables(tmp_path):
     names = {r["name"] for r in db._conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"events", "sessions", "attempts", "pbs", "ui_state"} <= names
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 4
 
 
 def test_reopening_existing_db_is_idempotent(tmp_path):
@@ -28,7 +28,7 @@ def test_reopening_existing_db_is_idempotent(tmp_path):
     sid = first.insert_session("2026-06-10T12:00:00Z")
     first.close()
     db = make_db(tmp_path)  # second open: migrations must not re-run/crash
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 4
     row = db._conn.execute("SELECT * FROM sessions WHERE id=?", (sid,)).fetchone()
     assert row is not None and row["started_utc"] == "2026-06-10T12:00:00Z"
 
@@ -146,7 +146,7 @@ def test_v1_database_upgrades_in_place(tmp_path):
     conn.commit()
     conn.close()
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 4
     assert db.attempts()[0].rollouts_total == 0   # backfilled default
     assert db.attempts()[0].jumps_total == 0
 
@@ -163,3 +163,62 @@ def test_attempts_round_trip_dust_trick_counts(tmp_path):
                 jumps_total=4, jumps_dustless=2)
     db.replace_attempts([a])
     assert db.attempts() == [a]
+
+
+# -- migration v4: segment_defs, attempts.segment_id, kind-aware pbs ----------
+
+def make_attempt(**overrides):
+    """Factory that fills every Attempt field with defaults then applies overrides."""
+    from sm64_events.tracking.projection import Attempt
+    defaults = dict(
+        id=1, session_id=1, course_id=2, star_id=1, strat_tag=None,
+        anchor_type="practice_reset", anchor_frame=100,
+        outcome="success", outcome_detail=None,
+        igt_frames=300, rta_frames=310,
+        started_utc="2026-06-11T00:00:00Z", ended_utc="2026-06-11T00:00:10Z",
+        cleared=False, cleared_reason=None,
+        rollouts_total=0, rollouts_dustless=0,
+        jumps_total=0, jumps_dustless=0,
+        segment_id=None,
+    )
+    defaults.update(overrides)
+    return Attempt(**defaults)
+
+
+def test_migration_v4_seeds_ten_segment_definitions(tmp_path):
+    db = make_db(tmp_path)
+    defs = db.segment_defs()
+    assert len(defs) == 10
+    lblj = next(d for d in defs if d["name"] == "LBLJ")
+    assert lblj["enabled"] is True
+    assert lblj["start_triggers"] == [{"type": "level_enter", "to": 6, "from": 16}]
+    assert lblj["end_triggers"] == [{"type": "level_enter", "to": 17}]
+
+
+def test_segment_def_crud_roundtrip(tmp_path):
+    db = make_db(tmp_path)
+    sid = db.insert_segment_def("Test", [{"type": "spawned"}],
+                                [{"type": "level_enter", "to": 6}], [],
+                                "2026-06-11T00:00:00Z")
+    db.update_segment_def(sid, name="Test2", enabled=False)
+    d = next(d for d in db.segment_defs() if d["id"] == sid)
+    assert d["name"] == "Test2" and d["enabled"] is False
+    db.delete_segment_def(sid)
+    assert all(d["id"] != sid for d in db.segment_defs())
+
+
+def test_attempts_roundtrip_preserves_segment_id(tmp_path):
+    db = make_db(tmp_path)
+    a = make_attempt(id=5, segment_id=3, course_id=None, star_id=None,
+                     rta_frames=88)
+    db.upsert_attempt(a)
+    assert db.attempts()[0].segment_id == 3
+
+
+def test_pb_accepts_segment_keying_and_null_course(tmp_path):
+    db = make_db(tmp_path)
+    db.insert_pb(course_id=None, star_id=None, strat_tag=None,
+                 timer_mode="rta", frames=85, attempt_id=None,
+                 saved_utc="2026-06-11T00:00:00Z", segment_id=1)
+    row = db.pbs()[0]
+    assert row["segment_id"] == 1 and row["course_id"] is None

@@ -92,6 +92,7 @@ class Attempt:
     rollouts_dustless: int = 0
     jumps_total: int = 0         # chained double/triple jumps
     jumps_dustless: int = 0
+    segment_id: int | None = None  # set => segment attempt; course/star None
 
 
 ANCHOR_EVENT_TYPES = ("practice_reset", "state_loaded")
