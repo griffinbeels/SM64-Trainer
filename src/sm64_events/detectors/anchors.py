@@ -18,6 +18,13 @@ Both anchor payloads carry mario_acted: whether Mario entered any non-passive
   The action transition ON the anchor tick itself is swallowed — it belongs
   to the warp/spawn, not to either attempt.
 
+Both anchor payloads also carry action: curr.mario_action at the tick the
+  anchor was detected. This is a journal FACT that lets consumers classify
+  load echoes — the segment engine ignores anchors where action is a
+  DOOR_ACTION (intra-area castle door), because door animations lock input
+  and Usamune resets IGT on every door crossing, producing a synthetic
+  anchor that is never a player reset.
+
 Pause streak: consecutive game frames where global_timer advanced but the
   overall IGT did not — game logic stopped, i.e. the Usamune pause menu (or a
   dialog time-stop). Stamped on anchors as paused_frames_before; the tracking
@@ -92,7 +99,8 @@ class AnchorDetector:
                           payload={"igt_frames_restored": curr.igt_overall,
                                    "mario_acted": self._acted,
                                    "paused_frames_before": self._pause_streak,
-                                   "acted_tracking": True})]
+                                   "acted_tracking": True,
+                                   "action": curr.mario_action})]
         if (curr.igt_overall < prev.igt_overall
                 and curr.igt_overall <= NEAR_ZERO_IGT
                 and prev.igt_overall < IGT_WRAP_CEILING):
@@ -101,5 +109,6 @@ class AnchorDetector:
                           payload={"igt_frames_before": prev.igt_overall,
                                    "mario_acted": self._acted,
                                    "paused_frames_before": self._pause_streak,
-                                   "acted_tracking": True})]
+                                   "acted_tracking": True,
+                                   "action": curr.mario_action})]
         return []

@@ -439,3 +439,66 @@ def test_real_reset_after_door_still_closes():
                             {"igt_frames_before": 30}), ctx(level=6))
     assert len(closed) == 1
     assert closed[0].outcome == "reset" and closed[0].rta_frames == 400
+
+
+# ---------------------------------------------------------------------------
+# Intra-area door echo (live gate 2026-06-12, finding 3)
+# Same area on both sides of the door → no area_changed → _last_transition_frame
+# guard cannot see it.  Classified instead by action in DOOR_ACTIONS.
+# ---------------------------------------------------------------------------
+
+def test_intra_area_door_echo_does_not_close():
+    """seq 23-31 replay: LBLJ armed at lobby entry (16→6 @92855, co-frame
+    load echo already ignored); player crosses the small lobby door toward
+    the basement stairs — SAME area on both sides (no area_changed) — and a
+    synthetic practice_reset fires @93025 with action=ACT_WARP_DOOR_SPAWN.
+    Must not close the segment.  level_changed 6→17 @93100 → success rta 245."""
+    e = SegmentEngine([LBLJ])
+    # arm via castle entry @92855
+    e.feed(jev(10, "level_changed", 92855, {"from": 16, "to": 6}),
+           ctx(level=6, prev_level=16))
+    # co-frame load echo at arm tick — already ignored by _last_transition_frame
+    e.feed(jev(11, "practice_reset", 92855, {"igt_frames_before": 64}),
+           ctx(level=6))
+    assert e.armed_ids() == {1}
+    # intra-area door echo: NO area_changed fired, but igt reset with door action
+    closed, _ = e.feed(
+        jev(12, "practice_reset", 93025,
+            {"igt_frames_before": 128, "action": 0x00001322}),
+        ctx(level=6))
+    assert closed == [], "intra-area door echo must not close the segment"
+    assert e.armed_ids() == {1}, "segment must remain armed after door echo"
+    # end trigger fires — success timed from original arm @92855
+    closed, _ = e.feed(jev(13, "level_changed", 93100, {"from": 6, "to": 17}),
+                       ctx(level=17, prev_level=6))
+    assert len(closed) == 1
+    assert closed[0].outcome == "success" and closed[0].rta_frames == 245
+
+
+def test_real_reset_with_gameplay_action_still_closes():
+    """A practice_reset whose action is a regular gameplay action (idle =
+    L-press default) is a genuine player reset and must close the segment."""
+    e = SegmentEngine([LBLJ])
+    e.feed(jev(10, "level_changed", 1000, {"from": 16, "to": 6}),
+           ctx(level=6, prev_level=16))
+    # real L-reset: action is ACT_IDLE (0x0C400201), not a door action
+    closed, _ = e.feed(
+        jev(11, "practice_reset", 1200, {"action": 0x0C400201}),
+        ctx(level=6))
+    assert len(closed) == 1
+    assert closed[0].outcome == "reset" and closed[0].rta_frames == 200
+
+
+def test_historical_anchor_without_action_field_closes():
+    """Historical journal events have no 'action' key in the payload.
+    .get('action') returns None → None not in DOOR_ACTIONS → conservative
+    close behaviour (real reset) is preserved for old events."""
+    e = SegmentEngine([LBLJ])
+    e.feed(jev(10, "level_changed", 1000, {"from": 16, "to": 6}),
+           ctx(level=6, prev_level=16))
+    # no "action" key — historical event
+    closed, _ = e.feed(
+        jev(11, "practice_reset", 1200, {"igt_frames_before": 30}),
+        ctx(level=6))
+    assert len(closed) == 1
+    assert closed[0].outcome == "reset" and closed[0].rta_frames == 200

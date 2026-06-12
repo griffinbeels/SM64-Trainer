@@ -22,17 +22,21 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
   hard_reset rows exist)
 - load-echo rule: Usamune resets IGT on every level/area load, so the
   anchor detector emits a synthetic practice_reset on the same global-timer
-  frame as the triggering transition.  Two echo shapes exist:
+  frame as the triggering transition.  Three echo shapes exist:
     (a) level-entry echo: practice_reset @ arm.start_frame (same tick as the
         level_changed that armed the segment — live gate 2026-06-12, seq 40-45);
     (b) area-door echo: area_changed mid-segment at frame F, then a synthetic
         practice_reset at the SAME frame F (live report 2026-06-12: LBLJ armed
-        in lobby closed-as-reset at the basement-stairs door).
-  Both echo shapes are detected by the engine-level _last_transition_frame
-  field, which is updated to ev.frame on every level_changed / area_changed
-  before per-def processing.  If a practice_reset / state_loaded lands on
-  _last_transition_frame it is an echo → ignored (no closure, no disarm).
-  A real player reset always lands on a LATER frame.
+        in lobby closed-as-reset at the basement-stairs door);
+    (c) intra-area door echo: NO area_changed (same area on both sides of the
+        door), but Usamune's IGT still resets → anchor fires with Mario in a
+        DOOR_ACTION (0x1320/0x1321/0x1322, inputs locked during door animation,
+        never a player reset). Detected via ev.payload.get("action") in
+        DOOR_ACTIONS — historical journal events lack the field, so .get()
+        returns None → not a door → old conservative close behaviour preserved.
+  Shapes (a) and (b) are detected by _last_transition_frame (ev.frame ==
+  _last_transition_frame).  Shape (c) is detected by the action field in
+  the anchor payload.  A real player reset always has a gameplay action.
   KNOWN EDGE (no code): a savestate load INTO A DIFFERENT AREA emits a
   corrective area_changed co-frame with state_loaded; that state_loaded will
   be classified as an echo (segment stays armed).  The negative-rta self-heal
@@ -42,7 +46,7 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
 from dataclasses import dataclass
 from typing import Callable
 
-from sm64_events.memory.addresses import CASTLE_AREA_NAMES, LEVEL_NAMES
+from sm64_events.memory.addresses import CASTLE_AREA_NAMES, DOOR_ACTIONS, LEVEL_NAMES
 
 _AFK_PAUSE_FRAMES = 150  # mirrors the star-side AFK discard (projection.py)
 
@@ -252,7 +256,7 @@ class SegmentEngine:
                     self._disarm(d, ev, notices)
                 elif ev.type in ("practice_reset", "state_loaded") \
                         and ev.frame == self._last_transition_frame:
-                    # Load echo — not a real player reset.  Two shapes:
+                    # Load echo — not a real player reset.  Shapes (a) and (b):
                     # (a) level-entry echo: practice_reset at arm.start_frame
                     #     (same tick as the level_changed that armed us —
                     #     live gate 2026-06-12, seq 40-45);
@@ -265,6 +269,17 @@ class SegmentEngine:
                     # Do NOTHING: no closure, no row, no disarm. Fall through
                     # to the arm phase where an attempt_anchor re-arm
                     # harmlessly replaces the _Arm with the identical frame.
+                    pass
+                elif ev.type in ("practice_reset", "state_loaded") \
+                        and ev.payload.get("action") in DOOR_ACTIONS:
+                    # Intra-area door echo (shape c): no area_changed fires
+                    # (same area on both sides of the door), but Usamune still
+                    # resets IGT → anchor fires with Mario in a door action
+                    # (0x1320/0x1321/0x1322). Inputs are locked during door
+                    # animations, so this can never be a player reset.
+                    # Historical journal events lack the "action" field →
+                    # .get() returns None → not in DOOR_ACTIONS → old
+                    # conservative close behaviour is preserved.
                     pass
                 elif ev.type in ("practice_reset", "state_loaded"):
                     if ev.payload.get("paused_frames_before", 0) \

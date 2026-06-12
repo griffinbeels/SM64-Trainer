@@ -228,6 +228,16 @@ FIGHT_END_LEVELS = {
     BOWSER_3_ARENA: "grand",
 }
 
+# Castle door actions — values observed in our own 2026-06-12 gate logs at
+# every door crossing (decomp names: ACT_PULLING_DOOR / ACT_PUSHING_DOOR /
+# ACT_WARP_DOOR_SPAWN). A door warp resets Usamune's IGT like any load,
+# so the anchor detector reports a synthetic reset mid-door — inputs are
+# locked during door animations, so such an anchor is never a player reset.
+ACT_PULLING_DOOR = 0x00001320
+ACT_PUSHING_DOOR = 0x00001321
+ACT_WARP_DOOR_SPAWN = 0x00001322
+DOOR_ACTIONS = frozenset({ACT_PULLING_DOOR, ACT_PUSHING_DOOR, ACT_WARP_DOOR_SPAWN})
+
 # Warp-entry actions — decomp include/sm64.h, quoted verbatim from
 # n64decomp/sm64 master, fetched 2026-06-11. Live-verified 2026-06-12:
 # ACT_DISAPPEARED fired on the BitDW pipe, the BitS end funnel, AND the
