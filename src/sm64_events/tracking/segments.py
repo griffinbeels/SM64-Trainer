@@ -136,6 +136,7 @@ class TriggerType:
     key: str
     label: str
     params: dict  # name -> {"kind": "level"|"area"|"course"|"star"|"int", "required": bool}
+    template: str  # sentence after the type label: "{to} coming from {from}"
     match: Callable[[dict, object, MatchContext], bool]
 
 
@@ -149,33 +150,39 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
     TriggerType("level_enter", "You enter level",
                 {"to": {"kind": "level", "required": True},
                  "from": {"kind": "level", "required": False}},
+                "{to} coming from {from}",
                 lambda p, ev, ctx: ev.type == "level_changed" and _real_edge(ev)
                 and ev.payload["to"] == p["to"]
                 and (p.get("from") is None or ev.payload["from"] == p["from"])),
     TriggerType("level_exit", "You exit level",
                 {"from": {"kind": "level", "required": True},
                  "to": {"kind": "level", "required": False}},
+                "{from} going to {to}",
                 lambda p, ev, ctx: ev.type == "level_changed" and _real_edge(ev)
                 and ev.payload["from"] == p["from"]
                 and (p.get("to") is None or ev.payload["to"] == p["to"])),
     TriggerType("area_enter", "You enter area",
                 {"level": {"kind": "level", "required": True},
                  "area": {"kind": "area", "required": True}},
+                "{area} of {level}",
                 lambda p, ev, ctx: ev.type == "area_changed" and _real_edge(ev)
                 and ev.payload["level"] == p["level"]
                 and ev.payload["to"] == p["area"]),
     TriggerType("warp_entered", "You enter a warp/pipe",
                 {"level": {"kind": "level", "required": True}},
+                "in {level}",
                 lambda p, ev, ctx: ev.type == "warp_entered"
                 and ev.payload["level"] == p["level"]),
     TriggerType("key_grabbed", "You grab a Bowser key",
                 {"level": {"kind": "level", "required": False}},
+                "in {level}",
                 lambda p, ev, ctx: ev.type == "key_grabbed"
                 and (p.get("level") is None
                      or ev.payload["level"] == p["level"])),
     TriggerType("star_grabbed", "You grab a star",
                 {"course": {"kind": "course", "required": False},
                  "star": {"kind": "star", "required": False}},
+                "in {course}, star {star}",
                 lambda p, ev, ctx: ev.type == "star_collected"
                 and (p.get("course") is None
                      or ev.payload["course_id"] == p["course"])
@@ -183,12 +190,14 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                      or ev.payload["star_id"] == p["star"])),
     TriggerType("spawned", "You spawn into the game",
                 {"level": {"kind": "level", "required": False}},
+                "in {level}",
                 lambda p, ev, ctx: ev.type == "spawned"
                 and (p.get("level") is None
                      or ev.payload["level"] == p["level"])),
-    TriggerType("attempt_anchor", "Practice reset / savestate load in level",
+    TriggerType("attempt_anchor", "Practice reset / savestate load",
                 {"level": {"kind": "level", "required": True},
                  "area": {"kind": "area", "required": False}},
+                "in {level}, area {area}",
                 # Optional area scoping prevents cross-arming: a basement
                 # respawn must not arm a lobby-anchored segment.  Added for
                 # warp-menu arming (live gate 2026-06-12): Usamune's warp
@@ -211,20 +220,24 @@ class GuardType:
     key: str
     label: str
     params: dict
+    template: str
     check: Callable[[dict, MatchContext], bool]
 
 
 GUARDS: dict[str, GuardType] = {g.key: g for g in [
     GuardType("prev_level", "Previous level was",
               {"level": {"kind": "level", "required": True}},
+              "{level}",
               lambda p, ctx: ctx.prev_level == p["level"]),
     GuardType("star_count_min", "Star count at least",
               {"n": {"kind": "int", "required": True}},
+              "{n}",
               # historical events without num_stars conservatively FAIL
               lambda p, ctx: ctx.num_stars is not None
               and ctx.num_stars >= p["n"]),
     GuardType("star_count_max", "Star count at most",
               {"n": {"kind": "int", "required": True}},
+              "{n}",
               lambda p, ctx: ctx.num_stars is not None
               and ctx.num_stars <= p["n"]),
 ]}
@@ -272,10 +285,10 @@ def validate_definition(d: dict) -> None:
 def vocab() -> dict:
     """Registry serialized for the builder GUI — the UI renders from this."""
     return {
-        "triggers": [{"key": t.key, "label": t.label, "params": t.params}
-                     for t in TRIGGERS.values()],
-        "guards": [{"key": g.key, "label": g.label, "params": g.params}
-                   for g in GUARDS.values()],
+        "triggers": [{"key": t.key, "label": t.label, "params": t.params,
+                      "template": t.template} for t in TRIGGERS.values()],
+        "guards": [{"key": g.key, "label": g.label, "params": g.params,
+                    "template": g.template} for g in GUARDS.values()],
         "levels": {str(k): v for k, v in sorted(LEVEL_NAMES.items())},
         "castle_areas": {str(k): v for k, v in CASTLE_AREA_NAMES.items()},
     }

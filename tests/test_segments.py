@@ -1,9 +1,11 @@
+import re
+
 import pytest
 
 from sm64_events.storage.db import EventRow
 from sm64_events.tracking.segments import (SEGMENT_ATTEMPT_OFFSET,
-                                           MatchContext, SegmentDef,
-                                           SegmentEngine,
+                                           GUARDS, TRIGGERS, MatchContext,
+                                           SegmentDef, SegmentEngine,
                                            validate_definition, vocab)
 
 W = "2026-06-11T12:00:00Z"
@@ -978,3 +980,27 @@ def test_menu_warp_still_rebases_with_anchor_trigger():
                        ctx(level=17, prev_level=6))
     assert len(closed) == 1
     assert closed[0].outcome == "success" and closed[0].rta_frames == 100
+
+
+# ---------------------------------------------------------------------------
+# Task 1: Registry templates
+# ---------------------------------------------------------------------------
+
+def test_every_trigger_and_guard_template_matches_its_params():
+    """A template typo must fail CI, not render a broken builder row."""
+    for reg in (TRIGGERS, GUARDS):
+        for t in reg.values():
+            assert t.template.strip(), f"{t.key}: empty template"
+            placeholders = set(re.findall(r"\{(\w+)\}", t.template))
+            assert placeholders == set(t.params), (
+                f"{t.key}: template placeholders {placeholders}"
+                f" != params {set(t.params)}")
+
+
+def test_vocab_serializes_templates():
+    v = vocab()
+    by_key = {t["key"]: t for t in v["triggers"]}
+    assert by_key["level_enter"]["template"] == "{to} coming from {from}"
+    assert by_key["attempt_anchor"]["label"] == (
+        "Practice reset / savestate load")
+    assert all("template" in t for t in v["triggers"] + v["guards"])
