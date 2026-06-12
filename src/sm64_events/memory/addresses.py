@@ -24,7 +24,9 @@ OS_MEM_SIZE = 0x80000318  # u32: 0x400000 or 0x800000
 # Mario state (gMarioStates[0]) — source: decomp struct MarioState + STROOP US.
 MARIO_STRUCT = 0x8033B170
 MARIO_PARTICLE_FLAGS = MARIO_STRUCT + 0x08  # u32 particleFlags, re-zeroed every
-                                            # frame; VERIFY (live gate pending)
+                                            # frame; live-verified 2026-06-12
+                                            # ([DUST] annotations consistent
+                                            # across the gate sessions)
 MARIO_ACTION = MARIO_STRUCT + 0x0C        # u32; live-verified 2026-06-10
 MARIO_ACTION_TIMER = MARIO_STRUCT + 0x1A  # u16, resets to 0 on action change
 MARIO_NUM_STARS = MARIO_STRUCT + 0xAA     # s16, total star count; live-verified 2026-06-10
@@ -86,12 +88,23 @@ ACT_STAR_DANCE_EXIT = 0x00001302               # live-verified 2026-06-10
 ACT_STAR_DANCE_WATER = 0x00001303
 ACT_STAR_DANCE_NO_EXIT = 0x00001307
 ACT_FALL_AFTER_STAR_GRAB = 0x00001904  # midair grabs; live-verified 2026-06-10
+# B3 grand star grab — live-verified 2026-06-12 (frame 1950504: entered
+# directly from a jump action, numStars unchanged at 17, no star-dance
+# action ever appeared, gLastCompleted* untouched). The grand star is NOT
+# a collectable star: it never triggers a star-dance action, so
+# star_collected cannot fire. The key detector claims it via this action id.
+# Composed path re-verified same day: key_grabbed which=grand fired live
+# at frame 12160 (third replication of gLastCompleted* staying unrelated).
+ACT_JUMBO_STAR_CUTSCENE = 0x00001909
 
 STAR_GRAB_ACTIONS = frozenset({
     ACT_STAR_DANCE_EXIT,
     ACT_STAR_DANCE_WATER,
     ACT_STAR_DANCE_NO_EXIT,
     ACT_FALL_AFTER_STAR_GRAB,
+    # ACT_JUMBO_STAR_CUTSCENE is intentionally NOT in this set — adding it
+    # would make star_grab.py suppress a hypothetical real star-dance in B3.
+    # The key detector uses it directly via FIGHT_END_LEVELS instead.
 })
 
 # Dust-trick action chains (decomp include/sm64.h, all values quoted
@@ -107,7 +120,8 @@ STAR_GRAB_ACTIONS = frozenset({
 # trick shows >= 1 visible landing/slide frame; exactly 1 visible frame IS
 # the frame-perfect (dustless) input, and a direct air->launch edge (0
 # visible frames) is impossible. See detectors/dust.py.
-# VERIFY (live gate pending for the jump-chain ids).
+# Jump-chain ids live-verified 2026-06-12 (gate sessions: double/triple
+# jumps and rollouts detected consistently across castle/BitS/arenas).
 ACT_DIVE = 0x0188088A
 ACT_DIVE_SLIDE = 0x00880456
 ACT_FORWARD_ROLLOUT = 0x010008A6
@@ -187,10 +201,111 @@ PASSIVE_ACTIONS = frozenset({
 
 # gCurrLevelNum values for the three castle hub levels — decomp
 # levels/level_defines.h. 6 (inside) is live-evidenced by our own journal
-# (every stage exit logs level_changed to=6); 16/26 are decomp-sourced.
-# VERIFY (live gate): 16/26 are decomp-only — check grounds/courtyard
-# entries flag correctly.
+# (every stage exit logs level_changed to=6); 16 (grounds) live-verified
+# 2026-06-12 (fresh-file spawn lands in level 16). VERIFY: 26 (courtyard)
+# is still decomp-only — check a courtyard entry flags correctly.
 CASTLE_LEVELS = frozenset({6, 16, 26})  # inside, grounds, courtyard
+
+# --- Segment-event primitives (spec: docs/superpowers/specs/2026-06-11) ----
+
+# gCurrLevelNum LEVEL ids — decomp levels/level_defines.h DEFINE_LEVEL order
+# (1-based). Cross-validated against three live-verified anchors we already
+# had: WF=24, SSL=8, castle 6/16/26 — all consistent with this table.
+# Live-walked 2026-06-12 gate (two sessions): 6, 7, 16, 17, 19, 21, 22,
+# 23, 30, 33, 34 all confirmed via level_changed payloads — every id a
+# segment depends on. Only 26 (courtyard, no segment uses it) remains
+# decomp-only.
+# Boot transient: level id 1 (decomp UNKNOWN stub) appears with garbage
+# reads during console resets — inert, matches no trigger.
+LEVEL_NAMES = {
+    4: "Big Boo's Haunt", 5: "Cool, Cool Mountain", 6: "Castle Inside",
+    7: "Hazy Maze Cave", 8: "Shifting Sand Land", 9: "Bob-omb Battlefield",
+    10: "Snowman's Land", 11: "Wet-Dry World", 12: "Jolly Roger Bay",
+    13: "Tiny-Huge Island", 14: "Tick Tock Clock", 15: "Rainbow Ride",
+    16: "Castle Grounds", 17: "Bowser in the Dark World",
+    18: "Vanish Cap Under the Moat", 19: "Bowser in the Fire Sea",
+    20: "The Secret Aquarium", 21: "Bowser in the Sky",
+    22: "Lethal Lava Land", 23: "Dire, Dire Docks", 24: "Whomp's Fortress",
+    26: "Castle Courtyard", 27: "The Princess's Secret Slide",
+    28: "Cavern of the Metal Cap", 29: "Tower of the Wing Cap",
+    30: "Bowser 1 Arena", 31: "Wing Mario Over the Rainbow",
+    33: "Bowser 2 Arena", 34: "Bowser 3 Arena", 36: "Tall, Tall Mountain",
+}
+# Gaps: 25 (ending cutscene), 32 and 35 (decomp UNKNOWN stubs) — not
+# reachable in normal play.
+
+LEVEL_BITDW, LEVEL_BITFS, LEVEL_BITS = 17, 19, 21
+LEVEL_HMC, LEVEL_DDD = 7, 23
+LEVEL_CASTLE_INSIDE, LEVEL_CASTLE_GROUNDS, LEVEL_CASTLE_COURTYARD = 6, 16, 26
+BOWSER_1_ARENA, BOWSER_2_ARENA, BOWSER_3_ARENA = 30, 33, 34
+
+# Key grabs enter the same star-dance actions as stars (see STAR_GRAB_ACTIONS
+# comment above). In these two arenas the grab is a KEY, not a star — the
+# key detector claims it and star_grab must ignore it.
+# Live-verified 2026-06-12, BOTH arenas: key grabs do NOT update
+# gLastCompleted* (B1: stale course=16 star=1 from the prior star;
+# B2: unrelated course=17 star=1 on a fresh 0-star file).
+# The star_grab guard on KEY_GRAB_LEVELS is what prevents misattribution —
+# confirmed that this guard is sufficient; no extra action-id guard needed.
+KEY_GRAB_LEVELS = frozenset({BOWSER_1_ARENA, BOWSER_2_ARENA})
+# Fight-ending grabs: Bowser 1/2 via star-dance actions (in KEY_GRAB_LEVELS),
+# Bowser 3 via ACT_JUMBO_STAR_CUTSCENE. The value is the which-label the
+# key_grabbed payload carries. Level 34 is intentionally NOT in KEY_GRAB_LEVELS
+# (that set guards star_grab.py); it is only in FIGHT_END_LEVELS (read by the
+# key detector). Adding 34 to KEY_GRAB_LEVELS would wrongly suppress a
+# hypothetical real star-dance in the B3 arena — keep the sets separate.
+FIGHT_END_LEVELS = {
+    BOWSER_1_ARENA: "bitdw",
+    BOWSER_2_ARENA: "bitfs",
+    BOWSER_3_ARENA: "grand",
+}
+
+# Castle door actions — values observed in our own 2026-06-12 gate logs at
+# every door crossing (decomp names: ACT_PULLING_DOOR / ACT_PUSHING_DOOR /
+# ACT_WARP_DOOR_SPAWN). A door warp resets Usamune's IGT like any load,
+# so the anchor detector reports a synthetic reset mid-door — inputs are
+# locked during door animations, so such an anchor is never a player reset.
+ACT_PULLING_DOOR = 0x00001320
+ACT_PUSHING_DOOR = 0x00001321
+ACT_WARP_DOOR_SPAWN = 0x00001322
+DOOR_ACTIONS = frozenset({ACT_PULLING_DOOR, ACT_PUSHING_DOOR, ACT_WARP_DOOR_SPAWN})
+
+# Warp-entry actions — decomp include/sm64.h, quoted verbatim from
+# n64decomp/sm64 master, fetched 2026-06-11. Live-verified 2026-06-12:
+# ACT_DISAPPEARED fired on the BitDW pipe, the BitS end funnel, AND the
+# castle upstairs -> BitS entry warp (all 0x1300).
+ACT_DISAPPEARED = 0x00001300       # generic "Mario left the world" (pipes, some warps); live-verified 2026-06-12
+ACT_TELEPORT_FADE_OUT = 0x00001336  # teleporter/cap-warp fade; also fires for in-level teleporters elsewhere — harmless: warp triggers filter by level. VERIFY (live gate pending)
+WARP_ENTRY_ACTIONS = frozenset({ACT_DISAPPEARED, ACT_TELEPORT_FADE_OUT})
+
+# Spawn actions — same decomp fetch. Live-verified 2026-06-12:
+# - FRESH file start: ACT_INTRO_CUTSCENE plays through Lakitu's dialogue;
+#   the edge OUT of it (control gained) fires spawned kind="intro" — the
+#   canonical Lakitu-skip timing start.
+# - EXISTING-file load: Mario spawns with NO SPAWN_ACTIONS edge at all (no
+#   spawned event) — so the Lakitu Skip seed arms only on fresh starts, by
+#   design (the trick is a run-start trick).
+# - Pipe/arena arrivals: ACT_SPAWN_SPIN_AIRBORNE (0x1924) and
+#   ACT_SPAWN_NO_SPIN_AIRBORNE (0x1932) observed -> spawned kind="spawn";
+#   harmless re-arms (triggers filter by level).
+ACT_INTRO_CUTSCENE = 0x04001301
+ACT_SPAWN_SPIN_AIRBORNE = 0x00001924
+ACT_SPAWN_SPIN_LANDING = 0x00001325
+ACT_SPAWN_NO_SPIN_AIRBORNE = 0x00001932
+ACT_SPAWN_NO_SPIN_LANDING = 0x00001333
+# NB: these four ids also appear in PASSIVE_ACTIONS (AnchorDetector's
+# inactive-action set); keep both in sync when modifying spawn ids.
+SPAWN_ACTIONS = frozenset({ACT_SPAWN_SPIN_AIRBORNE, ACT_SPAWN_SPIN_LANDING,
+                           ACT_SPAWN_NO_SPIN_AIRBORNE,
+                           ACT_SPAWN_NO_SPIN_LANDING})
+
+# gCurrAreaIndex (s16) — castle lobby/upstairs/basement are AREAS of level 6,
+# not levels. Live-verified 2026-06-12 via tools/hunt_exact.py snapshot diff:
+# reads 1 in the lobby, 2 upstairs, 3 in the basement, stable across repeated
+# visits (the repeat-label pass proves it is state, not a counter). Sits in
+# the area.c globals cluster two halfwords above gCurrCourseNum (0x8033BAC6).
+CURR_AREA = 0x8033BACA               # s16 gCurrAreaIndex
+CASTLE_AREA_NAMES = {1: "Lobby", 2: "Upstairs", 3: "Basement"}  # live-verified 2026-06-12 (same hunt)
 
 # ---------------------------------------------------------------------------
 # Name tables (display-only; IDs are the authoritative identity).

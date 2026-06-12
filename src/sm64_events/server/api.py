@@ -6,17 +6,20 @@ LookupError -> 404 (no such attempt), ValueError -> 409 (exists but not
 saveable: bad mode, non-success, cleared, missing clock),
 RuntimeError -> 503 (database unavailable / degraded mode)."""
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from sm64_events.links import star_links
 from sm64_events.stats.registry import (registry_meta, selection_id,
                                         selection_order)
+from sm64_events.tracking.segments import vocab
 from sm64_events.tracking.views import build_session_view
 
 
 class TargetBody(BaseModel):
-    course_id: int
-    star_id: int
+    kind: str = "star"
+    course_id: int | None = None
+    star_id: int | None = None
+    segment_id: int | None = None
     strat_tag: str | None = None
 
 
@@ -66,10 +69,31 @@ class Marker(BaseModel):
 
 
 class MarkersBody(BaseModel):
-    course_id: int = Field(ge=0)
-    star_id: int = Field(ge=0)
+    segment_id: int | None = None
+    course_id: int | None = Field(default=None, ge=0)
+    star_id: int | None = Field(default=None, ge=0)
     strat_tag: str | None = None
     markers: list[Marker] = Field(max_length=30)
+
+
+class SegmentBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    start_triggers: list[dict]
+    end_triggers: list[dict]
+    guards: list[dict] = []
+    enabled: bool = True
+
+
+class SegmentPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = None
+    start_triggers: list[dict] | None = None
+    end_triggers: list[dict] | None = None
+    guards: list[dict] | None = None
+    enabled: bool | None = None
 
 
 def _http(e: Exception) -> HTTPException:
@@ -117,10 +141,68 @@ def create_api_router(service) -> APIRouter:
             raise _http(e)
         return {"ok": True}
 
+    @router.get("/segments")
+    def segments_list():
+        """List all segment definitions; 503 in degraded mode."""
+        if service.db is None:
+            raise HTTPException(503, "database unavailable")
+        return service.db.segment_defs()
+
+    @router.get("/segments/vocab")
+    def segments_vocab():
+        """Return trigger/guard/level vocabulary for the builder GUI.
+
+        Route is declared BEFORE /segments/{segment_id} so FastAPI matches
+        the literal 'vocab' path before treating it as an id (declaration
+        order wins — fastapi-patterns)."""
+        return vocab()
+
+    @router.post("/segments")
+    async def create_segment(body: SegmentBody):
+        try:
+            sid = await service.create_segment(body.model_dump())
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True, "id": sid}
+
+    @router.put("/segments/{segment_id}")
+    async def update_segment(segment_id: int, body: SegmentPatch):
+        try:
+            # exclude None (unset fields), but keep False/[] (explicit sets)
+            patch = {k: v for k, v in body.model_dump().items()
+                     if v is not None}
+            await service.update_segment(segment_id, patch)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True}
+
+    @router.delete("/segments/{segment_id}")
+    async def delete_segment(segment_id: int):
+        try:
+            await service.delete_segment(segment_id)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True}
+
     @router.post("/target")
     async def target(body: TargetBody):
+        """Set the active practice target.
+
+        kind="segment": requires segment_id; targeting a DISABLED definition
+        is allowed — disabling pauses detection without forfeiting the target;
+        the section simply accrues no attempts.
+        kind="star" (default): requires course_id and star_id.
+        """
         try:
-            await service.set_target(body.course_id, body.star_id, body.strat_tag)
+            if body.kind == "segment":
+                if body.segment_id is None:
+                    raise ValueError("segment target needs segment_id")
+                await service.set_target_segment(body.segment_id, body.strat_tag)
+            else:
+                if body.course_id is None or body.star_id is None:
+                    raise ValueError("star target needs course_id and star_id")
+                await service.set_target(body.course_id, body.star_id,
+                                         body.strat_tag)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True}
@@ -177,14 +259,27 @@ def create_api_router(service) -> APIRouter:
 
     @router.put("/markers")
     async def put_markers(body: MarkersBody):
-        """Replace the marker list for one star+strategy (spec §3).
+        """Replace the marker list for one identity+strategy (spec §3).
+
+        Identity is either segment_id XOR (course_id + star_id) — providing
+        both or neither raises 409.  Key format: seg:{id}:{strat} for segment
+        markers, {course}:{star}:{strat} for star markers.
 
         async + no awaits: the read-modify-write on the timeline_markers
         dict is atomic on the event loop (same pattern as set_target's
         strategies RMW in tracking/service.py)."""
         if service.db is None:
             raise HTTPException(503, "database unavailable")
-        key = f"{body.course_id}:{body.star_id}:{body.strat_tag or ''}"
+        has_seg = body.segment_id is not None
+        has_star = body.course_id is not None and body.star_id is not None
+        if has_seg and has_star:
+            raise HTTPException(409, "provide segment_id OR course_id+star_id, not both")
+        if not has_seg and not has_star:
+            raise HTTPException(409, "provide segment_id OR course_id+star_id")
+        if has_seg:
+            key = f"seg:{body.segment_id}:{body.strat_tag or ''}"
+        else:
+            key = f"{body.course_id}:{body.star_id}:{body.strat_tag or ''}"
         state = service.db.get_state("timeline_markers", {})
         state[key] = sorted(
             ({"frames": m.frames, "label": m.label} for m in body.markers),

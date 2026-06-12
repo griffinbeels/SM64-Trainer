@@ -12,6 +12,15 @@ export function useTracker() {
   const [scope, setScope] = useState(localStorage.getItem("scope") || "session");
   const [feed, setFeed] = useState([]);
   const [connected, setConnected] = useState(false);
+  // armedOrder: live armed membership (drives the honest "armed" chip) —
+  // reconciled from each view fetch (membership authoritative, order
+  // best-effort). armedSegs (Set) is derived from it.
+  const [armedOrder, setArmedOrder] = useState([]);
+  // lastPinnedSeg: STICKY pin for the practice page — set on every
+  // segment_armed, NEVER cleared on segment_disarmed. An accidental exit
+  // disarms (correct timing semantics — re-entry re-arms fresh) but the page
+  // stays on the segment being practiced until a DIFFERENT segment arms.
+  const [lastPinnedSeg, setLastPinnedSeg] = useState(null);
   // server-owned pause truth: {paused, reason: "manual"|"afk"|null}.
   // Polled (5 s) because "afk" flips server-side without any UI action;
   // the POST response updates it instantly on manual toggles.
@@ -44,7 +53,27 @@ export function useTracker() {
   useEffect(() => { scopeRef.current = scope; }, [scope]);
 
   const refresh = useCallback(async () => {
-    try { setView(await getJSON(`/api/session?clock=${clockRef.current}&scope=${scopeRef.current}`)); }
+    try {
+      const v = await getJSON(`/api/session?clock=${clockRef.current}&scope=${scopeRef.current}`);
+      setView(v);
+      // armedOrder: live via WS notices, reconciled from every view fetch —
+      // instant AND cannot stay stale across reconnects. Keep the existing
+      // order filtered to the view's armed ids, then append any view-armed
+      // ids not already present (order unknown for those — arbitrary append).
+      const viewArmed = new Set(((v && v.segments) || [])
+        .filter((s) => s.armed).map((s) => s.segment_id));
+      setArmedOrder((prev) => {
+        const kept = prev.filter((id) => viewArmed.has(id));
+        const keptSet = new Set(kept);
+        const appended = [...viewArmed].filter((id) => !keptSet.has(id));
+        return [...kept, ...appended];
+      });
+      // Sticky pin reconcile: only seed an empty pin, and only when the view
+      // is unambiguous (exactly one armed segment). Never overwrite — the WS
+      // arm events own recency, and a disarm must not clear the pin.
+      setLastPinnedSeg((prev) =>
+        prev == null && viewArmed.size === 1 ? [...viewArmed][0] : prev);
+    }
     catch (e) { console.error(e); }
   }, []);
 
@@ -58,6 +87,8 @@ export function useTracker() {
         if (everConnected.current) {
           setFeed((f) => [{ type: "ws_reconnected", seq: "", frame: "",
                             payload: {} }, ...f].slice(0, 200));
+          refresh();   // events were missed during the outage — the view is
+                       // the authoritative state (armed flags, attempts, target)
         }
         everConnected.current = true;
         setConnected(true);
@@ -68,6 +99,15 @@ export function useTracker() {
         const ev = JSON.parse(e.data);
         setFeed((f) => [ev, ...f].slice(0, 200));
         if (REFRESH_ON.has(ev.type)) refresh();
+        if (ev.type === "segment_armed") {
+          const id = ev.payload.segment_id;
+          setArmedOrder((prev) => prev.includes(id) ? prev : [...prev, id]);
+          setLastPinnedSeg(id);   // sticky: only another arm moves the pin
+        } else if (ev.type === "segment_disarmed") {
+          const id = ev.payload.segment_id;
+          setArmedOrder((prev) => prev.filter((x) => x !== id));
+          // lastPinnedSeg deliberately NOT cleared — see its declaration
+        }
       };
     }
     connect();
@@ -76,7 +116,8 @@ export function useTracker() {
 
   const pickClock = (c) => { localStorage.setItem("clock", c); setClock(c); };
   const pickScope = (s) => { localStorage.setItem("scope", s); setScope(s); };
+  const armedSegs = new Set(armedOrder);
   return { view, clock, pickClock, scope, pickScope, feed, connected,
            refresh, paused: pauseState.paused,
-           pauseReason: pauseState.reason, togglePause };
+           pauseReason: pauseState.reason, togglePause, armedSegs, lastPinnedSeg };
 }

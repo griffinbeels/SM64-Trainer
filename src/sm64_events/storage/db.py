@@ -59,6 +59,54 @@ MIGRATIONS = [
     ALTER TABLE attempts ADD COLUMN jumps_total INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE attempts ADD COLUMN jumps_dustless INTEGER NOT NULL DEFAULT 0;
     """,
+    # v4 — segment events: definitions table, attempt linkage, kind-aware PBs
+    """
+    CREATE TABLE IF NOT EXISTS segment_defs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      start_triggers TEXT NOT NULL,
+      end_triggers TEXT NOT NULL,
+      guards TEXT NOT NULL DEFAULT '[]',
+      created_utc TEXT NOT NULL
+    );
+    ALTER TABLE attempts ADD COLUMN segment_id INTEGER;
+    CREATE TABLE pbs_v2 (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      course_id INTEGER, star_id INTEGER, segment_id INTEGER, strat_tag TEXT,
+      timer_mode TEXT NOT NULL, frames INTEGER NOT NULL,
+      attempt_id INTEGER, saved_utc TEXT NOT NULL
+    );
+    INSERT INTO pbs_v2 (id, course_id, star_id, strat_tag, timer_mode,
+                        frames, attempt_id, saved_utc)
+      SELECT id, course_id, star_id, strat_tag, timer_mode, frames,
+             attempt_id, saved_utc FROM pbs;
+    DROP TABLE pbs;
+    ALTER TABLE pbs_v2 RENAME TO pbs;
+    INSERT INTO segment_defs (name, enabled, start_triggers, end_triggers, guards, created_utc) VALUES
+      ('LBLJ', 1, '[{"type":"level_enter","to":6,"from":16},{"type":"attempt_anchor","level":6,"area":1}]', '[{"type":"level_enter","to":17}]', '[]', '2026-06-11T00:00:00Z'),
+      ('MIPS Clip', 1, '[{"type":"level_exit","from":7,"to":6}]', '[{"type":"level_enter","to":23}]', '[]', '2026-06-11T00:00:00Z'),
+      ('Lakitu Skip', 1, '[{"type":"spawned","level":16}]', '[{"type":"level_enter","to":6}]', '[]', '2026-06-11T00:00:00Z'),
+      ('BitS Entry', 1, '[{"type":"area_enter","level":6,"area":2}]', '[{"type":"level_enter","to":21}]', '[]', '2026-06-11T00:00:00Z'),
+      ('BitDW Pipe Entry', 1, '[{"type":"level_enter","to":17},{"type":"attempt_anchor","level":17}]', '[{"type":"warp_entered","level":17}]', '[]', '2026-06-11T00:00:00Z'),
+      ('BitFS Pipe Entry', 1, '[{"type":"level_enter","to":19},{"type":"attempt_anchor","level":19}]', '[{"type":"warp_entered","level":19}]', '[]', '2026-06-11T00:00:00Z'),
+      ('BitS Pipe Entry', 1, '[{"type":"level_enter","to":21},{"type":"attempt_anchor","level":21}]', '[{"type":"warp_entered","level":21}]', '[]', '2026-06-11T00:00:00Z'),
+      ('Bowser 1', 1, '[{"type":"level_enter","to":30},{"type":"attempt_anchor","level":30}]', '[{"type":"key_grabbed","level":30}]', '[]', '2026-06-11T00:00:00Z'),
+      ('Bowser 2', 1, '[{"type":"level_enter","to":33},{"type":"attempt_anchor","level":33}]', '[{"type":"key_grabbed","level":33}]', '[]', '2026-06-11T00:00:00Z'),
+      ('Bowser 3', 1, '[{"type":"level_enter","to":34},{"type":"attempt_anchor","level":34}]', '[{"type":"key_grabbed","level":34}]', '[]', '2026-06-11T00:00:00Z');
+    """,
+    # v5 — warp-menu arming (live gate 2026-06-12): the Usamune warp menu
+    # (06 01 00) deposits Mario at the castle lobby entrance — equivalent to
+    # the grounds→lobby door — emitting only a practice_reset (menu pause →
+    # warp → IGT reset; no level edge), so a level_enter-only LBLJ never
+    # armed.  LBLJ gains an area-scoped attempt_anchor (lobby = area 1;
+    # scoping prevents basement respawns from cross-arming).  Fresh DBs get
+    # the new triggers from the edited v4 seed above; this entry repairs
+    # existing DBs.  Name-guarded so a user-renamed/repurposed row id 1 is
+    # left alone.
+    """
+    UPDATE segment_defs SET start_triggers='[{"type":"level_enter","to":6,"from":16},{"type":"attempt_anchor","level":6,"area":1}]' WHERE id=1 AND name='LBLJ';
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
@@ -66,7 +114,8 @@ _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
                  "igt_frames", "rta_frames", "started_utc", "ended_utc",
                  "cleared", "cleared_reason",
                  "rollouts_total", "rollouts_dustless",
-                 "jumps_total", "jumps_dustless")
+                 "jumps_total", "jumps_dustless",
+                 "segment_id")
 
 
 class EventRow:
@@ -97,9 +146,21 @@ class Database:
         with self._lock:
             version = self._conn.execute("PRAGMA user_version").fetchone()[0]
             for i, script in enumerate(MIGRATIONS[version:], start=version + 1):
-                self._conn.executescript(script)
-                self._conn.execute(f"PRAGMA user_version = {i}")
-            self._conn.commit()
+                # One transaction per entry: a mid-migration crash rolls back
+                # BOTH the partial schema changes and the version write
+                # (PRAGMA user_version is a header field — transactional).
+                # Without this, a crash inside v4's DROP/RENAME leaves no pbs
+                # table, and re-opening dies on the duplicate-column ALTER.
+                try:
+                    self._conn.executescript(
+                        f"BEGIN;{script};PRAGMA user_version = {i};COMMIT;")
+                except Exception:
+                    # a failed statement leaves the explicit txn open on the
+                    # connection (write lock held) — release it before
+                    # re-raising so a retry/reopen isn't "database is locked"
+                    if self._conn.in_transaction:
+                        self._conn.execute("ROLLBACK")
+                    raise
 
     def close(self) -> None:
         self._conn.close()
@@ -176,7 +237,8 @@ class Database:
                 a.igt_frames, a.rta_frames, a.started_utc, a.ended_utc,
                 int(a.cleared), a.cleared_reason,
                 a.rollouts_total, a.rollouts_dustless,
-                a.jumps_total, a.jumps_dustless)
+                a.jumps_total, a.jumps_dustless,
+                a.segment_id)
 
     def replace_attempts(self, attempts: list[Attempt]) -> None:
         with self._lock:
@@ -201,16 +263,74 @@ class Database:
             return [Attempt(**{**{k: r[k] for k in _ATTEMPT_COLS},
                                "cleared": bool(r["cleared"])}) for r in rows]
 
-    # -- pbs -----------------------------------------------------------------
-    def insert_pb(self, course_id: int, star_id: int, strat_tag: str | None,
-                  timer_mode: str, frames: int, attempt_id: int | None,
-                  saved_utc: str) -> int:
+    # -- segment definitions -------------------------------------------------
+    def segment_defs(self) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM segment_defs ORDER BY id").fetchall()
+        return [{"id": r["id"], "name": r["name"],
+                 "enabled": bool(r["enabled"]),
+                 "start_triggers": json.loads(r["start_triggers"]),
+                 "end_triggers": json.loads(r["end_triggers"]),
+                 "guards": json.loads(r["guards"]),
+                 "created_utc": r["created_utc"]} for r in rows]
+
+    def insert_segment_def(self, name: str, start_triggers: list,
+                           end_triggers: list, guards: list,
+                           created_utc: str, enabled: bool = True) -> int:
         with self._lock:
             cur = self._conn.execute(
-                "INSERT INTO pbs (course_id, star_id, strat_tag, timer_mode,"
-                " frames, attempt_id, saved_utc) VALUES (?,?,?,?,?,?,?)",
-                (course_id, star_id, strat_tag, timer_mode, frames,
-                 attempt_id, saved_utc))
+                "INSERT INTO segment_defs (name, enabled, start_triggers,"
+                " end_triggers, guards, created_utc) VALUES (?,?,?,?,?,?)",
+                (name, int(enabled), json.dumps(start_triggers),
+                 json.dumps(end_triggers), json.dumps(guards), created_utc))
+            self._conn.commit()
+            return cur.lastrowid
+
+    def update_segment_def(self, def_id: int, **fields) -> None:
+        cols = {"name": lambda v: v, "enabled": int,
+                "start_triggers": json.dumps, "end_triggers": json.dumps,
+                "guards": json.dumps}
+        if set(fields) - set(cols):
+            raise ValueError(f"unknown fields {sorted(set(fields) - set(cols))}")
+        sets, vals = [], []
+        for k, conv in cols.items():
+            if k in fields:
+                sets.append(f"{k}=?"); vals.append(conv(fields[k]))
+        if not sets:
+            return
+        with self._lock:
+            cur = self._conn.execute(
+                f"UPDATE segment_defs SET {','.join(sets)} WHERE id=?",
+                (*vals, def_id))
+            self._conn.commit()
+        if cur.rowcount == 0:
+            raise LookupError(f"segment {def_id} not found")
+
+    def delete_segment_def(self, def_id: int) -> None:
+        # attempts cache rows are NOT touched — callers must re-project
+        # (mirrors delete_session)
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM segment_defs WHERE id=?",
+                                     (def_id,))
+            self._conn.execute("DELETE FROM pbs WHERE segment_id=?",
+                               (def_id,))  # spec: cascade — nothing to refer to
+            self._conn.commit()
+        if cur.rowcount == 0:
+            raise LookupError(f"segment {def_id} not found")
+
+    # -- pbs -----------------------------------------------------------------
+    def insert_pb(self, course_id: int | None, star_id: int | None,
+                  strat_tag: str | None, timer_mode: str, frames: int,
+                  attempt_id: int | None, saved_utc: str,
+                  segment_id: int | None = None) -> int:
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO pbs (course_id, star_id, segment_id, strat_tag,"
+                " timer_mode, frames, attempt_id, saved_utc)"
+                " VALUES (?,?,?,?,?,?,?,?)",
+                (course_id, star_id, segment_id, strat_tag, timer_mode,
+                 frames, attempt_id, saved_utc))
             self._conn.commit()
             return cur.lastrowid
 

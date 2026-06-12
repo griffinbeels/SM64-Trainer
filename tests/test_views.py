@@ -543,6 +543,157 @@ def test_duplicate_stored_stat_selections_render_once(tmp_path):
     assert keys == ["best", "success_rate"]
 
 
+# -- segment sections (spec 2026-06-11 segment-events) --------------------------
+
+def lvl(frame, from_, to):
+    return ev("level_changed", frame, {"from": from_, "to": to})
+
+
+def lblj_success(svc, t0=1000, rta=85):
+    """Arm the seeded LBLJ segment (16->6) and close it (6->17) `rta`
+    frames later. Side effect (seed shape): the closing 6->17 edge also
+    arms BitDW Pipe Entry."""
+    asyncio.run(svc.publish(lvl(t0, 16, 6)))
+    asyncio.run(svc.publish(lvl(t0 + rta, 6, 17)))
+
+
+def seg_section(view, seg_id):
+    return next(s for s in view["segments"] if s["segment_id"] == seg_id)
+
+
+def test_view_lists_segment_sections_with_rta_stats(tmp_path):
+    db, svc = make(tmp_path)
+    lblj_success(svc, rta=85)
+    view = build_session_view(db, svc, clock="igt")     # segments stay rta
+    sec = seg_section(view, 1)
+    assert sec["kind"] == "segment" and sec["name"] == "LBLJ"
+    assert sec["broken"] is False and sec["armed"] is False
+    [a] = sec["attempts"]
+    assert a["outcome"] == "success" and a["rta_frames"] == 85
+    assert a["segment_id"] == 1
+    assert sec["pb"]["rta"] is None                     # nothing saved yet
+    assert sec["timeline"]["points"][0]["frames"] == 85  # rta axis
+    [pt] = sec["progress"]["sessions"][0]["points"]
+    assert pt["rta_frames"] == 85
+    stats = {s["key"]: s["value"] for s in sec["stats"]}
+    assert stats["best"] == 85                          # rta even on igt views
+    assert view["unassigned"] == []                     # no segment noise
+
+
+def test_segment_target_section_always_present_and_target_kind_aware(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.set_target_segment(3))      # Lakitu Skip, zero attempts
+    view = build_session_view(db, svc, clock="igt")
+    tgt = view["target"]
+    assert tgt["kind"] == "segment" and tgt["segment_id"] == 3
+    assert tgt["segment_name"] == "Lakitu Skip"
+    assert tgt["course_id"] is None and tgt["star_name"] is None
+    sec = seg_section(view, 3)                  # pinned despite no attempts
+    assert sec["attempts"] == [] and sec["timeline"] is None
+    assert sec["progress"] is None and sec["pb"]["rta"] is None
+    assert view["stars"] == []
+
+
+def test_segment_pb_keying_isolates_segments_and_stars(tmp_path):
+    db, svc = make(tmp_path)
+    lblj_success(svc, rta=85)
+    seg_aid = next(a.id for a in db.attempts() if a.segment_id == 1)
+    asyncio.run(svc.save_pb(seg_aid, "rta"))
+    # a LATER pb row for ANOTHER segment must not shadow LBLJ's pb — the
+    # pre-fix keying collapsed every segment row onto (None, None, "rta")
+    db.insert_pb(course_id=None, star_id=None, strat_tag=None,
+                 timer_mode="rta", frames=50, attempt_id=None,
+                 saved_utc="2026-06-11T00:00:00Z", segment_id=2)
+    # star pbs keep their own keying alongside segment pbs
+    asyncio.run(svc.publish(ev("practice_reset", 2000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(2400, igt=343)))
+    star_aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    asyncio.run(svc.save_pb(star_aid, "igt"))
+    view = build_session_view(db, svc, clock="igt")
+    sec = seg_section(view, 1)
+    assert sec["pb"]["rta"]["frames"] == 85
+    [a] = sec["attempts"]
+    assert a["pb_delta_frames"] == 0            # kind-aware _attempt_json lookup
+    star_sec = next(s for s in view["stars"]
+                    if (s["course_id"], s["star_id"]) == (2, 2))
+    assert star_sec["pb"]["igt"]["frames"] == 343
+    assert view["target"]["kind"] == "star"     # the grab auto-followed
+
+
+def test_segment_section_armed_flag_tracks_live_projector(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.set_target_segment(1))
+    asyncio.run(svc.publish(lvl(1000, 16, 6)))          # arms LBLJ
+    view = build_session_view(db, svc, clock="igt")
+    assert seg_section(view, 1)["armed"] is True
+    asyncio.run(svc.publish(lvl(1085, 6, 17)))          # closes it
+    view2 = build_session_view(db, svc, clock="igt")
+    sec = seg_section(view2, 1)
+    assert sec["armed"] is False
+    assert sec["attempts"][0]["rta_frames"] == 85
+
+
+def test_segment_sections_order_by_journal_recency_not_raw_id(tmp_path):
+    # segment attempt ids carry def_id * 1e10, so a higher def id always
+    # raw-sorts above a lower one; recency must compare journal_id(...).
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(lvl(1000, 7, 6)))     # arms MIPS Clip (def 2)
+    asyncio.run(svc.publish(lvl(1100, 6, 23)))    # MIPS success
+    asyncio.run(svc.publish(lvl(1200, 23, 16)))
+    asyncio.run(svc.publish(lvl(1300, 16, 6)))    # arms LBLJ (def 1)
+    asyncio.run(svc.publish(lvl(1400, 6, 17)))    # LBLJ success — newest
+    view = build_session_view(db, svc, clock="igt")
+    # the closing 6->17 edge also ARMS BitDW Pipe Entry (def 5): its pinned
+    # fresh section (no attempts, recency -1) sorts last.
+    assert [s["segment_id"] for s in view["segments"]] == [1, 2, 5]
+
+
+def test_unassigned_excludes_segment_attempts(tmp_path):
+    db, svc = make(tmp_path)
+    lblj_success(svc)               # segment attempts have course_id None
+    asyncio.run(svc.publish(ev("practice_reset", 5000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(ev("practice_reset", 5500, {"igt_frames_before": 400})))
+    view = build_session_view(db, svc, clock="igt")
+    [u] = view["unassigned"]        # only the star-side no-target reset
+    assert u["segment_id"] is None
+
+
+def test_armed_segment_without_attempts_or_target_gets_section(tmp_path):
+    # armed = "active now": pinned like the target, so the armed badge has
+    # somewhere to render even before the first attempt closes.
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(lvl(1000, 6, 17)))   # arms BitDW Pipe Entry only
+    view = build_session_view(db, svc, clock="igt")
+    sec = seg_section(view, 5)
+    assert sec["armed"] is True and sec["broken"] is False
+    assert sec["attempts"] == [] and sec["timeline"] is None
+
+
+def test_segment_pb_dict_ships_igt_as_none(tmp_path):
+    # shape stability: UI code reading sec.pb.igt must get null, never
+    # undefined (same rule as the target payload's present-as-None keys).
+    db, svc = make(tmp_path)
+    lblj_success(svc, rta=85)
+    view = build_session_view(db, svc, clock="igt")
+    assert seg_section(view, 1)["pb"] == {"igt": None, "rta": None}
+    aid = next(a.id for a in db.attempts() if a.segment_id == 1)
+    asyncio.run(svc.save_pb(aid, "rta"))
+    pb = seg_section(build_session_view(db, svc, clock="igt"), 1)["pb"]
+    assert pb["igt"] is None and pb["rta"]["frames"] == 85
+
+
+def test_segment_section_lists_observed_strategies_sorted(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.set_target_segment(1, strat_tag="hyperspeed"))
+    lblj_success(svc, t0=1000)
+    asyncio.run(svc.set_target_segment(1, strat_tag="bljless"))
+    lblj_success(svc, t0=3000)
+    view = build_session_view(db, svc, clock="igt")
+    sec = seg_section(view, 1)
+    assert sec["strategies"] == ["bljless", "hyperspeed"]   # distinct, sorted
+    assert sec["last_strat"] == "bljless"
+
+
 def test_stat_pills_render_in_canonical_menu_order(tmp_path):
     db, svc = make(tmp_path)
     seed(svc)

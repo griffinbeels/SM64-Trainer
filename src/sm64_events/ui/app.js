@@ -6,9 +6,10 @@ import { useTracker } from "./store.js";
 import { Header } from "./components/header.js";
 import { Practice } from "./components/practice.js";
 import { Feed } from "./components/feed.js";
+import { Segments } from "./components/segments.js";
 
 const html = htm.bind(h);
-const TABS = ["Practice", "Routes", "Live feed"];
+const TABS = ["Practice", "Segments", "Routes", "Live feed"];
 
 function App() {
   const t = useTracker();
@@ -24,7 +25,9 @@ function App() {
              style=${name === "Routes" ? "opacity:.3;cursor:default" : ""}>${name}</div>`)}
     </div>
     <div class="pane">
-      ${tab === "Practice" ? html`<${Practice} t=${t} />` : html`<${Feed} t=${t} />`}
+      ${tab === "Practice" ? html`<${Practice} t=${t} />`
+        : tab === "Segments" ? html`<${Segments} t=${t} />`
+        : html`<${Feed} t=${t} />`}
     </div>`;
 }
 

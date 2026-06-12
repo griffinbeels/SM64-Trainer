@@ -234,6 +234,16 @@ Principles:
 - Live gate: `tools/verify_addresses.py` Phase 2 runs the REAL detector —
   required for any memory-layer change.
 
+## Segment events (2026-06-11/12, segment-events branch)
+
+Composed segments (LBLJ, pipe entries, Bowser fights) as first-class practice targets. Full spec: `docs/superpowers/specs/2026-06-11-segment-events-design.md`.
+
+**Journal facts vs derived segment attempts.** Four new detectors (`detectors/area.py`, `detectors/warp.py`, `detectors/key.py`, `detectors/spawn.py`) journal primitive facts (`area_changed`, `warp_entered`, `key_grabbed`, `spawned`) into the append-only event journal exactly like star events. `SegmentEngine` in `tracking/segments.py` runs per-definition FSMs **in the tracking layer** (not in detectors) — composition is a projection concern. Because segment attempts are entirely derived from journaled primitives, **re-projection makes new definitions retroactive**: `POST /api/segments` or `PUT /api/segments/{id}` triggers a full re-projection and every past occurrence surfaces immediately, no new memory reads required.
+
+**Id namespace offset.** Segment attempt ids = `arm_event_journal_id + 10^10 × def_id`. This puts them in a disjoint namespace from star attempt ids (raw journal ids), survives rebuilds, preserves chronological ordering within a definition via `journal_id()` (`tracking/projection.py`), and encodes the arm event id so the underlying recency is recoverable.
+
+**CURR_AREA address.** `gCurrAreaIndex` has no decomp-derivable static address; it is located via `tools/hunt_value.py` at the live gate (Task 17 Step 4). Until then `CURR_AREA = 0x0` (placeholder — `detectors/area.py` samples `snapshot.curr_area` which defaults to 0 and the area-change events are suppressed). All other segment primitives (warp/key/spawn) are independent of this address.
+
 ## Roadmap (unbuilt)
 
 Delivered in phase 1 (this branch): attempt tracking, stats registry, REST API, Practice
@@ -264,8 +274,7 @@ live-feedback round + incident-response from the spec). Remaining phases per
   case via the IGT-freeze inference; hunt the address only if that inference
   misfires live.
 - **Phase 4** — Routes storage + probability board + Routes tab.
-- Dedicated key / grand-star events (Bowser key grabs currently emit
-  star_collected with course_id 16/17 — documented limitation).
+- ~~Dedicated key / grand-star events~~ — **Delivered in segment-events branch**: `key_grabbed` detector claims Bowser 1/2 arena grabs; `star_grab.py` carries the inverse guard. B3 grand-star attribution VERIFY note in `addresses.py`.
 
 ## Replay capture (2026-06-11/12 live-audit marathon)
 

@@ -52,6 +52,7 @@ def test_edge_into_star_dance_emits_identified_event():
         "igt": "0'07\"70",  # the number Usamune shows
         "igt_source": "result",
         "igt_reconstructed": False,
+        "num_stars": 6,  # curr.num_stars at grab time
     }
 
 
@@ -219,3 +220,11 @@ def test_frame_never_negative():
                 global_timer=1, mario_action_timer=5)
     events = StarGrabDetector().process(snap(), curr)
     assert events[0].frame == 0
+
+
+def test_key_grab_in_bowser_arena_does_not_emit_star_collected():
+    d = StarGrabDetector()
+    events = d.process(snap(curr_level=A.BOWSER_1_ARENA),
+                       snap(curr_level=A.BOWSER_1_ARENA,
+                            mario_action=A.ACT_STAR_DANCE_EXIT))
+    assert events == []

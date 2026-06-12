@@ -20,7 +20,7 @@ def test_migrations_set_user_version_and_create_tables(tmp_path):
     names = {r["name"] for r in db._conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"events", "sessions", "attempts", "pbs", "ui_state"} <= names
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 5
 
 
 def test_reopening_existing_db_is_idempotent(tmp_path):
@@ -28,7 +28,7 @@ def test_reopening_existing_db_is_idempotent(tmp_path):
     sid = first.insert_session("2026-06-10T12:00:00Z")
     first.close()
     db = make_db(tmp_path)  # second open: migrations must not re-run/crash
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 5
     row = db._conn.execute("SELECT * FROM sessions WHERE id=?", (sid,)).fetchone()
     assert row is not None and row["started_utc"] == "2026-06-10T12:00:00Z"
 
@@ -146,7 +146,7 @@ def test_v1_database_upgrades_in_place(tmp_path):
     conn.commit()
     conn.close()
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 5
     assert db.attempts()[0].rollouts_total == 0   # backfilled default
     assert db.attempts()[0].jumps_total == 0
 
@@ -163,3 +163,155 @@ def test_attempts_round_trip_dust_trick_counts(tmp_path):
                 jumps_total=4, jumps_dustless=2)
     db.replace_attempts([a])
     assert db.attempts() == [a]
+
+
+# -- migration v4: segment_defs, attempts.segment_id, kind-aware pbs ----------
+
+def make_attempt(**overrides):
+    """Factory that fills every Attempt field with defaults then applies overrides."""
+    from sm64_events.tracking.projection import Attempt
+    defaults = dict(
+        id=1, session_id=1, course_id=2, star_id=1, strat_tag=None,
+        anchor_type="practice_reset", anchor_frame=100,
+        outcome="success", outcome_detail=None,
+        igt_frames=300, rta_frames=310,
+        started_utc="2026-06-11T00:00:00Z", ended_utc="2026-06-11T00:00:10Z",
+        cleared=False, cleared_reason=None,
+        rollouts_total=0, rollouts_dustless=0,
+        jumps_total=0, jumps_dustless=0,
+        segment_id=None,
+    )
+    defaults.update(overrides)
+    return Attempt(**defaults)
+
+
+def test_migration_v4_seeds_ten_segment_definitions(tmp_path):
+    db = make_db(tmp_path)
+    defs = db.segment_defs()
+    assert len(defs) == 10
+    lblj = next(d for d in defs if d["name"] == "LBLJ")
+    assert lblj["enabled"] is True
+    # warp-menu arming (live gate 2026-06-12): fresh DBs seed the
+    # area-scoped attempt_anchor alongside the level edge
+    assert lblj["start_triggers"] == [
+        {"type": "level_enter", "to": 6, "from": 16},
+        {"type": "attempt_anchor", "level": 6, "area": 1}]
+    assert lblj["end_triggers"] == [{"type": "level_enter", "to": 17}]
+
+
+def test_segment_def_crud_roundtrip(tmp_path):
+    db = make_db(tmp_path)
+    sid = db.insert_segment_def("Test", [{"type": "spawned"}],
+                                [{"type": "level_enter", "to": 6}], [],
+                                "2026-06-11T00:00:00Z")
+    db.update_segment_def(sid, name="Test2", enabled=False)
+    d = next(d for d in db.segment_defs() if d["id"] == sid)
+    assert d["name"] == "Test2" and d["enabled"] is False
+    db.delete_segment_def(sid)
+    assert all(d["id"] != sid for d in db.segment_defs())
+
+
+def test_attempts_roundtrip_preserves_segment_id(tmp_path):
+    db = make_db(tmp_path)
+    a = make_attempt(id=5, segment_id=3, course_id=None, star_id=None,
+                     rta_frames=88)
+    db.upsert_attempt(a)
+    assert db.attempts()[0].segment_id == 3
+
+
+def test_pb_accepts_segment_keying_and_null_course(tmp_path):
+    db = make_db(tmp_path)
+    db.insert_pb(course_id=None, star_id=None, strat_tag=None,
+                 timer_mode="rta", frames=85, attempt_id=None,
+                 saved_utc="2026-06-11T00:00:00Z", segment_id=1)
+    row = db.pbs()[0]
+    assert row["segment_id"] == 1 and row["course_id"] is None
+
+
+def test_update_segment_def_unknown_field_raises_value_error(tmp_path):
+    import pytest
+    db = make_db(tmp_path)
+    sid = db.insert_segment_def("Test", [{"type": "spawned"}],
+                                [{"type": "level_enter", "to": 6}], [],
+                                "2026-06-11T00:00:00Z")
+    with pytest.raises(ValueError, match="unknown"):
+        db.update_segment_def(sid, nonexistent_field="oops")
+
+
+def test_v3_database_pb_rows_survive_v4_rebuild(tmp_path):
+    # a real pre-segment db (user_version=3) must keep its PB rows — id,
+    # frames, keying — through v4's pbs_v2 rebuild, gaining segment_id=NULL
+    import sqlite3
+    from sm64_events.storage.db import MIGRATIONS
+    path = tmp_path / "t.db"
+    conn = sqlite3.connect(str(path))
+    conn.executescript(MIGRATIONS[0])
+    conn.executescript(MIGRATIONS[1])
+    conn.executescript(MIGRATIONS[2])
+    conn.execute("INSERT INTO pbs (id, course_id, star_id, timer_mode,"
+                 " frames, saved_utc) VALUES (7, 2, 3, 'igt', 500,"
+                 " '2026-06-10T12:00:00Z')")
+    conn.execute("PRAGMA user_version = 3")
+    conn.commit()
+    conn.close()
+    db = Database(path)
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    [row] = db.pbs()
+    assert row["id"] == 7 and row["frames"] == 500
+    assert row["course_id"] == 2 and row["star_id"] == 3
+    assert row["segment_id"] is None
+
+
+# -- migration v5: warp-menu arming — LBLJ gains the area-scoped anchor ------
+
+def test_v5_updates_existing_v4_lblj_row_with_area_anchor(tmp_path):
+    """An existing v4 db (created before the warp-menu amendment) carries
+    the OLD LBLJ start_triggers; v5 must rewrite them in place.  (Fresh DBs
+    get the new triggers straight from the edited v4 seed, so the
+    pre-amendment shape is restored by hand here.)"""
+    import sqlite3
+    from sm64_events.storage.db import MIGRATIONS
+    path = tmp_path / "t.db"
+    conn = sqlite3.connect(str(path))
+    for script in MIGRATIONS[:4]:
+        conn.executescript(script)
+    conn.execute("UPDATE segment_defs SET start_triggers="
+                 "'[{\"type\":\"level_enter\",\"to\":6,\"from\":16}]'"
+                 " WHERE id=1 AND name='LBLJ'")
+    conn.execute("PRAGMA user_version = 4")
+    conn.commit()
+    conn.close()
+    db = Database(path)
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    lblj = next(d for d in db.segment_defs() if d["name"] == "LBLJ")
+    assert lblj["start_triggers"] == [
+        {"type": "level_enter", "to": 6, "from": 16},
+        {"type": "attempt_anchor", "level": 6, "area": 1}]
+
+
+def test_failed_migration_rolls_back_schema_and_version(tmp_path, monkeypatch):
+    # a crash mid-entry must roll back BOTH the partial schema changes and
+    # the version write, so a fixed entry can later apply cleanly
+    import sqlite3
+    import pytest
+    import sm64_events.storage.db as db_mod
+    path = tmp_path / "t.db"
+    Database(path).close()                       # all real migrations applied
+    bad = "CREATE TABLE extra (id INTEGER); CREATE TABLE broken (oops"
+    monkeypatch.setattr(db_mod, "MIGRATIONS", db_mod.MIGRATIONS + [bad])
+    with pytest.raises(sqlite3.OperationalError):
+        Database(path)
+    check = sqlite3.connect(str(path))
+    # (a) version reflects only the successful prefix
+    assert check.execute("PRAGMA user_version").fetchone()[0] == 5
+    # partial application rolled back: first statement did NOT stick
+    names = {r[0] for r in check.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "extra" not in names
+    check.close()
+    # (b) the fixed entry then applies cleanly (no duplicate-table error)
+    fixed = "CREATE TABLE extra (id INTEGER);"
+    monkeypatch.setattr(db_mod, "MIGRATIONS", db_mod.MIGRATIONS[:-1] + [fixed])
+    db = Database(path)
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 6
+    db.close()

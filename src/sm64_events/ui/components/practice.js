@@ -68,12 +68,17 @@ function AttemptRow({ a, t, idx, focus, clearFocus }) {
     await send("POST", `/api/attempts/${a.id}/restore`);
     t.refresh();
   }
+  // Segment attempts are RTA-only (igt is null; the server rejects igt PB
+  // saves with "segments are RTA-only") — force rta whatever the view clock.
+  const isSeg = a.segment_id != null;
   async function savePb() {
-    await send("POST", "/api/pb", { attempt_id: a.id, timer_mode: t.clock });
+    await send("POST", "/api/pb",
+      { attempt_id: a.id, timer_mode: isSeg ? "rta" : t.clock });
     t.refresh();
   }
-  const time = t.clock === "igt" ? a.igt : a.rta;
-  const frames = t.clock === "igt" ? a.igt_frames : a.rta_frames;
+  const time = isSeg ? a.rta : (t.clock === "igt" ? a.igt : a.rta);
+  const frames = isSeg ? a.rta_frames : (t.clock === "igt" ? a.igt_frames : a.rta_frames);
+  const inTime = isSeg ? a.rta : a.igt; // failures: how-far-in on the section's clock
   // Glow when saving would set a new PB: beats the recorded PB, or no PB
   // exists yet. frames > 0 excludes same-tick race rows (rta=0 junk) whose
   // "PB" would be meaningless.
@@ -88,7 +93,7 @@ function AttemptRow({ a, t, idx, focus, clearFocus }) {
       ${a.outcome === "death" && a.outcome_detail
         ? html` <span class="meta">(${a.outcome_detail})</span>` : ""}
       ${a.outcome === "success" && time ? html` <b>${time}</b>` : ""}
-      ${a.outcome !== "success" && a.igt ? html` <span class="meta">${a.igt} in</span>` : ""}
+      ${a.outcome !== "success" && inTime ? html` <span class="meta">${inTime} in</span>` : ""}
       ${a.rollouts_total > 0
         ? html` <span class="meta">· ${a.rollouts_dustless}/${a.rollouts_total} dustless rollouts</span>` : ""}
       ${a.jumps_total > 0
@@ -215,6 +220,63 @@ function StarSection({ sec, t, ui, pinned }) {
   </div>`;
 }
 
+// Segment sibling of StarSection — deliberately NOT a generalization:
+// segments are RTA-only (igt is null everywhere), have no links, and no
+// strat selector in v1 (POST /api/strat is star-shaped: course_id+star_id
+// required, no kind — sec.strategies stays display-only until it grows one).
+// Broken sections (definition deleted, history remains) render but drop the
+// timeline/marker editor — markers key off the deleted definition.
+function SegmentSection({ sec, t, ui, pinned, pinnedByArm }) {
+  const [showHidden, setShowHidden] = useState(false);
+  const [visible, setVisible] = useState(10);
+  // armedSegs is the single live source: WS notices are instant, every view
+  // fetch reconciles it so it cannot stay stale — see store.js refresh().
+  const armed = t.armedSegs.has(sec.segment_id);
+  const base = showHidden ? sec.attempts
+    : sec.attempts.filter((a) => !a.cleared && a.outcome !== "abandoned");
+  const hidden = sec.attempts.filter((a) => a.cleared || a.outcome === "abandoned");
+  const rows = base
+    .filter((a) => !(ui.hideResets
+      && (a.outcome === "reset" || a.outcome === "hard_reset")))
+    .slice()
+    .sort(comparator(ui.sort, "rta"));
+  const shown = rows.slice(0, visible);
+
+  // Pinned tag, three-state: the target always wins the ★ tag; otherwise the
+  // honest armed flag decides between live (ARMED) and sticky (RECENT) pins.
+  const pinTag = !pinnedByArm ? "★ ACTIVE SEGMENT"
+    : armed ? "⏱ ARMED SEGMENT" : "⏱ RECENT SEGMENT";
+  return html`<div class="starsec ${pinned ? "active-star" : ""}">
+    ${pinned && html`<div class="active-tag">${pinTag}</div>`}
+    <div class="shead">
+      <b>⏱ ${sec.name}</b>
+      ${armed && html`<span class="chip good">⏱ armed</span>`}
+      ${sec.broken && html`<span class="meta">definition deleted — history only</span>`}
+      <span class="pbtag">${sec.pb.rta ? `PB ${sec.pb.rta.display} (rta)` : "no PB yet"}</span>
+    </div>
+    ${!sec.broken && html`<${Timeline} tl=${sec.timeline} sec=${sec} t=${t} />`}
+    <${Progress} prog=${sec.progress} clock="rta" />
+    <${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t} />
+    ${(rows.length > visible || visible > 10) && html`<div>
+      ${rows.length > visible && html`<button class="meta"
+          style="background:none;border:none;cursor:pointer"
+          onclick=${() => setVisible(visible + 10)}>
+        Show 10 more
+      </button>`}
+      ${visible > 10 && html`<button class="meta"
+          style="background:none;border:none;cursor:pointer"
+          onclick=${() => setVisible(Math.max(10, visible - 10))}>
+        Hide last 10
+      </button>`}
+    </div>`}
+    <${HideToggle} hidden=${hidden} showHidden=${showHidden} setShowHidden=${setShowHidden} />
+    <div class="chips">
+      ${sec.stats.map((s) => html`
+        <span class="chip" title=${s.key}>${s.label} ${s.display ?? "–"}</span>`)}
+    </div>
+  </div>`;
+}
+
 function ControlBar({ ui }) {
   return html`<div class="bar">
     <label class="meta">sort${" "}
@@ -248,10 +310,25 @@ export function Practice({ t }) {
   if (!v) return html`<p class="meta">loading… (server unreachable? check /health)</p>`;
 
   const tgt = v.target || {};
-  const isActive = (sec) =>
-    sec.course_id === tgt.course_id && sec.star_id === tgt.star_id;
-  const active = tgt.course_id != null ? v.stars.find(isActive) : undefined;
-  const rest = v.stars.filter((sec) => sec !== active);
+  const segs = v.segments || [];
+  const isActiveStar = (sec) => tgt.kind !== "segment"
+    && sec.course_id === tgt.course_id && sec.star_id === tgt.star_id;
+  const isActiveSeg = (sec) => tgt.kind === "segment"
+    && sec.segment_id === tgt.segment_id;
+  const activeStar = tgt.course_id != null ? v.stars.find(isActiveStar) : undefined;
+  const activeSeg = segs.find(isActiveSeg);
+  // armedPin: presentation-only sticky pin — the most recently ARMED segment,
+  // falling back to the target segment when nothing has armed yet. Sticky pin:
+  // an accidental exit disarms (correct timing semantics — re-entry re-arms
+  // fresh) but the page stays on the segment being practiced until a different
+  // segment arms. The target does not move; this only affects which section
+  // sits at the top of the page.
+  const armedPin = t.lastPinnedSeg != null
+    ? segs.find((s) => s.segment_id === t.lastPinnedSeg)
+    : undefined;
+  const pinnedSeg = armedPin || activeSeg;
+  const restStars = v.stars.filter((sec) => sec !== activeStar);
+  const restSegs = segs.filter((sec) => sec !== pinnedSeg);
 
   const unassignedVisible = v.unassigned.filter(
     (a) => !a.cleared && a.outcome !== "abandoned");
@@ -265,11 +342,14 @@ export function Practice({ t }) {
     </div>
     ${menuOpen && html`<${StatMenu} t=${t} close=${() => setMenuOpen(false)} />`}
     <${ControlBar} ui=${ui} />
-    ${active && html`<${StarSection} key=${`${active.course_id}:${active.star_id}`} sec=${active} t=${t} ui=${ui} pinned=${true} />`}
-    ${v.stars.length === 0 && v.unassigned.length === 0
+    ${pinnedSeg && html`<${SegmentSection} key=${`seg:${pinnedSeg.segment_id}`} sec=${pinnedSeg} t=${t} ui=${ui} pinned=${true} pinnedByArm=${armedPin != null && armedPin !== activeSeg} />`}
+    ${activeStar && html`<${StarSection} key=${`${activeStar.course_id}:${activeStar.star_id}`} sec=${activeStar} t=${t} ui=${ui} pinned=${true} />`}
+    ${v.stars.length === 0 && segs.length === 0 && v.unassigned.length === 0
       ? html`<p class="meta">No attempts this session yet — grab a star.</p>` : ""}
-    ${rest.length > 0 && html`<div class="meta listhead">stars — recent activity first</div>`}
-    ${rest.map((sec) => html`<${StarSection} key=${`${sec.course_id}:${sec.star_id}`} sec=${sec} t=${t} ui=${ui} pinned=${false} />`)}
+    ${restSegs.length > 0 && html`<div class="meta listhead">segments — recent activity first</div>`}
+    ${restSegs.map((sec) => html`<${SegmentSection} key=${`seg:${sec.segment_id}`} sec=${sec} t=${t} ui=${ui} pinned=${false} />`)}
+    ${restStars.length > 0 && html`<div class="meta listhead">stars — recent activity first</div>`}
+    ${restStars.map((sec) => html`<${StarSection} key=${`${sec.course_id}:${sec.star_id}`} sec=${sec} t=${t} ui=${ui} pinned=${false} />`)}
     ${v.unassigned.length > 0 && html`<div class="starsec">
       <div class="shead"><b>No target</b>
         <span class="meta">failures before any star was grabbed or set</span></div>

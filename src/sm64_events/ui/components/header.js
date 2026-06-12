@@ -59,9 +59,11 @@ export function Header({ t }) {
     ${v && html`<button onclick=${() => setManaging(!managing)} title="manage sessions">…</button>`}
     <button onclick=${newSession} disabled=${!v}>New session</button>
     <span>Target:
-      ${tgt && tgt.course_id !== null
-        ? html` <b>${tgt.course_name} · ${tgt.star_name}</b>`
-        : html` <span class="meta">none (grab a star or set one)</span>`}
+      ${tgt && tgt.kind === "segment"
+        ? html` <b>⏱ ${tgt.segment_name}</b>`
+        : tgt && tgt.course_id !== null
+          ? html` <b>${tgt.course_name} · ${tgt.star_name}</b>`
+          : html` <span class="meta">none (grab a star or set one)</span>`}
       ${tgt && tgt.strat_tag ? html` <span class="meta">«${tgt.strat_tag}»</span>` : ""}
       <button onclick=${() => setEditing(!editing)} disabled=${!v}>▾</button>
     </span>

@@ -25,7 +25,9 @@ def test_igt_drop_to_zero_emits_practice_reset():
     ev = events[0]
     assert ev.type == "practice_reset" and ev.frame == 1002
     assert ev.payload == {"igt_frames_before": 500, "mario_acted": False,
-                          "paused_frames_before": 0, "acted_tracking": True}
+                          "paused_frames_before": 0, "acted_tracking": True,
+                          "action": ACT_IDLE, "prev_action": ACT_IDLE,
+                          "frames_since_door": None}
 
 
 def test_igt_drop_to_small_value_still_practice_reset():
@@ -50,7 +52,9 @@ def test_backward_global_timer_emits_state_loaded():
     ev = events[0]
     assert ev.type == "state_loaded" and ev.frame == 3000
     assert ev.payload == {"igt_frames_restored": 120, "mario_acted": False,
-                          "paused_frames_before": 0, "acted_tracking": True}
+                          "paused_frames_before": 0, "acted_tracking": True,
+                          "action": ACT_IDLE, "prev_action": ACT_IDLE,
+                          "frames_since_door": None}
 
 
 def test_backward_jump_into_boot_range_is_left_to_game_reset():
@@ -254,3 +258,98 @@ def test_console_reset_clears_acted_flags():
     # latch cleared: a fresh action emits a fresh event
     events = d.process(snap(50, igt=5), snap(51, igt=6, action=ACT_WALKING))
     assert [e.type for e in events] == ["mario_acted"]
+
+
+# ---------------------------------------------------------------------------
+# action field — door-echo classifier (live gate 2026-06-12)
+# ---------------------------------------------------------------------------
+
+def test_practice_reset_payload_carries_curr_and_prev_action():
+    """The emitted practice_reset payload must include action = curr.mario_action
+    AND prev_action = prev.mario_action so the segment engine can correctly
+    classify intra-area door echoes vs L-resets that respawn AT a door.
+    The discriminator keys on prev_action: a door crossing has prev_action in
+    DOOR_ACTIONS (inputs locked on the prior tick); an L-reset has a gameplay
+    prev_action (e.g. ACT_WALKING = the action when L was pressed)."""
+    from sm64_events.memory.addresses import ACT_WARP_DOOR_SPAWN
+    events = AnchorDetector().process(
+        snap(1000, igt=500, action=ACT_WALKING),
+        snap(1002, igt=0, action=ACT_WARP_DOOR_SPAWN))
+    assert len(events) == 1
+    assert events[0].type == "practice_reset"
+    assert events[0].payload["action"] == ACT_WARP_DOOR_SPAWN
+    assert events[0].payload["prev_action"] == ACT_WALKING
+
+
+def test_state_loaded_payload_carries_curr_and_prev_action():
+    """state_loaded payload must include both action and prev_action for
+    symmetry with practice_reset — consumers classify load echoes the same way."""
+    from sm64_events.memory.addresses import ACT_PULLING_DOOR
+    events = AnchorDetector().process(
+        snap(5000, igt=900, action=ACT_WALKING),
+        snap(3000, igt=120, action=ACT_PULLING_DOOR))
+    assert len(events) == 1
+    assert events[0].type == "state_loaded"
+    assert events[0].payload["action"] == ACT_PULLING_DOOR
+    assert events[0].payload["prev_action"] == ACT_WALKING
+
+
+# ---------------------------------------------------------------------------
+# frames_since_door — non-warp door recency (live gate 2026-06-12)
+# NON-WARP doors (ACT_PULLING/PUSHING_DOOR, NOT WARP_DOOR_SPAWN) end the
+# Usamune section AFTER the door animation: the IGT reset is detected 1-5
+# frames later when Mario is already idle/landing.  Neither prev_action nor
+# action carries door context at that point, so prev_action alone cannot
+# classify these echoes.  The recency field frames_since_door bridges the gap.
+# ---------------------------------------------------------------------------
+
+def test_frames_since_door_present_after_door_action():
+    """A door action at tick N followed by a practice_reset at tick N+4 must
+    carry frames_since_door=4 in the payload."""
+    from sm64_events.memory.addresses import ACT_PUSHING_DOOR
+    d = AnchorDetector()
+    # Tick N: Mario is pushing a door
+    d.process(snap(1296, igt=100, action=ACT_WALKING),
+              snap(1300, igt=104, action=ACT_PUSHING_DOOR))
+    # Tick N+4: Usamune resets IGT; Mario is already idle/landing (no door action)
+    events = d.process(snap(1300, igt=104, action=ACT_PUSHING_DOOR),
+                       snap(1304, igt=0, action=ACT_WALKING))
+    assert len(events) == 1
+    assert events[0].type == "practice_reset"
+    assert events[0].payload["frames_since_door"] == 4
+
+
+def test_frames_since_door_none_when_no_door_seen():
+    """If no door action has been observed, frames_since_door must be None."""
+    events = AnchorDetector().process(snap(1000, igt=500), snap(1002, igt=0))
+    assert events[0].payload["frames_since_door"] is None
+
+
+def test_frames_since_door_cleared_on_backward_jump_self_heal():
+    """domain rule 4: if global_timer jumps backward, _last_door_frame must be
+    cleared so a stale recency value cannot poison anchors after the jump."""
+    from sm64_events.memory.addresses import ACT_PULLING_DOOR
+    d = AnchorDetector()
+    # Door observed at a high frame
+    d.process(snap(5000, igt=200, action=ACT_WALKING),
+              snap(5010, igt=210, action=ACT_PULLING_DOOR))
+    # Timer jumps backward to a low value (self-heal path in process())
+    # A practice_reset arriving now must NOT carry the stale door recency
+    events = d.process(snap(5010, igt=210, action=ACT_PULLING_DOOR),
+                       snap(2000, igt=0))
+    # This fires state_loaded (backward jump, mid-range). frames_since_door
+    # must be None because _last_door_frame was cleared.
+    assert len(events) == 1
+    assert events[0].type == "state_loaded"
+    assert events[0].payload["frames_since_door"] is None
+
+
+def test_existing_payload_pins_include_frames_since_door():
+    """Full payload pin for practice_reset — new key must be present and None
+    when no door was recently seen (updates existing exact-dict tests)."""
+    events = AnchorDetector().process(snap(1000, igt=500), snap(1002, igt=0))
+    assert events[0].payload == {
+        "igt_frames_before": 500, "mario_acted": False,
+        "paused_frames_before": 0, "acted_tracking": True,
+        "action": ACT_IDLE, "prev_action": ACT_IDLE,
+        "frames_since_door": None}

@@ -156,7 +156,7 @@ def test_replay_returns_end_state_projector():
     ])
     assert len(attempts) == 1            # the grab closed; the reset is open
     assert isinstance(proj, Projector)
-    assert proj.target == (2, 2)
+    assert proj.target == ("star", 2, 2)
     more = proj.feed(star(3, 1300))
     assert len(more) == 1 and more[0].id == 2 and more[0].outcome == "success"
 
@@ -750,7 +750,7 @@ def test_strat_set_updates_memory_without_moving_target():
         jev(1, "target_set", 0, {"course_id": 8, "star_id": 2, "strat_tag": "x"}),
         jev(2, "strat_set", 0, {"course_id": 2, "star_id": 2, "strat_tag": "owlless"}),
     ])
-    assert proj.target == (8, 2)                      # unmoved
+    assert proj.target == ("star", 8, 2)              # unmoved
     assert proj.strat_by_star[(2, 2)] == "owlless"
     assert proj.strat_tag == "x"                      # target's own strat intact
 
@@ -774,3 +774,141 @@ def test_strat_set_null_clears_and_is_not_a_boundary():
     ])
     assert attempts[0].rollouts_total == 1            # not zeroed by strat_set
     assert attempts[0].strat_tag is None
+
+
+# -- tagged target identity + SegmentEngine wiring (segments plan Task 11) ------
+
+def seg_defs():
+    from sm64_events.tracking.segments import SegmentDef
+    return [SegmentDef(id=1, name="LBLJ", enabled=True,
+                       start_triggers=[{"type": "level_enter", "to": 6,
+                                        "from": 16}],
+                       end_triggers=[{"type": "level_enter", "to": 17}],
+                       guards=[])]
+
+
+def test_segment_success_is_projected_and_auto_follows_target():
+    p = Projector(segments=seg_defs())
+    p.feed(jev(1, "level_changed", 900, {"from": 16, "to": 16}))
+    p.feed(jev(2, "level_changed", 1000, {"from": 16, "to": 6}))
+    closed = p.feed(jev(3, "level_changed", 1085, {"from": 6, "to": 17}))
+    segs = [a for a in closed if a.segment_id == 1]
+    assert len(segs) == 1 and segs[0].outcome == "success"
+    assert p.target == ("segment", 1)
+
+
+def test_star_target_is_tagged_now():
+    p = Projector()
+    p.feed(jev(1, "target_set", 0, {"course_id": 2, "star_id": 2}))
+    assert p.target == ("star", 2, 2)
+
+
+def test_segment_target_set_event_round_trips():
+    p = Projector()
+    p.feed(jev(1, "target_set", 0, {"kind": "segment", "segment_id": 4}))
+    assert p.target == ("segment", 4)
+
+
+def test_cleared_segment_attempt_does_not_move_target():
+    p = Projector(cleared={2 + 10**10 * 1: "mistake"}, segments=seg_defs())
+    p.feed(jev(1, "target_set", 0, {"course_id": 2, "star_id": 2}))
+    p.feed(jev(2, "level_changed", 1000, {"from": 16, "to": 6}))
+    closed = p.feed(jev(3, "level_changed", 1100, {"from": 6, "to": 17}))
+    assert closed[-1].cleared is True
+    assert p.target == ("star", 2, 2)
+
+
+def test_replay_signature_accepts_segments():
+    from sm64_events.tracking.projection import replay
+    attempts, projector = replay([
+        jev(1, "level_changed", 1000, {"from": 16, "to": 6}),
+        jev(2, "level_changed", 1100, {"from": 6, "to": 17}),
+    ], segments=seg_defs())
+    assert any(a.segment_id == 1 for a in attempts)
+
+
+def test_grab_closing_star_and_segment_orders_star_first_and_target_follows_segment():
+    from sm64_events.tracking.segments import SegmentDef
+    b3 = SegmentDef(id=10, name="Bowser 3", enabled=True,
+                    start_triggers=[{"type": "level_enter", "to": 34},
+                                    {"type": "attempt_anchor", "level": 34}],
+                    end_triggers=[{"type": "star_grabbed"}], guards=[])
+    p = Projector(segments=[b3])
+    p.feed(jev(1, "level_changed", 5000, {"from": 6, "to": 34}))
+    p.feed(jev(2, "practice_reset", 5100, {"mario_acted": True}))
+    closed = p.feed(jev(3, "star_collected", 6000,
+                        {"course_id": 25, "star_id": 0, "igt_frames": 880}))
+    assert [a.segment_id for a in closed] == [None, 10]   # star first, then segment
+    assert closed[0].outcome == closed[1].outcome == "success"
+    assert p.target == ("segment", 10)
+
+
+def lblj_v5_defs():
+    """Seeds-shaped LBLJ as of migration v5: level_enter PLUS the
+    area-scoped attempt_anchor (warp-menu arming, 2026-06-12)."""
+    from sm64_events.tracking.segments import SegmentDef
+    return [SegmentDef(id=1, name="LBLJ", enabled=True,
+                       start_triggers=[{"type": "level_enter", "to": 6,
+                                        "from": 16},
+                                       {"type": "attempt_anchor", "level": 6,
+                                        "area": 1}],
+                       end_triggers=[{"type": "level_enter", "to": 17}],
+                       guards=[])]
+
+
+def test_warp_menu_anchor_arms_lblj_via_tracked_area():
+    """THE LIVE SCENARIO (warp-menu arming, 2026-06-12): the Usamune warp
+    menu (06 01 00) deposits Mario at the castle lobby entrance — equivalent
+    to the grounds→lobby door — emitting only a practice_reset (menu pause →
+    warp → IGT reset; NO level edge).  The projector must track area from
+    journaled area_changed payloads and pass it to the matcher so the
+    area-scoped attempt_anchor arms LBLJ from idle; the next BitDW entry is
+    a success timed from the anchor."""
+    p = Projector(segments=lblj_v5_defs())
+    # establishing events (server attach mid-lobby): level + area known,
+    # from == to so nothing arms via level_enter
+    p.feed(jev(1, "level_changed", 900, {"from": 6, "to": 6}))
+    p.feed(jev(2, "area_changed", 900, {"level": 6, "from": 1, "to": 1}))
+    # warp-menu deposit: a practice_reset with gameplay context (no level or
+    # area edge on its frame, no door context — a real anchor, not an echo)
+    p.feed(jev(3, "practice_reset", 1000,
+               {"action": 0x0C400201, "mario_acted": True}))
+    assert p.armed_segment_ids() == {1}, \
+        "warp-menu practice_reset must arm LBLJ via attempt_anchor(6, area=1)"
+    closed = p.feed(jev(4, "level_changed", 1100, {"from": 6, "to": 17}))
+    segs = [a for a in closed if a.segment_id == 1]
+    assert len(segs) == 1
+    assert segs[0].outcome == "success" and segs[0].rta_frames == 100
+
+
+def test_basement_respawn_does_not_arm_lobby_anchored_lblj():
+    """Area guard: same shape but the tracked area is the basement (3) —
+    the lobby-scoped anchor must NOT arm (cross-arming prevention)."""
+    p = Projector(segments=lblj_v5_defs())
+    p.feed(jev(1, "level_changed", 900, {"from": 6, "to": 6}))
+    p.feed(jev(2, "area_changed", 900, {"level": 6, "from": 1, "to": 3}))
+    p.feed(jev(3, "practice_reset", 1000,
+               {"action": 0x0C400201, "mario_acted": True}))
+    assert p.armed_segment_ids() == set()
+    closed = p.feed(jev(4, "level_changed", 1100, {"from": 6, "to": 17}))
+    assert [a for a in closed if a.segment_id == 1] == []
+
+
+def test_game_reset_resets_star_count_knowledge_for_guards():
+    from sm64_events.tracking.segments import SegmentDef
+    guarded = SegmentDef(id=2, name="g", enabled=True,
+                         start_triggers=[{"type": "level_enter", "to": 6}],
+                         end_triggers=[{"type": "level_enter", "to": 17}],
+                         guards=[{"type": "star_count_min", "n": 3}])
+    p = Projector(segments=[guarded])
+    closed = []
+    closed += p.feed(jev(1, "star_collected", 900,
+                         {"course_id": 2, "star_id": 1,
+                          "igt_frames": 100, "num_stars": 5}))
+    closed += p.feed(jev(2, "game_reset", 50, {}))
+    closed += p.feed(jev(3, "level_changed", 1000, {"from": 16, "to": 6}))
+    closed += p.feed(jev(4, "level_changed", 1100, {"from": 6, "to": 17}))
+    closed += p.feed(jev(5, "level_changed", 1200, {"from": 17, "to": 6}))
+    # num_stars unknown after hard reset -> guard conservatively fails ->
+    # the def never armed -> no segment attempt anywhere
+    assert all(a.segment_id != 2 for a in closed)

@@ -61,13 +61,18 @@ trigger type = one registry row.
 - `key_grabbed(level?)` — matches `key_grabbed`
 - `star_grabbed(course?, star?)` — matches `star_collected`
 - `spawned(level?)` — matches `spawned`
-- `attempt_anchor(level)` — matches `practice_reset` OR `state_loaded` while
-  projection's tracked level equals the param. **Why it exists:** a Usamune
-  L-reset reloads the SAME level — no `level_changed` edge — so an in-level
-  segment starting only on `level_enter` would close on the first practice
-  reset and never re-arm. In-level seeds use
+- `attempt_anchor(level, area?)` — matches `practice_reset` OR `state_loaded`
+  while projection's tracked level equals the param. **Why it exists:** a
+  Usamune L-reset reloads the SAME level — no `level_changed` edge — so an
+  in-level segment starting only on `level_enter` would close on the first
+  practice reset and never re-arm. In-level seeds use
   `start: any-of [level_enter(X), attempt_anchor(X)]`, working in both full
-  runs and the savestate/L-reset practice loop.
+  runs and the savestate/L-reset practice loop. The optional `area` param
+  (amendment 2026-06-12, warp-menu arming) additionally requires projection's
+  journal-tracked area (from `area_changed` events) to match — scoping
+  prevents cross-arming (a basement respawn must not arm a lobby-anchored
+  segment); an unknown area (legacy journals) conservatively fails a scoped
+  anchor.
 
 **Guards v1** (predicates over projection context at arm time):
 
@@ -106,12 +111,12 @@ context only (no wall clock, no snapshots) — deterministic replay.
 | start trigger matches + guards pass (IDLE) | ARM; `start_frame` = event frame |
 | start trigger matches again | **Re-arm**: update `start_frame`; no row |
 | end trigger matches | **Success**: record attempt (`rta_frames = end.frame − start_frame`), broadcast `attempt_completed`, target auto-follows the segment (same rule as star grabs) |
-| `practice_reset` / `state_loaded` | Close as `reset` (anchor_type recorded); AFK discard applies (paused_frames_before ≥ 150 → no row) |
+| `practice_reset` / `state_loaded` | Close as `reset` AND **re-arm the same segment at the anchor frame** (practice-loop continuation — Usamune respawns at the level's last entrance, which is the segment's start position; live-gate amendment 2026-06-12); AFK discard applies (paused_frames_before ≥ 150 → no row, but segment still re-arms). The segment never stops being armed — the UI chip stays lit; no `segment_armed`/`segment_disarmed` notices are emitted (attempt boundary, not a state change). **Same-frame anchor = level-load echo: ignored entirely** (Usamune resets IGT on every level load; the anchor detector fires a synthetic reset on the same global-timer frame as the entry that armed the segment; a real player reset always arrives later). |
 | `death` | Close as `death` |
 | `game_reset` | Close as `hard_reset` |
 | `level_changed` matching neither start nor end | **Silent disarm** — no row ("never reached a failure condition") |
 | `area_changed` | Never disarms (castle-interior wandering is part of these segments) |
-| timer anomaly (would make `rta_frames` < 0) | Discard + disarm (self-heal, domain rule 4) |
+| timer anomaly (rta would be < 0) | success: discard + disarm; failure closures: record with rta_frames=None (game_reset's boot-range frame always lands here) |
 | definition edited while armed (live) | FSM resets to IDLE; re-projection re-derives everything anyway |
 
 **Ordering rule (one event, two roles):** for each event the matcher processes
@@ -146,7 +151,7 @@ never crashes projection.
 | Endpoint | Behavior |
 |---|---|
 | `GET /api/segments` | List definitions (+ broken flag) |
-| `POST /api/segments` | Create `{name, start_triggers, end_triggers, guards?, enabled?}`; validates against vocabulary (400 on unknown type/params); re-projects |
+| `POST /api/segments` | Create `{name, start_triggers, end_triggers, guards?, enabled?}`; validates against vocabulary (409 on unknown type/params, per the codebase's ValueError→409 taxonomy — deviation recorded in the plan); re-projects |
 | `PUT /api/segments/{id}` | Edit; re-projects |
 | `DELETE /api/segments/{id}` | Delete + cascade PBs; re-projects |
 | `GET /api/segments/vocab` | Trigger/guard types, param schemas, level/area/course enums — straight from the registry; the builder GUI is 100% data-driven |
@@ -173,7 +178,7 @@ endpoint table updated (consumer-facing surface).
 
 | Name | Start (any-of) | End (any-of) |
 |---|---|---|
-| LBLJ | level_enter(Castle Inside, from=Castle Grounds) | level_enter(BitDW) |
+| LBLJ | level_enter(Castle Inside, from=Castle Grounds) · attempt_anchor(Castle Inside, area=Lobby) [^lblj] | level_enter(BitDW) |
 | MIPS Clip | level_exit(HMC, to=Castle Inside) | level_enter(DDD) |
 | Lakitu Skip | spawned(Castle Grounds) | level_enter(Castle Inside) |
 | BitS Entry | area_enter(Castle Inside, upstairs area) | level_enter(BitS) |
@@ -182,7 +187,11 @@ endpoint table updated (consumer-facing surface).
 | BitS Pipe Entry | level_enter(BitS) · attempt_anchor(BitS) | warp_entered(BitS) |
 | Bowser 1 | level_enter(B1 arena) · attempt_anchor(B1 arena) | key_grabbed(B1 arena) |
 | Bowser 2 | level_enter(B2 arena) · attempt_anchor(B2 arena) | key_grabbed(B2 arena) |
-| Bowser 3 | level_enter(B3 arena) · attempt_anchor(B3 arena) | star_grabbed (grand star — attribution VERIFY) |
+| Bowser 3 | level_enter(B3 arena) · attempt_anchor(B3 arena) | key_grabbed(level=34) — grand star via ACT_JUMBO_STAR_CUTSCENE [^b3] |
+
+[^b3]: Amended at the 2026-06-12 live gate: the grand star enters ACT_JUMBO_STAR_CUTSCENE (0x1909), never a star-dance action — star_grabbed was unreachable. numStars unchanged (stayed 17), gLastCompleted* untouched, no star_collected ever fired.
+
+[^lblj]: Amended at the 2026-06-12 live gate (warp-menu arming): the Usamune warp menu (06 01 00) deposits Mario at the castle lobby entrance — equivalent to the grounds→lobby door — emitting only a practice_reset (menu pause → warp → IGT reset; no level edge), so the level_enter-only seed never armed. LBLJ gains attempt_anchor(level=6, area=1); the area scope keeps basement/upstairs respawns from cross-arming. Projection tracks area from journaled area_changed events; migration v5 updates existing DBs in place.
 
 ## Testing
 
@@ -195,7 +204,7 @@ endpoint table updated (consumer-facing surface).
   fixture; **regression test that `star_grab` no longer misattributes key
   grabs**.
 - **Storage/API**: migration test, CRUD round-trip, cascade-delete,
-  validation 400s, vocab endpoint shape, kind-aware target.
+  validation 409s, vocab endpoint shape, kind-aware target.
 - **Live gate** (with the human, before merge): `gCurrAreaIndex` address +
   castle area ids; warp action ids per pipe/funnel; spawn action id; what the
   game writes to `last_completed_*` on key grabs; B3 grand-star attribution.
