@@ -56,7 +56,7 @@ def test_broadcaster_seq_returned_and_stored(tmp_path):
 def test_set_target_and_attribution(tmp_path):
     db, svc = make(tmp_path)
     asyncio.run(svc.set_target(8, 2, strat_tag="carpetless"))
-    assert svc.target == (8, 2) and svc.strat_tag == "carpetless"
+    assert svc.target == ("star", 8, 2) and svc.strat_tag == "carpetless"
     asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
     asyncio.run(svc.publish(ev("practice_reset", 1400, {"igt_frames_before": 380})))
     fails = [a for a in db.attempts() if a.outcome == "reset"]
@@ -73,7 +73,7 @@ def test_clear_reprojects_and_restore_undoes(tmp_path):
     asyncio.run(svc.clear_attempt(grab_id, reason="accidental"))
     fails = [a for a in db.attempts() if a.outcome == "reset"]
     assert (fails[0].course_id, fails[0].star_id) == (8, 2)   # re-attributed
-    assert svc.target == (8, 2)
+    assert svc.target == ("star", 8, 2)
     asyncio.run(svc.restore_attempt(grab_id))
     fails = [a for a in db.attempts() if a.outcome == "reset"]
     assert (fails[0].course_id, fails[0].star_id) == (2, 2)
@@ -111,7 +111,7 @@ def test_restart_resumes_from_journal(tmp_path):
     svc2 = TrackerService(db2, Broadcaster())
     asyncio.run(svc2.start())
     assert svc2.session_id == 2
-    assert svc2.target == (2, 2)        # state rebuilt from journal
+    assert svc2.target == ("star", 2, 2)   # state rebuilt from journal
 
 
 def test_degraded_mode_without_db_still_broadcasts(tmp_path):
@@ -127,7 +127,7 @@ def test_reproject_emits_target_changed_when_target_reverts(tmp_path):
     asyncio.run(svc.publish(star(900)))            # target moves to (2,2)
     grab_id = db.attempts()[0].id
     asyncio.run(svc.clear_attempt(grab_id, reason="accidental"))
-    assert svc.target == (8, 2)
+    assert svc.target == ("star", 8, 2)
     tc = [e for e in db.events() if e.type == "target_changed"]
     assert tc[-1].payload["course_id"] == 8 and tc[-1].payload["star_id"] == 2
 

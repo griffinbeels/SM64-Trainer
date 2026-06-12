@@ -59,7 +59,7 @@ def test_target_clear_restore_pb_session_endpoints(tmp_path):
         assert client.post("/api/target", json={
             "course_id": 8, "star_id": 2, "strat_tag": "carpetless"
         }).status_code == 200
-        assert service.target == (8, 2)
+        assert service.target == ("star", 8, 2)
         r = client.post("/api/pb", json={"attempt_id": aid, "timer_mode": "igt"})
         assert r.status_code == 200 and r.json()["frames"] == 343
         assert client.post(f"/api/attempts/{aid}/clear",
@@ -345,7 +345,7 @@ def test_strat_endpoint_sets_without_moving_target(tmp_path):
         r = client.post("/api/strat", json={"course_id": 2, "star_id": 2,
                                             "strat_tag": "owlless"})
         assert r.status_code == 200
-        assert service.target == (8, 2)                 # unmoved
+        assert service.target == ("star", 8, 2)         # unmoved
         assert service.strat_by_star[(2, 2)] == "owlless"
         # registered for the star's dropdown
         view = client.get("/api/session").json()

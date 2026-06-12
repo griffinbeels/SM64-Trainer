@@ -156,7 +156,7 @@ def test_replay_returns_end_state_projector():
     ])
     assert len(attempts) == 1            # the grab closed; the reset is open
     assert isinstance(proj, Projector)
-    assert proj.target == (2, 2)
+    assert proj.target == ("star", 2, 2)
     more = proj.feed(star(3, 1300))
     assert len(more) == 1 and more[0].id == 2 and more[0].outcome == "success"
 
@@ -734,7 +734,7 @@ def test_strat_set_updates_memory_without_moving_target():
         jev(1, "target_set", 0, {"course_id": 8, "star_id": 2, "strat_tag": "x"}),
         jev(2, "strat_set", 0, {"course_id": 2, "star_id": 2, "strat_tag": "owlless"}),
     ])
-    assert proj.target == (8, 2)                      # unmoved
+    assert proj.target == ("star", 8, 2)              # unmoved
     assert proj.strat_by_star[(2, 2)] == "owlless"
     assert proj.strat_tag == "x"                      # target's own strat intact
 
@@ -758,3 +758,54 @@ def test_strat_set_null_clears_and_is_not_a_boundary():
     ])
     assert attempts[0].rollouts_total == 1            # not zeroed by strat_set
     assert attempts[0].strat_tag is None
+
+
+# -- tagged target identity + SegmentEngine wiring (segments plan Task 11) ------
+
+def seg_defs():
+    from sm64_events.tracking.segments import SegmentDef
+    return [SegmentDef(id=1, name="LBLJ", enabled=True,
+                       start_triggers=[{"type": "level_enter", "to": 6,
+                                        "from": 16}],
+                       end_triggers=[{"type": "level_enter", "to": 17}],
+                       guards=[])]
+
+
+def test_segment_success_is_projected_and_auto_follows_target():
+    p = Projector(segments=seg_defs())
+    p.feed(jev(1, "level_changed", 900, {"from": 16, "to": 16}))
+    p.feed(jev(2, "level_changed", 1000, {"from": 16, "to": 6}))
+    closed = p.feed(jev(3, "level_changed", 1085, {"from": 6, "to": 17}))
+    segs = [a for a in closed if a.segment_id == 1]
+    assert len(segs) == 1 and segs[0].outcome == "success"
+    assert p.target == ("segment", 1)
+
+
+def test_star_target_is_tagged_now():
+    p = Projector()
+    p.feed(jev(1, "target_set", 0, {"course_id": 2, "star_id": 2}))
+    assert p.target == ("star", 2, 2)
+
+
+def test_segment_target_set_event_round_trips():
+    p = Projector()
+    p.feed(jev(1, "target_set", 0, {"kind": "segment", "segment_id": 4}))
+    assert p.target == ("segment", 4)
+
+
+def test_cleared_segment_attempt_does_not_move_target():
+    p = Projector(cleared={2 + 10**10 * 1: "mistake"}, segments=seg_defs())
+    p.feed(jev(1, "target_set", 0, {"course_id": 2, "star_id": 2}))
+    p.feed(jev(2, "level_changed", 1000, {"from": 16, "to": 6}))
+    closed = p.feed(jev(3, "level_changed", 1100, {"from": 6, "to": 17}))
+    assert closed[-1].cleared is True
+    assert p.target == ("star", 2, 2)
+
+
+def test_replay_signature_accepts_segments():
+    from sm64_events.tracking.projection import replay
+    attempts, projector = replay([
+        jev(1, "level_changed", 1000, {"from": 16, "to": 6}),
+        jev(2, "level_changed", 1100, {"from": 6, "to": 17}),
+    ], segments=seg_defs())
+    assert any(a.segment_id == 1 for a in attempts)
