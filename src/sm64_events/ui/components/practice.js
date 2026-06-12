@@ -290,12 +290,14 @@ function StarSection({ sec, t, ui, pinned, freshIds }) {
 // required, no kind — sec.strategies stays display-only until it grows one).
 // Broken sections (definition deleted, history remains) render but drop the
 // timeline/marker editor — markers key off the deleted definition.
-function SegmentSection({ sec, t, ui, pinned, pinnedByArm, freshIds }) {
+function SegmentSection({ sec, t, ui, pinned, freshIds }) {
   const [showHidden, setShowHidden] = useState(false);
   const [visible, setVisible] = useState(10);
   // armedSegs is the single live source: WS notices are instant, every view
   // fetch reconciles it so it cannot stay stale — see store.js refresh().
   const armed = t.armedSegs.has(sec.segment_id);
+  const tgt = (t.view && t.view.target) || {};
+  const isTarget = tgt.kind === "segment" && tgt.segment_id === sec.segment_id;
   const base = showHidden ? sec.attempts
     : sec.attempts.filter((a) => !a.cleared && a.outcome !== "abandoned");
   const hidden = sec.attempts.filter((a) => a.cleared || a.outcome === "abandoned");
@@ -323,7 +325,7 @@ function SegmentSection({ sec, t, ui, pinned, pinnedByArm, freshIds }) {
 
   // Pinned tag, three-state: the target always wins the ★ tag; otherwise the
   // honest armed flag decides between live (ARMED) and sticky (RECENT) pins.
-  const pinTag = !pinnedByArm ? "★ ACTIVE SEGMENT"
+  const pinTag = isTarget ? "★ ACTIVE SEGMENT"
     : armed ? "⏱ ARMED SEGMENT" : "⏱ RECENT SEGMENT";
   return html`<div class="starsec ${pinned ? "active-star" : ""}">
     ${pinned && html`<div class="active-tag">${pinTag}</div>`}
@@ -401,18 +403,23 @@ export function Practice({ t }) {
     && sec.segment_id === tgt.segment_id;
   const activeStar = tgt.course_id != null ? v.stars.find(isActiveStar) : undefined;
   const activeSeg = segs.find(isActiveSeg);
-  // armedPin: presentation-only sticky pin — the most recently ARMED segment,
-  // falling back to the target segment when nothing has armed yet. Sticky pin:
-  // an accidental exit disarms (correct timing semantics — re-entry re-arms
-  // fresh) but the page stays on the segment being practiced until a different
-  // segment arms. The target does not move; this only affects which section
-  // sits at the top of the page.
-  const armedPin = t.lastPinnedSeg != null
+  // Pinned segments — presentation only, the target does not move:
+  // every currently-ARMED segment is "active now" and pins to the top,
+  // most recently armed first (armedOrder appends on arm → reverse).
+  // With nothing armed, the sticky last-armed pin keeps the page on the
+  // segment being practiced (an accidental exit disarms — correct timing
+  // semantics — but the section stays put until a different segment arms);
+  // before anything has ever armed, the target segment pins.
+  const armedPins = [...t.armedOrder].reverse()
+    .map((id) => segs.find((s) => s.segment_id === id))
+    .filter(Boolean);
+  const stickyPin = t.lastPinnedSeg != null
     ? segs.find((s) => s.segment_id === t.lastPinnedSeg)
     : undefined;
-  const pinnedSeg = armedPin || activeSeg;
+  const pinnedSegs = armedPins.length ? armedPins
+    : stickyPin ? [stickyPin] : activeSeg ? [activeSeg] : [];
   const restStars = v.stars.filter((sec) => sec !== activeStar);
-  const restSegs = segs.filter((sec) => sec !== pinnedSeg);
+  const restSegs = segs.filter((sec) => !pinnedSegs.includes(sec));
 
   const unassignedVisible = v.unassigned.filter(
     (a) => !a.cleared && a.outcome !== "abandoned");
@@ -426,7 +433,7 @@ export function Practice({ t }) {
     </div>
     ${menuOpen && html`<${StatMenu} t=${t} close=${() => setMenuOpen(false)} />`}
     <${ControlBar} ui=${ui} />
-    ${pinnedSeg && html`<${SegmentSection} key=${`seg:${pinnedSeg.segment_id}`} sec=${pinnedSeg} t=${t} ui=${ui} pinned=${true} pinnedByArm=${armedPin != null && armedPin !== activeSeg} freshIds=${freshIds} />`}
+    ${pinnedSegs.map((sec) => html`<${SegmentSection} key=${`seg:${sec.segment_id}`} sec=${sec} t=${t} ui=${ui} pinned=${true} freshIds=${freshIds} />`)}
     ${activeStar && html`<${StarSection} key=${`${activeStar.course_id}:${activeStar.star_id}`} sec=${activeStar} t=${t} ui=${ui} pinned=${true} freshIds=${freshIds} />`}
     ${v.stars.length === 0 && segs.length === 0 && v.unassigned.length === 0
       ? html`<p class="meta">No attempts this session yet — grab a star.</p>` : ""}

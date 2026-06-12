@@ -119,5 +119,6 @@ export function useTracker() {
   const armedSegs = new Set(armedOrder);
   return { view, clock, pickClock, scope, pickScope, feed, connected,
            refresh, paused: pauseState.paused,
-           pauseReason: pauseState.reason, togglePause, armedSegs, lastPinnedSeg };
+           pauseReason: pauseState.reason, togglePause,
+           armedSegs, armedOrder, lastPinnedSeg };
 }
