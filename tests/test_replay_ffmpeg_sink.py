@@ -1,4 +1,5 @@
 # tests/test_replay_ffmpeg_sink.py
+import io
 import shutil
 import time
 from datetime import datetime, timedelta, timezone
@@ -9,6 +10,47 @@ import pytest
 
 from sm64_events.replay.ffmpeg_sink import FfmpegVideoSink, parse_segment_csv
 from sm64_events.replay.config import ReplayConfig
+
+
+def test_spawn_args_pin_segment_and_quality_contract(tmp_path, monkeypatch):
+    """Pins the ffmpeg arg contract; each flag broke live when wrong:
+    no -g => NVENC default GOP (~250) gave the segment muxer (keyframe
+    splits only) ONE giant segment; default bitrate (~2 Mbps) => visible
+    grain; -muxdelay/-muxpreload/-reset_timestamps => the extractor's
+    pts0-per-segment contract."""
+    captured = {}
+
+    class _FakeProc:
+        def __init__(self):
+            self.stdin = io.BytesIO()
+            self.stdout = io.BytesIO()  # readline() -> b"" => readers exit
+            self.stderr = io.BytesIO()
+
+    def fake_popen(args, **kwargs):
+        captured["args"] = args
+        return _FakeProc()
+
+    monkeypatch.setattr(
+        "sm64_events.replay.ffmpeg_sink.subprocess.Popen", fake_popen)
+    cfg = ReplayConfig(scratch_dir=tmp_path, fps=60, segment_s=2.0)
+    sink = FfmpegVideoSink(cfg, lambda s: None, ffmpeg="ffmpeg")
+    sink._spawn(320, 240)
+    for t in sink._readers:  # EOF immediately against the fake pipes
+        t.join(timeout=5)
+    a = captured["args"]
+
+    def after(flag):
+        return a[a.index(flag) + 1]
+
+    assert after("-g") == "120"            # fps*segment_s: IDR per segment
+    assert after("-segment_time") == "2.0"
+    assert after("-b:v") == "12M"
+    assert after("-bf") == "0"
+    assert after("-forced-idr") == "1"
+    assert after("-muxdelay") == "0" and after("-muxpreload") == "0"
+    assert after("-reset_timestamps") == "1"
+    assert after("-segment_list") == "pipe:1"
+    assert after("-pix_fmt") == "bgra" and after("-s") == "320x240"
 
 T0 = datetime(2026, 6, 12, 1, 0, 0, tzinfo=timezone.utc)
 

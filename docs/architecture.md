@@ -247,34 +247,75 @@ live-feedback round + incident-response from the spec). Remaining phases per
 - Dedicated key / grand-star events (Bowser key grabs currently emit
   star_collected with course_id 16/17 — documented limitation).
 
-## Replay capture (2026-06-11)
+## Replay capture (2026-06-11/12 live-audit marathon)
 
 Self-contained PJ64 window+audio recording into a disk segment ring
-(`replay/` zone; design spec + plan in docs/superpowers/). Facts that cost
-real debugging and live OUTSIDE any single module:
+(`replay/` zone; spec carries an outcome addendum — its original stack was
+rebuilt twice). The final shape, and the evidence, so neither rebuild gets
+re-litigated. Module-local traps (NVENC probe dims, PyAV time_base through
+reformat, wall-clock pts across holes, WGC/proctap API quirks) live in the
+`encoder.py`/`extract.py`/`video.py`/`audio.py` docstrings — pointers, not
+copies, here.
 
-- NVENC rejects tiny encode dimensions with the SAME error (22, EINVAL at
-  avcodec_open2) as a missing driver — capability probes must use realistic
-  sizes (640x480). Evidence: live sweep 64x64 FAIL / 256x256 OK / 640x480 OK.
-- PyAV: decoded MPEG-TS frames keep time_base 1/90000 through reformat();
-  set frame.time_base to the OUTPUT rate before assigning integer pts or the
-  muxer collapses the clip to ~33 ms (silently — frame counts still pass).
-- A/V across capture gaps: video pts must be wall-clock-locked
-  (round((t-s)*fps)) or holes compress the video timeline against real-time
-  audio. Gap responsibilities: recorder fills gaps <= 1 segment; larger gaps
-  become segment boundaries = honest coverage holes in the ring.
-- proc-tap imports as `proctap`; callback delivers (bytes, num_frames=-1);
-  wire on_data at constructor time (start() takes no args). BUT: per-process
-  loopback is a false-healthy trap on this machine — start() succeeds and
-  delivers all-zero PCM (couldn't capture a beep from its OWN process; live
-  beep harness 2026-06-11). System loopback (PyAudioWPatch) verifiably works
-  and is the wired primary. Re-evaluate proctap only with a liveness check.
-- windows-capture: frames expose .frame_buffer/.timespan (no to_numpy);
-  @capture.event dispatches on the handler's __name__; timespan is QPC
-  100 ns ticks — anchor one (qpc, utc) pair per recording run (clock.py).
-- WINDOW capture of PJ64 1.6 is frozen (~1-6 unique frames/s during play;
-  188 deliveries -> 1 unique image in a 6 s probe): Jabo D3D8 bypasses the
-  DWM per-window surface. MONITOR capture cropped to the DWM extended-frame
-  bounds is the working path (video.py). The process must be per-monitor
-  DPI aware or window (physical px) and monitor (virtualized px) coordinate
-  systems disagree on scaled displays. monitor_index is 1-based.
+**Final pipeline.** DWM shared-surface capture (`replay/_dwm.py` +
+`DwmSurfaceVideoSource`) → lock-free submit into an ffmpeg.exe subprocess
+(`replay/ffmpeg_sink.py`: a sample-and-hold feeder paces exact-fps stdin
+writes; ffmpeg owns NVENC encode + MPEG-TS segment rotation) → SegmentRing.
+Audio: WASAPI loopback of the endpoint HOSTING PJ64'S SESSION
+(`replay/audio.py`) → real-time-safe pump (`replay/_system_audio.py`) →
+wall-clock placement → PCM sidecar chunks. Clips re-encode at extraction
+(`replay/extract.py`).
+
+**Capture pathology — why three video backends exist.** PJ64 1.6 / Jabo
+D3D8 presents via the legacy BITBLT model: its pixels live in the window's
+redirection surface, and capture APIs differ in WHICH surface they read and
+THROUGH WHICH door:
+
+| Path | Result for PJ64 1.6 | Evidence (live, 2026-06-11) |
+|---|---|---|
+| WGC window / DXGI duplication | FROZEN content — reads the DWM composition path, refreshed at dirty-region cadence for this app class on Win11 24H2 | ~1-6 unique frames/s during play; 188 deliveries → 1 unique image in 6 s |
+| WGC monitor (cropped) | Real pixels, but records occluders; DPI-unaware app ⇒ logical client size vs physical DWM bounds (black-bands bug) | 2560x1440 virtualized vs 2403x1907 physical, seen live |
+| GDI BitBlt window DC | Fresh pixels but SERIALIZES with the target's UI thread — PJ64 holds its window lock ~110-170 ms once a second (internal 1 Hz work; hiding the FPS display did NOT remove it — user-tested) | 1 Hz stall train in per-phase grab timing |
+| DwmGetDxSharedSurface (undocumented user32) | Redirection surface as a shared D3D11 texture, readable with NO window lock — the wired primary | 600 grabs/10 s, 30.1 distinct/s, 0 stalls |
+
+Corollary that cost a round: the grab thread must make NO user32 calls at
+all — even a 1 Hz cached-handle re-query inherited the ~170 ms lock stall.
+A separate geometry thread owns every window query (`replay/video.py`).
+
+**Hard real-time in CPython — why encoding left the process.** At 60 fps
+(16.7 ms/frame) and PortAudio callbacks (21 ms budget), every Python thread
+pays every other thread's latency through the GIL. Real offenders were
+evicted one by one — disk/encode work in the audio callback (~6 % sample
+loss), gen-2 GC stop-the-world, per-call ctypes/COM construction, PyAV
+holding the GIL through avcodec_open2 (~110 ms per NVENC session) — each
+fix real, yet the residual glitches were DOSE-INVARIANT: missed-slot counts
+identical at 1.5x vs 2x grab oversampling, grab rate pinned at ~57/s across
+three different timer mechanisms. Dose-invariance to local fixes is the
+signature of a structural cause. The structural fix: encode/segmentation in
+an ffmpeg subprocess; the in-Python hot path shrinks to a reference swap
+plus a GIL-releasing pipe write (`replay/ffmpeg_sink.py` docstring).
+Rule worth keeping: if a data path has a hard deadline, its Python side may
+contain only GIL-releasing syscalls — anything heavier goes out of process.
+
+**Audio facts (homes: `audio.py`, `_system_audio.py`, `extract.py`):**
+- Per-app endpoint routing breaks "capture the default device": PJ64's
+  session lives on "Game (Elgato Wave:XLR)", not the default "System"
+  endpoint — silence while the user hears the game. Target the endpoint
+  hosting the pid's session.
+- Liveness must be proven by CONTENT, not status: proctap start()s fine
+  and delivers all-zero PCM (couldn't hear a beep from its own process);
+  WASAPI loopback goes silently deaf when the target app restarts or
+  endpoints re-enumerate. The deaf-stream watchdog compares pump loudness
+  against the pid's session peak and reopens the stream.
+- WASAPI loopback delivers nothing while the endpoint is idle: place PCM
+  by wall clock; never assume a continuous stream.
+- AAC consumes EXACT 1024-sample frames: feeding rate//fps blocks (800 at
+  60 fps) padded every block → 800/1024 = 78 % playback speed, heard as
+  "slow motion with layered distortion".
+
+**When replay misbehaves, read the persistent log BEFORE theorizing** —
+every wrong theory of the marathon died on one of these numbers:
+`ffmpeg sink:` fed/s + max write (healthy: 60.0 / 6-8 ms steady-state;
+first window after spawn ~59 / ~100 ms is a normal init transient),
+`recorder video:` CFR fills (in-process fallback path only),
+`audio pump:` overflow/drops, gc-watchdog pause lines.

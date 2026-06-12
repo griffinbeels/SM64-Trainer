@@ -1,27 +1,38 @@
 """Orchestrator: window attach-retry (mirrors server/poller.py's pattern),
-capture sources -> SegmentWriter -> SegmentRing, status surface.
+capture sources -> video sink / SegmentWriter -> SegmentRing, status
+surface.
 
-Threading: capture callbacks arrive on library threads (windows-capture's
-Rust thread, proc-tap's audio thread). One lock serialises writer access;
-it is taken PER FRAME (not around whole CFR fill loops) so a large fill
-after a stale-window gap can't starve the audio callback, and the
-writer-None re-check happens UNDER the lock (teardown can run between a
-naked check and the write).
+Two video paths:
+- ffmpeg sink (PRIMARY when ffmpeg.exe is on PATH — main.py probes):
+  _on_frame becomes a lock-free reference swap into the sink; pacing,
+  encode and segmentation run in a child process (ffmpeg_sink.py
+  docstring carries why in-process encoding was structurally glitchy:
+  GIL co-tenancy).
+- in-process fallback: the CFR-conform path below feeds SegmentWriter.
 
-CFR conform happens here: frame_index = round(seconds_since_anchor * fps).
-Small delivery gaps (WGC only sends frames on change — pause menus,
-occlusion) are filled by re-encoding the last frame at each missing index,
-up to one segment's worth of frames. Larger gaps are NOT filled: the writer
-receives the real target index, its gap-rotation logic detects the jump and
-rotates segments, converting the silence into an honest coverage hole in the
-ring rather than minutes of frozen duplicate video. This wall-clock-locks the
-video stream, which is what makes utc <-> frame mapping exact.
+Threading: capture callbacks arrive on library threads (the video
+source's deliver thread, the audio pump). One lock serialises writer
+access; it is taken PER FRAME (not around whole CFR fill loops) so a
+large fill after a stale-window gap can't starve the audio callback, and
+the writer-None re-check happens UNDER the lock (teardown can run between
+a naked check and the write).
 
-Audio fallback chain: audio_factory (per-process tap) is tried first; if
-its start() fails and a fallback_audio_factory was provided (device-wide
-loopback), that is tried; otherwise recording proceeds video-only. The
-chain is config wiring, not policy — main.py decides what the factories
-are."""
+CFR conform (fallback path only): frame_index =
+round(seconds_since_anchor * fps). Small delivery gaps (sources send
+frames only on change — pause menus, occlusion) are filled by re-encoding
+the last frame at each missing index, up to one segment's worth of
+frames. Larger gaps are NOT filled: the writer receives the real target
+index, its gap-rotation logic detects the jump and rotates segments,
+converting the silence into an honest coverage hole in the ring rather
+than minutes of frozen duplicate video. This wall-clock-locks the video
+stream, which is what makes utc <-> frame mapping exact.
+
+Audio fallback chain: audio_factory is tried first; if its start() fails
+and a fallback_audio_factory was provided, that is tried; otherwise
+recording proceeds video-only. The chain is config wiring, not policy —
+main.py decides the factories (currently: system loopback with PID
+endpoint targeting as PRIMARY, no fallback — per-process tap is a
+false-healthy trap on this machine; see audio.py docstring)."""
 import logging
 import shutil
 import threading

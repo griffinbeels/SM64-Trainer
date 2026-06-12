@@ -1,33 +1,32 @@
-"""windows-capture (WGC) adapter -> recorder VideoSource protocol.
+"""Video capture sources -> recorder VideoSource protocol.
 
-MONITOR capture cropped to the PJ64 window — NOT window capture. Live-audit
-finding (2026-06-11): WGC window capture of PJ64 1.6 delivers frames at full
-cadence but with FROZEN content (~1-6 unique frames/s even during play) —
-Jabo's D3D8 presentation path bypasses the DWM per-window composition
-surface, so the window's capturable surface barely updates even though the
-screen shows the game live. Monitor capture sees the actual scanout, which
-always has the real pixels. Evidence: 6 s probe, 188 window-capture
-deliveries -> 1 unique frame, while session segments during active play held
-<= 12 unique frames per 60.
+Three sources, in pecking order for THIS app (PJ64 1.6 / Jabo D3D8 — a
+legacy BITBLT-model presenter whose pixels live in the window's
+redirection surface):
 
-Tradeoff (accepted): monitor capture records whatever covers the window —
-occlusion robustness is lost. The window rect is re-queried every frame
-(cheap ctypes), so moving/resizing the window tracks correctly; a minimized
-window yields no frames (a gap -> honest coverage hole in the ring).
+1. DwmSurfaceVideoSource (PRIMARY, wired in main.py) — reads the
+   redirection surface via DWM's shared D3D11 texture: fresh pixels with
+   zero window-lock contention. Probe evidence in its class docstring.
+2. GdiBitBltVideoSource (automatic fallback) — same fresh pixels through
+   the window DC, but BitBlt SERIALIZES with PJ64's UI thread, which
+   holds the window lock ~110-170 ms once a second (internal 1 Hz work;
+   survives hiding the FPS display — user-tested) -> a visible stall
+   every second. The WGC/DDA-vs-bitblt story is in its class docstring.
+3. WgcVideoSource (kept for normal flip-model apps) — WINDOW capture of
+   PJ64 delivers frozen content (~1-6 unique frames/s: the composition
+   path barely updates for this app class), so this adapter captures the
+   MONITOR cropped to the window. Records occluders; WGC API traps live
+   in its class docstring.
 
-Lazy import: constructing the recorder must never require capture hardware.
-frame.timespan is WGC SystemRelativeTime — QPC 100 ns ticks, the same
-timebase CaptureClock anchors against (clock.py).
+DPI: PJ64 is DPI-unaware, so its client/surface size is LOGICAL pixels
+(e.g. 1600x1224 at 150 % scaling) while DWM extended-frame bounds are
+PHYSICAL — mixing the two produced the black-bands bug. Each source
+documents which coordinate space it queries.
 
-The crop slice is copied: the library may reuse the underlying buffer
-between callbacks, and the recorder holds the last frame for CFR gap fill.
-
-Event registration API note: windows_capture.WindowsCapture.event() checks
-handler.__name__ — the decorated functions MUST be named on_frame_arrived
-and on_closed exactly.
-
-windows-capture monitor_index is 1-BASED in EnumDisplayMonitors order
-(verified live; index 0 raises)."""
+All sources stamp frames with QPC 100 ns ticks (CaptureClock's timebase)
+and deliver via grab -> bounded queue -> deliver thread so a slow
+consumer can never stall grabbing. Lazy imports throughout: constructing
+the recorder must never require capture hardware."""
 import ctypes
 import ctypes.wintypes as wt
 import logging
@@ -593,10 +592,23 @@ class _BMIH(ctypes.Structure):
 
 
 class WgcVideoSource:
-    """Monitor capture + per-frame crop to the target window.
+    """Monitor capture + per-frame crop to the target window (WGC).
 
     NOTE: NOT usable for PJ64 1.6 (frozen content — see GdiBitBltVideoSource
-    docstring); kept for capturing normal flip-model apps."""
+    docstring); kept for capturing normal flip-model apps.
+
+    windows-capture API traps (verified live 2026-06-11):
+    - frames expose .frame_buffer/.timespan (no to_numpy); timespan is WGC
+      SystemRelativeTime = QPC 100 ns ticks (CaptureClock's timebase).
+    - @capture.event dispatches on the handler's __name__ — the decorated
+      callbacks MUST be named on_frame_arrived / on_closed exactly.
+    - monitor_index is 1-BASED in EnumDisplayMonitors order (0 raises).
+    - The crop slice must be COPIED: the library may reuse the underlying
+      buffer between callbacks, and the recorder holds the last frame for
+      CFR gap fill.
+    - The process must be per-monitor DPI aware BEFORE session start
+      (_ensure_dpi_aware) or window (physical px) and monitor (virtualized
+      px) coordinates disagree on scaled displays."""
 
     def __init__(self, win: WindowInfo):
         self._win = win

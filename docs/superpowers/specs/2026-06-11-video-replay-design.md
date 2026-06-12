@@ -4,6 +4,14 @@
 **Status:** Approved (brainstorm complete, awaiting implementation plan)
 **Branch note:** spec committed on `feature/garbage-runs-markers-progress-ui`; implementation gets its own branch.
 
+> **Outcome addendum (2026-06-12):** shipped, but the "Verified stack"
+> section below was rebuilt twice during live audits — capture moved
+> windows-capture → GDI BitBlt → DWM shared surface, and encoding moved
+> in-process PyAV → ffmpeg subprocess (GIL co-tenancy made in-process
+> encoding structurally glitchy at real-time deadlines). The as-built
+> architecture and its evidence: `docs/architecture.md` → "Replay
+> capture". Treat this spec's stack/capture sections as historical record.
+
 ## Problem / goal
 
 "Wow, that PB was great — let me rewatch it to understand what I did." While the

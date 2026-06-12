@@ -27,6 +27,17 @@ Design:
 - -force_key_frames at the segment period: every segment opens on an IDR.
 - Window resize: the rawvideo pipe is fixed-size; the sink restarts the
   process with new dimensions (rare; logged; a brief coverage hole).
+  VERIFY (unit-tested, not yet live-verified): resize PJ64 while
+  recording -> expect a "dims ... restarting" log line, a new
+  "spawned WxH" line, and segments continuing within ~2 s. If segments
+  stop or dims stay stale, the restart path is broken — consequence:
+  silent recording halt after any window resize.
+- Reading the 30 s health report: the FIRST window after a spawn
+  typically shows ~59 fed/s and a ~100 ms max write (process/NVENC init
+  backpressure on the unbuffered pipe) — a normal startup transient, NOT
+  the glitch signature. Steady state on the dev rig: 60.0 fed/s, max
+  write 6-8 ms, 0 restarts. Investigate only sustained fed/s < fps or
+  repeated 100 ms+ writes AFTER the first window.
 """
 import logging
 import subprocess
