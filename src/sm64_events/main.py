@@ -6,11 +6,15 @@ from pathlib import Path
 
 from sm64_events.core.logging_setup import configure_logging
 from sm64_events.detectors.anchors import AnchorDetector
+from sm64_events.detectors.area import AreaChangeDetector
 from sm64_events.detectors.death import DeathDetector
-from sm64_events.detectors.level import LevelChangeDetector
 from sm64_events.detectors.dust import DustTrickDetector
+from sm64_events.detectors.key import KeyGrabDetector
+from sm64_events.detectors.level import LevelChangeDetector
 from sm64_events.detectors.lifecycle import GameResetDetector
+from sm64_events.detectors.spawn import SpawnDetector
 from sm64_events.detectors.star_grab import StarGrabDetector
+from sm64_events.detectors.warp import WarpDetector
 from sm64_events.memory.pj64 import Pj64Memory
 from sm64_events.replay.audio import SystemAudioSource
 from sm64_events.replay.config import ReplayConfig
@@ -108,8 +112,16 @@ def build():
     # same tick's igt-reset anchor opens the next one; resets before grabs
     # (see projection.py docstring on the same-tick race); dust tricks before
     # grabs so a same-tick rollout/jump attaches to the attempt the grab closes.
-    detectors = [GameResetDetector(), LevelChangeDetector(), AnchorDetector(),
-                 DeathDetector(), DustTrickDetector(), StarGrabDetector()]
+    # New primitives slot between level and anchors: area follows level
+    # (same establishing discipline); warp/key/spawn are stateless edges and
+    # must precede grabs so a same-tick key claim beats star attribution.
+    # NOTE: area_changed reads curr_area, which is 0 on every live snapshot
+    # until the CURR_AREA address is live-pinned (Task 17 gate) — until then
+    # area events are inert establishing rows ({from:0,to:0}), by design.
+    detectors = [GameResetDetector(), LevelChangeDetector(),
+                 AreaChangeDetector(), AnchorDetector(), DeathDetector(),
+                 DustTrickDetector(), WarpDetector(), KeyGrabDetector(),
+                 SpawnDetector(), StarGrabDetector()]
     poller = Poller(memory, detectors, service)  # service IS the event sink
     return create_app(poller, broadcaster, service=service, replay=replay)
 
