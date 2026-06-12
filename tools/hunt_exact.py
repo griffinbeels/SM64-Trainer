@@ -81,14 +81,35 @@ def main() -> None:
         if ok and len(set(per.values())) == len(per):
             survivors.append((i * 2, per))
 
-    print(f"\n{len(survivors)} candidates (showing up to {MAX_REPORT}):")
     # raw-offset -> N64 address: PJ64 stores RDRAM little-endian, so a
     # big-endian u16 at N64 address a sits at raw offset (a ^ 2) — same
     # convention as hunt_value.py's report line.
-    for off, per in survivors[:MAX_REPORT]:
+    rows = []
+    for off, per in survivors:
         addr = A.KSEG0_BASE + (off ^ 2)
         vals = "  ".join(f"{lab}={v}" for lab, v in per.items())
-        print(f"  {addr:#010x}/u16  {vals}  {describe(mem, addr)}")
+        rows.append((addr, f"{addr:#010x}/u16  {vals}  {describe(mem, addr)}"))
+    rows.sort()
+    # The engine's named globals (gCurrLevelNum etc.) live in the data/bss
+    # band; level-geometry heap survivors below it are area-DERIVED data and
+    # legitimately match the signature, but the canonical index is up here.
+    GLOBALS_LO, GLOBALS_HI = 0x80320000, 0x80340000
+    hot = [r for a, r in rows if GLOBALS_LO <= a < GLOBALS_HI]
+    print(f"\n{len(survivors)} candidates; {len(hot)} in the globals band "
+          f"({GLOBALS_LO:#x}-{GLOBALS_HI:#x}) — most likely first:")
+    for r in hot[:MAX_REPORT]:
+        print(f"  {r}")
+    print(f"\nOthers (up to {MAX_REPORT}):")
+    shown = 0
+    for a, r in rows:
+        if not (GLOBALS_LO <= a < GLOBALS_HI):
+            print(f"  {r}")
+            shown += 1
+            if shown >= MAX_REPORT:
+                break
+    with open("hunt_exact_results.txt", "w") as f:
+        f.write("\n".join(r for _, r in rows) + "\n")
+    print(f"\nFull list ({len(rows)} rows) -> hunt_exact_results.txt")
 
 
 if __name__ == "__main__":
