@@ -1,6 +1,6 @@
 // src/sm64_events/ui/components/practice.js
 import { h } from "preact";
-import { useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
 import { ReplayPlayer } from "./replay.js";
@@ -38,8 +38,28 @@ function delta(frames) {
   return html` <span class=${cls}>${sign}${(frames / 30).toFixed(2)}s</span>`;
 }
 
-function AttemptRow({ a, t, idx }) {
+function AttemptRow({ a, t, idx, focus, clearFocus }) {
   const [showReplay, setShowReplay] = useState(false);
+  const [flash, setFlash] = useState(false);
+  const rowRef = useRef(null);
+  // Progress-graph pick (see StarSection.pickFromGraph): when this row is
+  // the focused one, scroll it into view, flash it, and — when the pick
+  // says a saved replay file exists — open the player exactly as if the
+  // ▶ button was pressed. Keyed on the nonce so re-clicking the same node
+  // works after the user closed the player; runs on mount too, which is
+  // what makes a row revealed by the pagination bump handle its own pick.
+  useEffect(() => {
+    if (!focus || focus.id !== a.id) return;
+    if (focus.openReplay) setShowReplay(true);
+    requestAnimationFrame(() => {
+      if (rowRef.current)
+        rowRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    setFlash(true);
+    const timer = setTimeout(() => setFlash(false), 1600);
+    if (clearFocus) clearFocus(); // one pick = one handling; later remounts must not re-fire
+    return () => clearTimeout(timer);
+  }, [focus && focus.nonce]);
   async function clear() {
     await send("POST", `/api/attempts/${a.id}/clear`, { reason: "accidental" });
     t.refresh();
@@ -60,7 +80,8 @@ function AttemptRow({ a, t, idx }) {
   const pbBeat = a.outcome === "success" && !a.cleared
     && frames != null && frames > 0
     && (a.pb_delta_frames === null || a.pb_delta_frames < 0);
-  const row = html`<tr class=${a.cleared ? "cleared" : ""}>
+  const row = html`<tr ref=${(el) => { rowRef.current = el; }}
+      class="${a.cleared ? "cleared" : ""} ${flash ? "row-flash" : ""}">
     <td class="meta">#${idx + 1}</td>
     <td class=${a.outcome === "success" ? "good" : "badx"}>
       ${OUTCOME_LABEL[a.outcome] || a.outcome}
@@ -93,11 +114,12 @@ function AttemptRow({ a, t, idx }) {
 // Shared table component used by both StarSection and the unassigned block.
 // attempts: the full ordered list for stable numbering;
 // rows: the filtered/sorted subset to actually render.
-function AttemptTable({ attempts, rows, t }) {
+function AttemptTable({ attempts, rows, t, focus, clearFocus }) {
   return html`<table>
     ${rows.map((a) => {
       const idx = attempts.indexOf(a);
-      return html`<${AttemptRow} key=${a.id} a=${a} t=${t} idx=${idx} />`;
+      return html`<${AttemptRow} key=${a.id} a=${a} t=${t} idx=${idx}
+        focus=${focus} clearFocus=${clearFocus} />`;
     })}
   </table>`;
 }
@@ -114,6 +136,8 @@ function HideToggle({ hidden, showHidden, setShowHidden }) {
 function StarSection({ sec, t, ui, pinned }) {
   const [showHidden, setShowHidden] = useState(false);
   const [visible, setVisible] = useState(10);
+  const [focus, setFocus] = useState(null);
+  const pickNonce = useRef(0);
   const pb = sec.pb[t.clock];
   const base = showHidden ? sec.attempts
     : sec.attempts.filter((a) => !a.cleared && a.outcome !== "abandoned");
@@ -124,6 +148,22 @@ function StarSection({ sec, t, ui, pinned }) {
     .slice()
     .sort(comparator(ui.sort, t.clock));
   const shown = rows.slice(0, visible);
+
+  // Progress-graph node click: reveal that attempt's row (bump pagination
+  // if it's past the fold), scroll to it, and auto-open its replay when a
+  // saved file exists (HEAD existence probe — graph points are always in
+  // `rows`: they're non-cleared successes, which no list filter removes).
+  async function pickFromGraph(attemptId) {
+    let openReplay = false;
+    try {
+      openReplay = (await fetch(`/api/replay/saved/${attemptId}`,
+                                { method: "HEAD" })).ok;
+    } catch { /* probe is best-effort: still scroll + flash */ }
+    const idx = rows.findIndex((a) => a.id === attemptId);
+    if (idx === -1) return;
+    if (idx >= visible) setVisible(Math.ceil((idx + 1) / 10) * 10);
+    setFocus({ id: attemptId, nonce: ++pickNonce.current, openReplay });
+  }
 
   async function setStrat(v) {
     if (v === "__new") {
@@ -152,8 +192,9 @@ function StarSection({ sec, t, ui, pinned }) {
       <span class="pbtag">${pb ? `PB ${pb.display} (${t.clock})` : "no PB yet"}</span>
     </div>
     <${Timeline} tl=${sec.timeline} sec=${sec} t=${t} />
-    <${Progress} prog=${sec.progress} clock=${t.clock} />
-    <${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t} />
+    <${Progress} prog=${sec.progress} clock=${t.clock} onPick=${pickFromGraph} />
+    <${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t}
+      focus=${focus} clearFocus=${() => setFocus(null)} />
     ${(rows.length > visible || visible > 10) && html`<div>
       ${rows.length > visible && html`<button class="meta"
           style="background:none;border:none;cursor:pointer"

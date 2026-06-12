@@ -66,7 +66,10 @@ def create_replay_router(replay) -> APIRouter:
             raise _http(e)
         return FileResponse(path, media_type="video/mp4")  # native Range/206
 
-    @router.get("/replay/saved/{attempt_id}")
+    # HEAD serves the progress-graph click's existence probe (auto-open the
+    # player only when a saved file exists) — FastAPI does NOT add HEAD to
+    # GET routes by itself; FileResponse already sends headers-only for HEAD.
+    @router.api_route("/replay/saved/{attempt_id}", methods=["GET", "HEAD"])
     def saved(attempt_id: int):
         # Saved clips outlive the buffer: this is how a PB stays watchable
         # in later sessions (view() falls back here when the ring is gone).

@@ -92,6 +92,8 @@ Other event types, same envelope:
 
 **Timelines:** Each star section renders a strat map — every success, reset, and death plotted at its IGT position along a shared axis. Extending marker kinds requires two changes: one row in `TIMELINE_OUTCOMES` (`tracking/views.py`) to define the outcome key and color, and one row in `MARKERS` (`ui/components/timeline.js`) to define the SVG shape. Everything else (axis, tooltip, projection) is derived automatically from those two registries.
 
+**Progress graph:** Each star section also plots completion time over time (gold = explicitly saved PBs). Nodes are clickable: clicking one reveals that attempt's row in the list below (expanding past the pagination fold if needed), scrolls to it with a brief highlight, and — when the attempt has a saved replay file on disk (`HEAD /api/replay/saved/{id}` succeeds) — auto-opens its replay player as if ▶ had been pressed.
+
 ## HTTP API
 
 All endpoints are under `/api`. JSON in, JSON out.

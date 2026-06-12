@@ -100,6 +100,14 @@ def test_saved_replay_serving_supports_range_and_404(tmp_path):
     assert c.get("/api/replay/saved/99").status_code == 404
 
 
+def test_saved_replay_answers_head_for_existence_probes(tmp_path):
+    # the progress-graph click uses HEAD to decide whether to auto-open the
+    # player (no body transferred) — pin that GET routes serve HEAD
+    c = make_client(tmp_path)
+    assert c.head("/api/replay/saved/42").status_code == 200
+    assert c.head("/api/replay/saved/99").status_code == 404
+
+
 def test_save_passes_truncated_through(tmp_path):
     r = make_client(tmp_path).post("/api/attempts/1/replay/save")
     assert r.status_code == 200
