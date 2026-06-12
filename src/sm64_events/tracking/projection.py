@@ -181,6 +181,12 @@ class Projector:
             return self.target[1], self.target[2]
         return None
 
+    def armed_segment_ids(self) -> set[int]:
+        """Currently-armed segment def ids — engine-state delegate so the
+        service can diff armed sets across a reproject without reaching
+        into privates."""
+        return self._segments.armed_ids()
+
     def feed(self, ev) -> list[Attempt]:
         prev_level = self._level  # _dispatch may move it (level_changed)
         closed = self._dispatch(ev)

@@ -51,6 +51,12 @@ def make_rec(tmp_path):
     return db, svc, bc.sent
 
 
+def seed_id(db, name):
+    """Resolve a seeded segment def's id by name — tests must not couple
+    to autoincrement positions in the v4 migration seed list."""
+    return next(d["id"] for d in db.segment_defs() if d["name"] == name)
+
+
 def test_start_creates_session_and_journals_it(tmp_path):
     db, svc = make(tmp_path)
     assert svc.session_id == 1
@@ -348,35 +354,38 @@ def test_create_segment_invalid_definition_raises_before_insert(tmp_path):
 
 def test_update_segment_validates_merged_definition(tmp_path):
     db, svc, sent = make_rec(tmp_path)
+    lblj = seed_id(db, "LBLJ")
     # partial patch must validate as the MERGED whole, not in isolation
-    asyncio.run(svc.update_segment(1, {"enabled": False}))
-    d = next(d for d in db.segment_defs() if d["id"] == 1)
+    asyncio.run(svc.update_segment(lblj, {"enabled": False}))
+    d = next(d for d in db.segment_defs() if d["id"] == lblj)
     assert d["enabled"] is False and d["name"] == "LBLJ"
     assert any(e.type == "attempts_invalidated" for e in sent)
     with pytest.raises(ValueError):
-        asyncio.run(svc.update_segment(1, {"start_triggers": [{"type": "nope"}]}))
+        asyncio.run(svc.update_segment(lblj, {"start_triggers": [{"type": "nope"}]}))
     with pytest.raises(LookupError):
         asyncio.run(svc.update_segment(999, {"enabled": False}))
 
 
 def test_delete_segment_removes_def_and_reprojects(tmp_path):
     db, svc, sent = make_rec(tmp_path)
-    asyncio.run(svc.delete_segment(1))
-    assert all(d["id"] != 1 for d in db.segment_defs())
+    lblj = seed_id(db, "LBLJ")
+    asyncio.run(svc.delete_segment(lblj))
+    assert all(d["id"] != lblj for d in db.segment_defs())
     assert any(e.type == "attempts_invalidated" for e in sent)
     with pytest.raises(LookupError):
-        asyncio.run(svc.delete_segment(1))
+        asyncio.run(svc.delete_segment(lblj))
 
 
 def test_set_target_segment_round_trip(tmp_path):
     db, svc, sent = make_rec(tmp_path)
-    asyncio.run(svc.set_target_segment(1))               # seeded LBLJ
-    assert svc.target == ("segment", 1)
+    lblj = seed_id(db, "LBLJ")
+    asyncio.run(svc.set_target_segment(lblj))
+    assert svc.target == ("segment", lblj)
     ts = next(e for e in sent if e.type == "target_set")
-    assert ts.payload == {"kind": "segment", "segment_id": 1}
+    assert ts.payload == {"kind": "segment", "segment_id": lblj}
     tc = [e for e in sent if e.type == "target_changed"]
     assert tc and tc[-1].payload["kind"] == "segment"
-    assert tc[-1].payload["segment_id"] == 1
+    assert tc[-1].payload["segment_id"] == lblj
     assert tc[-1].payload["segment_name"] == "LBLJ"
     assert tc[-1].payload["course_id"] is None           # shape stability: UI header keys off course_id
     with pytest.raises(LookupError):
@@ -385,23 +394,25 @@ def test_set_target_segment_round_trip(tmp_path):
 
 def test_set_target_segment_with_strat_remembers_it(tmp_path):
     db, svc, sent = make_rec(tmp_path)
-    asyncio.run(svc.set_target_segment(1, strat_tag="quickturn"))
-    assert svc.target == ("segment", 1) and svc.strat_tag == "quickturn"
+    lblj = seed_id(db, "LBLJ")
+    asyncio.run(svc.set_target_segment(lblj, strat_tag="quickturn"))
+    assert svc.target == ("segment", lblj) and svc.strat_tag == "quickturn"
 
 
 def test_segment_attempt_completed_carries_segment_fields(tmp_path):
     db, svc, sent = make_rec(tmp_path)
-    # seeded LBLJ (id 1): arms on grounds(16)->castle(6), ends on ->BitDW(17)
+    lblj = seed_id(db, "LBLJ")
+    # seeded LBLJ: arms on grounds(16)->castle(6), ends on ->BitDW(17)
     asyncio.run(svc.publish(ev("level_changed", 1000, {"from": 16, "to": 6})))
     asyncio.run(svc.publish(ev("level_changed", 1085, {"from": 6, "to": 17})))
     done = [e for e in sent if e.type == "attempt_completed"
             and e.payload.get("kind") == "segment"]
-    assert done and done[0].payload["segment_id"] == 1
+    assert done and done[0].payload["segment_id"] == lblj
     assert done[0].payload["segment_name"] == "LBLJ"
     assert done[0].payload["rta_frames"] == 85
     assert done[0].payload["rta"] == "0'02\"83"
     armed = [e for e in sent if e.type == "segment_armed"]
-    assert armed and armed[0].payload["segment_id"] == 1
+    assert armed and armed[0].payload["segment_id"] == lblj
     # notices are broadcast-only: they must never reach the journal
     journaled = [e.type for e in db.events()]
     assert "segment_armed" not in journaled
@@ -421,20 +432,21 @@ def test_segment_armed_broadcast_survives_recursive_publish(tmp_path):
     """One published event must BOTH close an attempt (so _track recurses
     via the derived attempt_completed publish) AND emit segment notices.
 
-    Sequence (seeded BitDW Pipe Entry, id 5 — starts: level_enter to=17 OR
+    Sequence (seeded BitDW Pipe Entry — starts: level_enter to=17 OR
     attempt_anchor level=17; end: warp_entered level=17):
 
-      1. level_changed {from:6,to:17}  -> arms def 5 via level_enter
+      1. level_changed {from:6,to:17}  -> arms the def via level_enter
       2. practice_reset @1100          -> closes the armed segment as
          outcome "reset" (attempt_completed -> publish -> _track recursion,
          whose nested feed() RESETS projector.segment_notices) AND re-arms
-         def 5 via attempt_anchor (tracked level is 17), producing a
+         the def via attempt_anchor (tracked level is 17), producing a
          disarmed+armed notice pair on the SAME event.
 
     If the service drained notices AFTER the attempt loop, the recursive
     publish would clobber them and the frame-1100 pair would never be
     broadcast."""
     db, svc, sent = make_rec(tmp_path)
+    bitdw = seed_id(db, "BitDW Pipe Entry")
     asyncio.run(svc.publish(ev("level_changed", 1000, {"from": 6, "to": 17})))
     asyncio.run(svc.publish(ev("practice_reset", 1100, {"igt_frames_before": 0})))
     completed = [e for e in sent if e.type == "attempt_completed"]
@@ -443,18 +455,82 @@ def test_segment_armed_broadcast_survives_recursive_publish(tmp_path):
                if e.type in ("segment_armed", "segment_disarmed")
                and e.frame == 1100]
     assert {e.type for e in notices} == {"segment_armed", "segment_disarmed"}
-    assert all(e.payload["segment_id"] == 5 for e in notices)
+    assert all(e.payload["segment_id"] == bitdw for e in notices)
 
 
 def test_save_pb_segment_requires_rta_and_inserts_segment_row(tmp_path):
     db, svc, sent = make_rec(tmp_path)
+    lblj = seed_id(db, "LBLJ")
     asyncio.run(svc.publish(ev("level_changed", 1000, {"from": 16, "to": 6})))
     asyncio.run(svc.publish(ev("level_changed", 1085, {"from": 6, "to": 17})))
-    aid = next(a.id for a in db.attempts() if a.segment_id == 1)
+    aid = next(a.id for a in db.attempts() if a.segment_id == lblj)
     with pytest.raises(ValueError):
         asyncio.run(svc.save_pb(aid, "igt"))    # segments are RTA-only
     pb = asyncio.run(svc.save_pb(aid, "rta"))
-    assert pb["frames"] == 85 and pb["segment_id"] == 1
+    assert pb["frames"] == 85 and pb["segment_id"] == lblj
     row = db.pbs()[-1]
-    assert row["segment_id"] == 1
+    assert row["segment_id"] == lblj
     assert row["course_id"] is None and row["star_id"] is None
+
+
+def test_update_segment_reproject_diff_broadcasts_disarm(tmp_path):
+    """Replay re-derives armed state silently: disabling an ARMED def must
+    broadcast segment_disarmed (the reproject armed-set diff) or the UI
+    badge keeps lying."""
+    db, svc, sent = make_rec(tmp_path)
+    bitdw = seed_id(db, "BitDW Pipe Entry")
+    asyncio.run(svc.publish(ev("level_changed", 1000, {"from": 6, "to": 17})))
+    assert any(e.type == "segment_armed" and e.payload["segment_id"] == bitdw
+               for e in sent)
+    asyncio.run(svc.update_segment(bitdw, {"enabled": False}))
+    # frame 0 pins the notice to the reproject diff (live notices carry
+    # the journal event's frame, 1000 here)
+    assert any(e.type == "segment_disarmed" and e.frame == 0
+               and e.payload["segment_id"] == bitdw for e in sent)
+
+
+def test_reproject_during_track_tail_abandons_stale_attempts(tmp_path):
+    """Projector-identity race: a CRUD command awaited from INSIDE _track's
+    notice drain (modeling an API request landing while _track is
+    suspended) swaps self._projector mid-tail. The replay already accounted
+    for the in-flight journaled row, so the old tail must be ABANDONED —
+    finishing it would upsert a stale segment attempt the replace_attempts
+    just wiped.
+
+    Construction: level_changed {6->17} arms BitDW Pipe Entry; the
+    practice_reset @1100 closes it (closed=[seg reset attempt]) and emits a
+    disarmed+armed notice pair. The broadcaster deletes the def upon the
+    frame-1100 segment_armed notice — i.e. during the drain, BEFORE the
+    attempt loop runs. Without the identity guard the tail then upserts the
+    stale seg attempt back into the freshly re-projected table."""
+    db = Database(tmp_path / "t.db")
+
+    class DeleteOnArmed(RecordingBroadcaster):
+        def __init__(self):
+            super().__init__()
+            self.svc = None
+            self.target_id = None
+            self.fired = False
+
+        async def publish(self, event: Event) -> int:
+            seq = await super().publish(event)
+            if (event.type == "segment_armed" and event.frame == 1100
+                    and not self.fired):
+                self.fired = True
+                await self.svc.delete_segment(self.target_id)
+            return seq
+
+    bc = DeleteOnArmed()
+    svc = TrackerService(db, bc)
+    bc.svc = svc
+    asyncio.run(svc.start())
+    bc.target_id = seed_id(db, "BitDW Pipe Entry")
+    asyncio.run(svc.publish(ev("level_changed", 1000, {"from": 6, "to": 17})))
+    asyncio.run(svc.publish(ev("practice_reset", 1100, {"igt_frames_before": 0})))
+    assert bc.fired
+    # the stale tail was abandoned: no seg attempt re-upserted, no derived
+    # attempt_completed for the deleted def
+    assert all(a.segment_id != bc.target_id for a in db.attempts())
+    assert not any(e.type == "attempt_completed"
+                   and e.payload.get("segment_id") == bc.target_id
+                   for e in bc.sent)

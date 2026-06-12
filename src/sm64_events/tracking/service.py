@@ -13,6 +13,7 @@ truth; clear/restore re-run the full projection because their effect is
 retroactive. With db=None the service degrades to broadcast-only.
 Tracking failures are isolated inside publish() so the poll loop never
 dies (spec §9)."""
+import dataclasses
 import logging
 from datetime import datetime, timezone
 
@@ -43,10 +44,12 @@ class TrackerService:
         self._projector = Projector(segments=self._segment_defs)
 
     def _load_segment_defs(self) -> list[SegmentDef]:
+        # inclusion list (the dataclass's own fields), NOT exclusion of
+        # created_utc: a future db column must not TypeError startup
         if self.db is None:
             return []
-        return [SegmentDef(**{k: v for k, v in row.items()
-                              if k != "created_utc"})
+        keys = [f.name for f in dataclasses.fields(SegmentDef)]
+        return [SegmentDef(**{k: row[k] for k in keys})
                 for row in self.db.segment_defs()]
 
     # -- pipeline -------------------------------------------------------------
@@ -78,25 +81,37 @@ class TrackerService:
                        type=event.type, frame=event.frame,
                        wall_time_utc=_iso(event.timestamp_utc),
                        payload=event.payload)
-        target_before = self._projector.target
-        closed = self._projector.feed(row)
+        proj = self._projector
+        target_before = proj.target
+        closed = proj.feed(row)
         # Drain segment notices IMMEDIATELY, BEFORE the attempt loop:
         # publishing attempt_completed below re-enters _track, whose nested
         # feed() RESETS projector.segment_notices — draining after the loop
         # would silently lose armed/disarmed events. Broadcast-only via
         # broadcaster.publish (NOT self.publish): notices are ephemeral UI
         # state and must never be journaled.
-        for n in list(self._projector.segment_notices):
+        #
+        # Identity guard (`self._projector is not proj`): every await below
+        # can suspend this tail while a CRUD command reprojects, SWAPPING
+        # self._projector. The replay already accounted for this journaled
+        # row — finishing the tail would upsert stale attempts from the
+        # replaced projector and emit spurious notices/target_changed, so
+        # abandon it after any await that saw a swap.
+        for n in list(proj.segment_notices):
             await self.broadcaster.publish(Event(
                 type=n["event"], frame=n["frame"],
                 timestamp_utc=event.timestamp_utc,
                 payload={"segment_id": n["segment_id"], "name": n["name"]}))
+            if self._projector is not proj:
+                return
         for attempt in closed:
             self.db.upsert_attempt(attempt)
             # The derived event's journal row carries the CURRENT session_id,
             # which for a cross-session abandon differs from the attempt's own
             # session_id — the payload's session_id is authoritative.
             await self.publish(self._attempt_completed_event(attempt, event))
+            if self._projector is not proj:
+                return
         if self._projector.target != target_before:
             await self.publish(Event(
                 type="target_changed", frame=event.frame,
@@ -278,10 +293,23 @@ class TrackerService:
     async def _reproject(self) -> None:
         db = self._require_db()
         before = self._projector.target
+        old_armed = self._projector.armed_segment_ids()
         attempts, projector = replay(db.events(), segments=self._segment_defs)
         # keep the live session: replayed projector state is authoritative
         self._projector = projector
         db.replace_attempts(attempts)
+        # replay re-derives armed state silently; the UI badge must not lie
+        # after a definition edit — broadcast the armed-set diff (broadcast-
+        # only, like all notices: never journaled).
+        new_armed = projector.armed_segment_ids()
+        for sid in sorted(old_armed - new_armed):
+            await self.broadcaster.publish(Event(
+                type="segment_disarmed", frame=0, timestamp_utc=_now(),
+                payload={"segment_id": sid, "name": self._segment_name(sid)}))
+        for sid in sorted(new_armed - old_armed):
+            await self.broadcaster.publish(Event(
+                type="segment_armed", frame=0, timestamp_utc=_now(),
+                payload={"segment_id": sid, "name": self._segment_name(sid)}))
         await self.publish(Event(type="attempts_invalidated", frame=0,
                                  timestamp_utc=_now(), payload={}))
         if self._projector.target != before:
