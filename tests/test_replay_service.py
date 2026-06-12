@@ -35,6 +35,7 @@ class FakeTracker:
     def __init__(self, attempts):
         self.db = FakeDb(attempts)
         self.session_id = 3
+        self.segment_defs = []  # mirrors TrackerService.segment_defs
 
 
 class FakeRing:
