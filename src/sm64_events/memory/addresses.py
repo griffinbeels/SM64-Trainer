@@ -24,7 +24,9 @@ OS_MEM_SIZE = 0x80000318  # u32: 0x400000 or 0x800000
 # Mario state (gMarioStates[0]) — source: decomp struct MarioState + STROOP US.
 MARIO_STRUCT = 0x8033B170
 MARIO_PARTICLE_FLAGS = MARIO_STRUCT + 0x08  # u32 particleFlags, re-zeroed every
-                                            # frame; VERIFY (live gate pending)
+                                            # frame; live-verified 2026-06-12
+                                            # ([DUST] annotations consistent
+                                            # across the gate sessions)
 MARIO_ACTION = MARIO_STRUCT + 0x0C        # u32; live-verified 2026-06-10
 MARIO_ACTION_TIMER = MARIO_STRUCT + 0x1A  # u16, resets to 0 on action change
 MARIO_NUM_STARS = MARIO_STRUCT + 0xAA     # s16, total star count; live-verified 2026-06-10
@@ -116,7 +118,8 @@ STAR_GRAB_ACTIONS = frozenset({
 # trick shows >= 1 visible landing/slide frame; exactly 1 visible frame IS
 # the frame-perfect (dustless) input, and a direct air->launch edge (0
 # visible frames) is impossible. See detectors/dust.py.
-# VERIFY (live gate pending for the jump-chain ids).
+# Jump-chain ids live-verified 2026-06-12 (gate sessions: double/triple
+# jumps and rollouts detected consistently across castle/BitS/arenas).
 ACT_DIVE = 0x0188088A
 ACT_DIVE_SLIDE = 0x00880456
 ACT_FORWARD_ROLLOUT = 0x010008A6
@@ -164,9 +167,9 @@ PASSIVE_ACTIONS = frozenset({
 
 # gCurrLevelNum values for the three castle hub levels — decomp
 # levels/level_defines.h. 6 (inside) is live-evidenced by our own journal
-# (every stage exit logs level_changed to=6); 16/26 are decomp-sourced.
-# VERIFY (live gate): 16/26 are decomp-only — check grounds/courtyard
-# entries flag correctly.
+# (every stage exit logs level_changed to=6); 16 (grounds) live-verified
+# 2026-06-12 (fresh-file spawn lands in level 16). VERIFY: 26 (courtyard)
+# is still decomp-only — check a courtyard entry flags correctly.
 CASTLE_LEVELS = frozenset({6, 16, 26})  # inside, grounds, courtyard
 
 # --- Segment-event primitives (spec: docs/superpowers/specs/2026-06-11) ----
@@ -174,8 +177,11 @@ CASTLE_LEVELS = frozenset({6, 16, 26})  # inside, grounds, courtyard
 # gCurrLevelNum LEVEL ids — decomp levels/level_defines.h DEFINE_LEVEL order
 # (1-based). Cross-validated against three live-verified anchors we already
 # had: WF=24, SSL=8, castle 6/16/26 — all consistent with this table.
-# VERIFY (live gate): the ids the segments below depend on — 7 (HMC),
-# 17 (BitDW), 19 (BitFS), 21 (BitS), 23 (DDD), 30/33/34 (Bowser arenas).
+# Live-walked 2026-06-12 gate: 6, 16, 17, 21, 30, 34 confirmed via
+# level_changed payloads. VERIFY (walk-in pending): 7 (HMC), 19 (BitFS),
+# 23 (DDD), 33 (B2 arena) — decomp-sourced, same triple-anchored mapping.
+# Boot transient: level id 1 (decomp UNKNOWN stub) appears with garbage
+# reads during console resets — inert, matches no trigger.
 LEVEL_NAMES = {
     4: "Big Boo's Haunt", 5: "Cool, Cool Mountain", 6: "Castle Inside",
     7: "Hazy Maze Cave", 8: "Shifting Sand Land", 9: "Bob-omb Battlefield",
@@ -219,16 +225,23 @@ FIGHT_END_LEVELS = {
 }
 
 # Warp-entry actions — decomp include/sm64.h, quoted verbatim from
-# n64decomp/sm64 master, fetched 2026-06-11. VERIFY (live gate): which of
-# these fires on the BitDW/BitFS pipe touch and the BitS funnel.
-ACT_DISAPPEARED = 0x00001300       # generic "Mario left the world" (pipes, some warps)
+# n64decomp/sm64 master, fetched 2026-06-11. Live-verified 2026-06-12:
+# ACT_DISAPPEARED fired on the BitDW pipe, the BitS end funnel, AND the
+# castle upstairs -> BitS entry warp (all 0x1300).
+ACT_DISAPPEARED = 0x00001300       # generic "Mario left the world" (pipes, some warps); live-verified 2026-06-12
 ACT_TELEPORT_FADE_OUT = 0x00001336  # teleporter/cap-warp fade; also fires for in-level teleporters elsewhere — harmless: warp triggers filter by level. VERIFY (live gate pending)
 WARP_ENTRY_ACTIONS = frozenset({ACT_DISAPPEARED, ACT_TELEPORT_FADE_OUT})
 
-# Spawn actions — same decomp fetch. The file-select spawn on Castle Grounds
-# plays the Lakitu intro (ACT_INTRO_CUTSCENE); leaving that action = player
-# gains control. The SPAWN_* group covers non-intro spawn-ins. VERIFY (live
-# gate): which edge fires on a fresh file-select spawn.
+# Spawn actions — same decomp fetch. Live-verified 2026-06-12:
+# - FRESH file start: ACT_INTRO_CUTSCENE plays through Lakitu's dialogue;
+#   the edge OUT of it (control gained) fires spawned kind="intro" — the
+#   canonical Lakitu-skip timing start.
+# - EXISTING-file load: Mario spawns with NO SPAWN_ACTIONS edge at all (no
+#   spawned event) — so the Lakitu Skip seed arms only on fresh starts, by
+#   design (the trick is a run-start trick).
+# - Pipe/arena arrivals: ACT_SPAWN_SPIN_AIRBORNE (0x1924) and
+#   ACT_SPAWN_NO_SPIN_AIRBORNE (0x1932) observed -> spawned kind="spawn";
+#   harmless re-arms (triggers filter by level).
 ACT_INTRO_CUTSCENE = 0x04001301
 ACT_SPAWN_SPIN_AIRBORNE = 0x00001924
 ACT_SPAWN_SPIN_LANDING = 0x00001325
