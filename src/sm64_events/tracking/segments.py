@@ -135,6 +135,9 @@ GUARDS: dict[str, GuardType] = {g.key: g for g in [
 
 
 def _check_clause(clause: dict, registry: dict, what: str) -> None:
+    if not isinstance(clause, dict):
+        raise ValueError(f"each clause in {what} must be a dict,"
+                         f" got {type(clause).__name__!r}")
     kind = clause.get("type")
     if kind not in registry:
         raise ValueError(f"unknown trigger type {kind!r} in {what}"
@@ -157,11 +160,16 @@ def validate_definition(d: dict) -> None:
         raise ValueError("name is required")
     for side in ("start_triggers", "end_triggers"):
         clauses = d.get(side) or []
+        if not isinstance(clauses, list):
+            raise ValueError(f"{side} must be a list")
         if not clauses:
             raise ValueError(f"{side} needs at least one trigger")
         for c in clauses:
             _check_clause(c, TRIGGERS, side)
-    for g in d.get("guards") or []:
+    guards = d.get("guards") or []
+    if not isinstance(guards, list):
+        raise ValueError("guards must be a list")
+    for g in guards:
         _check_clause(g, GUARDS, "guards")
 
 

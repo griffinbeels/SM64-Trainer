@@ -47,3 +47,31 @@ def test_vocab_lists_triggers_guards_and_level_enum():
     assert {g["key"] for g in v["guards"]} == {"prev_level",
                                                "star_count_min",
                                                "star_count_max"}
+
+
+def test_string_clause_raises_value_error_not_500():
+    with pytest.raises(ValueError, match="must be a dict"):
+        validate_definition({"name": "x", "start_triggers": ["level_enter"],
+                             "end_triggers": [{"type": "spawned"}], "guards": []})
+
+
+def test_non_list_guards_raises_value_error():
+    with pytest.raises(ValueError, match="guards must be a list"):
+        validate_definition({"name": "x",
+                             "start_triggers": [{"type": "spawned"}],
+                             "end_triggers": [{"type": "spawned"}],
+                             "guards": "not a list"})
+
+
+def test_all_db_seeds_pass_validate_definition(tmp_path):
+    """Registry/seed agreement: seeds live as JSON in db.py MIGRATIONS while
+    the vocabulary lives here — this is the only gate that catches a rename
+    on either side."""
+    from sm64_events.storage.db import Database
+    db = Database(tmp_path / "t.db")
+    defs = db.segment_defs()
+    assert len(defs) == 10
+    for d in defs:
+        validate_definition({k: d[k] for k in
+                             ("name", "start_triggers", "end_triggers",
+                              "guards")})
