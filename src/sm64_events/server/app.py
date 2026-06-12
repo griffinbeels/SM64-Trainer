@@ -49,6 +49,14 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
                 replay.lifecycle_start()
             except Exception:
                 log.exception("replay start failed - continuing without replay")
+            try:
+                # process-wide stop-the-world pauses (gen2 GC) hit the grab
+                # loop and the audio callback simultaneously - arm the
+                # watchdog + freeze the startup heap once everything is built
+                from sm64_events.replay._gcwatch import arm
+                arm()
+            except Exception:
+                log.exception("gc watchdog arm failed - continuing")
         task = asyncio.create_task(poller.run())
         task.add_done_callback(_log_poller_exit)
         yield

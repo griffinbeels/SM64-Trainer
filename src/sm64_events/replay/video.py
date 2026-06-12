@@ -255,6 +255,8 @@ class GdiBitBltVideoSource:
         period = 1.0 / (self._fps * 1.5)
         grabs = drops = 0
         grab_ms = 0.0
+        max_gap_ms = 0.0
+        prev_grab_t = None
         last_report = 0.0
         next_t = _time.perf_counter()
         try:
@@ -289,6 +291,9 @@ class GdiBitBltVideoSource:
                     self._bmi = bmi
                 ts = qpc_100ns()
                 t_grab = _time.perf_counter()
+                if prev_grab_t is not None:
+                    max_gap_ms = max(max_gap_ms, (t_grab - prev_grab_t) * 1000)
+                prev_grab_t = t_grab
                 if not gdi32.BitBlt(mdc, 0, 0, w, h, hdc, 0, 0,
                                     self._SRCCOPY_CAPTUREBLT):
                     # DC went stale (display change); recreate next pass
@@ -305,10 +310,13 @@ class GdiBitBltVideoSource:
                 now = _time.perf_counter()
                 if now - last_report > 30 and grabs:
                     log.info("gdi capture: %.1f grabs/s avg %.1f ms, "
-                             "%d encoder-lag drops", grabs / (now - last_report)
-                             if last_report else grabs / 30, grab_ms / grabs, drops)
+                             "max inter-grab gap %.0f ms, %d encoder-lag "
+                             "drops", grabs / (now - last_report)
+                             if last_report else grabs / 30, grab_ms / grabs,
+                             max_gap_ms, drops)
                     grabs = drops = 0
                     grab_ms = 0.0
+                    max_gap_ms = 0.0
                     last_report = now
                 next_t += period
                 if next_t > _time.perf_counter():
