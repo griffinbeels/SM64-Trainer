@@ -68,6 +68,10 @@ export function ReplayPlayer({ attemptId }) {
   // each game frame spans two near-identical encoded frames, so stepping
   // 1/60 visibly changed the image only every SECOND press (live-reported
   // 2026-06-12 — "have to press twice").
+  // Known caveat (expected, not a bug): capture isn't phase-locked to the
+  // game and presents jitter (~59.90-60.05/s, user-measured) — a game
+  // frame occasionally spans 1 or 3 encoded frames, so once in a while a
+  // single press lands on a duplicate; the next press recovers.
   function step(dir) {
     const v = videoEl.current;
     if (!v) return;

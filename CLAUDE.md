@@ -41,7 +41,7 @@ uv run python tools/dedupe_journal.py data/tracker.db          # scan double-jou
 | Death detection | `detectors/death.py` — action-set edge; closes open attempt as outcome "death" |
 | Level-change detection | `detectors/level.py` — stateful: remembers last EMITTED level, journals establishing/corrective events (from may equal to) so projection-side level tracking never runs stale; closes open attempts as abandoned |
 | Dust tricks (dustless rollouts/jumps) | `detectors/dust.py` — TRICKS registry (one row per trick); docstring carries the decomp-verified landing-frame timing model; counts attach to attempts via projection.py |
-| Poll loop, attach retry, layout sanity | `server/poller.py` |
+| Poll loop, attach retry, layout sanity, session pause | `server/poller.py` |
 | WS fan-out, seq numbers | `server/broadcaster.py` |
 | HTTP/WS endpoints | `server/app.py` |
 | REST API + error taxonomy | `server/api.py` — docstring has the LookupError/ValueError/RuntimeError→HTTP mapping |
@@ -126,6 +126,17 @@ addresses.py (+VERIFY) and a defaulted GameSnapshot field → wire into
 - Timing rule (decomp-verified, do NOT re-derive from the spec — its §3
   model is annotated as wrong): `frames_late = visible_landing_frames - 1`;
   one visible landing frame IS frame-perfect. Evidence: addresses.py.
+
+**Add a user-visible replay setting** (another knob like storage/padding):
+bounds row in `SETTINGS_LIMITS` + plumb `validate_settings`/`save_settings`
+/`apply_settings_file` (replay/config.py) → live-apply + getter in
+`ReplayService.update_settings`/`settings()` → field on `SettingsBody`
+(server/replay_api.py) → input in the recording-dot panel
+(`ui/components/replay.js` BufferSettings) → README settings lines → tests
+in test_replay_{config,service,api}.py. Mirror commits 69bb83d / 29fd542.
+Settings persist in `data/replay_settings.json` (a JSON overlay beats a db
+migration for scalars); corrupt/out-of-range files lose to defaults so the
+server always starts.
 
 **Locate an unknown memory value:** `tools/find_timer.py` (ticking
 counters) → `tools/hunt_value.py` (exact displayed values) →

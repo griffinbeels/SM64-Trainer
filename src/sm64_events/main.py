@@ -129,4 +129,9 @@ if __name__ == "__main__":
     # shutdown waits for them BEFORE running lifespan teardown — without a
     # deadline CTRL+C appears to hang with ffmpeg still recording (live
     # incident 2026-06-12).
+    # VERIFY (fix not yet exercised live): one CTRL+C must return the
+    # prompt in <~5 s with ffmpeg gone. If it hangs again, the layer logs
+    # name the culprit — "replay stop exceeded 15 s" = teardown wedged;
+    # no such line = drain/loop still stuck. Consequence of regression:
+    # terminal lockup with ffmpeg logging into it.
     uvicorn.run(app, host="127.0.0.1", port=8064, timeout_graceful_shutdown=3)
