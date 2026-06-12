@@ -116,7 +116,7 @@ class TrackerService:
             await self.publish(Event(
                 type="target_changed", frame=event.frame,
                 timestamp_utc=event.timestamp_utc,
-                payload=self._target_payload()))
+                payload=self.target_payload()))
 
     def _attempt_completed_event(self, a, close_event: Event) -> Event:
         return Event(type="attempt_completed", frame=close_event.frame,
@@ -147,7 +147,10 @@ class TrackerService:
         return next((d.name for d in self._segment_defs
                      if d.id == segment_id), f"segment {segment_id}")
 
-    def _target_payload(self) -> dict:
+    def target_payload(self) -> dict:
+        """Kind-aware target identity. ONE builder for both consumers --
+        target_changed broadcasts and the session view (views.py) -- so the
+        WS payload and GET /api/session can never drift."""
         tgt = self._projector.target
         if tgt and tgt[0] == "segment":
             # course_id/star_id stay present-as-None for shape stability:
@@ -172,6 +175,22 @@ class TrackerService:
     @property
     def strat_by_star(self) -> dict:
         return self._projector.strat_by_star
+
+    @property
+    def strat_by_segment(self) -> dict:
+        return self._projector.strat_by_segment
+
+    @property
+    def segment_defs(self) -> list[SegmentDef]:
+        """Loaded definitions (enabled AND disabled -- the view names
+        sections for disabled defs too; only the engine filters)."""
+        return self._segment_defs
+
+    @property
+    def armed_segment_ids(self) -> set[int]:
+        """Live armed set, straight from the projector -- lets a view
+        refresh self-heal the UI's armed badge after missed notices."""
+        return self._projector.armed_segment_ids()
 
     def _require_db(self) -> Database:
         if self.db is None or self.session_id is None:
@@ -234,7 +253,7 @@ class TrackerService:
             # other clients refresh (REFRESH_ON includes target_changed)
             await self.publish(Event(type="target_changed", frame=0,
                                      timestamp_utc=_now(),
-                                     payload=self._target_payload()))
+                                     payload=self.target_payload()))
 
     async def clear_attempt(self, attempt_id: int, reason: str | None = None) -> None:
         db = self._require_db()
@@ -315,7 +334,7 @@ class TrackerService:
         if self._projector.target != before:
             await self.publish(Event(type="target_changed", frame=0,
                                      timestamp_utc=_now(),
-                                     payload=self._target_payload()))
+                                     payload=self.target_payload()))
 
     async def save_pb(self, attempt_id: int, timer_mode: str) -> dict:
         db = self._require_db()

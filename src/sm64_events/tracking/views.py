@@ -4,12 +4,18 @@ Contract (the UI builds against ALL of this):
 - `scope` selects which attempts drive sections/attempt lists/unassigned:
   "session" (default) = the active session, "lifetime" = everything.
   Stat chips and the timeline ALWAYS compute over lifetime history (spec §8).
-- Star sections are ordered newest-activity-first (max scoped attempt id;
-  fresh targets sort last).
+- Star sections are ordered newest-activity-first (max scoped journal
+  recency via projection.journal_id; fresh targets sort last); segment
+  sections order among themselves the same way.
 - The practice target's section is ALWAYS present, even with zero scoped
-  attempts — the UI pins it as the active-star block.
+  attempts — the UI pins it as the active block (star AND segment kinds).
 - Sections carry `markers_by_strat` (spec §3) and `progress` (spec §4,
-  scoped successes grouped per session)."""
+  scoped successes grouped per session).
+- Segment sections (`segments` key) mirror star sections but are RTA-only
+  (segments have no IGT): pb / attempts / stats / timeline / progress all
+  read rta_frames whatever the view clock. Marker keys: 'seg:<id>:<strat>'.
+- `target` is kind-aware: service.target_payload() identity + display
+  names, every key present for both kinds (shape stability)."""
 from sm64_events.core.timefmt import format_igt
 from sm64_events.links import star_links
 from sm64_events.memory.addresses import (COURSE_NAMES, STAR_NAMES,
@@ -17,30 +23,30 @@ from sm64_events.memory.addresses import (COURSE_NAMES, STAR_NAMES,
 from sm64_events.stats.registry import (DEFAULT_STAT_MENU, REGISTRY,
                                         compute_stat, selection_id,
                                         selection_order)
+from sm64_events.tracking.projection import journal_id
 
-# Timeline markers (per-star event graph): outcome -> IGT extractor.
+# Timeline markers (per-section event graph): outcomes that plot as points.
 # Adding a marker kind is one row here (+ a style row in ui timeline.js).
-# The axis is IGT-based by design: resets/deaths only have an IGT position.
-TIMELINE_OUTCOMES = {
-    "success": lambda a: a.igt_frames,
-    "reset": lambda a: a.igt_frames,
-    "death": lambda a: a.igt_frames,
-}
+# The frame position comes from the section's clock extractor: star
+# sections pass igt (resets/deaths only have an IGT position), segment
+# sections pass rta (segments have no IGT).
+TIMELINE_OUTCOMES = frozenset({"success", "reset", "death"})
 
 
-def _timeline(history) -> dict | None:
-    """X axis 0 -> longest SUCCESSFUL grab; every qualifying attempt is a
-    point at its IGT position. Points may exceed max_frames (a reset later
-    than the best success) — the UI extends the axis as needed.
+def _timeline(history, frames_of) -> dict | None:
+    """X axis 0 -> longest SUCCESSFUL attempt; every qualifying attempt is
+    a point at its frames_of(a) position. Points may exceed max_frames (a
+    reset later than the best success) — the UI extends the axis as needed.
 
     The axis ends at the longest success when one exists, otherwise at the
     rightmost point; max_is_success=False lets the UI render a provisional
-    axis until a success lands."""
+    axis until a success lands. Each point's display string keeps the "igt"
+    key whatever the clock (UI contract — it is just formatted frames)."""
     points = []
     for a in history:
         if a.cleared or a.outcome not in TIMELINE_OUTCOMES:
             continue
-        frames = TIMELINE_OUTCOMES[a.outcome](a)
+        frames = frames_of(a)
         if frames is None:
             continue
         points.append({"frames": frames, "igt": format_igt(frames),
@@ -64,15 +70,22 @@ def _fmt(value, fmt):
 
 
 def _current_pbs(pb_rows: list[dict]) -> dict:
-    """(course, star, mode) -> latest pb row."""
+    """Latest pb row per kind-aware key: ("segment", segment_id, mode) for
+    segment rows, (course_id, star_id, mode) for star rows. Without the
+    kind tag every segment pb collapses onto (None, None, "rta") and the
+    newest segment's save shadows all the others (live bug, Task 12)."""
     out = {}
     for row in pb_rows:  # ordered by id: later rows win
-        out[(row["course_id"], row["star_id"], row["timer_mode"])] = row
+        key = (("segment", row["segment_id"], row["timer_mode"])
+               if row["segment_id"] is not None
+               else (row["course_id"], row["star_id"], row["timer_mode"]))
+        out[key] = row
     return out
 
 
 def _attempt_json(a, pbs, clock):
-    pb = pbs.get((a.course_id, a.star_id, clock))
+    pb = pbs.get(("segment", a.segment_id, clock) if a.segment_id is not None
+                 else (a.course_id, a.star_id, clock))
     frames = a.igt_frames if clock == "igt" else a.rta_frames
     race_row = clock == "rta" and frames == 0  # same-tick reset-race: rta is junk (see projection.py docstring)
     delta = (frames - pb["frames"]
@@ -90,7 +103,8 @@ def _attempt_json(a, pbs, clock):
             "rollouts_total": a.rollouts_total,
             "rollouts_dustless": a.rollouts_dustless,
             "jumps_total": a.jumps_total,
-            "jumps_dustless": a.jumps_dustless}
+            "jumps_dustless": a.jumps_dustless,
+            "segment_id": a.segment_id}
 
 
 def _catalog() -> dict:
@@ -118,24 +132,56 @@ def _strategies_for(registered: dict, attempts, course_id: int, star_id: int) ->
     return out
 
 
-def _markers_for(markers_state: dict, course_id: int, star_id: int) -> dict:
-    """strat -> sorted marker list for ONE star, from the ui_state KV
-    (key shape '<course>:<star>:<strat>', '' = no strategy)."""
+def _markers_for(markers_state: dict, course_id, star_id) -> dict:
+    """strat -> sorted marker list for ONE section, from the ui_state KV.
+    Key shape '<course>:<star>:<strat>' for stars, 'seg:<id>:<strat>' for
+    segment sections (call with ("seg", segment_id)); '' = no strategy."""
     prefix = f"{course_id}:{star_id}:"
     return {k[len(prefix):]: v for k, v in markers_state.items()
             if k.startswith(prefix)}
 
 
-def _progress(attempts, pb_ids: set, session_meta) -> dict | None:
+def _stats_for(history, stat_menu, clock) -> list[dict]:
+    """Stat chips for one section: canonical registry order, deduped by
+    selection identity, computed over the LIFETIME history (spec §8).
+    Star sections pass the view clock; segment sections always pass "rta"."""
+    stats = []
+    seen_stat_ids: set[str] = set()
+    for sel in sorted(stat_menu,
+                      key=lambda s: selection_order(s.get("key", ""),
+                                                    s.get("params"))):
+        if sel["key"] not in REGISTRY:
+            continue
+        sid = selection_id(sel["key"], sel.get("params"))
+        if sid in seen_stat_ids:
+            continue
+        seen_stat_ids.add(sid)
+        d = REGISTRY[sel["key"]]
+        try:
+            value = compute_stat(sel["key"], history, sel.get("params"), clock)
+        except (ValueError, TypeError, KeyError):
+            value = None  # bad stored params (e.g. n="abc") must not 500 the view
+        # label N-substitution is keyed to avg_last_n; a future parameterized stat needs a label_template field instead
+        label = d.label.replace("N", str(sel.get("params", {}).get("n", ""))) \
+            if d.key == "avg_last_n" else d.label
+        stats.append({"key": d.key, "label": label,
+                      "params": sel.get("params", {}), "fmt": d.fmt,
+                      "value": value, "display": _fmt(value, d.fmt)})
+    return stats
+
+
+def _progress(attempts, pb_ids: set, session_meta, frames_of) -> dict | None:
     """Completion-time-over-time points (spec §4): non-cleared successes of
-    the SCOPED attempt list, grouped by session, chronological. Gold =
-    explicitly saved PB rows (every save stays gold even when superseded).
-    rta race rows (rta_frames == 0) ship as-is; the UI filters them.
-    Resumed sessions append to their original segment; within-segment id
+    the SCOPED attempt list, grouped by session, chronological. A success
+    qualifies when the section's clock (frames_of: stars igt, segments rta)
+    has a value; every point still ships BOTH clock fields (the UI picks).
+    Gold = explicitly saved PB rows (every save stays gold even when
+    superseded). rta race rows (rta_frames == 0) ship as-is; the UI filters
+    them. Resumed sessions append to their original group; within-group id
     order is still chronological (journal ids are wall-clock monotonic)."""
     by_session: dict[int, list] = {}
     for a in attempts:
-        if a.outcome != "success" or a.cleared:
+        if a.outcome != "success" or a.cleared or frames_of(a) is None:
             continue
         by_session.setdefault(a.session_id, []).append({
             "t_utc": a.ended_utc,
@@ -175,46 +221,37 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
 
     sections, unassigned = [], []
     seen: dict[tuple[int, int], None] = {}
+    seen_segs: dict[int, None] = {}
+    # newest-activity recency per section key; scoped is journal-id-ordered
+    # WITHIN each key, so the last write per key wins. journal_id() strips
+    # the segment-id namespace offset so star and segment sections both
+    # compare by underlying journal recency.
+    last_id: dict = {}
     for a in scoped:
-        if a.course_id is None:
+        if a.segment_id is not None:   # segment attempts have course_id None
+            seen_segs[a.segment_id] = None  # ...but are NEVER unassigned
+            last_id[("segment", a.segment_id)] = journal_id(a.id)
+        elif a.course_id is None:
             unassigned.append(_attempt_json(a, pbs, clock))
         else:
             seen[(a.course_id, a.star_id)] = None
+            last_id[(a.course_id, a.star_id)] = journal_id(a.id)
 
-    # the target star always gets a section (spec §5): setting a target
-    # immediately surfaces its lifetime history, PB, and markers.
-    # interim: segment target sections land in Task 13
+    # the practice target ALWAYS gets a section (spec §5), whichever kind:
+    # setting a target immediately surfaces its lifetime history, PB, and
+    # markers. Fresh targets have no recency entry (-1) and sort last.
     if service.target and service.target[0] == "star" \
             and service.target[1:] not in seen:
         seen[service.target[1:]] = None
+    if service.target and service.target[0] == "segment":
+        seen_segs.setdefault(service.target[1], None)
 
     scoped_set = set(scoped)
+    igt_of = lambda a: a.igt_frames
     for course_id, star_id in seen:
         history = [a for a in all_attempts
                    if a.course_id == course_id and a.star_id == star_id]
         in_section = [a for a in history if a in scoped_set]
-        stats = []
-        seen_stat_ids: set[str] = set()
-        for sel in sorted(stat_menu,
-                          key=lambda s: selection_order(s.get("key", ""),
-                                                        s.get("params"))):
-            if sel["key"] not in REGISTRY:
-                continue
-            sid = selection_id(sel["key"], sel.get("params"))
-            if sid in seen_stat_ids:
-                continue
-            seen_stat_ids.add(sid)
-            d = REGISTRY[sel["key"]]
-            try:
-                value = compute_stat(sel["key"], history, sel.get("params"), clock)
-            except (ValueError, TypeError, KeyError):
-                value = None  # bad stored params (e.g. n="abc") must not 500 the view
-            # label N-substitution is keyed to avg_last_n; a future parameterized stat needs a label_template field instead
-            label = d.label.replace("N", str(sel.get("params", {}).get("n", ""))) \
-                if d.key == "avg_last_n" else d.label
-            stats.append({"key": d.key, "label": label,
-                          "params": sel.get("params", {}), "fmt": d.fmt,
-                          "value": value, "display": _fmt(value, d.fmt)})
         pb_json = {}
         for mode in ("igt", "rta"):
             row = pbs.get((course_id, star_id, mode))
@@ -228,37 +265,68 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "links": star_links(course_id, star_id),
             "pb": pb_json,
             "attempts": [_attempt_json(a, pbs, clock) for a in in_section],
-            "stats": stats,
+            "stats": _stats_for(history, stat_menu, clock),
             "strategies": _strategies_for(registered, all_attempts, course_id, star_id),
             "last_strat": service.strat_by_star.get((course_id, star_id)),
-            "timeline": _timeline(history),
+            "timeline": _timeline(history, igt_of),
             "markers_by_strat": _markers_for(markers_state, course_id, star_id),
-            "progress": _progress(in_section, pb_ids, session_meta),
+            "progress": _progress(in_section, pb_ids, session_meta, igt_of),
         })
-
-    # newest activity first; scoped is journal-id-ordered so the last
-    # assignment per star is its max attempt id. Fresh targets (-1) sort last.
-    last_id: dict[tuple[int, int], int] = {}
-    for a in scoped:
-        if a.course_id is not None:
-            last_id[(a.course_id, a.star_id)] = a.id
     sections.sort(key=lambda s: last_id.get((s["course_id"], s["star_id"]), -1),
                   reverse=True)
 
-    tgt_c, tgt_s = (service.target[1:] if service.target
-                    and service.target[0] == "star" else (None, None))
+    # segment sections: same shape, RTA-only (segments have no IGT) — pb,
+    # attempts, stats, timeline and progress all force the rta clock
+    # whatever the view clock. "armed" reads the LIVE projector so a plain
+    # view refresh self-heals the UI's armed badge after missed notices.
+    seg_defs = {d.id: d for d in service.segment_defs}
+    armed = service.armed_segment_ids
+    rta_of = lambda a: a.rta_frames
+    seg_sections = []
+    for seg_id in seen_segs:
+        d = seg_defs.get(seg_id)
+        history = [a for a in all_attempts if a.segment_id == seg_id]
+        in_section = [a for a in history if a in scoped_set]
+        pb_row = pbs.get(("segment", seg_id, "rta"))
+        seg_sections.append({
+            "kind": "segment", "segment_id": seg_id,
+            "name": d.name if d else f"segment {seg_id} (deleted)",
+            "broken": d is None,
+            "armed": seg_id in armed,
+            "pb": {"rta": ({"frames": pb_row["frames"],
+                            "display": format_igt(pb_row["frames"])}
+                           if pb_row else None)},
+            "attempts": [_attempt_json(a, pbs, "rta") for a in in_section],
+            "stats": _stats_for(history, stat_menu, "rta"),
+            "last_strat": service.strat_by_segment.get(seg_id),
+            "timeline": _timeline(history, rta_of),
+            "markers_by_strat": _markers_for(markers_state, "seg", seg_id),
+            "progress": _progress(in_section, pb_ids, session_meta, rta_of),
+        })
+    seg_sections.sort(
+        key=lambda s: last_id.get(("segment", s["segment_id"]), -1),
+        reverse=True)
+
+    # kind-aware target: the service owns target identity (one builder
+    # shared with the target_changed broadcast); the view adds display
+    # names and guarantees every key exists for BOTH kinds.
+    target = dict(service.target_payload())
+    target.setdefault("segment_id", None)
+    target.setdefault("segment_name", None)
+    tgt_c, tgt_s = target["course_id"], target["star_id"]
+    target["course_name"] = course_name(tgt_c) if tgt_c is not None else None
+    target["star_name"] = star_name(tgt_c, tgt_s) if tgt_c is not None else None
+
     return {
         "session": {"id": service.session_id},
         "scope": scope,
         "sessions": sessions_list,
         "clock": clock,
-        "target": {"course_id": tgt_c, "star_id": tgt_s,
-                   "course_name": course_name(tgt_c) if tgt_c is not None else None,
-                   "star_name": star_name(tgt_c, tgt_s) if tgt_c is not None else None,
-                   "strat_tag": service.strat_tag},
+        "target": target,
         "stat_menu": stat_menu,
         "catalog": _CATALOG,
         "stars": sections,
+        "segments": seg_sections,
         "unassigned": unassigned,
         "strategies": registered,
         "last_strat_by_star": {f"{c}:{s}": v
