@@ -1,6 +1,6 @@
 // src/sm64_events/ui/components/replay.js — inline clip player + recording dot
 import { h } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 
@@ -38,6 +38,13 @@ function attachSharedVolume(el) {
 export function ReplayPlayer({ attemptId }) {
   const [state, setState] = useState({ phase: "loading" });
   const [savedPath, setSavedPath] = useState(null);
+  // One programmatic play() per View-Replay click (= per component mount),
+  // NEVER on re-render: gameplay emits events (mario_acted, anchors...),
+  // each WS push re-renders this tree, and an inline ref re-fires every
+  // render — the old `autoplay` + play()-in-ref resumed paused videos the
+  // moment the user started playing in game. Playback may start ONLY here
+  // (once) or from the player's own controls.
+  const autoPlayed = useRef(false);
 
   useEffect(() => {
     let alive = true;
@@ -64,12 +71,17 @@ export function ReplayPlayer({ attemptId }) {
 
   return html`<div class="replay-player">
     ${state.truncated && html`<div class="meta">⚠ starts mid-attempt (buffer didn't cover the full span)</div>`}
-    <video controls autoplay preload="auto" src=${state.clip_url}
+    <video controls preload="auto" src=${state.clip_url}
            ref=${(el) => {
-             if (!el || el.dataset.sharedVolume) return; // ref re-fires on render
-             el.dataset.sharedVolume = "1";
-             attachSharedVolume(el);
-             el.play().catch(() => {});
+             if (!el) return;
+             if (!el.dataset.sharedVolume) { // ref re-fires on every render
+               el.dataset.sharedVolume = "1";
+               attachSharedVolume(el);
+             }
+             if (!autoPlayed.current) { // see autoPlayed above: once per mount
+               autoPlayed.current = true;
+               el.play().catch(() => {});
+             }
            }}></video>
     <div>
       <button onclick=${saveReplay} disabled=${savedPath !== null}>
