@@ -17,6 +17,7 @@ def test_reader_populates_all_fields():
     mem.write_u16(A.USAMUNE_OVERALL, 600)
     mem.write_u16(A.USAMUNE_STAR_RESULT, 595)
     mem.write_u16(A.CURR_LEVEL, 24)
+    mem.write_u16(A.CURR_AREA, 3)
 
     snap = SnapshotReader(mem).read()
 
@@ -29,10 +30,9 @@ def test_reader_populates_all_fields():
     assert snap.igt_overall == 600
     assert snap.igt_result == 595
     assert snap.curr_level == 24
+    assert snap.curr_area == 3
     assert snap.wall_time_utc.tzinfo == timezone.utc
     assert (datetime.now(timezone.utc) - snap.wall_time_utc).total_seconds() < 5
-    # TODO Task 17 live gate: write A.CURR_AREA + assert snap.curr_area == <value>
-    #      once CURR_AREA is replaced with the live-pinned address in addresses.py
 
 
 def test_curr_area_defaults_to_zero_for_old_call_sites():

@@ -219,11 +219,12 @@ SPAWN_ACTIONS = frozenset({ACT_SPAWN_SPIN_AIRBORNE, ACT_SPAWN_SPIN_LANDING,
                            ACT_SPAWN_NO_SPIN_LANDING})
 
 # gCurrAreaIndex (s16) — castle lobby/upstairs/basement are AREAS of level 6,
-# not levels. NO static source for this address: locate it live (Step 2)
-# before trusting area events. VERIFY (live gate): address + castle area
-# mapping (expected 1=lobby, 2=upstairs, 3=basement — confirm all three).
-CURR_AREA = 0x0  # PLACEHOLDER-BY-DESIGN: replaced by Step 2's live hunt
-CASTLE_AREA_NAMES = {1: "Lobby", 2: "Upstairs", 3: "Basement"}
+# not levels. Live-verified 2026-06-12 via tools/hunt_exact.py snapshot diff:
+# reads 1 in the lobby, 2 upstairs, 3 in the basement, stable across repeated
+# visits (the repeat-label pass proves it is state, not a counter). Sits in
+# the area.c globals cluster two halfwords above gCurrCourseNum (0x8033BAC6).
+CURR_AREA = 0x8033BACA               # s16 gCurrAreaIndex
+CASTLE_AREA_NAMES = {1: "Lobby", 2: "Upstairs", 3: "Basement"}  # live-verified 2026-06-12 (same hunt)
 
 # ---------------------------------------------------------------------------
 # Name tables (display-only; IDs are the authoritative identity).

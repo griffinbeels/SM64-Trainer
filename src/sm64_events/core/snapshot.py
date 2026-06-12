@@ -43,4 +43,5 @@ class SnapshotReader:
             igt_result=m.read_u16(A.USAMUNE_STAR_RESULT),
             curr_level=m.read_s16(A.CURR_LEVEL),
             particle_flags=m.read_u32(A.MARIO_PARTICLE_FLAGS),
+            curr_area=m.read_s16(A.CURR_AREA),
         )
