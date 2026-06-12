@@ -203,7 +203,17 @@ No public RAM map exists for Usamune internals; locate values empirically:
 2. **Exact-value intersection** — `tools/hunt_value.py`: the human types
    the number displayed on screen; intersect scans across two distinct
    values. This collapsed 8 MB to the single result-store address.
-3. **Characterize** — `tools/watch_timer.py ADDR:u16`: watch candidates
+   Its ±2-frame tolerance is for TIMER display slack — it cannot tell
+   small indexes (1/2/3) apart; the 2026-06-12 area hunt converged on
+   door COUNTERS instead (ascending inputs select for things that count).
+3. **Snapshot diff for small indexes** — `tools/hunt_exact.py`: label
+   RDRAM snapshots by game state ("lobby", "upstairs"...), match EXACT
+   u16 values, REPEAT a label at the end (counters never return to an
+   earlier value — the repeat kills them), cap values < 64, and read the
+   globals band (0x8032xxxx–0x8033xxxx) first — area-derived level-heap
+   data also satisfies the signature but the canonical named global lives
+   in the band. Found gCurrAreaIndex (0x8033BACA) in one pass.
+4. **Characterize** — `tools/watch_timer.py ADDR:u16`: watch candidates
    (and neighbors — mod globals cluster) across level change, area warp,
    savestate, Usamune reset, display OFF. Only then promote to the
    registry, marked VERIFY until the live gate passes.
@@ -242,7 +252,9 @@ Composed segments (LBLJ, pipe entries, Bowser fights) as first-class practice ta
 
 **Id namespace offset.** Segment attempt ids = `arm_event_journal_id + 10^10 × def_id`. This puts them in a disjoint namespace from star attempt ids (raw journal ids), survives rebuilds, preserves chronological ordering within a definition via `journal_id()` (`tracking/projection.py`), and encodes the arm event id so the underlying recency is recoverable.
 
-**CURR_AREA address.** `gCurrAreaIndex` has no decomp-derivable static address; it is located via `tools/hunt_value.py` at the live gate (Task 17 Step 4). Until then `CURR_AREA = 0x0` (placeholder — `detectors/area.py` samples `snapshot.curr_area` which defaults to 0 and the area-change events are suppressed). All other segment primitives (warp/key/spawn) are independent of this address.
+**CURR_AREA address.** `gCurrAreaIndex` has no decomp-derivable static address; it was hunted live 2026-06-12 with `tools/hunt_exact.py` and pinned at `0x8033BACA` (castle: 1=lobby, 2=upstairs, 3=basement — the mapping fell out of the hunt itself). Evidence comment in `memory/addresses.py`.
+
+**Usamune section-timer behavior (live-gated 2026-06-12, four sessions).** The section IGT resets on EVERY load, not just L-resets: level entries, area-door warps, AND non-warp walk-through doors — the last resets AFTER the door animation completes (result written at the idle tick, zeroed the next), so the anchor detector sees it with gameplay actions in both context fields. An L-reset respawns Mario at the level's LAST ENTRANCE (which is why anchor-closure continuation re-arms are position-correct), and the Usamune warp menu (e.g. 06-01-00) resets IGT with no level edge. Consumer-side classification (four echo shapes, continuation re-arm, `prev_action`/`frames_since_door` discriminators) lives in the `tracking/segments.py` docstring and `detectors/anchors.py` — this paragraph records the GAME behavior; those record the rules derived from it.
 
 ## Roadmap (unbuilt)
 
@@ -259,11 +271,10 @@ live-feedback round + incident-response from the spec). Remaining phases per
   landing transitions run `set_mario_action(...); break;` so one visible
   landing frame IS the frame-perfect input (evidence quoted in
   `memory/addresses.py`; model documented in `detectors/dust.py`; old
-  journals re-derive via the projection's compat shim). NOT yet
-  live-verified: `MARIO_PARTICLE_FLAGS`, `PARTICLE_DUST` and the jump-chain
-  action ids are VERIFY-marked until a human session rollouts/chain-jumps
-  while watching `tools/verify_addresses.py` (expect `[DUST]` on dusty
-  slide/landing lines and correct dustless/late classification).
+  journals re-derive via the projection's compat shim). The particle flags
+  and jump-chain action ids were live-verified 2026-06-12 (segment-events
+  gate sessions: consistent `[DUST]` and dustless/late classification
+  across castle/BitS/arena play).
 - **Practice-quality round (2026-06-11, delivered):** AFK/no-activity/castle
   discards, `mario_acted` + `strat_set` events, timeline markers, progress
   graph, pinned active star, sort/hide-resets/batching controls, stat-chip
@@ -274,7 +285,14 @@ live-feedback round + incident-response from the spec). Remaining phases per
   case via the IGT-freeze inference; hunt the address only if that inference
   misfires live.
 - **Phase 4** — Routes storage + probability board + Routes tab.
-- ~~Dedicated key / grand-star events~~ — **Delivered in segment-events branch**: `key_grabbed` detector claims Bowser 1/2 arena grabs; `star_grab.py` carries the inverse guard. B3 grand-star attribution VERIFY note in `addresses.py`.
+- ~~Dedicated key / grand-star events~~ — **Delivered in segment-events branch**: `key_grabbed` claims all three fight-ending grabs (B1/B2 keys + B3 grand star via `ACT_JUMBO_STAR_CUTSCENE` — the grand star never enters a star-dance action; evidence in `addresses.py`).
+- **`door_used` primitive (designed follow-up, 2026-06-12):** doors are
+  object-pool objects with fixed positions, and `MarioState`'s used-object
+  pointer names the exact door during the animation — a `door_used {x, z,
+  behavior}` event would (a) replace the heuristic `frames_since_door`
+  echo window in `tracking/segments.py` with an exact causal link, and
+  (b) enable door-scoped triggers in the builder ("you use the door at…").
+  Needs one hunted+verified read (the usedObj offset). User-validated want.
 
 ## Replay capture (2026-06-11/12 live-audit marathon)
 

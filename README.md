@@ -70,7 +70,7 @@ Other event types, same envelope:
 | `mario_acted` | _(none)_ | Mario's first voluntary action since the last anchor (death actions never count); the tracking layer uses it to judge whether an attempt had any behavior |
 | `death` | `cause, igt_frames, level` | Mario died; closes the open attempt as outcome "death" with the cause in outcome_detail. Causes: the death-action set (`standing`, `quicksand`, `electrocution`, `suffocation`, `on_stomach`, `on_back`, `eaten_by_bubba`, `drowning`, `water`) plus `fall` — a void-out (death barrier / pit), detected from the game's pending-warp pulse *before* the level unloads, so the death always precedes the spit-out's `level_changed` |
 | `level_changed` | `from, to` | Level id edge; closes open attempts as abandoned. May arrive with `from == to`: the detector emits one establishing event on server start and a corrective event after attach gaps (`from` = last *emitted* level, not the previous read) so journal-derived level tracking never runs stale — don't infer "left level X" from `from != to` |
-| `area_changed` | `level, from, to` | Castle area id edge (lobby=1, upstairs=2, basement=3 — areas of level 6). Same establishing/corrective semantics as `level_changed`: emits on server start and after attach gaps (`from` may equal `to`). **Note:** `curr_area` reads 0 until `CURR_AREA` is pinned at the live gate (`tools/hunt_value.py` while in the castle — see Task 17 Step 4). |
+| `area_changed` | `level, from, to` | Castle area id edge (lobby=1, upstairs=2, basement=3 — areas of level 6). Same establishing/corrective semantics as `level_changed`: emits on server start and after attach gaps (`from` may equal `to`). `CURR_AREA` live-pinned 2026-06-12 (`0x8033BACA`). |
 | `warp_entered` | `level, area, action` | Edge into a warp/pipe-entry action on the already-sampled `mario_action`. The community-comparable timing moment for "entered the pipe" segments — the `level_changed` that follows adds constant fade time, so segment end anchors target this event instead. |
 | `key_grabbed` | `level, which` | Mario grabbed a Bowser key or the B3 grand star. `which` is `"bitdw"` (Bowser 1, level 30), `"bitfs"` (Bowser 2, level 33), or `"grand"` (Bowser 3, level 34). The key detector claims all three fight-ending grabs. B3's grand star is NOT a collectable star — live-verified 2026-06-12: it enters `ACT_JUMBO_STAR_CUTSCENE` (0x1909), numStars unchanged, no star-dance action, `gLastCompleted*` untouched — so `star_collected` is unreachable and the grand star is handled here. |
 | `spawned` | `level, kind` | Mario gained control at a spawn-in. `kind: "intro"` = leaving `ACT_INTRO_CUTSCENE` (file-select spawn on Castle Grounds — Lakitu Skip start anchor, control begins when the cutscene ends); `kind: "spawn"` = edge into a SPAWN_* action (non-intro spawn-ins). |
@@ -191,7 +191,8 @@ Deleting the file resets all history.
 |---|---|
 | `tools/verify_addresses.py` | Address verification gate + live event watch (prints real detector output) |
 | `tools/find_timer.py` | Scan RDRAM for ticking counters |
-| `tools/hunt_value.py` | Find where a displayed number lives (exact-value search) |
+| `tools/hunt_value.py` | Find where a displayed number lives (exact-value search; ±2-frame tolerance — for timers, not small indexes) |
+| `tools/hunt_exact.py` | Snapshot-diff hunt for small indexes (label game states, exact u16 match, repeated label kills counters) |
 | `tools/watch_timer.py` | Characterize a candidate address across game scenarios |
 | `tools/dedupe_journal.py` | Scan for double-journaled events from concurrent-instance incidents (read-only); `--fix` deletes duplicates and re-projects (server must be stopped first) |
 

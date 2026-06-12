@@ -10,10 +10,11 @@ watch: grab stars and confirm the printed identity matches what you grabbed.
 On any FAIL, cross-check the address at ukikipedia.net/wiki/RAM (US column)
 or the SM64 decomp US symbol map, fix addresses.py, and rerun.
 
-Live-gate checklist (segment events — Task 17 Step 4):
-  1. CURR_AREA: see SKIP note in Phase 1 below; hunt it FIRST with
-     tools/hunt_value.py (value 1 in lobby, 2 upstairs, 3 basement) then
-     confirm all three areas with watch_timer.py before replacing 0x0.
+Live-gate checklist (segment events — Task 17 Step 4; gate PASSED 2026-06-12,
+kept for the next memory-layer change):
+  1. CURR_AREA: pinned at 0x8033BACA via tools/hunt_exact.py (snapshot diff;
+     hunt_value.py's ±2 tolerance cannot tell 1/2/3 apart). The Phase 1 SKIP
+     branch below stays as the guard for any future placeholder address.
   2. Walk into BitDW (level 17) pipe and BitFS (level 19) pipe — confirm
      warp_entered fires in Phase 2 live watch; note action id printed.
      Adjust WARP_ENTRY_ACTIONS if a different action shows.

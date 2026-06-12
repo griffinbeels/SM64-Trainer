@@ -1,6 +1,6 @@
 # Segment Events — Composed Practice Targets
 
-**Date:** 2026-06-11 · **Status:** Approved (brainstorm) · **Next:** implementation plan
+**Date:** 2026-06-11 · **Status:** Implemented & merged (master `c63b43f`, 2026-06-12) — live-gate amendments are footnoted inline; the matcher docstring in `tracking/segments.py` is the living rule set
 
 ## Problem
 

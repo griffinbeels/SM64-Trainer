@@ -118,9 +118,8 @@ def build():
     # stateless edges — key_grabbed and star_collected cannot co-emit on the
     # same level (star_grab.py guards KEY_GRAB_LEVELS directly), so their
     # relative order is informational only.
-    # NOTE: area_changed reads curr_area, which is 0 on every live snapshot
-    # until the CURR_AREA address is live-pinned (Task 17 gate) — until then
-    # area events are inert establishing rows ({from:0,to:0}), by design.
+    # area_changed reads CURR_AREA (gCurrAreaIndex, live-pinned 2026-06-12);
+    # castle areas: 1=lobby, 2=upstairs, 3=basement — see addresses.py.
     detectors = [GameResetDetector(), LevelChangeDetector(),
                  AreaChangeDetector(), AnchorDetector(), DeathDetector(),
                  DustTrickDetector(), WarpDetector(), KeyGrabDetector(),
