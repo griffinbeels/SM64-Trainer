@@ -122,6 +122,207 @@ def crop_bounds(frame_w: int, frame_h: int,
     return x0, y0, x1, y1
 
 
+class DwmSurfaceVideoSource:
+    """PRIMARY capture for PJ64 1.6: read the window's redirection surface
+    through DWM's shared D3D11 texture (replay/_dwm.py) — the same fresh
+    pixels GDI BitBlt reads, with ZERO window-lock contention (probe: 600
+    grabs/10 s, 30.1 distinct/s, 0 stalls vs GDI's ~170 ms stall every
+    second from PJ64's internal 1 Hz work). Falls back to GdiBitBltVideoSource
+    if the undocumented API is unavailable.
+
+    Thread layout: the GRAB thread never calls user32 — even 1 Hz window
+    queries can block ~170 ms on this app's lock. A GEOMETRY thread owns all
+    window queries (client offset within the surface, dims, liveness) and
+    publishes them; the grab thread reads cached values only. Frames flow
+    grab -> queue -> deliver (encode), as with the GDI source."""
+
+    def __init__(self, win: WindowInfo, fps: int = 60):
+        self._win = win
+        self._fps = fps
+        self._stop = None
+        self._thread = None
+        self._geom_thread = None
+        self._deliver_thread = None
+        self._queue = None
+        self._fallback = None
+        # published by the geometry thread (tuple swap = atomic in CPython)
+        self._geom = None   # (off_x, off_y, cw, ch) in surface coords
+        self._alive = True
+
+    def start(self, on_frame, on_stopped) -> None:
+        if self._thread is not None or self._fallback is not None:
+            return
+        from sm64_events.replay._dwm import DwmSurfaceReader
+        try:
+            reader = DwmSurfaceReader()
+            probe = reader.acquire(self._win.hwnd)
+        except Exception:
+            probe = None
+            reader = None
+        if probe is None:
+            log.warning("DWM shared surface unavailable - falling back to "
+                        "GDI BitBlt capture (1 Hz stall caveat applies)")
+            if reader is not None:
+                reader.close()
+            self._fallback = GdiBitBltVideoSource(self._win, fps=self._fps)
+            self._fallback.start(on_frame, on_stopped)
+            return
+        log.info("dwm surface capture: %dx%d full-window surface",
+                 probe.shape[1], probe.shape[0])
+
+        import queue
+        import threading
+        self._stop = threading.Event()
+        self._queue = queue.Queue(maxsize=24)
+        self._geom_thread = threading.Thread(
+            target=self._geom_loop, args=(on_stopped,),
+            name="dwm-geometry", daemon=True)
+        self._geom_thread.start()
+        self._deliver_thread = threading.Thread(
+            target=self._deliver_loop, args=(on_frame,),
+            name="dwm-deliver", daemon=True)
+        self._deliver_thread.start()
+        self._thread = threading.Thread(
+            target=self._loop, args=(reader, on_stopped),
+            name="dwm-capture", daemon=True)
+        self._thread.start()
+
+    def _geom_loop(self, on_stopped) -> None:
+        """All user32 traffic lives here: it may block ~170 ms at PJ64's
+        1 Hz lock window, harmlessly. Publishes client offset within the
+        redirection surface (window-local logical coords)."""
+        import time as _time
+        user32 = ctypes.windll.user32
+        user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-1))  # UNAWARE
+        hwnd = wt.HWND(self._win.hwnd)
+
+        class _PT(ctypes.Structure):
+            _fields_ = [("x", wt.LONG), ("y", wt.LONG)]
+
+        while not self._stop.is_set():
+            if not user32.IsWindow(hwnd):
+                log.info("dwm capture: window gone")
+                self._alive = False
+                on_stopped()
+                return
+            if user32.IsIconic(hwnd):
+                self._geom = None  # minimized: no frames (coverage hole)
+            else:
+                wr = wt.RECT()
+                user32.GetWindowRect(hwnd, ctypes.byref(wr))
+                pt = _PT(0, 0)
+                user32.ClientToScreen(hwnd, ctypes.byref(pt))
+                cr = wt.RECT()
+                user32.GetClientRect(hwnd, ctypes.byref(cr))
+                cw, ch = cr.right & ~1, cr.bottom & ~1
+                if cw >= 16 and ch >= 16:
+                    self._geom = (pt.x - wr.left, pt.y - wr.top, cw, ch)
+                else:
+                    self._geom = None
+            self._stop.wait(1.0)
+
+    def _loop(self, reader, on_stopped) -> None:
+        from sm64_events.replay.clock import qpc_100ns
+        import time as _time
+
+        kernel32 = ctypes.windll.kernel32
+        _CREATE_HIGH_RES = 0x00000002
+        htimer = kernel32.CreateWaitableTimerExW(None, None, _CREATE_HIGH_RES,
+                                                 0x1F0003)
+
+        def _wait_until(target_t: float) -> None:
+            delay = target_t - _time.perf_counter()
+            if htimer and delay > 0.001:
+                due = ctypes.c_longlong(-int((delay - 0.0005) * 1e7))
+                if kernel32.SetWaitableTimer(htimer, ctypes.byref(due),
+                                             0, None, None, False):
+                    kernel32.WaitForSingleObject(htimer, 0xFFFFFFFF)
+            while _time.perf_counter() < target_t:
+                pass
+
+        period = 1.0 / (self._fps * 1.5)  # oversample; recorder dedupes
+        grabs = drops = misses = 0
+        grab_ms = 0.0
+        last_report = _time.monotonic()
+        next_t = _time.perf_counter()
+        try:
+            while not self._stop.is_set():
+                geom = self._geom
+                if geom is None:
+                    _time.sleep(0.1)
+                    next_t = _time.perf_counter()
+                    continue
+                ts = qpc_100ns()
+                t1 = _time.perf_counter()
+                full = reader.acquire(self._win.hwnd)
+                if full is None:
+                    misses += 1
+                    _time.sleep(0.05)
+                    continue
+                ox, oy, cw, ch = geom
+                ch = min(ch, full.shape[0] - oy) & ~1
+                cw = min(cw, full.shape[1] - ox) & ~1
+                if ch < 16 or cw < 16:
+                    continue
+                arr = full[oy:oy + ch, ox:ox + cw]
+                try:
+                    self._queue.put_nowait((arr, ts))
+                except Exception:
+                    try:
+                        self._queue.get_nowait()
+                    except Exception:
+                        pass
+                    self._queue.put_nowait((arr, ts))
+                    drops += 1
+                grabs += 1
+                grab_ms += (_time.perf_counter() - t1) * 1000
+                now = _time.monotonic()
+                if now - last_report > 30 and grabs:
+                    log.info("dwm capture: %.1f grabs/s avg %.1f ms, "
+                             "%d misses, %d encoder-lag drops",
+                             grabs / (now - last_report), grab_ms / grabs,
+                             misses, drops)
+                    grabs = drops = misses = 0
+                    grab_ms = 0.0
+                    last_report = now
+                next_t += period
+                if next_t > _time.perf_counter():
+                    _wait_until(next_t)
+                else:
+                    next_t = _time.perf_counter()
+        except Exception:
+            log.exception("dwm capture loop died")
+            on_stopped()
+        finally:
+            if htimer:
+                kernel32.CloseHandle(htimer)
+            reader.close()
+
+    def _deliver_loop(self, on_frame) -> None:
+        while True:
+            item = self._queue.get()
+            if item is None:
+                return
+            on_frame(*item)
+
+    def stop(self) -> None:
+        if self._fallback is not None:
+            self._fallback.stop()
+            self._fallback = None
+            return
+        if self._thread is not None:
+            self._stop.set()
+            self._thread.join(timeout=5)
+            self._thread = None
+        if self._geom_thread is not None:
+            self._geom_thread.join(timeout=5)
+            self._geom_thread = None
+        if self._deliver_thread is not None:
+            self._queue.put(None)
+            self._deliver_thread.join(timeout=5)
+            self._deliver_thread = None
+
+
 class GdiBitBltVideoSource:
     """GDI BitBlt of the window's CLIENT DC — the working capture path for
     PJ64 1.6 (Jabo D3D8).
