@@ -6,6 +6,34 @@ import { getJSON, send } from "../api.js";
 
 const html = htm.bind(h);
 
+// One shared volume for every replay player — current and future. The last
+// user adjustment wins everywhere: changing volume on any player fans out
+// to all mounted players and persists (localStorage) for players not yet
+// opened, including after a reload. Default 30% — game audio is loud
+// against an otherwise-silent page; a stored user choice overrides it.
+const VOLUME_KEY = "replay_volume";
+
+function storedVolume() {
+  let v = NaN;
+  try { v = parseFloat(localStorage.getItem(VOLUME_KEY)); } catch {}
+  return v >= 0 && v <= 1 ? v : 0.3;   // NaN fails both comparisons
+}
+
+let applyingVolume = false; // re-entrancy guard: our fan-out, not the user
+
+function attachSharedVolume(el) {
+  el.volume = storedVolume(); // before addEventListener: must not self-fire
+  el.addEventListener("volumechange", () => {
+    if (applyingVolume) return;
+    try { localStorage.setItem(VOLUME_KEY, String(el.volume)); } catch {}
+    applyingVolume = true;
+    document.querySelectorAll(".replay-player video").forEach((v) => {
+      if (v !== el) v.volume = el.volume;
+    });
+    applyingVolume = false;
+  });
+}
+
 // Expanded row under an attempt: extract on mount (server caches), then play.
 export function ReplayPlayer({ attemptId }) {
   const [state, setState] = useState({ phase: "loading" });
@@ -37,7 +65,12 @@ export function ReplayPlayer({ attemptId }) {
   return html`<div class="replay-player">
     ${state.truncated && html`<div class="meta">⚠ starts mid-attempt (buffer didn't cover the full span)</div>`}
     <video controls autoplay preload="auto" src=${state.clip_url}
-           ref=${(el) => el && el.play().catch(() => {})}></video>
+           ref=${(el) => {
+             if (!el || el.dataset.sharedVolume) return; // ref re-fires on render
+             el.dataset.sharedVolume = "1";
+             attachSharedVolume(el);
+             el.play().catch(() => {});
+           }}></video>
     <div>
       <button onclick=${saveReplay} disabled=${savedPath !== null}>
         ${savedPath ? "Saved" : "Save Replay"}</button>
