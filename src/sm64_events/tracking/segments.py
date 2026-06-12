@@ -319,29 +319,18 @@ class SegmentEngine:
                     # (live gate 2026-06-12, seq 40-45)
                     pass
                 elif ev.type in ("practice_reset", "state_loaded") \
-                        and ev.frame == self._last_transition_frame \
-                        and ev.payload.get("paused_frames_before", 0) \
-                        <= _MENU_PAUSE_FRAMES:
-                    # Shape (3) — transition co-frame echo (walked area door):
-                    # area_changed mid-segment at frame F, then anchor at F.
-                    # Suppressed only when paused_frames_before <= 5.
-                    # Menu warps (06-01-00, etc.) are co-frame BUT pass through
-                    # the pause menu: paused_frames_before 13-890 observed
-                    # in live logs (2026-06-12).  A co-frame anchor with a
-                    # large pause is a deliberate attempt boundary, not a
-                    # load echo — falls through to the real-reset path below.
-                    # (live report 2026-06-12: LBLJ armed in castle lobby
-                    # closed-as-reset when crossing the basement-stairs door)
-                    pass
-                elif ev.type in ("practice_reset", "state_loaded") \
                         and ev.payload.get(
                             "prev_action",
                             ev.payload.get("action")) in DOOR_ACTIONS:
-                    # Intra-area door echo (shape c): no area_changed fires
+                    # Shape (2a) — intra-area door echo: no area_changed fires
                     # (same area on both sides of the door), but Usamune still
                     # resets IGT → anchor fires with Mario in a door action
                     # (0x1320/0x1321/0x1322). Inputs are locked during door
                     # animations, so this can never be a player reset.
+                    # Ordered BEFORE the co-frame shape (3): positive evidence
+                    # of a door outranks frame-coincidence signals — a door
+                    # echo stays an echo regardless of pause buffering or
+                    # frame alignment.
                     # prev_action is authoritative when present: the door open
                     # animation must have been running on the PREVIOUS tick too
                     # (a real L-reset has prev_action = gameplay, not a door
@@ -355,13 +344,30 @@ class SegmentEngine:
                         and ev.payload.get("frames_since_door") is not None \
                         and 0 <= ev.payload["frames_since_door"] \
                         <= _DOOR_ECHO_WINDOW:
-                    # Non-warp door recency echo (shape d): ACT_PULLING/
+                    # Shape (2b) — non-warp door recency echo: ACT_PULLING/
                     # PUSHING_DOOR ends the section AFTER the animation —
                     # IGT resets 1-5 frames later with Mario already idle/
                     # landing, so action and prev_action carry no door
                     # context.  frames_since_door bridges the gap.
+                    # Also ordered BEFORE shape (3): door evidence outranks
+                    # frame coincidence.
                     # Historical events (no frames_since_door key): .get()
                     # returns None → falls through to conservative close.
+                    pass
+                elif ev.type in ("practice_reset", "state_loaded") \
+                        and ev.frame == self._last_transition_frame \
+                        and ev.payload.get("paused_frames_before", 0) \
+                        <= _MENU_PAUSE_FRAMES:
+                    # Shape (3) — transition co-frame echo (walked area door):
+                    # area_changed mid-segment at frame F, then anchor at F.
+                    # Suppressed only when paused_frames_before <= 5.
+                    # Menu warps (06-01-00, etc.) are co-frame BUT pass through
+                    # the pause menu: paused_frames_before 13-890 observed
+                    # in live logs (2026-06-12).  A co-frame anchor with a
+                    # large pause is a deliberate attempt boundary, not a
+                    # load echo — falls through to the real-reset path below.
+                    # (live report 2026-06-12: LBLJ armed in castle lobby
+                    # closed-as-reset when crossing the basement-stairs door)
                     pass
                 elif ev.type in ("practice_reset", "state_loaded"):
                     if ev.payload.get("paused_frames_before", 0) \
