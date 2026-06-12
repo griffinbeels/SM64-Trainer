@@ -627,3 +627,92 @@ def test_historical_anchor_without_frames_since_door_closes():
         ctx(level=6))
     assert len(closed) == 1
     assert closed[0].outcome == "reset" and closed[0].rta_frames == 200
+
+
+# ---------------------------------------------------------------------------
+# Anchor closure re-arm (live-gate amendment 2026-06-12)
+# A practice_reset/state_loaded that CLOSES an armed segment must also
+# RE-ARM the same segment at the anchor frame — the practice-loop
+# continuation.  Usamune L-reset respawns Mario at the level's last entrance,
+# which is the segment's start position (lobby door for LBLJ, HMC exit for
+# MIPS), so timing from the anchor equals a fresh start-trigger arm.
+# ---------------------------------------------------------------------------
+
+def test_second_reset_also_records():
+    """Live regression (2026-06-12 report: grounds→lobby, reset, reset again —
+    second reset recorded nothing, armed chip dark).
+    LBLJ armed via level_changed 16→6 @1000 (+ load echo @1000 ignored);
+    real reset @1300 → row 1 (reset rta 300), segment still armed;
+    real reset @1600 → row 2 (reset rta 300), segment still armed;
+    success end @1800 → row 3 (success rta 200, timed from second reset)."""
+    e = SegmentEngine([LBLJ])
+    # arm
+    e.feed(jev(10, "level_changed", 1000, {"from": 16, "to": 6}),
+           ctx(level=6, prev_level=16))
+    # load echo — ignored
+    e.feed(jev(11, "practice_reset", 1000, {"igt_frames_before": 64}),
+           ctx(level=6))
+    assert e.armed_ids() == {1}
+
+    # first real reset
+    closed1, notices1 = e.feed(
+        jev(12, "practice_reset", 1300, {"action": 0x0C400201}),
+        ctx(level=6))
+    assert len(closed1) == 1
+    assert closed1[0].outcome == "reset" and closed1[0].rta_frames == 300
+    assert e.armed_ids() == {1}, "segment must stay armed after first reset"
+    # no armed/disarmed notices: attempt boundary, not a state change
+    assert [n["event"] for n in notices1
+            if n["event"] in ("segment_armed", "segment_disarmed")] == []
+
+    # second real reset — the live-regression case (was yielding no row)
+    closed2, notices2 = e.feed(
+        jev(13, "practice_reset", 1600, {"action": 0x0C400201}),
+        ctx(level=6))
+    assert len(closed2) == 1, "second reset must record a row (was the bug)"
+    assert closed2[0].outcome == "reset" and closed2[0].rta_frames == 300
+    assert e.armed_ids() == {1}, "segment must stay armed after second reset"
+    assert [n["event"] for n in notices2
+            if n["event"] in ("segment_armed", "segment_disarmed")] == []
+
+    # success end — timed from the second reset at 1600
+    closed3, _ = e.feed(
+        jev(14, "level_changed", 1800, {"from": 6, "to": 17}),
+        ctx(level=17, prev_level=6))
+    assert len(closed3) == 1
+    assert closed3[0].outcome == "success" and closed3[0].rta_frames == 200
+
+
+def test_anchor_continuation_emits_no_notices():
+    """The closing anchor (a real practice_reset) must produce zero
+    segment_armed / segment_disarmed notices — it is an attempt boundary,
+    not a state change."""
+    e = SegmentEngine([LBLJ])
+    lblj_arm(e, jid=10, frame=1000)
+    _, notices = e.feed(
+        jev(11, "practice_reset", 1300, {"action": 0x0C400201}),
+        ctx(level=6))
+    state_notices = [n["event"] for n in notices
+                     if n["event"] in ("segment_armed", "segment_disarmed")]
+    assert state_notices == []
+
+
+def test_afk_anchor_rebases_without_row():
+    """AFK discard (paused_frames_before >= 150): no row recorded, but the
+    segment is re-armed at the AFK anchor frame.  A subsequent end trigger
+    times from the AFK anchor, not the original arm."""
+    e = SegmentEngine([LBLJ])
+    lblj_arm(e, jid=10, frame=1000)
+    # AFK anchor at 1500 (200 paused frames) — no row, still armed
+    closed_afk, _ = e.feed(
+        jev(11, "practice_reset", 1500,
+            {"paused_frames_before": 200, "action": 0x0C400201}),
+        ctx(level=6))
+    assert closed_afk == [], "AFK anchor must not record a row"
+    assert e.armed_ids() == {1}, "segment must stay armed after AFK anchor"
+    # success end — timed from the AFK anchor at 1500, not the original arm
+    closed, _ = e.feed(
+        jev(12, "level_changed", 1700, {"from": 6, "to": 17}),
+        ctx(level=17, prev_level=6))
+    assert len(closed) == 1
+    assert closed[0].outcome == "success" and closed[0].rta_frames == 200

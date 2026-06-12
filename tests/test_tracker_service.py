@@ -429,33 +429,35 @@ def test_star_attempt_completed_carries_kind_star(tmp_path):
 
 
 def test_segment_armed_broadcast_survives_recursive_publish(tmp_path):
-    """One published event must BOTH close an attempt (so _track recurses
-    via the derived attempt_completed publish) AND emit segment notices.
+    """One published event must close an attempt (attempt_completed fires via
+    recursive _track publish) while the segment stays continuously armed —
+    anchor closures emit NO armed/disarmed notices (attempt boundary, not a
+    state change; live-gate amendment 2026-06-12).
 
     Sequence (seeded BitDW Pipe Entry — starts: level_enter to=17 OR
     attempt_anchor level=17; end: warp_entered level=17):
 
       1. level_changed {from:6,to:17}  -> arms the def via level_enter
       2. practice_reset @1100          -> closes the armed segment as
-         outcome "reset" (attempt_completed -> publish -> _track recursion,
-         whose nested feed() RESETS projector.segment_notices) AND re-arms
-         the def via attempt_anchor (tracked level is 17), producing a
-         disarmed+armed notice pair on the SAME event.
+         outcome "reset" (attempt_completed -> publish -> _track recursion)
+         AND re-arms the def silently in place (no notices — UI chip stays
+         lit without flickering).  The attempt_completed fires THROUGH the
+         recursive path.
 
-    If the service drained notices AFTER the attempt loop, the recursive
-    publish would clobber them and the frame-1100 pair would never be
-    broadcast."""
+    Verify: attempt_completed fires with outcome "reset"; no armed/disarmed
+    notices at frame 1100; segment remains armed after the reset."""
     db, svc, sent = make_rec(tmp_path)
     bitdw = seed_id(db, "BitDW Pipe Entry")
     asyncio.run(svc.publish(ev("level_changed", 1000, {"from": 6, "to": 17})))
     asyncio.run(svc.publish(ev("practice_reset", 1100, {"igt_frames_before": 0})))
     completed = [e for e in sent if e.type == "attempt_completed"]
     assert completed and completed[-1].payload["outcome"] == "reset"  # recursion happened
-    notices = [e for e in sent
-               if e.type in ("segment_armed", "segment_disarmed")
-               and e.frame == 1100]
-    assert {e.type for e in notices} == {"segment_armed", "segment_disarmed"}
-    assert all(e.payload["segment_id"] == bitdw for e in notices)
+    # anchor closure emits no notices — the segment never stops being armed
+    notices_at_1100 = [e for e in sent
+                       if e.type in ("segment_armed", "segment_disarmed")
+                       and e.frame == 1100]
+    assert notices_at_1100 == [], "anchor closure must not emit armed/disarmed notices"
+    assert bitdw in svc.armed_segment_ids, "segment must remain armed after anchor closure"
 
 
 def test_save_pb_segment_requires_rta_and_inserts_segment_row(tmp_path):
@@ -491,21 +493,25 @@ def test_update_segment_reproject_diff_broadcasts_disarm(tmp_path):
 
 def test_reproject_during_track_tail_abandons_stale_attempts(tmp_path):
     """Projector-identity race: a CRUD command awaited from INSIDE _track's
-    notice drain (modeling an API request landing while _track is
+    attempt loop (modeling an API request landing while _track is
     suspended) swaps self._projector mid-tail. The replay already accounted
     for the in-flight journaled row, so the old tail must be ABANDONED —
     finishing it would upsert a stale segment attempt the replace_attempts
     just wiped.
 
     Construction: level_changed {6->17} arms BitDW Pipe Entry; the
-    practice_reset @1100 closes it (closed=[seg reset attempt]) and emits a
-    disarmed+armed notice pair. The broadcaster deletes the def upon the
-    frame-1100 segment_armed notice — i.e. during the drain, BEFORE the
-    attempt loop runs. Without the identity guard the tail then upserts the
-    stale seg attempt back into the freshly re-projected table."""
+    practice_reset @1100 closes it (closed=[seg reset attempt]) and emits
+    attempt_completed via recursive publish. The broadcaster deletes the def
+    upon the frame-1100 attempt_completed (kind=segment) — i.e. during the
+    attempt loop, AFTER the notice drain. Without the identity guard the loop
+    then upserts the stale seg attempt from the replaced projector back into
+    the freshly re-projected table.
+
+    Note: anchor closures emit no armed/disarmed notices (live-gate amendment
+    2026-06-12), so the trigger is attempt_completed rather than segment_armed."""
     db = Database(tmp_path / "t.db")
 
-    class DeleteOnArmed(RecordingBroadcaster):
+    class DeleteOnCompleted(RecordingBroadcaster):
         def __init__(self):
             super().__init__()
             self.svc = None
@@ -514,13 +520,15 @@ def test_reproject_during_track_tail_abandons_stale_attempts(tmp_path):
 
         async def publish(self, event: Event) -> int:
             seq = await super().publish(event)
-            if (event.type == "segment_armed" and event.frame == 1100
+            if (event.type == "attempt_completed"
+                    and event.payload.get("kind") == "segment"
+                    and event.frame == 1100
                     and not self.fired):
                 self.fired = True
                 await self.svc.delete_segment(self.target_id)
             return seq
 
-    bc = DeleteOnArmed()
+    bc = DeleteOnCompleted()
     svc = TrackerService(db, bc)
     bc.svc = svc
     asyncio.run(svc.start())
@@ -528,9 +536,12 @@ def test_reproject_during_track_tail_abandons_stale_attempts(tmp_path):
     asyncio.run(svc.publish(ev("level_changed", 1000, {"from": 6, "to": 17})))
     asyncio.run(svc.publish(ev("practice_reset", 1100, {"igt_frames_before": 0})))
     assert bc.fired
-    # the stale tail was abandoned: no seg attempt re-upserted, no derived
+    # the stale tail was abandoned: no seg attempt re-upserted, no second
     # attempt_completed for the deleted def
     assert all(a.segment_id != bc.target_id for a in db.attempts())
-    assert not any(e.type == "attempt_completed"
-                   and e.payload.get("segment_id") == bc.target_id
-                   for e in bc.sent)
+    completed_for_target = [e for e in bc.sent
+                            if e.type == "attempt_completed"
+                            and e.payload.get("segment_id") == bc.target_id]
+    # exactly one attempt_completed fires (the one that triggered the delete);
+    # the tail abandonment prevents a second upsert+broadcast
+    assert len(completed_for_target) == 1

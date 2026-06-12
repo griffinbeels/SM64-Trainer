@@ -7,6 +7,12 @@ builder GUI. Adding a trigger type = one TriggerType row here.
 Matcher invariants (spec §Matcher semantics — tests are the contract):
 - closures (success/failure) process BEFORE arming; one event may close an
   attempt AND re-arm the next (practice_reset in an attempt_anchor segment)
+- anchor closures are attempt BOUNDARIES, not state changes: a real
+  practice_reset/state_loaded closes the current attempt AND re-arms the
+  same segment at the anchor frame (practice-loop continuation — Usamune
+  respawns at the level's last entrance, which is the segment's start
+  position; live-gate amendment 2026-06-12). The segment never stops being
+  armed; the UI chip stays lit.
 - guards re-evaluate on EVERY arm and re-arm
 - re-firing a start trigger while armed re-arms (timer restarts, no row);
   a refire whose guards FAIL leaves the existing arm untouched (the old
@@ -332,7 +338,22 @@ class SegmentEngine:
                         a = self._close(Attempt, d, arm, ev, "reset", None)
                         if a:
                             closed.append(a)
-                    self._disarm(d, ev, notices)
+                    # Re-arm in place at the anchor frame instead of disarming.
+                    # A Usamune L-reset respawns Mario at the level's last entrance
+                    # — which IS the segment's start position in the practice loop
+                    # (lobby door for LBLJ, HMC exit for MIPS). Timing from this
+                    # anchor is equivalent to a fresh start-trigger arm.
+                    # The segment never stops being armed; no armed/disarmed
+                    # notices are emitted (attempt boundary, not a state change).
+                    # For defs with attempt_anchor start triggers the arm phase
+                    # below will replace this _Arm with identical values
+                    # (fresh=False → no duplicate notice) — idempotent.
+                    self._armed[d.id] = _Arm(
+                        jid=ev.id, start_frame=ev.frame,
+                        started_utc=ev.wall_time_utc,
+                        anchor_type=ev.type,
+                        session_id=ev.session_id,
+                    )
                 elif ev.type == "death":
                     a = self._close(Attempt, d, arm, ev, "death",
                                     ev.payload.get("cause"))
