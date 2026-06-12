@@ -181,10 +181,12 @@ LEVEL_NAMES = {
     30: "Bowser 1 Arena", 31: "Wing Mario Over the Rainbow",
     33: "Bowser 2 Arena", 34: "Bowser 3 Arena", 36: "Tall, Tall Mountain",
 }
+# Gaps: 25 (ending cutscene), 32 and 35 (decomp UNKNOWN stubs) — not
+# reachable in normal play.
 
 LEVEL_BITDW, LEVEL_BITFS, LEVEL_BITS = 17, 19, 21
 LEVEL_HMC, LEVEL_DDD = 7, 23
-LEVEL_CASTLE_INSIDE, LEVEL_CASTLE_GROUNDS = 6, 16
+LEVEL_CASTLE_INSIDE, LEVEL_CASTLE_GROUNDS, LEVEL_CASTLE_COURTYARD = 6, 16, 26
 BOWSER_1_ARENA, BOWSER_2_ARENA, BOWSER_3_ARENA = 30, 33, 34
 
 # Key grabs enter the same star-dance actions as stars (see STAR_GRAB_ACTIONS
@@ -198,7 +200,7 @@ KEY_GRAB_LEVELS = frozenset({BOWSER_1_ARENA, BOWSER_2_ARENA})
 # n64decomp/sm64 master, fetched 2026-06-11. VERIFY (live gate): which of
 # these fires on the BitDW/BitFS pipe touch and the BitS funnel.
 ACT_DISAPPEARED = 0x00001300       # generic "Mario left the world" (pipes, some warps)
-ACT_TELEPORT_FADE_OUT = 0x00001336
+ACT_TELEPORT_FADE_OUT = 0x00001336  # teleporter/cap-warp fade
 WARP_ENTRY_ACTIONS = frozenset({ACT_DISAPPEARED, ACT_TELEPORT_FADE_OUT})
 
 # Spawn actions — same decomp fetch. The file-select spawn on Castle Grounds
@@ -210,6 +212,8 @@ ACT_SPAWN_SPIN_AIRBORNE = 0x00001924
 ACT_SPAWN_SPIN_LANDING = 0x00001325
 ACT_SPAWN_NO_SPIN_AIRBORNE = 0x00001932
 ACT_SPAWN_NO_SPIN_LANDING = 0x00001333
+# NB: these four ids also appear in PASSIVE_ACTIONS (AnchorDetector's
+# inactive-action set); keep both in sync when modifying spawn ids.
 SPAWN_ACTIONS = frozenset({ACT_SPAWN_SPIN_AIRBORNE, ACT_SPAWN_SPIN_LANDING,
                            ACT_SPAWN_NO_SPIN_AIRBORNE,
                            ACT_SPAWN_NO_SPIN_LANDING})
