@@ -23,7 +23,8 @@ from collections import deque
 from sm64_events.core.events import Event
 from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.core.timefmt import format_igt
-from sm64_events.memory.addresses import STAR_GRAB_ACTIONS, course_name, star_name
+from sm64_events.memory.addresses import (KEY_GRAB_LEVELS, STAR_GRAB_ACTIONS,
+                                          course_name, star_name)
 
 
 class StarGrabDetector:
@@ -58,6 +59,8 @@ class StarGrabDetector:
                    and prev.mario_action not in STAR_GRAB_ACTIONS)
         if not entered:
             return []
+        if curr.curr_level in KEY_GRAB_LEVELS:
+            return []  # Bowser key, not a star — detectors/key.py owns it
         star_id = curr.last_completed_star - 1  # game is 1-based, API 0-based
         if star_id < 0:
             return []
