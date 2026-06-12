@@ -134,9 +134,21 @@ class Database:
         with self._lock:
             version = self._conn.execute("PRAGMA user_version").fetchone()[0]
             for i, script in enumerate(MIGRATIONS[version:], start=version + 1):
-                self._conn.executescript(script)
-                self._conn.execute(f"PRAGMA user_version = {i}")
-            self._conn.commit()
+                # One transaction per entry: a mid-migration crash rolls back
+                # BOTH the partial schema changes and the version write
+                # (PRAGMA user_version is a header field — transactional).
+                # Without this, a crash inside v4's DROP/RENAME leaves no pbs
+                # table, and re-opening dies on the duplicate-column ALTER.
+                try:
+                    self._conn.executescript(
+                        f"BEGIN;{script};PRAGMA user_version = {i};COMMIT;")
+                except Exception:
+                    # a failed statement leaves the explicit txn open on the
+                    # connection (write lock held) — release it before
+                    # re-raising so a retry/reopen isn't "database is locked"
+                    if self._conn.in_transaction:
+                        self._conn.execute("ROLLBACK")
+                    raise
 
     def close(self) -> None:
         self._conn.close()
@@ -267,6 +279,8 @@ class Database:
         cols = {"name": lambda v: v, "enabled": int,
                 "start_triggers": json.dumps, "end_triggers": json.dumps,
                 "guards": json.dumps}
+        if set(fields) - set(cols):
+            raise ValueError(f"unknown fields {sorted(set(fields) - set(cols))}")
         sets, vals = [], []
         for k, conv in cols.items():
             if k in fields:
@@ -282,6 +296,8 @@ class Database:
             raise LookupError(f"segment {def_id} not found")
 
     def delete_segment_def(self, def_id: int) -> None:
+        # attempts cache rows are NOT touched — callers must re-project
+        # (mirrors delete_session)
         with self._lock:
             cur = self._conn.execute("DELETE FROM segment_defs WHERE id=?",
                                      (def_id,))

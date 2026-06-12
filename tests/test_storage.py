@@ -222,3 +222,55 @@ def test_pb_accepts_segment_keying_and_null_course(tmp_path):
                  saved_utc="2026-06-11T00:00:00Z", segment_id=1)
     row = db.pbs()[0]
     assert row["segment_id"] == 1 and row["course_id"] is None
+
+
+def test_v3_database_pb_rows_survive_v4_rebuild(tmp_path):
+    # a real pre-segment db (user_version=3) must keep its PB rows — id,
+    # frames, keying — through v4's pbs_v2 rebuild, gaining segment_id=NULL
+    import sqlite3
+    from sm64_events.storage.db import MIGRATIONS
+    path = tmp_path / "t.db"
+    conn = sqlite3.connect(str(path))
+    conn.executescript(MIGRATIONS[0])
+    conn.executescript(MIGRATIONS[1])
+    conn.executescript(MIGRATIONS[2])
+    conn.execute("INSERT INTO pbs (id, course_id, star_id, timer_mode,"
+                 " frames, saved_utc) VALUES (7, 2, 3, 'igt', 500,"
+                 " '2026-06-10T12:00:00Z')")
+    conn.execute("PRAGMA user_version = 3")
+    conn.commit()
+    conn.close()
+    db = Database(path)
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 4
+    [row] = db.pbs()
+    assert row["id"] == 7 and row["frames"] == 500
+    assert row["course_id"] == 2 and row["star_id"] == 3
+    assert row["segment_id"] is None
+
+
+def test_failed_migration_rolls_back_schema_and_version(tmp_path, monkeypatch):
+    # a crash mid-entry must roll back BOTH the partial schema changes and
+    # the version write, so a fixed entry can later apply cleanly
+    import sqlite3
+    import pytest
+    import sm64_events.storage.db as db_mod
+    path = tmp_path / "t.db"
+    Database(path).close()                       # all real migrations applied
+    bad = "CREATE TABLE extra (id INTEGER); CREATE TABLE broken (oops"
+    monkeypatch.setattr(db_mod, "MIGRATIONS", db_mod.MIGRATIONS + [bad])
+    with pytest.raises(sqlite3.OperationalError):
+        Database(path)
+    check = sqlite3.connect(str(path))
+    # (a) version reflects only the successful prefix
+    assert check.execute("PRAGMA user_version").fetchone()[0] == 4
+    # partial application rolled back: first statement did NOT stick
+    names = {r[0] for r in check.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "extra" not in names
+    check.close()
+    # (b) the fixed entry then applies cleanly (no duplicate-table error)
+    fixed = "CREATE TABLE extra (id INTEGER);"
+    monkeypatch.setattr(db_mod, "MIGRATIONS", db_mod.MIGRATIONS[:-1] + [fixed])
+    db = Database(path)
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    db.close()
