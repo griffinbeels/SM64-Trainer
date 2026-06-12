@@ -32,6 +32,24 @@ class PauseBody(BaseModel):
     paused: bool
 
 
+def pause_state(poller, replay) -> dict:
+    """The ONE pause truth the UI renders. Two sources, strict precedence:
+
+    - reason "manual" (user pressed the button): poller paused (no events)
+      AND replay discarding; player movement is ignored — only an explicit
+      unpause clears it.
+    - reason "afk" (recorder idle gate): replay discarding, but the poller
+      KEEPS running — it must, the activity tap that detects the player's
+      return rides it (and while AFK no events fire anyway). Any input
+      resumes instantly; the UI just shows it happened.
+    """
+    if poller.paused:
+        return {"paused": True, "reason": "manual"}
+    if replay is not None and replay.recorder.status().get("idle"):
+        return {"paused": True, "reason": "afk"}
+    return {"paused": False, "reason": None}
+
+
 def _log_poller_exit(task: asyncio.Task) -> None:
     if task.cancelled():
         return
@@ -155,19 +173,22 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
 
     @app.get("/api/pause")
     def get_pause():
-        return {"paused": poller.paused}
+        return pause_state(poller, replay)
 
     @app.post("/api/pause")
     def set_pause(body: PauseBody):
-        """One switch for the whole pipeline: the poller stops reading and
-        dispatching (no events, no journal rows) and the replay recorder
-        discards footage (rides the idle machinery). Lives HERE, not
-        api.py — it spans poller + replay, which only this composition
+        """MANUAL pause switch (reason precedence in pause_state): the
+        poller stops reading and dispatching (no events, no journal rows)
+        and the replay recorder discards footage (rides the idle
+        machinery). Pausing while AFK escalates to manual — movement no
+        longer resumes. Unpausing while the player is still AFK lets the
+        idle gate re-trigger naturally (~idle_after_s later). Lives HERE,
+        not api.py — it spans poller + replay, which only this composition
         surface holds."""
         poller.set_paused(body.paused)
         if replay is not None:
             replay.recorder.set_session_paused(body.paused)
-        return {"paused": poller.paused}
+        return pause_state(poller, replay)
 
     @app.get("/health")
     def health():

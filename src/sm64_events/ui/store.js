@@ -12,19 +12,27 @@ export function useTracker() {
   const [scope, setScope] = useState(localStorage.getItem("scope") || "session");
   const [feed, setFeed] = useState([]);
   const [connected, setConnected] = useState(false);
-  const [paused, setPaused] = useState(false);
-
-  // server is the truth for pause (survives page reloads / other tabs)
-  const pausedRef = useRef(false);
-  useEffect(() => { pausedRef.current = paused; }, [paused]);
+  // server-owned pause truth: {paused, reason: "manual"|"afk"|null}.
+  // Polled (5 s) because "afk" flips server-side without any UI action;
+  // the POST response updates it instantly on manual toggles.
+  const [pauseState, setPauseState] = useState({ paused: false, reason: null });
+  const reasonRef = useRef(null);
+  useEffect(() => { reasonRef.current = pauseState.reason; }, [pauseState]);
   useEffect(() => {
-    getJSON("/api/pause").then((r) => setPaused(r.paused)).catch(() => {});
+    let alive = true;
+    const poll = () => getJSON("/api/pause")
+      .then((r) => alive && setPauseState(r)).catch(() => {});
+    poll();
+    const id = setInterval(poll, 5000);
+    return () => { alive = false; clearInterval(id); };
   }, []);
+  // The button drives only the MANUAL layer: pausing while afk escalates
+  // to manual (movement no longer resumes); resume exists only for manual.
   const togglePause = useCallback(async () => {
     try {
       const r = await send("POST", "/api/pause",
-                           { paused: !pausedRef.current });
-      setPaused(r.paused);
+                           { paused: reasonRef.current !== "manual" });
+      setPauseState(r);
     } catch (e) { console.error(e); }
   }, []);
 
@@ -69,5 +77,6 @@ export function useTracker() {
   const pickClock = (c) => { localStorage.setItem("clock", c); setClock(c); };
   const pickScope = (s) => { localStorage.setItem("scope", s); setScope(s); };
   return { view, clock, pickClock, scope, pickScope, feed, connected,
-           refresh, paused, togglePause };
+           refresh, paused: pauseState.paused,
+           pauseReason: pauseState.reason, togglePause };
 }

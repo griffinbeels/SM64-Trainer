@@ -100,4 +100,32 @@ def test_ui_responses_force_revalidation():
         r = c.get("/ui/store.js")
         assert r.status_code == 200
         assert r.headers["cache-control"] == "no-cache"
-        assert "cache-control" not in c.get("/api/pause").headers
+        pr = c.get("/api/pause")
+        assert "cache-control" not in pr.headers
+        assert pr.json() == {"paused": False, "reason": None}
+
+
+def test_pause_state_reasons_and_precedence():
+    """PauseReason contract: manual (button) outranks afk (idle gate);
+    afk shows whenever the recorder is idle and nothing is manual; the
+    poller never pauses for afk (it hosts the activity tap that detects
+    the player's return)."""
+    from types import SimpleNamespace
+
+    from sm64_events.server.app import pause_state
+
+    def replay_stub(idle):
+        rec = SimpleNamespace(status=lambda: {"idle": idle})
+        return SimpleNamespace(recorder=rec)
+
+    poller = SimpleNamespace(paused=False)
+    assert pause_state(poller, None) == {"paused": False, "reason": None}
+    assert pause_state(poller, replay_stub(False)) == \
+        {"paused": False, "reason": None}
+    assert pause_state(poller, replay_stub(True)) == \
+        {"paused": True, "reason": "afk"}
+
+    poller.paused = True
+    assert pause_state(poller, replay_stub(True)) == \
+        {"paused": True, "reason": "manual"}     # manual outranks afk
+    assert pause_state(poller, None) == {"paused": True, "reason": "manual"}
