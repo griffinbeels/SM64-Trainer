@@ -209,8 +209,9 @@ function BufferSettings({ st, refresh, close }) {
       <input id="replay-post-pad" name="replay_post_pad" type="number"
         min="0" max="10" step="0.5" style="width:4rem" value=${postS}
         oninput=${(e) => setPostS(e.target.value)} /> s after
-      <div class="meta">clips clamp to available footage; buffer pauses after
-        ${idleCutoff} s without player input and resumes on the next input</div>
+      <div class="meta">clips clamp to available footage; idle gaps
+        (${idleCutoff} s without input) aren't kept — recording resumes
+        instantly on input, reset, or level entry</div>
     </div>`}
     ${info && html`<div class="meta" style="margin-top:.3rem">
       saved replays (kept forever, not part of the buffer):

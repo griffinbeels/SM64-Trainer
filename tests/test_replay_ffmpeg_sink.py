@@ -53,53 +53,6 @@ def test_spawn_args_pin_segment_and_quality_contract(tmp_path, monkeypatch):
     assert after("-pix_fmt") == "bgra" and after("-s") == "320x240"
 
 
-def _wait_for(cond, timeout=3.0):
-    t0 = time.monotonic()
-    while time.monotonic() - t0 < timeout:
-        if cond():
-            return True
-        time.sleep(0.01)
-    return cond()
-
-
-def test_set_paused_flushes_proc_and_resume_respawns(tmp_path, monkeypatch):
-    """Idle-gate contract: pause stops the child (stdin EOF flushes the open
-    segment); resume spawns a FRESH process so fed-frame seconds re-anchor
-    to wall time instead of drifting across the gap."""
-    procs = []
-
-    class _FakeProc:
-        def __init__(self):
-            self.stdin = io.BytesIO()
-            self.stdout = io.BytesIO()
-            self.stderr = io.BytesIO()
-        def wait(self, timeout=None):
-            return 0
-
-    def fake_popen(args, **kwargs):
-        p = _FakeProc()
-        procs.append(p)
-        return p
-
-    monkeypatch.setattr(
-        "sm64_events.replay.ffmpeg_sink.subprocess.Popen", fake_popen)
-    cfg = ReplayConfig(scratch_dir=tmp_path, fps=60, segment_s=2.0)
-    sink = FfmpegVideoSink(cfg, lambda s: None, ffmpeg="ffmpeg")
-    sink.start()
-    try:
-        sink.submit(np.zeros((16, 16, 4), dtype=np.uint8))
-        assert _wait_for(lambda: len(procs) == 1)
-
-        sink.set_paused(True)
-        assert _wait_for(lambda: procs[0].stdin.closed)   # segment flushed
-
-        sink.set_paused(False)
-        assert _wait_for(lambda: len(procs) == 2)         # fresh anchor/process
-        assert not procs[1].stdin.closed
-    finally:
-        sink.stop()
-
-
 T0 = datetime(2026, 6, 12, 1, 0, 0, tzinfo=timezone.utc)
 
 

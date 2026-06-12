@@ -37,6 +37,7 @@ import logging
 import shutil
 import threading
 import time
+from datetime import datetime, timezone
 from typing import Callable, Protocol
 
 import numpy as np
@@ -114,14 +115,17 @@ class ReplayRecorder:
         self._window_found: bool = False
         self._audio_mode: str = "none"
 
-        # idle gating: no player input for idle_after_s -> stop writing the
-        # buffer (worthless footage); first active tick resumes instantly.
-        # _idle and _last_player_active are plain attrs flipped from the
-        # poll thread (resume) and attach thread (pause) — bool/float swaps
-        # are atomic in CPython, and both transitions are idempotent.
+        # idle gating: no player input for idle_after_s -> completed
+        # segments are DISCARDED instead of retained (_on_segment); the
+        # encoder keeps running so the timeline never breaks. First active
+        # tick resumes instantly. These are plain attrs flipped from the
+        # poll thread (resume) and attach thread (pause) — ref/bool/float
+        # swaps are atomic in CPython, and both transitions are idempotent.
         self.set_idle_after(cfg.pre_pad_s + cfg.post_pad_s)
         self._last_player_active = time.monotonic()
         self._idle = False
+        self._idle_since = None   # utc datetime while idle (the discard rule)
+        self._idle_dropped = 0
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -186,7 +190,8 @@ class ReplayRecorder:
 
         clock = self._clock_factory()
         writer = SegmentWriter(
-            self._cfg, clock, self._cfg.scratch_dir, self._codec, self.ring.add)
+            self._cfg, clock, self._cfg.scratch_dir, self._codec,
+            self._on_segment)
 
         with self._lock:
             self._clock = clock
@@ -195,7 +200,8 @@ class ReplayRecorder:
             self._last_index = -1
 
         if self._video_sink_factory is not None:
-            self._video_sink = self._video_sink_factory(self._cfg, self.ring.add)
+            self._video_sink = self._video_sink_factory(self._cfg,
+                                                        self._on_segment)
             self._video_sink.start()
 
         # Start video — on_stopped signals window loss back to attach loop.
@@ -244,6 +250,7 @@ class ReplayRecorder:
 
         self._last_player_active = time.monotonic()  # fresh grace period
         self._idle = False
+        self._idle_since = None
         self._recording = True
         log.info("capture started — window=%r audio=%s codec=%s",
                  win.title, audio_mode, self._codec)
@@ -281,11 +288,12 @@ class ReplayRecorder:
 
         self._recording = False
         self._idle = False
+        self._idle_since = None
         # _audio_mode intentionally kept as last-known value so status() can
         # report which mode was active even after stop; cleared only on
         # fresh _begin_capture (set to new mode) or explicit reset.
 
-    # -- idle gating (no player input -> stop writing the buffer) -------------
+    # -- idle gating (no player input -> discard footage, don't retain) -------
 
     def set_idle_after(self, window_s: float) -> None:
         """The idle threshold tracks the user's padding window (pre+post):
@@ -312,20 +320,44 @@ class ReplayRecorder:
 
     def _set_idle(self, idle: bool) -> None:
         self._idle = idle
-        sink = self._video_sink
-        if sink is not None:
-            sink.set_paused(idle)
         if idle:
-            log.info("replay idle: no player input for %.0f s — buffer "
-                     "paused (resumes on input)", self.idle_after_s)
+            self._idle_since = datetime.now(timezone.utc)
+            log.info("replay idle: no player input for %.0f s — new "
+                     "segments will be discarded until input",
+                     self.idle_after_s)
         else:
-            log.info("replay idle: input detected — buffer resumed")
+            self._idle_since = None
+            log.info("replay idle: input detected — buffer resumes "
+                     "(%d idle segments discarded)", self._idle_dropped)
+            self._idle_dropped = 0
+
+    def _on_segment(self, seg) -> None:
+        """Ring gate — BOTH video segments and audio chunks arrive here.
+        While idle, segments born ENTIRELY inside the idle window are
+        deleted instead of retained; the encoder keeps running so the
+        timeline never breaks. (Pausing the ffmpeg child was shipped first
+        and reverted: every resume respawned it, leaving a ~0.2 s startup
+        hole exactly where a 0-pre-pad clip begins — user-reported as a
+        frozen clip opening.) Segments STRADDLING the idle boundary are
+        kept: at pause they carry the last active footage; at resume they
+        carry the anchor lead-up/fade-in, which is why a 0 s pre-pad clip
+        opens exactly at the anchor."""
+        idle_since = self._idle_since
+        if idle_since is not None and seg.utc_start >= idle_since:
+            self._idle_dropped += 1
+            try:
+                seg.path.unlink(missing_ok=True)
+            except OSError:
+                log.exception("idle-discard unlink failed for %s", seg.path)
+            return
+        self.ring.add(seg)
 
     # -- frame callback (library thread) -------------------------------------
 
     def _on_frame(self, bgra: np.ndarray, ts_100ns: int) -> None:
-        if self._idle:
-            return  # idle gate: user inactive, footage worthless (see _set_idle)
+        # NO idle gate here: frames keep flowing so the sink's timeline and
+        # `_latest` stay fresh; idle discard happens per completed segment
+        # in _on_segment.
         # ffmpeg-sink path: a lock-free reference swap, nothing else — the
         # sink's feeder paces CFR and the child process encodes. The entire
         # in-process CFR/dedup/encode machinery below is bypassed.
@@ -385,8 +417,11 @@ class ReplayRecorder:
     # -- audio callback (library thread) -------------------------------------
 
     def _on_pcm(self, pcm_s16: np.ndarray) -> None:
-        if self._idle:
-            return  # idle gate: hole in audio mirrors the video hole
+        # NO idle gate here: audio chunk timestamps are COUNT-based
+        # (t0 + samples_written/rate — encoder.py); dropping PCM would
+        # shift every post-resume chunk earlier and desync A/V. The sample
+        # cursor must keep advancing; idle discard happens per completed
+        # chunk in _on_segment.
         with self._lock:
             if self._writer is None:
                 return

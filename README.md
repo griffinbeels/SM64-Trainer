@@ -147,9 +147,11 @@ span too short, 503 db unavailable. Clips span the whole attempt plus
 padding (defaults 3 s before the anchor, 2 s after the closing event;
 adjustable 0–10 s in the settings panel); `truncated` means the buffer no
 longer covered part of that span. When no player input is detected for
-longer than the padding window (pre+post, floor 3 s), the recorder pauses
-the buffer — `idle: true` in status, an honest coverage hole on disk — and
-resumes instantly on the next input.
+longer than the padding window (pre+post, floor 3 s), the recorder
+discards new footage instead of retaining it — `idle: true` in status, an
+honest coverage hole — and resumes instantly on input, a savestate load /
+practice reset, or a level entry. The segment straddling the resume is
+kept, so a 0 s pre-pad clip still opens exactly at the attempt anchor.
 
 ## Data
 
