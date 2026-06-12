@@ -31,6 +31,8 @@ def test_reader_populates_all_fields():
     assert snap.curr_level == 24
     assert snap.wall_time_utc.tzinfo == timezone.utc
     assert (datetime.now(timezone.utc) - snap.wall_time_utc).total_seconds() < 5
+    # TODO Task 17 live gate: write A.CURR_AREA + assert snap.curr_area == <value>
+    #      once CURR_AREA is replaced with the live-pinned address in addresses.py
 
 
 def test_curr_area_defaults_to_zero_for_old_call_sites():
