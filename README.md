@@ -86,6 +86,7 @@ Other event types, same envelope:
 | `attempt_restored` | `attempt_id` | Tombstone undone (triggers full re-projection; `attempts_invalidated` follows) |
 | `pb_saved` | `course_id, star_id, segment_id, strat_tag, timer_mode, frames, attempt_id` | Personal best recorded. Segment PBs: `course_id`/`star_id` null, `segment_id` set, `timer_mode` always `"rta"`. |
 | `pb_undone` | `course_id, star_id, segment_id, strat_tag, timer_mode, frames, attempt_id, restored_frames, restored_attempt_id` | The current PB save was deleted; the previous save (if any) is current again — `restored_*` null when none remains |
+| `data_wiped` | `kind, course_id, star_id, segment_id, session_id` | History wiped: `kind` `"star"`/`"segment"`/`"all"`, `session_id` null = every session. Applied retroactively on replay; attempts after the wipe accumulate fresh (`attempts_invalidated` follows) |
 | `session_started` | `session_id, label?` | New session opened (server start or `/api/session/new`) |
 | `attempts_invalidated` | _(none)_ | Full re-projection ran — consumers must refetch `/api/session` |
 | `emulator_connected` | _(none)_ | Attached to PJ64 process |
@@ -123,6 +124,7 @@ All endpoints are under `/api`. JSON in, JSON out.
 | `POST /api/attempts/{id}/restore` | Undo a tombstone (triggers re-projection) |
 | `POST /api/pb` `{attempt_id, timer_mode}` | Save a personal best from a success attempt |
 | `POST /api/pb/undo` `{attempt_id, timer_mode}` | Undo the attempt's PB save (409 unless it is the **current** PB) — the previous save becomes current again |
+| `POST /api/wipe` `{kind, course_id?, star_id?, segment_id?, scope?}` | Wipe history. `kind`: `"star"` (needs course+star), `"segment"` (needs segment_id), `"all"`. `scope`: `"session"` (default, the active session) or `"lifetime"`. Removes the scoped attempts and the PBs saved from them (lifetime star/segment wipes drop that key's PBs entirely; lifetime `"all"` factory-resets history — all events, sessions and PBs). Markers, strategies, stat menu and segment definitions always survive. |
 | `GET /api/stats/registry` | List all available stat definitions with keys, labels, and default params |
 | `PUT /api/statmenu` `{selections: [{key, params}]}` | Persist the stat chip selection |
 | `PUT /api/markers` `{course_id, star_id, strat_tag?, markers: [{frames, label}]}` **or** `{segment_id, strat_tag?, markers: [{frames, label}]}` | Replace the timeline annotation markers for one star+strategy or segment+strategy (max 30; labels 1–60 chars trimmed; replace-the-list, no per-marker ids). `segment_id` XOR `course_id+star_id` — supplying both → 409. Note: segment strat tags are settable via `target_set`/`strat_set` events but the practice-page strat dropdown is star-only in v1. |

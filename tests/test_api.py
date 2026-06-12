@@ -87,6 +87,20 @@ def test_pb_bad_mode_is_409(tmp_path):
         assert r.status_code == 409
 
 
+def test_wipe_endpoint_roundtrip_and_guards(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)
+        r = client.post("/api/wipe", json={"kind": "star", "course_id": 2,
+                                           "star_id": 2, "scope": "lifetime"})
+        assert r.status_code == 200
+        assert all((a.course_id, a.star_id) != (2, 2) for a in db.attempts())
+        assert client.post("/api/wipe", json={"kind": "nonsense"}).status_code == 409
+        assert client.post("/api/wipe", json={"kind": "segment"}).status_code == 409
+        r = client.post("/api/wipe", json={"kind": "all", "scope": "session"})
+        assert r.status_code == 200
+
+
 def test_pb_undo_roundtrip_and_guards(tmp_path):
     client, service, db = make_client(tmp_path)
     with client:

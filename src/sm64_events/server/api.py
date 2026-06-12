@@ -33,6 +33,14 @@ class PbBody(BaseModel):
     timer_mode: str
 
 
+class WipeBody(BaseModel):
+    kind: str                      # "star" | "segment" | "all"
+    course_id: int | None = None
+    star_id: int | None = None
+    segment_id: int | None = None
+    scope: str = "session"         # "session" (active) | "lifetime"
+
+
 class SessionBody(BaseModel):
     label: str | None = None
 
@@ -243,6 +251,15 @@ def create_api_router(service) -> APIRouter:
     async def undo_pb(body: PbBody):
         try:
             return await service.undo_pb(body.attempt_id, body.timer_mode)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+
+    @router.post("/wipe")
+    async def wipe(body: WipeBody):
+        try:
+            return await service.wipe_data(
+                body.kind, course_id=body.course_id, star_id=body.star_id,
+                segment_id=body.segment_id, scope=body.scope)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
 

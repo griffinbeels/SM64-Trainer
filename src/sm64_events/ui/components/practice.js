@@ -191,6 +191,21 @@ function StarSection({ sec, t, ui, pinned }) {
     t.refresh();
   }
 
+  async function wipeData() {
+    const name = `${sec.course_name} · ${sec.star_name}`;
+    const msg = t.scope === "lifetime"
+      ? `Wipe ALL data for ${name} across every session?\n`
+        + "All attempts and PBs for this star are permanently removed "
+        + "(markers and strategies are kept).\nThis cannot be undone."
+      : `Wipe this session's data for ${name}?\n`
+        + "The session's attempts and any PBs saved from them are "
+        + "permanently removed (earlier PBs are kept).\nThis cannot be undone.";
+    if (!window.confirm(msg)) return;
+    await send("POST", "/api/wipe", { kind: "star", course_id: sec.course_id,
+                                      star_id: sec.star_id, scope: t.scope });
+    t.refresh();
+  }
+
   return html`<div class="starsec ${pinned ? "active-star" : ""}">
     ${pinned && html`<div class="active-tag">★ ACTIVE STAR</div>`}
     <div class="shead">
@@ -204,6 +219,10 @@ function StarSection({ sec, t, ui, pinned }) {
         <option value="__new">+ new strat…</option>
       </select>
       <span class="pbtag">${pb ? `PB ${pb.display} (${t.clock})` : "no PB yet"}</span>
+      <button class="meta" onclick=${wipeData}
+        title=${t.scope === "lifetime"
+          ? "wipe this star's data (all sessions)"
+          : "wipe this star's data (current session)"}>clear data</button>
     </div>
     <${Timeline} tl=${sec.timeline} sec=${sec} t=${t} />
     <${Progress} prog=${sec.progress} clock=${t.clock} onPick=${pickFromGraph} />
@@ -251,6 +270,21 @@ function SegmentSection({ sec, t, ui, pinned, pinnedByArm }) {
     .sort(comparator(ui.sort, "rta"));
   const shown = rows.slice(0, visible);
 
+  async function wipeData() {
+    const msg = t.scope === "lifetime"
+      ? `Wipe ALL data for ${sec.name} across every session?\n`
+        + "All attempts and PBs for this segment are permanently removed "
+        + "(the definition and markers are kept).\nThis cannot be undone."
+      : `Wipe this session's data for ${sec.name}?\n`
+        + "The session's attempts and any PBs saved from them are "
+        + "permanently removed (earlier PBs are kept).\nThis cannot be undone.";
+    if (!window.confirm(msg)) return;
+    await send("POST", "/api/wipe", { kind: "segment",
+                                      segment_id: sec.segment_id,
+                                      scope: t.scope });
+    t.refresh();
+  }
+
   // Pinned tag, three-state: the target always wins the ★ tag; otherwise the
   // honest armed flag decides between live (ARMED) and sticky (RECENT) pins.
   const pinTag = !pinnedByArm ? "★ ACTIVE SEGMENT"
@@ -262,6 +296,10 @@ function SegmentSection({ sec, t, ui, pinned, pinnedByArm }) {
       ${armed && html`<span class="chip good">⏱ armed</span>`}
       ${sec.broken && html`<span class="meta">definition deleted — history only</span>`}
       <span class="pbtag">${sec.pb.rta ? `PB ${sec.pb.rta.display} (rta)` : "no PB yet"}</span>
+      <button class="meta" onclick=${wipeData}
+        title=${t.scope === "lifetime"
+          ? "wipe this segment's data (all sessions)"
+          : "wipe this segment's data (current session)"}>clear data</button>
     </div>
     ${!sec.broken && html`<${Timeline} tl=${sec.timeline} sec=${sec} t=${t} />`}
     <${Progress} prog=${sec.progress} clock="rta" />

@@ -28,6 +28,51 @@ def test_anchor_then_grab_is_a_success_attempt_with_both_clocks():
     assert a.cleared is False
 
 
+def test_data_wiped_suppresses_prior_matches_only():
+    attempts = project([
+        jev(1, "practice_reset", 1000, {"igt_frames_before": 0}),
+        star(2, 1350),                                   # success on (2,2)
+        jev(3, "practice_reset", 2000, {"igt_frames_before": 0, "mario_acted": True}),
+        star(4, 2400, course=8, star_id=1, igt=500),     # success on (8,1)
+        jev(5, "data_wiped", 0, {"kind": "star", "course_id": 2, "star_id": 2,
+                                 "segment_id": None, "session_id": None}),
+        jev(6, "practice_reset", 3000, {"igt_frames_before": 0}),
+        star(7, 3400),                                   # fresh (2,2) AFTER the wipe
+    ])
+    keys = [(a.course_id, a.star_id) for a in attempts]
+    assert (8, 1) in keys                  # other star untouched
+    assert keys.count((2, 2)) == 1         # pre-wipe row gone, post-wipe row stays
+    assert attempts[-1].id == 6
+
+
+def test_data_wiped_session_scope_spares_other_sessions():
+    attempts = project([
+        jev(1, "star_collected", 900,
+            {"course_id": 2, "star_id": 2, "igt_frames": 343}, session_id=1),
+        jev(2, "star_collected", 1900,
+            {"course_id": 2, "star_id": 2, "igt_frames": 350}, session_id=2),
+        jev(3, "data_wiped", 0, {"kind": "star", "course_id": 2, "star_id": 2,
+                                 "segment_id": None, "session_id": 2}),
+    ])
+    assert [a.session_id for a in attempts] == [1]
+
+
+def test_data_wiped_all_kind_wipes_everything_in_scope():
+    attempts = project([
+        jev(1, "practice_reset", 1000, {"igt_frames_before": 0}, session_id=1),
+        jev(2, "practice_reset", 1500,
+            {"igt_frames_before": 480, "mario_acted": True}, session_id=1),  # unassigned reset
+        jev(3, "star_collected", 2000,
+            {"course_id": 2, "star_id": 2, "igt_frames": 343}, session_id=1),
+        jev(4, "star_collected", 2900,
+            {"course_id": 2, "star_id": 2, "igt_frames": 350}, session_id=2),
+        jev(5, "data_wiped", 0, {"kind": "all", "course_id": None,
+                                 "star_id": None, "segment_id": None,
+                                 "session_id": 1}),
+    ])
+    assert [a.session_id for a in attempts] == [2]   # unassigned + star of s1 gone
+
+
 def test_grab_without_anchor_is_a_grab_only_attempt():
     attempts = project([star(5, 2000)])
     a = attempts[0]

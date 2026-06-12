@@ -37,6 +37,20 @@ export function Header({ t }) {
     t.refresh();
   }
 
+  async function wipeAll() {
+    const msg = t.scope === "lifetime"
+      ? "Wipe ALL practice data — every session, every star and segment?\n"
+        + "All attempts, sessions and PBs are permanently removed. Segment "
+        + "definitions, markers and settings are kept.\nThis cannot be undone."
+      : `Wipe all data in session ${active}?\n`
+        + "Its attempts and any PBs saved from them are permanently removed "
+        + "(the session stays open).\nThis cannot be undone.";
+    if (!window.confirm(msg)) return;
+    await send("POST", "/api/wipe", { kind: "all", scope: t.scope });
+    setManaging(false);
+    t.refresh();
+  }
+
   return html`<div class="bar">
     <span class="dot ${t.connected ? (t.paused ? "bad" : "ok") : "bad"}">
       ${t.connected
@@ -79,7 +93,11 @@ export function Header({ t }) {
         ${s.id !== active && html`<button onclick=${() => removeSession(s.id)}>×</button>`}
         ${s.id === active && html`<span class="meta">active</span>`}
       </div>`)}
-      <div style="margin-top:.4rem"><button onclick=${() => setManaging(false)}>Close</button></div>
+      <div style="margin-top:.4rem;display:flex;gap:.5rem">
+        <button onclick=${wipeAll} title="wipe the current scope's data">
+          ${t.scope === "lifetime" ? "Clear ALL data" : `Clear session ${active} data`}</button>
+        <button onclick=${() => setManaging(false)}>Close</button>
+      </div>
     </div>`}
     ${editing && v && html`<${TargetEditor} t=${t} close=${() => setEditing(false)} />`}
   </div>`;
