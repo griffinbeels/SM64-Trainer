@@ -84,6 +84,7 @@ class StarGrabDetector:
                 "igt": format_igt(igt_frames),
                 "igt_source": source,
                 "igt_reconstructed": source == "reconstructed",
+                "num_stars": curr.num_stars,
             },
         )]
 

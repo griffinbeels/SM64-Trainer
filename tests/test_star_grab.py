@@ -52,6 +52,7 @@ def test_edge_into_star_dance_emits_identified_event():
         "igt": "0'07\"70",  # the number Usamune shows
         "igt_source": "result",
         "igt_reconstructed": False,
+        "num_stars": 6,  # curr.num_stars at grab time
     }
 
 
