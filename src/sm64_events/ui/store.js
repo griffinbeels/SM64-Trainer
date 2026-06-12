@@ -59,6 +59,8 @@ export function useTracker() {
         if (everConnected.current) {
           setFeed((f) => [{ type: "ws_reconnected", seq: "", frame: "",
                             payload: {} }, ...f].slice(0, 200));
+          refresh();   // events were missed during the outage — the view is
+                       // the authoritative state (armed flags, attempts, target)
         }
         everConnected.current = true;
         setConnected(true);

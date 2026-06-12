@@ -60,10 +60,13 @@ function Builder({ vocab, initial, onSaved, onCancel }) {
   async function save() {
     try {
       setErr(null);
+      // Strip server-only fields: edit rows come from GET /api/segments and
+      // carry id/created_utc, which SegmentPatch (extra="forbid") rejects.
+      const { id: _id, created_utc: _c, ...body } = d;
       if (initial && initial.id != null) {
-        await send("PUT", `/api/segments/${initial.id}`, d);
+        await send("PUT", `/api/segments/${initial.id}`, body);
       } else {
-        await send("POST", "/api/segments", d);
+        await send("POST", "/api/segments", body);
       }
       onSaved();
     } catch (e) { setErr(String(e)); }
@@ -102,6 +105,12 @@ export function Segments({ t }) {
   if (!defs || !vocabData) return html`<div class="meta">loading…</div>`;
 
   const tgt = (t.view && t.view.target) || {};
+  // The view is the authoritative armed state (refetched on reconnect);
+  // the live WS-driven armedSegs Set is only a fallback while view is null.
+  const viewArmed = new Set((t.view && t.view.segments || [])
+    .filter((s) => s.armed).map((s) => s.segment_id));
+  const isArmed = (id) => (t.view && t.view.segments
+    ? viewArmed.has(id) : t.armedSegs.has(id));
   async function setTarget(d) {
     await send("POST", "/api/target", { kind: "segment", segment_id: d.id });
     t.refresh();
@@ -119,7 +128,7 @@ export function Segments({ t }) {
   return html`<div>
     ${defs.map((d) => html`<div class="segrow">
       <b>${d.name}</b>
-      ${t.armedSegs.has(d.id) && html`<span class="chip good">⏱ armed</span>`}
+      ${isArmed(d.id) && html`<span class="chip good">⏱ armed</span>`}
       ${tgt.kind === "segment" && tgt.segment_id === d.id
         && html`<span class="chip">★ target</span>`}
       <span style="flex:1"></span>
