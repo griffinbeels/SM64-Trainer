@@ -78,7 +78,8 @@ def test_view_pads_span_and_returns_clip_url(tmp_path):
     assert res["clip_url"] == "/api/replay/clips/clip_attempt_42.mp4"
     assert res["truncated"] is False
     assert res["duration_s"] == 17.0          # 12 s attempt + 3 pre + 2 post
-    assert res["fps"] == 60                   # frame-step UI needs the rate
+    assert res["fps"] == 60                   # encoded rate
+    assert res["game_fps"] == 30              # step unit: SM64 logic frames
     start, end, _ = svc.extractor.calls[0]
     assert start == T0 - timedelta(seconds=3)            # pre_pad
     assert end == T0 + timedelta(seconds=12 + 2)         # post_pad

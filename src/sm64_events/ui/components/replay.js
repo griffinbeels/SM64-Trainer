@@ -63,13 +63,16 @@ export function ReplayPlayer({ attemptId }) {
 
   // Frame stepping: pause first (stepping implies pause), then seek to the
   // MIDDLE of the adjacent frame — (n±1 + 0.5)/fps — so floating-point
-  // rounding can never straddle a frame boundary. Clips are CFR at the
-  // server-reported fps.
+  // rounding can never straddle a frame boundary. Steps move in GAME
+  // frames (30 fps SM64 logic), not encoded frames (60 fps presents):
+  // each game frame spans two near-identical encoded frames, so stepping
+  // 1/60 visibly changed the image only every SECOND press (live-reported
+  // 2026-06-12 — "have to press twice").
   function step(dir) {
     const v = videoEl.current;
     if (!v) return;
     if (!v.paused) v.pause();
-    const fps = state.fps || 60;
+    const fps = state.game_fps || 30;
     const n = Math.floor(v.currentTime * fps + 1e-4);
     const t = (n + dir + 0.5) / fps;
     v.currentTime = Math.min(Math.max(t, 0), v.duration || 0);
@@ -114,7 +117,7 @@ export function ReplayPlayer({ attemptId }) {
       <button onclick=${togglePlay} style="min-width:5.5rem"
               title="play / pause">${playing ? "❚❚ pause" : "▶ play"}</button>
       <button onclick=${() => step(1)} title="pause + forward one frame">frame ⏵</button>
-      <span class="meta">1 frame = 1/${state.fps || 60} s</span>
+      <span class="meta">1 frame = 1/${state.game_fps || 30} s (game frame)</span>
     </div>
     <div>
       <button onclick=${saveReplay} disabled=${savedPath !== null}>

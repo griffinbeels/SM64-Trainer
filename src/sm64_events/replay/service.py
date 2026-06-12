@@ -14,7 +14,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from sm64_events.core.timefmt import format_igt
+from sm64_events.core.timefmt import GAME_FPS, format_igt
 from sm64_events.memory.addresses import course_name, star_name
 from sm64_events.replay.config import (ReplayConfig, save_settings,
                                        validate_settings)
@@ -157,9 +157,13 @@ class ReplayService:
             meta.write_text(json.dumps(
                 {"duration_s": res.duration_s, "truncated": res.truncated}))
         m = json.loads(meta.read_text())
+        # fps = encoded rate (CFR); game_fps = SM64 logic rate — the
+        # frame-step UI steps in GAME frames: each spans two encoded
+        # frames, so stepping 1/fps changed the image only every 2nd press
+        # (live-reported 2026-06-12).
         return {"clip_url": f"/api/replay/clips/{name}",
                 "duration_s": m["duration_s"], "truncated": m["truncated"],
-                "fps": self.cfg.fps}  # clips are CFR at cfg.fps (frame-step UI)
+                "fps": self.cfg.fps, "game_fps": GAME_FPS}
 
     def _wait_for_tail(self, end_utc: datetime) -> None:
         """Bounded wait: a click right after the event can outrace the last
