@@ -3,6 +3,7 @@ import { h } from "preact";
 import { useState } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
+import { RecordingDot } from "./replay.js";
 
 const html = htm.bind(h);
 
@@ -38,6 +39,7 @@ export function Header({ t }) {
 
   return html`<div class="bar">
     <span class="dot ${t.connected ? "ok" : "bad"}">${t.connected ? "live" : "offline"}</span>
+    <${RecordingDot} />
     ${v && html`<select id="session-select" name="session"
                         value=${t.scope === "lifetime" ? "lifetime" : String(active)}
                         onchange=${pickSession}>

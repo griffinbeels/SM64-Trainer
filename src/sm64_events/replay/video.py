@@ -1,0 +1,658 @@
+"""Video capture sources -> recorder VideoSource protocol.
+
+Three sources, in pecking order for THIS app (PJ64 1.6 / Jabo D3D8 — a
+legacy BITBLT-model presenter whose pixels live in the window's
+redirection surface):
+
+1. DwmSurfaceVideoSource (PRIMARY, wired in main.py) — reads the
+   redirection surface via DWM's shared D3D11 texture: fresh pixels with
+   zero window-lock contention. Probe evidence in its class docstring.
+2. GdiBitBltVideoSource (automatic fallback) — same fresh pixels through
+   the window DC, but BitBlt SERIALIZES with PJ64's UI thread, which
+   holds the window lock ~110-170 ms once a second (internal 1 Hz work;
+   survives hiding the FPS display — user-tested) -> a visible stall
+   every second. The WGC/DDA-vs-bitblt story is in its class docstring.
+3. WgcVideoSource (kept for normal flip-model apps) — WINDOW capture of
+   PJ64 delivers frozen content (~1-6 unique frames/s: the composition
+   path barely updates for this app class), so this adapter captures the
+   MONITOR cropped to the window. Records occluders; WGC API traps live
+   in its class docstring.
+
+DPI: PJ64 is DPI-unaware, so its client/surface size is LOGICAL pixels
+(e.g. 1600x1224 at 150 % scaling) while DWM extended-frame bounds are
+PHYSICAL — mixing the two produced the black-bands bug. Each source
+documents which coordinate space it queries.
+
+All sources stamp frames with QPC 100 ns ticks (CaptureClock's timebase)
+and deliver via grab -> bounded queue -> deliver thread so a slow
+consumer can never stall grabbing. Lazy imports throughout: constructing
+the recorder must never require capture hardware."""
+import ctypes
+import ctypes.wintypes as wt
+import logging
+
+from sm64_events.replay.window import WindowInfo
+
+log = logging.getLogger("sm64.replay")
+
+_DWMWA_EXTENDED_FRAME_BOUNDS = 9
+_MONITOR_DEFAULTTONEAREST = 2
+_DPI_PER_MONITOR_AWARE_V2 = ctypes.c_void_p(-4)
+
+
+def _ensure_dpi_aware() -> None:
+    """DWM extended-frame bounds are PHYSICAL pixels regardless of process
+    DPI awareness, but GetMonitorInfo is virtualized for unaware processes —
+    on a scaled display the two disagree (seen live: monitor 2560x1440
+    virtualized vs a 2403x1907-physical window). Making the process
+    per-monitor aware puts every coordinate in physical pixels, matching the
+    WGC frame. Best-effort: fails harmlessly if awareness was already set."""
+    try:
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(
+            _DPI_PER_MONITOR_AWARE_V2)
+    except Exception:
+        pass
+
+
+class _MONITORINFO(ctypes.Structure):
+    _fields_ = [("cbSize", wt.DWORD), ("rcMonitor", wt.RECT),
+                ("rcWork", wt.RECT), ("dwFlags", wt.DWORD)]
+
+
+def window_rect(hwnd: int) -> tuple[int, int, int, int] | None:
+    """Visible window bounds in virtual-screen coords (DWM extended frame
+    bounds — excludes the drop shadow; falls back to GetWindowRect).
+    None when the window is minimized/gone (rect would be meaningless)."""
+    user32 = ctypes.windll.user32
+    if not user32.IsWindow(wt.HWND(hwnd)) or user32.IsIconic(wt.HWND(hwnd)):
+        return None
+    rect = wt.RECT()
+    res = ctypes.windll.dwmapi.DwmGetWindowAttribute(
+        wt.HWND(hwnd), _DWMWA_EXTENDED_FRAME_BOUNDS,
+        ctypes.byref(rect), ctypes.sizeof(rect))
+    if res != 0:
+        if not user32.GetWindowRect(wt.HWND(hwnd), ctypes.byref(rect)):
+            return None
+    return rect.left, rect.top, rect.right, rect.bottom
+
+
+def monitor_geometry(hwnd: int) -> tuple[int, tuple[int, int, int, int]]:
+    """(1-based monitor index in EnumDisplayMonitors order, monitor rect).
+
+    windows-capture enumerates monitors in the same EnumDisplayMonitors
+    order, 1-based — so the position of this window's HMONITOR in that
+    enumeration IS the crate's monitor_index."""
+    user32 = ctypes.windll.user32
+    target = user32.MonitorFromWindow(wt.HWND(hwnd), _MONITOR_DEFAULTTONEAREST)
+    monitors: list[int] = []
+
+    @ctypes.WINFUNCTYPE(wt.BOOL, wt.HMONITOR, wt.HDC, ctypes.POINTER(wt.RECT),
+                        wt.LPARAM)
+    def cb(hmon, _hdc, _rect, _lparam):
+        monitors.append(hmon)
+        return True
+
+    user32.EnumDisplayMonitors(None, None, cb, 0)
+    info = _MONITORINFO()
+    info.cbSize = ctypes.sizeof(info)
+    user32.GetMonitorInfoW(wt.HMONITOR(target), ctypes.byref(info))
+    rc = info.rcMonitor
+    try:
+        index = monitors.index(target) + 1
+    except ValueError:
+        index = 1
+    return index, (rc.left, rc.top, rc.right, rc.bottom)
+
+
+def crop_bounds(frame_w: int, frame_h: int,
+                win_rect: tuple[int, int, int, int],
+                mon_rect: tuple[int, int, int, int],
+                ) -> tuple[int, int, int, int] | None:
+    """Window rect (virtual-screen coords) -> frame-pixel slice bounds,
+    clamped to the frame; None when the visible intersection is degenerate.
+    Pure — unit-tested."""
+    mx, my = mon_rect[0], mon_rect[1]
+    x0 = max(0, min(frame_w, win_rect[0] - mx))
+    y0 = max(0, min(frame_h, win_rect[1] - my))
+    x1 = max(0, min(frame_w, win_rect[2] - mx))
+    y1 = max(0, min(frame_h, win_rect[3] - my))
+    if x1 - x0 < 16 or y1 - y0 < 16:
+        return None
+    return x0, y0, x1, y1
+
+
+class DwmSurfaceVideoSource:
+    """PRIMARY capture for PJ64 1.6: read the window's redirection surface
+    through DWM's shared D3D11 texture (replay/_dwm.py) — the same fresh
+    pixels GDI BitBlt reads, with ZERO window-lock contention (probe: 600
+    grabs/10 s, 30.1 distinct/s, 0 stalls vs GDI's ~170 ms stall every
+    second from PJ64's internal 1 Hz work). Falls back to GdiBitBltVideoSource
+    if the undocumented API is unavailable.
+
+    Thread layout: the GRAB thread never calls user32 — even 1 Hz window
+    queries can block ~170 ms on this app's lock. A GEOMETRY thread owns all
+    window queries (client offset within the surface, dims, liveness) and
+    publishes them; the grab thread reads cached values only. Frames flow
+    grab -> queue -> deliver (encode), as with the GDI source."""
+
+    def __init__(self, win: WindowInfo, fps: int = 60):
+        self._win = win
+        self._fps = fps
+        self._stop = None
+        self._thread = None
+        self._geom_thread = None
+        self._deliver_thread = None
+        self._queue = None
+        self._fallback = None
+        # published by the geometry thread (tuple swap = atomic in CPython)
+        self._geom = None    # (off_x, off_y, cw, ch) in surface coords
+        self._handle = None  # DWM shared-surface handle (changes on resize)
+        self._alive = True
+
+    def start(self, on_frame, on_stopped) -> None:
+        if self._thread is not None or self._fallback is not None:
+            return
+        from sm64_events.replay._dwm import DwmSurfaceReader
+        try:
+            reader = DwmSurfaceReader()
+            probe = reader.acquire(self._win.hwnd)
+        except Exception:
+            probe = None
+            reader = None
+        if probe is None:
+            log.warning("DWM shared surface unavailable - falling back to "
+                        "GDI BitBlt capture (1 Hz stall caveat applies)")
+            if reader is not None:
+                reader.close()
+            self._fallback = GdiBitBltVideoSource(self._win, fps=self._fps)
+            self._fallback.start(on_frame, on_stopped)
+            return
+        log.info("dwm surface capture: %dx%d full-window surface",
+                 probe.shape[1], probe.shape[0])
+        self._handle = DwmSurfaceReader.query_handle(self._win.hwnd)
+
+        import queue
+        import threading
+        self._stop = threading.Event()
+        self._queue = queue.Queue(maxsize=24)
+        self._geom_thread = threading.Thread(
+            target=self._geom_loop, args=(on_stopped,),
+            name="dwm-geometry", daemon=True)
+        self._geom_thread.start()
+        self._deliver_thread = threading.Thread(
+            target=self._deliver_loop, args=(on_frame,),
+            name="dwm-deliver", daemon=True)
+        self._deliver_thread.start()
+        self._thread = threading.Thread(
+            target=self._loop, args=(reader, on_stopped),
+            name="dwm-capture", daemon=True)
+        self._thread.start()
+
+    def _geom_loop(self, on_stopped) -> None:
+        """All user32 traffic lives here: it may block ~170 ms at PJ64's
+        1 Hz lock window, harmlessly. Publishes client offset within the
+        redirection surface (window-local logical coords)."""
+        import time as _time
+        user32 = ctypes.windll.user32
+        user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-1))  # UNAWARE
+        hwnd = wt.HWND(self._win.hwnd)
+
+        class _PT(ctypes.Structure):
+            _fields_ = [("x", wt.LONG), ("y", wt.LONG)]
+
+        while not self._stop.is_set():
+            if not user32.IsWindow(hwnd):
+                log.info("dwm capture: window gone")
+                self._alive = False
+                on_stopped()
+                return
+            if user32.IsIconic(hwnd):
+                self._geom = None  # minimized: no frames (coverage hole)
+            else:
+                wr = wt.RECT()
+                user32.GetWindowRect(hwnd, ctypes.byref(wr))
+                pt = _PT(0, 0)
+                user32.ClientToScreen(hwnd, ctypes.byref(pt))
+                cr = wt.RECT()
+                user32.GetClientRect(hwnd, ctypes.byref(cr))
+                cw, ch = cr.right & ~1, cr.bottom & ~1
+                if cw >= 16 and ch >= 16:
+                    self._geom = (pt.x - wr.left, pt.y - wr.top, cw, ch)
+                else:
+                    self._geom = None
+                # the handle query is user32 too (can block at the 1 Hz
+                # lock) — it belongs HERE, not in the grab loop; the
+                # measured ~120 ms grab gaps traced to it
+                from sm64_events.replay._dwm import DwmSurfaceReader
+                self._handle = DwmSurfaceReader.query_handle(self._win.hwnd)
+            self._stop.wait(1.0)
+
+    def _loop(self, reader, on_stopped) -> None:
+        from sm64_events.replay.clock import qpc_100ns
+        import time as _time
+
+        kernel32 = ctypes.windll.kernel32
+        _CREATE_HIGH_RES = 0x00000002
+        htimer = kernel32.CreateWaitableTimerExW(None, None, _CREATE_HIGH_RES,
+                                                 0x1F0003)
+
+        def _wait_until(target_t: float) -> None:
+            delay = target_t - _time.perf_counter()
+            if htimer and delay > 0.001:
+                due = ctypes.c_longlong(-int((delay - 0.0005) * 1e7))
+                if kernel32.SetWaitableTimer(htimer, ctypes.byref(due),
+                                             0, None, None, False):
+                    kernel32.WaitForSingleObject(htimer, 0xFFFFFFFF)
+            while _time.perf_counter() < target_t:
+                pass
+
+        period = 1.0 / (self._fps * 2.0)  # 2x oversample; recorder dedupes
+        grabs = drops = misses = 0
+        grab_ms = 0.0
+        max_gap_ms = 0.0
+        prev_t = None
+        last_report = _time.monotonic()
+        next_t = _time.perf_counter()
+        try:
+            while not self._stop.is_set():
+                geom = self._geom
+                handle = self._handle
+                if geom is None or handle is None:
+                    _time.sleep(0.1)
+                    next_t = _time.perf_counter()
+                    continue
+                ts = qpc_100ns()
+                t1 = _time.perf_counter()
+                if prev_t is not None:
+                    max_gap_ms = max(max_gap_ms, (t1 - prev_t) * 1000)
+                prev_t = t1
+                full = reader.read(handle)
+                if full is None:
+                    misses += 1
+                    _time.sleep(0.05)
+                    continue
+                ox, oy, cw, ch = geom
+                ch = min(ch, full.shape[0] - oy) & ~1
+                cw = min(cw, full.shape[1] - ox) & ~1
+                if ch < 16 or cw < 16:
+                    continue
+                arr = full[oy:oy + ch, ox:ox + cw]
+                try:
+                    self._queue.put_nowait((arr, ts))
+                except Exception:
+                    try:
+                        self._queue.get_nowait()
+                    except Exception:
+                        pass
+                    self._queue.put_nowait((arr, ts))
+                    drops += 1
+                grabs += 1
+                grab_ms += (_time.perf_counter() - t1) * 1000
+                now = _time.monotonic()
+                if now - last_report > 30 and grabs:
+                    log.info("dwm capture: %.1f grabs/s avg %.1f ms, max "
+                             "gap %.0f ms, %d misses, %d encoder-lag drops",
+                             grabs / (now - last_report), grab_ms / grabs,
+                             max_gap_ms, misses, drops)
+                    grabs = drops = misses = 0
+                    grab_ms = max_gap_ms = 0.0
+                    last_report = now
+                next_t += period
+                if next_t > _time.perf_counter():
+                    _wait_until(next_t)
+                else:
+                    next_t = _time.perf_counter()
+        except Exception:
+            log.exception("dwm capture loop died")
+            on_stopped()
+        finally:
+            if htimer:
+                kernel32.CloseHandle(htimer)
+            reader.close()
+
+    def _deliver_loop(self, on_frame) -> None:
+        while True:
+            item = self._queue.get()
+            if item is None:
+                return
+            on_frame(*item)
+
+    def stop(self) -> None:
+        if self._fallback is not None:
+            self._fallback.stop()
+            self._fallback = None
+            return
+        if self._thread is not None:
+            self._stop.set()
+            self._thread.join(timeout=5)
+            self._thread = None
+        if self._geom_thread is not None:
+            self._geom_thread.join(timeout=5)
+            self._geom_thread = None
+        if self._deliver_thread is not None:
+            self._queue.put(None)
+            self._deliver_thread.join(timeout=5)
+            self._deliver_thread = None
+
+
+class GdiBitBltVideoSource:
+    """GDI BitBlt of the window's CLIENT DC — the working capture path for
+    PJ64 1.6 (Jabo D3D8).
+
+    Why not WGC/DDA: Jabo presents via the legacy BITBLT model (back buffer
+    copied into the window's redirection surface every Present), while WGC
+    and DXGI duplication read the DWM composition path, which Win11 24H2
+    refreshes only on dirty-region/MPO cadence for this app class —
+    live-measured at 1-6 unique frames/s while the game ran at 30 fps.
+    BitBlt from the window DC reads the redirection surface itself (the
+    same mechanism as OBS's "BitBlt (legacy)" window capture, the
+    community-proven method for PJ64 1.6). Bonus: window DC content
+    survives occlusion.
+
+    Two threads: the GRAB loop runs at cfg fps and must never wait on the
+    encoder (at 60 fps the budget is 16.7 ms/frame and a grab alone costs
+    ~9 ms), so frames go through a small queue to a DELIVER thread that
+    calls on_frame (which encodes synchronously in the recorder). If the
+    encoder falls behind, the OLDEST queued frame is dropped and counted —
+    the recorder's CFR fill papers over the hole and the drop counter is
+    logged so sustained overruns are visible instead of mysterious judder.
+
+    Frames are stamped with qpc_100ns() at grab time (same timebase as
+    WGC's SystemRelativeTime, so CaptureClock math is unchanged)."""
+
+    _SRCCOPY_CAPTUREBLT = 0x00CC0020 | 0x40000000
+
+    def __init__(self, win: WindowInfo, fps: int = 60):
+        self._win = win
+        self._fps = fps
+        self._stop = None  # threading.Event while running
+        self._thread = None
+        self._deliver_thread = None
+        self._queue = None
+
+    def start(self, on_frame, on_stopped) -> None:
+        if self._thread is not None:
+            return  # already capturing
+        import queue
+        import threading
+        self._stop = threading.Event()
+        self._queue = queue.Queue(maxsize=24)  # ~280ms at 85 grabs/s: covers NVENC re-open spikes at the 2s rotation
+        self._deliver_thread = threading.Thread(
+            target=self._deliver_loop, args=(on_frame,),
+            name="gdi-deliver", daemon=True)
+        self._deliver_thread.start()
+        self._thread = threading.Thread(
+            target=self._loop, args=(on_stopped,),
+            name="gdi-capture", daemon=True)
+        self._thread.start()
+
+    def _deliver_loop(self, on_frame) -> None:
+        import queue
+        while True:
+            item = self._queue.get()
+            if item is None:
+                return
+            on_frame(*item)
+
+    def _enqueue(self, arr, ts) -> bool:
+        """Non-blocking put; drops the OLDEST frame when the encoder lags
+        (newest content wins — a stale frame is worse than a CFR fill)."""
+        import queue
+        try:
+            self._queue.put_nowait((arr, ts))
+            return False
+        except queue.Full:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                pass
+            self._queue.put_nowait((arr, ts))
+            return True
+
+    def _loop(self, on_stopped) -> None:
+        import numpy as np
+        from sm64_events.replay.clock import qpc_100ns
+
+        user32, gdi32 = ctypes.windll.user32, ctypes.windll.gdi32
+        kernel32 = ctypes.windll.kernel32
+        # Pacing a 16.7 ms loop with time.sleep() runs at ~57/s, not 60:
+        # Windows quantizes sleeps to the 15.6 ms timer, and on Win11 BOTH
+        # classic escapes are ignored for background processes (measured:
+        # timeBeginPeriod(1) -> 57.5/s; power-throttling opt-out -> 57.4/s).
+        # The reliable primitive is the HIGH-RESOLUTION WAITABLE TIMER
+        # (Win10 1803+, ~0.5 ms precision, exempt from throttling); a short
+        # spin closes the last fraction of a millisecond. Fallback if
+        # creation fails: pure spin (crude, one busy core, but exact).
+        import time as _time
+        _CREATE_HIGH_RES = 0x00000002
+        _TIMER_ALL_ACCESS = 0x1F0003
+        htimer = kernel32.CreateWaitableTimerExW(
+            None, None, _CREATE_HIGH_RES, _TIMER_ALL_ACCESS)
+        log.info("gdi capture pacing: %s",
+                 "high-res waitable timer" if htimer else "spin fallback")
+
+        def _wait_until(target_t: float) -> None:
+            delay = target_t - _time.perf_counter()
+            if htimer and delay > 0.001:
+                due = ctypes.c_longlong(-int((delay - 0.0005) * 1e7))
+                if kernel32.SetWaitableTimer(htimer, ctypes.byref(due),
+                                             0, None, None, False):
+                    kernel32.WaitForSingleObject(htimer, 0xFFFFFFFF)
+            while _time.perf_counter() < target_t:
+                pass
+        # PJ64 1.6 is DPI-UNAWARE: its real backing surface is its LOGICAL
+        # client size (e.g. 1600x1224 at 150% scaling), while a DPI-aware
+        # thread sees the scaled physical size (2400x1836) — BitBlt then
+        # copies past the surface into black right/bottom bands (live-
+        # measured: content bounds 1602x1226 inside a 2400x1836 frame).
+        # Thread-local UNAWARE makes GetClientRect/GetDC agree with the
+        # app's actual surface; the physical-size pixels were only DWM
+        # upscaling, not real detail, so this also shrinks grabs 2.25x.
+        user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-1))  # UNAWARE
+        hwnd = wt.HWND(self._win.hwnd)
+        hdc = mdc = bmp = None
+        w = h = 0
+        buf = None
+        # OVERSAMPLE 1.5x: pacing a 60/s grid exactly is impossible from
+        # Python - after any wait the thread queues for the GIL behind the
+        # encode/audio/server threads (~2-3 ms tax; measured 57.4 grabs/s
+        # across THREE wait mechanisms: sleep, timeBeginPeriod, high-res
+        # timer). A missed slot is a visible 50 ms judder pulse in 30 fps
+        # game content. At 90 grabs/s every 16.7 ms slot gets >=1 grab
+        # despite jitter; the recorder's wall-clock index mapping keeps the
+        # first grab per slot and drops the rest (target <= last_index).
+        # (Measured: fills are ~3/s at BOTH 85 and 113 grabs/s - the misses
+        # are ~30 ms grab-thread stalls (BitBlt vs the app's own present),
+        # not sampling jitter, so more rate buys nothing. ~half of those
+        # fills duplicate within a 30 fps game-frame pair and are invisible.)
+        period = 1.0 / (self._fps * 1.5)
+        grabs = drops = 0
+        grab_ms = 0.0
+        max_gap_ms = 0.0
+        prev_grab_t = None
+        last_blt_ms = last_dib_ms = 0.0
+        last_report = 0.0
+        next_t = _time.perf_counter()
+        try:
+            rect_check_t = 0.0
+            cw = ch = 0
+            while not self._stop.is_set():
+                # Window-state USER calls serialize against the target's UI
+                # thread (PJ64 redraws its FPS display at 1 Hz, holding that
+                # lock 50-130 ms) — query at 1 Hz, not 3 calls per frame, to
+                # shrink the collision cross-section. BitBlt failure catches
+                # window death between checks.
+                now = _time.perf_counter()
+                if now - rect_check_t > 1.0:
+                    rect_check_t = now
+                    if not user32.IsWindow(hwnd):
+                        log.info("GDI capture: window gone")
+                        on_stopped()
+                        return
+                    if user32.IsIconic(hwnd):
+                        cw = ch = 0
+                    else:
+                        rect = wt.RECT()
+                        user32.GetClientRect(hwnd, ctypes.byref(rect))
+                        cw, ch = rect.right & ~1, rect.bottom & ~1
+                if cw < 16 or ch < 16:
+                    _time.sleep(period)  # minimized/degenerate: gap
+                    next_t = _time.perf_counter()
+                    continue
+                if hdc is None:
+                    hdc = user32.GetDC(hwnd)
+                    mdc = gdi32.CreateCompatibleDC(hdc)
+                if (cw, ch) != (w, h):
+                    if bmp:
+                        gdi32.DeleteObject(bmp)
+                    bmp = gdi32.CreateCompatibleBitmap(hdc, cw, ch)
+                    gdi32.SelectObject(mdc, bmp)
+                    w, h = cw, ch
+                    buf = ctypes.create_string_buffer(w * h * 4)
+                    bmi = _BMIH(biSize=ctypes.sizeof(_BMIH), biWidth=w,
+                                biHeight=-h, biPlanes=1, biBitCount=32,
+                                biCompression=0)
+                    self._bmi = bmi
+                ts = qpc_100ns()
+                t_grab = _time.perf_counter()
+                if prev_grab_t is not None:
+                    gap = (t_grab - prev_grab_t) * 1000
+                    if gap > max_gap_ms:
+                        max_gap_ms = gap
+                    if gap > 50:
+                        # which phase ate the time? (last iteration's split)
+                        log.warning("grab stall %.0f ms (prev split: blt %.0f"
+                                    " ms, dib %.0f ms, rest %.0f ms)", gap,
+                                    last_blt_ms, last_dib_ms,
+                                    gap - last_blt_ms - last_dib_ms)
+                prev_grab_t = t_grab
+                t0 = _time.perf_counter()
+                if not gdi32.BitBlt(mdc, 0, 0, w, h, hdc, 0, 0,
+                                    self._SRCCOPY_CAPTUREBLT):
+                    # DC went stale (display change); recreate next pass
+                    gdi32.DeleteDC(mdc)
+                    user32.ReleaseDC(hwnd, hdc)
+                    hdc = mdc = None
+                    continue
+                last_blt_ms = (_time.perf_counter() - t0) * 1000
+                t0 = _time.perf_counter()
+                gdi32.GetDIBits(mdc, bmp, 0, h, buf, ctypes.byref(self._bmi), 0)
+                last_dib_ms = (_time.perf_counter() - t0) * 1000
+                arr = np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 4).copy()
+                if self._enqueue(arr, ts):
+                    drops += 1
+                grabs += 1
+                grab_ms += (_time.perf_counter() - t_grab) * 1000
+                now = _time.perf_counter()
+                if now - last_report > 30 and grabs:
+                    log.info("gdi capture: %.1f grabs/s avg %.1f ms, "
+                             "max inter-grab gap %.0f ms, %d encoder-lag "
+                             "drops", grabs / (now - last_report)
+                             if last_report else grabs / 30, grab_ms / grabs,
+                             max_gap_ms, drops)
+                    grabs = drops = 0
+                    grab_ms = 0.0
+                    max_gap_ms = 0.0
+                    last_report = now
+                next_t += period
+                if next_t > _time.perf_counter():
+                    _wait_until(next_t)
+                else:
+                    next_t = _time.perf_counter()  # grab overran; resync
+        except Exception:
+            log.exception("GDI capture loop died")
+            on_stopped()
+        finally:
+            if htimer:
+                kernel32.CloseHandle(htimer)
+            if bmp:
+                gdi32.DeleteObject(bmp)
+            if mdc:
+                gdi32.DeleteDC(mdc)
+            if hdc:
+                user32.ReleaseDC(hwnd, hdc)
+
+    def stop(self) -> None:
+        if self._thread is not None:
+            self._stop.set()
+            self._thread.join(timeout=5)
+            self._thread = None
+        if self._deliver_thread is not None:
+            self._queue.put(None)  # sentinel: drain and exit
+            self._deliver_thread.join(timeout=5)
+            self._deliver_thread = None
+
+
+class _BMIH(ctypes.Structure):
+    _fields_ = [("biSize", wt.DWORD), ("biWidth", wt.LONG), ("biHeight", wt.LONG),
+                ("biPlanes", wt.WORD), ("biBitCount", wt.WORD),
+                ("biCompression", wt.DWORD), ("biSizeImage", wt.DWORD),
+                ("biXPelsPerMeter", wt.LONG), ("biYPelsPerMeter", wt.LONG),
+                ("biClrUsed", wt.DWORD), ("biClrImportant", wt.DWORD)]
+
+
+class WgcVideoSource:
+    """Monitor capture + per-frame crop to the target window (WGC).
+
+    NOTE: NOT usable for PJ64 1.6 (frozen content — see GdiBitBltVideoSource
+    docstring); kept for capturing normal flip-model apps.
+
+    windows-capture API traps (verified live 2026-06-11):
+    - frames expose .frame_buffer/.timespan (no to_numpy); timespan is WGC
+      SystemRelativeTime = QPC 100 ns ticks (CaptureClock's timebase).
+    - @capture.event dispatches on the handler's __name__ — the decorated
+      callbacks MUST be named on_frame_arrived / on_closed exactly.
+    - monitor_index is 1-BASED in EnumDisplayMonitors order (0 raises).
+    - The crop slice must be COPIED: the library may reuse the underlying
+      buffer between callbacks, and the recorder holds the last frame for
+      CFR gap fill.
+    - The process must be per-monitor DPI aware BEFORE session start
+      (_ensure_dpi_aware) or window (physical px) and monitor (virtualized
+      px) coordinates disagree on scaled displays."""
+
+    def __init__(self, win: WindowInfo):
+        self._win = win
+        self._control = None
+
+    def start(self, on_frame, on_stopped) -> None:
+        if self._control is not None:
+            return  # already capturing; a second start would orphan the first
+        from windows_capture import WindowsCapture
+
+        _ensure_dpi_aware()
+        hwnd = self._win.hwnd
+        mon_index, mon_rect = monitor_geometry(hwnd)
+        log.info("monitor capture: index=%d rect=%s (window hwnd=%s)",
+                 mon_index, mon_rect, hwnd)
+
+        capture = WindowsCapture(
+            cursor_capture=False,
+            draw_border=False,
+            monitor_index=mon_index,
+        )
+
+        @capture.event
+        def on_frame_arrived(frame, capture_control):
+            rect = window_rect(hwnd)
+            if rect is None:
+                return  # minimized/destroyed: deliver nothing (coverage hole)
+            bounds = crop_bounds(frame.width, frame.height, rect, mon_rect)
+            if bounds is None:
+                return
+            x0, y0, x1, y1 = bounds
+            on_frame(frame.frame_buffer[y0:y1, x0:x1].copy(), frame.timespan)
+
+        @capture.event
+        def on_closed():
+            log.info("monitor capture session closed")
+            on_stopped()
+
+        self._control = capture.start_free_threaded()
+
+    def stop(self) -> None:
+        if self._control is not None:
+            try:
+                self._control.stop()
+            except Exception:
+                log.exception("WGC stop failed")
+            self._control = None

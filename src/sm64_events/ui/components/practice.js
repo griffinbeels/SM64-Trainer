@@ -3,6 +3,7 @@ import { h } from "preact";
 import { useState } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
+import { ReplayPlayer } from "./replay.js";
 import { StatMenu } from "./statmenu.js";
 import { Timeline } from "./timeline.js";
 import { Progress } from "./progress.js";
@@ -38,6 +39,7 @@ function delta(frames) {
 }
 
 function AttemptRow({ a, t, idx }) {
+  const [showReplay, setShowReplay] = useState(false);
   async function clear() {
     await send("POST", `/api/attempts/${a.id}/clear`, { reason: "accidental" });
     t.refresh();
@@ -58,7 +60,7 @@ function AttemptRow({ a, t, idx }) {
   const pbBeat = a.outcome === "success" && !a.cleared
     && frames != null && frames > 0
     && (a.pb_delta_frames === null || a.pb_delta_frames < 0);
-  return html`<tr class=${a.cleared ? "cleared" : ""}>
+  const row = html`<tr class=${a.cleared ? "cleared" : ""}>
     <td class="meta">#${idx + 1}</td>
     <td class=${a.outcome === "success" ? "good" : "badx"}>
       ${OUTCOME_LABEL[a.outcome] || a.outcome}
@@ -74,13 +76,18 @@ function AttemptRow({ a, t, idx }) {
     <td>${a.outcome === "success" ? delta(a.pb_delta_frames) : ""}</td>
     <td class="meta">${a.strat_tag || ""}</td>
     <td style="text-align:right">
+      <button onclick=${() => setShowReplay(!showReplay)} title="view replay">${showReplay ? "▾" : "▶"}</button>
       ${a.outcome === "success" && !a.cleared
-        ? html`<button class=${pbBeat ? "pb-glow" : ""} onclick=${savePb}>Save as PB</button> ` : ""}
+        ? html` <button class=${pbBeat ? "pb-glow" : ""} onclick=${savePb}>Save as PB</button>` : ""}
       ${a.cleared
-        ? html`<button onclick=${restore}>undo</button>`
-        : html`<button onclick=${clear} title="clear (mistake)">×</button>`}
+        ? html` <button onclick=${restore}>undo</button>`
+        : html` <button onclick=${clear} title="clear (mistake)">×</button>`}
     </td>
   </tr>`;
+  const expandedRow = showReplay
+    ? html`<tr class="replay-row"><td colspan="5"><${ReplayPlayer} attemptId=${a.id} /></td></tr>`
+    : null;
+  return [row, expandedRow];
 }
 
 // Shared table component used by both StarSection and the unassigned block.

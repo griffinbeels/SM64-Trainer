@@ -5,4 +5,7 @@ __pycache__/
 logs/
 .superpowers/
 data/
+replays/
+data/replay_buffer/
 .claude/worktrees/
+_dbg/
