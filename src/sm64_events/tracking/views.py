@@ -183,8 +183,10 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
 
     # the target star always gets a section (spec §5): setting a target
     # immediately surfaces its lifetime history, PB, and markers.
-    if service.target and service.target not in seen:
-        seen[service.target] = None
+    # interim: segment target sections land in Task 13
+    if service.target and service.target[0] == "star" \
+            and service.target[1:] not in seen:
+        seen[service.target[1:]] = None
 
     scoped_set = set(scoped)
     for course_id, star_id in seen:
@@ -243,7 +245,8 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     sections.sort(key=lambda s: last_id.get((s["course_id"], s["star_id"]), -1),
                   reverse=True)
 
-    tgt_c, tgt_s = service.target if service.target else (None, None)
+    tgt_c, tgt_s = (service.target[1:] if service.target
+                    and service.target[0] == "star" else (None, None))
     return {
         "session": {"id": service.session_id},
         "scope": scope,

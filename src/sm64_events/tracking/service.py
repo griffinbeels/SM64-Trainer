@@ -102,7 +102,9 @@ class TrackerService:
                      })
 
     def _target_payload(self) -> dict:
-        c, s = self._projector.target if self._projector.target else (None, None)
+        # interim: segment targets render as none until Task 12's kind-aware payload
+        tgt = self._projector.target
+        c, s = (tgt[1], tgt[2]) if tgt and tgt[0] == "star" else (None, None)
         return {"course_id": c, "star_id": s,
                 "strat_tag": self._projector.strat_tag}
 
@@ -157,7 +159,7 @@ class TrackerService:
                                           "strat_tag": strat_tag}))
         if strat_tag:
             self._register_strategy(db, course_id, star_id, strat_tag)
-        if self.target == (course_id, star_id):
+        if self.target == ("star", course_id, star_id):
             # the target's strat changed: keep the WS contract honest so
             # other clients refresh (REFRESH_ON includes target_changed)
             await self.publish(Event(type="target_changed", frame=0,
