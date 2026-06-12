@@ -240,9 +240,11 @@ class DwmSurfaceVideoSource:
             while _time.perf_counter() < target_t:
                 pass
 
-        period = 1.0 / (self._fps * 1.5)  # oversample; recorder dedupes
+        period = 1.0 / (self._fps * 2.0)  # 2x oversample; recorder dedupes
         grabs = drops = misses = 0
         grab_ms = 0.0
+        max_gap_ms = 0.0
+        prev_t = None
         last_report = _time.monotonic()
         next_t = _time.perf_counter()
         try:
@@ -254,6 +256,9 @@ class DwmSurfaceVideoSource:
                     continue
                 ts = qpc_100ns()
                 t1 = _time.perf_counter()
+                if prev_t is not None:
+                    max_gap_ms = max(max_gap_ms, (t1 - prev_t) * 1000)
+                prev_t = t1
                 full = reader.acquire(self._win.hwnd)
                 if full is None:
                     misses += 1
@@ -278,12 +283,12 @@ class DwmSurfaceVideoSource:
                 grab_ms += (_time.perf_counter() - t1) * 1000
                 now = _time.monotonic()
                 if now - last_report > 30 and grabs:
-                    log.info("dwm capture: %.1f grabs/s avg %.1f ms, "
-                             "%d misses, %d encoder-lag drops",
+                    log.info("dwm capture: %.1f grabs/s avg %.1f ms, max "
+                             "gap %.0f ms, %d misses, %d encoder-lag drops",
                              grabs / (now - last_report), grab_ms / grabs,
-                             misses, drops)
+                             max_gap_ms, misses, drops)
                     grabs = drops = misses = 0
-                    grab_ms = 0.0
+                    grab_ms = max_gap_ms = 0.0
                     last_report = now
                 next_t += period
                 if next_t > _time.perf_counter():

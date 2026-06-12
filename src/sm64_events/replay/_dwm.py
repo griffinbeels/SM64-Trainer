@@ -89,6 +89,20 @@ class DwmSurfaceReader:
         self._staging = ctypes.c_void_p()
         self._sdesc = _TEX2D_DESC()
         self._have_staging = False
+        # Bind COM methods ONCE: constructing WINFUNCTYPE wrappers per call
+        # is pure GIL-held Python overhead in the 60 Hz hot path (measured
+        # as extra missed slots vs the probe).
+        self._open_shared = _vtbl(self._device, 28, ctypes.c_long, wt.HANDLE,
+                                  ctypes.POINTER(ctypes.c_ubyte),
+                                  ctypes.POINTER(ctypes.c_void_p))
+        self._create_tex = _vtbl(self._device, 5, ctypes.c_long,
+                                 ctypes.POINTER(_TEX2D_DESC), ctypes.c_void_p,
+                                 ctypes.POINTER(ctypes.c_void_p))
+        self._copy_resource = _vtbl(self._context, 47, None, ctypes.c_void_p,
+                                    ctypes.c_void_p)
+        self._map = _vtbl(self._context, 14, ctypes.c_long, ctypes.c_void_p,
+                          wt.UINT, wt.UINT, wt.UINT, ctypes.POINTER(_MAPPED))
+        self._unmap = _vtbl(self._context, 15, None, ctypes.c_void_p, wt.UINT)
 
     def acquire(self, hwnd: int) -> np.ndarray | None:
         hsurf = wt.HANDLE()
@@ -102,10 +116,8 @@ class DwmSurfaceReader:
                 or not hsurf.value:
             return None
         tex = ctypes.c_void_p()
-        hr = _vtbl(self._device, 28, ctypes.c_long, wt.HANDLE,
-                   ctypes.POINTER(ctypes.c_ubyte),
-                   ctypes.POINTER(ctypes.c_void_p))(
-            self._device, hsurf, _IID_ID3D11Texture2D, ctypes.byref(tex))
+        hr = self._open_shared(self._device, hsurf, _IID_ID3D11Texture2D,
+                               ctypes.byref(tex))
         if hr != 0 or not tex.value:
             return None
         try:
@@ -128,20 +140,15 @@ class DwmSurfaceReader:
                 self._sdesc.CPUAccessFlags = 0x20000  # CPU_ACCESS_READ
                 self._sdesc.MiscFlags = 0
                 self._sdesc.MipLevels = 1
-                hr = _vtbl(self._device, 5, ctypes.c_long,
-                           ctypes.POINTER(_TEX2D_DESC), ctypes.c_void_p,
-                           ctypes.POINTER(ctypes.c_void_p))(
-                    self._device, ctypes.byref(self._sdesc), None,
-                    ctypes.byref(self._staging))
+                hr = self._create_tex(self._device, ctypes.byref(self._sdesc),
+                                      None, ctypes.byref(self._staging))
                 if hr != 0:
                     return None
                 self._have_staging = True
-            _vtbl(self._context, 47, None, ctypes.c_void_p, ctypes.c_void_p)(
-                self._context, self._staging, tex)
+            self._copy_resource(self._context, self._staging, tex)
             m = _MAPPED()
-            hr = _vtbl(self._context, 14, ctypes.c_long, ctypes.c_void_p,
-                       wt.UINT, wt.UINT, wt.UINT, ctypes.POINTER(_MAPPED))(
-                self._context, self._staging, 0, 1, 0, ctypes.byref(m))
+            hr = self._map(self._context, self._staging, 0, 1, 0,
+                           ctypes.byref(m))
             if hr != 0:
                 return None
             try:
@@ -150,8 +157,7 @@ class DwmSurfaceReader:
                 arr = np.frombuffer(buf, dtype=np.uint8).reshape(h, m.RowPitch)
                 return arr[:, :w * 4].reshape(h, w, 4).copy()
             finally:
-                _vtbl(self._context, 15, None, ctypes.c_void_p, wt.UINT)(
-                    self._context, self._staging, 0)
+                self._unmap(self._context, self._staging, 0)
         finally:
             _release(tex)
 
