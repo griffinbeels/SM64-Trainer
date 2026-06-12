@@ -146,7 +146,7 @@ never crashes projection.
 | Endpoint | Behavior |
 |---|---|
 | `GET /api/segments` | List definitions (+ broken flag) |
-| `POST /api/segments` | Create `{name, start_triggers, end_triggers, guards?, enabled?}`; validates against vocabulary (400 on unknown type/params); re-projects |
+| `POST /api/segments` | Create `{name, start_triggers, end_triggers, guards?, enabled?}`; validates against vocabulary (409 on unknown type/params, per the codebase's ValueError→409 taxonomy — deviation recorded in the plan); re-projects |
 | `PUT /api/segments/{id}` | Edit; re-projects |
 | `DELETE /api/segments/{id}` | Delete + cascade PBs; re-projects |
 | `GET /api/segments/vocab` | Trigger/guard types, param schemas, level/area/course enums — straight from the registry; the builder GUI is 100% data-driven |
@@ -195,7 +195,7 @@ endpoint table updated (consumer-facing surface).
   fixture; **regression test that `star_grab` no longer misattributes key
   grabs**.
 - **Storage/API**: migration test, CRUD round-trip, cascade-delete,
-  validation 400s, vocab endpoint shape, kind-aware target.
+  validation 409s, vocab endpoint shape, kind-aware target.
 - **Live gate** (with the human, before merge): `gCurrAreaIndex` address +
   castle area ids; warp action ids per pipe/funnel; spawn action id; what the
   game writes to `last_completed_*` on key grabs; B3 grand-star attribution.
