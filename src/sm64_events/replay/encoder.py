@@ -85,7 +85,9 @@ class SegmentWriter:
         self._enc_dims: tuple[int, int] | None = None
         self._run_first_index: int | None = None
         self._seg_base_pts = 0
+        self._seg_pkts = 0
         self._seg_first_index: int | None = None
+        self._seg_next_index: int | None = None
         self._seg_next_index: int | None = None  # enforces per-segment contiguity
         self._seg_frames = 0
         self._seg_n = 0
@@ -148,9 +150,13 @@ class SegmentWriter:
         if self._container is not None and frame_index < self._seg_next_index:
             return  # backwards/duplicate index — drop silently to preserve monotonic utc_end
         if self._container is not None and (
-                (w, h) != self._dims
-                or self._seg_frames >= self._frames_per_seg
-                or frame_index != self._seg_next_index):
+                (w, h) != self._dims or frame_index != self._seg_next_index):
+            # Dim change / index gap: the encoder must drain (it may hold a
+            # couple of delayed frames) and restart — segment-length rotation
+            # is NOT handled here; it is packet-driven in _mux_routed, because
+            # NVENC emits frame N's packet ~2 frames late even at p1/ull and
+            # frame-driven rotation dropped the tail of every segment.
+            self._drain_encoder()
             self._close_video_segment()
         try:
             self._ensure_encoder(w, h)
@@ -162,11 +168,10 @@ class SegmentWriter:
                 self._run_first_index = frame_index
             vf.pts = frame_index - self._run_first_index   # run-global pts
             vf.time_base = Fraction(1, self._cfg.fps)
-            if self._seg_frames == 0:
-                vf.pict_type = 1  # AV_PICTURE_TYPE_I: forced IDR at segment start
+            if (vf.pts - self._seg_base_pts) % self._frames_per_seg == 0:
+                vf.pict_type = 1  # forced IDR at every segment-grid boundary
             for pkt in self._enc.encode(vf):
                 self._mux_routed(pkt)
-            self._seg_frames += 1
             self._seg_next_index = frame_index + 1
         except Exception:
             log.exception("encode failed on frame %d — dropping frame, "
@@ -184,26 +189,38 @@ class SegmentWriter:
             self._container = self._stream = None
             self._enc = None  # recreate on next frame
 
+    def _drain_encoder(self) -> None:
+        """Flush remaining delayed packets into the current container and
+        retire the encoder (gap/dim-change/close paths only — costs a
+        ~110 ms re-open next frame, acceptable for these rare events)."""
+        if self._enc is None:
+            return
+        try:
+            for pkt in self._enc.encode(None):
+                self._mux_routed(pkt)
+        except Exception:
+            log.exception("encoder drain failed")
+        self._enc = None
+
     def _mux_routed(self, pkt) -> None:
-        """Route an encoder packet into the CURRENT container, rebasing its
-        run-global pts/dts to segment-local so each segment file starts at
-        pts 0 (the extractor contract). Zero-delay configs emit the packet
-        for frame N during encode(N); a straggler from before this segment's
-        base cannot be muxed into an already-closed file — log and drop."""
-        if self._container is None:
+        """Route an encoder packet into its segment's container, rotating
+        containers when a packet crosses the segment-grid boundary —
+        PACKET-driven because the encoder emits packets ~2 frames behind
+        the submitted frames. Rebases run-global pts/dts to segment-local
+        so each file starts at pts 0 (the extractor contract)."""
+        if self._container is None or pkt.pts is None:
             return
-        base = self._seg_base_pts
-        if pkt.pts is not None and pkt.pts < base:
-            log.warning("late encoder packet (pts %s < segment base %s) "
-                        "dropped — encoder delay unexpectedly nonzero",
-                        pkt.pts, base)
-            return
-        if pkt.pts is not None:
-            pkt.pts -= base
+        while pkt.pts >= self._seg_base_pts + self._frames_per_seg:
+            next_global = (self._run_first_index + self._seg_base_pts
+                           + self._frames_per_seg)
+            self._close_video_segment()
+            self._open_video_segment(next_global, *self._enc_dims)
+        pkt.pts -= self._seg_base_pts
         if pkt.dts is not None:
-            pkt.dts -= base
+            pkt.dts = pkt.pts
         pkt.stream = self._stream
         self._container.mux(pkt)
+        self._seg_pkts += 1
 
     def _open_video_segment(self, first_index: int, w: int, h: int) -> None:
         self._seg_n += 1
@@ -216,10 +233,11 @@ class SegmentWriter:
         if self._enc is not None and self._enc.extradata:
             self._stream.codec_context.extradata = self._enc.extradata
         self._seg_first_index = first_index
-        self._seg_next_index = first_index + 1
+        if self._seg_next_index is None or first_index >= self._seg_next_index:
+            self._seg_next_index = first_index + 1
         self._seg_base_pts = (first_index - self._run_first_index
                               if self._run_first_index is not None else 0)
-        self._seg_frames = 0
+        self._seg_pkts = 0
         self._dims = (w, h)
         self._path = path
 
@@ -227,7 +245,17 @@ class SegmentWriter:
         if self._container is None:
             return
         container = self._container
-        path, first_index, seg_frames = self._path, self._seg_first_index, self._seg_frames
+        path, first_index, seg_frames = self._path, self._seg_first_index, self._seg_pkts
+        if seg_frames == 0:
+            # nothing was ever muxed (e.g. gap immediately after open):
+            # discard the empty file rather than report a zero-length segment
+            self._container = self._stream = None
+            try:
+                container.close()
+            except Exception:
+                pass
+            path.unlink(missing_ok=True)
+            return
         self._container = self._stream = None
         try:
             container.close()  # container only — the encoder lives on
@@ -276,13 +304,7 @@ class SegmentWriter:
 
     # -- lifecycle -----------------------------------------------------------
     def close(self) -> None:
-        if self._enc is not None and self._container is not None:
-            try:
-                for pkt in self._enc.encode(None):  # end-of-run flush
-                    self._mux_routed(pkt)
-            except Exception:
-                log.exception("encoder flush failed at close")
-        self._enc = None
+        self._drain_encoder()  # end-of-run flush routes delayed packets
         self._close_video_segment()
         if self._audio_t0 is not None and self._pcm_buffered:
             self._flush_audio_chunk(self._pcm_buffered)

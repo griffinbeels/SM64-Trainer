@@ -261,20 +261,30 @@ class GdiBitBltVideoSource:
         last_report = 0.0
         next_t = _time.perf_counter()
         try:
+            rect_check_t = 0.0
+            cw = ch = 0
             while not self._stop.is_set():
-                if not user32.IsWindow(hwnd):
-                    log.info("GDI capture: window gone")
-                    on_stopped()
-                    return
-                if user32.IsIconic(hwnd):
-                    _time.sleep(period)  # minimized: deliver nothing (gap)
-                    next_t = _time.perf_counter()
-                    continue
-                rect = wt.RECT()
-                user32.GetClientRect(hwnd, ctypes.byref(rect))
-                cw, ch = rect.right & ~1, rect.bottom & ~1
+                # Window-state USER calls serialize against the target's UI
+                # thread (PJ64 redraws its FPS display at 1 Hz, holding that
+                # lock 50-130 ms) — query at 1 Hz, not 3 calls per frame, to
+                # shrink the collision cross-section. BitBlt failure catches
+                # window death between checks.
+                now = _time.perf_counter()
+                if now - rect_check_t > 1.0:
+                    rect_check_t = now
+                    if not user32.IsWindow(hwnd):
+                        log.info("GDI capture: window gone")
+                        on_stopped()
+                        return
+                    if user32.IsIconic(hwnd):
+                        cw = ch = 0
+                    else:
+                        rect = wt.RECT()
+                        user32.GetClientRect(hwnd, ctypes.byref(rect))
+                        cw, ch = rect.right & ~1, rect.bottom & ~1
                 if cw < 16 or ch < 16:
-                    _time.sleep(period)
+                    _time.sleep(period)  # minimized/degenerate: gap
+                    next_t = _time.perf_counter()
                     continue
                 if hdc is None:
                     hdc = user32.GetDC(hwnd)
