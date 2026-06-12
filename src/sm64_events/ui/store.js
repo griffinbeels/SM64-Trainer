@@ -45,7 +45,14 @@ export function useTracker() {
   useEffect(() => { scopeRef.current = scope; }, [scope]);
 
   const refresh = useCallback(async () => {
-    try { setView(await getJSON(`/api/session?clock=${clockRef.current}&scope=${scopeRef.current}`)); }
+    try {
+      const v = await getJSON(`/api/session?clock=${clockRef.current}&scope=${scopeRef.current}`);
+      setView(v);
+      // armedSegs: live via WS notices, reconciled from every view fetch —
+      // instant AND cannot stay stale across reconnects.
+      setArmedSegs(new Set(((v && v.segments) || [])
+        .filter((s) => s.armed).map((s) => s.segment_id)));
+    }
     catch (e) { console.error(e); }
   }, []);
 

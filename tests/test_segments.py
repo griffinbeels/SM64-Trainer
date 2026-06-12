@@ -387,3 +387,55 @@ def test_real_reset_frames_later_still_closes():
                             {"igt_frames_before": 30}), ctx(level=6))
     assert len(closed) == 1
     assert closed[0].outcome == "reset" and closed[0].rta_frames == 179
+
+
+# ---------------------------------------------------------------------------
+# Area-door echo guard (live report 2026-06-12)
+# An area_changed (castle door) mid-segment triggers a synthetic
+# practice_reset at the SAME frame.  The segment must stay armed.
+# ---------------------------------------------------------------------------
+
+def test_area_door_echo_mid_segment_does_not_close():
+    """LBLJ armed in lobby (level 16→6 @1000); area_changed 1→3 @1200 (door);
+    practice_reset @1200 (door echo) → no closure, segment stays armed.
+    Subsequent level_changed 6→17 @1300 → success rta 300."""
+    e = SegmentEngine([LBLJ])
+    # arm via castle entry
+    e.feed(jev(10, "level_changed", 1000, {"from": 16, "to": 6}),
+           ctx(level=6, prev_level=16))
+    # load echo at arm frame — already covered, still no closure
+    e.feed(jev(11, "practice_reset", 1000, {"igt_frames_before": 64}),
+           ctx(level=6))
+    assert e.armed_ids() == {1}
+    # area door crossed mid-segment: area_changed then echo at SAME frame
+    e.feed(jev(12, "area_changed", 1200, {"level": 6, "from": 1, "to": 3}),
+           ctx(level=6))
+    closed, _ = e.feed(jev(13, "practice_reset", 1200, {}), ctx(level=6))
+    assert closed == [], "area-door echo must not close the segment"
+    assert e.armed_ids() == {1}, "segment must remain armed after door echo"
+    # end trigger fires — success timed from original arm at 1000
+    closed, _ = e.feed(jev(14, "level_changed", 1300, {"from": 6, "to": 17}),
+                       ctx(level=17, prev_level=6))
+    assert len(closed) == 1
+    assert closed[0].outcome == "success" and closed[0].rta_frames == 300
+
+
+def test_real_reset_after_door_still_closes():
+    """Same prefix through the door @1200; a practice_reset at @1400 (delta
+    from last transition = 200 frames) is a real player reset → outcome reset,
+    rta 400 (from original arm at 1000)."""
+    e = SegmentEngine([LBLJ])
+    e.feed(jev(10, "level_changed", 1000, {"from": 16, "to": 6}),
+           ctx(level=6, prev_level=16))
+    e.feed(jev(11, "practice_reset", 1000, {"igt_frames_before": 64}),
+           ctx(level=6))
+    e.feed(jev(12, "area_changed", 1200, {"level": 6, "from": 1, "to": 3}),
+           ctx(level=6))
+    # door echo — ignored
+    e.feed(jev(13, "practice_reset", 1200, {}), ctx(level=6))
+    assert e.armed_ids() == {1}
+    # real reset 200 frames later — must close
+    closed, _ = e.feed(jev(14, "practice_reset", 1400,
+                            {"igt_frames_before": 30}), ctx(level=6))
+    assert len(closed) == 1
+    assert closed[0].outcome == "reset" and closed[0].rta_frames == 400

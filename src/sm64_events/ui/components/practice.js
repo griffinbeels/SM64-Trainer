@@ -188,9 +188,9 @@ function StarSection({ sec, t, ui, pinned }) {
 function SegmentSection({ sec, t, ui, pinned }) {
   const [showHidden, setShowHidden] = useState(false);
   const [visible, setVisible] = useState(10);
-  // view flag is authoritative; the WS set is only for the defs list
-  // between refreshes (segments.js)
-  const armed = sec.armed;
+  // armedSegs is the single live source: WS notices are instant, every view
+  // fetch reconciles it so it cannot stay stale — see store.js refresh().
+  const armed = t.armedSegs.has(sec.segment_id);
   const base = showHidden ? sec.attempts
     : sec.attempts.filter((a) => !a.cleared && a.outcome !== "abandoned");
   const hidden = sec.attempts.filter((a) => a.cleared || a.outcome === "abandoned");

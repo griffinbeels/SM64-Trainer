@@ -20,12 +20,24 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
   self-heal, domain rule 4), but failure closures record the row with
   rta_frames=None (game_reset's boot-range frame makes this the ONLY way
   hard_reset rows exist)
-- load-echo rule: a practice_reset/state_loaded whose frame == arm.start_frame
-  is a Usamune IGT reset emitted on the same global-timer frame as the level
-  entry that armed us — not a player reset (live gate 2026-06-12, seq 40-45).
-  Such events are ignored entirely (no closure, no disarm). A real player
-  reset always lands on a later frame because the global timer keeps ticking
-  even while paused.
+- load-echo rule: Usamune resets IGT on every level/area load, so the
+  anchor detector emits a synthetic practice_reset on the same global-timer
+  frame as the triggering transition.  Two echo shapes exist:
+    (a) level-entry echo: practice_reset @ arm.start_frame (same tick as the
+        level_changed that armed the segment — live gate 2026-06-12, seq 40-45);
+    (b) area-door echo: area_changed mid-segment at frame F, then a synthetic
+        practice_reset at the SAME frame F (live report 2026-06-12: LBLJ armed
+        in lobby closed-as-reset at the basement-stairs door).
+  Both echo shapes are detected by the engine-level _last_transition_frame
+  field, which is updated to ev.frame on every level_changed / area_changed
+  before per-def processing.  If a practice_reset / state_loaded lands on
+  _last_transition_frame it is an echo → ignored (no closure, no disarm).
+  A real player reset always lands on a LATER frame.
+  KNOWN EDGE (no code): a savestate load INTO A DIFFERENT AREA emits a
+  corrective area_changed co-frame with state_loaded; that state_loaded will
+  be classified as an echo (segment stays armed).  The negative-rta self-heal
+  covers the time-jump consequences.  Acceptable: door echoes are constant,
+  this edge is rare.
 """
 from dataclasses import dataclass
 from typing import Callable
@@ -212,6 +224,11 @@ class SegmentEngine:
     def __init__(self, defs: list[SegmentDef]):
         self._defs = [d for d in defs if d.enabled]
         self._armed: dict[int, _Arm] = {}
+        # Updated to ev.frame on every level_changed / area_changed BEFORE the
+        # per-def loop.  Transition events always journal before their same-tick
+        # synthetic practice_reset (detector order in main.py guarantees it),
+        # so this is always set when the echo arrives.
+        self._last_transition_frame: int | None = None
 
     def armed_ids(self) -> set[int]:
         return set(self._armed)
@@ -220,6 +237,10 @@ class SegmentEngine:
         """Returns (closed raw Attempts, notices). Closures before arming."""
         from sm64_events.tracking.projection import Attempt  # cycle-free at call time
         closed, notices = [], []
+        # Track the most recent level/area transition frame BEFORE per-def
+        # processing so the echo guard below can test both echo shapes.
+        if ev.type in ("level_changed", "area_changed"):
+            self._last_transition_frame = ev.frame
         for d in self._defs:
             arm = self._armed.get(d.id)
             starts = self._matches(d.start_triggers, ev, ctx)
@@ -230,14 +251,17 @@ class SegmentEngine:
                         closed.append(a)
                     self._disarm(d, ev, notices)
                 elif ev.type in ("practice_reset", "state_loaded") \
-                        and ev.frame == arm.start_frame:
-                    # Load echo, not a player reset: Usamune resets its IGT on
-                    # every level/area load, so the anchor detector emits a
-                    # synthetic practice_reset on the SAME global-timer frame
-                    # as the level entry that armed us (live gate 2026-06-12,
-                    # seq 40-45: armed LBLJ killed with a 0-frame reset on
-                    # castle entry). A real reset always lands frames later —
-                    # the global timer keeps ticking even while paused.
+                        and ev.frame == self._last_transition_frame:
+                    # Load echo — not a real player reset.  Two shapes:
+                    # (a) level-entry echo: practice_reset at arm.start_frame
+                    #     (same tick as the level_changed that armed us —
+                    #     live gate 2026-06-12, seq 40-45);
+                    # (b) area-door echo: area_changed mid-segment at frame F,
+                    #     followed by practice_reset at the SAME frame F
+                    #     (live report 2026-06-12: LBLJ armed in castle lobby
+                    #     closed-as-reset when crossing the basement-stairs
+                    #     door).
+                    # Both shapes share ev.frame == _last_transition_frame.
                     # Do NOTHING: no closure, no row, no disarm. Fall through
                     # to the arm phase where an attempt_anchor re-arm
                     # harmlessly replaces the _Arm with the identical frame.
