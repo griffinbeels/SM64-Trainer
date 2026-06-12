@@ -183,3 +183,94 @@ def vocab() -> dict:
         "levels": {str(k): v for k, v in sorted(LEVEL_NAMES.items())},
         "castle_areas": {str(k): v for k, v in CASTLE_AREA_NAMES.items()},
     }
+
+
+@dataclass(frozen=True)
+class _Arm:
+    jid: int            # journal id of the arming event -> attempt id
+    start_frame: int
+    started_utc: str
+    anchor_type: str    # the arming event's type
+    session_id: int
+
+
+class SegmentEngine:
+    """One IDLE<->ARMED FSM per enabled definition. Pure over journal
+    events + MatchContext: same code path live and in replay."""
+
+    def __init__(self, defs: list[SegmentDef]):
+        self._defs = [d for d in defs if d.enabled]
+        self._armed: dict[int, _Arm] = {}
+
+    def armed_ids(self) -> set[int]:
+        return set(self._armed)
+
+    def feed(self, ev, ctx: MatchContext):
+        """Returns (closed raw Attempts, notices). Closures before arming."""
+        from sm64_events.tracking.projection import Attempt  # cycle-free at call time
+        closed, notices = [], []
+        for d in self._defs:
+            arm = self._armed.get(d.id)
+            starts = self._matches(d.start_triggers, ev, ctx)
+            if arm is not None:
+                if self._matches(d.end_triggers, ev, ctx):
+                    a = self._close(Attempt, d, arm, ev, "success", None)
+                    if a:
+                        closed.append(a)
+                    self._disarm(d, ev, notices)
+                elif ev.type in ("practice_reset", "state_loaded"):
+                    if ev.payload.get("paused_frames_before", 0) \
+                            < _AFK_PAUSE_FRAMES:
+                        a = self._close(Attempt, d, arm, ev, "reset", None)
+                        if a:
+                            closed.append(a)
+                    self._disarm(d, ev, notices)
+                elif ev.type == "death":
+                    a = self._close(Attempt, d, arm, ev, "death",
+                                    ev.payload.get("cause"))
+                    if a:
+                        closed.append(a)
+                    self._disarm(d, ev, notices)
+                elif ev.type == "game_reset":
+                    a = self._close(Attempt, d, arm, ev, "hard_reset", None)
+                    if a:
+                        closed.append(a)
+                    self._disarm(d, ev, notices)
+                elif ev.type in ("level_changed", "session_started") \
+                        and not starts:
+                    self._disarm(d, ev, notices)   # silent: no row
+            # arm / re-arm — guards re-evaluated every time (spec)
+            if starts and all(GUARDS[g["type"]].check(g, ctx)
+                              for g in d.guards):
+                fresh = d.id not in self._armed
+                self._armed[d.id] = _Arm(jid=ev.id, start_frame=ev.frame,
+                                         started_utc=ev.wall_time_utc,
+                                         anchor_type=ev.type,
+                                         session_id=ev.session_id)
+                if fresh:
+                    notices.append({"event": "segment_armed",
+                                    "segment_id": d.id, "name": d.name,
+                                    "frame": ev.frame})
+        return closed, notices
+
+    def _matches(self, triggers, ev, ctx) -> bool:
+        return any(TRIGGERS[t["type"]].match(t, ev, ctx) for t in triggers)
+
+    def _disarm(self, d, ev, notices) -> None:
+        if self._armed.pop(d.id, None) is not None:
+            notices.append({"event": "segment_disarmed", "segment_id": d.id,
+                            "name": d.name, "frame": ev.frame})
+
+    def _close(self, Attempt, d, arm: _Arm, ev, outcome, detail):
+        rta = ev.frame - arm.start_frame
+        if rta < 0:
+            return None  # timer anomaly: discard (self-heal, domain rule 4)
+        return Attempt(
+            id=arm.jid + SEGMENT_ATTEMPT_OFFSET * d.id,
+            session_id=arm.session_id, course_id=None, star_id=None,
+            strat_tag=None,  # projector fills from its strat memory
+            anchor_type=arm.anchor_type, anchor_frame=arm.start_frame,
+            outcome=outcome, outcome_detail=detail,
+            igt_frames=None, rta_frames=rta,
+            started_utc=arm.started_utc, ended_utc=ev.wall_time_utc,
+            cleared=False, cleared_reason=None, segment_id=d.id)

@@ -1,7 +1,9 @@
 import pytest
 
 from sm64_events.storage.db import EventRow
-from sm64_events.tracking.segments import (MatchContext, SegmentDef,
+from sm64_events.tracking.segments import (SEGMENT_ATTEMPT_OFFSET,
+                                           MatchContext, SegmentDef,
+                                           SegmentEngine,
                                            validate_definition, vocab)
 
 W = "2026-06-11T12:00:00Z"
@@ -75,3 +77,152 @@ def test_all_db_seeds_pass_validate_definition(tmp_path):
         validate_definition({k: d[k] for k in
                              ("name", "start_triggers", "end_triggers",
                               "guards")})
+
+
+# ---------------------------------------------------------------------------
+# Task 10: SegmentEngine FSM tests
+# ---------------------------------------------------------------------------
+
+LBLJ = SegmentDef(id=1, name="LBLJ", enabled=True,
+                  start_triggers=[{"type": "level_enter", "to": 6, "from": 16}],
+                  end_triggers=[{"type": "level_enter", "to": 17}], guards=[])
+PIPE = SegmentDef(id=5, name="BitDW Pipe Entry", enabled=True,
+                  start_triggers=[{"type": "level_enter", "to": 17},
+                                  {"type": "attempt_anchor", "level": 17}],
+                  end_triggers=[{"type": "warp_entered", "level": 17}],
+                  guards=[])
+
+
+def ctx(level=None, prev_level=None, num_stars=None):
+    return MatchContext(level=level, prev_level=prev_level,
+                        num_stars=num_stars)
+
+
+def lblj_arm(engine, jid=10, frame=1000):
+    return engine.feed(jev(jid, "level_changed", frame,
+                           {"from": 16, "to": 6}), ctx(level=6, prev_level=16))
+
+
+def test_arm_then_end_is_a_success_with_rta_delta():
+    e = SegmentEngine([LBLJ])
+    lblj_arm(e)
+    closed, _ = e.feed(jev(11, "level_changed", 1085, {"from": 6, "to": 17}),
+                       ctx(level=17, prev_level=6))
+    [a] = closed
+    assert a.outcome == "success" and a.segment_id == 1
+    assert a.rta_frames == 85 and a.igt_frames is None
+    assert a.course_id is None and a.star_id is None
+    assert a.id == 10 + SEGMENT_ATTEMPT_OFFSET * 1
+    assert a.anchor_type == "level_changed"
+
+
+def test_restart_anchors_rearm_without_recording_a_row():
+    e = SegmentEngine([LBLJ])
+    lblj_arm(e, jid=10, frame=1000)
+    # walk out (silent disarm), walk back in (fresh arm at the new frame)
+    closed, _ = e.feed(jev(11, "level_changed", 1200, {"from": 6, "to": 16}),
+                       ctx(level=16, prev_level=6))
+    assert closed == []
+    lblj_arm(e, jid=12, frame=1300)
+    closed, _ = e.feed(jev(13, "level_changed", 1390, {"from": 6, "to": 17}),
+                       ctx(level=17, prev_level=6))
+    assert closed[0].rta_frames == 90
+
+
+def test_rearm_on_start_refire_restarts_the_timer():
+    e = SegmentEngine([PIPE])
+    e.feed(jev(20, "level_changed", 2000, {"from": 6, "to": 17}),
+           ctx(level=17, prev_level=6))
+    e.feed(jev(21, "practice_reset", 2500, {"igt_frames_before": 100}),
+           ctx(level=17))                       # closes reset AND re-arms
+    closed, _ = e.feed(jev(22, "warp_entered", 2600, {"level": 17, "area": 1,
+                                                      "action": 0x1300}),
+                       ctx(level=17))
+    assert closed[0].rta_frames == 100          # timed from the reset, not entry
+
+
+def test_practice_reset_closes_as_reset_then_rearms_via_attempt_anchor():
+    e = SegmentEngine([PIPE])
+    e.feed(jev(30, "level_changed", 3000, {"from": 6, "to": 17}),
+           ctx(level=17, prev_level=6))
+    closed, _ = e.feed(jev(31, "practice_reset", 3200,
+                           {"igt_frames_before": 50}), ctx(level=17))
+    [a] = closed
+    assert a.outcome == "reset" and a.rta_frames == 200
+    assert a.anchor_type == "level_changed"     # the attempt that FAILED was armed by entry
+
+
+def test_afk_reset_discards_the_row_but_still_rearms():
+    e = SegmentEngine([PIPE])
+    e.feed(jev(40, "level_changed", 4000, {"from": 6, "to": 17}),
+           ctx(level=17, prev_level=6))
+    closed, _ = e.feed(jev(41, "practice_reset", 4500,
+                           {"paused_frames_before": 200}), ctx(level=17))
+    assert closed == []                          # AFK discard
+    closed, _ = e.feed(jev(42, "warp_entered", 4600, {"level": 17, "area": 1,
+                                                      "action": 0x1300}),
+                       ctx(level=17))
+    assert closed[0].rta_frames == 100           # re-armed by the reset anyway
+
+
+def test_death_and_game_reset_close_with_their_outcomes():
+    e = SegmentEngine([LBLJ])
+    lblj_arm(e)
+    closed, _ = e.feed(jev(11, "death", 1050, {"cause": "standing"}),
+                       ctx(level=6))
+    assert closed[0].outcome == "death"
+    assert closed[0].outcome_detail == "standing"
+    lblj_arm(e, jid=12, frame=2000)
+    closed, _ = e.feed(jev(13, "game_reset", 2100, {}), ctx())
+    assert closed[0].outcome == "hard_reset"
+
+
+def test_foreign_level_change_disarms_silently():
+    e = SegmentEngine([LBLJ])
+    lblj_arm(e)
+    closed, _ = e.feed(jev(11, "level_changed", 1500, {"from": 6, "to": 27}),
+                       ctx(level=27, prev_level=6))
+    assert closed == []
+    closed, _ = e.feed(jev(12, "level_changed", 1600, {"from": 27, "to": 17}),
+                       ctx(level=17, prev_level=27))
+    assert closed == []                          # was not armed anymore
+
+
+def test_establishing_level_event_from_equals_to_never_arms():
+    e = SegmentEngine([LBLJ])
+    closed, _ = e.feed(jev(10, "level_changed", 1000, {"from": 6, "to": 6}),
+                       ctx(level=6, prev_level=6))
+    assert e.armed_ids() == set()
+
+
+def test_guards_reevaluate_on_every_arm():
+    guarded = SegmentDef(id=2, name="g", enabled=True,
+                         start_triggers=[{"type": "level_enter", "to": 6}],
+                         end_triggers=[{"type": "level_enter", "to": 17}],
+                         guards=[{"type": "prev_level", "level": 16}])
+    e = SegmentEngine([guarded])
+    e.feed(jev(10, "level_changed", 1000, {"from": 26, "to": 6}),
+           ctx(level=6, prev_level=26))          # guard fails: from courtyard
+    assert e.armed_ids() == set()
+    e.feed(jev(11, "level_changed", 1100, {"from": 16, "to": 6}),
+           ctx(level=6, prev_level=16))
+    assert e.armed_ids() == {2}
+
+
+def test_negative_rta_discards_and_disarms():
+    e = SegmentEngine([LBLJ])
+    lblj_arm(e, frame=5000)
+    closed, _ = e.feed(jev(11, "level_changed", 100, {"from": 6, "to": 17}),
+                       ctx(level=17, prev_level=6))
+    assert closed == []
+    assert e.armed_ids() == set()
+
+
+def test_armed_disarmed_notices_for_live_broadcast():
+    e = SegmentEngine([LBLJ])
+    _, notices = lblj_arm(e)
+    assert notices == [{"event": "segment_armed", "segment_id": 1,
+                        "name": "LBLJ", "frame": 1000}]
+    _, notices = e.feed(jev(11, "level_changed", 1500, {"from": 6, "to": 27}),
+                        ctx(level=27, prev_level=6))
+    assert notices[0]["event"] == "segment_disarmed"
