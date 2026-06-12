@@ -41,3 +41,20 @@ def test_level_change_re_establishes_area_for_new_level():
     events = d.process(snap(), snap(curr_level=17, curr_area=1))
     assert len(events) == 1                            # same area NUMBER, new level
     assert events[0].payload["level"] == 17
+
+
+def test_reattach_gap_within_same_level_is_caught():
+    d = AreaChangeDetector()
+    d.process(snap(curr_area=1), snap(curr_area=1))   # established at (6, 1)
+    # Server stayed up; emulator reattached at area 2 (prev re-seeded from real read).
+    # from must be last EMITTED area (1), not prev.curr_area (2).
+    events = d.process(snap(curr_area=2), snap(curr_area=2))
+    assert len(events) == 1
+    assert events[0].payload == {"level": 6, "from": 1, "to": 2}
+
+
+def test_area_change_frame_matches_curr_global_timer():
+    d = AreaChangeDetector()
+    d.process(snap(curr_area=1), snap(curr_area=1))
+    events = d.process(snap(curr_area=1), snap(curr_area=2, global_timer=4321))
+    assert events[0].frame == 4321
