@@ -80,7 +80,7 @@ function Builder({ vocab, initial, onSaved, onCancel }) {
 
   return html`<div class="segbuilder">
     <div><input placeholder="Segment name" value=${d.name}
-        onchange=${(e) => setD({ ...d, name: e.target.value })} /></div>
+        oninput=${(e) => setD({ ...d, name: e.target.value })} /></div>
     <div class="label">Starts when any of</div>
     ${clauses("start_triggers", vocab.triggers)}
     <div class="label">Ends when any of</div>

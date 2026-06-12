@@ -63,8 +63,12 @@ export function Timeline({ tl, sec, t }) {
   const x = (f) => PAD + (f / axisMax) * (W - 2 * PAD);
 
   async function save(list) {
+    // identity is segment_id XOR course_id+star_id (the API 409s on both)
+    const ident = sec.kind === "segment"
+      ? { segment_id: sec.segment_id }
+      : { course_id: sec.course_id, star_id: sec.star_id };
     await send("PUT", "/api/markers", {
-      course_id: sec.course_id, star_id: sec.star_id,
+      ...ident,
       strat_tag: sec.last_strat || null,
       markers: list.map(({ frames, label }) => ({ frames, label })),
     });
