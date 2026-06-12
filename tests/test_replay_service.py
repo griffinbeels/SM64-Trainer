@@ -278,3 +278,44 @@ def test_settings_reports_saved_bytes_on_demand(tmp_path):
     s = svc.settings()
     assert s["saved_bytes"] == 1000
     assert s["save_root"].endswith("replays")
+
+
+# -- Task 16b: segment-aware clip naming ------------------------------------
+
+def test_slug_filename_for_segment_attempt_uses_rta_and_segment_name():
+    # format_igt(85): mins=0, secs=2, cents=83  ->  "0'02\"83"  ->  "0m02s83"
+    # segment attempt: no IGT, rta_frames=85, star part empty -> no double __
+    a = attempt(id=10_000_000_005, segment_id=1, course_id=None,
+                star_id=None, igt_frames=None, rta_frames=85,
+                outcome="success")
+    assert slug_filename(a, "LBLJ", "") == \
+        "attempt_10000000005_lblj_0m02s83-rta.mp4"
+
+
+def test_save_segment_attempt_filename_contains_segment_name_and_rta(tmp_path):
+    from sm64_events.tracking.segments import SegmentDef
+    seg_def = SegmentDef(id=1, name="LBLJ", enabled=True,
+                         start_triggers=[{"type": "level_enter", "to": 6,
+                                          "from": 16}],
+                         end_triggers=[{"type": "level_enter", "to": 17}],
+                         guards=[])
+
+    class FakeTrackerWithSegments:
+        def __init__(self, attempts):
+            self.db = FakeDb(attempts)
+            self.session_id = 3
+            self.segment_defs = [seg_def]
+
+    a = attempt(id=10_000_000_005, segment_id=1, course_id=None,
+                star_id=None, igt_frames=None, rta_frames=85,
+                outcome="success")
+    cfg = ReplayConfig(save_root=tmp_path / "replays",
+                       scratch_dir=tmp_path / "buf", extract_wait_s=0.0)
+    cov = (T0 - timedelta(seconds=60), T0 + timedelta(seconds=60))
+    svc = ReplayService(cfg=cfg, recorder=FakeRecorder(cov),
+                        extractor=FakeExtractor(),
+                        tracker=FakeTrackerWithSegments([a]))
+    res = svc.save(10_000_000_005)
+    name = Path(res["path"]).name
+    assert "lblj" in name
+    assert "-rta" in name

@@ -48,14 +48,21 @@ def slug_filename(a, course: str, star: str) -> str:
 
     IGT display format from format_igt is M'SS"CC (Usamune style).
     We replace ' -> m and " -> s so the filename is filesystem-safe:
-    e.g. 0'11"43 -> 0m11s43.
+    e.g. 0'11"43 -> 0m11s43. Segment attempts are RTA-only (spec
+    2026-06-11): their time gets an explicit -rta marker.
+
+    Parts list drops empty slugs so a segment attempt (empty star part)
+    produces no double underscore.
     """
     if a.igt_frames is not None:
         igt = format_igt(a.igt_frames).replace("'", "m").replace('"', "s")
+    elif a.rta_frames is not None:
+        igt = format_igt(a.rta_frames).replace("'", "m").replace('"', "s") + "-rta"
     else:
         igt = "no-igt"
     suffix = "" if a.outcome == "success" else f"_{a.outcome}"
-    return f"attempt_{a.id:04d}_{_slug(course)}_{_slug(star)}_{igt}{suffix}.mp4"
+    parts = [p for p in (_slug(course), _slug(star)) if p]
+    return f"attempt_{a.id:04d}_{'_'.join(parts)}_{igt}{suffix}.mp4"
 
 
 class ReplayService:
@@ -190,9 +197,15 @@ class ReplayService:
         dest_dir = (self.cfg.save_root / ended_local.strftime("%Y-%m-%d")
                     / f"session_{a.session_id}")
         dest_dir.mkdir(parents=True, exist_ok=True)
-        c_name = course_name(a.course_id) if a.course_id is not None else "no-course"
-        s_name = (star_name(a.course_id, a.star_id)
-                  if a.star_id is not None and a.course_id is not None else "no-star")
+        if a.segment_id is not None:
+            c_name = next((d.name for d in self.tracker.segment_defs
+                           if d.id == a.segment_id),
+                          f"segment-{a.segment_id}")
+            s_name = ""
+        else:
+            c_name = course_name(a.course_id) if a.course_id is not None else "no-course"
+            s_name = (star_name(a.course_id, a.star_id)
+                      if a.star_id is not None and a.course_id is not None else "no-star")
         dest = dest_dir / slug_filename(a, c_name, s_name)
         shutil.copy2(clip, dest)
         meta = clip.with_suffix(".json")
