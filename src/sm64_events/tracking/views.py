@@ -9,6 +9,7 @@ Contract (the UI builds against ALL of this):
   sections order among themselves the same way.
 - The practice target's section is ALWAYS present, even with zero scoped
   attempts — the UI pins it as the active block (star AND segment kinds).
+  ARMED segments are pinned the same way: active now => section present.
 - Sections carry `markers_by_strat` (spec §3) and `progress` (spec §4,
   scoped successes grouped per session).
 - Segment sections (`segments` key) mirror star sections but are RTA-only
@@ -245,6 +246,13 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         seen[service.target[1:]] = None
     if service.target and service.target[0] == "segment":
         seen_segs.setdefault(service.target[1], None)
+    # armed segments are "active now" by the same philosophy as the target
+    # pin: their sections render even with zero attempts, so the armed
+    # badge has somewhere to live and a plain refresh self-heals it.
+    # sorted = deterministic tie order among fresh (-1 recency) sections.
+    armed = service.armed_segment_ids
+    for sid in sorted(armed):
+        seen_segs.setdefault(sid, None)
 
     scoped_set = set(scoped)
     igt_of = lambda a: a.igt_frames
@@ -280,7 +288,6 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     # whatever the view clock. "armed" reads the LIVE projector so a plain
     # view refresh self-heals the UI's armed badge after missed notices.
     seg_defs = {d.id: d for d in service.segment_defs}
-    armed = service.armed_segment_ids
     rta_of = lambda a: a.rta_frames
     seg_sections = []
     for seg_id in seen_segs:
@@ -293,11 +300,17 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "name": d.name if d else f"segment {seg_id} (deleted)",
             "broken": d is None,
             "armed": seg_id in armed,
-            "pb": {"rta": ({"frames": pb_row["frames"],
+            # igt present-as-None: same shape-stability rule as the target
+            # payload — UI code reading sec.pb.igt gets null, not undefined.
+            "pb": {"igt": None,
+                   "rta": ({"frames": pb_row["frames"],
                             "display": format_igt(pb_row["frames"])}
                            if pb_row else None)},
             "attempts": [_attempt_json(a, pbs, "rta") for a in in_section],
             "stats": _stats_for(history, stat_menu, "rta"),
+            # observed-from-attempts only (v1): segments have no registered-
+            # strategies KV yet; mirrors _strategies_for's observed half.
+            "strategies": sorted({a.strat_tag for a in history if a.strat_tag}),
             "last_strat": service.strat_by_segment.get(seg_id),
             "timeline": _timeline(history, rta_of),
             "markers_by_strat": _markers_for(markers_state, "seg", seg_id),

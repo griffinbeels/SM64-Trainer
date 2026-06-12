@@ -643,7 +643,9 @@ def test_segment_sections_order_by_journal_recency_not_raw_id(tmp_path):
     asyncio.run(svc.publish(lvl(1300, 16, 6)))    # arms LBLJ (def 1)
     asyncio.run(svc.publish(lvl(1400, 6, 17)))    # LBLJ success — newest
     view = build_session_view(db, svc, clock="igt")
-    assert [s["segment_id"] for s in view["segments"]] == [1, 2]
+    # the closing 6->17 edge also ARMS BitDW Pipe Entry (def 5): its pinned
+    # fresh section (no attempts, recency -1) sorts last.
+    assert [s["segment_id"] for s in view["segments"]] == [1, 2, 5]
 
 
 def test_unassigned_excludes_segment_attempts(tmp_path):
@@ -654,6 +656,42 @@ def test_unassigned_excludes_segment_attempts(tmp_path):
     view = build_session_view(db, svc, clock="igt")
     [u] = view["unassigned"]        # only the star-side no-target reset
     assert u["segment_id"] is None
+
+
+def test_armed_segment_without_attempts_or_target_gets_section(tmp_path):
+    # armed = "active now": pinned like the target, so the armed badge has
+    # somewhere to render even before the first attempt closes.
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(lvl(1000, 6, 17)))   # arms BitDW Pipe Entry only
+    view = build_session_view(db, svc, clock="igt")
+    sec = seg_section(view, 5)
+    assert sec["armed"] is True and sec["broken"] is False
+    assert sec["attempts"] == [] and sec["timeline"] is None
+
+
+def test_segment_pb_dict_ships_igt_as_none(tmp_path):
+    # shape stability: UI code reading sec.pb.igt must get null, never
+    # undefined (same rule as the target payload's present-as-None keys).
+    db, svc = make(tmp_path)
+    lblj_success(svc, rta=85)
+    view = build_session_view(db, svc, clock="igt")
+    assert seg_section(view, 1)["pb"] == {"igt": None, "rta": None}
+    aid = next(a.id for a in db.attempts() if a.segment_id == 1)
+    asyncio.run(svc.save_pb(aid, "rta"))
+    pb = seg_section(build_session_view(db, svc, clock="igt"), 1)["pb"]
+    assert pb["igt"] is None and pb["rta"]["frames"] == 85
+
+
+def test_segment_section_lists_observed_strategies_sorted(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.set_target_segment(1, strat_tag="hyperspeed"))
+    lblj_success(svc, t0=1000)
+    asyncio.run(svc.set_target_segment(1, strat_tag="bljless"))
+    lblj_success(svc, t0=3000)
+    view = build_session_view(db, svc, clock="igt")
+    sec = seg_section(view, 1)
+    assert sec["strategies"] == ["bljless", "hyperspeed"]   # distinct, sorted
+    assert sec["last_strat"] == "bljless"
 
 
 def test_stat_pills_render_in_canonical_menu_order(tmp_path):
