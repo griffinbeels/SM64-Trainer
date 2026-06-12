@@ -407,3 +407,110 @@ def test_statmenu_stores_canonical_order(tmp_path):
         assert [(s["key"], s["params"].get("n")) for s in stored] == [
             ("avg_last_n", 10), ("avg_last_n", 50),
             ("best", None), ("success_rate", None)]
+
+
+# -- segments CRUD + vocab + kind-aware target + markers ----------------------
+
+def test_vocab_endpoint_shape(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        v = client.get("/api/segments/vocab").json()
+        assert "triggers" in v and "levels" in v and "guards" in v
+
+
+def test_get_segments_lists_seeds(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.get("/api/segments")
+        assert r.status_code == 200
+        assert any(d["name"] == "LBLJ" for d in r.json())
+
+
+def test_post_invalid_segment_is_409(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.post("/api/segments", json={
+            "name": "x", "start_triggers": [{"type": "nope"}],
+            "end_triggers": [{"type": "spawned"}]})
+        assert r.status_code == 409
+
+
+def test_segment_crud_roundtrip(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.post("/api/segments", json={
+            "name": "Custom", "start_triggers": [{"type": "spawned"}],
+            "end_triggers": [{"type": "level_enter", "to": 6}]})
+        assert r.status_code == 200
+        sid = r.json()["id"]
+        assert client.put(f"/api/segments/{sid}",
+                          json={"enabled": False}).status_code == 200
+        assert client.delete(f"/api/segments/{sid}").status_code == 200
+        assert client.delete(f"/api/segments/{sid}").status_code == 404
+
+
+def test_target_accepts_segment_kind(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        # LBLJ is seed id=1
+        r = client.post("/api/target", json={"kind": "segment", "segment_id": 1})
+        assert r.status_code == 200
+        r = client.post("/api/target", json={"kind": "segment",
+                                             "segment_id": 9999})
+        assert r.status_code == 404
+
+
+def test_segment_body_extra_field_is_422(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.post("/api/segments", json={
+            "name": "x", "start_triggers": [{"type": "spawned"}],
+            "end_triggers": [{"type": "level_enter", "to": 6}],
+            "typo_field": "oops"})
+        assert r.status_code == 422
+
+
+def test_segment_patch_extra_field_is_422(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.put("/api/segments/1", json={"enabled": False,
+                                                "typo_field": "oops"})
+        assert r.status_code == 422
+
+
+def test_markers_put_with_segment_id_writes_seg_key(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)
+        r = client.put("/api/markers", json={
+            "segment_id": 1, "strat_tag": "default",
+            "markers": [{"frames": 120, "label": "bowser hit"}]})
+        assert r.status_code == 200 and r.json()["ok"] is True
+        state = db.get_state("timeline_markers", {})
+        assert "seg:1:default" in state
+        assert state["seg:1:default"] == [{"frames": 120, "label": "bowser hit"}]
+
+
+def test_markers_put_both_identities_is_409(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.put("/api/markers", json={
+            "segment_id": 1, "course_id": 2, "star_id": 2,
+            "markers": []})
+        assert r.status_code == 409
+
+
+def test_star_target_missing_star_id_is_409(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.post("/api/target", json={"kind": "star", "course_id": 2})
+        assert r.status_code == 409
+
+
+def test_segments_503_when_db_none(tmp_path):
+    broadcaster = Broadcaster()
+    service = TrackerService(None, broadcaster)
+    poller = Poller(OfflineMemory(), [], service)
+    app = create_app(poller, broadcaster, service=service)
+    with TestClient(app) as client:
+        assert client.get("/api/segments").status_code == 503
