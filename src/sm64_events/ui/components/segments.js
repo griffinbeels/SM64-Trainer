@@ -9,26 +9,32 @@ import { getJSON, send } from "../api.js";
 
 const html = htm.bind(h);
 
-function ParamInput({ schema, name, value, vocab, onChange }) {
-  if (schema.kind === "level") {
-    return html`<select value=${value ?? ""}
-        onchange=${(e) => onChange(e.target.value === "" ? null : Number(e.target.value))}>
-      <option value="">${schema.required ? "— pick level —" : "(any)"}</option>
-      ${Object.entries(vocab.levels).map(([id, n]) =>
-        html`<option value=${id}>${n}</option>`)}
-    </select>`;
-  }
-  if (schema.kind === "area") {
-    return html`<select value=${value ?? ""}
-        onchange=${(e) => onChange(Number(e.target.value))}>
-      <option value="">— pick area —</option>
-      ${Object.entries(vocab.castle_areas).map(([id, n]) =>
-        html`<option value=${id}>${n}</option>`)}
+function ParamInput({ schema, name, value, vocab, clause, onChange }) {
+  const numOrNull = (s) => (s === "" ? null : Number(s));
+  const dropdown = (entries, anyLabel, pickLabel) => html`<select
+      value=${value ?? ""} onchange=${(e) => onChange(numOrNull(e.target.value))}>
+    <option value="">${schema.required ? pickLabel : anyLabel}</option>
+    ${entries.map(([id, n]) => html`<option value=${id}>${n}</option>`)}
+  </select>`;
+  if (schema.kind === "level")
+    return dropdown(Object.entries(vocab.levels), "(any level)", "— pick level —");
+  if (schema.kind === "area")
+    return dropdown(Object.entries(vocab.castle_areas), "(any area)", "— pick area —");
+  if (schema.kind === "course")
+    return dropdown(Object.entries(vocab.courses), "(any course)", "— pick course —");
+  if (schema.kind === "star") {
+    // dependent on the sibling course param: no course (or "any course")
+    // implies any star, so the selector is disabled until a course is picked
+    const names = vocab.stars[String(clause.course)] || [];
+    return html`<select value=${value ?? ""} disabled=${clause.course == null}
+        onchange=${(e) => onChange(numOrNull(e.target.value))}>
+      <option value="">(any star)</option>
+      ${names.map((n, i) => html`<option value=${i}>${n}</option>`)}
     </select>`;
   }
   return html`<input type="number" style="width:5rem" value=${value ?? ""}
       placeholder=${name}
-      onchange=${(e) => onChange(e.target.value === "" ? null : Number(e.target.value))} />`;
+      onchange=${(e) => onChange(numOrNull(e.target.value))} />`;
 }
 
 function ClauseRow({ clause, types, vocab, onChange, onRemove }) {
@@ -40,7 +46,7 @@ function ClauseRow({ clause, types, vocab, onChange, onRemove }) {
     </select>
     ${Object.entries(spec.params).map(([name, schema]) => html`
       <${ParamInput} schema=${schema} name=${name} vocab=${vocab}
-        value=${clause[name]}
+        clause=${clause} value=${clause[name]}
         onChange=${(v) => onChange({ ...clause, [name]: v })} />`)}
     <button onclick=${onRemove}>✕</button>
   </div>`;
