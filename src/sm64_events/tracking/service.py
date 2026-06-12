@@ -7,7 +7,7 @@ feed the projector; attempts closed by the event are persisted and an
 attempt_completed derived event is emitted through the same pipeline
 (the projector ignores derived types, so this cannot recurse).
 
-Commands (set_target, clear/restore, save_pb, new_session) append journal
+Commands (set_target, clear/restore, save_pb/undo_pb, new_session) append journal
 events through the same path so the journal stays the single source of
 truth; clear/restore re-run the full projection because their effect is
 retroactive. With db=None the service degrades to broadcast-only.
@@ -359,6 +359,39 @@ class TrackerService:
                    "strat_tag": attempt.strat_tag, "timer_mode": timer_mode,
                    "frames": frames, "attempt_id": attempt_id}
         await self.publish(Event(type="pb_saved", frame=0,
+                                 timestamp_utc=_now(), payload=payload))
+        return payload
+
+    async def undo_pb(self, attempt_id: int, timer_mode: str) -> dict:
+        """Undo the attempt's pb save: delete the row it created, so the
+        previous save (if any) is current again — latest-row-wins is the
+        pbs contract (views._current_pbs). Only the CURRENT pb's owner may
+        undo (ValueError otherwise): a superseded save's row is no longer
+        what the pbtag shows, so "undo" would silently delete history the
+        user can't see. Like save_pb, the pbs table is mutated directly —
+        the journaled pb_undone event is record/broadcast only."""
+        db = self._require_db()
+        if timer_mode not in ("igt", "rta"):
+            raise ValueError(f"bad timer_mode {timer_mode!r}")
+        attempt = next((a for a in db.attempts() if a.id == attempt_id), None)
+        if attempt is None:
+            raise LookupError(f"no attempt {attempt_id}")
+        row = db.current_pb(attempt.course_id, attempt.star_id, timer_mode,
+                            segment_id=attempt.segment_id)
+        if row is None or row["attempt_id"] != attempt_id:
+            raise ValueError(
+                f"attempt {attempt_id} is not the current {timer_mode} PB")
+        db.delete_pb(row["id"])
+        restored = db.current_pb(attempt.course_id, attempt.star_id,
+                                 timer_mode, segment_id=attempt.segment_id)
+        payload = {"course_id": attempt.course_id, "star_id": attempt.star_id,
+                   "segment_id": attempt.segment_id,
+                   "strat_tag": row["strat_tag"], "timer_mode": timer_mode,
+                   "frames": row["frames"], "attempt_id": attempt_id,
+                   "restored_frames": restored["frames"] if restored else None,
+                   "restored_attempt_id":
+                       restored["attempt_id"] if restored else None}
+        await self.publish(Event(type="pb_undone", frame=0,
                                  timestamp_utc=_now(), payload=payload))
         return payload
 

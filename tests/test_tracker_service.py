@@ -124,6 +124,87 @@ def test_save_pb_rejects_missing_attempt(tmp_path):
         asyncio.run(svc.save_pb(999, "igt"))
 
 
+def two_successes(db, svc):
+    """Two successes on the same star: igt 343 then 350. Returns their ids."""
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350, igt=343)))
+    asyncio.run(svc.publish(ev("practice_reset", 1400, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1760, igt=350)))
+    first = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    second = next(a.id for a in db.attempts() if a.igt_frames == 350)
+    return first, second
+
+
+def test_undo_pb_restores_previous_pb(tmp_path):
+    db, svc = make(tmp_path)
+    first, second = two_successes(db, svc)
+    asyncio.run(svc.save_pb(first, "igt"))
+    asyncio.run(svc.save_pb(second, "igt"))      # supersedes first
+    out = asyncio.run(svc.undo_pb(second, "igt"))
+    assert out["frames"] == 350
+    assert out["restored_frames"] == 343 and out["restored_attempt_id"] == first
+    [row] = db.pbs()
+    assert row["attempt_id"] == first            # first is current again
+    assert "pb_undone" in [e.type for e in db.events()]
+
+
+def test_undo_pb_with_single_save_leaves_no_pb(tmp_path):
+    db, svc = make(tmp_path)
+    first, _ = two_successes(db, svc)
+    asyncio.run(svc.save_pb(first, "igt"))
+    out = asyncio.run(svc.undo_pb(first, "igt"))
+    assert out["restored_frames"] is None and out["restored_attempt_id"] is None
+    assert db.pbs() == []
+
+
+def test_undo_pb_rejects_attempt_that_is_not_current(tmp_path):
+    # a newer save superseded this attempt's: undoing it must not delete
+    # anything (its row is no longer what "current PB" points at)
+    db, svc = make(tmp_path)
+    first, second = two_successes(db, svc)
+    asyncio.run(svc.save_pb(first, "igt"))
+    asyncio.run(svc.save_pb(second, "igt"))
+    with pytest.raises(ValueError):
+        asyncio.run(svc.undo_pb(first, "igt"))
+    assert len(db.pbs()) == 2                    # nothing deleted
+
+
+def test_undo_pb_is_per_timer_mode(tmp_path):
+    db, svc = make(tmp_path)
+    first, _ = two_successes(db, svc)
+    asyncio.run(svc.save_pb(first, "igt"))
+    with pytest.raises(ValueError):              # no rta save to undo
+        asyncio.run(svc.undo_pb(first, "rta"))
+    assert len(db.pbs()) == 1
+
+
+def test_undo_pb_rejects_missing_attempt_and_bad_mode(tmp_path):
+    db, svc = make(tmp_path)
+    with pytest.raises(LookupError):
+        asyncio.run(svc.undo_pb(999, "igt"))
+    with pytest.raises(ValueError):
+        asyncio.run(svc.undo_pb(999, "lap"))     # mode checked first, like save_pb
+
+
+def test_undo_pb_segment_is_kind_aware(tmp_path):
+    # undoing a segment PB must not touch star rows (kind-aware keying:
+    # segment rows match by segment_id, star rows by course+star)
+    db, svc, sent = make_rec(tmp_path)
+    lblj = seed_id(db, "LBLJ")
+    asyncio.run(svc.publish(ev("practice_reset", 500, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(900)))
+    star_aid = next(a.id for a in db.attempts() if a.segment_id is None)
+    asyncio.run(svc.save_pb(star_aid, "rta"))
+    asyncio.run(svc.publish(ev("level_changed", 1000, {"from": 16, "to": 6})))
+    asyncio.run(svc.publish(ev("level_changed", 1085, {"from": 6, "to": 17})))
+    seg_aid = next(a.id for a in db.attempts() if a.segment_id == lblj)
+    asyncio.run(svc.save_pb(seg_aid, "rta"))
+    out = asyncio.run(svc.undo_pb(seg_aid, "rta"))
+    assert out["segment_id"] == lblj and out["restored_frames"] is None
+    [row] = db.pbs()
+    assert row["attempt_id"] == star_aid         # the star PB survived
+
+
 def test_new_session_closes_open_attempt_as_abandoned(tmp_path):
     db, svc = make(tmp_path)
     asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))

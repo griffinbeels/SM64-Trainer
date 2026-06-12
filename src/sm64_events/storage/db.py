@@ -339,6 +339,30 @@ class Database:
             rows = self._conn.execute("SELECT * FROM pbs ORDER BY id").fetchall()
             return [dict(r) for r in rows]
 
+    def current_pb(self, course_id: int | None, star_id: int | None,
+                   timer_mode: str, segment_id: int | None = None) -> dict | None:
+        """Latest saved row for one star/segment + mode — the same row
+        views._current_pbs picks (later saves win). Kind-aware like
+        insert_pb: segment rows match by segment_id, star rows by
+        course+star (segment_id IS NULL keeps the kinds disjoint)."""
+        if segment_id is not None:
+            q = ("SELECT * FROM pbs WHERE segment_id=? AND timer_mode=?"
+                 " ORDER BY id DESC LIMIT 1")
+            params = (segment_id, timer_mode)
+        else:
+            q = ("SELECT * FROM pbs WHERE course_id=? AND star_id=?"
+                 " AND segment_id IS NULL AND timer_mode=?"
+                 " ORDER BY id DESC LIMIT 1")
+            params = (course_id, star_id, timer_mode)
+        with self._lock:
+            row = self._conn.execute(q, params).fetchone()
+            return dict(row) if row else None
+
+    def delete_pb(self, pb_id: int) -> None:
+        with self._lock:
+            self._conn.execute("DELETE FROM pbs WHERE id=?", (pb_id,))
+            self._conn.commit()
+
     # -- ui_state ------------------------------------------------------------
     def get_state(self, key: str, default):
         with self._lock:

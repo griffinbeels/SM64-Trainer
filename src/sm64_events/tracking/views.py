@@ -99,6 +99,9 @@ def _attempt_json(a, pbs, clock):
             "rta_frames": a.rta_frames,
             "rta": format_igt(a.rta_frames) if a.rta_frames is not None else None,
             "pb_delta_frames": delta, "cleared": a.cleared,
+            # this attempt owns the CURRENT pb row on this clock — drives
+            # the Save-as-PB / Undo-PB button swap (undo deletes that row)
+            "is_current_pb": bool(pb) and pb["attempt_id"] == a.id,
             "cleared_reason": a.cleared_reason,
             "started_utc": a.started_utc, "ended_utc": a.ended_utc,
             "rollouts_total": a.rollouts_total,

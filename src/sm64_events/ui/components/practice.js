@@ -76,6 +76,11 @@ function AttemptRow({ a, t, idx, focus, clearFocus }) {
       { attempt_id: a.id, timer_mode: isSeg ? "rta" : t.clock });
     t.refresh();
   }
+  async function undoPb() {
+    await send("POST", "/api/pb/undo",
+      { attempt_id: a.id, timer_mode: isSeg ? "rta" : t.clock });
+    t.refresh();
+  }
   const time = isSeg ? a.rta : (t.clock === "igt" ? a.igt : a.rta);
   const frames = isSeg ? a.rta_frames : (t.clock === "igt" ? a.igt_frames : a.rta_frames);
   const inTime = isSeg ? a.rta : a.igt; // failures: how-far-in on the section's clock
@@ -104,7 +109,11 @@ function AttemptRow({ a, t, idx, focus, clearFocus }) {
     <td style="text-align:right">
       <button onclick=${() => setShowReplay(!showReplay)} title="view replay">${showReplay ? "▾" : "▶"}</button>
       ${a.outcome === "success" && !a.cleared
-        ? html` <button class=${pbBeat ? "pb-glow" : ""} onclick=${savePb}>Save as PB</button>` : ""}
+        ? (a.is_current_pb
+          ? html` <button onclick=${undoPb}
+              title="delete this save — the previous PB becomes current again">Undo PB</button>`
+          : html` <button class=${pbBeat ? "pb-glow" : ""} onclick=${savePb}>Save as PB</button>`)
+        : ""}
       ${a.cleared
         ? html` <button onclick=${restore}>undo</button>`
         : html` <button onclick=${clear} title="clear (mistake)">×</button>`}

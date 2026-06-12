@@ -409,6 +409,27 @@ def test_progress_superseded_pbs_stay_gold(tmp_path):
     assert flags[a343] is True and flags[a350] is True   # every saved PB is gold
 
 
+def test_attempt_is_current_pb_follows_latest_save_and_clock(tmp_path):
+    db, svc = make(tmp_path)
+    seed(svc)
+    a343 = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    a350 = next(a.id for a in db.attempts() if a.igt_frames == 350)
+    asyncio.run(svc.save_pb(a350, "igt"))
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    flags = {a["id"]: a["is_current_pb"] for a in sec["attempts"]}
+    assert flags[a350] is True and flags[a343] is False
+    asyncio.run(svc.save_pb(a343, "igt"))      # supersedes: the flag moves
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    flags = {a["id"]: a["is_current_pb"] for a in sec["attempts"]}
+    assert flags[a343] is True and flags[a350] is False
+    # per-clock: nothing is saved on rta, so no rta row is "current"
+    view = build_session_view(db, svc, clock="rta")
+    [sec] = view["stars"]
+    assert all(a["is_current_pb"] is False for a in sec["attempts"])
+
+
 # -- section ordering + pinned target (spec §5) ---------------------------------
 
 def test_sections_ordered_newest_activity_first(tmp_path):

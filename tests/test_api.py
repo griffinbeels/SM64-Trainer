@@ -87,6 +87,22 @@ def test_pb_bad_mode_is_409(tmp_path):
         assert r.status_code == 409
 
 
+def test_pb_undo_roundtrip_and_guards(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)
+        aid = db.attempts()[0].id
+        # nothing saved yet: this attempt is not the current PB -> 409
+        r = client.post("/api/pb/undo", json={"attempt_id": aid, "timer_mode": "igt"})
+        assert r.status_code == 409
+        client.post("/api/pb", json={"attempt_id": aid, "timer_mode": "igt"})
+        r = client.post("/api/pb/undo", json={"attempt_id": aid, "timer_mode": "igt"})
+        assert r.status_code == 200 and r.json()["restored_frames"] is None
+        assert db.pbs() == []
+        r = client.post("/api/pb/undo", json={"attempt_id": 999, "timer_mode": "igt"})
+        assert r.status_code == 404
+
+
 def test_restore_unknown_attempt_is_404(tmp_path):
     client, service, db = make_client(tmp_path)
     with client:
