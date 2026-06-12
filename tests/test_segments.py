@@ -983,7 +983,9 @@ def test_menu_warp_still_rebases_with_anchor_trigger():
 
 
 # ---------------------------------------------------------------------------
-# Task 1: Registry templates
+# Registry templates (vocab contract): every trigger/guard carries a sentence
+# template whose placeholders must match its params exactly — a typo or
+# duplicate must fail CI, not render a broken builder row.
 # ---------------------------------------------------------------------------
 
 def test_every_trigger_and_guard_template_matches_its_params():
@@ -991,7 +993,10 @@ def test_every_trigger_and_guard_template_matches_its_params():
     for reg in (TRIGGERS, GUARDS):
         for t in reg.values():
             assert t.template.strip(), f"{t.key}: empty template"
-            placeholders = set(re.findall(r"\{(\w+)\}", t.template))
+            found = re.findall(r"\{(\w+)\}", t.template)
+            assert len(found) == len(set(found)), (
+                f"{t.key}: duplicated placeholder in template")
+            placeholders = set(found)
             assert placeholders == set(t.params), (
                 f"{t.key}: template placeholders {placeholders}"
                 f" != params {set(t.params)}")
