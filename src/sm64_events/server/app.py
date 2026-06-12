@@ -33,10 +33,27 @@ def _log_poller_exit(task: asyncio.Task) -> None:
         log.critical("poll loop died: %r", exc)
 
 
+def _quiet_connection_resets(loop, context) -> None:
+    """Scoped asyncio noise filter. Browsers abort in-flight Range requests
+    whenever a <video> element seeks; on Windows' proactor loop the dead
+    socket's connection_lost callback then raises ConnectionResetError
+    (WinError 10054) INSIDE asyncio (sock.shutdown on an already-reset
+    socket) and the default handler prints a full traceback per seek.
+    Those are normal client disconnects, not server errors. Everything
+    else still reaches the default handler unchanged."""
+    if isinstance(context.get("exception"), ConnectionResetError):
+        log.debug("client connection reset (normal for video seeks): %s",
+                  context.get("message"))
+        return
+    loop.default_exception_handler(context)
+
+
 def create_app(poller: Poller, broadcaster: Broadcaster,
                service=None, replay=None, debug_hooks: bool = False) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        asyncio.get_running_loop().set_exception_handler(
+            _quiet_connection_resets)
         if service is not None:
             try:
                 await service.start()
