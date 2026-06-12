@@ -12,6 +12,7 @@ export function useTracker() {
   const [scope, setScope] = useState(localStorage.getItem("scope") || "session");
   const [feed, setFeed] = useState([]);
   const [connected, setConnected] = useState(false);
+  const [armedSegs, setArmedSegs] = useState(new Set());
   // server-owned pause truth: {paused, reason: "manual"|"afk"|null}.
   // Polled (5 s) because "afk" flips server-side without any UI action;
   // the POST response updates it instantly on manual toggles.
@@ -68,6 +69,12 @@ export function useTracker() {
         const ev = JSON.parse(e.data);
         setFeed((f) => [ev, ...f].slice(0, 200));
         if (REFRESH_ON.has(ev.type)) refresh();
+        if (ev.type === "segment_armed") {
+          setArmedSegs((s) => new Set(s).add(ev.payload.segment_id));
+        } else if (ev.type === "segment_disarmed") {
+          setArmedSegs((s) => { const n = new Set(s);
+            n.delete(ev.payload.segment_id); return n; });
+        }
       };
     }
     connect();
@@ -78,5 +85,5 @@ export function useTracker() {
   const pickScope = (s) => { localStorage.setItem("scope", s); setScope(s); };
   return { view, clock, pickClock, scope, pickScope, feed, connected,
            refresh, paused: pauseState.paused,
-           pauseReason: pauseState.reason, togglePause };
+           pauseReason: pauseState.reason, togglePause, armedSegs };
 }
