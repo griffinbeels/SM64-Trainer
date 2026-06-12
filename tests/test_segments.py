@@ -226,3 +226,89 @@ def test_armed_disarmed_notices_for_live_broadcast():
     _, notices = e.feed(jev(11, "level_changed", 1500, {"from": 6, "to": 27}),
                         ctx(level=27, prev_level=6))
     assert notices[0]["event"] == "segment_disarmed"
+
+
+def test_realistic_game_reset_records_hard_reset_with_unknowable_rta():
+    # game_reset frames are boot-range (< 120, lifecycle.py) BY DEFINITION,
+    # so the delta from any real arm frame is negative — the row must still
+    # exist, with the time marked unknowable.
+    e = SegmentEngine([LBLJ])
+    lblj_arm(e)                                  # armed at frame 1000
+    closed, _ = e.feed(jev(11, "game_reset", 50, {}), ctx())
+    [a] = closed
+    assert a.outcome == "hard_reset"
+    assert a.rta_frames is None
+    assert e.armed_ids() == set()
+
+
+def test_session_started_while_armed_disarms_silently():
+    e = SegmentEngine([LBLJ])
+    lblj_arm(e)
+    closed, notices = e.feed(jev(11, "session_started", 0, {}), ctx())
+    assert closed == []
+    assert e.armed_ids() == set()
+    assert notices == [{"event": "segment_disarmed", "segment_id": 1,
+                        "name": "LBLJ", "frame": 0}]
+
+
+def test_state_loaded_closes_as_reset():
+    e = SegmentEngine([PIPE])
+    e.feed(jev(20, "level_changed", 2000, {"from": 6, "to": 17}),
+           ctx(level=17, prev_level=6))
+    closed, _ = e.feed(jev(21, "state_loaded", 2300,
+                           {"igt_frames_restored": 0}), ctx(level=17))
+    [a] = closed
+    assert a.outcome == "reset" and a.rta_frames == 300
+    assert e.armed_ids() == {5}                  # re-armed via attempt_anchor
+
+
+def test_two_defs_armed_by_same_event_get_disjoint_ids():
+    second = SegmentDef(id=2, name="Second", enabled=True,
+                        start_triggers=[{"type": "level_enter", "to": 6,
+                                         "from": 16}],
+                        end_triggers=[{"type": "level_enter", "to": 17}],
+                        guards=[])
+    e = SegmentEngine([LBLJ, second])
+    _, notices = lblj_arm(e)
+    assert e.armed_ids() == {1, 2}
+    assert [n["event"] for n in notices] == ["segment_armed",
+                                             "segment_armed"]
+    closed, _ = e.feed(jev(11, "level_changed", 1085, {"from": 6, "to": 17}),
+                       ctx(level=17, prev_level=6))
+    assert len(closed) == 2
+    by_def = {a.segment_id: a for a in closed}
+    assert (by_def[2].id - by_def[1].id) == SEGMENT_ATTEMPT_OFFSET * (2 - 1)
+
+
+def test_success_emits_disarmed_notice():
+    e = SegmentEngine([LBLJ])
+    lblj_arm(e)
+    _, notices = e.feed(jev(11, "level_changed", 1085, {"from": 6, "to": 17}),
+                        ctx(level=17, prev_level=6))
+    assert notices == [{"event": "segment_disarmed", "segment_id": 1,
+                        "name": "LBLJ", "frame": 1085}]
+
+
+def test_afk_constant_matches_projection():
+    # the segment-side AFK threshold mirrors the star side — if projection's
+    # constant moves, this is the gate that catches the drift
+    from sm64_events.tracking.projection import PAUSE_DISCARD_FRAMES
+    from sm64_events.tracking.segments import _AFK_PAUSE_FRAMES
+    assert _AFK_PAUSE_FRAMES == PAUSE_DISCARD_FRAMES
+
+
+def test_guard_failing_refire_keeps_original_arm():
+    guarded = SegmentDef(id=3, name="g", enabled=True,
+                         start_triggers=[{"type": "star_grabbed"}],
+                         end_triggers=[{"type": "level_enter", "to": 17}],
+                         guards=[{"type": "star_count_max", "n": 5}])
+    e = SegmentEngine([guarded])
+    e.feed(jev(30, "star_collected", 3000, {"course_id": 1, "star_id": 1}),
+           ctx(level=9, num_stars=5))            # guard passes: armed
+    assert e.armed_ids() == {3}
+    e.feed(jev(31, "star_collected", 3500, {"course_id": 1, "star_id": 2}),
+           ctx(level=9, num_stars=6))            # guard fails: NO re-arm, NO disarm
+    assert e.armed_ids() == {3}
+    closed, _ = e.feed(jev(32, "level_changed", 4000, {"from": 9, "to": 17}),
+                       ctx(level=17, prev_level=9))
+    assert closed[0].rta_frames == 1000          # timed from the ORIGINAL arm

@@ -111,7 +111,7 @@ context only (no wall clock, no snapshots) — deterministic replay.
 | `game_reset` | Close as `hard_reset` |
 | `level_changed` matching neither start nor end | **Silent disarm** — no row ("never reached a failure condition") |
 | `area_changed` | Never disarms (castle-interior wandering is part of these segments) |
-| timer anomaly (would make `rta_frames` < 0) | Discard + disarm (self-heal, domain rule 4) |
+| timer anomaly (rta would be < 0) | success: discard + disarm; failure closures: record with rta_frames=None (game_reset's boot-range frame always lands here) |
 | definition edited while armed (live) | FSM resets to IDLE; re-projection re-derives everything anyway |
 
 **Ordering rule (one event, two roles):** for each event the matcher processes

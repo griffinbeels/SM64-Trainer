@@ -8,13 +8,18 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
 - closures (success/failure) process BEFORE arming; one event may close an
   attempt AND re-arm the next (practice_reset in an attempt_anchor segment)
 - guards re-evaluate on EVERY arm and re-arm
-- re-firing a start trigger while armed re-arms (timer restarts, no row)
+- re-firing a start trigger while armed re-arms (timer restarts, no row);
+  a refire whose guards FAIL leaves the existing arm untouched (the old
+  start_frame keeps running)
 - level_changed matching neither start nor end disarms silently (no row);
   area_changed and session_started never record rows
 - failure rows only on practice_reset/state_loaded (reset), death,
   game_reset (hard_reset); AFK closures (paused >= 150 frames) discard
-- rta_frames = close.frame - start_frame; a would-be-negative value
-  discards the attempt (self-heal, domain rule 4)
+- rta_frames = close.frame - start_frame; a would-be-negative value on a
+  SUCCESS discards the attempt (end before arm is a genuine anomaly —
+  self-heal, domain rule 4), but failure closures record the row with
+  rta_frames=None (game_reset's boot-range frame makes this the ONLY way
+  hard_reset rows exist)
 """
 from dataclasses import dataclass
 from typing import Callable
@@ -264,7 +269,9 @@ class SegmentEngine:
     def _close(self, Attempt, d, arm: _Arm, ev, outcome, detail):
         rta = ev.frame - arm.start_frame
         if rta < 0:
-            return None  # timer anomaly: discard (self-heal, domain rule 4)
+            if outcome == "success":
+                return None  # genuine anomaly: end before arm (self-heal)
+            rta = None       # backward jump (game_reset boot frame, earlier savestate): row counts, time unknowable
         return Attempt(
             id=arm.jid + SEGMENT_ATTEMPT_OFFSET * d.id,
             session_id=arm.session_id, course_id=None, star_id=None,
