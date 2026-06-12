@@ -82,6 +82,10 @@ class ReplayService:
         # AFTER recorder.start() so any future recursive wipe by the recorder
         # doesn't evict a directory we created first.
         self.clips_dir = cfg.scratch_dir / "clips"
+        # Pads are settings-mutable (cfg is frozen): these live values are
+        # what _span uses; update_settings replaces them.
+        self.pre_pad_s = cfg.pre_pad_s
+        self.post_pad_s = cfg.post_pad_s
 
     # -- queries -------------------------------------------------------------
 
@@ -97,17 +101,27 @@ class ReplayService:
                  if root.exists() else 0)
         return {"retention_s": self.recorder.ring.retention_s,
                 "max_buffer_bytes": self.recorder.ring.max_bytes,
+                "pre_pad_s": self.pre_pad_s,
+                "post_pad_s": self.post_pad_s,
                 "save_root": str(root),
                 "saved_bytes": saved}
 
     def update_settings(self, retention_s: float | None,
-                        max_buffer_bytes: int) -> dict:
-        """Validate -> persist -> apply live to the ring (evicts immediately).
-        Persist before apply so a write failure can't leave limits applied
-        but not durable."""
-        validate_settings(retention_s, max_buffer_bytes)
-        save_settings(self.cfg.settings_path, retention_s, max_buffer_bytes)
+                        max_buffer_bytes: int,
+                        pre_pad_s: float | None = None,
+                        post_pad_s: float | None = None) -> dict:
+        """Validate -> persist -> apply live (ring evicts immediately; pads
+        affect the next view(); the recorder's idle threshold follows the
+        padding window). None pads = keep current. Persist before apply so
+        a write failure can't leave limits applied but not durable."""
+        pre = self.pre_pad_s if pre_pad_s is None else float(pre_pad_s)
+        post = self.post_pad_s if post_pad_s is None else float(post_pad_s)
+        validate_settings(retention_s, max_buffer_bytes, pre, post)
+        save_settings(self.cfg.settings_path, retention_s, max_buffer_bytes,
+                      pre, post)
         self.recorder.ring.set_limits(retention_s, max_buffer_bytes)
+        self.pre_pad_s, self.post_pad_s = pre, post
+        self.recorder.set_idle_after(pre + post)
         return self.settings()
 
     def _attempt(self, attempt_id: int):
@@ -119,8 +133,8 @@ class ReplayService:
         raise LookupError(f"no attempt {attempt_id}")
 
     def _span(self, a) -> tuple[datetime, datetime]:
-        start = _parse_utc(a.started_utc) - timedelta(seconds=self.cfg.pre_pad_s)
-        end = _parse_utc(a.ended_utc) + timedelta(seconds=self.cfg.post_pad_s)
+        start = _parse_utc(a.started_utc) - timedelta(seconds=self.pre_pad_s)
+        end = _parse_utc(a.ended_utc) + timedelta(seconds=self.post_pad_s)
         return start, end
 
     # -- commands ------------------------------------------------------------

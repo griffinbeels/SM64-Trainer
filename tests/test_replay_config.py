@@ -28,11 +28,12 @@ def test_retention_minutes_constructor():
 def test_settings_overlay_round_trip(tmp_path):
     cfg = ReplayConfig(settings_path=tmp_path / "rs.json")
     assert apply_settings_file(cfg) is cfg            # no file -> defaults
-    save_settings(cfg.settings_path, 600.0, 5 * 1024**3)
+    save_settings(cfg.settings_path, 600.0, 5 * 1024**3, 5.0, 4.0)
     out = apply_settings_file(cfg)
     assert out.retention_s == 600.0
     assert out.max_buffer_bytes == 5 * 1024**3
-    assert out.fps == cfg.fps                         # only the two knobs move
+    assert out.pre_pad_s == 5.0 and out.post_pad_s == 4.0
+    assert out.fps == cfg.fps                         # only the knobs move
 
 
 def test_settings_overlay_ignores_corrupt_and_invalid(tmp_path):
@@ -47,7 +48,12 @@ def test_settings_overlay_ignores_corrupt_and_invalid(tmp_path):
 def test_validate_settings_bounds():
     validate_settings(None, 1024**3)                  # whole session, 1 GiB
     validate_settings(60.0, 20 * 1024**3)
+    validate_settings(None, 1024**3, 0.0, 10.0)       # pad extremes are legal
     with pytest.raises(ValueError):
         validate_settings(5.0, 1024**3)               # retention below 60 s
     with pytest.raises(ValueError):
         validate_settings(None, 100)                  # cap below 1 GiB
+    with pytest.raises(ValueError):
+        validate_settings(None, 1024**3, 11.0, 2.0)   # pre pad above 10 s
+    with pytest.raises(ValueError):
+        validate_settings(None, 1024**3, 3.0, -1.0)   # negative post pad

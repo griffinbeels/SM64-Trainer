@@ -25,6 +25,11 @@ Design:
   pts 0 with no MPEG-TS preload offset (the extractor contract:
   frame i of a segment is at utc_start + i/fps EXACTLY).
 - -force_key_frames at the segment period: every segment opens on an IDR.
+- Idle pause (set_paused, driven by the recorder's input gate): the feeder
+  flushes the current segment by stopping the child, then feeds nothing.
+  Resume lazily respawns with a FRESH wall-clock anchor — fed-frame seconds
+  must never drift from wall time, so a paused feeder must not keep one
+  process across the gap. The pause is an honest coverage hole in the ring.
 - Window resize: the rawvideo pipe is fixed-size; the sink restarts the
   process with new dimensions (rare; logged; a brief coverage hole).
   VERIFY (unit-tested, not yet live-verified): resize PJ64 while
@@ -93,6 +98,13 @@ class FfmpegVideoSink:
         self._fed = 0
         self._seg_n_base = 0  # filename numbering across restarts
         self._restarts = 0
+        self._paused = False
+
+    def set_paused(self, paused: bool) -> None:
+        """Idle gate (recorder): a bool flip, applied by the feeder loop —
+        pausing flushes the open segment, resuming respawns with a fresh
+        anchor. Safe from any thread; idempotent."""
+        self._paused = paused
 
     # -- capture-thread surface (lock-free) -----------------------------------
     def submit(self, bgra: np.ndarray) -> None:
@@ -124,6 +136,9 @@ class FfmpegVideoSink:
 
     # -- process management ----------------------------------------------------
     def _spawn(self, w: int, h: int) -> None:
+        # idle pause/resume cycles accumulate finished reader threads;
+        # prune the dead so the list stays bounded across a long session
+        self._readers = [t for t in self._readers if t.is_alive()]
         fps = self._cfg.fps
         seg_s = self._cfg.segment_s
         pattern = str(self._cfg.scratch_dir / f"video_{self._seg_n_base:02d}_%06d.ts")
@@ -187,6 +202,12 @@ class FfmpegVideoSink:
         last_report = _time.monotonic()
         try:
             while not self._stop.is_set():
+                if self._paused:
+                    if self._proc is not None:
+                        self._stop_proc()  # flush segment -> honest hole
+                    _time.sleep(0.05)
+                    next_t = _time.perf_counter()
+                    continue
                 frame = self._latest
                 if frame is None:
                     _time.sleep(0.05)

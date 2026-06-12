@@ -111,6 +111,11 @@ def build():
     # grabs so a same-tick rollout/jump attaches to the attempt the grab closes.
     detectors = [GameResetDetector(), LevelChangeDetector(), AnchorDetector(),
                  DeathDetector(), DustTrickDetector(), StarGrabDetector()]
+    if replay is not None:
+        # Poll-thread tap (emits no events): tells the recorder the player
+        # is providing input so the buffer pauses while idle (activity.py).
+        from sm64_events.replay.activity import ActivityTap
+        detectors.append(ActivityTap(replay.recorder))
     poller = Poller(memory, detectors, service)  # service IS the event sink
     return create_app(poller, broadcaster, service=service, replay=replay)
 

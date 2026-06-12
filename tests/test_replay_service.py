@@ -208,8 +208,11 @@ class RecorderWithRealRing:
     """Settings tests need a REAL ring (FakeRing has no set_limits)."""
     def __init__(self):
         self.ring = SegmentRing(retention_s=None, max_bytes=20 * 1024**3)
+        self.idle_window = None
     def status(self):
         return {}
+    def set_idle_after(self, window_s):
+        self.idle_window = window_s
 
 
 def test_settings_update_validates_persists_and_applies(tmp_path):
@@ -234,6 +237,30 @@ def test_settings_update_validates_persists_and_applies(tmp_path):
         svc.update_settings(None, 100)                 # cap below 1 GiB
     # failed updates must not clobber the persisted file
     assert apply_settings_file(cfg).retention_s == 600.0
+
+
+def test_settings_pads_apply_to_span_and_idle_window(tmp_path):
+    cfg = ReplayConfig(save_root=tmp_path / "replays",
+                       scratch_dir=tmp_path / "buf",
+                       settings_path=tmp_path / "replay_settings.json")
+    rec = RecorderWithRealRing()
+    svc = ReplayService(cfg=cfg, recorder=rec, extractor=None, tracker=None)
+
+    out = svc.update_settings(None, 20 * 1024**3,
+                              pre_pad_s=1.0, post_pad_s=0.5)
+    assert out["pre_pad_s"] == 1.0 and out["post_pad_s"] == 0.5
+    assert rec.idle_window == 1.5                      # follows the pad window
+    start, end = svc._span(attempt())                  # pads drive the clip cut
+    assert start == T0 - timedelta(seconds=1.0)
+    assert end == T0 + timedelta(seconds=12 + 0.5)
+    # persisted for the next startup
+    cfg2 = apply_settings_file(cfg)
+    assert cfg2.pre_pad_s == 1.0 and cfg2.post_pad_s == 0.5
+    # omitted pads = unchanged
+    svc.update_settings(None, 20 * 1024**3)
+    assert svc.pre_pad_s == 1.0 and svc.post_pad_s == 0.5
+    with pytest.raises(ValueError):
+        svc.update_settings(None, 20 * 1024**3, pre_pad_s=11.0)
 
 
 def test_settings_reports_saved_bytes_on_demand(tmp_path):

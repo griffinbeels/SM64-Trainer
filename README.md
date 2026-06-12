@@ -135,17 +135,21 @@ the recording dot in the header (shows usage as `rec · 38 min ·
 immediately. Saved replays under `replays/` are kept forever and never
 evicted. PJ64 must run windowed (exclusive fullscreen cannot be captured).
 
-- `GET  /api/replay/status` — `{enabled, recording, window_found, audio_mode, encoder, buffer_start_utc, buffer_end_utc, disk_bytes, retention_s, max_buffer_bytes}`
-- `GET  /api/replay/settings` — `{retention_s, max_buffer_bytes, save_root, saved_bytes}`
-- `PUT  /api/replay/settings` — body `{retention_s|null, max_buffer_bytes}` (null = whole session); persists + applies immediately (shrinking evicts oldest footage now); 409 outside 60 s–24 h / 1 GiB–1 TiB
+- `GET  /api/replay/status` — `{enabled, recording, idle, window_found, audio_mode, encoder, buffer_start_utc, buffer_end_utc, disk_bytes, retention_s, max_buffer_bytes}`
+- `GET  /api/replay/settings` — `{retention_s, max_buffer_bytes, pre_pad_s, post_pad_s, save_root, saved_bytes}`
+- `PUT  /api/replay/settings` — body `{retention_s|null, max_buffer_bytes, pre_pad_s?, post_pad_s?}` (null retention = whole session; omitted pads = unchanged); persists + applies immediately (shrinking evicts oldest footage now); 409 outside 60 s–24 h / 1 GiB–1 TiB / pads 0–10 s
 - `POST /api/attempts/{id}/replay` — cut (or reuse) the attempt's clip → `{clip_url, duration_s, truncated}`
 - `GET  /api/replay/clips/{name}` — the MP4 (supports HTTP Range; scrubs smoothly)
 - `POST /api/attempts/{id}/replay/save` — copy to `replays/<YYYY-MM-DD>/session_<N>/<slug>.mp4` → `{path, truncated}`
 
 Errors follow the API taxonomy: 404 unknown attempt/clip, 409 no footage /
 span too short, 503 db unavailable. Clips span the whole attempt plus
-padding (3 s before the anchor, 2 s after the closing event); `truncated`
-means the buffer no longer covered part of that span.
+padding (defaults 3 s before the anchor, 2 s after the closing event;
+adjustable 0–10 s in the settings panel); `truncated` means the buffer no
+longer covered part of that span. When no player input is detected for
+longer than the padding window (pre+post, floor 3 s), the recorder pauses
+the buffer — `idle: true` in status, an honest coverage hole on disk — and
+resumes instantly on the next input.
 
 ## Data
 

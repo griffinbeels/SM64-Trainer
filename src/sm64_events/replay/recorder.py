@@ -36,6 +36,7 @@ false-healthy trap on this machine; see audio.py docstring)."""
 import logging
 import shutil
 import threading
+import time
 from typing import Callable, Protocol
 
 import numpy as np
@@ -47,6 +48,10 @@ from sm64_events.replay.ring import SegmentRing
 from sm64_events.replay.window import WindowInfo
 
 log = logging.getLogger("sm64.replay")
+
+# Minimum idle threshold even when the padding window is tiny: prevents
+# pause/resume thrash (each cycle restarts the ffmpeg child).
+_IDLE_FLOOR_S = 3.0
 
 
 class VideoSource(Protocol):
@@ -109,6 +114,15 @@ class ReplayRecorder:
         self._window_found: bool = False
         self._audio_mode: str = "none"
 
+        # idle gating: no player input for idle_after_s -> stop writing the
+        # buffer (worthless footage); first active tick resumes instantly.
+        # _idle and _last_player_active are plain attrs flipped from the
+        # poll thread (resume) and attach thread (pause) — bool/float swaps
+        # are atomic in CPython, and both transitions are idempotent.
+        self.set_idle_after(cfg.pre_pad_s + cfg.post_pad_s)
+        self._last_player_active = time.monotonic()
+        self._idle = False
+
     # -- lifecycle -----------------------------------------------------------
 
     def start(self) -> None:
@@ -159,6 +173,7 @@ class ReplayRecorder:
                 log.info("window lost — tearing down capture")
                 self._teardown_capture()
 
+            self._maybe_idle_pause()
             self._stop_event.wait(self._cfg.attach_poll_s)
 
     # -- capture setup / teardown --------------------------------------------
@@ -227,6 +242,8 @@ class ReplayRecorder:
             self._audio_source = audio
             self._audio_mode = audio_mode
 
+        self._last_player_active = time.monotonic()  # fresh grace period
+        self._idle = False
         self._recording = True
         log.info("capture started — window=%r audio=%s codec=%s",
                  win.title, audio_mode, self._codec)
@@ -263,13 +280,52 @@ class ReplayRecorder:
                 log.exception("error closing writer")
 
         self._recording = False
+        self._idle = False
         # _audio_mode intentionally kept as last-known value so status() can
         # report which mode was active even after stop; cleared only on
         # fresh _begin_capture (set to new mode) or explicit reset.
 
+    # -- idle gating (no player input -> stop writing the buffer) -------------
+
+    def set_idle_after(self, window_s: float) -> None:
+        """The idle threshold tracks the user's padding window (pre+post):
+        footage further from any input than the padding can never appear
+        in a clip, so recording it is pure disk churn. Floored at
+        _IDLE_FLOOR_S to prevent thrash at tiny pads."""
+        self.idle_after_s = max(_IDLE_FLOOR_S, float(window_s))
+
+    def set_player_active(self) -> None:
+        """Poll-thread tap (replay/activity.py): called on every tick where
+        the player is providing input. Resume happens HERE, instantly — the
+        next attempt's pre-pad starts at the first input. Pause lives in
+        the attach loop (2 s cadence; a couple of extra recorded idle
+        seconds is harmless)."""
+        self._last_player_active = time.monotonic()
+        if self._idle:
+            self._set_idle(False)
+
+    def _maybe_idle_pause(self) -> None:
+        if (self._recording and not self._idle
+                and time.monotonic() - self._last_player_active
+                > self.idle_after_s):
+            self._set_idle(True)
+
+    def _set_idle(self, idle: bool) -> None:
+        self._idle = idle
+        sink = self._video_sink
+        if sink is not None:
+            sink.set_paused(idle)
+        if idle:
+            log.info("replay idle: no player input for %.0f s — buffer "
+                     "paused (resumes on input)", self.idle_after_s)
+        else:
+            log.info("replay idle: input detected — buffer resumed")
+
     # -- frame callback (library thread) -------------------------------------
 
     def _on_frame(self, bgra: np.ndarray, ts_100ns: int) -> None:
+        if self._idle:
+            return  # idle gate: user inactive, footage worthless (see _set_idle)
         # ffmpeg-sink path: a lock-free reference swap, nothing else — the
         # sink's feeder paces CFR and the child process encodes. The entire
         # in-process CFR/dedup/encode machinery below is bypassed.
@@ -329,6 +385,8 @@ class ReplayRecorder:
     # -- audio callback (library thread) -------------------------------------
 
     def _on_pcm(self, pcm_s16: np.ndarray) -> None:
+        if self._idle:
+            return  # idle gate: hole in audio mirrors the video hole
         with self._lock:
             if self._writer is None:
                 return
@@ -351,4 +409,5 @@ class ReplayRecorder:
             "disk_bytes": self.ring.total_bytes,
             "retention_s": self.ring.retention_s,
             "max_buffer_bytes": self.ring.max_bytes,
+            "idle": self._idle,
         }

@@ -221,3 +221,46 @@ def test_startup_wipe_is_recursive_clips_cache_dies_with_buffer(tmp_path):
     assert not (clips / "clip_attempt_1.mp4").exists()
     assert not (clips / "clip_attempt_1.json").exists()
     rec.stop()
+
+
+class _StubSink:
+    def __init__(self):
+        self.paused = None
+    def set_paused(self, p):
+        self.paused = p
+
+
+class _StubWriter:
+    def __init__(self):
+        self.audio_writes = 0
+    def write_audio(self, pcm):
+        self.audio_writes += 1
+
+
+def test_idle_gating_pauses_then_resumes_on_input(tmp_path):
+    cfg = ReplayConfig(scratch_dir=tmp_path / "buf")
+    rec = ReplayRecorder(cfg=cfg, window_finder=lambda t: None,
+                         video_factory=None, audio_factory=None)
+    assert rec.idle_after_s == 5.0          # default pads 3+2
+    rec.set_idle_after(1.0)
+    assert rec.idle_after_s == 3.0          # floor prevents thrash
+
+    sink, writer = _StubSink(), _StubWriter()
+    rec._video_sink = sink
+    rec._writer = writer
+    rec._recording = True
+    rec.idle_after_s = 0.05                 # fast for the test
+
+    rec._maybe_idle_pause()                 # input is recent -> no pause
+    assert rec.status()["idle"] is False
+
+    rec._last_player_active = time.monotonic() - 1.0
+    rec._maybe_idle_pause()
+    assert rec.status()["idle"] is True and sink.paused is True
+    rec._on_pcm(None)                       # idle gate: writer never touched
+    assert writer.audio_writes == 0
+
+    rec.set_player_active()                 # first input -> instant resume
+    assert rec.status()["idle"] is False and sink.paused is False
+    rec._on_pcm(None)
+    assert writer.audio_writes == 1

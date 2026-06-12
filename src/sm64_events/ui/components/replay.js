@@ -124,7 +124,7 @@ export function RecordingDot() {
   if (st === null) return null;
   const cls = st.recording ? "ok" : "bad";
   const label = st.recording
-    ? `rec · ${fmtSpan(st)} · ${fmtGB(st.disk_bytes)}/${fmtGB(st.max_buffer_bytes)} GB`
+    ? `rec${st.idle ? " (idle)" : ""} · ${fmtSpan(st)} · ${fmtGB(st.disk_bytes)}/${fmtGB(st.max_buffer_bytes)} GB`
     : "no capture";
   return html`<span style="position:relative">
     <span class="dot ${cls}" style="cursor:pointer"
@@ -145,9 +145,15 @@ function BufferSettings({ st, refresh, close }) {
   const [mins, setMins] = useState(
     st.retention_s != null ? Math.round(st.retention_s / 60) : 10);
   const [capGb, setCapGb] = useState(Math.round(st.max_buffer_bytes / 1024 ** 3));
+  const [preS, setPreS] = useState(null);   // loaded with the settings GET
+  const [postS, setPostS] = useState(null);
   const [msg, setMsg] = useState(null);
   useEffect(() => {
-    getJSON("/api/replay/settings").then(setInfo).catch(() => {});
+    getJSON("/api/replay/settings").then((s) => {
+      setInfo(s);
+      setPreS(String(s.pre_pad_s));
+      setPostS(String(s.post_pad_s));
+    }).catch(() => {});
   }, []);
 
   async function apply() {
@@ -155,17 +161,21 @@ function BufferSettings({ st, refresh, close }) {
     if (!Number.isFinite(cap) || (mode === "minutes" && !Number.isFinite(m))) {
       setMsg("enter a number"); return;
     }
+    const body = {
+      retention_s: mode === "session" ? null : m * 60,
+      max_buffer_bytes: Math.round(cap * 1024 ** 3),
+    };
+    if (preS !== null) body.pre_pad_s = Number(preS);   // omitted = unchanged
+    if (postS !== null) body.post_pad_s = Number(postS);
     try {
-      await send("PUT", "/api/replay/settings", {
-        retention_s: mode === "session" ? null : m * 60,
-        max_buffer_bytes: Math.round(cap * 1024 ** 3),
-      });
+      await send("PUT", "/api/replay/settings", body);
       setMsg("saved ✓ (applies immediately)");
       refresh();
     } catch (e) {
       setMsg(String(e));
     }
   }
+  const idleCutoff = Math.max(3, (Number(preS) || 0) + (Number(postS) || 0));
 
   const pct = Math.min(100, (st.disk_bytes / st.max_buffer_bytes) * 100);
   return html`<div class="popover" style="min-width:360px">
@@ -192,6 +202,16 @@ function BufferSettings({ st, refresh, close }) {
         style="width:4.5rem" value=${capGb}
         oninput=${(e) => setCapGb(e.target.value)} /> GB
     </div>
+    ${preS !== null && html`<div style="margin-top:.3rem">Clip padding:
+      <input id="replay-pre-pad" name="replay_pre_pad" type="number"
+        min="0" max="10" step="0.5" style="width:4rem" value=${preS}
+        oninput=${(e) => setPreS(e.target.value)} /> s before ·
+      <input id="replay-post-pad" name="replay_post_pad" type="number"
+        min="0" max="10" step="0.5" style="width:4rem" value=${postS}
+        oninput=${(e) => setPostS(e.target.value)} /> s after
+      <div class="meta">clips clamp to available footage; buffer pauses after
+        ${idleCutoff} s without player input and resumes on the next input</div>
+    </div>`}
     ${info && html`<div class="meta" style="margin-top:.3rem">
       saved replays (kept forever, not part of the buffer):
       ${fmtGB(info.saved_bytes)} GB in ${info.save_root}\\</div>`}

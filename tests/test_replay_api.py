@@ -33,13 +33,17 @@ class FakeReplayService:
 
     def settings(self):
         return {"retention_s": None, "max_buffer_bytes": 20 * 1024**3,
+                "pre_pad_s": 3.0, "post_pad_s": 2.0,
                 "save_root": "replays", "saved_bytes": 0}
 
-    def update_settings(self, retention_s, max_buffer_bytes):
+    def update_settings(self, retention_s, max_buffer_bytes,
+                        pre_pad_s=None, post_pad_s=None):
         from sm64_events.replay.config import validate_settings
-        validate_settings(retention_s, max_buffer_bytes)  # ValueError -> 409
+        validate_settings(retention_s, max_buffer_bytes,
+                          pre_pad_s, post_pad_s)        # ValueError -> 409
         return {"retention_s": retention_s,
                 "max_buffer_bytes": max_buffer_bytes,
+                "pre_pad_s": pre_pad_s, "post_pad_s": post_pad_s,
                 "save_root": "replays", "saved_bytes": 0}
 
     def clip_path(self, name: str) -> Path:
@@ -102,8 +106,18 @@ def test_settings_get_put_and_validation(tmp_path):
     assert r.json()["retention_s"] is None            # omitted = whole session
 
     r = c.put("/api/replay/settings",
+              json={"retention_s": None, "max_buffer_bytes": 5 * 1024**3,
+                    "pre_pad_s": 1.5, "post_pad_s": 8.0})
+    assert r.status_code == 200 and r.json()["pre_pad_s"] == 1.5
+
+    r = c.put("/api/replay/settings",
               json={"retention_s": 5, "max_buffer_bytes": 5 * 1024**3})
     assert r.status_code == 409                       # out of range -> taxonomy
+
+    r = c.put("/api/replay/settings",
+              json={"retention_s": None, "max_buffer_bytes": 5 * 1024**3,
+                    "pre_pad_s": 99})
+    assert r.status_code == 409                       # pad out of range
 
     r = c.put("/api/replay/settings",
               json={"retention_s": None, "max_buffer_bytes": "x"})

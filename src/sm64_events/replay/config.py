@@ -37,11 +37,16 @@ class ReplayConfig:
 SETTINGS_LIMITS = {
     "retention_s": (60.0, 86400.0),          # 1 min .. 24 h (None = whole session)
     "max_buffer_bytes": (1024**3, 1024**4),  # 1 GiB .. 1 TiB
+    "pre_pad_s": (0.0, 10.0),                # clip lead-in before the anchor
+    "post_pad_s": (0.0, 10.0),               # clip tail after the closing event
 }
 
 
-def validate_settings(retention_s: float | None, max_buffer_bytes: int) -> None:
-    """ValueError on out-of-range values (the API maps it to 409)."""
+def validate_settings(retention_s: float | None, max_buffer_bytes: int,
+                      pre_pad_s: float | None = None,
+                      post_pad_s: float | None = None) -> None:
+    """ValueError on out-of-range values (the API maps it to 409).
+    Pads are validated only when provided (None = caller keeps current)."""
     lo, hi = SETTINGS_LIMITS["retention_s"]
     if retention_s is not None and not (lo <= float(retention_s) <= hi):
         raise ValueError(
@@ -49,13 +54,21 @@ def validate_settings(retention_s: float | None, max_buffer_bytes: int) -> None:
     lo, hi = SETTINGS_LIMITS["max_buffer_bytes"]
     if not (lo <= int(max_buffer_bytes) <= hi):
         raise ValueError("max_buffer_bytes must be 1 GiB..1 TiB")
+    for name, val in (("pre_pad_s", pre_pad_s), ("post_pad_s", post_pad_s)):
+        if val is None:
+            continue
+        lo, hi = SETTINGS_LIMITS[name]
+        if not (lo <= float(val) <= hi):
+            raise ValueError(f"{name} must be {lo:.0f}..{hi:.0f} seconds")
 
 
 def save_settings(path: Path, retention_s: float | None,
-                  max_buffer_bytes: int) -> None:
+                  max_buffer_bytes: int, pre_pad_s: float,
+                  post_pad_s: float) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(
-        {"retention_s": retention_s, "max_buffer_bytes": int(max_buffer_bytes)},
+        {"retention_s": retention_s, "max_buffer_bytes": int(max_buffer_bytes),
+         "pre_pad_s": float(pre_pad_s), "post_pad_s": float(post_pad_s)},
         indent=2))
 
 
@@ -73,10 +86,13 @@ def apply_settings_file(cfg: ReplayConfig) -> ReplayConfig:
         return cfg
     retention = raw.get("retention_s", cfg.retention_s)
     cap = raw.get("max_buffer_bytes", cfg.max_buffer_bytes)
+    pre = raw.get("pre_pad_s", cfg.pre_pad_s)
+    post = raw.get("post_pad_s", cfg.post_pad_s)
     try:
-        validate_settings(retention, cap)
+        validate_settings(retention, cap, pre, post)
     except ValueError as e:
         logging.getLogger("sm64.replay").warning(
             "ignoring invalid %s: %s", cfg.settings_path, e)
         return cfg
-    return replace(cfg, retention_s=retention, max_buffer_bytes=int(cap))
+    return replace(cfg, retention_s=retention, max_buffer_bytes=int(cap),
+                   pre_pad_s=float(pre), post_pad_s=float(post))
