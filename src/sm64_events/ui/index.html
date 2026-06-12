@@ -50,6 +50,9 @@
   /* progress-graph pick: one fading gold pulse lands the eye on the row */
   @keyframes rowflash { from { background: #3a321d; } to { background: transparent; } }
   .row-flash td { animation: rowflash 1.6s ease-out; }
+  /* new-entry blink: three gold pulses single out the row that just landed */
+  @keyframes rownew { 0%, 100% { background: transparent; } 50% { background: #3a321d; } }
+  .row-new td { animation: rownew 0.8s ease-in-out 3; }
   .popover { position: absolute; background: #1b1e24; border: 1px solid #3a4150;
              border-radius: 6px; padding: .7rem; z-index: 5; }
   li { margin: .25rem 0; list-style: none; } ul { padding: 0; }

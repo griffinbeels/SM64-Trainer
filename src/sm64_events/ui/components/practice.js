@@ -31,6 +31,41 @@ function comparator(sort, clock) {
   return (a, b) => b.id - a.id; // newest (default)
 }
 
+// New-entry blink: attempt ids first seen AFTER the initial view load get
+// .row-new (three gold pulses, ~2.4s) so the row that just landed is
+// unmissable. The first view after mount and the first after a
+// session↔lifetime flip are absorbed silently — those bring in OLD
+// attempts, not new entries. Expiry is real state, not just animation-end:
+// keyed reorders re-insert the <tr>, which replays any animation class
+// still present on it.
+function useFreshAttemptIds(t) {
+  const [freshIds, setFreshIds] = useState(() => new Set());
+  const base = useRef(null);            // { scope, ids } — every id ever seen
+  useEffect(() => {
+    const v = t.view;
+    if (!v) return;
+    const ids = [
+      ...v.stars.flatMap((s) => s.attempts),
+      ...(v.segments || []).flatMap((s) => s.attempts),
+      ...v.unassigned,
+    ].map((a) => a.id);
+    if (!base.current || base.current.scope !== t.scope) {
+      base.current = { scope: t.scope, ids: new Set(ids) };
+      return;
+    }
+    const fresh = ids.filter((id) => !base.current.ids.has(id));
+    if (fresh.length === 0) return;
+    fresh.forEach((id) => base.current.ids.add(id));
+    setFreshIds((prev) => new Set([...prev, ...fresh]));
+    setTimeout(() => setFreshIds((prev) => {   // per-batch timer — an effect
+      const next = new Set(prev);              // cleanup would cancel this
+      fresh.forEach((id) => next.delete(id));  // batch's expiry whenever the
+      return next;                             // next view lands within 2.6s
+    }), 2600);
+  }, [t.view]);
+  return freshIds;
+}
+
 function delta(frames) {
   if (frames === null || frames === undefined) return "";
   const cls = frames > 0 ? "delta-up" : "delta-down";
@@ -38,7 +73,7 @@ function delta(frames) {
   return html` <span class=${cls}>${sign}${(frames / 30).toFixed(2)}s</span>`;
 }
 
-function AttemptRow({ a, t, idx, focus, clearFocus }) {
+function AttemptRow({ a, t, idx, focus, clearFocus, isNew }) {
   const [showReplay, setShowReplay] = useState(false);
   const [flash, setFlash] = useState(false);
   const rowRef = useRef(null);
@@ -91,7 +126,7 @@ function AttemptRow({ a, t, idx, focus, clearFocus }) {
     && frames != null && frames > 0
     && (a.pb_delta_frames === null || a.pb_delta_frames < 0);
   const row = html`<tr ref=${(el) => { rowRef.current = el; }}
-      class="${a.cleared ? "cleared" : ""} ${flash ? "row-flash" : ""}">
+      class="${a.cleared ? "cleared" : ""} ${flash ? "row-flash" : ""} ${isNew ? "row-new" : ""}">
     <td class="meta">#${idx + 1}</td>
     <td class=${a.outcome === "success" ? "good" : "badx"}>
       ${OUTCOME_LABEL[a.outcome] || a.outcome}
@@ -128,12 +163,13 @@ function AttemptRow({ a, t, idx, focus, clearFocus }) {
 // Shared table component used by both StarSection and the unassigned block.
 // attempts: the full ordered list for stable numbering;
 // rows: the filtered/sorted subset to actually render.
-function AttemptTable({ attempts, rows, t, focus, clearFocus }) {
+function AttemptTable({ attempts, rows, t, focus, clearFocus, freshIds }) {
   return html`<table>
     ${rows.map((a) => {
       const idx = attempts.indexOf(a);
       return html`<${AttemptRow} key=${a.id} a=${a} t=${t} idx=${idx}
-        focus=${focus} clearFocus=${clearFocus} />`;
+        focus=${focus} clearFocus=${clearFocus}
+        isNew=${freshIds ? freshIds.has(a.id) : false} />`;
     })}
   </table>`;
 }
@@ -147,7 +183,7 @@ function HideToggle({ hidden, showHidden, setShowHidden }) {
   </button>`;
 }
 
-function StarSection({ sec, t, ui, pinned }) {
+function StarSection({ sec, t, ui, pinned, freshIds }) {
   const [showHidden, setShowHidden] = useState(false);
   const [visible, setVisible] = useState(10);
   const [focus, setFocus] = useState(null);
@@ -227,7 +263,7 @@ function StarSection({ sec, t, ui, pinned }) {
     <${Timeline} tl=${sec.timeline} sec=${sec} t=${t} />
     <${Progress} prog=${sec.progress} clock=${t.clock} onPick=${pickFromGraph} />
     <${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t}
-      focus=${focus} clearFocus=${() => setFocus(null)} />
+      focus=${focus} clearFocus=${() => setFocus(null)} freshIds=${freshIds} />
     ${(rows.length > visible || visible > 10) && html`<div>
       ${rows.length > visible && html`<button class="meta"
           style="background:none;border:none;cursor:pointer"
@@ -254,7 +290,7 @@ function StarSection({ sec, t, ui, pinned }) {
 // required, no kind — sec.strategies stays display-only until it grows one).
 // Broken sections (definition deleted, history remains) render but drop the
 // timeline/marker editor — markers key off the deleted definition.
-function SegmentSection({ sec, t, ui, pinned, pinnedByArm }) {
+function SegmentSection({ sec, t, ui, pinned, pinnedByArm, freshIds }) {
   const [showHidden, setShowHidden] = useState(false);
   const [visible, setVisible] = useState(10);
   // armedSegs is the single live source: WS notices are instant, every view
@@ -303,7 +339,7 @@ function SegmentSection({ sec, t, ui, pinned, pinnedByArm }) {
     </div>
     ${!sec.broken && html`<${Timeline} tl=${sec.timeline} sec=${sec} t=${t} />`}
     <${Progress} prog=${sec.progress} clock="rta" />
-    <${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t} />
+    <${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t} freshIds=${freshIds} />
     ${(rows.length > visible || visible > 10) && html`<div>
       ${rows.length > visible && html`<button class="meta"
           style="background:none;border:none;cursor:pointer"
@@ -353,6 +389,7 @@ export function Practice({ t }) {
       setHideResetsState(v);
     },
   };
+  const freshIds = useFreshAttemptIds(t);
   const v = t.view;
   if (!v) return html`<p class="meta">loading… (server unreachable? check /health)</p>`;
 
@@ -389,18 +426,18 @@ export function Practice({ t }) {
     </div>
     ${menuOpen && html`<${StatMenu} t=${t} close=${() => setMenuOpen(false)} />`}
     <${ControlBar} ui=${ui} />
-    ${pinnedSeg && html`<${SegmentSection} key=${`seg:${pinnedSeg.segment_id}`} sec=${pinnedSeg} t=${t} ui=${ui} pinned=${true} pinnedByArm=${armedPin != null && armedPin !== activeSeg} />`}
-    ${activeStar && html`<${StarSection} key=${`${activeStar.course_id}:${activeStar.star_id}`} sec=${activeStar} t=${t} ui=${ui} pinned=${true} />`}
+    ${pinnedSeg && html`<${SegmentSection} key=${`seg:${pinnedSeg.segment_id}`} sec=${pinnedSeg} t=${t} ui=${ui} pinned=${true} pinnedByArm=${armedPin != null && armedPin !== activeSeg} freshIds=${freshIds} />`}
+    ${activeStar && html`<${StarSection} key=${`${activeStar.course_id}:${activeStar.star_id}`} sec=${activeStar} t=${t} ui=${ui} pinned=${true} freshIds=${freshIds} />`}
     ${v.stars.length === 0 && segs.length === 0 && v.unassigned.length === 0
       ? html`<p class="meta">No attempts this session yet — grab a star.</p>` : ""}
     ${restSegs.length > 0 && html`<div class="meta listhead">segments — recent activity first</div>`}
-    ${restSegs.map((sec) => html`<${SegmentSection} key=${`seg:${sec.segment_id}`} sec=${sec} t=${t} ui=${ui} pinned=${false} />`)}
+    ${restSegs.map((sec) => html`<${SegmentSection} key=${`seg:${sec.segment_id}`} sec=${sec} t=${t} ui=${ui} pinned=${false} freshIds=${freshIds} />`)}
     ${restStars.length > 0 && html`<div class="meta listhead">stars — recent activity first</div>`}
-    ${restStars.map((sec) => html`<${StarSection} key=${`${sec.course_id}:${sec.star_id}`} sec=${sec} t=${t} ui=${ui} pinned=${false} />`)}
+    ${restStars.map((sec) => html`<${StarSection} key=${`${sec.course_id}:${sec.star_id}`} sec=${sec} t=${t} ui=${ui} pinned=${false} freshIds=${freshIds} />`)}
     ${v.unassigned.length > 0 && html`<div class="starsec">
       <div class="shead"><b>No target</b>
         <span class="meta">failures before any star was grabbed or set</span></div>
-      <${AttemptTable} attempts=${v.unassigned} rows=${unassignedRows} t=${t} />
+      <${AttemptTable} attempts=${v.unassigned} rows=${unassignedRows} t=${t} freshIds=${freshIds} />
       <${HideToggle} hidden=${unassignedHidden}
                      showHidden=${showUnassignedHidden}
                      setShowHidden=${setShowUnassignedHidden} />
