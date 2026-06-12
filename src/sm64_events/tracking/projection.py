@@ -95,6 +95,7 @@ from sm64_events.tracking.segments import (
 @dataclass(frozen=True)
 class Attempt:
     id: int                    # journal id of the attempt's first event
+                               # (segment attempts: + namespace offset — caveat 11)
     session_id: int
     course_id: int | None      # None = failure with no declared target yet
     star_id: int | None
@@ -185,6 +186,8 @@ class Projector:
         closed = self._dispatch(ev)
         if ev.type == "star_collected" and "num_stars" in ev.payload:
             self._num_stars = ev.payload["num_stars"]
+        elif ev.type == "game_reset":
+            self._num_stars = None  # file can change at the title screen: unknown until the next grab
         seg_closed, self.segment_notices = self._segments.feed(
             ev, MatchContext(level=self._level, prev_level=prev_level,
                              num_stars=self._num_stars))

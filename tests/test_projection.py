@@ -809,3 +809,39 @@ def test_replay_signature_accepts_segments():
         jev(2, "level_changed", 1100, {"from": 6, "to": 17}),
     ], segments=seg_defs())
     assert any(a.segment_id == 1 for a in attempts)
+
+
+def test_grab_closing_star_and_segment_orders_star_first_and_target_follows_segment():
+    from sm64_events.tracking.segments import SegmentDef
+    b3 = SegmentDef(id=10, name="Bowser 3", enabled=True,
+                    start_triggers=[{"type": "level_enter", "to": 34},
+                                    {"type": "attempt_anchor", "level": 34}],
+                    end_triggers=[{"type": "star_grabbed"}], guards=[])
+    p = Projector(segments=[b3])
+    p.feed(jev(1, "level_changed", 5000, {"from": 6, "to": 34}))
+    p.feed(jev(2, "practice_reset", 5100, {"mario_acted": True}))
+    closed = p.feed(jev(3, "star_collected", 6000,
+                        {"course_id": 25, "star_id": 0, "igt_frames": 880}))
+    assert [a.segment_id for a in closed] == [None, 10]   # star first, then segment
+    assert closed[0].outcome == closed[1].outcome == "success"
+    assert p.target == ("segment", 10)
+
+
+def test_game_reset_resets_star_count_knowledge_for_guards():
+    from sm64_events.tracking.segments import SegmentDef
+    guarded = SegmentDef(id=2, name="g", enabled=True,
+                         start_triggers=[{"type": "level_enter", "to": 6}],
+                         end_triggers=[{"type": "level_enter", "to": 17}],
+                         guards=[{"type": "star_count_min", "n": 3}])
+    p = Projector(segments=[guarded])
+    closed = []
+    closed += p.feed(jev(1, "star_collected", 900,
+                         {"course_id": 2, "star_id": 1,
+                          "igt_frames": 100, "num_stars": 5}))
+    closed += p.feed(jev(2, "game_reset", 50, {}))
+    closed += p.feed(jev(3, "level_changed", 1000, {"from": 16, "to": 6}))
+    closed += p.feed(jev(4, "level_changed", 1100, {"from": 6, "to": 17}))
+    closed += p.feed(jev(5, "level_changed", 1200, {"from": 17, "to": 6}))
+    # num_stars unknown after hard reset -> guard conservatively fails ->
+    # the def never armed -> no segment attempt anywhere
+    assert all(a.segment_id != 2 for a in closed)
