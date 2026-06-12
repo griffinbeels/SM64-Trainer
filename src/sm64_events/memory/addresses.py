@@ -93,6 +93,8 @@ ACT_FALL_AFTER_STAR_GRAB = 0x00001904  # midair grabs; live-verified 2026-06-10
 # action ever appeared, gLastCompleted* untouched). The grand star is NOT
 # a collectable star: it never triggers a star-dance action, so
 # star_collected cannot fire. The key detector claims it via this action id.
+# Composed path re-verified same day: key_grabbed which=grand fired live
+# at frame 12160 (third replication of gLastCompleted* staying unrelated).
 ACT_JUMBO_STAR_CUTSCENE = 0x00001909
 
 STAR_GRAB_ACTIONS = frozenset({
