@@ -28,7 +28,7 @@ function ParamInput({ schema, name, value, vocab, clause, onChange }) {
     const names = vocab.stars[String(clause.course)] || [];
     return html`<select value=${value ?? ""} disabled=${clause.course == null}
         onchange=${(e) => onChange(numOrNull(e.target.value))}>
-      <option value="">(any star)</option>
+      <option value="">${schema.required ? "— pick star —" : "(any star)"}</option>
       ${names.map((n, i) => html`<option value=${i}>${n}</option>`)}
     </select>`;
   }
@@ -39,15 +39,33 @@ function ParamInput({ schema, name, value, vocab, clause, onChange }) {
 
 function ClauseRow({ clause, types, vocab, onChange, onRemove }) {
   const spec = types.find((t) => t.key === clause.type) || types[0];
+  const setParam = (pname, v) => {
+    const next = { ...clause, [pname]: v };
+    // a star id is meaningless outside its course — clear it on course change
+    if (pname === "course" && "star" in spec.params) next.star = null;
+    onChange(next);
+  };
+  const param = (pname) => html`<${ParamInput} schema=${spec.params[pname]}
+      name=${pname} vocab=${vocab} clause=${clause} value=${clause[pname]}
+      onChange=${(v) => setParam(pname, v)} />`;
+  // "{to} coming from {from}" → inputs interleaved with muted words.
+  // Params a template forgets to mention render appended — the registry
+  // test makes that unreachable; this keeps a bad vocab usable, not blank.
+  const mentioned = new Set();
+  const rendered = (spec.template || "").split(/(\{\w+\})/).map((tok) => {
+    const m = /^\{(\w+)\}$/.exec(tok);
+    if (m && spec.params[m[1]]) { mentioned.add(m[1]); return param(m[1]); }
+    const word = tok.trim();
+    return word ? html`<span class="segword">${word}</span>` : null;
+  });
+  const extras = Object.keys(spec.params).filter((p) => !mentioned.has(p));
   return html`<div class="segclause">
     <select value=${clause.type}
         onchange=${(e) => onChange({ type: e.target.value })}>
       ${types.map((t) => html`<option value=${t.key}>${t.label}</option>`)}
     </select>
-    ${Object.entries(spec.params).map(([name, schema]) => html`
-      <${ParamInput} schema=${schema} name=${name} vocab=${vocab}
-        clause=${clause} value=${clause[name]}
-        onChange=${(v) => onChange({ ...clause, [name]: v })} />`)}
+    ${rendered}
+    ${extras.map(param)}
     <button onclick=${onRemove}>✕</button>
   </div>`;
 }
