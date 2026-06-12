@@ -257,6 +257,7 @@ class GdiBitBltVideoSource:
         grab_ms = 0.0
         max_gap_ms = 0.0
         prev_grab_t = None
+        last_blt_ms = last_dib_ms = 0.0
         last_report = 0.0
         next_t = _time.perf_counter()
         try:
@@ -292,8 +293,17 @@ class GdiBitBltVideoSource:
                 ts = qpc_100ns()
                 t_grab = _time.perf_counter()
                 if prev_grab_t is not None:
-                    max_gap_ms = max(max_gap_ms, (t_grab - prev_grab_t) * 1000)
+                    gap = (t_grab - prev_grab_t) * 1000
+                    if gap > max_gap_ms:
+                        max_gap_ms = gap
+                    if gap > 50:
+                        # which phase ate the time? (last iteration's split)
+                        log.warning("grab stall %.0f ms (prev split: blt %.0f"
+                                    " ms, dib %.0f ms, rest %.0f ms)", gap,
+                                    last_blt_ms, last_dib_ms,
+                                    gap - last_blt_ms - last_dib_ms)
                 prev_grab_t = t_grab
+                t0 = _time.perf_counter()
                 if not gdi32.BitBlt(mdc, 0, 0, w, h, hdc, 0, 0,
                                     self._SRCCOPY_CAPTUREBLT):
                     # DC went stale (display change); recreate next pass
@@ -301,7 +311,10 @@ class GdiBitBltVideoSource:
                     user32.ReleaseDC(hwnd, hdc)
                     hdc = mdc = None
                     continue
+                last_blt_ms = (_time.perf_counter() - t0) * 1000
+                t0 = _time.perf_counter()
                 gdi32.GetDIBits(mdc, bmp, 0, h, buf, ctypes.byref(self._bmi), 0)
+                last_dib_ms = (_time.perf_counter() - t0) * 1000
                 arr = np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 4).copy()
                 if self._enqueue(arr, ts):
                     drops += 1
