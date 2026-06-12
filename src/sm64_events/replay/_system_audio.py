@@ -56,6 +56,7 @@ class AudioPump:
         self._q: queue.Queue = queue.Queue(maxsize=256)
         self._dropped = 0
         self._overflows = 0
+        self.last_loud_t = 0.0   # monotonic time of last non-silent packet
         self._thread = threading.Thread(
             target=self._consume, name="audio-pump", daemon=True)
         self._thread.start()
@@ -79,6 +80,9 @@ class AudioPump:
                 return
             raw, ts = item
             data = np.frombuffer(raw, dtype=np.int16).reshape(-1, 2)
+            if len(data) and int(np.abs(data[::16]).max()) > 50:
+                import time as _t2
+                self.last_loud_t = _t2.monotonic()
             # the packet ENDS at its callback time; it STARTS n samples back
             packet_start = (int((ts - self._epoch) / 1e7 * self._rate)
                             - len(data))

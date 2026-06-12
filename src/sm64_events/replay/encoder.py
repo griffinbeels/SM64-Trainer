@@ -127,6 +127,10 @@ class SegmentWriter:
         ctx.time_base = Fraction(1, self._cfg.fps)
         ctx.framerate = Fraction(self._cfg.fps, 1)
         ctx.gop_size = self._frames_per_seg
+        # CodecContext.create defaults to ~2 Mbps - visibly grainy at
+        # 1600x1224@60 (the stream-based path defaulted higher). 12 Mbps
+        # ~= 5.4 GB/h, comfortably inside the 20 GB disk cap.
+        ctx.bit_rate = 12_000_000
         if self._codec == "h264_nvenc":
             # bf=0: B-frames shift start_time +3 frames and break the
             # frame0=pts0 contract. p1+ull: encode must beat 16.7 ms/frame.

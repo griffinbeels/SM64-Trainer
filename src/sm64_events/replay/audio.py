@@ -141,12 +141,63 @@ class ProcessAudioSource:
             self._tap = None
 
 
+def session_peak_for_pid(pid: int) -> float:
+    """Instantaneous meter peak of the pid's audio session (0.0-1.0), or
+    -1.0 when no session exists. Used by the silence watchdog to tell
+    'the app is quiet' apart from 'our loopback stream went deaf'."""
+    try:
+        import comtypes
+        from comtypes import CLSCTX_ALL
+        from pycaw.api.audiopolicy import (IAudioSessionControl2,
+                                           IAudioSessionManager2)
+        from pycaw.api.endpointvolume import IAudioMeterInformation
+        from pycaw.api.mmdeviceapi import IMMDeviceEnumerator
+        from pycaw.constants import CLSID_MMDeviceEnumerator
+
+        devenum = comtypes.CoCreateInstance(
+            CLSID_MMDeviceEnumerator, IMMDeviceEnumerator,
+            comtypes.CLSCTX_INPROC_SERVER)
+        coll = devenum.EnumAudioEndpoints(0, 1)
+        for i in range(coll.GetCount()):
+            dev = coll.Item(i)
+            mgr = dev.Activate(IAudioSessionManager2._iid_, CLSCTX_ALL, None)
+            mgr = mgr.QueryInterface(IAudioSessionManager2)
+            se = mgr.GetSessionEnumerator()
+            for j in range(se.GetCount()):
+                ctl = se.GetSession(j)
+                try:
+                    if ctl.QueryInterface(IAudioSessionControl2).GetProcessId() != pid:
+                        continue
+                except Exception:
+                    continue
+                meter = ctl.QueryInterface(IAudioMeterInformation)
+                return float(meter.GetPeakValue())
+    except Exception:
+        log.exception("session peak probe failed")
+    return -1.0
+
+
 class SystemAudioSource:
-    """Device loopback capture. With a pid, captures the endpoint that
-    actually HOSTS that process's audio session (per-app routing aware);
-    without one, the default output."""
+    """Device loopback capture with SELF-HEALING. With a pid, captures the
+    endpoint that actually HOSTS that process's audio session (per-app
+    routing aware); without one, the default output.
+
+    Watchdog: a WASAPI loopback stream goes silently deaf when the world
+    changes under it — the target app restarts (new session), the endpoint
+    re-enumerates (Wave Link restart leaves a zombie device with an
+    IDENTICAL name), or routing moves. No error is ever raised; the stream
+    just delivers dither forever (live: PJ64 restarted mid-session, its new
+    session was ACTIVE at peak 0.35 on the Game endpoint while our stream
+    recorded silence). Every few seconds the watchdog compares 'has the
+    stream heard anything loud?' against the session's own meter; sustained
+    deafness while the app is audibly emitting triggers a full re-resolve
+    and stream reopen. The pump (and the wall-clock placement epoch) persist
+    across reopens, so the timeline stays continuous."""
 
     mode = "system"
+
+    _DEAF_AFTER_S = 5.0
+    _CHECK_EVERY_S = 2.0
 
     def __init__(self, rate: int = 48000, pid: int | None = None):
         self._rate = rate
@@ -154,75 +205,117 @@ class SystemAudioSource:
         self._stream = None
         self._pa = None
         self._pump = None
+        self._watchdog = None
+        self._stop_evt = None
+
+    def _open_stream(self) -> None:
+        """(Re)resolve the endpoint and open the loopback stream feeding the
+        existing pump. Raises on failure; caller handles cleanup/retry."""
+        import pyaudiowpatch as pyaudio
+        from sm64_events.replay.clock import qpc_100ns
+
+        target_name = device_name_hosting_pid(self._pid) if self._pid else None
+        if self._pa is None:
+            self._pa = pyaudio.PyAudio()
+        wasapi = self._pa.get_host_api_info_by_type(pyaudio.paWASAPI)
+        speakers = self._pa.get_device_info_by_index(wasapi["defaultOutputDevice"])
+        loopback = pick_loopback_device(
+            list(self._pa.get_loopback_device_info_generator()),
+            target_name, speakers["name"])
+        if loopback is None:
+            raise RuntimeError("no WASAPI loopback device matches the "
+                               "target or default output device")
+        log.info("audio loopback endpoint: %s (app session endpoint: %s)",
+                 loopback["name"], target_name or "unknown -> default")
+        if int(loopback["defaultSampleRate"]) != self._rate:
+            log.warning("loopback device rate %s != %s; recording at device "
+                        "rate without resample (v1 limitation)",
+                        loopback["defaultSampleRate"], self._rate)
+        pump_feed = self._pump.feed
+
+        # REAL-TIME RULE: this callback runs on PortAudio's thread with a
+        # ~21 ms buffer behind it. It must NEVER touch the recorder lock,
+        # the writer, the disk, or logging — any stall drops packets
+        # (measured 6% sustained loss with the old in-callback work).
+        def cb(in_data, frame_count, time_info, status):
+            pump_feed(in_data, qpc_100ns(), status)
+            return (None, pyaudio.paContinue)
+
+        self._stream = self._pa.open(
+            format=pyaudio.paInt16, channels=2,
+            rate=int(loopback["defaultSampleRate"]),
+            input=True, input_device_index=loopback["index"],
+            stream_callback=cb)
+
+    def _close_stream(self) -> None:
+        if self._stream is not None:
+            try:
+                self._stream.stop_stream()
+                self._stream.close()
+            except Exception:
+                log.exception("loopback stream close failed")
+            self._stream = None
+        if self._pa is not None:
+            try:
+                self._pa.terminate()
+            except Exception:
+                pass
+            self._pa = None
 
     def start(self, on_pcm) -> None:
-        import pyaudiowpatch as pyaudio
+        import threading
+
         from sm64_events.replay._system_audio import AudioPump
         from sm64_events.replay.clock import qpc_100ns
 
         # Epoch FIRST: the writer's audio t0 is stamped (by the recorder)
-        # immediately before this method runs. Everything below — the COM
-        # session scan, device enumeration, stream open — takes seconds, and
-        # any of it spent before the guard's epoch would make every sample
-        # claim an earlier time than it really happened (live bug: clip
-        # audio led video by the ~3 s init cost). With the epoch here, the
-        # init window becomes leading silence and the timeline stays
-        # wall-true end to end.
+        # immediately before this method runs; everything below takes
+        # seconds and must land AFTER the epoch (else every sample claims
+        # an earlier time than it happened — the old ~3 s audio-lead bug).
         epoch = qpc_100ns()
-
-        target_name = device_name_hosting_pid(self._pid) if self._pid else None
-        self._pa = pyaudio.PyAudio()
+        self._pump = AudioPump(self._rate, on_pcm, epoch)
         try:
-            wasapi = self._pa.get_host_api_info_by_type(pyaudio.paWASAPI)
-            speakers = self._pa.get_device_info_by_index(wasapi["defaultOutputDevice"])
-            loopback = pick_loopback_device(
-                list(self._pa.get_loopback_device_info_generator()),
-                target_name, speakers["name"])
-            if loopback is None:
-                raise RuntimeError("no WASAPI loopback device matches the "
-                                   "target or default output device")
-            log.info("audio loopback endpoint: %s (app session endpoint: %s)",
-                     loopback["name"], target_name or "unknown -> default")
-            if int(loopback["defaultSampleRate"]) != self._rate:
-                log.warning("loopback device rate %s != %s; recording at device "
-                            "rate without resample (v1 limitation)",
-                            loopback["defaultSampleRate"], self._rate)
-
-            self._pump = AudioPump(self._rate, on_pcm, epoch)
-            pump_feed = self._pump.feed
-
-            # REAL-TIME RULE: this callback runs on PortAudio's thread with a
-            # ~21 ms buffer behind it. It must NEVER touch the recorder lock,
-            # the writer, the disk, or logging — any stall drops packets
-            # (measured 6% sustained loss with the old in-callback work).
-            def cb(in_data, frame_count, time_info, status):
-                pump_feed(in_data, qpc_100ns(), status)
-                return (None, pyaudio.paContinue)
-
-            self._stream = self._pa.open(
-                format=pyaudio.paInt16, channels=2,
-                rate=int(loopback["defaultSampleRate"]),
-                input=True, input_device_index=loopback["index"],
-                stream_callback=cb)
+            self._open_stream()
         except Exception:
             # The recorder only stop()s sources whose start() succeeded —
-            # a partial failure here must release the PyAudio COM handle
-            # itself or it leaks until GC.
-            if self._pump is not None:
-                self._pump.stop()
-                self._pump = None
-            self._pa.terminate()
-            self._pa = None
+            # release everything ourselves on partial failure.
+            self._pump.stop()
+            self._pump = None
+            self._close_stream()
             raise
 
+        self._stop_evt = threading.Event()
+        self._watchdog = threading.Thread(
+            target=self._watch, name="audio-watchdog", daemon=True)
+        self._watchdog.start()
+
+    def _watch(self) -> None:
+        import time as _time
+        while not self._stop_evt.wait(self._CHECK_EVERY_S):
+            heard = _time.monotonic() - self._pump.last_loud_t
+            if heard < self._DEAF_AFTER_S:
+                continue
+            if self._pid is None:
+                continue
+            peak = session_peak_for_pid(self._pid)
+            if peak < 0.02:
+                continue  # app genuinely quiet (or gone) — nothing to heal
+            log.warning("audio watchdog: stream deaf %.0f s while the app's "
+                        "session peaks at %.2f — reopening loopback", heard, peak)
+            try:
+                self._close_stream()
+                self._open_stream()
+                self._pump.last_loud_t = _time.monotonic()  # grace period
+            except Exception:
+                log.exception("loopback reopen failed — will retry")
+
     def stop(self) -> None:
-        if self._stream is not None:
-            self._stream.stop_stream()
-            self._stream.close()
-            self._stream = None
+        if self._stop_evt is not None:
+            self._stop_evt.set()
+        if self._watchdog is not None:
+            self._watchdog.join(timeout=5)
+            self._watchdog = None
+        self._close_stream()
         if self._pump is not None:
             self._pump.stop()
             self._pump = None
-        if self._pa is not None:
-            self._pa.terminate()
-            self._pa = None
