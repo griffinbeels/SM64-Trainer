@@ -899,3 +899,82 @@ def test_arm_frame_echo_immune_to_pause():
     assert closed == [], "arm-frame echo must be suppressed regardless of pause"
     assert e.armed_ids() == {1}
     assert e._armed[1].start_frame == 3000
+
+
+# ---------------------------------------------------------------------------
+# Echo anchors are invisible to the ARM phase (live regression 2026-06-12)
+# Echo-classified anchors were skipped in the CLOSURE phase but still
+# processed by the ARM phase.  Since LBLJ's seeded start triggers include
+# attempt_anchor(level=6, area=1), a door's section-reset echo MATCHED it
+# and the arm phase REPLACED the _Arm at the door — rebasing
+# start_frame/started_utc so the replay (and rta) began at the door instead
+# of the segment start.
+#
+# THE RULE: an echo anchor is involuntary — it must be INVISIBLE to the
+# engine entirely: no closure, no continuation re-arm, no arm-phase
+# arm/re-arm, for every def.  "Re-arm on start trigger refire" applies to
+# player actions only.
+# ---------------------------------------------------------------------------
+
+def test_intra_area_door_echo_does_not_rebase_anchor_started_segments():
+    """THE REGRESSION: LBLJ_V5 (the seeded shape, with attempt_anchor(6,1));
+    arm via level_changed 16→6 @1000 (entry echo anchor @1000 paused 3 —
+    invisible); area-1 small door echo anchor @1500 (frames_since_door 4,
+    paused 2, gameplay actions) → STILL armed with start 1000 (no row);
+    level_changed 6→17 @1800 → success rta 800.
+    Red before fix: rta 300 (the echo rebased the arm to the door @1500)."""
+    e = SegmentEngine([LBLJ_V5])
+    # arm via grounds→lobby entry @1000
+    e.feed(jev(10, "level_changed", 1000, {"from": 16, "to": 6}),
+           ctx(level=6, prev_level=16, area=1))
+    # entry echo anchor @1000 (co-frame, paused 3) — invisible
+    e.feed(jev(11, "practice_reset", 1000, {"paused_frames_before": 3,
+                                             "igt_frames_before": 64}),
+           ctx(level=6, area=1))
+    assert e.armed_ids() == {1}
+    assert e._armed[1].start_frame == 1000
+    # small lobby door (intra-area: NO area_changed): section-reset echo
+    # @1500 with gameplay actions and frames_since_door 4 (shape 2b)
+    closed, _ = e.feed(
+        jev(12, "practice_reset", 1500,
+            {"paused_frames_before": 2,
+             "frames_since_door": 4,
+             "action": 0x04000440,         # ACT_FREEFALL — gameplay
+             "prev_action": 0x0C400201}),  # ACT_IDLE — gameplay
+        ctx(level=6, area=1))
+    assert closed == [], "door echo must not record a row"
+    assert e.armed_ids() == {1}
+    assert e._armed[1].start_frame == 1000, \
+        "echo anchor must not rebase the anchor-started segment (the bug)"
+    # success @1800 — rta 800 from the ORIGINAL arm (red-before-fix: 300)
+    closed, _ = e.feed(jev(13, "level_changed", 1800, {"from": 6, "to": 17}),
+                       ctx(level=17, prev_level=6))
+    assert len(closed) == 1
+    assert closed[0].outcome == "success" and closed[0].rta_frames == 800
+
+
+def test_menu_warp_still_rebases_with_anchor_trigger():
+    """Guard that the echo hoist didn't break the menu-warp pause gate for
+    anchor-started segments: a co-frame anchor with paused 18 (> 5, no door
+    context) is REAL → closes the stale attempt (reset rta 1000) AND re-arms
+    @2000 (closure-phase continuation; the arm-phase attempt_anchor replace
+    stays idempotent for real anchors).  Success @2100 → rta 100."""
+    e = SegmentEngine([LBLJ_V5])
+    e.feed(jev(10, "level_changed", 1000, {"from": 16, "to": 6}),
+           ctx(level=6, prev_level=16, area=1))
+    assert e.armed_ids() == {1}
+    # menu warp: area_changed 3→1 @2000, then the anchor co-frame paused 18
+    e.feed(jev(11, "area_changed", 2000, {"level": 6, "from": 3, "to": 1}),
+           ctx(level=6, area=1))
+    closed, _ = e.feed(
+        jev(12, "practice_reset", 2000,
+            {"paused_frames_before": 18, "action": 0x0C400201}),
+        ctx(level=6, area=1))
+    assert len(closed) == 1
+    assert closed[0].outcome == "reset" and closed[0].rta_frames == 1000
+    assert e.armed_ids() == {1}
+    assert e._armed[1].start_frame == 2000
+    closed, _ = e.feed(jev(13, "level_changed", 2100, {"from": 6, "to": 17}),
+                       ctx(level=17, prev_level=6))
+    assert len(closed) == 1
+    assert closed[0].outcome == "success" and closed[0].rta_frames == 100

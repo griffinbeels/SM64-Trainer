@@ -16,7 +16,9 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
 - guards re-evaluate on EVERY arm and re-arm
 - re-firing a start trigger while armed re-arms (timer restarts, no row);
   a refire whose guards FAIL leaves the existing arm untouched (the old
-  start_frame keeps running)
+  start_frame keeps running).  PLAYER ACTIONS ONLY: an echo anchor matching
+  an attempt_anchor start trigger neither arms nor re-arms (see load-echo
+  rule — echo invisibility)
 - level_changed matching neither start nor end disarms silently (no row);
   area_changed and session_started never record rows
 - failure rows only on practice_reset/state_loaded (reset), death,
@@ -65,6 +67,18 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
   prev_action/action in DOOR_ACTIONS (falling back through the chain) or
   frames_since_door.  Historical events (no prev_action, no frames_since_door):
   .get() returns None -> conservative close behaviour preserved.
+  ECHO INVISIBILITY (live regression 2026-06-12): an echo anchor is
+  involuntary -- it is INVISIBLE to the engine entirely: no closure, no
+  continuation re-arm, no arm-phase arm/re-arm, for every def.  Without
+  this, an echo matching an attempt_anchor start trigger rebased the _Arm
+  in the arm phase (LBLJ's lobby-door section reset rebased
+  start_frame/started_utc to the door, so replay + rta began at the door).
+  Shapes (2a)/(2b)/(3) depend only on the event, so they are classified
+  ONCE per event before the per-def loop (anchor_is_echo); shape (1)
+  depends on the per-def arm and is checked per def in BOTH the closure
+  and arm phases.  Real anchors still take the continuation re-arm in the
+  closure phase; the arm-phase attempt_anchor replace stays idempotent
+  for those.
   KNOWN EDGE (no code): a savestate load INTO A DIFFERENT AREA emits a
   corrective area_changed co-frame with state_loaded; that state_loaded will
   be classified as a co-frame echo if paused_frames_before <= 5.  The
@@ -75,6 +89,8 @@ from dataclasses import dataclass
 from typing import Callable
 
 from sm64_events.memory.addresses import CASTLE_AREA_NAMES, DOOR_ACTIONS, LEVEL_NAMES
+
+_ANCHOR_TYPES = ("practice_reset", "state_loaded")  # attempt-anchor events
 
 _AFK_PAUSE_FRAMES = 150  # mirrors the star-side AFK discard (projection.py)
 
@@ -298,6 +314,33 @@ class SegmentEngine:
         # processing so the echo guard below can test both echo shapes.
         if ev.type in ("level_changed", "area_changed"):
             self._last_transition_frame = ev.frame
+        # Event-level echo classification — shapes (2a)/(2b)/(3) depend only
+        # on the event payload + _last_transition_frame, never on a per-def
+        # arm, so classify ONCE before the loop.  An echo anchor is
+        # involuntary — it must be INVISIBLE to the engine entirely: no
+        # closure, no continuation re-arm, no arm-phase arm/re-arm, for
+        # every def (live regression 2026-06-12: the lobby door's section
+        # reset matched LBLJ's attempt_anchor start trigger in the ARM phase
+        # and rebased start_frame to the door).  Boolean OR — door evidence
+        # and the pause-gated co-frame shape are independent, so order is
+        # irrelevant here; the docstring taxonomy keys each shape.
+        anchor_is_echo = ev.type in _ANCHOR_TYPES and (
+            # (2a) intra-area door echo: prev_action authoritative when
+            # present (door anim ran on the previous tick); fallback to
+            # action for events journaled before prev_action existed.
+            ev.payload.get("prev_action",
+                           ev.payload.get("action")) in DOOR_ACTIONS
+            # (2b) non-warp door recency echo: IGT reset lands 1-5 frames
+            # after the door action ends; frames_since_door bridges the gap.
+            or (ev.payload.get("frames_since_door") is not None
+                and 0 <= ev.payload["frames_since_door"]
+                <= _DOOR_ECHO_WINDOW)
+            # (3) transition co-frame echo, pause-gated: menu warps are
+            # co-frame too but carry paused_frames_before 13-890 (live
+            # logs) — they fail the gate and stay REAL attempt boundaries.
+            or (ev.frame == self._last_transition_frame
+                and ev.payload.get("paused_frames_before", 0)
+                <= _MENU_PAUSE_FRAMES))
         for d in self._defs:
             arm = self._armed.get(d.id)
             starts = self._matches(d.start_triggers, ev, ctx)
@@ -307,7 +350,7 @@ class SegmentEngine:
                     if a:
                         closed.append(a)
                     self._disarm(d, ev, notices)
-                elif ev.type in ("practice_reset", "state_loaded") \
+                elif ev.type in _ANCHOR_TYPES \
                         and ev.frame == arm.start_frame:
                     # Shape (1) — arm-frame echo: the level_changed that armed
                     # this segment and the synthetic anchor it triggers share
@@ -315,61 +358,18 @@ class SegmentEngine:
                     # the player may have been paused on the grounds for
                     # minutes before entering the lobby — a large
                     # paused_frames_before here is normal and must not
-                    # reclassify this as a real reset.
+                    # reclassify this as a real reset.  Per-def (depends on
+                    # the arm), unlike the event-level shapes below.
                     # (live gate 2026-06-12, seq 40-45)
                     pass
-                elif ev.type in ("practice_reset", "state_loaded") \
-                        and ev.payload.get(
-                            "prev_action",
-                            ev.payload.get("action")) in DOOR_ACTIONS:
-                    # Shape (2a) — intra-area door echo: no area_changed fires
-                    # (same area on both sides of the door), but Usamune still
-                    # resets IGT → anchor fires with Mario in a door action
-                    # (0x1320/0x1321/0x1322). Inputs are locked during door
-                    # animations, so this can never be a player reset.
-                    # Ordered BEFORE the co-frame shape (3): positive evidence
-                    # of a door outranks frame-coincidence signals — a door
-                    # echo stays an echo regardless of pause buffering or
-                    # frame alignment.
-                    # prev_action is authoritative when present: the door open
-                    # animation must have been running on the PREVIOUS tick too
-                    # (a real L-reset has prev_action = gameplay, not a door
-                    # action — even if curr is 0x1322 due to poll-tick race).
-                    # Fall back to action for events without prev_action
-                    # (journaled before this field was added). Missing both
-                    # fields → .get() chain returns None → not in DOOR_ACTIONS
-                    # → conservative close behaviour preserved.
+                elif ev.type in _ANCHOR_TYPES and anchor_is_echo:
+                    # Shapes (2a)/(2b)/(3) — event-level echoes, classified
+                    # once before the loop (see anchor_is_echo above; full
+                    # taxonomy in the module docstring).  No closure, no row,
+                    # no disarm — and the arm phase below skips echoes too,
+                    # so the _Arm is untouched.
                     pass
-                elif ev.type in ("practice_reset", "state_loaded") \
-                        and ev.payload.get("frames_since_door") is not None \
-                        and 0 <= ev.payload["frames_since_door"] \
-                        <= _DOOR_ECHO_WINDOW:
-                    # Shape (2b) — non-warp door recency echo: ACT_PULLING/
-                    # PUSHING_DOOR ends the section AFTER the animation —
-                    # IGT resets 1-5 frames later with Mario already idle/
-                    # landing, so action and prev_action carry no door
-                    # context.  frames_since_door bridges the gap.
-                    # Also ordered BEFORE shape (3): door evidence outranks
-                    # frame coincidence.
-                    # Historical events (no frames_since_door key): .get()
-                    # returns None → falls through to conservative close.
-                    pass
-                elif ev.type in ("practice_reset", "state_loaded") \
-                        and ev.frame == self._last_transition_frame \
-                        and ev.payload.get("paused_frames_before", 0) \
-                        <= _MENU_PAUSE_FRAMES:
-                    # Shape (3) — transition co-frame echo (walked area door):
-                    # area_changed mid-segment at frame F, then anchor at F.
-                    # Suppressed only when paused_frames_before <= 5.
-                    # Menu warps (06-01-00, etc.) are co-frame BUT pass through
-                    # the pause menu: paused_frames_before 13-890 observed
-                    # in live logs (2026-06-12).  A co-frame anchor with a
-                    # large pause is a deliberate attempt boundary, not a
-                    # load echo — falls through to the real-reset path below.
-                    # (live report 2026-06-12: LBLJ armed in castle lobby
-                    # closed-as-reset when crossing the basement-stairs door)
-                    pass
-                elif ev.type in ("practice_reset", "state_loaded"):
+                elif ev.type in _ANCHOR_TYPES:
                     if ev.payload.get("paused_frames_before", 0) \
                             < _AFK_PAUSE_FRAMES:
                         a = self._close(Attempt, d, arm, ev, "reset", None)
@@ -405,9 +405,25 @@ class SegmentEngine:
                 elif ev.type in ("level_changed", "session_started") \
                         and not starts:
                     self._disarm(d, ev, notices)   # silent: no row
-            # arm / re-arm — guards re-evaluated every time (spec)
-            if starts and all(GUARDS[g["type"]].check(g, ctx)
-                              for g in d.guards):
+            # arm / re-arm — guards re-evaluated every time (spec).
+            # Echo anchors are INVISIBLE here too: an involuntary door/load
+            # echo matching an attempt_anchor start trigger must neither arm
+            # an idle def nor rebase an armed one (live regression
+            # 2026-06-12: the lobby door's section-reset echo rebased LBLJ's
+            # start_frame/started_utc to the door, so replay and rta began
+            # at the door instead of the segment start).  The arm-frame
+            # check is the per-def belt for shape (1) — `arm` is the
+            # pre-closure value, unchanged for echoes.  REAL anchors already
+            # took the continuation re-arm in the closure phase above; for
+            # those the attempt_anchor replace here remains idempotent
+            # (identical _Arm values).  The spec's "re-arm on start trigger
+            # refire" applies to player actions only.
+            echo_invisible = ev.type in _ANCHOR_TYPES and (
+                anchor_is_echo
+                or (arm is not None and ev.frame == arm.start_frame))
+            if starts and not echo_invisible \
+                    and all(GUARDS[g["type"]].check(g, ctx)
+                            for g in d.guards):
                 fresh = d.id not in self._armed
                 self._armed[d.id] = _Arm(jid=ev.id, start_frame=ev.frame,
                                          started_utc=ev.wall_time_utc,
