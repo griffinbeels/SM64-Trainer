@@ -158,7 +158,8 @@ class ReplayService:
                 {"duration_s": res.duration_s, "truncated": res.truncated}))
         m = json.loads(meta.read_text())
         return {"clip_url": f"/api/replay/clips/{name}",
-                "duration_s": m["duration_s"], "truncated": m["truncated"]}
+                "duration_s": m["duration_s"], "truncated": m["truncated"],
+                "fps": self.cfg.fps}  # clips are CFR at cfg.fps (frame-step UI)
 
     def _wait_for_tail(self, end_utc: datetime) -> None:
         """Bounded wait: a click right after the event can outrace the last

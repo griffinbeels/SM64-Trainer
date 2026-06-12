@@ -38,6 +38,8 @@ function attachSharedVolume(el) {
 export function ReplayPlayer({ attemptId }) {
   const [state, setState] = useState({ phase: "loading" });
   const [savedPath, setSavedPath] = useState(null);
+  const [playing, setPlaying] = useState(false); // event-driven (onplay/onpause)
+  const videoEl = useRef(null);
   // One programmatic play() per View-Replay click (= per component mount),
   // NEVER on re-render: gameplay emits events (mario_acted, anchors...),
   // each WS push re-renders this tree, and an inline ref re-fires every
@@ -59,6 +61,27 @@ export function ReplayPlayer({ attemptId }) {
     setSavedPath(r.path);
   }
 
+  // Frame stepping: pause first (stepping implies pause), then seek to the
+  // MIDDLE of the adjacent frame — (n±1 + 0.5)/fps — so floating-point
+  // rounding can never straddle a frame boundary. Clips are CFR at the
+  // server-reported fps.
+  function step(dir) {
+    const v = videoEl.current;
+    if (!v) return;
+    if (!v.paused) v.pause();
+    const fps = state.fps || 60;
+    const n = Math.floor(v.currentTime * fps + 1e-4);
+    const t = (n + dir + 0.5) / fps;
+    v.currentTime = Math.min(Math.max(t, 0), v.duration || 0);
+  }
+
+  function togglePlay() {
+    const v = videoEl.current;
+    if (!v) return;
+    if (v.paused) v.play().catch(() => {});
+    else v.pause();
+  }
+
   if (state.phase === "loading")
     return html`<span class="meta">extracting replay…</span>`;
   if (state.phase === "error")
@@ -72,7 +95,10 @@ export function ReplayPlayer({ attemptId }) {
   return html`<div class="replay-player">
     ${state.truncated && html`<div class="meta">⚠ starts mid-attempt (buffer didn't cover the full span)</div>`}
     <video controls preload="auto" src=${state.clip_url}
+           onplay=${() => setPlaying(true)}
+           onpause=${() => setPlaying(false)}
            ref=${(el) => {
+             videoEl.current = el; // null on unmount — step()/toggle guard
              if (!el) return;
              if (!el.dataset.sharedVolume) { // ref re-fires on every render
                el.dataset.sharedVolume = "1";
@@ -83,6 +109,13 @@ export function ReplayPlayer({ attemptId }) {
                el.play().catch(() => {});
              }
            }}></video>
+    <div style="display:flex;gap:.3rem;margin:.3rem 0;align-items:center">
+      <button onclick=${() => step(-1)} title="pause + back one frame">⏴ frame</button>
+      <button onclick=${togglePlay} style="min-width:5.5rem"
+              title="play / pause">${playing ? "❚❚ pause" : "▶ play"}</button>
+      <button onclick=${() => step(1)} title="pause + forward one frame">frame ⏵</button>
+      <span class="meta">1 frame = 1/${state.fps || 60} s</span>
+    </div>
     <div>
       <button onclick=${saveReplay} disabled=${savedPath !== null}>
         ${savedPath ? "Saved" : "Save Replay"}</button>
