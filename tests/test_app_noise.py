@@ -65,3 +65,39 @@ def test_replay_stop_bounded_fast_path():
 
     asyncio.run(app_mod._stop_replay_bounded(Quick()))
     assert calls == [1]
+
+
+def test_ui_responses_force_revalidation():
+    """Stale-module incident 2026-06-12: with no Cache-Control, the browser
+    served a cached store.js (no togglePause) next to a fresh header.js —
+    a dead pause button. / and /ui/* must always say no-cache; /api stays
+    untouched."""
+    import asyncio
+
+    from fastapi.testclient import TestClient
+
+    from sm64_events.server.app import create_app
+    from sm64_events.server.broadcaster import Broadcaster
+
+    class NoMemory:
+        attached = False
+        def attach(self):
+            return False
+        def detach(self):
+            pass
+
+    class PollerStub:
+        memory = NoMemory()
+        latest = None
+        paused = False
+        async def run(self):
+            await asyncio.sleep(3600)
+        def set_paused(self, p):
+            self.paused = p
+
+    with TestClient(create_app(PollerStub(), Broadcaster())) as c:
+        assert c.get("/").headers["cache-control"] == "no-cache"
+        r = c.get("/ui/store.js")
+        assert r.status_code == 200
+        assert r.headers["cache-control"] == "no-cache"
+        assert "cache-control" not in c.get("/api/pause").headers

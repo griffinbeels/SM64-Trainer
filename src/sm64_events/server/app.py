@@ -127,6 +127,21 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
 
     app = FastAPI(title="SM64 Event API", lifespan=lifespan)
 
+    @app.middleware("http")
+    async def _ui_always_revalidate(request, call_next):
+        """The UI contract is edit + refresh (no build, no restart). With
+        no Cache-Control, browsers apply HEURISTIC freshness to /ui module
+        files and can serve a STALE module alongside fresh ones — live
+        incident 2026-06-12: cached store.js (no togglePause) + fresh
+        header.js (with the pause button) = a dead control and no request
+        ever sent. no-cache forces revalidation on every load (cheap 304s
+        on localhost) so module versions can never mix."""
+        response = await call_next(request)
+        p = request.url.path
+        if p == "/" or p.startswith("/ui"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
     app.mount("/ui", StaticFiles(directory=str(_UI_INDEX.parent)), name="ui")
     if service is not None:
         app.include_router(create_api_router(service))
