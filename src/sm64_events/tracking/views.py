@@ -266,6 +266,10 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             pb_json[mode] = ({"frames": row["frames"],
                               "display": format_igt(row["frames"])}
                              if row else None)
+        # Note: star sections intentionally omit "kind". The UI branches on
+        # sec.kind being undefined for stars (SegmentSection vs StarSection),
+        # so adding kind="star" here would silently break that check. Do not
+        # add the key unless the UI branch is updated at the same time.
         sections.append({
             "course_id": course_id, "star_id": star_id,
             "course_name": course_name(course_id),

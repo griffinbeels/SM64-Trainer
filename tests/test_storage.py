@@ -224,6 +224,16 @@ def test_pb_accepts_segment_keying_and_null_course(tmp_path):
     assert row["segment_id"] == 1 and row["course_id"] is None
 
 
+def test_update_segment_def_unknown_field_raises_value_error(tmp_path):
+    import pytest
+    db = make_db(tmp_path)
+    sid = db.insert_segment_def("Test", [{"type": "spawned"}],
+                                [{"type": "level_enter", "to": 6}], [],
+                                "2026-06-11T00:00:00Z")
+    with pytest.raises(ValueError, match="unknown"):
+        db.update_segment_def(sid, nonexistent_field="oops")
+
+
 def test_v3_database_pb_rows_survive_v4_rebuild(tmp_path):
     # a real pre-segment db (user_version=3) must keep its PB rows — id,
     # frames, keying — through v4's pbs_v2 rebuild, gaining segment_id=NULL

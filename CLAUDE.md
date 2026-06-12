@@ -41,6 +41,9 @@ uv run python tools/dedupe_journal.py data/tracker.db          # scan double-jou
 | Death detection | `detectors/death.py` — action-set edge; closes open attempt as outcome "death" |
 | Level-change detection | `detectors/level.py` — stateful: remembers last EMITTED level, journals establishing/corrective events (from may equal to) so projection-side level tracking never runs stale; closes open attempts as abandoned |
 | Dust tricks (dustless rollouts/jumps) | `detectors/dust.py` — TRICKS registry (one row per trick); docstring carries the decomp-verified landing-frame timing model; counts attach to attempts via projection.py |
+| area_changed / warp_entered / key_grabbed / spawned | `detectors/area.py` · `detectors/warp.py` · `detectors/key.py` · `detectors/spawn.py` — segment-primitive facts; area mirrors level.py's last-EMITTED discipline; key detector guards star_grab from misattributing Bowser keys |
+| Segment defs, trigger vocabulary, matcher FSM | `tracking/segments.py` — ONE registry (TRIGGERS/GUARDS) drives validation, matching, and the /api/segments/vocab endpoint; docstring carries the FSM invariants (closures before arming, guards re-evaluated every arm, silent disarm on foreign level change) |
+| Segments builder UI | `ui/components/segments.js` — 100% vocab-driven: adding a trigger type in tracking/segments.py appears in the UI with zero JS changes |
 | Poll loop, attach retry, layout sanity | `server/poller.py` |
 | WS fan-out, seq numbers | `server/broadcaster.py` |
 | HTTP/WS endpoints | `server/app.py` |

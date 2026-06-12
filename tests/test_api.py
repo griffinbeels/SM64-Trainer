@@ -514,3 +514,11 @@ def test_segments_503_when_db_none(tmp_path):
     app = create_app(poller, broadcaster, service=service)
     with TestClient(app) as client:
         assert client.get("/api/segments").status_code == 503
+        assert client.post("/api/segments", json={
+            "name": "X", "start_triggers": [{"type": "spawned"}],
+            "end_triggers": [{"type": "level_enter", "to": 6}]
+        }).status_code == 503
+        assert client.put("/api/segments/1", json={"enabled": False}).status_code == 503
+        assert client.delete("/api/segments/1").status_code == 503
+        # vocab is always 200 — no db dependency
+        assert client.get("/api/segments/vocab").status_code == 200

@@ -2409,23 +2409,71 @@ git commit -m "feat: segment-aware replay clip names - segment name + rta time"
 - [ ] **Step 4: LIVE GATE with the human (blocking merge — domain rule 1)**
 
 Run: `uv run python tools/verify_addresses.py` with PJ64 + the Usamune ROM.
-Checklist (from the spec's VERIFY items):
-1. `gCurrAreaIndex` address + lobby/upstairs/basement = 1/2/3 (fix
-   `CASTLE_AREA_NAMES` + the BitS Entry seed's `area` param if different).
-2. Pipe touch in BitDW/BitFS and the BitS funnel fire `warp_entered`
-   (adjust `WARP_ENTRY_ACTIONS` if a different action shows).
-3. File-select spawn fires `spawned` (note which kind).
-4. Key grab in B1: `key_grabbed` fires, NO `star_collected`, and record what
-   `last_completed_*` held.
-5. B3 grand star fires `star_collected` (record course/star attribution; if
-   attribution is unusable, change the Bowser 3 seed's end trigger params).
-6. Level ids 7/17/19/21/23/30/33/34 confirmed by walking into each (watch
-   the `level_changed` payloads in the live event watch).
-7. End-to-end: practice one real LBLJ; confirm armed → success with a
-   plausible RTA, and that the seeded definition's history appears.
+The tool now prints the full checklist at startup. Step-by-step:
+
+1. **CURR_AREA address** — Phase 1 prints `[SKIP]` because `CURR_AREA = 0x0`.
+   FIRST step: run `uv run python tools/hunt_value.py` while standing in the
+   castle lobby (hunt value `1`); re-filter from upstairs (`2`), then basement
+   (`3`). Confirm with `watch_timer.py ADDR:u16`. Replace `CURR_AREA = 0x0` in
+   `addresses.py` and re-run the tool — Phase 1 should now `[PASS]`.
+   Fix `CASTLE_AREA_NAMES` if the mapping differs from 1/2/3.
+   Fix the BitS Entry seed's `area` param if the upstairs area id is not 2.
+
+2. **Pipe touch** — walk into the BitDW (level 17) pipe and the BitFS (level 19)
+   pipe while watching the Phase 2 live output. `warp_entered` must fire with
+   a `[LIVE-GATE]` annotation. Note the action id printed — if different from
+   `ACT_DISAPPEARED (0x00001300)` or `ACT_TELEPORT_FADE_OUT (0x00001336)`,
+   add the observed id to `WARP_ENTRY_ACTIONS` in `addresses.py`. Also
+   confirm BitS funnel (level 21) fires similarly.
+
+3. **File-select spawn** — from the file-select screen, load the save.
+   `spawned` must fire. Note `kind` in the printout: if `kind="intro"` the
+   `ACT_INTRO_CUTSCENE` edge is correct; if `kind="spawn"` the intro action
+   fires differently — adjust the detector logic or the action id.
+
+4. **Key grab, B1** — enter Bowser 1 arena (level 30), defeat Bowser, touch
+   the key. `key_grabbed` must fire; NO `star_collected` may fire.
+   The printout shows `last_completed course=X star=Y` at the touch frame —
+   record those values in a VERIFY note in `addresses.py`'s `KEY_GRAB_LEVELS`
+   comment (they confirm gLastCompleted* is stale from a prior star, not
+   the key).
+
+5. **B3 grand star** — defeat Bowser 3 (level 34), touch the grand star.
+   `star_collected` must fire (not `key_grabbed` — level 34 is not in
+   `KEY_GRAB_LEVELS`). Record the course/star attribution from the printout.
+   If attribution is unusable (stale garbage), change the Bowser 3 seed's
+   `end_triggers` from `[{"type": "star_grabbed"}]` to
+   `[{"type": "level_enter", "to": 21}]` (entering BitS = B3 done in 16-star)
+   and document the change.
+
+6. **Level ids walk-in** — walk into each of levels 7, 17, 19, 21, 23, 30, 33,
+   34. Each `level_changed` payload in the Phase 2 watch must match the
+   expected id. Fix `LEVEL_NAMES` entries in `addresses.py` if any id differs.
+   Note: level ids are shown in the action stream (`level <N>` column).
+
+7. **End-to-end LBLJ** — practice one real LBLJ (Castle Grounds → Castle Inside
+   via the lobby entrance → enter Bowser in the Dark World pipe).
+   Confirm in Phase 2 output:
+   - `segment_armed` notice when entering Castle Inside from Grounds (level 16→6)
+   - `attempt_completed` with `kind=segment` and a plausible RTA (sub-30 s for
+     a successful LBLJ means rta_frames < 900)
+   - The Segments tab in the UI shows the history
 
 Flip each verified `VERIFY` comment in `addresses.py` to a live-verified
 note with today's date (follow the existing annotation style).
+
+**Key fact to record (for the next session):** the `key_grabbed` touch frame
+is the same frame the star-dance action edges — `STAR_GRAB_ACTIONS` detects
+the edge, so the detector fires one frame AFTER the last non-grab action.
+This is identical to star_collected stamping. No special calibration needed.
+
+**hard_reset / game_reset while a segment is armed:** the engine closes with
+outcome `"hard_reset"` and `rta_frames = frame - arm_frame`. Since
+`game_reset` carries no meaningful frame position relative to the arm, the
+rta value is technically valid but not meaningful for a game reset — it is
+recorded but never surfaces as a PB candidate (only `success` qualifies for
+`save_pb`). No code change needed; document this behavior if it causes
+confusion in the UI.
 
 - [ ] **Step 5: Full suite + commit**
 
