@@ -7,12 +7,24 @@ builder GUI. Adding a trigger type = one TriggerType row here.
 Matcher invariants (spec §Matcher semantics — tests are the contract):
 - closures (success/failure) process BEFORE arming; one event may close an
   attempt AND re-arm the next (practice_reset in an attempt_anchor segment)
-- anchor closures are attempt BOUNDARIES, not state changes: a real
-  practice_reset/state_loaded closes the current attempt AND re-arms the
-  same segment at the anchor frame (practice-loop continuation — Usamune
-  respawns at the level's last entrance, which is the segment's start
-  position; live-gate amendment 2026-06-12). The segment never stops being
-  armed; the UI chip stays lit.
+- anchor closures are POSITION-GATED (segment swap, live report 2026-06-12).
+  Each _Arm remembers the MatchContext (level, area) where it armed — the
+  segment's start position; a co-frame establishing area_changed pins the
+  area for level_changed arms (ctx.area is stale during the level event —
+  the area detector establishes one event later on the same tick).
+  - Anchor AT the arm position: attempt BOUNDARY, not a state change — a
+    real practice_reset/state_loaded closes the current attempt AND re-arms
+    the same segment at the anchor frame (practice-loop continuation —
+    Usamune respawns at the level's last entrance, which is the segment's
+    start position; live-gate amendment 2026-06-12). The segment never
+    stops being armed; the UI chip stays lit.
+  - Anchor SOMEWHERE ELSE (Usamune menu warp / savestate into another
+    area): RELOCATION — the player is moving, not practicing, so a failed-
+    attempt row would lie. No row; the segment disarms (its start
+    conditions no longer hold) and defs anchored at the destination arm in
+    the same event's arm phase — the armed set always reflects where Mario
+    actually is. None on either side = unknown (legacy journals) →
+    conservative match (the pre-area continuation behavior).
 - guards re-evaluate on EVERY arm and re-arm
 - re-firing a start trigger while armed re-arms (timer restarts, no row);
   a refire whose guards FAIL leaves the existing arm untouched (the old
@@ -85,7 +97,7 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
   negative-rta self-heal covers the time-jump consequences.  Acceptable: door
   echoes are constant, this edge is rare.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable
 
 from sm64_events.memory.addresses import CASTLE_AREA_NAMES, DOOR_ACTIONS, LEVEL_NAMES
@@ -288,6 +300,20 @@ class _Arm:
     started_utc: str
     anchor_type: str    # the arming event's type
     session_id: int
+    # MatchContext position when armed = the segment's start position.
+    # level_changed arms record a stale ctx.area; the co-frame establishing
+    # area_changed overwrites it (see feed). None = unknown (legacy
+    # journals) — position checks treat None as a wildcard.
+    level: int | None = None
+    area: int | None = None
+
+
+def _at_arm_position(arm: _Arm, ctx: MatchContext) -> bool:
+    """True when the tracked position matches where the segment armed.
+    None on either side = unknown → match, so legacy journals (no
+    level/area events) keep the unconditional continuation behavior."""
+    return ((arm.level is None or ctx.level is None or ctx.level == arm.level)
+            and (arm.area is None or ctx.area is None or ctx.area == arm.area))
 
 
 class SegmentEngine:
@@ -314,6 +340,14 @@ class SegmentEngine:
         # processing so the echo guard below can test both echo shapes.
         if ev.type in ("level_changed", "area_changed"):
             self._last_transition_frame = ev.frame
+        if ev.type == "area_changed":
+            # Pin arm positions: a def armed by THIS tick's level_changed
+            # recorded a stale ctx.area (the area detector establishes the
+            # new level's area one event later, same frame — main.py order).
+            # The co-frame establishing/corrective area event owns the truth.
+            for did, stale in self._armed.items():
+                if stale.start_frame == ev.frame:
+                    self._armed[did] = replace(stale, area=ev.payload["to"])
         # Event-level echo classification — shapes (2a)/(2b)/(3) depend only
         # on the event payload + _last_transition_frame, never on a per-def
         # arm, so classify ONCE before the loop.  An echo anchor is
@@ -369,6 +403,16 @@ class SegmentEngine:
                     # no disarm — and the arm phase below skips echoes too,
                     # so the _Arm is untouched.
                     pass
+                elif ev.type in _ANCHOR_TYPES \
+                        and not _at_arm_position(arm, ctx):
+                    # RELOCATION (live report 2026-06-12): a real warp/load
+                    # landed outside this segment's start position — the
+                    # Usamune menu warp to another area is the player MOVING,
+                    # not a failed attempt, so no reset row. The start
+                    # conditions no longer hold → disarm (notice); defs
+                    # anchored at the destination arm in the arm phase below
+                    # (segment swap).
+                    self._disarm(d, ev, notices)
                 elif ev.type in _ANCHOR_TYPES:
                     if ev.payload.get("paused_frames_before", 0) \
                             < _AFK_PAUSE_FRAMES:
@@ -385,11 +429,15 @@ class SegmentEngine:
                     # For defs with attempt_anchor start triggers the arm phase
                     # below will replace this _Arm with identical values
                     # (fresh=False → no duplicate notice) — idempotent.
+                    # Position carries over (ctx wins, arm fills unknowns) so
+                    # the gate above keeps working across continuations.
                     self._armed[d.id] = _Arm(
                         jid=ev.id, start_frame=ev.frame,
                         started_utc=ev.wall_time_utc,
                         anchor_type=ev.type,
                         session_id=ev.session_id,
+                        level=ctx.level if ctx.level is not None else arm.level,
+                        area=ctx.area if ctx.area is not None else arm.area,
                     )
                 elif ev.type == "death":
                     a = self._close(Attempt, d, arm, ev, "death",
@@ -428,7 +476,8 @@ class SegmentEngine:
                 self._armed[d.id] = _Arm(jid=ev.id, start_frame=ev.frame,
                                          started_utc=ev.wall_time_utc,
                                          anchor_type=ev.type,
-                                         session_id=ev.session_id)
+                                         session_id=ev.session_id,
+                                         level=ctx.level, area=ctx.area)
                 if fresh:
                     notices.append({"event": "segment_armed",
                                     "segment_id": d.id, "name": d.name,

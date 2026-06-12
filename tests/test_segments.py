@@ -978,3 +978,98 @@ def test_menu_warp_still_rebases_with_anchor_trigger():
                        ctx(level=17, prev_level=6))
     assert len(closed) == 1
     assert closed[0].outcome == "success" and closed[0].rta_frames == 100
+
+
+# ---------------------------------------------------------------------------
+# Position-gated anchor closures — segment swap (live report 2026-06-12)
+# Each _Arm remembers the MatchContext (level, area) where it armed: the
+# segment's start position.  A real anchor AT that position is the practice
+# loop (reset row + re-arm in place, unchanged).  A real anchor SOMEWHERE
+# ELSE (Usamune menu warp / savestate into another area) is a RELOCATION:
+# the player is moving, not practicing — NO reset row, the segment disarms
+# (its start conditions no longer hold), and whatever def is anchored at the
+# destination arms fresh.  None on either side = unknown (legacy journals)
+# → conservative match, the pre-area continuation behavior.
+# ---------------------------------------------------------------------------
+
+BITS_ENTRY = SegmentDef(
+    id=2, name="BITS Entry", enabled=True,
+    start_triggers=[{"type": "attempt_anchor", "level": 6, "area": 2}],
+    end_triggers=[{"type": "level_enter", "to": 31}], guards=[])
+
+
+def test_menu_warp_to_other_area_swaps_armed_segments():
+    """THE LIVE REPORT: LBLJ armed at the lobby; Usamune menu warp to
+    Upstairs (area 2).  LBLJ must disarm WITHOUT a reset row (moving ≠
+    a failed attempt) and BITS Entry must arm fresh — most recently armed
+    segment becomes the only armed one."""
+    e = SegmentEngine([LBLJ_V5, BITS_ENTRY])
+    # warp-menu deposit at the lobby arms LBLJ via attempt_anchor(6, 1)
+    e.feed(jev(10, "practice_reset", 1000, {"action": 0x0C400201}),
+           ctx(level=6, area=1))
+    assert e.armed_ids() == {1}
+    # menu warp upstairs: area_changed 1→2 co-frame with the warp anchor
+    e.feed(jev(11, "area_changed", 2000, {"level": 6, "from": 1, "to": 2}),
+           ctx(level=6, area=2))
+    closed, notices = e.feed(
+        jev(12, "practice_reset", 2000,
+            {"paused_frames_before": 18, "action": 0x0C400201}),
+        ctx(level=6, area=2))
+    assert closed == [], "relocation must not record a reset row"
+    assert e.armed_ids() == {2}, "LBLJ out, BITS Entry in"
+    assert [(n["event"], n["segment_id"]) for n in notices] == [
+        ("segment_disarmed", 1), ("segment_armed", 2)]
+    # BITS Entry times from the warp frame
+    closed, _ = e.feed(jev(13, "level_changed", 2300, {"from": 6, "to": 31}),
+                       ctx(level=31, prev_level=6))
+    assert len(closed) == 1
+    assert closed[0].outcome == "success"
+    assert closed[0].segment_id == 2 and closed[0].rta_frames == 300
+
+
+def test_establishing_area_event_pins_arm_position():
+    """level_enter arms while ctx.area is still the PREVIOUS level's area
+    (the area detector establishes the new level's area one event later on
+    the same tick — main.py order).  The co-frame establishing area_changed
+    must pin the arm position: a later same-area L-reset is a retry (row +
+    re-arm), a cross-area menu warp is a relocation (no row, disarm)."""
+    e = SegmentEngine([LBLJ_V5])
+    # entering the castle: ctx.area=2 is the stale pre-entry area
+    e.feed(jev(10, "level_changed", 1000, {"from": 16, "to": 6}),
+           ctx(level=6, prev_level=16, area=2))
+    # co-frame establishing area event: the lobby is area 1
+    e.feed(jev(11, "area_changed", 1000, {"level": 6, "from": 2, "to": 1}),
+           ctx(level=6, area=1))
+    # L-reset at the lobby: same position → practice-loop retry
+    closed, _ = e.feed(
+        jev(12, "practice_reset", 1500, {"action": 0x0C400201}),
+        ctx(level=6, area=1))
+    assert len(closed) == 1
+    assert closed[0].outcome == "reset" and closed[0].rta_frames == 500
+    assert e.armed_ids() == {1}
+    # menu warp upstairs: relocation → disarm, NO row
+    e.feed(jev(13, "area_changed", 2000, {"level": 6, "from": 1, "to": 2}),
+           ctx(level=6, area=2))
+    closed, notices = e.feed(
+        jev(14, "practice_reset", 2000,
+            {"paused_frames_before": 18, "action": 0x0C400201}),
+        ctx(level=6, area=2))
+    assert closed == [], "cross-area warp must not record a reset row"
+    assert e.armed_ids() == set()
+    assert [n["event"] for n in notices] == ["segment_disarmed"]
+
+
+def test_afk_length_menu_warp_relocation_also_disarms():
+    """Relocation does not branch on pause length: an AFK-length menu
+    pause (890 frames) warping to another area still disarms with no row."""
+    e = SegmentEngine([LBLJ_V5])
+    e.feed(jev(10, "practice_reset", 1000, {"action": 0x0C400201}),
+           ctx(level=6, area=1))
+    e.feed(jev(11, "area_changed", 2000, {"level": 6, "from": 1, "to": 2}),
+           ctx(level=6, area=2))
+    closed, _ = e.feed(
+        jev(12, "practice_reset", 2000,
+            {"paused_frames_before": 890, "action": 0x0C400201}),
+        ctx(level=6, area=2))
+    assert closed == []
+    assert e.armed_ids() == set()
