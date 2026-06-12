@@ -3,7 +3,9 @@ from datetime import datetime, timezone
 
 from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.detectors.key import KeyGrabDetector
-from sm64_events.memory.addresses import ACT_STAR_DANCE_EXIT, BOWSER_1_ARENA
+from sm64_events.memory.addresses import (ACT_JUMBO_STAR_CUTSCENE,
+                                          ACT_STAR_DANCE_EXIT,
+                                          BOWSER_1_ARENA, BOWSER_3_ARENA)
 
 ACT_IDLE = 0x0C400201
 
@@ -53,3 +55,22 @@ def test_persisting_dance_action_is_silent():
     d.process(snap(), snap(mario_action=ACT_STAR_DANCE_EXIT))
     assert d.process(snap(mario_action=ACT_STAR_DANCE_EXIT),
                      snap(mario_action=ACT_STAR_DANCE_EXIT)) == []
+
+
+def test_grand_star_in_b3_arena_is_the_fight_end():
+    # Live-verified 2026-06-12: B3 grand star enters ACT_JUMBO_STAR_CUTSCENE
+    # (0x1909), not a star-dance action; numStars unchanged; no star_collected.
+    events = KeyGrabDetector().process(
+        snap(curr_level=BOWSER_3_ARENA),
+        snap(curr_level=BOWSER_3_ARENA, mario_action=ACT_JUMBO_STAR_CUTSCENE))
+    assert len(events) == 1
+    assert events[0].type == "key_grabbed"
+    assert events[0].payload == {"level": BOWSER_3_ARENA, "which": "grand"}
+
+
+def test_jumbo_star_cutscene_outside_fight_levels_is_silent():
+    # ACT_JUMBO_STAR_CUTSCENE edge outside the three Bowser arenas must not fire.
+    events = KeyGrabDetector().process(
+        snap(curr_level=24),
+        snap(curr_level=24, mario_action=ACT_JUMBO_STAR_CUTSCENE))
+    assert events == []

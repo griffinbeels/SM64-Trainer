@@ -182,7 +182,9 @@ endpoint table updated (consumer-facing surface).
 | BitS Pipe Entry | level_enter(BitS) · attempt_anchor(BitS) | warp_entered(BitS) |
 | Bowser 1 | level_enter(B1 arena) · attempt_anchor(B1 arena) | key_grabbed(B1 arena) |
 | Bowser 2 | level_enter(B2 arena) · attempt_anchor(B2 arena) | key_grabbed(B2 arena) |
-| Bowser 3 | level_enter(B3 arena) · attempt_anchor(B3 arena) | star_grabbed (grand star — attribution VERIFY) |
+| Bowser 3 | level_enter(B3 arena) · attempt_anchor(B3 arena) | key_grabbed(level=34) — grand star via ACT_JUMBO_STAR_CUTSCENE [^b3] |
+
+[^b3]: Amended at the 2026-06-12 live gate: the grand star enters ACT_JUMBO_STAR_CUTSCENE (0x1909), never a star-dance action — star_grabbed was unreachable. numStars unchanged (stayed 17), gLastCompleted* untouched, no star_collected ever fired.
 
 ## Testing
 

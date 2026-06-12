@@ -21,9 +21,10 @@ Live-gate checklist (segment events — Task 17 Step 4):
   4. Grab the B1 key (level 30): key_grabbed must fire, NO star_collected.
      Record gLastCompletedCourseNum/StarNum values printed in the action
      stream — needed for VERIFY note in addresses.py.
-  5. B3 grand star (level 34): star_collected must fire; record course/star
-     attribution. If attribution is unusable (stale last_completed values),
-     update the Bowser 3 seed's end trigger params accordingly.
+  5. B3 grand star (level 34): key_grabbed which=grand must fire (NO
+     star_collected — the grand star is not a collectable; live-verified
+     2026-06-12: ACT_JUMBO_STAR_CUTSCENE, numStars unchanged, gLastCompleted*
+     untouched, no star-dance action ever appeared).
   6. Level ids 7/17/19/21/23/30/33/34: walk into each; confirm level_changed
      payloads in Phase 2. Fix LEVEL_NAMES entries if any id is wrong.
   7. End-to-end: practice one real LBLJ; confirm segment_armed then
@@ -138,7 +139,7 @@ def main() -> None:
     print("  [ ] 3. File-select spawn → spawned fires (note kind: intro or spawn).")
     print("  [ ] 4. Grab B1 key (level 30) → key_grabbed fires, NO star_collected;")
     print("         record gLastCompletedCourseNum/StarNum values from the action stream.")
-    print("  [ ] 5. B3 grand star (level 34) → star_collected fires; record attribution.")
+    print("  [ ] 5. B3 grand star (level 34) → key_grabbed which=grand fires (NO star_collected).")
     print("  [ ] 6. Walk into each of levels 7/17/19/21/23/30/33/34 and confirm ids.")
     print("  [ ] 7. Practice one LBLJ → segment_armed then attempt_completed (kind=segment).")
 

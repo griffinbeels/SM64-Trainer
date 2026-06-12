@@ -2439,12 +2439,11 @@ The tool now prints the full checklist at startup. Step-by-step:
    the key).
 
 5. **B3 grand star** — defeat Bowser 3 (level 34), touch the grand star.
-   `star_collected` must fire (not `key_grabbed` — level 34 is not in
-   `KEY_GRAB_LEVELS`). Record the course/star attribution from the printout.
-   If attribution is unusable (stale garbage), change the Bowser 3 seed's
-   `end_triggers` from `[{"type": "star_grabbed"}]` to
-   `[{"type": "level_enter", "to": 21}]` (entering BitS = B3 done in 16-star)
-   and document the change.
+   **Resolved at the 2026-06-12 live gate**: `key_grabbed` which=grand fires
+   (NOT `star_collected` — the grand star enters `ACT_JUMBO_STAR_CUTSCENE`
+   (0x1909), never a star-dance action; numStars unchanged (stayed 17);
+   `gLastCompleted*` untouched). The Bowser 3 seed's `end_triggers` was
+   amended to `[{"type": "key_grabbed", "level": 34}]`.
 
 6. **Level ids walk-in** — walk into each of levels 7, 17, 19, 21, 23, 30, 33,
    34. Each `level_changed` payload in the Phase 2 watch must match the

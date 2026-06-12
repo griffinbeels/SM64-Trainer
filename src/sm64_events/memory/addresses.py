@@ -86,12 +86,21 @@ ACT_STAR_DANCE_EXIT = 0x00001302               # live-verified 2026-06-10
 ACT_STAR_DANCE_WATER = 0x00001303
 ACT_STAR_DANCE_NO_EXIT = 0x00001307
 ACT_FALL_AFTER_STAR_GRAB = 0x00001904  # midair grabs; live-verified 2026-06-10
+# B3 grand star grab — live-verified 2026-06-12 (frame 1950504: entered
+# directly from a jump action, numStars unchanged at 17, no star-dance
+# action ever appeared, gLastCompleted* untouched). The grand star is NOT
+# a collectable star: it never triggers a star-dance action, so
+# star_collected cannot fire. The key detector claims it via this action id.
+ACT_JUMBO_STAR_CUTSCENE = 0x00001909
 
 STAR_GRAB_ACTIONS = frozenset({
     ACT_STAR_DANCE_EXIT,
     ACT_STAR_DANCE_WATER,
     ACT_STAR_DANCE_NO_EXIT,
     ACT_FALL_AFTER_STAR_GRAB,
+    # ACT_JUMBO_STAR_CUTSCENE is intentionally NOT in this set — adding it
+    # would make star_grab.py suppress a hypothetical real star-dance in B3.
+    # The key detector uses it directly via FIGHT_END_LEVELS instead.
 })
 
 # Dust-trick action chains (decomp include/sm64.h, all values quoted
@@ -191,10 +200,23 @@ BOWSER_1_ARENA, BOWSER_2_ARENA, BOWSER_3_ARENA = 30, 33, 34
 
 # Key grabs enter the same star-dance actions as stars (see STAR_GRAB_ACTIONS
 # comment above). In these two arenas the grab is a KEY, not a star — the
-# key detector claims it and star_grab must ignore it (B3's grand star IS a
-# star and stays with star_grab). VERIFY (live gate): key-grab behavior of
-# gLastCompletedCourseNum/StarNum.
+# key detector claims it and star_grab must ignore it.
+# Live-verified 2026-06-12: key grabs do NOT update gLastCompleted*; the
+# values stayed stale (course=16 star=1 from the prior star) at the gate.
+# The star_grab guard on KEY_GRAB_LEVELS is what prevents misattribution —
+# confirmed that this guard is sufficient; no extra action-id guard needed.
 KEY_GRAB_LEVELS = frozenset({BOWSER_1_ARENA, BOWSER_2_ARENA})
+# Fight-ending grabs: Bowser 1/2 via star-dance actions (in KEY_GRAB_LEVELS),
+# Bowser 3 via ACT_JUMBO_STAR_CUTSCENE. The value is the which-label the
+# key_grabbed payload carries. Level 34 is intentionally NOT in KEY_GRAB_LEVELS
+# (that set guards star_grab.py); it is only in FIGHT_END_LEVELS (read by the
+# key detector). Adding 34 to KEY_GRAB_LEVELS would wrongly suppress a
+# hypothetical real star-dance in the B3 arena — keep the sets separate.
+FIGHT_END_LEVELS = {
+    BOWSER_1_ARENA: "bitdw",
+    BOWSER_2_ARENA: "bitfs",
+    BOWSER_3_ARENA: "grand",
+}
 
 # Warp-entry actions — decomp include/sm64.h, quoted verbatim from
 # n64decomp/sm64 master, fetched 2026-06-11. VERIFY (live gate): which of
