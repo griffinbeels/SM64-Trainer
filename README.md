@@ -85,6 +85,8 @@ Other event types, same envelope:
 | `attempt_cleared` | `attempt_id, reason` | Attempt tombstoned; `reason` is always present, may be null (triggers full re-projection; `attempts_invalidated` follows) |
 | `attempt_restored` | `attempt_id` | Tombstone undone (triggers full re-projection; `attempts_invalidated` follows) |
 | `pb_saved` | `course_id, star_id, segment_id, strat_tag, timer_mode, frames, attempt_id` | Personal best recorded. Segment PBs: `course_id`/`star_id` null, `segment_id` set, `timer_mode` always `"rta"`. |
+| `pb_undone` | `course_id, star_id, segment_id, strat_tag, timer_mode, frames, attempt_id, restored_frames, restored_attempt_id` | The current PB save was deleted; the previous save (if any) is current again — `restored_*` null when none remains |
+| `data_wiped` | `kind, course_id, star_id, segment_id, session_id` | History wiped: `kind` `"star"`/`"segment"`/`"all"`, `session_id` null = every session. Applied retroactively on replay; attempts after the wipe accumulate fresh (`attempts_invalidated` follows) |
 | `session_started` | `session_id, label?` | New session opened (server start or `/api/session/new`) |
 | `attempts_invalidated` | _(none)_ | Full re-projection ran — consumers must refetch `/api/session` |
 | `emulator_connected` | _(none)_ | Attached to PJ64 process |
@@ -121,6 +123,8 @@ All endpoints are under `/api`. JSON in, JSON out.
 | `POST /api/attempts/{id}/clear` `{reason?}` | Tombstone an attempt (triggers re-projection) |
 | `POST /api/attempts/{id}/restore` | Undo a tombstone (triggers re-projection) |
 | `POST /api/pb` `{attempt_id, timer_mode}` | Save a personal best from a success attempt |
+| `POST /api/pb/undo` `{attempt_id, timer_mode}` | Undo the attempt's PB save (409 unless it is the **current** PB) — the previous save becomes current again |
+| `POST /api/wipe` `{kind, course_id?, star_id?, segment_id?, scope?}` | Wipe history. `kind`: `"star"` (needs course+star), `"segment"` (needs segment_id), `"all"`. `scope`: `"session"` (default, the active session) or `"lifetime"`. Removes the scoped attempts and the PBs saved from them (lifetime star/segment wipes drop that key's PBs entirely; lifetime `"all"` factory-resets history — all events, sessions and PBs). Markers, strategies, stat menu and segment definitions always survive. |
 | `GET /api/stats/registry` | List all available stat definitions with keys, labels, and default params |
 | `PUT /api/statmenu` `{selections: [{key, params}]}` | Persist the stat chip selection |
 | `PUT /api/markers` `{course_id, star_id, strat_tag?, markers: [{frames, label}]}` **or** `{segment_id, strat_tag?, markers: [{frames, label}]}` | Replace the timeline annotation markers for one star+strategy or segment+strategy (max 30; labels 1–60 chars trimmed; replace-the-list, no per-marker ids). `segment_id` XOR `course_id+star_id` — supplying both → 409. Note: segment strat tags are settable via `target_set`/`strat_set` events but the practice-page strat dropdown is star-only in v1. |
@@ -129,7 +133,8 @@ All endpoints are under `/api`. JSON in, JSON out.
 **Segments:** A segment is a timed stretch defined by a start trigger (any-of list) and an end trigger (any-of list), with optional context guards. Ten built-in segments are seeded on first run (LBLJ, MIPS Clip, Lakitu Skip, BitS Entry, BitDW/BitFS/BitS Pipe Entry, Bowser 1/2/3); all are editable. The builder GUI lives on the Segments tab — it is 100% vocabulary-driven (`GET /api/segments/vocab` supplies types, param schemas, and level/area enums). Segment attempts are **RTA-only** (`igt_frames` is always null); they share the full attempt machinery (outcomes, timeline, PBs, stats, markers, progress). Definitions are retroactive: creating or editing a definition via `POST/PUT /api/segments` triggers a full re-projection so every past occurrence in the journal surfaces immediately. Disabled definitions stay targetable for history review. Segment attempt ids are offset from star attempt ids by `10^10 × def_id` — stable across rebuilds and unique per definition. While a segment is armed, it pins to the top of the practice page (most recent arm wins); the pin is sticky — it persists after a disarm until another segment arms; the practice target is unaffected. **A reset during an armed segment records the failure and immediately re-arms — each reset is one attempt** (Usamune respawns at the level's last entrance, which equals the segment's start position; live-gate amendment 2026-06-12).
 
 **Error taxonomy:** `404` = no such attempt; `409` = attempt exists but is not valid for the
-operation (bad timer mode, already cleared, non-success outcome, or missing clock);
+operation (bad timer mode, already cleared, non-success outcome, missing clock, or — for
+`/api/pb/undo` — not the current PB);
 `503` = database unavailable (server is running in broadcast-only mode).
 
 > `GET /api/pb` is intentionally absent in phase 1 — current PBs are included in the

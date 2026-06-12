@@ -400,10 +400,34 @@ class Projector:
             jumps_dustless=self._jumps_dustless)
 
 
+def wipe_matches(a: Attempt, p: dict) -> bool:
+    """data_wiped scope filter — shared by replay() (attempt suppression)
+    and service.wipe_data (collecting pb rows to delete), so the two can
+    never disagree about what a wipe covers. session_id None = every
+    session; kind "all" = every attempt in the session scope (including
+    unassigned rows, which belong to no star)."""
+    if p.get("session_id") is not None and a.session_id != p["session_id"]:
+        return False
+    if p["kind"] == "star":
+        return (a.segment_id is None and a.course_id == p["course_id"]
+                and a.star_id == p["star_id"])
+    if p["kind"] == "segment":
+        return a.segment_id == p["segment_id"]
+    return True  # kind == "all"
+
+
 def replay(events, segments=None) -> tuple[list[Attempt], Projector]:
     proj = Projector(cleared_ids(events), segments=segments)
     attempts: list[Attempt] = []
     for ev in events:
+        if ev.type == "data_wiped":
+            # Retroactive suppression (the wipe analogue of attempt_cleared):
+            # drop everything accumulated so far that falls in scope; attempts
+            # closed AFTER the wipe accumulate fresh. The event never reaches
+            # the projector — an in-flight open attempt deliberately survives
+            # (it closes after the wipe, so it is post-wipe data).
+            attempts = [a for a in attempts if not wipe_matches(a, ev.payload)]
+            continue
         attempts.extend(proj.feed(ev))
     return attempts, proj
 

@@ -339,6 +339,63 @@ class Database:
             rows = self._conn.execute("SELECT * FROM pbs ORDER BY id").fetchall()
             return [dict(r) for r in rows]
 
+    def current_pb(self, course_id: int | None, star_id: int | None,
+                   timer_mode: str, segment_id: int | None = None) -> dict | None:
+        """Latest saved row for one star/segment + mode — the same row
+        views._current_pbs picks (later saves win). Kind-aware like
+        insert_pb: segment rows match by segment_id, star rows by
+        course+star (segment_id IS NULL keeps the kinds disjoint)."""
+        if segment_id is not None:
+            q = ("SELECT * FROM pbs WHERE segment_id=? AND timer_mode=?"
+                 " ORDER BY id DESC LIMIT 1")
+            params = (segment_id, timer_mode)
+        else:
+            q = ("SELECT * FROM pbs WHERE course_id=? AND star_id=?"
+                 " AND segment_id IS NULL AND timer_mode=?"
+                 " ORDER BY id DESC LIMIT 1")
+            params = (course_id, star_id, timer_mode)
+        with self._lock:
+            row = self._conn.execute(q, params).fetchone()
+            return dict(row) if row else None
+
+    def delete_pb(self, pb_id: int) -> None:
+        with self._lock:
+            self._conn.execute("DELETE FROM pbs WHERE id=?", (pb_id,))
+            self._conn.commit()
+
+    def delete_pbs_for_attempts(self, attempt_ids: list[int]) -> None:
+        """Session-scoped wipes: drop pb rows saved from the wiped attempts
+        so the previous PB (latest remaining row) restores automatically."""
+        with self._lock:
+            self._conn.executemany("DELETE FROM pbs WHERE attempt_id=?",
+                                   [(i,) for i in attempt_ids])
+            self._conn.commit()
+
+    def delete_pbs_for_star(self, course_id: int, star_id: int) -> None:
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM pbs WHERE course_id=? AND star_id=?"
+                " AND segment_id IS NULL", (course_id, star_id))
+            self._conn.commit()
+
+    def delete_pbs_for_segment(self, segment_id: int) -> None:
+        with self._lock:
+            self._conn.execute("DELETE FROM pbs WHERE segment_id=?",
+                               (segment_id,))
+            self._conn.commit()
+
+    def wipe_all_history(self, keep_session_id: int) -> None:
+        """Factory-reset of practice HISTORY: every journal event, every pb,
+        every session row except the active one (it stays open and keeps
+        receiving events). Segment definitions and ui_state survive — they
+        are user configuration, not history. Callers must re-project."""
+        with self._lock:
+            self._conn.execute("DELETE FROM events")
+            self._conn.execute("DELETE FROM pbs")
+            self._conn.execute("DELETE FROM sessions WHERE id<>?",
+                               (keep_session_id,))
+            self._conn.commit()
+
     # -- ui_state ------------------------------------------------------------
     def get_state(self, key: str, default):
         with self._lock:

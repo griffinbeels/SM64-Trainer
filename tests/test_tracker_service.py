@@ -124,6 +124,222 @@ def test_save_pb_rejects_missing_attempt(tmp_path):
         asyncio.run(svc.save_pb(999, "igt"))
 
 
+def two_successes(db, svc):
+    """Two successes on the same star: igt 343 then 350. Returns their ids."""
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350, igt=343)))
+    asyncio.run(svc.publish(ev("practice_reset", 1400, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1760, igt=350)))
+    first = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    second = next(a.id for a in db.attempts() if a.igt_frames == 350)
+    return first, second
+
+
+def test_undo_pb_restores_previous_pb(tmp_path):
+    db, svc = make(tmp_path)
+    first, second = two_successes(db, svc)
+    asyncio.run(svc.save_pb(first, "igt"))
+    asyncio.run(svc.save_pb(second, "igt"))      # supersedes first
+    out = asyncio.run(svc.undo_pb(second, "igt"))
+    assert out["frames"] == 350
+    assert out["restored_frames"] == 343 and out["restored_attempt_id"] == first
+    [row] = db.pbs()
+    assert row["attempt_id"] == first            # first is current again
+    assert "pb_undone" in [e.type for e in db.events()]
+
+
+def test_undo_pb_with_single_save_leaves_no_pb(tmp_path):
+    db, svc = make(tmp_path)
+    first, _ = two_successes(db, svc)
+    asyncio.run(svc.save_pb(first, "igt"))
+    out = asyncio.run(svc.undo_pb(first, "igt"))
+    assert out["restored_frames"] is None and out["restored_attempt_id"] is None
+    assert db.pbs() == []
+
+
+def test_undo_pb_rejects_attempt_that_is_not_current(tmp_path):
+    # a newer save superseded this attempt's: undoing it must not delete
+    # anything (its row is no longer what "current PB" points at)
+    db, svc = make(tmp_path)
+    first, second = two_successes(db, svc)
+    asyncio.run(svc.save_pb(first, "igt"))
+    asyncio.run(svc.save_pb(second, "igt"))
+    with pytest.raises(ValueError):
+        asyncio.run(svc.undo_pb(first, "igt"))
+    assert len(db.pbs()) == 2                    # nothing deleted
+
+
+def test_undo_pb_is_per_timer_mode(tmp_path):
+    db, svc = make(tmp_path)
+    first, _ = two_successes(db, svc)
+    asyncio.run(svc.save_pb(first, "igt"))
+    with pytest.raises(ValueError):              # no rta save to undo
+        asyncio.run(svc.undo_pb(first, "rta"))
+    assert len(db.pbs()) == 1
+
+
+def test_undo_pb_rejects_missing_attempt_and_bad_mode(tmp_path):
+    db, svc = make(tmp_path)
+    with pytest.raises(LookupError):
+        asyncio.run(svc.undo_pb(999, "igt"))
+    with pytest.raises(ValueError):
+        asyncio.run(svc.undo_pb(999, "lap"))     # mode checked first, like save_pb
+
+
+def test_undo_pb_segment_is_kind_aware(tmp_path):
+    # undoing a segment PB must not touch star rows (kind-aware keying:
+    # segment rows match by segment_id, star rows by course+star)
+    db, svc, sent = make_rec(tmp_path)
+    lblj = seed_id(db, "LBLJ")
+    asyncio.run(svc.publish(ev("practice_reset", 500, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(900)))
+    star_aid = next(a.id for a in db.attempts() if a.segment_id is None)
+    asyncio.run(svc.save_pb(star_aid, "rta"))
+    asyncio.run(svc.publish(ev("level_changed", 1000, {"from": 16, "to": 6})))
+    asyncio.run(svc.publish(ev("level_changed", 1085, {"from": 6, "to": 17})))
+    seg_aid = next(a.id for a in db.attempts() if a.segment_id == lblj)
+    asyncio.run(svc.save_pb(seg_aid, "rta"))
+    out = asyncio.run(svc.undo_pb(seg_aid, "rta"))
+    assert out["segment_id"] == lblj and out["restored_frames"] is None
+    [row] = db.pbs()
+    assert row["attempt_id"] == star_aid         # the star PB survived
+
+
+# -- wipe_data ----------------------------------------------------------------
+
+def success(svc, frame, course=2, star_id=2, igt=343):
+    asyncio.run(svc.publish(ev("practice_reset", frame, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(frame + 350, course=course, star_id=star_id, igt=igt)))
+
+
+def test_wipe_star_session_scope_spares_other_sessions_and_stars(tmp_path):
+    db, svc = make(tmp_path)
+    success(svc, 1000)                            # session 1, (2,2)
+    asyncio.run(svc.new_session())
+    success(svc, 5000, igt=350)                   # session 2, (2,2)
+    success(svc, 6000, course=8, star_id=1)       # session 2, (8,1)
+    asyncio.run(svc.wipe_data("star", course_id=2, star_id=2, scope="session"))
+    keys = [(a.session_id, a.course_id, a.star_id) for a in db.attempts()
+            if a.outcome == "success"]
+    assert (1, 2, 2) in keys                      # other session survives
+    assert (2, 8, 1) in keys                      # other star survives
+    assert (2, 2, 2) not in keys                  # wiped
+    wiped = [e for e in db.events() if e.type == "data_wiped"]
+    assert wiped[-1].payload["session_id"] == 2   # journaled with a concrete id
+
+
+def test_wipe_star_lifetime_wipes_history_and_pbs(tmp_path):
+    db, svc = make(tmp_path)
+    success(svc, 1000)
+    asyncio.run(svc.new_session())
+    success(svc, 5000, igt=350)
+    success(svc, 6000, course=8, star_id=1, igt=500)
+    a22 = next(a.id for a in db.attempts() if (a.course_id, a.star_id) == (2, 2))
+    a81 = next(a.id for a in db.attempts() if (a.course_id, a.star_id) == (8, 1))
+    asyncio.run(svc.save_pb(a22, "igt"))
+    asyncio.run(svc.save_pb(a81, "igt"))
+    asyncio.run(svc.wipe_data("star", course_id=2, star_id=2, scope="lifetime"))
+    assert all((a.course_id, a.star_id) != (2, 2) for a in db.attempts())
+    [pb] = db.pbs()                               # only the (8,1) pb remains
+    assert (pb["course_id"], pb["star_id"]) == (8, 1)
+
+
+def test_wipe_star_session_scope_pb_falls_back_to_prior_session(tmp_path):
+    db, svc = make(tmp_path)
+    success(svc, 1000)                            # s1: igt 343
+    a1 = db.attempts()[0].id
+    asyncio.run(svc.save_pb(a1, "igt"))
+    asyncio.run(svc.new_session())
+    success(svc, 5000, igt=330)                   # s2: faster
+    a2 = next(a.id for a in db.attempts() if a.igt_frames == 330)
+    asyncio.run(svc.save_pb(a2, "igt"))
+    asyncio.run(svc.wipe_data("star", course_id=2, star_id=2, scope="session"))
+    [pb] = db.pbs()                               # s2's save vanished with its attempt
+    assert pb["attempt_id"] == a1                 # s1's PB is current again
+
+
+def test_wipe_segment_lifetime_spares_star_data(tmp_path):
+    db, svc, _ = make_rec(tmp_path)
+    lblj = seed_id(db, "LBLJ")
+    success(svc, 500)                             # star attempt
+    asyncio.run(svc.publish(ev("level_changed", 1000, {"from": 16, "to": 6})))
+    asyncio.run(svc.publish(ev("level_changed", 1085, {"from": 6, "to": 17})))
+    seg_aid = next(a.id for a in db.attempts() if a.segment_id == lblj)
+    asyncio.run(svc.save_pb(seg_aid, "rta"))
+    asyncio.run(svc.wipe_data("segment", segment_id=lblj, scope="lifetime"))
+    assert all(a.segment_id != lblj for a in db.attempts())
+    assert any(a.segment_id is None for a in db.attempts())   # star attempt kept
+    assert db.pbs() == []                          # segment pb gone
+
+
+def test_wipe_star_spares_segment_data(tmp_path):
+    db, svc, _ = make_rec(tmp_path)
+    lblj = seed_id(db, "LBLJ")
+    asyncio.run(svc.publish(ev("level_changed", 1000, {"from": 16, "to": 6})))
+    asyncio.run(svc.publish(ev("level_changed", 1085, {"from": 6, "to": 17})))
+    success(svc, 2000)
+    asyncio.run(svc.wipe_data("star", course_id=2, star_id=2, scope="lifetime"))
+    assert any(a.segment_id == lblj for a in db.attempts())   # segment survives
+
+
+def test_wipe_survives_restart(tmp_path):
+    db, svc = make(tmp_path)
+    success(svc, 1000)
+    asyncio.run(svc.wipe_data("star", course_id=2, star_id=2, scope="lifetime"))
+    success(svc, 5000, igt=350)                   # fresh data after the wipe
+    db2 = Database(tmp_path / "t.db")
+    svc2 = TrackerService(db2, Broadcaster())
+    asyncio.run(svc2.start())                     # replay applies the wipe event
+    igts = [a.igt_frames for a in db2.attempts() if a.outcome == "success"]
+    assert igts == [350]
+
+
+def test_wipe_all_session_scope(tmp_path):
+    db, svc = make(tmp_path)
+    success(svc, 1000)                            # session 1
+    asyncio.run(svc.new_session())
+    asyncio.run(svc.publish(ev("practice_reset", 5000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(ev("practice_reset", 5500,                  # unassigned reset
+                               {"igt_frames_before": 470, "mario_acted": True})))
+    success(svc, 6000, igt=350)
+    a2 = next(a.id for a in db.attempts() if a.igt_frames == 350)
+    asyncio.run(svc.save_pb(a2, "igt"))
+    asyncio.run(svc.wipe_data("all", scope="session"))
+    assert [a.session_id for a in db.attempts()] == [1]      # s2 wiped clean
+    assert db.pbs() == []                                    # s2's pb gone
+    assert any(s["id"] == 2 for s in db.sessions())          # session row kept
+    success(svc, 9000, igt=360)                              # still records
+    assert any(a.session_id == 2 and a.igt_frames == 360 for a in db.attempts())
+
+
+def test_wipe_all_lifetime_factory_resets_history(tmp_path):
+    db, svc = make(tmp_path)
+    success(svc, 1000)
+    a1 = db.attempts()[0].id
+    asyncio.run(svc.save_pb(a1, "igt"))
+    asyncio.run(svc.new_session())
+    success(svc, 5000, igt=350)
+    defs_before = len(db.segment_defs())
+    asyncio.run(svc.wipe_data("all", scope="lifetime"))
+    assert db.attempts() == [] and db.pbs() == []
+    assert [s["id"] for s in db.sessions()] == [svc.session_id]  # only active
+    assert len(db.segment_defs()) == defs_before  # definitions are config, not history
+    success(svc, 9000, igt=360)                   # tracking continues
+    assert len(db.attempts()) == 1
+
+
+def test_wipe_guards(tmp_path):
+    db, svc = make(tmp_path)
+    with pytest.raises(ValueError):
+        asyncio.run(svc.wipe_data("nonsense", scope="session"))
+    with pytest.raises(ValueError):
+        asyncio.run(svc.wipe_data("star", course_id=2, star_id=2, scope="weekly"))
+    with pytest.raises(ValueError):
+        asyncio.run(svc.wipe_data("star", course_id=2, scope="session"))
+    with pytest.raises(ValueError):
+        asyncio.run(svc.wipe_data("segment", scope="session"))
+
+
 def test_new_session_closes_open_attempt_as_abandoned(tmp_path):
     db, svc = make(tmp_path)
     asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))

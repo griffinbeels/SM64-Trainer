@@ -7,7 +7,8 @@ feed the projector; attempts closed by the event are persisted and an
 attempt_completed derived event is emitted through the same pipeline
 (the projector ignores derived types, so this cannot recurse).
 
-Commands (set_target, clear/restore, save_pb, new_session) append journal
+Commands (set_target, clear/restore, save_pb/undo_pb, wipe_data,
+new_session) append journal
 events through the same path so the journal stays the single source of
 truth; clear/restore re-run the full projection because their effect is
 retroactive. With db=None the service degrades to broadcast-only.
@@ -21,7 +22,7 @@ from sm64_events.core.events import Event
 from sm64_events.core.timefmt import format_igt
 from sm64_events.memory.addresses import course_name, star_name
 from sm64_events.storage.db import Database, EventRow
-from sm64_events.tracking.projection import Projector, replay
+from sm64_events.tracking.projection import Projector, replay, wipe_matches
 from sm64_events.tracking.segments import SegmentDef, validate_definition
 
 log = logging.getLogger("sm64.tracker")
@@ -360,6 +361,88 @@ class TrackerService:
                    "frames": frames, "attempt_id": attempt_id}
         await self.publish(Event(type="pb_saved", frame=0,
                                  timestamp_utc=_now(), payload=payload))
+        return payload
+
+    async def undo_pb(self, attempt_id: int, timer_mode: str) -> dict:
+        """Undo the attempt's pb save: delete the row it created, so the
+        previous save (if any) is current again — latest-row-wins is the
+        pbs contract (views._current_pbs). Only the CURRENT pb's owner may
+        undo (ValueError otherwise): a superseded save's row is no longer
+        what the pbtag shows, so "undo" would silently delete history the
+        user can't see. Like save_pb, the pbs table is mutated directly —
+        the journaled pb_undone event is record/broadcast only."""
+        db = self._require_db()
+        if timer_mode not in ("igt", "rta"):
+            raise ValueError(f"bad timer_mode {timer_mode!r}")
+        attempt = next((a for a in db.attempts() if a.id == attempt_id), None)
+        if attempt is None:
+            raise LookupError(f"no attempt {attempt_id}")
+        row = db.current_pb(attempt.course_id, attempt.star_id, timer_mode,
+                            segment_id=attempt.segment_id)
+        if row is None or row["attempt_id"] != attempt_id:
+            raise ValueError(
+                f"attempt {attempt_id} is not the current {timer_mode} PB")
+        db.delete_pb(row["id"])
+        restored = db.current_pb(attempt.course_id, attempt.star_id,
+                                 timer_mode, segment_id=attempt.segment_id)
+        payload = {"course_id": attempt.course_id, "star_id": attempt.star_id,
+                   "segment_id": attempt.segment_id,
+                   "strat_tag": row["strat_tag"], "timer_mode": timer_mode,
+                   "frames": row["frames"], "attempt_id": attempt_id,
+                   "restored_frames": restored["frames"] if restored else None,
+                   "restored_attempt_id":
+                       restored["attempt_id"] if restored else None}
+        await self.publish(Event(type="pb_undone", frame=0,
+                                 timestamp_utc=_now(), payload=payload))
+        return payload
+
+    async def wipe_data(self, kind: str, course_id: int | None = None,
+                        star_id: int | None = None,
+                        segment_id: int | None = None,
+                        scope: str = "session") -> dict:
+        """Wipe practice history for one star/segment or everything, scoped
+        to the active session (scope="session") or all sessions ("lifetime").
+
+        Star/segment wipes and session-scoped wipes are a journaled
+        data_wiped event applied retroactively on replay (see
+        projection.wipe_matches) — never journal deletion, because one
+        journal event can close BOTH a star and a segment attempt, so
+        deleting "this star's events" would corrupt the other kind's
+        history. Only the lifetime kind="all" wipe hard-deletes
+        (db.wipe_all_history): suppressing-but-keeping every event forever
+        contradicts "wipe all data", and whole-journal deletion has no
+        attribution problem. PB rows: lifetime star/segment wipes drop the
+        key's rows outright; session wipes drop rows saved from the wiped
+        attempts, so an earlier session's PB restores via latest-row-wins;
+        markers/strategies/definitions survive every wipe (configuration,
+        not history)."""
+        db = self._require_db()
+        if scope not in ("session", "lifetime"):
+            raise ValueError(f"bad scope {scope!r}")
+        if kind == "star":
+            if course_id is None or star_id is None:
+                raise ValueError("star wipe needs course_id and star_id")
+        elif kind == "segment":
+            if segment_id is None:
+                raise ValueError("segment wipe needs segment_id")
+        elif kind != "all":
+            raise ValueError(f"bad kind {kind!r}")
+        session_id = self.session_id if scope == "session" else None
+        payload = {"kind": kind, "course_id": course_id, "star_id": star_id,
+                   "segment_id": segment_id, "session_id": session_id}
+
+        if kind == "all" and session_id is None:
+            db.wipe_all_history(keep_session_id=self.session_id)
+        elif session_id is None and kind == "star":
+            db.delete_pbs_for_star(course_id, star_id)
+        elif session_id is None and kind == "segment":
+            db.delete_pbs_for_segment(segment_id)
+        else:
+            wiped_ids = [a.id for a in db.attempts() if wipe_matches(a, payload)]
+            db.delete_pbs_for_attempts(wiped_ids)
+        await self.publish(Event(type="data_wiped", frame=0,
+                                 timestamp_utc=_now(), payload=payload))
+        await self._reproject()
         return payload
 
     async def new_session(self, label: str | None = None) -> int:
