@@ -27,7 +27,7 @@ architecture.
 | 2 | Integration depth | **First-class practice targets**: segments get the full attempt machinery — anchored attempts, outcome taxonomy, timeline, PBs, stats, markers, progress. Target identity becomes kind-aware (star OR segment). |
 | 3 | Timing | **RTA frames**: `rta_frames = end.frame − start_frame` (gGlobalTimer delta, 30 fps). `igt_frames` is NULL for segment attempts. Same M:SS.ff display format. |
 | 4 | Configuration | **Builder GUI from day one**: definitions live in the DB, composed in the UI from the trigger vocabulary. Built-in segments ship as seeded, editable rows. |
-| 5 | Retry semantics | **Re-arm on start trigger**: re-firing the start trigger restarts the open attempt's timer without recording a failure. Failures are recorded only on practice_reset / state_loaded / death / game_reset. Foreign level changes disarm silently (no row). |
+| 5 | Retry semantics | **Re-arm on start trigger**: re-firing the start trigger restarts the open attempt's timer without recording a failure. Failures are recorded only on practice_reset / state_loaded / death / game_reset. Foreign level changes disarm silently (no row). *Live-gate amendments 2026-06-12:* (a) anchors that close an armed segment **re-arm it in place** (practice-loop continuation — Usamune respawns at the level's last entrance); (b) this and the start-trigger re-arm apply to **player actions only**: echo-classified anchors (load/door echoes — see the matcher docstring's shape taxonomy) are invisible to the engine entirely, neither closing nor re-arming nor arming; (c) menu warps are player actions (`paused_frames_before > 5` defeats the co-frame echo shape). |
 | 6 | Architecture | **Primitives in detectors, composition in projection**: detectors journal only facts; the segment matcher runs in the tracking layer, parameterized by DB definitions. Segment attempts are derived and rebuilt by re-projection — **defining a segment retroactively surfaces every past occurrence already in the journal**. |
 
 ## New primitive events (journaled facts)
@@ -109,7 +109,7 @@ context only (no wall clock, no snapshots) — deterministic replay.
 | On (while ARMED unless noted) | Action |
 |---|---|
 | start trigger matches + guards pass (IDLE) | ARM; `start_frame` = event frame |
-| start trigger matches again | **Re-arm**: update `start_frame`; no row |
+| start trigger matches again | **Re-arm**: update `start_frame`; no row. *(2026-06-12: player actions only — an echo-classified anchor never re-arms, even when it matches an `attempt_anchor` start trigger; see Decision 5 amendments.)* |
 | end trigger matches | **Success**: record attempt (`rta_frames = end.frame − start_frame`), broadcast `attempt_completed`, target auto-follows the segment (same rule as star grabs) |
 | `practice_reset` / `state_loaded` | Close as `reset` AND **re-arm the same segment at the anchor frame** (practice-loop continuation — Usamune respawns at the level's last entrance, which is the segment's start position; live-gate amendment 2026-06-12); AFK discard applies (paused_frames_before ≥ 150 → no row, but segment still re-arms). The segment never stops being armed — the UI chip stays lit; no `segment_armed`/`segment_disarmed` notices are emitted (attempt boundary, not a state change). **Same-frame anchor = level-load echo: ignored entirely** (Usamune resets IGT on every level load; the anchor detector fires a synthetic reset on the same global-timer frame as the entry that armed the segment; a real player reset always arrives later). |
 | `death` | Close as `death` |
