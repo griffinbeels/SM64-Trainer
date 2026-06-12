@@ -112,6 +112,108 @@ def test_save_copies_into_date_session_tree(tmp_path):
     assert res["truncated"] is False
 
 
+class RaisingExtractor:
+    """Stands in for a ring that no longer covers the span (later session)."""
+    def __init__(self):
+        self.calls = 0
+    def extract(self, ring, start, end, out_path):
+        self.calls += 1
+        raise ValueError("no footage for that span")
+
+
+def test_save_writes_metadata_sidecar(tmp_path):
+    svc = make_service(tmp_path, [attempt()])
+    p = Path(svc.save(42)["path"])
+    import json
+    m = json.loads(p.with_suffix(".json").read_text())
+    assert m["duration_s"] == 17.0
+    assert m["truncated"] is False
+    assert m["fps"] == 60          # stamped at save time: outlives config changes
+
+
+def test_save_is_idempotent_when_buffer_is_gone(tmp_path):
+    # later session: scratch clips wiped, ring empty — saving again must
+    # return the existing file, not try to re-extract
+    svc = make_service(tmp_path, [attempt()])
+    first = svc.save(42)
+    import shutil
+    shutil.rmtree(svc.clips_dir)
+    svc.extractor = RaisingExtractor()
+    again = svc.save(42)
+    assert again["path"] == first["path"]
+    assert svc.extractor.calls == 0
+
+
+def test_view_falls_back_to_saved_file_when_buffer_gone(tmp_path):
+    svc = make_service(tmp_path, [attempt()])
+    saved_path = svc.save(42)["path"]
+    import shutil
+    shutil.rmtree(svc.clips_dir)        # restart wipes the extraction cache
+    svc.extractor = RaisingExtractor()  # and the ring no longer has footage
+    res = svc.view(42)
+    assert res["clip_url"] == "/api/replay/saved/42"
+    assert res["source"] == "saved"
+    assert res["saved_path"] == saved_path
+    assert res["duration_s"] == 17.0    # from the sidecar
+    assert res["truncated"] is False
+    assert res["fps"] == 60 and res["game_fps"] == 30
+    assert svc.extractor.calls == 0     # saved file short-circuits extraction
+
+
+def test_view_fallback_tolerates_legacy_saved_file_without_sidecar(tmp_path):
+    # files saved before sidecars existed: still playable, metadata degrades
+    svc = make_service(tmp_path, [attempt()])
+    d = tmp_path / "replays" / "2026-06-11" / "session_3"
+    d.mkdir(parents=True)
+    (d / "attempt_0042_whomps-fortress_x_0m11s43.mp4").write_bytes(b"mp4")
+    svc.extractor = RaisingExtractor()
+    res = svc.view(42)
+    assert res["clip_url"] == "/api/replay/saved/42"
+    assert res["duration_s"] is None
+    assert res["truncated"] is False
+    assert res["fps"] == 60             # falls back to current config
+
+
+def test_view_prefers_scratch_cache_and_reports_saved_path(tmp_path):
+    # mid-session after a save: serve the scratch clip (same bytes) but
+    # report saved_path so the UI shows the Saved state across reloads
+    svc = make_service(tmp_path, [attempt()])
+    saved_path = svc.save(42)["path"]
+    res = svc.view(42)
+    assert res["clip_url"] == "/api/replay/clips/clip_attempt_42.mp4"
+    assert res["source"] == "buffer"
+    assert res["saved_path"] == saved_path
+    assert len(svc.extractor.calls) == 1   # save()'s view extracted once
+
+
+def test_view_still_errors_when_no_saved_file_and_no_footage(tmp_path):
+    svc = make_service(tmp_path, [attempt()])
+    svc.extractor = RaisingExtractor()
+    import pytest as _pytest
+    with _pytest.raises(ValueError):
+        svc.view(42)
+
+
+def test_find_saved_zero_pad_disambiguates_ids(tmp_path):
+    svc = make_service(tmp_path, [attempt(), attempt(id=4)])
+    d = tmp_path / "replays" / "2026-06-11" / "session_3"
+    d.mkdir(parents=True)
+    (d / "attempt_0004_a_b_0m01s00.mp4").write_bytes(b"a")
+    (d / "attempt_0042_a_b_0m11s43.mp4").write_bytes(b"b")
+    assert svc.find_saved(4).name.startswith("attempt_0004_")
+    assert svc.find_saved(42).name.startswith("attempt_0042_")
+    assert svc.find_saved(420) is None
+
+
+def test_saved_clip_path_resolves_or_404s(tmp_path):
+    svc = make_service(tmp_path, [attempt()])
+    svc.save(42)
+    assert svc.saved_clip_path(42).exists()
+    import pytest as _pytest
+    with _pytest.raises(LookupError):
+        svc.saved_clip_path(99)
+
+
 def test_clip_path_validates_names(tmp_path):
     svc = make_service(tmp_path, [attempt()])
     svc.view(42)

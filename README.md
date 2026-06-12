@@ -134,14 +134,21 @@ regardless. Both storage limits are adjustable live from the UI — click
 the recording dot in the header (shows usage as `rec · 38 min ·
 1.2/20 GB`); changes persist to `data/replay_settings.json` and apply
 immediately. Saved replays under `replays/` are kept forever and never
-evicted. PJ64 must run windowed (exclusive fullscreen cannot be captured).
+evicted — and they stay *watchable* forever: viewing an attempt whose
+footage has left the buffer (later session, evicted, restart) transparently
+serves the saved file instead, so a saved PB replays in any future session
+(switch the UI to lifetime scope to reach old attempts' ▶ buttons). The
+attempt id in the filename is the only link — rename the `attempt_NNNN_`
+prefix and the tracker no longer finds it (reorganizing folders is fine).
+PJ64 must run windowed (exclusive fullscreen cannot be captured).
 
 - `GET  /api/replay/status` — `{enabled, recording, idle, window_found, audio_mode, encoder, buffer_start_utc, buffer_end_utc, disk_bytes, retention_s, max_buffer_bytes}`
 - `GET  /api/replay/settings` — `{retention_s, max_buffer_bytes, pre_pad_s, post_pad_s, save_root, saved_bytes}`
 - `PUT  /api/replay/settings` — body `{retention_s|null, max_buffer_bytes, pre_pad_s?, post_pad_s?}` (null retention = whole session; omitted pads = unchanged); persists + applies immediately (shrinking evicts oldest footage now); 409 outside 60 s–24 h / 1 GiB–1 TiB / pads 0–10 s
-- `POST /api/attempts/{id}/replay` — cut (or reuse) the attempt's clip → `{clip_url, duration_s, truncated, fps, game_fps}` (fps = encoded rate; game_fps = 30 fps SM64 logic, the frame-step unit)
+- `POST /api/attempts/{id}/replay` — cut (or reuse) the attempt's clip → `{clip_url, duration_s, truncated, fps, game_fps, source, saved_path}` (fps = encoded rate; game_fps = 30 fps SM64 logic, the frame-step unit; `source` is `buffer` or `saved`; `saved_path` non-null whenever a saved file exists). Falls back to the saved file when the buffer can't produce the clip; clips saved before 2026-06-12 lack a metadata sidecar → `duration_s` null, `truncated` false
 - `GET  /api/replay/clips/{name}` — the MP4 (supports HTTP Range; scrubs smoothly)
-- `POST /api/attempts/{id}/replay/save` — copy to `replays/<YYYY-MM-DD>/session_<N>/<slug>.mp4` → `{path, truncated}`
+- `GET  /api/replay/saved/{attempt_id}` — a SAVED attempt's MP4 (same Range support); 404 when that attempt has no saved file
+- `POST /api/attempts/{id}/replay/save` — copy to `replays/<YYYY-MM-DD>/session_<N>/<slug>.mp4` plus a `.json` metadata sidecar → `{path, truncated}`. Idempotent: an already-saved attempt returns its existing file (delete it in Explorer first to re-save with new padding)
 
 Errors follow the API taxonomy: 404 unknown attempt/clip, 409 no footage /
 span too short, 503 db unavailable. Clips span the whole attempt plus

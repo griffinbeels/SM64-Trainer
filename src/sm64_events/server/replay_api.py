@@ -66,6 +66,16 @@ def create_replay_router(replay) -> APIRouter:
             raise _http(e)
         return FileResponse(path, media_type="video/mp4")  # native Range/206
 
+    @router.get("/replay/saved/{attempt_id}")
+    def saved(attempt_id: int):
+        # Saved clips outlive the buffer: this is how a PB stays watchable
+        # in later sessions (view() falls back here when the ring is gone).
+        try:
+            path = replay.saved_clip_path(attempt_id)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return FileResponse(path, media_type="video/mp4")  # native Range/206
+
     @router.post("/attempts/{attempt_id}/replay/save")
     def save(attempt_id: int):
         try:
