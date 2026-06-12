@@ -57,7 +57,8 @@ class ReplayRecorder:
                  audio_factory: Callable[[int], AudioSource],
                  fallback_audio_factory: Callable[[int], AudioSource] | None = None,
                  clock_factory: Callable[[], CaptureClock] = CaptureClock.now,
-                 codec: str | None = None):
+                 codec: str | None = None,
+                 video_sink_factory=None):
         self._cfg = cfg
         self._window_finder = window_finder
         self._video_factory = video_factory
@@ -65,6 +66,12 @@ class ReplayRecorder:
         self._fallback_audio_factory = fallback_audio_factory
         self._clock_factory = clock_factory
         self._codec: str | None = codec
+        # ffmpeg-subprocess video path: when set, frames bypass the in-process
+        # writer entirely (sink.submit is a lock-free reference swap; pacing,
+        # encoding and segmentation happen in the child process — the GIL
+        # decoupling that ended the scattered-missed-slot glitch class)
+        self._video_sink_factory = video_sink_factory
+        self._video_sink = None
 
         self.ring = SegmentRing(cfg.retention_s, cfg.max_buffer_bytes)
 
@@ -161,6 +168,10 @@ class ReplayRecorder:
             self._last_frame = None
             self._last_index = -1
 
+        if self._video_sink_factory is not None:
+            self._video_sink = self._video_sink_factory(self._cfg, self.ring.add)
+            self._video_sink.start()
+
         # Start video — on_stopped signals window loss back to attach loop.
         # C1: assign _video_source the instant start() succeeds so teardown
         # can always reclaim it, even if something below raises.
@@ -211,6 +222,13 @@ class ReplayRecorder:
 
     def _teardown_capture(self) -> None:
         """Stop sources and close writer. Safe to call when already idle."""
+        sink = self._video_sink
+        self._video_sink = None
+        if sink is not None:
+            try:
+                sink.stop()  # closes stdin -> ffmpeg flushes final segment
+            except Exception:
+                log.exception("ffmpeg sink stop failed")
         with self._lock:
             video = self._video_source
             audio = self._audio_source
@@ -241,6 +259,13 @@ class ReplayRecorder:
     # -- frame callback (library thread) -------------------------------------
 
     def _on_frame(self, bgra: np.ndarray, ts_100ns: int) -> None:
+        # ffmpeg-sink path: a lock-free reference swap, nothing else — the
+        # sink's feeder paces CFR and the child process encodes. The entire
+        # in-process CFR/dedup/encode machinery below is bypassed.
+        sink = self._video_sink
+        if sink is not None:
+            sink.submit(bgra)
+            return
         # M1: _last_frame and _last_index are written here only; WGC guarantees
         # a single callback thread, so they need no lock — if that ever changes,
         # move both inside _lock.
