@@ -104,7 +104,11 @@ class DwmSurfaceReader:
                           wt.UINT, wt.UINT, wt.UINT, ctypes.POINTER(_MAPPED))
         self._unmap = _vtbl(self._context, 15, None, ctypes.c_void_p, wt.UINT)
 
-    def acquire(self, hwnd: int) -> np.ndarray | None:
+    @staticmethod
+    def query_handle(hwnd: int) -> int | None:
+        """user32 call — may block on the target window's lock (PJ64 holds
+        it ~170 ms at 1 Hz). Call from a lock-tolerant thread, NOT the grab
+        loop; the handle only changes on window resize."""
         hsurf = wt.HANDLE()
         luid = _LUID()
         fmt = wt.ULONG()
@@ -115,9 +119,23 @@ class DwmSurfaceReader:
                                       ctypes.byref(flags), ctypes.byref(upd)) \
                 or not hsurf.value:
             return None
+        return hsurf.value
+
+    def acquire(self, hwnd: int) -> np.ndarray | None:
+        """Convenience: query + read (probe/startup only — the hot path
+        must use read() with a handle cached by a lock-tolerant thread)."""
+        handle = self.query_handle(hwnd)
+        if handle is None:
+            return None
+        return self.read(handle)
+
+    def read(self, handle: int) -> np.ndarray | None:
+        """Pure D3D11 path (kernel graphics, no window locks): open the
+        cached shared handle, copy to staging, map. Returns None when the
+        handle went stale (resize) — caller waits for a fresh handle."""
         tex = ctypes.c_void_p()
-        hr = self._open_shared(self._device, hsurf, _IID_ID3D11Texture2D,
-                               ctypes.byref(tex))
+        hr = self._open_shared(self._device, wt.HANDLE(handle),
+                               _IID_ID3D11Texture2D, ctypes.byref(tex))
         if hr != 0 or not tex.value:
             return None
         try:
