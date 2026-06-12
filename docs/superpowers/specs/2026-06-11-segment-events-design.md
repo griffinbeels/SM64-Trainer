@@ -106,7 +106,7 @@ context only (no wall clock, no snapshots) — deterministic replay.
 | start trigger matches + guards pass (IDLE) | ARM; `start_frame` = event frame |
 | start trigger matches again | **Re-arm**: update `start_frame`; no row |
 | end trigger matches | **Success**: record attempt (`rta_frames = end.frame − start_frame`), broadcast `attempt_completed`, target auto-follows the segment (same rule as star grabs) |
-| `practice_reset` / `state_loaded` | Close as `reset` (anchor_type recorded); AFK discard applies (paused_frames_before ≥ 150 → no row) |
+| `practice_reset` / `state_loaded` | Close as `reset` (anchor_type recorded); AFK discard applies (paused_frames_before ≥ 150 → no row). **Same-frame anchor = level-load echo: ignored — live-gate amendment 2026-06-12** (Usamune resets IGT on every level load; the anchor detector fires a synthetic reset on the same global-timer frame as the entry that armed the segment; a real player reset always arrives later). |
 | `death` | Close as `death` |
 | `game_reset` | Close as `hard_reset` |
 | `level_changed` matching neither start nor end | **Silent disarm** — no row ("never reached a failure condition") |

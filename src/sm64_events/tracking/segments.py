@@ -20,6 +20,12 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
   self-heal, domain rule 4), but failure closures record the row with
   rta_frames=None (game_reset's boot-range frame makes this the ONLY way
   hard_reset rows exist)
+- load-echo rule: a practice_reset/state_loaded whose frame == arm.start_frame
+  is a Usamune IGT reset emitted on the same global-timer frame as the level
+  entry that armed us — not a player reset (live gate 2026-06-12, seq 40-45).
+  Such events are ignored entirely (no closure, no disarm). A real player
+  reset always lands on a later frame because the global timer keeps ticking
+  even while paused.
 """
 from dataclasses import dataclass
 from typing import Callable
@@ -223,6 +229,19 @@ class SegmentEngine:
                     if a:
                         closed.append(a)
                     self._disarm(d, ev, notices)
+                elif ev.type in ("practice_reset", "state_loaded") \
+                        and ev.frame == arm.start_frame:
+                    # Load echo, not a player reset: Usamune resets its IGT on
+                    # every level/area load, so the anchor detector emits a
+                    # synthetic practice_reset on the SAME global-timer frame
+                    # as the level entry that armed us (live gate 2026-06-12,
+                    # seq 40-45: armed LBLJ killed with a 0-frame reset on
+                    # castle entry). A real reset always lands frames later —
+                    # the global timer keeps ticking even while paused.
+                    # Do NOTHING: no closure, no row, no disarm. Fall through
+                    # to the arm phase where an attempt_anchor re-arm
+                    # harmlessly replaces the _Arm with the identical frame.
+                    pass
                 elif ev.type in ("practice_reset", "state_loaded"):
                     if ev.payload.get("paused_frames_before", 0) \
                             < _AFK_PAUSE_FRAMES:

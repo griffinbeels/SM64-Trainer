@@ -312,3 +312,78 @@ def test_guard_failing_refire_keeps_original_arm():
     closed, _ = e.feed(jev(32, "level_changed", 4000, {"from": 9, "to": 17}),
                        ctx(level=17, prev_level=9))
     assert closed[0].rta_frames == 1000          # timed from the ORIGINAL arm
+
+
+# ---------------------------------------------------------------------------
+# Load-echo guard (live gate 2026-06-12)
+# Usamune resets IGT on every level load, so the anchor detector emits a
+# synthetic practice_reset on the SAME global-timer frame as the level entry
+# that armed the segment.  A same-frame anchor must be ignored completely.
+# ---------------------------------------------------------------------------
+
+def test_load_echo_anchor_does_not_close_a_fresh_arm():
+    """Castle-entry LBLJ: practice_reset at frame 1000 == arm frame 1000
+    is a load echo and must NOT close or disarm the segment."""
+    e = SegmentEngine([LBLJ])
+    e.feed(jev(10, "level_changed", 1000, {"from": 16, "to": 6}),
+           ctx(level=6, prev_level=16))
+    closed, notices = e.feed(jev(11, "practice_reset", 1000,
+                                  {"igt_frames_before": 64}), ctx(level=6))
+    assert closed == []
+    assert e.armed_ids() == {1}
+    disarmed = [n for n in notices if n["event"] == "segment_disarmed"]
+    assert disarmed == []
+
+
+def test_lblj_full_walk_with_load_echoes_records_one_clean_success():
+    """Full LBLJ walk: castle-entry echo at 1000, BitDW entry echo at 1085.
+    Only one closed attempt (success, rta 85); no reset rows."""
+    e = SegmentEngine([LBLJ])
+    # Castle entry arms LBLJ
+    e.feed(jev(10, "level_changed", 1000, {"from": 16, "to": 6}),
+           ctx(level=6, prev_level=16))
+    # Load echo — same frame as arm — must be ignored
+    e.feed(jev(11, "practice_reset", 1000, {"igt_frames_before": 64}),
+           ctx(level=6))
+    # BitDW entry closes LBLJ with success (end trigger)
+    closed1, _ = e.feed(jev(12, "level_changed", 1085, {"from": 6, "to": 17}),
+                         ctx(level=17, prev_level=6))
+    # BitDW load echo — LBLJ is already disarmed; PIPE not in this engine
+    closed2, _ = e.feed(jev(13, "practice_reset", 1085,
+                             {"igt_frames_before": 64}), ctx(level=17))
+    all_closed = closed1 + closed2
+    assert len(all_closed) == 1
+    [a] = all_closed
+    assert a.outcome == "success" and a.rta_frames == 85
+
+
+def test_attempt_anchor_segment_load_echo_keeps_armed_without_junk_row():
+    """BitDW pipe entry (attempt_anchor segment): level entry at 2000 arms;
+    practice_reset at frame 2000 (load echo) must not close it.
+    A subsequent warp_entered at 2100 must succeed with rta 100."""
+    e = SegmentEngine([PIPE])
+    e.feed(jev(20, "level_changed", 2000, {"from": 6, "to": 17}),
+           ctx(level=17, prev_level=6))
+    # Load echo — same frame
+    closed, _ = e.feed(jev(21, "practice_reset", 2000,
+                            {"igt_frames_before": 64}), ctx(level=17))
+    assert closed == []
+    assert e.armed_ids() == {5}
+    # Real end trigger
+    closed, _ = e.feed(jev(22, "warp_entered", 2100,
+                            {"level": 17, "area": 1, "action": 0x1300}),
+                        ctx(level=17))
+    assert len(closed) == 1
+    assert closed[0].outcome == "success" and closed[0].rta_frames == 100
+
+
+def test_real_reset_frames_later_still_closes():
+    """Guard the guard: a practice_reset that lands at a DIFFERENT frame
+    from the arm frame is a real player reset and must close the segment."""
+    e = SegmentEngine([LBLJ])
+    e.feed(jev(10, "level_changed", 1000, {"from": 16, "to": 6}),
+           ctx(level=6, prev_level=16))
+    closed, _ = e.feed(jev(11, "practice_reset", 1179,
+                            {"igt_frames_before": 30}), ctx(level=6))
+    assert len(closed) == 1
+    assert closed[0].outcome == "reset" and closed[0].rta_frames == 179
