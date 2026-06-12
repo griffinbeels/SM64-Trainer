@@ -14,6 +14,20 @@
 
 **Conscious deviation from spec:** the spec says validation errors return 400; this plan follows the codebase's established error taxonomy (`ValueError` → 409 via `_http()` in `server/api.py`). Intent (reject invalid definitions) is preserved.
 
+**Replay-system interaction** (video replay merged to master 2026-06-11,
+commit `4341d39`, AFTER this plan was first written — verified compatible):
+`ReplayService` is pull-based and attempt-id-keyed — `view(attempt_id)` cuts
+a clip from the ring buffer using the attempt's `started_utc`/`ended_utc`
+span. Segment attempts carry both fields, so segment replays work with NO
+changes; the UI replay toggle lives in `AttemptRow`, which `SegmentSection`
+reuses. The big segment attempt ids (`jid + 10¹⁰·def_id`) pass the
+`clip_attempt_\d+\.mp4` filename pattern. Two consequences for this plan:
+(a) Task 7's `main.py` anchor is still exact — the replay wiring sits ABOVE
+the unchanged `detectors = [...]` list; (b) saved-clip naming in
+`replay/service.py` assumes star identity and IGT — Task 16b (new) makes it
+segment-aware. `_attempt_json` now also emits `started_utc` (replay needs
+it); Task 13's "gains `segment_id`" edit is unaffected.
+
 ---
 
 ## Task 1: Registry constants — level ids, action ids, area address
@@ -2277,6 +2291,89 @@ Inside), setting it as target, deleting it. Fix until clean.
 ```bash
 git add src/sm64_events/ui/components/practice.js src/sm64_events/ui/components/header.js src/sm64_events/ui/components/timeline.js
 git commit -m "feat: segment sections on the practice page - pinned target, armed light, rta clock"
+```
+
+---
+
+## Task 16b: Segment-aware replay clip naming
+
+**Files:**
+- Modify: `src/sm64_events/replay/service.py`
+- Test: `tests/test_replay_service.py`
+
+Depends on Task 13 (the `segment_defs` property on TrackerService). Without
+this task, saving a segment replay produces
+`attempt_…_no-course_no-star_no-igt.mp4`.
+
+- [ ] **Step 1: Write the failing test** (append to
+  `tests/test_replay_service.py`; reuse its existing attempt factory for the
+  pure-function test, and extend its existing `save()` test pattern for the
+  integration assert)
+
+```python
+def test_slug_filename_for_segment_attempt_uses_rta_and_segment_name():
+    from sm64_events.replay.service import slug_filename
+    a = make_attempt(id=10_000_000_005, segment_id=1, course_id=None,
+                     star_id=None, igt_frames=None, rta_frames=85,
+                     outcome="success")
+    assert slug_filename(a, "LBLJ", "") == \
+        "attempt_10000000005_lblj_0m02s83-rta.mp4"
+```
+
+Plus one assert in the existing save-path test style: saving a segment
+attempt's clip yields a filename containing `lblj` and `-rta` (build the
+fake tracker so `tracker.segment_defs` returns a `SegmentDef(id=1,
+name="LBLJ", ...)`).
+
+- [ ] **Step 2: Run** — `uv run pytest tests/test_replay_service.py -q` → FAIL.
+
+- [ ] **Step 3: Implement** in `replay/service.py`:
+
+`slug_filename` becomes kind-aware (existing star behavior unchanged —
+both parts non-empty joins identically):
+
+```python
+def slug_filename(a, course: str, star: str) -> str:
+    """Human-readable filename for a saved clip.
+
+    IGT display format from format_igt is M'SS"CC (Usamune style).
+    We replace ' -> m and " -> s so the filename is filesystem-safe:
+    e.g. 0'11"43 -> 0m11s43. Segment attempts are RTA-only (spec
+    2026-06-11): their time gets an explicit -rta marker.
+    """
+    if a.igt_frames is not None:
+        igt = format_igt(a.igt_frames).replace("'", "m").replace('"', "s")
+    elif a.rta_frames is not None:
+        igt = format_igt(a.rta_frames).replace("'", "m").replace('"', "s") + "-rta"
+    else:
+        igt = "no-igt"
+    suffix = "" if a.outcome == "success" else f"_{a.outcome}"
+    parts = [p for p in (_slug(course), _slug(star)) if p]
+    return f"attempt_{a.id:04d}_{'_'.join(parts)}_{igt}{suffix}.mp4"
+```
+
+and `save()`'s naming block branches on kind:
+
+```python
+        if a.segment_id is not None:
+            c_name = next((d.name for d in self.tracker.segment_defs
+                           if d.id == a.segment_id),
+                          f"segment-{a.segment_id}")
+            s_name = ""
+        else:
+            c_name = course_name(a.course_id) if a.course_id is not None else "no-course"
+            s_name = (star_name(a.course_id, a.star_id)
+                      if a.star_id is not None and a.course_id is not None else "no-star")
+        dest = dest_dir / slug_filename(a, c_name, s_name)
+```
+
+- [ ] **Step 4: Run** — `uv run pytest -q` → all pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/sm64_events/replay/service.py tests/test_replay_service.py
+git commit -m "feat: segment-aware replay clip names - segment name + rta time"
 ```
 
 ---
