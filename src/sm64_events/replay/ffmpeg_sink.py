@@ -25,6 +25,18 @@ Design:
   pts 0 with no MPEG-TS preload offset (the extractor contract:
   frame i of a segment is at utc_start + i/fps EXACTLY).
 - -force_key_frames at the segment period: every segment opens on an IDR.
+- Idle gating lives in the RECORDER (segment discard in _on_segment), NOT
+  here. Pausing this feeder was shipped briefly and reverted: every resume
+  respawned the child, leaving a ~0.2 s startup hole exactly where a
+  0-pre-pad clip begins (user-reported as a frozen clip opening), and the
+  stale `_latest` frame got re-fed at resume. The feeder runs whenever
+  capture runs; worthless footage is discarded downstream.
+- Shutdown: stop() bounds every join; stdin EOF -> wait(10 s) -> kill().
+  The OS-level backstop is a kill-on-close Job Object — every spawned
+  child is assigned to it, so if THIS process dies without teardown
+  (hung shutdown, hard kill, interpreter crash) Windows reaps ffmpeg.
+  Live incident 2026-06-12: a hung graceful shutdown left an orphan
+  ffmpeg recording into a dead terminal.
 - Window resize: the rawvideo pipe is fixed-size; the sink restarts the
   process with new dimensions (rare; logged; a brief coverage hole).
   VERIFY (unit-tested, not yet live-verified): resize PJ64 while
@@ -50,6 +62,66 @@ import numpy as np
 from sm64_events.replay.ring import SegmentInfo
 
 log = logging.getLogger("sm64.replay")
+
+_JOB_KILL_ON_CLOSE = 0x2000          # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+_JOB_EXTENDED_LIMIT_INFO_CLASS = 9   # JobObjectExtendedLimitInformation
+
+
+def _assign_kill_on_close(proc) -> int | None:
+    """Assign `proc` to a Windows Job Object whose last-handle-close kills
+    its members. We never close the returned handle: it dies WITH this
+    process — however it dies — and the OS then terminates ffmpeg. This is
+    the backstop that makes orphan encoders impossible (a hung shutdown on
+    2026-06-12 left ffmpeg logging into a dead terminal). Returns the job
+    handle to keep alive, or None (logged) if assignment failed."""
+    import ctypes
+    import ctypes.wintypes as wt
+
+    class _IO_COUNTERS(ctypes.Structure):
+        _fields_ = [(n, ctypes.c_ulonglong) for n in (
+            "ReadOperationCount", "WriteOperationCount",
+            "OtherOperationCount", "ReadTransferCount",
+            "WriteTransferCount", "OtherTransferCount")]
+
+    class _BASIC_LIMITS(ctypes.Structure):
+        _fields_ = [("PerProcessUserTimeLimit", wt.LARGE_INTEGER),
+                    ("PerJobUserTimeLimit", wt.LARGE_INTEGER),
+                    ("LimitFlags", wt.DWORD),
+                    ("MinimumWorkingSetSize", ctypes.c_size_t),
+                    ("MaximumWorkingSetSize", ctypes.c_size_t),
+                    ("ActiveProcessLimit", wt.DWORD),
+                    ("Affinity", ctypes.c_size_t),
+                    ("PriorityClass", wt.DWORD),
+                    ("SchedulingClass", wt.DWORD)]
+
+    class _EXTENDED_LIMITS(ctypes.Structure):
+        _fields_ = [("BasicLimitInformation", _BASIC_LIMITS),
+                    ("IoInfo", _IO_COUNTERS),
+                    ("ProcessMemoryLimit", ctypes.c_size_t),
+                    ("JobMemoryLimit", ctypes.c_size_t),
+                    ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                    ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+    try:
+        k32 = ctypes.windll.kernel32
+        job = k32.CreateJobObjectW(None, None)
+        if not job:
+            log.warning("CreateJobObject failed (%d) - no ffmpeg backstop",
+                        ctypes.get_last_error())
+            return None
+        info = _EXTENDED_LIMITS()
+        info.BasicLimitInformation.LimitFlags = _JOB_KILL_ON_CLOSE
+        ok = k32.SetInformationJobObject(
+            job, _JOB_EXTENDED_LIMIT_INFO_CLASS,
+            ctypes.byref(info), ctypes.sizeof(info))
+        if ok and k32.AssignProcessToJobObject(job, int(proc._handle)):
+            return job
+        log.warning("job-object assignment failed - no ffmpeg backstop")
+        k32.CloseHandle(job)
+        return None
+    except Exception:
+        log.exception("job-object setup failed - no ffmpeg backstop")
+        return None
 
 
 def parse_segment_csv(line: str, anchor_utc: datetime,
@@ -93,6 +165,7 @@ class FfmpegVideoSink:
         self._fed = 0
         self._seg_n_base = 0  # filename numbering across restarts
         self._restarts = 0
+        self._jobs: list[int] = []  # kill-on-close job handles (kept open)
 
     # -- capture-thread surface (lock-free) -----------------------------------
     def submit(self, bgra: np.ndarray) -> None:
@@ -124,6 +197,9 @@ class FfmpegVideoSink:
 
     # -- process management ----------------------------------------------------
     def _spawn(self, w: int, h: int) -> None:
+        # restarts (dims change, write failure) accumulate finished reader
+        # threads; prune the dead so the list stays bounded
+        self._readers = [t for t in self._readers if t.is_alive()]
         fps = self._cfg.fps
         seg_s = self._cfg.segment_s
         pattern = str(self._cfg.scratch_dir / f"video_{self._seg_n_base:02d}_%06d.ts")
@@ -147,6 +223,11 @@ class FfmpegVideoSink:
             args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, bufsize=0,
             creationflags=subprocess.CREATE_NO_WINDOW)
+        # handle kept alive on self for the process lifetime (never closed):
+        # closing it IS the kill switch — see _assign_kill_on_close
+        job = _assign_kill_on_close(self._proc)
+        if job is not None:
+            self._jobs.append(job)
         self._dims = (w, h)
         self._seg_n_base += 1
         for target, name in ((self._segment_list_loop, "ffmpeg-segments"),

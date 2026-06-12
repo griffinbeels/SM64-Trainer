@@ -1,6 +1,6 @@
 // src/sm64_events/ui/store.js — session state + live WS subscription
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
-import { getJSON } from "./api.js";
+import { getJSON, send } from "./api.js";
 
 const REFRESH_ON = new Set(["attempt_completed", "attempts_invalidated",
   "pb_saved", "session_started", "target_changed", "star_collected",
@@ -12,6 +12,29 @@ export function useTracker() {
   const [scope, setScope] = useState(localStorage.getItem("scope") || "session");
   const [feed, setFeed] = useState([]);
   const [connected, setConnected] = useState(false);
+  // server-owned pause truth: {paused, reason: "manual"|"afk"|null}.
+  // Polled (5 s) because "afk" flips server-side without any UI action;
+  // the POST response updates it instantly on manual toggles.
+  const [pauseState, setPauseState] = useState({ paused: false, reason: null });
+  const reasonRef = useRef(null);
+  useEffect(() => { reasonRef.current = pauseState.reason; }, [pauseState]);
+  useEffect(() => {
+    let alive = true;
+    const poll = () => getJSON("/api/pause")
+      .then((r) => alive && setPauseState(r)).catch(() => {});
+    poll();
+    const id = setInterval(poll, 5000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+  // The button drives only the MANUAL layer: pausing while afk escalates
+  // to manual (movement no longer resumes); resume exists only for manual.
+  const togglePause = useCallback(async () => {
+    try {
+      const r = await send("POST", "/api/pause",
+                           { paused: reasonRef.current !== "manual" });
+      setPauseState(r);
+    } catch (e) { console.error(e); }
+  }, []);
 
   // clockRef / scopeRef keep refresh's identity stable so the WS effect never restarts
   const clockRef = useRef(clock);
@@ -53,5 +76,7 @@ export function useTracker() {
 
   const pickClock = (c) => { localStorage.setItem("clock", c); setClock(c); };
   const pickScope = (s) => { localStorage.setItem("scope", s); setScope(s); };
-  return { view, clock, pickClock, scope, pickScope, feed, connected, refresh };
+  return { view, clock, pickClock, scope, pickScope, feed, connected,
+           refresh, paused: pauseState.paused,
+           pauseReason: pauseState.reason, togglePause };
 }

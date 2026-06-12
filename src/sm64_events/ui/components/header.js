@@ -38,7 +38,16 @@ export function Header({ t }) {
   }
 
   return html`<div class="bar">
-    <span class="dot ${t.connected ? "ok" : "bad"}">${t.connected ? "live" : "offline"}</span>
+    <span class="dot ${t.connected ? (t.paused ? "bad" : "ok") : "bad"}">
+      ${t.connected
+        ? (t.paused ? (t.pauseReason === "afk" ? "paused (afk)" : "paused")
+                    : "live")
+        : "offline"}</span>
+    <button onclick=${t.togglePause}
+            title=${t.pauseReason === "manual"
+                     ? "resume event + replay processing"
+                     : "manual pause: stops ALL processing; movement will NOT unpause"}>
+      ${t.pauseReason === "manual" ? "▶ resume" : "⏸ pause"}</button>
     <${RecordingDot} />
     ${v && html`<select id="session-select" name="session"
                         value=${t.scope === "lifetime" ? "lifetime" : String(active)}

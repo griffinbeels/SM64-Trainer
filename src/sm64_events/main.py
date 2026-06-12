@@ -17,7 +17,7 @@ from sm64_events.detectors.star_grab import StarGrabDetector
 from sm64_events.detectors.warp import WarpDetector
 from sm64_events.memory.pj64 import Pj64Memory
 from sm64_events.replay.audio import SystemAudioSource
-from sm64_events.replay.config import ReplayConfig
+from sm64_events.replay.config import ReplayConfig, apply_settings_file
 from sm64_events.replay.extract import ClipExtractor
 from sm64_events.replay.recorder import ReplayRecorder
 from sm64_events.replay.service import ReplayService
@@ -61,7 +61,8 @@ def build():
                 "database unavailable - running broadcast-only")
             db = None
     service = TrackerService(db, broadcaster)
-    replay_cfg = ReplayConfig()
+    # User-set storage limits (UI panel) overlay the code defaults.
+    replay_cfg = apply_settings_file(ReplayConfig())
     replay = None
     if replay_cfg.enabled:
         from sm64_events.replay.encoder import pick_video_codec
@@ -124,6 +125,11 @@ def build():
                  AreaChangeDetector(), AnchorDetector(), DeathDetector(),
                  DustTrickDetector(), WarpDetector(), KeyGrabDetector(),
                  SpawnDetector(), StarGrabDetector()]
+    if replay is not None:
+        # Poll-thread tap (emits no events): tells the recorder the player
+        # is providing input so the buffer pauses while idle (activity.py).
+        from sm64_events.replay.activity import ActivityTap
+        detectors.append(ActivityTap(replay.recorder))
     poller = Poller(memory, detectors, service)  # service IS the event sink
     return create_app(poller, broadcaster, service=service, replay=replay)
 
@@ -132,4 +138,9 @@ app = build()
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8064)
+    # timeout_graceful_shutdown: browsers hold keep-alive connections open
+    # (5 s status poll, <video> Range requests) and uvicorn's graceful
+    # shutdown waits for them BEFORE running lifespan teardown — without a
+    # deadline CTRL+C appears to hang with ffmpeg still recording (live
+    # incident 2026-06-12).
+    uvicorn.run(app, host="127.0.0.1", port=8064, timeout_graceful_shutdown=3)

@@ -52,6 +52,32 @@ def test_spawn_args_pin_segment_and_quality_contract(tmp_path, monkeypatch):
     assert after("-segment_list") == "pipe:1"
     assert after("-pix_fmt") == "bgra" and after("-s") == "320x240"
 
+
+def test_kill_on_close_job_reaps_child_when_handle_dies():
+    """The orphan-ffmpeg backstop (live incident 2026-06-12: hung shutdown
+    left ffmpeg recording into a dead terminal). Closing the job handle is
+    exactly what the OS does to our handles when this process dies — the
+    assigned child must be terminated by Windows, not by our code."""
+    import ctypes
+    import subprocess
+    import sys
+
+    from sm64_events.replay.ffmpeg_sink import _assign_kill_on_close
+
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        creationflags=subprocess.CREATE_NO_WINDOW)
+    try:
+        job = _assign_kill_on_close(child)
+        assert job is not None
+        ctypes.windll.kernel32.CloseHandle(job)   # simulate our process dying
+        child.wait(timeout=5)                     # raises if NOT reaped
+        assert child.poll() is not None
+    finally:
+        if child.poll() is None:
+            child.kill()
+
+
 T0 = datetime(2026, 6, 12, 1, 0, 0, tzinfo=timezone.utc)
 
 

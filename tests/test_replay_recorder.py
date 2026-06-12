@@ -1,11 +1,12 @@
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 
 from sm64_events.replay.clock import CaptureClock
 from sm64_events.replay.config import ReplayConfig
 from sm64_events.replay.recorder import ReplayRecorder
+from sm64_events.replay.ring import SegmentInfo
 from sm64_events.replay.window import WindowInfo
 
 T0 = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
@@ -221,3 +222,73 @@ def test_startup_wipe_is_recursive_clips_cache_dies_with_buffer(tmp_path):
     assert not (clips / "clip_attempt_1.mp4").exists()
     assert not (clips / "clip_attempt_1.json").exists()
     rec.stop()
+
+
+def _seg(tmp_path, name, start, end):
+    p = tmp_path / name
+    p.write_bytes(b"x" * 10)
+    return SegmentInfo(path=p, kind="video", utc_start=start, utc_end=end,
+                       size_bytes=10)
+
+
+def test_idle_gating_discards_segments_keeps_straddlers(tmp_path):
+    """The discard contract (live-reported bug 2026-06-12: pausing the sink
+    left a hole at the clip start). While idle, only segments born ENTIRELY
+    inside the idle window are dropped; straddlers carry the last active
+    footage / the anchor lead-up and must be kept. Resume is instant."""
+    cfg = ReplayConfig(scratch_dir=tmp_path / "buf")
+    rec = ReplayRecorder(cfg=cfg, window_finder=lambda t: None,
+                         video_factory=None, audio_factory=None)
+    assert rec.idle_after_s == 5.0          # default pads 3+2
+    rec.set_idle_after(1.0)
+    assert rec.idle_after_s == 3.0          # floor prevents thrash
+
+    rec._recording = True
+    rec.idle_after_s = 0.05                 # fast for the test
+    now = datetime.now(timezone.utc)
+
+    rec._maybe_idle_pause()                 # input is recent -> stays active
+    assert rec.status()["idle"] is False
+    rec._on_segment(_seg(tmp_path, "a.ts", now - timedelta(seconds=4),
+                         now - timedelta(seconds=2)))
+    assert rec.ring.total_bytes == 10       # active: retained
+
+    rec._last_player_active = time.monotonic() - 1.0
+    rec._maybe_idle_pause()
+    assert rec.status()["idle"] is True
+    since = rec._idle_since
+    straddler = _seg(tmp_path, "b.ts", since - timedelta(seconds=1),
+                     since + timedelta(seconds=1))
+    rec._on_segment(straddler)
+    assert rec.ring.total_bytes == 20       # born before idle: kept
+    inside = _seg(tmp_path, "c.ts", since + timedelta(seconds=1),
+                  since + timedelta(seconds=3))
+    rec._on_segment(inside)
+    assert rec.ring.total_bytes == 20       # born inside idle: dropped
+    assert not inside.path.exists()         # disk freed, not just unlisted
+
+    rec.set_player_active()                 # first input -> instant resume
+    assert rec.status()["idle"] is False
+    rec._on_segment(_seg(tmp_path, "d.ts", now + timedelta(seconds=5),
+                         now + timedelta(seconds=7)))
+    assert rec.ring.total_bytes == 30       # post-resume: retained again
+
+
+def test_session_pause_forces_idle_and_outranks_input(tmp_path):
+    """Manual pause (POST /api/pause): forces the idle-discard state, and
+    stray input pings must NOT resume it; unpausing resumes immediately
+    and refreshes the activity clock so auto-idle doesn't re-trigger."""
+    cfg = ReplayConfig(scratch_dir=tmp_path / "buf")
+    rec = ReplayRecorder(cfg=cfg, window_finder=lambda t: None,
+                         video_factory=None, audio_factory=None)
+    rec._recording = True
+
+    rec.set_session_paused(True)
+    assert rec.status()["idle"] is True
+    rec.set_player_active()                 # input must not resume a pause
+    assert rec.status()["idle"] is True
+
+    rec.set_session_paused(False)
+    assert rec.status()["idle"] is False
+    rec._maybe_idle_pause()                 # clock refreshed on unpause
+    assert rec.status()["idle"] is False

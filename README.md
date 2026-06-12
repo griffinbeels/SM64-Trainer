@@ -101,6 +101,7 @@ All endpoints are under `/api`. JSON in, JSON out.
 | `GET /api/session?clock=igt\|rta[&scope=session\|lifetime]` | Full session view: target, attempts per star, stat chips, PBs, catalog; `scope=session` (default) shows only the active session, `scope=lifetime` aggregates all sessions; star sections are ordered newest-activity-first, the target's section is always present (pinned active star), and each section carries markers_by_strat (per-strategy timeline annotations) and progress (per-session completion-time points with is_pb flags per clock) |
 | `POST /api/session/new` `{label?}` | Close the current session and open a new one |
 | `POST /api/session/continue` `{session_id}` | Resume a previously ended session; new attempts land there |
+| `GET/POST /api/pause` `{paused}` → `{paused, reason}` | Manual pause/resume. `reason`: `manual` = user-pressed — poller stops (no events, no journal rows), replay discards, movement does NOT resume; `afk` = idle gate (read-only, shown for visibility) — replay discards but detectors keep watching, and any input resumes instantly. Manual outranks afk; resume self-heals detector state (fresh establishing pair) |
 | `DELETE /api/session/{id}` | Hard-delete a session and all its data (409 on the active session; PBs survive; clears recorded in the deleted session revert their targets on re-projection) |
 | `POST /api/target` `{course_id, star_id, strat_tag?}` | Set the practice target |
 | `POST /api/strat` `{course_id, star_id, strat_tag?}` | Set a star's active strategy without changing the practice target (null clears) |
@@ -128,19 +129,30 @@ hosting PJ64's audio session) into `data/replay_buffer/` (scratch, wiped on
 startup). Video encoding runs in an `ffmpeg` subprocess when ffmpeg is on
 PATH — recommended; the in-process fallback encoder stutters under load
 (why: docs/architecture.md → Replay capture). Retention defaults to the
-whole session (`ReplayConfig.retention_s`); a hard disk cap (default
-20 GB) evicts oldest footage regardless. PJ64 must run windowed (exclusive
-fullscreen cannot be captured).
+whole session; a hard disk cap (default 20 GB) evicts oldest footage
+regardless. Both storage limits are adjustable live from the UI — click
+the recording dot in the header (shows usage as `rec · 38 min ·
+1.2/20 GB`); changes persist to `data/replay_settings.json` and apply
+immediately. Saved replays under `replays/` are kept forever and never
+evicted. PJ64 must run windowed (exclusive fullscreen cannot be captured).
 
-- `GET  /api/replay/status` — `{enabled, recording, window_found, audio_mode, encoder, buffer_start_utc, buffer_end_utc, disk_bytes}`
-- `POST /api/attempts/{id}/replay` — cut (or reuse) the attempt's clip → `{clip_url, duration_s, truncated}`
+- `GET  /api/replay/status` — `{enabled, recording, idle, window_found, audio_mode, encoder, buffer_start_utc, buffer_end_utc, disk_bytes, retention_s, max_buffer_bytes}`
+- `GET  /api/replay/settings` — `{retention_s, max_buffer_bytes, pre_pad_s, post_pad_s, save_root, saved_bytes}`
+- `PUT  /api/replay/settings` — body `{retention_s|null, max_buffer_bytes, pre_pad_s?, post_pad_s?}` (null retention = whole session; omitted pads = unchanged); persists + applies immediately (shrinking evicts oldest footage now); 409 outside 60 s–24 h / 1 GiB–1 TiB / pads 0–10 s
+- `POST /api/attempts/{id}/replay` — cut (or reuse) the attempt's clip → `{clip_url, duration_s, truncated, fps, game_fps}` (fps = encoded rate; game_fps = 30 fps SM64 logic, the frame-step unit)
 - `GET  /api/replay/clips/{name}` — the MP4 (supports HTTP Range; scrubs smoothly)
 - `POST /api/attempts/{id}/replay/save` — copy to `replays/<YYYY-MM-DD>/session_<N>/<slug>.mp4` → `{path, truncated}`
 
 Errors follow the API taxonomy: 404 unknown attempt/clip, 409 no footage /
 span too short, 503 db unavailable. Clips span the whole attempt plus
-padding (3 s before the anchor, 2 s after the closing event); `truncated`
-means the buffer no longer covered part of that span.
+padding (defaults 3 s before the anchor, 2 s after the closing event;
+adjustable 0–10 s in the settings panel); `truncated` means the buffer no
+longer covered part of that span. When no player input is detected for
+longer than the padding window (pre+post, floor 3 s), the recorder
+discards new footage instead of retaining it — `idle: true` in status, an
+honest coverage hole — and resumes instantly on input, a savestate load /
+practice reset, or a level entry. The segment straddling the resume is
+kept, so a 0 s pre-pad clip still opens exactly at the attempt anchor.
 
 ## Data
 

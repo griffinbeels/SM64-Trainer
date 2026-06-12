@@ -1,5 +1,11 @@
 """Usamune timer display format: M'SS"CC (30 fps frames -> centiseconds)."""
 
+# SM64 game LOGIC runs at 30 fps — the unit of IGT, frame-perfect tricks,
+# and "one frame" to a practicer. Distinct from the 60 fps the emulator
+# PRESENTS (and replay captures): each game frame spans two encoded video
+# frames. The replay frame-stepper steps in THESE frames.
+GAME_FPS = 30
+
 
 def format_igt(frames: int) -> str:
     """Format game frames as Usamune IGT display: M'SS"CC.

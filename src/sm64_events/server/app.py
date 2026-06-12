@@ -6,6 +6,8 @@ re-read per request so UI edits show on refresh without a server restart.
 """
 import asyncio
 import logging
+import threading
+import time
 from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -14,6 +16,7 @@ from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from sm64_events.core.events import Event
 from sm64_events.server.api import create_api_router
@@ -25,6 +28,28 @@ log = logging.getLogger("sm64.server")
 _UI_INDEX = Path(__file__).resolve().parent.parent / "ui" / "index.html"
 
 
+class PauseBody(BaseModel):
+    paused: bool
+
+
+def pause_state(poller, replay) -> dict:
+    """The ONE pause truth the UI renders. Two sources, strict precedence:
+
+    - reason "manual" (user pressed the button): poller paused (no events)
+      AND replay discarding; player movement is ignored — only an explicit
+      unpause clears it.
+    - reason "afk" (recorder idle gate): replay discarding, but the poller
+      KEEPS running — it must, the activity tap that detects the player's
+      return rides it (and while AFK no events fire anyway). Any input
+      resumes instantly; the UI just shows it happened.
+    """
+    if poller.paused:
+        return {"paused": True, "reason": "manual"}
+    if replay is not None and replay.recorder.status().get("idle"):
+        return {"paused": True, "reason": "afk"}
+    return {"paused": False, "reason": None}
+
+
 def _log_poller_exit(task: asyncio.Task) -> None:
     if task.cancelled():
         return
@@ -33,10 +58,62 @@ def _log_poller_exit(task: asyncio.Task) -> None:
         log.critical("poll loop died: %r", exc)
 
 
+# Replay teardown joins capture threads and waits for ffmpeg to flush —
+# worst-case tens of seconds of SYNC work. Run inside the event loop it
+# blocks uvicorn's shutdown (and the force-exit CTRL+C path) — live
+# incident 2026-06-12: CTRL+C appeared to hang with ffmpeg still logging.
+_REPLAY_STOP_DEADLINE_S = 15.0
+
+
+async def _stop_replay_bounded(replay) -> None:
+    """Run replay.lifecycle_stop() on a DAEMON thread with a deadline.
+    Deliberately not asyncio.to_thread: executor threads are non-daemon and
+    the interpreter joins them at exit, which would re-introduce the hang
+    we are bounding. If the deadline passes we abandon the worker (daemon —
+    cannot block exit) and rely on the kill-on-close job object to reap
+    ffmpeg (ffmpeg_sink._assign_kill_on_close)."""
+    done = threading.Event()
+
+    def _run():
+        try:
+            replay.lifecycle_stop()
+        except Exception:
+            log.exception("replay stop failed - continuing shutdown")
+        finally:
+            done.set()
+
+    threading.Thread(target=_run, name="replay-stop", daemon=True).start()
+    t0 = time.monotonic()
+    while not done.is_set():
+        if time.monotonic() - t0 > _REPLAY_STOP_DEADLINE_S:
+            log.error("replay stop exceeded %.0f s - abandoning teardown "
+                      "(worker is daemon; ffmpeg is reaped by the "
+                      "kill-on-close job object)", _REPLAY_STOP_DEADLINE_S)
+            return
+        await asyncio.sleep(0.05)
+
+
+def _quiet_connection_resets(loop, context) -> None:
+    """Scoped asyncio noise filter. Browsers abort in-flight Range requests
+    whenever a <video> element seeks; on Windows' proactor loop the dead
+    socket's connection_lost callback then raises ConnectionResetError
+    (WinError 10054) INSIDE asyncio (sock.shutdown on an already-reset
+    socket) and the default handler prints a full traceback per seek.
+    Those are normal client disconnects, not server errors. Everything
+    else still reaches the default handler unchanged."""
+    if isinstance(context.get("exception"), ConnectionResetError):
+        log.debug("client connection reset (normal for video seeks): %s",
+                  context.get("message"))
+        return
+    loop.default_exception_handler(context)
+
+
 def create_app(poller: Poller, broadcaster: Broadcaster,
                service=None, replay=None, debug_hooks: bool = False) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        asyncio.get_running_loop().set_exception_handler(
+            _quiet_connection_resets)
         if service is not None:
             try:
                 await service.start()
@@ -61,15 +138,27 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
         task.add_done_callback(_log_poller_exit)
         yield
         if replay is not None:
-            try:
-                replay.lifecycle_stop()
-            except Exception:
-                log.exception("replay stop failed - continuing shutdown")
+            await _stop_replay_bounded(replay)
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
 
     app = FastAPI(title="SM64 Event API", lifespan=lifespan)
+
+    @app.middleware("http")
+    async def _ui_always_revalidate(request, call_next):
+        """The UI contract is edit + refresh (no build, no restart). With
+        no Cache-Control, browsers apply HEURISTIC freshness to /ui module
+        files and can serve a STALE module alongside fresh ones — live
+        incident 2026-06-12: cached store.js (no togglePause) + fresh
+        header.js (with the pause button) = a dead control and no request
+        ever sent. no-cache forces revalidation on every load (cheap 304s
+        on localhost) so module versions can never mix."""
+        response = await call_next(request)
+        p = request.url.path
+        if p == "/" or p.startswith("/ui"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
     app.mount("/ui", StaticFiles(directory=str(_UI_INDEX.parent)), name="ui")
     if service is not None:
@@ -81,6 +170,25 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     @app.get("/", response_class=HTMLResponse)
     def index():
         return _UI_INDEX.read_text(encoding="utf-8")
+
+    @app.get("/api/pause")
+    def get_pause():
+        return pause_state(poller, replay)
+
+    @app.post("/api/pause")
+    def set_pause(body: PauseBody):
+        """MANUAL pause switch (reason precedence in pause_state): the
+        poller stops reading and dispatching (no events, no journal rows)
+        and the replay recorder discards footage (rides the idle
+        machinery). Pausing while AFK escalates to manual — movement no
+        longer resumes. Unpausing while the player is still AFK lets the
+        idle gate re-trigger naturally (~idle_after_s later). Lives HERE,
+        not api.py — it spans poller + replay, which only this composition
+        surface holds."""
+        poller.set_paused(body.paused)
+        if replay is not None:
+            replay.recorder.set_session_paused(body.paused)
+        return pause_state(poller, replay)
 
     @app.get("/health")
     def health():

@@ -53,6 +53,45 @@ class EchoDetector:
                       payload={"prev": prev.global_timer})]
 
 
+def test_pause_skips_everything_and_resume_self_heals():
+    """Session pause: run() must touch NOTHING while paused (no attach, no
+    reads); resume resets _prev so detectors get a fresh establishing pair
+    instead of a stale cross-pause pair (which would look like a giant
+    timer jump to every detector)."""
+    b = RecordingBroadcaster()
+    p = Poller(StubMemory(), [EchoDetector()], b,
+               reader=ScriptedReader([snap(1), snap(2), snap(10)]))
+    asyncio.run(p.tick())            # establishes prev = snap(1)
+    asyncio.run(p.tick())            # pair (1,2) -> one event
+    assert len(b.events) == 1
+
+    p.set_paused(True)
+    assert p.paused
+
+    class NeverAttach:
+        attached = False
+        def attach(self):
+            raise AssertionError("paused run() must not touch memory")
+    p.memory = NeverAttach()
+
+    async def run_briefly():
+        task = asyncio.create_task(p.run())
+        await asyncio.sleep(0.05)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(run_briefly())       # raises inside if memory was touched
+
+    p.set_paused(False)
+    assert p._prev is None           # resume = fresh attach for detectors
+    p.memory = StubMemory()
+    asyncio.run(p.tick())            # establishing tick only
+    assert len(b.events) == 1        # NO event from the (2, 10) gap pair
+
+
 def test_first_tick_emits_nothing_then_detectors_run_on_pairs():
     b = RecordingBroadcaster()
     p = Poller(StubMemory(), [EchoDetector()], b,

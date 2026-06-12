@@ -14,9 +14,10 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from sm64_events.core.timefmt import format_igt
+from sm64_events.core.timefmt import GAME_FPS, format_igt
 from sm64_events.memory.addresses import course_name, star_name
-from sm64_events.replay.config import ReplayConfig
+from sm64_events.replay.config import (ReplayConfig, save_settings,
+                                       validate_settings)
 
 _CLIP_NAME = "clip_attempt_{id}.mp4"
 # fullmatch pattern — rejects traversal, wrong extension, empty id
@@ -81,11 +82,47 @@ class ReplayService:
         # AFTER recorder.start() so any future recursive wipe by the recorder
         # doesn't evict a directory we created first.
         self.clips_dir = cfg.scratch_dir / "clips"
+        # Pads are settings-mutable (cfg is frozen): these live values are
+        # what _span uses; update_settings replaces them.
+        self.pre_pad_s = cfg.pre_pad_s
+        self.post_pad_s = cfg.post_pad_s
 
     # -- queries -------------------------------------------------------------
 
     def status(self) -> dict:
         return {"enabled": True, **self.recorder.status()}
+
+    def settings(self) -> dict:
+        """Storage limits + where the bytes are. saved_bytes walks save_root
+        on demand (panel-open frequency) — deliberately NOT part of the 5 s
+        status poll."""
+        root = self.cfg.save_root
+        saved = (sum(p.stat().st_size for p in root.rglob("*") if p.is_file())
+                 if root.exists() else 0)
+        return {"retention_s": self.recorder.ring.retention_s,
+                "max_buffer_bytes": self.recorder.ring.max_bytes,
+                "pre_pad_s": self.pre_pad_s,
+                "post_pad_s": self.post_pad_s,
+                "save_root": str(root),
+                "saved_bytes": saved}
+
+    def update_settings(self, retention_s: float | None,
+                        max_buffer_bytes: int,
+                        pre_pad_s: float | None = None,
+                        post_pad_s: float | None = None) -> dict:
+        """Validate -> persist -> apply live (ring evicts immediately; pads
+        affect the next view(); the recorder's idle threshold follows the
+        padding window). None pads = keep current. Persist before apply so
+        a write failure can't leave limits applied but not durable."""
+        pre = self.pre_pad_s if pre_pad_s is None else float(pre_pad_s)
+        post = self.post_pad_s if post_pad_s is None else float(post_pad_s)
+        validate_settings(retention_s, max_buffer_bytes, pre, post)
+        save_settings(self.cfg.settings_path, retention_s, max_buffer_bytes,
+                      pre, post)
+        self.recorder.ring.set_limits(retention_s, max_buffer_bytes)
+        self.pre_pad_s, self.post_pad_s = pre, post
+        self.recorder.set_idle_after(pre + post)
+        return self.settings()
 
     def _attempt(self, attempt_id: int):
         if self.tracker.db is None:
@@ -96,8 +133,8 @@ class ReplayService:
         raise LookupError(f"no attempt {attempt_id}")
 
     def _span(self, a) -> tuple[datetime, datetime]:
-        start = _parse_utc(a.started_utc) - timedelta(seconds=self.cfg.pre_pad_s)
-        end = _parse_utc(a.ended_utc) + timedelta(seconds=self.cfg.post_pad_s)
+        start = _parse_utc(a.started_utc) - timedelta(seconds=self.pre_pad_s)
+        end = _parse_utc(a.ended_utc) + timedelta(seconds=self.post_pad_s)
         return start, end
 
     # -- commands ------------------------------------------------------------
@@ -120,8 +157,13 @@ class ReplayService:
             meta.write_text(json.dumps(
                 {"duration_s": res.duration_s, "truncated": res.truncated}))
         m = json.loads(meta.read_text())
+        # fps = encoded rate (CFR); game_fps = SM64 logic rate — the
+        # frame-step UI steps in GAME frames: each spans two encoded
+        # frames, so stepping 1/fps changed the image only every 2nd press
+        # (live-reported 2026-06-12).
         return {"clip_url": f"/api/replay/clips/{name}",
-                "duration_s": m["duration_s"], "truncated": m["truncated"]}
+                "duration_s": m["duration_s"], "truncated": m["truncated"],
+                "fps": self.cfg.fps, "game_fps": GAME_FPS}
 
     def _wait_for_tail(self, end_utc: datetime) -> None:
         """Bounded wait: a click right after the event can outrace the last
