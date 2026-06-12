@@ -12,11 +12,15 @@ export function useTracker() {
   const [scope, setScope] = useState(localStorage.getItem("scope") || "session");
   const [feed, setFeed] = useState([]);
   const [connected, setConnected] = useState(false);
-  // armedOrder: arm recency for the practice page's pinned slot — most recent
-  // arm wins; reconciled from each view fetch (membership authoritative, order
-  // best-effort). armedSegs (Set) and lastArmedSeg are derived from it so all
-  // existing consumers keep working unchanged.
+  // armedOrder: live armed membership (drives the honest "armed" chip) —
+  // reconciled from each view fetch (membership authoritative, order
+  // best-effort). armedSegs (Set) is derived from it.
   const [armedOrder, setArmedOrder] = useState([]);
+  // lastPinnedSeg: STICKY pin for the practice page — set on every
+  // segment_armed, NEVER cleared on segment_disarmed. An accidental exit
+  // disarms (correct timing semantics — re-entry re-arms fresh) but the page
+  // stays on the segment being practiced until a DIFFERENT segment arms.
+  const [lastPinnedSeg, setLastPinnedSeg] = useState(null);
   // server-owned pause truth: {paused, reason: "manual"|"afk"|null}.
   // Polled (5 s) because "afk" flips server-side without any UI action;
   // the POST response updates it instantly on manual toggles.
@@ -64,6 +68,11 @@ export function useTracker() {
         const appended = [...viewArmed].filter((id) => !keptSet.has(id));
         return [...kept, ...appended];
       });
+      // Sticky pin reconcile: only seed an empty pin, and only when the view
+      // is unambiguous (exactly one armed segment). Never overwrite — the WS
+      // arm events own recency, and a disarm must not clear the pin.
+      setLastPinnedSeg((prev) =>
+        prev == null && viewArmed.size === 1 ? [...viewArmed][0] : prev);
     }
     catch (e) { console.error(e); }
   }, []);
@@ -93,9 +102,11 @@ export function useTracker() {
         if (ev.type === "segment_armed") {
           const id = ev.payload.segment_id;
           setArmedOrder((prev) => prev.includes(id) ? prev : [...prev, id]);
+          setLastPinnedSeg(id);   // sticky: only another arm moves the pin
         } else if (ev.type === "segment_disarmed") {
           const id = ev.payload.segment_id;
           setArmedOrder((prev) => prev.filter((x) => x !== id));
+          // lastPinnedSeg deliberately NOT cleared — see its declaration
         }
       };
     }
@@ -106,8 +117,7 @@ export function useTracker() {
   const pickClock = (c) => { localStorage.setItem("clock", c); setClock(c); };
   const pickScope = (s) => { localStorage.setItem("scope", s); setScope(s); };
   const armedSegs = new Set(armedOrder);
-  const lastArmedSeg = armedOrder.length > 0 ? armedOrder[armedOrder.length - 1] : null;
   return { view, clock, pickClock, scope, pickScope, feed, connected,
            refresh, paused: pauseState.paused,
-           pauseReason: pauseState.reason, togglePause, armedSegs, lastArmedSeg };
+           pauseReason: pauseState.reason, togglePause, armedSegs, lastPinnedSeg };
 }

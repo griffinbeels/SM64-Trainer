@@ -201,8 +201,12 @@ function SegmentSection({ sec, t, ui, pinned, pinnedByArm }) {
     .sort(comparator(ui.sort, "rta"));
   const shown = rows.slice(0, visible);
 
+  // Pinned tag, three-state: the target always wins the ★ tag; otherwise the
+  // honest armed flag decides between live (ARMED) and sticky (RECENT) pins.
+  const pinTag = !pinnedByArm ? "★ ACTIVE SEGMENT"
+    : armed ? "⏱ ARMED SEGMENT" : "⏱ RECENT SEGMENT";
   return html`<div class="starsec ${pinned ? "active-star" : ""}">
-    ${pinned && html`<div class="active-tag">${pinnedByArm ? "⏱ ARMED SEGMENT" : "★ ACTIVE SEGMENT"}</div>`}
+    ${pinned && html`<div class="active-tag">${pinTag}</div>`}
     <div class="shead">
       <b>⏱ ${sec.name}</b>
       ${armed && html`<span class="chip good">⏱ armed</span>`}
@@ -272,11 +276,14 @@ export function Practice({ t }) {
     && sec.segment_id === tgt.segment_id;
   const activeStar = tgt.course_id != null ? v.stars.find(isActiveStar) : undefined;
   const activeSeg = segs.find(isActiveSeg);
-  // armedPin: presentation-only pin — most recently armed segment while any
-  // segment is armed, falling back to the target segment otherwise. The target
-  // does not move; this only affects which section sits at the top of the page.
-  const armedPin = t.lastArmedSeg != null
-    ? segs.find((s) => s.segment_id === t.lastArmedSeg)
+  // armedPin: presentation-only sticky pin — the most recently ARMED segment,
+  // falling back to the target segment when nothing has armed yet. Sticky pin:
+  // an accidental exit disarms (correct timing semantics — re-entry re-arms
+  // fresh) but the page stays on the segment being practiced until a different
+  // segment arms. The target does not move; this only affects which section
+  // sits at the top of the page.
+  const armedPin = t.lastPinnedSeg != null
+    ? segs.find((s) => s.segment_id === t.lastPinnedSeg)
     : undefined;
   const pinnedSeg = armedPin || activeSeg;
   const restStars = v.stars.filter((sec) => sec !== activeStar);
