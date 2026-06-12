@@ -161,6 +161,12 @@ class DwmSurfaceReader:
         finally:
             _release(tex)
 
+    def acquire(self, hwnd: int) -> np.ndarray | None:
+        handle = self.query_handle(hwnd)
+        if handle is None:
+            return None
+        return self.read(handle)
+
     def close(self) -> None:
         if self._have_staging:
             _release(self._staging)

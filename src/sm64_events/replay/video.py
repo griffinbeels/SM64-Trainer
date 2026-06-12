@@ -146,7 +146,8 @@ class DwmSurfaceVideoSource:
         self._queue = None
         self._fallback = None
         # published by the geometry thread (tuple swap = atomic in CPython)
-        self._geom = None   # (off_x, off_y, cw, ch) in surface coords
+        self._geom = None    # (off_x, off_y, cw, ch) in surface coords
+        self._handle = None  # DWM shared-surface handle (changes on resize)
         self._alive = True
 
     def start(self, on_frame, on_stopped) -> None:
@@ -169,6 +170,7 @@ class DwmSurfaceVideoSource:
             return
         log.info("dwm surface capture: %dx%d full-window surface",
                  probe.shape[1], probe.shape[0])
+        self._handle = DwmSurfaceReader.query_handle(self._win.hwnd)
 
         import queue
         import threading
@@ -219,6 +221,11 @@ class DwmSurfaceVideoSource:
                     self._geom = (pt.x - wr.left, pt.y - wr.top, cw, ch)
                 else:
                     self._geom = None
+                # the handle query is user32 too (can block at the 1 Hz
+                # lock) — it belongs HERE, not in the grab loop; the
+                # measured ~120 ms grab gaps traced to it
+                from sm64_events.replay._dwm import DwmSurfaceReader
+                self._handle = DwmSurfaceReader.query_handle(self._win.hwnd)
             self._stop.wait(1.0)
 
     def _loop(self, reader, on_stopped) -> None:
@@ -250,7 +257,8 @@ class DwmSurfaceVideoSource:
         try:
             while not self._stop.is_set():
                 geom = self._geom
-                if geom is None:
+                handle = self._handle
+                if geom is None or handle is None:
                     _time.sleep(0.1)
                     next_t = _time.perf_counter()
                     continue
@@ -259,7 +267,7 @@ class DwmSurfaceVideoSource:
                 if prev_t is not None:
                     max_gap_ms = max(max_gap_ms, (t1 - prev_t) * 1000)
                 prev_t = t1
-                full = reader.acquire(self._win.hwnd)
+                full = reader.read(handle)
                 if full is None:
                     misses += 1
                     _time.sleep(0.05)
