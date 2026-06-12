@@ -272,3 +272,23 @@ def test_idle_gating_discards_segments_keeps_straddlers(tmp_path):
     rec._on_segment(_seg(tmp_path, "d.ts", now + timedelta(seconds=5),
                          now + timedelta(seconds=7)))
     assert rec.ring.total_bytes == 30       # post-resume: retained again
+
+
+def test_session_pause_forces_idle_and_outranks_input(tmp_path):
+    """Manual pause (POST /api/pause): forces the idle-discard state, and
+    stray input pings must NOT resume it; unpausing resumes immediately
+    and refreshes the activity clock so auto-idle doesn't re-trigger."""
+    cfg = ReplayConfig(scratch_dir=tmp_path / "buf")
+    rec = ReplayRecorder(cfg=cfg, window_finder=lambda t: None,
+                         video_factory=None, audio_factory=None)
+    rec._recording = True
+
+    rec.set_session_paused(True)
+    assert rec.status()["idle"] is True
+    rec.set_player_active()                 # input must not resume a pause
+    assert rec.status()["idle"] is True
+
+    rec.set_session_paused(False)
+    assert rec.status()["idle"] is False
+    rec._maybe_idle_pause()                 # clock refreshed on unpause
+    assert rec.status()["idle"] is False

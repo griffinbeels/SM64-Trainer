@@ -1,6 +1,6 @@
 // src/sm64_events/ui/store.js — session state + live WS subscription
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
-import { getJSON } from "./api.js";
+import { getJSON, send } from "./api.js";
 
 const REFRESH_ON = new Set(["attempt_completed", "attempts_invalidated",
   "pb_saved", "session_started", "target_changed", "star_collected",
@@ -12,6 +12,21 @@ export function useTracker() {
   const [scope, setScope] = useState(localStorage.getItem("scope") || "session");
   const [feed, setFeed] = useState([]);
   const [connected, setConnected] = useState(false);
+  const [paused, setPaused] = useState(false);
+
+  // server is the truth for pause (survives page reloads / other tabs)
+  const pausedRef = useRef(false);
+  useEffect(() => { pausedRef.current = paused; }, [paused]);
+  useEffect(() => {
+    getJSON("/api/pause").then((r) => setPaused(r.paused)).catch(() => {});
+  }, []);
+  const togglePause = useCallback(async () => {
+    try {
+      const r = await send("POST", "/api/pause",
+                           { paused: !pausedRef.current });
+      setPaused(r.paused);
+    } catch (e) { console.error(e); }
+  }, []);
 
   // clockRef / scopeRef keep refresh's identity stable so the WS effect never restarts
   const clockRef = useRef(clock);
@@ -53,5 +68,6 @@ export function useTracker() {
 
   const pickClock = (c) => { localStorage.setItem("clock", c); setClock(c); };
   const pickScope = (s) => { localStorage.setItem("scope", s); setScope(s); };
-  return { view, clock, pickClock, scope, pickScope, feed, connected, refresh };
+  return { view, clock, pickClock, scope, pickScope, feed, connected,
+           refresh, paused, togglePause };
 }

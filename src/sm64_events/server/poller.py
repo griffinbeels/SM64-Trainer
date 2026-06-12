@@ -38,6 +38,22 @@ class Poller:
         self.reader = reader or SnapshotReader(memory)
         self.latest: GameSnapshot | None = None
         self._prev: GameSnapshot | None = None
+        self.paused = False  # session pause: run() idles — no reads, no events
+
+    def set_paused(self, paused: bool) -> None:
+        """Session pause (POST /api/pause): while paused, run() neither
+        reads memory nor dispatches detectors — gameplay is intentionally
+        unobserved (no events, no journal rows). On RESUME, _prev resets so
+        detectors receive a fresh establishing pair: the same self-heal
+        contract as emulator reattach (LevelChangeDetector re-establishes
+        level state via corrective events; a stale open attempt closes by
+        the normal next-anchor rules)."""
+        if self.paused == paused:
+            return
+        self.paused = paused
+        if not paused:
+            self._prev = None  # resume = fresh attach for detector streams
+        log.info("session %s", "paused" if paused else "resumed")
 
     async def tick(self) -> None:
         try:
@@ -86,6 +102,9 @@ class Poller:
 
     async def run(self) -> None:
         while True:
+            if self.paused:
+                await asyncio.sleep(0.2)  # bounds resume latency; zero reads
+                continue
             if not self.memory.attached:
                 if not self.memory.attach():
                     await asyncio.sleep(2.0)

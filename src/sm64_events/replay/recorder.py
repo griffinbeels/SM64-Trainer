@@ -126,6 +126,7 @@ class ReplayRecorder:
         self._idle = False
         self._idle_since = None   # utc datetime while idle (the discard rule)
         self._idle_dropped = 0
+        self._session_paused = False  # manual pause: outranks the input tap
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -251,6 +252,8 @@ class ReplayRecorder:
         self._last_player_active = time.monotonic()  # fresh grace period
         self._idle = False
         self._idle_since = None
+        if self._session_paused:  # window (re)appeared mid-pause: stay idle
+            self._set_idle(True)
         self._recording = True
         log.info("capture started — window=%r audio=%s codec=%s",
                  win.title, audio_mode, self._codec)
@@ -308,9 +311,28 @@ class ReplayRecorder:
         next attempt's pre-pad starts at the first input. Pause lives in
         the attach loop (2 s cadence; a couple of extra recorded idle
         seconds is harmless)."""
+        if self._session_paused:
+            return  # manual session pause outranks the input signal
         self._last_player_active = time.monotonic()
         if self._idle:
             self._set_idle(False)
+
+    def set_session_paused(self, paused: bool) -> None:
+        """Manual session pause (POST /api/pause via server/app.py): rides
+        the idle-discard machinery — the encoder timeline stays unbroken,
+        completed segments are dropped, the buffer gains nothing. Unlike
+        auto-idle, resume is NOT input-driven (the poller pauses too, so
+        the activity tap goes silent); unpausing restores recording
+        immediately and refreshes the activity clock so auto-idle doesn't
+        instantly re-trigger."""
+        self._session_paused = paused
+        if paused:
+            if not self._idle:
+                self._set_idle(True)
+        else:
+            self._last_player_active = time.monotonic()
+            if self._idle:
+                self._set_idle(False)
 
     def _maybe_idle_pause(self) -> None:
         if (self._recording and not self._idle

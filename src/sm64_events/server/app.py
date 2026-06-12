@@ -16,6 +16,7 @@ from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from sm64_events.core.events import Event
 from sm64_events.server.api import create_api_router
@@ -25,6 +26,10 @@ from sm64_events.server.poller import Poller
 log = logging.getLogger("sm64.server")
 
 _UI_INDEX = Path(__file__).resolve().parent.parent / "ui" / "index.html"
+
+
+class PauseBody(BaseModel):
+    paused: bool
 
 
 def _log_poller_exit(task: asyncio.Task) -> None:
@@ -132,6 +137,22 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     @app.get("/", response_class=HTMLResponse)
     def index():
         return _UI_INDEX.read_text(encoding="utf-8")
+
+    @app.get("/api/pause")
+    def get_pause():
+        return {"paused": poller.paused}
+
+    @app.post("/api/pause")
+    def set_pause(body: PauseBody):
+        """One switch for the whole pipeline: the poller stops reading and
+        dispatching (no events, no journal rows) and the replay recorder
+        discards footage (rides the idle machinery). Lives HERE, not
+        api.py — it spans poller + replay, which only this composition
+        surface holds."""
+        poller.set_paused(body.paused)
+        if replay is not None:
+            replay.recorder.set_session_paused(body.paused)
+        return {"paused": poller.paused}
 
     @app.get("/health")
     def health():
