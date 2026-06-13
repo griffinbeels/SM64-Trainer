@@ -131,19 +131,31 @@ def test_leaving_to_the_castle_emits_not_in_stage():
 
 def test_bowser_course_is_not_a_main_stage():
     # course_for_level(17) == 16 (a Bowser COURSE) — excluded by the 1..15 gate.
+    # Establish in a MAIN course so the move changes the resolved course
+    # (8 -> None); a None->None move correctly emits nothing (test below).
     d = StageChangeDetector()
-    d.process(snap(curr_level=6), snap(curr_level=6))
-    events = d.process(snap(curr_level=6), snap(curr_level=17))
+    d.process(snap(curr_level=8), snap(curr_level=8))            # SSL (course 8)
+    events = d.process(snap(curr_level=8), snap(curr_level=17))  # -> BitDW
+    assert len(events) == 1
     assert events[0].payload == {"course_id": None, "level": 17, "in_stage": False}
 
 
 def test_secret_star_area_is_not_a_main_stage():
     # course_for_level(27) == 19 (Secret Slide course) — excluded.
     d = StageChangeDetector()
-    d.process(snap(curr_level=6), snap(curr_level=6))
-    events = d.process(snap(curr_level=6), snap(curr_level=27))
+    d.process(snap(curr_level=8), snap(curr_level=8))            # SSL (course 8)
+    events = d.process(snap(curr_level=8), snap(curr_level=27))  # -> Secret Slide
+    assert len(events) == 1
     assert events[0].payload["in_stage"] is False
     assert events[0].payload["course_id"] is None
+
+
+def test_no_event_between_two_non_stage_levels():
+    # castle -> Bowser arena: neither is a main course, so the banner's hidden
+    # state is unchanged -> no stage_changed (keyed on resolved course, not level).
+    d = StageChangeDetector()
+    d.process(snap(curr_level=6), snap(curr_level=6))            # castle (None)
+    assert d.process(snap(curr_level=6), snap(curr_level=17)) == []
 
 
 def test_no_event_on_in_course_area_switch():
