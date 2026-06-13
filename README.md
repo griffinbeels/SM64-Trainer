@@ -117,7 +117,7 @@ All endpoints are under `/api`. JSON in, JSON out.
 | `POST /api/segments` `{name, start_triggers, end_triggers, guards?}` | Create a new definition; validated against the trigger vocabulary (unknown type or missing required param → 409). Triggers a full re-projection — new definitions retroactively surface every past occurrence already in the journal. |
 | `PUT /api/segments/{id}` `{name?, enabled?, start_triggers?, end_triggers?, guards?}` | Partial update (merged with the stored definition before validation). Triggers re-projection. Disabled definitions stay targetable. |
 | `DELETE /api/segments/{id}` | Delete a definition and cascade-delete its PBs. Triggers re-projection. 404 if not found. |
-| `GET /api/segments/vocab` | Trigger vocabulary for the builder GUI: `{triggers, guards, levels, castle_areas}`. Always 200 (no db dependency). |
+| `GET /api/segments/vocab` | Trigger vocabulary for the builder GUI: `{triggers, guards, levels, castle_areas, courses, stars}`; each trigger/guard carries a sentence `template` ("{to} coming from {from}") the builder renders. Always 200 (no db dependency). |
 | `POST /api/target` `{course_id, star_id, strat_tag?}` **or** `{kind: "segment", segment_id}` | Set the practice target. Star targets: legacy shape works (`kind` defaults to `"star"`). Segment targets: `kind: "segment"` + `segment_id`. 404 if the segment id is not in the definition list. |
 | `POST /api/strat` `{course_id, star_id, strat_tag?}` | Set a star's active strategy without changing the practice target (null clears) |
 | `POST /api/attempts/{id}/clear` `{reason?}` | Tombstone an attempt (triggers re-projection) |

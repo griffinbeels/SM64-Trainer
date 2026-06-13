@@ -446,6 +446,8 @@ def test_vocab_endpoint_shape(tmp_path):
     with client:
         v = client.get("/api/segments/vocab").json()
         assert "triggers" in v and "levels" in v and "guards" in v
+        assert "courses" in v and "stars" in v
+        assert all("template" in t for t in v["triggers"] + v["guards"])
 
 
 def test_get_segments_lists_seeds(tmp_path):

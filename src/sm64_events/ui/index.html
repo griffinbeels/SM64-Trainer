@@ -30,7 +30,20 @@
   .starsec { border: 1px solid #2c3140; border-radius: 8px; padding: .6rem .8rem; margin: 0 0 .8rem 0; }
   .active-star { border-color: #e0c36a; }
   .segrow { display: flex; gap: .5rem; align-items: center; border: 1px solid #2c3140; border-radius: 8px; padding: .4rem .6rem; margin-bottom: .4rem; }
-  .segclause { display: flex; gap: .4rem; margin: .2rem 0; }
+  .segsection { border: 1px solid #2c3140; border-radius: 8px; padding: .45rem .55rem; margin: .5rem 0; }
+  .seghead { padding: .2rem .5rem; border-radius: 5px; margin-bottom: .3rem; font-size: .9em; }
+  /* muted section identities: start=green, end=red, guards=orange */
+  .seg-start { border-color: #2f4a38; } .seg-start .seghead { background: #16291c; color: #8fce9f; }
+  .seg-end { border-color: #4a2f2f; } .seg-end .seghead { background: #291616; color: #ce8f8f; }
+  .seg-guard { border-color: #4a3c2a; } .seg-guard .seghead { background: #292016; color: #cead7f; }
+  .segclause { display: flex; flex-wrap: wrap; gap: .4rem; margin: .3rem 0; align-items: center; padding: .3rem .45rem; border-radius: 6px; }
+  .segclause select { max-width: 100%; min-width: 0; }
+  .segword { color: #6c7686; font-size: .85em; }
+  /* one tint per alternative clause (cycling): new color = new condition */
+  .tint0 { background: #161d2b; border-left: 3px solid #4a6fa5; }
+  .tint1 { background: #16241c; border-left: 3px solid #3f8a5f; }
+  .tint2 { background: #221a2b; border-left: 3px solid #7e5fa5; }
+  .tint3 { background: #281f14; border-left: 3px solid #a5823f; }
   .segbuilder { border: 1px solid #3a4150; border-radius: 8px; padding: .6rem; margin-top: .6rem; }
   .active-tag { color: #e0c36a; font-size: .7em; letter-spacing: 1px; margin-bottom: .2rem; }
   .listhead { letter-spacing: 1px; text-transform: uppercase; font-size: .7em; margin: .2rem 0 .4rem; }

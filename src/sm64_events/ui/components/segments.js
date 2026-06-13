@@ -1,7 +1,8 @@
 // src/sm64_events/ui/components/segments.js — definition list + builder.
 // The form is 100% vocab-driven: GET /api/segments/vocab supplies trigger
-// types, param schemas, and level/area enums; adding a trigger type in
-// tracking/segments.py appears here with zero UI changes.
+// types, param schemas, sentence templates, and level/area/course/star
+// enums; adding a trigger type in tracking/segments.py appears here with
+// zero UI changes.
 import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
@@ -9,39 +10,63 @@ import { getJSON, send } from "../api.js";
 
 const html = htm.bind(h);
 
-function ParamInput({ schema, name, value, vocab, onChange }) {
-  if (schema.kind === "level") {
-    return html`<select value=${value ?? ""}
-        onchange=${(e) => onChange(e.target.value === "" ? null : Number(e.target.value))}>
-      <option value="">${schema.required ? "— pick level —" : "(any)"}</option>
-      ${Object.entries(vocab.levels).map(([id, n]) =>
-        html`<option value=${id}>${n}</option>`)}
-    </select>`;
-  }
-  if (schema.kind === "area") {
-    return html`<select value=${value ?? ""}
-        onchange=${(e) => onChange(Number(e.target.value))}>
-      <option value="">— pick area —</option>
-      ${Object.entries(vocab.castle_areas).map(([id, n]) =>
-        html`<option value=${id}>${n}</option>`)}
+function ParamInput({ schema, name, value, vocab, clause, onChange }) {
+  const numOrNull = (s) => (s === "" ? null : Number(s));
+  const dropdown = (entries, anyLabel, pickLabel) => html`<select
+      value=${value ?? ""} onchange=${(e) => onChange(numOrNull(e.target.value))}>
+    <option value="">${schema.required ? pickLabel : anyLabel}</option>
+    ${entries.map(([id, n]) => html`<option value=${id}>${n}</option>`)}
+  </select>`;
+  if (schema.kind === "level")
+    return dropdown(Object.entries(vocab.levels), "(any level)", "— pick level —");
+  if (schema.kind === "area")
+    return dropdown(Object.entries(vocab.castle_areas), "(any area)", "— pick area —");
+  if (schema.kind === "course")
+    return dropdown(Object.entries(vocab.courses), "(any course)", "— pick course —");
+  if (schema.kind === "star") {
+    // dependent on the sibling course param: no course (or "any course")
+    // implies any star, so the selector is disabled until a course is picked
+    const names = vocab.stars[String(clause.course)] || [];
+    return html`<select value=${value ?? ""} disabled=${clause.course == null}
+        onchange=${(e) => onChange(numOrNull(e.target.value))}>
+      <option value="">${schema.required ? "— pick star —" : "(any star)"}</option>
+      ${names.map((n, i) => html`<option value=${i}>${n}</option>`)}
     </select>`;
   }
   return html`<input type="number" style="width:5rem" value=${value ?? ""}
       placeholder=${name}
-      onchange=${(e) => onChange(e.target.value === "" ? null : Number(e.target.value))} />`;
+      onchange=${(e) => onChange(numOrNull(e.target.value))} />`;
 }
 
-function ClauseRow({ clause, types, vocab, onChange, onRemove }) {
+function ClauseRow({ clause, types, vocab, tint, onChange, onRemove }) {
   const spec = types.find((t) => t.key === clause.type) || types[0];
-  return html`<div class="segclause">
+  const setParam = (pname, v) => {
+    const next = { ...clause, [pname]: v };
+    // a star id is meaningless outside its course — clear it on course change
+    if (pname === "course" && "star" in spec.params) next.star = null;
+    onChange(next);
+  };
+  const param = (pname) => html`<${ParamInput} schema=${spec.params[pname]}
+      name=${pname} vocab=${vocab} clause=${clause} value=${clause[pname]}
+      onChange=${(v) => setParam(pname, v)} />`;
+  // "{to} coming from {from}" → inputs interleaved with muted words.
+  // Params a template forgets to mention render appended — the registry
+  // test makes that unreachable; this keeps a bad vocab usable, not blank.
+  const mentioned = new Set();
+  const rendered = (spec.template || "").split(/(\{\w+\})/).map((tok) => {
+    const m = /^\{(\w+)\}$/.exec(tok);
+    if (m && spec.params[m[1]]) { mentioned.add(m[1]); return param(m[1]); }
+    const word = tok.trim();
+    return word ? html`<span class="segword">${word}</span>` : null;
+  });
+  const extras = Object.keys(spec.params).filter((p) => !mentioned.has(p));
+  return html`<div class="segclause tint${tint ?? 0}">
     <select value=${clause.type}
         onchange=${(e) => onChange({ type: e.target.value })}>
       ${types.map((t) => html`<option value=${t.key}>${t.label}</option>`)}
     </select>
-    ${Object.entries(spec.params).map(([name, schema]) => html`
-      <${ParamInput} schema=${schema} name=${name} vocab=${vocab}
-        value=${clause[name]}
-        onChange=${(v) => onChange({ ...clause, [name]: v })} />`)}
+    ${rendered}
+    ${extras.map(param)}
     <button onclick=${onRemove}>✕</button>
   </div>`;
 }
@@ -72,21 +97,23 @@ function Builder({ vocab, initial, onSaved, onCancel }) {
     } catch (e) { setErr(String(e)); }
   }
 
-  const clauses = (k, types) => html`
+  // One bordered group per side; each alternative clause inside gets its
+  // own tinted card (cycling) so "new color = new alternative" reads at a
+  // glance even when a wrapped row spans two lines.
+  const section = (label, k, types, cls) => html`<div class="segsection ${cls}">
+    <div class="seghead">${label}</div>
     ${d[k].map((c, i) => html`<${ClauseRow} clause=${c} types=${types}
-        vocab=${vocab} onChange=${(cl) => edit(k, i, cl)}
+        tint=${i % 4} vocab=${vocab} onChange=${(cl) => edit(k, i, cl)}
         onRemove=${() => drop(k, i)} />`)}
-    <button class="meta" onclick=${() => add(k, types)}>+ alternate trigger</button>`;
+    <button class="meta" onclick=${() => add(k, types)}>+ alternate trigger</button>
+  </div>`;
 
   return html`<div class="segbuilder">
     <div><input placeholder="Segment name" value=${d.name}
         oninput=${(e) => setD({ ...d, name: e.target.value })} /></div>
-    <div class="label">Starts when any of</div>
-    ${clauses("start_triggers", vocab.triggers)}
-    <div class="label">Ends when any of</div>
-    ${clauses("end_triggers", vocab.triggers)}
-    <div class="label">Guards (optional)</div>
-    ${clauses("guards", vocab.guards)}
+    ${section("Starts when any of", "start_triggers", vocab.triggers, "seg-start")}
+    ${section("Ends when any of", "end_triggers", vocab.triggers, "seg-end")}
+    ${section("Guards (optional)", "guards", vocab.guards, "seg-guard")}
     ${err && html`<div class="badx">${err}</div>`}
     <div>
       <button onclick=${save}>Save — history recomputes automatically</button>

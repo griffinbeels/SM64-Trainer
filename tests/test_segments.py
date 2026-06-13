@@ -1,9 +1,11 @@
+import re
+
 import pytest
 
 from sm64_events.storage.db import EventRow
 from sm64_events.tracking.segments import (SEGMENT_ATTEMPT_OFFSET,
-                                           MatchContext, SegmentDef,
-                                           SegmentEngine,
+                                           GUARDS, TRIGGERS, MatchContext,
+                                           SegmentDef, SegmentEngine,
                                            validate_definition, vocab)
 
 W = "2026-06-11T12:00:00Z"
@@ -1095,3 +1097,42 @@ def test_afk_length_menu_warp_relocation_also_disarms():
         ctx(level=6, area=2))
     assert closed == []
     assert e.armed_ids() == set()
+
+
+# ---------------------------------------------------------------------------
+# Registry templates (vocab contract): every trigger/guard carries a sentence
+# template whose placeholders must match its params exactly — a typo or
+# duplicate must fail CI, not render a broken builder row.
+# ---------------------------------------------------------------------------
+
+def test_every_trigger_and_guard_template_matches_its_params():
+    """A template typo must fail CI, not render a broken builder row."""
+    for reg in (TRIGGERS, GUARDS):
+        for t in reg.values():
+            assert t.template.strip(), f"{t.key}: empty template"
+            found = re.findall(r"\{(\w+)\}", t.template)
+            assert len(found) == len(set(found)), (
+                f"{t.key}: duplicated placeholder in template")
+            placeholders = set(found)
+            assert placeholders == set(t.params), (
+                f"{t.key}: template placeholders {placeholders}"
+                f" != params {set(t.params)}")
+
+
+def test_vocab_serializes_templates():
+    v = vocab()
+    by_key = {t["key"]: t for t in v["triggers"]}
+    assert by_key["level_enter"]["template"] == "{to} coming from {from}"
+    assert by_key["attempt_anchor"]["label"] == (
+        "Practice reset / savestate load")
+    assert all("template" in t for t in v["triggers"] + v["guards"])
+
+
+def test_vocab_course_and_star_enums():
+    v = vocab()
+    assert v["courses"]["2"] == "Whomp's Fortress"
+    assert v["stars"]["2"][2] == "Shoot into the Wild Blue"
+    assert v["stars"]["1"][6] == "100 Coins"    # main courses: 100-coin star at star_id 6
+    assert len(v["stars"]["1"]) == 7
+    assert v["stars"]["16"] == ["8 Red Coins"]  # Bowser course: one star
+    assert v["stars"]["0"] == []                # Castle Secret: no named stars
