@@ -397,11 +397,20 @@ export function Practice({ t }) {
 
   const tgt = v.target || {};
   const segs = v.segments || [];
-  const isActiveStar = (sec) => tgt.kind !== "segment"
-    && sec.course_id === tgt.course_id && sec.star_id === tgt.star_id;
+  // Active star and active segment are mutually exclusive — a single practice
+  // focus. The server keeps ONE target and retires the star target the moment
+  // a segment arms OR Mario enters a different course (projection.py), so a
+  // LIVE star target authoritatively means "doing stars": highlight that star
+  // and suppress every segment pin. With no star target we're in segment-land
+  // — pin armed > sticky-recent > target-segment as before. (Tied to the
+  // server rule: don't reintroduce a frontend "armed beats star" override, or
+  // setting a star while a segment is still armed would wrongly hide the star.)
+  const starActive = tgt.kind !== "segment" && tgt.course_id != null;
+  const isActiveStar = (sec) => sec.course_id === tgt.course_id
+    && sec.star_id === tgt.star_id;
   const isActiveSeg = (sec) => tgt.kind === "segment"
     && sec.segment_id === tgt.segment_id;
-  const activeStar = tgt.course_id != null ? v.stars.find(isActiveStar) : undefined;
+  const activeStar = starActive ? v.stars.find(isActiveStar) : undefined;
   const activeSeg = segs.find(isActiveSeg);
   // Pinned segments — presentation only, the target does not move:
   // every currently-ARMED segment is "active now" and pins to the top,
@@ -416,7 +425,8 @@ export function Practice({ t }) {
   const stickyPin = t.lastPinnedSeg != null
     ? segs.find((s) => s.segment_id === t.lastPinnedSeg)
     : undefined;
-  const pinnedSegs = armedPins.length ? armedPins
+  const pinnedSegs = starActive ? []
+    : armedPins.length ? armedPins
     : stickyPin ? [stickyPin] : activeSeg ? [activeSeg] : [];
   const restStars = v.stars.filter((sec) => sec !== activeStar);
   const restSegs = segs.filter((sec) => !pinnedSegs.includes(sec));

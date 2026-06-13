@@ -118,6 +118,31 @@ def test_arm_then_end_is_a_success_with_rta_delta():
     assert a.anchor_type == "level_changed"
 
 
+B3 = SegmentDef(id=10, name="Bowser 3", enabled=True,
+                start_triggers=[{"type": "level_enter", "to": 34},
+                                {"type": "attempt_anchor", "level": 34}],
+                end_triggers=[{"type": "key_grabbed", "level": 34}], guards=[])
+
+
+def test_grab_close_records_usamune_igt_not_wall_frame_delta():
+    # A segment ending on a grab (key_grabbed / star_collected) records the
+    # event's authoritative Usamune IGT as its time — the wall-frame delta is
+    # one display-tick short and counts paused frames (live report
+    # 2026-06-12: Bowser 3 read 0'46"23, Usamune showed 0'46"26).
+    e = SegmentEngine([B3])
+    e.feed(jev(50, "level_changed", 788707, {"from": 6, "to": 34}),
+           ctx(level=34, prev_level=6))
+    closed, _ = e.feed(
+        jev(51, "key_grabbed", 790094,  # wall delta would be 790094-788707=1387
+            {"level": 34, "which": "grand", "igt_frames": 1388,
+             "igt": "0'46\"26", "igt_source": "result"}),
+        ctx(level=34))
+    [a] = closed
+    assert a.outcome == "success" and a.segment_id == 10
+    assert a.rta_frames == 1388        # Usamune's IGT, not the 1387 wall delta
+    assert a.igt_frames is None        # segments stay RTA-only to UI/PB
+
+
 def test_restart_anchors_rearm_without_recording_a_row():
     e = SegmentEngine([LBLJ])
     lblj_arm(e, jid=10, frame=1000)
@@ -389,6 +414,75 @@ def test_real_reset_frames_later_still_closes():
                             {"igt_frames_before": 30}), ctx(level=6))
     assert len(closed) == 1
     assert closed[0].outcome == "reset" and closed[0].rta_frames == 179
+
+
+# ---------------------------------------------------------------------------
+# Save-prompt echo guard (live report 2026-06-12)
+# Exiting a course WITH a star pops the "SAVE & CONTINUE?" course-complete
+# screen.  Selecting an option reloads and resets Usamune's IGT, firing a
+# practice_reset frames later (idle Mario, no position change) that is
+# neither co-frame, a door, nor AFK — so it slips through every echo shape
+# and wrongly closes the armed segment.  The anchor detector stamps
+# save_pending=True when the save menu was seen this anchor period; such an
+# anchor is involuntary and must be INVISIBLE to the engine (the user wants
+# the segment to run through the save — "INCLUDING the save prompt").
+# ---------------------------------------------------------------------------
+
+def test_save_prompt_anchor_is_echo_segment_stays_armed():
+    """MIPS Clip arms on the HMC exit (level 7→6, basement).  The save-and-
+    continue reload ~169 frames later carries save_pending=True → no row, the
+    segment stays armed, and the eventual DDD entry succeeds with rta timed
+    from the original HMC exit (proving the timer ran through the save)."""
+    mips = SegmentDef(id=2, name="MIPS Clip", enabled=True,
+                      start_triggers=[{"type": "level_exit",
+                                       "from": 7, "to": 6}],
+                      end_triggers=[{"type": "level_enter", "to": 23}],
+                      guards=[])
+    e = SegmentEngine([mips])
+    # arm on the HMC exit (basement, area 3)
+    e.feed(jev(10, "level_changed", 762510, {"from": 7, "to": 6}),
+           ctx(level=6, prev_level=7, area=3))
+    # co-frame load echo at the exit tick — already ignored
+    e.feed(jev(11, "practice_reset", 762510,
+               {"igt_frames_before": 727, "paused_frames_before": 3}),
+           ctx(level=6, area=3))
+    assert e.armed_ids() == {2}
+    # save-and-continue reload 169 frames later: idle Mario, same area, the
+    # anchor detector flagged the save menu this period → echo, no closure
+    closed, _ = e.feed(
+        jev(12, "practice_reset", 762679,
+            {"igt_frames_before": 158, "paused_frames_before": 0,
+             "action": 0x0C400201, "prev_action": 0x0C400201,
+             "save_pending": True}),
+        ctx(level=6, area=3))
+    assert closed == [], "save-prompt reset must not close the segment"
+    assert e.armed_ids() == {2}, "segment must remain armed through the save"
+    # MIPS clip eventually reaches DDD — success timed from the original arm
+    closed, _ = e.feed(jev(13, "level_changed", 769934, {"from": 6, "to": 23}),
+                       ctx(level=23, prev_level=6))
+    assert len(closed) == 1
+    assert closed[0].outcome == "success"
+    assert closed[0].rta_frames == 769934 - 762510
+
+
+def test_reset_without_save_pending_still_closes():
+    """The save_pending gate is opt-in: an ordinary player reset (no
+    save_pending key, or False) still records its reset row."""
+    mips = SegmentDef(id=2, name="MIPS Clip", enabled=True,
+                      start_triggers=[{"type": "level_exit",
+                                       "from": 7, "to": 6}],
+                      end_triggers=[{"type": "level_enter", "to": 23}],
+                      guards=[])
+    e = SegmentEngine([mips])
+    e.feed(jev(10, "level_changed", 762510, {"from": 7, "to": 6}),
+           ctx(level=6, prev_level=7, area=3))
+    closed, _ = e.feed(
+        jev(12, "practice_reset", 762679,
+            {"igt_frames_before": 158, "action": 0x0C400201,
+             "save_pending": False}),
+        ctx(level=6, area=3))
+    assert len(closed) == 1
+    assert closed[0].outcome == "reset" and closed[0].rta_frames == 169
 
 
 # ---------------------------------------------------------------------------

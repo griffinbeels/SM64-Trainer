@@ -83,6 +83,12 @@ MIGRATIONS = [
              attempt_id, saved_utc FROM pbs;
     DROP TABLE pbs;
     ALTER TABLE pbs_v2 RENAME TO pbs;
+    -- EDITING A SEED VALUE BELOW? It only reaches FRESH dbs — existing ones
+    -- (the live data/tracker.db, carried across sessions) NEVER re-read this
+    -- seed. Ship a paired repair migration that UPDATEs the live rows, guarded
+    -- on the exact OLD value so user customizations survive (see v5 LBLJ, v6
+    -- Bowser 3). Omitting it leaves every existing db on the broken value —
+    -- exactly how Bowser 3 shipped ending on star_grabbed for weeks.
     INSERT INTO segment_defs (name, enabled, start_triggers, end_triggers, guards, created_utc) VALUES
       ('LBLJ', 1, '[{"type":"level_enter","to":6,"from":16},{"type":"attempt_anchor","level":6,"area":1}]', '[{"type":"level_enter","to":17}]', '[]', '2026-06-11T00:00:00Z'),
       ('MIPS Clip', 1, '[{"type":"level_exit","from":7,"to":6}]', '[{"type":"level_enter","to":23}]', '[]', '2026-06-11T00:00:00Z'),
@@ -106,6 +112,20 @@ MIGRATIONS = [
     # left alone.
     """
     UPDATE segment_defs SET start_triggers='[{"type":"level_enter","to":6,"from":16},{"type":"attempt_anchor","level":6,"area":1}]' WHERE id=1 AND name='LBLJ';
+    """,
+    # v6 — grand-star repair (live report 2026-06-12): the B3 grand star is
+    # NOT a collectable star — it enters ACT_JUMBO_STAR_CUTSCENE, never a
+    # star-dance action, so it fires key_grabbed which='grand' and NEVER
+    # star_collected (detectors/key.py; addresses.py FIGHT_END_LEVELS).  The
+    # ORIGINAL v4 seed (commit c9a03cd) ended Bowser 3 on star_grabbed, which
+    # the grand star can never satisfy — the segment armed but never
+    # completed.  419c4e6 corrected the v4 seed for FRESH DBs but, unlike the
+    # v5 LBLJ fix, shipped no repair for EXISTING ones, so every db seeded
+    # before it kept the broken trigger.  This is that repair, mirroring v5.
+    # Triple-guarded (id + name + the EXACT broken seed value) so a
+    # user-renamed or deliberately re-pointed row is left untouched.
+    """
+    UPDATE segment_defs SET end_triggers='[{"type":"key_grabbed","level":34}]' WHERE id=10 AND name='Bowser 3' AND end_triggers='[{"type":"star_grabbed"}]';
     """,
 ]
 

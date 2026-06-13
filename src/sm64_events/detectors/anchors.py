@@ -49,6 +49,19 @@ NON-WARP door recency (live gate 2026-06-12, journal seq 26):
   Self-heal (domain rule 4): if global_timer jumps backward, _last_door_frame
   is cleared so a stale recency value cannot poison anchors after the jump.
 
+save_pending (live report 2026-06-12): exiting a course WITH a star pops the
+  post-star "SAVE & CONTINUE?" course-complete screen; Mario holds
+  ACT_EXIT_LAND_SAVE_DIALOG (addresses.SAVE_DIALOG_ACTIONS) for the whole menu
+  and confirming an option reloads the area, resetting Usamune's IGT a few
+  frames later — an INVOLUNTARY reset, NOT a player retry. A boolean latch is
+  set whenever that action is seen; the practice_reset/state_loaded that
+  follows carries save_pending=True so the segment engine treats it as an echo
+  (segments.py shape 4) and a segment runs THROUGH the save. A latch (not
+  frames_since_door-style recency) because the menu-close→reload-reset gap
+  varies; the next anchor always consumes the latch (the reload reset is the
+  first anchor after the menu), so it cannot linger onto a later real reset.
+  Cleared on every anchor and on the boot-range backward jump (self-heal).
+
 Pause streak: consecutive game frames where global_timer advanced but the
   overall IGT did not — game logic stopped, i.e. the Usamune pause menu (or a
   dialog time-stop). Stamped on anchors as paused_frames_before; the tracking
@@ -87,7 +100,8 @@ acceptable for attempt tracking, but the payload distinction matters for
 the anchor→outcome clock, so characterize it once on real hardware."""
 from sm64_events.core.events import Event
 from sm64_events.core.snapshot import GameSnapshot
-from sm64_events.memory.addresses import DEATH_ACTIONS, DOOR_ACTIONS, PASSIVE_ACTIONS
+from sm64_events.memory.addresses import (DEATH_ACTIONS, DOOR_ACTIONS,
+                                           PASSIVE_ACTIONS, SAVE_DIALOG_ACTIONS)
 
 BOOT_TIMER_MAX = 120   # global_timer below ~4 s after a backward jump = console reset; shared by lifecycle.py
 NEAR_ZERO_IGT = 30     # 30 frames = 1 s at 30 fps; <= so exactly 1 s still counts
@@ -103,6 +117,7 @@ class AnchorDetector:
         self._pause_streak = 0
         self._last_door_frame: int | None = None
         self._pending_warp: Event | None = None  # pause-warp anchor awaiting position-stable tick
+        self._save_menu_seen = False  # save-prompt screen observed this anchor period
 
     def process(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         # Self-heal on backward global_timer jump (domain rule 4): stale door
@@ -117,6 +132,16 @@ class AnchorDetector:
         # be classified as echoes via frames_since_door (non-warp door shape).
         if curr.mario_action in DOOR_ACTIONS:
             self._last_door_frame = curr.global_timer
+        # Post-star "SAVE & CONTINUE?" screen: Mario HOLDS ACT_EXIT_LAND_SAVE_DIALOG
+        # for the whole menu (live watch 2026-06-12). Confirming an option reloads
+        # the area and resets Usamune's IGT a few frames later (Mario already back
+        # to idle) — an involuntary reset, not a player retry. Latch it so the
+        # practice_reset that follows carries save_pending and the segment engine
+        # treats it as an echo (segments.py shape 4). Latch (not recency) because
+        # the close-to-reset gap varies; the next anchor always consumes it (the
+        # reload reset), so it cannot linger onto a later real reset.
+        if curr.mario_action in SAVE_DIALOG_ACTIONS:
+            self._save_menu_seen = True
         events = self._classify(prev, curr)
         if events:
             self._pending_warp = None  # one load, one anchor: classified wins
@@ -145,12 +170,14 @@ class AnchorDetector:
                          "acted_tracking": True,
                          "action": curr.mario_action,
                          "prev_action": prev.mario_action,
+                         "save_pending": self._save_menu_seen,
                          "frames_since_door":
                              (curr.global_timer - self._last_door_frame)
                              if self._last_door_frame is not None else None})
             self._acted = False
             self._acted_reported = False
             self._pause_streak = 0
+            self._save_menu_seen = False
             return []
         if events:
             # the action transition ON the anchor tick is swallowed — it
@@ -158,6 +185,7 @@ class AnchorDetector:
             self._acted = False
             self._acted_reported = False
             self._pause_streak = 0
+            self._save_menu_seen = False  # consumed by this anchor (the reload reset)
             return events
         self._update_pause_streak(prev, curr)
         if (curr.mario_action not in PASSIVE_ACTIONS
@@ -176,6 +204,7 @@ class AnchorDetector:
             self._pause_streak = 0
             self._acted = False
             self._acted_reported = False
+            self._save_menu_seen = False
         elif curr.igt_overall != prev.igt_overall:
             self._pause_streak = 0   # game logic is running
         elif curr.global_timer > prev.global_timer:
@@ -202,6 +231,7 @@ class AnchorDetector:
                                    "acted_tracking": True,
                                    "action": curr.mario_action,
                                    "prev_action": prev.mario_action,
+                                   "save_pending": self._save_menu_seen,
                                    "frames_since_door": frames_since_door})]
         if (curr.igt_overall < prev.igt_overall
                 and curr.igt_overall <= NEAR_ZERO_IGT
@@ -214,5 +244,6 @@ class AnchorDetector:
                                    "acted_tracking": True,
                                    "action": curr.mario_action,
                                    "prev_action": prev.mario_action,
+                                   "save_pending": self._save_menu_seen,
                                    "frames_since_door": frames_since_door})]
         return []

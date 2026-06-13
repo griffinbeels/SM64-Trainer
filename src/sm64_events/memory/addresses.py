@@ -107,6 +107,21 @@ STAR_GRAB_ACTIONS = frozenset({
     # The key detector uses it directly via FIGHT_END_LEVELS instead.
 })
 
+# Post-star "SAVE & CONTINUE?" course-complete screen. Exiting a course WITH a
+# star lands Mario in ACT_EXIT_LAND_SAVE_DIALOG; the save-options menu
+# (gMenuMode==2) renders over it and Mario HOLDS this action for the whole menu.
+# Confirming any option reloads the area and resets Usamune's IGT a few frames
+# later — an INVOLUNTARY reset, not a player retry. The anchor detector flags
+# resets seen during this action (save_pending) so the segment engine treats
+# them as echoes (segments.py shape 4) and a segment runs THROUGH the save.
+# Live-verified 2026-06-12 (LLL exit watch on gMenuMode 0x803314F8 + this
+# action): mario_action held 0x1327 for the entire menu — one tick before
+# gMenuMode flipped to 2 — then reverted to ACT_IDLE on "Save and Continue".
+# Read off the already-sampled mario_action: no new memory address needed.
+# Source: decomp include/sm64.h ACT_EXIT_LAND_SAVE_DIALOG.
+ACT_EXIT_LAND_SAVE_DIALOG = 0x00001327
+SAVE_DIALOG_ACTIONS = frozenset({ACT_EXIT_LAND_SAVE_DIALOG})
+
 # Dust-trick action chains (decomp include/sm64.h, all values quoted
 # verbatim from n64decomp/sm64 master, fetched 2026-06-11).
 #
@@ -432,3 +447,29 @@ def star_count(course_id: int) -> int:
     star_id 6 (star_name owns the naming side of that rule); everything
     else has exactly its STAR_NAMES entries (course 0 has none)."""
     return 7 if 1 <= course_id <= 15 else len(STAR_NAMES.get(course_id, ()))
+
+
+# gCurrLevelNum -> gCurrCourseNum (course id — the SAME id space as star
+# course_ids / gLastCompletedCourseNum, NOT the level-id space; see the trap
+# note at CURR_LEVEL). THE level->course registry: each entry pairs a
+# LEVEL_NAMES key with its identically-named COURSE_NAMES id (decomp
+# levels/course_table.h order). Hub levels (6/16/26 Castle Inside/Grounds/
+# Courtyard) and the Bowser fight arenas (30/33/34) have NO course of their
+# own and are intentionally ABSENT -> course_for_level returns None, which
+# callers read as "not a course stage" (passing through never invalidates an
+# active star). Used by the projector to retire a stale active-star target
+# when Mario enters a DIFFERENT course (tracking/projection.py). A test keeps
+# this consistent with the two name tables (test_addresses.py).
+COURSE_BY_LEVEL = {
+    9: 1, 24: 2, 12: 3, 5: 4, 4: 5, 7: 6, 22: 7, 8: 8, 23: 9, 10: 10,
+    11: 11, 36: 12, 13: 13, 14: 14, 15: 15,            # 15 main courses
+    17: 16, 19: 17, 21: 18,                            # Bowser courses
+    27: 19, 28: 20, 29: 21, 18: 22, 31: 23, 20: 24,    # slide / caps / WMOTR / aquarium
+}
+
+
+def course_for_level(level: int | None) -> int | None:
+    """Course id a level belongs to, or None for hub levels, Bowser fight
+    arenas, and unknown ids (see COURSE_BY_LEVEL). None means "not a course
+    stage" — callers must not treat it as a course change."""
+    return COURSE_BY_LEVEL.get(level)

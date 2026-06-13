@@ -82,10 +82,31 @@ Caveats (hard-won — keep these current):
     segment attempt's id is its ARM event's journal id + the namespace
     offset, see segments.SEGMENT_ATTEMPT_OFFSET). A non-cleared segment
     success auto-follows the target exactly like a star grab does.
+
+12. Active-star retirement (active-star/segment exclusivity, 2026-06-12): a
+    STAR target is the active practice focus only while we're plausibly still
+    doing it, so feed() retires it (target -> None) on two signals — a segment
+    going ARMED (a segment run just started; the just-armed segment is the new
+    focus) and a level_changed into a DIFFERENT course (the star lives in
+    another stage). course_for_level (addresses.py) bridges the level-id ->
+    course-id gap; hub levels / Bowser arenas have NO course, so passing
+    through them keeps the target and the retry loop is uninterrupted. SEGMENT
+    targets are never course-bound — only star targets retire. A segment that
+    SUCCEEDS by entering a star stage (its closing event is a level_changed
+    into a course-bearing level — MIPS ends in DDD, LBLJ in BITDW) does NOT
+    auto-follow onto the segment either: it lands us in a fresh stage with no
+    star picked, so the target clears to None (no active star AND no active
+    segment). Segment successes that do not enter a stage (star grab, mid-
+    course, exit to hub) still auto-follow onto the segment. Retirement runs
+    inside feed(), so replay rebuilds the same end-state target and service.
+    _track auto-broadcasts target_changed. The UI reads this to highlight the
+    active star XOR the active segment, never both (ui/components/practice.js);
+    the frontend also retires its sticky segment pin on any segment success so
+    a stage-entry completion leaves nothing pinned (ui/store.js).
 """
 from dataclasses import dataclass, replace
 
-from sm64_events.memory.addresses import CASTLE_LEVELS
+from sm64_events.memory.addresses import CASTLE_LEVELS, course_for_level
 # one-way import: segments.py pulls Attempt lazily at call time, so this
 # module-level import cannot cycle (see SegmentEngine.feed).
 from sm64_events.tracking.segments import (
@@ -205,8 +226,28 @@ class Projector:
                         cleared=a.id in self._cleared,
                         cleared_reason=self._cleared.get(a.id))
             if a.outcome == "success" and not a.cleared:
-                self.target = ("segment", a.segment_id)
+                # A segment that COMPLETES by entering a star stage (the
+                # closing event is a level_changed into a course-bearing level)
+                # drops us into that stage with NO star picked yet, so there is
+                # no active focus at all — clear the target rather than follow
+                # onto the just-finished segment (MIPS ends by entering DDD;
+                # LBLJ by entering BITDW — 2026-06-12). Completions that do NOT
+                # enter a stage (a star grab, a mid-course end, an exit to the
+                # hub) still auto-follow onto the segment.
+                entered_stage = (ev.type == "level_changed"
+                                 and course_for_level(ev.payload["to"]) is not None)
+                self.target = None if entered_stage else ("segment", a.segment_id)
             closed.append(a)
+        # A segment going ARMED means a segment run just started, so a star we
+        # were practicing is no longer the active focus (active-star and
+        # segment are mutually exclusive in the UI — 2026-06-12). Clear ONLY a
+        # star target; a segment target (set just above on a success) IS the
+        # new focus and must stay. service._track auto-broadcasts
+        # target_changed off this in-feed change.
+        if self.target and self.target[0] == "star" \
+                and any(n["event"] == "segment_armed"
+                        for n in self.segment_notices):
+            self.target = None
         if ev.type in BOUNDARY_EVENT_TYPES:
             self._rollouts_total = self._rollouts_dustless = 0
             self._jumps_total = self._jumps_dustless = 0
@@ -229,7 +270,21 @@ class Projector:
             return self._close(ev, outcome="abandoned", igt_frames=None)
         if ev.type == "level_changed":
             closed = self._close(ev, outcome="abandoned", igt_frames=None)
-            self._level = ev.payload["to"]
+            to_level = ev.payload["to"]
+            # Entering a DIFFERENT course retires a stale active-star target:
+            # the practiced star lives in another stage, so it cannot be the
+            # active star here (active-star/segment exclusivity — 2026-06-12).
+            # Hub levels and the Bowser arenas have no course of their own
+            # (course_for_level None) and are NOT a stage, so the target
+            # survives an exit-and-re-enter and the retry loop is undisturbed;
+            # an exit that lands straight INTO a segment is retired by the
+            # arm-clear in feed() instead. Close FIRST (above) so the abandoned
+            # run still attributes to the star we were on.
+            if self.target and self.target[0] == "star":
+                to_course = course_for_level(to_level)
+                if to_course is not None and to_course != self.target[1]:
+                    self.target = None
+            self._level = to_level
             # _area is deliberately NOT reset here: every level entry is
             # followed by an establishing area_changed (area.py keys its
             # last-EMITTED state on (level, area)), which keeps _area honest;

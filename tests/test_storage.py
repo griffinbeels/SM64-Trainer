@@ -20,7 +20,7 @@ def test_migrations_set_user_version_and_create_tables(tmp_path):
     names = {r["name"] for r in db._conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"events", "sessions", "attempts", "pbs", "ui_state"} <= names
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 6
 
 
 def test_reopening_existing_db_is_idempotent(tmp_path):
@@ -28,7 +28,7 @@ def test_reopening_existing_db_is_idempotent(tmp_path):
     sid = first.insert_session("2026-06-10T12:00:00Z")
     first.close()
     db = make_db(tmp_path)  # second open: migrations must not re-run/crash
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 6
     row = db._conn.execute("SELECT * FROM sessions WHERE id=?", (sid,)).fetchone()
     assert row is not None and row["started_utc"] == "2026-06-10T12:00:00Z"
 
@@ -146,7 +146,7 @@ def test_v1_database_upgrades_in_place(tmp_path):
     conn.commit()
     conn.close()
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 6
     assert db.attempts()[0].rollouts_total == 0   # backfilled default
     assert db.attempts()[0].jumps_total == 0
 
@@ -197,6 +197,18 @@ def test_migration_v4_seeds_ten_segment_definitions(tmp_path):
         {"type": "level_enter", "to": 6, "from": 16},
         {"type": "attempt_anchor", "level": 6, "area": 1}]
     assert lblj["end_triggers"] == [{"type": "level_enter", "to": 17}]
+
+
+def test_fresh_db_seeds_bowser3_ending_on_key_grabbed(tmp_path):
+    # Regression: the ORIGINAL v4 seed (commit c9a03cd) ended Bowser 3 on
+    # star_grabbed, which the grand star can NEVER fire (it enters
+    # ACT_JUMBO_STAR_CUTSCENE -> key_grabbed, not star_collected — see
+    # detectors/key.py). The segment armed but never completed (live report
+    # 2026-06-12). 419c4e6 fixed the seed; this pins it so a future seed edit
+    # can't silently re-break detection. (Existing-db repair: v6, below.)
+    db = make_db(tmp_path)
+    b3 = next(d for d in db.segment_defs() if d["name"] == "Bowser 3")
+    assert b3["end_triggers"] == [{"type": "key_grabbed", "level": 34}]
 
 
 def test_segment_def_crud_roundtrip(tmp_path):
@@ -255,7 +267,7 @@ def test_v3_database_pb_rows_survive_v4_rebuild(tmp_path):
     conn.commit()
     conn.close()
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 6
     [row] = db.pbs()
     assert row["id"] == 7 and row["frames"] == 500
     assert row["course_id"] == 2 and row["star_id"] == 3
@@ -282,11 +294,59 @@ def test_v5_updates_existing_v4_lblj_row_with_area_anchor(tmp_path):
     conn.commit()
     conn.close()
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 6
     lblj = next(d for d in db.segment_defs() if d["name"] == "LBLJ")
     assert lblj["start_triggers"] == [
         {"type": "level_enter", "to": 6, "from": 16},
         {"type": "attempt_anchor", "level": 6, "area": 1}]
+
+
+# -- migration v6: grand-star repair — Bowser 3 ends on key_grabbed ----------
+
+def test_v6_repairs_existing_bowser3_end_trigger(tmp_path):
+    """An existing db seeded from the ORIGINAL v4 (commit c9a03cd) ended
+    Bowser 3 on star_grabbed.  The grand star never enters a star-dance
+    action (detectors/key.py) — it fires key_grabbed which='grand', never
+    star_collected — so that segment armed but could never complete.  The
+    seed was corrected in 419c4e6 for FRESH DBs but no repair shipped for
+    existing ones; v6 is that repair.  (Fresh DBs already carry the fixed
+    end trigger, so the pre-fix shape is restored by hand here.)"""
+    import sqlite3
+    from sm64_events.storage.db import MIGRATIONS
+    path = tmp_path / "t.db"
+    conn = sqlite3.connect(str(path))
+    for script in MIGRATIONS[:5]:          # bring the db up to v5
+        conn.executescript(script)
+    conn.execute("UPDATE segment_defs SET end_triggers="
+                 "'[{\"type\":\"star_grabbed\"}]'"
+                 " WHERE id=10 AND name='Bowser 3'")
+    conn.execute("PRAGMA user_version = 5")
+    conn.commit()
+    conn.close()
+    db = Database(path)
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 6
+    b3 = next(d for d in db.segment_defs() if d["name"] == "Bowser 3")
+    assert b3["end_triggers"] == [{"type": "key_grabbed", "level": 34}]
+
+
+def test_v6_leaves_user_customized_bowser3_untouched(tmp_path):
+    """The repair is triple-guarded on the EXACT broken seed value, so a
+    user who deliberately re-pointed Bowser 3's end trigger keeps it."""
+    import sqlite3
+    from sm64_events.storage.db import MIGRATIONS
+    path = tmp_path / "t.db"
+    conn = sqlite3.connect(str(path))
+    for script in MIGRATIONS[:5]:
+        conn.executescript(script)
+    conn.execute("UPDATE segment_defs SET end_triggers="
+                 "'[{\"type\":\"level_enter\",\"to\":6}]'"
+                 " WHERE id=10 AND name='Bowser 3'")
+    conn.execute("PRAGMA user_version = 5")
+    conn.commit()
+    conn.close()
+    db = Database(path)
+    b3 = next(d for d in db.segment_defs() if d["name"] == "Bowser 3")
+    assert b3["end_triggers"] == [{"type": "level_enter", "to": 6}]
 
 
 def test_failed_migration_rolls_back_schema_and_version(tmp_path, monkeypatch):
@@ -303,7 +363,7 @@ def test_failed_migration_rolls_back_schema_and_version(tmp_path, monkeypatch):
         Database(path)
     check = sqlite3.connect(str(path))
     # (a) version reflects only the successful prefix
-    assert check.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert check.execute("PRAGMA user_version").fetchone()[0] == 6
     # partial application rolled back: first statement did NOT stick
     names = {r[0] for r in check.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
@@ -313,5 +373,5 @@ def test_failed_migration_rolls_back_schema_and_version(tmp_path, monkeypatch):
     fixed = "CREATE TABLE extra (id INTEGER);"
     monkeypatch.setattr(db_mod, "MIGRATIONS", db_mod.MIGRATIONS[:-1] + [fixed])
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 7
     db.close()

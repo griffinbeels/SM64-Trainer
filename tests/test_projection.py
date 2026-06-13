@@ -701,11 +701,16 @@ def test_star_select_period_is_not_an_abandon_for_the_star():
 
 
 def test_attribution_resumes_for_in_level_anchors():
+    # The grabbed star and the level must name the SAME course now that
+    # re-entry checks it (projection.py): a WF star (course 2) is practiced via
+    # level 24 (WF). Exit to the castle (hub: no course, target survives) then
+    # RE-ENTER the same course — re-entering the star's own course never
+    # retires the target, so the in-level L-reset still attributes to it.
     attempts = project([
         star(1, 900),
-        lvl(2, 1000, 22, 6),
+        lvl(2, 1000, 24, 6),
         jev(3, "practice_reset", 1000, {"igt_frames_before": 900, "mario_acted": True}),
-        lvl(4, 1250, 6, 22),
+        lvl(4, 1250, 6, 24),
         jev(5, "practice_reset", 1300, {"igt_frames_before": 0, "mario_acted": True}),   # course load
         jev(6, "practice_reset", 1700, {"igt_frames_before": 380, "mario_acted": True}), # L-reset
     ])
@@ -832,14 +837,50 @@ def seg_defs():
                        guards=[])]
 
 
-def test_segment_success_is_projected_and_auto_follows_target():
+def test_segment_success_into_a_star_stage_is_projected_and_clears_target():
+    # LBLJ (seg_defs) ENDS by entering level 17 = BITDW, a course-bearing star
+    # stage — so the success is recorded but the target clears to None (we're
+    # in a fresh stage with no star picked). The auto-follow-onto-segment path
+    # is covered by the star-grab and into-hub tests below.
     p = Projector(segments=seg_defs())
     p.feed(jev(1, "level_changed", 900, {"from": 16, "to": 16}))
     p.feed(jev(2, "level_changed", 1000, {"from": 16, "to": 6}))
     closed = p.feed(jev(3, "level_changed", 1085, {"from": 6, "to": 17}))
     segs = [a for a in closed if a.segment_id == 1]
     assert len(segs) == 1 and segs[0].outcome == "success"
-    assert p.target == ("segment", 1)
+    assert p.target is None
+
+
+def test_segment_completing_into_the_hub_still_follows_onto_the_segment():
+    # Boundary of caveat 12: only entering a STAR STAGE clears. A segment that
+    # ends by entering the castle hub (level 6, no course) still auto-follows
+    # onto the segment — it becomes the active segment.
+    from sm64_events.tracking.segments import SegmentDef
+    seg = SegmentDef(id=8, name="to-hub", enabled=True,
+                     start_triggers=[{"type": "level_enter", "to": 8}],
+                     end_triggers=[{"type": "level_enter", "to": 6}], guards=[])
+    p = Projector(segments=[seg])
+    p.feed(jev(1, "level_changed", 500, {"from": 6, "to": 8}))          # arm in SSL
+    closed = p.feed(jev(2, "level_changed", 2000, {"from": 8, "to": 6}))  # end into hub
+    assert any(a.segment_id == 8 and a.outcome == "success" for a in closed)
+    assert p.target == ("segment", 8)
+
+
+def test_mips_segment_records_attempt_but_leaves_nothing_active():
+    # The user's exact report: MIPS is run in the basement and COMPLETES by
+    # entering DDD (level 23 = course 9). The segment attempt is recorded with
+    # its time, but because we're now in DDD with no star picked the target is
+    # cleared — no active segment AND no active star.
+    from sm64_events.tracking.segments import SegmentDef
+    mips = SegmentDef(id=7, name="MIPS", enabled=True,
+                      start_triggers=[{"type": "level_enter", "to": 6}],
+                      end_triggers=[{"type": "level_enter", "to": 23}], guards=[])
+    p = Projector(segments=[mips])
+    p.feed(jev(1, "level_changed", 500, {"from": 16, "to": 6}))           # arm in the castle
+    closed = p.feed(jev(2, "level_changed", 5000, {"from": 6, "to": 23}))  # enter DDD -> completes MIPS
+    win = next(a for a in closed if a.segment_id == 7)
+    assert win.outcome == "success" and win.rta_frames == 4500   # attempt + time recorded
+    assert p.target is None                                      # nothing active
 
 
 def test_star_target_is_tagged_now():
@@ -855,12 +896,17 @@ def test_segment_target_set_event_round_trips():
 
 
 def test_cleared_segment_attempt_does_not_move_target():
+    # Arming a segment retires the active-star target (active-star/segment
+    # exclusivity, 2026-06-12): the star target -> None as LBLJ arms on the
+    # 16->6 entry, and the CLEARED segment success then does NOT move the
+    # target onto the segment either — so it stays None throughout.
     p = Projector(cleared={2 + 10**10 * 1: "mistake"}, segments=seg_defs())
     p.feed(jev(1, "target_set", 0, {"course_id": 2, "star_id": 2}))
-    p.feed(jev(2, "level_changed", 1000, {"from": 16, "to": 6}))
+    p.feed(jev(2, "level_changed", 1000, {"from": 16, "to": 6}))  # arms LBLJ -> clears star target
+    assert p.target is None
     closed = p.feed(jev(3, "level_changed", 1100, {"from": 6, "to": 17}))
     assert closed[-1].cleared is True
-    assert p.target == ("star", 2, 2)
+    assert p.target is None       # cleared success does not set a segment target
 
 
 def test_replay_signature_accepts_segments():
@@ -870,6 +916,53 @@ def test_replay_signature_accepts_segments():
         jev(2, "level_changed", 1100, {"from": 6, "to": 17}),
     ], segments=seg_defs())
     assert any(a.segment_id == 1 for a in attempts)
+
+
+# -- active-star/segment mutual exclusivity (UI requirement 2026-06-12) ---------
+
+def test_segment_arming_retires_active_star_target():
+    # Req 1: starting a segment run means "doing a segment, not the star" — a
+    # star target is retired the instant a segment arms (LBLJ arms on 16->6).
+    p = Projector(segments=seg_defs())
+    p.feed(jev(1, "target_set", 0, {"course_id": 2, "star_id": 2}))
+    assert p.target == ("star", 2, 2)
+    p.feed(jev(2, "level_changed", 1000, {"from": 16, "to": 6}))
+    assert p.target is None
+
+
+def test_entering_a_different_course_retires_active_star():
+    # Req 3: an active star in one course (SSL, course 8) can't be active once
+    # Mario warps to another stage (DDD, level 23 = course 9). Re-entering the
+    # SAME course (level 8) on the way in does NOT retire it.
+    p = Projector()
+    p.feed(jev(1, "target_set", 0, {"course_id": 8, "star_id": 1}))
+    p.feed(jev(2, "level_changed", 1000, {"from": 6, "to": 8}))   # enter SSL: same course
+    assert p.target == ("star", 8, 1)
+    p.feed(jev(3, "level_changed", 2000, {"from": 8, "to": 23}))  # warp to DDD: different course
+    assert p.target is None
+
+
+def test_exit_to_hub_keeps_active_star_until_another_stage():
+    # Req 3 hub rule: the castle hub (level 6) has no course of its own, so
+    # bouncing out to it and back into the same course leaves the active star
+    # untouched — only entering a genuinely different stage retires it.
+    p = Projector()
+    p.feed(jev(1, "target_set", 0, {"course_id": 8, "star_id": 1}))   # SSL
+    p.feed(jev(2, "level_changed", 1000, {"from": 8, "to": 6}))        # exit to hub
+    assert p.target == ("star", 8, 1)
+    p.feed(jev(3, "level_changed", 1500, {"from": 6, "to": 8}))        # re-enter SSL
+    assert p.target == ("star", 8, 1)
+    p.feed(jev(4, "level_changed", 2000, {"from": 8, "to": 9}))        # enter BoB (level 9 = course 1)
+    assert p.target is None
+
+
+def test_different_course_entry_keeps_segment_target():
+    # Only a STAR target is course-bound; a segment target survives any level
+    # change (segments span/define their own geography).
+    p = Projector()
+    p.feed(jev(1, "target_set", 0, {"kind": "segment", "segment_id": 4}))
+    p.feed(jev(2, "level_changed", 1000, {"from": 8, "to": 23}))
+    assert p.target == ("segment", 4)
 
 
 def test_grab_closing_star_and_segment_orders_star_first_and_target_follows_segment():

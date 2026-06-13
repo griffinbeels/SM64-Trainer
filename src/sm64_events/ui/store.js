@@ -107,6 +107,17 @@ export function useTracker() {
           const id = ev.payload.segment_id;
           setArmedOrder((prev) => prev.filter((x) => x !== id));
           // lastPinnedSeg deliberately NOT cleared — see its declaration
+        } else if (ev.type === "attempt_completed"
+                   && ev.payload.kind === "segment"
+                   && ev.payload.outcome === "success") {
+          // A finished segment run retires the sticky pin (the run is DONE —
+          // unlike an accidental disarm, which keeps it). If the segment ended
+          // by entering a star stage the server leaves NO active target, so
+          // without this the segment would linger pinned as "RECENT"; a
+          // success that does NOT enter a stage stays pinned via the segment
+          // target (activeSeg). Matched to projection.py caveat 12.
+          setLastPinnedSeg((prev) =>
+            prev === ev.payload.segment_id ? null : prev);
         }
       };
     }

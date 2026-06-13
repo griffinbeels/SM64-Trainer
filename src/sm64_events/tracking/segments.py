@@ -42,7 +42,19 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
   SUCCESS discards the attempt (end before arm is a genuine anomaly —
   self-heal, domain rule 4), but failure closures record the row with
   rta_frames=None (game_reset's boot-range frame makes this the ONLY way
-  hard_reset rows exist)
+  hard_reset rows exist).  EXCEPTION — grab closes carry Usamune's IGT: a
+  close event with an authoritative igt_frames in its payload (key_grabbed /
+  star_collected) records THAT as the time instead of the wall-frame delta,
+  so a fight segment matches Usamune's display exactly and stays pause-safe
+  (the delta is one display-tick short and counts paused frames; live report
+  2026-06-12, Bowser 3 read 0'46"23 vs Usamune 0'46"26).  The grand star
+  never fires star_collected (detectors/key.py) — key.py stamps the igt via
+  the shared clock (detectors/igt_clock.py).  Valid because every grab-closed
+  segment today arms at the level/area load where Usamune resets IGT, so its
+  igt IS the segment elapsed; a segment armed mid-level and closed on a grab
+  would record Usamune's since-load time, not the since-arm delta (none
+  exists; revisit if one is created).  igt_frames on the Attempt stays None —
+  segments remain RTA-only to the UI/PB layer; only the rta VALUE changes.
 - load-echo rule: Usamune resets IGT on every level/area load, so the
   anchor detector emits a synthetic practice_reset on the same global-timer
   frame as the triggering transition.  Echo classification uses ORDERED shapes
@@ -80,6 +92,19 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
         real-reset path -> closes the stale attempt and re-arms at the warp
         frame.  A deliberate menu action is never an involuntary load echo.
         (live-gate amendment 2026-06-12)
+    (4) save-prompt echo: ev.payload["save_pending"] is True -- suppressed
+        UNCONDITIONALLY.  Exiting a course WITH a star pops the post-star
+        "SAVE & CONTINUE?" course-complete screen; confirming an option
+        reloads and resets Usamune's IGT, firing a practice_reset frames
+        later (idle Mario, no position change, paused_frames_before 0) that
+        is neither co-frame, a door, nor AFK -- it slipped through (1)-(3)
+        and wrongly closed the armed segment (MIPS Clip: HMC exit -> save
+        prompt reset the segment, live report 2026-06-12).  The anchor
+        detector sets save_pending when the save menu was observed this
+        anchor period (anchors.py); such a reload is involuntary, so the
+        user wants the segment to run through it ("INCLUDING the save
+        prompt").  Historical events (no key): .get() -> False -> conservative
+        close behaviour preserved.
   Shapes (1)/(3) are detected by frame equality.  Shape (2) is detected by
   prev_action/action in DOOR_ACTIONS (falling back through the chain) or
   frames_since_door.  Historical events (no prev_action, no frames_since_door):
@@ -192,7 +217,12 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 "in {level}",
                 lambda p, ev, ctx: ev.type == "warp_entered"
                 and ev.payload["level"] == p["level"]),
-    TriggerType("key_grabbed", "You grab a Bowser key",
+    TriggerType("key_grabbed", "You grab a Bowser key / grand star",
+                # key_grabbed claims all three fight-ending grabs: the Bowser
+                # 1/2 keys AND the Bowser 3 grand star (which='grand', level
+                # 34) — the grand star never fires star_collected, so a
+                # "beat Bowser 3" segment ends HERE, not on star_grabbed.
+                # See detectors/key.py.
                 {"level": {"kind": "level", "required": False}},
                 "in {level}",
                 lambda p, ev, ctx: ev.type == "key_grabbed"
@@ -400,7 +430,14 @@ class SegmentEngine:
             # logs) — they fail the gate and stay REAL attempt boundaries.
             or (ev.frame == self._last_transition_frame
                 and ev.payload.get("paused_frames_before", 0)
-                <= _MENU_PAUSE_FRAMES))
+                <= _MENU_PAUSE_FRAMES)
+            # (4) save-prompt echo: the post-star "SAVE & CONTINUE?" course-
+            # complete screen reloads on confirm, resetting Usamune's IGT.
+            # save_pending means the anchor detector saw the save menu this
+            # period — an involuntary reload, not a player reset.  Like the
+            # door shapes it feeds echo_invisible too (an attempt_anchor-armed
+            # segment must not rebase its start_frame onto the save reload).
+            or ev.payload.get("save_pending", False))
         for d in self._defs:
             arm = self._armed.get(d.id)
             starts = self._matches(d.start_triggers, ev, ctx)
@@ -528,11 +565,19 @@ class SegmentEngine:
                             "name": d.name, "frame": ev.frame})
 
     def _close(self, Attempt, d, arm: _Arm, ev, outcome, detail):
-        rta = ev.frame - arm.start_frame
-        if rta < 0:
-            if outcome == "success":
-                return None  # genuine anomaly: end before arm (self-heal)
-            rta = None       # backward jump (game_reset boot frame, earlier savestate): row counts, time unknowable
+        # A grab close carries Usamune's authoritative IGT — use it verbatim
+        # (pause-safe, display-tick aligned; see the module docstring's
+        # rta_frames clause). Non-grab closes (level/warp/reset/death) have no
+        # igt_frames -> the wall-frame delta with its negative self-heal.
+        igt = ev.payload.get("igt_frames")
+        if igt is not None:
+            rta = igt
+        else:
+            rta = ev.frame - arm.start_frame
+            if rta < 0:
+                if outcome == "success":
+                    return None  # genuine anomaly: end before arm (self-heal)
+                rta = None       # backward jump (game_reset boot frame, earlier savestate): row counts, time unknowable
         return Attempt(
             id=arm.jid + SEGMENT_ATTEMPT_OFFSET * d.id,
             session_id=arm.session_id, course_id=None, star_id=None,

@@ -37,3 +37,27 @@ def test_mario_offsets_derive_from_struct_base():
     assert A.MARIO_ACTION == A.MARIO_STRUCT + 0x0C
     assert A.MARIO_ACTION_TIMER == A.MARIO_STRUCT + 0x1A
     assert A.MARIO_NUM_STARS == A.MARIO_STRUCT + 0xAA
+
+
+def test_course_by_level_is_consistent_with_the_name_tables():
+    # Drift guard: every mapped level must name the SAME place as the course
+    # it points at. A typo in either table (or a wrong pairing) breaks this
+    # before it can silently fail to retire a stale active star.
+    for level, course in A.COURSE_BY_LEVEL.items():
+        assert level in A.LEVEL_NAMES, level
+        assert course in A.COURSE_NAMES, course
+        assert A.LEVEL_NAMES[level] == A.COURSE_NAMES[course], (level, course)
+
+
+def test_course_for_level_returns_none_for_hubs_and_unknown():
+    assert A.course_for_level(8) == 8           # SSL level -> SSL course
+    assert A.course_for_level(9) == 1           # BoB level -> course 1
+    assert A.course_for_level(6) is None        # Castle Inside (hub)
+    assert A.course_for_level(16) is None        # Castle Grounds (hub)
+    assert A.course_for_level(30) is None        # Bowser 1 Arena (no course)
+    assert A.course_for_level(None) is None
+    assert A.course_for_level(999) is None       # unknown id
+
+    # Every main course (1-15) is reachable from exactly one level.
+    mapped = set(A.COURSE_BY_LEVEL.values())
+    assert set(range(1, 16)) <= mapped

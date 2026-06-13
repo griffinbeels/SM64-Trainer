@@ -30,7 +30,7 @@ def test_igt_drop_to_zero_emits_practice_reset():
     assert ev.payload == {"igt_frames_before": 500, "mario_acted": False,
                           "paused_frames_before": 0, "acted_tracking": True,
                           "action": ACT_IDLE, "prev_action": ACT_IDLE,
-                          "frames_since_door": None}
+                          "save_pending": False, "frames_since_door": None}
 
 
 def test_igt_drop_to_small_value_still_practice_reset():
@@ -57,7 +57,7 @@ def test_backward_global_timer_emits_state_loaded():
     assert ev.payload == {"igt_frames_restored": 120, "mario_acted": False,
                           "paused_frames_before": 0, "acted_tracking": True,
                           "action": ACT_IDLE, "prev_action": ACT_IDLE,
-                          "frames_since_door": None}
+                          "save_pending": False, "frames_since_door": None}
 
 
 def test_backward_jump_into_boot_range_is_left_to_game_reset():
@@ -355,7 +355,7 @@ def test_existing_payload_pins_include_frames_since_door():
         "igt_frames_before": 500, "mario_acted": False,
         "paused_frames_before": 0, "acted_tracking": True,
         "action": ACT_IDLE, "prev_action": ACT_IDLE,
-        "frames_since_door": None}
+        "save_pending": False, "frames_since_door": None}
 
 
 # ---------------------------------------------------------------------------
@@ -500,3 +500,69 @@ def test_pause_warp_superseded_by_real_igt_drop():
     assert [e.type for e in events] == ["state_loaded"]
     assert d.process(snap(900, igt=120, level=6, area=2),
                      snap(902, igt=120, level=6, area=2)) == []
+
+
+# ---------------------------------------------------------------------------
+# save_pending — post-star "SAVE & CONTINUE?" screen (live report 2026-06-12)
+# Mario holds ACT_EXIT_LAND_SAVE_DIALOG (0x1327) for the whole course-complete
+# save menu (live watch); confirming an option reloads the area and resets
+# Usamune's IGT a few frames later, after Mario is already back to idle.  That
+# reset is involuntary — the segment engine must ignore it (shape 4).  A latch
+# set while the action is seen tags the following anchor with save_pending.
+# ---------------------------------------------------------------------------
+
+def test_save_dialog_action_latches_save_pending_on_following_reset():
+    """Faithful replay of the live trace: 0x1327 held during the menu, reverts
+    to idle on confirm, then the reload resets the IGT — the practice_reset
+    must carry save_pending=True."""
+    from sm64_events.memory.addresses import ACT_EXIT_LAND_SAVE_DIALOG
+    d = AnchorDetector()
+    # menu up: Mario in the save-dialog action while the IGT still runs
+    d.process(snap(1000, igt=100, action=ACT_IDLE),
+              snap(1001, igt=101, action=ACT_EXIT_LAND_SAVE_DIALOG))
+    # confirm: action reverts to idle (live: 0x1327 -> ACT_IDLE)
+    d.process(snap(1001, igt=101, action=ACT_EXIT_LAND_SAVE_DIALOG),
+              snap(1002, igt=102, action=ACT_IDLE))
+    # reload a few frames later resets the IGT, Mario still idle
+    events = d.process(snap(1002, igt=102, action=ACT_IDLE),
+                       snap(1004, igt=0, action=ACT_IDLE))
+    assert len(events) == 1 and events[0].type == "practice_reset"
+    assert events[0].payload["save_pending"] is True
+
+
+def test_save_pending_latch_consumed_by_its_reset():
+    """One-shot: the reload reset consumes the latch, so a LATER genuine
+    L-reset is not wrongly suppressed."""
+    from sm64_events.memory.addresses import ACT_EXIT_LAND_SAVE_DIALOG
+    d = AnchorDetector()
+    d.process(snap(1000, igt=100, action=ACT_IDLE),
+              snap(1001, igt=101, action=ACT_EXIT_LAND_SAVE_DIALOG))
+    # save reload reset — fires save_pending=True and clears the latch
+    save = d.process(snap(1001, igt=101, action=ACT_EXIT_LAND_SAVE_DIALOG),
+                     snap(1003, igt=0, action=ACT_IDLE))
+    assert save[0].payload["save_pending"] is True
+    # later real L-reset (idle Mario, never re-saw the menu): save_pending False
+    events = d.process(snap(1003, igt=200, action=ACT_IDLE),
+                       snap(1005, igt=0, action=ACT_IDLE))
+    assert len(events) == 1 and events[0].type == "practice_reset"
+    assert events[0].payload["save_pending"] is False
+
+
+def test_ordinary_reset_has_save_pending_false():
+    """No save menu seen → save_pending False (the segment engine still
+    records the reset row)."""
+    events = AnchorDetector().process(snap(1000, igt=500), snap(1002, igt=0))
+    assert events[0].payload["save_pending"] is False
+
+
+def test_save_dialog_sets_save_pending_on_state_loaded():
+    """Symmetry with practice_reset: a state_loaded during the save menu also
+    carries the latch."""
+    from sm64_events.memory.addresses import ACT_EXIT_LAND_SAVE_DIALOG
+    d = AnchorDetector()
+    d.process(snap(1000, igt=100, action=ACT_IDLE),
+              snap(1001, igt=101, action=ACT_EXIT_LAND_SAVE_DIALOG))
+    events = d.process(snap(1001, igt=101, action=ACT_EXIT_LAND_SAVE_DIALOG),
+                       snap(800, igt=120, action=ACT_IDLE))  # backward jump
+    assert events[0].type == "state_loaded"
+    assert events[0].payload["save_pending"] is True
