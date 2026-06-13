@@ -37,6 +37,11 @@ rate is wildly uneven. Route toward the channels that have a reader:
   context. The strongest enforcement for a mechanical rule — and the most
   *under-used*: audits repeatedly find recurring mechanical mistakes routed to
   weak prose because "a hook is more work." Don't. (See Step 2.)
+- **Skill bodies** — loaded only when the skill triggers, and skills
+  *under*-trigger. Reliable only for a lesson whose decision point reliably
+  fires that skill; otherwise an always-loaded pointer beats it. (A skill's
+  always-on surface is its one-line description in the skills list, not its
+  body — so a lesson buried in a skill body is as cold as the skill is quiet.)
 - **Standalone prose with no reader** — a retro file, a lessons doc, or any
   artifact whose only access path is "someone decides to go read it" — is
   cold. Nearly never consumed.
@@ -75,7 +80,7 @@ artifact — always check the rows above it first.
 | A module-local contract or rationale | **Module docstring** | The module |
 | Cross-cutting domain knowledge + its evidence | **Project knowledge doc** | e.g. docs/architecture.md — record evidence WITH the fact |
 | Consumer-facing surface change | **API docs / README** | The consumer contract file |
-| A workflow/process lesson (how Claude should work) | **Skill update — user level** | Edit the skill that was IN USE when the mistake happened (e.g., a plan-execution flaw → the plan-writing/executing skill). Never a new grab-bag "lessons" skill |
+| A workflow/process lesson (how Claude should work) | **By reliable channel: hook → always-loaded pointer → skill body** | Mechanical rule → a hook (fires every call). Otherwise the lesson's reliable surface is always-loaded: a lean CLAUDE.md/AGENTS pointer, or a memory whose index hook stands alone. Edit a **skill body only if that skill reliably triggers at this decision point** — skill bodies load on a trigger that often doesn't fire, so they're weaker than the always-loaded index. Never a grab-bag "lessons" skill. |
 | A user preference or project reality not in the repo | **Memory** | The persistent memory dir + MEMORY.md index — NOT project docs |
 | An unproven assumption | **VERIFY marker with a falsifiability test** | At the assumption: "run X, observe Y → holds; observe Z → wrong, consequence is W" |
 
@@ -161,7 +166,7 @@ more than a session.
 | "The stale-twin sweep came back clean" | Show the command and its output. An asserted-clean sweep that wasn't actually run is how a twin survives on a sibling branch and merges back. |
 | "That stale copy is on another branch" | It will merge. Fix it or flag the owner — silence ships the bug twice. |
 | "The user preference is noted in the docs" | Preferences describe the USER, not the code. They belong in memory. |
-| "This lesson is project-specific" | Workflow lessons (how to plan, review, execute) are not — route to user-level skills. |
+| "This lesson is project-specific" | Workflow lessons (how to plan, review, execute) are usually cross-project — but route by reliable channel (mechanical → hook; else an always-loaded pointer), NOT reflexively into a skill body that may never trigger. |
 | "VERIFY: unconfirmed" | Incomplete. Every VERIFY needs the exact test, the observable, and the consequence. |
 | "No bugs this session, nothing to write" | Harvest also promotes patterns that worked and assumptions that shipped. |
 | "It fits in two homes, I'll add it to both" | Run the placement test; ONE home wins. The other gets a link only if it serves a different audience — never a second copy of the content. |
