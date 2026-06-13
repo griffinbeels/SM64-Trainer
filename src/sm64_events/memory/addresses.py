@@ -423,3 +423,12 @@ def star_name(course_id: int, star_id: int) -> str:
     if 0 <= star_id < len(names):
         return names[star_id]
     return f"Star {star_id + 1}"
+
+
+def star_count(course_id: int) -> int:
+    """Selectable stars per course — THE one home for the 7-star rule.
+
+    Main courses (1-15) have six named stars plus the 100-coin star at
+    star_id 6 (star_name owns the naming side of that rule); everything
+    else has exactly its STAR_NAMES entries (course 0 has none)."""
+    return 7 if 1 <= course_id <= 15 else len(STAR_NAMES.get(course_id, ()))

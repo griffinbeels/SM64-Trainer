@@ -19,8 +19,8 @@ Contract (the UI builds against ALL of this):
   names, every key present for both kinds (shape stability)."""
 from sm64_events.core.timefmt import format_igt
 from sm64_events.links import star_links
-from sm64_events.memory.addresses import (COURSE_NAMES, STAR_NAMES,
-                                          course_name, star_name)
+from sm64_events.memory.addresses import (COURSE_NAMES, course_name,
+                                          star_count, star_name)
 from sm64_events.stats.registry import (DEFAULT_STAT_MENU, REGISTRY,
                                         compute_stat, selection_id,
                                         selection_order)
@@ -114,11 +114,12 @@ def _attempt_json(a, pbs, clock):
 def _catalog() -> dict:
     courses = []
     for cid, cname in COURSE_NAMES.items():
-        n = len(STAR_NAMES.get(cid, ()))
-        if 1 <= cid <= 15:
-            n = 7  # six named stars + 100 coins
+        # max(..., 1): the catalog always shows at least one star row even
+        # for course 0 (display fallback); the count itself lives in
+        # addresses.star_count
+        n = max(star_count(cid), 1)
         courses.append({"id": cid, "name": cname,
-                        "stars": [star_name(cid, s) for s in range(max(n, 1))]})
+                        "stars": [star_name(cid, s) for s in range(n)]})
     return {"courses": courses}
 
 

@@ -25,6 +25,14 @@ def test_star_names_fallback():
     assert A.star_name(1, 9) == "Star 10"
 
 
+def test_star_count_owns_the_seven_star_rule():
+    assert A.star_count(1) == 7    # six named + 100 Coins
+    assert A.star_count(15) == 7
+    assert A.star_count(16) == 1   # Bowser course
+    assert A.star_count(19) == 2   # Princess's Secret Slide
+    assert A.star_count(0) == 0    # Castle Secret: no named stars
+
+
 def test_mario_offsets_derive_from_struct_base():
     assert A.MARIO_ACTION == A.MARIO_STRUCT + 0x0C
     assert A.MARIO_ACTION_TIMER == A.MARIO_STRUCT + 0x1A
