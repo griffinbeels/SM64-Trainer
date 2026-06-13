@@ -41,7 +41,7 @@ export function StageBanner({ t }) {
         const active = tgt.kind !== "segment"
           && tgt.course_id === stage.course_id && tgt.star_id === i;
         const strat = lastStratFor(i);
-        return html`<button key=${i}
+        return html`<button key=${`${stage.course_id}:${i}`}
                             class="stagebtn ${active ? "active-star" : ""}"
                             onclick=${() => pick(i)}>
           <span class="stagebtn-name">${name}</span>
