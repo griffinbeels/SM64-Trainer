@@ -20,7 +20,7 @@ FastAPI + uvicorn, pymem, pytest.
 ```
 uv sync
 uv run pytest -q                                     # MUST pass before any merge
-uv run uvicorn sm64_events.main:app --host 127.0.0.1 --port 8064   # run from repo root (data/ is cwd-relative)
+uv run python -m sm64_events.main                    # run from repo root (data/ is cwd-relative); canonical — binds the CTRL+C shutdown deadline (bare uvicorn CLI needs --timeout-graceful-shutdown 3)
 uv run python tools/verify_addresses.py              # live gate (needs PJ64 + ROM)
 uv run python tools/dedupe_journal.py data/tracker.db          # scan double-journaled events (read-only); add --fix to repair (server must be stopped)
 ```

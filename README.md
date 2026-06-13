@@ -13,9 +13,16 @@ else that wants a live feed of the game.
 ## Run
 
     uv sync
-    uv run uvicorn sm64_events.main:app --host 127.0.0.1 --port 8064
+    uv run python -m sm64_events.main
 
 **Run from the repo root** — `data/tracker.db` is created relative to cwd.
+
+This is the canonical launch: it binds uvicorn's graceful-shutdown
+deadline so one CTRL+C always terminates the server. Launching the app
+via the bare uvicorn CLI works too, but pass
+`--timeout-graceful-shutdown 3` — without it, a browser holding a
+connection (e.g. a paused replay video) stalls CTRL+C until a 30 s
+force-exit watchdog fires.
 
 A second server started against the same db acquires no lock and runs broadcast-only — game events are never double-recorded.
 
