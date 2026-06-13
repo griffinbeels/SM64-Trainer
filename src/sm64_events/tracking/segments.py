@@ -2,7 +2,8 @@
 
 ONE registry: TRIGGERS/GUARDS drive (a) definition validation at the API
 boundary, (b) the matcher, (c) GET /api/segments/vocab that renders the
-builder GUI. Adding a trigger type = one TriggerType row here.
+builder GUI. Adding a trigger type = one TriggerType row here (label +
+params + the sentence template the builder renders).
 
 Matcher invariants (spec §Matcher semantics — tests are the contract):
 - closures (success/failure) process BEFORE arming; one event may close an

@@ -1,7 +1,8 @@
 // src/sm64_events/ui/components/segments.js — definition list + builder.
 // The form is 100% vocab-driven: GET /api/segments/vocab supplies trigger
-// types, param schemas, and level/area enums; adding a trigger type in
-// tracking/segments.py appears here with zero UI changes.
+// types, param schemas, sentence templates, and level/area/course/star
+// enums; adding a trigger type in tracking/segments.py appears here with
+// zero UI changes.
 import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
