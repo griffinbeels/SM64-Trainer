@@ -22,14 +22,36 @@ drift-guard tests in `tests/test_addresses.py`). This plan **reuses**
 areas (19–24) too, so the detector in Task 1 gates to `1 ≤ course ≤ 15` to
 honor "15 main courses only".
 
-This is a **shared checkout**; that bridge may still be uncommitted in a
-sibling session's working tree. Before starting:
-
-- [ ] **Confirm the bridge is present and committed on this branch**
+- [ ] **Confirm the bridge is present on this branch**
 
 Run: `git log --oneline -5 -- src/sm64_events/memory/addresses.py`
 Then run: `uv run pytest -q tests/test_addresses.py`
-Expected: `test_course_by_level_is_consistent_with_the_name_tables` and `test_course_for_level_returns_none_for_hubs_and_unknown` PASS. If `course_for_level` is only an uncommitted working-tree change, coordinate so that work lands first — importing an uncommitted symbol on a shared checkout is fragile.
+Expected: `test_course_by_level_is_consistent_with_the_name_tables` and `test_course_for_level_returns_none_for_hubs_and_unknown` PASS. (As of 2026-06-12 this is **merged to master** — commit history includes the active-star-retirement work; the working tree is clean.)
+
+## Compatibility with projection caveats 12 & 13 (verified post-merge 2026-06-12)
+
+The merged segment/reset rework added two behaviors this banner must coexist
+with — it does, complementarily. Read these so you do not "fix" the server's
+auto-resume as if it were a banner bug:
+
+- **Caveat 12 (retirement):** a STAR target retires to `None` when a segment
+  arms OR Mario enters a DIFFERENT course (`projection.py`, keyed on the
+  **journaled `level_changed`**, via `course_for_level`). The banner's
+  broadcast-only `stage_changed` does NOT feed the projector, so it can never
+  double-drive this — the two are fully decoupled.
+- **Caveat 13 (resume on re-entry):** a star retired by leaving its course is
+  stashed in `_suspended_star`; re-entering that course with nothing active
+  reinstates the target. So on re-entry the banner **highlights** the resumed
+  star automatically (it reads `v.target`) — no click needed.
+- **Clicking a banner button** POSTs `/api/target` → `target_set`, whose
+  handler does `self._suspended_star = None` (an explicit pick overrides the
+  resume) then sets the star target. This is the SAME path the header
+  `TargetEditor` already uses, so the banner inherits exclusivity and the
+  `target_changed` broadcast for free — no new server logic.
+
+Net: the banner is purely additive. Its value over auto-resume is first-time
+course entry (no suspended star), switching to a DIFFERENT star than the
+resumed one, and surfacing each star's last-strategy subtext.
 
 ---
 
@@ -457,8 +479,11 @@ In `refresh()`, right after `setView(v);`, add:
 
 - [ ] **Step 3: Update `stage` on the live WS event**
 
-In `ws.onmessage`, extend the `segment_armed`/`segment_disarmed` branch chain
-with a `stage_changed` arm:
+The `ws.onmessage` if/else-if chain now ends with an `attempt_completed`
+(segment-success) branch that retires the sticky pin (added by the merged
+reset rework). Append `stage_changed` as the FINAL `else if`, AFTER that
+branch — i.e. after the `setLastPinnedSeg((prev) => prev === ev.payload.segment_id ? null : prev);`
+line that closes the `attempt_completed` block:
 
 ```javascript
         } else if (ev.type === "stage_changed") {
@@ -466,7 +491,10 @@ with a `stage_changed` arm:
         }
 ```
 
-(Add it as the final `else if` after the `segment_disarmed` block.)
+For reference, the chain becomes: `segment_armed` → `segment_disarmed` →
+`attempt_completed` (segment success) → `stage_changed`. (Do NOT add
+`stage_changed` to `REFRESH_ON` — the view's catalog and `last_strat_by_star`
+do not depend on it.)
 
 - [ ] **Step 4: Return `stage` from the hook**
 
@@ -635,6 +663,9 @@ Open: `http://127.0.0.1:8064/`
 - [ ] Enter **Bowser in the Dark World** or a **secret slide/cap** → **no** banner (main courses only).
 - [ ] Switch areas inside one course (e.g. SSL pyramid top) → the banner stays put, no flicker.
 - [ ] Reload the page while standing in a course → the banner is present immediately (served from `view.stage`).
+- [ ] **Caveat 13 interplay:** pick a star, leave the course, then re-enter it → the server auto-resumes that star (`projection.py`) and the banner shows it highlighted **without** a click.
+- [ ] **Override a resume:** after that auto-resume, click a DIFFERENT button in the banner → the target switches cleanly to the new star (the suspended resume is dropped; header + highlight follow).
+- [ ] **Exclusivity:** with a star active from the banner, arm a segment → the star target retires (caveat 12) and the banner highlight clears; the active star section is replaced by the armed segment pin.
 
 - [ ] **Step 3: Note any issues**
 
