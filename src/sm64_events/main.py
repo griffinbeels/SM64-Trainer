@@ -13,6 +13,7 @@ from sm64_events.detectors.key import KeyGrabDetector
 from sm64_events.detectors.level import LevelChangeDetector
 from sm64_events.detectors.lifecycle import GameResetDetector
 from sm64_events.detectors.spawn import SpawnDetector
+from sm64_events.detectors.stage import StageChangeDetector
 from sm64_events.detectors.star_grab import StarGrabDetector
 from sm64_events.detectors.warp import WarpDetector
 from sm64_events.memory.pj64 import Pj64Memory
@@ -121,9 +122,9 @@ def build():
     # area_changed reads CURR_AREA (gCurrAreaIndex, live-pinned 2026-06-12);
     # castle areas: 1=lobby, 2=upstairs, 3=basement — see addresses.py.
     detectors = [GameResetDetector(), LevelChangeDetector(),
-                 AreaChangeDetector(), AnchorDetector(), DeathDetector(),
-                 DustTrickDetector(), WarpDetector(), KeyGrabDetector(),
-                 SpawnDetector(), StarGrabDetector()]
+                 AreaChangeDetector(), StageChangeDetector(), AnchorDetector(),
+                 DeathDetector(), DustTrickDetector(), WarpDetector(),
+                 KeyGrabDetector(), SpawnDetector(), StarGrabDetector()]
     if replay is not None:
         # Poll-thread tap (emits no events): tells the recorder the player
         # is providing input so the buffer pauses while idle (activity.py).
