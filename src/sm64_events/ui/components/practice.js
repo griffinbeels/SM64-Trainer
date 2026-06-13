@@ -7,6 +7,7 @@ import { ReplayPlayer } from "./replay.js";
 import { StatMenu } from "./statmenu.js";
 import { Timeline } from "./timeline.js";
 import { Progress } from "./progress.js";
+import { StageBanner } from "./stagebanner.js";
 
 const html = htm.bind(h);
 
@@ -443,6 +444,7 @@ export function Practice({ t }) {
     </div>
     ${menuOpen && html`<${StatMenu} t=${t} close=${() => setMenuOpen(false)} />`}
     <${ControlBar} ui=${ui} />
+    <${StageBanner} t=${t} />
     ${pinnedSegs.map((sec) => html`<${SegmentSection} key=${`seg:${sec.segment_id}`} sec=${sec} t=${t} ui=${ui} pinned=${true} freshIds=${freshIds} />`)}
     ${activeStar && html`<${StarSection} key=${`${activeStar.course_id}:${activeStar.star_id}`} sec=${activeStar} t=${t} ui=${ui} pinned=${true} freshIds=${freshIds} />`}
     ${v.stars.length === 0 && segs.length === 0 && v.unassigned.length === 0
