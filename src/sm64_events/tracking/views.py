@@ -352,4 +352,5 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         "strategies": registered,
         "last_strat_by_star": {f"{c}:{s}": v
                                for (c, s), v in service.strat_by_star.items()},
+        "stage": service.current_stage,
     }
