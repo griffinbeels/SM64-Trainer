@@ -23,6 +23,11 @@ export function useTracker() {
   // the segment SUCCEEDS (a completed run is done — retired in the WS handler
   // below; a stage-entry completion otherwise lingers as "RECENT").
   const [lastPinnedSeg, setLastPinnedSeg] = useState(null);
+  // stage: the main course the player is currently in (or null / in_stage:false).
+  // Driven by the broadcast-only stage_changed WS event; intentionally NOT in
+  // REFRESH_ON — the view's catalog and last_strat_by_star don't depend on it,
+  // so a full refetch would be wasted. Seeded from v.stage for initial load.
+  const [stage, setStage] = useState(null);
   // server-owned pause truth: {paused, reason: "manual"|"afk"|null}.
   // Polled (5 s) because "afk" flips server-side without any UI action;
   // the POST response updates it instantly on manual toggles.
@@ -58,6 +63,7 @@ export function useTracker() {
     try {
       const v = await getJSON(`/api/session?clock=${clockRef.current}&scope=${scopeRef.current}`);
       setView(v);
+      setStage(v ? v.stage : null);
       // armedOrder: live via WS notices, reconciled from every view fetch —
       // instant AND cannot stay stale across reconnects. Keep the existing
       // order filtered to the view's armed ids, then append any view-armed
@@ -123,6 +129,8 @@ export function useTracker() {
           // fires and target_changed never arrives — see projection.py.
           setLastPinnedSeg((prev) =>
             prev === ev.payload.segment_id ? null : prev);
+        } else if (ev.type === "stage_changed") {
+          setStage(ev.payload);
         }
       };
     }
@@ -136,5 +144,5 @@ export function useTracker() {
   return { view, clock, pickClock, scope, pickScope, feed, connected,
            refresh, paused: pauseState.paused,
            pauseReason: pauseState.reason, togglePause,
-           armedSegs, armedOrder, lastPinnedSeg };
+           armedSegs, armedOrder, lastPinnedSeg, stage };
 }
