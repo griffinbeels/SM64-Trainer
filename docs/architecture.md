@@ -219,6 +219,15 @@ No public RAM map exists for Usamune internals; locate values empirically:
    registry, marked VERIFY until the live gate passes.
 
 Principles:
+- Before hunting a NEW address, check whether the state is already
+  distinguishable from a field the snapshot ALREADY samples — a new memory
+  read is the heaviest option (touches addresses.py + snapshot.py, both
+  shared contracts, plus a live gate). The save-prompt fix (2026-06-12)
+  needed to detect the post-star "SAVE & CONTINUE?" screen; a live watch
+  showed `mario_action` already held `ACT_EXIT_LAND_SAVE_DIALOG` (0x1327)
+  for the whole menu — one tick before `gMenuMode` (0x803314F8) even flipped
+  to 2 — so it reused the sampled action instead of adding `gMenuMode`,
+  collapsing a 5-file change to 3 files and zero shared-contract edits.
 - A scan only distinguishes quantities that DIFFER during the scan.
 - Correlated "garbage" = wrong symbol at that address; random garbage =
   wrong decode.
