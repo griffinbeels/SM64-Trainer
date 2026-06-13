@@ -37,7 +37,7 @@
   .seg-end { border-color: #4a2f2f; } .seg-end .seghead { background: #291616; color: #ce8f8f; }
   .seg-guard { border-color: #4a3c2a; } .seg-guard .seghead { background: #292016; color: #cead7f; }
   .segclause { display: flex; flex-wrap: wrap; gap: .4rem; margin: .3rem 0; align-items: center; padding: .3rem .45rem; border-radius: 6px; }
-  .segclause select { max-width: 100%; min-width: 0; }
+  .segclause select { max-width: 100%; min-width: 0; } /* min-width:0 required: flex min-width:auto = min-content, so a wide level name punches through the pane with max-width alone */
   .segword { color: #6c7686; font-size: .85em; }
   /* one tint per alternative clause (cycling): new color = new condition */
   .tint0 { background: #161d2b; border-left: 3px solid #4a6fa5; }

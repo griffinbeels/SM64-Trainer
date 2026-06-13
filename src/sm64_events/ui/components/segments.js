@@ -11,6 +11,8 @@ import { getJSON, send } from "../api.js";
 const html = htm.bind(h);
 
 function ParamInput({ schema, name, value, vocab, clause, onChange }) {
+  // "" MUST become null, never Number("")===0 — 0 is a real area/level id,
+  // so a bare Number() silently scoped cleared optional params to area 0.
   const numOrNull = (s) => (s === "" ? null : Number(s));
   const dropdown = (entries, anyLabel, pickLabel) => html`<select
       value=${value ?? ""} onchange=${(e) => onChange(numOrNull(e.target.value))}>
