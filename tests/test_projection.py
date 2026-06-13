@@ -883,6 +883,72 @@ def test_mips_segment_records_attempt_but_leaves_nothing_active():
     assert p.target is None                                      # nothing active
 
 
+# -- active-star resume on re-entry (caveat 13, UI requirement 2026-06-12) ------
+
+def _mips():
+    from sm64_events.tracking.segments import SegmentDef
+    return SegmentDef(id=7, name="MIPS", enabled=True,
+                      start_triggers=[{"type": "level_enter", "to": 6}],
+                      end_triggers=[{"type": "level_enter", "to": 23}], guards=[])
+
+
+def test_reentering_the_course_just_left_resumes_the_active_star():
+    # User's scenario: grab an HMC star (active); exit HMC -> MIPS arms and the
+    # star deactivates (caveat 12). RE-ENTER HMC instead of doing MIPS -> the
+    # HMC star is reinstated (caveat 13). HMC = course 6, level 7.
+    p = Projector(segments=[_mips()])
+    p.feed(jev(1, "level_changed", 100, {"from": 6, "to": 7}))   # enter HMC
+    p.feed(jev(2, "star_collected", 900,
+               {"course_id": 6, "star_id": 2, "igt_frames": 300}))
+    assert p.target == ("star", 6, 2)
+    p.feed(jev(3, "level_changed", 1500, {"from": 7, "to": 6}))  # exit: MIPS arms, star suspended
+    assert p.target is None
+    p.feed(jev(4, "level_changed", 1700, {"from": 6, "to": 7}))  # re-enter HMC (MIPS disarms)
+    assert p.target == ("star", 6, 2)                            # resumed
+
+
+def test_doing_the_segment_does_not_later_resume_the_suspended_star():
+    # Contrast: if you DO the segment (complete MIPS into DDD) instead of going
+    # back, the suspended HMC star is dropped — returning to HMC later does NOT
+    # resurrect it (caveat 13: a committed completion clears the stash).
+    p = Projector(segments=[_mips()])
+    p.feed(jev(1, "level_changed", 100, {"from": 6, "to": 7}))   # HMC
+    p.feed(jev(2, "star_collected", 900,
+               {"course_id": 6, "star_id": 2, "igt_frames": 300}))
+    p.feed(jev(3, "level_changed", 1500, {"from": 7, "to": 6}))  # exit: suspend HMC star
+    p.feed(jev(4, "level_changed", 5000, {"from": 6, "to": 23}))  # complete MIPS into DDD
+    assert p.target is None                                      # nothing active (caveat 12)
+    p.feed(jev(5, "level_changed", 6000, {"from": 23, "to": 7}))  # later, back to HMC
+    assert p.target is None                                      # NOT resumed
+
+
+def test_resume_after_direct_warp_to_another_course_and_back():
+    # Suspend via the different-course path (no segment): an SSL star is active,
+    # warp straight to DDD (suspends it), warp back to SSL -> resumed.
+    p = Projector()
+    p.feed(jev(1, "target_set", 0, {"course_id": 8, "star_id": 1}))  # SSL
+    p.feed(jev(2, "level_changed", 1000, {"from": 6, "to": 8}))       # enter SSL (same course)
+    assert p.target == ("star", 8, 1)
+    p.feed(jev(3, "level_changed", 2000, {"from": 8, "to": 23}))      # warp to DDD: suspend
+    assert p.target is None
+    p.feed(jev(4, "level_changed", 3000, {"from": 23, "to": 8}))      # warp back to SSL
+    assert p.target == ("star", 8, 1)                                # resumed
+
+
+def test_a_new_grab_drops_the_suspended_star():
+    # Committing a new focus elsewhere clears the stash: grabbing a BoB star
+    # after suspending the SSL star means returning to SSL does not resume it.
+    p = Projector()
+    p.feed(jev(1, "target_set", 0, {"course_id": 8, "star_id": 1}))  # SSL
+    p.feed(jev(2, "level_changed", 1000, {"from": 8, "to": 9}))       # enter BoB (course 1): suspend SSL star
+    assert p.target is None
+    p.feed(jev(3, "star_collected", 2000,
+               {"course_id": 1, "star_id": 0, "igt_frames": 200}))   # grab BoB star -> drops stash
+    assert p.target == ("star", 1, 0)
+    p.feed(jev(4, "level_changed", 3000, {"from": 9, "to": 8}))       # back to SSL
+    assert p.target is None                                          # SSL star NOT resumed
+
+
 def test_star_target_is_tagged_now():
     p = Projector()
     p.feed(jev(1, "target_set", 0, {"course_id": 2, "star_id": 2}))

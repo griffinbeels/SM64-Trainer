@@ -19,7 +19,9 @@ export function useTracker() {
   // lastPinnedSeg: STICKY pin for the practice page — set on every
   // segment_armed, NEVER cleared on segment_disarmed. An accidental exit
   // disarms (correct timing semantics — re-entry re-arms fresh) but the page
-  // stays on the segment being practiced until a DIFFERENT segment arms.
+  // stays on the segment being practiced until a DIFFERENT segment arms OR
+  // the segment SUCCEEDS (a completed run is done — retired in the WS handler
+  // below; a stage-entry completion otherwise lingers as "RECENT").
   const [lastPinnedSeg, setLastPinnedSeg] = useState(null);
   // server-owned pause truth: {paused, reason: "manual"|"afk"|null}.
   // Polled (5 s) because "afk" flips server-side without any UI action;
@@ -115,7 +117,10 @@ export function useTracker() {
           // by entering a star stage the server leaves NO active target, so
           // without this the segment would linger pinned as "RECENT"; a
           // success that does NOT enter a stage stays pinned via the segment
-          // target (activeSeg). Matched to projection.py caveat 12.
+          // target (activeSeg). Matched to projection.py caveat 12. We key off
+          // attempt_completed, NOT target_changed: a stage-entry completion
+          // leaves target already-None (it was None mid-run), so no transition
+          // fires and target_changed never arrives — see projection.py.
           setLastPinnedSeg((prev) =>
             prev === ev.payload.segment_id ? null : prev);
         }

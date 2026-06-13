@@ -81,7 +81,9 @@ Caveats (hard-won — keep these current):
     with the same first-event-id keying as star attempts (caveat 2: a
     segment attempt's id is its ARM event's journal id + the namespace
     offset, see segments.SEGMENT_ATTEMPT_OFFSET). A non-cleared segment
-    success auto-follows the target exactly like a star grab does.
+    success auto-follows the target like a star grab does — EXCEPT when it
+    completes by entering a star stage, which clears the target instead
+    (caveat 12).
 
 12. Active-star retirement (active-star/segment exclusivity, 2026-06-12): a
     STAR target is the active practice focus only while we're plausibly still
@@ -103,6 +105,19 @@ Caveats (hard-won — keep these current):
     active star XOR the active segment, never both (ui/components/practice.js);
     the frontend also retires its sticky segment pin on any segment success so
     a stage-entry completion leaves nothing pinned (ui/store.js).
+
+13. Active-star resume (2026-06-12): a star target retired by LEAVING its
+    course (caveat 12, either path) is stashed in _suspended_star. Re-entering
+    that same course with NOTHING active (target is None) reinstates it —
+    "I accidentally left HMC, going back resumes the star I was on." The stash
+    survives hub transit (hub entries don't match any course) and the segment
+    arm that deactivated the star; it is consumed on restore, overwritten by
+    the next leaving-retirement, and dropped once a NEW focus is committed
+    (a grab, a target_set, or a segment success — so doing the segment instead
+    of going back does NOT later resurrect the star, and a segment completed
+    into a stage stays "nothing active"). If re-entry ALSO arms a segment, the
+    arm-clear in feed() retires the just-restored star again — segment wins,
+    matching caveat 12.
 """
 from dataclasses import dataclass, replace
 
@@ -172,6 +187,13 @@ class Projector:
         self._cleared = cleared if cleared is not None else {}
         # ("star", course_id, star_id) | ("segment", segment_id) | None
         self.target: tuple | None = None
+        # (course_id, star_id) of the active star most recently retired BY
+        # LEAVING its course (caveat 12). Re-entering that course with nothing
+        # else active reinstates it ("resume the star I just stepped out of");
+        # consumed on restore, overwritten on the next such retirement, and
+        # dropped once a new focus is committed (grab / set_target / segment
+        # success). See caveat 13.
+        self._suspended_star: tuple[int, int] | None = None
         self.strat_by_star: dict[tuple[int, int], str | None] = {}
         self.strat_by_segment: dict[int, str | None] = {}
         self._segments = SegmentEngine(segments or [])
@@ -237,6 +259,7 @@ class Projector:
                 entered_stage = (ev.type == "level_changed"
                                  and course_for_level(ev.payload["to"]) is not None)
                 self.target = None if entered_stage else ("segment", a.segment_id)
+                self._suspended_star = None  # finished a segment: moved on (caveat 13)
             closed.append(a)
         # A segment going ARMED means a segment run just started, so a star we
         # were practicing is no longer the active focus (active-star and
@@ -247,6 +270,7 @@ class Projector:
         if self.target and self.target[0] == "star" \
                 and any(n["event"] == "segment_armed"
                         for n in self.segment_notices):
+            self._suspended_star = self.target[1:]  # resume on re-entry (caveat 13)
             self.target = None
         if ev.type in BOUNDARY_EVENT_TYPES:
             self._rollouts_total = self._rollouts_dustless = 0
@@ -280,10 +304,19 @@ class Projector:
             # an exit that lands straight INTO a segment is retired by the
             # arm-clear in feed() instead. Close FIRST (above) so the abandoned
             # run still attributes to the star we were on.
+            to_course = course_for_level(to_level)
             if self.target and self.target[0] == "star":
-                to_course = course_for_level(to_level)
                 if to_course is not None and to_course != self.target[1]:
+                    self._suspended_star = self.target[1:]  # resume on re-entry (caveat 13)
                     self.target = None
+            # Resume the star we just stepped out of: re-entering its course
+            # with nothing else active reinstates it (caveat 13). Guarded on
+            # target is None so an explicit star/segment focus is never
+            # overridden; an arm on this same entry re-clears it via feed().
+            elif (self.target is None and self._suspended_star is not None
+                  and to_course == self._suspended_star[0]):
+                self.target = ("star", *self._suspended_star)
+                self._suspended_star = None
             self._level = to_level
             # _area is deliberately NOT reset here: every level entry is
             # followed by an establishing area_changed (area.py keys its
@@ -296,6 +329,7 @@ class Projector:
             self._area = ev.payload["to"]
             return []
         if ev.type == "target_set":
+            self._suspended_star = None  # explicit focus overrides a resume (caveat 13)
             if ev.payload.get("kind") == "segment":
                 self.target = ("segment", ev.payload["segment_id"])
             else:  # legacy payloads have no kind: star (caveat 10)
@@ -389,6 +423,7 @@ class Projector:
         if not attempt.cleared:
             # last VALID grab moves the practice target
             self.target = ("star", *grabbed)
+            self._suspended_star = None  # committed a new focus (caveat 13)
         return [attempt]
 
     def _close_by_death(self, ev) -> list[Attempt]:
