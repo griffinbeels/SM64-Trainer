@@ -268,7 +268,22 @@ FIGHT_END_LEVELS = {
 ACT_PULLING_DOOR = 0x00001320
 ACT_PUSHING_DOOR = 0x00001321
 ACT_WARP_DOOR_SPAWN = 0x00001322
-DOOR_ACTIONS = frozenset({ACT_PULLING_DOOR, ACT_PUSHING_DOOR, ACT_WARP_DOOR_SPAWN})
+# Star/key doors run their OWN cutscene actions, not PUSH/PULL — decomp
+# include/sm64.h, quoted verbatim from n64decomp/sm64 master, fetched
+# 2026-06-12 (0x1330 is unassigned in the decomp; flags are all
+# STATIONARY|INTANGIBLE like the three above). Found via live journal event
+# 3594 (2026-06-12): opening a 30/70-star door on the way to BitS fired the
+# Usamune section reset with frames_since_door STALE (1976) because none of
+# these were in DOOR_ACTIONS — every echo shape failed and the segment
+# engine closed + rebased the armed BitS Entry segment at the door. VERIFY
+# (live gate): mario_action crosses 0x1331 walking through an open star
+# door, 0x132F on the first-time star-count tally, 0x132E at a key door.
+ACT_UNLOCKING_KEY_DOOR = 0x0000132E
+ACT_UNLOCKING_STAR_DOOR = 0x0000132F
+ACT_ENTERING_STAR_DOOR = 0x00001331
+DOOR_ACTIONS = frozenset({
+    ACT_PULLING_DOOR, ACT_PUSHING_DOOR, ACT_WARP_DOOR_SPAWN,
+    ACT_UNLOCKING_KEY_DOOR, ACT_UNLOCKING_STAR_DOOR, ACT_ENTERING_STAR_DOOR})
 
 # Warp-entry actions — decomp include/sm64.h, quoted verbatim from
 # n64decomp/sm64 master, fetched 2026-06-11. Live-verified 2026-06-12:

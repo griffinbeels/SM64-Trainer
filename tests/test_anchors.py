@@ -1,6 +1,8 @@
 # tests/test_anchors.py
 from datetime import datetime, timezone
 
+import pytest
+
 from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.detectors.anchors import BOOT_TIMER_MAX, AnchorDetector
 
@@ -353,3 +355,32 @@ def test_existing_payload_pins_include_frames_since_door():
         "paused_frames_before": 0, "acted_tracking": True,
         "action": ACT_IDLE, "prev_action": ACT_IDLE,
         "frames_since_door": None}
+
+
+# ---------------------------------------------------------------------------
+# Star/key door actions — the BitS Entry regression (live journal 2026-06-12)
+# The 30/70-star doors and the basement key doors run their OWN cutscene
+# actions (ACT_ENTERING_STAR_DOOR 0x1331 / ACT_UNLOCKING_STAR_DOOR 0x132F /
+# ACT_UNLOCKING_KEY_DOOR 0x132E), not PUSH/PULL — Usamune still ends the
+# section after the animation, so the anchor lands frames later with Mario
+# already idle/walking.  If the recency tracker doesn't treat these as doors,
+# frames_since_door stays stale (1976 observed live, event 3594) and the
+# segment engine closes + rebases the armed segment at the door.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("door_action", [
+    0x0000132E,  # ACT_UNLOCKING_KEY_DOOR
+    0x0000132F,  # ACT_UNLOCKING_STAR_DOOR
+    0x00001331,  # ACT_ENTERING_STAR_DOOR
+])
+def test_frames_since_door_tracks_star_and_key_doors(door_action):
+    """A star/key door action at tick N followed by a practice_reset at tick
+    N+4 must carry frames_since_door=4, exactly like push/pull doors."""
+    d = AnchorDetector()
+    d.process(snap(1296, igt=100, action=ACT_WALKING),
+              snap(1300, igt=104, action=door_action))
+    events = d.process(snap(1300, igt=104, action=door_action),
+                       snap(1304, igt=0, action=ACT_WALKING))
+    assert len(events) == 1
+    assert events[0].type == "practice_reset"
+    assert events[0].payload["frames_since_door"] == 4

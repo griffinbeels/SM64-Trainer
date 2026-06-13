@@ -629,6 +629,28 @@ def test_historical_anchor_without_frames_since_door_closes():
     assert closed[0].outcome == "reset" and closed[0].rta_frames == 200
 
 
+@pytest.mark.parametrize("door_action", [
+    0x0000132E,  # ACT_UNLOCKING_KEY_DOOR
+    0x0000132F,  # ACT_UNLOCKING_STAR_DOOR
+    0x00001331,  # ACT_ENTERING_STAR_DOOR
+])
+def test_star_door_echo_with_prev_action_stays_echo(door_action):
+    """THE BITS-ENTRY REGRESSION (live report 2026-06-12): the 30/70-star
+    doors and key doors run their own cutscene actions, not PUSH/PULL.  An
+    anchor whose prev tick was inside one of those animations is a door echo
+    — inputs locked, never a player reset.  Segment must stay armed, no row."""
+    e = SegmentEngine([LBLJ])
+    lblj_arm(e)
+    closed, _ = e.feed(
+        jev(11, "practice_reset", 1200,
+            {"igt_frames_before": 200,
+             "action": 0x04000440,        # already back to gameplay
+             "prev_action": door_action}),
+        ctx(level=6))
+    assert closed == [], "star/key door echo must not close the segment"
+    assert e.armed_ids() == {1}, "segment must remain armed"
+
+
 # ---------------------------------------------------------------------------
 # Anchor closure re-arm (live-gate amendment 2026-06-12)
 # A practice_reset/state_loaded that CLOSES an armed segment must also

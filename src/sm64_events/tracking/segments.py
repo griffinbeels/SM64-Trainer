@@ -54,8 +54,10 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
         evidence of a door animation; pause-buffering at a door then crossing
         stays an echo.  Subshapes:
         (2a) intra-area door echo: NO area_changed (same area on both sides),
-             but Usamune IGT resets -> anchor fires in DOOR_ACTION
-             (0x1320/0x1321/0x1322, inputs locked, never a player reset).
+             but Usamune IGT resets -> anchor fires in a DOOR_ACTIONS member
+             (push/pull/warp-spawn 0x1320-0x1322 or star/key-door cutscene
+             0x132E/0x132F/0x1331 — addresses.py is the registry; inputs
+             locked, never a player reset).
              Keyed on prev_action first (door anim was running the prev tick);
              fallback to action for old events without prev_action.
              Race fix (2026-06-12): L-resets respawn in ACT_WARP_DOOR_SPAWN

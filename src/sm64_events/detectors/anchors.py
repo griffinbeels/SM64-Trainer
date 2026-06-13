@@ -38,7 +38,10 @@ NON-WARP door recency (live gate 2026-06-12, journal seq 26):
   section AFTER the door animation completes — the IGT reset is detected
   1-5 frames after the last door action, when Mario is already idle or
   landing.  At that point neither prev_action nor action is in DOOR_ACTIONS,
-  so the action-based echo clause cannot classify it.
+  so the action-based echo clause cannot classify it.  Star/key doors
+  (ACT_ENTERING_STAR_DOOR 0x1331 etc.) share this late-reset pathology —
+  they are DOOR_ACTIONS members precisely so the recency tracker sees them
+  (BitS Entry regression, live journal event 3594, 2026-06-12).
   Solution: track the global_timer of the last tick a door action was observed
   (_last_door_frame).  Anchor payloads gain frames_since_door: how many game
   frames have elapsed since the most recent door action (None if never seen).
