@@ -777,4 +777,4 @@ def test_stage_changed_is_broadcast_only_and_cached(tmp_path):
 
 def test_current_stage_defaults_to_not_in_stage(tmp_path):
     db, svc = make(tmp_path)
-    assert svc.current_stage["in_stage"] is False
+    assert svc.current_stage == {"course_id": None, "level": None, "in_stage": False}

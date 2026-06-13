@@ -70,6 +70,7 @@ def test_no_event_between_two_non_stage_levels():
 def test_no_event_on_in_course_area_switch():
     # Keyed on course, not level/area: an SSL area switch (level stays 8) is
     # silent, unlike area_changed.
+    # SSL (level 8) has areas 1 (inside) and 2 (atop the pyramid) — same course 8.
     d = StageChangeDetector()
     d.process(snap(curr_level=8, curr_area=1), snap(curr_level=8, curr_area=1))
     assert d.process(snap(curr_level=8, curr_area=1),

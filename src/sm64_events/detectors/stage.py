@@ -25,9 +25,11 @@ class StageChangeDetector:
     def __init__(self):
         self._last = _UNSET   # last EMITTED course_id (main-course int | None)
 
+    # prev unused: the _UNSET sentinel covers the establishing case (level/area
+    # siblings use prev for a 'from' field; stage has none).
     def process(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         course = course_for_level(curr.curr_level)
-        course_id = course if course is not None and 1 <= course <= 15 else None
+        course_id = course if course is not None and 1 <= course <= 15 else None  # 15 main courses; see COURSE_BY_LEVEL in addresses.py
         if self._last is not _UNSET and course_id == self._last:
             return []
         self._last = course_id
