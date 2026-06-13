@@ -154,7 +154,7 @@ export function Segments({ t }) {
   return html`<div>
     ${defs.map((d) => html`<div class="segrow">
       <b>${d.name}</b>
-      ${isArmed(d.id) && html`<span class="chip good">⏱ armed</span>`}
+      ${isArmed(d.id) && html`<span class="chip good">⏱ active</span>`}
       ${tgt.kind === "segment" && tgt.segment_id === d.id
         && html`<span class="chip">★ target</span>`}
       <span style="flex:1"></span>

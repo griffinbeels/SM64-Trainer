@@ -323,15 +323,17 @@ function SegmentSection({ sec, t, ui, pinned, freshIds }) {
     t.refresh();
   }
 
-  // Pinned tag, three-state: the target always wins the ★ tag; otherwise the
-  // honest armed flag decides between live (ARMED) and sticky (RECENT) pins.
-  const pinTag = isTarget ? "★ ACTIVE SEGMENT"
-    : armed ? "⏱ ARMED SEGMENT" : "⏱ RECENT SEGMENT";
+  // Pinned tag, two-state — same vocabulary as stars (★ ACTIVE STAR):
+  // a segment being practiced NOW is ACTIVE, whether it's the set target OR
+  // currently running (the live `armed` flag); the sticky just-ran pin reads
+  // RECENT. No "armed" wording — active/recent/inactive is unified across
+  // stars and segments (inactive = untagged row in the list, like stars).
+  const pinTag = (isTarget || armed) ? "★ ACTIVE SEGMENT" : "⏱ RECENT SEGMENT";
   return html`<div class="starsec ${pinned ? "active-star" : ""}">
     ${pinned && html`<div class="active-tag">${pinTag}</div>`}
     <div class="shead">
       <b>⏱ ${sec.name}</b>
-      ${armed && html`<span class="chip good">⏱ armed</span>`}
+      ${armed && html`<span class="chip good">⏱ active</span>`}
       ${sec.broken && html`<span class="meta">definition deleted — history only</span>`}
       <span class="pbtag">${sec.pb.rta ? `PB ${sec.pb.rta.display} (rta)` : "no PB yet"}</span>
       <button class="meta" onclick=${wipeData}
