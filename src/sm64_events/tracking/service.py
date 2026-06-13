@@ -43,6 +43,8 @@ class TrackerService:
         self.session_id: int | None = None
         self._segment_defs = self._load_segment_defs()
         self._projector = Projector(segments=self._segment_defs)
+        self._current_stage = {"course_id": None, "level": None,
+                               "in_stage": False}
 
     def _load_segment_defs(self) -> list[SegmentDef]:
         # inclusion list (the dataclass's own fields), NOT exclusion of
@@ -68,6 +70,13 @@ class TrackerService:
 
     async def publish(self, event: Event) -> None:
         seq = await self.broadcaster.publish(event)
+        if event.type == "stage_changed":
+            # Live presentation signal: cache for the session view's initial
+            # load and NEVER journal it (recomputable from curr_level; a
+            # journal row would only add replay/projection noise). Same
+            # broadcast-only discipline as the segment notices.
+            self._current_stage = dict(event.payload)
+            return
         if self.db is None or self.session_id is None:
             return
         try:
@@ -180,6 +189,13 @@ class TrackerService:
     @property
     def strat_by_segment(self) -> dict:
         return self._projector.strat_by_segment
+
+    @property
+    def current_stage(self) -> dict:
+        """The main course the player is standing in (else in_stage=False),
+        cached from the broadcast-only stage_changed event for the session
+        view's initial load. See detectors/stage.py."""
+        return self._current_stage
 
     @property
     def segment_defs(self) -> list[SegmentDef]:
