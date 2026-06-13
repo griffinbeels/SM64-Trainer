@@ -23,24 +23,14 @@ _UNSET = object()
 
 class StageChangeDetector:
     def __init__(self):
-        self._last = _UNSET   # last EMITTED (course_id, level) key
-        # Key is course_id for main courses (so in-course area switches are
-        # silent); raw level for non-main-course levels (so castle -> Bowser
-        # arena -> castle all emit distinct events even though all have
-        # course_id=None).
+        self._last = _UNSET   # last EMITTED course_id (main-course int | None)
 
     def process(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         course = course_for_level(curr.curr_level)
         course_id = course if course is not None and 1 <= course <= 15 else None
-        # Stable key: main-course entries key on course_id (ignoring area);
-        # non-main-course entries key on the raw level so hub/Bowser/secret
-        # transitions still emit an updated level in the payload.
-        key = course_id if course_id is not None else curr.curr_level
-        last_key = (self._last[0] if course_id is not None else self._last[1]) \
-            if self._last is not _UNSET else _UNSET
-        if self._last is not _UNSET and key == last_key:
+        if self._last is not _UNSET and course_id == self._last:
             return []
-        self._last = (course_id, curr.curr_level)
+        self._last = course_id
         return [Event(type="stage_changed", frame=curr.global_timer,
                       timestamp_utc=curr.wall_time_utc,
                       payload={"course_id": course_id,
