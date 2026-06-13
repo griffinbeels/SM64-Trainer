@@ -6,6 +6,8 @@ re-read per request so UI edits show on refresh without a server restart.
 """
 import asyncio
 import logging
+import os
+import signal
 import threading
 import time
 from contextlib import asynccontextmanager, suppress
@@ -93,6 +95,88 @@ async def _stop_replay_bounded(replay) -> None:
         await asyncio.sleep(0.05)
 
 
+# Outermost layer of the "bound every shutdown layer" doctrine (ffaff23
+# bounded replay teardown; this bounds the WHOLE process). Why it exists:
+# uvicorn's graceful shutdown waits for in-flight connections BEFORE
+# lifespan teardown, and that wait is UNBOUNDED unless
+# timeout_graceful_shutdown is set — the uvicorn CLI default is None, and
+# a browser that stops reading a streaming response (a paused <video>
+# holding a Range request) wedges the drain forever in flow_control.drain()
+# (live incident 2026-06-13: CTRL+C -> "Shutting down" -> capture threads
+# still logging at full rate 30 s later; repro: a stalled-reader client
+# keeps serve() alive indefinitely with timeout=None, exits in 3 s with
+# timeout=3). `python -m sm64_events.main` passes the bound; this watchdog
+# covers every OTHER launch mode. Force-exit consequences are all already
+# handled: ffmpeg dies with the kill-on-close job object, scratch is wiped
+# on next start, SQLite journaling survives mid-write death, and the
+# instance lock is an OS file-region lock released on process death.
+_FORCE_EXIT_AFTER_S = 30.0
+
+
+class ForceExitWatchdog:
+    """First shutdown signal arms a one-shot daemon timer; if the process
+    is still alive deadline_s later, log the wedge and force-exit. Daemon
+    timer + os._exit: it cannot itself keep the process alive, and nothing
+    wedging the event loop or a connection can block it."""
+
+    def __init__(self, deadline_s: float = _FORCE_EXIT_AFTER_S,
+                 exit_fn=os._exit):
+        self._deadline_s = deadline_s
+        self._exit = exit_fn
+        self._lock = threading.Lock()
+        self._armed = False
+
+    def arm(self) -> None:
+        with self._lock:
+            if self._armed:
+                return
+            self._armed = True
+        timer = threading.Timer(self._deadline_s, self._fire)
+        timer.daemon = True
+        timer.start()
+
+    def _fire(self) -> None:
+        log.error(
+            "shutdown still incomplete %.0f s after the stop signal - "
+            "force-exiting (something is wedging uvicorn's connection "
+            "drain; launch via 'uv run python -m sm64_events.main' to "
+            "bound it gracefully)", self._deadline_s)
+        self._exit(1)
+
+
+def install_force_exit_watchdog(dog: ForceExitWatchdog | None = None) -> bool:
+    """Chain dog.arm() in FRONT of the existing SIGINT/SIGTERM/SIGBREAK
+    handlers (uvicorn's handle_exit when running under uvicorn), so the
+    graceful path proceeds unchanged but a hard deadline starts ticking.
+    Signal handlers can only be installed on the main thread — under
+    TestClient the lifespan runs on a portal thread, so this is a no-op
+    there (tests don't CTRL+C). Non-callable handlers (SIG_DFL/SIG_IGN)
+    are left untouched so default semantics never change. Returns whether
+    at least one handler was chained."""
+    if threading.current_thread() is not threading.main_thread():
+        return False
+    dog = dog or ForceExitWatchdog()
+    installed = False
+    for name in ("SIGINT", "SIGTERM", "SIGBREAK"):
+        signum = getattr(signal, name, None)
+        if signum is None:
+            continue
+        prev = signal.getsignal(signum)
+        if not callable(prev):
+            continue
+
+        def _chained(sig, frame, _prev=prev):
+            dog.arm()
+            _prev(sig, frame)
+
+        try:
+            signal.signal(signum, _chained)
+        except (ValueError, OSError):
+            return installed  # non-main-thread race or exotic host
+        installed = True
+    return installed
+
+
 def _quiet_connection_resets(loop, context) -> None:
     """Scoped asyncio noise filter. Browsers abort in-flight Range requests
     whenever a <video> element seeks; on Windows' proactor loop the dead
@@ -112,6 +196,10 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
                service=None, replay=None, debug_hooks: bool = False) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # Installed here (not main.py) so EVERY launch mode gets the
+        # bound — uvicorn installs its own handlers before lifespan
+        # startup, so chaining at this point always finds them.
+        install_force_exit_watchdog()
         asyncio.get_running_loop().set_exception_handler(
             _quiet_connection_resets)
         if service is not None:

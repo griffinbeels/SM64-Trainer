@@ -135,16 +135,30 @@ def build():
 
 app = build()
 
-if __name__ == "__main__":
+
+def run() -> None:
+    """THE canonical launch (`uv run python -m sm64_events.main`).
+
+    timeout_graceful_shutdown is the load-bearing argument: browsers hold
+    connections open (5 s status poll, paused <video> Range requests that
+    stop reading mid-stream) and uvicorn waits for them BEFORE running
+    lifespan teardown — without a deadline that wait is INFINITE and
+    CTRL+C hangs with ffmpeg still recording (live incidents 2026-06-12
+    and 2026-06-13; repro: a stalled-reader client wedges serve() in
+    flow_control.drain() forever). The bare uvicorn CLI defaults the
+    timeout to None, which is exactly why the 06-12 fix never took: it
+    lived only here while the documented command was `uvicorn
+    sm64_events.main:app`. Backstop for non-canonical launches: the
+    force-exit watchdog in server/app.py (armed at first CTRL+C, 30 s).
+
+    VERIFY (live): one CTRL+C on `uv run python -m sm64_events.main` must
+    return the prompt in <~5 s with ffmpeg gone. If it hangs: "replay
+    stop exceeded 15 s" in the log = teardown wedged; watchdog line at
+    30 s = drain wedged; neither = a new layer, instrument before fixing.
+    """
     import uvicorn
-    # timeout_graceful_shutdown: browsers hold keep-alive connections open
-    # (5 s status poll, <video> Range requests) and uvicorn's graceful
-    # shutdown waits for them BEFORE running lifespan teardown — without a
-    # deadline CTRL+C appears to hang with ffmpeg still recording (live
-    # incident 2026-06-12).
-    # VERIFY (fix not yet exercised live): one CTRL+C must return the
-    # prompt in <~5 s with ffmpeg gone. If it hangs again, the layer logs
-    # name the culprit — "replay stop exceeded 15 s" = teardown wedged;
-    # no such line = drain/loop still stuck. Consequence of regression:
-    # terminal lockup with ffmpeg logging into it.
     uvicorn.run(app, host="127.0.0.1", port=8064, timeout_graceful_shutdown=3)
+
+
+if __name__ == "__main__":
+    run()
