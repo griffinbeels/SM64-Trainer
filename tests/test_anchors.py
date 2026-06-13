@@ -13,12 +13,13 @@ ACT_WALKING = 0x04000440  # not in PASSIVE_ACTIONS -> counts as "acted"
 ACT_QUICKSAND_DEATH = 0x00021312  # in DEATH_ACTIONS -> involuntary
 
 
-def snap(timer: int, igt: int = 0, action: int = ACT_IDLE) -> GameSnapshot:
+def snap(timer: int, igt: int = 0, action: int = ACT_IDLE,
+         level: int = 0, area: int = 0) -> GameSnapshot:
     return GameSnapshot(
         wall_time_utc=datetime(2026, 6, 10, tzinfo=timezone.utc),
         global_timer=timer, mario_action=action, mario_action_timer=0,
         num_stars=5, last_completed_course=1, last_completed_star=3,
-        igt_overall=igt)
+        igt_overall=igt, curr_level=level, curr_area=area)
 
 
 def test_igt_drop_to_zero_emits_practice_reset():
@@ -384,3 +385,118 @@ def test_frames_since_door_tracks_star_and_key_doors(door_action):
     assert len(events) == 1
     assert events[0].type == "practice_reset"
     assert events[0].payload["frames_since_door"] == 4
+
+
+# ---------------------------------------------------------------------------
+# Pause-warp anchor (live feedback 2026-06-12)
+# Menu warp executed straight from the pause menu without ever unpausing:
+# the Usamune section timer sits at 0 on BOTH sides of the warp, so no IGT
+# drop edge exists and the classifier above is blind — the segment engine
+# never gets its anchor (no swap re-validation, no attempt_anchor arming).
+# Discriminator: (curr_level, curr_area) changed while the pause streak was
+# running, with the section timer near zero on both sides.  Walked
+# transitions cannot match: walking runs gameplay frames (IGT grows past
+# NEAR_ZERO and the streak resets).  Emitted one STABLE tick later so the
+# area detector (earlier in main.py order) journals the settled position
+# first — cross-level warps update the area byte a tick after the level
+# byte (live journal events 3572/3573).
+# ---------------------------------------------------------------------------
+
+def test_pause_warp_without_gameplay_emits_anchor_after_settle():
+    """THE LIVE REPORT: warp upstairs, pause again immediately (IGT frozen
+    at 0), warp back — no IGT edge.  The position change while paused must
+    fire a practice_reset once the position is stable, stamped at the warp
+    tick with the menu pause streak."""
+    d = AnchorDetector()
+    # paused at the lobby: global_timer advances, igt frozen at 0
+    assert d.process(snap(1000, igt=0, level=6, area=1),
+                     snap(1030, igt=0, level=6, area=1)) == []
+    # warp tick: area flips, igt still 0 — pending, nothing emitted yet
+    assert d.process(snap(1030, igt=0, level=6, area=1),
+                     snap(1031, igt=0, level=6, area=2)) == []
+    # next tick: position stable -> anchor emits, stamped at the warp tick
+    events = d.process(snap(1031, igt=0, level=6, area=2),
+                       snap(1032, igt=0, level=6, area=2))
+    assert [e.type for e in events] == ["practice_reset"]
+    ev = events[0]
+    assert ev.frame == 1031
+    assert ev.payload["paused_frames_before"] == 30
+    assert ev.payload["igt_frames_before"] == 0
+    assert ev.payload["mario_acted"] is False
+    assert ev.payload["acted_tracking"] is True
+
+
+def test_pause_warp_cross_level_waits_for_area_byte_to_settle():
+    """Cross-level pause-warp: the level byte flips a tick before the area
+    byte (journal 3572/3573).  The pending anchor must NOT emit until both
+    have settled, and must carry the ORIGINAL pause streak."""
+    d = AnchorDetector()
+    d.process(snap(1000, igt=0, level=17, area=1),
+              snap(1050, igt=0, level=17, area=1))          # +50 paused
+    # tick 1: level byte flips, area byte stale
+    assert d.process(snap(1050, igt=0, level=17, area=1),
+                     snap(1051, igt=0, level=6, area=1)) == []
+    # tick 2: area byte settles — still changing, still pending
+    assert d.process(snap(1051, igt=0, level=6, area=1),
+                     snap(1052, igt=0, level=6, area=2)) == []
+    # tick 3: stable — emit with the streak captured at the warp tick
+    events = d.process(snap(1052, igt=0, level=6, area=2),
+                       snap(1053, igt=0, level=6, area=2))
+    assert [e.type for e in events] == ["practice_reset"]
+    assert events[0].payload["paused_frames_before"] == 50
+
+
+def test_position_change_without_pause_is_not_a_pause_warp():
+    """Walked-style transition with no pause streak must not fire the
+    pause-warp branch (the normal IGT-drop classifier owns walked loads)."""
+    d = AnchorDetector()
+    # igt running -> streak stays 0
+    d.process(snap(1000, igt=10, level=6, area=1),
+              snap(1001, igt=11, level=6, area=1))
+    assert d.process(snap(1001, igt=11, level=6, area=1),
+                     snap(1002, igt=12, level=6, area=2)) == []
+    assert d.process(snap(1002, igt=12, level=6, area=2),
+                     snap(1003, igt=13, level=6, area=2)) == []
+
+
+def test_position_change_after_timestop_with_large_igt_is_not_a_pause_warp():
+    """A door-cutscene time-stop grows the streak, but the player walked
+    there: IGT is far past NEAR_ZERO on both sides -> no pause-warp."""
+    d = AnchorDetector()
+    d.process(snap(1000, igt=500, level=6, area=1),
+              snap(1030, igt=500, level=6, area=1))         # +30 streak
+    assert d.process(snap(1030, igt=500, level=6, area=1),
+                     snap(1031, igt=500, level=6, area=3)) == []
+    assert d.process(snap(1031, igt=500, level=6, area=3),
+                     snap(1032, igt=500, level=6, area=3)) == []
+
+
+def test_pause_warp_pending_cleared_on_backward_jump():
+    """A rewind (console reset / savestate) between the warp tick and the
+    settle tick invalidates the pending anchor — it must never emit."""
+    d = AnchorDetector()
+    d.process(snap(1000, igt=0, level=6, area=1),
+              snap(1030, igt=0, level=6, area=1))           # +30 paused
+    assert d.process(snap(1030, igt=0, level=6, area=1),
+                     snap(1031, igt=0, level=6, area=2)) == []   # pending
+    # console reset into boot range: pending must die with the rewind
+    assert d.process(snap(1031, igt=0, level=6, area=2),
+                     snap(50, igt=0, level=6, area=2)) == []
+    assert d.process(snap(50, igt=0, level=6, area=2),
+                     snap(52, igt=0, level=6, area=2)) == []
+
+
+def test_pause_warp_superseded_by_real_igt_drop():
+    """If a classified anchor fires while a pause-warp is pending, the
+    pending anchor is dropped (never double-anchor one load)."""
+    d = AnchorDetector()
+    d.process(snap(1000, igt=0, level=6, area=1),
+              snap(1030, igt=0, level=6, area=1))           # +30 paused
+    assert d.process(snap(1030, igt=0, level=6, area=1),
+                     snap(1031, igt=0, level=6, area=2)) == []   # pending
+    # mid-range backward jump: state_loaded classifies -> supersedes pending
+    events = d.process(snap(1031, igt=0, level=6, area=2),
+                       snap(900, igt=120, level=6, area=2))
+    assert [e.type for e in events] == ["state_loaded"]
+    assert d.process(snap(900, igt=120, level=6, area=2),
+                     snap(902, igt=120, level=6, area=2)) == []

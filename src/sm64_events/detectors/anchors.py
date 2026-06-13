@@ -54,6 +54,24 @@ Pause streak: consecutive game frames where global_timer advanced but the
   dialog time-stop). Stamped on anchors as paused_frames_before; the tracking
   layer discards reset-closures after long pauses (AFK rule). Emulator pause
   freezes BOTH clocks, so it never grows the streak (documented limitation).
+
+Pause-warp anchor (live feedback 2026-06-12): a menu warp executed straight
+  from the pause menu without ever unpausing leaves igt_overall near zero on
+  BOTH sides of the warp — no drop edge exists, the IGT classifier is blind,
+  and the segment engine never gets its anchor (no swap re-validation, no
+  attempt_anchor arming; the user had to warp twice).  Discriminator:
+  (curr_level, curr_area) changed while the pause streak was running
+  (> PAUSE_WARP_MIN_STREAK) with the section timer <= NEAR_ZERO_IGT on both
+  sides.  Walked transitions cannot match — walking runs gameplay frames, so
+  IGT grows past the near-zero zone and the streak resets; door-cutscene
+  time-stops grow the streak but the player walked there (IGT large).  The
+  anchor is captured at the warp tick (frame, streak, actions) but emitted
+  one POSITION-STABLE tick later: cross-level warps update the area byte a
+  poll tick after the level byte (live journal 3572/3573), and the area
+  detector — earlier in main.py's order — must journal the settled position
+  before the engine sees the anchor.  A rewind or any classified anchor in
+  between supersedes the pending event (never two anchors for one load).
+
 mario_acted event: emitted once per anchor period at Mario's first
   non-passive action, so the tracking layer can judge activity for closures
   that are NOT anchors (death/abandon/hard reset). Anchors additionally carry
@@ -74,6 +92,8 @@ from sm64_events.memory.addresses import DEATH_ACTIONS, DOOR_ACTIONS, PASSIVE_AC
 BOOT_TIMER_MAX = 120   # global_timer below ~4 s after a backward jump = console reset; shared by lifecycle.py
 NEAR_ZERO_IGT = 30     # 30 frames = 1 s at 30 fps; <= so exactly 1 s still counts
 IGT_WRAP_CEILING = 65000  # u16 wrap guard: 65535->0 looks like a reset without this
+PAUSE_WARP_MIN_STREAK = 5  # walked load echoes pause 0-3 frames, menu warps 13+
+# (live logs 2026-06-12; segments._MENU_PAUSE_FRAMES mirrors the same evidence)
 
 
 class AnchorDetector:
@@ -82,10 +102,14 @@ class AnchorDetector:
         self._acted_reported = False
         self._pause_streak = 0
         self._last_door_frame: int | None = None
+        self._pending_warp: Event | None = None  # pause-warp anchor awaiting position-stable tick
 
     def process(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         # Self-heal on backward global_timer jump (domain rule 4): stale door
-        # recency must not cross a savestate rewind boundary.
+        # recency must not cross a savestate rewind boundary — and neither may
+        # a pending pause-warp anchor (its warp context predates the jump).
+        if curr.global_timer < prev.global_timer:
+            self._pending_warp = None
         if curr.global_timer < (self._last_door_frame or 0):
             self._last_door_frame = None
         # Track the most recent frame where a door action was observed so that
@@ -94,6 +118,40 @@ class AnchorDetector:
         if curr.mario_action in DOOR_ACTIONS:
             self._last_door_frame = curr.global_timer
         events = self._classify(prev, curr)
+        if events:
+            self._pending_warp = None  # one load, one anchor: classified wins
+        elif self._pending_warp is not None:
+            # Pause-warp pending: emit once the position is STABLE, so the
+            # area detector (earlier in main.py order) has journaled the
+            # settled post-warp position before the engine sees this anchor.
+            if (curr.curr_level, curr.curr_area) \
+                    == (prev.curr_level, prev.curr_area):
+                events = [self._pending_warp]
+                self._pending_warp = None
+        elif (self._pause_streak > PAUSE_WARP_MIN_STREAK
+              and (curr.curr_level, curr.curr_area)
+              != (prev.curr_level, prev.curr_area)
+              and curr.igt_overall <= NEAR_ZERO_IGT
+              and prev.igt_overall <= NEAR_ZERO_IGT):
+            # Pause-warp (module docstring): menu warp with the section timer
+            # already near zero — no IGT edge will ever fire for this load.
+            # Capture the anchor at the warp tick; the anchor period ends now.
+            self._pending_warp = Event(
+                type="practice_reset", frame=curr.global_timer,
+                timestamp_utc=curr.wall_time_utc,
+                payload={"igt_frames_before": prev.igt_overall,
+                         "mario_acted": self._acted,
+                         "paused_frames_before": self._pause_streak,
+                         "acted_tracking": True,
+                         "action": curr.mario_action,
+                         "prev_action": prev.mario_action,
+                         "frames_since_door":
+                             (curr.global_timer - self._last_door_frame)
+                             if self._last_door_frame is not None else None})
+            self._acted = False
+            self._acted_reported = False
+            self._pause_streak = 0
+            return []
         if events:
             # the action transition ON the anchor tick is swallowed — it
             # belongs to the warp/spawn, not to either attempt

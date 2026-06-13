@@ -35,7 +35,9 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
 - level_changed matching neither start nor end disarms silently (no row);
   area_changed and session_started never record rows
 - failure rows only on practice_reset/state_loaded (reset), death,
-  game_reset (hard_reset); AFK closures (paused >= 150 frames) discard
+  game_reset (hard_reset); AFK closures (paused >= 150 frames) discard, and
+  so do no-op closures (acted_tracking true, mario_acted false — warp/reset
+  spam where Mario never moved; mirrors the star-side discard)
 - rta_frames = close.frame - start_frame; a would-be-negative value on a
   SUCCESS discards the attempt (end before arm is a genuine anomaly —
   self-heal, domain rule 4), but failure closures record the row with
@@ -438,8 +440,17 @@ class SegmentEngine:
                     # (segment swap).
                     self._disarm(d, ev, notices)
                 elif ev.type in _ANCHOR_TYPES:
-                    if ev.payload.get("paused_frames_before", 0) \
-                            < _AFK_PAUSE_FRAMES:
+                    # AFK (>= 150 paused frames) and no-op closures (Mario
+                    # never acted since the last anchor — warp/reset spam,
+                    # live feedback 2026-06-12) discard the row; both still
+                    # re-arm below.  acted_tracking-gated: historical events
+                    # without the flag keep recording (mirrors the star-side
+                    # discard in projection._close_by_reset).
+                    afk = ev.payload.get("paused_frames_before", 0) \
+                        >= _AFK_PAUSE_FRAMES
+                    unacted = ev.payload.get("acted_tracking", False) \
+                        and not ev.payload.get("mario_acted", False)
+                    if not afk and not unacted:
                         a = self._close(Attempt, d, arm, ev, "reset", None)
                         if a:
                             closed.append(a)

@@ -1100,6 +1100,91 @@ def test_afk_length_menu_warp_relocation_also_disarms():
 
 
 # ---------------------------------------------------------------------------
+# No-op closures + warp ping-pong (live feedback 2026-06-12)
+# A reset/warp where Mario never acted since the last anchor is reset spam,
+# not a failed attempt — no row (mirrors the star-side no-op discard,
+# acted_tracking-gated so historical journals keep recording).  And warping
+# back and forth between two segment starts must always leave EXACTLY the
+# destination's segment armed — never both.
+# ---------------------------------------------------------------------------
+
+BITS_AREA = SegmentDef(
+    id=3, name="BitS Entry (area-armed)", enabled=True,
+    start_triggers=[{"type": "area_enter", "level": 6, "area": 2}],
+    end_triggers=[{"type": "level_enter", "to": 21}], guards=[])
+
+
+def test_unacted_same_position_anchor_discards_the_row():
+    """Warp-to-own-start spam without ever moving (acted_tracking True,
+    mario_acted False): no reset row, but the arm still rebases to the
+    anchor frame (timer restarts at the warp)."""
+    e = SegmentEngine([LBLJ_V5])
+    e.feed(jev(10, "practice_reset", 1000, {"action": 0x0C400201,
+                                            "acted_tracking": True,
+                                            "mario_acted": True}),
+           ctx(level=6, area=1))
+    assert e.armed_ids() == {1}
+    closed, _ = e.feed(
+        jev(11, "practice_reset", 1400,
+            {"paused_frames_before": 20, "action": 0x0C400201,
+             "acted_tracking": True, "mario_acted": False}),
+        ctx(level=6, area=1))
+    assert closed == [], "no-op reset must not record a row"
+    assert e.armed_ids() == {1}
+    assert e._armed[1].start_frame == 1400
+
+
+def test_acted_same_position_anchor_still_records():
+    """Companion: with mario_acted True the same anchor records normally."""
+    e = SegmentEngine([LBLJ_V5])
+    e.feed(jev(10, "practice_reset", 1000, {"action": 0x0C400201}),
+           ctx(level=6, area=1))
+    closed, _ = e.feed(
+        jev(11, "practice_reset", 1400,
+            {"paused_frames_before": 20, "action": 0x0C400201,
+             "acted_tracking": True, "mario_acted": True}),
+        ctx(level=6, area=1))
+    assert len(closed) == 1
+    assert closed[0].outcome == "reset" and closed[0].rta_frames == 400
+
+
+def test_warp_ping_pong_never_double_arms():
+    """THE LIVE REPORT: back-and-forth lobby<->upstairs menu warps without
+    moving.  After EVERY warp exactly the destination's segment is armed
+    (never both), and zero rows are recorded.  Uses the production def
+    shapes: LBLJ arms via attempt_anchor(6,1), BitS Entry arms via
+    area_enter(6,2) — whose arm-frame co-frame anchor is a shape-(1) echo."""
+    e = SegmentEngine([LBLJ_V5, BITS_AREA])
+    rows = []
+
+    def warp(jid, frame, to_area):
+        frm = 2 if to_area == 1 else 1
+        closed, _ = e.feed(jev(jid, "area_changed", frame,
+                               {"level": 6, "from": frm, "to": to_area}),
+                           ctx(level=6, area=to_area))
+        rows.extend(closed)
+        closed, _ = e.feed(jev(jid + 1, "practice_reset", frame,
+                               {"paused_frames_before": 18,
+                                "action": 0x0C400201,
+                                "acted_tracking": True,
+                                "mario_acted": False}),
+                           ctx(level=6, area=to_area))
+        rows.extend(closed)
+
+    # warp-menu deposit at the lobby arms LBLJ
+    e.feed(jev(10, "practice_reset", 1000, {"action": 0x0C400201}),
+           ctx(level=6, area=1))
+    assert e.armed_ids() == {1}
+    for i, (frame, area) in enumerate([(2000, 2), (3000, 1), (4000, 2),
+                                       (5000, 1), (6000, 2), (7000, 1)]):
+        warp(20 + 2 * i, frame, area)
+        expect = {3} if area == 2 else {1}
+        assert e.armed_ids() == expect, \
+            f"after warp #{i + 1} to area {area}: {e.armed_ids()}"
+    assert rows == [], "no-move warps must record zero rows"
+
+
+# ---------------------------------------------------------------------------
 # Registry templates (vocab contract): every trigger/guard carries a sentence
 # template whose placeholders must match its params exactly — a typo or
 # duplicate must fail CI, not render a broken builder row.
