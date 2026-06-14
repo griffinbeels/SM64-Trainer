@@ -225,6 +225,11 @@ def _only_castle(param: str) -> dict:
     return {"param": param, "equals": LEVEL_CASTLE_INSIDE}
 
 
+# NB: views._segment_start_areas (the castle quick-select banner) reads the
+# `to_subarea`/`area` PARAM NAMES off these trigger dicts STATICALLY to decide
+# which segments a subarea offers — it depends on those names, NOT the match
+# lambdas. A rename here silently breaks the banner; the contract is pinned by
+# test_views.test_segment_banner_param_names_match_the_registry.
 TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
     # level_enter/level_exit gain a conditional subarea on EACH side (to/from);
     # the selector is hidden unless that side is Castle Inside (only_castle).

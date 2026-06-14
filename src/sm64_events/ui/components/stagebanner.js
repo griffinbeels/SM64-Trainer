@@ -23,7 +23,7 @@ export function StageBanner({ t }) {
   const v = t.view;
   const stage = t.stage;
   if (!v || !stage) return null;
-  if (stage.in_stage && stage.course_id != null)
+  if (stage.in_stage)   // main course -> stars (course_id is set whenever in_stage)
     return html`<${StarRow} t=${t} v=${v} stage=${stage} />`;
   if (stage.level === CASTLE_INSIDE && CASTLE_AREA_NAMES[stage.area])
     return html`<${SegmentRow} t=${t} v=${v} stage=${stage} />`;

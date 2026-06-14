@@ -772,3 +772,15 @@ def test_segment_start_areas_reads_only_subarea_scoped_triggers():
     assert _segment_start_areas(triggers) == [[6, 2], [6, 1], [6, 3]]
     # a bare Castle-Inside trigger contributes nothing (keeps LBLJ lobby-only)
     assert _segment_start_areas([{"type": "level_enter", "to": 6}]) == []
+
+
+def test_segment_banner_param_names_match_the_registry():
+    # _segment_start_areas reads these trigger PARAM NAMES off the dicts
+    # statically; a rename in segments.py's TRIGGERS would silently break the
+    # castle banner with no other coupling pointing back. Pin the contract
+    # (see the NB comment above TRIGGERS in segments.py).
+    from sm64_events.tracking.segments import TRIGGERS
+    assert {"to", "to_subarea"} <= set(TRIGGERS["level_enter"].params)
+    assert {"to", "to_subarea"} <= set(TRIGGERS["level_exit"].params)
+    assert {"level", "area"} <= set(TRIGGERS["area_enter"].params)
+    assert {"level", "area"} <= set(TRIGGERS["attempt_anchor"].params)
