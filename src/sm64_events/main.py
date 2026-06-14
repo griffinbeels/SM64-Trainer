@@ -2,7 +2,6 @@
 """Composition root: registry -> memory -> poller -> detectors -> tracking -> app."""
 import logging
 import sys
-from pathlib import Path
 
 from sm64_events.core.logging_setup import configure_logging
 from sm64_events.core.paths import bundled_ffmpeg, db_path, instance_lock_path
