@@ -10,6 +10,9 @@ pywebview 6.2.1 API notes (verified via inspect.signature + source read):
 - events.resized, events.moved, events.closed all exist in 6.2.1
 - win.width, win.height, win.x, win.y are @property accessors in Window class
 - += operator is supported on Event objects via __iadd__
+- webview.start() accepts icon= (path str) to set the window/taskbar icon
+- create_window() has minimized=False default; no runtime .minimized property
+  to query — detect via the -32000 sentinel Windows uses for minimized windows.
 No adaptations from the reference implementation were required."""
 import json
 import logging
@@ -17,24 +20,50 @@ import logging
 import webview
 
 from sm64_events.core.paths import window_state_path
+from sm64_events.desktop.tray import _asset_path
 
 log = logging.getLogger("sm64.desktop")
 URL = "http://127.0.0.1:8064/"
 _DEFAULT = {"w": 480, "h": 900, "x": None, "y": None}
 
+# Windows uses -32000,-32000 as sentinel coordinates when a window is minimized.
+# Any position <= this threshold is off-screen/minimized; skip persisting it.
+_WIN_MINIMIZED_SENTINEL = -30000
+
 
 def _load_geometry() -> dict:
     try:
         saved = json.loads(window_state_path().read_text())
-        return {**_DEFAULT, **saved}
+        g = {**_DEFAULT, **saved}
+        # Reject off-screen or minimized positions: restore size only and let
+        # the OS place the window on-screen. Size (w/h) is always kept.
+        x, y = g.get("x"), g.get("y")
+        if x is not None and (x <= _WIN_MINIMIZED_SENTINEL or y <= _WIN_MINIMIZED_SENTINEL):
+            log.debug("discarding off-screen/minimized saved position (%s,%s)", x, y)
+            g["x"] = None
+            g["y"] = None
+        return g
     except Exception:
         return dict(_DEFAULT)
 
 
 def _save_geometry(win) -> None:
+    """Persist window size + position. SKIPS the write when the window is
+    minimized: Windows reports -32000,-32000 for minimized windows, which
+    restores off-screen on the next launch. Size is still valuable to keep
+    (vertical-monitor workflow), so we only reject clearly-bad samples."""
     try:
-        state = {"w": int(win.width), "h": int(win.height),
-                 "x": int(win.x), "y": int(win.y)}
+        x, y = int(win.x), int(win.y)
+        w, h = int(win.width), int(win.height)
+        # Guard: skip if coordinates are the Windows minimized sentinel or
+        # dimensions are implausibly small (window not yet laid out).
+        if x <= _WIN_MINIMIZED_SENTINEL or y <= _WIN_MINIMIZED_SENTINEL:
+            log.debug("skip geometry save: minimized sentinel (%s,%s)", x, y)
+            return
+        if w < 100 or h < 100:
+            log.debug("skip geometry save: implausible size (%s,%s)", w, h)
+            return
+        state = {"w": w, "h": h, "x": x, "y": y}
         p = window_state_path()
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(state))
@@ -56,4 +85,6 @@ def create(on_closed) -> "webview.Window":
 
 def run() -> None:
     """Blocks on the main thread until the last window closes."""
-    webview.start()
+    # icon= sets the window/taskbar icon (pywebview 6.2.1 webview.start param).
+    icon_path = str(_asset_path("ukiki.ico"))
+    webview.start(icon=icon_path)
