@@ -17,6 +17,9 @@ class FakeVideoSource:
     def __init__(self):
         self.on_frame = None
         self.stopped = False
+        self.idle_check = None      # captured from set_idle_check
+    def set_idle_check(self, fn):
+        self.idle_check = fn
     def start(self, on_frame, on_stopped):
         self.on_frame = on_frame
     def stop(self):
@@ -272,6 +275,22 @@ def test_idle_gating_discards_segments_keeps_straddlers(tmp_path):
     rec._on_segment(_seg(tmp_path, "d.ts", now + timedelta(seconds=5),
                          now + timedelta(seconds=7)))
     assert rec.ring.total_bytes == 30       # post-resume: retained again
+
+
+def test_recorder_injects_idle_check_tracking_idle_state(tmp_path):
+    """The capture source throttles its grab rate while idle: the recorder
+    must hand it a live 'am I idle?' callback that flips with the idle gate
+    (AFK auto-idle AND manual pause both count)."""
+    video, audio = FakeVideoSource(), FakeAudioSource()
+    rec = make_recorder(tmp_path, video, audio)
+    rec.start()
+    assert wait_for(lambda: video.idle_check is not None)
+    assert video.idle_check() is False           # fresh capture: active
+    rec.set_session_paused(True)
+    assert video.idle_check() is True             # pause -> source trickles
+    rec.set_session_paused(False)
+    assert video.idle_check() is False            # resume -> full rate
+    rec.stop()
 
 
 def test_session_pause_forces_idle_and_outranks_input(tmp_path):

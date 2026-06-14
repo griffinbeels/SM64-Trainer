@@ -35,7 +35,26 @@ from sm64_events.replay.window import WindowInfo
 
 log = logging.getLogger("sm64.replay")
 
+# While the recorder is idle (AFK / manual pause) every captured segment is
+# discarded, so we grab just often enough to keep the last frame fresh for an
+# instant resume — not the full oversampled rate. 8 Hz cuts the per-grab
+# ~8 MB surface read+copy churn ~15x with no effect on retained footage, and
+# bounds the resume staleness (one idle period before the loop re-checks idle)
+# to ~0.125 s so a 0-pre-pad clip's opening frame stays crisp.
+_IDLE_GRAB_FPS = 8.0
+
 _DWMWA_EXTENDED_FRAME_BOUNDS = 9
+
+
+def grab_period(active_fps_eff: float, idle: bool,
+                idle_fps: float = _IDLE_GRAB_FPS) -> float:
+    """Seconds between grabs: the oversampled active rate normally, a trickle
+    while idle. Pure — unit-tested. The ffmpeg feeder is NOT throttled (it
+    re-sends the last frame at the real fps), so the encoder timeline and the
+    0-pre-pad resume contract are unaffected; only the wasteful idle grabbing
+    slows down."""
+    fps = idle_fps if idle else active_fps_eff
+    return 1.0 / fps if fps > 0 else 1.0
 _MONITOR_DEFAULTTONEAREST = 2
 _DPI_PER_MONITOR_AWARE_V2 = ctypes.c_void_p(-4)
 
@@ -148,6 +167,14 @@ class DwmSurfaceVideoSource:
         self._geom = None    # (off_x, off_y, cw, ch) in surface coords
         self._handle = None  # DWM shared-surface handle (changes on resize)
         self._alive = True
+        self._idle_check = lambda: False  # recorder injects via set_idle_check
+
+    def set_idle_check(self, fn) -> None:
+        """Recorder injects 'am I idle?' so the grab loop can throttle. Set
+        before start(); also forwarded to a GDI fallback if one is spun up."""
+        self._idle_check = fn
+        if self._fallback is not None:
+            self._fallback.set_idle_check(fn)
 
     def start(self, on_frame, on_stopped) -> None:
         if self._thread is not None or self._fallback is not None:
@@ -165,6 +192,7 @@ class DwmSurfaceVideoSource:
             if reader is not None:
                 reader.close()
             self._fallback = GdiBitBltVideoSource(self._win, fps=self._fps)
+            self._fallback.set_idle_check(self._idle_check)
             self._fallback.start(on_frame, on_stopped)
             return
         log.info("dwm surface capture: %dx%d full-window surface",
@@ -246,7 +274,7 @@ class DwmSurfaceVideoSource:
             while _time.perf_counter() < target_t:
                 pass
 
-        period = 1.0 / (self._fps * 2.0)  # 2x oversample; recorder dedupes
+        active_fps_eff = self._fps * 2.0  # 2x oversample; recorder dedupes
         grabs = drops = misses = 0
         grab_ms = 0.0
         max_gap_ms = 0.0
@@ -255,6 +283,7 @@ class DwmSurfaceVideoSource:
         next_t = _time.perf_counter()
         try:
             while not self._stop.is_set():
+                period = grab_period(active_fps_eff, self._idle_check())
                 geom = self._geom
                 handle = self._handle
                 if geom is None or handle is None:
@@ -369,6 +398,12 @@ class GdiBitBltVideoSource:
         self._thread = None
         self._deliver_thread = None
         self._queue = None
+        self._idle_check = lambda: False  # recorder injects via set_idle_check
+
+    def set_idle_check(self, fn) -> None:
+        """Recorder injects 'am I idle?' so the grab loop throttles while
+        footage is being discarded. Set before start()."""
+        self._idle_check = fn
 
     def start(self, on_frame, on_stopped) -> None:
         if self._thread is not None:
@@ -465,7 +500,7 @@ class GdiBitBltVideoSource:
         # are ~30 ms grab-thread stalls (BitBlt vs the app's own present),
         # not sampling jitter, so more rate buys nothing. ~half of those
         # fills duplicate within a 30 fps game-frame pair and are invisible.)
-        period = 1.0 / (self._fps * 1.5)
+        active_fps_eff = self._fps * 1.5
         grabs = drops = 0
         grab_ms = 0.0
         max_gap_ms = 0.0
@@ -477,6 +512,7 @@ class GdiBitBltVideoSource:
             rect_check_t = 0.0
             cw = ch = 0
             while not self._stop.is_set():
+                period = grab_period(active_fps_eff, self._idle_check())
                 # Window-state USER calls serialize against the target's UI
                 # thread (PJ64 redraws its FPS display at 1 Hz, holding that
                 # lock 50-130 ms) — query at 1 Hz, not 3 calls per frame, to

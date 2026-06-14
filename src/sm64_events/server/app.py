@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from sm64_events.core.events import Event
+from sm64_events.core.procmem import MemoryMonitor
 from sm64_events.server.api import create_api_router
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.server.poller import Poller
@@ -194,6 +195,12 @@ def _quiet_connection_resets(loop, context) -> None:
 
 def create_app(poller: Poller, broadcaster: Broadcaster,
                service=None, replay=None, debug_hooks: bool = False) -> FastAPI:
+    # Observability for long-running sessions: samples RSS / object count / GC
+    # / scratch size on a cadence (logs + warns) and backs /health.memory.
+    # scratch_dir comes from replay so the file-cache/disk churn is visible too.
+    monitor = MemoryMonitor(
+        scratch_dir=replay.cfg.scratch_dir if replay is not None else None)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         # Installed here (not main.py) so EVERY launch mode gets the
@@ -217,14 +224,20 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
             try:
                 # process-wide stop-the-world pauses (gen2 GC) hit the grab
                 # loop and the audio callback simultaneously - arm the
-                # watchdog + freeze the startup heap once everything is built
+                # watchdog + freeze the startup heap once everything is built.
+                # is_idle drives the manual gen-2 collector (runs while
+                # footage is discarded) so disabling auto-gen-2 can't leak.
                 from sm64_events.replay._gcwatch import arm
-                arm()
+                arm(is_idle=replay.recorder.is_idle)
             except Exception:
                 log.exception("gc watchdog arm failed - continuing")
         task = asyncio.create_task(poller.run())
         task.add_done_callback(_log_poller_exit)
+        mon_task = asyncio.create_task(monitor.run())
         yield
+        mon_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await mon_task
         if replay is not None:
             await _stop_replay_bounded(replay)
         task.cancel()
@@ -289,6 +302,7 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
             "db": ("absent" if service is None
                    else "error" if service.db is None else "ok"),
             "session_id": service.session_id if service is not None else None,
+            "memory": monitor.latest,
         }
 
     @app.get("/state")

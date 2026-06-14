@@ -47,6 +47,7 @@ def test_health_reports_unattached():
         assert body["emulator_attached"] is False
         assert body["clients"] == 0
         assert body["last_frame"] is None
+        assert "memory" in body            # observability surface always present
 
 
 def test_state_is_null_before_first_snapshot():

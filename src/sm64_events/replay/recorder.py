@@ -90,7 +90,13 @@ class ReplayRecorder:
         self._video_sink_factory = video_sink_factory
         self._video_sink = None
 
-        self.ring = SegmentRing(cfg.retention_s, cfg.max_buffer_bytes)
+        # free-disk-gated cap: the configured byte cap is a ceiling, but the
+        # buffer never grows so large that the scratch volume's free space
+        # drops below the ring's margin (a near-full disk thrashes the whole
+        # machine — same symptom as a RAM leak).
+        self.ring = SegmentRing(
+            cfg.retention_s, cfg.max_buffer_bytes,
+            free_bytes_fn=lambda: shutil.disk_usage(cfg.scratch_dir).free)
 
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -209,6 +215,13 @@ class ReplayRecorder:
         # C1: assign _video_source the instant start() succeeds so teardown
         # can always reclaim it, even if something below raises.
         video = self._video_factory(win)
+        # Idle throttle: while the recorder is idle (AFK / manual pause) the
+        # capture source drops to a trickle grab rate — every segment is
+        # discarded anyway, so the dominant cost (the per-grab ~8 MB surface
+        # read+copy, ~2 GB/s at full rate) is pure waste. The ffmpeg feeder is
+        # untouched, so resume stays seamless (no child respawn hole).
+        if hasattr(video, "set_idle_check"):
+            video.set_idle_check(self.is_idle)
         video.start(self._on_frame, self._window_lost.set)
         with self._lock:
             self._video_source = video
@@ -333,6 +346,13 @@ class ReplayRecorder:
             self._last_player_active = time.monotonic()
             if self._idle:
                 self._set_idle(False)
+
+    def is_idle(self) -> bool:
+        """True while footage is being discarded — auto-idle (AFK) OR manual
+        session pause (both set _idle). The capture source reads this to
+        throttle its grab rate; the gen-2 GC collector reads it to pick a
+        free moment to run (a stop-the-world pause is invisible while idle)."""
+        return self._idle
 
     def _maybe_idle_pause(self) -> None:
         if (self._recording and not self._idle

@@ -12,6 +12,24 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
+# Free disk we refuse to consume: a near-full system volume thrashes the whole
+# machine (Windows squeezes the pagefile), which reads as the same "everything
+# is laggy / out of memory" symptom as a RAM leak. The buffer never grows so
+# large that free space would drop below this.
+_DISK_MARGIN_BYTES = 5 * 1024 ** 3
+
+
+def effective_cap(configured_cap: int, free_bytes: int, current_total: int,
+                  *, margin_bytes: int = _DISK_MARGIN_BYTES) -> int:
+    """The byte cap actually enforced: the configured cap, but never so large
+    that free disk would fall below margin_bytes. free_bytes is space free NOT
+    counting our buffer; on top of what we already hold we may grow into
+    (free - margin), and when free has ALREADY dropped below the margin that
+    term is negative — the cap falls below current_total so eviction reclaims
+    the deficit (a disk that filled under us shrinks the buffer back). Pure —
+    unit-tested."""
+    return min(configured_cap, current_total + (free_bytes - margin_bytes))
+
 
 @dataclass(frozen=True)
 class SegmentInfo:
@@ -23,9 +41,16 @@ class SegmentInfo:
 
 
 class SegmentRing:
-    def __init__(self, retention_s: float | None, max_bytes: int):
+    def __init__(self, retention_s: float | None, max_bytes: int,
+                 free_bytes_fn=None,
+                 disk_margin_bytes: int = _DISK_MARGIN_BYTES):
         self._retention_s = retention_s
         self._max_bytes = max_bytes
+        # free_bytes_fn() -> bytes free on the scratch volume (None = no disk
+        # gating, e.g. unit tests). When set, eviction also caps the buffer so
+        # free disk can't drop below disk_margin_bytes regardless of max_bytes.
+        self._free_bytes_fn = free_bytes_fn
+        self._disk_margin = disk_margin_bytes
         self._segments: deque[SegmentInfo] = deque()
         self._total_bytes = 0
         self._lock = threading.Lock()  # 1 encoder writer, N API reader threads
@@ -71,7 +96,16 @@ class SegmentRing:
             horizon = now - timedelta(seconds=self._retention_s)
             while self._segments and self._segments[0].utc_end <= horizon:
                 drop_head()
-        while self._segments and self._total_bytes > self._max_bytes:
+        cap = self._max_bytes
+        if self._free_bytes_fn is not None:
+            try:
+                free = self._free_bytes_fn()
+            except OSError:
+                free = None  # scratch volume not ready/gone — fall back to cap
+            if free is not None:
+                cap = effective_cap(self._max_bytes, free, self._total_bytes,
+                                    margin_bytes=self._disk_margin)
+        while self._segments and self._total_bytes > cap:
             drop_head()
 
     def covering(self, kind: str, start: datetime, end: datetime) -> list[SegmentInfo]:

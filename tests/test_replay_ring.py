@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from sm64_events.replay.ring import SegmentInfo, SegmentRing
+from sm64_events.replay.ring import SegmentInfo, SegmentRing, effective_cap
 
 T0 = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -45,6 +45,40 @@ def test_disk_cap_evicts_oldest_regardless_of_retention(tmp_path):
         ring.add(s)
     assert ring.total_bytes <= 250
     assert not segs[0].path.exists() and segs[3].path.exists()
+
+
+def test_effective_cap_configured_wins_when_disk_is_plentiful():
+    # 1 TiB free, holding 1 GiB, configured 20 GiB -> configured wins
+    assert effective_cap(20 * 1024**3, 1024**4, 1024**3,
+                         margin_bytes=5 * 1024**3) == 20 * 1024**3
+
+
+def test_effective_cap_disk_limits_below_configured():
+    # only 8 GiB free, margin 5 GiB, holding 2 GiB -> grow to 2+(8-5)=5 GiB
+    assert effective_cap(20 * 1024**3, 8 * 1024**3, 2 * 1024**3,
+                         margin_bytes=5 * 1024**3) == 5 * 1024**3
+
+
+def test_effective_cap_reclaims_when_free_below_margin():
+    # free already under margin -> cap drops below current_total -> evict
+    cap = effective_cap(20 * 1024**3, 1 * 1024**3, 4 * 1024**3,
+                        margin_bytes=5 * 1024**3)
+    assert cap == 4 * 1024**3 + (1 * 1024**3 - 5 * 1024**3)  # = 0
+
+
+def test_disk_gate_caps_buffer_to_volume_minus_margin(tmp_path):
+    """A configured cap far above the disk size must NOT fill the volume:
+    eviction holds free space at the margin. Models a 500-byte volume whose
+    only consumer is the buffer; margin 100 -> buffer parks at 400."""
+    ring = SegmentRing(retention_s=None, max_bytes=10**9,
+                       free_bytes_fn=lambda: max(0, 500 - ring.total_bytes),
+                       disk_margin_bytes=100)
+    segs = [seg(tmp_path, i, size=100) for i in range(6)]
+    for s in segs:
+        ring.add(s)
+    assert ring.total_bytes == 400                 # volume(500) - margin(100)
+    assert not segs[0].path.exists() and not segs[1].path.exists()
+    assert segs[5].path.exists()                   # newest kept
 
 
 def test_coverage_none_when_empty():

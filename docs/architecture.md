@@ -376,7 +376,8 @@ every wrong theory of the marathon died on one of these numbers:
 `ffmpeg sink:` fed/s + max write (healthy: 60.0 / 6-8 ms steady-state;
 first window after spawn ~59 / ~100 ms is a normal init transient),
 `recorder video:` CFR fills (in-process fallback path only),
-`audio pump:` overflow/drops, gc-watchdog pause lines.
+`audio pump:` overflow/drops, gc-watchdog pause lines, and `mem:` RSS /
+object-count / scratch trend (`core/procmem.py`).
 
 **Idle gating + pause layer (2026-06-12).** No-input footage is DISCARDED,
 never produced-then-paused: stopping the ffmpeg child was shipped first
@@ -394,6 +395,46 @@ the activity tap that detects the player's return rides it — the watchdog
 may sleep the system, never itself. Precedence and the reason wire format
 live in `server/app.py pause_state`; resume self-heals detectors through
 the reattach contract (`poller.set_paused` clears `_prev`).
+
+**Extended-runtime resource safety (2026-06-13 incident).** A long session
+froze the whole machine on memory pressure; closing the server recovered it
+instantly. Three compounding causes, each fixed:
+1. *Idle discarded results, not work.* The idle gate dropped completed
+   segments but capture/encode NEVER throttled — DWM grabs ran at the full
+   oversampled rate whenever PJ64 was open (each grab a ~8 MB surface copy →
+   ~2 GB/s of transient allocation, 24/7, even while AFK). Fix: while idle the
+   grab loop trickles to 8 Hz (`video.grab_period`, wired via
+   `recorder.is_idle` → `set_idle_check`); the ffmpeg feeder is untouched, so
+   resume stays seamless (no child respawn hole — the constraint that killed
+   the earlier "pause the sink" attempt still holds). NVENC keeps encoding the
+   static frame by design (cheap, GPU-side); the win is killing the Python
+   allocation churn that drove the RAM pressure.
+2. *gen-2 GC disabled with no manual collection.* `_gcwatch.arm()` raised the
+   gen-2 threshold to ~manual to stop stop-the-world glitches, but NOTHING
+   ever ran the "manual" collection — so any cyclic object reaching gen-2 was
+   never reclaimed for the process lifetime (an unbounded leak; gen-0/gen-1
+   still freed short-lived cycles, which is why it took hours). Fix:
+   `_gcwatch._Gen2Collector` runs `gc.collect(2)` OPPORTUNISTICALLY while the
+   recorder is idle (a stop-the-world pause is invisible when footage is
+   discarded), with a 5-minute force backstop for never-idle sessions. The
+   glitch mitigation is intact; the leak is closed.
+3. *Disk could fill, and a near-full volume thrashes everything.* The 20 GiB
+   scratch cap with `retention_s=None` can be approached over long ACTIVE play
+   (idle discards, so the ring only grows while recording). A full system disk
+   squeezes the Windows pagefile → the same "out of memory / everything laggy"
+   symptom as a RAM leak. Fix: `ring.effective_cap` gates the byte cap on
+   actual free disk (5 GiB margin), so the buffer shrinks rather than filling
+   the volume regardless of the configured cap.
+
+**Memory observability is now mandatory, because we were blind.** Nothing
+sampled the process, so a true leak was indistinguishable from OS file-cache
+pressure. `core/procmem.py` samples RSS (psapi via ctypes — set argtypes or
+the pointer truncates to 32-bit and silently reads 0), GC generation state,
+live object count, and scratch size; it backs `/health.memory` and logs a
+`mem:` line every 60 s with a one-shot growth alarm (`assess_growth`). When a
+long session misbehaves, the `mem:` trend (RSS + objects climbing together =
+leak; RSS up with objects flat = native/file-cache) is the first number to
+read.
 
 **Shutdown is a liveness property** (CTRL+C hung with ffmpeg still
 logging into a dead terminal, 2026-06-12). Every exit link is bounded:
