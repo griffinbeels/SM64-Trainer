@@ -208,6 +208,33 @@ def _progress(attempts, pb_ids: set, session_meta, frames_of) -> dict | None:
         for sid, pts in sorted(by_session.items())]}
 
 
+# Castle-subarea quick-select: the (level, area) pairs a segment EXPLICITLY
+# starts in, read off its start triggers. Only subarea-scoped triggers count —
+# a bare "enter Castle Inside" with no subarea must NOT surface the segment in
+# every subarea (that is what keeps LBLJ out of Upstairs). Derived from the
+# trigger param NAMES (stable across the matcher), so this stays decoupled from
+# segments.py's registry:
+#   area_enter / attempt_anchor : (level, area)
+#   level_enter / level_exit    : (to, to_subarea)   [to_subarea exists once the
+#       subarea-trigger work lands; until then .get() returns None and the row
+#       contributes nothing — forward-safe]
+# The UI (ui/components/stagebanner.js) filters these by the current castle
+# subarea (stage_changed carries level+area) to offer one-click segment targets.
+def _segment_start_areas(start_triggers: list) -> list:
+    out: list = []
+    for trig in start_triggers:
+        kind = trig.get("type")
+        if kind in ("area_enter", "attempt_anchor"):
+            level, area = trig.get("level"), trig.get("area")
+        elif kind in ("level_enter", "level_exit"):
+            level, area = trig.get("to"), trig.get("to_subarea")
+        else:
+            continue
+        if level is not None and area is not None and [level, area] not in out:
+            out.append([level, area])
+    return out
+
+
 def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     all_attempts = db.attempts()
     session_attempts = [a for a in all_attempts
@@ -353,4 +380,10 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         "last_strat_by_star": {f"{c}:{s}": v
                                for (c, s), v in service.strat_by_star.items()},
         "stage": service.current_stage,
+        # Enabled segments that start in a known subarea, for the castle
+        # quick-select banner (filtered client-side by the current subarea).
+        "segment_targets": [
+            {"segment_id": d.id, "name": d.name, "start_areas": areas}
+            for d in service.segment_defs
+            if d.enabled and (areas := _segment_start_areas(d.start_triggers))],
     }

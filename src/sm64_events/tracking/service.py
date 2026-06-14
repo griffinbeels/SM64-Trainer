@@ -44,7 +44,7 @@ class TrackerService:
         self._segment_defs = self._load_segment_defs()
         self._projector = Projector(segments=self._segment_defs)
         self._current_stage = {"course_id": None, "level": None,
-                               "in_stage": False}
+                               "area": None, "in_stage": False}
 
     def _load_segment_defs(self) -> list[SegmentDef]:
         # inclusion list (the dataclass's own fields), NOT exclusion of

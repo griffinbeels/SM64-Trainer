@@ -1,23 +1,36 @@
 // src/sm64_events/ui/components/stagebanner.js
-// Quick-select star row. When the player loads into one of the 15 main courses
-// (t.stage.in_stage, set from the broadcast-only stage_changed event), surface
-// that course's stars as one-click target buttons. 100% data-driven from the
-// session view the store already holds: catalog.courses for names,
-// last_strat_by_star for the subtext, target for the active highlight. One
-// click POSTs /api/target carrying the star's last strategy -- the same
-// endpoint the header TargetEditor uses, so the normal target_changed flow
-// updates the header, the pinned active-star section, and this banner.
+// Quick-select row, dual-mode — driven by t.stage (the broadcast-only
+// stage_changed event):
+//   STARS    : in one of the 15 main courses (stage.in_stage) -> that course's
+//              stars (name + last-strategy subtext); click sets the star target.
+//   SEGMENTS : in a Castle Inside subarea (level 6, area lobby/upstairs/
+//              basement) -> the segments whose start triggers begin in that
+//              subarea (v.segment_targets, derived server-side from the
+//              definitions); click sets the segment target. Only subarea-scoped
+//              segments appear, so e.g. LBLJ (lobby) never shows upstairs.
+// Both paths POST /api/target -- the same endpoint the header uses -- so the
+// normal target_changed flow updates the header, the pinned section, and this.
 import { h } from "preact";
 import htm from "htm";
 import { send } from "../api.js";
 
 const html = htm.bind(h);
 
+const CASTLE_INSIDE = 6;
+const CASTLE_AREA_NAMES = { 1: "Lobby", 2: "Upstairs", 3: "Basement" };
+
 export function StageBanner({ t }) {
   const v = t.view;
   const stage = t.stage;
-  if (!v || !stage || !stage.in_stage) return null;
+  if (!v || !stage) return null;
+  if (stage.in_stage && stage.course_id != null)
+    return html`<${StarRow} t=${t} v=${v} stage=${stage} />`;
+  if (stage.level === CASTLE_INSIDE && CASTLE_AREA_NAMES[stage.area])
+    return html`<${SegmentRow} t=${t} v=${v} stage=${stage} />`;
+  return null;
+}
 
+function StarRow({ t, v, stage }) {
   const course = v.catalog.courses.find((c) => c.id === stage.course_id);
   if (!course) return null;
 
@@ -46,6 +59,33 @@ export function StageBanner({ t }) {
                             onclick=${() => pick(i)}>
           <span class="stagebtn-name">${name}</span>
           <span class="stagebtn-sub meta">${strat || "—"}</span>
+        </button>`;
+      })}
+    </div>
+  </div>`;
+}
+
+function SegmentRow({ t, v, stage }) {
+  const tgt = v.target || {};
+  const segs = (v.segment_targets || []).filter((s) =>
+    s.start_areas.some((a) => a[0] === stage.level && a[1] === stage.area));
+  if (!segs.length) return null;   // no segments start here -> nothing to offer
+
+  async function pick(segId) {
+    await send("POST", "/api/target", { kind: "segment", segment_id: segId });
+    t.refresh();
+  }
+
+  return html`<div class="starsec stagebanner">
+    <div class="shead"><b>▸ Castle ${CASTLE_AREA_NAMES[stage.area]}</b>
+      <span class="meta">tap a segment to practice</span></div>
+    <div class="stagebanner-row">
+      ${segs.map((s) => {
+        const active = tgt.kind === "segment" && tgt.segment_id === s.segment_id;
+        return html`<button key=${`seg:${s.segment_id}`}
+                            class="stagebtn ${active ? "active-star" : ""}"
+                            onclick=${() => pick(s.segment_id)}>
+          <span class="stagebtn-name">${s.name}</span>
         </button>`;
       })}
     </div>

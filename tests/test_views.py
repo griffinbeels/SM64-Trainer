@@ -5,7 +5,7 @@ from sm64_events.core.events import Event
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.storage.db import Database
 from sm64_events.tracking.service import TrackerService
-from sm64_events.tracking.views import build_session_view
+from sm64_events.tracking.views import _segment_start_areas, build_session_view
 
 T0 = datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -734,12 +734,41 @@ def test_stat_pills_render_in_canonical_menu_order(tmp_path):
 def test_view_includes_current_stage(tmp_path):
     db, svc = make(tmp_path)
     asyncio.run(svc.publish(ev("stage_changed", 100,
-                               {"course_id": 8, "level": 8, "in_stage": True})))
+                               {"course_id": 8, "level": 8, "area": 1,
+                                "in_stage": True})))
     view = build_session_view(db, svc, clock="igt")
-    assert view["stage"] == {"course_id": 8, "level": 8, "in_stage": True}
+    assert view["stage"] == {"course_id": 8, "level": 8, "area": 1,
+                             "in_stage": True}
 
 
 def test_view_stage_defaults_to_not_in_stage(tmp_path):
     db, svc = make(tmp_path)
     view = build_session_view(db, svc, clock="igt")
     assert view["stage"]["in_stage"] is False
+
+
+def test_segment_targets_carry_castle_start_areas(tmp_path):
+    # Seeded LBLJ has attempt_anchor{level:6,area:1} -> lobby; BitS Entry has
+    # area_enter{level:6,area:2} -> upstairs — the banner filters on these.
+    db, svc = make(tmp_path)
+    view = build_session_view(db, svc, clock="igt")
+    by_name = {s["name"]: s for s in view["segment_targets"]}
+    assert by_name["LBLJ"]["start_areas"] == [[6, 1]]
+    assert by_name["BitS Entry"]["start_areas"] == [[6, 2]]
+    # MIPS Clip is level_exit{from:7,to:6} with NO destination subarea on
+    # master, so it has no subarea-scoped start trigger -> excluded.
+    assert "MIPS Clip" not in by_name
+
+
+def test_segment_start_areas_reads_only_subarea_scoped_triggers():
+    triggers = [
+        {"type": "area_enter", "level": 6, "area": 2},
+        {"type": "attempt_anchor", "level": 6, "area": 1},
+        {"type": "level_enter", "to": 6, "to_subarea": 3},          # forward-compat
+        {"type": "level_exit", "from": 7, "to": 6, "to_subarea": 3},  # dup -> deduped
+        {"type": "level_enter", "to": 6, "from": 16},               # no subarea -> ignored
+        {"type": "spawned", "level": 16},                           # not subarea -> ignored
+    ]
+    assert _segment_start_areas(triggers) == [[6, 2], [6, 1], [6, 3]]
+    # a bare Castle-Inside trigger contributes nothing (keeps LBLJ lobby-only)
+    assert _segment_start_areas([{"type": "level_enter", "to": 6}]) == []
