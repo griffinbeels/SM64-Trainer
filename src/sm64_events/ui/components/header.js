@@ -12,6 +12,19 @@ export function Header({ t }) {
   const tgt = v && v.target;
   const [editing, setEditing] = useState(false);
   const [managing, setManaging] = useState(false);
+  const [restarting, setRestarting] = useState(false);
+
+  async function restartServer() {
+    if (restarting) return;
+    setRestarting(true);
+    try {
+      await send("POST", "/api/admin/restart");
+    } catch (e) {
+      console.error(e);   // endpoint may drop the connection as it restarts
+    }
+    // The WS drops and auto-reconnects (store.js); clear the flag after a beat.
+    setTimeout(() => setRestarting(false), 8000);
+  }
 
   const active = v && v.session.id;
 
@@ -62,6 +75,9 @@ export function Header({ t }) {
                      ? "resume event + replay processing"
                      : "manual pause: stops ALL processing; movement will NOT unpause"}>
       ${t.pauseReason === "manual" ? "▶ resume" : "⏸ pause"}</button>
+    <button onclick=${restartServer} disabled=${restarting}
+            title="Relaunch the underlying server to pick up backend changes">
+      ${restarting ? "↻ restarting…" : "↻ restart server"}</button>
     <${RecordingDot} />
     ${v && html`<select id="session-select" name="session"
                         value=${t.scope === "lifetime" ? "lifetime" : String(active)}
