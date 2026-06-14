@@ -174,6 +174,12 @@ def run() -> None:
     stop exceeded 15 s" in the log = teardown wedged; watchdog line at
     30 s = drain wedged; neither = a new layer, instrument before fixing.
     """
+    import os
+    if os.environ.pop("SM64_RESTART", None):
+        # A restart relaunch: the old process is exiting — wait for it to
+        # free :8064 so build()'s instance-lock acquisition hands off cleanly.
+        from sm64_events.core.relaunch import wait_port_free
+        wait_port_free()
     import uvicorn
     uvicorn.run(get_app(), host="127.0.0.1", port=8064,
                 timeout_graceful_shutdown=3)
