@@ -125,3 +125,51 @@ def test_install_is_noop_off_main_thread():
     t.join()
     assert result == [False]
     assert signal.getsignal(signal.SIGINT) is before
+
+
+def test_admin_shutdown_invokes_state_callback():
+    with make_client() as client:
+        called: list[bool] = []
+        client.app.state.request_shutdown = lambda: called.append(True)
+        resp = client.post("/api/admin/shutdown")
+        assert resp.status_code == 200
+        assert resp.json() == {"shutting_down": True}
+        _wait_for(called)
+        assert called == [True]
+
+
+def test_admin_shutdown_fallback_raises_sigint(monkeypatch):
+    raised: list[int] = []
+    monkeypatch.setattr("sm64_events.server.app.signal.raise_signal",
+                        raised.append)
+    with make_client() as client:
+        if hasattr(client.app.state, "request_shutdown"):
+            delattr(client.app.state, "request_shutdown")
+        assert client.post("/api/admin/shutdown").status_code == 200
+        _wait_for(raised)
+        assert raised == [signal.SIGINT]
+
+
+def test_admin_restart_invokes_state_callback():
+    with make_client() as client:
+        called: list[bool] = []
+        client.app.state.request_restart = lambda: called.append(True)
+        resp = client.post("/api/admin/restart")
+        assert resp.status_code == 200
+        assert resp.json() == {"restarting": True}
+        _wait_for(called)
+        assert called == [True]
+
+
+def test_admin_restart_fallback_relaunches(monkeypatch):
+    spawned: list[bool] = []
+    monkeypatch.setattr("sm64_events.server.app.spawn_replacement",
+                        lambda: spawned.append(True))
+    monkeypatch.setattr("sm64_events.server.app.signal.raise_signal",
+                        lambda s: None)
+    with make_client() as client:
+        if hasattr(client.app.state, "request_restart"):
+            delattr(client.app.state, "request_restart")
+        assert client.post("/api/admin/restart").status_code == 200
+        _wait_for(spawned)
+        assert spawned == [True]

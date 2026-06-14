@@ -21,7 +21,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from sm64_events.core.events import Event
+from sm64_events.core.paths import pidfile_path
 from sm64_events.core.procmem import MemoryMonitor
+from sm64_events.core.relaunch import spawn_replacement
 from sm64_events.server.api import create_api_router
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.server.poller import Poller
@@ -29,6 +31,22 @@ from sm64_events.server.poller import Poller
 log = logging.getLogger("sm64.server")
 
 _UI_INDEX = Path(__file__).resolve().parent.parent / "ui" / "index.html"
+
+
+def _dispatch(fn) -> None:
+    """Run a shutdown/restart action OFF the request thread: blocking inside
+    the handler (joining the server thread) would deadlock graceful
+    shutdown."""
+    threading.Thread(target=fn, daemon=True).start()
+
+
+def _fallback_shutdown() -> None:
+    signal.raise_signal(signal.SIGINT)
+
+
+def _fallback_restart() -> None:
+    spawn_replacement()
+    signal.raise_signal(signal.SIGINT)
 
 
 class PauseBody(BaseModel):
@@ -207,6 +225,12 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
         # bound — uvicorn installs its own handlers before lifespan
         # startup, so chaining at this point always finds them.
         install_force_exit_watchdog()
+        try:
+            pf = pidfile_path()
+            pf.parent.mkdir(parents=True, exist_ok=True)
+            pf.write_text(str(os.getpid()))
+        except Exception:
+            log.warning("could not write pidfile", exc_info=True)
         asyncio.get_running_loop().set_exception_handler(
             _quiet_connection_resets)
         if service is not None:
@@ -243,6 +267,8 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
+        with suppress(Exception):
+            pidfile_path().unlink()
 
     app = FastAPI(title="SM64 Event API", lifespan=lifespan)
 
@@ -290,6 +316,26 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
         if replay is not None:
             replay.recorder.set_session_paused(body.paused)
         return pause_state(poller, replay)
+
+    @app.post("/api/admin/shutdown")
+    def admin_shutdown():
+        """Localhost-only graceful shutdown — the 'close the other instance'
+        takeover path. The desktop sets app.state.request_shutdown to a FULL
+        GUI quit; a terminal launch has none, so fall back to SIGINT."""
+        _dispatch(getattr(app.state, "request_shutdown", None)
+                  or _fallback_shutdown)
+        return {"shutting_down": True}
+
+    @app.post("/api/admin/restart")
+    def admin_restart():
+        """Localhost-only full-process relaunch (the 'Restart server'
+        button) — picks up edited backend code. The desktop sets
+        app.state.request_restart; a terminal launch falls back to
+        spawn_replacement() + SIGINT (run() waits for the port via
+        SM64_RESTART)."""
+        _dispatch(getattr(app.state, "request_restart", None)
+                  or _fallback_restart)
+        return {"restarting": True}
 
     @app.get("/health")
     def health():
