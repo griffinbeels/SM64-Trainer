@@ -49,6 +49,11 @@ Two deliverables in this pass:
 - **GUI extras for v1:** app icon + branding (exe/window/taskbar/tray) and a
   **system tray icon** (show/hide, quit). Native toast notifications are
   explicitly deferred. The single-instance dialog is included regardless.
+- **Restart server:** a one-click "Restart server" button in the UI (browser
+  + GUI) that fully RELAUNCHES the process — the only way CPython picks up
+  edited backend code. Reuses single-instance takeover: relaunch with an
+  `SM64_RESTART` flag so the fresh process waits for the old to exit and
+  skips the dialog.
 - **Build:** one command (`uv run python tools/build_exe.py`) driven by a
   committed `.spec`. GitHub Actions release automation is an optional later
   enhancement, not in this pass.
@@ -143,13 +148,47 @@ turns the silent degraded mode into an explicit choice.
 `test_single_instance.py`: detection true/false against a fake health probe;
 takeover issues shutdown then waits; force-kill path triggers on timeout.
 
-### 4. Admin shutdown endpoint (`server/app.py`)
+### 4. Admin shutdown + restart endpoints (`server/app.py`)
 
-New `POST /api/admin/shutdown` — localhost-only (the app only ever binds
-`127.0.0.1`). Sets a shutdown flag that flips the running `uvicorn.Server`'s
-`should_exit` so the graceful lifespan teardown (replay/ffmpeg/db) runs. This
-is the clean path for "close the other instance" without force-killing.
-Returns `{"shutting_down": true}`.
+Two localhost-only POSTs (the app only ever binds `127.0.0.1`), each
+dispatched on a daemon thread so the request returns before the action runs
+(joining the server thread from inside the handler would deadlock graceful
+shutdown):
+
+- `POST /api/admin/shutdown` → runs `app.state.request_shutdown` if set, else
+  raises SIGINT (the terminal graceful path). The desktop sets
+  `request_shutdown` to a FULL quit (stop server + close window + stop tray)
+  — not just `should_exit` — so "close the other instance" actually closes
+  it. Returns `{"shutting_down": true}`.
+- `POST /api/admin/restart` → runs `app.state.request_restart` if set, else
+  the fallback (`spawn_replacement()` + SIGINT). Returns `{"restarting": true}`.
+
+### 4b. Restart = full process relaunch (`core/relaunch.py`, new)
+
+An in-process server restart will NOT pick up edited backend modules (CPython
+caches imports), so "Restart server" RELAUNCHES the process.
+`core/relaunch.py` holds the primitives: `server_alive()` (/health probe),
+`wait_port_free()`, and `spawn_replacement()` (re-launch this exact process
+via `sys.orig_argv`, tagged with the `SM64_RESTART=1` env var).
+
+- **GUI:** the button POSTs `/api/admin/restart`; the desktop's
+  `request_restart` calls `spawn_replacement()` then the full quit. The fresh
+  exe sees `SM64_RESTART`, `wait_port_free()`s for the old to exit (skipping
+  the takeover dialog), then builds + opens its window.
+- **Browser/terminal:** the fallback `spawn_replacement()` + SIGINT relaunches
+  `python -m sm64_events.main`; `run()` sees `SM64_RESTART` and
+  `wait_port_free()`s before building, so the lock hands off cleanly.
+- The UI needs no special handling: the store's WebSocket auto-reconnects
+  (2 s) and refetches `/api/session` on reconnect, so the page seamlessly
+  rejoins the new server. The button shows a transient "Restarting…" state.
+
+**Required main.py refactor (root cause):** today `app = build()` runs at
+module import, which acquires the instance lock as a side effect. The desktop
+must call `build()` AFTER the single-instance takeover, so importing it must
+be side-effect-free. main.py changes to a lazy module-level `app` (via module
+`__getattr__`) so `from sm64_events.main import build` no longer builds/locks;
+only `uvicorn sm64_events.main:app` (attribute access) or `run()` builds. This
+also fixes a latent "import acquires the lock" footgun.
 
 ### 5. Window (`desktop/window.py`, new)
 
@@ -254,15 +293,17 @@ the first → wait for port free → start here.
 
 ## Files
 
-New: `core/paths.py` · `desktop/__init__.py` · `desktop/__main__.py` ·
-`desktop/server_runner.py` · `desktop/single_instance.py` · `desktop/window.py`
-· `desktop/tray.py` · `tools/build_exe.py` · `sm64_tracker.spec` ·
-`assets/ukiki.ico` · tests for the above.
-Changed: `main.py` (paths + bundled-ffmpeg discovery) · `server/app.py`
-(`/api/admin/shutdown`) · replay config (paths) · `pyproject.toml`
-(`pywebview`, `pystray` runtime; `pyinstaller` dev) · `README.md` (restructure)
-· `docs/api.md` (new home for the API reference) · `CLAUDE.md` (module-map
-rows + parity rule).
+New: `core/paths.py` · `core/relaunch.py` · `desktop/__init__.py` ·
+`desktop/__main__.py` · `desktop/server_runner.py` · `desktop/single_instance.py`
+· `desktop/window.py` · `desktop/tray.py` · `tools/build_exe.py` ·
+`tools/rthook_comtypes.py` · `gui_entry.py` · `assets/ukiki.ico` · tests for
+the above.
+Changed: `main.py` (paths + bundled-ffmpeg + lazy `app` + restart wait in
+`run()`) · `server/app.py` (`/api/admin/shutdown` + `/api/admin/restart` +
+pidfile) · replay config (paths) · `ui/components/header.js` (Restart server
+button) · `pyproject.toml` (`pywebview`, `pystray` runtime; `pyinstaller` dev)
+· `README.md` (restructure) · `docs/api.md` (new home for the API reference) ·
+`CLAUDE.md` (module-map rows + parity rule).
 
 ## Phasing (one effort, natural order)
 
@@ -289,8 +330,20 @@ rows + parity rule).
   Evergreen runtime. README carries the one-line installer link.
 - **Shared checkout, concurrent sessions.** Per `CLAUDE.md`, `main.py` is a
   "never edit in two branches at once" contract and this touches it (paths +
-  ffmpeg discovery). The implementation session must re-check the branch and
-  merge cleanly before editing it.
+  ffmpeg discovery + the lazy-`app` refactor). The implementation session must
+  re-check the branch and merge cleanly before editing it.
+- **main.py lazy-`app` refactor.** Making `app` lazy (module `__getattr__`) is
+  a structural change to the composition root. It must keep ALL existing
+  launch modes working: `uvicorn sm64_events.main:app` (attribute access
+  builds), `python -m sm64_events.main` (`run()` builds), and `test_composition`
+  (reload no longer eager-builds; explicit `build()` still works). Verified by
+  the composition suite + a live CTRL+C check on the canonical launch.
+- **Restart relaunch is launch-mode-sensitive.** It relaunches `sys.orig_argv`,
+  so the canonical launches (`python -m sm64_events.desktop`, the frozen exe,
+  `python -m sm64_events.main`) are fully supported; an exotic launch (bare
+  `uvicorn` CLI) relaunches without the `SM64_RESTART` port-free wait and may
+  briefly race the lock (degrading to broadcast-only until the next restart).
+  Documented, not fixed.
 - **onefile startup latency.** Self-extract adds a few seconds to first
   launch; acceptable, documented. (onedir/zip remains a fallback if it ever
   becomes a problem.)
