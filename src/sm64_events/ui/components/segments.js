@@ -4,7 +4,7 @@
 // enums; adding a trigger type in tracking/segments.py appears here with
 // zero UI changes.
 import { h } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 
@@ -98,7 +98,7 @@ function ClauseRow({ clause, types, vocab, tint, onChange, onRemove }) {
   </div>`;
 }
 
-function Builder({ vocab, initial, onSaved, onCancel }) {
+function Builder({ vocab, initial, onSaved, onCancel, apiRef }) {
   const blank = { name: "", enabled: true,
     start_triggers: [{ type: "level_enter" }],
     end_triggers: [{ type: "level_enter" }], guards: [] };
@@ -121,8 +121,18 @@ function Builder({ vocab, initial, onSaved, onCancel }) {
         await send("POST", "/api/segments", body);
       }
       onSaved();
-    } catch (e) { setErr(String(e)); }
+      return true;
+    } catch (e) { setErr(String(e)); return false; }
   }
+
+  // Expose a save handle + live dirty flag so the parent can offer "save your
+  // changes?" when the user clicks edit on a DIFFERENT segment (Segments
+  // tryEdit). dirty = the form differs from what we opened with (reverting an
+  // edit back clears it). Reassigned each render so the parent reads current
+  // state at click time.
+  if (apiRef) apiRef.current = {
+    save, dirty: JSON.stringify(d) !== JSON.stringify(initial || blank),
+  };
 
   // One bordered group per side; each alternative clause inside gets its
   // own tinted card (cycling) so "new color = new alternative" reads at a
@@ -153,6 +163,7 @@ export function Segments({ t }) {
   const [defs, setDefs] = useState(null);
   const [vocabData, setVocabData] = useState(null);
   const [editing, setEditing] = useState(null);   // null | "new" | def object
+  const editorRef = useRef(null);   // the open Builder's {save, dirty} handle
   const load = async () => setDefs(await getJSON("/api/segments"));
   useEffect(() => { load();
     getJSON("/api/segments/vocab").then(setVocabData); }, []);
@@ -175,6 +186,24 @@ export function Segments({ t }) {
     await send("DELETE", `/api/segments/${d.id}`);
     load(); t.refresh();
   }
+  // Clicking "edit" while another segment's editor is open: offer to save any
+  // unsaved changes, then swap immediately. Previously the click was a no-op
+  // until the open editor was closed (a wasted click) — the Builder ignored
+  // the new `initial` (useState reads it once) and had no key to remount.
+  async function tryEdit(d) {
+    if (editing) {
+      const isNew = editing === "new";
+      if (!isNew && editing.id === d.id) return;   // already editing this one
+      const api = editorRef.current;
+      if (api && api.dirty) {
+        const keep = window.confirm(
+          `Save your changes to "${isNew ? "the new segment" : editing.name}" `
+          + `before editing "${d.name}"?\n\nOK = save · Cancel = discard`);
+        if (keep && !(await api.save())) return;   // save failed -> stay put
+      }
+    }
+    setEditing(d);
+  }
 
   return html`<div>
     ${defs.map((d) => html`<div class="segrow">
@@ -185,11 +214,12 @@ export function Segments({ t }) {
       <span style="flex:1"></span>
       <button onclick=${() => setTarget(d)}>set target</button>
       <button onclick=${() => toggle(d)}>${d.enabled ? "disable" : "enable"}</button>
-      <button onclick=${() => setEditing(d)}>edit</button>
+      <button onclick=${() => tryEdit(d)}>edit</button>
       <button onclick=${() => remove(d)}>delete</button>
     </div>`)}
     ${editing
-      ? html`<${Builder} vocab=${vocabData}
+      ? html`<${Builder} key=${editing === "new" ? "new" : editing.id}
+          vocab=${vocabData} apiRef=${editorRef}
           initial=${editing === "new" ? null : editing}
           onSaved=${() => { setEditing(null); load(); t.refresh(); }}
           onCancel=${() => setEditing(null)} />`
