@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from sm64_events.core.logging_setup import configure_logging
+from sm64_events.core.paths import bundled_ffmpeg, db_path, instance_lock_path
 from sm64_events.detectors.anchors import AnchorDetector
 from sm64_events.detectors.area import AreaChangeDetector
 from sm64_events.detectors.death import DeathDetector
@@ -31,8 +32,6 @@ from sm64_events.storage.db import Database
 from sm64_events.storage.instance_lock import acquire_instance_lock
 from sm64_events.tracking.service import TrackerService
 
-DB_PATH = Path("data") / "tracker.db"
-
 # Held for the process lifetime; releasing it would allow a second instance to
 # start journaling concurrently (the incident we're guarding against).
 _instance_lock = None
@@ -46,17 +45,18 @@ def build():
     sys.setswitchinterval(0.002)
     memory = Pj64Memory()
     broadcaster = Broadcaster()
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    lock = acquire_instance_lock(DB_PATH.with_suffix(".lock"))
+    db_file = db_path()
+    db_file.parent.mkdir(parents=True, exist_ok=True)
+    lock = acquire_instance_lock(instance_lock_path())
     if lock is None:
         logging.getLogger("sm64.tracker").error(
             "another tracker instance owns %s - running broadcast-only "
-            "(events will NOT be recorded twice)", DB_PATH)
+            "(events will NOT be recorded twice)", db_file)
         db = None
     else:
         _instance_lock = lock
         try:
-            db = Database(DB_PATH)
+            db = Database(db_file)
         except Exception:
             logging.getLogger("sm64.tracker").exception(
                 "database unavailable - running broadcast-only")
@@ -134,7 +134,25 @@ def build():
     return create_app(poller, broadcaster, service=service, replay=replay)
 
 
-app = build()
+_app = None
+
+
+def get_app():
+    """Build the app once, lazily. Importing this module must NOT build it —
+    build() acquires the instance lock, and the desktop shell needs to call
+    build() AFTER its single-instance takeover. Only serving the app builds
+    it: `uvicorn sm64_events.main:app` (attribute access via __getattr__) or
+    run()."""
+    global _app
+    if _app is None:
+        _app = build()
+    return _app
+
+
+def __getattr__(name):
+    if name == "app":
+        return get_app()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def run() -> None:
@@ -158,7 +176,8 @@ def run() -> None:
     30 s = drain wedged; neither = a new layer, instrument before fixing.
     """
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8064, timeout_graceful_shutdown=3)
+    uvicorn.run(get_app(), host="127.0.0.1", port=8064,
+                timeout_graceful_shutdown=3)
 
 
 if __name__ == "__main__":
