@@ -301,9 +301,12 @@ On import: validate `kind`/`version`; reuse an exact-match existing segment
 - `game_reset` mid-run = save-aborted-then-restart; runs snapshot the route.
 - Gold splits matched by step **signature**, so reordering steps is safe.
 - Reconnect/refresh re-fetches authoritative run state (`GET /api/run`).
-- Shared contracts touched: `tracking/projection.py` (wire `RunTracker` into
-  `replay()`) and `main.py` (wiring) — land on a focused branch first per the
-  parallel-work rules; do not parallelize these edits.
+- Shared contract touched: `tracking/projection.py` (wire `RunTracker` into
+  `replay()`) — a "never edit in two branches at once" file; keep it on a
+  focused branch and merge cleanly. **`main.py` is NOT needed** by this feature
+  (the service loads routes from the db like `segment_defs`, the `RunTracker`
+  lives in the projector driven by journaled `run_started` events, and
+  endpoints go in `server/api.py`'s already-mounted router). See §12.
 
 ## 9. Build phases
 
@@ -328,7 +331,41 @@ On import: validate `kind`/`version`; reuse an exact-match existing segment
   existing `game_reset` event** (the only behavior we rely on but haven't
   exercised this way). No new memory addresses.
 
-## 11. Definition of done
+## 11. Compatibility with the `desktop-gui-packaging` worktree
+
+A second worktree (`.claude/worktrees/desktop-gui-packaging`, branch
+`desktop-gui-packaging`) is building the desktop GUI + portable exe. Diffed
+against master — the two efforts are **file-disjoint**; no code-file collisions.
+
+- **No shared code files.** The GUI touches `main.py`, `server/app.py`,
+  `replay/config.py`, `ui/components/header.js`, `pyproject.toml`, `uv.lock`,
+  and adds `core/paths.py`, `core/relaunch.py`, `desktop/*`. This feature
+  touches `storage/db.py`, `tracking/{routes,runs,views,service,projection}.py`,
+  `server/api.py`, adds `ui/{routes,runview,runhistory}.js`, and edits
+  `ui/{app,store,api}.js`. No overlap.
+- **`main.py` is NOT needed here** (confirmed by reading the composition root):
+  so the GUI's sensitive lazy-`app`/paths refactor of `main.py` and this work
+  never meet.
+- **`projection.py`** (a "never edit in two branches" contract) is touched here
+  but NOT by the GUI — safe, absent a third concurrent editor.
+- **Migrations:** the GUI adds **no** DB migration, so `routes`=v7 / `runs`=v8
+  are unclaimed. If another branch adds a migration before this lands, re-number
+  and re-check (guard seed/repair per the db.py migration discipline).
+- **Synergies:** the GUI's `core/paths.py` (`db_path()`) will place the new
+  tables under `%LOCALAPPDATA%` when frozen — nothing extra to do. The GUI's
+  **parity rule** (UI features live in `ui/` + server, never forked into the
+  desktop shell) is satisfied for free — the Routes tab is plain `ui/` served by
+  the same server, so it appears in both the browser and the pywebview window.
+- **Doc merge points (low risk):** both update `CLAUDE.md` (module-map rows) and
+  the API reference. The GUI **moves the API reference to `docs/api.md`**; if the
+  GUI lands first, document the new `/api/routes*` + `/api/run*` surface there,
+  not in the old README tables.
+- **Suggested ordering:** let `desktop-gui-packaging` merge to master first (it
+  does the structural `paths.py` + lazy-`app` refactor); branch this work from
+  the updated master so the new tables inherit `db_path()`. Parallel is also
+  safe given the file-disjointness — only merge-time care on the docs.
+
+## 12. Definition of done
 
 - All phases merged; `uv run pytest -q` green; new behavior tested.
 - F1 → `game_reset` confirmed on the live gate.
