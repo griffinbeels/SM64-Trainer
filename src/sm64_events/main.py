@@ -81,7 +81,7 @@ def build():
         import shutil as _shutil
         import subprocess as _sp
         video_sink_factory = None
-        _ffmpeg = _shutil.which("ffmpeg")
+        _ffmpeg = bundled_ffmpeg() or _shutil.which("ffmpeg")
         if _ffmpeg:
             try:
                 _sp.run([_ffmpeg, "-version"], capture_output=True,
