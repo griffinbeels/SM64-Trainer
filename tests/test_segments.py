@@ -486,55 +486,121 @@ def test_reset_without_save_pending_still_closes():
 
 
 # ---------------------------------------------------------------------------
-# Area-door echo guard (live report 2026-06-12)
-# An area_changed (castle door) mid-segment triggers a synthetic
-# practice_reset at the SAME frame.  The segment must stay armed.
+# Cross-area relocation (live report 2026-06-13, supersedes the 2026-06-12
+# "stay armed through a cross-area door" behaviour): crossing to a DIFFERENT
+# castle area (the lobby<->upstairs star door, a basement door, a warp) means
+# Mario left the segment's start position, so it disarms with NO row and ONLY
+# the new area's segment is armed. A SAME-area door fires no area_changed and
+# still keeps the segment armed (intra-area echo, below).
 # ---------------------------------------------------------------------------
 
-def test_area_door_echo_mid_segment_does_not_close():
-    """LBLJ armed in lobby (level 16→6 @1000); area_changed 1→3 @1200 (door);
-    practice_reset @1200 (door echo) → no closure, segment stays armed.
-    Subsequent level_changed 6→17 @1300 → success rta 300."""
+def test_cross_area_change_disarms_lobby_segment():
+    """LBLJ armed in the lobby (area 1); area_changed 1->3 (crossing to the
+    basement) disarms it as a relocation — no reset row — and the co-frame load
+    echo changes nothing."""
     e = SegmentEngine([LBLJ])
-    # arm via castle entry
     e.feed(jev(10, "level_changed", 1000, {"from": 16, "to": 6}),
-           ctx(level=6, prev_level=16))
-    # load echo at arm frame — already covered, still no closure
+           ctx(level=6, prev_level=16, area=1))
     e.feed(jev(11, "practice_reset", 1000, {"igt_frames_before": 64}),
-           ctx(level=6))
+           ctx(level=6, area=1))
     assert e.armed_ids() == {1}
-    # area door crossed mid-segment: area_changed then echo at SAME frame
-    e.feed(jev(12, "area_changed", 1200, {"level": 6, "from": 1, "to": 3}),
-           ctx(level=6))
-    closed, _ = e.feed(jev(13, "practice_reset", 1200, {}), ctx(level=6))
-    assert closed == [], "area-door echo must not close the segment"
-    assert e.armed_ids() == {1}, "segment must remain armed after door echo"
-    # end trigger fires — success timed from original arm at 1000
-    closed, _ = e.feed(jev(14, "level_changed", 1300, {"from": 6, "to": 17}),
-                       ctx(level=17, prev_level=6))
-    assert len(closed) == 1
-    assert closed[0].outcome == "success" and closed[0].rta_frames == 300
+    # cross-area change: Mario left the lobby -> relocation disarm, NO row
+    closed, _ = e.feed(
+        jev(12, "area_changed", 1200, {"level": 6, "from": 1, "to": 3}),
+        ctx(level=6, area=3))
+    assert closed == [], "relocation records no reset row"
+    assert e.armed_ids() == set(), "left the lobby area -> disarmed"
+    closed, _ = e.feed(jev(13, "practice_reset", 1200, {}), ctx(level=6, area=3))
+    assert closed == [] and e.armed_ids() == set()
 
 
-def test_real_reset_after_door_still_closes():
-    """Same prefix through the door @1200; a practice_reset at @1400 (delta
-    from last transition = 200 frames) is a real player reset → outcome reset,
-    rta 400 (from original arm at 1000)."""
+def test_real_reset_after_intra_area_door_still_closes():
+    """An intra-area door (SAME area, no area_changed) keeps the segment armed
+    via the door echo; a real player reset afterward closes it as a reset,
+    rta 400 (from the original arm @1000)."""
     e = SegmentEngine([LBLJ])
     e.feed(jev(10, "level_changed", 1000, {"from": 16, "to": 6}),
-           ctx(level=6, prev_level=16))
+           ctx(level=6, prev_level=16, area=1))
     e.feed(jev(11, "practice_reset", 1000, {"igt_frames_before": 64}),
-           ctx(level=6))
-    e.feed(jev(12, "area_changed", 1200, {"level": 6, "from": 1, "to": 3}),
-           ctx(level=6))
-    # door echo — ignored
-    e.feed(jev(13, "practice_reset", 1200, {}), ctx(level=6))
+           ctx(level=6, area=1))
+    # intra-area door echo (door action, NO area change) — ignored, stays armed
+    e.feed(jev(12, "practice_reset", 1200, {"action": 0x00001322}),
+           ctx(level=6, area=1))
     assert e.armed_ids() == {1}
     # real reset 200 frames later — must close
-    closed, _ = e.feed(jev(14, "practice_reset", 1400,
-                            {"igt_frames_before": 30}), ctx(level=6))
+    closed, _ = e.feed(jev(13, "practice_reset", 1400,
+                            {"igt_frames_before": 30}), ctx(level=6, area=1))
     assert len(closed) == 1
     assert closed[0].outcome == "reset" and closed[0].rta_frames == 400
+
+
+def test_cross_area_warp_swaps_segments_no_double_arm():
+    """THE LIVE REPORT (2026-06-13): moving/warping between the lobby and the
+    upstairs must leave EXACTLY the destination's segment armed, never both.
+    LBLJ arms in the lobby (area 1), BitS Entry upstairs (area 2)."""
+    lblj = SegmentDef(id=1, name="LBLJ", enabled=True,
+        start_triggers=[{"type": "attempt_anchor", "level": 6, "area": 1}],
+        end_triggers=[{"type": "level_enter", "to": 17}], guards=[])
+    bits = SegmentDef(id=2, name="BitS", enabled=True,
+        start_triggers=[{"type": "area_enter", "level": 6, "area": 2}],
+        end_triggers=[{"type": "level_enter", "to": 21}], guards=[])
+    e = SegmentEngine([lblj, bits])
+    # in the lobby, a reset arms LBLJ
+    e.feed(jev(10, "practice_reset", 1000, {"action": 0x0C400201}),
+           ctx(level=6, area=1))
+    assert e.armed_ids() == {1}
+    # cross the star door to the upstairs: area_changed 1->2 + co-frame echo
+    e.feed(jev(11, "area_changed", 1100, {"level": 6, "from": 1, "to": 2}),
+           ctx(level=6, area=2))
+    assert e.armed_ids() == {2}, "LBLJ disarmed, only BitS armed upstairs"
+    e.feed(jev(12, "practice_reset", 1100,
+               {"igt_frames_before": 0, "mario_acted": True}),
+           ctx(level=6, area=2))
+    assert e.armed_ids() == {2}, "co-frame echo doesn't re-arm LBLJ"
+    # warp back to the lobby: area_changed 2->1 + a menu-warp reset (high pause)
+    e.feed(jev(13, "area_changed", 1300, {"level": 6, "from": 2, "to": 1}),
+           ctx(level=6, area=1))
+    assert e.armed_ids() == set(), "BitS disarmed leaving the upstairs"
+    e.feed(jev(14, "practice_reset", 1300,
+               {"paused_frames_before": 30, "action": 0x0C400201}),
+           ctx(level=6, area=1))
+    assert e.armed_ids() == {1}, "menu warp to the lobby arms only LBLJ"
+
+
+def test_cross_area_warp_into_door_spawn_arms_idle_segment():
+    """Warping to the lobby lands Mario in ACT_WARP_DOOR_SPAWN (a door echo),
+    but it is a cross-area RELOCATION, so the idle lobby segment still arms
+    (live report 2026-06-13: LBLJ never re-armed after warping to the lobby
+    because every landing reset was door-echo-suppressed)."""
+    lblj = SegmentDef(id=1, name="LBLJ", enabled=True,
+        start_triggers=[{"type": "attempt_anchor", "level": 6, "area": 1}],
+        end_triggers=[{"type": "level_enter", "to": 17}], guards=[])
+    e = SegmentEngine([lblj])
+    # warp upstairs -> lobby: area edge 2->1, then a door-spawn landing reset
+    e.feed(jev(10, "area_changed", 2000, {"level": 6, "from": 2, "to": 1}),
+           ctx(level=6, area=1))
+    closed, notices = e.feed(
+        jev(11, "practice_reset", 2000,
+            {"action": 0x1322, "prev_action": 0x1322, "frames_since_door": 0,
+             "paused_frames_before": 67}),
+        ctx(level=6, area=1))
+    assert e.armed_ids() == {1}, "cross-area warp landing arms the lobby segment"
+    assert [n["event"] for n in notices] == ["segment_armed"]
+
+
+def test_intra_area_door_spawn_echo_does_not_arm_idle_segment():
+    """The same door-spawn reset WITHOUT a co-frame area edge is an involuntary
+    intra-area door echo — it must NOT arm an idle segment (only a real reset
+    or a cross-area relocation does)."""
+    lblj = SegmentDef(id=1, name="LBLJ", enabled=True,
+        start_triggers=[{"type": "attempt_anchor", "level": 6, "area": 1}],
+        end_triggers=[{"type": "level_enter", "to": 17}], guards=[])
+    e = SegmentEngine([lblj])
+    e.feed(jev(10, "practice_reset", 2000,
+               {"action": 0x1322, "prev_action": 0x1322,
+                "frames_since_door": 0}),
+           ctx(level=6, area=1))
+    assert e.armed_ids() == set(), "intra-area door echo must not arm"
 
 
 # ---------------------------------------------------------------------------
@@ -1126,17 +1192,23 @@ def test_menu_warp_to_other_area_swaps_armed_segments():
     e.feed(jev(10, "practice_reset", 1000, {"action": 0x0C400201}),
            ctx(level=6, area=1))
     assert e.armed_ids() == {1}
-    # menu warp upstairs: area_changed 1→2 co-frame with the warp anchor
-    e.feed(jev(11, "area_changed", 2000, {"level": 6, "from": 1, "to": 2}),
-           ctx(level=6, area=2))
-    closed, notices = e.feed(
+    # menu warp upstairs: the area change relocates LBLJ out (no row)...
+    closed, notices11 = e.feed(
+        jev(11, "area_changed", 2000, {"level": 6, "from": 1, "to": 2}),
+        ctx(level=6, area=2))
+    assert closed == []
+    assert e.armed_ids() == set(), "LBLJ relocated out on the area change"
+    assert [(n["event"], n["segment_id"]) for n in notices11] == [
+        ("segment_disarmed", 1)]
+    # ...and the co-frame warp anchor arms BITS Entry upstairs
+    closed, notices12 = e.feed(
         jev(12, "practice_reset", 2000,
             {"paused_frames_before": 18, "action": 0x0C400201}),
         ctx(level=6, area=2))
     assert closed == [], "relocation must not record a reset row"
-    assert e.armed_ids() == {2}, "LBLJ out, BITS Entry in"
-    assert [(n["event"], n["segment_id"]) for n in notices] == [
-        ("segment_disarmed", 1), ("segment_armed", 2)]
+    assert e.armed_ids() == {2}, "BITS Entry in"
+    assert [(n["event"], n["segment_id"]) for n in notices12] == [
+        ("segment_armed", 2)]
     # BITS Entry times from the warp frame
     closed, _ = e.feed(jev(13, "level_changed", 2300, {"from": 6, "to": 31}),
                        ctx(level=31, prev_level=6))
@@ -1165,16 +1237,19 @@ def test_establishing_area_event_pins_arm_position():
     assert len(closed) == 1
     assert closed[0].outcome == "reset" and closed[0].rta_frames == 500
     assert e.armed_ids() == {1}
-    # menu warp upstairs: relocation → disarm, NO row
-    e.feed(jev(13, "area_changed", 2000, {"level": 6, "from": 1, "to": 2}),
-           ctx(level=6, area=2))
+    # menu warp upstairs: the area change IS the relocation → disarm, NO row
     closed, notices = e.feed(
-        jev(14, "practice_reset", 2000,
-            {"paused_frames_before": 18, "action": 0x0C400201}),
+        jev(13, "area_changed", 2000, {"level": 6, "from": 1, "to": 2}),
         ctx(level=6, area=2))
     assert closed == [], "cross-area warp must not record a reset row"
     assert e.armed_ids() == set()
     assert [n["event"] for n in notices] == ["segment_disarmed"]
+    # the co-frame load echo changes nothing (already relocated out)
+    closed, _ = e.feed(
+        jev(14, "practice_reset", 2000,
+            {"paused_frames_before": 18, "action": 0x0C400201}),
+        ctx(level=6, area=2))
+    assert closed == [] and e.armed_ids() == set()
 
 
 def test_afk_length_menu_warp_relocation_also_disarms():
@@ -1301,7 +1376,8 @@ def test_every_trigger_and_guard_template_matches_its_params():
 def test_vocab_serializes_templates():
     v = vocab()
     by_key = {t["key"]: t for t in v["triggers"]}
-    assert by_key["level_enter"]["template"] == "{to} coming from {from}"
+    assert by_key["level_enter"]["template"] == (
+        "{to} {to_subarea} coming from {from} {from_subarea}")
     assert by_key["attempt_anchor"]["label"] == (
         "Practice reset / savestate load")
     assert all("template" in t for t in v["triggers"] + v["guards"])
@@ -1315,3 +1391,196 @@ def test_vocab_course_and_star_enums():
     assert len(v["stars"]["1"]) == 7
     assert v["stars"]["16"] == ["8 Red Coins"]  # Bowser course: one star
     assert v["stars"]["0"] == []                # Castle Secret: no named stars
+
+
+# ---------------------------------------------------------------------------
+# Castle subarea scoping (spec 2026-06-12, live-corrected 2026-06-13).
+# level_enter / level_exit gain a conditional subarea on EACH side (shown only
+# when that side is Castle Inside, level 6). Lobby=1, Upstairs=2, Basement=3.
+#
+# SOURCE subarea (from_subarea) reads from_area off the level edge — Mario was
+# settled in that area before leaving, so it is reliable.
+#
+# DESTINATION subarea (to_subarea) CANNOT be read off the edge: the castle
+# loads area 1 (lobby) first, then warps Mario to the real area a poll later
+# on the same game frame (live journal 2026-06-13). So the engine DEFERS a
+# destination-subarea trigger into _pending, tracks the settling co-frame
+# area_changed, and arms once the frame advances iff the SETTLED area matches.
+#
+# area_enter restricts its region to the castle hubs {6,16,26} with an optional
+# subarea (unchanged area_changed semantics).
+# ---------------------------------------------------------------------------
+
+
+def _seg(**triggers):
+    return SegmentDef(id=1, name="x", enabled=True,
+                      end_triggers=[{"type": "spawned"}], guards=[],
+                      **triggers)
+
+
+def test_level_exit_to_subarea_arms_when_destination_area_settles():
+    # THE LIVE REPORT (2026-06-13): "exit HMC into Basement" never matched
+    # because to_area read the transient lobby (1) on the level edge. It must
+    # arm when the co-frame area settles into the basement (3) — promptly, on
+    # the real-edge lobby->basement warp.
+    e = SegmentEngine([_seg(start_triggers=[
+        {"type": "level_exit", "from": 7, "to": 6, "to_subarea": 3}])])
+    e.feed(jev(10, "level_changed", 1000, {"from": 7, "to": 6, "from_area": 1}),
+           ctx(level=6))
+    assert e.armed_ids() == set(), "deferred: destination not settled yet"
+    e.feed(jev(11, "area_changed", 1000, {"level": 6, "from": 1, "to": 1}),
+           ctx(level=6, area=1))            # transient lobby (establishing)
+    assert e.armed_ids() == set(), "transient lobby — still deferred"
+    e.feed(jev(12, "area_changed", 1000, {"level": 6, "from": 1, "to": 3}),
+           ctx(level=6, area=3))            # real-edge settle into the basement
+    assert e.armed_ids() == {1}, "prompt arm on the definitive settle"
+
+
+def test_level_exit_to_subarea_does_not_arm_when_settling_elsewhere():
+    # same basement trigger, but the entry settles in the lobby (no warp to 3)
+    e = SegmentEngine([_seg(start_triggers=[
+        {"type": "level_exit", "from": 7, "to": 6, "to_subarea": 3}])])
+    e.feed(jev(10, "level_changed", 1000, {"from": 7, "to": 6, "from_area": 1}),
+           ctx(level=6))
+    e.feed(jev(11, "area_changed", 1000, {"level": 6, "from": 1, "to": 1}),
+           ctx(level=6, area=1))            # stays in the lobby
+    e.feed(jev(20, "area_changed", 1100, {"level": 6, "from": 1, "to": 1}),
+           ctx(level=6, area=1))            # frame advances -> drop
+    assert e.armed_ids() == set()
+
+
+def test_level_enter_to_subarea_lobby_arms_promptly_on_entry():
+    # lobby destination: area is 1 throughout, so the only co-frame event is the
+    # establishing 1->1. It must arm ON ENTRY (live report 2026-06-13: LBLJ's
+    # grounds->lobby armed too late — only when the player left — and whiffed).
+    e = SegmentEngine([_seg(start_triggers=[
+        {"type": "level_enter", "to": 6, "to_subarea": 1, "from": 16}])])
+    e.feed(jev(10, "level_changed", 1000, {"from": 16, "to": 6, "from_area": 1}),
+           ctx(level=6))
+    assert e.armed_ids() == set(), "deferred until the area settles"
+    e.feed(jev(11, "area_changed", 1000, {"level": 6, "from": 1, "to": 1}),
+           ctx(level=6, area=1))            # establishing lobby settle
+    assert e.armed_ids() == {1}, "armed on entry, not at a later event"
+
+
+def test_lobby_subarea_retracts_when_entry_settles_to_basement():
+    # a Lobby destination (no source filter) provisionally arms on the transient
+    # lobby load, then RETRACTS the instant the entry settles into the basement.
+    e = SegmentEngine([_seg(start_triggers=[
+        {"type": "level_enter", "to": 6, "to_subarea": 1}])])
+    e.feed(jev(10, "level_changed", 1000, {"from": 7, "to": 6, "from_area": 1}),
+           ctx(level=6))
+    e.feed(jev(11, "area_changed", 1000, {"level": 6, "from": 1, "to": 1}),
+           ctx(level=6, area=1))            # transient lobby -> provisional arm
+    assert e.armed_ids() == {1}
+    e.feed(jev(12, "area_changed", 1000, {"level": 6, "from": 1, "to": 3}),
+           ctx(level=6, area=3))            # settles basement -> retract
+    assert e.armed_ids() == set()
+
+
+def test_level_enter_from_subarea_scopes_the_source_area():
+    # "enter BitDW coming from Castle Inside upstairs" — source area off the
+    # level edge (reliable; arms immediately, no deferral).
+    e = SegmentEngine([_seg(start_triggers=[
+        {"type": "level_enter", "to": 17, "from": 6, "from_subarea": 2}])])
+    e.feed(jev(10, "level_changed", 1000, {"from": 6, "to": 17, "from_area": 1}),
+           ctx(level=17))
+    assert e.armed_ids() == set(), "left the lobby, not the upstairs"
+    e.feed(jev(11, "level_changed", 2000, {"from": 6, "to": 17, "from_area": 2}),
+           ctx(level=17))
+    assert e.armed_ids() == {1}
+
+
+def test_level_exit_from_subarea_scopes_the_left_castle_area():
+    e = SegmentEngine([_seg(start_triggers=[
+        {"type": "level_exit", "from": 6, "from_subarea": 3}])])
+    e.feed(jev(10, "level_changed", 1000, {"from": 6, "to": 7, "from_area": 3}),
+           ctx(level=7))
+    assert e.armed_ids() == {1}
+
+
+def test_to_subarea_trigger_without_area_events_never_arms():
+    # legacy journal: no area_changed follows the level edge -> the destination
+    # subarea can't be confirmed -> the deferred entry is dropped, never arms.
+    e = SegmentEngine([_seg(start_triggers=[
+        {"type": "level_enter", "to": 6, "to_subarea": 3}])])
+    e.feed(jev(10, "level_changed", 1000, {"from": 7, "to": 6}), ctx(level=6))
+    e.feed(jev(20, "level_changed", 2000, {"from": 6, "to": 7}), ctx(level=7))
+    assert e.armed_ids() == set()
+
+
+def test_deferred_destination_subarea_segment_completes_with_entry_start():
+    # The resolved arm behaves like any other for end-matching, and its
+    # start_frame is the level ENTRY frame (not the resolve frame) so timing is
+    # measured from the crossing.
+    e = SegmentEngine([SegmentDef(
+        id=1, name="MIPS Clip", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 7, "to": 6,
+                         "to_subarea": 3}],
+        end_triggers=[{"type": "level_enter", "to": 23}], guards=[])])
+    e.feed(jev(10, "level_changed", 1000, {"from": 7, "to": 6, "from_area": 1}),
+           ctx(level=6))
+    e.feed(jev(11, "area_changed", 1000, {"level": 6, "from": 1, "to": 1}),
+           ctx(level=6, area=1))
+    e.feed(jev(12, "area_changed", 1000, {"level": 6, "from": 1, "to": 3}),
+           ctx(level=6, area=3))
+    e.feed(jev(13, "area_changed", 1100, {"level": 6, "from": 3, "to": 3}),
+           ctx(level=6, area=3))            # resolve -> armed
+    assert e.armed_ids() == {1}
+    closed, _ = e.feed(jev(20, "level_changed", 1500,
+                           {"from": 6, "to": 23, "from_area": 3}),
+                       ctx(level=23))
+    assert len(closed) == 1 and closed[0].outcome == "success"
+    assert closed[0].rta_frames == 500, "measured from the entry frame (1000)"
+
+
+def test_area_enter_without_subarea_matches_any_area_in_region():
+    # request 3: "enter area Castle Grounds" — region-only, no subarea.
+    e = SegmentEngine([_seg(start_triggers=[
+        {"type": "area_enter", "level": 16}])])
+    e.feed(jev(10, "area_changed", 1000, {"level": 16, "from": 0, "to": 1}),
+           ctx(level=16, area=1))
+    assert e.armed_ids() == {1}
+
+
+def test_area_enter_with_subarea_still_scopes_to_that_area():
+    e = SegmentEngine([_seg(start_triggers=[
+        {"type": "area_enter", "level": 6, "area": 3}])])
+    e.feed(jev(10, "area_changed", 1000, {"level": 6, "from": 1, "to": 2}),
+           ctx(level=6, area=2))
+    assert e.armed_ids() == set(), "entered upstairs, not the basement"
+    e.feed(jev(11, "area_changed", 2000, {"level": 6, "from": 2, "to": 3}),
+           ctx(level=6, area=3))
+    assert e.armed_ids() == {1}
+
+
+def test_validate_accepts_subarea_and_optional_area_params():
+    validate_definition({
+        "name": "x",
+        "start_triggers": [
+            {"type": "level_enter", "to": 6, "to_subarea": 1},
+            {"type": "level_exit", "from": 6, "from_subarea": 2},
+            {"type": "area_enter", "level": 16}],
+        "end_triggers": [{"type": "spawned"}], "guards": []})  # no raise
+
+
+def test_validate_rejects_area_enter_without_region():
+    with pytest.raises(ValueError, match="area_enter"):
+        validate_definition({"name": "x",
+                             "start_triggers": [{"type": "area_enter"}],
+                             "end_triggers": [{"type": "spawned"}],
+                             "guards": []})
+
+
+def test_vocab_exposes_region_enum_and_conditional_subareas():
+    by_key = {t["key"]: t for t in vocab()["triggers"]}
+    ae = by_key["area_enter"]["params"]
+    assert ae["level"]["enum"] == [6, 16, 26]
+    assert ae["area"]["required"] is False
+    assert ae["area"]["only_when"] == {"param": "level", "equals": 6}
+    le = by_key["level_enter"]["params"]
+    assert le["to_subarea"]["only_when"] == {"param": "to", "equals": 6}
+    assert le["from_subarea"]["only_when"] == {"param": "from", "equals": 6}
+    lx = by_key["level_exit"]["params"]
+    assert lx["from_subarea"]["only_when"] == {"param": "from", "equals": 6}
+    assert lx["to_subarea"]["only_when"] == {"param": "to", "equals": 6}

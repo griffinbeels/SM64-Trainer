@@ -19,10 +19,18 @@ function ParamInput({ schema, name, value, vocab, clause, onChange }) {
     <option value="">${schema.required ? pickLabel : anyLabel}</option>
     ${entries.map(([id, n]) => html`<option value=${id}>${n}</option>`)}
   </select>`;
-  if (schema.kind === "level")
-    return dropdown(Object.entries(vocab.levels), "(any level)", "— pick level —");
-  if (schema.kind === "area")
-    return dropdown(Object.entries(vocab.castle_areas), "(any area)", "— pick area —");
+  if (schema.kind === "level") {
+    // schema.enum restricts the choices (area_enter offers only the castle
+    // hubs); absent enum = the full level list.
+    const entries = Object.entries(vocab.levels).filter(
+      ([id]) => !schema.enum || schema.enum.includes(Number(id)));
+    return dropdown(entries, "(any level)", "— pick level —");
+  }
+  if (schema.kind === "subarea")
+    // Castle interior areas (lobby/upstairs/basement). Always optional — the
+    // empty option is the explicit "Any" (matches any interior area). Shown
+    // only when the companion level is Castle Inside (ClauseRow only_when).
+    return dropdown(Object.entries(vocab.castle_areas), "Any", "— pick subarea —");
   if (schema.kind === "course")
     return dropdown(Object.entries(vocab.courses), "(any course)", "— pick course —");
   if (schema.kind === "star") {
@@ -42,10 +50,21 @@ function ParamInput({ schema, name, value, vocab, clause, onChange }) {
 
 function ClauseRow({ clause, types, vocab, tint, onChange, onRemove }) {
   const spec = types.find((t) => t.key === clause.type) || types[0];
+  // A param with only_when shows only while its controlling param equals the
+  // gate value (subarea selectors appear only for Castle Inside).
+  const visible = (pname) => {
+    const ow = spec.params[pname]?.only_when;
+    return !ow || clause[ow.param] === ow.equals;
+  };
   const setParam = (pname, v) => {
     const next = { ...clause, [pname]: v };
     // a star id is meaningless outside its course — clear it on course change
     if (pname === "course" && "star" in spec.params) next.star = null;
+    // changing a controlling level away from the gate clears its now-hidden
+    // subarea, so a stale "Basement" can't cling to "Castle Grounds".
+    for (const [p, meta] of Object.entries(spec.params))
+      if (meta.only_when && meta.only_when.param === pname
+          && v !== meta.only_when.equals) next[p] = null;
     onChange(next);
   };
   const param = (pname) => html`<${ParamInput} schema=${spec.params[pname]}
@@ -54,14 +73,20 @@ function ClauseRow({ clause, types, vocab, tint, onChange, onRemove }) {
   // "{to} coming from {from}" → inputs interleaved with muted words.
   // Params a template forgets to mention render appended — the registry
   // test makes that unreachable; this keeps a bad vocab usable, not blank.
+  // Hidden (only_when unmet) params render nothing but stay "mentioned" so
+  // they don't reappear in the extras tail.
   const mentioned = new Set();
   const rendered = (spec.template || "").split(/(\{\w+\})/).map((tok) => {
     const m = /^\{(\w+)\}$/.exec(tok);
-    if (m && spec.params[m[1]]) { mentioned.add(m[1]); return param(m[1]); }
+    if (m && spec.params[m[1]]) {
+      mentioned.add(m[1]);
+      return visible(m[1]) ? param(m[1]) : null;
+    }
     const word = tok.trim();
     return word ? html`<span class="segword">${word}</span>` : null;
   });
-  const extras = Object.keys(spec.params).filter((p) => !mentioned.has(p));
+  const extras = Object.keys(spec.params).filter(
+    (p) => !mentioned.has(p) && visible(p));
   return html`<div class="segclause tint${tint ?? 0}">
     <select value=${clause.type}
         onchange=${(e) => onChange({ type: e.target.value })}>

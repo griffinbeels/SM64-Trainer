@@ -24,20 +24,34 @@ def snap(**overrides) -> GameSnapshot:
 
 
 def test_level_change_emits_event_with_from_and_to():
-    events = LevelChangeDetector().process(snap(curr_level=8), snap(curr_level=24))
+    events = LevelChangeDetector().process(
+        snap(curr_level=8, curr_area=1), snap(curr_level=24, curr_area=2))
     assert len(events) == 1
     ev = events[0]
     assert ev.type == "level_changed"
     assert ev.frame == 1000
-    assert ev.payload == {"from": 8, "to": 24}
+    assert ev.payload == {"from": 8, "to": 24, "from_area": 1}
+
+
+def test_level_change_carries_source_area_only():
+    """Castle-subarea segment triggers (tracking/segments.py) read from_area
+    (the area Mario LEFT) off the level edge. There is deliberately no to_area:
+    the destination loads area 1 (lobby) transiently before warping to the real
+    area a poll later, so curr.curr_area on the edge is NOT the destination."""
+    events = LevelChangeDetector().process(
+        snap(curr_level=6, curr_area=3),    # leaving the Castle basement
+        snap(curr_level=7, curr_area=1))    # into Hazy Maze Cave
+    assert events[0].payload["from_area"] == 3
+    assert "to_area" not in events[0].payload
 
 
 def test_first_pair_establishes_level_in_journal():
     # the establishing event (from may equal to) is what lets the
     # projector's level tracking survive server restarts
-    events = LevelChangeDetector().process(snap(curr_level=8), snap(curr_level=8))
+    events = LevelChangeDetector().process(
+        snap(curr_level=8, curr_area=1), snap(curr_level=8, curr_area=1))
     assert len(events) == 1
-    assert events[0].payload == {"from": 8, "to": 8}
+    assert events[0].payload == {"from": 8, "to": 8, "from_area": 1}
 
 
 def test_same_level_silent_after_established():
@@ -51,9 +65,14 @@ def test_reattach_gap_level_change_is_caught():
     d.process(snap(curr_level=8), snap(curr_level=8))      # established at 8
     # emulator restarted while the server stayed up: prev is re-seeded from
     # a fresh read so prev == curr == 6, but the journal still says 8
-    events = d.process(snap(curr_level=6), snap(curr_level=6))
+    # from_area is best-effort across a reattach gap: prev is re-seeded, so
+    # both reads carry the post-gap area (3 here). The from LEVEL stays the
+    # authoritative correction (last-emitted); from_area is a bonus that is
+    # only exact when prev is a real pre-edge frame.
+    events = d.process(snap(curr_level=6, curr_area=3),
+                       snap(curr_level=6, curr_area=3))
     assert len(events) == 1
-    assert events[0].payload == {"from": 8, "to": 6}
+    assert events[0].payload == {"from": 8, "to": 6, "from_area": 3}
 
 
 def test_level_change_frame_matches_curr_global_timer():
@@ -68,6 +87,7 @@ def test_boot_default_level_zero_to_real_level_emits_event():
     # On first attach, curr_level starts at 0 (default) and transitions to
     # whichever level is loaded. This fires once on attach — acceptable and
     # noted here so the projection layer can handle it (e.g. ignore from==0).
-    events = LevelChangeDetector().process(snap(curr_level=0), snap(curr_level=8))
+    events = LevelChangeDetector().process(
+        snap(curr_level=0, curr_area=0), snap(curr_level=8, curr_area=1))
     assert len(events) == 1
-    assert events[0].payload == {"from": 0, "to": 8}
+    assert events[0].payload == {"from": 0, "to": 8, "from_area": 0}

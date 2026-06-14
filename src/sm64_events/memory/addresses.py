@@ -337,6 +337,15 @@ SPAWN_ACTIONS = frozenset({ACT_SPAWN_SPIN_AIRBORNE, ACT_SPAWN_SPIN_LANDING,
 CURR_AREA = 0x8033BACA               # s16 gCurrAreaIndex
 CASTLE_AREA_NAMES = {1: "Lobby", 2: "Upstairs", 3: "Basement"}  # live-verified 2026-06-12 (same hunt)
 
+# The castle-region levels the segment builder's "enter area" condition offers
+# (tracking/segments.py): the interior (6, whose CASTLE_AREA_NAMES subareas
+# the builder exposes) plus the two subarea-less hub levels. Ordered
+# interior-first to match the region dropdown. These are LEVELS, not areas —
+# only level 6 has named subareas (gCurrAreaIndex 1/2/3); 16 and 26 are single-
+# area levels, so the builder shows no subarea selector for them.
+CASTLE_REGION_LEVELS = (LEVEL_CASTLE_INSIDE, LEVEL_CASTLE_GROUNDS,
+                        LEVEL_CASTLE_COURTYARD)  # = (6, 16, 26)
+
 # ---------------------------------------------------------------------------
 # Name tables (display-only; IDs are the authoritative identity).
 # ---------------------------------------------------------------------------

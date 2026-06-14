@@ -26,6 +26,31 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
     the same event's arm phase — the armed set always reflects where Mario
     actually is. None on either side = unknown (legacy journals) →
     conservative match (the pre-area continuation behavior).
+- CROSS-AREA relocation also fires on the area_changed ITSELF, not just on
+  anchors (live report 2026-06-13: warping between the lobby and upstairs
+  double-armed both segments). An area_changed to a DIFFERENT area than where a
+  segment armed disarms it (no row) — Mario left its start position — even when
+  the co-frame load-echo anchor that would relocate it is echo-suppressed; a
+  SAME-area door fires no area_changed, so the intra-area echo keeps it armed.
+  And a cross-area RELOCATION anchor (co-frame with a real area edge =
+  _last_area_edge_frame) may ARM an IDLE destination segment even though its
+  warp landing spawns in ACT_WARP_DOOR_SPAWN (door-echo-classified) — else
+  warping to the lobby never re-arms an attempt_anchor segment. Scoped to idle
+  defs so it never rebases an armed one.
+- DESTINATION subarea is DEFERRED then resolved LIVE (live report 2026-06-13):
+  a level_enter/level_exit with a to_subarea can't be confirmed on the edge —
+  the castle loads the lobby (area 1) transiently, then warps Mario to the real
+  area a poll later, same game frame (detectors/level.py). Such a start match
+  goes to _pending (not _armed) keyed on the required area; each co-frame
+  area_changed updates the entry and ARMS the instant .area == required, RETRACTS
+  the instant a later co-frame moves away (the transient lobby before a
+  basement/upstairs settle). So a Lobby destination arms on ENTRY (its only
+  co-frame is the establishing 1->1), and a basement/upstairs destination arms on
+  its real-edge settle — both prompt. The entry stays in _pending until the frame
+  advances (then dropped), so a later co-frame can still retract. start_frame
+  stays the entry frame. SOURCE subarea (from_subarea) needs no deferral — Mario
+  was settled there, so the lambda checks from_area off the edge. to_subarea is
+  honoured on START triggers only.
 - guards re-evaluate on EVERY arm and re-arm
 - re-firing a start trigger while armed re-arms (timer restarts, no row);
   a refire whose guards FAIL leaves the existing arm untouched (the old
@@ -130,9 +155,10 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
 from dataclasses import dataclass, replace
 from typing import Callable
 
-from sm64_events.memory.addresses import (CASTLE_AREA_NAMES, COURSE_NAMES,
-                                          DOOR_ACTIONS, LEVEL_NAMES,
-                                          star_count, star_name)
+from sm64_events.memory.addresses import (CASTLE_AREA_NAMES,
+                                          CASTLE_REGION_LEVELS, COURSE_NAMES,
+                                          DOOR_ACTIONS, LEVEL_CASTLE_INSIDE,
+                                          LEVEL_NAMES, star_count, star_name)
 
 _ANCHOR_TYPES = ("practice_reset", "state_loaded")  # attempt-anchor events
 
@@ -190,28 +216,67 @@ def _real_edge(ev) -> bool:
     return ev.payload.get("from") != ev.payload.get("to")
 
 
+def _only_castle(param: str) -> dict:
+    """A castle-subarea param applies only when its companion level param is
+    the Castle Inside interior (level 6) — the only level with named subareas.
+    The builder reads only_when to show/hide the selector; the matcher does NOT
+    gate on it (a subarea set against a non-castle level just never matches,
+    since that level has no such area index)."""
+    return {"param": param, "equals": LEVEL_CASTLE_INSIDE}
+
+
 TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
+    # level_enter/level_exit gain a conditional subarea on EACH side (to/from);
+    # the selector is hidden unless that side is Castle Inside (only_castle).
+    # SOURCE subarea (from_subarea) reads from_area off the level edge — Mario
+    # was settled there, so the lambda checks it directly. DESTINATION subarea
+    # (to_subarea) is NOT checked here: the castle loads the lobby transiently
+    # before warping to the real area a poll later (detectors/level.py), so the
+    # lambda matches the level+from+from_subarea and the ENGINE defers a
+    # to_subarea match into _pending, arming once the settled co-frame area
+    # matches (SegmentEngine._pending). to_subarea is therefore honoured only on
+    # START triggers; on an END trigger the destination subarea is ignored.
     TriggerType("level_enter", "You enter level",
                 {"to": {"kind": "level", "required": True},
-                 "from": {"kind": "level", "required": False}},
-                "{to} coming from {from}",
+                 "to_subarea": {"kind": "subarea", "required": False,
+                                "only_when": _only_castle("to")},
+                 "from": {"kind": "level", "required": False},
+                 "from_subarea": {"kind": "subarea", "required": False,
+                                  "only_when": _only_castle("from")}},
+                "{to} {to_subarea} coming from {from} {from_subarea}",
                 lambda p, ev, ctx: ev.type == "level_changed" and _real_edge(ev)
                 and ev.payload["to"] == p["to"]
-                and (p.get("from") is None or ev.payload["from"] == p["from"])),
+                and (p.get("from") is None or ev.payload["from"] == p["from"])
+                and (p.get("from_subarea") is None
+                     or ev.payload.get("from_area") == p["from_subarea"])),
     TriggerType("level_exit", "You exit level",
                 {"from": {"kind": "level", "required": True},
-                 "to": {"kind": "level", "required": False}},
-                "{from} going to {to}",
+                 "from_subarea": {"kind": "subarea", "required": False,
+                                  "only_when": _only_castle("from")},
+                 "to": {"kind": "level", "required": False},
+                 "to_subarea": {"kind": "subarea", "required": False,
+                                "only_when": _only_castle("to")}},
+                "{from} {from_subarea} going to {to} {to_subarea}",
                 lambda p, ev, ctx: ev.type == "level_changed" and _real_edge(ev)
                 and ev.payload["from"] == p["from"]
-                and (p.get("to") is None or ev.payload["to"] == p["to"])),
+                and (p.get("to") is None or ev.payload["to"] == p["to"])
+                and (p.get("from_subarea") is None
+                     or ev.payload.get("from_area") == p["from_subarea"])),
+    # "enter area" is the castle-region condition (live-confirmed semantics
+    # 2026-06-12): the region dropdown offers only the castle hubs
+    # (CASTLE_REGION_LEVELS), and the subarea is OPTIONAL — "Any" / a single-
+    # area hub matches any area in that level. Matches area_changed, so it
+    # fires on intra-castle movement too (lobby->basement = "enter Basement"),
+    # unlike level_enter which fires only on the level boundary crossing.
     TriggerType("area_enter", "You enter area",
-                {"level": {"kind": "level", "required": True},
-                 "area": {"kind": "area", "required": True}},
-                "{area} of {level}",
+                {"level": {"kind": "level", "required": True,
+                           "enum": list(CASTLE_REGION_LEVELS)},
+                 "area": {"kind": "subarea", "required": False,
+                          "only_when": _only_castle("level")}},
+                "{level} {area}",
                 lambda p, ev, ctx: ev.type == "area_changed" and _real_edge(ev)
                 and ev.payload["level"] == p["level"]
-                and ev.payload["to"] == p["area"]),
+                and (p.get("area") is None or ev.payload["to"] == p["area"])),
     TriggerType("warp_entered", "You enter a warp/pipe",
                 {"level": {"kind": "level", "required": True}},
                 "in {level}",
@@ -245,8 +310,9 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                      or ev.payload["level"] == p["level"])),
     TriggerType("attempt_anchor", "Practice reset / savestate load",
                 {"level": {"kind": "level", "required": True},
-                 "area": {"kind": "area", "required": False}},
-                "in {level}, area {area}",
+                 "area": {"kind": "subarea", "required": False,
+                          "only_when": _only_castle("level")}},
+                "in {level} {area}",
                 # Optional area scoping prevents cross-arming: a basement
                 # respawn must not arm a lobby-anchored segment.  Added for
                 # warp-menu arming (live gate 2026-06-12): Usamune's warp
@@ -362,6 +428,11 @@ class _Arm:
     # journals) — position checks treat None as a wildcard.
     level: int | None = None
     area: int | None = None
+    # Set on a DEFERRED destination-subarea entry held in SegmentEngine._pending:
+    # the required interior area. The entry's .area is re-pinned to the settling
+    # co-frame area_changed; it arms iff area == required_area once the frame
+    # advances. Always None on a live _armed entry (cleared when it resolves).
+    required_area: int | None = None
 
 
 def _at_arm_position(arm: _Arm, ctx: MatchContext) -> bool:
@@ -378,12 +449,27 @@ class SegmentEngine:
 
     def __init__(self, defs: list[SegmentDef]):
         self._defs = [d for d in defs if d.enabled]
+        self._def_by_id = {d.id: d for d in self._defs}
         self._armed: dict[int, _Arm] = {}
+        # Deferred destination-subarea entries (see _Arm.required_area): a
+        # level edge into Castle Inside matched the level+from, but the
+        # destination interior area only settles a poll later (the lobby loads
+        # first). These hold until the frame advances, then arm iff the settled
+        # area matches. Kept OUT of _armed so the closure/echo logic never sees
+        # an unconfirmed entry. Live report 2026-06-13.
+        self._pending: dict[int, _Arm] = {}
         # Updated to ev.frame on every level_changed / area_changed BEFORE the
         # per-def loop.  Transition events always journal before their same-tick
         # synthetic practice_reset (detector order in main.py guarantees it),
         # so this is always set when the echo arrives.
         self._last_transition_frame: int | None = None
+        # Frame of the last REAL-EDGE area_changed (Mario crossed into a new
+        # castle area). A co-frame anchor is then a cross-area RELOCATION (warp
+        # landing), which may arm an IDLE destination segment even when its
+        # spawn action looks like a door echo (live report 2026-06-13: warping
+        # to the lobby lands in ACT_WARP_DOOR_SPAWN, so the attempt_anchor reset
+        # was door-echo-suppressed and LBLJ never re-armed).
+        self._last_area_edge_frame: int | None = None
 
     def armed_ids(self) -> set[int]:
         return set(self._armed)
@@ -392,11 +478,21 @@ class SegmentEngine:
         """Returns (closed raw Attempts, notices). Closures before arming."""
         from sm64_events.tracking.projection import Attempt  # cycle-free at call time
         closed, notices = [], []
+        # Drop spent deferred destination-subarea entries (_pending): once an
+        # event at a LATER frame arrives, the entry frame's co-frame area_changed
+        # burst is over. Arming/retraction already happened LIVE on those co-frame
+        # events (see the area_changed block); here we just retire the entry. An
+        # entry that never reached its required area simply never armed.
+        for did in list(self._pending):
+            if self._pending[did].start_frame < ev.frame:
+                del self._pending[did]
         # Track the most recent level/area transition frame BEFORE per-def
         # processing so the echo guard below can test both echo shapes.
         if ev.type in ("level_changed", "area_changed"):
             self._last_transition_frame = ev.frame
         if ev.type == "area_changed":
+            if _real_edge(ev):
+                self._last_area_edge_frame = ev.frame  # cross-area relocation
             # Pin arm positions: a def armed by THIS tick's level_changed
             # recorded a stale ctx.area (the area detector establishes the
             # new level's area one event later, same frame — main.py order).
@@ -404,6 +500,33 @@ class SegmentEngine:
             for did, stale in self._armed.items():
                 if stale.start_frame == ev.frame:
                     self._armed[did] = replace(stale, area=ev.payload["to"])
+            # Deferred destination-subarea entries resolve LIVE here, so the chip
+            # tracks Mario in real time: the castle loads the lobby (1) then warps
+            # to the real area, all on this frame across several polls. Each
+            # co-frame area updates the entry; the instant it equals the required
+            # interior area we arm, and the instant a LATER co-frame moves away
+            # (the transient lobby before a basement/upstairs settle) we retract.
+            # This makes a Lobby destination (whose only co-frame is the
+            # establishing 1->1) arm on ENTRY, not at the next unrelated event —
+            # the LBLJ grounds->lobby regression (live report 2026-06-13). The
+            # entry stays in _pending until the frame advances (drop above), so a
+            # later co-frame can still retract it.
+            for did in list(self._pending):
+                stale = self._pending[did]
+                if stale.start_frame != ev.frame:
+                    continue
+                p = replace(stale, area=ev.payload["to"])
+                self._pending[did] = p
+                live = self._armed.get(did)
+                if p.area == p.required_area and live is None:
+                    self._armed[did] = replace(p, required_area=None)
+                    notices.append({"event": "segment_armed",
+                                    "segment_id": did,
+                                    "name": self._def_by_id[did].name,
+                                    "frame": p.start_frame})
+                elif p.area != p.required_area and live is not None \
+                        and live.start_frame == p.start_frame:
+                    self._disarm(self._def_by_id[did], ev, notices)
         # Event-level echo classification — shapes (2a)/(2b)/(3) depend only
         # on the event payload + _last_transition_frame, never on a per-def
         # arm, so classify ONCE before the loop.  An echo anchor is
@@ -440,12 +563,29 @@ class SegmentEngine:
             or ev.payload.get("save_pending", False))
         for d in self._defs:
             arm = self._armed.get(d.id)
-            starts = self._matches(d.start_triggers, ev, ctx)
+            start_clause = self._first_match(d.start_triggers, ev, ctx)
+            starts = start_clause is not None
             if arm is not None:
                 if self._matches(d.end_triggers, ev, ctx):
                     a = self._close(Attempt, d, arm, ev, "success", None)
                     if a:
                         closed.append(a)
+                    self._disarm(d, ev, notices)
+                elif ev.type == "area_changed" \
+                        and not _at_arm_position(arm, ctx):
+                    # RELOCATION via area change (live report 2026-06-13): Mario
+                    # moved to a DIFFERENT castle area than where this segment
+                    # armed (the lobby<->upstairs star door, a basement door, a
+                    # warp), so its start position no longer holds — disarm with
+                    # NO row, exactly as a warp/savestate to another area does.
+                    # Without this a lobby segment stays armed after crossing to
+                    # the upstairs and double-arms with the upstairs segment; the
+                    # co-frame load echo that WOULD relocate it is suppressed
+                    # (anchor_is_echo). A segment armed by THIS tick's level entry
+                    # was re-pinned to ctx.area above, and a same-area door fires
+                    # no area_changed at all (intra-area echo, still armed), so
+                    # neither is touched. Supersedes the 2026-06-12 "stay armed
+                    # through a cross-area door" behaviour.
                     self._disarm(d, ev, notices)
                 elif ev.type in _ANCHOR_TYPES \
                         and ev.frame == arm.start_frame:
@@ -541,23 +681,56 @@ class SegmentEngine:
             echo_invisible = ev.type in _ANCHOR_TYPES and (
                 anchor_is_echo
                 or (arm is not None and ev.frame == arm.start_frame))
-            if starts and not echo_invisible \
+            # EXCEPTION — cross-area relocation arm (live report 2026-06-13): an
+            # anchor co-frame with a real area edge is a WARP LANDING in a new
+            # area. An IDLE destination segment must still arm there even though
+            # the landing spawns in ACT_WARP_DOOR_SPAWN (door-echo-classified) —
+            # else warping to the lobby never re-arms LBLJ. Scoped to idle defs
+            # so it never REBASES an armed one (the 2026-06-12 regression: only
+            # an already-armed def must be echo-protected from rebasing).
+            relocation_arm = (ev.type in _ANCHOR_TYPES
+                              and ev.frame == self._last_area_edge_frame
+                              and d.id not in self._armed)
+            if starts and (not echo_invisible or relocation_arm) \
                     and all(GUARDS[g["type"]].check(g, ctx)
                             for g in d.guards):
-                fresh = d.id not in self._armed
-                self._armed[d.id] = _Arm(jid=ev.id, start_frame=ev.frame,
-                                         started_utc=ev.wall_time_utc,
-                                         anchor_type=ev.type,
-                                         session_id=ev.session_id,
-                                         level=ctx.level, area=ctx.area)
-                if fresh:
-                    notices.append({"event": "segment_armed",
-                                    "segment_id": d.id, "name": d.name,
-                                    "frame": ev.frame})
+                # A destination-subarea level trigger can't be confirmed yet
+                # (the castle lobby loads before the warp settles) — DEFER it
+                # into _pending keyed on the required interior area, to be
+                # resolved when the co-frame area_changed burst is over. The
+                # source subarea (from_subarea) is already in the lambda, so a
+                # plain match here arms immediately as before.
+                req = (start_clause.get("to_subarea")
+                       if ev.type == "level_changed" else None)
+                if req is not None:
+                    self._pending[d.id] = _Arm(
+                        jid=ev.id, start_frame=ev.frame,
+                        started_utc=ev.wall_time_utc, anchor_type=ev.type,
+                        session_id=ev.session_id, level=ctx.level,
+                        area=ctx.area, required_area=req)
+                else:
+                    fresh = d.id not in self._armed
+                    self._armed[d.id] = _Arm(jid=ev.id, start_frame=ev.frame,
+                                             started_utc=ev.wall_time_utc,
+                                             anchor_type=ev.type,
+                                             session_id=ev.session_id,
+                                             level=ctx.level, area=ctx.area)
+                    if fresh:
+                        notices.append({"event": "segment_armed",
+                                        "segment_id": d.id, "name": d.name,
+                                        "frame": ev.frame})
         return closed, notices
 
     def _matches(self, triggers, ev, ctx) -> bool:
         return any(TRIGGERS[t["type"]].match(t, ev, ctx) for t in triggers)
+
+    def _first_match(self, triggers, ev, ctx):
+        """The first start clause that matches ev (its dict — so the engine can
+        read to_subarea), or None. Mirrors _matches' any()-semantics."""
+        for t in triggers:
+            if TRIGGERS[t["type"]].match(t, ev, ctx):
+                return t
+        return None
 
     def _disarm(self, d, ev, notices) -> None:
         if self._armed.pop(d.id, None) is not None:
