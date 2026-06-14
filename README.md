@@ -98,6 +98,7 @@ Other event types, same envelope:
 | `attempts_invalidated` | _(none)_ | Full re-projection ran — consumers must refetch `/api/session` |
 | `emulator_connected` | _(none)_ | Attached to PJ64 process |
 | `emulator_disconnected` | _(none)_ | Lost PJ64 process |
+| `stage_changed` | `course_id, level, in_stage` | **Broadcast-only — never journaled.** The main course the player is currently standing in, for the practice quick-select banner. `in_stage` is true only for the 15 main courses (1–15); Bowser courses, secret-star areas, hubs and arenas all report `in_stage: false`. `course_id` is null when `in_stage` is false. |
 
 **Attempt outcomes:** `success`, `reset`, `death`, `hard_reset`, `abandoned`. `death` and `reset` count toward the default failure rate. `abandoned` (level changed before a grab) and discarded no-op resets (where `mario_acted: false`) never count toward the failure rate. Old journal entries without the `mario_acted` key default to acted (counted as real resets). Three automatic discards never produce attempt rows at all: reset/load closures arriving after ≥5 s of pause (`paused_frames_before` ≥ 150 — AFK, not practice); for attempts opened by an `acted_tracking` anchor, ANY non-success closure with no `mario_acted` event during the attempt (no behavior = garbage); and attempts OPENED while Mario was in a castle hub level (castle movement, never a star attempt — `CASTLE_LEVELS` in addresses.py). Successes always count.
 

@@ -729,3 +729,17 @@ def test_stat_pills_render_in_canonical_menu_order(tmp_path):
     labels = [(s["key"], s["params"].get("n")) for s in view["stars"][0]["stats"]]
     assert labels == [("avg_last_n", 10), ("avg_last_n", 50), ("best", None),
                       ("success_count", None), ("success_rate", None)]
+
+
+def test_view_includes_current_stage(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("stage_changed", 100,
+                               {"course_id": 8, "level": 8, "in_stage": True})))
+    view = build_session_view(db, svc, clock="igt")
+    assert view["stage"] == {"course_id": 8, "level": 8, "in_stage": True}
+
+
+def test_view_stage_defaults_to_not_in_stage(tmp_path):
+    db, svc = make(tmp_path)
+    view = build_session_view(db, svc, clock="igt")
+    assert view["stage"]["in_stage"] is False

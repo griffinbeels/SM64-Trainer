@@ -16,6 +16,13 @@ def test_detector_order_is_load_bearing():
     assert positions == sorted(positions)
 
 
+def test_stage_detector_is_wired():
+    src = (Path(sm64_events.__file__).parent / "main.py").read_text(encoding="utf-8")
+    # rindex skips the alphabetical import line in favour of the last
+    # occurrence, which is inside the detectors = [...] list.
+    assert src.rindex("StageChangeDetector()") > src.rindex("detectors = [")
+
+
 def test_build_wires_replay_endpoints(monkeypatch, tmp_path):
     # Stub instance lock so build() doesn't acquire a real file lock.
     monkeypatch.setattr(
