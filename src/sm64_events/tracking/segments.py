@@ -130,9 +130,24 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
         user wants the segment to run through it ("INCLUDING the save
         prompt").  Historical events (no key): .get() -> False -> conservative
         close behaviour preserved.
+    (5) dialogue/cutscene echo: 0 <= frames_since_dialog <= _DIALOG_ECHO_WINDOW
+        -- suppressed.  A textbox/cutscene engages a TIME-STOP that
+        re-initialises Usamune's overall IGT.  On a fresh-file Lakitu Skip the
+        intro cutscene ends, control is regained (spawned kind="intro" arms the
+        segment), and Usamune zeroes the overall counter ONE frame later -- the
+        detector reads that drop as a practice_reset.  It lands a frame AFTER
+        the spawn (so NOT co-frame with any transition/arm -> shapes 1/3 miss)
+        and carries no door/save context (shapes 2/4 miss), so it slipped
+        through and closed the just-armed Lakitu Skip with a bogus ~1-frame
+        "reset" row (live journal 2026-06-14).  frames_since_dialog (anchors.py)
+        is the recency discriminator -- mirrors frames_since_door (2b).  We
+        never split timing on a textbox in any level/circumstance (user rule
+        2026-06-14).  Historical events (no key): .get() -> None -> out of
+        window -> conservative close behaviour preserved.
   Shapes (1)/(3) are detected by frame equality.  Shape (2) is detected by
   prev_action/action in DOOR_ACTIONS (falling back through the chain) or
-  frames_since_door.  Historical events (no prev_action, no frames_since_door):
+  frames_since_door.  Shape (5) is detected by frames_since_dialog recency.
+  Historical events (no prev_action / frames_since_door / frames_since_dialog):
   .get() returns None -> conservative close behaviour preserved.
   ECHO INVISIBILITY (live regression 2026-06-12): an echo anchor is
   involuntary -- it is INVISIBLE to the engine entirely: no closure, no
@@ -140,7 +155,7 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
   this, an echo matching an attempt_anchor start trigger rebased the _Arm
   in the arm phase (LBLJ's lobby-door section reset rebased
   start_frame/started_utc to the door, so replay + rta began at the door).
-  Shapes (2a)/(2b)/(3) depend only on the event, so they are classified
+  Shapes (2a)/(2b)/(3)/(5) depend only on the event, so they are classified
   ONCE per event before the per-def loop (anchor_is_echo); shape (1)
   depends on the per-def arm and is checked per def in BOTH the closure
   and arm phases.  Real anchors still take the continuation re-arm in the
@@ -174,6 +189,14 @@ _DOOR_ECHO_WINDOW = 30  # frames; non-warp doors reset the section 1-5 frames
 # No human completes a door AND L-resets within a second; misclassifying a
 # borderline instant reset (eaten, segment stays armed) is cheaper than
 # constant false failures on every walk-through door.
+
+_DIALOG_ECHO_WINDOW = 30  # frames; the intro IGT re-init lands +1 frame after
+# control is regained (live journal 2026-06-14), but the recency is measured
+# from the last in-textbox/cutscene poll, which may be a few frames earlier when
+# polls are sparse — so allow ~1 s, same as the door window and for the same
+# reason. The intro spawn is fresh-file-only; no human meaningfully L-resets
+# within a second of a textbox, so an eaten borderline reset (segment stays
+# armed) is cheaper than the false ~1-frame reset on every textbox.
 
 # Segment attempt ids live in a disjoint namespace from star attempt ids
 # (which are raw journal ids): id = arm-event journal id + OFFSET * def_id.
@@ -565,7 +588,16 @@ class SegmentEngine:
             # period — an involuntary reload, not a player reset.  Like the
             # door shapes it feeds echo_invisible too (an attempt_anchor-armed
             # segment must not rebase its start_frame onto the save reload).
-            or ev.payload.get("save_pending", False))
+            or ev.payload.get("save_pending", False)
+            # (5) dialogue/cutscene echo: a textbox/intro-cutscene time-stop
+            # re-initialises Usamune's IGT a frame or two after control is
+            # regained — an involuntary reset that closed the just-armed Lakitu
+            # Skip segment (live journal 2026-06-14).  frames_since_dialog
+            # bridges the gap exactly as frames_since_door does (2b); we never
+            # split timing on a textbox in any level (user rule 2026-06-14).
+            or (ev.payload.get("frames_since_dialog") is not None
+                and 0 <= ev.payload["frames_since_dialog"]
+                <= _DIALOG_ECHO_WINDOW))
         for d in self._defs:
             arm = self._armed.get(d.id)
             start_clause = self._first_match(d.start_triggers, ev, ctx)

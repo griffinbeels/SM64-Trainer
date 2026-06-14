@@ -329,6 +329,26 @@ SPAWN_ACTIONS = frozenset({ACT_SPAWN_SPIN_AIRBORNE, ACT_SPAWN_SPIN_LANDING,
                            ACT_SPAWN_NO_SPIN_AIRBORNE,
                            ACT_SPAWN_NO_SPIN_LANDING})
 
+# Textbox / dialogue actions — decomp include/sm64.h, quoted verbatim from
+# n64decomp/sm64 master, fetched 2026-06-14. Mario holds one of these for the
+# whole textbox; a textbox engages a TIME-STOP that re-initialises Usamune's
+# overall IGT, so an anchor (practice_reset/state_loaded) coinciding with one is
+# an involuntary echo, never a player retry — see AnchorDetector._last_dialog_frame
+# and segments.py echo shape (5). The intro cutscene (ACT_INTRO_CUTSCENE, the
+# Lakitu-skip run-start dialogue) is tracked alongside these: it ends, control is
+# regained, and Usamune zeroes the overall IGT one frame later (live journal
+# 2026-06-14). We do NOT split timing on textboxes in any level/circumstance
+# (user rule 2026-06-14).
+# VERIFY (live gate pending): confirm mario_action reads these while a textbox is
+# open — 0x20001305 on a sign/automatic dialog, 0x20001306 talking to an NPC,
+# 0x0000130A waiting for a dialog to begin. ACT_INTRO_CUTSCENE is already
+# live-verified (the fresh-file spawn source above).
+ACT_READING_AUTOMATIC_DIALOG = 0x20001305  # signs / automatic dialogs
+ACT_READING_NPC_DIALOG = 0x20001306        # talking to an NPC
+ACT_WAITING_FOR_DIALOG = 0x0000130A        # dialog about to begin
+DIALOG_ACTIONS = frozenset({ACT_READING_AUTOMATIC_DIALOG,
+                            ACT_READING_NPC_DIALOG, ACT_WAITING_FOR_DIALOG})
+
 # gCurrAreaIndex (s16) — castle lobby/upstairs/basement are AREAS of level 6,
 # not levels. Live-verified 2026-06-12 via tools/hunt_exact.py snapshot diff:
 # reads 1 in the lobby, 2 upstairs, 3 in the basement, stable across repeated

@@ -62,6 +62,21 @@ save_pending (live report 2026-06-12): exiting a course WITH a star pops the
   first anchor after the menu), so it cannot linger onto a later real reset.
   Cleared on every anchor and on the boot-range backward jump (self-heal).
 
+frames_since_dialog (live journal 2026-06-14, Lakitu Skip): how many game
+  frames have elapsed since Mario was last in a textbox/cutscene action
+  (addresses.DIALOG_ACTIONS, plus ACT_INTRO_CUTSCENE — the fresh-file run-start
+  dialogue). A textbox engages a TIME-STOP that re-initialises Usamune's overall
+  IGT; on the intro the cutscene ends, control is regained (spawned kind="intro")
+  and Usamune zeroes the overall counter ONE frame later, so the detector reads
+  that drop as a practice_reset. It lands a frame AFTER the spawn (not co-frame
+  with any transition or arm) and carries no door/save context, so it slips past
+  every other echo shape and wrongly closes the just-armed segment. The segment
+  engine keys a fifth echo shape on 0 <= frames_since_dialog <= window so a run
+  never splits/resets on a textbox in ANY level (user rule 2026-06-14). None when
+  no dialogue has been seen this anchor period. Self-heal (domain rule 4): a
+  backward global_timer jump clears _last_dialog_frame so a stale recency value
+  cannot poison anchors after a rewind. Mirrors frames_since_door exactly.
+
 Pause streak: consecutive game frames where global_timer advanced but the
   overall IGT did not — game logic stopped, i.e. the Usamune pause menu (or a
   dialog time-stop). Stamped on anchors as paused_frames_before; the tracking
@@ -100,7 +115,8 @@ acceptable for attempt tracking, but the payload distinction matters for
 the anchor→outcome clock, so characterize it once on real hardware."""
 from sm64_events.core.events import Event
 from sm64_events.core.snapshot import GameSnapshot
-from sm64_events.memory.addresses import (DEATH_ACTIONS, DOOR_ACTIONS,
+from sm64_events.memory.addresses import (ACT_INTRO_CUTSCENE, DEATH_ACTIONS,
+                                           DIALOG_ACTIONS, DOOR_ACTIONS,
                                            PASSIVE_ACTIONS, SAVE_DIALOG_ACTIONS)
 
 BOOT_TIMER_MAX = 120   # global_timer below ~4 s after a backward jump = console reset; shared by lifecycle.py
@@ -116,6 +132,7 @@ class AnchorDetector:
         self._acted_reported = False
         self._pause_streak = 0
         self._last_door_frame: int | None = None
+        self._last_dialog_frame: int | None = None  # last tick Mario was in a textbox/intro-cutscene action
         self._pending_warp: Event | None = None  # pause-warp anchor awaiting position-stable tick
         self._save_menu_seen = False  # save-prompt screen observed this anchor period
 
@@ -127,11 +144,23 @@ class AnchorDetector:
             self._pending_warp = None
         if curr.global_timer < (self._last_door_frame or 0):
             self._last_door_frame = None
+        if curr.global_timer < (self._last_dialog_frame or 0):
+            self._last_dialog_frame = None
         # Track the most recent frame where a door action was observed so that
         # anchors emitted 1-5 frames after the door animation ends can still
         # be classified as echoes via frames_since_door (non-warp door shape).
         if curr.mario_action in DOOR_ACTIONS:
             self._last_door_frame = curr.global_timer
+        # Track the most recent textbox/intro-cutscene frame so an IGT re-init a
+        # frame or two later (Usamune zeroes the overall counter when control is
+        # regained — live journal 2026-06-14, Lakitu Skip) is recognised as a
+        # dialogue echo, never a player reset. ACT_INTRO_CUTSCENE is included:
+        # it is the fresh-file run-start dialogue, and the reset lands the frame
+        # AFTER it ends (Mario already back to gameplay), so only this recency
+        # field — not the current action — can classify it.
+        if (curr.mario_action in DIALOG_ACTIONS
+                or curr.mario_action == ACT_INTRO_CUTSCENE):
+            self._last_dialog_frame = curr.global_timer
         # Post-star "SAVE & CONTINUE?" screen: Mario HOLDS ACT_EXIT_LAND_SAVE_DIALOG
         # for the whole menu (live watch 2026-06-12). Confirming an option reloads
         # the area and resets Usamune's IGT a few frames later (Mario already back
@@ -173,7 +202,10 @@ class AnchorDetector:
                          "save_pending": self._save_menu_seen,
                          "frames_since_door":
                              (curr.global_timer - self._last_door_frame)
-                             if self._last_door_frame is not None else None})
+                             if self._last_door_frame is not None else None,
+                         "frames_since_dialog":
+                             (curr.global_timer - self._last_dialog_frame)
+                             if self._last_dialog_frame is not None else None})
             self._acted = False
             self._acted_reported = False
             self._pause_streak = 0
@@ -220,6 +252,11 @@ class AnchorDetector:
         frames_since_door = (
             (curr.global_timer - self._last_door_frame)
             if self._last_door_frame is not None else None)
+        # Recency since the last textbox/intro-cutscene frame: an IGT re-init
+        # within a blink of one is a dialogue echo (segments.py shape 5).
+        frames_since_dialog = (
+            (curr.global_timer - self._last_dialog_frame)
+            if self._last_dialog_frame is not None else None)
         if curr.global_timer < prev.global_timer:
             if curr.global_timer < BOOT_TIMER_MAX:
                 return []  # console reset — GameResetDetector owns this
@@ -232,7 +269,8 @@ class AnchorDetector:
                                    "action": curr.mario_action,
                                    "prev_action": prev.mario_action,
                                    "save_pending": self._save_menu_seen,
-                                   "frames_since_door": frames_since_door})]
+                                   "frames_since_door": frames_since_door,
+                                   "frames_since_dialog": frames_since_dialog})]
         if (curr.igt_overall < prev.igt_overall
                 and curr.igt_overall <= NEAR_ZERO_IGT
                 and prev.igt_overall < IGT_WRAP_CEILING):
@@ -245,5 +283,6 @@ class AnchorDetector:
                                    "action": curr.mario_action,
                                    "prev_action": prev.mario_action,
                                    "save_pending": self._save_menu_seen,
-                                   "frames_since_door": frames_since_door})]
+                                   "frames_since_door": frames_since_door,
+                                   "frames_since_dialog": frames_since_dialog})]
         return []

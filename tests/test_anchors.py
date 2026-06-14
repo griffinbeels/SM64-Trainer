@@ -30,7 +30,8 @@ def test_igt_drop_to_zero_emits_practice_reset():
     assert ev.payload == {"igt_frames_before": 500, "mario_acted": False,
                           "paused_frames_before": 0, "acted_tracking": True,
                           "action": ACT_IDLE, "prev_action": ACT_IDLE,
-                          "save_pending": False, "frames_since_door": None}
+                          "save_pending": False, "frames_since_door": None,
+                          "frames_since_dialog": None}
 
 
 def test_igt_drop_to_small_value_still_practice_reset():
@@ -57,7 +58,8 @@ def test_backward_global_timer_emits_state_loaded():
     assert ev.payload == {"igt_frames_restored": 120, "mario_acted": False,
                           "paused_frames_before": 0, "acted_tracking": True,
                           "action": ACT_IDLE, "prev_action": ACT_IDLE,
-                          "save_pending": False, "frames_since_door": None}
+                          "save_pending": False, "frames_since_door": None,
+                          "frames_since_dialog": None}
 
 
 def test_backward_jump_into_boot_range_is_left_to_game_reset():
@@ -355,7 +357,8 @@ def test_existing_payload_pins_include_frames_since_door():
         "igt_frames_before": 500, "mario_acted": False,
         "paused_frames_before": 0, "acted_tracking": True,
         "action": ACT_IDLE, "prev_action": ACT_IDLE,
-        "save_pending": False, "frames_since_door": None}
+        "save_pending": False, "frames_since_door": None,
+        "frames_since_dialog": None}
 
 
 # ---------------------------------------------------------------------------
@@ -385,6 +388,64 @@ def test_frames_since_door_tracks_star_and_key_doors(door_action):
     assert len(events) == 1
     assert events[0].type == "practice_reset"
     assert events[0].payload["frames_since_door"] == 4
+
+
+# ---------------------------------------------------------------------------
+# frames_since_dialog — textbox/cutscene recency (live journal 2026-06-14)
+# Textboxes and the intro cutscene engage a time-stop that re-initialises
+# Usamune's overall IGT.  On Lakitu Skip the intro cutscene ends, control is
+# regained, and Usamune zeroes the overall timer a frame later — a drop the
+# detector reads as a practice_reset.  frames_since_dialog lets the segment
+# engine recognise it as an involuntary echo, so the run never splits/resets on
+# a textbox.  Mirrors frames_since_door exactly.
+# ---------------------------------------------------------------------------
+
+ACT_INTRO_CUTSCENE = 0x04001301
+ACT_READING_NPC_DIALOG = 0x20001306  # decomp include/sm64.h (a textbox action)
+
+
+def test_frames_since_dialog_present_after_intro_cutscene():
+    """The Lakitu Skip case: Mario in ACT_INTRO_CUTSCENE @N, control regained,
+    Usamune re-inits the overall IGT @N+1 → the practice_reset carries
+    frames_since_dialog so the segment engine can treat it as an echo."""
+    d = AnchorDetector()
+    # Tick N: still in the intro cutscene (overall IGT holds the stale value)
+    d.process(snap(1690, igt=1481, action=ACT_WALKING),
+              snap(1691, igt=1481, action=ACT_INTRO_CUTSCENE))
+    # Tick N+1: control regained, Usamune zeroes the overall IGT
+    events = d.process(snap(1691, igt=1481, action=ACT_INTRO_CUTSCENE),
+                       snap(1692, igt=0, action=ACT_WALKING))
+    assert len(events) == 1 and events[0].type == "practice_reset"
+    assert events[0].payload["frames_since_dialog"] == 1
+
+
+def test_frames_since_dialog_present_after_textbox():
+    """Any textbox (here ACT_READING_NPC_DIALOG) is tracked the same way as the
+    intro cutscene, so a reset coinciding with a dialogue is an echo."""
+    d = AnchorDetector()
+    d.process(snap(2000, igt=400, action=ACT_WALKING),
+              snap(2004, igt=404, action=ACT_READING_NPC_DIALOG))
+    events = d.process(snap(2004, igt=404, action=ACT_READING_NPC_DIALOG),
+                       snap(2008, igt=0, action=ACT_WALKING))
+    assert len(events) == 1 and events[0].type == "practice_reset"
+    assert events[0].payload["frames_since_dialog"] == 4
+
+
+def test_frames_since_dialog_none_when_no_dialogue_seen():
+    events = AnchorDetector().process(snap(1000, igt=500), snap(1002, igt=0))
+    assert events[0].payload["frames_since_dialog"] is None
+
+
+def test_frames_since_dialog_cleared_on_backward_jump_self_heal():
+    """domain rule 4: a backward global_timer jump clears _last_dialog_frame so
+    a stale recency value cannot poison anchors after a savestate rewind."""
+    d = AnchorDetector()
+    d.process(snap(5000, igt=200, action=ACT_WALKING),
+              snap(5010, igt=210, action=ACT_INTRO_CUTSCENE))
+    events = d.process(snap(5010, igt=210, action=ACT_INTRO_CUTSCENE),
+                       snap(2000, igt=0))
+    assert len(events) == 1 and events[0].type == "state_loaded"
+    assert events[0].payload["frames_since_dialog"] is None
 
 
 # ---------------------------------------------------------------------------

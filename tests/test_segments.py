@@ -814,6 +814,83 @@ def test_star_door_echo_with_prev_action_stays_echo(door_action):
 
 
 # ---------------------------------------------------------------------------
+# Dialogue/cutscene echo, shape (5) (live journal 2026-06-14, Lakitu Skip)
+# A textbox/cutscene engages a time-stop that re-initialises Usamune's overall
+# IGT.  On a fresh-file start the intro cutscene ends, control is regained
+# (spawned kind="intro"), and ONE frame later Usamune zeroes the overall timer —
+# the anchor detector reads that drop as a practice_reset.  It lands a frame
+# AFTER the spawn (so it is not co-frame with any transition / arm) and carries
+# no door/save context, slipping through every earlier echo shape and closing
+# the just-armed Lakitu Skip segment with a bogus ~1-frame "reset" row.
+# frames_since_dialog (anchors.py) is the recency discriminator.
+# ---------------------------------------------------------------------------
+
+LAKITU = SegmentDef(id=3, name="Lakitu Skip", enabled=True,
+                    start_triggers=[{"type": "spawned", "level": 16}],
+                    end_triggers=[{"type": "level_enter", "to": 6}], guards=[])
+
+
+def test_lakitu_skip_intro_reset_is_echo_segment_stays_armed():
+    """THE LAKITU-SKIP REGRESSION (live journal 2026-06-14): spawned(intro,16)
+    @1691 arms Lakitu Skip; Usamune re-inits the overall IGT @1692 → a
+    practice_reset with frames_since_dialog=1.  It must NOT close the segment;
+    the run continues and the eventual castle entry records the real time.
+    (Red before fix — the false 0'00\"03 reset the user reported.)"""
+    e = SegmentEngine([LAKITU])
+    armed = e.feed(jev(108, "spawned", 1691, {"kind": "intro", "level": 16}),
+                   ctx(level=16))
+    assert e.armed_ids() == {3}, "intro spawn arms Lakitu Skip"
+    closed, _ = e.feed(
+        jev(111, "practice_reset", 1692,
+            {"igt_frames_before": 1481, "mario_acted": True,
+             "paused_frames_before": 0, "acted_tracking": True,
+             "action": 0x04000440, "prev_action": 0x0C400201,
+             "save_pending": False, "frames_since_door": None,
+             "frames_since_dialog": 1}),
+        ctx(level=16))
+    assert closed == [], "intro IGT re-init must not close the segment"
+    assert e.armed_ids() == {3}, "segment must remain armed from the spawn"
+    # The skip completes by entering the castle — the real, only row.
+    done, _ = e.feed(jev(140, "level_changed", 2400, {"from": 16, "to": 6}),
+                     ctx(level=6, prev_level=16))
+    [a] = done
+    assert a.outcome == "success" and a.segment_id == 3
+    assert a.rta_frames == 2400 - 1691, "timed from the spawn, not the reset"
+
+
+def test_dialogue_reset_far_from_textbox_still_closes():
+    """The window is opt-in: a real L-reset long after any dialogue
+    (frames_since_dialog out of window) still records its reset row."""
+    e = SegmentEngine([LAKITU])
+    e.feed(jev(108, "spawned", 1691, {"kind": "intro", "level": 16}),
+           ctx(level=16))
+    closed, _ = e.feed(
+        jev(111, "practice_reset", 2000,
+            {"igt_frames_before": 309, "mario_acted": True,
+             "acted_tracking": True, "action": 0x04000440,
+             "prev_action": 0x0C400201, "frames_since_dialog": 309}),
+        ctx(level=16))
+    assert len(closed) == 1
+    assert closed[0].outcome == "reset" and closed[0].rta_frames == 309
+
+
+def test_historical_anchor_without_frames_since_dialog_closes():
+    """Historical events (no frames_since_dialog key) keep conservative close
+    behaviour — .get() returns None, out-of-window, treated as a real reset."""
+    e = SegmentEngine([LAKITU])
+    e.feed(jev(108, "spawned", 1691, {"kind": "intro", "level": 16}),
+           ctx(level=16))
+    closed, _ = e.feed(
+        jev(111, "practice_reset", 1900,
+            {"igt_frames_before": 209, "mario_acted": True,
+             "acted_tracking": True, "action": 0x04000440,
+             "prev_action": 0x0C400201}),  # no frames_since_dialog key
+        ctx(level=16))
+    assert len(closed) == 1
+    assert closed[0].outcome == "reset" and closed[0].rta_frames == 209
+
+
+# ---------------------------------------------------------------------------
 # Anchor closure re-arm (live-gate amendment 2026-06-12)
 # A practice_reset/state_loaded that CLOSES an armed segment must also
 # RE-ARM the same segment at the anchor frame — the practice-loop
