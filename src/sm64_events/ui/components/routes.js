@@ -203,13 +203,21 @@ export function Routes({ t }) {
     </div>
     ${err ? html`<div class="badx">${err}</div>` : null}
     ${selected && view ? html`<div class="routebuilder">
-      ${view.steps.length === 0
+      ${selected.steps.length === 0
         ? html`<div class="meta">No steps yet — add one below.</div>` : null}
-      ${view.steps.map((vs, i) => html`<${StepRow} key=${i}
-          step=${selected.steps[i]} view=${vs} idx=${i} total=${view.steps.length}
-          catalog=${catalog} segs=${segs}
-          onChange=${(s) => editStep(i, s)} onMove=${(dir) => moveStep(i, dir)}
-          onRemove=${() => removeStep(i)} />`)}
+      ${selected.steps.map((step, i) => {
+        // Render from the RAW steps (structural source of truth); pull the
+        // resolved %s by index with a safe fallback. saveSteps reloads routes
+        // and the view separately, so on a removal they are transiently
+        // different lengths — indexing the view here (not mapping it) avoids a
+        // step=undefined render crash (live smoke 2026-06-14).
+        const vs = (view.steps && view.steps[i])
+          || { candidates: [], step_rate: 0, cumulative: 0, broken: false };
+        return html`<${StepRow} key=${i} step=${step} view=${vs} idx=${i}
+            total=${selected.steps.length} catalog=${catalog} segs=${segs}
+            onChange=${(s) => editStep(i, s)} onMove=${(dir) => moveStep(i, dir)}
+            onRemove=${() => removeStep(i)} />`;
+      })}
       <div class="routeadd">
         <span class="meta">Add step:</span>
         <${ItemPicker} catalog=${catalog} segs=${segs} label="+ add step" onPick=${addStep} />
