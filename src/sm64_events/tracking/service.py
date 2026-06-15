@@ -28,6 +28,8 @@ from sm64_events.tracking import routes as route_logic
 
 log = logging.getLogger("sm64.tracker")
 
+RUN_OFFSET_MIN, RUN_OFFSET_MAX = 0, 600000   # 0..10 min, ms
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -46,6 +48,7 @@ class TrackerService:
         self._projector = Projector(segments=self._segment_defs)
         self._current_stage = {"course_id": None, "level": None,
                                "area": None, "in_stage": False}
+        self._persisted_runs: list[int] = []
 
     def _load_segment_defs(self) -> list[SegmentDef]:
         # inclusion list (the dataclass's own fields), NOT exclusion of
@@ -64,6 +67,8 @@ class TrackerService:
         events = self.db.events()
         attempts, self._projector = replay(events, segments=self._segment_defs)
         self.db.replace_attempts(attempts)
+        self.db.replace_runs([r.as_row() for r in self._projector.finished_runs()])
+        self._persisted_runs = [r.id for r in self._projector.finished_runs()]
         self.session_id = self.db.insert_session(_iso(_now()))
         await self.publish(Event(type="session_started", frame=0,
                                  timestamp_utc=_now(),
@@ -113,6 +118,23 @@ class TrackerService:
                 type=n["event"], frame=n["frame"],
                 timestamp_utc=event.timestamp_utc,
                 payload={"segment_id": n["segment_id"], "name": n["name"]}))
+            if self._projector is not proj:
+                return
+        # Run drain: persist any newly finished/aborted runs produced by this
+        # event. These are broadcast-only derived events (run_finished/run_aborted
+        # must NEVER be journaled — the projector re-derives them on replay from
+        # run_started + game_reset + completions). Use broadcaster.publish, not
+        # self.publish, for the same reason segment notices use it.
+        for r in proj.finished_runs()[len(self._persisted_runs):]:
+            self.db.upsert_run(r.as_row())
+            self._persisted_runs.append(r.id)
+            await self.broadcaster.publish(self._run_completed_event(r, event))
+            if self._projector is not proj:
+                return
+        for n in list(proj.run_notices):
+            await self.broadcaster.publish(Event(
+                type=n["event"], frame=event.frame,
+                timestamp_utc=event.timestamp_utc, payload=n))
             if self._projector is not proj:
                 return
         for attempt in closed:
@@ -368,6 +390,63 @@ class TrackerService:
         await self.broadcaster.publish(Event(type="routes_changed", frame=0,
                                               timestamp_utc=_now(), payload={}))
 
+    # -- run lifecycle ---------------------------------------------------------
+    async def start_run(self, route_id: int) -> None:
+        """Journal run_started (arms run mode). The clock starts at 0 on the
+        next game_reset (F1). Validates route exists first (LookupError → 404).
+        start_offset_ms comes from run_settings; default 1360 ms models the
+        SM64 emulator reset-timing convention."""
+        db = self._require_db()
+        route = next((r for r in db.routes() if r["id"] == route_id), None)
+        if route is None:
+            raise LookupError(f"route {route_id} not found")
+        offset = self.run_settings()["start_offset_ms"]
+        await self.publish(Event(type="run_started", frame=0,
+                                 timestamp_utc=_now(),
+                                 payload={"route_id": route_id,
+                                          "route_name": route["name"],
+                                          "route_steps": route["steps"],
+                                          "mode": "forgiving",
+                                          "start_offset_ms": offset}))
+
+    async def end_run(self) -> None:
+        """Journal run_ended (disarms run mode). If a run is in progress it
+        is saved as aborted."""
+        self._require_db()
+        await self.publish(Event(type="run_ended", frame=0,
+                                 timestamp_utc=_now(), payload={}))
+
+    def run_settings(self) -> dict:
+        """Current run settings, defaulting to start_offset_ms=1360."""
+        db = self._require_db()
+        return db.get_state("run_settings", {"start_offset_ms": 1360})
+
+    async def update_run_settings(self, patch: dict) -> dict:
+        """Persist updated run settings. Validates start_offset_ms in 0..600000 ms."""
+        db = self._require_db()
+        cur = self.run_settings()
+        off = patch.get("start_offset_ms", cur["start_offset_ms"])
+        if not isinstance(off, int) or off < RUN_OFFSET_MIN or off > RUN_OFFSET_MAX:
+            raise ValueError("start_offset_ms must be 0..600000 ms")
+        merged = {**cur, "start_offset_ms": off}
+        db.set_state("run_settings", merged)
+        return merged
+
+    def active_run(self) -> dict | None:
+        """Current active run view from the projector, or None."""
+        return self._projector.active_run_view()
+
+    def _run_completed_event(self, r, close_event: Event) -> Event:
+        """Broadcast-only derived event for a finished or aborted run.
+        Must NEVER be journaled — the projector re-derives these from the
+        journal (run_started + game_reset + completions) on replay."""
+        etype = "run_finished" if r.status == "finished" else "run_aborted"
+        return Event(type=etype, frame=close_event.frame,
+                     timestamp_utc=close_event.timestamp_utc,
+                     payload={"run_id": r.id, "route_id": r.route_id,
+                              "status": r.status, "reached_step": r.reached_step,
+                              "total_ms": r.total_ms, "is_pb": r.is_pb})
+
     def export_route(self, route_id: int) -> dict:
         """Self-contained export (sync — read-only). Embeds segment defs."""
         db = self._require_db()
@@ -423,6 +502,8 @@ class TrackerService:
         # keep the live session: replayed projector state is authoritative
         self._projector = projector
         db.replace_attempts(attempts)
+        db.replace_runs([r.as_row() for r in projector.finished_runs()])
+        self._persisted_runs = [r.id for r in projector.finished_runs()]
         # replay re-derives armed state silently; the UI badge must not lie
         # after a definition edit — broadcast the armed-set diff (broadcast-
         # only, like all notices: never journaled).
