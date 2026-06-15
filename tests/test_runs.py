@@ -127,3 +127,40 @@ def test_end_run_aborts_active_and_disarms():
     # disarmed: a later game_reset does NOT start a run
     rt.feed(Ev("game_reset", id=400), [])
     assert rt.active_run_view() is None
+
+
+def test_pb_run_picks_min_finished_total():
+    runs = [{"status": "finished", "total_ms": 130000},
+            {"status": "aborted", "total_ms": 50000},
+            {"status": "finished", "total_ms": 121000}]
+    assert pb_run(runs)["total_ms"] == 121000
+    assert pb_run([{"status": "aborted", "total_ms": 1}]) is None
+
+
+def test_gold_splits_best_per_step_and_sum_of_best():
+    steps = [{"need": 1, "candidates": [STAR]}, {"need": 1, "candidates": [SEG]}]
+    # run 1: step0 dur 60s, step1 dur 70s (cumulative 60s, 130s)
+    r1 = {"status": "finished", "route_steps": steps,
+          "splits": [{"step_index": 0, "elapsed_ms": 60000},
+                     {"step_index": 1, "elapsed_ms": 130000}]}
+    # run 2: step0 dur 55s (gold), step1 dur 80s (cumulative 55s, 135s)
+    r2 = {"status": "finished", "route_steps": steps,
+          "splits": [{"step_index": 0, "elapsed_ms": 55000},
+                     {"step_index": 1, "elapsed_ms": 135000}]}
+    g = gold_splits([r1, r2], steps)
+    assert g["durations"][0] == 55000 and g["durations"][1] == 70000
+    assert g["sum_of_best"] == 125000
+
+
+def test_is_pb_frozen_only_when_finished_beats_prior():
+    rt = RunTracker()
+    steps = [{"need": 1, "candidates": [STAR]}]
+    def run(reset_id, grab_id, wall_end):
+        rt.feed(started(steps), [])
+        rt.feed(Ev("game_reset", id=reset_id, wall="2026-06-14T00:00:00Z"), [])
+        return rt.feed(Ev("star_collected", id=grab_id, wall=wall_end),
+                       [att(course=2, star=0)])[0]
+    first = run(100, 101, "2026-06-14T00:02:00Z")    # 120s
+    second = run(200, 201, "2026-06-14T00:01:30Z")   # 90s -> PB
+    third = run(300, 301, "2026-06-14T00:02:30Z")    # 150s -> not PB
+    assert first.is_pb is True and second.is_pb is True and third.is_pb is False
