@@ -127,6 +127,18 @@ MIGRATIONS = [
     """
     UPDATE segment_defs SET end_triggers='[{"type":"key_grabbed","level":34}]' WHERE id=10 AND name='Bowser 3' AND end_triggers='[{"type":"star_grabbed"}]';
     """,
+    # v7 — routes: ordered star/segment practice plans (spec 2026-06-14).
+    # Config like segment_defs (NOT history); steps is JSON, see
+    # tracking/routes.py for the shape. The runs table arrives in v8 (Phase D).
+    """
+    CREATE TABLE IF NOT EXISTS routes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      steps TEXT NOT NULL,
+      created_utc TEXT NOT NULL,
+      updated_utc TEXT NOT NULL
+    );
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
@@ -338,6 +350,52 @@ class Database:
             self._conn.commit()
         if cur.rowcount == 0:
             raise LookupError(f"segment {def_id} not found")
+
+    # -- routes (config) -----------------------------------------------------
+    def routes(self) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM routes ORDER BY id").fetchall()
+        return [{"id": r["id"], "name": r["name"],
+                 "steps": json.loads(r["steps"]),
+                 "created_utc": r["created_utc"],
+                 "updated_utc": r["updated_utc"]} for r in rows]
+
+    def insert_route(self, name: str, steps: list, created_utc: str) -> int:
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO routes (name, steps, created_utc, updated_utc)"
+                " VALUES (?,?,?,?)",
+                (name, json.dumps(steps), created_utc, created_utc))
+            self._conn.commit()
+            return cur.lastrowid
+
+    def update_route(self, route_id: int, **fields) -> None:
+        cols = {"name": lambda v: v, "steps": json.dumps,
+                "updated_utc": lambda v: v}
+        if set(fields) - set(cols):
+            raise ValueError(f"unknown fields {sorted(set(fields) - set(cols))}")
+        sets, vals = [], []
+        for k, conv in cols.items():
+            if k in fields:
+                sets.append(f"{k}=?"); vals.append(conv(fields[k]))
+        if not sets:
+            return
+        with self._lock:
+            cur = self._conn.execute(
+                f"UPDATE routes SET {','.join(sets)} WHERE id=?",
+                (*vals, route_id))
+            self._conn.commit()
+        if cur.rowcount == 0:
+            raise LookupError(f"route {route_id} not found")
+
+    def delete_route(self, route_id: int) -> None:
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM routes WHERE id=?",
+                                     (route_id,))
+            self._conn.commit()
+        if cur.rowcount == 0:
+            raise LookupError(f"route {route_id} not found")
 
     # -- pbs -----------------------------------------------------------------
     def insert_pb(self, course_id: int | None, star_id: int | None,
