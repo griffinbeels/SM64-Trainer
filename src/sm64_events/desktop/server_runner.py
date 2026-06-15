@@ -32,12 +32,17 @@ class ServerRunner:
         deadline = time.monotonic() + timeout_s
         url = f"http://{self.host}:{self.port}/health"
         while time.monotonic() < deadline:
-            try:
-                with urllib.request.urlopen(url, timeout=1) as r:
-                    if r.status == 200:
-                        return True
-            except Exception:
-                pass
+            # Require OUR uvicorn to have actually started (bound the port).
+            # Without this, during a restart handoff a /health 200 from a
+            # still-dying OLD instance would falsely report ready and the
+            # window would open against a server about to vanish.
+            if self._server.started:
+                try:
+                    with urllib.request.urlopen(url, timeout=1) as r:
+                        if r.status == 200:
+                            return True
+                except Exception:
+                    pass
             time.sleep(0.1)
         return False
 

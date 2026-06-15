@@ -10,7 +10,7 @@ import urllib.request
 from collections.abc import Callable
 
 from sm64_events.core.paths import pidfile_path
-from sm64_events.core.relaunch import HOST, PORT, server_alive
+from sm64_events.core.relaunch import HOST, PORT, port_in_use, server_alive
 
 
 def instance_running(probe: Callable[[], bool] = server_alive) -> bool:
@@ -40,11 +40,14 @@ def _force_kill_pidfile() -> None:
 def take_over(*, shutdown: Callable[[], None] = _post_shutdown,
               port_free: Callable[[], bool] | None = None,
               force_kill: Callable[[], None] = _force_kill_pidfile,
-              timeout_s: float = 8.0, poll_s: float = 0.25) -> bool:
+              timeout_s: float = 20.0, poll_s: float = 0.25) -> bool:
     """Free the port for a fresh start: graceful shutdown first, force-kill on
-    timeout. Returns True once the port is free."""
+    timeout. Returns True once the port is free. 'Free' = actually bindable
+    (port_in_use), not just /health-down — the old listener + replay teardown
+    outlive /health, so a health-only wait would force-kill mid-teardown. The
+    timeout exceeds the bounded replay teardown (~15 s)."""
     if port_free is None:
-        port_free = lambda: not server_alive()
+        port_free = lambda: not port_in_use()
     shutdown()
     if _wait(port_free, timeout_s, poll_s):
         return True

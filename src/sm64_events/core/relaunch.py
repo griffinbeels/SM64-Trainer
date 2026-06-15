@@ -8,6 +8,7 @@ before it binds; spawn_replacement re-launches sys.orig_argv tagged with
 SM64_RESTART=1 so the fresh process knows to wait and skip the takeover
 dialog."""
 import os
+import socket
 import subprocess
 import sys
 import time
@@ -27,15 +28,36 @@ def server_alive(timeout: float = 1.0) -> bool:
         return False
 
 
-def wait_port_free(timeout_s: float = 10.0, poll_s: float = 0.25,
-                   alive: Callable[[], bool] = server_alive) -> bool:
-    """Block until the server is gone (port free), bounded by timeout_s."""
+def port_in_use(host: str = HOST, port: int = PORT) -> bool:
+    """True if the port can't be bound right now (a server holds it).
+
+    This is the RIGHT signal for a restart handoff — more reliable than a
+    /health probe. The old uvicorn stops answering /health the moment
+    should_exit is set, but its listening socket (and the lengthy replay
+    teardown) outlive that, so a health-only wait lets the replacement
+    bind-race the dying process and land an unreachable server."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind((host, port))
+        return False
+    except OSError:
+        return True
+    finally:
+        s.close()
+
+
+def wait_port_free(timeout_s: float = 30.0, poll_s: float = 0.25,
+                   occupied: Callable[[], bool] = port_in_use) -> bool:
+    """Block until the port is actually free to BIND, bounded by timeout_s.
+    The default timeout comfortably exceeds the old process's bounded replay
+    teardown (~15 s) so the replacement never binds while the old still holds
+    the socket. Returns True once free, False on timeout."""
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
-        if not alive():
+        if not occupied():
             return True
         time.sleep(poll_s)
-    return not alive()
+    return not occupied()
 
 
 def spawn_replacement() -> None:

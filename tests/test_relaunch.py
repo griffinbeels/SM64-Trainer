@@ -1,20 +1,34 @@
 # tests/test_relaunch.py
 """Full-process relaunch primitives for the one-click restart."""
+import socket
 import subprocess
 import sys
 
 from sm64_events.core import relaunch
 
 
-def test_wait_port_free_true_when_alive_goes_false():
+def test_wait_port_free_true_when_occupied_goes_false():
     seq = iter([True, True, False])
     assert relaunch.wait_port_free(
-        timeout_s=1.0, poll_s=0.01, alive=lambda: next(seq, False)) is True
+        timeout_s=1.0, poll_s=0.01, occupied=lambda: next(seq, False)) is True
 
 
-def test_wait_port_free_times_out_when_always_alive():
+def test_wait_port_free_times_out_when_always_occupied():
     assert relaunch.wait_port_free(
-        timeout_s=0.05, poll_s=0.01, alive=lambda: True) is False
+        timeout_s=0.05, poll_s=0.01, occupied=lambda: True) is False
+
+
+def test_port_in_use_detects_a_bound_socket():
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.listen(1)
+    try:
+        assert relaunch.port_in_use("127.0.0.1", port) is True
+    finally:
+        s.close()
+    # Once closed, the port is bindable again.
+    assert relaunch.port_in_use("127.0.0.1", port) is False
 
 
 def test_spawn_replacement_relaunches_orig_argv(monkeypatch):
