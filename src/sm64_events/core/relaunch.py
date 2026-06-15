@@ -44,5 +44,13 @@ def spawn_replacement() -> None:
         argv = [sys.executable, *sys.orig_argv[1:]]
     else:
         argv = list(sys.orig_argv)
-    subprocess.Popen(argv, env={**os.environ, "SM64_RESTART": "1"},
-                     close_fds=False)
+    env = {**os.environ, "SM64_RESTART": "1"}
+    # PyInstaller onefile self-relaunch: the running (2nd-stage) process has
+    # _MEIPASS2 / _PYI_* set, pointing at THIS exe's extraction temp dir.
+    # Inheriting them makes the relaunched exe skip its OWN extraction and try
+    # to load from our dir — which the bootloader deletes as we exit, so the
+    # child crashes importing a bundled module (e.g. _cffi_backend, via
+    # pywebview -> pythonnet). Scrub them so the child bootstraps cleanly.
+    for key in [k for k in env if k.startswith(("_MEI", "_PYI"))]:
+        del env[key]
+    subprocess.Popen(argv, env=env, close_fds=False)

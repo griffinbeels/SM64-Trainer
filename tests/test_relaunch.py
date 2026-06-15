@@ -39,3 +39,23 @@ def test_spawn_replacement_frozen_uses_executable(monkeypatch):
     monkeypatch.setattr(sys, "orig_argv", [r"C:\app\sm64_tracker.exe", "--x"])
     relaunch.spawn_replacement()
     assert captured["argv"] == [r"C:\app\sm64_tracker.exe", "--x"]
+
+
+def test_spawn_replacement_scrubs_pyinstaller_env(monkeypatch):
+    # The onefile self-relaunch must drop the parent's PyInstaller bootloader
+    # vars so the child extracts its own bundle (else: missing _cffi_backend).
+    captured = {}
+    monkeypatch.setattr(subprocess, "Popen",
+                        lambda argv, **kw: captured.update(env=kw.get("env")))
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", r"C:\app\sm64_tracker.exe")
+    monkeypatch.setattr(sys, "orig_argv", [r"C:\app\sm64_tracker.exe"])
+    monkeypatch.setenv("_MEIPASS2", r"C:\Temp\_MEI42")
+    monkeypatch.setenv("_PYI_APPLICATION_HOME_DIR", r"C:\Temp\_MEI42")
+    monkeypatch.setenv("KEEP_ME", "yes")
+    relaunch.spawn_replacement()
+    env = captured["env"]
+    assert "_MEIPASS2" not in env
+    assert "_PYI_APPLICATION_HOME_DIR" not in env
+    assert env["SM64_RESTART"] == "1"
+    assert env["KEEP_ME"] == "yes"   # unrelated vars are preserved
