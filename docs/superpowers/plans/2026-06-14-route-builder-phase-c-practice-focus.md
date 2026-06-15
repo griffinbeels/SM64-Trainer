@@ -218,7 +218,7 @@ In the returned JSX of `Practice`, replace the existing tail starting at `<${Sta
                          showHidden=${showUnassignedHidden}
                          setShowHidden=${setShowUnassignedHidden} />
         </div>`}
-      </div>}`;
+      </div>`}`;
 ```
 
 > This keeps the exact existing normal-practice markup inside the `: html\`<div>…</div>\`` branch; only the wrapping `<div>` and the `routeView ?` conditional are new. Do not change the `pinnedSegs`/`restSegs`/`restStars`/`unassignedRows` computations above — they're still used by the normal branch.
