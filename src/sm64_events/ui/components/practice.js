@@ -2,7 +2,7 @@
 import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
-import { send } from "../api.js";
+import { getJSON, send } from "../api.js";
 import { ReplayPlayer } from "./replay.js";
 import { StatMenu } from "./statmenu.js";
 import { Timeline } from "./timeline.js";
@@ -365,6 +365,82 @@ function SegmentSection({ sec, t, ui, pinned, freshIds }) {
   </div>`;
 }
 
+// --- Route Practice focus (Phase C) ---------------------------------------
+// Non-destructive focus layer: when a route is active the Practice tab shows
+// ONLY that route's members, in route order. The current-step pointer reads
+// the live target; clicking a candidate sets the target (retry anything
+// freely). Driven by the route view (GET /api/routes/{id}) for order + names +
+// %s, cross-referenced to the session view for the current step's full section.
+const fpct = (r) => `${Math.round((r ?? 0) * 100)}%`;
+
+function candIsTarget(c, tgt) {
+  return c.kind === "segment"
+    ? (tgt.kind === "segment" && tgt.segment_id === c.segment_id)
+    : (tgt.kind !== "segment" && tgt.course_id === c.course && tgt.star_id === c.star);
+}
+
+async function setTargetCandidate(c, t) {
+  if (c.kind === "segment")
+    await send("POST", "/api/target", { kind: "segment", segment_id: c.segment_id });
+  else
+    await send("POST", "/api/target", { course_id: c.course, star_id: c.star });
+  t.refresh();
+}
+
+function RouteFocus({ rv, t, ui, freshIds }) {
+  const v = t.view;
+  const tgt = v.target || {};
+  // current = first step whose any candidate is the live target; else step 0
+  // (the suggested start). next = the following step (badge only — advancing is
+  // a suggestion; the target auto-follows completions, the user may click any
+  // step to retry).
+  let currentIdx = rv.steps.findIndex((s) =>
+    s.candidates.some((c) => candIsTarget(c, tgt)));
+  if (currentIdx === -1) currentIdx = 0;
+
+  const sectionFor = (c) => c.kind === "segment"
+    ? (v.segments || []).find((s) => s.segment_id === c.segment_id)
+    : v.stars.find((s) => s.course_id === c.course && s.star_id === c.star);
+
+  return html`<div>
+    <div class="meta listhead">route — ${rv.name}</div>
+    ${rv.steps.length === 0
+      ? html`<p class="meta">This route has no steps yet — add some in the Routes tab.</p>`
+      : null}
+    ${rv.steps.map((s, i) => {
+      const isCurrent = i === currentIdx;
+      const badge = isCurrent
+        ? html`<span class="chip routecur">▶ CURRENT</span>`
+        : i === currentIdx + 1 ? html`<span class="chip">NEXT</span>` : null;
+      return html`<div class="routefstep ${isCurrent ? "active-star" : ""}">
+        <div class="shead">
+          <span class="routenum">${i + 1}.</span>
+          ${badge}
+          ${s.candidates.length > 1
+            ? html`<span class="chip">${s.need} of ${s.candidates.length}</span>` : null}
+          ${s.label ? html`<b>${s.label}</b>` : null}
+          ${s.candidates.map((c) => html`<button
+              class=${candIsTarget(c, tgt) ? "pb-glow" : ""}
+              onclick=${() => setTargetCandidate(c, t)}
+              title="practice this">${c.display}</button>`)}
+          <span style="flex:1"></span>
+          <span class="routerate">step ${fpct(s.step_rate)}</span>
+          <span class="routecum">cum ${fpct(s.cumulative)}</span>
+        </div>
+        ${isCurrent ? s.candidates.map((c) => {
+          const sec = sectionFor(c);
+          if (!sec) return null;   // not the target yet / no history — compact only
+          return c.kind === "segment"
+            ? html`<${SegmentSection} key=${`seg:${sec.segment_id}`}
+                sec=${sec} t=${t} ui=${ui} pinned=${false} freshIds=${freshIds} />`
+            : html`<${StarSection} key=${`${sec.course_id}:${sec.star_id}`}
+                sec=${sec} t=${t} ui=${ui} pinned=${false} freshIds=${freshIds} />`;
+        }) : null}
+      </div>`;
+    })}
+  </div>`;
+}
+
 function ControlBar({ ui }) {
   return html`<div class="bar">
     <label class="meta">sort${" "}
@@ -395,6 +471,25 @@ export function Practice({ t }) {
     },
   };
   const freshIds = useFreshAttemptIds(t);
+  const [routes, setRoutes] = useState([]);
+  const [activeRouteId, setActiveRouteId] = useState(() => {
+    const s = localStorage.getItem("sm64.activeRoute");
+    return s ? Number(s) : null;
+  });
+  const [routeView, setRouteView] = useState(null);
+  useEffect(() => { getJSON("/api/routes").then(setRoutes).catch(() => {}); }, []);
+  // Refetch the resolved route view on selection change AND on every session
+  // view update, so per-step/cumulative % stay live as attempts land. A 404
+  // (route deleted) clears it → the tab falls back to normal practice.
+  useEffect(() => {
+    if (activeRouteId == null) { setRouteView(null); return; }
+    getJSON(`/api/routes/${activeRouteId}`).then(setRouteView).catch(() => setRouteView(null));
+  }, [activeRouteId, t.view]);
+  const pickRoute = (id) => {
+    if (id == null) localStorage.removeItem("sm64.activeRoute");
+    else localStorage.setItem("sm64.activeRoute", String(id));
+    setActiveRouteId(id);
+  };
   const v = t.view;
   if (!v) return html`<p class="meta">loading… (server unreachable? check /health)</p>`;
 
@@ -446,21 +541,35 @@ export function Practice({ t }) {
     </div>
     ${menuOpen && html`<${StatMenu} t=${t} close=${() => setMenuOpen(false)} />`}
     <${ControlBar} ui=${ui} />
-    <${StageBanner} t=${t} />
-    ${pinnedSegs.map((sec) => html`<${SegmentSection} key=${`seg:${sec.segment_id}`} sec=${sec} t=${t} ui=${ui} pinned=${true} freshIds=${freshIds} />`)}
-    ${activeStar && html`<${StarSection} key=${`${activeStar.course_id}:${activeStar.star_id}`} sec=${activeStar} t=${t} ui=${ui} pinned=${true} freshIds=${freshIds} />`}
-    ${v.stars.length === 0 && segs.length === 0 && v.unassigned.length === 0
-      ? html`<p class="meta">No attempts this session yet — grab a star.</p>` : ""}
-    ${restSegs.length > 0 && html`<div class="meta listhead">segments — recent activity first</div>`}
-    ${restSegs.map((sec) => html`<${SegmentSection} key=${`seg:${sec.segment_id}`} sec=${sec} t=${t} ui=${ui} pinned=${false} freshIds=${freshIds} />`)}
-    ${restStars.length > 0 && html`<div class="meta listhead">stars — recent activity first</div>`}
-    ${restStars.map((sec) => html`<${StarSection} key=${`${sec.course_id}:${sec.star_id}`} sec=${sec} t=${t} ui=${ui} pinned=${false} freshIds=${freshIds} />`)}
-    ${v.unassigned.length > 0 && html`<div class="starsec">
-      <div class="shead"><b>No target</b>
-        <span class="meta">failures before any star was grabbed or set</span></div>
-      <${AttemptTable} attempts=${v.unassigned} rows=${unassignedRows} t=${t} freshIds=${freshIds} />
-      <${HideToggle} hidden=${unassignedHidden}
-                     showHidden=${showUnassignedHidden}
-                     setShowHidden=${setShowUnassignedHidden} />
-    </div>`}`;
+    <div class="bar">
+      <label class="meta">Focus route${" "}
+        <select value=${activeRouteId ?? ""}
+            onchange=${(e) => pickRoute(e.target.value ? Number(e.target.value) : null)}>
+          <option value="">— none (all practice) —</option>
+          ${routes.map((r) => html`<option value=${r.id}>${r.name}</option>`)}
+        </select></label>
+      ${routeView ? html`<span class="meta">focused — non-route stars/segments hidden;
+        history still records</span>` : null}
+    </div>
+    ${routeView
+      ? html`<${RouteFocus} rv=${routeView} t=${t} ui=${ui} freshIds=${freshIds} />`
+      : html`<div>
+        <${StageBanner} t=${t} />
+        ${pinnedSegs.map((sec) => html`<${SegmentSection} key=${`seg:${sec.segment_id}`} sec=${sec} t=${t} ui=${ui} pinned=${true} freshIds=${freshIds} />`)}
+        ${activeStar && html`<${StarSection} key=${`${activeStar.course_id}:${activeStar.star_id}`} sec=${activeStar} t=${t} ui=${ui} pinned=${true} freshIds=${freshIds} />`}
+        ${v.stars.length === 0 && segs.length === 0 && v.unassigned.length === 0
+          ? html`<p class="meta">No attempts this session yet — grab a star.</p>` : ""}
+        ${restSegs.length > 0 && html`<div class="meta listhead">segments — recent activity first</div>`}
+        ${restSegs.map((sec) => html`<${SegmentSection} key=${`seg:${sec.segment_id}`} sec=${sec} t=${t} ui=${ui} pinned=${false} freshIds=${freshIds} />`)}
+        ${restStars.length > 0 && html`<div class="meta listhead">stars — recent activity first</div>`}
+        ${restStars.map((sec) => html`<${StarSection} key=${`${sec.course_id}:${sec.star_id}`} sec=${sec} t=${t} ui=${ui} pinned=${false} freshIds=${freshIds} />`)}
+        ${v.unassigned.length > 0 && html`<div class="starsec">
+          <div class="shead"><b>No target</b>
+            <span class="meta">failures before any star was grabbed or set</span></div>
+          <${AttemptTable} attempts=${v.unassigned} rows=${unassignedRows} t=${t} freshIds=${freshIds} />
+          <${HideToggle} hidden=${unassignedHidden}
+                         showHidden=${showUnassignedHidden}
+                         setShowHidden=${setShowUnassignedHidden} />
+        </div>`}
+      </div>}`;
 }
