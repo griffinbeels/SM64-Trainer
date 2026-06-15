@@ -368,6 +368,53 @@ class TrackerService:
         await self.broadcaster.publish(Event(type="routes_changed", frame=0,
                                               timestamp_utc=_now(), payload={}))
 
+    def export_route(self, route_id: int) -> dict:
+        """Self-contained export (sync — read-only). Embeds segment defs."""
+        db = self._require_db()
+        route = next((r for r in db.routes() if r["id"] == route_id), None)
+        if route is None:
+            raise LookupError(f"route {route_id} not found")
+        defs = {d["id"]: d for d in db.segment_defs()}
+        return route_logic.export_route(route["name"], route["steps"], defs)
+
+    async def import_route(self, payload: dict, dry_run: bool = False) -> dict:
+        """Reconcile + (unless dry_run) create missing segments and the route.
+        Preview returns the reuse/create summary without writing anything."""
+        db = self._require_db()
+        resolved = route_logic.resolve_import(payload, db.segment_defs())
+        if dry_run:
+            return {"name": resolved["name"], "reused": resolved["reused"],
+                    "created": resolved["created"], "dry_run": True}
+        new_ids = []
+        for emb in resolved["to_create"]:
+            validate_definition({**emb, "enabled": True})
+            new_ids.append(db.insert_segment_def(
+                emb["name"], emb["start_triggers"], emb["end_triggers"],
+                emb["guards"], _iso(_now())))
+        steps = self._finalize_import_steps(resolved["steps"], new_ids)
+        rid = db.insert_route(resolved["name"], steps, _iso(_now()))
+        await self._routes_changed()
+        return {"id": rid, "name": resolved["name"], "reused": resolved["reused"],
+                "created": resolved["created"], "dry_run": False}
+
+    @staticmethod
+    def _finalize_import_steps(steps: list, new_ids: list) -> list:
+        """Rewrite {"create_index": i} segment candidates to real ids."""
+        out = []
+        for step in steps:
+            cands = []
+            for c in step["candidates"]:
+                if c.get("type") == "segment" and "create_index" in c:
+                    cands.append({"type": "segment",
+                                  "segment_id": new_ids[c["create_index"]]})
+                else:
+                    cands.append(c)
+            ns = {"need": step["need"], "candidates": cands}
+            if step.get("label") is not None:
+                ns["label"] = step["label"]
+            out.append(ns)
+        return out
+
     async def _reproject(self) -> None:
         db = self._require_db()
         before = self._projector.target
