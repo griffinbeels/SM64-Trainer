@@ -62,8 +62,8 @@ See `tools/build_exe.py` for what gets bundled.
 - A practice tracker UI: per-star attempt history, PBs, timelines, progress
   graphs, and a one-click stage quick-select.
 - **Routes**: build an ordered route of stars/segments (with "complete K of N"
-  group steps), see per-step and cumulative success rates, and import/export a
-  route as copy-pastable JSON to share.
+  group steps), see per-step and cumulative success rates, pick an active route
+  to focus the Practice tab on it, and import/export a route as JSON to share.
 - **Instant replay**: records the PJ64 window + game audio and lets you watch
   (and save) the video of any attempt.
 
