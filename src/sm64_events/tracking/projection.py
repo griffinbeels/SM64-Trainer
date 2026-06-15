@@ -124,6 +124,7 @@ from dataclasses import dataclass, replace
 from sm64_events.memory.addresses import CASTLE_LEVELS, course_for_level
 # one-way import: segments.py pulls Attempt lazily at call time, so this
 # module-level import cannot cycle (see SegmentEngine.feed).
+from sm64_events.tracking.runs import RunTracker
 from sm64_events.tracking.segments import (
     SEGMENT_ATTEMPT_OFFSET, MatchContext, SegmentEngine)
 
@@ -198,6 +199,8 @@ class Projector:
         self.strat_by_segment: dict[int, str | None] = {}
         self._segments = SegmentEngine(segments or [])
         self.segment_notices: list[dict] = []  # live-broadcast queue, drained by service
+        self._runs = RunTracker()
+        self.run_notices: list[dict] = []   # live-broadcast queue, drained by service
         self._num_stars: int | None = None
         self._open = None  # EventRow of the open attempt's anchor
         self._open_acted = False  # mario_acted seen since the last anchor; only meaningful while _open is set
@@ -230,6 +233,12 @@ class Projector:
         service can diff armed sets across a reproject without reaching
         into privates."""
         return self._segments.armed_ids()
+
+    def finished_runs(self):
+        return self._runs.finished_runs()
+
+    def active_run_view(self):
+        return self._runs.active_run_view()
 
     def feed(self, ev) -> list[Attempt]:
         prev_level = self._level  # _dispatch may move it (level_changed)
@@ -272,6 +281,10 @@ class Projector:
                         for n in self.segment_notices):
             self._suspended_star = self.target[1:]  # resume on re-entry (caveat 13)
             self.target = None
+        # Run engine sees the same event + the attempts just closed (star AND
+        # segment successes/failures); it owns the run lifecycle independently.
+        self._runs.feed(ev, closed)
+        self.run_notices = self._runs.run_notices
         if ev.type in BOUNDARY_EVENT_TYPES:
             self._rollouts_total = self._rollouts_dustless = 0
             self._jumps_total = self._jumps_dustless = 0
