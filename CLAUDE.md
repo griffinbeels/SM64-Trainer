@@ -54,6 +54,11 @@ uv run python tools/dedupe_journal.py data/tracker.db          # scan double-jou
 | Event pipeline + commands (journal→project→broadcast) | `tracking/service.py` |
 | Session view payload | `tracking/views.py` |
 | SQLite journal + derived tables | `storage/db.py` |
+| Route defs (ordered star/segment plans), cumulative success, import/export | `tracking/routes.py` — pure: `validate_route`, `route_stats` (best-K product, no-data=0), `export_route` (embeds segment defs), `resolve_import` (reuse exact match / create rest). Steps are a uniform `{label?, need:K, candidates:[star\|segment]}` shape |
+| Route view payload | `tracking/views.py::build_route_view` — resolves candidate names + per-step/cumulative success + broken flag (deleted segment) |
+| Route CRUD + import/export commands | `tracking/service.py` — create/update/delete_route (segment-existence check), export_route, import_route (dry-run preview); broadcast-only `routes_changed` |
+| Route storage | `storage/db.py` — `routes` table (migration v7) + routes/insert_route/update_route/delete_route |
+| Route REST surface | `server/api.py` — `/api/routes` CRUD, `/api/routes/{id}/export`, `/api/routes/import?dry_run=` |
 | Single-instance guard (broadcast-only fallback) | `storage/instance_lock.py` — Windows msvcrt file-region lock; held for process lifetime |
 | Duplicate-event detection logic | `storage/dedupe.py` — pure fn; used by `tools/dedupe_journal.py` |
 | Journal deduplication repair tool | `tools/dedupe_journal.py` — scan (read-only) or --fix (delete duplicates + re-project; server must be stopped) |
