@@ -82,7 +82,7 @@ export function Run({ t }) {
 
   return html`<div class=${focus ? "runfocus" : ""}>
     <div class="runbar">
-      <select value=${routeId ?? ""}
+      <select value=${(active ? active.route_id : routeId) ?? ""} disabled=${!!active}
           onchange=${(e) => { const v = e.target.value ? Number(e.target.value) : null;
             setRouteId(v); if (v != null) localStorage.setItem("sm64.activeRoute", String(v)); }}>
         <option value="">— pick a route —</option>
