@@ -8,9 +8,10 @@ import { Practice } from "./components/practice.js";
 import { Feed } from "./components/feed.js";
 import { Segments } from "./components/segments.js";
 import { Routes } from "./components/routes.js";
+import { Run } from "./components/runview.js";
 
 const html = htm.bind(h);
-const TABS = ["Practice", "Segments", "Routes", "Live feed"];
+const TABS = ["Practice", "Segments", "Routes", "Run", "Live feed"];
 
 function App() {
   const t = useTracker();
@@ -27,6 +28,7 @@ function App() {
       ${tab === "Practice" ? html`<${Practice} t=${t} />`
         : tab === "Segments" ? html`<${Segments} t=${t} />`
         : tab === "Routes" ? html`<${Routes} t=${t} />`
+        : tab === "Run" ? html`<${Run} t=${t} />`
         : html`<${Feed} t=${t} />`}
     </div>`;
 }

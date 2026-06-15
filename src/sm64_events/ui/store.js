@@ -5,6 +5,8 @@ import { getJSON, send } from "./api.js";
 const REFRESH_ON = new Set(["attempt_completed", "attempts_invalidated",
   "pb_saved", "pb_undone", "session_started", "target_changed",
   "star_collected", "strat_set"]);
+const RUN_REFRESH_ON = new Set(["run_started", "run_progress",
+  "run_finished", "run_aborted", "game_reset"]);
 
 export function useTracker() {
   const [view, setView] = useState(null);
@@ -28,6 +30,12 @@ export function useTracker() {
   // REFRESH_ON — the view's catalog and last_strat_by_star don't depend on it,
   // so a full refetch would be wasted. Seeded from v.stage for initial load.
   const [stage, setStage] = useState(null);
+  const [run, setRun] = useState(null);
+  const refreshRun = useCallback(async () => {
+    try { setRun(await getJSON("/api/run")); } catch (e) { /* keep last */ }
+  }, []);
+  useEffect(() => { refreshRun(); }, [refreshRun]);
+
   // server-owned pause truth: {paused, reason: "manual"|"afk"|null}.
   // Polled (5 s) because "afk" flips server-side without any UI action;
   // the POST response updates it instantly on manual toggles.
@@ -107,6 +115,7 @@ export function useTracker() {
         const ev = JSON.parse(e.data);
         setFeed((f) => [ev, ...f].slice(0, 200));
         if (REFRESH_ON.has(ev.type)) refresh();
+        if (RUN_REFRESH_ON.has(ev.type)) refreshRun();
         if (ev.type === "segment_armed") {
           const id = ev.payload.segment_id;
           setArmedOrder((prev) => prev.includes(id) ? prev : [...prev, id]);
@@ -144,5 +153,6 @@ export function useTracker() {
   return { view, clock, pickClock, scope, pickScope, feed, connected,
            refresh, paused: pauseState.paused,
            pauseReason: pauseState.reason, togglePause,
-           armedSegs, armedOrder, lastPinnedSeg, stage };
+           armedSegs, armedOrder, lastPinnedSeg, stage,
+           run, refreshRun };
 }

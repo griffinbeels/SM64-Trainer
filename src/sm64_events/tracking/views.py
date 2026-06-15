@@ -413,37 +413,39 @@ def _resolve_cands(cands, seg_names):
 
 def build_run_view(db, service) -> dict:
     """Live run state for the run panel: the active run (resolved step names +
-    elapsed) plus the route's PB total and gold/sum-of-best for comparison."""
+    elapsed + per-step PB-cumulative and gold-duration for ±/gold) plus the
+    route's PB total and gold sum-of-best."""
     from sm64_events.tracking.runs import pb_run, gold_splits
     act = service.active_run()
     seg_names = {d["id"]: d["name"] for d in db.segment_defs()}
     offset = service.run_settings()["start_offset_ms"]
-    out = {"active": None, "pb": None, "gold": None,
-           "start_offset_ms": offset}
-    if act is not None:
-        steps_def = next((r["steps"] for r in db.routes()
-                          if r["id"] == act["route_id"]), [])
-        steps = []
-        for i, s in enumerate(act["steps"]):
-            cands = _resolve_cands(steps_def[i]["candidates"], seg_names) \
-                if i < len(steps_def) else []
-            steps.append({**s, "candidates": cands,
-                          "display": cands[0]["display"] if cands else "?",
-                          "elapsed_display": _fmt_ms(
-                              None if s["elapsed_ms"] is None
-                              else s["elapsed_ms"] + offset)})
-        out["active"] = {**act, "steps": steps}
-    if act is not None and act["route_id"] is not None:
-        runs = db.runs(route_id=act["route_id"])
-        pb = pb_run(runs)
-        steps_def = next((r["steps"] for r in db.routes()
-                          if r["id"] == act["route_id"]), [])
-        gold = gold_splits(runs, steps_def)
-        out["pb"] = {"total_ms": pb["total_ms"],
-                     "display": _fmt_ms(pb["total_ms"] + offset)} if pb else None
-        out["gold"] = {"sum_of_best": gold["sum_of_best"],
-                       "display": _fmt_ms(None if gold["sum_of_best"] is None
-                                          else gold["sum_of_best"] + offset)}
+    out = {"active": None, "pb": None, "gold": None, "start_offset_ms": offset}
+    if act is None:
+        return out
+    steps_def = next((r["steps"] for r in db.routes()
+                      if r["id"] == act["route_id"]), [])
+    runs = db.runs(route_id=act["route_id"]) if act["route_id"] is not None else []
+    pb = pb_run(runs)
+    gold = gold_splits(runs, steps_def)
+    pb_cum = {s["step_index"]: s["elapsed_ms"] for s in pb["splits"]} if pb else {}
+    gold_dur = gold["durations"]
+    steps = []
+    for i, s in enumerate(act["steps"]):
+        cands = _resolve_cands(steps_def[i]["candidates"], seg_names) \
+            if i < len(steps_def) else []
+        steps.append({**s, "candidates": cands,
+                      "display": cands[0]["display"] if cands else "?",
+                      "elapsed_display": _fmt_ms(
+                          None if s["elapsed_ms"] is None
+                          else s["elapsed_ms"] + offset),
+                      "pb_elapsed_ms": pb_cum.get(i),
+                      "gold_ms": gold_dur.get(i)})
+    out["active"] = {**act, "steps": steps}
+    out["pb"] = {"total_ms": pb["total_ms"],
+                 "display": _fmt_ms(pb["total_ms"] + offset)} if pb else None
+    out["gold"] = {"sum_of_best": gold["sum_of_best"],
+                   "display": _fmt_ms(None if gold["sum_of_best"] is None
+                                      else gold["sum_of_best"] + offset)}
     return out
 
 
