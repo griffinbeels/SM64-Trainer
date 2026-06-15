@@ -5,7 +5,7 @@
 // Focus mode (neutral, no ±/gold) and click-to-hide any timer are pure UI
 // state in localStorage.
 import { h } from "preact";
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 
@@ -27,6 +27,77 @@ const fmtDelta = (ms) =>
 function loadHidden() {
   try { return new Set(JSON.parse(localStorage.getItem("sm64.runHidden") || "[]")); }
   catch { return new Set(); }
+}
+
+function fmtDate(utc) {
+  try { return new Date(utc).toLocaleString(); } catch { return utc; }
+}
+
+// Small dedicated progression graph: finished-run totals over time, gold dots
+// for runs that were a PB when achieved (is_pb). Reuses progress.js's VISUAL
+// pattern (line + dots, gold = PB) — not the component, whose per-star/clock
+// shape doesn't fit whole-game runs. y inverted (lower time = higher = better).
+function RunGraph({ runs }) {
+  const fin = runs.filter((r) => r.status === "finished" && r.total_ms != null);
+  if (fin.length < 2)
+    return html`<div class="rungraph-empty">finish at least 2 runs to see a graph</div>`;
+  const W = 600, H = 150, pad = 22;
+  const val = (r) => r.total_ms + r.start_offset_ms;
+  const vals = fin.map(val);
+  const min = Math.min(...vals), max = Math.max(...vals), span = (max - min) || 1;
+  const x = (i) => pad + (i * (W - 2 * pad)) / (fin.length - 1);
+  const y = (v) => pad + ((v - min) / span) * (H - 2 * pad);
+  const path = fin.map((r, i) =>
+    `${i ? "L" : "M"}${x(i).toFixed(1)} ${y(val(r)).toFixed(1)}`).join(" ");
+  return html`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" class="rungraph">
+    <path d=${path} fill="none" stroke="#4a6fa5" stroke-width="1.5" />
+    ${fin.map((r, i) => html`<circle cx=${x(i)} cy=${y(val(r))} r="3.5"
+        fill=${r.is_pb ? "#ffd75f" : "#6fa8ff"}>
+      <title>${fmtMs(val(r))}${r.is_pb ? " · PB" : ""} — ${fmtDate(r.started_utc)}</title>
+    </circle>`)}
+  </svg>`;
+}
+
+function RunHistory({ t, routeId }) {
+  const [hist, setHist] = useState(null);
+  const [finishedOnly, setFinishedOnly] = useState(true);
+  const load = useCallback(async () => {
+    if (routeId == null) { setHist(null); return; }
+    try { setHist(await getJSON(`/api/run/history?route_id=${routeId}`)); }
+    catch { setHist(null); }
+  }, [routeId]);
+  // refetch on mount, route change, and run events (t.run flips on run_*)
+  useEffect(() => { load(); }, [load, t.run]);
+
+  if (routeId == null)
+    return html`<div class="runhistory meta">pick a route to see its run history</div>`;
+  if (!hist) return html`<div class="runhistory meta">loading history…</div>`;
+
+  const finished = hist.runs.filter((r) => r.status === "finished" && r.total_ms != null);
+  const pbRun = finished.length
+    ? finished.reduce((a, b) => (a.total_ms <= b.total_ms ? a : b)) : null;
+  const list = [...hist.runs].reverse();   // newest first for the table
+  const shown = finishedOnly ? list.filter((r) => r.status === "finished") : list;
+
+  return html`<div class="runhistory">
+    <div class="shead">
+      <b>Run history</b>
+      <label class="meta"><input type="checkbox" checked=${finishedOnly}
+          onchange=${(e) => setFinishedOnly(e.target.checked)} /> finished only</label>
+      ${pbRun ? html`<span class="pbtag">PB ${pbRun.display_total}</span>` : null}
+    </div>
+    <${RunGraph} runs=${hist.runs} />
+    ${shown.length === 0
+      ? html`<p class="meta">no ${finishedOnly ? "finished " : ""}runs yet</p>`
+      : html`<table><tbody>
+        ${shown.map((r) => html`<tr>
+          <td class="meta">${fmtDate(r.started_utc)}</td>
+          <td>${r.status === "finished"
+              ? html`<b>${r.display_total}</b>${r.is_pb ? html` <span class="rungold">★</span>` : ""}`
+              : html`<span class="meta">aborted · reached step ${r.reached_step}</span>`}</td>
+        </tr>`)}
+      </tbody></table>`}
+  </div>`;
 }
 
 export function Run({ t }) {
@@ -135,5 +206,6 @@ export function Run({ t }) {
           })}
         </tbody></table>
       </div>`}
+    <${RunHistory} t=${t} routeId=${active ? active.route_id : routeId} />
   </div>`;
 }
