@@ -854,6 +854,30 @@ def test_build_run_view_idle_when_no_run(tmp_path):
     assert build_run_view(db, svc)["active"] is None
 
 
+def test_build_run_view_adds_per_step_pb_and_gold(tmp_path):
+    from sm64_events.tracking.views import build_run_view
+    db, svc = make(tmp_path)
+    rid = asyncio.run(svc.create_route({"name": "RC", "steps": [
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 1}]}]}))
+    # one finished run in history: step0 cumulative 60s, step1 cumulative 130s
+    db.insert_run({"id": 1, "route_id": rid, "route_name": "RC",
+        "route_steps": [{"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]},
+                        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 1}]}],
+        "mode": "forgiving", "status": "finished", "reached_step": 2,
+        "total_ms": 130000, "start_offset_ms": 1360,
+        "started_utc": "t", "ended_utc": "t", "is_pb": 1,
+        "splits": [{"step_index": 0, "elapsed_ms": 60000},
+                   {"step_index": 1, "elapsed_ms": 130000}]})
+    # start an active run on the same route
+    asyncio.run(svc.start_run(rid))
+    asyncio.run(svc.publish(ev("game_reset", 0)))
+    view = build_run_view(db, svc)
+    s0, s1 = view["active"]["steps"]
+    assert s0["pb_elapsed_ms"] == 60000 and s0["gold_ms"] == 60000     # step0 duration 60s
+    assert s1["pb_elapsed_ms"] == 130000 and s1["gold_ms"] == 70000    # step1 duration 70s
+
+
 def test_build_run_history_filters_finished(tmp_path):
     from sm64_events.tracking.views import build_run_history
     db, svc = make(tmp_path)
