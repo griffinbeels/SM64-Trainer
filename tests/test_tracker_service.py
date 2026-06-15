@@ -781,3 +781,47 @@ def test_current_stage_defaults_to_not_in_stage(tmp_path):
     db, svc = make(tmp_path)
     assert svc.current_stage == {"course_id": None, "level": None,
                                  "area": None, "in_stage": False}
+
+
+# -- routes (Phase A) ---------------------------------------------------------
+
+def test_create_route_persists_and_broadcasts(tmp_path):
+    db, svc, sent = make_rec(tmp_path)
+    lblj = seed_id(db, "LBLJ")
+    rid = asyncio.run(svc.create_route({
+        "name": "Test Route", "steps": [
+            {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]},
+            {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}))
+    assert any(r["id"] == rid and r["name"] == "Test Route" for r in db.routes())
+    assert any(e.type == "routes_changed" for e in sent)
+
+
+def test_create_route_rejects_missing_segment(tmp_path):
+    db, svc = make(tmp_path)
+    with pytest.raises(LookupError):
+        asyncio.run(svc.create_route({"name": "Bad", "steps": [
+            {"need": 1, "candidates": [{"type": "segment", "segment_id": 99999}]}]}))
+
+
+def test_create_route_rejects_invalid_definition(tmp_path):
+    db, svc = make(tmp_path)
+    with pytest.raises(ValueError):
+        asyncio.run(svc.create_route({"name": "", "steps": []}))
+
+
+def test_update_and_delete_route(tmp_path):
+    db, svc = make(tmp_path)
+    rid = asyncio.run(svc.create_route({"name": "R", "steps": [
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}))
+    asyncio.run(svc.update_route(rid, {"name": "R2"}))
+    assert next(r for r in db.routes() if r["id"] == rid)["name"] == "R2"
+    asyncio.run(svc.delete_route(rid))
+    assert all(r["id"] != rid for r in db.routes())
+    with pytest.raises(LookupError):
+        asyncio.run(svc.delete_route(rid))
+
+
+def test_update_route_unknown_id_raises(tmp_path):
+    db, svc = make(tmp_path)
+    with pytest.raises(LookupError):
+        asyncio.run(svc.update_route(999, {"name": "x"}))

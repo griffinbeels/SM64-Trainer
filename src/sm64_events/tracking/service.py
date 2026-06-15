@@ -24,6 +24,7 @@ from sm64_events.memory.addresses import course_name, star_name
 from sm64_events.storage.db import Database, EventRow
 from sm64_events.tracking.projection import Projector, replay, wipe_matches
 from sm64_events.tracking.segments import SegmentDef, validate_definition
+from sm64_events.tracking import routes as route_logic
 
 log = logging.getLogger("sm64.tracker")
 
@@ -325,6 +326,47 @@ class TrackerService:
         attempt from the journal (mirrors clear/restore)."""
         self._segment_defs = self._load_segment_defs()
         await self._reproject()
+
+    # -- routes ----------------------------------------------------------------
+    def _check_segment_refs(self, db: Database, steps: list) -> None:
+        """Every segment candidate must reference an existing def (LookupError
+        -> 404). Star candidates need no db check."""
+        ids = {d["id"] for d in db.segment_defs()}
+        for step in steps:
+            for c in step["candidates"]:
+                if c["type"] == "segment" and c["segment_id"] not in ids:
+                    raise LookupError(f"segment {c['segment_id']} not found")
+
+    async def create_route(self, d: dict) -> int:
+        db = self._require_db()
+        route_logic.validate_route(d)          # structural, BEFORE insert
+        self._check_segment_refs(db, d["steps"])
+        rid = db.insert_route(d["name"], d["steps"], _iso(_now()))
+        await self._routes_changed()
+        return rid
+
+    async def update_route(self, route_id: int, d: dict) -> None:
+        db = self._require_db()
+        current = next((r for r in db.routes() if r["id"] == route_id), None)
+        if current is None:
+            raise LookupError(f"route {route_id} not found")
+        merged = {**current, **d}              # partial patch validates as whole
+        route_logic.validate_route(merged)
+        self._check_segment_refs(db, merged["steps"])
+        db.update_route(route_id, updated_utc=_iso(_now()),
+                        **{k: d[k] for k in ("name", "steps") if k in d})
+        await self._routes_changed()
+
+    async def delete_route(self, route_id: int) -> None:
+        db = self._require_db()
+        db.delete_route(route_id)
+        await self._routes_changed()
+
+    async def _routes_changed(self) -> None:
+        """Broadcast-only (like segment notices): routes are config, never
+        journaled. The UI refetches the route list on this event."""
+        await self.broadcaster.publish(Event(type="routes_changed", frame=0,
+                                              timestamp_utc=_now(), payload={}))
 
     async def _reproject(self) -> None:
         db = self._require_db()
