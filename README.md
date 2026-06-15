@@ -142,8 +142,12 @@ All endpoints are under `/api`. JSON in, JSON out.
 
 - **Routes tab** — build an ordered route of stars/segments (with "complete K
   of N" group steps), see per-step and cumulative success rates, and
-  import/export a route as copy-pastable JSON to share. (Practice-focus and the
-  full-game run timer arrive in later phases.)
+  import/export a route as copy-pastable JSON to share. (The full-game run timer
+  arrives in a later phase.)
+- **Route Practice focus** — pick an active route on the Practice tab to show
+  only that route's stars/segments, in route order, with a suggested
+  current/next step and live cumulative success. Retry any step freely; your
+  full history keeps recording in the background.
 
 **Error taxonomy:** `404` = no such attempt; `409` = attempt exists but is not valid for the
 operation (bad timer mode, already cleared, non-success outcome, missing clock, or — for
