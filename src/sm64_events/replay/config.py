@@ -9,6 +9,9 @@ import logging
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from sm64_events.core.paths import (replay_scratch_dir, replay_settings_path,
+                                     replays_root)
+
 
 @dataclass(frozen=True)
 class ReplayConfig:
@@ -23,13 +26,13 @@ class ReplayConfig:
                                           # capture must follow presents.
     segment_s: float = 2.0                # video segment / audio chunk length
     max_buffer_bytes: int = 20 * 1024**3  # hard disk guard regardless of retention
-    save_root: Path = field(default=Path("replays"))
-    scratch_dir: Path = field(default=Path("data") / "replay_buffer")
+    save_root: Path = field(default_factory=replays_root)
+    scratch_dir: Path = field(default_factory=replay_scratch_dir)
     window_title: str = "Project64"       # substring match on the window title
     audio_rate: int = 48000               # proc-tap delivers 48 kHz stereo
     attach_poll_s: float = 2.0            # window-hunt interval
     extract_wait_s: float = 5.0           # bounded wait for the tail segment
-    settings_path: Path = field(default=Path("data") / "replay_settings.json")
+    settings_path: Path = field(default_factory=replay_settings_path)
 
 
 # -- user-adjustable storage limits (UI: recording-dot panel) -----------------

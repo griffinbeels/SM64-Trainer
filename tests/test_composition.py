@@ -23,6 +23,35 @@ def test_stage_detector_is_wired():
     assert src.rindex("StageChangeDetector()") > src.rindex("detectors = [")
 
 
+def test_app_is_lazy_not_built_at_import():
+    src = (Path(sm64_events.__file__).parent / "main.py").read_text(
+        encoding="utf-8")
+    # No eager module-level build (which would acquire the instance lock);
+    # the app is provided lazily via module __getattr__.
+    assert "\napp = build()" not in src
+    assert "__getattr__" in src
+
+
+def test_get_app_builds_once(monkeypatch):
+    import importlib
+
+    import sm64_events.main as main_mod
+    importlib.reload(main_mod)
+
+    calls = []
+
+    def fake_build():
+        from fastapi import FastAPI
+        calls.append(True)
+        return FastAPI()
+
+    monkeypatch.setattr(main_mod, "build", fake_build)
+    a1 = main_mod.get_app()
+    a2 = main_mod.get_app()
+    assert a1 is a2
+    assert calls == [True]
+
+
 def test_build_wires_replay_endpoints(monkeypatch, tmp_path):
     # Stub instance lock so build() doesn't acquire a real file lock.
     monkeypatch.setattr(

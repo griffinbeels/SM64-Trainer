@@ -9,3 +9,10 @@ replays/
 data/replay_buffer/
 .claude/worktrees/
 _dbg/
+
+# desktop build + runtime state
+/dist/
+/build/
+*.spec
+/server.pid
+/window.json
