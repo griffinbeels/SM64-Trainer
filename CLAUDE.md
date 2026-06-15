@@ -46,6 +46,7 @@ uv run python tools/dedupe_journal.py data/tracker.db          # scan double-jou
 | Segment defs, trigger vocabulary, matcher FSM | `tracking/segments.py` — ONE registry (TRIGGERS/GUARDS) drives validation, matching, and the /api/segments/vocab endpoint; docstring carries the FSM invariants (closures before arming, guards re-evaluated every arm, silent disarm on foreign level change, position-gated anchor closures: retry re-arms in place at the arm position, a warp elsewhere disarms with no row and swaps to the destination's segment, load/door/save-prompt-echo shapes) |
 | Segments builder UI | `ui/components/segments.js` — 100% vocab-driven (labels, sentence templates, level/area/course/star enums): adding a trigger type in tracking/segments.py appears in the UI with zero JS changes |
 | Stage quick-select banner | `ui/components/stagebanner.js` — dual-mode: one-click STAR target in a main course, or one-click SEGMENT target in a Castle Inside subarea (lobby/upstairs/basement) showing segments whose start triggers begin there (`segment_targets`, derived in views.py via `_segment_start_areas` — only subarea-scoped triggers, so LBLJ never shows upstairs); data-driven from the session view; rendered atop `ui/components/practice.js` |
+| Route builder UI | `ui/components/routes.js` — Routes tab: route picker + CRUD, step editor (reorder / add / remove / `need` for K-of-N groups), candidate chips, import/export panel. Display names + per-step/cumulative % from `GET /api/routes/{id}`; raw steps from `GET /api/routes`; every edit PUTs steps and re-fetches |
 | Poll loop, attach retry, layout sanity, session pause | `server/poller.py` |
 | WS fan-out, seq numbers | `server/broadcaster.py` |
 | HTTP/WS endpoints | `server/app.py` |
@@ -54,6 +55,11 @@ uv run python tools/dedupe_journal.py data/tracker.db          # scan double-jou
 | Event pipeline + commands (journal→project→broadcast) | `tracking/service.py` |
 | Session view payload | `tracking/views.py` |
 | SQLite journal + derived tables | `storage/db.py` |
+| Route defs (ordered star/segment plans), cumulative success, import/export | `tracking/routes.py` — pure: `validate_route`, `route_stats` (best-K product, no-data=0), `export_route` (embeds segment defs), `resolve_import` (reuse exact match / create rest). Steps are a uniform `{label?, need:K, candidates:[star\|segment]}` shape |
+| Route view payload | `tracking/views.py::build_route_view` — resolves candidate names + per-step/cumulative success + broken flag (deleted segment) |
+| Route CRUD + import/export commands | `tracking/service.py` — create/update/delete_route (segment-existence check), export_route, import_route (dry-run preview); broadcast-only `routes_changed` |
+| Route storage | `storage/db.py` — `routes` table (migration v7) + routes/insert_route/update_route/delete_route |
+| Route REST surface | `server/api.py` — `/api/routes` CRUD, `/api/routes/{id}/export`, `/api/routes/import?dry_run=` |
 | Single-instance guard (broadcast-only fallback) | `storage/instance_lock.py` — Windows msvcrt file-region lock; held for process lifetime |
 | Duplicate-event detection logic | `storage/dedupe.py` — pure fn; used by `tools/dedupe_journal.py` |
 | Journal deduplication repair tool | `tools/dedupe_journal.py` — scan (read-only) or --fix (delete duplicates + re-project; server must be stopped) |

@@ -7,6 +7,7 @@ import { Header } from "./components/header.js";
 import { Practice } from "./components/practice.js";
 import { Feed } from "./components/feed.js";
 import { Segments } from "./components/segments.js";
+import { Routes } from "./components/routes.js";
 
 const html = htm.bind(h);
 const TABS = ["Practice", "Segments", "Routes", "Live feed"];
@@ -20,13 +21,12 @@ function App() {
     <div class="tabs">
       ${TABS.map((name) => html`
         <div class="tab ${tab === name ? "on" : ""}"
-             onclick=${() => name !== "Routes" && setTab(name)}
-             title=${name === "Routes" ? "Phase 4" : ""}
-             style=${name === "Routes" ? "opacity:.3;cursor:default" : ""}>${name}</div>`)}
+             onclick=${() => setTab(name)}>${name}</div>`)}
     </div>
     <div class="pane">
       ${tab === "Practice" ? html`<${Practice} t=${t} />`
         : tab === "Segments" ? html`<${Segments} t=${t} />`
+        : tab === "Routes" ? html`<${Routes} t=${t} />`
         : html`<${Feed} t=${t} />`}
     </div>`;
 }

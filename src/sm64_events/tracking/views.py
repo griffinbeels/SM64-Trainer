@@ -25,6 +25,7 @@ from sm64_events.stats.registry import (DEFAULT_STAT_MENU, REGISTRY,
                                         compute_stat, selection_id,
                                         selection_order)
 from sm64_events.tracking.projection import journal_id
+from sm64_events.tracking.routes import route_stats
 
 # Timeline markers (per-section event graph): outcomes that plot as points.
 # Adding a marker kind is one row here (+ a style row in ui timeline.js).
@@ -387,3 +388,35 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             for d in service.segment_defs
             if d.enabled and (areas := _segment_start_areas(d.start_triggers))],
     }
+
+
+def build_route_view(db, route_id: int) -> dict:
+    """Resolve a route for display: each step's candidates get names, plus the
+    per-step success rate and cumulative product (tracking/routes.route_stats).
+    A candidate whose segment was deleted is marked broken (no cascade)."""
+    route = next((r for r in db.routes() if r["id"] == route_id), None)
+    if route is None:
+        raise LookupError(f"route {route_id} not found")
+    attempts = db.attempts()
+    seg_names = {d["id"]: d["name"] for d in db.segment_defs()}
+    stats = route_stats(route["steps"], attempts)
+    steps = []
+    for step, st in zip(route["steps"], stats):
+        cands, broken = [], False
+        for c in step["candidates"]:
+            if c["type"] == "segment":
+                name = seg_names.get(c["segment_id"])
+                if name is None:
+                    broken = True
+                    name = f"segment {c['segment_id']} (deleted)"
+                cands.append({"kind": "segment", "segment_id": c["segment_id"],
+                              "display": name})
+            else:
+                cands.append({"kind": "star", "course": c["course"],
+                              "star": c["star"],
+                              "display": star_name(c["course"], c["star"]),
+                              "course_name": course_name(c["course"])})
+        steps.append({"label": step.get("label"), "need": step["need"],
+                      "candidates": cands, "step_rate": st["step_rate"],
+                      "cumulative": st["cumulative"], "broken": broken})
+    return {"id": route["id"], "name": route["name"], "steps": steps}

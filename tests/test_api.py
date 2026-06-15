@@ -554,3 +554,58 @@ def test_segments_503_when_db_none(tmp_path):
         assert client.delete("/api/segments/1").status_code == 503
         # vocab is always 200 — no db dependency
         assert client.get("/api/segments/vocab").status_code == 200
+
+
+# -- route CRUD + export/import endpoints (Task 9) ----------------------------
+
+def _lblj(db):
+    return next(d["id"] for d in db.segment_defs() if d["name"] == "LBLJ")
+
+
+def test_route_crud_endpoints(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        lblj = _lblj(db)
+        r = client.post("/api/routes", json={"name": "R", "steps": [
+            {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]}]})
+        assert r.status_code == 200
+        rid = r.json()["id"]
+        assert any(x["id"] == rid for x in client.get("/api/routes").json())
+        v = client.get(f"/api/routes/{rid}")
+        assert v.status_code == 200
+        assert v.json()["steps"][0]["broken"] is False
+        assert client.put(f"/api/routes/{rid}",
+                          json={"name": "R2"}).status_code == 200
+        assert client.delete(f"/api/routes/{rid}").status_code == 200
+        assert client.get(f"/api/routes/{rid}").status_code == 404
+
+
+def test_create_route_bad_segment_is_404(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.post("/api/routes", json={"name": "R", "steps": [
+            {"need": 1, "candidates": [{"type": "segment", "segment_id": 99999}]}]})
+        assert r.status_code == 404
+
+
+def test_create_route_invalid_is_409(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.post("/api/routes", json={"name": "", "steps": []})
+        assert r.status_code == 409
+
+
+def test_route_export_import_endpoints(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        lblj = _lblj(db)
+        rid = client.post("/api/routes", json={"name": "R", "steps": [
+            {"need": 1, "candidates": [
+                {"type": "segment", "segment_id": lblj}]}]}).json()["id"]
+        exp = client.get(f"/api/routes/{rid}/export").json()
+        assert exp["kind"] == "sm64-route"
+        prev = client.post("/api/routes/import?dry_run=true",
+                           json={"payload": exp})
+        assert prev.status_code == 200 and prev.json()["reused"] == ["LBLJ"]
+        created = client.post("/api/routes/import", json={"payload": exp})
+        assert created.status_code == 200 and "id" in created.json()

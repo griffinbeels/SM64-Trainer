@@ -13,7 +13,7 @@ from sm64_events.links import star_links
 from sm64_events.stats.registry import (registry_meta, selection_id,
                                         selection_order)
 from sm64_events.tracking.segments import vocab
-from sm64_events.tracking.views import build_session_view
+from sm64_events.tracking.views import build_route_view, build_session_view
 
 
 class TargetBody(BaseModel):
@@ -105,6 +105,24 @@ class SegmentPatch(BaseModel):
     enabled: bool | None = None
 
 
+class RouteBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    steps: list[dict]
+
+
+class RoutePatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = None
+    steps: list[dict] | None = None
+
+
+class ImportBody(BaseModel):
+    payload: dict
+
+
 def _http(e: Exception) -> HTTPException:
     if isinstance(e, LookupError):
         return HTTPException(404, str(e))
@@ -189,6 +207,65 @@ def create_api_router(service) -> APIRouter:
     async def delete_segment(segment_id: int):
         try:
             await service.delete_segment(segment_id)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True}
+
+    # routes — literal '/routes/import' declared before '/routes/{route_id}'
+    # so the path segment is never parsed as an id (declaration order wins —
+    # fastapi-patterns; mirrors /segments/vocab).
+    @router.get("/routes")
+    def routes_list():
+        if service.db is None:
+            raise HTTPException(503, "database unavailable")
+        return service.db.routes()
+
+    @router.post("/routes")
+    async def create_route(body: RouteBody):
+        try:
+            rid = await service.create_route(body.model_dump())
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True, "id": rid}
+
+    @router.post("/routes/import")
+    async def import_route(body: ImportBody, dry_run: bool = False):
+        try:
+            return await service.import_route(body.payload, dry_run=dry_run)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+
+    @router.get("/routes/{route_id}")
+    def route_view(route_id: int):
+        if service.db is None:
+            raise HTTPException(503, "database unavailable")
+        try:
+            return build_route_view(service.db, route_id)
+        except (LookupError, ValueError) as e:
+            raise _http(e)
+
+    @router.get("/routes/{route_id}/export")
+    def export_route(route_id: int):
+        if service.db is None:
+            raise HTTPException(503, "database unavailable")
+        try:
+            return service.export_route(route_id)
+        except (LookupError, ValueError) as e:
+            raise _http(e)
+
+    @router.put("/routes/{route_id}")
+    async def update_route(route_id: int, body: RoutePatch):
+        try:
+            patch = {k: v for k, v in body.model_dump().items() if v is not None}
+            await service.update_route(route_id, patch)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True}
+
+    @router.delete("/routes/{route_id}")
+    async def delete_route(route_id: int):
+        try:
+            await service.delete_route(route_id)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True}
