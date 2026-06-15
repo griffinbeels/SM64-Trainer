@@ -62,6 +62,11 @@ uv run python tools/dedupe_journal.py data/tracker.db          # scan double-jou
 | Built-in viewer UI | `ui/index.html` — served per request: edit + refresh, no restart |
 | UI components, store, API client | `ui/components/` · `ui/store.js` · `ui/api.js` · `ui/app.js`; vendored Preact in `ui/vendor/`; incl. `ui/components/timeline.js` (per-star event graph; marker styles via `MARKERS` registry) · `ui/components/progress.js` (per-star completion-time graph; gold = saved PBs; node click → practice.js pickFromGraph reveals + scrolls to the row, auto-opens saved replays) · `ui/format.js` (shared display formatting — fmtIgt mirrors core/timefmt.py) |
 | Wiring / startup / logging | `main.py` (composition root), `core/logging_setup.py` |
+| Runtime data locations (db, replays, settings, lock, pidfile, window state, logs) | `core/paths.py` — THE path resolver; cwd-relative from source (identical to historical layout), `%LOCALAPPDATA%\sm64_tracker` when frozen; also `bundled_ffmpeg()` |
+| Full-process restart primitives | `core/relaunch.py` — `server_alive`/`port_in_use`/`wait_port_free`/`spawn_replacement`; backs the one-click restart + the `SM64_RESTART` handoff (waits on real port bindability, scrubs PyInstaller `_MEIPASS2`/`_PYI_*`) |
+| Desktop GUI shell (window, tray, single-instance, server runner) | `desktop/` — additive wrapper over the SAME server/UI: `app.py` (composition + native takeover dialog + restart/quit wiring), `server_runner.py` (uvicorn in a thread), `single_instance.py`, `window.py` (resizable pywebview + geometry), `tray.py`; entry `python -m sm64_events.desktop` / `gui_entry.py` |
+| Admin endpoints (GUI takeover + restart) | `server/app.py` `POST /api/admin/shutdown` + `/api/admin/restart` + pidfile in the lifespan; dispatched off-thread |
+| One-command portable build | `tools/build_exe.py` (+ `tools/rthook_comtypes.py`, `assets/ukiki.ico`) — PyInstaller onefile; auto-bundles ffmpeg from PATH |
 | Process memory / GC / disk observability | `core/procmem.py` — RSS (psapi via ctypes), gc generation state, live object count, scratch size; backs `/health.memory` + a 60 s `mem:` log line with a one-shot growth alarm. THE leak-hunting surface (added after the 2026-06-13 freeze: we were flying blind) |
 | Memory-hunting diagnostics | `tools/` — playbook in docs/architecture.md |
 | Replay orchestration (attach loop, source wiring, ring, idle gate) | `replay/recorder.py` + player-input tap `replay/activity.py`; `replay/clock.py` is THE QPC↔UTC contract. Idle now THROTTLES capture grabs (`is_idle` → `video.set_idle_check`) not just discards segments; the ring byte-cap is free-disk-gated (`ring.effective_cap`) so it can't fill the volume |
@@ -105,6 +110,10 @@ with `--no-ff`; run the full suite on the merged result; delete the branch.
 8. Keep the poller's implausible-read refusal — it has caught bugs in our
    own registry.
 9. One server instance per db — enforced by `storage/instance_lock.py`; second instances run broadcast-only (events NOT double-recorded).
+10. **Browser ↔ GUI parity.** Every user-facing feature lands in `ui/` +
+   server, so it appears in BOTH the browser tab and the desktop window. The
+   `desktop/` shell adds ONLY native chrome (window, tray, icon,
+   single-instance, restart) and must never fork or special-case the UI.
 
 ## Recipes
 
