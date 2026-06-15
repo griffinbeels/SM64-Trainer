@@ -99,3 +99,26 @@ def test_route_stats_star_item_ignores_segment_attempts():
     steps = [{"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]
     [s] = route_stats(steps, attempts)
     assert abs(s["step_rate"] - 0.5) < 1e-9
+
+
+def test_export_route_embeds_segment_defs_and_keeps_stars():
+    segs = {1: {"name": "LBLJ", "start_triggers": [{"type": "spawned"}],
+                "end_triggers": [{"type": "level_enter", "to": 6}],
+                "guards": []}}
+    steps = [{"need": 1, "candidates": [{"type": "segment", "segment_id": 1}]},
+             {"need": 1, "label": "star step",
+              "candidates": [{"type": "star", "course": 2, "star": 0}]}]
+    out = export_route("R", steps, segs)
+    assert out["kind"] == "sm64-route" and out["version"] == 1 and out["name"] == "R"
+    seg = out["steps"][0]["candidates"][0]
+    assert seg == {"type": "segment", "segment": {
+        "name": "LBLJ", "start_triggers": [{"type": "spawned"}],
+        "end_triggers": [{"type": "level_enter", "to": 6}], "guards": []}}
+    assert out["steps"][1]["label"] == "star step"
+    assert out["steps"][1]["candidates"][0] == {"type": "star", "course": 2, "star": 0}
+
+
+def test_export_route_raises_on_missing_segment():
+    with pytest.raises(ValueError, match="missing segment"):
+        export_route("R", [{"need": 1, "candidates": [
+            {"type": "segment", "segment_id": 99}]}], {})

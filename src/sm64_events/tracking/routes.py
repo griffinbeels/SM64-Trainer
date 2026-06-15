@@ -96,10 +96,33 @@ def route_stats(steps: list, attempts) -> list[dict]:
     return out
 
 
-# Stubs — implemented in Tasks 4, 5 respectively.
 def export_route(name: str, steps: list, segment_defs: dict) -> dict:
-    raise NotImplementedError
+    """Self-contained export. Segment candidates embed their full definition
+    (resolved from segment_defs: id -> {name, start_triggers, end_triggers,
+    guards}); star candidates are portable as-is. Raises ValueError if a step
+    references a segment id not in segment_defs."""
+    out_steps = []
+    for step in steps:
+        cands = []
+        for c in step["candidates"]:
+            if c["type"] == "segment":
+                d = segment_defs.get(c["segment_id"])
+                if d is None:
+                    raise ValueError(
+                        f"route references missing segment {c['segment_id']}")
+                cands.append({"type": "segment", "segment": {
+                    "name": d["name"], "start_triggers": d["start_triggers"],
+                    "end_triggers": d["end_triggers"], "guards": d["guards"]}})
+            else:
+                cands.append(dict(c))
+        out_step = {"need": step["need"], "candidates": cands}
+        if step.get("label") is not None:
+            out_step["label"] = step["label"]
+        out_steps.append(out_step)
+    return {"kind": ROUTE_EXPORT_KIND, "version": ROUTE_EXPORT_VERSION,
+            "name": name, "steps": out_steps}
 
 
+# Stub — implemented in Task 5.
 def resolve_import(payload: dict, existing_defs: list) -> dict:
     raise NotImplementedError
