@@ -18,7 +18,20 @@ def test_wait_port_free_times_out_when_always_occupied():
         timeout_s=0.05, poll_s=0.01, occupied=lambda: True) is False
 
 
-def test_port_in_use_detects_a_bound_socket():
+def test_listener_pid_finds_the_listening_process():
+    import os
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.listen(1)
+    try:
+        assert relaunch.listener_pid(port) == os.getpid()
+    finally:
+        s.close()
+    assert relaunch.listener_pid(port) is None   # no listener once closed
+
+
+def test_port_in_use_detects_a_listener():
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.bind(("127.0.0.1", 0))
     port = s.getsockname()[1]
@@ -27,7 +40,7 @@ def test_port_in_use_detects_a_bound_socket():
         assert relaunch.port_in_use("127.0.0.1", port) is True
     finally:
         s.close()
-    # Once closed, the port is bindable again.
+    # No listener once closed (TIME_WAIT wouldn't count even if present).
     assert relaunch.port_in_use("127.0.0.1", port) is False
 
 
