@@ -571,5 +571,5 @@ export function Practice({ t }) {
                          showHidden=${showUnassignedHidden}
                          setShowHidden=${setShowUnassignedHidden} />
         </div>`}
-      </div>}`;
+      </div>`}`;
 }
