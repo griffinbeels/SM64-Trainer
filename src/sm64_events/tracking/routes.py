@@ -57,11 +57,46 @@ def validate_route(d: dict) -> None:
             _validate_item(c)
 
 
-# Stubs — implemented in Tasks 3, 4, 5 respectively.
+def _item_attempts(item: dict, attempts):
+    if item["type"] == "segment":
+        sid = item["segment_id"]
+        return [a for a in attempts if a.segment_id == sid]
+    c, s = item["course"], item["star"]
+    return [a for a in attempts
+            if a.segment_id is None and a.course_id == c and a.star_id == s]
+
+
+def _item_rate(item: dict, attempts) -> float:
+    """Lifetime success rate for one item; no data -> 0.0.
+
+    Reuses the registry's success_rate stat (failures = reset/hard_reset/death,
+    cleared attempts excluded). success_rate ignores the clock arg."""
+    rate = compute_stat("success_rate", _item_attempts(item, attempts), {}, "igt")
+    return rate if rate is not None else 0.0
+
+
+def _step_rate(step: dict, attempts) -> float:
+    """Product of the best-K candidate rates (K = step['need'])."""
+    rates = sorted((_item_rate(c, attempts) for c in step["candidates"]),
+                   reverse=True)
+    product = 1.0
+    for r in rates[:step["need"]]:
+        product *= r
+    return product
+
+
 def route_stats(steps: list, attempts) -> list[dict]:
-    raise NotImplementedError
+    """Per-step success rate + cumulative (running product), in route order.
+    attempts is the full lifetime attempt list (caller scopes nothing)."""
+    out, cumulative = [], 1.0
+    for step in steps:
+        sr = _step_rate(step, attempts)
+        cumulative *= sr
+        out.append({"step_rate": sr, "cumulative": cumulative})
+    return out
 
 
+# Stubs — implemented in Tasks 4, 5 respectively.
 def export_route(name: str, steps: list, segment_defs: dict) -> dict:
     raise NotImplementedError
 

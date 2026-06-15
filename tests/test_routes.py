@@ -55,3 +55,47 @@ def test_validate_route_rejects_star_without_ints():
     with pytest.raises(ValueError):
         validate_route({"name": "R", "steps": [
             {"need": 1, "candidates": [{"type": "star", "course": 2}]}]})
+
+
+def test_route_stats_single_step_uses_item_success_rate():
+    # segment 1: 2 success + 1 reset -> 2/3
+    attempts = [att(segment_id=1, outcome="success"),
+                att(segment_id=1, outcome="success"),
+                att(segment_id=1, outcome="reset")]
+    steps = [{"need": 1, "candidates": [{"type": "segment", "segment_id": 1}]}]
+    [s] = route_stats(steps, attempts)
+    assert abs(s["step_rate"] - 2 / 3) < 1e-9
+    assert abs(s["cumulative"] - 2 / 3) < 1e-9
+
+
+def test_route_stats_no_data_is_zero_and_zeroes_downstream():
+    attempts = [att(segment_id=1, outcome="success")]  # only step 1 has data
+    steps = [{"need": 1, "candidates": [{"type": "segment", "segment_id": 1}]},
+             {"need": 1, "candidates": [{"type": "star", "course": 9, "star": 9}]}]
+    s1, s2 = route_stats(steps, attempts)
+    assert s1["step_rate"] == 1.0 and s1["cumulative"] == 1.0
+    assert s2["step_rate"] == 0.0 and s2["cumulative"] == 0.0
+
+
+def test_route_stats_group_uses_best_k_product():
+    # seg1 = 100% (1/1), seg2 = 50% (1 success, 1 reset), seg3 = 0% (no data)
+    # need 2 -> best two rates = 1.0 * 0.5 = 0.5
+    attempts = [att(segment_id=1, outcome="success"),
+                att(segment_id=2, outcome="success"),
+                att(segment_id=2, outcome="reset")]
+    steps = [{"need": 2, "candidates": [
+        {"type": "segment", "segment_id": 1},
+        {"type": "segment", "segment_id": 2},
+        {"type": "segment", "segment_id": 3}]}]
+    [s] = route_stats(steps, attempts)
+    assert abs(s["step_rate"] - 0.5) < 1e-9
+
+
+def test_route_stats_star_item_ignores_segment_attempts():
+    # an attempt on (course 2, star 0) as a STAR must not be confused with a
+    # segment attempt; segment_id None is the discriminator
+    attempts = [att(segment_id=None, course_id=2, star_id=0, outcome="success"),
+                att(segment_id=None, course_id=2, star_id=0, outcome="death")]
+    steps = [{"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]
+    [s] = route_stats(steps, attempts)
+    assert abs(s["step_rate"] - 0.5) < 1e-9
