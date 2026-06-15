@@ -63,6 +63,10 @@ def window_state_path() -> Path:
     return data_root() / "window.json"
 
 
+def logs_dir() -> Path:
+    return data_root() / "logs"
+
+
 def bundled_ffmpeg() -> str | None:
     """Absolute path to the ffmpeg.exe bundled beside a frozen exe, else None.
     PyInstaller unpacks --add-binary files into ``sys._MEIPASS``."""

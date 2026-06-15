@@ -14,6 +14,7 @@ def test_source_paths_match_historical_relative_layout(monkeypatch):
     assert paths.replay_scratch_dir() == Path("data") / "replay_buffer"
     assert paths.replays_root() == Path("replays")
     assert paths.replay_settings_path() == Path("data") / "replay_settings.json"
+    assert paths.logs_dir() == Path("logs")
 
 
 def test_frozen_paths_live_under_localappdata(monkeypatch, tmp_path):
@@ -26,6 +27,7 @@ def test_frozen_paths_live_under_localappdata(monkeypatch, tmp_path):
     assert paths.replays_root() == root / "replays"
     assert paths.pidfile_path() == root / "server.pid"
     assert paths.window_state_path() == root / "window.json"
+    assert paths.logs_dir() == root / "logs"
 
 
 def test_bundled_ffmpeg_none_from_source(monkeypatch):
