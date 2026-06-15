@@ -19,8 +19,8 @@ def test_migrations_set_user_version_and_create_tables(tmp_path):
     db = make_db(tmp_path)
     names = {r["name"] for r in db._conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
-    assert {"events", "sessions", "attempts", "pbs", "ui_state", "routes"} <= names
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert {"events", "sessions", "attempts", "pbs", "ui_state", "routes", "runs"} <= names
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 8
 
 
 def test_reopening_existing_db_is_idempotent(tmp_path):
@@ -28,7 +28,7 @@ def test_reopening_existing_db_is_idempotent(tmp_path):
     sid = first.insert_session("2026-06-10T12:00:00Z")
     first.close()
     db = make_db(tmp_path)  # second open: migrations must not re-run/crash
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 8
     row = db._conn.execute("SELECT * FROM sessions WHERE id=?", (sid,)).fetchone()
     assert row is not None and row["started_utc"] == "2026-06-10T12:00:00Z"
 
@@ -146,7 +146,7 @@ def test_v1_database_upgrades_in_place(tmp_path):
     conn.commit()
     conn.close()
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 8
     assert db.attempts()[0].rollouts_total == 0   # backfilled default
     assert db.attempts()[0].jumps_total == 0
 
@@ -267,7 +267,7 @@ def test_v3_database_pb_rows_survive_v4_rebuild(tmp_path):
     conn.commit()
     conn.close()
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 8
     [row] = db.pbs()
     assert row["id"] == 7 and row["frames"] == 500
     assert row["course_id"] == 2 and row["star_id"] == 3
@@ -294,7 +294,7 @@ def test_v5_updates_existing_v4_lblj_row_with_area_anchor(tmp_path):
     conn.commit()
     conn.close()
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 8
     lblj = next(d for d in db.segment_defs() if d["name"] == "LBLJ")
     assert lblj["start_triggers"] == [
         {"type": "level_enter", "to": 6, "from": 16},
@@ -324,7 +324,7 @@ def test_v6_repairs_existing_bowser3_end_trigger(tmp_path):
     conn.commit()
     conn.close()
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 8
     b3 = next(d for d in db.segment_defs() if d["name"] == "Bowser 3")
     assert b3["end_triggers"] == [{"type": "key_grabbed", "level": 34}]
 
@@ -409,7 +409,7 @@ def test_failed_migration_rolls_back_schema_and_version(tmp_path, monkeypatch):
         Database(path)
     check = sqlite3.connect(str(path))
     # (a) version reflects only the successful prefix
-    assert check.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert check.execute("PRAGMA user_version").fetchone()[0] == 8
     # partial application rolled back: first statement did NOT stick
     names = {r[0] for r in check.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
@@ -419,5 +419,57 @@ def test_failed_migration_rolls_back_schema_and_version(tmp_path, monkeypatch):
     fixed = "CREATE TABLE extra (id INTEGER);"
     monkeypatch.setattr(db_mod, "MIGRATIONS", db_mod.MIGRATIONS[:-1] + [fixed])
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 8
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 9
     db.close()
+
+
+# -- migration v8: runs (full-game run history) ------------------------------
+
+def test_migration_v8_creates_runs_table(tmp_path):
+    db = make_db(tmp_path)
+    names = {r["name"] for r in db._conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "runs" in names
+
+
+def _run_row(**o):
+    d = dict(id=500, route_id=1, route_name="R", route_steps=[{"need": 1,
+             "candidates": [{"type": "star", "course": 2, "star": 0}]}],
+             mode="forgiving", status="finished", reached_step=1,
+             total_ms=120000, start_offset_ms=1360,
+             started_utc="2026-06-14T00:00:00Z", ended_utc="2026-06-14T00:02:00Z",
+             is_pb=1, splits=[{"step_index": 0, "elapsed_ms": 120000}])
+    d.update(o); return d
+
+
+def test_run_insert_and_read(tmp_path):
+    db = make_db(tmp_path)
+    db.insert_run(_run_row())
+    [r] = db.runs()
+    assert r["id"] == 500 and r["status"] == "finished" and r["total_ms"] == 120000
+    assert r["route_steps"][0]["need"] == 1            # JSON round-trips
+    assert r["splits"][0]["elapsed_ms"] == 120000
+    assert r["is_pb"] is True
+
+
+def test_runs_filter_by_route_and_finished(tmp_path):
+    db = make_db(tmp_path)
+    db.insert_run(_run_row(id=1, route_id=1, status="finished"))
+    db.insert_run(_run_row(id=2, route_id=1, status="aborted", is_pb=0))
+    db.insert_run(_run_row(id=3, route_id=2, status="finished"))
+    assert {r["id"] for r in db.runs(route_id=1)} == {1, 2}
+    assert {r["id"] for r in db.runs(route_id=1, finished_only=True)} == {1}
+
+
+def test_replace_runs_rebuilds_cache(tmp_path):
+    db = make_db(tmp_path)
+    db.insert_run(_run_row(id=9))
+    db.replace_runs([])
+    assert db.runs() == []
+
+
+def test_run_settings_default_and_set(tmp_path):
+    db = make_db(tmp_path)
+    assert db.get_state("run_settings", {"start_offset_ms": 1360}) == {"start_offset_ms": 1360}
+    db.set_state("run_settings", {"start_offset_ms": 2000})
+    assert db.get_state("run_settings", {})["start_offset_ms"] == 2000
