@@ -784,3 +784,45 @@ def test_segment_banner_param_names_match_the_registry():
     assert {"to", "to_subarea"} <= set(TRIGGERS["level_exit"].params)
     assert {"level", "area"} <= set(TRIGGERS["area_enter"].params)
     assert {"level", "area"} <= set(TRIGGERS["attempt_anchor"].params)
+
+
+# -- route view (Task 8) -------------------------------------------------------
+
+def test_build_route_view_resolves_names_and_cumulative(tmp_path):
+    from sm64_events.tracking.views import build_route_view
+    db, svc = make(tmp_path)
+    lblj = next(d["id"] for d in db.segment_defs() if d["name"] == "LBLJ")
+    rid = asyncio.run(svc.create_route({"name": "V", "steps": [
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]},
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]}]}))
+    view = build_route_view(db, rid)
+    assert view["name"] == "V"
+    star_cand = view["steps"][0]["candidates"][0]
+    assert star_cand["display"] == "Chip off Whomp's Block"
+    assert star_cand["course_name"] == "Whomp's Fortress"
+    seg_cand = view["steps"][1]["candidates"][0]
+    assert seg_cand["display"] == "LBLJ" and seg_cand["kind"] == "segment"
+    # no attempts logged -> 0% rate, cumulative 0 from the first step
+    assert view["steps"][0]["step_rate"] == 0.0
+    assert view["steps"][0]["cumulative"] == 0.0
+    assert view["steps"][1]["broken"] is False
+
+
+def test_build_route_view_marks_deleted_segment_broken(tmp_path):
+    from sm64_events.tracking.views import build_route_view
+    db, svc = make(tmp_path)
+    lblj = next(d["id"] for d in db.segment_defs() if d["name"] == "LBLJ")
+    rid = asyncio.run(svc.create_route({"name": "V", "steps": [
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]}]}))
+    asyncio.run(svc.delete_segment(lblj))
+    view = build_route_view(db, rid)
+    assert view["steps"][0]["broken"] is True
+    assert "deleted" in view["steps"][0]["candidates"][0]["display"]
+
+
+def test_build_route_view_unknown_route_raises(tmp_path):
+    import pytest
+    from sm64_events.tracking.views import build_route_view
+    db, svc = make(tmp_path)
+    with pytest.raises(LookupError):
+        build_route_view(db, 999)

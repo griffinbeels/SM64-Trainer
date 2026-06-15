@@ -781,3 +781,91 @@ def test_current_stage_defaults_to_not_in_stage(tmp_path):
     db, svc = make(tmp_path)
     assert svc.current_stage == {"course_id": None, "level": None,
                                  "area": None, "in_stage": False}
+
+
+# -- routes (Phase A) ---------------------------------------------------------
+
+def test_create_route_persists_and_broadcasts(tmp_path):
+    db, svc, sent = make_rec(tmp_path)
+    lblj = seed_id(db, "LBLJ")
+    rid = asyncio.run(svc.create_route({
+        "name": "Test Route", "steps": [
+            {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]},
+            {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}))
+    assert any(r["id"] == rid and r["name"] == "Test Route" for r in db.routes())
+    assert any(e.type == "routes_changed" for e in sent)
+
+
+def test_create_route_rejects_missing_segment(tmp_path):
+    db, svc = make(tmp_path)
+    with pytest.raises(LookupError):
+        asyncio.run(svc.create_route({"name": "Bad", "steps": [
+            {"need": 1, "candidates": [{"type": "segment", "segment_id": 99999}]}]}))
+
+
+def test_create_route_rejects_invalid_definition(tmp_path):
+    db, svc = make(tmp_path)
+    with pytest.raises(ValueError):
+        asyncio.run(svc.create_route({"name": "", "steps": []}))
+
+
+def test_update_and_delete_route(tmp_path):
+    db, svc = make(tmp_path)
+    rid = asyncio.run(svc.create_route({"name": "R", "steps": [
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}))
+    asyncio.run(svc.update_route(rid, {"name": "R2"}))
+    assert next(r for r in db.routes() if r["id"] == rid)["name"] == "R2"
+    asyncio.run(svc.delete_route(rid))
+    assert all(r["id"] != rid for r in db.routes())
+    with pytest.raises(LookupError):
+        asyncio.run(svc.delete_route(rid))
+
+
+def test_update_route_unknown_id_raises(tmp_path):
+    db, svc = make(tmp_path)
+    with pytest.raises(LookupError):
+        asyncio.run(svc.update_route(999, {"name": "x"}))
+
+
+def test_export_then_import_reuses_existing_segment(tmp_path):
+    db, svc = make(tmp_path)
+    lblj = seed_id(db, "LBLJ")
+    rid = asyncio.run(svc.create_route({"name": "Exp", "steps": [
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}))
+    payload = svc.export_route(rid)
+    assert payload["kind"] == "sm64-route" and payload["version"] == 1
+    assert payload["steps"][0]["candidates"][0]["segment"]["name"] == "LBLJ"
+    preview = asyncio.run(svc.import_route(payload, dry_run=True))
+    assert preview["reused"] == ["LBLJ"] and preview["created"] == []
+    out = asyncio.run(svc.import_route(payload))
+    imported = next(r for r in db.routes() if r["id"] == out["id"])
+    assert imported["steps"][0]["candidates"][0] == {"type": "segment",
+                                                     "segment_id": lblj}
+
+
+def test_import_creates_missing_segment(tmp_path):
+    db, svc = make(tmp_path)
+    payload = {"kind": "sm64-route", "version": 1, "name": "Imp", "steps": [
+        {"need": 1, "candidates": [{"type": "segment", "segment": {
+            "name": "Brand New Seg", "start_triggers": [{"type": "spawned"}],
+            "end_triggers": [{"type": "level_enter", "to": 6}], "guards": []}}]}]}
+    before = len(db.segment_defs())
+    out = asyncio.run(svc.import_route(payload))
+    assert len(db.segment_defs()) == before + 1
+    new = next(d for d in db.segment_defs() if d["name"] == "Brand New Seg")
+    imported = next(r for r in db.routes() if r["id"] == out["id"])
+    assert imported["steps"][0]["candidates"][0]["segment_id"] == new["id"]
+
+
+def test_export_unknown_route_raises(tmp_path):
+    db, svc = make(tmp_path)
+    with pytest.raises(LookupError):
+        svc.export_route(999)
+
+
+def test_import_rejects_bad_envelope(tmp_path):
+    db, svc = make(tmp_path)
+    with pytest.raises(ValueError):
+        asyncio.run(svc.import_route({"kind": "nope", "version": 1, "name": "x",
+                                      "steps": [{"need": 1, "candidates": []}]}))
