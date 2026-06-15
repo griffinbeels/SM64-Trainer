@@ -122,3 +122,52 @@ def test_export_route_raises_on_missing_segment():
     with pytest.raises(ValueError, match="missing segment"):
         export_route("R", [{"need": 1, "candidates": [
             {"type": "segment", "segment_id": 99}]}], {})
+
+
+def _payload(*step_cands):
+    return {"kind": "sm64-route", "version": 1, "name": "R",
+            "steps": [{"need": 1, "candidates": list(cs)} for cs in step_cands]}
+
+
+def test_resolve_import_reuses_exact_match_creates_rest():
+    existing = [{"id": 7, "name": "LBLJ", "start_triggers": [{"type": "spawned"}],
+                 "end_triggers": [{"type": "level_enter", "to": 6}], "guards": []}]
+    payload = _payload(
+        [{"type": "segment", "segment": {
+            "name": "LBLJ", "start_triggers": [{"type": "spawned"}],
+            "end_triggers": [{"type": "level_enter", "to": 6}], "guards": []}}],
+        [{"type": "segment", "segment": {
+            "name": "New", "start_triggers": [{"type": "spawned"}],
+            "end_triggers": [{"type": "level_enter", "to": 9}], "guards": []}}])
+    res = resolve_import(payload, existing)
+    assert res["name"] == "R"
+    assert res["reused"] == ["LBLJ"] and res["created"] == ["New"]
+    assert res["steps"][0]["candidates"][0] == {"type": "segment", "segment_id": 7}
+    assert res["steps"][1]["candidates"][0] == {"type": "segment", "create_index": 0}
+    assert len(res["to_create"]) == 1 and res["to_create"][0]["name"] == "New"
+
+
+def test_resolve_import_dedupes_repeated_new_segment():
+    payload = _payload(
+        [{"type": "segment", "segment": {"name": "Dup", "start_triggers": [],
+                                         "end_triggers": [], "guards": []}}],
+        [{"type": "segment", "segment": {"name": "Dup", "start_triggers": [],
+                                         "end_triggers": [], "guards": []}}])
+    res = resolve_import(payload, [])
+    assert len(res["to_create"]) == 1                      # created once
+    assert res["steps"][0]["candidates"][0]["create_index"] == 0
+    assert res["steps"][1]["candidates"][0]["create_index"] == 0
+
+
+def test_resolve_import_keeps_star_candidates():
+    res = resolve_import(_payload([{"type": "star", "course": 2, "star": 0}]), [])
+    assert res["steps"][0]["candidates"][0] == {"type": "star", "course": 2, "star": 0}
+
+
+def test_resolve_import_rejects_bad_kind_or_version():
+    with pytest.raises(ValueError):
+        resolve_import({"kind": "nope", "version": 1, "name": "R",
+                        "steps": [{"need": 1, "candidates": []}]}, [])
+    with pytest.raises(ValueError):
+        resolve_import({"kind": "sm64-route", "version": 99, "name": "R",
+                        "steps": [{"need": 1, "candidates": []}]}, [])

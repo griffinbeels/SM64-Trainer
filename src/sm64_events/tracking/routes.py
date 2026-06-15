@@ -123,6 +123,72 @@ def export_route(name: str, steps: list, segment_defs: dict) -> dict:
             "name": name, "steps": out_steps}
 
 
-# Stub — implemented in Task 5.
+def _segment_matches(emb: dict, existing: dict) -> bool:
+    return (existing["name"] == emb["name"]
+            and existing["start_triggers"] == emb["start_triggers"]
+            and existing["end_triggers"] == emb["end_triggers"]
+            and existing.get("guards", []) == emb.get("guards", []))
+
+
 def resolve_import(payload: dict, existing_defs: list) -> dict:
-    raise NotImplementedError
+    """Pure reconciliation of an imported route against the local segment list.
+
+    Returns {name, steps, to_create, reused, created}:
+      - steps: ready to persist EXCEPT segment candidates carry either
+        {"type":"segment","segment_id":<existing id>} (exact match reused) or
+        {"type":"segment","create_index": i} (service creates to_create[i] then
+        rewrites these to a real segment_id).
+      - to_create: unique embedded segment defs with no local exact match.
+      - reused / created: segment-name lists for the dry-run preview.
+    Raises ValueError on a bad envelope or malformed step."""
+    if payload.get("kind") != ROUTE_EXPORT_KIND:
+        raise ValueError("not an sm64-route export")
+    if payload.get("version") != ROUTE_EXPORT_VERSION:
+        raise ValueError(f"unsupported route version {payload.get('version')!r}")
+    name = str(payload.get("name", "")).strip()
+    if not name:
+        raise ValueError("import is missing a route name")
+    steps_in = payload.get("steps")
+    if not isinstance(steps_in, list) or not steps_in:
+        raise ValueError("import has no steps")
+
+    to_create, reused, created, out_steps = [], [], [], []
+    for step in steps_in:
+        if not isinstance(step, dict) or not isinstance(step.get("candidates"), list):
+            raise ValueError("each step needs a candidates list")
+        cands = []
+        for c in step["candidates"]:
+            if not isinstance(c, dict):
+                raise ValueError("each candidate must be an object")
+            if c.get("type") == "segment":
+                emb = c.get("segment")
+                if not isinstance(emb, dict) or not str(emb.get("name", "")).strip():
+                    raise ValueError("embedded segment is missing its definition")
+                emb_def = {"name": emb["name"],
+                           "start_triggers": emb.get("start_triggers", []),
+                           "end_triggers": emb.get("end_triggers", []),
+                           "guards": emb.get("guards", [])}
+                match = next((e for e in existing_defs
+                              if _segment_matches(emb_def, e)), None)
+                if match is not None:
+                    cands.append({"type": "segment", "segment_id": match["id"]})
+                    reused.append(emb_def["name"])
+                else:
+                    idx = next((i for i, d in enumerate(to_create)
+                                if _segment_matches(emb_def, d)), None)
+                    if idx is None:
+                        idx = len(to_create)
+                        to_create.append(emb_def)
+                        created.append(emb_def["name"])
+                    cands.append({"type": "segment", "create_index": idx})
+            elif c.get("type") == "star":
+                cands.append({"type": "star", "course": c.get("course"),
+                              "star": c.get("star")})
+            else:
+                raise ValueError(f"unknown candidate type {c.get('type')!r}")
+        out_step = {"need": step.get("need", 1), "candidates": cands}
+        if step.get("label") is not None:
+            out_step["label"] = step["label"]
+        out_steps.append(out_step)
+    return {"name": name, "steps": out_steps, "to_create": to_create,
+            "reused": reused, "created": created}
