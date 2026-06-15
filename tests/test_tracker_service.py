@@ -869,3 +869,77 @@ def test_import_rejects_bad_envelope(tmp_path):
     with pytest.raises(ValueError):
         asyncio.run(svc.import_route({"kind": "nope", "version": 1, "name": "x",
                                       "steps": [{"need": 1, "candidates": []}]}))
+
+
+# -- runs (Phase D) -----------------------------------------------------------
+
+def _route_with(db, svc):
+    seed_id(db, "LBLJ")  # ensure LBLJ seed is present (side-effect: confirms db seeded)
+    return asyncio.run(svc.create_route({"name": "Run R", "steps": [
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}))
+
+
+def test_start_run_journals_and_arms(tmp_path):
+    db, svc, sent = make_rec(tmp_path)
+    rid = _route_with(db, svc)
+    asyncio.run(svc.start_run(rid))
+    ev_list = [e for e in db.events() if e.type == "run_started"]
+    assert len(ev_list) == 1
+    assert ev_list[-1].payload["route_id"] == rid
+    assert ev_list[-1].payload["route_name"] == "Run R"
+    assert ev_list[-1].payload["route_steps"][0]["need"] == 1
+    assert ev_list[-1].payload["start_offset_ms"] == 1360       # default
+    assert any(e.type == "run_started" for e in sent)           # broadcast too
+
+
+def test_full_run_persists_finished_row(tmp_path):
+    db, svc = make(tmp_path)
+    rid = _route_with(db, svc)
+    asyncio.run(svc.start_run(rid))
+    asyncio.run(svc.publish(ev("game_reset", 0)))
+    asyncio.run(svc.publish(star(900, course=2, star_id=0)))
+    [run] = db.runs()
+    assert run["status"] == "finished" and run["route_id"] == rid
+    assert run["is_pb"] is True
+
+
+def test_start_run_unknown_route_raises(tmp_path):
+    db, svc = make(tmp_path)
+    with pytest.raises(LookupError):
+        asyncio.run(svc.start_run(99999))
+
+
+def test_run_settings_get_and_update(tmp_path):
+    db, svc = make(tmp_path)
+    assert svc.run_settings()["start_offset_ms"] == 1360
+    asyncio.run(svc.update_run_settings({"start_offset_ms": 2000}))
+    assert svc.run_settings()["start_offset_ms"] == 2000
+    with pytest.raises(ValueError):
+        asyncio.run(svc.update_run_settings({"start_offset_ms": -5}))
+
+
+def test_runs_rebuild_on_restart(tmp_path):
+    db, svc = make(tmp_path)
+    rid = _route_with(db, svc)
+    asyncio.run(svc.start_run(rid))
+    asyncio.run(svc.publish(ev("game_reset", 0)))
+    asyncio.run(svc.publish(star(900, course=2, star_id=0)))
+    db2 = Database(tmp_path / "t.db")
+    svc2 = TrackerService(db2, Broadcaster())
+    asyncio.run(svc2.start())                  # replay re-derives + replace_runs
+    assert len(db2.runs()) == 1 and db2.runs()[0]["status"] == "finished"
+
+
+def test_run_finished_not_journaled(tmp_path):
+    """run_finished/run_aborted are broadcast-only: they must never appear in
+    db.events() (they are derived and the projector ignores them on replay —
+    like segment_armed/segment_disarmed)."""
+    db, svc = make(tmp_path)
+    rid = _route_with(db, svc)
+    asyncio.run(svc.start_run(rid))
+    asyncio.run(svc.publish(ev("game_reset", 0)))
+    asyncio.run(svc.publish(star(900, course=2, star_id=0)))
+    journaled_types = [e.type for e in db.events()]
+    assert "run_finished" not in journaled_types
+    assert "run_aborted" not in journaled_types
+    assert "run_progress" not in journaled_types

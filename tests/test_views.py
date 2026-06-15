@@ -826,3 +826,43 @@ def test_build_route_view_unknown_route_raises(tmp_path):
     db, svc = make(tmp_path)
     with pytest.raises(LookupError):
         build_route_view(db, 999)
+
+
+# -- run view + history (Task 7 Phase D) ----------------------------------------
+
+def test_build_run_view_active_with_pb_and_gold(tmp_path):
+    from sm64_events.tracking.views import build_run_view
+    db, svc = make(tmp_path)
+    lblj = next(d["id"] for d in db.segment_defs() if d["name"] == "LBLJ")
+    rid = asyncio.run(svc.create_route({"name": "RV", "steps": [
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]},
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]}]}))
+    asyncio.run(svc.start_run(rid))
+    asyncio.run(svc.publish(ev("game_reset", 0)))
+    view = build_run_view(db, svc)
+    assert view["active"] is not None
+    assert view["active"]["current_step"] == 0
+    assert view["active"]["start_offset_ms"] == 1360
+    # step display names resolved for the live view
+    assert view["active"]["steps"][0]["display"] == "Chip off Whomp's Block"
+    assert "pb" in view and "gold" in view       # comparison present (None/empty ok)
+
+
+def test_build_run_view_idle_when_no_run(tmp_path):
+    from sm64_events.tracking.views import build_run_view
+    db, svc = make(tmp_path)
+    assert build_run_view(db, svc)["active"] is None
+
+
+def test_build_run_history_filters_finished(tmp_path):
+    from sm64_events.tracking.views import build_run_history
+    db, svc = make(tmp_path)
+    rid = asyncio.run(svc.create_route({"name": "H", "steps": [
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}))
+    asyncio.run(svc.start_run(rid))
+    asyncio.run(svc.publish(ev("game_reset", 0)))
+    asyncio.run(svc.publish(star(900, course=2, star_id=0)))
+    hist = build_run_history(db, route_id=rid)
+    assert len(hist["runs"]) == 1
+    assert hist["runs"][0]["display_total"] is not None   # total + offset, formatted
+    assert hist["pb"] is not None

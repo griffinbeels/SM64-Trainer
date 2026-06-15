@@ -609,3 +609,38 @@ def test_route_export_import_endpoints(tmp_path):
         assert prev.status_code == 200 and prev.json()["reused"] == ["LBLJ"]
         created = client.post("/api/routes/import", json={"payload": exp})
         assert created.status_code == 200 and "id" in created.json()
+
+
+# -- run lifecycle + state + history + settings (Task 8 Phase D) ---------------
+
+def test_run_lifecycle_endpoints(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        lblj = _lblj(db)
+        rid = client.post("/api/routes", json={"name": "R", "steps": [
+            {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}).json()["id"]
+        assert client.post("/api/run/start", json={"route_id": rid}).status_code == 200
+        assert client.get("/api/run").json()["active"] is None      # armed, not started
+        assert client.post("/api/run/end").status_code == 200
+
+
+def test_run_start_unknown_route_404(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        assert client.post("/api/run/start", json={"route_id": 9999}).status_code == 404
+
+
+def test_run_settings_endpoints(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        assert client.get("/api/run/settings").json()["start_offset_ms"] == 1360
+        assert client.put("/api/run/settings", json={"start_offset_ms": 2000}).status_code == 200
+        assert client.get("/api/run/settings").json()["start_offset_ms"] == 2000
+        assert client.put("/api/run/settings", json={"start_offset_ms": -1}).status_code == 409
+
+
+def test_run_history_endpoint(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        assert client.get("/api/run/history").status_code == 200
+        assert "runs" in client.get("/api/run/history").json()

@@ -390,6 +390,76 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     }
 
 
+def _fmt_ms(ms):
+    if ms is None:
+        return None
+    s, ms = divmod(int(ms), 1000)
+    m, s = divmod(s, 60)
+    return f"{m}:{s:02d}.{ms:03d}"
+
+
+def _resolve_cands(cands, seg_names):
+    out = []
+    for c in cands:
+        if c["type"] == "segment":
+            out.append({"kind": "segment", "segment_id": c["segment_id"],
+                        "display": seg_names.get(c["segment_id"],
+                                                 f"segment {c['segment_id']} (deleted)")})
+        else:
+            out.append({"kind": "star", "course": c["course"], "star": c["star"],
+                        "display": star_name(c["course"], c["star"])})
+    return out
+
+
+def build_run_view(db, service) -> dict:
+    """Live run state for the run panel: the active run (resolved step names +
+    elapsed) plus the route's PB total and gold/sum-of-best for comparison."""
+    from sm64_events.tracking.runs import pb_run, gold_splits
+    act = service.active_run()
+    seg_names = {d["id"]: d["name"] for d in db.segment_defs()}
+    offset = service.run_settings()["start_offset_ms"]
+    out = {"active": None, "pb": None, "gold": None,
+           "start_offset_ms": offset}
+    if act is not None:
+        steps_def = next((r["steps"] for r in db.routes()
+                          if r["id"] == act["route_id"]), [])
+        steps = []
+        for i, s in enumerate(act["steps"]):
+            cands = _resolve_cands(steps_def[i]["candidates"], seg_names) \
+                if i < len(steps_def) else []
+            steps.append({**s, "candidates": cands,
+                          "display": cands[0]["display"] if cands else "?",
+                          "elapsed_display": _fmt_ms(
+                              None if s["elapsed_ms"] is None
+                              else s["elapsed_ms"] + offset)})
+        out["active"] = {**act, "steps": steps}
+    if act is not None and act["route_id"] is not None:
+        runs = db.runs(route_id=act["route_id"])
+        pb = pb_run(runs)
+        steps_def = next((r["steps"] for r in db.routes()
+                          if r["id"] == act["route_id"]), [])
+        gold = gold_splits(runs, steps_def)
+        out["pb"] = {"total_ms": pb["total_ms"],
+                     "display": _fmt_ms(pb["total_ms"] + offset)} if pb else None
+        out["gold"] = {"sum_of_best": gold["sum_of_best"],
+                       "display": _fmt_ms(None if gold["sum_of_best"] is None
+                                          else gold["sum_of_best"] + offset)}
+    return out
+
+
+def build_run_history(db, route_id: int | None = None) -> dict:
+    """Saved runs (optionally one route) + the PB. display_total folds in the
+    per-run offset; finished runs flagged is_pb power the progression graph."""
+    from sm64_events.tracking.runs import pb_run
+    runs = db.runs(route_id=route_id)
+    out_runs = [{**r, "display_total": _fmt_ms(None if r["total_ms"] is None
+                                               else r["total_ms"] + r["start_offset_ms"])}
+                for r in runs]
+    pb = pb_run(runs)
+    return {"runs": out_runs,
+            "pb": {"total_ms": pb["total_ms"]} if pb else None}
+
+
 def build_route_view(db, route_id: int) -> dict:
     """Resolve a route for display: each step's candidates get names, plus the
     per-step success rate and cumulative product (tracking/routes.route_stats).

@@ -1098,6 +1098,28 @@ def test_basement_respawn_does_not_arm_lobby_anchored_lblj():
     assert [a for a in closed if a.segment_id == 1] == []
 
 
+def test_replay_derives_finished_run(tmp_path):
+    from sm64_events.tracking.projection import replay
+    from sm64_events.storage.db import Database
+    db = Database(tmp_path / "t.db")
+    sid = db.insert_session("2026-06-14T00:00:00Z")
+    from sm64_events.core.events import Event
+    from datetime import datetime, timezone
+    T = datetime(2026, 6, 14, tzinfo=timezone.utc)
+    steps = [{"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]
+    db.append_event(sid, 1, Event(type="run_started", frame=0, timestamp_utc=T,
+        payload={"route_id": 1, "route_name": "R", "route_steps": steps,
+                 "mode": "forgiving", "start_offset_ms": 1360}))
+    db.append_event(sid, 2, Event(type="game_reset", frame=0, timestamp_utc=T,
+        payload={}))
+    db.append_event(sid, 3, Event(type="star_collected", frame=0, timestamp_utc=T,
+        payload={"course_id": 2, "star_id": 0, "igt_frames": 100}))
+    attempts, proj = replay(db.events())
+    runs = proj.finished_runs()
+    assert len(runs) == 1 and runs[0].status == "finished"
+    assert proj.active_run_view() is None
+
+
 def test_game_reset_resets_star_count_knowledge_for_guards():
     from sm64_events.tracking.segments import SegmentDef
     guarded = SegmentDef(id=2, name="g", enabled=True,

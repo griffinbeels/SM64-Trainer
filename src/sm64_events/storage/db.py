@@ -139,6 +139,27 @@ MIGRATIONS = [
       updated_utc TEXT NOT NULL
     );
     """,
+    # v8 — runs: full-game run history (spec 2026-06-14, Phase D). Cache like
+    # attempts, rebuilt from the journal (run_started + completions + resets).
+    # route_steps/splits are JSON; id = the game_reset journal id that started
+    # the run. Times stored offset-free; display adds start_offset_ms.
+    """
+    CREATE TABLE IF NOT EXISTS runs (
+      id INTEGER PRIMARY KEY,
+      route_id INTEGER,
+      route_name TEXT NOT NULL,
+      route_steps TEXT NOT NULL,
+      mode TEXT NOT NULL,
+      status TEXT NOT NULL,
+      reached_step INTEGER NOT NULL,
+      total_ms INTEGER,
+      start_offset_ms INTEGER NOT NULL DEFAULT 0,
+      started_utc TEXT NOT NULL,
+      ended_utc TEXT NOT NULL,
+      is_pb INTEGER NOT NULL DEFAULT 0,
+      splits TEXT NOT NULL
+    );
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
@@ -396,6 +417,59 @@ class Database:
             self._conn.commit()
         if cur.rowcount == 0:
             raise LookupError(f"route {route_id} not found")
+
+    # -- runs (history cache) ------------------------------------------------
+    _RUN_COLS = ("id", "route_id", "route_name", "route_steps", "mode",
+                 "status", "reached_step", "total_ms", "start_offset_ms",
+                 "started_utc", "ended_utc", "is_pb", "splits")
+
+    def _run_params(self, r: dict) -> tuple:
+        return (r["id"], r["route_id"], r["route_name"],
+                json.dumps(r["route_steps"]), r["mode"], r["status"],
+                r["reached_step"], r["total_ms"], r["start_offset_ms"],
+                r["started_utc"], r["ended_utc"], int(r["is_pb"]),
+                json.dumps(r["splits"]))
+
+    def insert_run(self, r: dict) -> None:
+        with self._lock:
+            self._conn.execute(
+                f"INSERT OR REPLACE INTO runs ({','.join(self._RUN_COLS)})"
+                f" VALUES ({','.join('?' * len(self._RUN_COLS))})",
+                self._run_params(r))
+            self._conn.commit()
+
+    upsert_run = insert_run   # same INSERT OR REPLACE (id is stable)
+
+    def replace_runs(self, runs: list) -> None:
+        with self._lock:
+            self._conn.execute("DELETE FROM runs")
+            self._conn.executemany(
+                f"INSERT INTO runs ({','.join(self._RUN_COLS)})"
+                f" VALUES ({','.join('?' * len(self._RUN_COLS))})",
+                [self._run_params(r) for r in runs])
+            self._conn.commit()
+
+    def runs(self, route_id: int | None = None,
+             finished_only: bool = False) -> list[dict]:
+        q, params = "SELECT * FROM runs", []
+        where = []
+        if route_id is not None:
+            where.append("route_id=?"); params.append(route_id)
+        if finished_only:
+            where.append("status='finished'")
+        if where:
+            q += " WHERE " + " AND ".join(where)
+        q += " ORDER BY id"
+        with self._lock:
+            rows = self._conn.execute(q, params).fetchall()
+        return [{"id": r["id"], "route_id": r["route_id"],
+                 "route_name": r["route_name"],
+                 "route_steps": json.loads(r["route_steps"]), "mode": r["mode"],
+                 "status": r["status"], "reached_step": r["reached_step"],
+                 "total_ms": r["total_ms"], "start_offset_ms": r["start_offset_ms"],
+                 "started_utc": r["started_utc"], "ended_utc": r["ended_utc"],
+                 "is_pb": bool(r["is_pb"]), "splits": json.loads(r["splits"])}
+                for r in rows]
 
     # -- pbs -----------------------------------------------------------------
     def insert_pb(self, course_id: int | None, star_id: int | None,
