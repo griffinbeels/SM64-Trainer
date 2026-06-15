@@ -17,8 +17,10 @@ import urllib.request
 from collections.abc import Callable
 from ctypes import wintypes
 
+from sm64_events.core.paths import server_port
+
 HOST = "127.0.0.1"
-PORT = 8064
+PORT = server_port()
 
 _TCP_TABLE_OWNER_PID_ALL = 5
 _AF_INET = 2

@@ -40,3 +40,19 @@ def test_bundled_ffmpeg_found_when_frozen(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
     (tmp_path / "ffmpeg.exe").write_text("x")
     assert paths.bundled_ffmpeg() == str(tmp_path / "ffmpeg.exe")
+
+
+def test_server_port_frozen_vs_dev(monkeypatch):
+    monkeypatch.delenv("SM64_PORT", raising=False)
+    monkeypatch.setattr(paths, "is_frozen", lambda: True)
+    assert paths.server_port() == 8064
+    monkeypatch.setattr(paths, "is_frozen", lambda: False)
+    assert paths.server_port() == 8065
+
+
+def test_server_port_env_override(monkeypatch):
+    monkeypatch.setenv("SM64_PORT", "9000")
+    monkeypatch.setattr(paths, "is_frozen", lambda: False)
+    assert paths.server_port() == 9000
+    monkeypatch.setattr(paths, "is_frozen", lambda: True)
+    assert paths.server_port() == 9000

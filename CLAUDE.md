@@ -25,6 +25,11 @@ uv run python tools/verify_addresses.py              # live gate (needs PJ64 + R
 uv run python tools/dedupe_journal.py data/tracker.db          # scan double-journaled events (read-only); add --fix to repair (server must be stopped)
 ```
 
+**Server port:** `core/paths.py::server_port()` is the single source — `SM64_PORT`
+env override, else **8064 when frozen (the exe), 8065 from source (dev)**. This
+is enforced so a dev server and a built exe never collide on one port (the
+exe's single-instance takeover would otherwise fight a dev server on :8064).
+
 ## Module map — where to change what
 
 | To change... | Edit |

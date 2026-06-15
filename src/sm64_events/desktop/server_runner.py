@@ -10,13 +10,15 @@ import urllib.request
 
 import uvicorn
 
+from sm64_events.core.paths import server_port
+
 
 class ServerRunner:
-    def __init__(self, app, host: str = "127.0.0.1", port: int = 8064):
+    def __init__(self, app, host: str = "127.0.0.1", port: int | None = None):
         self.host = host
-        self.port = port
+        self.port = server_port() if port is None else port
         self._server = uvicorn.Server(uvicorn.Config(
-            app, host=host, port=port, log_config=None,
+            app, host=host, port=self.port, log_config=None,
             timeout_graceful_shutdown=3))
         self._thread: threading.Thread | None = None
         # Default: the admin shutdown endpoint stops the server. The desktop

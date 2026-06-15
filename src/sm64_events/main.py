@@ -4,7 +4,7 @@ import logging
 import sys
 
 from sm64_events.core.logging_setup import configure_logging
-from sm64_events.core.paths import bundled_ffmpeg, db_path, instance_lock_path
+from sm64_events.core.paths import bundled_ffmpeg, db_path, instance_lock_path, server_port
 from sm64_events.detectors.anchors import AnchorDetector
 from sm64_events.detectors.area import AreaChangeDetector
 from sm64_events.detectors.death import DeathDetector
@@ -177,11 +177,11 @@ def run() -> None:
     import os
     if os.environ.pop("SM64_RESTART", None):
         # A restart relaunch: the old process is exiting — wait for it to
-        # free :8064 so build()'s instance-lock acquisition hands off cleanly.
+        # free the port so build()'s instance-lock acquisition hands off cleanly.
         from sm64_events.core.relaunch import wait_port_free
         wait_port_free()
     import uvicorn
-    uvicorn.run(get_app(), host="127.0.0.1", port=8064,
+    uvicorn.run(get_app(), host="127.0.0.1", port=server_port(),
                 timeout_graceful_shutdown=3)
 
 

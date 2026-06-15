@@ -34,7 +34,7 @@ That's it — no install, no Python, nothing else to set up.
 uv sync
 uv run python -m sm64_events.desktop    # the desktop GUI
 # or, headless / browser-only:
-uv run python -m sm64_events.main        # then open http://127.0.0.1:8064/
+uv run python -m sm64_events.main        # then open http://127.0.0.1:8065/ (dev port; the packaged exe uses 8064)
 ```
 
 Run from the repo root (from source, `data/` is created relative to cwd).

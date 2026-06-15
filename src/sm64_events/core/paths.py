@@ -20,6 +20,18 @@ def is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False))
 
 
+def server_port() -> int:
+    """TCP port the API/UI server binds. The packaged exe (frozen) uses the
+    canonical 8064 (the port external consumers/overlays expect); running from
+    source (dev) uses 8065, so a dev server and a built exe can never collide
+    on one port (single-instance takeover, bind conflicts). SM64_PORT
+    overrides either."""
+    override = os.environ.get("SM64_PORT")
+    if override:
+        return int(override)
+    return 8064 if is_frozen() else 8065
+
+
 def data_root() -> Path:
     """Base directory for all persisted state.
 
