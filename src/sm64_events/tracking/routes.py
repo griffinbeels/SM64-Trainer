@@ -42,8 +42,11 @@ def validate_route(d: dict) -> None:
     if not str(d.get("name", "")).strip():
         raise ValueError("name is required")
     steps = d.get("steps")
-    if not isinstance(steps, list) or not steps:
-        raise ValueError("steps must be a non-empty list")
+    if not isinstance(steps, list):
+        raise ValueError("steps must be a list")
+    # An empty route is a valid DRAFT: the builder creates the route empty and
+    # adds steps afterward (live report 2026-06-14: POST {steps:[]} must not
+    # 409). resolve_import keeps its OWN non-empty check for shared routes.
     for step in steps:
         if not isinstance(step, dict):
             raise ValueError("each step must be an object")

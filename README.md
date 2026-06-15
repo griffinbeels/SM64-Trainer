@@ -140,6 +140,11 @@ All endpoints are under `/api`. JSON in, JSON out.
 
 **Segments:** A segment is a timed stretch defined by a start trigger (any-of list) and an end trigger (any-of list), with optional context guards. Ten built-in segments are seeded on first run (LBLJ, MIPS Clip, Lakitu Skip, BitS Entry, BitDW/BitFS/BitS Pipe Entry, Bowser 1/2/3); all are editable. The builder GUI lives on the Segments tab — it is 100% vocabulary-driven (`GET /api/segments/vocab` supplies types, param schemas, and level/area enums). Segment attempts are **RTA-only** (`igt_frames` is always null); they share the full attempt machinery (outcomes, timeline, PBs, stats, markers, progress). Definitions are retroactive: creating or editing a definition via `POST/PUT /api/segments` triggers a full re-projection so every past occurrence in the journal surfaces immediately. Disabled definitions stay targetable for history review. Segment attempt ids are offset from star attempt ids by `10^10 × def_id` — stable across rebuilds and unique per definition. While a segment is armed, it pins to the top of the practice page (most recent arm wins); the pin is sticky — it persists after a disarm until another segment arms; the practice target is unaffected. **A reset during an armed segment records the failure and immediately re-arms — each reset is one attempt** (Usamune respawns at the level's last entrance, which equals the segment's start position; live-gate amendment 2026-06-12). This applies to PLAYER actions only — involuntary section resets (level/area loads, walk-through doors) are classified as load echoes and touch nothing; menu warps count as player actions (the pause streak before the anchor is the discriminator). Replay clip spans equal the attempt's `started_utc → ended_utc` trigger boundaries ± padding.
 
+- **Routes tab** — build an ordered route of stars/segments (with "complete K
+  of N" group steps), see per-step and cumulative success rates, and
+  import/export a route as copy-pastable JSON to share. (Practice-focus and the
+  full-game run timer arrive in later phases.)
+
 **Error taxonomy:** `404` = no such attempt; `409` = attempt exists but is not valid for the
 operation (bad timer mode, already cleared, non-success outcome, missing clock, or — for
 `/api/pb/undo` — not the current PB);

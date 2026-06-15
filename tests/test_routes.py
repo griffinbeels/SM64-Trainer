@@ -34,9 +34,15 @@ def test_validate_route_rejects_empty_name():
             {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]})
 
 
-def test_validate_route_rejects_empty_steps():
+def test_validate_route_allows_empty_steps():
+    # an empty route is a valid draft — the builder creates it empty then adds
+    # steps (live report 2026-06-14: POST {steps:[]} must not 409)
+    validate_route({"name": "R", "steps": []})
+
+
+def test_validate_route_rejects_non_list_steps():
     with pytest.raises(ValueError, match="steps"):
-        validate_route({"name": "R", "steps": []})
+        validate_route({"name": "R", "steps": "nope"})
 
 
 def test_validate_route_rejects_need_out_of_range():
