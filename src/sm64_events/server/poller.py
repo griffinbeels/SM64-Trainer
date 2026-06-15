@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 from sm64_events.core.events import Event
 from sm64_events.core.snapshot import GameSnapshot, SnapshotReader
+from sm64_events.detectors.anchors import BOOT_TIMER_MAX
 from sm64_events.memory.base import MemoryReadError
 
 log = logging.getLogger("sm64.poller")
@@ -38,6 +39,10 @@ class Poller:
         self.reader = reader or SnapshotReader(memory)
         self.latest: GameSnapshot | None = None
         self._prev: GameSnapshot | None = None
+        # last good global_timer, kept ACROSS a detach (unlike _prev) so a
+        # console reset (F1) that detaches us mid-reset is still recognised on
+        # reattach — see tick().
+        self._last_timer: int | None = None
         self.paused = False  # session pause: run() idles — no reads, no events
 
     def set_paused(self, paused: bool) -> None:
@@ -72,6 +77,25 @@ class Poller:
             self._prev = None
             self.latest = None
             return
+        # Reset-across-reattach synthesis (live gate 2026-06-15): an F1 console
+        # reset makes RDRAM briefly implausible/unreadable, so the poller
+        # detaches and reattaches — which nulls _prev and breaks the consecutive
+        # pair GameResetDetector needs to see the backward-into-boot jump (live
+        # journal: gGlobalTimer 206 -> [detach/reattach] -> 96, game_reset never
+        # fired). _last_timer survives the gap: when the stream is freshly
+        # (re)established (_prev is None) and the timer dropped from above the
+        # boot range into it, emit the game_reset that was lost. In the no-detach
+        # case _prev is not None, so GameResetDetector fires instead — exactly
+        # one of the two fires (mirrors lifecycle.py / anchors.py).
+        # (Residual edge: if reattach lands AFTER boot, timer >= BOOT_TIMER_MAX,
+        # so a slow reattach can still miss it — acceptable; F1 reattach observed
+        # in the boot range.)
+        if (self._prev is None and self._last_timer is not None
+                and self._last_timer >= BOOT_TIMER_MAX
+                and curr.global_timer < BOOT_TIMER_MAX):
+            await self.broadcaster.publish(Event(
+                type="game_reset", frame=curr.global_timer,
+                timestamp_utc=curr.wall_time_utc, payload={}))
         if self._prev is not None:
             for detector in self.detectors:
                 try:
@@ -84,6 +108,7 @@ class Poller:
                     await self.broadcaster.publish(event)
         self._prev = curr
         self.latest = curr
+        self._last_timer = curr.global_timer
 
     def _probe(self) -> bool:
         """Post-attach layout check: refuse to serve a ROM whose reads are

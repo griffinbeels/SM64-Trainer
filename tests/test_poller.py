@@ -171,3 +171,31 @@ def test_probe_rejects_read_error_and_detaches():
                reader=ScriptedReader([MemoryReadError("gone")]))
     assert p._probe() is False
     assert mem.detached is True
+
+
+def test_reset_during_reattach_synthesizes_game_reset():
+    """F1 console reset makes RDRAM briefly implausible/unreadable -> the poller
+    detaches and reattaches, which nulls _prev and breaks the consecutive pair
+    GameResetDetector needs. _last_timer survives the gap, so a fresh read that
+    dropped from above the boot range (206) into it (96 < BOOT_TIMER_MAX=120)
+    synthesizes the game_reset that was lost (live gate 2026-06-15)."""
+    b = RecordingBroadcaster()
+    p = Poller(StubMemory(), [EchoDetector()], b,
+               reader=ScriptedReader([snap(206), MemoryReadError("reset"), snap(96)]))
+    asyncio.run(p.tick())            # establish _prev=206, _last_timer=206
+    asyncio.run(p.tick())            # read error -> detach, _prev=None
+    asyncio.run(p.tick())            # snap(96): boot-range after 206 -> game_reset
+    gr = [e for e in b.events if e.type == "game_reset"]
+    assert len(gr) == 1 and gr[0].frame == 96
+    # the reattach snapshot has no prev pair, so NO detector (tick) event fires
+    assert not any(e.type == "tick" for e in b.events)
+
+
+def test_no_game_reset_when_reattach_stays_mid_game():
+    """A detach/reattach that stays mid-game (closed + reopened PJ64 mid-level)
+    must NOT synthesize a reset — only a drop INTO the boot range counts."""
+    b = RecordingBroadcaster()
+    p = Poller(StubMemory(), [EchoDetector()], b,
+               reader=ScriptedReader([snap(5000), MemoryReadError("x"), snap(5000)]))
+    asyncio.run(p.tick()); asyncio.run(p.tick()); asyncio.run(p.tick())
+    assert not any(e.type == "game_reset" for e in b.events)
