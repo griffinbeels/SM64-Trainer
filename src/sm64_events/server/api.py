@@ -13,7 +13,8 @@ from sm64_events.links import star_links
 from sm64_events.stats.registry import (registry_meta, selection_id,
                                         selection_order)
 from sm64_events.tracking.segments import vocab
-from sm64_events.tracking.views import build_route_view, build_session_view
+from sm64_events.tracking.views import (build_route_view, build_run_history,
+                                        build_run_view, build_session_view)
 
 
 class TargetBody(BaseModel):
@@ -121,6 +122,13 @@ class RoutePatch(BaseModel):
 
 class ImportBody(BaseModel):
     payload: dict
+
+
+class RunStartBody(BaseModel):
+    route_id: int
+
+class RunSettingsBody(BaseModel):
+    start_offset_ms: int
 
 
 def _http(e: Exception) -> HTTPException:
@@ -269,6 +277,47 @@ def create_api_router(service) -> APIRouter:
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True}
+
+    @router.post("/run/start")
+    async def run_start(body: RunStartBody):
+        try:
+            await service.start_run(body.route_id)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True}
+
+    @router.post("/run/end")
+    async def run_end():
+        try:
+            await service.end_run()
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True}
+
+    @router.get("/run/history")
+    def run_history(route_id: int | None = None):
+        if service.db is None:
+            raise HTTPException(503, "database unavailable")
+        return build_run_history(service.db, route_id=route_id)
+
+    @router.get("/run/settings")
+    def run_settings_get():
+        if service.db is None:
+            raise HTTPException(503, "database unavailable")
+        return service.run_settings()
+
+    @router.put("/run/settings")
+    async def run_settings_put(body: RunSettingsBody):
+        try:
+            return await service.update_run_settings(body.model_dump())
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+
+    @router.get("/run")
+    def run_state():
+        if service.db is None:
+            raise HTTPException(503, "database unavailable")
+        return build_run_view(service.db, service)
 
     @router.post("/target")
     async def target(body: TargetBody):
