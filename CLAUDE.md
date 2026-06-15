@@ -66,6 +66,10 @@ exe's single-instance takeover would otherwise fight a dev server on :8064).
 | Route CRUD + import/export commands | `tracking/service.py` — create/update/delete_route (segment-existence check), export_route, import_route (dry-run preview); broadcast-only `routes_changed` |
 | Route storage | `storage/db.py` — `routes` table (migration v7) + routes/insert_route/update_route/delete_route |
 | Route REST surface | `server/api.py` — `/api/routes` CRUD, `/api/routes/{id}/export`, `/api/routes/import?dry_run=` |
+| Run engine (forgiving-RTA full-game timer) | `tracking/runs.py` — pure `RunTracker`: arm on `run_started`, start the clock on the next `game_reset` (F1) + `start_offset`, forgiving splits (wall-clock per step, retries roll up), K-of-N no-dup completion, abort/restart on `game_reset`, finish on the last step; `pb_run`/`gold_splits` helpers. Run id = the starting game_reset journal id; times stored offset-free (display adds offset) |
+| Run projection wiring | `tracking/projection.py` — `Projector` embeds `RunTracker`, feeds it `(ev, closed)`; `finished_runs()`/`active_run_view()`/`run_notices`. Runs re-derive on replay (cache like attempts) |
+| Run storage | `storage/db.py` — `runs` table (migration v8) + insert/upsert/replace/`runs(route_id?,finished_only?)`; run settings in `ui_state` (`start_offset_ms`, default 1360) |
+| Run lifecycle + view + API | `tracking/service.py` (`start_run`/`end_run`/`run_settings`; persists runs in start/_reproject/_track; `run_started`/`run_ended` journaled, `run_finished`/`run_aborted`/`run_progress` broadcast-only) · `tracking/views.py` (`build_run_view`/`build_run_history`) · `server/api.py` (`/api/run/*`) |
 | Single-instance guard (broadcast-only fallback) | `storage/instance_lock.py` — Windows msvcrt file-region lock; held for process lifetime |
 | Duplicate-event detection logic | `storage/dedupe.py` — pure fn; used by `tools/dedupe_journal.py` |
 | Journal deduplication repair tool | `tools/dedupe_journal.py` — scan (read-only) or --fix (delete duplicates + re-project; server must be stopped) |
