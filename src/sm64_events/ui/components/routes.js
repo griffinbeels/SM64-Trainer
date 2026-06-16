@@ -9,6 +9,7 @@ import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
+import { ClauseRow } from "./segments.js";
 
 const html = htm.bind(h);
 const pct = (r) => `${Math.round((r ?? 0) * 100)}%`;
@@ -143,13 +144,18 @@ export function Routes({ t }) {
   const [selId, setSelId] = useState(null);
   const [view, setView] = useState(null);
   const [segs, setSegs] = useState([]);
+  const [vocab, setVocab] = useState(null);
   const [err, setErr] = useState(null);
   const catalog = (t.view && t.view.catalog) || { courses: [] };
 
   const loadRoutes = async () => { const rs = await getJSON("/api/routes"); setRoutes(rs); return rs; };
   const loadView = async (id) =>
     setView(id == null ? null : await getJSON(`/api/routes/${id}`).catch(() => null));
-  useEffect(() => { loadRoutes(); getJSON("/api/segments").then(setSegs); }, []);
+  useEffect(() => {
+    loadRoutes();
+    getJSON("/api/segments").then(setSegs);
+    getJSON("/api/segments/vocab").then(setVocab).catch(() => {});
+  }, []);
   // re-fetch the resolved view whenever the selection OR the raw routes change
   // (a saveSteps PUT reloads routes -> this refreshes the % columns).
   useEffect(() => { loadView(selId); }, [selId, routes]);
@@ -189,6 +195,10 @@ export function Routes({ t }) {
     try { await send("DELETE", `/api/routes/${selId}`); setSelId(null); await loadRoutes(); }
     catch (e) { setErr(String(e)); }
   }
+  async function saveStartCondition(c) {
+    try { setErr(null); await send("PUT", `/api/routes/${selId}`, { start_condition: c }); await loadRoutes(); }
+    catch (e) { setErr(String(e)); }
+  }
 
   return html`<div>
     <div class="bar">
@@ -203,6 +213,12 @@ export function Routes({ t }) {
     </div>
     ${err ? html`<div class="badx">${err}</div>` : null}
     ${selected && view ? html`<div class="routebuilder">
+      ${vocab ? html`<div class="routestart">
+        <span class="meta">Run starts when:</span>
+        <${ClauseRow} clause=${view.start_condition || { type: "reset_game" }}
+          types=${vocab.triggers} vocab=${vocab}
+          onChange=${(c) => saveStartCondition(c)} onRemove=${() => {}} />
+      </div>` : null}
       ${selected.steps.length === 0
         ? html`<div class="meta">No steps yet — add one below.</div>` : null}
       ${selected.steps.map((step, i) => {
