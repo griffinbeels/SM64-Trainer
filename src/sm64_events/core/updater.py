@@ -27,8 +27,8 @@ log = logging.getLogger("sm64.updater")
 
 DEFAULT_REPO = "griffinbeels/SM64-Trainer"
 GITHUB_API = "https://api.github.com"
-EXE_NAME = "sm64_tracker.exe"
-_UA = "sm64_tracker-updater"
+EXE_NAME = "SM64Trainer.exe"
+_UA = "SM64Trainer-updater"
 _CHECK_TTL_S = 3600.0
 
 
@@ -103,7 +103,7 @@ def check_for_update(current: str, *, http=urllib.request.urlopen,
 
 def download_and_stage(info: "UpdateInfo", exe_dir: Path, *,
                        http=urllib.request.urlopen, progress=None) -> Path:
-    """Stream the new exe to <exe_dir>/sm64_tracker.exe.new, verify SHA-256
+    """Stream the new exe to <exe_dir>/SM64Trainer.exe.new, verify SHA-256
     against the published .sha256, return the staged path. Raises ValueError on
     a hash mismatch (caller keeps the current exe)."""
     staged = exe_dir / (EXE_NAME + ".new")
@@ -159,14 +159,25 @@ def apply_update(staged: Path, current_exe: Path, *, retries: int = 5,
             sleep(0.5)
 
 
-def cleanup_old(exe_dir: Path) -> None:
-    """Delete the backup left by a prior update (now unlocked). Targets the
-    EXACT name (not a `*.old` glob) so a shared install dir's foreign .old
-    files are never touched."""
-    try:
-        (exe_dir / (EXE_NAME + ".old")).unlink(missing_ok=True)
-    except OSError:
-        pass  # still locked (rare) -> retry next launch
+def cleanup_old(exe_path: Path, *, attempts: int = 1, sleep=time.sleep) -> bool:
+    """Delete the `.old` backup of `exe_path` left by a prior self-update.
+    Derives ``<name>.old`` from the ACTUAL running-exe path (not a glob or a
+    constant) so a shared dir's foreign .old files are never touched and any
+    future exe rename stays consistent with apply_update. Retries up to
+    `attempts` times (1 s apart): right after a restart the OLD process — which
+    executes FROM the .old file — is often still alive and locking it. Returns
+    True once the backup is gone."""
+    old = exe_path.parent / (exe_path.name + ".old")
+    for i in range(attempts):
+        if not old.exists():
+            return True
+        try:
+            old.unlink()
+            return True
+        except OSError:
+            if i < attempts - 1:
+                sleep(1.0)
+    return False
 
 
 def exe_dir_writable(exe_dir: Path) -> bool:
@@ -297,5 +308,14 @@ class UpdateService:
         self._progress = max(0.0, min(1.0, frac))
 
     def cleanup_old_exe(self) -> None:
-        if self._frozen:
-            cleanup_old(self._exe.parent)
+        """Background-reap the prior update's `.old` backup. Off-thread with
+        bounded retries: right after a self-update restart the OLD process
+        (running FROM the .old file) is often still tearing down and locking it,
+        so one attempt at startup is too early — without retries the .old
+        lingered until the NEXT launch, leaving a visible artifact next to the
+        exe."""
+        if not self._frozen:
+            return
+        exe = self._exe
+        threading.Thread(target=lambda: cleanup_old(exe, attempts=60),
+                         name="update-cleanup", daemon=True).start()
