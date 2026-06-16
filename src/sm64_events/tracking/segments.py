@@ -355,6 +355,9 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                                                "state_loaded")
                 and ctx.level == p["level"]
                 and (p.get("area") is None or ctx.area == p["area"])),
+    TriggerType("reset_game", "The game resets (F1 / console reset)",
+                {}, "on F1 or console reset",
+                lambda p, ev, ctx: ev.type == "game_reset"),
 ]}
 
 

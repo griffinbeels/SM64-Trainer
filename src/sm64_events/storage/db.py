@@ -160,6 +160,12 @@ MIGRATIONS = [
       splits TEXT NOT NULL
     );
     """,
+    # v9 — per-route run-start condition (spec 2026-06-15). The run clock starts
+    # when this trigger fires; existing routes default to the game reset (F1).
+    """
+    ALTER TABLE routes ADD COLUMN start_condition TEXT NOT NULL
+      DEFAULT '{"type":"reset_game"}';
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
@@ -379,20 +385,24 @@ class Database:
                 "SELECT * FROM routes ORDER BY id").fetchall()
         return [{"id": r["id"], "name": r["name"],
                  "steps": json.loads(r["steps"]),
+                 "start_condition": json.loads(r["start_condition"]),
                  "created_utc": r["created_utc"],
                  "updated_utc": r["updated_utc"]} for r in rows]
 
-    def insert_route(self, name: str, steps: list, created_utc: str) -> int:
+    def insert_route(self, name: str, steps: list, created_utc: str,
+                     start_condition: dict | None = None) -> int:
+        sc = start_condition if start_condition is not None else {"type": "reset_game"}
         with self._lock:
             cur = self._conn.execute(
-                "INSERT INTO routes (name, steps, created_utc, updated_utc)"
-                " VALUES (?,?,?,?)",
-                (name, json.dumps(steps), created_utc, created_utc))
+                "INSERT INTO routes (name, steps, start_condition, created_utc, updated_utc)"
+                " VALUES (?,?,?,?,?)",
+                (name, json.dumps(steps), json.dumps(sc), created_utc, created_utc))
             self._conn.commit()
             return cur.lastrowid
 
     def update_route(self, route_id: int, **fields) -> None:
         cols = {"name": lambda v: v, "steps": json.dumps,
+                "start_condition": json.dumps,
                 "updated_utc": lambda v: v}
         if set(fields) - set(cols):
             raise ValueError(f"unknown fields {sorted(set(fields) - set(cols))}")

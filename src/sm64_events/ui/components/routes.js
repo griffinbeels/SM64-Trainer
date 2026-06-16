@@ -9,6 +9,7 @@ import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
+import { ClauseRow } from "./segments.js";
 
 const html = htm.bind(h);
 const pct = (r) => `${Math.round((r ?? 0) * 100)}%`;
@@ -142,17 +143,29 @@ export function Routes({ t }) {
   const [routes, setRoutes] = useState(null);
   const [selId, setSelId] = useState(null);
   const [view, setView] = useState(null);
+  const [startCond, setStartCond] = useState(null);   // local start-condition edit buffer
   const [segs, setSegs] = useState([]);
+  const [vocab, setVocab] = useState(null);
   const [err, setErr] = useState(null);
   const catalog = (t.view && t.view.catalog) || { courses: [] };
 
   const loadRoutes = async () => { const rs = await getJSON("/api/routes"); setRoutes(rs); return rs; };
   const loadView = async (id) =>
     setView(id == null ? null : await getJSON(`/api/routes/${id}`).catch(() => null));
-  useEffect(() => { loadRoutes(); getJSON("/api/segments").then(setSegs); }, []);
+  useEffect(() => {
+    loadRoutes();
+    getJSON("/api/segments").then(setSegs);
+    getJSON("/api/segments/vocab").then(setVocab).catch(() => {});
+  }, []);
   // re-fetch the resolved view whenever the selection OR the raw routes change
   // (a saveSteps PUT reloads routes -> this refreshes the % columns).
   useEffect(() => { loadView(selId); }, [selId, routes]);
+  // mirror the loaded route's start_condition into a local edit buffer, so a
+  // half-typed parameterized trigger (type chosen, required param not yet) can
+  // render its param inputs WITHOUT PUTting an incomplete clause (which 409s).
+  useEffect(() => {
+    setStartCond(view ? (view.start_condition || { type: "reset_game" }) : null);
+  }, [view]);
 
   if (routes === null) return html`<div class="meta">loading…</div>`;
   const selected = routes.find((r) => r.id === selId) || null;
@@ -189,6 +202,17 @@ export function Routes({ t }) {
     try { await send("DELETE", `/api/routes/${selId}`); setSelId(null); await loadRoutes(); }
     catch (e) { setErr(String(e)); }
   }
+  function clauseComplete(c) {
+    const spec = vocab && vocab.triggers.find((tt) => tt.key === c.type);
+    if (!spec) return false;
+    return Object.entries(spec.params).every(([n, m]) => !m.required || c[n] != null);
+  }
+  async function saveStartCondition(c) {
+    setStartCond(c);                  // local first: lets param inputs appear for an incomplete clause
+    if (!clauseComplete(c)) return;   // don't PUT until required params are filled (was 409-ing on type change)
+    try { setErr(null); await send("PUT", `/api/routes/${selId}`, { start_condition: c }); await loadRoutes(); }
+    catch (e) { setErr(String(e)); }
+  }
 
   return html`<div>
     <div class="bar">
@@ -203,6 +227,12 @@ export function Routes({ t }) {
     </div>
     ${err ? html`<div class="badx">${err}</div>` : null}
     ${selected && view ? html`<div class="routebuilder">
+      ${vocab ? html`<div class="routestart">
+        <span class="meta">Run starts when:</span>
+        <${ClauseRow} clause=${startCond || view.start_condition || { type: "reset_game" }}
+          types=${vocab.triggers} vocab=${vocab}
+          onChange=${(c) => saveStartCondition(c)} onRemove=${() => {}} />
+      </div>` : null}
       ${selected.steps.length === 0
         ? html`<div class="meta">No steps yet — add one below.</div>` : null}
       ${selected.steps.map((step, i) => {

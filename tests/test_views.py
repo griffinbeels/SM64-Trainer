@@ -890,3 +890,30 @@ def test_build_run_history_filters_finished(tmp_path):
     assert len(hist["runs"]) == 1
     assert hist["runs"][0]["display_total"] is not None   # total + offset, formatted
     assert hist["pb"] is not None
+
+
+# -- Task 7: start_condition in route view + run-history split detail ----------
+
+def test_route_view_includes_start_condition(tmp_path):
+    from sm64_events.tracking.views import build_route_view
+    db, svc = make(tmp_path)
+    rid = asyncio.run(svc.create_route({"name": "R",
+        "start_condition": {"type": "reset_game"}, "steps": [
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}))
+    assert build_route_view(db, rid)["start_condition"] == {"type": "reset_game"}
+
+
+def test_run_history_splits_carry_display_and_duration(tmp_path):
+    from sm64_events.tracking.views import build_run_history
+    db, svc = make(tmp_path)
+    rid = asyncio.run(svc.create_route({"name": "R", "steps": [
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}))
+    db.insert_run({"id": 1, "route_id": rid, "route_name": "R",
+        "route_steps": [{"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}],
+        "mode": "forgiving", "status": "finished", "reached_step": 1, "total_ms": 60000,
+        "start_offset_ms": 1360, "started_utc": "t", "ended_utc": "t", "is_pb": 1,
+        "splits": [{"step_index": 0, "completed_item": {"type": "star", "course": 2, "star": 0},
+                    "elapsed_ms": 60000, "attempts": 1, "fails": 0}]})
+    sp = build_run_history(db, route_id=rid)["runs"][0]["splits"][0]
+    assert sp["display"] == "Chip off Whomp's Block"
+    assert sp["duration_ms"] == 60000 and sp["duration_display"] is not None

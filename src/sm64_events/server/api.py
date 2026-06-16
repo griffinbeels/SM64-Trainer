@@ -111,6 +111,7 @@ class RouteBody(BaseModel):
 
     name: str
     steps: list[dict]
+    start_condition: dict | None = None
 
 
 class RoutePatch(BaseModel):
@@ -118,6 +119,7 @@ class RoutePatch(BaseModel):
 
     name: str | None = None
     steps: list[dict] | None = None
+    start_condition: dict | None = None
 
 
 class ImportBody(BaseModel):
@@ -290,6 +292,30 @@ def create_api_router(service) -> APIRouter:
     async def run_end():
         try:
             await service.end_run()
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True}
+
+    @router.post("/run/pause")
+    async def run_pause():
+        try:
+            await service.pause_run()
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True}
+
+    @router.post("/run/resume")
+    async def run_resume():
+        try:
+            await service.resume_run()
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True}
+
+    @router.post("/run/reset")
+    async def run_reset():
+        try:
+            await service.reset_run()
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True}

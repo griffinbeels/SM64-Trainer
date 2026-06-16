@@ -449,13 +449,41 @@ def build_run_view(db, service) -> dict:
     return out
 
 
+def _enrich_splits(run, seg_names):
+    """Add display name, duration_ms, and duration_display to each split.
+
+    display: resolved from completed_item (star name or segment name).
+    duration_ms: time spent on this step (elapsed_ms minus previous
+      split's elapsed_ms, i.e. the wall-clock split for that step).
+    duration_display: human-readable duration_ms via _fmt_ms."""
+    out, prev = [], 0
+    for s in run["splits"]:
+        ci = s.get("completed_item") or {}
+        if ci.get("type") == "segment":
+            disp = seg_names.get(ci.get("segment_id"),
+                                 f"segment {ci.get('segment_id')} (deleted)")
+        elif ci.get("type") == "star":
+            disp = star_name(ci.get("course"), ci.get("star"))
+        else:
+            disp = "?"
+        dur = (s["elapsed_ms"] - prev) if s["elapsed_ms"] is not None else None
+        prev = s["elapsed_ms"] if s["elapsed_ms"] is not None else prev
+        out.append({**s, "display": disp, "duration_ms": dur,
+                    "duration_display": _fmt_ms(dur)})
+    return out
+
+
 def build_run_history(db, route_id: int | None = None) -> dict:
     """Saved runs (optionally one route) + the PB. display_total folds in the
-    per-run offset; finished runs flagged is_pb power the progression graph."""
+    per-run offset; finished runs flagged is_pb power the progression graph.
+    Each run's splits are enriched with display names and per-step durations."""
     from sm64_events.tracking.runs import pb_run
     runs = db.runs(route_id=route_id)
-    out_runs = [{**r, "display_total": _fmt_ms(None if r["total_ms"] is None
-                                               else r["total_ms"] + r["start_offset_ms"])}
+    seg_names = {d["id"]: d["name"] for d in db.segment_defs()}
+    out_runs = [{**r,
+                 "display_total": _fmt_ms(None if r["total_ms"] is None
+                                          else r["total_ms"] + r["start_offset_ms"]),
+                 "splits": _enrich_splits(r, seg_names)}
                 for r in runs]
     pb = pb_run(runs)
     return {"runs": out_runs,
@@ -491,4 +519,5 @@ def build_route_view(db, route_id: int) -> dict:
         steps.append({"label": step.get("label"), "need": step["need"],
                       "candidates": cands, "step_rate": st["step_rate"],
                       "cumulative": st["cumulative"], "broken": broken})
-    return {"id": route["id"], "name": route["name"], "steps": steps}
+    return {"id": route["id"], "name": route["name"],
+            "start_condition": route["start_condition"], "steps": steps}

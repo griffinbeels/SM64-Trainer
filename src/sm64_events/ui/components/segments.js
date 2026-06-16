@@ -10,7 +10,7 @@ import { getJSON, send } from "../api.js";
 
 const html = htm.bind(h);
 
-function ParamInput({ schema, name, value, vocab, clause, onChange }) {
+export function ParamInput({ schema, name, value, vocab, clause, onChange }) {
   // "" MUST become null, never Number("")===0 — 0 is a real area/level id,
   // so a bare Number() silently scoped cleared optional params to area 0.
   const numOrNull = (s) => (s === "" ? null : Number(s));
@@ -48,7 +48,7 @@ function ParamInput({ schema, name, value, vocab, clause, onChange }) {
       onchange=${(e) => onChange(numOrNull(e.target.value))} />`;
 }
 
-function ClauseRow({ clause, types, vocab, tint, onChange, onRemove }) {
+export function ClauseRow({ clause, types, vocab, tint, onChange, onRemove }) {
   const spec = types.find((t) => t.key === clause.type) || types[0];
   // A param with only_when shows only while its controlling param equals the
   // gate value (subarea selectors appear only for Castle Inside).

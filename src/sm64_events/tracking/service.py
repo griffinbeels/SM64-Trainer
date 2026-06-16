@@ -363,7 +363,8 @@ class TrackerService:
         db = self._require_db()
         route_logic.validate_route(d)          # structural, BEFORE insert
         self._check_segment_refs(db, d["steps"])
-        rid = db.insert_route(d["name"], d["steps"], _iso(_now()))
+        rid = db.insert_route(d["name"], d["steps"], _iso(_now()),
+                              start_condition=d.get("start_condition"))
         await self._routes_changed()
         return rid
 
@@ -376,8 +377,11 @@ class TrackerService:
         route_logic.validate_route(merged)
         self._check_segment_refs(db, merged["steps"])
         db.update_route(route_id, updated_utc=_iso(_now()),
-                        **{k: d[k] for k in ("name", "steps") if k in d})
+                        **{k: d[k] for k in ("name", "steps", "start_condition") if k in d})
         await self._routes_changed()
+        if (("steps" in d or "start_condition" in d)
+                and self._projector.armed_route_id() == route_id):
+            await self._arm_run(route_id, void_active=True)  # re-arm: void any in-flight run, fresh snapshot
 
     async def delete_route(self, route_id: int) -> None:
         db = self._require_db()
@@ -391,29 +395,55 @@ class TrackerService:
                                               timestamp_utc=_now(), payload={}))
 
     # -- run lifecycle ---------------------------------------------------------
+    async def _arm_run(self, route_id: int, void_active: bool = False) -> None:
+        """Build and publish run_started. When void_active=True the payload
+        carries the flag so RunTracker discards any in-flight run without
+        saving it (used by update_route: edit = current run is invalid)."""
+        db = self._require_db()
+        route = next((r for r in db.routes() if r["id"] == route_id), None)
+        if route is None:
+            raise LookupError(f"route {route_id} not found")
+        payload = {"route_id": route_id, "route_name": route["name"],
+                   "route_steps": route["steps"], "mode": "forgiving",
+                   "start_offset_ms": self.run_settings()["start_offset_ms"],
+                   "start_condition": route.get("start_condition",
+                                                {"type": "reset_game"})}
+        if void_active:
+            payload["void_active"] = True
+        await self.publish(Event(type="run_started", frame=0,
+                                 timestamp_utc=_now(), payload=payload))
+
     async def start_run(self, route_id: int) -> None:
         """Journal run_started (arms run mode). The clock starts at 0 on the
         next game_reset (F1). Validates route exists first (LookupError → 404).
         start_offset_ms comes from run_settings; default 1360 ms models the
         SM64 emulator reset-timing convention."""
-        db = self._require_db()
-        route = next((r for r in db.routes() if r["id"] == route_id), None)
-        if route is None:
-            raise LookupError(f"route {route_id} not found")
-        offset = self.run_settings()["start_offset_ms"]
-        await self.publish(Event(type="run_started", frame=0,
-                                 timestamp_utc=_now(),
-                                 payload={"route_id": route_id,
-                                          "route_name": route["name"],
-                                          "route_steps": route["steps"],
-                                          "mode": "forgiving",
-                                          "start_offset_ms": offset}))
+        await self._arm_run(route_id, void_active=False)
 
     async def end_run(self) -> None:
         """Journal run_ended (disarms run mode). If a run is in progress it
         is saved as aborted."""
         self._require_db()
         await self.publish(Event(type="run_ended", frame=0,
+                                 timestamp_utc=_now(), payload={}))
+
+    async def pause_run(self) -> None:
+        """Journal run_paused — suspends the wall clock and step tracking."""
+        self._require_db()
+        await self.publish(Event(type="run_paused", frame=0,
+                                 timestamp_utc=_now(), payload={}))
+
+    async def resume_run(self) -> None:
+        """Journal run_resumed — resumes the wall clock and step tracking."""
+        self._require_db()
+        await self.publish(Event(type="run_resumed", frame=0,
+                                 timestamp_utc=_now(), payload={}))
+
+    async def reset_run(self) -> None:
+        """Journal run_reset — aborts the active run; route stays armed so
+        the next start-condition event begins a fresh run from step 0."""
+        self._require_db()
+        await self.publish(Event(type="run_reset", frame=0,
                                  timestamp_utc=_now(), payload={}))
 
     def run_settings(self) -> dict:
@@ -454,7 +484,8 @@ class TrackerService:
         if route is None:
             raise LookupError(f"route {route_id} not found")
         defs = {d["id"]: d for d in db.segment_defs()}
-        return route_logic.export_route(route["name"], route["steps"], defs)
+        return route_logic.export_route(route["name"], route["steps"], defs,
+                                        start_condition=route.get("start_condition"))
 
     async def import_route(self, payload: dict, dry_run: bool = False) -> dict:
         """Reconcile + (unless dry_run) create missing segments and the route.
@@ -471,7 +502,8 @@ class TrackerService:
                 emb["name"], emb["start_triggers"], emb["end_triggers"],
                 emb["guards"], _iso(_now())))
         steps = self._finalize_import_steps(resolved["steps"], new_ids)
-        rid = db.insert_route(resolved["name"], steps, _iso(_now()))
+        rid = db.insert_route(resolved["name"], steps, _iso(_now()),
+                              start_condition=resolved.get("start_condition"))
         await self._routes_changed()
         return {"id": rid, "name": resolved["name"], "reused": resolved["reused"],
                 "created": resolved["created"], "dry_run": False}
