@@ -51,3 +51,47 @@ def parse_version(tag: str) -> tuple[int, ...]:
 
 def is_newer(candidate: str, current: str) -> bool:
     return parse_version(candidate) > parse_version(current)
+
+
+@dataclass
+class UpdateInfo:
+    version: str
+    notes: str
+    html_url: str
+    asset_url: str
+    sha256_url: str
+
+
+def _get(http, url: str, *, accept: str | None = None):
+    req = urllib.request.Request(url, headers={"User-Agent": _UA})
+    if accept:
+        req.add_header("Accept", accept)
+    return http(req)
+
+
+def check_for_update(current: str, *, http=urllib.request.urlopen,
+                     repo: str = DEFAULT_REPO,
+                     api_base: str = GITHUB_API) -> "UpdateInfo | None":
+    """GET the latest release; return UpdateInfo iff it is strictly newer AND
+    carries an EXE_NAME asset. Best-effort: any error -> None (no popup)."""
+    try:
+        url = f"{api_base}/repos/{repo}/releases/latest"
+        with _get(http, url, accept="application/vnd.github+json") as r:
+            rel = json.loads(r.read().decode("utf-8"))
+        tag = rel.get("tag_name") or ""
+        if not is_newer(tag, current):
+            return None
+        assets = {a.get("name"): a.get("browser_download_url")
+                  for a in rel.get("assets", [])}
+        asset_url = assets.get(EXE_NAME)
+        if not asset_url:
+            return None
+        return UpdateInfo(
+            version=tag.lstrip("vV"),
+            notes=rel.get("body") or "",
+            html_url=rel.get("html_url") or "",
+            asset_url=asset_url,
+            sha256_url=assets.get(EXE_NAME + ".sha256") or "")
+    except Exception:
+        log.info("update check failed", exc_info=True)
+        return None
