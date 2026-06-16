@@ -6,6 +6,18 @@ star grabs (with exact Usamune timing), resets, deaths, segments and more,
 and shows it all in a tracker UI — attempt history, PBs, timelines, and
 instant-replay video of every attempt.
 
+Beyond single-star practice, the **Routes** tab builds an ordered route of
+stars/segments (with "complete K of N" group steps, live cumulative-success %,
+and copy-paste import/export to share). Route Practice focuses the tracker on
+just that route; **Run mode** (Run tab) runs the whole game as a forgiving-RTA
+speedrun — a per-route start condition arms the clock (default F1/game reset,
+with a configurable +1.36 s offset), per-step splits roll up your retries,
+Pause/Reset and a calming Focus mode, live ± vs PB and gold splits, and a saved
+run history with a PB-progression graph. (REST/WS surface: `/api/routes*` and
+`/api/run*`; run events `run_started`/`run_ended`/`run_paused`/`run_resumed`/
+`run_reset` are journaled, `run_progress`/`run_finished`/`run_aborted` are
+broadcast-only.)
+
 ## Quick start (just want to use it)
 
 1. **Download** the latest `sm64_tracker.exe` from the
