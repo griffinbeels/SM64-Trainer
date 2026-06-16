@@ -943,3 +943,20 @@ def test_run_finished_not_journaled(tmp_path):
     assert "run_finished" not in journaled_types
     assert "run_aborted" not in journaled_types
     assert "run_progress" not in journaled_types
+
+
+def test_create_route_default_start_condition(tmp_path):
+    db, svc = make(tmp_path)
+    rid = asyncio.run(svc.create_route({"name": "R", "steps": [
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}))
+    assert next(r for r in db.routes() if r["id"] == rid)["start_condition"] == {"type": "reset_game"}
+
+
+def test_start_run_includes_start_condition(tmp_path):
+    db, svc, sent = make_rec(tmp_path)
+    rid = asyncio.run(svc.create_route({"name": "R",
+        "start_condition": {"type": "level_enter", "to": 9}, "steps": [
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}))
+    asyncio.run(svc.start_run(rid))
+    ev_list = [e for e in db.events() if e.type == "run_started"][-1]
+    assert ev_list.payload["start_condition"] == {"type": "level_enter", "to": 9}

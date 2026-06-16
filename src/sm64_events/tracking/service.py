@@ -363,7 +363,8 @@ class TrackerService:
         db = self._require_db()
         route_logic.validate_route(d)          # structural, BEFORE insert
         self._check_segment_refs(db, d["steps"])
-        rid = db.insert_route(d["name"], d["steps"], _iso(_now()))
+        rid = db.insert_route(d["name"], d["steps"], _iso(_now()),
+                              start_condition=d.get("start_condition"))
         await self._routes_changed()
         return rid
 
@@ -376,7 +377,7 @@ class TrackerService:
         route_logic.validate_route(merged)
         self._check_segment_refs(db, merged["steps"])
         db.update_route(route_id, updated_utc=_iso(_now()),
-                        **{k: d[k] for k in ("name", "steps") if k in d})
+                        **{k: d[k] for k in ("name", "steps", "start_condition") if k in d})
         await self._routes_changed()
 
     async def delete_route(self, route_id: int) -> None:
@@ -401,13 +402,15 @@ class TrackerService:
         if route is None:
             raise LookupError(f"route {route_id} not found")
         offset = self.run_settings()["start_offset_ms"]
+        sc = route.get("start_condition", {"type": "reset_game"})
         await self.publish(Event(type="run_started", frame=0,
                                  timestamp_utc=_now(),
                                  payload={"route_id": route_id,
                                           "route_name": route["name"],
                                           "route_steps": route["steps"],
                                           "mode": "forgiving",
-                                          "start_offset_ms": offset}))
+                                          "start_offset_ms": offset,
+                                          "start_condition": sc}))
 
     async def end_run(self) -> None:
         """Journal run_ended (disarms run mode). If a run is in progress it
@@ -454,7 +457,8 @@ class TrackerService:
         if route is None:
             raise LookupError(f"route {route_id} not found")
         defs = {d["id"]: d for d in db.segment_defs()}
-        return route_logic.export_route(route["name"], route["steps"], defs)
+        return route_logic.export_route(route["name"], route["steps"], defs,
+                                        start_condition=route.get("start_condition"))
 
     async def import_route(self, payload: dict, dry_run: bool = False) -> dict:
         """Reconcile + (unless dry_run) create missing segments and the route.
@@ -471,7 +475,8 @@ class TrackerService:
                 emb["name"], emb["start_triggers"], emb["end_triggers"],
                 emb["guards"], _iso(_now())))
         steps = self._finalize_import_steps(resolved["steps"], new_ids)
-        rid = db.insert_route(resolved["name"], steps, _iso(_now()))
+        rid = db.insert_route(resolved["name"], steps, _iso(_now()),
+                              start_condition=resolved.get("start_condition"))
         await self._routes_changed()
         return {"id": rid, "name": resolved["name"], "reused": resolved["reused"],
                 "created": resolved["created"], "dry_run": False}
