@@ -42,6 +42,7 @@ from typing import Callable, Protocol
 
 import numpy as np
 
+from sm64_events.core.recorder_lock import acquire_recorder_lock
 from sm64_events.replay.clock import CaptureClock, qpc_100ns
 from sm64_events.replay.config import ReplayConfig
 from sm64_events.replay.encoder import SegmentWriter, pick_video_codec
@@ -75,8 +76,14 @@ class ReplayRecorder:
                  fallback_audio_factory: Callable[[int], AudioSource] | None = None,
                  clock_factory: Callable[[], CaptureClock] = CaptureClock.now,
                  codec: str | None = None,
-                 video_sink_factory=None):
+                 video_sink_factory=None,
+                 recorder_lock_factory=acquire_recorder_lock):
         self._cfg = cfg
+        # machine-wide single-recorder guard (injectable for tests): only the
+        # instance holding this lock actually captures; others run viewer-only.
+        self._recorder_lock_factory = recorder_lock_factory
+        self._rec_lock = None        # held handle while WE are the recorder
+        self._lock_warned = False    # log the viewer-only notice once
         self._window_finder = window_finder
         self._video_factory = video_factory
         self._audio_factory = audio_factory
@@ -195,6 +202,23 @@ class ReplayRecorder:
         if self._stopping:
             return
 
+        # Machine-wide single-recorder guard: if another tracker instance (a
+        # second exe, a dev server in another worktree) already owns the
+        # recorder lock, do NOT start a redundant capture of the same window —
+        # that doubles GPU/encode/audio load and collides on the shared replay
+        # buffer. Retried every attach cycle, so this instance takes over the
+        # moment the owner exits (the OS frees the lock). Released in teardown.
+        if self._rec_lock is None:
+            self._rec_lock = self._recorder_lock_factory()
+            if self._rec_lock is None:
+                if not self._lock_warned:
+                    log.warning("another tracker instance is already recording "
+                                "this machine — running VIEWER-ONLY (no "
+                                "capture); will take over if it exits")
+                    self._lock_warned = True
+                return
+            self._lock_warned = False
+
         clock = self._clock_factory()
         writer = SegmentWriter(
             self._cfg, clock, self._cfg.scratch_dir, self._codec,
@@ -232,7 +256,13 @@ class ReplayRecorder:
         # t0 = "writer ready", which is at most one attach-poll interval
         # earlier than "audio started" — irrelevant vs the ±2-3 s clip padding.
         with self._lock:
-            writer.start_audio(t0_utc=clock.utc_of(qpc_100ns()))
+            audio_t0 = clock.utc_of(qpc_100ns())
+            writer.start_audio(t0_utc=audio_t0)
+        # AV-SYNC diagnostic: the audio timeline origin. Paired with the
+        # ffmpeg sink's "video_anchor" line, the delta is the recording-side
+        # stamping gap between the two streams (prime suspect for any fixed
+        # A/V offset). Keep greppable as "AV-SYNC".
+        log.info("AV-SYNC audio_t0=%s", audio_t0.isoformat())
 
         # Audio fallback chain
         audio: AudioSource | None = None
@@ -305,6 +335,15 @@ class ReplayRecorder:
         self._recording = False
         self._idle = False
         self._idle_since = None
+        # Release the machine-wide recorder lock so another instance can take
+        # over recording (e.g. PJ64 closed here, or this instance is shutting
+        # down). Re-acquired on the next _begin_capture if we capture again.
+        if self._rec_lock is not None:
+            try:
+                self._rec_lock.close()
+            except Exception:
+                pass
+            self._rec_lock = None
         # _audio_mode intentionally kept as last-known value so status() can
         # report which mode was active even after stop; cleared only on
         # fresh _begin_capture (set to new mode) or explicit reset.

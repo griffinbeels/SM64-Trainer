@@ -1,7 +1,7 @@
 """Session-wide test guards."""
 import pytest
 
-from sm64_events.core import perfmon
+from sm64_events.core import perfmon, recorder_lock
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -16,3 +16,13 @@ def _redirect_perf_log(tmp_path_factory):
     perfmon._DEFAULT_LOG = tmp_path_factory.mktemp("perf") / "perf_log.jsonl"
     yield
     perfmon._DEFAULT_LOG = orig
+
+
+@pytest.fixture(autouse=True)
+def _isolate_recorder_lock(tmp_path, monkeypatch):
+    """No test may touch the REAL machine-wide recorder lock — a live server
+    (or another test) holds it, which would make recorder tests flaky. Redirect
+    it to a per-test temp path (acquire_recorder_lock reads the global at call
+    time, so this takes effect even for the import-time-built app)."""
+    monkeypatch.setattr(recorder_lock, "RECORDER_LOCK_PATH",
+                        tmp_path / "recorder.lock")

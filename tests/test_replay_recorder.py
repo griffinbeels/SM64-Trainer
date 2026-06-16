@@ -48,7 +48,16 @@ class SystemFakeAudioSource(FakeAudioSource):
     mode = "system"
 
 
-def make_recorder(tmp_path, video, audio, found=WIN, fallback=None):
+class _FakeLock:
+    """Stand-in for the machine-wide recorder lock handle."""
+    def __init__(self):
+        self.closed = False
+    def close(self):
+        self.closed = True
+
+
+def make_recorder(tmp_path, video, audio, found=WIN, fallback=None,
+                  recorder_lock_factory=None):
     cfg = ReplayConfig(scratch_dir=tmp_path / "buf", attach_poll_s=0.01, fps=30)
     return ReplayRecorder(
         cfg=cfg,
@@ -57,7 +66,10 @@ def make_recorder(tmp_path, video, audio, found=WIN, fallback=None):
         audio_factory=lambda pid: audio,
         fallback_audio_factory=(lambda rate: fallback) if fallback else None,
         clock_factory=lambda: CaptureClock(anchor_qpc_100ns=0, anchor_utc=T0),
-        codec="libx264")
+        codec="libx264",
+        # default: always-acquire fake so capture tests are deterministic and
+        # never touch the real lock; override per-test to simulate contention.
+        recorder_lock_factory=recorder_lock_factory or (lambda: _FakeLock()))
 
 
 def push_frames(video, n, start_index=0, fps=30):
@@ -73,6 +85,33 @@ def wait_for(cond, timeout=5.0):
             return True
         time.sleep(0.01)
     return False
+
+
+def test_viewer_only_when_another_instance_holds_recorder_lock(tmp_path):
+    """Single-recorder guard: if the machine-wide lock can't be acquired
+    (another instance is recording), this one finds the window but starts NO
+    capture — preventing the redundant double-capture that lagged the machine."""
+    video, audio = FakeVideoSource(), FakeAudioSource()
+    rec = make_recorder(tmp_path, video, audio,
+                        recorder_lock_factory=lambda: None)  # lock unavailable
+    rec.start()
+    assert wait_for(lambda: rec.status()["window_found"] is True)
+    time.sleep(0.1)                              # several attach cycles
+    assert video.on_frame is None                # capture never started
+    assert rec.status()["recording"] is False
+    rec.stop()
+
+
+def test_recorder_releases_lock_on_teardown(tmp_path):
+    """The held lock is released on teardown so another instance can take
+    over recording."""
+    video, audio = FakeVideoSource(), FakeAudioSource()
+    held = _FakeLock()
+    rec = make_recorder(tmp_path, video, audio, recorder_lock_factory=lambda: held)
+    rec.start()
+    assert wait_for(lambda: video.on_frame is not None)   # captured -> lock taken
+    rec.stop()
+    assert held.closed is True                            # released on teardown
 
 
 def test_recorder_attaches_and_produces_segments(tmp_path):
