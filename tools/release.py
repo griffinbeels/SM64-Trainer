@@ -107,7 +107,11 @@ def main() -> int:
 
     _run(["git", "add", str(VERSION_PY), str(PYPROJECT)])
     _run(["git", "commit", "-m", f"release: {tag}"])
-    _run(["git", "tag", tag])
+    # Annotated (-a) tag, NOT lightweight: `git push --follow-tags` only pushes
+    # ANNOTATED tags, so a lightweight `git tag v…` reaches main but never the
+    # remote, and `gh release create` then fails "tag … not pushed" (hit live
+    # on v1.0.0). Annotated → the one push below carries the tag with it.
+    _run(["git", "tag", "-a", tag, "-m", tag])
     _run(["git", "push", "origin", "main", "--follow-tags"])
 
     notes = (["--notes-file", args.notes_file] if args.notes_file
