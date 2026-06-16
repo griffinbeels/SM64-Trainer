@@ -56,3 +56,9 @@ def test_server_port_env_override(monkeypatch):
     assert paths.server_port() == 9000
     monkeypatch.setattr(paths, "is_frozen", lambda: True)
     assert paths.server_port() == 9000
+
+
+def test_update_state_path_lives_under_data():
+    p = paths.update_state_path()
+    assert p.name == "update_state.json"
+    assert p.parent.name == "data"
