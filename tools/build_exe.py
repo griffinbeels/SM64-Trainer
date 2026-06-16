@@ -39,6 +39,11 @@ def main() -> int:
         # imported, so it must be collected preserving the package path.
         "--add-data",
         f"{REPO / 'src' / 'sm64_events' / 'ui'}{SEP}sm64_events/ui",
+        # The desktop tray + pywebview window load assets/ukiki.ico at RUNTIME
+        # via _asset_path (-> sys._MEIPASS/ukiki.ico when frozen). --icon only
+        # embeds it in the PE header (Explorer/taskbar); without bundling it as
+        # data the frozen tray fell back to a placeholder. Land it at root.
+        "--add-data", f"{REPO / 'assets' / 'ukiki.ico'}{SEP}.",
     ]
     for pkg in COLLECT:
         argv += ["--collect-all", pkg]
