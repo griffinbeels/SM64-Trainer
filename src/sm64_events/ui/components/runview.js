@@ -1,7 +1,9 @@
 // src/sm64_events/ui/components/runview.js — full-game run timer (Run tab).
 // Renders GET /api/run (via the store's t.run, refetched on run_* WS events);
 // the big clock + current-step time TICK client-side off the authoritative
-// started_utc + start_offset_ms. Forgiving RTA: no pause subtraction (v1).
+// started_utc + start_offset_ms. Pause/Resume/Reset buttons call
+// POST /api/run/pause|resume|reset; clock freezes at paused_at when paused,
+// and subtracts accumulated paused_ms so paused time is excluded.
 // Always-on: idle shows preview steps + 0:00+offset; active ticks; finished
 // freezes on the last split until the next run begins. No Start button —
 // selecting a route arms it (pickRoute calls POST /api/run/start).
@@ -142,6 +144,9 @@ export function Run({ t }) {
     t.refreshRun();
   }
 
+  async function pauseRun() { try { await send("POST", active.paused ? "/api/run/resume" : "/api/run/pause"); t.refreshRun(); } catch (e) { setErr(String(e)); } }
+  async function resetRun() { try { await send("POST", "/api/run/reset"); t.refreshRun(); } catch (e) { setErr(String(e)); } }
+
   if (!run) return html`<p class="meta">loading…</p>`;
 
   // latest finished run for the frozen post-run display
@@ -151,7 +156,9 @@ export function Run({ t }) {
   // clock + step rows by state: active (live) > finished (frozen) > idle (preview)
   let clockMs, rows;
   if (active) {
-    clockMs = nowMs - Date.parse(active.started_utc) + active.start_offset_ms;
+    clockMs = active.start_offset_ms - (active.paused_ms || 0)
+      + ((active.paused && active.paused_at ? Date.parse(active.paused_at) : nowMs)
+         - Date.parse(active.started_utc));
     rows = active.steps.map((s, i) => ({
       key: i, display: s.display, group: s.candidates && s.candidates.length > 1,
       need: s.need, doneN: s.done.length, current: i === active.current_step,
@@ -180,6 +187,8 @@ export function Run({ t }) {
         ${routes.map((r) => html`<option value=${r.id}>${r.name}</option>`)}
       </select>
       <button onclick=${toggleFocus}>${focus ? "Focus ✓" : "Focus"}</button>
+      ${active ? html`<button onclick=${pauseRun}>${active.paused ? "Resume" : "Pause"}</button>` : null}
+      ${active ? html`<button onclick=${resetRun}>Reset</button>` : null}
       <span style="flex:1"></span>
       ${run.pb ? html`<span class="meta">PB ${run.pb.display}</span>` : null}
     </div>
@@ -188,6 +197,7 @@ export function Run({ t }) {
       ? html`<p class="meta">Pick a route to arm a run. The clock starts on the route's start condition (default F1).</p>`
       : html`<div>
         <div class="runclock"><${Timer} k="total">${fmtMs(clockMs)}<//>${" "}
+          ${active && active.paused ? html`<span class="meta">PAUSED</span>` : ""}
           ${active ? "" : html`<span class="meta">${lastFinished ? "(finished)" : startLabel}</span>`}</div>
         <table class="runsplits"><tbody>
           ${rows.map((r) => html`<tr class=${r.current ? "runstep-cur" : (r.cumMs != null ? "rundone" : "runupcoming")}>
