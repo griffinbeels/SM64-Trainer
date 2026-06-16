@@ -165,7 +165,7 @@ export function Run({ t }) {
   } else {
     clockMs = run.start_offset_ms;                       // idle: 0:00 + offset
     rows = (routeView ? routeView.steps : []).map((s, i) => ({
-      key: i, display: (s.candidates[0] && s.candidates[0].display) || s.label || "?",
+      key: i, display: s.candidates.map((c) => c.display).join(" / ") || s.label || "?",
       group: s.candidates.length > 1, need: s.need, current: false, cumMs: null }));
   }
   const startLabel = routeView && routeView.start_condition

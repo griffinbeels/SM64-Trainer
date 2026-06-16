@@ -143,6 +143,7 @@ export function Routes({ t }) {
   const [routes, setRoutes] = useState(null);
   const [selId, setSelId] = useState(null);
   const [view, setView] = useState(null);
+  const [startCond, setStartCond] = useState(null);   // local start-condition edit buffer
   const [segs, setSegs] = useState([]);
   const [vocab, setVocab] = useState(null);
   const [err, setErr] = useState(null);
@@ -159,6 +160,12 @@ export function Routes({ t }) {
   // re-fetch the resolved view whenever the selection OR the raw routes change
   // (a saveSteps PUT reloads routes -> this refreshes the % columns).
   useEffect(() => { loadView(selId); }, [selId, routes]);
+  // mirror the loaded route's start_condition into a local edit buffer, so a
+  // half-typed parameterized trigger (type chosen, required param not yet) can
+  // render its param inputs WITHOUT PUTting an incomplete clause (which 409s).
+  useEffect(() => {
+    setStartCond(view ? (view.start_condition || { type: "reset_game" }) : null);
+  }, [view]);
 
   if (routes === null) return html`<div class="meta">loading…</div>`;
   const selected = routes.find((r) => r.id === selId) || null;
@@ -195,7 +202,14 @@ export function Routes({ t }) {
     try { await send("DELETE", `/api/routes/${selId}`); setSelId(null); await loadRoutes(); }
     catch (e) { setErr(String(e)); }
   }
+  function clauseComplete(c) {
+    const spec = vocab && vocab.triggers.find((tt) => tt.key === c.type);
+    if (!spec) return false;
+    return Object.entries(spec.params).every(([n, m]) => !m.required || c[n] != null);
+  }
   async function saveStartCondition(c) {
+    setStartCond(c);                  // local first: lets param inputs appear for an incomplete clause
+    if (!clauseComplete(c)) return;   // don't PUT until required params are filled (was 409-ing on type change)
     try { setErr(null); await send("PUT", `/api/routes/${selId}`, { start_condition: c }); await loadRoutes(); }
     catch (e) { setErr(String(e)); }
   }
@@ -215,7 +229,7 @@ export function Routes({ t }) {
     ${selected && view ? html`<div class="routebuilder">
       ${vocab ? html`<div class="routestart">
         <span class="meta">Run starts when:</span>
-        <${ClauseRow} clause=${view.start_condition || { type: "reset_game" }}
+        <${ClauseRow} clause=${startCond || view.start_condition || { type: "reset_game" }}
           types=${vocab.triggers} vocab=${vocab}
           onChange=${(c) => saveStartCondition(c)} onRemove=${() => {}} />
       </div>` : null}
