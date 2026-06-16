@@ -95,3 +95,55 @@ def test_check_none_on_http_error():
     def boom(req):
         raise OSError("network down")
     assert check_for_update("1.0.0", http=boom) is None
+
+
+import hashlib as _hashlib
+
+import pytest
+
+from sm64_events.core.updater import (apply_update, cleanup_old,
+                                      download_and_stage, exe_dir_writable)
+
+
+def test_download_stage_verifies_good_hash(tmp_path):
+    payload = b"new exe bytes"
+    digest = _hashlib.sha256(payload).hexdigest()
+    info = UpdateInfo("2.0.0", "n", "h", "https://dl/exe", "https://dl/sha")
+    http = _fake_http({"https://dl/exe": payload,
+                       "https://dl/sha": (digest + "  sm64_tracker.exe").encode()})
+    seen = []
+    staged = download_and_stage(info, tmp_path, http=http,
+                                progress=seen.append)
+    assert staged.read_bytes() == payload
+    assert staged.name == "sm64_tracker.exe.new"
+    assert seen and seen[-1] == 1.0
+
+
+def test_download_stage_rejects_bad_hash(tmp_path):
+    info = UpdateInfo("2.0.0", "n", "h", "https://dl/exe", "https://dl/sha")
+    http = _fake_http({"https://dl/exe": b"corrupt",
+                       "https://dl/sha": (("0" * 64) + "  x").encode()})
+    with pytest.raises(ValueError):
+        download_and_stage(info, tmp_path, http=http)
+    assert not (tmp_path / "sm64_tracker.exe.new").exists()
+
+
+def test_apply_update_swaps_running_exe(tmp_path):
+    current = tmp_path / "sm64_tracker.exe"
+    current.write_text("OLD")
+    staged = tmp_path / "sm64_tracker.exe.new"
+    staged.write_text("NEW")
+    apply_update(staged, current)
+    assert current.read_text() == "NEW"
+    assert (tmp_path / "sm64_tracker.exe.old").read_text() == "OLD"
+
+
+def test_cleanup_old_removes_old_files(tmp_path):
+    (tmp_path / "sm64_tracker.exe.old").write_text("x")
+    cleanup_old(tmp_path)
+    assert not (tmp_path / "sm64_tracker.exe.old").exists()
+
+
+def test_exe_dir_writable(tmp_path):
+    assert exe_dir_writable(tmp_path) is True
+    assert exe_dir_writable(tmp_path / "does-not-exist") is False

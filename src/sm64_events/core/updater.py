@@ -95,3 +95,68 @@ def check_for_update(current: str, *, http=urllib.request.urlopen,
     except Exception:
         log.info("update check failed", exc_info=True)
         return None
+
+
+def download_and_stage(info: "UpdateInfo", exe_dir: Path, *,
+                       http=urllib.request.urlopen, progress=None) -> Path:
+    """Stream the new exe to <exe_dir>/sm64_tracker.exe.new, verify SHA-256
+    against the published .sha256, return the staged path. Raises ValueError on
+    a hash mismatch (caller keeps the current exe)."""
+    staged = exe_dir / (EXE_NAME + ".new")
+    h = hashlib.sha256()
+    with _get(http, info.asset_url) as r:
+        total = int((r.headers or {}).get("Content-Length") or 0)
+        done = 0
+        with open(staged, "wb") as f:
+            while True:
+                chunk = r.read(1 << 16)
+                if not chunk:
+                    break
+                f.write(chunk)
+                h.update(chunk)
+                done += len(chunk)
+                if progress and total:
+                    progress(min(1.0, done / total))
+    if info.sha256_url:
+        with _get(http, info.sha256_url) as r:
+            published = r.read().decode("utf-8").split()[0].strip().lower()
+        if published and published != h.hexdigest():
+            staged.unlink(missing_ok=True)
+            raise ValueError("update checksum mismatch")
+    return staged
+
+
+def apply_update(staged: Path, current_exe: Path, *, retries: int = 5,
+                 sleep=time.sleep) -> None:
+    """Swap `staged` in for the running exe via two renames (Windows allows
+    renaming a running exe). Bounded retry: AV can briefly lock the new file."""
+    old = current_exe.parent / (current_exe.name + ".old")
+    for attempt in range(retries):
+        try:
+            old.unlink(missing_ok=True)
+            os.replace(current_exe, old)
+            os.replace(staged, current_exe)
+            return
+        except PermissionError:
+            if attempt == retries - 1:
+                raise
+            sleep(0.5)
+
+
+def cleanup_old(exe_dir: Path) -> None:
+    """Delete a leftover *.old from a prior update (now unlocked)."""
+    for p in exe_dir.glob("*.old"):
+        try:
+            p.unlink()
+        except OSError:
+            pass  # still locked (rare) -> retry next launch
+
+
+def exe_dir_writable(exe_dir: Path) -> bool:
+    probe = exe_dir / ".sm64_update_probe"
+    try:
+        probe.write_text("x")
+        probe.unlink()
+        return True
+    except OSError:
+        return False
