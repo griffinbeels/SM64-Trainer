@@ -212,7 +212,8 @@ def _quiet_connection_resets(loop, context) -> None:
 
 
 def create_app(poller: Poller, broadcaster: Broadcaster,
-               service=None, replay=None, debug_hooks: bool = False) -> FastAPI:
+               service=None, replay=None, updater=None,
+               debug_hooks: bool = False) -> FastAPI:
     # Observability for long-running sessions: samples self + CHILD (ffmpeg)
     # memory, handle/GDI/USER counts, system pressure, and a per-type heap
     # histogram on a cadence — logs an expanded line, fires one-shot per-class
@@ -318,6 +319,17 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     if replay is not None:
         from sm64_events.server.replay_api import create_replay_router
         app.include_router(create_replay_router(replay))
+
+    if updater is not None:
+        from sm64_events.server.update_api import create_update_router
+
+        def _restart():
+            # Same path as /api/admin/restart: full GUI relaunch in the desktop
+            # shell, spawn_replacement()+SIGINT fallback from a terminal launch.
+            _dispatch(getattr(app.state, "request_restart", None)
+                      or _fallback_restart)
+
+        app.include_router(create_update_router(updater, _restart))
 
     @app.get("/", response_class=HTMLResponse)
     def index():
