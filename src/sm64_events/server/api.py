@@ -111,6 +111,7 @@ class RouteBody(BaseModel):
 
     name: str
     steps: list[dict]
+    start_condition: dict | None = None
 
 
 class RoutePatch(BaseModel):
@@ -118,6 +119,7 @@ class RoutePatch(BaseModel):
 
     name: str | None = None
     steps: list[dict] | None = None
+    start_condition: dict | None = None
 
 
 class ImportBody(BaseModel):
