@@ -62,6 +62,14 @@ def _ms(a_utc: str, b_utc: str) -> int:
     return int((b - a).total_seconds() * 1000)
 
 
+def _effective_ms(act: dict, wall: str) -> int:
+    """Wall-clock ms from run start to `wall`, excluding accumulated paused time."""
+    base = _ms(act["started_utc"], wall) - act["paused_ms"]
+    if act["paused"] and act["paused_at"] is not None:
+        base -= _ms(act["paused_at"], wall)
+    return base
+
+
 def _cand_matches(cand: dict, a) -> bool:
     if cand["type"] == "segment":
         return a.segment_id == cand["segment_id"]
@@ -95,6 +103,9 @@ class RunTracker:
                 "start_offset_ms": self._armed["offset"],
                 "start_condition": self._armed["start_condition"],
                 "current_step": act["current"],
+                "paused": act["paused"],
+                "paused_ms": act["paused_ms"],
+                "paused_at": act["paused_at"],
                 "steps": [{"index": i, "need": steps[i]["need"],
                            "done": list(p["done"]), "attempts": p["attempts"],
                            "fails": p["fails"], "elapsed_ms": p["elapsed_ms"]}
@@ -123,6 +134,19 @@ class RunTracker:
                 produced.append(self._finalize("aborted", ev.wall_time_utc))
             self._armed = None
             self._active = None
+        elif ev.type == "run_paused":
+            if self._active is not None and not self._active["paused"]:
+                self._active["paused"] = True
+                self._active["paused_at"] = ev.wall_time_utc
+        elif ev.type == "run_resumed":
+            if self._active is not None and self._active["paused"]:
+                self._active["paused_ms"] += _ms(self._active["paused_at"], ev.wall_time_utc)
+                self._active["paused"] = False
+                self._active["paused_at"] = None
+        elif ev.type == "run_reset":
+            if self._active is not None:
+                produced.append(self._finalize("aborted", ev.wall_time_utc))
+            # armed stays -> the next start-condition fire begins from step 0
         elif self._armed is not None:
             if _cond_fires(self._armed["start_condition"], ev, ctx):
                 if self._active is not None:
@@ -132,7 +156,7 @@ class RunTracker:
                 # hard reset that is NOT this route's start condition: the run is
                 # over (player bailed); they re-trigger the start condition to begin.
                 produced.append(self._finalize("aborted", ev.wall_time_utc))
-        if self._active is not None and closed:
+        if self._active is not None and not self._active["paused"] and closed:
             for a in closed:
                 fin = self._apply(a, ev)
                 if fin is not None:
@@ -147,6 +171,7 @@ class RunTracker:
     def _begin(self, ev) -> None:
         self._active = {
             "id": ev.id, "started_utc": ev.wall_time_utc, "current": 0,
+            "paused": False, "paused_at": None, "paused_ms": 0,
             "steps": [{"done": [], "attempts": 0, "fails": 0,
                        "elapsed_ms": None, "completed_item": None}
                       for _ in self._armed["route_steps"]]}
@@ -170,7 +195,7 @@ class RunTracker:
         prog["done"].append(key)
         prog["attempts"] += 1
         if len(prog["done"]) >= step["need"]:
-            prog["elapsed_ms"] = _ms(act["started_utc"], ev.wall_time_utc)
+            prog["elapsed_ms"] = _effective_ms(act, ev.wall_time_utc)
             prog["completed_item"] = matched
             act["current"] += 1
             if act["current"] >= len(steps):
@@ -183,7 +208,7 @@ class RunTracker:
                    "elapsed_ms": p["elapsed_ms"], "attempts": p["attempts"],
                    "fails": p["fails"]}
                   for i, p in enumerate(act["steps"]) if p["elapsed_ms"] is not None]
-        total = _ms(act["started_utc"], ended_utc)
+        total = _effective_ms(act, ended_utc)
         is_pb = False
         if status == "finished":
             prior = [r.total_ms for r in self._finished

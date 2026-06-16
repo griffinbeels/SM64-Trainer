@@ -296,6 +296,30 @@ def create_api_router(service) -> APIRouter:
             raise _http(e)
         return {"ok": True}
 
+    @router.post("/run/pause")
+    async def run_pause():
+        try:
+            await service.pause_run()
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True}
+
+    @router.post("/run/resume")
+    async def run_resume():
+        try:
+            await service.resume_run()
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True}
+
+    @router.post("/run/reset")
+    async def run_reset():
+        try:
+            await service.reset_run()
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True}
+
     @router.get("/run/history")
     def run_history(route_id: int | None = None):
         if service.db is None:

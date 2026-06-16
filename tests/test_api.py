@@ -658,3 +658,16 @@ def test_create_route_with_start_condition(tmp_path):
         assert r.status_code == 200
         rid = r.json()["id"]
         assert client.get(f"/api/routes/{rid}").json()["start_condition"] == {"type": "reset_game"}
+
+
+# -- run pause/resume/reset endpoints (Phase E) --------------------------------
+
+def test_run_pause_resume_reset_endpoints(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        rid = client.post("/api/routes", json={"name": "R", "steps": [
+            {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}).json()["id"]
+        client.post("/api/run/start", json={"route_id": rid})
+        assert client.post("/api/run/pause").status_code == 200
+        assert client.post("/api/run/resume").status_code == 200
+        assert client.post("/api/run/reset").status_code == 200

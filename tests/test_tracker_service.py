@@ -960,3 +960,23 @@ def test_start_run_includes_start_condition(tmp_path):
     asyncio.run(svc.start_run(rid))
     ev_list = [e for e in db.events() if e.type == "run_started"][-1]
     assert ev_list.payload["start_condition"] == {"type": "level_enter", "to": 9}
+
+
+# -- run pause/resume/reset (Phase E) -----------------------------------------
+
+def test_pause_run_journals_run_paused(tmp_path):
+    db, svc = make(tmp_path)
+    rid = _route_with(db, svc)
+    asyncio.run(svc.start_run(rid))
+    asyncio.run(svc.pause_run())
+    types = [e.type for e in db.events()]
+    assert "run_paused" in types
+
+
+def test_reset_run_journals_run_reset(tmp_path):
+    db, svc = make(tmp_path)
+    rid = _route_with(db, svc)
+    asyncio.run(svc.start_run(rid))
+    asyncio.run(svc.reset_run())
+    types = [e.type for e in db.events()]
+    assert "run_reset" in types

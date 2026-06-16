@@ -419,6 +419,25 @@ class TrackerService:
         await self.publish(Event(type="run_ended", frame=0,
                                  timestamp_utc=_now(), payload={}))
 
+    async def pause_run(self) -> None:
+        """Journal run_paused — suspends the wall clock and step tracking."""
+        self._require_db()
+        await self.publish(Event(type="run_paused", frame=0,
+                                 timestamp_utc=_now(), payload={}))
+
+    async def resume_run(self) -> None:
+        """Journal run_resumed — resumes the wall clock and step tracking."""
+        self._require_db()
+        await self.publish(Event(type="run_resumed", frame=0,
+                                 timestamp_utc=_now(), payload={}))
+
+    async def reset_run(self) -> None:
+        """Journal run_reset — aborts the active run; route stays armed so
+        the next start-condition event begins a fresh run from step 0."""
+        self._require_db()
+        await self.publish(Event(type="run_reset", frame=0,
+                                 timestamp_utc=_now(), payload={}))
+
     def run_settings(self) -> dict:
         """Current run settings, defaulting to start_offset_ms=1360."""
         db = self._require_db()

@@ -200,3 +200,66 @@ def test_game_reset_aborts_when_not_the_start_condition():
     out = rt.feed(Ev("game_reset", id=200), [], CTX)               # hard reset -> abort
     assert out and out[0].status == "aborted"
     assert rt.active_run_view() is None        # NOT restarted (game_reset != start cond)
+
+
+# -- pause / resume / reset tests (Phase E) ------------------------------------
+
+def test_pause_resume_accumulates_paused_ms():
+    rt = RunTracker()
+    steps = [{"need": 1, "candidates": [STAR]}]
+    rt.feed(started(steps), [], CTX)
+    rt.feed(Ev("game_reset", id=100, wall="2026-06-14T00:00:00Z"), [], CTX)
+    rt.feed(Ev("run_paused", wall="2026-06-14T00:00:10Z"), [], CTX)
+    rt.feed(Ev("run_resumed", wall="2026-06-14T00:00:25Z"), [], CTX)
+    v = rt.active_run_view()
+    assert v["paused_ms"] == 15000
+    assert v["paused"] is False
+
+
+def test_completions_ignored_while_paused():
+    rt = RunTracker()
+    steps = [{"need": 1, "candidates": [STAR]}]
+    rt.feed(started(steps), [], CTX)
+    rt.feed(Ev("game_reset", id=100, wall="2026-06-14T00:00:00Z"), [], CTX)
+    rt.feed(Ev("run_paused", wall="2026-06-14T00:00:05Z"), [], CTX)
+    # star collected while paused: must NOT complete the step
+    result = rt.feed(Ev("star_collected", id=101, wall="2026-06-14T00:00:10Z"),
+                     [att(course=2, star=0)], CTX)
+    assert result == []
+    v = rt.active_run_view()
+    assert v["current_step"] == 0
+
+
+def test_split_elapsed_excludes_paused_time():
+    """start @t0, pause @t0+10s, resume @t0+30s (20s paused), complete @t0+50s
+    -> elapsed_ms == 30000 (50s wall - 20s paused)."""
+    rt = RunTracker()
+    steps = [{"need": 1, "candidates": [STAR]}]
+    rt.feed(started(steps), [], CTX)
+    rt.feed(Ev("game_reset", id=100, wall="2026-06-14T00:00:00Z"), [], CTX)
+    rt.feed(Ev("run_paused", wall="2026-06-14T00:00:10Z"), [], CTX)
+    rt.feed(Ev("run_resumed", wall="2026-06-14T00:00:30Z"), [], CTX)
+    done = rt.feed(Ev("star_collected", id=101, wall="2026-06-14T00:00:50Z"),
+                   [att(course=2, star=0)], CTX)
+    assert len(done) == 1
+    r = done[0]
+    assert r.splits[0]["elapsed_ms"] == 30000
+    assert r.total_ms == 30000
+
+
+def test_run_reset_aborts_active_and_stays_armed():
+    """run_reset produces an aborted RunRecord; route stays armed so the
+    next game_reset (start condition) begins a fresh run at step 0."""
+    rt = RunTracker()
+    steps = [{"need": 1, "candidates": [STAR]}]
+    rt.feed(started(steps), [], CTX)
+    rt.feed(Ev("game_reset", id=100, wall="2026-06-14T00:00:00Z"), [], CTX)
+    assert rt.active_run_view() is not None
+    out = rt.feed(Ev("run_reset", id=200, wall="2026-06-14T00:00:10Z"), [], CTX)
+    assert len(out) == 1
+    assert out[0].status == "aborted"
+    assert rt.active_run_view() is None
+    # armed: a subsequent game_reset begins a fresh run from step 0
+    rt.feed(Ev("game_reset", id=300, wall="2026-06-14T00:01:00Z"), [], CTX)
+    v = rt.active_run_view()
+    assert v is not None and v["id"] == 300 and v["current_step"] == 0
