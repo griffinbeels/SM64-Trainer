@@ -7,7 +7,8 @@ import logging
 import os
 
 from sm64_events.core.logging_setup import configure_logging
-from sm64_events.core.paths import data_root
+from sm64_events.core.paths import (APP_DISPLAY_NAME, data_root,
+                                    migrate_legacy_data_dir)
 from sm64_events.core.relaunch import spawn_replacement, wait_port_free
 from sm64_events.desktop import single_instance, tray, window
 from sm64_events.desktop.server_runner import ServerRunner
@@ -25,17 +26,20 @@ def _ask_takeover() -> bool:
     """Native yes/no: Yes = close the other instance and run here."""
     return ctypes.windll.user32.MessageBoxW(
         None,
-        "sm64_tracker is already running.\n\n"
+        f"{APP_DISPLAY_NAME} is already running.\n\n"
         "Use THIS window and close the other instance?",
-        "sm64_tracker", _MB_YESNO | _MB_ICONQUESTION) == _IDYES
+        APP_DISPLAY_NAME, _MB_YESNO | _MB_ICONQUESTION) == _IDYES
 
 
 def _error(msg: str) -> None:
-    ctypes.windll.user32.MessageBoxW(None, msg, "sm64_tracker", _MB_ICONERROR)
+    ctypes.windll.user32.MessageBoxW(None, msg, APP_DISPLAY_NAME, _MB_ICONERROR)
 
 
 def main() -> None:
     configure_logging()
+    # Rename %LOCALAPPDATA%\sm64_tracker -> SM64Trainer BEFORE the mkdir below
+    # touches the new dir, so existing PBs/replays carry over.
+    migrate_legacy_data_dir()
     data_root().mkdir(parents=True, exist_ok=True)
 
     if os.environ.pop("SM64_RESTART", None):

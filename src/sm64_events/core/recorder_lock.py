@@ -22,7 +22,7 @@ from sm64_events.storage.instance_lock import acquire_instance_lock
 
 log = logging.getLogger("sm64.replay")
 
-RECORDER_LOCK_PATH = Path(tempfile.gettempdir()) / "sm64_tracker_recorder.lock"
+RECORDER_LOCK_PATH = Path(tempfile.gettempdir()) / "SM64Trainer_recorder.lock"
 
 
 def acquire_recorder_lock(path: Path | None = None):

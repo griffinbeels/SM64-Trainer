@@ -19,7 +19,7 @@ import logging
 
 import webview
 
-from sm64_events.core.paths import server_port, window_state_path
+from sm64_events.core.paths import APP_DISPLAY_NAME, server_port, window_state_path
 from sm64_events.desktop.tray import _asset_path
 
 log = logging.getLogger("sm64.desktop")
@@ -73,7 +73,7 @@ def _save_geometry(win) -> None:
 def create(on_closed) -> "webview.Window":
     g = _load_geometry()
     win = webview.create_window(
-        "sm64_tracker", url=f"http://127.0.0.1:{server_port()}/",
+        APP_DISPLAY_NAME, url=f"http://127.0.0.1:{server_port()}/",
         width=g["w"], height=g["h"], x=g["x"], y=g["y"],
         resizable=True, min_size=(360, 500))
     win.events.resized += lambda *a: _save_geometry(win)

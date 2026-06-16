@@ -22,7 +22,7 @@ REPO = Path(__file__).resolve().parents[1]
 VERSION_PY = REPO / "src" / "sm64_events" / "core" / "version.py"
 PYPROJECT = REPO / "pyproject.toml"
 UV_LOCK = REPO / "uv.lock"
-EXE = REPO / "dist" / "sm64_tracker.exe"
+EXE = REPO / "dist" / "SM64Trainer.exe"
 
 
 def valid_version(v: str) -> bool:
@@ -96,7 +96,7 @@ def main() -> int:
     # Build first so a broken build aborts BEFORE any tag/push.
     _run(["uv", "run", "python", "tools/build_exe.py"])
     if not EXE.exists():
-        sys.exit("build did not produce dist/sm64_tracker.exe")
+        sys.exit("build did not produce dist/SM64Trainer.exe")
     digest = sha256_file(EXE)
     sha_path = EXE.with_name(EXE.name + ".sha256")
     sha_path.write_text(f"{digest}  {EXE.name}\n")

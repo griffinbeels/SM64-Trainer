@@ -9,6 +9,8 @@ from pathlib import Path
 import pystray
 from PIL import Image
 
+from sm64_events.core.paths import APP_DISPLAY_NAME
+
 log = logging.getLogger("sm64.desktop")
 
 # Single source of truth for the asset base directory, used by tray and window.
@@ -46,7 +48,7 @@ def create(on_show, on_quit) -> "pystray.Icon":
     menu = pystray.Menu(
         pystray.MenuItem("Show", lambda icon, item: on_show()),
         pystray.MenuItem("Quit", lambda icon, item: on_quit()))
-    return pystray.Icon("sm64_tracker", _icon_image(), "sm64_tracker", menu)
+    return pystray.Icon(APP_DISPLAY_NAME, _icon_image(), APP_DISPLAY_NAME, menu)
 
 
 def start(icon) -> None:

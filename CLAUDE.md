@@ -1,4 +1,4 @@
-# sm64_tracker — Claude Development Guide
+# SM64 Trainer — Claude Development Guide
 
 This project is developed **exclusively by Claude**; the human runs the
 emulator and verifies live behavior. Future sessions have no memory of past
@@ -80,7 +80,7 @@ exe's single-instance takeover would otherwise fight a dev server on :8064).
 | Built-in viewer UI | `ui/index.html` — served per request: edit + refresh, no restart |
 | UI components, store, API client | `ui/components/` · `ui/store.js` · `ui/api.js` · `ui/app.js`; vendored Preact in `ui/vendor/`; incl. `ui/components/timeline.js` (per-star event graph; marker styles via `MARKERS` registry) · `ui/components/progress.js` (per-star completion-time graph; gold = saved PBs; node click → practice.js pickFromGraph reveals + scrolls to the row, auto-opens saved replays) · `ui/format.js` (shared display formatting — fmtIgt mirrors core/timefmt.py) |
 | Wiring / startup / logging | `main.py` (composition root), `core/logging_setup.py` |
-| Runtime data locations (db, replays, settings, lock, pidfile, window state, logs) | `core/paths.py` — THE path resolver; cwd-relative from source (identical to historical layout), `%LOCALAPPDATA%\sm64_tracker` when frozen; also `bundled_ffmpeg()` + `update_state_path()` (the skipped-update overlay `data/update_state.json`) |
+| Runtime data locations (db, replays, settings, lock, pidfile, window state, logs) | `core/paths.py` — THE path resolver; cwd-relative from source (identical to historical layout), `%LOCALAPPDATA%\SM64Trainer` when frozen (legacy `sm64_tracker` auto-migrated by `migrate_legacy_data_dir()`); also `bundled_ffmpeg()` + `update_state_path()` (the skipped-update overlay `data/update_state.json`) + `APP_DISPLAY_NAME` ("SM64 Trainer", the window/tray/dialog name) |
 | Full-process restart primitives | `core/relaunch.py` — `server_alive`/`port_in_use`/`wait_port_free`/`spawn_replacement`; backs the one-click restart + the `SM64_RESTART` handoff (waits on real port bindability, scrubs PyInstaller `_MEIPASS2`/`_PYI_*`) |
 | Desktop GUI shell (window, tray, single-instance, server runner) | `desktop/` — additive wrapper over the SAME server/UI: `app.py` (composition + native takeover dialog + restart/quit wiring), `server_runner.py` (uvicorn in a thread), `single_instance.py`, `window.py` (resizable pywebview + geometry), `tray.py`; entry `python -m sm64_events.desktop` / `gui_entry.py` |
 | Admin endpoints (GUI takeover + restart) | `server/app.py` `POST /api/admin/shutdown` + `/api/admin/restart` + pidfile in the lifespan; dispatched off-thread |
