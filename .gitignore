@@ -9,6 +9,7 @@ replays/
 data/replay_buffer/
 .claude/worktrees/
 _dbg/
+internal_notes/
 
 # desktop build + runtime state
 /dist/

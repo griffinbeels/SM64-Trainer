@@ -5,6 +5,8 @@ import sys
 
 from sm64_events.core.logging_setup import configure_logging
 from sm64_events.core.paths import bundled_ffmpeg, db_path, instance_lock_path, server_port
+from sm64_events.core.updater import UpdateService
+from sm64_events.core.version import __version__
 from sm64_events.detectors.anchors import AnchorDetector
 from sm64_events.detectors.area import AreaChangeDetector
 from sm64_events.detectors.death import DeathDetector
@@ -130,7 +132,10 @@ def build():
         from sm64_events.replay.activity import ActivityTap
         detectors.append(ActivityTap(replay.recorder))
     poller = Poller(memory, detectors, service)  # service IS the event sink
-    return create_app(poller, broadcaster, service=service, replay=replay)
+    updater = UpdateService(current_version=__version__)
+    updater.cleanup_old_exe()   # delete a *.old left by a prior self-update
+    return create_app(poller, broadcaster, service=service, replay=replay,
+                      updater=updater)
 
 
 _app = None

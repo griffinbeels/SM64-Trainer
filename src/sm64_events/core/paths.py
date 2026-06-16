@@ -67,6 +67,12 @@ def replay_settings_path() -> Path:
     return data_root() / "data" / "replay_settings.json"
 
 
+def update_state_path() -> Path:
+    # Skipped-update version lives here (a JSON overlay like replay_settings.json,
+    # keeps the updater DB-free).
+    return data_root() / "data" / "update_state.json"
+
+
 def pidfile_path() -> Path:
     return data_root() / "server.pid"
 

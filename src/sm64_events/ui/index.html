@@ -123,6 +123,22 @@
   .runhistory { margin-top: 1rem; border-top: 1px solid #2c3140; padding-top: .6rem; }
   .rungraph { width: 100%; height: 150px; display: block; margin: .4rem 0; }
   .rungraph-empty { color: #6c7686; font-size: .85em; }
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.6);
+    display: flex; align-items: center; justify-content: center; z-index: 50; }
+  .modal { background: #1b1e24; border: 1px solid #3a4150; border-radius: 10px;
+    padding: 1rem 1.2rem; max-width: 540px; width: 90%; max-height: 80vh;
+    overflow: auto; }
+  .modal h2 { font-size: 1.05rem; margin: 0 0 .3rem; color: #ffd75f; }
+  .update-notes { background: #14161a; border: 1px solid #2c3140;
+    border-radius: 6px; padding: .5rem .7rem; margin: .6rem 0; font-size: .9em;
+    line-height: 1.5; }
+  .update-notes ul { padding-left: 1.1rem; } .update-notes li { list-style: disc; }
+  .modal-actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .6rem; }
+  .btnlink { display: inline-block; padding: .15rem .55rem; border: 1px solid #3a4150;
+    border-radius: 4px; text-decoration: none; }
+  .progress { background: #14161a; border: 1px solid #2c3140; border-radius: 4px;
+    height: 10px; overflow: hidden; margin-top: .5rem; }
+  .progress-bar { background: #6fa8ff; height: 100%; transition: width .3s; }
 </style></head>
 <body>
 <div id="app"></div>

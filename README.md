@@ -29,6 +29,14 @@ broadcast-only.)
 
 That's it — no install, no Python, nothing else to set up.
 
+**Updates are automatic.** On launch the app checks GitHub for a newer
+release; if one exists you get an in-app popup with the patch notes and a
+link. Click **Update now** and it downloads the new exe (SHA-256 verified),
+swaps itself, and restarts — your history and PBs are untouched. **Skip this
+version** silences that one release (a newer one will still notify);
+**Later** dismisses until next launch. (In-app updates don't trigger
+SmartScreen — only the first manual download does.)
+
 ### Requirements / assumptions
 
 - **Windows 11** 64-bit (Windows 10 works if the
@@ -73,6 +81,26 @@ See `tools/build_exe.py` for what gets bundled.
 > The released exe bundles **ffmpeg** (FFmpeg, https://ffmpeg.org) for replay
 > encoding. FFmpeg is licensed under the GPL/LGPL; it ships as a separate
 > binary within the exe and is used unmodified.
+
+## Cutting a release (maintainer)
+
+```
+uv run python tools/release.py 1.1.0          # or --notes-file NOTES.md
+```
+
+One command: it refuses unless you're on `master` with a clean tree and `gh`
+is authenticated, runs the full test suite, bumps `core/version.py` +
+`pyproject.toml`, **builds the exe before tagging** (a broken build aborts
+with nothing pushed), writes `dist\sm64_tracker.exe.sha256`, pushes the
+commit + tag, and runs `gh release create` with the exe + checksum attached
+(GitHub adds the source zip/tar.gz automatically). Notes default to GitHub's
+auto-generated changelog; the popup fetches the release body live, so you can
+also edit the notes on GitHub afterward.
+
+**Prereqs:** ffmpeg on PATH (so the exe bundles it) and `gh auth login`. The
+in-app updater requires the `.sha256` asset — `release.py` always uploads it,
+and a release published without one is simply never offered to users.
+`--dry-run` builds + checksums without committing/tagging/publishing.
 
 ## What it does
 

@@ -9,6 +9,7 @@ import { Feed } from "./components/feed.js";
 import { Segments } from "./components/segments.js";
 import { Routes } from "./components/routes.js";
 import { Run } from "./components/runview.js";
+import { UpdatePopup } from "./components/update.js";
 
 const html = htm.bind(h);
 const TABS = ["Practice", "Segments", "Routes", "Run", "Live feed"];
@@ -30,7 +31,8 @@ function App() {
         : tab === "Routes" ? html`<${Routes} t=${t} />`
         : tab === "Run" ? html`<${Run} t=${t} />`
         : html`<${Feed} t=${t} />`}
-    </div>`;
+    </div>
+    <${UpdatePopup} />`;
 }
 
 render(html`<${App} />`, document.getElementById("app"));
