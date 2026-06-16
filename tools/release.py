@@ -21,6 +21,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 VERSION_PY = REPO / "src" / "sm64_events" / "core" / "version.py"
 PYPROJECT = REPO / "pyproject.toml"
+UV_LOCK = REPO / "uv.lock"
 EXE = REPO / "dist" / "sm64_tracker.exe"
 
 
@@ -105,7 +106,10 @@ def main() -> int:
         print("dry-run: built + checksummed, skipping commit/tag/publish")
         return 0
 
-    _run(["git", "add", str(VERSION_PY), str(PYPROJECT)])
+    # uv.lock records the editable package's OWN version, so the bump above
+    # regenerates it during the `uv run` build; stage it too or it's left dirty
+    # and the NEXT release's clean-tree preflight refuses.
+    _run(["git", "add", str(VERSION_PY), str(PYPROJECT), str(UV_LOCK)])
     _run(["git", "commit", "-m", f"release: {tag}"])
     # Annotated (-a) tag, NOT lightweight: `git push --follow-tags` only pushes
     # ANNOTATED tags, so a lightweight `git tag v…` reaches main but never the
