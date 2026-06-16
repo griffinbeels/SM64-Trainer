@@ -149,9 +149,12 @@ export function Run({ t }) {
 
   if (!run) return html`<p class="meta">loading…</p>`;
 
-  // latest finished run for the frozen post-run display
-  const lastFinished = hist && [...hist.runs].reverse()
-    .find((r) => r.status === "finished" && r.total_ms != null);
+  // Frozen post-run display: ONLY when the MOST RECENT run finished. After a
+  // Reset / F1-abort the newest run is "aborted", so we fall through to the idle
+  // 0:00 + preview (armed and ready) instead of showing a stale finished time.
+  const mostRecent = hist && hist.runs.length ? hist.runs[hist.runs.length - 1] : null;
+  const lastFinished = (mostRecent && mostRecent.status === "finished"
+    && mostRecent.total_ms != null) ? mostRecent : null;
 
   // clock + step rows by state: active (live) > finished (frozen) > idle (preview)
   let clockMs, rows;
