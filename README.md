@@ -1,4 +1,4 @@
-# sm64_tracker
+# SM64 Trainer
 
 A practice-stats tracker for **Super Mario 64 — Usamune v1.93u (US)** running
 in **Project64 1.6** on Windows. It reads the emulator's memory live, detects
@@ -20,7 +20,7 @@ broadcast-only.)
 
 ## Quick start (just want to use it)
 
-1. **Download** the latest `sm64_tracker.exe` from the
+1. **Download** the latest `SM64Trainer.exe` from the
    [Releases page](../../releases).
 2. **Run it.** First launch shows a Windows SmartScreen notice (the app is
    unsigned) — click **More info → Run anyway**. A window opens.
@@ -45,12 +45,12 @@ SmartScreen — only the first manual download does.)
 - **Project64 1.6** (other versions not supported — addresses are 1.6-specific).
 - **Usamune v1.93u — US**. The **JP** version is **untested and unsupported**.
 - For replay video: run PJ64 **windowed** (the released exe bundles ffmpeg).
-- Your data lives in `%LOCALAPPDATA%\sm64_tracker\` — history and PBs survive
+- Your data lives in `%LOCALAPPDATA%\SM64Trainer\` — history and PBs survive
   upgrading the exe.
 - **Replay audio routing:** if a saved replay plays back with no sound, Windows
   has likely routed the app's audio — and the GUI's embedded browser
   (`msedgewebview2.exe`) — to the wrong output device. Open **Settings → System
-  → Sound → Volume mixer** and set both **sm64_tracker** and
+  → Sound → Volume mixer** and set both **SM64 Trainer** and
   **msedgewebview2.exe** to your speakers/headphones. (A quirk of the WebView2
   audio session in the current build; may be fixed in a later release.)
 
@@ -80,7 +80,7 @@ testing whether the instrumentation contributes to any capture/audio hitch.
 uv run python tools/build_exe.py
 ```
 
-→ `dist\sm64_tracker.exe` (one self-contained onefile build; ffmpeg on PATH is
+→ `dist\SM64Trainer.exe` (one self-contained onefile build; ffmpeg on PATH is
 bundled automatically — pass `--ffmpeg PATH` to point at a specific binary).
 See `tools/build_exe.py` for what gets bundled.
 
@@ -97,7 +97,7 @@ uv run python tools/release.py 1.1.0          # or --notes-file NOTES.md
 One command: it refuses unless you're on `main` with a clean tree and `gh`
 is authenticated, runs the full test suite, bumps `core/version.py` +
 `pyproject.toml`, **builds the exe before tagging** (a broken build aborts
-with nothing pushed), writes `dist\sm64_tracker.exe.sha256`, pushes the
+with nothing pushed), writes `dist\SM64Trainer.exe.sha256`, pushes the
 commit + tag, and runs `gh release create` with the exe + checksum attached
 (GitHub adds the source zip/tar.gz automatically). Notes default to GitHub's
 auto-generated changelog; the popup fetches the release body live, so you can

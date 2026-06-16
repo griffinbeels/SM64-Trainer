@@ -4,7 +4,8 @@ import logging
 import sys
 
 from sm64_events.core.logging_setup import configure_logging
-from sm64_events.core.paths import bundled_ffmpeg, db_path, instance_lock_path, server_port
+from sm64_events.core.paths import (bundled_ffmpeg, db_path, instance_lock_path,
+                                    migrate_legacy_data_dir, server_port)
 from sm64_events.core.updater import UpdateService
 from sm64_events.core.version import __version__
 from sm64_events.detectors.anchors import AnchorDetector
@@ -41,6 +42,7 @@ _instance_lock = None
 def build():
     global _instance_lock
     configure_logging()
+    migrate_legacy_data_dir()   # rename the legacy data dir before any data path is read
     # Capture threads contend with encode/server threads for the GIL; the
     # default 5 ms switch interval adds whole-frame latency spikes at 60 fps.
     sys.setswitchinterval(0.002)

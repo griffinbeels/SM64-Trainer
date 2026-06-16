@@ -18,7 +18,7 @@ function App() {
   const t = useTracker();
   const [tab, setTab] = useState("Practice");
   return html`
-    <h1>SM64 Practice Tracker</h1>
+    <h1>SM64 Trainer</h1>
     <${Header} t=${t} />
     <div class="tabs">
       ${TABS.map((name) => html`

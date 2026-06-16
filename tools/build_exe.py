@@ -1,5 +1,5 @@
 # tools/build_exe.py
-"""One-command build: `uv run python tools/build_exe.py` -> dist/sm64_tracker.exe
+"""One-command build: `uv run python tools/build_exe.py` -> dist/SM64Trainer.exe
 
 Bundles Python + all native deps + the UI folder + the Ukiki icon into a
 single onefile exe. ffmpeg is bundled automatically: --ffmpeg PATH wins,
@@ -30,7 +30,7 @@ def main() -> int:
 
     argv = [
         str(REPO / "gui_entry.py"),
-        "--name", "sm64_tracker",
+        "--name", "SM64Trainer",
         "--onefile", "--windowed", "--clean", "--noconfirm",
         "--paths", str(REPO / "src"),
         "--icon", str(REPO / "assets" / "ukiki.ico"),
@@ -64,7 +64,7 @@ def main() -> int:
               "Install ffmpeg (or pass --ffmpeg PATH) for a proper release.")
 
     pyi.run(argv)
-    print("\nBuilt:", REPO / "dist" / "sm64_tracker.exe")
+    print("\nBuilt:", REPO / "dist" / "SM64Trainer.exe")
     return 0
 
 

@@ -1,4 +1,4 @@
-# sm64_tracker — API reference
+# SM64 Trainer — API reference
 
 The live event feed, HTTP API, replay endpoints, and behavior notes. New to
 the project? Start with the [README](../README.md). Developing here? Read
@@ -22,7 +22,7 @@ when running from source (`is_frozen()` false → `update_available: false`).
 | `POST /api/update/apply` | Begins the off-thread download → SHA-256 verify → exe swap, then fires the same full-process restart as `/api/admin/restart`. Returns `{state}` immediately; poll `/status` for `progress`. Refuses (`state: "error"`) if not frozen, no update, the folder isn't writable, or already in progress. |
 | `POST /api/update/skip` `{version}` | Persist a skipped version to `data/update_state.json` so that release never re-notifies (a newer one still does). `{"skipped": version}`. |
 
-A release **must** carry a `sm64_tracker.exe.sha256` asset; one without it is
+A release **must** carry a `SM64Trainer.exe.sha256` asset; one without it is
 never offered, so an unverified exe can never be applied. The exe swap uses
 the Windows rename-a-running-exe trick and restores the backup on failure —
 see `docs/architecture.md` → Self-update.

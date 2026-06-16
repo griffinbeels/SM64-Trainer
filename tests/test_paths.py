@@ -20,7 +20,7 @@ def test_source_paths_match_historical_relative_layout(monkeypatch):
 def test_frozen_paths_live_under_localappdata(monkeypatch, tmp_path):
     monkeypatch.setattr(paths, "is_frozen", lambda: True)
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
-    root = tmp_path / "sm64_tracker"
+    root = tmp_path / "SM64Trainer"
     assert paths.data_root() == root
     assert paths.db_path() == root / "data" / "tracker.db"
     assert paths.instance_lock_path() == root / "data" / "tracker.lock"
@@ -62,3 +62,49 @@ def test_update_state_path_lives_under_data():
     p = paths.update_state_path()
     assert p.name == "update_state.json"
     assert p.parent.name == "data"
+
+
+def test_migrate_renames_legacy_data_dir(monkeypatch, tmp_path):
+    monkeypatch.setattr(paths, "is_frozen", lambda: True)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    legacy = tmp_path / "sm64_tracker"
+    (legacy / "data").mkdir(parents=True)
+    (legacy / "data" / "tracker.db").write_text("PB")
+    paths.migrate_legacy_data_dir()
+    assert not legacy.exists()
+    assert (tmp_path / "SM64Trainer" / "data" / "tracker.db").read_text() == "PB"
+
+
+def test_migrate_into_empty_new_dir(monkeypatch, tmp_path):
+    # The new dir may already exist but EMPTY (e.g. a mkdir ran first) — the
+    # rename must still proceed.
+    monkeypatch.setattr(paths, "is_frozen", lambda: True)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    (tmp_path / "sm64_tracker" / "data").mkdir(parents=True)
+    (tmp_path / "sm64_tracker" / "data" / "x").write_text("d")
+    (tmp_path / "SM64Trainer").mkdir()
+    paths.migrate_legacy_data_dir()
+    assert (tmp_path / "SM64Trainer" / "data" / "x").read_text() == "d"
+    assert not (tmp_path / "sm64_tracker").exists()
+
+
+def test_migrate_never_destroys_existing_new_data(monkeypatch, tmp_path):
+    monkeypatch.setattr(paths, "is_frozen", lambda: True)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    legacy = tmp_path / "sm64_tracker"
+    legacy.mkdir()
+    (legacy / "old.txt").write_text("legacy")
+    new = tmp_path / "SM64Trainer"
+    new.mkdir()
+    (new / "current.txt").write_text("new")   # new dir already holds data
+    paths.migrate_legacy_data_dir()
+    assert (new / "current.txt").read_text() == "new"   # untouched
+    assert legacy.exists()                              # NOT destroyed
+
+
+def test_migrate_noop_from_source(monkeypatch, tmp_path):
+    monkeypatch.setattr(paths, "is_frozen", lambda: False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    (tmp_path / "sm64_tracker").mkdir()
+    paths.migrate_legacy_data_dir()
+    assert (tmp_path / "sm64_tracker").exists()   # inert from source
