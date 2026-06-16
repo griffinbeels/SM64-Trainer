@@ -160,12 +160,13 @@ def apply_update(staged: Path, current_exe: Path, *, retries: int = 5,
 
 
 def cleanup_old(exe_dir: Path) -> None:
-    """Delete a leftover *.old from a prior update (now unlocked)."""
-    for p in exe_dir.glob("*.old"):
-        try:
-            p.unlink()
-        except OSError:
-            pass  # still locked (rare) -> retry next launch
+    """Delete the backup left by a prior update (now unlocked). Targets the
+    EXACT name (not a `*.old` glob) so a shared install dir's foreign .old
+    files are never touched."""
+    try:
+        (exe_dir / (EXE_NAME + ".old")).unlink(missing_ok=True)
+    except OSError:
+        pass  # still locked (rare) -> retry next launch
 
 
 def exe_dir_writable(exe_dir: Path) -> bool:

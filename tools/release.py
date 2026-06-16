@@ -37,6 +37,8 @@ def bump_version_py(text: str, new: str) -> str:
 
 
 def bump_pyproject(text: str, new: str) -> str:
+    # Targets the FIRST top-level `version = "..."` — assumes [project] (the
+    # authoritative version) precedes any [tool.*] version in pyproject.toml.
     out, n = re.subn(r'(?m)^version\s*=\s*"[^"]+"',
                      f'version = "{new}"', text, count=1)
     if n != 1:

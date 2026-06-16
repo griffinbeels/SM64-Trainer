@@ -75,12 +75,18 @@ export function UpdatePopup() {
              dangerouslySetInnerHTML=${{ __html: renderNotes(st.notes) }}></div>
         <p><a href=${st.html_url} target="_blank">View this release on GitHub →</a></p>
         ${applying
-          ? html`
-            <div class="meta">${st.state === "error"
-              ? "Update failed — keeping the current version. Try again or download from GitHub."
-              : "Installing… the app will restart automatically."}</div>
-            <div class="progress"><div class="progress-bar"
-                 style=${{ width: pct + "%" }}></div></div>`
+          ? (st.state === "error"
+            ? html`
+              <div class="meta">Update failed — your current version is unchanged.</div>
+              <div class="modal-actions">
+                <button onclick=${() => setApplying(false)}>Close</button>
+                <a class="btnlink" href=${st.html_url}
+                   target="_blank">Download from GitHub</a>
+              </div>`
+            : html`
+              <div class="meta">Installing… the app will restart automatically.</div>
+              <div class="progress"><div class="progress-bar"
+                   style=${{ width: pct + "%" }}></div></div>`)
           : html`
             <div class="modal-actions">
               ${st.writable
