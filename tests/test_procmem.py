@@ -9,8 +9,9 @@ import os
 from sm64_events.core.procmem import (assess_growth, child_memory,
                                       dir_size_bytes, gc_summary, gpu_memory,
                                       handle_counts, named_process_memory,
-                                      resource_alarms, sample, system_memory,
-                                      top_type_growth, type_histogram)
+                                      process_table, resource_alarms, sample,
+                                      system_memory, top_type_growth,
+                                      type_histogram)
 
 _GiB = 1024 ** 3
 
@@ -169,6 +170,20 @@ def test_named_process_memory_matches_self():
 
 def test_named_process_memory_empty_for_unknown_name():
     assert named_process_memory({"definitely-not-a-real-process-xyz.exe"}) == {}
+
+
+def test_process_table_one_pass_covers_children_and_named():
+    import sys
+    exe = os.path.basename(sys.executable)        # python.exe — this process
+    pt = process_table(parent_pid=os.getpid(), names={exe})
+    assert isinstance(pt, dict)
+    if pt:  # Windows
+        assert "children" in pt and "processes" in pt
+        assert any(exe.lower() == k.lower() for k in pt["processes"])  # self matched
+
+
+def test_process_table_empty_when_nothing_requested():
+    assert process_table() == {}                  # no parent, no names -> no work
 
 
 def test_sample_gpu_and_processes_opt_in():

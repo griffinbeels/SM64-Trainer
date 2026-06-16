@@ -213,84 +213,81 @@ def system_memory() -> dict:
             "commit_limit_bytes": int(m.ullTotalPageFile)}
 
 
-def child_memory(parent_pid: int) -> dict:
-    """Summed working-set + private bytes of the DIRECT child processes of
-    parent_pid (ffmpeg.exe is spawned directly by the recorder). THE probe for
-    the encoder-leak hypothesis: ffmpeg memory is invisible to a self-only RSS
-    sample. Returns {count, rss_bytes, private_bytes, by_name:{exe: rss}}; {}
-    off Windows. Best-effort — a child we can't open is skipped, never raises."""
-    if _API.snapshot is None:
+def process_table(parent_pid: int | None = None, names=None) -> dict:
+    """ONE Toolhelp32 pass collecting BOTH the direct children of parent_pid AND
+    any processes whose exe matches `names` (case-insensitive). One pass, not
+    two: each enumeration is ~13 ms of mostly-kernel time, and the 60 s monitor
+    wants both — doing them separately doubled its GIL footprint (a periodic
+    capture/audio hitch suspect). Returns {'children': {count, rss_bytes,
+    private_bytes, by_name}, 'processes': {exe: {count, rss_bytes,
+    private_bytes}}} with only the requested keys present; {} off Windows or
+    when nothing was requested. Best-effort — an unopenable process is skipped."""
+    if _API.snapshot is None or (parent_pid is None and not names):
         return {}
+    wanted = {n.lower() for n in (names or ())}
     snap = _API.snapshot(_TH32CS_SNAPPROCESS, 0)
     if not snap or snap == _INVALID_HANDLE:
         return {}
-    count = 0
-    rss = priv = 0
-    by_name: Counter = Counter()
-    try:
-        entry = _PROCESSENTRY32W()
-        entry.dwSize = ctypes.sizeof(entry)
-        ok = _API.proc_first(snap, ctypes.byref(entry))
-        while ok:
-            if entry.th32ParentProcessID == parent_pid:
-                h = _API.openproc(_PROCESS_QUERY_LIMITED_INFORMATION, False,
-                                  entry.th32ProcessID)
-                if h:
-                    try:
-                        c = _mem_counters(h)
-                        if c:
-                            count += 1
-                            rss += int(c.WorkingSetSize)
-                            priv += int(c.PagefileUsage)
-                            by_name[entry.szExeFile] += int(c.WorkingSetSize)
-                    finally:
-                        _API.closehandle(h)
-            ok = _API.proc_next(snap, ctypes.byref(entry))
-    finally:
-        _API.closehandle(snap)
-    return {"count": count, "rss_bytes": rss, "private_bytes": priv,
-            "by_name": dict(by_name)}
-
-
-def named_process_memory(names) -> dict:
-    """Working-set + private bytes of ALL processes whose exe matches `names`
-    (case-insensitive), keyed by exe name. THE probe for 'is the system-commit
-    growth PJ64's OWN leak, not ours?' — PJ64 is not our child, so child_memory
-    misses it. `names`: iterable of exe filenames (e.g. {'project64.exe'}).
-    Returns {exe: {count, rss_bytes, private_bytes}}; {} off Windows. Best-
-    effort — a process we can't open is skipped, never raises."""
-    if _API.snapshot is None:
-        return {}
-    wanted = {n.lower() for n in names}
-    snap = _API.snapshot(_TH32CS_SNAPPROCESS, 0)
-    if not snap or snap == _INVALID_HANDLE:
-        return {}
-    out: dict = {}
+    c_count = 0
+    c_rss = c_priv = 0
+    c_by_name: Counter = Counter()
+    procs: dict = {}
     try:
         entry = _PROCESSENTRY32W()
         entry.dwSize = ctypes.sizeof(entry)
         ok = _API.proc_first(snap, ctypes.byref(entry))
         while ok:
             exe = entry.szExeFile
-            if exe.lower() in wanted:
+            is_child = (parent_pid is not None
+                        and entry.th32ParentProcessID == parent_pid)
+            is_named = exe.lower() in wanted
+            if is_child or is_named:
                 h = _API.openproc(_PROCESS_QUERY_LIMITED_INFORMATION, False,
                                   entry.th32ProcessID)
                 if h:
                     try:
                         c = _mem_counters(h)
                         if c:
-                            slot = out.setdefault(
-                                exe, {"count": 0, "rss_bytes": 0,
-                                      "private_bytes": 0})
-                            slot["count"] += 1
-                            slot["rss_bytes"] += int(c.WorkingSetSize)
-                            slot["private_bytes"] += int(c.PagefileUsage)
+                            rss, priv = int(c.WorkingSetSize), int(c.PagefileUsage)
+                            if is_child:
+                                c_count += 1
+                                c_rss += rss
+                                c_priv += priv
+                                c_by_name[exe] += rss
+                            if is_named:
+                                slot = procs.setdefault(
+                                    exe, {"count": 0, "rss_bytes": 0,
+                                          "private_bytes": 0})
+                                slot["count"] += 1
+                                slot["rss_bytes"] += rss
+                                slot["private_bytes"] += priv
                     finally:
                         _API.closehandle(h)
             ok = _API.proc_next(snap, ctypes.byref(entry))
     finally:
         _API.closehandle(snap)
+    out: dict = {}
+    if parent_pid is not None:
+        out["children"] = {"count": c_count, "rss_bytes": c_rss,
+                           "private_bytes": c_priv, "by_name": dict(c_by_name)}
+    if names:
+        out["processes"] = procs
     return out
+
+
+def child_memory(parent_pid: int) -> dict:
+    """Summed working-set + private bytes of the DIRECT child processes of
+    parent_pid (ffmpeg.exe). {count, rss_bytes, private_bytes, by_name}; {} off
+    Windows. Thin wrapper over process_table (one snapshot)."""
+    return process_table(parent_pid=parent_pid).get("children", {})
+
+
+def named_process_memory(names) -> dict:
+    """Working-set + private bytes of processes whose exe matches `names`
+    (case-insensitive), keyed by exe. THE probe for 'is the growth PJ64's OWN,
+    not ours?' (PJ64 is not our child). {exe: {count, rss_bytes, private_bytes}};
+    {} off Windows. Thin wrapper over process_table (one snapshot)."""
+    return process_table(names=names).get("processes", {})
 
 
 # -- GPU VRAM (DXGI) ---------------------------------------------------------
@@ -457,12 +454,14 @@ def sample(scratch_dir: Path | None = None, *, count_objects: bool = False,
         snap["objects"] = len(objs)
         if histogram:
             snap["types"] = type_histogram(objs)
-    if children_of is not None:
-        snap["children"] = child_memory(children_of)
+    if children_of is not None or processes:
+        pt = process_table(parent_pid=children_of, names=processes)  # ONE pass
+        if children_of is not None:
+            snap["children"] = pt.get("children", {})
+        if processes:
+            snap["processes"] = pt.get("processes", {})
     if gpu:
         snap["gpu"] = gpu_memory()
-    if processes:
-        snap["processes"] = named_process_memory(processes)
     if scratch_dir is not None:
         snap["scratch_bytes"] = dir_size_bytes(scratch_dir)
     return snap
