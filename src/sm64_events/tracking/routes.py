@@ -11,6 +11,7 @@ success rate of 0.0, which zeroes the cumulative product from that step down.
 Group rate = product of the BEST-K candidate rates (K=1 'pick one' = the most
 reliable option's rate)."""
 from sm64_events.stats.registry import compute_stat
+from sm64_events.tracking.segments import TRIGGERS, _check_clause
 
 ROUTE_EXPORT_KIND = "sm64-route"
 ROUTE_EXPORT_VERSION = 1
@@ -58,6 +59,9 @@ def validate_route(d: dict) -> None:
             raise ValueError("need must be an integer in 1..len(candidates)")
         for c in cands:
             _validate_item(c)
+    sc = d.get("start_condition")
+    if sc is not None:
+        _check_clause(sc, TRIGGERS, "start_condition")
 
 
 def _item_attempts(item: dict, attempts):
@@ -99,7 +103,8 @@ def route_stats(steps: list, attempts) -> list[dict]:
     return out
 
 
-def export_route(name: str, steps: list, segment_defs: dict) -> dict:
+def export_route(name: str, steps: list, segment_defs: dict,
+                 start_condition: dict | None = None) -> dict:
     """Self-contained export. Segment candidates embed their full definition
     (resolved from segment_defs: id -> {name, start_triggers, end_triggers,
     guards}); star candidates are portable as-is. Raises ValueError if a step
@@ -123,7 +128,8 @@ def export_route(name: str, steps: list, segment_defs: dict) -> dict:
             out_step["label"] = step["label"]
         out_steps.append(out_step)
     return {"kind": ROUTE_EXPORT_KIND, "version": ROUTE_EXPORT_VERSION,
-            "name": name, "steps": out_steps}
+            "name": name, "steps": out_steps,
+            "start_condition": start_condition or {"type": "reset_game"}}
 
 
 def _segment_matches(emb: dict, existing: dict) -> bool:
@@ -193,5 +199,7 @@ def resolve_import(payload: dict, existing_defs: list) -> dict:
         if step.get("label") is not None:
             out_step["label"] = step["label"]
         out_steps.append(out_step)
+    sc = payload.get("start_condition", {"type": "reset_game"})
     return {"name": name, "steps": out_steps, "to_create": to_create,
-            "reused": reused, "created": created}
+            "reused": reused, "created": created,
+            "start_condition": sc}

@@ -177,3 +177,23 @@ def test_resolve_import_rejects_bad_kind_or_version():
     with pytest.raises(ValueError):
         resolve_import({"kind": "sm64-route", "version": 99, "name": "R",
                         "steps": [{"need": 1, "candidates": []}]}, [])
+
+
+def test_validate_route_accepts_valid_start_condition():
+    validate_route({"name": "R", "start_condition": {"type": "reset_game"},
+        "steps": [{"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]})
+
+
+def test_validate_route_rejects_bad_start_condition():
+    with pytest.raises(ValueError):
+        validate_route({"name": "R", "start_condition": {"type": "nope"},
+            "steps": [{"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]})
+
+
+def test_export_import_roundtrips_start_condition():
+    segs = {}
+    out = export_route("R", [{"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}],
+                       segs, start_condition={"type": "level_enter", "to": 9})
+    assert out["start_condition"] == {"type": "level_enter", "to": 9}
+    res = resolve_import(out, [])
+    assert res["start_condition"] == {"type": "level_enter", "to": 9}
