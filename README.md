@@ -41,6 +41,13 @@ Run from the repo root (from source, `data/` is created relative to cwd).
 `uv run pytest -q` must pass before any merge. The **↻ restart server** button
 in the header relaunches the backend to pick up code changes.
 
+**Perf instrumentation toggle:** the server samples resource usage every 60 s
+(`mem:` log line + `data/perf_log.jsonl`, analyzed by
+`tools/analyze_perf_log.py`). It's on by default while the over-hours leak is
+being hunted. To turn it fully off (zero per-60 s overhead — no heap walk, no
+GPU/process probes), set `SM64_PERFMON=0` before launching. Useful for A/B
+testing whether the instrumentation contributes to any capture/audio hitch.
+
 ## Build the portable exe
 
 ```

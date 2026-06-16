@@ -234,9 +234,15 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
                 pass
         return g
 
+    # Easy off-switch: SM64_PERFMON=0 (or off/false/no) disables all perf
+    # sampling — no 60 s heap walk / process+GPU probes / perf_log. Default on
+    # (we're still hunting the over-hours leak). Toggle it to A/B-test whether
+    # the instrumentation contributes to any capture/audio hitch.
+    _perfmon_on = os.environ.get("SM64_PERFMON", "1").strip().lower() \
+        not in ("0", "off", "false", "no")
     monitor = PerfMonitor(
         scratch_dir=replay.cfg.scratch_dir if replay is not None else None,
-        gauges=_perf_gauges)
+        gauges=_perf_gauges, enabled=_perfmon_on)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

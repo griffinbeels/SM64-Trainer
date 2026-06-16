@@ -62,6 +62,14 @@ def test_monitor_latest_starts_empty():
     assert PerfMonitor(perf_log_path=None).latest == {}
 
 
+def test_disabled_monitor_does_nothing(tmp_path):
+    import asyncio
+    path = tmp_path / "perf.jsonl"
+    mon = PerfMonitor(perf_log_path=path, enabled=False)
+    asyncio.run(mon.run())                       # returns at once, no sampling
+    assert mon.latest == {} and not path.exists()
+
+
 def test_tick_samples_persists_and_sets_baseline(tmp_path):
     path = tmp_path / "perf.jsonl"
     mon = PerfMonitor(scratch_dir=tmp_path, perf_log_path=path,

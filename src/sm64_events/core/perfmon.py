@@ -109,7 +109,11 @@ class PerfMonitor:
                  gauges: Callable[[], dict] | None = None,
                  self_pid: int | None = None,
                  max_log_bytes: int = 50 * 1024 * 1024,
-                 watch_processes=("Project64.exe",)):
+                 watch_processes=("Project64.exe",),
+                 enabled: bool = True):
+        self._enabled = enabled    # SM64_PERFMON=0 -> run() is a no-op (zero
+                                   # per-60s cost: no heap walk, no probes, no
+                                   # log line) for audio-sensitive sessions
         self._scratch_dir = scratch_dir
         self._interval_s = interval_s
         # exe names whose memory we sample alongside ours — PJ64 is NOT our
@@ -198,6 +202,10 @@ class PerfMonitor:
 
     async def run(self) -> None:
         import asyncio
+        if not self._enabled:
+            log.info("perf monitor DISABLED (SM64_PERFMON=0) — no sampling, "
+                     "no perf_log.jsonl, zero overhead")
+            return
         start_new_session_log(self._logpath())  # one run = one clean log
         while True:
             try:
