@@ -2,10 +2,13 @@
 // Renders GET /api/run (via the store's t.run, refetched on run_* WS events);
 // the big clock + current-step time TICK client-side off the authoritative
 // started_utc + start_offset_ms. Forgiving RTA: no pause subtraction (v1).
+// Always-on: idle shows preview steps + 0:00+offset; active ticks; finished
+// freezes on the last split until the next run begins. No Start button —
+// selecting a route arms it (pickRoute calls POST /api/run/start).
 // Focus mode (neutral, no ±/gold) and click-to-hide any timer are pure UI
 // state in localStorage.
 import { h } from "preact";
-import { useCallback, useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 
@@ -20,8 +23,6 @@ function fmtMs(ms) {
   const cs = Math.floor((ms % 1000) / 10);
   return `${sign}${m}:${String(s).padStart(2, "0")}.${String(cs).padStart(2, "00")}`;
 }
-const fmtDelta = (ms) =>
-  ms == null ? "" : `${ms > 0 ? "+" : ms < 0 ? "−" : ""}${(Math.abs(ms) / 1000).toFixed(2)}`;
 
 // Persisted set of hidden timer keys (click-to-hide).
 function loadHidden() {
@@ -33,23 +34,21 @@ function fmtDate(utc) {
   try { return new Date(utc).toLocaleString(); } catch { return utc; }
 }
 
-// Small dedicated progression graph: finished-run totals over time, gold dots
-// for runs that were a PB when achieved (is_pb). Reuses progress.js's VISUAL
-// pattern (line + dots, gold = PB) — not the component, whose per-star/clock
-// shape doesn't fit whole-game runs. y inverted (lower time = higher = better).
+// --- replaces the existing RunGraph: x = oldest->newest, y = time with 0 at
+// the BOTTOM and the worst time at the TOP (slower = higher; not inverted). ---
 function RunGraph({ runs }) {
   const fin = runs.filter((r) => r.status === "finished" && r.total_ms != null);
   if (fin.length < 2)
     return html`<div class="rungraph-empty">finish at least 2 runs to see a graph</div>`;
   const W = 600, H = 150, pad = 22;
   const val = (r) => r.total_ms + r.start_offset_ms;
-  const vals = fin.map(val);
-  const min = Math.min(...vals), max = Math.max(...vals), span = (max - min) || 1;
+  const max = Math.max(...fin.map(val)) || 1;        // 0-based axis
   const x = (i) => pad + (i * (W - 2 * pad)) / (fin.length - 1);
-  const y = (v) => pad + ((v - min) / span) * (H - 2 * pad);
+  const y = (v) => (H - pad) - (v / max) * (H - 2 * pad);   // 0 -> bottom, max -> top
   const path = fin.map((r, i) =>
     `${i ? "L" : "M"}${x(i).toFixed(1)} ${y(val(r)).toFixed(1)}`).join(" ");
   return html`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" class="rungraph">
+    <line x1=${pad} y1=${H - pad} x2=${W - pad} y2=${H - pad} stroke="#2c3140" />
     <path d=${path} fill="none" stroke="#4a6fa5" stroke-width="1.5" />
     ${fin.map((r, i) => html`<circle cx=${x(i)} cy=${y(val(r))} r="3.5"
         fill=${r.is_pb ? "#ffd75f" : "#6fa8ff"}>
@@ -58,62 +57,63 @@ function RunGraph({ runs }) {
   </svg>`;
 }
 
-function RunHistory({ t, routeId }) {
-  const [hist, setHist] = useState(null);
+function RunHistory({ t, hist, openRun, setOpenRun }) {
   const [finishedOnly, setFinishedOnly] = useState(true);
-  const load = useCallback(async () => {
-    if (routeId == null) { setHist(null); return; }
-    try { setHist(await getJSON(`/api/run/history?route_id=${routeId}`)); }
-    catch { setHist(null); }
-  }, [routeId]);
-  // refetch on mount, route change, and run events (t.run flips on run_*)
-  useEffect(() => { load(); }, [load, t.run]);
-
-  if (routeId == null)
-    return html`<div class="runhistory meta">pick a route to see its run history</div>`;
-  if (!hist) return html`<div class="runhistory meta">loading history…</div>`;
-
+  if (!hist) return html`<div class="runhistory meta">no run history yet</div>`;
   const finished = hist.runs.filter((r) => r.status === "finished" && r.total_ms != null);
   const pbRun = finished.length
     ? finished.reduce((a, b) => (a.total_ms <= b.total_ms ? a : b)) : null;
-  const list = [...hist.runs].reverse();   // newest first for the table
+  const list = [...hist.runs].reverse();
   const shown = finishedOnly ? list.filter((r) => r.status === "finished") : list;
-
   return html`<div class="runhistory">
-    <div class="shead">
-      <b>Run history</b>
+    <div class="shead"><b>Run history</b>
       <label class="meta"><input type="checkbox" checked=${finishedOnly}
           onchange=${(e) => setFinishedOnly(e.target.checked)} /> finished only</label>
-      ${pbRun ? html`<span class="pbtag">PB ${pbRun.display_total}</span>` : null}
-    </div>
+      ${pbRun ? html`<span class="pbtag">PB ${pbRun.display_total}</span>` : null}</div>
     <${RunGraph} runs=${hist.runs} />
-    ${shown.length === 0
-      ? html`<p class="meta">no ${finishedOnly ? "finished " : ""}runs yet</p>`
-      : html`<table><tbody>
-        ${shown.map((r) => html`<tr>
+    ${shown.length === 0 ? html`<p class="meta">no runs yet</p>` : html`<table><tbody>
+      ${shown.map((r) => [
+        html`<tr style="cursor:pointer"
+            onclick=${() => setOpenRun(openRun === r.id ? null : r.id)}>
           <td class="meta">${fmtDate(r.started_utc)}</td>
           <td>${r.status === "finished"
               ? html`<b>${r.display_total}</b>${r.is_pb ? html` <span class="rungold">★</span>` : ""}`
-              : html`<span class="meta">aborted · reached step ${r.reached_step}</span>`}</td>
-        </tr>`)}
-      </tbody></table>`}
+              : html`<span class="meta">aborted · reached step ${r.reached_step}</span>`}
+            <span class="meta"> ${openRun === r.id ? "▾" : "▸"}</span></td>
+        </tr>`,
+        openRun === r.id ? html`<tr><td colspan="2"><table class="runsplits"><tbody>
+          ${r.splits.map((s) => html`<tr>
+            <td class="meta">${s.step_index + 1}</td><td>${s.display}</td>
+            <td style="text-align:right">${s.duration_display}
+              <span class="meta">${s.fails ? ` · ${s.fails} fail${s.fails > 1 ? "s" : ""}` : ""}</span></td>
+          </tr>`)}
+        </tbody></table></td></tr>` : null,
+      ])}
+    </tbody></table>`}
   </div>`;
 }
 
 export function Run({ t }) {
-  const run = t.run;
+  const run = t.run;                       // {active, pb, gold, start_offset_ms}
   const [routes, setRoutes] = useState([]);
   const [routeId, setRouteId] = useState(() => {
-    const s = localStorage.getItem("sm64.activeRoute"); return s ? Number(s) : null;
-  });
+    const s = localStorage.getItem("sm64.activeRoute"); return s ? Number(s) : null; });
+  const [routeView, setRouteView] = useState(null);   // preview steps + start_condition
+  const [hist, setHist] = useState(null);
   const [focus, setFocus] = useState(() => localStorage.getItem("sm64.runFocus") === "1");
   const [hidden, setHidden] = useState(loadHidden);
+  const [openRun, setOpenRun] = useState(null);        // run id expanded in history
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [err, setErr] = useState(null);
 
   useEffect(() => { getJSON("/api/routes").then(setRoutes).catch(() => {}); }, []);
-  // tick the live clock only while a run is active
   const active = run && run.active;
+  const effRouteId = active ? active.route_id : routeId;
+  useEffect(() => {
+    if (effRouteId == null) { setRouteView(null); setHist(null); return; }
+    getJSON(`/api/routes/${effRouteId}`).then(setRouteView).catch(() => setRouteView(null));
+    getJSON(`/api/run/history?route_id=${effRouteId}`).then(setHist).catch(() => setHist(null));
+  }, [effRouteId, run]);
   useEffect(() => {
     if (!active) return;
     const id = setInterval(() => setNowMs(Date.now()), 60);
@@ -121,91 +121,83 @@ export function Run({ t }) {
   }, [active && active.id]);
 
   const toggleFocus = () => {
-    const v = !focus; localStorage.setItem("sm64.runFocus", v ? "1" : "0"); setFocus(v);
-  };
+    const v = !focus; localStorage.setItem("sm64.runFocus", v ? "1" : "0"); setFocus(v); };
   const toggleHide = (key) => setHidden((prev) => {
-    const next = new Set(prev);
-    next.has(key) ? next.delete(key) : next.add(key);
-    localStorage.setItem("sm64.runHidden", JSON.stringify([...next]));
-    return next;
-  });
-  const Timer = ({ k, children, cls }) => html`<span
-      class="runhide ${cls || ""}" title="click to hide/show"
-      onclick=${() => toggleHide(k)}>${hidden.has(k) ? "- - - -" : children}</span>`;
+    const next = new Set(prev); next.has(key) ? next.delete(key) : next.add(key);
+    localStorage.setItem("sm64.runHidden", JSON.stringify([...next])); return next; });
+  const Timer = ({ k, children, cls }) => html`<span class="runhide ${cls || ""}"
+      title="click to hide/show" onclick=${() => toggleHide(k)}>${
+      hidden.has(k) ? "- - - -" : children}</span>`;
 
-  async function startRun() {
-    if (routeId == null) { setErr("pick a route first"); return; }
-    try { setErr(null); await send("POST", "/api/run/start", { route_id: routeId });
-      t.refreshRun(); }
-    catch (e) { setErr(String(e)); }
-  }
-  async function endRun() {
-    try { await send("POST", "/api/run/end"); t.refreshRun(); }
-    catch (e) { setErr(String(e)); }
+  // Selecting a route ARMS it (no Start button). "none" disarms.
+  async function pickRoute(id) {
+    setErr(null);
+    if (id == null) {
+      localStorage.removeItem("sm64.activeRoute"); setRouteId(null);
+      try { await send("POST", "/api/run/end"); } catch (e) {}
+      t.refreshRun(); return;
+    }
+    localStorage.setItem("sm64.activeRoute", String(id)); setRouteId(id);
+    try { await send("POST", "/api/run/start", { route_id: id }); } catch (e) { setErr(String(e)); }
+    t.refreshRun();
   }
 
   if (!run) return html`<p class="meta">loading…</p>`;
 
-  // live total elapsed (ms) from the authoritative start + offset
-  const liveMs = active
-    ? (nowMs - Date.parse(active.started_utc) + active.start_offset_ms)
-    : null;
+  // latest finished run for the frozen post-run display
+  const lastFinished = hist && [...hist.runs].reverse()
+    .find((r) => r.status === "finished" && r.total_ms != null);
+
+  // clock + step rows by state: active (live) > finished (frozen) > idle (preview)
+  let clockMs, rows;
+  if (active) {
+    clockMs = nowMs - Date.parse(active.started_utc) + active.start_offset_ms;
+    rows = active.steps.map((s, i) => ({
+      key: i, display: s.display, group: s.candidates && s.candidates.length > 1,
+      need: s.need, doneN: s.done.length, current: i === active.current_step,
+      cumMs: s.elapsed_ms != null ? s.elapsed_ms + active.start_offset_ms
+        : (i === active.current_step ? clockMs : null) }));
+  } else if (lastFinished) {
+    clockMs = lastFinished.total_ms + lastFinished.start_offset_ms;
+    rows = lastFinished.splits.map((s) => ({
+      key: s.step_index, display: s.display, current: false,
+      cumMs: s.elapsed_ms + lastFinished.start_offset_ms }));
+  } else {
+    clockMs = run.start_offset_ms;                       // idle: 0:00 + offset
+    rows = (routeView ? routeView.steps : []).map((s, i) => ({
+      key: i, display: (s.candidates[0] && s.candidates[0].display) || s.label || "?",
+      group: s.candidates.length > 1, need: s.need, current: false, cumMs: null }));
+  }
+  const startLabel = routeView && routeView.start_condition
+    ? (routeView.start_condition.type === "reset_game" ? "starts on game reset (F1)"
+       : `starts on: ${routeView.start_condition.type}`) : "";
 
   return html`<div class=${focus ? "runfocus" : ""}>
     <div class="runbar">
-      <select value=${(active ? active.route_id : routeId) ?? ""} disabled=${!!active}
-          onchange=${(e) => { const v = e.target.value ? Number(e.target.value) : null;
-            setRouteId(v); if (v != null) localStorage.setItem("sm64.activeRoute", String(v)); }}>
+      <select value=${effRouteId ?? ""} disabled=${!!active}
+          onchange=${(e) => pickRoute(e.target.value ? Number(e.target.value) : null)}>
         <option value="">— pick a route —</option>
         ${routes.map((r) => html`<option value=${r.id}>${r.name}</option>`)}
       </select>
-      ${active
-        ? html`<button onclick=${endRun}>End run</button>`
-        : html`<button onclick=${startRun}>Start run</button>`}
       <button onclick=${toggleFocus}>${focus ? "Focus ✓" : "Focus"}</button>
       <span style="flex:1"></span>
       ${run.pb ? html`<span class="meta">PB ${run.pb.display}</span>` : null}
-      ${run.gold && run.gold.display ? html`<span class="meta">SoB ${run.gold.display}</span>` : null}
     </div>
-
     ${err ? html`<div class="badx">${err}</div>` : null}
-
-    ${!active
-      ? html`<p class="meta">${routeId == null
-          ? "Pick a route and press Start run."
-          : "Armed — press F1 to begin the run (the clock starts on reset)."}</p>`
+    ${effRouteId == null
+      ? html`<p class="meta">Pick a route to arm a run. The clock starts on the route's start condition (default F1).</p>`
       : html`<div>
-        <div class="runclock"><${Timer} k="total">${fmtMs(liveMs)}<//></div>
+        <div class="runclock"><${Timer} k="total">${fmtMs(clockMs)}<//>${" "}
+          ${active ? "" : html`<span class="meta">${lastFinished ? "(finished)" : startLabel}</span>`}</div>
         <table class="runsplits"><tbody>
-          ${active.steps.map((s, i) => {
-            const isCur = i === active.current_step;
-            const cls = isCur ? "runstep-cur" : (s.elapsed_ms != null ? "rundone" : "runupcoming");
-            // cumulative shown: completed -> its split; current -> live; upcoming -> —
-            const cumMs = s.elapsed_ms != null ? s.elapsed_ms + active.start_offset_ms
-              : (isCur ? liveMs : null);
-            // ± vs PB cumulative (only meaningful once this step has data and PB exists)
-            const delta = (s.elapsed_ms != null && s.pb_elapsed_ms != null)
-              ? (s.elapsed_ms + active.start_offset_ms) - (s.pb_elapsed_ms + active.start_offset_ms)
-              : null;
-            // gold: this step's segment duration beat the route's best for it
-            const prevCum = i > 0 && active.steps[i - 1].elapsed_ms != null
-              ? active.steps[i - 1].elapsed_ms : 0;
-            const segDur = s.elapsed_ms != null ? s.elapsed_ms - prevCum : null;
-            const isGold = !focus && segDur != null && s.gold_ms != null && segDur < s.gold_ms;
-            const grp = s.candidates && s.candidates.length > 1;
-            return html`<tr class=${cls}>
-              <td class="meta">${i + 1}</td>
-              <td>${grp ? html`<span class="chip">${s.need} of ${s.candidates.length}</span> ` : ""}
-                  ${s.display}${grp ? html` <span class="meta">(${s.done.length}/${s.need})</span>` : ""}</td>
-              <td style="text-align:right" class=${isGold ? "rungold" : ""}>
-                <${Timer} k=${`step:${i}`}>${fmtMs(cumMs)}<//>${isGold ? " ★" : ""}</td>
-              <td style="text-align:right">${focus || delta == null ? "" : html`
-                <${Timer} k=${`delta:${i}`} cls=${delta > 0 ? "runbehind" : "runahead"}>
-                  ${fmtDelta(delta)}<//>`}</td>
-            </tr>`;
-          })}
+          ${rows.map((r) => html`<tr class=${r.current ? "runstep-cur" : (r.cumMs != null ? "rundone" : "runupcoming")}>
+            <td class="meta">${r.key + 1}</td>
+            <td>${r.group ? html`<span class="chip">${r.need} of</span> ` : ""}${r.display}
+              ${r.group && r.doneN != null ? html` <span class="meta">(${r.doneN}/${r.need})</span>` : ""}</td>
+            <td style="text-align:right"><${Timer} k=${`step:${r.key}`}>${fmtMs(r.cumMs)}<//></td>
+          </tr>`)}
         </tbody></table>
       </div>`}
-    <${RunHistory} t=${t} routeId=${active ? active.route_id : routeId} />
+    <${RunHistory} t=${t} hist=${hist} openRun=${openRun} setOpenRun=${setOpenRun} />
   </div>`;
 }
