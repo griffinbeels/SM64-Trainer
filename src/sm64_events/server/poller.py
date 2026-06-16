@@ -7,6 +7,7 @@ observed; the star dance lasts ~60-90 frames so edges cannot be missed.
 import asyncio
 import logging
 from datetime import datetime, timezone
+from time import perf_counter
 
 from sm64_events.core.events import Event
 from sm64_events.core.snapshot import GameSnapshot, SnapshotReader
@@ -44,6 +45,13 @@ class Poller:
         # reattach — see tick().
         self._last_timer: int | None = None
         self.paused = False  # session pause: run() idles — no reads, no events
+        # per-tick detector-COMPUTE timing — the "performance over a session"
+        # CPU signal the memory probes can't see. A climbing EMA = detector
+        # dispatch slowing (the user's "inefficient function calls" hypothesis).
+        # Fed to the perf monitor via perf_stats().
+        self._tick_ms_ema = 0.0
+        self._tick_ms_max = 0.0
+        self._tick_count = 0
 
     def set_paused(self, paused: bool) -> None:
         """Session pause (POST /api/pause): while paused, run() neither
@@ -97,18 +105,39 @@ class Poller:
                 type="game_reset", frame=curr.global_timer,
                 timestamp_utc=curr.wall_time_utc, payload={}))
         if self._prev is not None:
+            # Time the synchronous detector COMPUTE only (not the awaited
+            # broadcast I/O): collect, measure, then publish.
+            t0 = perf_counter()
+            out: list[Event] = []
             for detector in self.detectors:
                 try:
-                    events = detector.process(self._prev, curr)
+                    out.extend(detector.process(self._prev, curr))
                 except Exception:
                     log.exception("detector %s failed; skipped this tick",
                                   type(detector).__name__)
-                    continue
-                for event in events:
-                    await self.broadcaster.publish(event)
+            self._record_tick_ms((perf_counter() - t0) * 1000)
+            for event in out:
+                await self.broadcaster.publish(event)
         self._prev = curr
         self.latest = curr
         self._last_timer = curr.global_timer
+
+    def _record_tick_ms(self, dt_ms: float) -> None:
+        self._tick_count += 1
+        if dt_ms > self._tick_ms_max:
+            self._tick_ms_max = dt_ms
+        self._tick_ms_ema = (dt_ms if self._tick_count == 1
+                             else 0.99 * self._tick_ms_ema + 0.01 * dt_ms)
+
+    def perf_stats(self) -> dict:
+        """Per-tick detector-compute timing for the perf monitor's gauges. The
+        windowed max RESETS on read (one read per monitor interval); the EMA is
+        a cumulative trend — a climbing EMA over a session is the 'inefficient
+        calls building up' signature the memory probes can't catch."""
+        m = self._tick_ms_max
+        self._tick_ms_max = 0.0
+        return {"tick_ms_ema": round(self._tick_ms_ema, 3),
+                "tick_ms_max": round(m, 3), "ticks": self._tick_count}
 
     def _probe(self) -> bool:
         """Post-attach layout check: refuse to serve a ROM whose reads are

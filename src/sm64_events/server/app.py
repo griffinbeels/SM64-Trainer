@@ -22,7 +22,7 @@ from pydantic import BaseModel
 
 from sm64_events.core.events import Event
 from sm64_events.core.paths import pidfile_path
-from sm64_events.core.procmem import MemoryMonitor
+from sm64_events.core.perfmon import PerfMonitor
 from sm64_events.core.relaunch import spawn_replacement
 from sm64_events.server.api import create_api_router
 from sm64_events.server.broadcaster import Broadcaster
@@ -213,11 +213,30 @@ def _quiet_connection_resets(loop, context) -> None:
 
 def create_app(poller: Poller, broadcaster: Broadcaster,
                service=None, replay=None, debug_hooks: bool = False) -> FastAPI:
-    # Observability for long-running sessions: samples RSS / object count / GC
-    # / scratch size on a cadence (logs + warns) and backs /health.memory.
-    # scratch_dir comes from replay so the file-cache/disk churn is visible too.
-    monitor = MemoryMonitor(
-        scratch_dir=replay.cfg.scratch_dir if replay is not None else None)
+    # Observability for long-running sessions: samples self + CHILD (ffmpeg)
+    # memory, handle/GDI/USER counts, system pressure, and a per-type heap
+    # histogram on a cadence — logs an expanded line, fires one-shot per-class
+    # leak alarms, and persists a time-series to data/perf_log.jsonl. Backs
+    # /health.memory. scratch_dir + ring gauges make replay churn visible too.
+    def _perf_gauges() -> dict:
+        g: dict = {}
+        try:
+            g.update(poller.perf_stats())     # tick-compute latency trend
+        except Exception:
+            pass
+        if replay is not None:
+            try:
+                st = replay.recorder.status()
+                g.update(ring_bytes=st.get("disk_bytes"), idle=st.get("idle"),
+                         recording=st.get("recording"),
+                         audio_mode=st.get("audio_mode"))
+            except Exception:
+                pass
+        return g
+
+    monitor = PerfMonitor(
+        scratch_dir=replay.cfg.scratch_dir if replay is not None else None,
+        gauges=_perf_gauges)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

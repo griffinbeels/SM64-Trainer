@@ -53,6 +53,20 @@ class EchoDetector:
                       payload={"prev": prev.global_timer})]
 
 
+def test_perf_stats_times_detector_compute_and_resets_max():
+    """The per-tick compute timing (the CPU 'performance over a session'
+    signal): only ticks WITH a prev are timed; the windowed max resets on read,
+    the cumulative tick count does not."""
+    p = Poller(StubMemory(), [EchoDetector()], RecordingBroadcaster(),
+               reader=ScriptedReader([snap(1), snap(2), snap(3)]))
+    assert p.perf_stats() == {"tick_ms_ema": 0.0, "tick_ms_max": 0.0, "ticks": 0}
+    asyncio.run(p.tick())            # _prev None -> establishes, not timed
+    asyncio.run(p.tick())            # _prev set -> detector compute timed
+    s = p.perf_stats()
+    assert s["ticks"] == 1 and s["tick_ms_max"] >= 0.0
+    assert p.perf_stats()["tick_ms_max"] == 0.0   # max reset on read
+
+
 def test_pause_skips_everything_and_resume_self_heals():
     """Session pause: run() must touch NOTHING while paused (no attach, no
     reads); resume resets _prev so detectors get a fresh establishing pair

@@ -1,22 +1,34 @@
-"""Process memory + GC observability — the evidence layer for leak hunting.
+"""Process + OS resource observability — the evidence layer for leak hunting.
 
-WHY THIS EXISTS: a long-running session can grow RAM unboundedly with no way
-to tell a true leak from OS file-cache pressure, because nothing sampled the
-process. Two structural risks make a leak plausible and a monitor mandatory:
-- replay/_gcwatch.py raises the gen-2 GC threshold to ~manual (cyclic garbage
-  that reaches gen-2 is reclaimed only when something explicitly collects);
-- the capture hot path allocates ~8 MB frame buffers at a high rate.
-This module samples RSS (Windows working set), GC generation state, and the
-scratch-buffer size, surfaces them on /health, and logs them on a cadence so
-the NEXT incident leaves a trail instead of a mystery.
+WHY THIS EXISTS: a long session grew RAM/handles unboundedly and every fix
+attempt missed, because the monitor sampled only THIS process's working set
+and a total object count — blind to the places a leak actually hides. The
+2026-06-14 widening adds, deliberately, one probe per previously-invisible
+suspect (each maps to a hypothesis the old surface could not test):
 
-No third-party deps: RSS comes from psapi via ctypes (the codebase's existing
-Windows idiom). On non-Windows / probe failure, rss_bytes() returns 0 and the
-rest of the surface still works — the monitor degrades, never crashes."""
+- CHILD-PROCESS memory: encoding runs in an ffmpeg.exe subprocess. If ffmpeg
+  grows, our RSS stays flat while the MACHINE runs out of RAM — the exact
+  "we keep instrumenting and never catch it" failure. child_memory() sums it.
+- GDI / USER / kernel HANDLES: the capture path touches user32/gdi32 (DWM
+  handle query every 1 s; GDI fallback DCs/bitmaps). A handle leak craters the
+  whole desktop with our RSS unmoved. handle_counts() exposes them.
+- SYSTEM-WIDE pressure: a near-full pagefile thrashes everything and reads as
+  "out of RAM" even if no single process is huge. system_memory() shows the
+  commit charge and memory-load %.
+- PRIVATE/COMMIT bytes vs working set: the OS trims working set under pressure,
+  hiding a leak; committed private bytes is the honest signal. private_bytes().
+- WHICH Python type is growing: a total count says "the heap grew" but not
+  what. type_histogram() + top_type_growth() name the accumulating type.
+
+All probes are pure-ctypes (no third-party deps, the codebase's Windows idiom)
+and degrade to 0 / {} off-Windows or on probe failure — the monitor never
+crashes the server. The periodic sampler that consumes these lives in
+core/perfmon.py; the pure decision helpers here are unit-tested."""
 import ctypes
 import gc
 import logging
 import os
+from collections import Counter
 from ctypes import wintypes
 from pathlib import Path
 
@@ -38,36 +50,215 @@ class _PROCESS_MEMORY_COUNTERS(ctypes.Structure):
                 ("PeakPagefileUsage", ctypes.c_size_t)]
 
 
-def _bind_gpmi():
-    """Bind psapi!GetProcessMemoryInfo with explicit argtypes — WITHOUT them
-    ctypes defaults pointer args to c_int and truncates them to 32 bits on
-    64-bit Python, so byref() writes nowhere and the call silently no-ops
-    (the bug that made an earlier probe always read 0)."""
+class _MEMORYSTATUSEX(ctypes.Structure):
+    _fields_ = [("dwLength", wintypes.DWORD), ("dwMemoryLoad", wintypes.DWORD),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+
+class _PROCESSENTRY32W(ctypes.Structure):
+    _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+                ("th32ProcessID", wintypes.DWORD),
+                ("th32DefaultHeapID", ctypes.c_size_t),  # ULONG_PTR
+                ("th32ModuleID", wintypes.DWORD),
+                ("cntThreads", wintypes.DWORD),
+                ("th32ParentProcessID", wintypes.DWORD),
+                ("pcPriClassBase", wintypes.LONG),
+                ("dwFlags", wintypes.DWORD),
+                ("szExeFile", ctypes.c_wchar * 260)]
+
+
+def _bind():
+    """Bind every Win32 entry point ONCE with explicit argtypes/restypes.
+    WITHOUT argtypes, ctypes defaults pointer args to c_int and truncates
+    them to 32 bits on 64-bit Python, so byref() writes nowhere and the call
+    silently no-ops (the bug that made an earlier RSS probe always read 0).
+    Returns a flat namespace, or an all-None one off-Windows."""
+    ns = type("WinAPI", (), {})()
+    names = ("gpmi", "getcur", "getpid_handle", "handlecount", "guiresources",
+             "memstatus", "snapshot", "proc_first", "proc_next", "openproc",
+             "closehandle")
     try:
-        fn = ctypes.windll.psapi.GetProcessMemoryInfo
-        fn.argtypes = [wintypes.HANDLE,
-                       ctypes.POINTER(_PROCESS_MEMORY_COUNTERS), wintypes.DWORD]
-        fn.restype = wintypes.BOOL
-        getcur = ctypes.windll.kernel32.GetCurrentProcess
-        getcur.restype = wintypes.HANDLE
-        return fn, getcur
-    except Exception:  # non-Windows or missing psapi
-        return None, None
+        k32 = ctypes.windll.kernel32
+        psapi = ctypes.windll.psapi
+        user32 = ctypes.windll.user32
+
+        ns.gpmi = psapi.GetProcessMemoryInfo
+        ns.gpmi.argtypes = [wintypes.HANDLE,
+                            ctypes.POINTER(_PROCESS_MEMORY_COUNTERS),
+                            wintypes.DWORD]
+        ns.gpmi.restype = wintypes.BOOL
+
+        ns.getcur = k32.GetCurrentProcess
+        ns.getcur.restype = wintypes.HANDLE
+
+        ns.handlecount = k32.GetProcessHandleCount
+        ns.handlecount.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        ns.handlecount.restype = wintypes.BOOL
+
+        ns.guiresources = user32.GetGuiResources
+        ns.guiresources.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        ns.guiresources.restype = wintypes.DWORD
+
+        ns.memstatus = k32.GlobalMemoryStatusEx
+        ns.memstatus.argtypes = [ctypes.POINTER(_MEMORYSTATUSEX)]
+        ns.memstatus.restype = wintypes.BOOL
+
+        ns.snapshot = k32.CreateToolhelp32Snapshot
+        ns.snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+        ns.snapshot.restype = wintypes.HANDLE
+
+        ns.proc_first = k32.Process32FirstW
+        ns.proc_first.argtypes = [wintypes.HANDLE, ctypes.POINTER(_PROCESSENTRY32W)]
+        ns.proc_first.restype = wintypes.BOOL
+
+        ns.proc_next = k32.Process32NextW
+        ns.proc_next.argtypes = [wintypes.HANDLE, ctypes.POINTER(_PROCESSENTRY32W)]
+        ns.proc_next.restype = wintypes.BOOL
+
+        ns.openproc = k32.OpenProcess
+        ns.openproc.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        ns.openproc.restype = wintypes.HANDLE
+
+        ns.closehandle = k32.CloseHandle
+        ns.closehandle.argtypes = [wintypes.HANDLE]
+        ns.closehandle.restype = wintypes.BOOL
+        return ns
+    except Exception:  # non-Windows or missing module
+        for n in names:
+            setattr(ns, n, None)
+        return ns
 
 
-_GPMI, _GETCUR = _bind_gpmi()
+_API = _bind()
+
+_GR_GDIOBJECTS = 0
+_GR_USEROBJECTS = 1
+_TH32CS_SNAPPROCESS = 0x2
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_INVALID_HANDLE = ctypes.c_void_p(-1).value
+
+
+def _mem_counters(handle) -> _PROCESS_MEMORY_COUNTERS | None:
+    """GetProcessMemoryInfo for an already-open handle, or None on failure."""
+    if _API.gpmi is None or not handle:
+        return None
+    c = _PROCESS_MEMORY_COUNTERS()
+    c.cb = ctypes.sizeof(c)
+    if _API.gpmi(handle, ctypes.byref(c), c.cb):
+        return c
+    return None
 
 
 def rss_bytes() -> int:
     """Current process working set (resident set) in bytes, or 0 if the
     platform can't report it."""
-    if _GPMI is None:
+    if _API.getcur is None:
         return 0
-    counters = _PROCESS_MEMORY_COUNTERS()
-    counters.cb = ctypes.sizeof(counters)
-    if _GPMI(_GETCUR(), ctypes.byref(counters), counters.cb):
-        return int(counters.WorkingSetSize)
-    return 0
+    c = _mem_counters(_API.getcur())
+    return int(c.WorkingSetSize) if c else 0
+
+
+def private_bytes() -> int:
+    """Current process COMMITTED private bytes (PagefileUsage) — the honest
+    leak signal: unlike the working set, the OS does not trim it under memory
+    pressure, so a steady climb here is a true leak. 0 if unavailable."""
+    if _API.getcur is None:
+        return 0
+    c = _mem_counters(_API.getcur())
+    return int(c.PagefileUsage) if c else 0
+
+
+def handle_counts() -> dict:
+    """Kernel handle count + GDI + USER object counts for THIS process. A
+    climb in any is a system-wide-resource leak that leaves RSS flat (the
+    'whole desktop lags but our process looks fine' signature). Per-process
+    GDI/USER objects are capped at 10000 by Windows — alarms fire well below.
+    Missing keys (off-Windows) read as 0 downstream."""
+    out: dict = {}
+    if _API.getcur is None:
+        return out
+    h = _API.getcur()
+    if _API.handlecount is not None:
+        n = wintypes.DWORD(0)
+        if _API.handlecount(h, ctypes.byref(n)):
+            out["handles"] = int(n.value)
+    if _API.guiresources is not None:
+        out["gdi_objects"] = int(_API.guiresources(h, _GR_GDIOBJECTS))
+        out["user_objects"] = int(_API.guiresources(h, _GR_USEROBJECTS))
+    return out
+
+
+def system_memory() -> dict:
+    """System-wide memory via GlobalMemoryStatusEx: load_pct (0-100), available
+    physical, total physical, and the COMMIT charge (total page file - avail)
+    against its limit. Distinguishes 'one process is huge' from 'the whole
+    machine is out of commit' — both lag everything, the fixes differ. {} off
+    Windows."""
+    if _API.memstatus is None:
+        return {}
+    m = _MEMORYSTATUSEX()
+    m.dwLength = ctypes.sizeof(m)
+    if not _API.memstatus(ctypes.byref(m)):
+        return {}
+    return {"load_pct": int(m.dwMemoryLoad),
+            "avail_phys_bytes": int(m.ullAvailPhys),
+            "total_phys_bytes": int(m.ullTotalPhys),
+            "commit_bytes": int(m.ullTotalPageFile - m.ullAvailPageFile),
+            "commit_limit_bytes": int(m.ullTotalPageFile)}
+
+
+def child_memory(parent_pid: int) -> dict:
+    """Summed working-set + private bytes of the DIRECT child processes of
+    parent_pid (ffmpeg.exe is spawned directly by the recorder). THE probe for
+    the encoder-leak hypothesis: ffmpeg memory is invisible to a self-only RSS
+    sample. Returns {count, rss_bytes, private_bytes, by_name:{exe: rss}}; {}
+    off Windows. Best-effort — a child we can't open is skipped, never raises."""
+    if _API.snapshot is None:
+        return {}
+    snap = _API.snapshot(_TH32CS_SNAPPROCESS, 0)
+    if not snap or snap == _INVALID_HANDLE:
+        return {}
+    count = 0
+    rss = priv = 0
+    by_name: Counter = Counter()
+    try:
+        entry = _PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(entry)
+        ok = _API.proc_first(snap, ctypes.byref(entry))
+        while ok:
+            if entry.th32ParentProcessID == parent_pid:
+                h = _API.openproc(_PROCESS_QUERY_LIMITED_INFORMATION, False,
+                                  entry.th32ProcessID)
+                if h:
+                    try:
+                        c = _mem_counters(h)
+                        if c:
+                            count += 1
+                            rss += int(c.WorkingSetSize)
+                            priv += int(c.PagefileUsage)
+                            by_name[entry.szExeFile] += int(c.WorkingSetSize)
+                    finally:
+                        _API.closehandle(h)
+            ok = _API.proc_next(snap, ctypes.byref(entry))
+    finally:
+        _API.closehandle(snap)
+    return {"count": count, "rss_bytes": rss, "private_bytes": priv,
+            "by_name": dict(by_name)}
+
+
+def thread_count() -> int:
+    """Python-level live thread count (threading.active_count). Captures the
+    threads WE create — the capture/feeder/reader/gc-gen2 daemons — so a
+    thread leak (e.g. ffmpeg reader threads never reaped across restarts)
+    shows up. Cheap; no syscall."""
+    import threading
+    return threading.active_count()
 
 
 def dir_size_bytes(path: Path) -> int:
@@ -98,26 +289,56 @@ def gc_summary() -> dict:
             "frozen": gc.get_freeze_count()}
 
 
-def sample(scratch_dir: Path | None = None, *, count_objects: bool = False) -> dict:
-    """One observability snapshot. `count_objects` walks the whole heap
-    (len(gc.get_objects())) — the truest 'is the object graph growing' signal
-    but O(heap); the periodic monitor sets it, on-demand /health does not."""
-    snap = {"rss_bytes": rss_bytes(), "gc": gc_summary()}
-    if count_objects:
-        snap["objects"] = len(gc.get_objects())
+def type_histogram(objs: list | None = None) -> dict[str, int]:
+    """Map of qualified-type-name -> live instance count over the GC-tracked
+    heap (pass an already-fetched gc.get_objects() to share the one walk).
+    The FULL histogram (hundreds of types); callers persist only the top-N.
+    Qualified names (module.qualname) disambiguate same-named classes."""
+    if objs is None:
+        objs = gc.get_objects()
+    c: Counter = Counter()
+    for o in objs:
+        t = type(o)
+        c[f"{t.__module__}.{t.__qualname__}"] += 1
+    return dict(c)
+
+
+def sample(scratch_dir: Path | None = None, *, count_objects: bool = False,
+           resources: bool = False, children_of: int | None = None,
+           histogram: bool = False) -> dict:
+    """One observability snapshot. Cheap by default (RSS + GC). Opt-in adds:
+    `resources` (private bytes, handle/GDI/USER counts, threads, system memory
+    — all O(1) syscalls); `count_objects`/`histogram` (a gc.get_objects() heap
+    walk — the only O(heap) cost, so the periodic monitor sets it, on-demand
+    /health does not); `children_of` (child-process memory snapshot);
+    `scratch_dir` (flat dir size)."""
+    snap: dict = {"rss_bytes": rss_bytes(), "gc": gc_summary()}
+    if resources:
+        snap["private_bytes"] = private_bytes()
+        snap.update(handle_counts())
+        snap["threads"] = thread_count()
+        snap["system"] = system_memory()
+    if count_objects or histogram:
+        objs = gc.get_objects()
+        snap["objects"] = len(objs)
+        if histogram:
+            snap["types"] = type_histogram(objs)
+    if children_of is not None:
+        snap["children"] = child_memory(children_of)
     if scratch_dir is not None:
         snap["scratch_bytes"] = dir_size_bytes(scratch_dir)
     return snap
 
 
+# -- pure decision helpers (unit-tested) -------------------------------------
+
 def assess_growth(baseline_rss: int, current_rss: int, *,
                   warn_ratio: float = 2.0,
                   warn_floor_bytes: int = 2 * _GiB) -> str | None:
-    """Pure leak-alarm decision (unit-tested). Warn only when BOTH the
-    process has at least doubled vs its post-startup baseline AND it now
-    exceeds an absolute floor — so a tiny baseline doubling to still-tiny
-    doesn't cry wolf, and a genuinely large working set does. Returns the
-    warning text or None."""
+    """Pure leak-alarm decision. Warn only when BOTH the process has at least
+    doubled vs its post-startup baseline AND it now exceeds an absolute floor —
+    so a tiny baseline doubling to still-tiny doesn't cry wolf, and a genuinely
+    large working set does. Returns the warning text or None."""
     if baseline_rss <= 0 or current_rss <= 0:
         return None
     if current_rss >= warn_floor_bytes and current_rss >= baseline_rss * warn_ratio:
@@ -128,32 +349,72 @@ def assess_growth(baseline_rss: int, current_rss: int, *,
     return None
 
 
-class MemoryMonitor:
-    """Periodic sampler: logs RSS / object count / GC / scratch size every
-    `interval_s` and warns once when growth trips assess_growth. Baseline is
-    the first sample (taken after startup + gc.freeze()). `latest` backs the
-    /health surface. Runs as an asyncio task so it needs no extra thread."""
+def top_type_growth(baseline: dict[str, int], current: dict[str, int],
+                    n: int = 10) -> list[dict]:
+    """The n type names that grew most since baseline, as
+    [{type, baseline, current, delta}], delta-descending. Pure — THE Python-
+    heap attribution signal ('numpy.ndarray +12000' names a frame-array leak).
+    Types absent from baseline count as 0; shrinkage is filtered out."""
+    deltas = []
+    for name, cur in current.items():
+        base = baseline.get(name, 0)
+        d = cur - base
+        if d > 0:
+            deltas.append({"type": name, "baseline": base, "current": cur,
+                           "delta": d})
+    deltas.sort(key=lambda r: r["delta"], reverse=True)
+    return deltas[:n]
 
-    def __init__(self, scratch_dir: Path | None = None, interval_s: float = 60.0):
-        self._scratch_dir = scratch_dir
-        self._interval_s = interval_s
-        self._baseline_rss = 0
-        self._warned = False
-        self.latest: dict = {}
 
-    async def run(self) -> None:
-        import asyncio
-        while True:
-            self.latest = sample(self._scratch_dir, count_objects=True)
-            rss = self.latest["rss_bytes"]
-            if self._baseline_rss == 0 and rss > 0:
-                self._baseline_rss = rss
-            scratch = self.latest.get("scratch_bytes", 0)
-            log.info("mem: rss=%.0f MiB objects=%d gc_counts=%s scratch=%.0f MiB",
-                     rss / 1024**2, self.latest.get("objects", -1),
-                     self.latest["gc"]["counts"], scratch / 1024**2)
-            warning = assess_growth(self._baseline_rss, rss)
-            if warning and not self._warned:
-                log.warning("memory growth alarm: %s", warning)
-                self._warned = True
-            await asyncio.sleep(self._interval_s)
+# Each row: (key, getter(snap)->int|None, ratio, floor, unit). ratio=None means
+# ABSOLUTE: alarm when current >= floor (child ffmpeg has a known healthy ceiling
+# and starts AFTER baseline, so a baseline ratio would be skipped). Otherwise
+# RELATIVE: alarm when current >= floor AND current >= ratio x baseline (the
+# assess_growth shape, generalised). Floors are chosen so normal operation never
+# trips: GDI/USER well under the 10000 cap, handles/threads above steady-state,
+# child/private/rss above a healthy session.
+_ALARM_SPECS = [
+    ("rss_bytes", lambda s: s.get("rss_bytes"), 2.0, 2 * _GiB, "GiB"),
+    ("private_bytes", lambda s: s.get("private_bytes"), 2.0, 2 * _GiB, "GiB"),
+    ("handles", lambda s: s.get("handles"), 3.0, 5000, ""),
+    ("gdi_objects", lambda s: s.get("gdi_objects"), 3.0, 3000, ""),
+    ("user_objects", lambda s: s.get("user_objects"), 3.0, 3000, ""),
+    ("threads", lambda s: s.get("threads"), 3.0, 60, ""),
+    ("child_rss", lambda s: (s.get("children") or {}).get("rss_bytes"),
+     None, 2 * _GiB, "GiB"),  # absolute: ffmpeg over 2 GiB is pathological
+]
+
+
+def resource_alarms(baseline: dict, current: dict) -> list[str]:
+    """Every resource class currently breaching its leak threshold, as warning
+    strings. Pure — the monitor fires each message at most once. Covers RSS,
+    private bytes, kernel handles, GDI/USER objects, thread count, and child
+    (ffmpeg) RSS, plus an absolute system-memory-pressure check (>=92% load).
+    A flat-RSS run with climbing handles or child RSS still alarms — the whole
+    point of the widening."""
+    out: list[str] = []
+    for key, get, ratio, floor, unit in _ALARM_SPECS:
+        cur = get(current)
+        if cur is None or cur <= 0 or cur < floor:
+            continue
+        if ratio is None:
+            shown = f"{cur / _GiB:.2f} GiB" if unit == "GiB" else str(cur)
+            out.append(f"{key} {shown} exceeds the {floor / _GiB:.0f} GiB "
+                       f"ceiling — possible leak" if unit == "GiB"
+                       else f"{key} {cur} exceeds the {floor} ceiling — "
+                       f"possible leak")
+            continue
+        base = get(baseline)
+        if base is None or base <= 0 or cur < base * ratio:
+            continue
+        if unit == "GiB":
+            out.append(f"{key} {cur / _GiB:.2f} GiB is {cur / base:.1f}x "
+                       f"the baseline {base / _GiB:.2f} GiB — possible leak")
+        else:
+            out.append(f"{key} {cur} is {cur / base:.1f}x the baseline "
+                       f"{base} — possible leak")
+    load = (current.get("system") or {}).get("load_pct")
+    if load is not None and load >= 92:
+        out.append(f"system memory load {load}% — the machine is near "
+                   f"out-of-RAM; correlate which row above is climbing")
+    return out
