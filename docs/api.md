@@ -11,6 +11,22 @@ the project? Start with the [README](../README.md). Developing here? Read
 | `POST /api/admin/shutdown` | Graceful shutdown — the desktop "close the other instance" takeover path. `{"shutting_down": true}` |
 | `POST /api/admin/restart` | Full-process relaunch — the one-click "Restart server" button; picks up edited backend code. `{"restarting": true}` |
 
+## Auto-update (localhost only)
+
+The packaged exe self-updates from GitHub releases. All endpoints are inert
+when running from source (`is_frozen()` false → `update_available: false`).
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/update/status[?force=1]` | `{current, frozen, update_available, latest, notes, html_url, skipped, writable, state, progress}`. `notes` is the release body (patch notes); `writable` is false when the exe's folder can't be written (popup offers a browser download instead) or during an active install; `state` ∈ `idle\|downloading\|installing\|error`, `progress` 0–1. The check is cached per process (1 h TTL); `force=1` bypasses it (the manual "Check for updates"). |
+| `POST /api/update/apply` | Begins the off-thread download → SHA-256 verify → exe swap, then fires the same full-process restart as `/api/admin/restart`. Returns `{state}` immediately; poll `/status` for `progress`. Refuses (`state: "error"`) if not frozen, no update, the folder isn't writable, or already in progress. |
+| `POST /api/update/skip` `{version}` | Persist a skipped version to `data/update_state.json` so that release never re-notifies (a newer one still does). `{"skipped": version}`. |
+
+A release **must** carry a `sm64_tracker.exe.sha256` asset; one without it is
+never offered, so an unverified exe can never be applied. The exe swap uses
+the Windows rename-a-running-exe trick and restores the backup on failure —
+see `docs/architecture.md` → Self-update.
+
 ## Event schema
 
 Every WebSocket message is a versioned envelope:

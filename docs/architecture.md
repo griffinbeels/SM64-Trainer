@@ -369,6 +369,49 @@ contain only GIL-releasing syscalls — anything heavier goes out of process.
   WASAPI loopback goes silently deaf when the target app restarts or
   endpoints re-enumerate. The deaf-stream watchdog compares pump loudness
   against the pid's session peak and reopens the stream.
+
+## Self-update (2026-06-16)
+
+The packaged exe updates itself from GitHub releases (`core/updater.py`,
+`server/update_api.py`, `ui/components/update.js`, `tools/release.py`). The
+facts that make it safe, so the next session doesn't re-derive them.
+
+**The enabling OS fact: Windows forbids DELETING a running exe but ALLOWS
+RENAMING one.** So the swap is two `os.replace` calls — rename the running
+`sm64_tracker.exe` aside to `*.exe.old`, then move the downloaded
+`*.exe.new` into the canonical name. The old process keeps executing from the
+renamed file (the OS tracks the open file object, not the path). This is why
+no separate helper/.bat is needed.
+
+**`sys.executable` does the rest for free.** It is the canonical path string,
+captured at process start. After the swap that path points at the NEW exe, so
+`core/relaunch.spawn_replacement()` (which relaunches `sys.executable`)
+launches the new build with ZERO change to relaunch.py — apply just calls the
+same restart path as `/api/admin/restart`. `wait_port_free` hands the port
+from old to new; `cleanup_old_exe()` (run at startup in `main.py`) deletes the
+now-unlocked `*.old`.
+
+**Failure-safety is non-negotiable for a self-overwriting exe** (a review
+caught both of these before ship):
+- The two-rename retry must hoist the rename-aside OUT of the retry loop. The
+  naive "retry the whole pair" bug: step 1 succeeds, step 2 fails (AV briefly
+  locks the new file), the retry deletes the backup then hits
+  `FileNotFoundError` on the already-moved current — leaving the user with NO
+  exe. Fix: rename aside once; retry only the staged→current move; on final
+  failure restore the backup (`apply_update`).
+- A release with no `.sha256` asset must mean "no update", never "skip
+  verification". `check_for_update` returns None without the checksum asset,
+  so an unverified exe can never be applied. The download verifies SHA-256
+  before any rename; a mismatch raises and keeps the current exe.
+
+**The user's state survives every update** because `%LOCALAPPDATA%\sm64_tracker`
+(DB, PBs, saved replays) is separate from the exe (`core/paths.py`), and the
+new exe runs its DB migrations on launch. Everything is guarded on
+`is_frozen()` — from source the updater is inert so a dev tree is never
+swapped (`SM64_UPDATE_FAKE=1` renders the popup in dev without a real
+release). The exe is unsigned, so the FIRST manual (browser) download trips
+SmartScreen; in-app updates don't (the app, not the browser, fetches the
+file). Code signing is the documented future fix.
 - WASAPI loopback delivers nothing while the endpoint is idle: place PCM
   by wall clock; never assume a continuous stream.
 - AAC consumes EXACT 1024-sample frames: feeding rate//fps blocks (800 at
