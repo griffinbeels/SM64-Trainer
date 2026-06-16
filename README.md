@@ -88,7 +88,7 @@ See `tools/build_exe.py` for what gets bundled.
 uv run python tools/release.py 1.1.0          # or --notes-file NOTES.md
 ```
 
-One command: it refuses unless you're on `master` with a clean tree and `gh`
+One command: it refuses unless you're on `main` with a clean tree and `gh`
 is authenticated, runs the full test suite, bumps `core/version.py` +
 `pyproject.toml`, **builds the exe before tagging** (a broken build aborts
 with nothing pushed), writes `dist\sm64_tracker.exe.sha256`, pushes the

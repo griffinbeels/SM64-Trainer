@@ -3,7 +3,7 @@
 
     uv run python tools/release.py 1.1.0 [--notes-file NOTES.md] [--dry-run]
 
-Refuses unless the tree is clean, you're on master, `gh` is authed, and the
+Refuses unless the tree is clean, you're on main, `gh` is authed, and the
 full test suite passes. Builds the self-contained exe via tools/build_exe.py
 (ffmpeg must be on PATH so it gets bundled), writes a SHA-256 the in-app updater
 verifies, then `gh release create` with the exe + checksum. GitHub attaches the
@@ -65,8 +65,8 @@ def _capture(cmd: list[str]) -> str:
 
 
 def _preflight() -> None:
-    if _capture(["git", "rev-parse", "--abbrev-ref", "HEAD"]) != "master":
-        sys.exit("refusing: not on master")
+    if _capture(["git", "rev-parse", "--abbrev-ref", "HEAD"]) != "main":
+        sys.exit("refusing: not on main")
     if _capture(["git", "status", "--porcelain"]):
         sys.exit("refusing: working tree is dirty")
     try:
@@ -108,7 +108,7 @@ def main() -> int:
     _run(["git", "add", str(VERSION_PY), str(PYPROJECT)])
     _run(["git", "commit", "-m", f"release: {tag}"])
     _run(["git", "tag", tag])
-    _run(["git", "push", "origin", "master", "--follow-tags"])
+    _run(["git", "push", "origin", "main", "--follow-tags"])
 
     notes = (["--notes-file", args.notes_file] if args.notes_file
              else ["--generate-notes"])
