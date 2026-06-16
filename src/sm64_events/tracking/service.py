@@ -381,7 +381,7 @@ class TrackerService:
         await self._routes_changed()
         if (("steps" in d or "start_condition" in d)
                 and self._projector.armed_route_id() == route_id):
-            await self.start_run(route_id)   # re-arm: fresh route_steps/start_condition snapshot
+            await self._arm_run(route_id, void_active=True)  # re-arm: void any in-flight run, fresh snapshot
 
     async def delete_route(self, route_id: int) -> None:
         db = self._require_db()
@@ -395,25 +395,30 @@ class TrackerService:
                                               timestamp_utc=_now(), payload={}))
 
     # -- run lifecycle ---------------------------------------------------------
+    async def _arm_run(self, route_id: int, void_active: bool = False) -> None:
+        """Build and publish run_started. When void_active=True the payload
+        carries the flag so RunTracker discards any in-flight run without
+        saving it (used by update_route: edit = current run is invalid)."""
+        db = self._require_db()
+        route = next((r for r in db.routes() if r["id"] == route_id), None)
+        if route is None:
+            raise LookupError(f"route {route_id} not found")
+        payload = {"route_id": route_id, "route_name": route["name"],
+                   "route_steps": route["steps"], "mode": "forgiving",
+                   "start_offset_ms": self.run_settings()["start_offset_ms"],
+                   "start_condition": route.get("start_condition",
+                                                {"type": "reset_game"})}
+        if void_active:
+            payload["void_active"] = True
+        await self.publish(Event(type="run_started", frame=0,
+                                 timestamp_utc=_now(), payload=payload))
+
     async def start_run(self, route_id: int) -> None:
         """Journal run_started (arms run mode). The clock starts at 0 on the
         next game_reset (F1). Validates route exists first (LookupError → 404).
         start_offset_ms comes from run_settings; default 1360 ms models the
         SM64 emulator reset-timing convention."""
-        db = self._require_db()
-        route = next((r for r in db.routes() if r["id"] == route_id), None)
-        if route is None:
-            raise LookupError(f"route {route_id} not found")
-        offset = self.run_settings()["start_offset_ms"]
-        sc = route.get("start_condition", {"type": "reset_game"})
-        await self.publish(Event(type="run_started", frame=0,
-                                 timestamp_utc=_now(),
-                                 payload={"route_id": route_id,
-                                          "route_name": route["name"],
-                                          "route_steps": route["steps"],
-                                          "mode": "forgiving",
-                                          "start_offset_ms": offset,
-                                          "start_condition": sc}))
+        await self._arm_run(route_id, void_active=False)
 
     async def end_run(self) -> None:
         """Journal run_ended (disarms run mode). If a run is in progress it

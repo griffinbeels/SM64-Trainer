@@ -123,7 +123,10 @@ class RunTracker:
         produced = []
         if ev.type == "run_started":
             if self._active is not None:
-                produced.append(self._finalize("aborted", ev.wall_time_utc))
+                if ev.payload.get("void_active"):
+                    self._active = None  # route changed mid-run -> void, no record
+                else:
+                    produced.append(self._finalize("aborted", ev.wall_time_utc))
             p = ev.payload
             self._armed = {"route_id": p.get("route_id"),
                            "route_name": p.get("route_name", ""),

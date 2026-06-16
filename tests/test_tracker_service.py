@@ -1006,3 +1006,19 @@ def test_editing_unarmed_route_does_not_emit_run_started(tmp_path):
     # never armed -> editing must NOT emit run_started
     asyncio.run(svc.update_route(rid, {"name": "R2"}))
     assert not any(e.type == "run_started" for e in db.events())
+
+
+def test_editing_armed_route_mid_run_voids_not_aborts(tmp_path):
+    db, svc = make(tmp_path)
+    rid = asyncio.run(svc.create_route({"name": "R", "steps": [
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}))
+    asyncio.run(svc.start_run(rid))
+    asyncio.run(svc.publish(ev("game_reset", 0)))            # a run is now ACTIVE
+    asyncio.run(svc.update_route(rid, {"steps": [
+        {"need": 1, "candidates": [{"type": "star", "course": 8, "star": 2}]}]}))
+    # the interrupted run is VOID — no aborted (or any) run row was saved by the edit
+    assert db.runs() == []
+    # the fresh snapshot has the edited step; grabbing it (after F1) finishes
+    asyncio.run(svc.publish(ev("game_reset", 0)))
+    asyncio.run(svc.publish(star(900, course=8, star_id=2)))
+    assert [r["status"] for r in db.runs()] == ["finished"]
