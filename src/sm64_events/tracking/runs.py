@@ -93,6 +93,10 @@ class RunTracker:
         self.run_notices: list[dict] = []       # live broadcast queue
 
     # -- queries -------------------------------------------------------------
+    def armed_route_id(self):
+        """route_id this tracker is armed for (whether or not a run is active), else None."""
+        return self._armed["route_id"] if self._armed is not None else None
+
     def active_run_view(self) -> dict | None:
         if self._active is None:
             return None

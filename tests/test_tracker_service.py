@@ -980,3 +980,29 @@ def test_reset_run_journals_run_reset(tmp_path):
     asyncio.run(svc.reset_run())
     types = [e.type for e in db.events()]
     assert "run_reset" in types
+
+
+def test_editing_armed_route_steps_rearms_run(tmp_path):
+    db, svc = make(tmp_path)
+    rid = asyncio.run(svc.create_route({"name": "R", "steps": [
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}))
+    asyncio.run(svc.start_run(rid))                 # arms with course 2 star 0
+    # edit the step to a different star
+    asyncio.run(svc.update_route(rid, {"steps": [
+        {"need": 1, "candidates": [{"type": "star", "course": 8, "star": 2}]}]}))
+    # the LATEST run_started snapshot must reflect the edited step
+    rs = [e for e in db.events() if e.type == "run_started"][-1]
+    assert rs.payload["route_steps"][0]["candidates"][0] == {"type": "star", "course": 8, "star": 2}
+    # and now grabbing course 8 star 2 (after a game_reset) finishes the run
+    asyncio.run(svc.publish(ev("game_reset", 0)))
+    asyncio.run(svc.publish(star(900, course=8, star_id=2)))
+    assert any(r["status"] == "finished" and r["route_id"] == rid for r in db.runs())
+
+
+def test_editing_unarmed_route_does_not_emit_run_started(tmp_path):
+    db, svc = make(tmp_path)
+    rid = asyncio.run(svc.create_route({"name": "R", "steps": [
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}))
+    # never armed -> editing must NOT emit run_started
+    asyncio.run(svc.update_route(rid, {"name": "R2"}))
+    assert not any(e.type == "run_started" for e in db.events())

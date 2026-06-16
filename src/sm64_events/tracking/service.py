@@ -379,6 +379,9 @@ class TrackerService:
         db.update_route(route_id, updated_utc=_iso(_now()),
                         **{k: d[k] for k in ("name", "steps", "start_condition") if k in d})
         await self._routes_changed()
+        if (("steps" in d or "start_condition" in d)
+                and self._projector.armed_route_id() == route_id):
+            await self.start_run(route_id)   # re-arm: fresh route_steps/start_condition snapshot
 
     async def delete_route(self, route_id: int) -> None:
         db = self._require_db()

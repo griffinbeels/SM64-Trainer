@@ -234,6 +234,9 @@ class Projector:
         into privates."""
         return self._segments.armed_ids()
 
+    def armed_route_id(self):
+        return self._runs.armed_route_id()
+
     def finished_runs(self):
         return self._runs.finished_runs()
 
