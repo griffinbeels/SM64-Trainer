@@ -1138,3 +1138,27 @@ def test_game_reset_resets_star_count_knowledge_for_guards():
     # num_stars unknown after hard reset -> guard conservatively fails ->
     # the def never armed -> no segment attempt anywhere
     assert all(a.segment_id != 2 for a in closed)
+
+
+def test_run_starts_on_configured_level_enter(tmp_path):
+    from sm64_events.tracking.projection import replay
+    from sm64_events.storage.db import Database
+    from sm64_events.core.events import Event
+    from datetime import datetime, timezone
+    db = Database(tmp_path / "t.db"); sid = db.insert_session("t")
+    T = datetime(2026, 6, 15, tzinfo=timezone.utc)
+    steps = [{"need": 1, "candidates": [{"type": "star", "course": 9, "star": 0}]}]
+    db.append_event(sid, 1, Event(type="run_started", frame=0, timestamp_utc=T, payload={
+        "route_id": 1, "route_name": "R", "route_steps": steps, "mode": "forgiving",
+        "start_offset_ms": 0, "start_condition": {"type": "level_enter", "to": 9}}))
+    # a game_reset must NOT start this run (start condition is level_enter)
+    db.append_event(sid, 2, Event(type="game_reset", frame=0, timestamp_utc=T, payload={}))
+    attempts, proj = replay(db.events())
+    assert proj.active_run_view() is None
+    # entering level 9 starts it
+    db.append_event(sid, 3, Event(type="level_changed", frame=0, timestamp_utc=T,
+        payload={"from": 1, "to": 9}))
+    db.append_event(sid, 4, Event(type="star_collected", frame=0, timestamp_utc=T,
+        payload={"course_id": 9, "star_id": 0, "igt_frames": 1}))
+    attempts, proj = replay(db.events())
+    assert len(proj.finished_runs()) == 1

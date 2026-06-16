@@ -247,9 +247,9 @@ class Projector:
             self._num_stars = ev.payload["num_stars"]
         elif ev.type == "game_reset":
             self._num_stars = None  # file can change at the title screen: unknown until the next grab
-        seg_closed, self.segment_notices = self._segments.feed(
-            ev, MatchContext(level=self._level, prev_level=prev_level,
-                             num_stars=self._num_stars, area=self._area))
+        ctx = MatchContext(level=self._level, prev_level=prev_level,
+                           num_stars=self._num_stars, area=self._area)
+        seg_closed, self.segment_notices = self._segments.feed(ev, ctx)
         for a in seg_closed:
             # same first-event-id cleared keying as _build (caveat 2/11)
             a = replace(a,
@@ -283,7 +283,8 @@ class Projector:
             self.target = None
         # Run engine sees the same event + the attempts just closed (star AND
         # segment successes/failures); it owns the run lifecycle independently.
-        self._runs.feed(ev, closed)
+        # ctx is the same MatchContext already built for the segment engine.
+        self._runs.feed(ev, closed, ctx)
         self.run_notices = self._runs.run_notices
         if ev.type in BOUNDARY_EVENT_TYPES:
             self._rollouts_total = self._rollouts_dustless = 0
