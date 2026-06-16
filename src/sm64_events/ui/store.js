@@ -147,6 +147,48 @@ export function useTracker() {
     return () => { closed = true; ws && ws.close(); };
   }, [refresh]);   // refresh is now stable -> this effect runs exactly once
 
+  // --- auto-update (shared so the header "Check for updates" button and the
+  // popup agree on one status / one in-flight install) ---
+  const [update, setUpdate] = useState(null);              // /api/update/status dict
+  const [updateForced, setUpdateForced] = useState(false); // manual check found one -> show despite Skip/Later
+  const [updateApplying, setUpdateApplying] = useState(false);
+  const [updateMsg, setUpdateMsg] = useState("");          // transient header toast
+  const fetchUpdate = useCallback(async (force) => {
+    try {
+      const st = await getJSON("/api/update/status" + (force ? "?force=1" : ""));
+      setUpdate(st);
+      return st;
+    } catch (e) { return null; }
+  }, []);
+  useEffect(() => { fetchUpdate(false); }, [fetchUpdate]);  // passive check once on load
+  const checkUpdates = useCallback(async () => {           // the header button
+    setUpdateMsg("Checking…");
+    const st = await fetchUpdate(true);                    // force=1 bypasses the server cache
+    if (!st) setUpdateMsg("Check failed");
+    else if (st.update_available) { setUpdateForced(true); setUpdateMsg(""); }
+    else if (!st.frozen) setUpdateMsg(`v${st.current} — updates run in the packaged app`);
+    else setUpdateMsg(`Up to date · v${st.current}`);
+  }, [fetchUpdate]);
+  useEffect(() => {   // auto-clear the toast, but keep "Checking…" until the result lands
+    if (!updateMsg || updateMsg === "Checking…") return;
+    const id = setTimeout(() => setUpdateMsg(""), 5000);
+    return () => clearTimeout(id);
+  }, [updateMsg]);
+  const applyUpdate = useCallback(async () => {
+    setUpdateApplying(true);
+    try { await send("POST", "/api/update/apply"); } catch (e) { /* status poll shows error */ }
+  }, []);
+  useEffect(() => {   // poll progress while installing; the WS drop on restart ends the session
+    if (!updateApplying) return;
+    const id = setInterval(() => fetchUpdate(false), 700);
+    return () => clearInterval(id);
+  }, [updateApplying, fetchUpdate]);
+  const skipUpdate = useCallback(async (version) => {
+    try { await send("POST", "/api/update/skip", { version }); } catch (e) { /* ignore */ }
+    setUpdate((u) => (u ? { ...u, skipped: version } : u));
+    setUpdateForced(false);
+  }, []);
+
   const pickClock = (c) => { localStorage.setItem("clock", c); setClock(c); };
   const pickScope = (s) => { localStorage.setItem("scope", s); setScope(s); };
   const armedSegs = new Set(armedOrder);
@@ -154,5 +196,7 @@ export function useTracker() {
            refresh, paused: pauseState.paused,
            pauseReason: pauseState.reason, togglePause,
            armedSegs, armedOrder, lastPinnedSeg, stage,
-           run, refreshRun };
+           run, refreshRun,
+           update, updateForced, setUpdateForced, updateApplying,
+           setUpdateApplying, updateMsg, checkUpdates, applyUpdate, skipUpdate };
 }

@@ -1,10 +1,11 @@
 // src/sm64_events/ui/components/update.js — auto-update popup.
-// Self-contained: polls /api/update/status, shows notes + Update/Skip/Later.
+// Presentational: reads update status + actions from the store (t). The header
+// "Check for updates" button forces a re-check; the auto-check on load and the
+// install/progress live in store.js so both stay in sync.
 // Notes are GitHub-release markdown rendered by a tiny safe pass (escape first).
 import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
-import { getJSON, send } from "../api.js";
 
 const html = htm.bind(h);
 
@@ -36,34 +37,20 @@ function renderNotes(md) {
   return out;
 }
 
-export function UpdatePopup() {
-  const [st, setSt] = useState(null);
+export function UpdatePopup({ t }) {
+  const st = t.update;
+  const applying = t.updateApplying;
   const [dismissed, setDismissed] = useState(false);
-  const [applying, setApplying] = useState(false);
+  // A manual "Check for updates" re-opens the modal even after Skip/Later.
+  useEffect(() => { if (t.updateForced) setDismissed(false); }, [t.updateForced]);
 
-  const refresh = (force) =>
-    getJSON("/api/update/status" + (force ? "?force=1" : ""))
-      .then(setSt).catch(() => {});
+  if (!st || !st.update_available) return null;
+  const blockedBySkip = !t.updateForced && st.skipped && st.skipped === st.latest;
+  if (!applying && (dismissed || blockedBySkip)) return null;
 
-  useEffect(() => { refresh(false); }, []);
-  useEffect(() => {
-    if (!applying) return;
-    const id = setInterval(() => refresh(false), 700);
-    return () => clearInterval(id);
-  }, [applying]);
-
-  if (!st || !st.update_available || dismissed) return null;
-  if (!applying && st.skipped && st.skipped === st.latest) return null;
-
-  const onUpdate = async () => {
-    setApplying(true);
-    try { await send("POST", "/api/update/apply"); } catch (e) { /* poll shows error */ }
-  };
-  const onSkip = async () => {
-    try { await send("POST", "/api/update/skip", { version: st.latest }); }
-    catch (e) { /* ignore */ }
-    setDismissed(true);
-  };
+  const onSkip = () => { t.skipUpdate(st.latest); setDismissed(true); };
+  const onLater = () => { setDismissed(true); t.setUpdateForced(false); };
+  const onClose = () => { t.setUpdateApplying(false); setDismissed(true); };
   const pct = Math.round((st.progress || 0) * 100);
 
   return html`
@@ -79,7 +66,7 @@ export function UpdatePopup() {
             ? html`
               <div class="meta">Update failed — your current version is unchanged.</div>
               <div class="modal-actions">
-                <button onclick=${() => setApplying(false)}>Close</button>
+                <button onclick=${onClose}>Close</button>
                 <a class="btnlink" href=${st.html_url}
                    target="_blank">Download from GitHub</a>
               </div>`
@@ -90,11 +77,11 @@ export function UpdatePopup() {
           : html`
             <div class="modal-actions">
               ${st.writable
-                ? html`<button onclick=${onUpdate}>Update now</button>`
+                ? html`<button onclick=${() => t.applyUpdate()}>Update now</button>`
                 : html`<a class="btnlink" href=${st.html_url}
                           target="_blank">Download from GitHub</a>`}
               <button onclick=${onSkip}>Skip this version</button>
-              <button onclick=${() => setDismissed(true)}>Later</button>
+              <button onclick=${onLater}>Later</button>
             </div>`}
       </div>
     </div>`;

@@ -32,7 +32,7 @@ function App() {
         : tab === "Run" ? html`<${Run} t=${t} />`
         : html`<${Feed} t=${t} />`}
     </div>
-    <${UpdatePopup} />`;
+    <${UpdatePopup} t=${t} />`;
 }
 
 render(html`<${App} />`, document.getElementById("app"));

@@ -78,6 +78,9 @@ export function Header({ t }) {
     <button onclick=${restartServer} disabled=${restarting}
             title="Relaunch the underlying server to pick up backend changes">
       ${restarting ? "↻ restarting…" : "↻ restart server"}</button>
+    <button onclick=${t.checkUpdates}
+            title="Check GitHub for a newer version of the app">⟳ updates</button>
+    ${t.updateMsg && html`<span class="meta">${t.updateMsg}</span>`}
     <${RecordingDot} />
     ${v && html`<select id="session-select" name="session"
                         value=${t.scope === "lifetime" ? "lifetime" : String(active)}
