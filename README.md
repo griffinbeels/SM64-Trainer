@@ -47,6 +47,12 @@ SmartScreen — only the first manual download does.)
 - For replay video: run PJ64 **windowed** (the released exe bundles ffmpeg).
 - Your data lives in `%LOCALAPPDATA%\sm64_tracker\` — history and PBs survive
   upgrading the exe.
+- **Replay audio routing:** if a saved replay plays back with no sound, Windows
+  has likely routed the app's audio — and the GUI's embedded browser
+  (`msedgewebview2.exe`) — to the wrong output device. Open **Settings → System
+  → Sound → Volume mixer** and set both **sm64_tracker** and
+  **msedgewebview2.exe** to your speakers/headphones. (A quirk of the WebView2
+  audio session in the current build; may be fixed in a later release.)
 
 ## Run from source (developers)
 
