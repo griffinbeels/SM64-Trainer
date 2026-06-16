@@ -160,3 +160,117 @@ def exe_dir_writable(exe_dir: Path) -> bool:
         return True
     except OSError:
         return False
+
+
+class UpdateService:
+    """Stateful orchestrator the REST layer talks to: caches the check, tracks
+    download progress/state, persists the skipped version. Inert unless frozen.
+
+    SM64_UPDATE_FAKE=1 makes status() report a synthetic update (writable forced
+    False, so the only action is the GitHub link) — lets the popup be verified
+    in dev WITHOUT cutting a real release."""
+
+    def __init__(self, *, current_version: str, repo: str = DEFAULT_REPO,
+                 exe_path: "Path | None" = None,
+                 http=urllib.request.urlopen,
+                 state_path: "Path | None" = None,
+                 frozen: "bool | None" = None):
+        self.current = current_version
+        self.repo = repo
+        self._http = http
+        self._frozen = is_frozen() if frozen is None else frozen
+        self._exe = Path(exe_path) if exe_path else Path(sys.executable)
+        self._state_path = state_path or update_state_path()
+        self._lock = threading.Lock()
+        self._state = "idle"        # idle | downloading | installing | error
+        self._progress = 0.0
+        self._cache: "UpdateInfo | None" = None
+        self._checked_at = 0.0      # monotonic of last real check; 0 = never
+
+    # --- skipped-version overlay ---
+    def _skipped(self) -> "str | None":
+        try:
+            return json.loads(self._state_path.read_text()).get("skipped")
+        except Exception:
+            return None
+
+    def skip(self, version: str) -> None:
+        self._state_path.parent.mkdir(parents=True, exist_ok=True)
+        self._state_path.write_text(json.dumps({"skipped": version}))
+
+    # --- cached check ---
+    def _fake(self) -> "UpdateInfo | None":
+        if not os.environ.get("SM64_UPDATE_FAKE"):
+            return None
+        return UpdateInfo(
+            version="9.9.9",
+            notes="## Demo release\n- **New:** sample patch notes\n"
+                  "- Open the release page for the real thing",
+            html_url=f"https://github.com/{self.repo}/releases",
+            asset_url="", sha256_url="")
+
+    def _check(self, force: bool) -> "UpdateInfo | None":
+        fake = self._fake()
+        if fake is not None:
+            return fake
+        if not self._frozen:
+            return None
+        now = time.monotonic()
+        if not force and self._checked_at and (now - self._checked_at) < _CHECK_TTL_S:
+            return self._cache
+        self._cache = check_for_update(self.current, http=self._http,
+                                       repo=self.repo)
+        self._checked_at = now
+        return self._cache
+
+    def status(self, force: bool = False) -> dict:
+        info = self._check(force)
+        writable = bool(self._frozen and info is not None
+                        and not os.environ.get("SM64_UPDATE_FAKE")
+                        and exe_dir_writable(self._exe.parent))
+        return {
+            "current": self.current,
+            "frozen": self._frozen,
+            "update_available": info is not None,
+            "latest": info.version if info else None,
+            "notes": info.notes if info else "",
+            "html_url": info.html_url if info else "",
+            "skipped": self._skipped(),
+            "writable": writable,
+            "state": self._state,
+            "progress": self._progress,
+        }
+
+    # --- apply (off-thread; UI polls status for progress) ---
+    def begin_apply(self, on_success) -> dict:
+        with self._lock:
+            if self._state in ("downloading", "installing"):
+                return {"state": self._state}
+            info = self._check(force=False)
+            if not self._frozen or info is None:
+                return {"state": "error", "error": "no update available"}
+            if not exe_dir_writable(self._exe.parent):
+                return {"state": "error", "error": "exe folder not writable"}
+            self._state = "downloading"
+            self._progress = 0.0
+        threading.Thread(target=self._run_apply, args=(info, on_success),
+                         daemon=True, name="update-apply").start()
+        return {"state": "downloading"}
+
+    def _run_apply(self, info: "UpdateInfo", on_success) -> None:
+        try:
+            staged = download_and_stage(info, self._exe.parent, http=self._http,
+                                        progress=self._set_progress)
+            self._state = "installing"
+            apply_update(staged, self._exe)
+            on_success()
+        except Exception:
+            log.exception("update apply failed")
+            self._state = "error"
+
+    def _set_progress(self, frac: float) -> None:
+        self._progress = max(0.0, min(1.0, frac))
+
+    def cleanup_old_exe(self) -> None:
+        if self._frozen:
+            cleanup_old(self._exe.parent)

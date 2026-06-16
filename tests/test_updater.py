@@ -147,3 +147,63 @@ def test_cleanup_old_removes_old_files(tmp_path):
 def test_exe_dir_writable(tmp_path):
     assert exe_dir_writable(tmp_path) is True
     assert exe_dir_writable(tmp_path / "does-not-exist") is False
+
+
+from sm64_events.core.updater import UpdateService
+
+
+def _svc(tmp_path, http, *, frozen=True):
+    exe = tmp_path / "sm64_tracker.exe"
+    exe.write_text("OLD")
+    return UpdateService(current_version="1.0.0", http=http, exe_path=exe,
+                         state_path=tmp_path / "update_state.json",
+                         frozen=frozen)
+
+
+def test_status_inert_from_source(tmp_path):
+    svc = _svc(tmp_path, _fake_http({}), frozen=False)
+    st = svc.status()
+    assert st["frozen"] is False
+    assert st["update_available"] is False
+
+
+def test_status_reports_available(tmp_path):
+    http = _fake_http({LATEST: _release_json("v2.0.0", {
+        "sm64_tracker.exe": "https://dl/exe"})})
+    svc = _svc(tmp_path, http)
+    st = svc.status()
+    assert st["update_available"] is True
+    assert st["latest"] == "2.0.0"
+    assert st["writable"] is True          # tmp dir is writable
+
+
+def test_skip_persists_and_round_trips(tmp_path):
+    http = _fake_http({LATEST: _release_json("v2.0.0", {
+        "sm64_tracker.exe": "https://dl/exe"})})
+    svc = _svc(tmp_path, http)
+    svc.skip("2.0.0")
+    assert svc.status()["skipped"] == "2.0.0"
+
+
+def test_run_apply_swaps_and_calls_on_success(tmp_path):
+    payload = b"NEWEXE"
+    digest = _hashlib.sha256(payload).hexdigest()
+    http = _fake_http({
+        LATEST: _release_json("v2.0.0", {
+            "sm64_tracker.exe": "https://dl/exe",
+            "sm64_tracker.exe.sha256": "https://dl/sha"}),
+        "https://dl/exe": payload,
+        "https://dl/sha": (digest + "  sm64_tracker.exe").encode()})
+    svc = _svc(tmp_path, http)
+    info = svc._check(force=True)
+    restarted = []
+    svc._run_apply(info, lambda: restarted.append(True))
+    assert (tmp_path / "sm64_tracker.exe").read_bytes() == payload
+    assert restarted == [True]
+
+
+def test_begin_apply_errors_when_no_update(tmp_path):
+    http = _fake_http({LATEST: _release_json("v1.0.0", {
+        "sm64_tracker.exe": "https://dl/exe"})})
+    svc = _svc(tmp_path, http)
+    assert svc.begin_apply(lambda: None)["state"] == "error"
