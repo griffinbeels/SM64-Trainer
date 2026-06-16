@@ -1661,3 +1661,19 @@ def test_vocab_exposes_region_enum_and_conditional_subareas():
     lx = by_key["level_exit"]["params"]
     assert lx["from_subarea"]["only_when"] == {"param": "from", "equals": 6}
     assert lx["to_subarea"]["only_when"] == {"param": "to", "equals": 6}
+
+
+def test_reset_game_trigger_matches_game_reset():
+    from sm64_events.tracking.segments import TRIGGERS, MatchContext
+    t = TRIGGERS["reset_game"]
+    class E:  # minimal event
+        type = "game_reset"; payload = {}
+    assert t.match({"type": "reset_game"}, E(), MatchContext(level=6, prev_level=6, num_stars=0))
+    class E2:
+        type = "level_changed"; payload = {"from": 1, "to": 2}
+    assert not t.match({"type": "reset_game"}, E2(), MatchContext(level=2, prev_level=1, num_stars=0))
+
+
+def test_vocab_includes_reset_game():
+    from sm64_events.tracking.segments import vocab
+    assert any(t["key"] == "reset_game" for t in vocab()["triggers"])
