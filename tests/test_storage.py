@@ -20,7 +20,7 @@ def test_migrations_set_user_version_and_create_tables(tmp_path):
     names = {r["name"] for r in db._conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"events", "sessions", "attempts", "pbs", "ui_state", "routes", "runs"} <= names
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 8
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 9
 
 
 def test_reopening_existing_db_is_idempotent(tmp_path):
@@ -28,7 +28,7 @@ def test_reopening_existing_db_is_idempotent(tmp_path):
     sid = first.insert_session("2026-06-10T12:00:00Z")
     first.close()
     db = make_db(tmp_path)  # second open: migrations must not re-run/crash
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 8
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 9
     row = db._conn.execute("SELECT * FROM sessions WHERE id=?", (sid,)).fetchone()
     assert row is not None and row["started_utc"] == "2026-06-10T12:00:00Z"
 
@@ -146,7 +146,7 @@ def test_v1_database_upgrades_in_place(tmp_path):
     conn.commit()
     conn.close()
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 8
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 9
     assert db.attempts()[0].rollouts_total == 0   # backfilled default
     assert db.attempts()[0].jumps_total == 0
 
@@ -267,7 +267,7 @@ def test_v3_database_pb_rows_survive_v4_rebuild(tmp_path):
     conn.commit()
     conn.close()
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 8
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 9
     [row] = db.pbs()
     assert row["id"] == 7 and row["frames"] == 500
     assert row["course_id"] == 2 and row["star_id"] == 3
@@ -294,7 +294,7 @@ def test_v5_updates_existing_v4_lblj_row_with_area_anchor(tmp_path):
     conn.commit()
     conn.close()
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 8
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 9
     lblj = next(d for d in db.segment_defs() if d["name"] == "LBLJ")
     assert lblj["start_triggers"] == [
         {"type": "level_enter", "to": 6, "from": 16},
@@ -324,7 +324,7 @@ def test_v6_repairs_existing_bowser3_end_trigger(tmp_path):
     conn.commit()
     conn.close()
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 8
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 9
     b3 = next(d for d in db.segment_defs() if d["name"] == "Bowser 3")
     assert b3["end_triggers"] == [{"type": "key_grabbed", "level": 34}]
 
@@ -409,7 +409,7 @@ def test_failed_migration_rolls_back_schema_and_version(tmp_path, monkeypatch):
         Database(path)
     check = sqlite3.connect(str(path))
     # (a) version reflects only the successful prefix
-    assert check.execute("PRAGMA user_version").fetchone()[0] == 8
+    assert check.execute("PRAGMA user_version").fetchone()[0] == 9
     # partial application rolled back: first statement did NOT stick
     names = {r[0] for r in check.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
@@ -419,7 +419,7 @@ def test_failed_migration_rolls_back_schema_and_version(tmp_path, monkeypatch):
     fixed = "CREATE TABLE extra (id INTEGER);"
     monkeypatch.setattr(db_mod, "MIGRATIONS", db_mod.MIGRATIONS[:-1] + [fixed])
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 9
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 10
     db.close()
 
 
@@ -473,3 +473,21 @@ def test_run_settings_default_and_set(tmp_path):
     assert db.get_state("run_settings", {"start_offset_ms": 1360}) == {"start_offset_ms": 1360}
     db.set_state("run_settings", {"start_offset_ms": 2000})
     assert db.get_state("run_settings", {})["start_offset_ms"] == 2000
+
+
+# -- migration v9: routes.start_condition (per-route run-start condition) -----
+
+def test_migration_v9_adds_start_condition_default_reset(tmp_path):
+    db = make_db(tmp_path)
+    rid = db.insert_route("R", [], "t")
+    [row] = db.routes()
+    assert row["start_condition"] == {"type": "reset_game"}   # default
+
+
+def test_route_insert_with_explicit_start_condition(tmp_path):
+    db = make_db(tmp_path)
+    rid = db.insert_route("R", [], "t", start_condition={"type": "level_enter", "to": 9})
+    row = next(r for r in db.routes() if r["id"] == rid)
+    assert row["start_condition"] == {"type": "level_enter", "to": 9}
+    db.update_route(rid, start_condition={"type": "reset_game"}, updated_utc="t2")
+    assert db.routes()[0]["start_condition"] == {"type": "reset_game"}
