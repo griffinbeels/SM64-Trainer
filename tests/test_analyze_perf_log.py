@@ -74,6 +74,24 @@ def test_tick_compute_latency_growth_is_caught():
     assert "tick_compute_ms" in out["verdict"]
 
 
+def test_gpu_vram_growth_is_named():
+    # the D3D-capture-leak signature: process RSS flat, OUR VRAM climbing
+    r0, r1 = _rec(0), _rec(3600)
+    r0["gpu"] = {"local_usage_bytes": 500 * _MiB}
+    r1["gpu"] = {"local_usage_bytes": 6000 * _MiB}
+    out = analyze([r0, r1])
+    assert "gpu_vram(ours)" in out["verdict"]
+
+
+def test_pj64_growth_is_named_when_it_leaks():
+    # the "it's the emulator, not us" signature
+    r0, r1 = _rec(0), _rec(3600)
+    r0["processes"] = {"Project64.exe": {"rss_bytes": 300 * _MiB}}
+    r1["processes"] = {"Project64.exe": {"rss_bytes": 9000 * _MiB}}
+    out = analyze([r0, r1])
+    assert "pj64_rss" in out["verdict"]
+
+
 def test_top_type_growers_passed_through_from_last_record():
     growers = [{"type": "numpy.ndarray", "baseline": 10, "current": 9000,
                 "delta": 8990}]

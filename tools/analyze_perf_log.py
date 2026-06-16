@@ -25,6 +25,9 @@ _DIMS = [
     ("self_private", lambda r: r.get("private_mib"), "MiB", 256),
     ("child_rss(ffmpeg)",
      lambda r: _nested(r, "children", "rss_bytes", div=_MiB), "MiB", 256),
+    ("gpu_vram(ours)",
+     lambda r: _nested(r, "gpu", "local_usage_bytes", div=_MiB), "MiB", 512),
+    ("pj64_rss", lambda r: _proc_rss(r), "MiB", 512),
     ("system_commit",
      lambda r: _nested(r, "system", "commit_bytes", div=_MiB), "MiB", 1024),
     ("py_objects", lambda r: r.get("objects"), "", 50_000),
@@ -44,6 +47,15 @@ def _nested(rec: dict, outer: str, key: str, div: float = 1.0):
     d = rec.get(outer) or {}
     v = d.get(key)
     return None if v is None else v / div
+
+
+def _proc_rss(rec: dict):
+    """Summed RSS (MiB) of the watched non-child processes (PJ64). None when
+    not sampled, so the dimension is simply absent in older logs."""
+    procs = rec.get("processes")
+    if not procs:
+        return None
+    return sum(p.get("rss_bytes", 0) for p in procs.values()) / _MiB
 
 
 def _series(records: list[dict], get) -> list[float]:

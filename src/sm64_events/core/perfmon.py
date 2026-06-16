@@ -59,6 +59,8 @@ def perf_record(snap: dict, gauges: dict, *, uptime_s: float, t_utc: str,
                         if "scratch_bytes" in snap else None),
         "system": snap.get("system"),
         "children": snap.get("children"),
+        "gpu": snap.get("gpu"),
+        "processes": snap.get("processes"),
         "gauges": gauges or {},
         "top_growers": top_growers,
         "top_types": top_types,
@@ -106,9 +108,14 @@ class PerfMonitor:
                  perf_log_path=_USE_DEFAULT,
                  gauges: Callable[[], dict] | None = None,
                  self_pid: int | None = None,
-                 max_log_bytes: int = 50 * 1024 * 1024):
+                 max_log_bytes: int = 50 * 1024 * 1024,
+                 watch_processes=("Project64.exe",)):
         self._scratch_dir = scratch_dir
         self._interval_s = interval_s
+        # exe names whose memory we sample alongside ours — PJ64 is NOT our
+        # child, so a PJ64 leak (suspected from the 69-min capture's +5 GiB
+        # system commit that wasn't us) only shows via this by-name probe.
+        self._watch = tuple(watch_processes or ())
         # Keep the raw value; resolve _DEFAULT_LOG LAZILY (at write time) via
         # _logpath() so a conftest patch applies even when the monitor was
         # constructed at import time (main.py builds `app` before tests patch
@@ -131,9 +138,11 @@ class PerfMonitor:
                 else self._perf_log_path)
 
     def _collect(self) -> dict:
-        """One full sample (heap walk + resources + children + scratch)."""
+        """One full sample (heap walk + resources + children + GPU + watched
+        processes + scratch)."""
         return sample(self._scratch_dir, count_objects=True, resources=True,
-                      children_of=self._pid, histogram=True)
+                      children_of=self._pid, histogram=True, gpu=True,
+                      processes=self._watch)
 
     def _tick(self) -> dict:
         """Sample, log, alarm, persist. Returns the record (testable without
@@ -153,14 +162,19 @@ class PerfMonitor:
                                   n=10)
         child = snap.get("children") or {}
         sysd = snap.get("system") or {}
+        gpu = snap.get("gpu") or {}
+        pj64 = sum(p.get("rss_bytes", 0)
+                   for p in (snap.get("processes") or {}).values())
         log.info(
             "mem: rss=%.0f MiB priv=%.0f MiB obj=%d thr=%d handles=%s gdi=%s "
-            "user=%s child=%.0f MiB(%d) sys_load=%s%% scratch=%.0f MiB",
+            "user=%s child=%.0f MiB(%d) gpu=%.0f MiB pj64=%.0f MiB "
+            "sys_load=%s%% scratch=%.0f MiB",
             snap.get("rss_bytes", 0) / _MiB, snap.get("private_bytes", 0) / _MiB,
             snap.get("objects", -1), snap.get("threads", -1),
             snap.get("handles", "?"), snap.get("gdi_objects", "?"),
             snap.get("user_objects", "?"), child.get("rss_bytes", 0) / _MiB,
-            child.get("count", 0), sysd.get("load_pct", "?"),
+            child.get("count", 0), gpu.get("local_usage_bytes", 0) / _MiB,
+            pj64 / _MiB, sysd.get("load_pct", "?"),
             snap.get("scratch_bytes", 0) / _MiB)
         if growers:
             log.info("mem growers vs baseline: %s", ", ".join(

@@ -7,10 +7,10 @@ import gc
 import os
 
 from sm64_events.core.procmem import (assess_growth, child_memory,
-                                      dir_size_bytes, gc_summary,
-                                      handle_counts, resource_alarms, sample,
-                                      system_memory, top_type_growth,
-                                      type_histogram)
+                                      dir_size_bytes, gc_summary, gpu_memory,
+                                      handle_counts, named_process_memory,
+                                      resource_alarms, sample, system_memory,
+                                      top_type_growth, type_histogram)
 
 _GiB = 1024 ** 3
 
@@ -145,3 +145,34 @@ def test_resource_alarms_quiet_when_flat_or_degenerate():
     assert resource_alarms(flat, flat) == []
     # zero/None current never divides or fires
     assert resource_alarms({"handles": 0}, {"handles": 0}) == []
+
+
+def test_gpu_memory_shape_is_platform_tolerant():
+    g = gpu_memory()
+    assert isinstance(g, dict)
+    if g:  # Windows with a DXGI adapter
+        assert g["local_budget_bytes"] >= 0
+        assert g["local_usage_bytes"] >= 0
+        assert g["nonlocal_usage_bytes"] >= 0
+
+
+def test_named_process_memory_matches_self():
+    import sys
+    exe = os.path.basename(sys.executable)        # python.exe — this process
+    out = named_process_memory({exe})
+    assert isinstance(out, dict)
+    if out:  # Windows: at least this process matched
+        slot = next(iter(out.values()))
+        assert set(slot) == {"count", "rss_bytes", "private_bytes"}
+        assert slot["count"] >= 1 and slot["rss_bytes"] > 0
+
+
+def test_named_process_memory_empty_for_unknown_name():
+    assert named_process_memory({"definitely-not-a-real-process-xyz.exe"}) == {}
+
+
+def test_sample_gpu_and_processes_opt_in():
+    bare = sample()
+    assert "gpu" not in bare and "processes" not in bare
+    s = sample(gpu=True, processes={"python.exe"})
+    assert isinstance(s["gpu"], dict) and isinstance(s["processes"], dict)

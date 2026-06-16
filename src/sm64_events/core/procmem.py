@@ -252,6 +252,138 @@ def child_memory(parent_pid: int) -> dict:
             "by_name": dict(by_name)}
 
 
+def named_process_memory(names) -> dict:
+    """Working-set + private bytes of ALL processes whose exe matches `names`
+    (case-insensitive), keyed by exe name. THE probe for 'is the system-commit
+    growth PJ64's OWN leak, not ours?' — PJ64 is not our child, so child_memory
+    misses it. `names`: iterable of exe filenames (e.g. {'project64.exe'}).
+    Returns {exe: {count, rss_bytes, private_bytes}}; {} off Windows. Best-
+    effort — a process we can't open is skipped, never raises."""
+    if _API.snapshot is None:
+        return {}
+    wanted = {n.lower() for n in names}
+    snap = _API.snapshot(_TH32CS_SNAPPROCESS, 0)
+    if not snap or snap == _INVALID_HANDLE:
+        return {}
+    out: dict = {}
+    try:
+        entry = _PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(entry)
+        ok = _API.proc_first(snap, ctypes.byref(entry))
+        while ok:
+            exe = entry.szExeFile
+            if exe.lower() in wanted:
+                h = _API.openproc(_PROCESS_QUERY_LIMITED_INFORMATION, False,
+                                  entry.th32ProcessID)
+                if h:
+                    try:
+                        c = _mem_counters(h)
+                        if c:
+                            slot = out.setdefault(
+                                exe, {"count": 0, "rss_bytes": 0,
+                                      "private_bytes": 0})
+                            slot["count"] += 1
+                            slot["rss_bytes"] += int(c.WorkingSetSize)
+                            slot["private_bytes"] += int(c.PagefileUsage)
+                    finally:
+                        _API.closehandle(h)
+            ok = _API.proc_next(snap, ctypes.byref(entry))
+    finally:
+        _API.closehandle(snap)
+    return out
+
+
+# -- GPU VRAM (DXGI) ---------------------------------------------------------
+# The DWM capture path is pure D3D11 (replay/_dwm.py): a leak of staging /
+# shared-surface textures fills VRAM, which neither process RSS nor (until it
+# spills to shared system memory) system commit reveals — the one dimension a
+# CPU-memory sample is structurally blind to. QueryVideoMemoryInfo gives the
+# adapter-wide usage; if OUR capture leaks, local usage climbs across a session.
+class _DXGI_QVMI(ctypes.Structure):
+    _fields_ = [("Budget", ctypes.c_uint64), ("CurrentUsage", ctypes.c_uint64),
+                ("AvailableForReservation", ctypes.c_uint64),
+                ("CurrentReservation", ctypes.c_uint64)]
+
+
+# IIDs packed little-endian (Data1/2/3) + big-endian (Data4), the COM layout.
+_IID_IDXGIFactory1 = (ctypes.c_ubyte * 16).from_buffer_copy(
+    b"\x78\xae\x0a\x77\x6f\xf2\xba\x4d\xa8\x29\x25\x3c\x83\xd1\xb3\x87")
+_IID_IDXGIAdapter3 = (ctypes.c_ubyte * 16).from_buffer_copy(
+    b"\xa4\x67\x59\x64\x92\x13\x10\x43\xa7\x98\x80\x53\xce\x3e\x93\xfd")
+
+
+def _vtbl(obj, index, restype, *argtypes):
+    """Call COM method #index on `obj` (ctypes c_void_p to the interface).
+    Mirrors replay/_dwm.py's helper — the codebase's COM-via-ctypes idiom."""
+    vptr = ctypes.cast(obj, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p)))
+    return ctypes.WINFUNCTYPE(restype, ctypes.c_void_p, *argtypes)(
+        vptr.contents[index])
+
+
+def gpu_memory() -> dict:
+    """Adapter VRAM usage via DXGI QueryVideoMemoryInfo, summed across adapters:
+    {local_usage_bytes (VRAM in use), local_budget_bytes (what the OS grants),
+    nonlocal_usage_bytes (shared-system spill)}. Adapter-wide, not per-process —
+    but a climbing local_usage over a session is the GPU-resource-leak signal.
+    {} off Windows / on any probe failure (it never raises into the monitor)."""
+    try:
+        dxgi = ctypes.windll.dxgi
+        create = dxgi.CreateDXGIFactory1
+        create.argtypes = [ctypes.POINTER(ctypes.c_ubyte),
+                           ctypes.POINTER(ctypes.c_void_p)]
+        create.restype = ctypes.c_long
+    except Exception:
+        return {}
+    factory = ctypes.c_void_p()
+    try:
+        if create(_IID_IDXGIFactory1, ctypes.byref(factory)) != 0 \
+                or not factory.value:
+            return {}
+    except Exception:
+        return {}
+    local_usage = local_budget = nonlocal_usage = 0
+    try:
+        # Adapter 0 = the primary/discrete GPU (the 5090 here). Summing all
+        # adapters folded in the software render driver's system-RAM budget
+        # (~192 GB of noise); the primary adapter is where our D3D capture and
+        # PJ64 render, so its CurrentUsage is the signal. QueryVideoMemoryInfo
+        # reports the CALLING process's usage — run inside the server it tracks
+        # OUR VRAM, climbing if _dwm leaks staging/shared-surface textures.
+        enum = _vtbl(factory, 12, ctypes.c_long, ctypes.c_uint,
+                     ctypes.POINTER(ctypes.c_void_p))           # EnumAdapters1
+        adapter = ctypes.c_void_p()
+        if enum(factory, 0, ctypes.byref(adapter)) != 0 or not adapter.value:
+            return {}
+        try:
+            a3 = ctypes.c_void_p()
+            qi = _vtbl(adapter, 0, ctypes.c_long,
+                       ctypes.POINTER(ctypes.c_ubyte),
+                       ctypes.POINTER(ctypes.c_void_p))         # QueryInterface
+            if qi(adapter, _IID_IDXGIAdapter3, ctypes.byref(a3)) == 0 \
+                    and a3.value:
+                try:
+                    qvmi = _vtbl(a3, 14, ctypes.c_long, ctypes.c_uint,
+                                 ctypes.c_int, ctypes.POINTER(_DXGI_QVMI))
+                    info = _DXGI_QVMI()
+                    if qvmi(a3, 0, 0, ctypes.byref(info)) == 0:      # 0 = LOCAL
+                        local_usage = int(info.CurrentUsage)
+                        local_budget = int(info.Budget)
+                    info2 = _DXGI_QVMI()
+                    if qvmi(a3, 0, 1, ctypes.byref(info2)) == 0:     # 1 = NONLOCAL
+                        nonlocal_usage = int(info2.CurrentUsage)
+                finally:
+                    _vtbl(a3, 2, ctypes.c_ulong)(a3)                 # Release
+        finally:
+            _vtbl(adapter, 2, ctypes.c_ulong)(adapter)              # Release
+    except Exception:
+        return {}
+    finally:
+        _vtbl(factory, 2, ctypes.c_ulong)(factory)                  # Release
+    return {"local_usage_bytes": local_usage,
+            "local_budget_bytes": local_budget,
+            "nonlocal_usage_bytes": nonlocal_usage}
+
+
 def thread_count() -> int:
     """Python-level live thread count (threading.active_count). Captures the
     threads WE create — the capture/feeder/reader/gc-gen2 daemons — so a
@@ -305,13 +437,15 @@ def type_histogram(objs: list | None = None) -> dict[str, int]:
 
 def sample(scratch_dir: Path | None = None, *, count_objects: bool = False,
            resources: bool = False, children_of: int | None = None,
-           histogram: bool = False) -> dict:
+           histogram: bool = False, gpu: bool = False,
+           processes=None) -> dict:
     """One observability snapshot. Cheap by default (RSS + GC). Opt-in adds:
     `resources` (private bytes, handle/GDI/USER counts, threads, system memory
     — all O(1) syscalls); `count_objects`/`histogram` (a gc.get_objects() heap
     walk — the only O(heap) cost, so the periodic monitor sets it, on-demand
-    /health does not); `children_of` (child-process memory snapshot);
-    `scratch_dir` (flat dir size)."""
+    /health does not); `children_of` (child-process memory snapshot); `gpu`
+    (DXGI VRAM usage of THIS process); `processes` (iterable of exe names to
+    measure, e.g. PJ64); `scratch_dir` (flat dir size)."""
     snap: dict = {"rss_bytes": rss_bytes(), "gc": gc_summary()}
     if resources:
         snap["private_bytes"] = private_bytes()
@@ -325,6 +459,10 @@ def sample(scratch_dir: Path | None = None, *, count_objects: bool = False,
             snap["types"] = type_histogram(objs)
     if children_of is not None:
         snap["children"] = child_memory(children_of)
+    if gpu:
+        snap["gpu"] = gpu_memory()
+    if processes:
+        snap["processes"] = named_process_memory(processes)
     if scratch_dir is not None:
         snap["scratch_bytes"] = dir_size_bytes(scratch_dir)
     return snap
