@@ -169,7 +169,8 @@ def test_status_inert_from_source(tmp_path):
 
 def test_status_reports_available(tmp_path):
     http = _fake_http({LATEST: _release_json("v2.0.0", {
-        "sm64_tracker.exe": "https://dl/exe"})})
+        "sm64_tracker.exe": "https://dl/exe",
+        "sm64_tracker.exe.sha256": "https://dl/sha"})})
     svc = _svc(tmp_path, http)
     st = svc.status()
     assert st["update_available"] is True
@@ -207,3 +208,46 @@ def test_begin_apply_errors_when_no_update(tmp_path):
         "sm64_tracker.exe": "https://dl/exe"})})
     svc = _svc(tmp_path, http)
     assert svc.begin_apply(lambda: None)["state"] == "error"
+
+
+def test_check_none_when_no_sha256_asset():
+    http = _fake_http({LATEST: _release_json("v2.0.0", {
+        "sm64_tracker.exe": "https://dl/exe"})})   # exe but NO .sha256
+    assert check_for_update("1.0.0", http=http) is None
+
+
+import os as _os
+
+def test_apply_update_restores_backup_on_persistent_failure(tmp_path, monkeypatch):
+    current = tmp_path / "sm64_tracker.exe"
+    current.write_text("OLD")
+    staged = tmp_path / "sm64_tracker.exe.new"
+    staged.write_text("NEW")
+    real = _os.replace
+    def flaky(src, dst):
+        if str(src) == str(staged):          # fail only the staged->current move
+            raise PermissionError("locked")
+        return real(src, dst)
+    monkeypatch.setattr("sm64_events.core.updater.os.replace", flaky)
+    import pytest
+    with pytest.raises(PermissionError):
+        apply_update(staged, current, retries=2, sleep=lambda s: None)
+    assert current.read_text() == "OLD"      # restored, not bricked
+
+
+import threading as _threading
+
+def test_begin_apply_happy_path_swaps_and_calls_back(tmp_path):
+    payload = b"NEWEXE"
+    digest = _hashlib.sha256(payload).hexdigest()
+    http = _fake_http({
+        LATEST: _release_json("v2.0.0", {
+            "sm64_tracker.exe": "https://dl/exe",
+            "sm64_tracker.exe.sha256": "https://dl/sha"}),
+        "https://dl/exe": payload,
+        "https://dl/sha": (digest + "  sm64_tracker.exe").encode()})
+    svc = _svc(tmp_path, http)
+    done = _threading.Event()
+    assert svc.begin_apply(done.set)["state"] == "downloading"
+    assert done.wait(timeout=5)
+    assert (tmp_path / "sm64_tracker.exe").read_bytes() == payload

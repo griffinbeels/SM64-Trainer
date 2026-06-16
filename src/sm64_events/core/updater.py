@@ -86,12 +86,16 @@ def check_for_update(current: str, *, http=urllib.request.urlopen,
         asset_url = assets.get(EXE_NAME)
         if not asset_url:
             return None
+        sha256_url = assets.get(EXE_NAME + ".sha256")
+        if not sha256_url:
+            log.info("release %s has no .sha256 asset; not offering", tag)
+            return None
         return UpdateInfo(
             version=tag.lstrip("vV"),
             notes=rel.get("body") or "",
             html_url=rel.get("html_url") or "",
             asset_url=asset_url,
-            sha256_url=assets.get(EXE_NAME + ".sha256") or "")
+            sha256_url=sha256_url)
     except Exception:
         log.info("update check failed", exc_info=True)
         return None
@@ -119,8 +123,13 @@ def download_and_stage(info: "UpdateInfo", exe_dir: Path, *,
                     progress(min(1.0, done / total))
     if info.sha256_url:
         with _get(http, info.sha256_url) as r:
-            published = r.read().decode("utf-8").split()[0].strip().lower()
-        if published and published != h.hexdigest():
+            text = r.read().decode("utf-8")
+        parts = text.split()
+        if not parts:
+            staged.unlink(missing_ok=True)
+            raise ValueError("sha256 file is empty or malformed")
+        published = parts[0].strip().lower()
+        if published != h.hexdigest():
             staged.unlink(missing_ok=True)
             raise ValueError("update checksum mismatch")
     return staged
@@ -129,16 +138,23 @@ def download_and_stage(info: "UpdateInfo", exe_dir: Path, *,
 def apply_update(staged: Path, current_exe: Path, *, retries: int = 5,
                  sleep=time.sleep) -> None:
     """Swap `staged` in for the running exe via two renames (Windows allows
-    renaming a running exe). Bounded retry: AV can briefly lock the new file."""
+    renaming a running exe). Renaming the running exe aside happens once; only
+    the staged->current move is retried (AV can briefly lock the new file). On
+    final failure the backup is restored so the install is never left exe-less."""
     old = current_exe.parent / (current_exe.name + ".old")
+    old.unlink(missing_ok=True)
+    os.replace(current_exe, old)            # fails here -> current_exe untouched
     for attempt in range(retries):
         try:
-            old.unlink(missing_ok=True)
-            os.replace(current_exe, old)
             os.replace(staged, current_exe)
             return
         except PermissionError:
             if attempt == retries - 1:
+                try:
+                    os.replace(old, current_exe)   # restore the backup
+                except OSError:
+                    log.error("update failed AND backup restore failed; "
+                              "exe at %s", old)
                 raise
             sleep(0.5)
 
@@ -186,6 +202,7 @@ class UpdateService:
         self._progress = 0.0
         self._cache: "UpdateInfo | None" = None
         self._checked_at = 0.0      # monotonic of last real check; 0 = never
+        self._writable: "bool | None" = None   # probed once, then cached
 
     # --- skipped-version overlay ---
     def _skipped(self) -> "str | None":
@@ -225,9 +242,11 @@ class UpdateService:
 
     def status(self, force: bool = False) -> dict:
         info = self._check(force)
-        writable = bool(self._frozen and info is not None
-                        and not os.environ.get("SM64_UPDATE_FAKE")
-                        and exe_dir_writable(self._exe.parent))
+        fake = bool(os.environ.get("SM64_UPDATE_FAKE"))
+        if self._writable is None and self._frozen and info is not None and not fake:
+            self._writable = exe_dir_writable(self._exe.parent)
+        writable = bool(self._writable and not fake
+                        and self._state not in ("downloading", "installing"))
         return {
             "current": self.current,
             "frozen": self._frozen,
@@ -243,12 +262,14 @@ class UpdateService:
 
     # --- apply (off-thread; UI polls status for progress) ---
     def begin_apply(self, on_success) -> dict:
+        info = self._check(force=False)
+        if not self._frozen or info is None:
+            return {"state": "error", "error": "no update available"}
+        if os.environ.get("SM64_UPDATE_FAKE"):
+            return {"state": "error", "error": "fake update"}
         with self._lock:
             if self._state in ("downloading", "installing"):
                 return {"state": self._state}
-            info = self._check(force=False)
-            if not self._frozen or info is None:
-                return {"state": "error", "error": "no update available"}
             if not exe_dir_writable(self._exe.parent):
                 return {"state": "error", "error": "exe folder not writable"}
             self._state = "downloading"
@@ -258,6 +279,7 @@ class UpdateService:
         return {"state": "downloading"}
 
     def _run_apply(self, info: "UpdateInfo", on_success) -> None:
+        staged = None
         try:
             staged = download_and_stage(info, self._exe.parent, http=self._http,
                                         progress=self._set_progress)
@@ -266,6 +288,8 @@ class UpdateService:
             on_success()
         except Exception:
             log.exception("update apply failed")
+            if staged is not None:
+                staged.unlink(missing_ok=True)
             self._state = "error"
 
     def _set_progress(self, frac: float) -> None:
