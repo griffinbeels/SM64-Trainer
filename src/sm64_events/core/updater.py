@@ -233,8 +233,13 @@ class UpdateService:
             return None
         return UpdateInfo(
             version="9.9.9",
-            notes="## Demo release\n- **New:** sample patch notes\n"
-                  "- Open the release page for the real thing",
+            notes="## Demo release\n"
+                  "- **New:** a sample bullet whose text is long enough to wrap\n"
+                  "  onto a second source line, exercising the soft-wrap join.\n"
+                  "- A second bullet that mentions the `.old` backup as code.\n"
+                  "\n"
+                  "A trailing paragraph after a blank line, also wrapping across\n"
+                  "two source lines, to confirm paragraphs join too.",
             html_url=f"https://github.com/{self.repo}/releases",
             asset_url="", sha256_url="")
 
