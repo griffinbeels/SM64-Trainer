@@ -15,24 +15,44 @@ function esc(s) {
 }
 function inline(s) {
   return s
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
     .replace(/\[(.+?)\]\((https?:\/\/[^\s)]+)\)/g,
              '<a href="$2" target="_blank">$1</a>')
     .replace(/(^|[^"(>])(https?:\/\/[^\s<]+)/g,
              '$1<a href="$2" target="_blank">$2</a>');
 }
+// Block renderer: GitHub joins soft-wrapped lines (a single newline = a space)
+// into one paragraph/bullet; a BLANK line separates blocks. The old per-line
+// renderer broke continuation lines out of their bullet and added stray <br>s.
 function renderNotes(md) {
   const lines = esc(md).split(/\r?\n/);
-  let out = "", inList = false;
-  for (const ln of lines) {
+  let out = "", inList = false, buf = null;   // buf: {type:'li'|'p'|'h', text}
+  const flush = () => {
+    if (!buf) return;
+    if (buf.type === "li") {
+      if (!inList) { out += "<ul>"; inList = true; }
+      out += "<li>" + inline(buf.text) + "</li>";
+    } else {
+      if (inList) { out += "</ul>"; inList = false; }
+      out += buf.type === "h"
+        ? "<b>" + inline(buf.text) + "</b>"
+        : "<p>" + inline(buf.text) + "</p>";
+    }
+    buf = null;
+  };
+  for (const raw of lines) {
+    const ln = raw.replace(/\s+$/, "");
+    if (ln.trim() === "") { flush(); continue; }            // blank line ends a block
     const li = ln.match(/^\s*[-*]\s+(.*)$/);
-    if (li) { if (!inList) { out += "<ul>"; inList = true; }
-              out += "<li>" + inline(li[1]) + "</li>"; continue; }
-    if (inList) { out += "</ul>"; inList = false; }
     const hd = ln.match(/^\s*#{1,6}\s+(.*)$/);
-    if (hd) { out += "<b>" + inline(hd[1]) + "</b><br>"; continue; }
-    out += ln.trim() === "" ? "<br>" : inline(ln) + "<br>";
+    if (li) { flush(); buf = { type: "li", text: li[1] }; }
+    else if (hd) { flush(); buf = { type: "h", text: hd[1] }; }
+    else if (buf && (buf.type === "li" || buf.type === "p")) {
+      buf.text += " " + ln.trim();                          // soft-wrap continuation
+    } else { flush(); buf = { type: "p", text: ln.trim() }; }
   }
+  flush();
   if (inList) out += "</ul>";
   return out;
 }
