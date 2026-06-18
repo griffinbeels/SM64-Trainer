@@ -138,6 +138,47 @@ def test_av_sink_produces_synced_av_segments(tmp_path):
     assert abs(vframes / 60.0 - asamp / 48000.0) < 0.15
 
 
+def _sec_of_pcm(seconds, rate=48000):
+    return np.zeros((int(rate * seconds), 2), dtype=np.int16).tobytes()
+
+
+def test_audio_pacer_bridges_gaps_to_hold_realtime():
+    """Regression for the choppy-video bug (2026-06-18): both pipes are
+    wall-clock-stamped, so if the audio pipe falls behind the wall clock (the
+    game goes quiet → WASAPI delivers nothing), ffmpeg blocks on audio and
+    stops draining the VIDEO stdin, collapsing captured fps (live: 16.9 fed/s,
+    >10000 duplicated frames → ~17 fps). The pacer must pad silence so the pipe
+    stays at realtime through the gap. Deterministic: injected clock + writer."""
+    from sm64_events.replay.ffmpeg_sink import AudioPacer
+    clock = [0.0]
+    written = []
+    p = AudioPacer(48000, lambda: clock[0], written.append)
+    # tick every 5 ms for 1 s; real audio arrives only for the first 0.2 s
+    for k in range(200):
+        clock[0] = k * 0.005
+        if clock[0] < 0.2:
+            p.feed(_sec_of_pcm(0.005))
+        p.tick()
+    total = sum(len(b) // 4 for b in written)
+    # ~1 s of samples delivered despite audio stopping at 0.2 s (gap bridged)
+    assert abs(total - 48000 * 0.995) < 48000 * 0.02
+    assert total > 48000 * 0.5, "pipe fell far behind realtime — would starve ffmpeg"
+
+
+def test_audio_pacer_does_not_overpad_when_audio_runs_ahead():
+    """A burst of real audio ahead of the wall clock must NOT trigger silence
+    padding (which would inflate/duplicate the track)."""
+    from sm64_events.replay.ffmpeg_sink import AudioPacer
+    clock = [0.0]
+    written = []
+    p = AudioPacer(48000, lambda: clock[0], written.append)
+    p.feed(_sec_of_pcm(1.0))          # 1 s of audio delivered at t=0
+    for k in range(100):              # tick across the next ~0.5 s
+        clock[0] = k * 0.005
+        assert p.tick() == 0          # already ahead → never pads
+    assert sum(len(b) // 4 for b in written) == 48000  # only the real burst
+
+
 def test_kill_on_close_job_reaps_child_when_handle_dies():
     """The orphan-ffmpeg backstop (live incident 2026-06-12: hung shutdown
     left ffmpeg recording into a dead terminal). Closing the job handle is

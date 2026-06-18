@@ -128,6 +128,52 @@ def _assign_kill_on_close(proc) -> int | None:
         return None
 
 
+class AudioPacer:
+    """Keep ffmpeg's audio pipe fed CONTINUOUSLY AT REALTIME by draining real
+    PCM and padding silence up to the wall-clock-expected sample count.
+
+    Both ffmpeg inputs are wall-clock-stamped, so the input scheduler reads
+    whichever stream is behind in wall time and BLOCKS on it. If the audio pipe
+    falls behind — which it does whenever the game is quiet (WASAPI loopback
+    delivers no packets) — ffmpeg waits for audio and stops draining the VIDEO
+    stdin, collapsing the captured frame rate (live: 16.9 fed/s, ffmpeg
+    duplicating >10000 frames → choppy ~17 fps). Holding audio at realtime
+    keeps the scheduler from ever waiting on it; padded silence is stamped at
+    its write wall-clock and aresample reconciles it.
+
+    Pure logic — clock and writer are injected so the no-starve invariant is
+    unit-testable without ffmpeg. `feed` writes real PCM; `tick` pads silence
+    to realtime. Returns samples written so callers/tests can observe."""
+
+    def __init__(self, rate: int, now, write):
+        self._rate = rate
+        self._now = now
+        self._write = write
+        self._t0 = None
+        self._delivered = 0
+
+    def feed(self, real_pcm: bytes) -> None:
+        if self._t0 is None:
+            self._t0 = self._now()
+        self._write(real_pcm)
+        self._delivered += len(real_pcm) // 4  # 2ch * s16
+
+    def tick(self) -> int:
+        if self._t0 is None:
+            self._t0 = self._now()
+        expected = int((self._now() - self._t0) * self._rate)
+        pad = expected - self._delivered
+        if pad > 0:
+            self._write(b"\x00" * (pad * 4))
+            self._delivered += pad
+            return pad
+        return 0
+
+    @property
+    def delivered(self) -> int:
+        return self._delivered
+
+
 def parse_segment_csv(line: str, anchor_utc: datetime, origin_s: float,
                       scratch: Path) -> SegmentInfo | None:
     """One line of ffmpeg's -segment_list_type csv: 'file,start,end' (seconds).
@@ -299,25 +345,55 @@ class FfmpegAvSink:
         self._pipe_handle = h
 
     def _audio_writer_loop(self) -> None:
-        """Block until ffmpeg connects to the named pipe, then drain the queue
-        into it. WriteFile may block on pipe backpressure — harmless here (off
-        the RT path); on ffmpeg exit the read end closes and WriteFile errors,
-        ending the loop."""
+        """Block until ffmpeg connects to the named pipe, then keep it fed
+        CONTINUOUSLY AT REALTIME: drain whatever real PCM has arrived and pad
+        silence to the wall-clock-expected sample count.
+
+        WHY pad (the choppy-video fix, 2026-06-18): both pipes are
+        wall-clock-stamped, so ffmpeg's input scheduler reads whichever stream
+        is behind in wall time and BLOCKS on it. If the audio pipe starves —
+        which it does whenever the game is quiet (WASAPI loopback delivers no
+        packets) — ffmpeg waits for audio and stops draining the VIDEO stdin,
+        so the feeder's writes block and the captured frame rate collapses to a
+        fraction of fps (live: 16.9 fed/s, ffmpeg duplicating >10000 frames →
+        ~17 fps of unique content). Holding the audio input at realtime keeps
+        the scheduler from ever waiting on it. The padded silence is stamped at
+        its write wall-clock and aresample reconciles it; bisect-verified that
+        continuous realtime audio sustains full fps while gappy audio does not.
+
+        WriteFile may block on pipe backpressure — harmless (off the RT path);
+        on ffmpeg exit the read end closes and WriteFile errors, ending loop."""
+        import time as _time
         h = self._pipe_handle
         if h is None:
             return
         _k32.ConnectNamedPipe(h, None)  # returns when ffmpeg opens the pipe
         written = wt.DWORD(0)
+        broken = [False]
+
+        def _put(buf: bytes) -> None:
+            if not _k32.WriteFile(h, buf, len(buf), ctypes.byref(written), None):
+                broken[0] = True  # read end closed (ffmpeg gone)
+
+        pacer = AudioPacer(self._cfg.audio_rate, _time.perf_counter, _put)
         while not self._stop.is_set():
-            try:
-                buf = self._audio_q.get(timeout=0.5)
-            except queue.Empty:
-                continue
-            if buf is None:
-                break
-            ok = _k32.WriteFile(h, buf, len(buf), ctypes.byref(written), None)
-            if not ok:
-                break  # broken pipe (ffmpeg gone)
+            drained = False
+            while True:
+                try:
+                    buf = self._audio_q.get_nowait()
+                except queue.Empty:
+                    break
+                if buf is None:
+                    return
+                pacer.feed(buf)
+                if broken[0]:
+                    return
+                drained = True
+            pacer.tick()  # pad silence to realtime so audio never starves video
+            if broken[0]:
+                return
+            if not drained:
+                _time.sleep(0.005)  # fine tick: smooth, low-latency pacing
 
     def _teardown_audio_pipe(self) -> None:
         self._audio_q.put(None)  # wake the writer
