@@ -319,14 +319,35 @@ reformat, wall-clock pts across holes, WGC/proctap API quirks) live in the
 `encoder.py`/`extract.py`/`video.py`/`audio.py` docstrings — pointers, not
 copies, here.
 
-**Final pipeline.** DWM shared-surface capture (`replay/_dwm.py` +
-`DwmSurfaceVideoSource`) → lock-free submit into an ffmpeg.exe subprocess
-(`replay/ffmpeg_sink.py`: a sample-and-hold feeder paces exact-fps stdin
-writes; ffmpeg owns NVENC encode + MPEG-TS segment rotation) → SegmentRing.
-Audio: WASAPI loopback of the endpoint HOSTING PJ64'S SESSION
-(`replay/audio.py`) → real-time-safe pump (`replay/_system_audio.py`) →
-wall-clock placement → PCM sidecar chunks. Clips re-encode at extraction
-(`replay/extract.py`).
+**Final pipeline (single-mux, 2026-06-18 — supersedes the two-stream stack).**
+DWM shared-surface capture (`replay/_dwm.py` + `DwmSurfaceVideoSource`) +
+WASAPI loopback of the endpoint HOSTING PJ64'S SESSION (`replay/audio.py`,
+RT-safe pump `replay/_system_audio.py`) both feed ONE ffmpeg.exe
+(`replay/ffmpeg_sink.py::FfmpegAvSink`): video over stdin, audio over a Windows
+named pipe. ffmpeg stamps BOTH by wall-clock, CFR-locks the video and
+aresample-async-locks the audio to that one clock, and emits combined A+V
+MPEG-TS segments → SegmentRing. Clips are a pure ffmpeg cut of those segments
+(`replay/extract.py`). The in-process `encoder.py` SegmentWriter survives only
+as a no-ffmpeg fallback.
+
+**Why the rebuild — the two-clock A/V drift (2026-06-17 diagnosis).** The
+previous stack carried video and audio on TWO independent clocks and reconciled
+them only at extraction: video time = fed-frame-count/fps (the feeder's
+sample-and-hold), audio time = cumulative-sample-count/48000 (count-based PCM
+sidecars). Their rates diverged and clips drifted audio-behind-video by SECONDS
+over a long session — the bug multiple sessions chased as a "fixed offset" and
+never caught, because nothing locked the two RATES together. Evidence (live
+7h49m session log + on-disk segment-mtime measurement, 924-segment run): video
+ran ~248 ppm slow (feeder stalls resync `next_t=perf_counter()`, dropping owed
+frames — asymmetric, can only LOSE time), audio ~101 ppm slow (device crystal),
+NET ~147 ppm × full session wall-clock ≈ 4 s. The fix is structural, not a
+tune: one muxer, one clock, audio resampled onto it (`aresample=async`).
+Prototype-verified before the rewrite — 10000 ppm injected audio drift →
+bounded NON-accumulating residual. The per-segment AAC priming gap that
+originally forced PCM sidecars does NOT recur: it is one continuous encode the
+segment muxer slices, so priming applies once at stream start. Deep notes:
+[[replay-av-drift-two-clocks]] (auto-memory) + the `ffmpeg_sink.py`/`extract.py`
+docstrings.
 
 **Capture pathology — why three video backends exist.** PJ64 1.6 / Jabo
 D3D8 presents via the legacy BITBLT model: its pixels live in the window's
@@ -429,10 +450,11 @@ object-count / scratch trend (`core/procmem.py`).
 **Idle gating + pause layer (2026-06-12).** No-input footage is DISCARDED,
 never produced-then-paused: stopping the ffmpeg child was shipped first
 and reverted — every resume respawned it with a ~0.2 s hole exactly where
-a 0-pre-pad clip begins, and gating raw PCM would have shifted the
-COUNT-BASED audio cursor (silent A/V desync). Gate at the
-completed-artifact boundary (`recorder._on_segment`: both segment kinds
-arrive there; straddlers are kept), keep producers running. The resume
+a 0-pre-pad clip begins, and gating raw frames/PCM is the wrong layer (the
+single AV mux wants a continuous feed; it CFR-fills video and aresample-fills
+audio across idle by itself). Gate at the completed-artifact boundary
+(`recorder._on_segment`: A+V segments arrive there; straddlers are kept),
+keep producers running. The resume
 signal must include the ANCHOR — igt reset / level entry — not just
 movement: Mario stands passive through post-load fade-ins, so
 movement-only resume opened 0-pre-pad clips ~2 s late on a frozen frame
