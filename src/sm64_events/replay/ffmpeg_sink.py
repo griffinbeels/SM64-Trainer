@@ -1,57 +1,47 @@
-"""ffmpeg-subprocess video sink — encoding OUT of the Python process.
+r"""ffmpeg-subprocess A+V sink — ONE ffmpeg owns both streams and ONE clock.
 
-WHY: every remaining replay glitch class (scattered missed slots, rare
-100-200 ms gaps, audio hiccups correlated with them) traced to threads
-sharing one interpreter lock with the in-process PyAV/NVENC encoder.
-Capture callbacks, the audio pump, and the encoder all paid each other's
-latency through the GIL. A separate process is the structural end of that
-coupling: ffmpeg.exe receives raw BGRA frames over a pipe (the write is a
-syscall — GIL released), encodes with NVENC, and rotates MPEG-TS segments
-with its own battle-tested segment muxer.
+WHY this shape (the whole point — read the drift memory): video and audio used
+to be two streams on two independent clocks (count-based audio vs
+fed-frame-count video), reconciled by hand only at extraction. Their rates
+diverged ~150 ppm and the clip A/V offset grew to seconds over a long session.
+The cure is structural: feed BOTH raw streams into one ffmpeg that stamps each
+by SYSTEM WALL-CLOCK at read time (`-use_wallclock_as_timestamps`), CFR-locks
+the video to that clock (`-fps_mode cfr -r fps`), and continuously resamples
+the audio onto the same timeline (`-af aresample=async=1`). The segment muxer
+then slices an already-continuous, already-synced encode, so each MPEG-TS
+segment carries A+V locked together — and the per-segment AAC priming gap that
+forced the old PCM-sidecar design does NOT return (priming is applied once at
+stream start, not per segment).
 
-Design:
-- FEEDER thread paces EXACTLY fps frames/s (high-resolution waitable
-  timer): each tick writes the latest submitted frame to ffmpeg's stdin.
-  CFR by construction — no index math, no fill logic; a capture gap simply
-  re-sends the last frame (frozen image = honest content for "nothing new
-  was presented").
-- submit() (called from the capture thread) just swaps an ndarray
-  reference: lock-free, O(1).
-- ffmpeg writes a CSV segment list to stdout; a reader thread maps each
-  completed segment (start/end in fed-frame seconds) onto wall time via
-  the anchor captured at the FIRST fed frame, and hands SegmentInfo to the
-  ring. stderr drains to the log.
-- -muxdelay 0 -muxpreload 0 -reset_timestamps 1: each segment starts at
-  pts 0 with no MPEG-TS preload offset (the extractor contract:
-  frame i of a segment is at utc_start + i/fps EXACTLY).
-- -force_key_frames at the segment period: every segment opens on an IDR.
-- Idle gating lives in the RECORDER (segment discard in _on_segment), NOT
-  here. Pausing this feeder was shipped briefly and reverted: every resume
-  respawned the child, leaving a ~0.2 s startup hole exactly where a
-  0-pre-pad clip begins (user-reported as a frozen clip opening), and the
-  stale `_latest` frame got re-fed at resume. The feeder runs whenever
-  capture runs; worthless footage is discarded downstream.
-- Shutdown: stop() bounds every join; stdin EOF -> wait(10 s) -> kill().
-  The OS-level backstop is a kill-on-close Job Object — every spawned
-  child is assigned to it, so if THIS process dies without teardown
-  (hung shutdown, hard kill, interpreter crash) Windows reaps ffmpeg.
-  Live incident 2026-06-12: a hung graceful shutdown left an orphan
-  ffmpeg recording into a dead terminal.
-- Window resize: the rawvideo pipe is fixed-size; the sink restarts the
-  process with new dimensions (rare; logged; a brief coverage hole).
-  VERIFY (unit-tested, not yet live-verified): resize PJ64 while
-  recording -> expect a "dims ... restarting" log line, a new
-  "spawned WxH" line, and segments continuing within ~2 s. If segments
-  stop or dims stay stale, the restart path is broken — consequence:
-  silent recording halt after any window resize.
-- Reading the 30 s health report: the FIRST window after a spawn
-  typically shows ~59 fed/s and a ~100 ms max write (process/NVENC init
-  backpressure on the unbuffered pipe) — a normal startup transient, NOT
-  the glitch signature. Steady state on the dev rig: 60.0 fed/s, max
-  write 6-8 ms, 0 restarts. Investigate only sustained fed/s < fps or
-  repeated 100 ms+ writes AFTER the first window.
+Transport:
+- VIDEO over stdin (`pipe:0`): the feeder thread re-sends the latest submitted
+  frame at fps. Exact pacing is no longer load-bearing — ffmpeg's wallclock
+  stamping owns the timeline, so feeder jitter cannot accumulate drift (this is
+  precisely the bug the old fed-frame-count timeline had: a stall's resync
+  dropped owed frames and the video clock fell permanently behind).
+- AUDIO over a Windows named pipe (`\\.\pipe\...`): the producer (recorder
+  _on_pcm) calls submit_audio(); a writer thread connects the pipe and drains a
+  queue into it. Inherited-fd `pipe:N` does NOT work on Windows — a named pipe
+  is the only second-input mechanism. Pitfall: ffmpeg opens inputs in order and
+  a pipe open BLOCKS until a writer connects, so the writer thread must connect
+  promptly and independently of the video feeder.
+
+Timeline -> UTC: anchor once at the first fed frame (wall time); each segment's
+UTC offset is its CSV start MINUS the first segment's CSV start (relative), so
+the mapping is correct whether ffmpeg reports zero-based or wall-clock-epoch
+pts. `-reset_timestamps 1` applies ONE shared offset to both streams per
+segment (verified in libavformat/segment.c), so files open at pts~0 and A/V
+sync is preserved across segment boundaries (the extractor contract).
+
+Backstop: every spawned child is assigned to a kill-on-close Job Object, so a
+hung/hard-killed parent can never orphan an ffmpeg recording into a dead
+terminal (live incident 2026-06-12).
 """
+import ctypes
+import ctypes.wintypes as wt
 import logging
+import os
+import queue
 import subprocess
 import threading
 from datetime import datetime, timedelta, timezone
@@ -66,22 +56,36 @@ log = logging.getLogger("sm64.replay")
 _JOB_KILL_ON_CLOSE = 0x2000          # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
 _JOB_EXTENDED_LIMIT_INFO_CLASS = 9   # JobObjectExtendedLimitInformation
 
+# -- Windows named pipe (audio transport) ------------------------------------
+_PIPE_ACCESS_OUTBOUND = 0x00000002
+_PIPE_TYPE_BYTE = 0x0
+_PIPE_WAIT = 0x0
+_INVALID_HANDLE = wt.HANDLE(-1).value
+_pipe_seq = 0  # process-unique pipe names
+
+if hasattr(ctypes, "windll"):
+    _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _k32.CreateNamedPipeW.restype = wt.HANDLE
+    _k32.CreateNamedPipeW.argtypes = [
+        wt.LPCWSTR, wt.DWORD, wt.DWORD, wt.DWORD,
+        wt.DWORD, wt.DWORD, wt.DWORD, ctypes.c_void_p]
+    _k32.ConnectNamedPipe.argtypes = [wt.HANDLE, ctypes.c_void_p]
+    _k32.WriteFile.argtypes = [wt.HANDLE, ctypes.c_void_p, wt.DWORD,
+                               ctypes.POINTER(wt.DWORD), ctypes.c_void_p]
+    _k32.FlushFileBuffers.argtypes = [wt.HANDLE]
+    _k32.DisconnectNamedPipe.argtypes = [wt.HANDLE]
+    _k32.CloseHandle.argtypes = [wt.HANDLE]
+
 
 def _assign_kill_on_close(proc) -> int | None:
-    """Assign `proc` to a Windows Job Object whose last-handle-close kills
-    its members. We never close the returned handle: it dies WITH this
-    process — however it dies — and the OS then terminates ffmpeg. This is
-    the backstop that makes orphan encoders impossible (a hung shutdown on
-    2026-06-12 left ffmpeg logging into a dead terminal). Returns the job
-    handle to keep alive, or None (logged) if assignment failed."""
-    import ctypes
-    import ctypes.wintypes as wt
-
+    """Assign `proc` to a Windows Job Object whose last-handle-close kills its
+    members. We never close the returned handle: it dies WITH this process and
+    the OS then terminates ffmpeg. Returns the job handle to keep alive, or
+    None (logged) if assignment failed."""
     class _IO_COUNTERS(ctypes.Structure):
         _fields_ = [(n, ctypes.c_ulonglong) for n in (
-            "ReadOperationCount", "WriteOperationCount",
-            "OtherOperationCount", "ReadTransferCount",
-            "WriteTransferCount", "OtherTransferCount")]
+            "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+            "ReadTransferCount", "WriteTransferCount", "OtherTransferCount")]
 
     class _BASIC_LIMITS(ctypes.Structure):
         _fields_ = [("PerProcessUserTimeLimit", wt.LARGE_INTEGER),
@@ -124,10 +128,12 @@ def _assign_kill_on_close(proc) -> int | None:
         return None
 
 
-def parse_segment_csv(line: str, anchor_utc: datetime,
+def parse_segment_csv(line: str, anchor_utc: datetime, origin_s: float,
                       scratch: Path) -> SegmentInfo | None:
-    """One line of ffmpeg's -segment_list_type csv: 'file,start,end'
-    (seconds on the fed-frame timeline). Pure — unit-tested."""
+    """One line of ffmpeg's -segment_list_type csv: 'file,start,end' (seconds).
+    UTC is anchored once (anchor_utc = wall time of the first fed frame) and the
+    segment offset is RELATIVE to the first segment's start (origin_s) — correct
+    whether ffmpeg's pts are zero-based or wall-clock-epoch-based. Pure."""
     parts = line.strip().rsplit(",", 2)
     if len(parts) != 3:
         return None
@@ -141,15 +147,17 @@ def parse_segment_csv(line: str, anchor_utc: datetime,
         size = path.stat().st_size
     except OSError:
         return None
-    return SegmentInfo(path=path, kind="video",
-                       utc_start=anchor_utc + timedelta(seconds=start),
-                       utc_end=anchor_utc + timedelta(seconds=end),
-                       size_bytes=size)
+    return SegmentInfo(
+        path=path, kind="video",
+        utc_start=anchor_utc + timedelta(seconds=start - origin_s),
+        utc_end=anchor_utc + timedelta(seconds=end - origin_s),
+        size_bytes=size)
 
 
-class FfmpegVideoSink:
-    """Drop-in video half of the recorder pipeline. submit() frames from
-    any thread; segments arrive at on_segment with wall-true utc spans."""
+class FfmpegAvSink:
+    """Combined-A/V video+audio sink. submit() frames and submit_audio() PCM
+    from any thread; segments arrive at on_segment with wall-true UTC spans and
+    audio muxed in, synced on a single clock."""
 
     def __init__(self, cfg, on_segment, ffmpeg: str = "ffmpeg"):
         self._cfg = cfg
@@ -163,9 +171,15 @@ class FfmpegVideoSink:
         self._dims: tuple[int, int] | None = None
         self._anchor_utc: datetime | None = None
         self._fed = 0
-        self._seg_n_base = 0  # filename numbering across restarts
+        self._seg_n_base = 0
         self._restarts = 0
-        self._jobs: list[int] = []  # kill-on-close job handles (kept open)
+        self._jobs: list[int] = []
+        # audio named-pipe transport
+        self._audio_q: queue.Queue = queue.Queue(maxsize=256)
+        self._audio_dropped = 0
+        self._pipe_name: str | None = None
+        self._pipe_handle = None
+        self._audio_thread: threading.Thread | None = None
 
     # -- capture-thread surface (lock-free) -----------------------------------
     def submit(self, bgra: np.ndarray) -> None:
@@ -175,6 +189,15 @@ class FfmpegVideoSink:
         self._latest = bgra if bgra.flags["C_CONTIGUOUS"] \
             else np.ascontiguousarray(bgra)
 
+    def submit_audio(self, pcm_bytes: bytes) -> None:
+        """Enqueue interleaved s16le stereo PCM for the audio pipe. Non-blocking
+        and drop-on-overflow: the writer thread absorbs pipe backpressure, but a
+        wedged ffmpeg must never stall the audio producer."""
+        try:
+            self._audio_q.put_nowait(pcm_bytes)
+        except queue.Full:
+            self._audio_dropped += 1
+
     # -- lifecycle -------------------------------------------------------------
     def start(self) -> None:
         self._stop.clear()
@@ -183,13 +206,13 @@ class FfmpegVideoSink:
         self._feeder.start()
 
     def stop(self) -> None:
-        # Order matters: feeder first (stops stdin writes), then close stdin
-        # so ffmpeg flushes its final segment and exits, THEN the readers —
-        # they exit on stdout/stderr EOF, which requires process exit.
+        # feeder first (stops stdin writes), then close stdin so ffmpeg flushes
+        # its final segment and exits, THEN tear down audio pipe + readers.
         self._stop.set()
         if self._feeder is not None:
             self._feeder.join(timeout=10)
             self._feeder = None
+        self._teardown_audio_pipe()
         self._stop_proc()
         for t in self._readers:
             t.join(timeout=10)
@@ -197,46 +220,59 @@ class FfmpegVideoSink:
 
     # -- process management ----------------------------------------------------
     def _spawn(self, w: int, h: int) -> None:
-        # restarts (dims change, write failure) accumulate finished reader
-        # threads; prune the dead so the list stays bounded
+        global _pipe_seq
         self._readers = [t for t in self._readers if t.is_alive()]
         fps = self._cfg.fps
         seg_s = self._cfg.segment_s
-        pattern = str(self._cfg.scratch_dir / f"video_{self._seg_n_base:02d}_%06d.ts")
+        rate = self._cfg.audio_rate
+        _pipe_seq += 1
+        self._pipe_name = rf"\\.\pipe\sm64av_{os.getpid()}_{_pipe_seq}"
+        self._open_audio_pipe()
+        pattern = str(self._cfg.scratch_dir / f"av_{self._seg_n_base:02d}_%06d.ts")
         args = [
             self._ffmpeg, "-hide_banner", "-loglevel", "warning",
-            "-f", "rawvideo", "-pix_fmt", "bgra", "-s", f"{w}x{h}",
-            "-framerate", str(fps), "-i", "pipe:0",
-            "-c:v", "h264_nvenc", "-preset", "p1", "-tune", "ull",
-            # exact periodic IDR every segment: the segment muxer can only
-            # split at keyframes — without -g, NVENC's default GOP (~250)
-            # produced one giant unsplittable segment (live-tested)
-            "-bf", "0", "-b:v", "12M",
-            "-g", str(int(fps * seg_s)), "-forced-idr", "1",
-            "-muxdelay", "0", "-muxpreload", "0",
+            "-fflags", "+nobuffer",
+            # video input: stdin, wall-clock stamped
+            "-use_wallclock_as_timestamps", "1", "-thread_queue_size", "1024",
+            "-f", "rawvideo", "-pix_fmt", "bgra", "-s", f"{w}x{h}", "-i", "pipe:0",
+            # audio input: named pipe, wall-clock stamped
+            "-use_wallclock_as_timestamps", "1", "-thread_queue_size", "1024",
+            "-f", "s16le", "-ar", str(rate), "-ac", "2", "-i", self._pipe_name,
+            "-map", "0:v:0", "-map", "1:a:0",
+            # video: NVENC, CFR locked to the wall clock
+            "-c:v", "h264_nvenc", "-preset", "p1", "-tune", "ull", "-bf", "0",
+            "-b:v", "12M", "-g", str(int(fps * seg_s)), "-forced-idr", "1",
+            "-fps_mode", "cfr", "-r", str(fps),
+            # audio: AAC, async-resampled to LOCK to the master (kills drift)
+            "-c:a", "aac", "-b:a", "160k", "-ar", str(rate),
+            "-af", "aresample=async=1:first_pts=0:min_hard_comp=0.1",
+            # combined A+V MPEG-TS segments
             "-f", "segment", "-segment_time", str(seg_s),
             "-segment_format", "mpegts", "-reset_timestamps", "1",
             "-segment_list", "pipe:1", "-segment_list_type", "csv",
+            "-segment_list_flags", "+live",
             pattern,
         ]
         self._proc = subprocess.Popen(
             args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, bufsize=0,
             creationflags=subprocess.CREATE_NO_WINDOW)
-        # handle kept alive on self for the process lifetime (never closed):
-        # closing it IS the kill switch — see _assign_kill_on_close
         job = _assign_kill_on_close(self._proc)
         if job is not None:
             self._jobs.append(job)
         self._dims = (w, h)
         self._seg_n_base += 1
+        # audio writer thread: connect the pipe (ffmpeg is the client) + drain
+        self._audio_thread = threading.Thread(
+            target=self._audio_writer_loop, name="ffmpeg-audio", daemon=True)
+        self._audio_thread.start()
         for target, name in ((self._segment_list_loop, "ffmpeg-segments"),
                              (self._stderr_loop, "ffmpeg-stderr")):
             t = threading.Thread(target=target, args=(self._proc,),
                                  name=name, daemon=True)
             t.start()
             self._readers.append(t)
-        log.info("ffmpeg sink: spawned %dx%d@%d nvenc (run %d)",
+        log.info("ffmpeg AV sink: spawned %dx%d@%d nvenc + audio pipe (run %d)",
                  w, h, fps, self._seg_n_base)
 
     def _stop_proc(self) -> None:
@@ -252,12 +288,60 @@ class FfmpegVideoSink:
             log.exception("ffmpeg shutdown failed - killing")
             proc.kill()
 
+    # -- audio named pipe ------------------------------------------------------
+    def _open_audio_pipe(self) -> None:
+        h = _k32.CreateNamedPipeW(
+            self._pipe_name, _PIPE_ACCESS_OUTBOUND,
+            _PIPE_TYPE_BYTE | _PIPE_WAIT, 1,
+            8 * 1024 * 1024, 8 * 1024 * 1024, 0, None)
+        if h == _INVALID_HANDLE:
+            raise OSError(f"CreateNamedPipe failed: {ctypes.get_last_error()}")
+        self._pipe_handle = h
+
+    def _audio_writer_loop(self) -> None:
+        """Block until ffmpeg connects to the named pipe, then drain the queue
+        into it. WriteFile may block on pipe backpressure — harmless here (off
+        the RT path); on ffmpeg exit the read end closes and WriteFile errors,
+        ending the loop."""
+        h = self._pipe_handle
+        if h is None:
+            return
+        _k32.ConnectNamedPipe(h, None)  # returns when ffmpeg opens the pipe
+        written = wt.DWORD(0)
+        while not self._stop.is_set():
+            try:
+                buf = self._audio_q.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if buf is None:
+                break
+            ok = _k32.WriteFile(h, buf, len(buf), ctypes.byref(written), None)
+            if not ok:
+                break  # broken pipe (ffmpeg gone)
+
+    def _teardown_audio_pipe(self) -> None:
+        self._audio_q.put(None)  # wake the writer
+        if self._audio_thread is not None:
+            self._audio_thread.join(timeout=5)
+            self._audio_thread = None
+        h, self._pipe_handle = self._pipe_handle, None
+        if h is not None:
+            try:
+                _k32.FlushFileBuffers(h)
+                _k32.DisconnectNamedPipe(h)
+            except Exception:
+                pass
+            _k32.CloseHandle(h)
+        # drain any residual queued PCM so a restart starts clean
+        try:
+            while True:
+                self._audio_q.get_nowait()
+        except queue.Empty:
+            pass
+
     # -- threads ---------------------------------------------------------------
     def _feed_loop(self) -> None:
-        import ctypes
         import time as _time
-
-        from sm64_events.replay.clock import qpc_100ns  # noqa: F401 (timebase doc)
 
         kernel32 = ctypes.windll.kernel32
         htimer = kernel32.CreateWaitableTimerExW(None, None, 0x2, 0x1F0003)
@@ -276,23 +360,23 @@ class FfmpegVideoSink:
                 h, w = frame.shape[:2]
                 if self._proc is None or (w, h) != self._dims:
                     if self._proc is not None:
-                        log.info("ffmpeg sink: dims %s -> %s, restarting",
+                        log.info("ffmpeg AV sink: dims %s -> %s, restarting",
                                  self._dims, (w, h))
                         self._restarts += 1
+                        self._teardown_audio_pipe()
                         self._stop_proc()
-                    self._anchor_segbase_utc = None
+                    self._anchor_utc = None
                     self._spawn(w, h)
                 if self._anchor_utc is None:
+                    # this run's frame 0 is NOW (the segment-time anchor)
                     self._anchor_utc = datetime.now(timezone.utc)
-                if getattr(self, "_anchor_segbase_utc", None) is None:
-                    # per-process anchor: this run's frame 0 is NOW
-                    self._anchor_segbase_utc = datetime.now(timezone.utc)
                 t0 = _time.perf_counter()
                 try:
                     self._proc.stdin.write(frame)  # raw pipe: GIL released
                 except Exception:
                     log.exception("ffmpeg stdin write failed - restarting")
                     self._restarts += 1
+                    self._teardown_audio_pipe()
                     self._stop_proc()
                     next_t = _time.perf_counter()
                     continue
@@ -302,11 +386,13 @@ class FfmpegVideoSink:
                 fed_window += 1
                 now = _time.monotonic()
                 if now - last_report > 30 and fed_window:
-                    log.info("ffmpeg sink: %.1f fed/s, max write %.0f ms, "
-                             "%d restarts", fed_window / (now - last_report),
-                             stall_max, self._restarts)
+                    log.info("ffmpeg AV sink: %.1f fed/s, max write %.0f ms, "
+                             "%d restarts, %d audio drops",
+                             fed_window / (now - last_report), stall_max,
+                             self._restarts, self._audio_dropped)
                     fed_window = 0
                     stall_max = 0.0
+                    self._audio_dropped = 0
                     last_report = now
                 next_t += period
                 delay = next_t - _time.perf_counter()
@@ -318,7 +404,7 @@ class FfmpegVideoSink:
                 while _time.perf_counter() < next_t:
                     pass
                 if next_t < _time.perf_counter() - period:
-                    next_t = _time.perf_counter()  # resync after long stall
+                    next_t = _time.perf_counter()
         except Exception:
             log.exception("ffmpeg feeder died")
         finally:
@@ -326,11 +412,20 @@ class FfmpegVideoSink:
                 kernel32.CloseHandle(htimer)
 
     def _segment_list_loop(self, proc) -> None:
+        origin = None  # this run's first segment start (pts origin to subtract)
         for raw in iter(proc.stdout.readline, b""):
-            anchor = getattr(self, "_anchor_segbase_utc", None)
+            anchor = self._anchor_utc
             if anchor is None:
                 continue
-            seg = parse_segment_csv(raw.decode("utf-8", "replace"), anchor,
+            line = raw.decode("utf-8", "replace")
+            parts = line.strip().rsplit(",", 2)
+            if len(parts) == 3:
+                try:
+                    if origin is None:
+                        origin = float(parts[1])
+                except ValueError:
+                    pass
+            seg = parse_segment_csv(line, anchor, origin or 0.0,
                                     self._cfg.scratch_dir)
             if seg is not None:
                 self._on_segment(seg)
