@@ -32,53 +32,46 @@ def test_pick_loopback_device_prefers_app_endpoint():
     assert pick_loopback_device(devs, "Nope", "AlsoNope") is None
 
 
-def test_pcm_continuity_fills_idle_gaps_only():
-    from sm64_events.replay.audio import PcmContinuity
-    g = PcmContinuity(rate=48000, qpc_start_100ns=0)
-    # 1 s in, delivered 1 s of samples: no gap
-    g.on_delivered(48000)
-    assert g.fill_before(10_000_000) == 0
-    # 0.9 s late-burst jitter (flush stalls, GIL): below threshold, no fill
-    assert g.fill_before(19_000_000) == 0
-    # 3 s idle: expected 4 s worth, delivered 1 s -> fill the difference
-    fill = g.fill_before(40_000_000)
-    assert fill == 48000 * 3
-    g.on_delivered(fill)
-    assert g.fill_before(40_000_000) == 0
-
-
-def test_audio_pump_orders_fills_and_data_off_callback():
-    """The pump consumes (bytes, qpc) pairs on its own thread: idle gaps
-    become silence BEFORE the late data, and every delivered byte reaches
-    on_pcm in order."""
+def test_audio_pump_forwards_pcm_in_order_off_callback():
+    """The pump is now a pure RT-safe handoff: each delivered packet's PCM
+    reaches on_pcm in order on the consumer thread, with NO silence injection
+    and NO sample-count placement — ffmpeg's wall-clock + aresample own the
+    timeline and fill idle gaps, so an idle gap here must NOT manufacture
+    silence (that would dump a burst into the pipe and fight aresample)."""
     import time
     import numpy as np
     from sm64_events.replay._system_audio import AudioPump
 
     out = []
-    pump = AudioPump(48000, lambda a: out.append(a.copy()), 0)
-    one = np.ones((480, 2), dtype=np.int16)  # 10ms of "audio"
+    pump = AudioPump(48000, lambda a: out.append(a.copy()))
+    one = np.ones((480, 2), dtype=np.int16)
+    two = (np.ones((480, 2), dtype=np.int16) * 7)
 
-    pump.feed(one.tobytes(), 100_000, 0)          # 10ms mark: no gap
-    pump.feed(one.tobytes(), 30_000_000, 0)       # 3s mark: ~3s idle gap
+    pump.feed(one.tobytes(), 0)
+    pump.feed(two.tobytes(), 0)                    # an idle gap would be here
     deadline = time.monotonic() + 5
-    while len(out) < 3 and time.monotonic() < deadline:
+    while len(out) < 2 and time.monotonic() < deadline:
         time.sleep(0.01)
     pump.stop()
-    assert len(out) == 3
-    assert np.array_equal(out[0], one)            # first packet, no fill
-    assert (out[1] == 0).all() and len(out[1]) > 48000 * 2  # the idle fill
-    assert np.array_equal(out[2], one)            # late packet after fill
+    assert len(out) == 2                           # exactly the two packets
+    assert np.array_equal(out[0], one)
+    assert np.array_equal(out[1], two)             # no injected silence between
 
 
-def test_plan_placement_regimes():
-    from sm64_events.replay._system_audio import plan_placement
-    MIN = 12000  # 250 ms at 48 k
-    # in-sequence (tiny jitter either way): append, no fill, no drop
-    assert plan_placement(1000, 1000, 480, MIN) == (0, False)
-    assert plan_placement(900, 1000, 480, MIN) == (0, False)
-    assert plan_placement(1300, 1000, 480, MIN) == (0, False)
-    # engine nap: exact silence fill
-    assert plan_placement(50_000, 1000, 480, MIN) == (49_000, False)
-    # stale packet fully behind the timeline: dropped
-    assert plan_placement(0, 1000, 480, MIN) == (0, True)
+def test_audio_pump_tracks_loud_for_deaf_watchdog():
+    """The deaf-stream watchdog still needs last_loud_t: a loud packet must
+    bump it off its initial 0.0 (a silent packet must not)."""
+    import time
+    import numpy as np
+    from sm64_events.replay._system_audio import AudioPump
+
+    pump = AudioPump(48000, lambda a: None)
+    pump.feed(np.zeros((480, 2), dtype=np.int16).tobytes(), 0)
+    time.sleep(0.1)
+    assert pump.last_loud_t == 0.0                 # silence: no bump
+    pump.feed((np.ones((480, 2), dtype=np.int16) * 5000).tobytes(), 0)
+    deadline = time.monotonic() + 5
+    while pump.last_loud_t == 0.0 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    pump.stop()
+    assert pump.last_loud_t > 0.0                  # loud: bumped

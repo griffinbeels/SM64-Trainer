@@ -91,12 +91,12 @@ def build():
                 _sp.run([_ffmpeg, "-version"], capture_output=True,
                         timeout=10, check=True,
                         creationflags=_sp.CREATE_NO_WINDOW)
-                from sm64_events.replay.ffmpeg_sink import FfmpegVideoSink
+                from sm64_events.replay.ffmpeg_sink import FfmpegAvSink
                 video_sink_factory = (
-                    lambda cfg, on_seg, _f=_ffmpeg: FfmpegVideoSink(
+                    lambda cfg, on_seg, _f=_ffmpeg: FfmpegAvSink(
                         cfg, on_seg, ffmpeg=_f))
                 logging.getLogger("sm64.replay").info(
-                    "video backend: ffmpeg subprocess (%s)", _ffmpeg)
+                    "replay backend: single ffmpeg A+V mux (%s)", _ffmpeg)
             except Exception:
                 logging.getLogger("sm64.replay").exception(
                     "ffmpeg probe failed - using in-process encoder")

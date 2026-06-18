@@ -58,41 +58,6 @@ def device_name_hosting_pid(pid: int) -> str | None:
     return None
 
 
-class PcmContinuity:
-    """Wall-clock-locks a loopback stream. WASAPI loopback stops delivering
-    packets while the endpoint is idle (no app rendering), which would
-    silently PAUSE a cumulative-sample clock — every later chunk would be
-    stamped earlier than it really happened, shearing clip audio against
-    video. This guard tracks the expected sample position from QPC wall time
-    and says how much silence to inject before a delivery to close the gap.
-    Pure — unit-tested."""
-
-    def __init__(self, rate: int, qpc_start_100ns: int):
-        self._rate = rate
-        self._t0 = qpc_start_100ns
-        self._delivered = 0
-        # Only TRUE engine idle counts as a gap. Anything under a second is
-        # delivery jitter: WASAPI loopback packets arrive in bursts, the GIL
-        # delays callback dispatch under encode load, and our own 2 s chunk
-        # flush (disk write inside the callback path) stalls the next
-        # delivery 50-150 ms — a tight threshold turned each of those into
-        # spurious silence injected BETWEEN late-but-real packets, dicing
-        # music and inflating the timeline (live: 0.1 s fills at exactly the
-        # 2 s flush cadence). Real idles observed are minutes long; jitter
-        # never exceeds ~0.2 s. One second separates the regimes with 5x
-        # margin both ways. Late packets still count toward 'delivered', so
-        # jitter self-corrects without any fill.
-        self._min_gap = rate
-
-    def fill_before(self, qpc_now_100ns: int) -> int:
-        expected = int((qpc_now_100ns - self._t0) / 1e7 * self._rate)
-        gap = expected - self._delivered
-        return gap if gap > self._min_gap else 0
-
-    def on_delivered(self, n_samples: int) -> None:
-        self._delivered += n_samples
-
-
 def pick_loopback_device(loopback_devices: list[dict], target_name: str | None,
                          default_name: str) -> dict | None:
     """Choose the loopback entry matching the endpoint that hosts the target
@@ -191,8 +156,9 @@ class SystemAudioSource:
     recorded silence). Every few seconds the watchdog compares 'has the
     stream heard anything loud?' against the session's own meter; sustained
     deafness while the app is audibly emitting triggers a full re-resolve
-    and stream reopen. The pump (and the wall-clock placement epoch) persist
-    across reopens, so the timeline stays continuous."""
+    and stream reopen. The pump persists across reopens; ffmpeg's wall-clock
+    stamping + aresample bridge the reopen gap so the timeline stays
+    continuous."""
 
     mode = "system"
 
@@ -212,7 +178,6 @@ class SystemAudioSource:
         """(Re)resolve the endpoint and open the loopback stream feeding the
         existing pump. Raises on failure; caller handles cleanup/retry."""
         import pyaudiowpatch as pyaudio
-        from sm64_events.replay.clock import qpc_100ns
 
         target_name = device_name_hosting_pid(self._pid) if self._pid else None
         if self._pa is None:
@@ -238,7 +203,7 @@ class SystemAudioSource:
         # the writer, the disk, or logging — any stall drops packets
         # (measured 6% sustained loss with the old in-callback work).
         def cb(in_data, frame_count, time_info, status):
-            pump_feed(in_data, qpc_100ns(), status)
+            pump_feed(in_data, status)
             return (None, pyaudio.paContinue)
 
         self._stream = self._pa.open(
@@ -266,14 +231,11 @@ class SystemAudioSource:
         import threading
 
         from sm64_events.replay._system_audio import AudioPump
-        from sm64_events.replay.clock import qpc_100ns
 
-        # Epoch FIRST: the writer's audio t0 is stamped (by the recorder)
-        # immediately before this method runs; everything below takes
-        # seconds and must land AFTER the epoch (else every sample claims
-        # an earlier time than it happened — the old ~3 s audio-lead bug).
-        epoch = qpc_100ns()
-        self._pump = AudioPump(self._rate, on_pcm, epoch)
+        # The pump is a pure RT-safe handoff now (no wall-clock epoch): it
+        # forwards device PCM straight to on_pcm and the single ffmpeg mux
+        # stamps + aresample-locks it. No audio origin to align here.
+        self._pump = AudioPump(self._rate, on_pcm)
         try:
             self._open_stream()
         except Exception:

@@ -220,20 +220,26 @@ class ReplayRecorder:
             self._lock_warned = False
 
         clock = self._clock_factory()
-        writer = SegmentWriter(
-            self._cfg, clock, self._cfg.scratch_dir, self._codec,
-            self._on_segment)
-
         with self._lock:
             self._clock = clock
-            self._writer = writer
+            self._writer = None
             self._last_frame = None
             self._last_index = -1
 
+        # PRIMARY: one ffmpeg muxes video+audio on a single wall-clock (the AV
+        # sink owns the timeline + audio sync). FALLBACK (no ffmpeg binary):
+        # the in-process SegmentWriter — video plus the legacy count-based
+        # audio sidecar, the only path that still has the old two-clock
+        # behaviour, reached solely when no ffmpeg is present.
         if self._video_sink_factory is not None:
             self._video_sink = self._video_sink_factory(self._cfg,
                                                         self._on_segment)
             self._video_sink.start()
+        else:
+            with self._lock:
+                self._writer = SegmentWriter(
+                    self._cfg, clock, self._cfg.scratch_dir, self._codec,
+                    self._on_segment)
 
         # Start video — on_stopped signals window loss back to attach loop.
         # C1: assign _video_source the instant start() succeeds so teardown
@@ -250,19 +256,18 @@ class ReplayRecorder:
         with self._lock:
             self._video_source = video
 
-        # I1: set the writer's audio t0 BEFORE wiring any audio callback so a
-        # PCM packet arriving between audio.start() and start_audio() doesn't
-        # hit writer.write_audio()'s "start_audio() not called" guard.
-        # t0 = "writer ready", which is at most one attach-poll interval
-        # earlier than "audio started" — irrelevant vs the ±2-3 s clip padding.
-        with self._lock:
-            audio_t0 = clock.utc_of(qpc_100ns())
-            writer.start_audio(t0_utc=audio_t0)
-        # AV-SYNC diagnostic: the audio timeline origin. Paired with the
-        # ffmpeg sink's "video_anchor" line, the delta is the recording-side
-        # stamping gap between the two streams (prime suspect for any fixed
-        # A/V offset). Keep greppable as "AV-SYNC".
-        log.info("AV-SYNC audio_t0=%s", audio_t0.isoformat())
+        # Fallback-writer only: set its audio t0 BEFORE wiring any audio
+        # callback so a PCM packet arriving between audio.start() and
+        # start_audio() doesn't hit write_audio()'s "start_audio() not called"
+        # guard. The AV sink needs none of this — ffmpeg stamps audio itself
+        # by wall-clock, so there is no separate audio origin to reconcile (the
+        # whole point: one clock, no two-stream A/V drift).
+        if self._writer is not None:
+            with self._lock:
+                audio_t0 = clock.utc_of(qpc_100ns())
+                self._writer.start_audio(t0_utc=audio_t0)
+            log.info("AV-SYNC audio_t0=%s (in-process fallback)",
+                     audio_t0.isoformat())
 
         # Audio fallback chain
         audio: AudioSource | None = None
@@ -498,11 +503,16 @@ class ReplayRecorder:
     # -- audio callback (library thread) -------------------------------------
 
     def _on_pcm(self, pcm_s16: np.ndarray) -> None:
-        # NO idle gate here: audio chunk timestamps are COUNT-based
-        # (t0 + samples_written/rate — encoder.py); dropping PCM would
-        # shift every post-resume chunk earlier and desync A/V. The sample
-        # cursor must keep advancing; idle discard happens per completed
-        # chunk in _on_segment.
+        # PRIMARY: hand raw interleaved s16le PCM to the AV sink's audio pipe;
+        # ffmpeg wall-clock-stamps it and aresample-locks it to the video
+        # master, so there is no count-based cursor to keep advancing and no
+        # idle gate (idle footage is discarded per completed segment, audio
+        # included, in _on_segment). FALLBACK: the in-process count-based
+        # writer (no ffmpeg).
+        sink = self._video_sink
+        if sink is not None:
+            sink.submit_audio(pcm_s16.tobytes())
+            return
         with self._lock:
             if self._writer is None:
                 return

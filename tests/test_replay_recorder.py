@@ -56,8 +56,25 @@ class _FakeLock:
         self.closed = True
 
 
+class FakeAvSink:
+    """Stand-in for FfmpegAvSink: records submit()/submit_audio() calls."""
+    def __init__(self):
+        self.frames = []
+        self.audio = []
+        self.started = False
+        self.stopped = False
+    def start(self):
+        self.started = True
+    def stop(self):
+        self.stopped = True
+    def submit(self, bgra):
+        self.frames.append(bgra)
+    def submit_audio(self, pcm_bytes):
+        self.audio.append(pcm_bytes)
+
+
 def make_recorder(tmp_path, video, audio, found=WIN, fallback=None,
-                  recorder_lock_factory=None):
+                  recorder_lock_factory=None, video_sink_factory=None):
     cfg = ReplayConfig(scratch_dir=tmp_path / "buf", attach_poll_s=0.01, fps=30)
     return ReplayRecorder(
         cfg=cfg,
@@ -67,6 +84,7 @@ def make_recorder(tmp_path, video, audio, found=WIN, fallback=None,
         fallback_audio_factory=(lambda rate: fallback) if fallback else None,
         clock_factory=lambda: CaptureClock(anchor_qpc_100ns=0, anchor_utc=T0),
         codec="libx264",
+        video_sink_factory=video_sink_factory,
         # default: always-acquire fake so capture tests are deterministic and
         # never touch the real lock; override per-test to simulate contention.
         recorder_lock_factory=recorder_lock_factory or (lambda: _FakeLock()))
@@ -85,6 +103,28 @@ def wait_for(cond, timeout=5.0):
             return True
         time.sleep(0.01)
     return False
+
+
+def test_av_sink_receives_both_video_and_audio(tmp_path):
+    """Single-mux architecture: when an AV sink is present, BOTH streams route
+    into it (video via submit, audio via submit_audio as raw s16le bytes) and
+    NO in-process SegmentWriter is created — ffmpeg owns muxing + sync."""
+    video, audio = FakeVideoSource(), SystemFakeAudioSource()
+    sink = FakeAvSink()
+    rec = make_recorder(tmp_path, video, audio,
+                        video_sink_factory=lambda cfg, on_seg: sink)
+    rec.start()
+    assert wait_for(lambda: video.on_frame is not None and audio.on_pcm is not None)
+    assert sink.started is True
+    push_frames(video, 1)
+    pcm = np.zeros((1600, 2), dtype=np.int16)
+    pcm[:, 0] = 1234
+    audio.on_pcm(pcm)
+    assert wait_for(lambda: len(sink.frames) >= 1 and len(sink.audio) >= 1)
+    assert sink.audio[0] == pcm.tobytes()        # raw interleaved s16le
+    assert rec._writer is None                    # no PCM-sidecar writer
+    rec.stop()
+    assert sink.stopped is True
 
 
 def test_viewer_only_when_another_instance_holds_recorder_lock(tmp_path):
