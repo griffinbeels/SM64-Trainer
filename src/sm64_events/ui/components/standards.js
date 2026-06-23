@@ -14,13 +14,18 @@ export function StandardsPanel({ entity, activeStrat, onChanged }) {
   async function load() { setData(await getJSON(`/api/ranks/standards?entity=${encodeURIComponent(entity)}`)); }
   function toggle() { const n = !open; setOpen(n); if (n && !data) load(); }
   async function put(strat, rank, seconds) {
-    await send("PUT", `/api/ranks/standards/${encodeURIComponent(entity)}/${encodeURIComponent(strat)}/${rank}`, { seconds });
+    await send("PUT", `/api/ranks/standards/${encodeURIComponent(entity)}/${encodeURIComponent(strat)}/${encodeURIComponent(rank)}`, { seconds });
     await load(); onChanged && onChanged();
   }
   async function addStrat() {
     const s = (window.prompt("New strategy name:") || "").trim();
     if (!s) return;
     await send("POST", `/api/ranks/standards/${encodeURIComponent(entity)}`, { strategy: s });
+    await load(); onChanged && onChanged();
+  }
+  async function delStrat(s) {
+    if (!window.confirm(`Remove strategy "${s}"?`)) return;
+    await send("DELETE", `/api/ranks/standards/${encodeURIComponent(entity)}/${encodeURIComponent(s)}`);
     await load(); onChanged && onChanged();
   }
   async function reset() {
@@ -34,6 +39,7 @@ export function StandardsPanel({ entity, activeStrat, onChanged }) {
       <span>${open ? "▾" : "▸"}</span> Rank standards
       ${activeStrat ? html`<span class="meta"> · active: ${activeStrat}</span>` : null}
     </div>
+    ${open && !data ? html`<div class="stdbody"><span class="meta">Loading…</span></div>` : null}
     ${open && data ? html`<div class="stdbody">
       <div class="stdtools">
         <button class="meta" onclick=${() => setEditing(!editing)}>${editing ? "Done" : "Edit"}</button>
@@ -41,7 +47,7 @@ export function StandardsPanel({ entity, activeStrat, onChanged }) {
         <button class="meta" onclick=${reset}>Reset to community defaults</button>
       </div>
       <table class="stdtable"><thead><tr><th>Strat</th>
-        ${strats.map((s) => html`<th class=${s === activeStrat ? "col-active" : ""}>${s}</th>`)}</tr></thead>
+        ${strats.map((s) => html`<th class=${s === activeStrat ? "col-active" : ""}>${s}${editing ? html` <button class="candx" title="remove strategy" onclick=${() => delStrat(s)}>×</button>` : ""}</th>`)}</tr></thead>
         <tbody>
         ${RANK_NAMES.filter((r) => r !== "Iron").map((rank) => html`<tr>
           <td style=${`background:${rankColor(rank)};color:#111;font-weight:700`}>${rank}</td>
