@@ -795,7 +795,7 @@ def test_build_route_view_resolves_names_and_cumulative(tmp_path):
     rid = asyncio.run(svc.create_route({"name": "V", "steps": [
         {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]},
         {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]}]}))
-    view = build_route_view(db, rid)
+    view = build_route_view(db, svc, rid)
     assert view["name"] == "V"
     star_cand = view["steps"][0]["candidates"][0]
     assert star_cand["display"] == "Chip off Whomp's Block"
@@ -815,7 +815,7 @@ def test_build_route_view_marks_deleted_segment_broken(tmp_path):
     rid = asyncio.run(svc.create_route({"name": "V", "steps": [
         {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]}]}))
     asyncio.run(svc.delete_segment(lblj))
-    view = build_route_view(db, rid)
+    view = build_route_view(db, svc, rid)
     assert view["steps"][0]["broken"] is True
     assert "deleted" in view["steps"][0]["candidates"][0]["display"]
 
@@ -825,7 +825,7 @@ def test_build_route_view_unknown_route_raises(tmp_path):
     from sm64_events.tracking.views import build_route_view
     db, svc = make(tmp_path)
     with pytest.raises(LookupError):
-        build_route_view(db, 999)
+        build_route_view(db, svc, 999)
 
 
 # -- run view + history (Task 7 Phase D) ----------------------------------------
@@ -900,7 +900,7 @@ def test_route_view_includes_start_condition(tmp_path):
     rid = asyncio.run(svc.create_route({"name": "R",
         "start_condition": {"type": "reset_game"}, "steps": [
         {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}))
-    assert build_route_view(db, rid)["start_condition"] == {"type": "reset_game"}
+    assert build_route_view(db, svc, rid)["start_condition"] == {"type": "reset_game"}
 
 
 def test_run_history_splits_carry_display_and_duration(tmp_path):
@@ -917,3 +917,108 @@ def test_run_history_splits_carry_display_and_duration(tmp_path):
     sp = build_run_history(db, route_id=rid)["runs"][0]["splits"][0]
     assert sp["display"] == "Chip off Whomp's Block"
     assert sp["duration_ms"] == 60000 and sp["duration_display"] is not None
+
+
+# -- Task 6: per-attempt rank, section banner, progress-point rank --------------
+
+def _ranks(tmp_path):
+    import json
+    from sm64_events.ranks.standards import RankStandards
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "star:2:2": {"clock": "igt", "strategies": {
+            "fast": {"Mario": 11.0, "Diamond": 12.0, "Silver": 13.0}}}}}))
+    s = RankStandards(p); s.load(); return s
+
+
+def test_section_banner_sentinel_when_standards_but_no_strat(tmp_path):
+    """Entity WITH standards + no active strat → sentinel {"rank": None} (truthy).
+    Entity with NO standards → None (banner not rendered)."""
+    import json
+    from sm64_events.ranks.standards import RankStandards
+    from sm64_events.tracking.views import _section_banner
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "star:2:2": {"clock": "igt", "strategies": {
+            "fast": {"Mario": 11.0, "Diamond": 12.0}}}}}))
+    ranks = RankStandards(p); ranks.load()
+    # entity HAS standards, no strat → sentinel
+    result = _section_banner(ranks, "star:2:2", strat=None, pb=None)
+    assert result == {"rank": None}
+    # entity HAS standards, strat set but no pb → sentinel
+    result2 = _section_banner(ranks, "star:2:2", strat="fast", pb=None)
+    assert result2 == {"rank": None}
+    # entity HAS standards, strat with no ladder → sentinel
+    result3 = _section_banner(ranks, "star:2:2", strat="unknown_strat", pb={"frames": 343})
+    assert result3 == {"rank": None}
+    # entity has NO standards → None (don't render banner at all)
+    result4 = _section_banner(ranks, "star:8:1", strat=None, pb=None)
+    assert result4 is None
+    # ranks is None → None
+    result5 = _section_banner(None, "star:2:2", strat="fast", pb={"frames": 343})
+    assert result5 is None
+
+
+def test_session_view_attaches_ranks(tmp_path):
+    db, svc = make(tmp_path)
+    seed(svc)                     # existing helper: seeds course 2 star 2 successes
+    # save the best attempt as PB so the section banner has a time to classify
+    best_aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    asyncio.run(svc.save_pb(best_aid, "igt"))
+    svc.ranks = _ranks(tmp_path)
+    # tag the section's active strat so the banner can classify the PB
+    asyncio.run(svc.set_strat(2, 2, "fast"))
+    # make every seeded attempt carry strat 'fast' so per-attempt rank resolves
+    db._conn.execute("UPDATE attempts SET strat_tag='fast' WHERE course_id=2")
+    db._conn.commit()
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    assert sec["rank"]["rank"] in {"Mario", "Diamond", "Silver", "Iron"}
+    assert any(at["rank"] in {"Mario", "Grandmaster", "Master", "Diamond",
+                              "Platinum", "Gold", "Silver", "Bronze", "Iron"}
+               for at in sec["attempts"])
+    assert any(p.get("rank") for s in sec["progress"]["sessions"] for p in s["points"])
+
+
+def test_star_standard_strategies_appear_without_any_attempt(tmp_path):
+    """A star with rank standards defined but NO attempts using those strats
+    still lists the standard strategy names in the section strategies list."""
+    import json
+    from sm64_events.ranks.standards import RankStandards
+    db, svc = make(tmp_path)
+    # write standards for star:2:2 with strategy "Nuts Pless"
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "star:2:2": {"clock": "igt", "strategies": {
+            "Nuts Pless": {"Mario": 11.0, "Diamond": 12.0}}}}}))
+    svc.ranks = RankStandards(p)
+    svc.ranks.load()
+    # no attempts at all — target section pinned via set_target
+    asyncio.run(svc.set_target(2, 2))
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    assert (sec["course_id"], sec["star_id"]) == (2, 2)
+    assert "Nuts Pless" in sec["strategies"]
+
+
+def test_segment_standard_strategies_appear_without_any_attempt(tmp_path):
+    """A segment with rank standards defined but NO attempts using those strats
+    still lists the standard strategy names in the section strategies list."""
+    import json
+    from sm64_events.ranks.standards import RankStandards, entity_key
+    db, svc = make(tmp_path)
+    # find the LBLJ segment id (def 1) and write standards for it
+    lblj_id = next(d["id"] for d in db.segment_defs() if d["name"] == "LBLJ")
+    ek = entity_key(None, None, lblj_id)
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        ek: {"clock": "rta", "strategies": {
+            "hyperspeed BLJ": {"Mario": 2.5, "Diamond": 3.0}}}}}))
+    svc.ranks = RankStandards(p)
+    svc.ranks.load()
+    # arm the segment so it gets a section even with zero attempts
+    asyncio.run(svc.set_target_segment(lblj_id))
+    view = build_session_view(db, svc, clock="igt")
+    sec = seg_section(view, lblj_id)
+    assert sec["attempts"] == []
+    assert "hyperspeed BLJ" in sec["strategies"]

@@ -40,9 +40,10 @@ def _iso(dt: datetime) -> str:
 
 
 class TrackerService:
-    def __init__(self, db: Database | None, broadcaster):
+    def __init__(self, db: Database | None, broadcaster, ranks=None):
         self.db = db
         self.broadcaster = broadcaster
+        self.ranks = ranks            # RankStandards | None
         self.session_id: int | None = None
         self._segment_defs = self._load_segment_defs()
         self._projector = Projector(segments=self._segment_defs)
@@ -393,6 +394,33 @@ class TrackerService:
         journaled. The UI refetches the route list on this event."""
         await self.broadcaster.publish(Event(type="routes_changed", frame=0,
                                               timestamp_utc=_now(), payload={}))
+
+    # -- rank standards commands -----------------------------------------------
+    async def _rank_standards_changed(self) -> None:
+        """Broadcast-only: rank standards are config, never journaled."""
+        await self.broadcaster.publish(Event(type="rank_standards_changed",
+                                             frame=0, timestamp_utc=_now(), payload={}))
+
+    def _require_ranks(self):
+        if self.ranks is None:
+            raise RuntimeError("rank standards unavailable")
+        return self.ranks
+
+    async def set_rank_threshold(self, ek, strat, rank, seconds) -> None:
+        self._require_ranks().set_threshold(ek, strat, rank, seconds)
+        await self._rank_standards_changed()
+
+    async def create_rank_strategy(self, ek, strat) -> None:
+        self._require_ranks().create_strategy(ek, strat)
+        await self._rank_standards_changed()
+
+    async def delete_rank_strategy(self, ek, strat) -> None:
+        self._require_ranks().delete_strategy(ek, strat)
+        await self._rank_standards_changed()
+
+    async def reset_rank_entity(self, ek) -> None:
+        self._require_ranks().reset_entity(ek)
+        await self._rank_standards_changed()
 
     # -- run lifecycle ---------------------------------------------------------
     async def _arm_run(self, route_id: int, void_active: bool = False) -> None:

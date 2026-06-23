@@ -1,8 +1,21 @@
+import asyncio
+import json
+
 import pytest
 
+from sm64_events.server.broadcaster import Broadcaster
+from sm64_events.storage.db import Database
 from sm64_events.tracking.projection import Attempt
 from sm64_events.tracking.routes import (export_route, resolve_import,
                                          route_stats, validate_route)
+from sm64_events.tracking.service import TrackerService
+
+
+def make(tmp_path):
+    db = Database(tmp_path / "t.db")
+    svc = TrackerService(db, Broadcaster())
+    asyncio.run(svc.start())
+    return db, svc
 
 
 def att(**o):
@@ -197,3 +210,44 @@ def test_export_import_roundtrips_start_condition():
     assert out["start_condition"] == {"type": "level_enter", "to": 9}
     res = resolve_import(out, [])
     assert res["start_condition"] == {"type": "level_enter", "to": 9}
+
+
+def test_route_view_has_step_ranks_and_average(tmp_path):
+    from sm64_events.core.events import Event
+    from datetime import datetime, timezone
+    from sm64_events.ranks.standards import RankStandards
+    from sm64_events.tracking.views import build_route_view
+
+    db, svc = make(tmp_path)
+
+    # seed a star attempt (course 2, star 2) so current_pb can resolve
+    T0 = datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
+    def ev(type_, frame, payload=None):
+        return Event(type=type_, frame=frame, timestamp_utc=T0, payload=payload or {})
+
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(ev("star_collected", 1350,
+                               {"course_id": 2, "star_id": 2, "igt_frames": 343})))
+    # save that attempt as PB
+    aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    asyncio.run(svc.save_pb(aid, "igt"))
+
+    # load rank standards with thresholds for star:2:2
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "star:2:2": {"clock": "igt", "strategies": {
+            "fast": {"Mario": 11.0, "Gold": 12.0, "Iron": 99.0}}}}}))
+    svc.ranks = RankStandards(p)
+    svc.ranks.load()
+    asyncio.run(svc.set_strat(2, 2, "fast"))
+
+    # create a route with one star-2-2 step
+    route_id = asyncio.run(svc.create_route({"name": "TestR", "steps": [
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 2}]}]}))
+
+    rv = build_route_view(db, svc, route_id)
+    step0 = rv["steps"][0]
+    assert step0["rank"] is not None        # a real tier resolved (not the all-None regression)
+    assert rv["avg_rank"] is not None
+    assert rv["avg_rank"]["tier"] == step0["rank"]   # single ranked step -> avg tier == its tier
+    assert rv["weakest_step"] == 0

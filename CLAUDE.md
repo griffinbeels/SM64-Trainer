@@ -101,6 +101,11 @@ exe's single-instance takeover would otherwise fight a dev server on :8064).
 | Replay clip extraction (ffmpeg cut of A+V segments) | `replay/extract.py` — pure ffmpeg cut: `concat:` the covering segments, accurate-seek the span, re-encode video (0.5s GOP) + faststart, `-c:a copy` the already-synced audio. Coverage holes clamp to the contiguous run containing the span start (`contiguous_run`); no PCM assembly / per-frame interleave (those were the two-clock reconciliation) |
 | Replay REST surface (status/extract/save/serve) | `server/replay_api.py` — FileResponse for Range/206; same error taxonomy as api.py |
 | Replay player + recording dot | `ui/components/replay.js` |
+| Rank classification (pure) | `ranks/classify.py` — THE rank ORDER (Mario..Iron) + RANK_SCORE + display_cs/rank_for/next_tier/band; compares DISPLAYED centiseconds so rank never disagrees with the shown time |
+| Rank standards store (editable JSON, seeded) | `ranks/standards.py` over `data/rank_standards.json`; RANK_COLORS; entity_key; seed/corrupt→empty fallback; CRUD |
+| Rank standards scraper | `tools/scrape_ranks.py` — fetches the xcams Next.js chunk, extracts the embedded JSON.parse standards blob, maps keys→entities, writes `src/sm64_events/data/rank_standards.seed.json`; re-run to refresh |
+| Rank REST surface | `server/ranks_api.py` — CRUD; service commands broadcast `rank_standards_changed` |
+| Rank UI (badge/banner/table/route medals) | `ui/components/ranks.js` (Medal/RankBanner + registry mirror) + `standards.js` (collapsible editable table); wired into practice.js (section banner + attempt medals), progress.js (medal nodes), routes.js + RouteFocus (per-step medals + route avg) |
 
 (All paths under `src/sm64_events/` unless noted.) Tests mirror modules:
 `tests/test_<module>.py` — read the test file first; it's the executable spec.

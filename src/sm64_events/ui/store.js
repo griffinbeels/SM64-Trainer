@@ -4,7 +4,7 @@ import { getJSON, send } from "./api.js";
 
 const REFRESH_ON = new Set(["attempt_completed", "attempts_invalidated",
   "pb_saved", "pb_undone", "session_started", "target_changed",
-  "star_collected", "strat_set"]);
+  "star_collected", "strat_set", "rank_standards_changed"]);
 const RUN_REFRESH_ON = new Set(["run_started", "run_progress",
   "run_finished", "run_aborted", "game_reset"]);
 

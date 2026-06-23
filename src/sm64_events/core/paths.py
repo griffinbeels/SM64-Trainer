@@ -119,6 +119,20 @@ def logs_dir() -> Path:
     return data_root() / "logs"
 
 
+def rank_standards_path() -> Path:
+    return data_root() / "data" / "rank_standards.json"
+
+
+def bundled_rank_standards() -> Path | None:
+    """The seed shipped beside a frozen exe (PyInstaller _MEIPASS), else the
+    in-repo seed when running from source."""
+    if is_frozen():
+        cand = Path(getattr(sys, "_MEIPASS", "")) / "rank_standards.seed.json"
+        return cand if cand.exists() else None
+    cand = Path(__file__).resolve().parent.parent / "data" / "rank_standards.seed.json"
+    return cand if cand.exists() else None
+
+
 def bundled_ffmpeg() -> str | None:
     """Absolute path to the ffmpeg.exe bundled beside a frozen exe, else None.
     PyInstaller unpacks --add-binary files into ``sys._MEIPASS``."""

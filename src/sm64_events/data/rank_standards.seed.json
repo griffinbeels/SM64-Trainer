@@ -1,0 +1,3074 @@
+{
+ "version": 1,
+ "entities": {
+  "star:1:0": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 44.23,
+     "Grandmaster": 44.6,
+     "Master": 45.46,
+     "Diamond": 46.23,
+     "Platinum": 47.86,
+     "Gold": 48.86,
+     "Silver": 57.83,
+     "Bronze": 61.86
+    },
+    "Left Side": {
+     "Mario": 43.43,
+     "Grandmaster": 43.8,
+     "Master": 44.66,
+     "Diamond": 45.43,
+     "Platinum": 47.06,
+     "Gold": 48.06,
+     "Silver": 49.23,
+     "Bronze": 53.26
+    }
+   }
+  },
+  "star:1:1": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 81.86,
+     "Grandmaster": 82.13,
+     "Master": 82.9,
+     "Diamond": 83.86,
+     "Platinum": 84.36,
+     "Gold": 85.36,
+     "Silver": 92.86,
+     "Bronze": 96.36
+    },
+    "No Cutscene": {
+     "Mario": 78.26,
+     "Grandmaster": 78.53,
+     "Master": 79.3,
+     "Diamond": 80.26,
+     "Platinum": 80.76,
+     "Gold": 81.76,
+     "Silver": 82.76,
+     "Bronze": 86.26
+    }
+   }
+  },
+  "star:1:2": {
+   "clock": "igt",
+   "strategies": {
+    "Skyjump": {
+     "Mario": 19.36,
+     "Grandmaster": 19.63,
+     "Master": 19.86,
+     "Diamond": 20.13,
+     "Platinum": 20.46,
+     "Gold": 20.83,
+     "Silver": 21.26,
+     "Bronze": 22.73
+    },
+    "Slope Start": {
+     "Mario": 19.03,
+     "Grandmaster": 19.3,
+     "Master": 19.53,
+     "Diamond": 19.8,
+     "Platinum": 20.13,
+     "Gold": 20.5,
+     "Silver": 20.93,
+     "Bronze": 22.4
+    },
+    "Island Hop": {
+     "Mario": 21.36,
+     "Grandmaster": 21.63,
+     "Master": 21.96,
+     "Diamond": 22.7,
+     "Platinum": 23.23,
+     "Gold": 23.9,
+     "Silver": 24.56,
+     "Bronze": 26.9
+    },
+    "TJ Ihop": {
+     "Mario": 19.66,
+     "Grandmaster": 19.93,
+     "Master": 20.26,
+     "Diamond": 21.0,
+     "Platinum": 21.53,
+     "Gold": 22.2,
+     "Silver": 22.86,
+     "Bronze": 25.2
+    }
+   }
+  },
+  "star:1:4": {
+   "clock": "igt",
+   "strategies": {
+    "Skyjump": {
+     "Mario": 30.9,
+     "Grandmaster": 31.36,
+     "Master": 32.0,
+     "Diamond": 32.66,
+     "Platinum": 33.66,
+     "Gold": 35.1,
+     "Silver": 36.2,
+     "Bronze": 40.0
+    },
+    "Slope Start": {
+     "Mario": 30.13,
+     "Grandmaster": 30.6,
+     "Master": 31.23,
+     "Diamond": 31.9,
+     "Platinum": 32.9,
+     "Gold": 34.33,
+     "Silver": 35.43,
+     "Bronze": 39.23
+    }
+   }
+  },
+  "star:1:5": {
+   "clock": "igt",
+   "strategies": {
+    "Bomb Clip": {
+     "Mario": 12.76,
+     "Grandmaster": 12.83,
+     "Master": 12.9,
+     "Diamond": 13.0,
+     "Platinum": 13.2,
+     "Gold": 13.56,
+     "Silver": 14.1,
+     "Bronze": 14.86
+    },
+    "Backflip Clip": {
+     "Mario": 12.1,
+     "Grandmaster": 12.2,
+     "Master": 12.33,
+     "Diamond": 12.56,
+     "Platinum": 12.73,
+     "Gold": 13.03,
+     "Silver": 13.33,
+     "Bronze": 14.33
+    }
+   }
+  },
+  "star:2:0": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 29.86,
+     "Grandmaster": 29.96,
+     "Master": 30.1,
+     "Diamond": 30.26,
+     "Platinum": 30.53,
+     "Gold": 30.86,
+     "Silver": 32.83,
+     "Bronze": 33.73
+    }
+   }
+  },
+  "star:2:1": {
+   "clock": "igt",
+   "strategies": {
+    "Triple Jump": {
+     "Mario": 14.16,
+     "Grandmaster": 14.33,
+     "Master": 14.56,
+     "Diamond": 14.76,
+     "Platinum": 14.96,
+     "Gold": 15.3,
+     "Silver": 15.63,
+     "Bronze": 16.76
+    },
+    "Double Jump": {
+     "Mario": 13.8,
+     "Grandmaster": 13.96,
+     "Master": 14.2,
+     "Diamond": 14.4,
+     "Platinum": 14.6,
+     "Gold": 14.93,
+     "Silver": 15.26,
+     "Bronze": 16.4
+    },
+    "Sideflip WK": {
+     "Mario": 16.63,
+     "Grandmaster": 16.8,
+     "Master": 17.03,
+     "Diamond": 17.23,
+     "Platinum": 17.43,
+     "Gold": 19.46,
+     "Silver": 19.8,
+     "Bronze": 20.93
+    }
+   }
+  },
+  "star:2:2": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 9.76,
+     "Grandmaster": 9.83,
+     "Master": 9.93,
+     "Diamond": 10.03,
+     "Platinum": 10.36,
+     "Gold": 10.73,
+     "Silver": 11.0,
+     "Bronze": 11.9
+    },
+    "Single Jump": {
+     "Mario": 9.5,
+     "Grandmaster": 9.63,
+     "Master": 9.7,
+     "Diamond": 9.9,
+     "Platinum": 10.1,
+     "Gold": 10.36,
+     "Silver": 10.63,
+     "Bronze": 11.53
+    }
+   }
+  },
+  "star:2:4": {
+   "clock": "igt",
+   "strategies": {
+    "TJ Owlless": {
+     "Mario": 11.7,
+     "Grandmaster": 11.9,
+     "Master": 12.2,
+     "Diamond": 12.4,
+     "Platinum": 12.6,
+     "Gold": 12.96,
+     "Silver": 13.33,
+     "Bronze": 14.6
+    },
+    "DJ Owlless": {
+     "Mario": 11.06,
+     "Grandmaster": 11.2,
+     "Master": 11.36,
+     "Diamond": 11.56,
+     "Platinum": 11.63,
+     "Gold": 11.86,
+     "Silver": 12.1,
+     "Bronze": 12.86
+    },
+    "Owl": {
+     "Mario": 15.93,
+     "Grandmaster": 16.1,
+     "Master": 16.96,
+     "Diamond": 17.4,
+     "Platinum": 17.9,
+     "Gold": 18.53,
+     "Silver": 19.16,
+     "Bronze": 21.33
+    },
+    "Sideflip": {
+     "Mario": 10.93,
+     "Grandmaster": 11.13,
+     "Master": 11.43,
+     "Diamond": 11.63,
+     "Platinum": 11.83,
+     "Gold": 12.2,
+     "Silver": 12.56,
+     "Bronze": 13.83
+    },
+    "Mad Owl": {
+     "Mario": 14.53,
+     "Grandmaster": 14.7,
+     "Master": 15.56,
+     "Diamond": 16.0,
+     "Platinum": 16.5,
+     "Gold": 17.13,
+     "Silver": 17.76,
+     "Bronze": 19.93
+    }
+   }
+  },
+  "star:2:5": {
+   "clock": "igt",
+   "strategies": {
+    "Sockfolder": {
+     "Mario": 12.5,
+     "Grandmaster": 12.96,
+     "Master": 13.66,
+     "Diamond": 13.83,
+     "Platinum": 14.1,
+     "Gold": 14.46,
+     "Silver": 14.96,
+     "Bronze": 22.7
+    },
+    "Texture": {
+     "Mario": 10.83,
+     "Grandmaster": 11.06,
+     "Master": 11.33,
+     "Diamond": 11.56,
+     "Platinum": 11.83,
+     "Gold": 12.2,
+     "Silver": 12.6,
+     "Bronze": 13.96
+    },
+    "Salt": {
+     "Mario": 8.7,
+     "Grandmaster": 8.76,
+     "Master": 8.9,
+     "Diamond": 8.96,
+     "Platinum": 9.13,
+     "Gold": 9.2,
+     "Silver": 9.33,
+     "Bronze": 9.8
+    },
+    "OG": {
+     "Mario": 8.53,
+     "Grandmaster": 8.63,
+     "Master": 8.85,
+     "Diamond": 8.96,
+     "Platinum": 9.1,
+     "Gold": 9.33,
+     "Silver": 9.56,
+     "Bronze": 10.33
+    },
+    "LJ": {
+     "Mario": 7.96,
+     "Grandmaster": 8.03,
+     "Master": 8.16,
+     "Diamond": 8.23,
+     "Platinum": 8.4,
+     "Gold": 8.46,
+     "Silver": 8.6,
+     "Bronze": 9.06
+    }
+   }
+  },
+  "star:3:0": {
+   "clock": "igt",
+   "strategies": {
+    "Ship Clip": {
+     "Mario": 42.46,
+     "Grandmaster": 43.23,
+     "Master": 44.4,
+     "Diamond": 45.96,
+     "Platinum": 47.86,
+     "Gold": 49.43,
+     "Silver": 51.2,
+     "Bronze": 57.36
+    },
+    "No Ship Clip": {
+     "Mario": 53.1,
+     "Grandmaster": 53.86,
+     "Master": 55.03,
+     "Diamond": 56.6,
+     "Platinum": 58.5,
+     "Gold": 60.06,
+     "Silver": 61.83,
+     "Bronze": 68.0
+    }
+   }
+  },
+  "star:3:1": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 33.73,
+     "Grandmaster": 34.0,
+     "Master": 34.4,
+     "Diamond": 34.9,
+     "Platinum": 35.36,
+     "Gold": 35.93,
+     "Silver": 36.5,
+     "Bronze": 38.46
+    },
+    "BLJ": {
+     "Mario": 29.9,
+     "Grandmaster": 30.46,
+     "Master": 31.6,
+     "Diamond": 32.4,
+     "Platinum": 33.3,
+     "Gold": 34.16,
+     "Silver": 35.03,
+     "Bronze": 38.06
+    }
+   }
+  },
+  "star:3:2": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 37.8,
+     "Grandmaster": 38.2,
+     "Master": 38.93,
+     "Diamond": 39.7,
+     "Platinum": 40.56,
+     "Gold": 41.96,
+     "Silver": 42.96,
+     "Bronze": 46.46
+    },
+    "BLJ": {
+     "Mario": 34.5,
+     "Grandmaster": 34.93,
+     "Master": 35.8,
+     "Diamond": 36.43,
+     "Platinum": 37.1,
+     "Gold": 38.03,
+     "Silver": 38.96,
+     "Bronze": 42.2
+    }
+   }
+  },
+  "star:3:4": {
+   "clock": "igt",
+   "strategies": {
+    "Cannon (Direct)": {
+     "Mario": 10.96,
+     "Grandmaster": 11.13,
+     "Master": 11.53,
+     "Diamond": 11.86,
+     "Platinum": 12.73,
+     "Gold": 13.56,
+     "Silver": 14.2,
+     "Bronze": 16.36
+    },
+    "Ship LJ": {
+     "Mario": 18.66,
+     "Grandmaster": 19.0,
+     "Master": 19.66,
+     "Diamond": 20.13,
+     "Platinum": 20.66,
+     "Gold": 21.33,
+     "Silver": 22.0,
+     "Bronze": 24.33
+    },
+    "Framewalk": {
+     "Mario": 13.93,
+     "Grandmaster": 14.6,
+     "Master": 15.46,
+     "Diamond": 16.1,
+     "Platinum": 16.8,
+     "Gold": 17.7,
+     "Silver": 18.56,
+     "Bronze": 21.63
+    },
+    "Cannon (Pole)": {
+     "Mario": 12.63,
+     "Grandmaster": 12.8,
+     "Master": 13.2,
+     "Diamond": 13.53,
+     "Platinum": 14.4,
+     "Gold": 15.23,
+     "Silver": 15.86,
+     "Bronze": 18.03
+    }
+   }
+  },
+  "star:3:5": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 19.5,
+     "Grandmaster": 19.66,
+     "Master": 19.93,
+     "Diamond": 20.23,
+     "Platinum": 20.56,
+     "Gold": 20.93,
+     "Silver": 21.3,
+     "Bronze": 22.53
+    }
+   }
+  },
+  "star:4:0": {
+   "clock": "igt",
+   "strategies": {
+    "No Clip": {
+     "Mario": 25.06,
+     "Grandmaster": 25.13,
+     "Master": 25.3,
+     "Diamond": 25.53,
+     "Platinum": 25.73,
+     "Gold": 26.13,
+     "Silver": 27.3,
+     "Bronze": 28.23
+    },
+    "Standard": {
+     "Mario": 24.63,
+     "Grandmaster": 24.7,
+     "Master": 24.86,
+     "Diamond": 25.1,
+     "Platinum": 25.3,
+     "Gold": 25.7,
+     "Silver": 25.96,
+     "Bronze": 26.9
+    }
+   }
+  },
+  "star:4:1": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 18.56,
+     "Grandmaster": 18.7,
+     "Master": 18.86,
+     "Diamond": 19.0,
+     "Platinum": 19.2,
+     "Gold": 19.6,
+     "Silver": 19.9,
+     "Bronze": 20.9
+    },
+    "Pingu Trick": {
+     "Mario": 18.06,
+     "Grandmaster": 18.2,
+     "Master": 18.36,
+     "Diamond": 18.5,
+     "Platinum": 18.7,
+     "Gold": 19.1,
+     "Silver": 19.4,
+     "Bronze": 20.4
+    }
+   }
+  },
+  "star:4:3": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 37.8,
+     "Grandmaster": 38.56,
+     "Master": 39.46,
+     "Diamond": 40.56,
+     "Platinum": 42.6,
+     "Gold": 45.56,
+     "Silver": 50.3,
+     "Bronze": 55.26
+    }
+   }
+  },
+  "star:4:4": {
+   "clock": "igt",
+   "strategies": {
+    "Upper Start": {
+     "Mario": 36.8,
+     "Grandmaster": 37.06,
+     "Master": 37.3,
+     "Diamond": 37.5,
+     "Platinum": 37.73,
+     "Gold": 37.96,
+     "Silver": 38.26,
+     "Bronze": 39.3
+    },
+    "Lower Start": {
+     "Mario": 36.66,
+     "Grandmaster": 36.93,
+     "Master": 37.16,
+     "Diamond": 37.36,
+     "Platinum": 37.6,
+     "Gold": 37.83,
+     "Silver": 38.13,
+     "Bronze": 39.16
+    }
+   }
+  },
+  "star:4:5": {
+   "clock": "igt",
+   "strategies": {
+    "Backflip WK": {
+     "Mario": 8.7,
+     "Grandmaster": 8.83,
+     "Master": 8.93,
+     "Diamond": 9.03,
+     "Platinum": 9.26,
+     "Gold": 9.63,
+     "Silver": 9.86,
+     "Bronze": 10.66
+    },
+    "Beginner": {
+     "Mario": 11.0,
+     "Grandmaster": 11.1,
+     "Master": 11.36,
+     "Diamond": 11.56,
+     "Platinum": 11.76,
+     "Gold": 12.0,
+     "Silver": 12.56,
+     "Bronze": 13.63
+    },
+    "SJ WK": {
+     "Mario": 8.3,
+     "Grandmaster": 8.43,
+     "Master": 8.53,
+     "Diamond": 8.63,
+     "Platinum": 8.86,
+     "Gold": 9.23,
+     "Silver": 9.46,
+     "Bronze": 10.26
+    },
+    "Floor Clip": {
+     "Mario": 6.7,
+     "Grandmaster": 6.86,
+     "Master": 7.2,
+     "Diamond": 7.43,
+     "Platinum": 7.7,
+     "Gold": 8.0,
+     "Silver": 8.36,
+     "Bronze": 9.63
+    }
+   }
+  },
+  "star:5:0": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 52.1,
+     "Grandmaster": 52.5,
+     "Master": 53.86,
+     "Diamond": 54.93,
+     "Platinum": 56.5,
+     "Gold": 58.03,
+     "Silver": 60.86,
+     "Bronze": 66.23
+    },
+    "Door Skips": {
+     "Mario": 49.53,
+     "Grandmaster": 49.93,
+     "Master": 51.3,
+     "Diamond": 52.36,
+     "Platinum": 53.93,
+     "Gold": 55.46,
+     "Silver": 57.0,
+     "Bronze": 62.36
+    },
+    "Open": {
+     "Mario": 48.46,
+     "Grandmaster": 48.86,
+     "Master": 50.23,
+     "Diamond": 51.3,
+     "Platinum": 52.86,
+     "Gold": 54.4,
+     "Silver": 55.93,
+     "Bronze": 61.3
+    },
+    "Text Skip": {
+     "Mario": 51.63,
+     "Grandmaster": 52.03,
+     "Master": 53.4,
+     "Diamond": 54.46,
+     "Platinum": 56.03,
+     "Gold": 57.56,
+     "Silver": 59.1,
+     "Bronze": 64.46
+    }
+   }
+  },
+  "star:5:1": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 33.33,
+     "Grandmaster": 33.5,
+     "Master": 33.73,
+     "Diamond": 34.26,
+     "Platinum": 35.3,
+     "Gold": 35.96,
+     "Silver": 36.63,
+     "Bronze": 41.93
+    },
+    "DJ Dive": {
+     "Mario": 33.16,
+     "Grandmaster": 33.33,
+     "Master": 33.56,
+     "Diamond": 34.1,
+     "Platinum": 35.13,
+     "Gold": 35.8,
+     "Silver": 36.46,
+     "Bronze": 38.76
+    }
+   }
+  },
+  "star:5:2": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 11.23,
+     "Grandmaster": 11.33,
+     "Master": 11.43,
+     "Diamond": 11.53,
+     "Platinum": 11.66,
+     "Gold": 11.9,
+     "Silver": 13.3,
+     "Bronze": 13.93
+    },
+    "Open": {
+     "Mario": 11.13,
+     "Grandmaster": 11.23,
+     "Master": 11.33,
+     "Diamond": 11.43,
+     "Platinum": 11.56,
+     "Gold": 11.8,
+     "Silver": 12.0,
+     "Bronze": 12.63
+    },
+    "Right WK": {
+     "Mario": 11.26,
+     "Grandmaster": 11.36,
+     "Master": 11.46,
+     "Diamond": 11.56,
+     "Platinum": 11.7,
+     "Gold": 11.93,
+     "Silver": 12.13,
+     "Bronze": 12.76
+    }
+   }
+  },
+  "star:5:4": {
+   "clock": "igt",
+   "strategies": {
+    "Other Kill": {
+     "Mario": 26.76,
+     "Grandmaster": 27.1,
+     "Master": 27.4,
+     "Diamond": 28.03,
+     "Platinum": 28.83,
+     "Gold": 29.33,
+     "Silver": 30.96,
+     "Bronze": 33.23
+    },
+    "Pro Kill": {
+     "Mario": 26.16,
+     "Grandmaster": 26.5,
+     "Master": 26.8,
+     "Diamond": 27.43,
+     "Platinum": 28.23,
+     "Gold": 28.73,
+     "Silver": 29.36,
+     "Bronze": 31.63
+    }
+   }
+  },
+  "star:5:5": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 27.0,
+     "Grandmaster": 27.33,
+     "Master": 27.56,
+     "Diamond": 28.16,
+     "Platinum": 29.13,
+     "Gold": 29.83,
+     "Silver": 30.53,
+     "Bronze": 33.0
+    },
+    "DJ Kick Box": {
+     "Mario": 26.76,
+     "Grandmaster": 27.1,
+     "Master": 27.33,
+     "Diamond": 27.93,
+     "Platinum": 28.9,
+     "Gold": 29.6,
+     "Silver": 30.3,
+     "Bronze": 32.76
+    }
+   }
+  },
+  "star:6:0": {
+   "clock": "igt",
+   "strategies": {
+    "Box Triple": {
+     "Mario": 15.23,
+     "Grandmaster": 15.33,
+     "Master": 15.4,
+     "Diamond": 15.5,
+     "Platinum": 15.63,
+     "Gold": 15.93,
+     "Silver": 16.13,
+     "Bronze": 16.8
+    },
+    "Sign Clip": {
+     "Mario": 13.06,
+     "Grandmaster": 13.23,
+     "Master": 13.53,
+     "Diamond": 13.76,
+     "Platinum": 13.96,
+     "Gold": 14.56,
+     "Silver": 14.96,
+     "Bronze": 16.33
+    },
+    "WK Over Wall": {
+     "Mario": 17.56,
+     "Grandmaster": 17.66,
+     "Master": 17.8,
+     "Diamond": 17.9,
+     "Platinum": 18.03,
+     "Gold": 18.2,
+     "Silver": 18.5,
+     "Bronze": 19.5
+    },
+    "Elevator Clip": {
+     "Mario": 19.53,
+     "Grandmaster": 19.56,
+     "Master": 19.7,
+     "Diamond": 19.8,
+     "Platinum": 19.9,
+     "Gold": 19.96,
+     "Silver": 20.26,
+     "Bronze": 20.73
+    }
+   }
+  },
+  "star:6:2": {
+   "clock": "igt",
+   "strategies": {
+    "Xmas Miracle": {
+     "Mario": 25.13,
+     "Grandmaster": 25.33,
+     "Master": 25.63,
+     "Diamond": 25.86,
+     "Platinum": 26.16,
+     "Gold": 26.46,
+     "Silver": 26.86,
+     "Bronze": 28.23
+    },
+    "BLJ": {
+     "Mario": 21.4,
+     "Grandmaster": 21.93,
+     "Master": 22.96,
+     "Diamond": 23.66,
+     "Platinum": 24.06,
+     "Gold": 24.56,
+     "Silver": 25.06,
+     "Bronze": 26.76
+    },
+    "Sazandora": {
+     "Mario": 20.96,
+     "Grandmaster": 21.53,
+     "Master": 22.63,
+     "Diamond": 23.36,
+     "Platinum": 23.8,
+     "Gold": 24.36,
+     "Silver": 24.9,
+     "Bronze": 26.76
+    },
+    "Sign Clip": {
+     "Mario": 22.96,
+     "Grandmaster": 23.23,
+     "Master": 23.7,
+     "Diamond": 24.03,
+     "Platinum": 24.4,
+     "Gold": 24.86,
+     "Silver": 25.33,
+     "Bronze": 26.93
+    }
+   }
+  },
+  "star:6:3": {
+   "clock": "igt",
+   "strategies": {
+    "BLJ": {
+     "Mario": 24.83,
+     "Grandmaster": 25.86,
+     "Master": 26.4,
+     "Diamond": 28.4,
+     "Platinum": 29.5,
+     "Gold": 30.83,
+     "Silver": 32.2,
+     "Bronze": 36.93
+    },
+    "Wall Clip": {
+     "Mario": 31.56,
+     "Grandmaster": 31.9,
+     "Master": 32.56,
+     "Diamond": 33.4,
+     "Platinum": 34.8,
+     "Gold": 35.83,
+     "Silver": 36.86,
+     "Bronze": 40.46
+    },
+    "No Clip": {
+     "Mario": 36.23,
+     "Grandmaster": 36.56,
+     "Master": 37.23,
+     "Diamond": 38.06,
+     "Platinum": 39.46,
+     "Gold": 40.5,
+     "Silver": 41.53,
+     "Bronze": 45.13
+    }
+   }
+  },
+  "star:6:4": {
+   "clock": "igt",
+   "strategies": {
+    "Rightside": {
+     "Mario": 11.23,
+     "Grandmaster": 11.3,
+     "Master": 11.4,
+     "Diamond": 11.53,
+     "Platinum": 11.66,
+     "Gold": 11.83,
+     "Silver": 12.7,
+     "Bronze": 13.8
+    },
+    "Leftside": {
+     "Mario": 11.36,
+     "Grandmaster": 11.4,
+     "Master": 11.46,
+     "Diamond": 11.5,
+     "Platinum": 11.6,
+     "Gold": 11.66,
+     "Silver": 11.73,
+     "Bronze": 11.96
+    },
+    "SS": {
+     "Mario": 10.9,
+     "Grandmaster": 10.96,
+     "Master": 11.1,
+     "Diamond": 11.3,
+     "Platinum": 11.5,
+     "Gold": 11.7
+    }
+   }
+  },
+  "star:6:5": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 15.43,
+     "Grandmaster": 15.56,
+     "Master": 15.66,
+     "Diamond": 15.73,
+     "Platinum": 15.83,
+     "Gold": 15.96,
+     "Silver": 16.46,
+     "Bronze": 19.13
+    },
+    "GTM Slide": {
+     "Mario": 14.8,
+     "Grandmaster": 14.93,
+     "Master": 15.06,
+     "Diamond": 15.26,
+     "Platinum": 15.53,
+     "Gold": 15.86,
+     "Silver": 16.2,
+     "Bronze": 17.33
+    }
+   }
+  },
+  "star:7:0": {
+   "clock": "igt",
+   "strategies": {
+    "No Ledgegrab": {
+     "Mario": 18.7,
+     "Grandmaster": 18.83,
+     "Master": 18.93,
+     "Diamond": 19.1,
+     "Platinum": 19.33,
+     "Gold": 20.36,
+     "Silver": 20.76,
+     "Bronze": 22.13
+    },
+    "Right GP Kill": {
+     "Mario": 18.3,
+     "Grandmaster": 18.43,
+     "Master": 18.53,
+     "Diamond": 18.7,
+     "Platinum": 18.93,
+     "Gold": 19.96,
+     "Silver": 20.36,
+     "Bronze": 21.73
+    },
+    "Double Burn": {
+     "Mario": 18.1,
+     "Grandmaster": 18.23,
+     "Master": 18.33,
+     "Diamond": 18.5,
+     "Platinum": 18.76,
+     "Gold": 19.83,
+     "Silver": 20.26,
+     "Bronze": 21.73
+    },
+    "Ledgegrab": {
+     "Mario": 19.03,
+     "Grandmaster": 19.16,
+     "Master": 19.26,
+     "Diamond": 19.43,
+     "Platinum": 19.7,
+     "Gold": 20.76,
+     "Silver": 21.2,
+     "Bronze": 22.66
+    }
+   }
+  },
+  "star:7:1": {
+   "clock": "igt",
+   "strategies": {
+    "Ledgegrab": {
+     "Mario": 24.83,
+     "Grandmaster": 24.9,
+     "Master": 24.96,
+     "Diamond": 25.16,
+     "Platinum": 25.6,
+     "Gold": 25.93,
+     "Silver": 26.23,
+     "Bronze": 27.3
+    },
+    "No Ledgegrab": {
+     "Mario": 24.2,
+     "Grandmaster": 24.33,
+     "Master": 24.43,
+     "Diamond": 24.7,
+     "Platinum": 24.96,
+     "Gold": 25.3,
+     "Silver": 25.63,
+     "Bronze": 26.73
+    },
+    "Rightside": {
+     "Mario": 23.4,
+     "Grandmaster": 23.56,
+     "Master": 23.86,
+     "Diamond": 24.06,
+     "Platinum": 24.33,
+     "Gold": 24.63,
+     "Silver": 24.93,
+     "Bronze": 25.96
+    }
+   }
+  },
+  "star:7:2": {
+   "clock": "igt",
+   "strategies": {
+    "Beginner": {
+     "Mario": 14.73,
+     "Grandmaster": 14.8,
+     "Master": 14.86,
+     "Diamond": 14.93,
+     "Platinum": 15.03,
+     "Gold": 15.23,
+     "Silver": 15.36,
+     "Bronze": 15.86
+    },
+    "3x LJ": {
+     "Mario": 14.36,
+     "Grandmaster": 14.43,
+     "Master": 14.5,
+     "Diamond": 14.56,
+     "Platinum": 14.66,
+     "Gold": 14.86,
+     "Silver": 15.0,
+     "Bronze": 15.5
+    },
+    "Standard": {
+     "Mario": 14.03,
+     "Grandmaster": 14.1,
+     "Master": 14.16,
+     "Diamond": 14.23,
+     "Platinum": 14.33,
+     "Gold": 14.53,
+     "Silver": 14.66,
+     "Bronze": 15.16
+    }
+   }
+  },
+  "star:7:3": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 11.76,
+     "Grandmaster": 11.86,
+     "Master": 11.93,
+     "Diamond": 12.1,
+     "Platinum": 12.43,
+     "Gold": 12.93,
+     "Silver": 13.23,
+     "Bronze": 14.3
+    },
+    "TJ Strat": {
+     "Mario": 10.96,
+     "Grandmaster": 11.06,
+     "Master": 11.13,
+     "Diamond": 11.3,
+     "Platinum": 11.63,
+     "Gold": 12.13,
+     "Silver": 12.43,
+     "Bronze": 13.5
+    },
+    "2x LJ Sidehop": {
+     "Mario": 12.66,
+     "Grandmaster": 12.76,
+     "Master": 12.9,
+     "Diamond": 13.03,
+     "Platinum": 13.2,
+     "Gold": 13.43,
+     "Silver": 13.66,
+     "Bronze": 14.46
+    },
+    "DJ Sidehop": {
+     "Mario": 11.86,
+     "Grandmaster": 11.96,
+     "Master": 12.1,
+     "Diamond": 12.23,
+     "Platinum": 12.4,
+     "Gold": 12.63,
+     "Silver": 12.86,
+     "Bronze": 13.66
+    },
+    "LJ JD Sidehop": {
+     "Mario": 12.36,
+     "Grandmaster": 12.46,
+     "Master": 12.6,
+     "Diamond": 12.73,
+     "Platinum": 12.9,
+     "Gold": 13.13,
+     "Silver": 13.36,
+     "Bronze": 14.16
+    }
+   }
+  },
+  "star:7:4": {
+   "clock": "igt",
+   "strategies": {
+    "Double Pole Skip": {
+     "Mario": 17.46,
+     "Grandmaster": 17.76,
+     "Master": 18.2,
+     "Diamond": 19.36,
+     "Platinum": 20.53,
+     "Gold": 22.43,
+     "Silver": 23.7,
+     "Bronze": 28.06
+    },
+    "Akira Boost": {
+     "Mario": 19.03,
+     "Grandmaster": 19.3,
+     "Master": 19.73,
+     "Diamond": 20.8,
+     "Platinum": 21.86,
+     "Gold": 23.63,
+     "Silver": 24.8,
+     "Bronze": 28.83
+    },
+    "Pro Boost": {
+     "Mario": 18.0,
+     "Grandmaster": 18.26,
+     "Master": 18.7,
+     "Diamond": 19.76,
+     "Platinum": 20.83,
+     "Gold": 22.6,
+     "Silver": 23.76,
+     "Bronze": 27.8
+    },
+    "Beginner": {
+     "Mario": 27.3,
+     "Grandmaster": 28.23,
+     "Master": 30.1,
+     "Diamond": 31.4,
+     "Platinum": 32.86,
+     "Gold": 34.7,
+     "Silver": 36.5,
+     "Bronze": 42.46
+    },
+    "TJ Boost": {
+     "Mario": 22.1,
+     "Grandmaster": 22.4,
+     "Master": 22.83,
+     "Diamond": 24.0,
+     "Platinum": 25.16,
+     "Gold": 27.06,
+     "Silver": 28.33,
+     "Bronze": 32.7
+    }
+   }
+  },
+  "star:7:5": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 18.86,
+     "Grandmaster": 19.03,
+     "Master": 19.26,
+     "Diamond": 19.5,
+     "Platinum": 19.76,
+     "Gold": 20.36,
+     "Silver": 21.76,
+     "Bronze": 23.16
+    },
+    "Open": {
+     "Mario": 18.86,
+     "Grandmaster": 19.03,
+     "Master": 19.26,
+     "Diamond": 19.5,
+     "Platinum": 19.76,
+     "Gold": 20.36,
+     "Silver": 21.76,
+     "Bronze": 23.16
+    }
+   }
+  },
+  "star:8:0": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 16.4,
+     "Grandmaster": 16.46,
+     "Master": 16.6,
+     "Diamond": 16.73,
+     "Platinum": 16.86,
+     "Gold": 17.0,
+     "Silver": 17.56,
+     "Bronze": 19.3
+    },
+    "Speed Pres": {
+     "Mario": 15.93,
+     "Grandmaster": 16.06,
+     "Master": 16.2,
+     "Diamond": 16.36,
+     "Platinum": 16.56,
+     "Gold": 16.8,
+     "Silver": 17.03,
+     "Bronze": 17.86
+    },
+    "Flyguyless": {
+     "Mario": 14.1,
+     "Grandmaster": 14.23,
+     "Master": 14.46,
+     "Diamond": 14.7,
+     "Platinum": 14.96,
+     "Gold": 15.3,
+     "Silver": 15.63,
+     "Bronze": 16.76
+    }
+   }
+  },
+  "star:8:1": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 6.76,
+     "Grandmaster": 6.8,
+     "Master": 6.83,
+     "Diamond": 6.9,
+     "Platinum": 6.93,
+     "Gold": 7.03,
+     "Silver": 7.13,
+     "Bronze": 7.43
+    }
+   }
+  },
+  "star:8:2": {
+   "clock": "igt",
+   "strategies": {
+    "Pillarless": {
+     "Mario": 15.4,
+     "Grandmaster": 15.7,
+     "Master": 16.06,
+     "Diamond": 16.46,
+     "Platinum": 17.3,
+     "Gold": 18.43,
+     "Silver": 19.2,
+     "Bronze": 21.96
+    },
+    "No Pless": {
+     "Mario": 25.8,
+     "Grandmaster": 26.36,
+     "Master": 26.9,
+     "Diamond": 27.56,
+     "Platinum": 28.1,
+     "Gold": 28.56,
+     "Silver": 29.96,
+     "Bronze": 30.5
+    },
+    "Shell": {
+     "Mario": 28.8,
+     "Grandmaster": 29.03,
+     "Master": 29.46,
+     "Diamond": 29.76,
+     "Platinum": 30.13,
+     "Gold": 30.56,
+     "Silver": 30.96,
+     "Bronze": 32.5
+    },
+    "Nuts Pless": {
+     "Mario": 12.93,
+     "Grandmaster": 13.03,
+     "Master": 13.16,
+     "Diamond": 13.36,
+     "Platinum": 14.16,
+     "Gold": 15.66,
+     "Silver": 16.76
+    },
+    "SJ Pless": {
+     "Mario": 14.2,
+     "Grandmaster": 14.43,
+     "Master": 14.8,
+     "Diamond": 15.53,
+     "Platinum": 16.26,
+     "Gold": 17.4,
+     "Silver": 18.16,
+     "Bronze": 20.93
+    },
+    "Tama Pless": {
+     "Mario": 13.06,
+     "Grandmaster": 13.13,
+     "Master": 13.26,
+     "Diamond": 13.46,
+     "Platinum": 15.23,
+     "Gold": 16.36,
+     "Silver": 17.13,
+     "Bronze": 19.9
+    }
+   }
+  },
+  "star:8:3": {
+   "clock": "igt",
+   "strategies": {
+    "Topless": {
+     "Mario": 44.96,
+     "Grandmaster": 45.26,
+     "Master": 45.8,
+     "Diamond": 46.5,
+     "Platinum": 47.43,
+     "Gold": 48.2,
+     "Silver": 48.96,
+     "Bronze": 51.66
+    },
+    "Backside": {
+     "Mario": 53.43,
+     "Grandmaster": 53.73,
+     "Master": 54.26,
+     "Diamond": 54.96,
+     "Platinum": 55.9,
+     "Gold": 56.66,
+     "Silver": 59.93,
+     "Bronze": 62.63
+    },
+    "TJWK": {
+     "Mario": 50.76,
+     "Grandmaster": 51.06,
+     "Master": 51.6,
+     "Diamond": 52.3,
+     "Platinum": 53.23,
+     "Gold": 54.0,
+     "Silver": 54.76,
+     "Bronze": 57.46
+    }
+   }
+  },
+  "star:8:4": {
+   "clock": "igt",
+   "strategies": {
+    "No Wall Bounce": {
+     "Mario": 52.8,
+     "Grandmaster": 53.93,
+     "Master": 55.96,
+     "Diamond": 60.0,
+     "Platinum": 61.96,
+     "Gold": 65.16,
+     "Silver": 68.36,
+     "Bronze": 79.53
+    },
+    "Wall Bounce": {
+     "Mario": 50.13,
+     "Grandmaster": 51.26,
+     "Master": 53.3,
+     "Diamond": 57.33,
+     "Platinum": 59.3,
+     "Gold": 62.5,
+     "Silver": 65.7,
+     "Bronze": 76.86
+    },
+    "Z-Slide": {
+     "Mario": 44.26,
+     "Grandmaster": 45.4,
+     "Master": 47.43,
+     "Diamond": 51.46,
+     "Platinum": 53.43,
+     "Gold": 56.63,
+     "Silver": 59.83,
+     "Bronze": 71.0
+    }
+   }
+  },
+  "star:8:5": {
+   "clock": "igt",
+   "strategies": {
+    "Solo Secrets": {
+     "Mario": 25.66,
+     "Grandmaster": 26.06,
+     "Master": 26.8,
+     "Diamond": 30.53,
+     "Platinum": 32.13,
+     "Gold": 34.13,
+     "Silver": 36.13,
+     "Bronze": 43.1
+    },
+    "Nuts Pless": {
+     "Mario": 25.63,
+     "Grandmaster": 26.03,
+     "Master": 26.76,
+     "Diamond": 30.5,
+     "Platinum": 32.1,
+     "Gold": 34.1,
+     "Silver": 36.1,
+     "Bronze": 43.06
+    },
+    "No Pless": {
+     "Mario": 40.06,
+     "Grandmaster": 40.56,
+     "Master": 41.26,
+     "Diamond": 41.7,
+     "Platinum": 43.93,
+     "Gold": 45.4,
+     "Silver": 50.13,
+     "Bronze": 57.1
+    }
+   }
+  },
+  "star:9:0": {
+   "clock": "igt",
+   "strategies": {
+    "Front Sub": {
+     "Mario": 31.96,
+     "Grandmaster": 32.43,
+     "Master": 33.56,
+     "Diamond": 34.46,
+     "Platinum": 35.1,
+     "Gold": 35.83,
+     "Silver": 36.86,
+     "Bronze": 40.4
+    },
+    "Back Sub": {
+     "Mario": 34.83,
+     "Grandmaster": 35.3,
+     "Master": 36.43,
+     "Diamond": 37.33,
+     "Platinum": 37.96,
+     "Gold": 38.7,
+     "Silver": 39.73,
+     "Bronze": 43.26
+    }
+   }
+  },
+  "star:9:1": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 30.36,
+     "Grandmaster": 30.76,
+     "Master": 31.13,
+     "Diamond": 31.83,
+     "Platinum": 32.6,
+     "Gold": 34.36,
+     "Silver": 37.36,
+     "Bronze": 40.86
+    },
+    "Downwarp": {
+     "Mario": 29.66,
+     "Grandmaster": 30.06,
+     "Master": 30.3,
+     "Diamond": 30.7,
+     "Platinum": 31.13,
+     "Gold": 32.13,
+     "Silver": 32.7,
+     "Bronze": 34.66
+    }
+   }
+  },
+  "star:9:3": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 35.76,
+     "Grandmaster": 36.3,
+     "Master": 36.83,
+     "Diamond": 38.53,
+     "Platinum": 39.5,
+     "Gold": 40.7,
+     "Silver": 44.9,
+     "Bronze": 56.1
+    },
+    "Chip Clip": {
+     "Mario": 34.7,
+     "Grandmaster": 35.23,
+     "Master": 35.76,
+     "Diamond": 37.46,
+     "Platinum": 38.43,
+     "Gold": 39.63,
+     "Silver": 40.83,
+     "Bronze": 45.03
+    }
+   }
+  },
+  "star:9:4": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 14.26,
+     "Grandmaster": 14.36,
+     "Master": 14.53,
+     "Diamond": 14.7,
+     "Platinum": 15.33,
+     "Gold": 15.83,
+     "Silver": 16.23,
+     "Bronze": 18.4
+    }
+   }
+  },
+  "star:9:5": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 42.2,
+     "Grandmaster": 42.56,
+     "Master": 42.93,
+     "Diamond": 43.9,
+     "Platinum": 44.56,
+     "Gold": 45.4,
+     "Silver": 48.63,
+     "Bronze": 51.56
+    },
+    "Chip Clip": {
+     "Mario": 41.2,
+     "Grandmaster": 41.56,
+     "Master": 41.93,
+     "Diamond": 42.9,
+     "Platinum": 43.56,
+     "Gold": 44.4,
+     "Silver": 45.23,
+     "Bronze": 48.16
+    }
+   }
+  },
+  "star:10:0": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 9.73,
+     "Grandmaster": 9.93,
+     "Master": 10.23,
+     "Diamond": 10.63,
+     "Platinum": 11.16,
+     "Gold": 12.23,
+     "Silver": 12.9,
+     "Bronze": 15.2
+    },
+    "Pingu Flip": {
+     "Mario": 8.63,
+     "Grandmaster": 9.0,
+     "Master": 9.73,
+     "Diamond": 10.26,
+     "Platinum": 10.86,
+     "Gold": 11.63,
+     "Silver": 12.4,
+     "Bronze": 15.03
+    },
+    "Beginner": {
+     "Mario": 10.96,
+     "Grandmaster": 11.43,
+     "Master": 12.36,
+     "Diamond": 13.0,
+     "Platinum": 13.7,
+     "Gold": 16.0,
+     "Silver": 18.3,
+     "Bronze": 22.36
+    }
+   }
+  },
+  "star:10:1": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 12.5,
+     "Grandmaster": 12.53,
+     "Master": 12.56,
+     "Diamond": 12.6,
+     "Platinum": 12.66,
+     "Gold": 12.73,
+     "Silver": 12.8,
+     "Bronze": 13.0
+    },
+    "Crouch Kill": {
+     "Mario": 12.3,
+     "Grandmaster": 12.33,
+     "Master": 12.36,
+     "Diamond": 12.4,
+     "Platinum": 12.46,
+     "Gold": 12.53,
+     "Silver": 12.6,
+     "Bronze": 12.8
+    }
+   }
+  },
+  "star:10:2": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 5.46,
+     "Grandmaster": 5.5,
+     "Master": 5.53,
+     "Diamond": 5.63,
+     "Platinum": 5.8,
+     "Gold": 5.93,
+     "Silver": 6.06,
+     "Bronze": 6.5
+    },
+    "TJ Strat": {
+     "Mario": 5.6,
+     "Grandmaster": 5.66,
+     "Master": 5.73,
+     "Diamond": 5.8,
+     "Platinum": 5.86,
+     "Gold": 6.0,
+     "Silver": 6.13,
+     "Bronze": 6.53
+    }
+   }
+  },
+  "star:10:3": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 13.5,
+     "Grandmaster": 13.63,
+     "Master": 13.76,
+     "Diamond": 13.9,
+     "Platinum": 14.1,
+     "Gold": 14.33,
+     "Silver": 14.56,
+     "Bronze": 15.33
+    },
+    "Leftside": {
+     "Mario": 14.06,
+     "Grandmaster": 14.2,
+     "Master": 14.33,
+     "Diamond": 14.46,
+     "Platinum": 14.66,
+     "Gold": 14.9,
+     "Silver": 15.13,
+     "Bronze": 16.6
+    }
+   }
+  },
+  "star:10:4": {
+   "clock": "igt",
+   "strategies": {
+    "Solo Reds": {
+     "Mario": 31.23,
+     "Grandmaster": 32.06,
+     "Master": 32.9,
+     "Diamond": 33.26,
+     "Platinum": 34.8,
+     "Gold": 35.96,
+     "Silver": 38.13,
+     "Bronze": 43.36
+    }
+   }
+  },
+  "star:10:5": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 16.83,
+     "Grandmaster": 17.2,
+     "Master": 17.73,
+     "Diamond": 19.76,
+     "Platinum": 21.0,
+     "Gold": 22.3,
+     "Silver": 23.6,
+     "Bronze": 28.1
+    },
+    "Igloo Clip": {
+     "Mario": 15.7,
+     "Grandmaster": 16.06,
+     "Master": 16.6,
+     "Diamond": 18.63,
+     "Platinum": 19.86,
+     "Gold": 21.16,
+     "Silver": 22.46,
+     "Bronze": 26.96
+    }
+   }
+  },
+  "star:11:0": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 13.56,
+     "Grandmaster": 13.6,
+     "Master": 13.63,
+     "Diamond": 13.76,
+     "Platinum": 13.86,
+     "Gold": 13.96,
+     "Silver": 14.06,
+     "Bronze": 14.36
+    },
+    "Mid Water": {
+     "Mario": 12.9,
+     "Grandmaster": 13.06,
+     "Master": 13.33,
+     "Diamond": 13.5,
+     "Platinum": 13.76,
+     "Gold": 14.1,
+     "Silver": 14.43,
+     "Bronze": 15.6
+    }
+   }
+  },
+  "star:11:1": {
+   "clock": "igt",
+   "strategies": {
+    "Cage TJWK": {
+     "Mario": 14.66,
+     "Grandmaster": 14.93,
+     "Master": 15.2,
+     "Diamond": 15.66,
+     "Platinum": 16.1,
+     "Gold": 16.63,
+     "Silver": 17.16,
+     "Bronze": 19.03
+    },
+    "Purple Switch": {
+     "Mario": 16.43,
+     "Grandmaster": 16.53,
+     "Master": 16.8,
+     "Diamond": 17.0,
+     "Platinum": 17.43,
+     "Gold": 17.9,
+     "Silver": 18.36,
+     "Bronze": 19.96
+    },
+    "Direct TJ": {
+     "Mario": 13.96,
+     "Grandmaster": 14.23,
+     "Master": 14.5,
+     "Diamond": 14.96,
+     "Platinum": 15.4,
+     "Gold": 15.93,
+     "Silver": 16.46,
+     "Bronze": 18.33
+    }
+   }
+  },
+  "star:11:2": {
+   "clock": "igt",
+   "strategies": {
+    "Solo Secrets": {
+     "Mario": 32.63,
+     "Grandmaster": 33.13,
+     "Master": 34.0,
+     "Diamond": 35.3,
+     "Platinum": 36.73,
+     "Gold": 38.06,
+     "Silver": 39.4,
+     "Bronze": 44.06
+    }
+   }
+  },
+  "star:11:3": {
+   "clock": "igt",
+   "strategies": {
+    "Cage TJWK": {
+     "Mario": 18.4,
+     "Grandmaster": 18.86,
+     "Master": 19.2,
+     "Diamond": 20.03,
+     "Platinum": 20.83,
+     "Gold": 21.7,
+     "Silver": 22.6,
+     "Bronze": 25.66
+    },
+    "Purple Switch": {
+     "Mario": 21.33,
+     "Grandmaster": 21.7,
+     "Master": 22.36,
+     "Diamond": 22.9,
+     "Platinum": 23.9,
+     "Gold": 25.4,
+     "Silver": 32.7,
+     "Bronze": 35.86
+    },
+    "Elevator Clip": {
+     "Mario": 11.13,
+     "Grandmaster": 11.46,
+     "Master": 12.06,
+     "Diamond": 12.5,
+     "Platinum": 12.96,
+     "Gold": 13.6,
+     "Silver": 14.23,
+     "Bronze": 16.4
+    },
+    "Early Box Break": {
+     "Mario": 17.73,
+     "Grandmaster": 18.2,
+     "Master": 18.53,
+     "Diamond": 19.36,
+     "Platinum": 20.16,
+     "Gold": 21.03,
+     "Silver": 21.93,
+     "Bronze": 25.0
+    }
+   }
+  },
+  "star:11:4": {
+   "clock": "igt",
+   "strategies": {
+    "Solo Reds": {
+     "Mario": 56.76,
+     "Grandmaster": 57.56,
+     "Master": 59.16,
+     "Diamond": 60.3,
+     "Platinum": 61.6,
+     "Gold": 63.16,
+     "Silver": 68.6,
+     "Bronze": 78.43
+    }
+   }
+  },
+  "star:11:5": {
+   "clock": "igt",
+   "strategies": {
+    "CCW": {
+     "Mario": 41.7,
+     "Grandmaster": 42.7,
+     "Master": 43.96,
+     "Diamond": 45.63,
+     "Platinum": 47.1,
+     "Gold": 48.93,
+     "Silver": 50.73,
+     "Bronze": 57.1
+    },
+    "CW": {
+     "Mario": 40.76,
+     "Grandmaster": 41.76,
+     "Master": 43.03,
+     "Diamond": 44.7,
+     "Platinum": 46.16,
+     "Gold": 48.0,
+     "Silver": 49.8,
+     "Bronze": 56.16
+    }
+   }
+  },
+  "star:12:0": {
+   "clock": "igt",
+   "strategies": {
+    "Log WK": {
+     "Mario": 16.93,
+     "Grandmaster": 17.33,
+     "Master": 17.66,
+     "Diamond": 19.0,
+     "Platinum": 19.63,
+     "Gold": 20.76,
+     "Silver": 21.86,
+     "Bronze": 25.66
+    },
+    "Log Firsty": {
+     "Mario": 16.6,
+     "Grandmaster": 17.03,
+     "Master": 17.5,
+     "Diamond": 18.9,
+     "Platinum": 19.86,
+     "Gold": 21.06,
+     "Silver": 22.26,
+     "Bronze": 26.46
+    },
+    "No Log WK": {
+     "Mario": 20.26,
+     "Grandmaster": 20.66,
+     "Master": 21.0,
+     "Diamond": 22.33,
+     "Platinum": 22.96,
+     "Gold": 24.1,
+     "Silver": 25.2,
+     "Bronze": 29.0
+    }
+   }
+  },
+  "star:12:1": {
+   "clock": "igt",
+   "strategies": {
+    "Log WK": {
+     "Mario": 34.96,
+     "Grandmaster": 35.76,
+     "Master": 36.66,
+     "Diamond": 37.96,
+     "Platinum": 39.63,
+     "Gold": 41.26,
+     "Silver": 42.9,
+     "Bronze": 48.6
+    },
+    "Log Firsty": {
+     "Mario": 34.3,
+     "Grandmaster": 35.1,
+     "Master": 36.0,
+     "Diamond": 37.3,
+     "Platinum": 38.96,
+     "Gold": 40.6,
+     "Silver": 42.23,
+     "Bronze": 47.93
+    },
+    "No Log WK": {
+     "Mario": 40.06,
+     "Grandmaster": 40.86,
+     "Master": 41.76,
+     "Diamond": 43.06,
+     "Platinum": 44.73,
+     "Gold": 46.36,
+     "Silver": 50.0,
+     "Bronze": 65.7
+    }
+   }
+  },
+  "star:12:2": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 23.36,
+     "Grandmaster": 23.83,
+     "Master": 24.43,
+     "Diamond": 25.33,
+     "Platinum": 26.4,
+     "Gold": 27.5,
+     "Silver": 29.53,
+     "Bronze": 33.1
+    }
+   }
+  },
+  "star:12:3": {
+   "clock": "igt",
+   "strategies": {
+    "Slowturn Bless": {
+     "Mario": 7.66,
+     "Grandmaster": 7.83,
+     "Master": 7.93,
+     "Diamond": 8.1,
+     "Platinum": 8.3,
+     "Gold": 8.56,
+     "Silver": 8.83,
+     "Bronze": 9.76
+    },
+    "Breezeless": {
+     "Mario": 7.5,
+     "Grandmaster": 7.66,
+     "Master": 7.76,
+     "Diamond": 7.93,
+     "Platinum": 8.13,
+     "Gold": 8.4,
+     "Silver": 8.66,
+     "Bronze": 9.6
+    },
+    "Breeze": {
+     "Mario": 9.76,
+     "Grandmaster": 9.93,
+     "Master": 10.26,
+     "Diamond": 10.6,
+     "Platinum": 11.0,
+     "Gold": 12.23,
+     "Silver": 12.86,
+     "Bronze": 15.1
+    },
+    "Slowturn Breeze": {
+     "Mario": 10.23,
+     "Grandmaster": 10.4,
+     "Master": 10.73,
+     "Diamond": 11.06,
+     "Platinum": 11.46,
+     "Gold": 12.7,
+     "Silver": 13.33,
+     "Bronze": 15.56
+    }
+   }
+  },
+  "star:12:4": {
+   "clock": "igt",
+   "strategies": {
+    "Log WK": {
+     "Mario": 14.93,
+     "Grandmaster": 15.33,
+     "Master": 15.66,
+     "Diamond": 16.7,
+     "Platinum": 17.6,
+     "Gold": 18.56,
+     "Silver": 19.56,
+     "Bronze": 23.03
+    },
+    "Log Firsty": {
+     "Mario": 14.66,
+     "Grandmaster": 14.96,
+     "Master": 15.3,
+     "Diamond": 16.63,
+     "Platinum": 17.46,
+     "Gold": 18.5,
+     "Silver": 19.53,
+     "Bronze": 23.16
+    },
+    "Slidekick (No LWK)": {
+     "Mario": 19.66,
+     "Grandmaster": 20.06,
+     "Master": 20.4,
+     "Diamond": 21.43,
+     "Platinum": 22.33,
+     "Gold": 23.3,
+     "Silver": 24.3,
+     "Bronze": 27.76
+    },
+    "No Log WK": {
+     "Mario": 18.23,
+     "Grandmaster": 18.63,
+     "Master": 18.96,
+     "Diamond": 20.0,
+     "Platinum": 20.9,
+     "Gold": 21.86,
+     "Silver": 22.86,
+     "Bronze": 26.33
+    }
+   }
+  },
+  "star:12:5": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 10.5,
+     "Grandmaster": 10.56,
+     "Master": 10.63,
+     "Diamond": 10.76,
+     "Platinum": 10.93,
+     "Gold": 11.26,
+     "Silver": 11.46,
+     "Bronze": 12.13
+    },
+    "Beginner": {
+     "Mario": 10.53,
+     "Grandmaster": 10.6,
+     "Master": 10.7,
+     "Diamond": 10.76,
+     "Platinum": 10.86,
+     "Gold": 10.93,
+     "Silver": 11.96,
+     "Bronze": 12.9
+    },
+    "No Setup": {
+     "Mario": 10.23,
+     "Grandmaster": 10.3,
+     "Master": 10.36,
+     "Diamond": 10.5,
+     "Platinum": 10.66,
+     "Gold": 11.0,
+     "Silver": 11.2,
+     "Bronze": 11.86
+    }
+   }
+  },
+  "star:13:0": {
+   "clock": "igt",
+   "strategies": {
+    "CW": {
+     "Mario": 23.36,
+     "Grandmaster": 23.43,
+     "Master": 23.5,
+     "Diamond": 23.63,
+     "Platinum": 23.93,
+     "Gold": 24.2,
+     "Silver": 24.4,
+     "Bronze": 25.1
+    },
+    "CCW": {
+     "Mario": 23.33,
+     "Grandmaster": 23.4,
+     "Master": 23.46,
+     "Diamond": 23.6,
+     "Platinum": 23.9,
+     "Gold": 24.16,
+     "Silver": 24.36,
+     "Bronze": 25.06
+    }
+   }
+  },
+  "star:13:1": {
+   "clock": "igt",
+   "strategies": {
+    "Rightside Clip": {
+     "Mario": 20.06,
+     "Grandmaster": 20.4,
+     "Master": 20.8,
+     "Diamond": 21.06,
+     "Platinum": 21.4,
+     "Gold": 21.8,
+     "Silver": 22.26,
+     "Bronze": 23.86
+    },
+    "No Clip": {
+     "Mario": 20.66,
+     "Grandmaster": 20.96,
+     "Master": 21.46,
+     "Diamond": 21.66,
+     "Platinum": 22.53,
+     "Gold": 23.16,
+     "Silver": 24.2,
+     "Bronze": 27.23
+    },
+    "TJ Dive Start": {
+     "Mario": 18.16,
+     "Grandmaster": 18.6,
+     "Master": 19.1,
+     "Diamond": 19.43,
+     "Platinum": 19.83,
+     "Gold": 20.36,
+     "Silver": 20.96,
+     "Bronze": 23.0
+    },
+    "Leftside Clip": {
+     "Mario": 18.76,
+     "Grandmaster": 19.1,
+     "Master": 19.5,
+     "Diamond": 19.76,
+     "Platinum": 20.1,
+     "Gold": 20.5,
+     "Silver": 20.96,
+     "Bronze": 22.56
+    }
+   }
+  },
+  "star:13:2": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 47.63,
+     "Grandmaster": 47.96,
+     "Master": 48.26,
+     "Diamond": 48.76,
+     "Platinum": 49.63,
+     "Gold": 50.46,
+     "Silver": 51.3,
+     "Bronze": 54.2
+    },
+    "Intended": {
+     "Mario": 48.73,
+     "Grandmaster": 49.06,
+     "Master": 49.36,
+     "Diamond": 49.86,
+     "Platinum": 50.73,
+     "Gold": 51.56,
+     "Silver": 52.4,
+     "Bronze": 55.3
+    },
+    "TJ Dive Start": {
+     "Mario": 46.9,
+     "Grandmaster": 47.23,
+     "Master": 47.53,
+     "Diamond": 48.03,
+     "Platinum": 48.9,
+     "Gold": 49.73,
+     "Silver": 50.56,
+     "Bronze": 53.46
+    }
+   }
+  },
+  "star:13:3": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 18.83,
+     "Grandmaster": 19.0,
+     "Master": 19.3,
+     "Diamond": 19.46,
+     "Platinum": 19.8,
+     "Gold": 20.8,
+     "Silver": 21.9,
+     "Bronze": 25.06
+    },
+    "Beginner": {
+     "Mario": 23.53,
+     "Grandmaster": 23.86,
+     "Master": 24.53,
+     "Diamond": 24.96,
+     "Platinum": 25.8,
+     "Gold": 26.8,
+     "Silver": 27.6,
+     "Bronze": 30.4
+    },
+    "Slide Strat": {
+     "Mario": 18.63,
+     "Grandmaster": 18.8,
+     "Master": 19.1,
+     "Diamond": 19.26,
+     "Platinum": 19.6,
+     "Gold": 20.6,
+     "Silver": 21.1,
+     "Bronze": 22.86
+    }
+   }
+  },
+  "star:13:4": {
+   "clock": "igt",
+   "strategies": {
+    "Solo Reds": {
+     "Mario": 27.8,
+     "Grandmaster": 28.66,
+     "Master": 29.5,
+     "Diamond": 30.43,
+     "Platinum": 31.5,
+     "Gold": 32.83,
+     "Silver": 34.16,
+     "Bronze": 38.83
+    }
+   }
+  },
+  "star:13:5": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 42.23,
+     "Grandmaster": 42.86,
+     "Master": 43.66,
+     "Diamond": 45.0,
+     "Platinum": 46.56,
+     "Gold": 47.9,
+     "Silver": 49.23,
+     "Bronze": 65.9
+    },
+    "TJ Dive Start": {
+     "Mario": 41.7,
+     "Grandmaster": 42.33,
+     "Master": 43.13,
+     "Diamond": 44.46,
+     "Platinum": 46.03,
+     "Gold": 47.36,
+     "Silver": 48.7,
+     "Bronze": 53.36
+    }
+   }
+  },
+  "star:14:0": {
+   "clock": "igt",
+   "strategies": {
+    "Flippies": {
+     "Mario": 10.56,
+     "Grandmaster": 10.66,
+     "Master": 10.73,
+     "Diamond": 10.86,
+     "Platinum": 10.96,
+     "Gold": 11.26,
+     "Silver": 11.46,
+     "Bronze": 12.13
+    },
+    "Cog Rollout": {
+     "Mario": 10.2,
+     "Grandmaster": 10.3,
+     "Master": 10.36,
+     "Diamond": 10.5,
+     "Platinum": 10.6,
+     "Gold": 10.9,
+     "Silver": 11.1,
+     "Bronze": 11.76
+    },
+    "Time Stop": {
+     "Mario": 11.53,
+     "Grandmaster": 11.73,
+     "Master": 12.76,
+     "Diamond": 13.3,
+     "Platinum": 13.9,
+     "Gold": 14.63,
+     "Silver": 15.36,
+     "Bronze": 17.93
+    },
+    "Side Flippies": {
+     "Mario": 9.6,
+     "Grandmaster": 9.7,
+     "Master": 9.76,
+     "Diamond": 9.9,
+     "Platinum": 10.0,
+     "Gold": 10.3,
+     "Silver": 10.5,
+     "Bronze": 11.16
+    }
+   }
+  },
+  "star:14:1": {
+   "clock": "igt",
+   "strategies": {
+    "Flippies": {
+     "Mario": 11.93,
+     "Grandmaster": 12.16,
+     "Master": 12.5,
+     "Diamond": 13.26,
+     "Platinum": 13.8,
+     "Gold": 14.46,
+     "Silver": 15.1,
+     "Bronze": 17.26
+    },
+    "Cog Rollout": {
+     "Mario": 11.6,
+     "Grandmaster": 11.83,
+     "Master": 12.16,
+     "Diamond": 12.93,
+     "Platinum": 13.46,
+     "Gold": 14.13,
+     "Silver": 14.76,
+     "Bronze": 16.93
+    },
+    "Time Stop": {
+     "Mario": 11.9,
+     "Grandmaster": 12.53,
+     "Master": 13.86,
+     "Diamond": 14.8,
+     "Platinum": 15.86,
+     "Gold": 17.2,
+     "Silver": 18.53,
+     "Bronze": 23.2
+    }
+   }
+  },
+  "star:14:2": {
+   "clock": "igt",
+   "strategies": {
+    "Flippies": {
+     "Mario": 8.4,
+     "Grandmaster": 8.43,
+     "Master": 8.5,
+     "Diamond": 8.56,
+     "Platinum": 8.66,
+     "Gold": 8.83,
+     "Silver": 8.96,
+     "Bronze": 9.36
+    },
+    "Time Stop": {
+     "Mario": 10.36,
+     "Grandmaster": 10.53,
+     "Master": 11.26,
+     "Diamond": 11.56,
+     "Platinum": 11.9,
+     "Gold": 12.33,
+     "Silver": 12.73,
+     "Bronze": 13.5
+    }
+   }
+  },
+  "star:14:3": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 23.73,
+     "Grandmaster": 24.43,
+     "Master": 25.7,
+     "Diamond": 27.3,
+     "Platinum": 28.7,
+     "Gold": 30.66,
+     "Silver": 32.63,
+     "Bronze": 39.46
+    }
+   }
+  },
+  "star:14:4": {
+   "clock": "igt",
+   "strategies": {
+    "Time Stop": {
+     "Mario": 15.96,
+     "Grandmaster": 16.56,
+     "Master": 16.96,
+     "Diamond": 17.66,
+     "Platinum": 18.93,
+     "Gold": 20.93,
+     "Silver": 22.93,
+     "Bronze": 33.9
+    },
+    "Moving Moving": {
+     "Mario": 16.96,
+     "Grandmaster": 17.26,
+     "Master": 17.83,
+     "Diamond": 18.3,
+     "Platinum": 18.83,
+     "Gold": 19.5,
+     "Silver": 20.16,
+     "Bronze": 22.5
+    },
+    "Open": {
+     "Mario": 15.53,
+     "Grandmaster": 15.83,
+     "Master": 16.4,
+     "Diamond": 16.86,
+     "Platinum": 17.4,
+     "Gold": 18.06,
+     "Silver": 18.73,
+     "Bronze": 21.06
+    }
+   }
+  },
+  "star:14:5": {
+   "clock": "igt",
+   "strategies": {
+    "Time Stop": {
+     "Mario": 14.73,
+     "Grandmaster": 14.93,
+     "Master": 15.26,
+     "Diamond": 15.7,
+     "Platinum": 16.56,
+     "Gold": 17.83,
+     "Silver": 18.6,
+     "Bronze": 21.26
+    },
+    "Hanoji Reds": {
+     "Mario": 15.2,
+     "Grandmaster": 15.33,
+     "Master": 15.73,
+     "Diamond": 16.0,
+     "Platinum": 16.3,
+     "Gold": 16.63,
+     "Silver": 16.96,
+     "Bronze": 18.16
+    },
+    "Moving Reds": {
+     "Mario": 14.5,
+     "Grandmaster": 14.63,
+     "Master": 15.03,
+     "Diamond": 15.3,
+     "Platinum": 15.6,
+     "Gold": 15.93,
+     "Silver": 16.26,
+     "Bronze": 17.46
+    }
+   }
+  },
+  "star:15:0": {
+   "clock": "igt",
+   "strategies": {
+    "Sideflip Bounce": {
+     "Mario": 19.56,
+     "Grandmaster": 20.23,
+     "Master": 20.96,
+     "Diamond": 21.96,
+     "Platinum": 22.8,
+     "Gold": 24.5,
+     "Silver": 25.76,
+     "Bronze": 30.2
+    },
+    "Lakitu Bounce": {
+     "Mario": 18.86,
+     "Grandmaster": 19.53,
+     "Master": 20.26,
+     "Diamond": 21.26,
+     "Platinum": 22.1,
+     "Gold": 23.8,
+     "Silver": 25.06,
+     "Bronze": 29.5
+    },
+    "Assless": {
+     "Mario": 16.43,
+     "Grandmaster": 16.9,
+     "Master": 18.06,
+     "Diamond": 18.9,
+     "Platinum": 19.86,
+     "Gold": 21.06,
+     "Silver": 22.26,
+     "Bronze": 26.43
+    },
+    "No Bounce": {
+     "Mario": 24.36,
+     "Grandmaster": 24.96,
+     "Master": 25.96,
+     "Diamond": 27.36,
+     "Platinum": 28.96,
+     "Gold": 31.16,
+     "Silver": 35.03,
+     "Bronze": 40.76
+    }
+   }
+  },
+  "star:15:1": {
+   "clock": "igt",
+   "strategies": {
+    "Carpetful": {
+     "Mario": 10.0,
+     "Grandmaster": 10.03,
+     "Master": 10.06,
+     "Diamond": 10.1,
+     "Platinum": 111.96,
+     "Gold": 115.16,
+     "Silver": 121.13
+    },
+    "Carpetless": {
+     "Mario": 40.33,
+     "Grandmaster": 43.2,
+     "Master": 49.2,
+     "Diamond": 53.4,
+     "Platinum": 58.2,
+     "Gold": 69.3,
+     "Silver": 81.13,
+     "Bronze": 93.73
+    },
+    "JD Ending": {
+     "Mario": 39.36,
+     "Grandmaster": 42.23,
+     "Master": 48.23,
+     "Diamond": 52.43,
+     "Platinum": 57.23,
+     "Gold": 63.2,
+     "Silver": 69.16,
+     "Bronze": 81.76
+    },
+    "Usamune (Dezanig)": {
+     "Mario": 37.76,
+     "Grandmaster": 40.7,
+     "Master": 46.8,
+     "Diamond": 51.06,
+     "Platinum": 55.93,
+     "Gold": 62.0,
+     "Silver": 68.06,
+     "Bronze": 80.9
+    }
+   }
+  },
+  "star:15:2": {
+   "clock": "igt",
+   "strategies": {
+    "Kick Recoil End": {
+     "Mario": 22.33,
+     "Grandmaster": 22.8,
+     "Master": 23.16,
+     "Diamond": 23.8,
+     "Platinum": 24.8,
+     "Gold": 25.36,
+     "Silver": 26.16,
+     "Bronze": 28.96
+    },
+    "Kick Back End": {
+     "Mario": 22.13,
+     "Grandmaster": 22.6,
+     "Master": 22.96,
+     "Diamond": 23.6,
+     "Platinum": 24.6,
+     "Gold": 25.16,
+     "Silver": 25.96,
+     "Bronze": 28.76
+    }
+   }
+  },
+  "star:15:3": {
+   "clock": "igt",
+   "strategies": {
+    "Sideflip": {
+     "Mario": 13.4,
+     "Grandmaster": 13.46,
+     "Master": 13.56,
+     "Diamond": 13.7,
+     "Platinum": 13.9,
+     "Gold": 14.1,
+     "Silver": 14.3,
+     "Bronze": 14.96
+    },
+    "Pro Strat": {
+     "Mario": 12.76,
+     "Grandmaster": 12.8,
+     "Master": 12.83,
+     "Diamond": 12.9,
+     "Platinum": 12.96,
+     "Gold": 13.03,
+     "Silver": 13.1,
+     "Bronze": 13.33
+    },
+    "Flame TJ": {
+     "Mario": 15.86,
+     "Grandmaster": 16.06,
+     "Master": 16.43,
+     "Diamond": 16.7,
+     "Platinum": 16.96,
+     "Gold": 17.76,
+     "Silver": 18.53,
+     "Bronze": 19.63
+    }
+   }
+  },
+  "star:15:4": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 12.9,
+     "Grandmaster": 12.96,
+     "Master": 13.1,
+     "Diamond": 13.26,
+     "Platinum": 13.7,
+     "Gold": 15.86,
+     "Silver": 16.56,
+     "Bronze": 19.0
+    },
+    "Low Dive": {
+     "Mario": 12.73,
+     "Grandmaster": 12.8,
+     "Master": 12.93,
+     "Diamond": 13.1,
+     "Platinum": 13.53,
+     "Gold": 15.7,
+     "Silver": 16.4,
+     "Bronze": 18.83
+    },
+    "Beginner": {
+     "Mario": 14.36,
+     "Grandmaster": 14.43,
+     "Master": 14.56,
+     "Diamond": 14.73,
+     "Platinum": 15.16,
+     "Gold": 17.33,
+     "Silver": 18.03,
+     "Bronze": 20.46
+    }
+   }
+  },
+  "star:15:5": {
+   "clock": "igt",
+   "strategies": {
+    "Sideflip Bounce": {
+     "Mario": 33.16,
+     "Grandmaster": 34.03,
+     "Master": 35.36,
+     "Diamond": 36.3,
+     "Platinum": 37.46,
+     "Gold": 39.16,
+     "Silver": 40.83,
+     "Bronze": 46.66
+    },
+    "Lakitu Bounce": {
+     "Mario": 32.5,
+     "Grandmaster": 33.36,
+     "Master": 34.7,
+     "Diamond": 35.63,
+     "Platinum": 36.8,
+     "Gold": 38.5,
+     "Silver": 40.16,
+     "Bronze": 46.0
+    },
+    "Assless": {
+     "Mario": 29.76,
+     "Grandmaster": 30.66,
+     "Master": 32.03,
+     "Diamond": 33.0,
+     "Platinum": 34.2,
+     "Gold": 35.93,
+     "Silver": 37.66,
+     "Bronze": 43.7
+    },
+    "No Bounce": {
+     "Mario": 38.93,
+     "Grandmaster": 39.13,
+     "Master": 39.53,
+     "Diamond": 41.1,
+     "Platinum": 42.83,
+     "Gold": 44.03,
+     "Silver": 45.23,
+     "Bronze": 49.4
+    }
+   }
+  },
+  "star:21:0": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 20.43,
+     "Grandmaster": 20.9,
+     "Master": 21.56,
+     "Diamond": 21.86,
+     "Platinum": 22.73,
+     "Gold": 23.66,
+     "Silver": 24.6,
+     "Bronze": 27.86
+    },
+    "Switch Rollout": {
+     "Mario": 20.03,
+     "Grandmaster": 20.5,
+     "Master": 21.16,
+     "Diamond": 21.46,
+     "Platinum": 22.33,
+     "Gold": 23.26,
+     "Silver": 24.2,
+     "Bronze": 27.46
+    },
+    "Wall Rollout": {
+     "Mario": 20.43,
+     "Grandmaster": 20.9,
+     "Master": 21.56,
+     "Diamond": 21.86,
+     "Platinum": 22.73,
+     "Gold": 23.66,
+     "Silver": 24.6,
+     "Bronze": 27.86
+    }
+   }
+  },
+  "star:22:0": {
+   "clock": "igt",
+   "strategies": {
+    "Expert": {
+     "Mario": 28.8,
+     "Grandmaster": 29.3,
+     "Master": 30.43,
+     "Diamond": 31.53,
+     "Platinum": 35.8,
+     "Gold": 36.36,
+     "Silver": 38.26,
+     "Bronze": 44.86
+    },
+    "No Slope Clip": {
+     "Mario": 30.1,
+     "Grandmaster": 30.6,
+     "Master": 31.73,
+     "Diamond": 32.83,
+     "Platinum": 37.06,
+     "Gold": 37.93,
+     "Silver": 39.83,
+     "Bronze": 49.06
+    },
+    "Standard": {
+     "Mario": 30.1,
+     "Grandmaster": 30.6,
+     "Master": 31.73,
+     "Diamond": 32.83,
+     "Platinum": 37.06,
+     "Gold": 37.93,
+     "Silver": 39.83,
+     "Bronze": 49.06
+    }
+   }
+  },
+  "star:20:0": {
+   "clock": "igt",
+   "strategies": {
+    "Left Side": {
+     "Mario": 20.56,
+     "Grandmaster": 21.1,
+     "Master": 21.66,
+     "Diamond": 22.1,
+     "Platinum": 22.46,
+     "Gold": 23.13,
+     "Silver": 23.76,
+     "Bronze": 36.96
+    },
+    "Right Side": {
+     "Mario": 20.16,
+     "Grandmaster": 20.7,
+     "Master": 21.26,
+     "Diamond": 21.7,
+     "Platinum": 22.06,
+     "Gold": 22.73,
+     "Silver": 23.36,
+     "Bronze": 25.56
+    }
+   }
+  },
+  "star:24:0": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 40.5,
+     "Grandmaster": 40.93,
+     "Master": 41.36,
+     "Diamond": 42.0,
+     "Platinum": 43.1,
+     "Gold": 44.03,
+     "Silver": 44.96,
+     "Bronze": 48.2
+    }
+   }
+  },
+  "star:23:0": {
+   "clock": "igt",
+   "strategies": {
+    "Standard": {
+     "Mario": 61.9,
+     "Grandmaster": 63.93,
+     "Master": 65.93,
+     "Diamond": 68.2,
+     "Platinum": 70.06,
+     "Gold": 73.13,
+     "Silver": 76.2,
+     "Bronze": 86.96
+    },
+    "Open": {
+     "Mario": 57.9,
+     "Grandmaster": 60.0,
+     "Master": 62.03,
+     "Diamond": 64.4,
+     "Platinum": 66.3,
+     "Gold": 69.46,
+     "Silver": 72.63,
+     "Bronze": 83.73
+    },
+    "Stored Angle": {
+     "Mario": 57.9,
+     "Grandmaster": 60.0,
+     "Master": 62.03,
+     "Diamond": 64.4,
+     "Platinum": 66.3,
+     "Gold": 69.46,
+     "Silver": 72.63,
+     "Bronze": 83.73
+    },
+    "No Cutscene": {
+     "Mario": 51.96,
+     "Grandmaster": 54.0,
+     "Master": 56.0,
+     "Diamond": 58.26,
+     "Platinum": 60.13,
+     "Gold": 63.2,
+     "Silver": 66.26,
+     "Bronze": 77.03
+    },
+    "Pole Red Early": {
+     "Mario": 60.86,
+     "Grandmaster": 62.9,
+     "Master": 64.9,
+     "Diamond": 67.16,
+     "Platinum": 69.03,
+     "Gold": 72.1,
+     "Silver": 75.16,
+     "Bronze": 85.93
+    },
+    "Pole Red Early (NC)": {
+     "Mario": 50.43,
+     "Grandmaster": 52.46,
+     "Master": 54.46,
+     "Diamond": 56.73,
+     "Platinum": 58.6,
+     "Gold": 61.66,
+     "Silver": 64.73,
+     "Bronze": 75.5
+    },
+    "Open#Alt": {
+     "Mario": 48.16,
+     "Grandmaster": 50.26,
+     "Master": 52.3,
+     "Diamond": 54.66,
+     "Platinum": 56.56,
+     "Gold": 59.73,
+     "Silver": 62.9,
+     "Bronze": 74.0
+    },
+    "Stored Angle (NC)": {
+     "Mario": 48.16,
+     "Grandmaster": 50.26,
+     "Master": 52.3,
+     "Diamond": 54.66,
+     "Platinum": 56.56,
+     "Gold": 59.73,
+     "Silver": 62.9,
+     "Bronze": 74.0
+    }
+   }
+  },
+  "star:19:0": {
+   "clock": "igt",
+   "strategies": {
+    "Box Star": {
+     "Mario": 24.86,
+     "Grandmaster": 24.93,
+     "Master": 25.03,
+     "Diamond": 25.13,
+     "Platinum": 25.33,
+     "Gold": 25.53,
+     "Silver": 25.73,
+     "Bronze": 26.43
+    },
+    "Under 21": {
+     "Mario": 20.73,
+     "Grandmaster": 20.8,
+     "Master": 20.9,
+     "Diamond": 21.0,
+     "Platinum": 21.13,
+     "Gold": 21.4,
+     "Silver": 21.6,
+     "Bronze": 22.26
+    }
+   }
+  },
+  "segment:5": {
+   "clock": "rta",
+   "strategies": {
+    "Standard": {
+     "Mario": 26.7,
+     "Grandmaster": 26.93,
+     "Master": 28.03,
+     "Diamond": 28.66,
+     "Platinum": 29.5,
+     "Gold": 30.3,
+     "Silver": 31.23,
+     "Bronze": 34.5
+    },
+    "Framewalk": {
+     "Mario": 25.53,
+     "Grandmaster": 25.76,
+     "Master": 26.86,
+     "Diamond": 27.5,
+     "Platinum": 28.33,
+     "Gold": 29.13,
+     "Silver": 30.06,
+     "Bronze": 33.33
+    }
+   }
+  },
+  "segment:8": {
+   "clock": "rta",
+   "strategies": {
+    "Standard": {
+     "Mario": 26.13,
+     "Grandmaster": 26.3,
+     "Master": 26.8,
+     "Diamond": 27.06,
+     "Platinum": 27.33,
+     "Gold": 27.66,
+     "Silver": 28.13,
+     "Bronze": 29.7
+    }
+   }
+  },
+  "segment:6": {
+   "clock": "rta",
+   "strategies": {
+    "Pole Glitch": {
+     "Mario": 35.4,
+     "Grandmaster": 36.03,
+     "Master": 36.86,
+     "Diamond": 37.83,
+     "Platinum": 38.73,
+     "Gold": 39.86,
+     "Silver": 41.0,
+     "Bronze": 44.93
+    },
+    "Ultimate": {
+     "Mario": 33.4,
+     "Grandmaster": 33.7,
+     "Master": 34.03,
+     "Diamond": 34.46,
+     "Platinum": 34.96,
+     "Gold": 35.6,
+     "Silver": 36.23,
+     "Bronze": 38.43
+    },
+    "BLJ": {
+     "Mario": 31.36,
+     "Grandmaster": 31.66,
+     "Master": 32.0,
+     "Diamond": 32.43,
+     "Platinum": 32.93,
+     "Gold": 33.56
+    },
+    "Zero Cycle": {
+     "Mario": 37.56,
+     "Grandmaster": 38.2,
+     "Master": 39.13,
+     "Diamond": 39.73,
+     "Platinum": 40.96,
+     "Gold": 42.3,
+     "Silver": 49.46,
+     "Bronze": 54.2
+    }
+   }
+  },
+  "segment:9": {
+   "clock": "rta",
+   "strategies": {
+    "Standard": {
+     "Mario": 32.4,
+     "Grandmaster": 32.63,
+     "Master": 33.06,
+     "Diamond": 33.23,
+     "Platinum": 33.33,
+     "Gold": 33.53,
+     "Silver": 33.86,
+     "Bronze": 34.96
+    }
+   }
+  },
+  "segment:7": {
+   "clock": "rta",
+   "strategies": {
+    "Right TJWK": {
+     "Mario": 38.73,
+     "Grandmaster": 39.03,
+     "Master": 39.76,
+     "Diamond": 40.96,
+     "Platinum": 42.13,
+     "Gold": 44.03,
+     "Silver": 45.23,
+     "Bronze": 49.36
+    },
+    "Left TJWK": {
+     "Mario": 41.66,
+     "Grandmaster": 42.0,
+     "Master": 43.23,
+     "Diamond": 43.4,
+     "Platinum": 44.73,
+     "Gold": 45.96,
+     "Silver": 47.16,
+     "Bronze": 51.36
+    },
+    "TAS LJ + Ult": {
+     "Mario": 35.93,
+     "Grandmaster": 36.73,
+     "Master": 38.0,
+     "Diamond": 40.16,
+     "Platinum": 40.76,
+     "Gold": 41.7,
+     "Silver": 42.3,
+     "Bronze": 44.36
+    },
+    "Pole": {
+     "Mario": 48.83,
+     "Grandmaster": 49.16,
+     "Master": 50.9,
+     "Diamond": 51.13,
+     "Platinum": 53.06,
+     "Gold": 54.8,
+     "Silver": 59.53,
+     "Bronze": 65.56
+    }
+   }
+  },
+  "segment:10": {
+   "clock": "rta",
+   "strategies": {
+    "Normal File": {
+     "Mario": 39.13,
+     "Grandmaster": 39.63,
+     "Master": 41.03,
+     "Diamond": 42.06,
+     "Platinum": 43.3,
+     "Gold": 44.2,
+     "Silver": 47.66,
+     "Bronze": 52.76
+    },
+    "120 Star File": {
+     "Mario": 39.63,
+     "Grandmaster": 40.13,
+     "Master": 41.53,
+     "Diamond": 42.56,
+     "Platinum": 43.8,
+     "Gold": 44.7,
+     "Silver": 48.16,
+     "Bronze": 53.26
+    }
+   }
+  },
+  "segment:1": {
+   "clock": "rta",
+   "strategies": {
+    "Standard": {
+     "Mario": 8.0,
+     "Gold": 9.0,
+     "Silver": 10.0
+    }
+   }
+  },
+  "segment:2": {
+   "clock": "rta",
+   "strategies": {
+    "Standard": {
+     "Mario": 6.0,
+     "Gold": 7.0,
+     "Silver": 8.0
+    }
+   }
+  },
+  "segment:3": {
+   "clock": "rta",
+   "strategies": {
+    "Standard": {
+     "Mario": 5.0,
+     "Gold": 6.0,
+     "Silver": 7.0
+    }
+   }
+  },
+  "segment:4": {
+   "clock": "rta",
+   "strategies": {
+    "Standard": {
+     "Mario": 4.0,
+     "Gold": 5.0,
+     "Silver": 6.0
+    }
+   }
+  }
+ }
+}

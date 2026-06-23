@@ -11,6 +11,10 @@ data/replay_buffer/
 _dbg/
 internal_notes/
 
+# bundled package data (rank-standards seed) must be tracked despite the data/ rule above
+!src/sm64_events/data/
+!src/sm64_events/data/**
+
 # desktop build + runtime state
 /dist/
 /build/

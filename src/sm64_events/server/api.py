@@ -250,7 +250,7 @@ def create_api_router(service) -> APIRouter:
         if service.db is None:
             raise HTTPException(503, "database unavailable")
         try:
-            return build_route_view(service.db, route_id)
+            return build_route_view(service.db, service, route_id)
         except (LookupError, ValueError) as e:
             raise _http(e)
 

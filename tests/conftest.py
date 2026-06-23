@@ -26,3 +26,11 @@ def _isolate_recorder_lock(tmp_path, monkeypatch):
     time, so this takes effect even for the import-time-built app)."""
     monkeypatch.setattr(recorder_lock, "RECORDER_LOCK_PATH",
                         tmp_path / "recorder.lock")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_rank_standards(tmp_path, monkeypatch):
+    from sm64_events.core import paths
+    monkeypatch.setattr(paths, "rank_standards_path",
+                        lambda: tmp_path / "rank_standards.json")
+    monkeypatch.setattr(paths, "bundled_rank_standards", lambda: None)
