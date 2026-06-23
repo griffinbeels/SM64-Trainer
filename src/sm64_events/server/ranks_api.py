@@ -31,7 +31,8 @@ def create_ranks_router(service) -> APIRouter:
         if entity is None:
             return service.ranks.to_json()
         return {"entity": entity, "clock": service.ranks.clock_for(entity),
-                "strategies": service.ranks.ladders(entity)}
+                "strategies": service.ranks.ladders(entity),
+                "videos": service.ranks.videos(entity)}
 
     @router.put("/ranks/standards/{entity}/{strategy}/{rank}")
     async def put_threshold(entity: str, strategy: str, rank: str, body: ThresholdBody):

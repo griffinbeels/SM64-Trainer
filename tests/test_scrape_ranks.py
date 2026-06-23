@@ -54,3 +54,49 @@ def test_extract_standards_blob_skips_viewer_blob_with_list_times():
           "\"times\":{\"Mario\":{\"sr\":\"time\",\"time\":{\"time\":1293}}}}}}');")
     blob = scrape.extract_standards_blob(js)
     assert "7_3" in blob   # picked the standards blob, not the viewer (list times)
+
+
+def test_time_to_cs():
+    assert scrape._time_to_cs("12.60") == 1260
+    assert scrape._time_to_cs("1:20.63") == 8063
+    assert scrape._time_to_cs(None) is None
+    assert scrape._time_to_cs("-") is None
+
+
+_CAMS = [{"ext": {"182": {"record": "12.60", "link": "https://youtu.be/A", "ideal": None, "idealLink": None},
+                  "9":   {"record": "12.40", "link": None, "ideal": "12.0", "idealLink": "https://youtu.be/IDEAL"}},
+          "main": {"5": {"record": "13.00", "link": "https://youtu.be/SLOW", "ideal": None, "idealLink": None}}}]
+
+
+def test_strat_videos_picks_fastest_record_with_link():
+    star = {"jp_set": {"Nuts": {"id_list": [["ext", 182]]},
+                        "Multi": {"id_list": [["ext", 182], ["main", 5]]}},
+            "us_set": {}}
+    out = scrape.strat_videos(star, _CAMS)
+    assert out["Nuts"] == "https://youtu.be/A"
+    assert out["Multi"] == "https://youtu.be/A"        # 12.60 (A) beats 13.00 (SLOW)
+
+
+def test_strat_videos_falls_back_to_ideallink_then_any_link():
+    star = {"jp_set": {"NoRecLink": {"id_list": [["ext", 9]]}}, "us_set": {}}
+    # ext/9 has no record link but has idealLink -> use idealLink
+    assert scrape.strat_videos(star, _CAMS)["NoRecLink"] == "https://youtu.be/IDEAL"
+
+
+def test_strat_videos_falls_back_to_any_link():
+    cams = [{"ext": {"7": {"record": "-", "link": "https://youtu.be/ANY", "ideal": None, "idealLink": None}}}]
+    star = {"jp_set": {"S": {"id_list": [["ext", 7]]}}, "us_set": {}}
+    assert scrape.strat_videos(star, cams)["S"] == "https://youtu.be/ANY"
+
+
+def test_build_seed_attaches_videos():
+    parsed = {"7_3": {"Nuts": {"Mario": 12.6}}}
+    catalog = [None]*7 + [{"starList": [{"id": "3", "name": "x",
+                          "jp_set": {"Nuts": {"id_list": [["ext", 182]]}}, "us_set": {}}]}]
+    seed = scrape.build_seed(parsed, catalog, _CAMS)
+    assert seed["entities"]["star:8:2"]["videos"]["Nuts"] == "https://youtu.be/A"
+
+
+def test_build_seed_without_catalog_omits_videos():
+    seed = scrape.build_seed({"7_3": {"Nuts": {"Mario": 12.6}}})
+    assert "videos" not in seed["entities"]["star:8:2"]

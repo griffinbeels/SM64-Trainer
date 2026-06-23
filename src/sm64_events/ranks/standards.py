@@ -80,6 +80,12 @@ class RankStandards:
     def strategies(self, ek) -> list:
         return list(self.ladders(ek).keys())
 
+    def videos(self, ek) -> dict:
+        return self._entity(ek).get("videos", {})
+
+    def video_for(self, ek, strat) -> str | None:
+        return self.videos(ek).get(strat)
+
     # ---- writes ----
     def _ensure(self, ek) -> dict:
         return self._data["entities"].setdefault(

@@ -54,3 +54,15 @@ def test_set_threshold_rejects_iron_and_unknown(tmp_path):
         s.set_threshold("star:9:2", "Nuts Pless", "Iron", 5.0)
     with pytest.raises(ValueError):
         s.set_threshold("star:9:2", "Nuts Pless", "NotARank", 5.0)
+
+def test_videos_accessors(tmp_path):
+    import json
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "star:8:2": {"clock": "igt", "strategies": {"Nuts": {"Mario": 12.6}},
+                     "videos": {"Nuts": "https://youtu.be/A"}}}}))
+    s = RankStandards(p); s.load()
+    assert s.videos("star:8:2") == {"Nuts": "https://youtu.be/A"}
+    assert s.video_for("star:8:2", "Nuts") == "https://youtu.be/A"
+    assert s.video_for("star:8:2", "Missing") is None
+    assert s.videos("segment:99") == {}        # absent entity -> empty

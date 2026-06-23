@@ -68,3 +68,15 @@ def test_reset_entity_endpoint(tmp_path):
         assert r.status_code == 200
         r = client.get("/api/ranks/standards", params={"entity": "star:8:2"})
         assert r.json()["strategies"] == {}
+
+def test_get_standards_includes_videos(tmp_path):
+    import json
+    client, svc = make_client(tmp_path)
+    # seed a video directly into the store
+    svc.ranks._data["entities"]["star:8:2"] = {
+        "clock": "igt", "strategies": {"Nuts": {"Mario": 12.6}},
+        "videos": {"Nuts": "https://youtu.be/A"}}
+    with client:
+        r = client.get("/api/ranks/standards", params={"entity": "star:8:2"})
+        assert r.status_code == 200
+        assert r.json()["videos"] == {"Nuts": "https://youtu.be/A"}

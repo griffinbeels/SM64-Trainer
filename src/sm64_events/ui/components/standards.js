@@ -47,7 +47,7 @@ export function StandardsPanel({ entity, activeStrat, onChanged }) {
         <button class="meta" onclick=${reset}>Reset to community defaults</button>
       </div>
       <table class="stdtable"><thead><tr><th>Strat</th>
-        ${strats.map((s) => html`<th class=${s === activeStrat ? "col-active" : ""}>${s}${editing ? html` <button class="candx" title="remove strategy" onclick=${() => delStrat(s)}>×</button>` : ""}</th>`)}</tr></thead>
+        ${strats.map((s) => html`<th class=${s === activeStrat ? "col-active" : ""}>${data.videos && data.videos[s] ? html`<a href=${data.videos[s]} target="_blank" rel="noopener" title="fastest-time video">${s}</a>` : s}${editing ? html` <button class="candx" title="remove strategy" onclick=${() => delStrat(s)}>×</button>` : ""}</th>`)}</tr></thead>
         <tbody>
         ${RANK_NAMES.filter((r) => r !== "Iron").map((rank) => html`<tr>
           <td style=${`background:${rankColor(rank)};color:#111;font-weight:700`}>${rank}</td>

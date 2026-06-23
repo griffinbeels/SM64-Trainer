@@ -72,30 +72,14 @@ def key_to_entity(key: str) -> str | None:
     return None
 
 
-def build_seed(parsed: dict) -> dict:
-    entities = {}
-    for key, ladders in parsed.items():
-        ek = key_to_entity(key)
-        if ek is None:
-            continue
-        clock = "rta" if ek.startswith("segment:") else "igt"
-        entities[ek] = {"clock": clock, "strategies": ladders}
-    for seg_id, strategies in DEFAULT_SEGMENT_LADDERS.items():
-        entities.setdefault(f"segment:{seg_id}", {"clock": "rta", "strategies": strategies})
-    return {"version": 1, "entities": entities}
-
-
-def extract_standards_blob(js_text: str) -> dict:
-    """Find the JSON.parse('...') literal holding the rank standards (a dict whose
-    values are {strat: {'times': {...}}}) and return the parsed object."""
-    needle = "JSON.parse('"
-    i = 0
+def _all_blobs(js_text: str) -> list:
+    """Every JSON.parse('...') literal in the chunk, parsed (skips unparseable)."""
+    out, i, needle = [], 0, "JSON.parse('"
     while True:
         j = js_text.find(needle, i)
         if j < 0:
-            raise LookupError("standards blob not found in chunk")
-        k = j + len(needle)
-        buf = []
+            return out
+        k = j + len(needle); buf = []
         while k < len(js_text):
             c = js_text[k]
             if c == "\\":
@@ -105,40 +89,139 @@ def extract_standards_blob(js_text: str) -> dict:
             buf.append(c); k += 1
         i = k + 1
         try:
-            obj = json.loads("".join(buf).encode().decode("unicode_escape"))
+            out.append(json.loads("".join(buf).encode().decode("unicode_escape")))
         except ValueError:
+            pass
+
+
+def _is_standards(obj) -> bool:
+    if not (isinstance(obj, dict) and obj):
+        return False
+    v = next(iter(obj.values()))
+    if not (isinstance(v, dict) and v):
+        return False
+    strat = next(iter(v.values()))
+    t = strat.get("times") if isinstance(strat, dict) else None
+    return isinstance(t, dict) and any(r in t for r in _RANKS)
+
+
+def extract_standards_blob(js_text: str) -> dict:
+    """Find the JSON.parse('...') literal holding the rank standards (a dict whose
+    values are {strat: {'times': {...}}}) and return the parsed object."""
+    for b in _all_blobs(js_text):
+        if _is_standards(b):
+            return b
+    raise LookupError("standards blob not found in chunk")
+
+
+def extract_catalog_blob(js_text: str) -> list:
+    """The catalog: a list whose entries carry 'starList'."""
+    for b in _all_blobs(js_text):
+        if isinstance(b, list) and b and isinstance(b[0], dict) and "starList" in b[0]:
+            return b
+    raise LookupError("catalog blob not found in chunk")
+
+
+def extract_cam_blobs(js_text: str) -> list:
+    """Cam-data blobs: dicts keyed by sheet ('main'/'ext'/'beg') -> camId -> cam."""
+    return [b for b in _all_blobs(js_text)
+            if isinstance(b, dict) and "main" in b and ("ext" in b or "beg" in b)]
+
+
+def _time_to_cs(s) -> int | None:
+    """'12.60' / '1:20.63' -> centiseconds; None on missing/unparseable."""
+    if not s or not isinstance(s, str):
+        return None
+    try:
+        if ":" in s:
+            m, rest = s.split(":", 1)
+            return int(m) * 6000 + int(round(float(rest) * 100))
+        return int(round(float(s) * 100))
+    except (ValueError, TypeError):
+        return None
+
+
+def strat_videos(catalog_star: dict, cam_blobs: list) -> dict:
+    """{strat: video url} for one catalog star. Per strat, picks the cam with
+    the smallest record time that has a link; else idealLink; else any link."""
+    def lookup(sheet, cid):
+        for cb in cam_blobs:
+            node = cb.get(sheet, {}).get(str(cid))
+            if node:
+                return node
+        return None
+
+    cams_by_strat = {}
+    for setname in ("jp_set", "us_set"):
+        for strat, info in (catalog_star.get(setname) or {}).items():
+            cams_by_strat.setdefault(strat, []).extend(info.get("id_list") or [])
+
+    out = {}
+    for strat, refs in cams_by_strat.items():
+        best = None            # (record_cs, link)
+        ideal = None           # first idealLink
+        anylink = None         # first link seen (last-resort fallback)
+        for sheet, cid in refs:
+            node = lookup(sheet, cid)
+            if not node:
+                continue
+            link, rec = node.get("link"), _time_to_cs(node.get("record"))
+            if link and rec is not None and (best is None or rec < best[0]):
+                best = (rec, link)
+            if link and anylink is None:
+                anylink = link
+            if node.get("idealLink") and ideal is None:
+                ideal = node["idealLink"]
+        url = (best[1] if best else None) or ideal or anylink
+        if url:
+            out[strat] = url
+    return out
+
+
+def build_seed(parsed: dict, catalog=None, cams=None) -> dict:
+    cat_by_stage = {i: {s["id"]: s for s in (st or {}).get("starList", [])}
+                    for i, st in enumerate(catalog or [])}
+    entities = {}
+    for key, ladders in parsed.items():
+        ek = key_to_entity(key)
+        if ek is None:
             continue
-        if isinstance(obj, dict) and obj:
-            v = next(iter(obj.values()))
-            if isinstance(v, dict) and v:
-                strat = next(iter(v.values()))
-                t = strat.get("times") if isinstance(strat, dict) else None
-                if isinstance(t, dict) and any(r in t for r in _RANKS):
-                    return obj
+        clock = "rta" if ek.startswith("segment:") else "igt"
+        ent = {"clock": clock, "strategies": ladders}
+        if catalog and cams:
+            stage, _, starkey = key.partition("_")
+            star = cat_by_stage.get(int(stage), {}).get(starkey) if stage.isdigit() else None
+            if star:
+                vids = {s: u for s, u in strat_videos(star, cams).items() if s in ladders}
+                if vids:
+                    ent["videos"] = vids
+        entities[ek] = ent
+    for seg_id, strategies in DEFAULT_SEGMENT_LADDERS.items():
+        entities.setdefault(f"segment:{seg_id}", {"clock": "rta", "strategies": strategies})
+    return {"version": 1, "entities": entities}
 
 
-def fetch_standards() -> dict:
-    """Fetch the live site, locate the chunk holding the standards, parse it."""
+def fetch_all() -> tuple:
+    """Fetch the chunk once; return (standards_blob, catalog, cam_blobs)."""
     base = "https://sm64-xcams.netlify.app"
     page = urllib.request.urlopen(base + "/beta", timeout=30).read().decode("utf-8", "replace")
     chunks = sorted(set(re.findall(r"/_next/static/chunks/[\w./-]+\.js", page)))
     for path in chunks:
         js = urllib.request.urlopen(base + path, timeout=30).read().decode("utf-8", "replace")
-        if "Grandmaster" in js:
-            try:
-                return extract_standards_blob(js)
-            except LookupError:
-                continue
+        if "Grandmaster" in js and "starList" in js:
+            return extract_standards_blob(js), extract_catalog_blob(js), extract_cam_blobs(js)
     raise LookupError("could not locate standards chunk")
 
 
 def main() -> None:
-    seed = build_seed(parse_standards(fetch_standards()))
+    standards, catalog, cams = fetch_all()
+    seed = build_seed(parse_standards(standards), catalog, cams)
     out = (Path(__file__).resolve().parent.parent / "src" / "sm64_events"
            / "data" / "rank_standards.seed.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(seed, indent=1))
-    print(f"wrote {out} ({len(seed['entities'])} entities)")
+    n_vid = sum(len(e.get("videos", {})) for e in seed["entities"].values())
+    print(f"wrote {out} ({len(seed['entities'])} entities, {n_vid} videos)")
 
 
 if __name__ == "__main__":
