@@ -31,7 +31,7 @@ export function StandardsPanel({ entity, activeStrat, onChanged }) {
   async function reset() {
     if (!window.confirm("Reset this entity to community defaults?")) return;
     await send("POST", `/api/ranks/standards/${encodeURIComponent(entity)}/reset`);
-    await load(); onChanged && onChanged();
+    await load(); setEditing(false); onChanged && onChanged();
   }
   const strats = data ? Object.keys(data.strategies) : [];
   return html`<div class="stdpanel">

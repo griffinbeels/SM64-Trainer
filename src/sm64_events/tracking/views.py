@@ -149,12 +149,22 @@ def _attempt_rank(a, frames, ranks) -> str | None:
 
 
 def _section_banner(ranks, ek, strat, pb) -> dict | None:
-    """Rank banner for a section: the PB time graded under the ACTIVE strat."""
-    if ranks is None or not strat or pb is None:
+    """Rank banner for a section: the PB time graded under the ACTIVE strat.
+
+    Returns None when the entity has NO standards (RankBanner not rendered).
+    Returns {"rank": None} sentinel when the entity HAS standards but can't
+    be graded (no active strat, no PB, or the active strat has no ladder) —
+    RankBanner renders this as the "pick a strat to see your rank" prompt."""
+    if ranks is None:
         return None
+    has_standards = bool(ranks.ladders(ek))
+    if not has_standards:
+        return None
+    if not strat or pb is None:
+        return {"rank": None}
     ladder = ranks.ladder_cs(ek, strat)
     if not ladder:
-        return None
+        return {"rank": None}
     return classify.band(ladder, classify.display_cs(pb["frames"]))
 
 

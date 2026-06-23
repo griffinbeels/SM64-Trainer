@@ -25,9 +25,11 @@ def create_ranks_router(service) -> APIRouter:
     router = APIRouter(prefix="/api")
 
     @router.get("/ranks/standards")
-    def get_standards(entity: str):
+    def get_standards(entity: str | None = None):
         if service.ranks is None:
             raise HTTPException(503, "rank standards unavailable")
+        if entity is None:
+            return service.ranks.to_json()
         return {"entity": entity, "clock": service.ranks.clock_for(entity),
                 "strategies": service.ranks.ladders(entity)}
 

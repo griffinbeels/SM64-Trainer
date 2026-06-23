@@ -44,6 +44,11 @@ def main() -> int:
         # embeds it in the PE header (Explorer/taskbar); without bundling it as
         # data the frozen tray fell back to a placeholder. Land it at root.
         "--add-data", f"{REPO / 'assets' / 'ukiki.ico'}{SEP}.",
+        # The rank standards seed (bundled_rank_standards() in core/paths.py)
+        # is read from sys._MEIPASS when frozen; without this entry the whole
+        # ranks feature has no data in the released exe.
+        "--add-data",
+        f"{REPO / 'src' / 'sm64_events' / 'data' / 'rank_standards.seed.json'}{SEP}.",
     ]
     for pkg in COLLECT:
         argv += ["--collect-all", pkg]

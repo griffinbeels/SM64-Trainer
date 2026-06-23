@@ -931,6 +931,34 @@ def _ranks(tmp_path):
     s = RankStandards(p); s.load(); return s
 
 
+def test_section_banner_sentinel_when_standards_but_no_strat(tmp_path):
+    """Entity WITH standards + no active strat → sentinel {"rank": None} (truthy).
+    Entity with NO standards → None (banner not rendered)."""
+    import json
+    from sm64_events.ranks.standards import RankStandards
+    from sm64_events.tracking.views import _section_banner
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "star:2:2": {"clock": "igt", "strategies": {
+            "fast": {"Mario": 11.0, "Diamond": 12.0}}}}}))
+    ranks = RankStandards(p); ranks.load()
+    # entity HAS standards, no strat → sentinel
+    result = _section_banner(ranks, "star:2:2", strat=None, pb=None)
+    assert result == {"rank": None}
+    # entity HAS standards, strat set but no pb → sentinel
+    result2 = _section_banner(ranks, "star:2:2", strat="fast", pb=None)
+    assert result2 == {"rank": None}
+    # entity HAS standards, strat with no ladder → sentinel
+    result3 = _section_banner(ranks, "star:2:2", strat="unknown_strat", pb={"frames": 343})
+    assert result3 == {"rank": None}
+    # entity has NO standards → None (don't render banner at all)
+    result4 = _section_banner(ranks, "star:8:1", strat=None, pb=None)
+    assert result4 is None
+    # ranks is None → None
+    result5 = _section_banner(None, "star:2:2", strat="fast", pb={"frames": 343})
+    assert result5 is None
+
+
 def test_session_view_attaches_ranks(tmp_path):
     db, svc = make(tmp_path)
     seed(svc)                     # existing helper: seeds course 2 star 2 successes

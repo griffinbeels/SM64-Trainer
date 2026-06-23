@@ -40,6 +40,22 @@ def test_delete_strategy_and_bad_rank(tmp_path):
         r = client.put("/api/ranks/standards/star:8:2/X/NotARank", json={"seconds": 1.0})
         assert r.status_code == 409          # ValueError -> 409
 
+def test_get_standards_no_entity_returns_all(tmp_path):
+    """GET /api/ranks/standards with no entity param returns 200 with all standards."""
+    client, svc = make_client(tmp_path)
+    with client:
+        # Seed some data for two entities
+        client.put("/api/ranks/standards/star:8:2/Fast/Mario", json={"seconds": 12.5})
+        client.put("/api/ranks/standards/star:2:1/Cannonless/Diamond", json={"seconds": 30.0})
+        r = client.get("/api/ranks/standards")
+        assert r.status_code == 200
+        data = r.json()
+        # to_json() returns the full store with an "entities" key
+        assert "entities" in data
+        assert "star:8:2" in data["entities"]
+        assert "star:2:1" in data["entities"]
+
+
 def test_reset_entity_endpoint(tmp_path):
     client, svc = make_client(tmp_path)
     with client:
