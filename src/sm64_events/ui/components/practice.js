@@ -432,6 +432,7 @@ function RouteFocus({ rv, t, ui, freshIds }) {
               onclick=${() => setTargetCandidate(c, t)}
               title="practice this">${c.display}</button>`)}
           <span style="flex:1"></span>
+          ${s.rank ? html`<${Medal} rank=${s.rank} size=${16} />` : null}
           <span class="routerate">step ${fpct(s.step_rate)}</span>
           <span class="routecum">cum ${fpct(s.cumulative)}</span>
         </div>

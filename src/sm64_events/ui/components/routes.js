@@ -10,6 +10,7 @@ import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { ClauseRow } from "./segments.js";
+import { Medal } from "./ranks.js";
 
 const html = htm.bind(h);
 const pct = (r) => `${Math.round((r ?? 0) * 100)}%`;
@@ -52,7 +53,7 @@ function ItemPicker({ catalog, segs, onPick, label }) {
 
 // One step row. step = raw {label?, need, candidates[]}; view = resolved
 // {candidates:[{display}], step_rate, cumulative, broken} (parallel by index).
-function StepRow({ step, view, idx, total, catalog, segs, onChange, onMove, onRemove }) {
+function StepRow({ step, view, idx, total, catalog, segs, onChange, onMove, onRemove, weakest }) {
   const setNeed = (n) => onChange({ ...step, need: n });
   const addCand = (c) => onChange({ ...step, candidates: [...step.candidates, c] });
   const removeCand = (i) => {
@@ -67,6 +68,8 @@ function StepRow({ step, view, idx, total, catalog, segs, onChange, onMove, onRe
       <span class="routenum">${idx + 1}.</span>
       ${group ? html`<span class="chip">${step.need} of ${step.candidates.length}</span>` : null}
       ${step.label ? html`<b>${step.label}</b>` : null}
+      ${view.rank ? html`<${Medal} rank=${view.rank} size=${16} />` : null}
+      ${weakest ? html`<span class="weakflag">weakest</span>` : null}
       <span class="routerate">step ${pct(view.step_rate)}</span>
       <span class="routecum">cum ${pct(view.cumulative)}</span>
       <span style="flex:1"></span>
@@ -233,6 +236,7 @@ export function Routes({ t }) {
           types=${vocab.triggers} vocab=${vocab}
           onChange=${(c) => saveStartCondition(c)} onRemove=${() => {}} />
       </div>` : null}
+      ${view.avg_rank ? html`<div class="routeavg"><span class="meta">Route avg:</span> <${Medal} rank=${view.avg_rank.tier} size=${18} /> ${view.avg_rank.tier} · ${view.avg_rank.score}/9</div>` : null}
       ${selected.steps.length === 0
         ? html`<div class="meta">No steps yet — add one below.</div>` : null}
       ${selected.steps.map((step, i) => {
@@ -245,6 +249,7 @@ export function Routes({ t }) {
           || { candidates: [], step_rate: 0, cumulative: 0, broken: false };
         return html`<${StepRow} key=${i} step=${step} view=${vs} idx=${i}
             total=${selected.steps.length} catalog=${catalog} segs=${segs}
+            weakest=${i === view.weakest_step}
             onChange=${(s) => editStep(i, s)} onMove=${(dir) => moveStep(i, dir)}
             onRemove=${() => removeStep(i)} />`;
       })}
