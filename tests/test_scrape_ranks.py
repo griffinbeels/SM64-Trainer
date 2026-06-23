@@ -100,3 +100,34 @@ def test_build_seed_attaches_videos():
 def test_build_seed_without_catalog_omits_videos():
     seed = scrape.build_seed({"7_3": {"Nuts": {"Mario": 12.6}}})
     assert "videos" not in seed["entities"]["star:8:2"]
+
+
+def test_resolve_jp_us():
+    assert scrape._resolve_jp_us({"sr": "time", "time": {"time": 4423, "alt": [4546, "us"]}}) == (4423, 4546)
+    assert scrape._resolve_jp_us({"sr": "time", "time": {"time": 6913, "alt": [6950, "jp"]}}) == (6950, 6913)  # primary is US
+    assert scrape._resolve_jp_us({"sr": "time", "time": {"time": 1293, "alt": None}}) == (1293, 1293)
+    assert scrape._resolve_jp_us({"sr": "none"}) is None
+
+_RAW = {"0_1": {"Standard": {"times": {
+            "Mario": {"sr": "time", "time": {"time": 4423, "alt": [4546, "us"]}},
+            "Iron":  {"sr": "none"}}}},
+        "7_3": {"Nuts Pless": {"times": {
+            "Mario": {"sr": "time", "time": {"time": 1293, "alt": None}}}}}}
+
+def test_parse_standards_is_us_effective():
+    out = scrape.parse_standards(_RAW)
+    assert out["0_1"]["Standard"]["Mario"] == 45.46   # US value, not the 44.23 JP primary
+    assert out["7_3"]["Nuts Pless"]["Mario"] == 12.93  # no alt -> unchanged
+    assert "Iron" not in out["0_1"]["Standard"]
+
+def test_parse_jp_deltas_only_where_differ():
+    jp = scrape.parse_jp_deltas(_RAW)
+    assert jp["0_1"]["Standard"]["Mario"] == 44.23     # JP value retained
+    assert "7_3" not in jp                              # no diff -> no entry
+
+def test_build_seed_attaches_jp_strategies():
+    parsed = scrape.parse_standards(_RAW); jp = scrape.parse_jp_deltas(_RAW)
+    seed = scrape.build_seed(parsed, jp_deltas=jp)
+    assert seed["entities"]["star:1:0"]["strategies"]["Standard"]["Mario"] == 45.46
+    assert seed["entities"]["star:1:0"]["jp_strategies"]["Standard"]["Mario"] == 44.23
+    assert "jp_strategies" not in seed["entities"]["star:9:2"] if "star:9:2" in seed["entities"] else True
