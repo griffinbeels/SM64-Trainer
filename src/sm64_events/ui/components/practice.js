@@ -9,6 +9,7 @@ import { Timeline } from "./timeline.js";
 import { Progress } from "./progress.js";
 import { StageBanner } from "./stagebanner.js";
 import { Medal, RankBanner } from "./ranks.js";
+import { StandardsPanel } from "./standards.js";
 
 const html = htm.bind(h);
 
@@ -284,6 +285,8 @@ function StarSection({ sec, t, ui, pinned, freshIds }) {
       ${sec.stats.map((s) => html`
         <span class="chip" title=${s.key}>${s.label} ${s.display ?? "–"}</span>`)}
     </div>
+    <${StandardsPanel} entity=${`star:${sec.course_id}:${sec.star_id}`}
+        activeStrat=${sec.last_strat} onChanged=${t.refresh} />
   </div>`;
 }
 
@@ -365,6 +368,8 @@ function SegmentSection({ sec, t, ui, pinned, freshIds }) {
       ${sec.stats.map((s) => html`
         <span class="chip" title=${s.key}>${s.label} ${s.display ?? "–"}</span>`)}
     </div>
+    <${StandardsPanel} entity=${`segment:${sec.segment_id}`}
+        activeStrat=${sec.last_strat} onChanged=${t.refresh} />
   </div>`;
 }
 
