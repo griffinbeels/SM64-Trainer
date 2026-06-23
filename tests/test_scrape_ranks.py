@@ -130,4 +130,4 @@ def test_build_seed_attaches_jp_strategies():
     seed = scrape.build_seed(parsed, jp_deltas=jp)
     assert seed["entities"]["star:1:0"]["strategies"]["Standard"]["Mario"] == 45.46
     assert seed["entities"]["star:1:0"]["jp_strategies"]["Standard"]["Mario"] == 44.23
-    assert "jp_strategies" not in seed["entities"]["star:9:2"] if "star:9:2" in seed["entities"] else True
+    assert "jp_strategies" not in seed["entities"]["star:8:2"]
