@@ -83,6 +83,12 @@ def test_strat_videos_falls_back_to_ideallink_then_any_link():
     assert scrape.strat_videos(star, _CAMS)["NoRecLink"] == "https://youtu.be/IDEAL"
 
 
+def test_strat_videos_falls_back_to_any_link():
+    cams = [{"ext": {"7": {"record": "-", "link": "https://youtu.be/ANY", "ideal": None, "idealLink": None}}}]
+    star = {"jp_set": {"S": {"id_list": [["ext", 7]]}}, "us_set": {}}
+    assert scrape.strat_videos(star, cams)["S"] == "https://youtu.be/ANY"
+
+
 def test_build_seed_attaches_videos():
     parsed = {"7_3": {"Nuts": {"Mario": 12.6}}}
     catalog = [None]*7 + [{"starList": [{"id": "3", "name": "x",

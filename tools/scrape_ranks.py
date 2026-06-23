@@ -160,7 +160,7 @@ def strat_videos(catalog_star: dict, cam_blobs: list) -> dict:
     for strat, refs in cams_by_strat.items():
         best = None            # (record_cs, link)
         ideal = None           # first idealLink
-        anylink = None         # first link with no usable record
+        anylink = None         # first link seen (last-resort fallback)
         for sheet, cid in refs:
             node = lookup(sheet, cid)
             if not node:
@@ -199,21 +199,6 @@ def build_seed(parsed: dict, catalog=None, cams=None) -> dict:
     for seg_id, strategies in DEFAULT_SEGMENT_LADDERS.items():
         entities.setdefault(f"segment:{seg_id}", {"clock": "rta", "strategies": strategies})
     return {"version": 1, "entities": entities}
-
-
-def fetch_standards() -> dict:
-    """Fetch the live site, locate the chunk holding the standards, parse it."""
-    base = "https://sm64-xcams.netlify.app"
-    page = urllib.request.urlopen(base + "/beta", timeout=30).read().decode("utf-8", "replace")
-    chunks = sorted(set(re.findall(r"/_next/static/chunks/[\w./-]+\.js", page)))
-    for path in chunks:
-        js = urllib.request.urlopen(base + path, timeout=30).read().decode("utf-8", "replace")
-        if "Grandmaster" in js:
-            try:
-                return extract_standards_blob(js)
-            except LookupError:
-                continue
-    raise LookupError("could not locate standards chunk")
 
 
 def fetch_all() -> tuple:
