@@ -978,3 +978,47 @@ def test_session_view_attaches_ranks(tmp_path):
                               "Platinum", "Gold", "Silver", "Bronze", "Iron"}
                for at in sec["attempts"])
     assert any(p.get("rank") for s in sec["progress"]["sessions"] for p in s["points"])
+
+
+def test_star_standard_strategies_appear_without_any_attempt(tmp_path):
+    """A star with rank standards defined but NO attempts using those strats
+    still lists the standard strategy names in the section strategies list."""
+    import json
+    from sm64_events.ranks.standards import RankStandards
+    db, svc = make(tmp_path)
+    # write standards for star:2:2 with strategy "Nuts Pless"
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "star:2:2": {"clock": "igt", "strategies": {
+            "Nuts Pless": {"Mario": 11.0, "Diamond": 12.0}}}}}))
+    svc.ranks = RankStandards(p)
+    svc.ranks.load()
+    # no attempts at all — target section pinned via set_target
+    asyncio.run(svc.set_target(2, 2))
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    assert (sec["course_id"], sec["star_id"]) == (2, 2)
+    assert "Nuts Pless" in sec["strategies"]
+
+
+def test_segment_standard_strategies_appear_without_any_attempt(tmp_path):
+    """A segment with rank standards defined but NO attempts using those strats
+    still lists the standard strategy names in the section strategies list."""
+    import json
+    from sm64_events.ranks.standards import RankStandards, entity_key
+    db, svc = make(tmp_path)
+    # find the LBLJ segment id (def 1) and write standards for it
+    lblj_id = next(d["id"] for d in db.segment_defs() if d["name"] == "LBLJ")
+    ek = entity_key(None, None, lblj_id)
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        ek: {"clock": "rta", "strategies": {
+            "hyperspeed BLJ": {"Mario": 2.5, "Diamond": 3.0}}}}}))
+    svc.ranks = RankStandards(p)
+    svc.ranks.load()
+    # arm the segment so it gets a section even with zero attempts
+    asyncio.run(svc.set_target_segment(lblj_id))
+    view = build_session_view(db, svc, clock="igt")
+    sec = seg_section(view, lblj_id)
+    assert sec["attempts"] == []
+    assert "hyperspeed BLJ" in sec["strategies"]

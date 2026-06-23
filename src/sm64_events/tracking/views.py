@@ -130,14 +130,31 @@ def _catalog() -> dict:
 _CATALOG = _catalog()
 
 
-def _strategies_for(registered: dict, attempts, course_id: int, star_id: int) -> list[str]:
+def _strategies_for(registered: dict, attempts, course_id: int, star_id: int,
+                    ranks=None) -> list[str]:
     """Registered strategies (ui_state) merged with every strat ever used
-    on this star's attempts — union preserves registration order first."""
+    on this star's attempts, plus any strategies defined in rank standards —
+    union preserves registration order first, then observed, then standard."""
     out = list(registered.get(f"{course_id}:{star_id}", []))
     for a in attempts:
         if (a.course_id, a.star_id) == (course_id, star_id) \
                 and a.strat_tag and a.strat_tag not in out:
             out.append(a.strat_tag)
+    if ranks is not None:
+        for strat in ranks.strategies(entity_key(course_id, star_id)):
+            if strat not in out:
+                out.append(strat)
+    return out
+
+
+def _seg_strategies(history, seg_id: int, ranks=None) -> list[str]:
+    """Observed strats (sorted) union rank-standard strats for a segment section.
+    Segments have no registered-strategies KV yet, so observed comes first."""
+    out = sorted({a.strat_tag for a in history if a.strat_tag})
+    if ranks is not None:
+        for strat in ranks.strategies(entity_key(None, None, seg_id)):
+            if strat not in out:
+                out.append(strat)
     return out
 
 
@@ -343,7 +360,8 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "pb": pb_json,
             "attempts": [_attempt_json(a, pbs, clock, service.ranks) for a in in_section],
             "stats": _stats_for(history, stat_menu, clock),
-            "strategies": _strategies_for(registered, all_attempts, course_id, star_id),
+            "strategies": _strategies_for(registered, all_attempts, course_id, star_id,
+                                         service.ranks),
             "last_strat": service.strat_by_star.get((course_id, star_id)),
             "timeline": _timeline(history, igt_of),
             "markers_by_strat": _markers_for(markers_state, course_id, star_id),
@@ -381,9 +399,10 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                            if pb_row else None)},
             "attempts": [_attempt_json(a, pbs, "rta", service.ranks) for a in in_section],
             "stats": _stats_for(history, stat_menu, "rta"),
-            # observed-from-attempts only (v1): segments have no registered-
-            # strategies KV yet; mirrors _strategies_for's observed half.
-            "strategies": sorted({a.strat_tag for a in history if a.strat_tag}),
+            # observed-from-attempts union rank-standard strategies; segments
+            # have no registered-strategies KV yet so observed comes first
+            # (sorted), then any standard strats not already present.
+            "strategies": _seg_strategies(history, seg_id, service.ranks),
             "last_strat": service.strat_by_segment.get(seg_id),
             "timeline": _timeline(history, rta_of),
             "markers_by_strat": _markers_for(markers_state, "seg", seg_id),
