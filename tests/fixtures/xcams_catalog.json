@@ -1,0 +1,587 @@
+[
+ {
+  "name": "Bob-omb Battlefield",
+  "stars": [
+   {
+    "id": "1",
+    "name": "Big Bob-omb on the Summit"
+   },
+   {
+    "id": "2",
+    "name": "Footrace with Koopa the Quick"
+   },
+   {
+    "id": "100c2",
+    "name": "100c + Footrace with Koopa the Quick"
+   },
+   {
+    "id": "3",
+    "name": "Shoot to the Island in the Sky"
+   },
+   {
+    "id": "4",
+    "name": "Find the 8 Red Coins"
+   },
+   {
+    "id": "100c4",
+    "name": "100c + Find the 8 Red Coins"
+   },
+   {
+    "id": "5",
+    "name": "Mario Wings to the Sky"
+   },
+   {
+    "id": "6",
+    "name": "Behind Chain Chomp's Gate"
+   }
+  ]
+ },
+ {
+  "name": "Whomp's Fortress",
+  "stars": [
+   {
+    "id": "1",
+    "name": "Chip off Whomp's Block"
+   },
+   {
+    "id": "2",
+    "name": "To the Top of the Fortress"
+   },
+   {
+    "id": "3",
+    "name": "Shoot into the Wild Blue"
+   },
+   {
+    "id": "100c4",
+    "name": "100c + Red Coins on the Floating Isle"
+   },
+   {
+    "id": "5",
+    "name": "Fall onto the Caged Island"
+   },
+   {
+    "id": "6",
+    "name": "Blast Away the Wall"
+   }
+  ]
+ },
+ {
+  "name": "Jolly Roger Bay",
+  "stars": [
+   {
+    "id": "1",
+    "name": "Plunder in the Sunken Ship"
+   },
+   {
+    "id": "2",
+    "name": "Can the Eel Come Out to Play?"
+   },
+   {
+    "id": "3",
+    "name": "Treasure of the Ocean Cave"
+   },
+   {
+    "id": "100c3",
+    "name": "100c + Treasure of the Ocean Cave"
+   },
+   {
+    "id": "4",
+    "name": "Red Coins on the Ship Afloat"
+   },
+   {
+    "id": "100c4",
+    "name": "100c + Red Coins on the Ship Afloat"
+   },
+   {
+    "id": "5",
+    "name": "Blast to the Stone Pillar"
+   },
+   {
+    "id": "6",
+    "name": "Through the Jet Stream"
+   }
+  ]
+ },
+ {
+  "name": "Cool, Cool Mountain",
+  "stars": [
+   {
+    "id": "1",
+    "name": "Slip Slidin' Away"
+   },
+   {
+    "id": "100c1",
+    "name": "100c + Slip Slidin' Away"
+   },
+   {
+    "id": "2",
+    "name": "Li'l Penguin Lost"
+   },
+   {
+    "id": "100c3",
+    "name": "100c + Big Penguin Race"
+   },
+   {
+    "id": "4",
+    "name": "Frosty Slide for 8 Red Coins"
+   },
+   {
+    "id": "5",
+    "name": "Snowman's Lost His Head"
+   },
+   {
+    "id": "6",
+    "name": "Wall Kicks Will Work"
+   }
+  ]
+ },
+ {
+  "name": "Big Boo's Haunt",
+  "stars": [
+   {
+    "id": "1",
+    "name": "Go on a Ghost Hunt"
+   },
+   {
+    "id": "2",
+    "name": "Ride Big Boo's Merry-Go-Round"
+   },
+   {
+    "id": "3",
+    "name": "Secret of the Haunted Books"
+   },
+   {
+    "id": "100c4",
+    "name": "100c + Seek the 8 Red Coins"
+   },
+   {
+    "id": "5",
+    "name": "Big Boo's Balcony"
+   },
+   {
+    "id": "6",
+    "name": "Eye to Eye in the Secret Room"
+   }
+  ]
+ },
+ {
+  "name": "Hazy Maze Cave",
+  "stars": [
+   {
+    "id": "1",
+    "name": "Swimming Beast in the Cavern"
+   },
+   {
+    "id": "2",
+    "name": "Elevate for 8 Red Coins"
+   },
+   {
+    "id": "100c2",
+    "name": "100c + Elevate for 8 Red Coins"
+   },
+   {
+    "id": "3",
+    "name": "Metal-Head Mario Can Move!"
+   },
+   {
+    "id": "4",
+    "name": "Navigating the Toxic Maze"
+   },
+   {
+    "id": "100c4",
+    "name": "100c + Navigating the Toxic Maze"
+   },
+   {
+    "id": "5",
+    "name": "A-Maze-ing Emergency Exit"
+   },
+   {
+    "id": "6",
+    "name": "Watch for Rolling Rocks"
+   },
+   {
+    "id": "premc",
+    "name": "CotMC (Metal Cap) Entry"
+   }
+  ]
+ },
+ {
+  "name": "Lethal Lava Land",
+  "stars": [
+   {
+    "id": "1",
+    "name": "Boil the Big Bully"
+   },
+   {
+    "id": "2",
+    "name": "Bully the Bullies"
+   },
+   {
+    "id": "100c2",
+    "name": "100c + Bully the Bullies"
+   },
+   {
+    "id": "3",
+    "name": "8-Coin Puzzle with 15 Pieces"
+   },
+   {
+    "id": "4",
+    "name": "Red-Hot Log Rolling"
+   },
+   {
+    "id": "5",
+    "name": "Hot-Foot-it into the Volcano"
+   },
+   {
+    "id": "100c5",
+    "name": "100c + Hot-Foot-it into the Volcano"
+   },
+   {
+    "id": "6",
+    "name": "Elevator Tour in the Volcano"
+   }
+  ]
+ },
+ {
+  "name": "Shifting Sand Land",
+  "stars": [
+   {
+    "id": "1",
+    "name": "In the Talons of the Big Bird"
+   },
+   {
+    "id": "2",
+    "name": "Shining Atop the Pyramid"
+   },
+   {
+    "id": "3",
+    "name": "Inside the Ancient Pyramid"
+   },
+   {
+    "id": "4",
+    "name": "Stand Tall on the Four Pillars"
+   },
+   {
+    "id": "5",
+    "name": "Free Flying for 8 Red Coins"
+   },
+   {
+    "id": "6",
+    "name": "Pyramid Puzzle"
+   },
+   {
+    "id": "100c6",
+    "name": "100c + Pyramid Puzzle"
+   }
+  ]
+ },
+ {
+  "name": "Dire, Dire Docks",
+  "stars": [
+   {
+    "id": "1",
+    "name": "Board Bowser's Sub"
+   },
+   {
+    "id": "2",
+    "name": "Chests in the Current"
+   },
+   {
+    "id": "100c3",
+    "name": "100c + Pole-Jumping for Red Coins"
+   },
+   {
+    "id": "4",
+    "name": "Through the Jet Stream"
+   },
+   {
+    "id": "5",
+    "name": "The Manta Ray's Reward"
+   },
+   {
+    "id": "6",
+    "name": "Collect the Caps..."
+   }
+  ]
+ },
+ {
+  "name": "Snowman's Land",
+  "stars": [
+   {
+    "id": "1",
+    "name": "Snowman's Big Head"
+   },
+   {
+    "id": "2",
+    "name": "Chill with the Bully"
+   },
+   {
+    "id": "3",
+    "name": "In the Deep Freeze"
+   },
+   {
+    "id": "4",
+    "name": "Whirl from the Freezing Pond"
+   },
+   {
+    "id": "5",
+    "name": "Shell Shreddin' for Red Coins"
+   },
+   {
+    "id": "100c5",
+    "name": "100c + Shell Shreddin' for Red Coins"
+   },
+   {
+    "id": "6",
+    "name": "Into the Igloo"
+   }
+  ]
+ },
+ {
+  "name": "Wet-Dry World",
+  "stars": [
+   {
+    "id": "1",
+    "name": "Shocking Arrow Lifts!"
+   },
+   {
+    "id": "2",
+    "name": "Top o' the Town"
+   },
+   {
+    "id": "3",
+    "name": "Secrets in the Shallows and Sky"
+   },
+   {
+    "id": "100c3",
+    "name": "100c + Secrets in the Shallows and Sky"
+   },
+   {
+    "id": "4",
+    "name": "Express Elevator--Hurry Up!"
+   },
+   {
+    "id": "5",
+    "name": "Go to Town for Red Coins"
+   },
+   {
+    "id": "100c5",
+    "name": "100c + Go to Town for Red Coins"
+   },
+   {
+    "id": "6",
+    "name": "Quick Race Through Downtown!"
+   }
+  ]
+ },
+ {
+  "name": "Tall, Tall Mountain",
+  "stars": [
+   {
+    "id": "1",
+    "name": "Scale the Mountain"
+   },
+   {
+    "id": "2",
+    "name": "Mystery of the Monkey Cage"
+   },
+   {
+    "id": "3",
+    "name": "Scary 'Shrooms, Red Coins"
+   },
+   {
+    "id": "100c3",
+    "name": "100c + Scary 'Shrooms, Red Coins"
+   },
+   {
+    "id": "4",
+    "name": "Mysterious Mountainside"
+   },
+   {
+    "id": "5",
+    "name": "Breathtaking View from Bridge"
+   },
+   {
+    "id": "6",
+    "name": "Blast to the Lonely Mushroom"
+   }
+  ]
+ },
+ {
+  "name": "Tiny-Huge Island",
+  "stars": [
+   {
+    "id": "1",
+    "name": "Pluck the Piranha Flower"
+   },
+   {
+    "id": "2",
+    "name": "The Tip Top of the Huge Island"
+   },
+   {
+    "id": "3",
+    "name": "Rematch with Koopa the Quick"
+   },
+   {
+    "id": "100c3",
+    "name": "100c + Rematch with Koopa the Quick"
+   },
+   {
+    "id": "4",
+    "name": "Five Itty Bitty Secrets"
+   },
+   {
+    "id": "5",
+    "name": "Wiggler's Red Coins"
+   },
+   {
+    "id": "100c5",
+    "name": "100c + Wiggler's Red Coin"
+   },
+   {
+    "id": "6",
+    "name": "Make Wiggler Squirm"
+   }
+  ]
+ },
+ {
+  "name": "Tick Tock Clock",
+  "stars": [
+   {
+    "id": "1",
+    "name": "Roll into the Cage"
+   },
+   {
+    "id": "2",
+    "name": "The Pit and the Pendulums"
+   },
+   {
+    "id": "3",
+    "name": "Get a Hand"
+   },
+   {
+    "id": "4",
+    "name": "Stomp on the Thwomp"
+   },
+   {
+    "id": "100c4",
+    "name": "100c + Stomp on the Thwomp"
+   },
+   {
+    "id": "5",
+    "name": "Timed Jumps on Moving Bars"
+   },
+   {
+    "id": "6",
+    "name": "Stop Time for Red Coins"
+   }
+  ]
+ },
+ {
+  "name": "Rainbow Ride",
+  "stars": [
+   {
+    "id": "1",
+    "name": "Cruiser Crossing the Rainbow"
+   },
+   {
+    "id": "2",
+    "name": "The Big House in the Sky"
+   },
+   {
+    "id": "100c2",
+    "name": "100c + The Big House in the Sky"
+   },
+   {
+    "id": "3",
+    "name": "Coins Amassed in a Maze"
+   },
+   {
+    "id": "4",
+    "name": "Swingin' in the Breeze"
+   },
+   {
+    "id": "5",
+    "name": "Tricky Triangles!"
+   },
+   {
+    "id": "6",
+    "name": "Somewhere over the Rainbow"
+   },
+   {
+    "id": "100c6",
+    "name": "100c + Somewhere over the Rainbow"
+   }
+  ]
+ },
+ {
+  "name": "Castle Secret Stars",
+  "stars": [
+   {
+    "id": "wc",
+    "name": "Tower of the Wing Cap"
+   },
+   {
+    "id": "vc",
+    "name": "Vanish Cap under the Moat"
+   },
+   {
+    "id": "mc",
+    "name": "Cavern of the Metal Cap"
+   },
+   {
+    "id": "aqua",
+    "name": "The Secret Aquarium"
+   },
+   {
+    "id": "wmotr",
+    "name": "Wing Mario over the Rainbow"
+   },
+   {
+    "id": "pss",
+    "name": "Princess' Secret Slide"
+   }
+  ]
+ },
+ {
+  "name": "Bowser Courses",
+  "stars": [
+   {
+    "id": "1n",
+    "name": "BitDW No Reds"
+   },
+   {
+    "id": "1r",
+    "name": "BitDW Reds"
+   },
+   {
+    "id": "1x",
+    "name": "BitDW Battle"
+   },
+   {
+    "id": "2n",
+    "name": "BitFS No Reds"
+   },
+   {
+    "id": "2r",
+    "name": "BitFS Reds"
+   },
+   {
+    "id": "2x",
+    "name": "BitFS Battle"
+   },
+   {
+    "id": "3n",
+    "name": "BitS No Reds"
+   },
+   {
+    "id": "3r",
+    "name": "BitS Reds"
+   },
+   {
+    "id": "3x",
+    "name": "BitS Battle"
+   }
+  ]
+ }
+]
