@@ -64,7 +64,11 @@ def build():
             logging.getLogger("sm64.tracker").exception(
                 "database unavailable - running broadcast-only")
             db = None
-    service = TrackerService(db, broadcaster)
+    from sm64_events.ranks.standards import RankStandards
+    from sm64_events.core.paths import rank_standards_path, bundled_rank_standards
+    ranks = RankStandards(rank_standards_path(), bundled_rank_standards())
+    ranks.load()
+    service = TrackerService(db, broadcaster, ranks=ranks)
     # User-set storage limits (UI panel) overlay the code defaults.
     replay_cfg = apply_settings_file(ReplayConfig())
     replay = None

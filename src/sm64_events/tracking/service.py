@@ -40,9 +40,10 @@ def _iso(dt: datetime) -> str:
 
 
 class TrackerService:
-    def __init__(self, db: Database | None, broadcaster):
+    def __init__(self, db: Database | None, broadcaster, ranks=None):
         self.db = db
         self.broadcaster = broadcaster
+        self.ranks = ranks            # RankStandards | None
         self.session_id: int | None = None
         self._segment_defs = self._load_segment_defs()
         self._projector = Projector(segments=self._segment_defs)
