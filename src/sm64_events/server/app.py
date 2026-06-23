@@ -316,6 +316,8 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     app.mount("/ui", StaticFiles(directory=str(_UI_INDEX.parent)), name="ui")
     if service is not None:
         app.include_router(create_api_router(service))
+        from sm64_events.server.ranks_api import create_ranks_router
+        app.include_router(create_ranks_router(service))
     if replay is not None:
         from sm64_events.server.replay_api import create_replay_router
         app.include_router(create_replay_router(replay))
