@@ -795,7 +795,7 @@ def test_build_route_view_resolves_names_and_cumulative(tmp_path):
     rid = asyncio.run(svc.create_route({"name": "V", "steps": [
         {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]},
         {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]}]}))
-    view = build_route_view(db, rid)
+    view = build_route_view(db, svc, rid)
     assert view["name"] == "V"
     star_cand = view["steps"][0]["candidates"][0]
     assert star_cand["display"] == "Chip off Whomp's Block"
@@ -815,7 +815,7 @@ def test_build_route_view_marks_deleted_segment_broken(tmp_path):
     rid = asyncio.run(svc.create_route({"name": "V", "steps": [
         {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]}]}))
     asyncio.run(svc.delete_segment(lblj))
-    view = build_route_view(db, rid)
+    view = build_route_view(db, svc, rid)
     assert view["steps"][0]["broken"] is True
     assert "deleted" in view["steps"][0]["candidates"][0]["display"]
 
@@ -825,7 +825,7 @@ def test_build_route_view_unknown_route_raises(tmp_path):
     from sm64_events.tracking.views import build_route_view
     db, svc = make(tmp_path)
     with pytest.raises(LookupError):
-        build_route_view(db, 999)
+        build_route_view(db, svc, 999)
 
 
 # -- run view + history (Task 7 Phase D) ----------------------------------------
@@ -900,7 +900,7 @@ def test_route_view_includes_start_condition(tmp_path):
     rid = asyncio.run(svc.create_route({"name": "R",
         "start_condition": {"type": "reset_game"}, "steps": [
         {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}))
-    assert build_route_view(db, rid)["start_condition"] == {"type": "reset_game"}
+    assert build_route_view(db, svc, rid)["start_condition"] == {"type": "reset_game"}
 
 
 def test_run_history_splits_carry_display_and_duration(tmp_path):

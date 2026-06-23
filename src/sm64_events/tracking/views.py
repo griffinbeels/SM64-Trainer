@@ -521,10 +521,32 @@ def build_run_history(db, route_id: int | None = None) -> dict:
             "pb": {"total_ms": pb["total_ms"]} if pb else None}
 
 
-def build_route_view(db, route_id: int) -> dict:
+def _candidate_rank(db, service, c) -> str | None:
+    """Best rank for one route candidate under that candidate's active strat."""
+    if service.ranks is None:
+        return None
+    if c["type"] == "segment":
+        ek = entity_key(None, None, c["segment_id"])
+        strat = service.strat_by_segment.get(c["segment_id"])
+        pb = db.current_pb(None, None, "rta", segment_id=c["segment_id"])
+    else:
+        ek = entity_key(c["course"], c["star"])
+        strat = service.strat_by_star.get((c["course"], c["star"]))
+        pb = db.current_pb(c["course"], c["star"], "igt")
+    if not strat or pb is None:
+        return None
+    ladder = service.ranks.ladder_cs(ek, strat)
+    if not ladder:
+        return None
+    return classify.rank_for(ladder, classify.display_cs(pb["frames"]))
+
+
+def build_route_view(db, service, route_id: int) -> dict:
     """Resolve a route for display: each step's candidates get names, plus the
     per-step success rate and cumulative product (tracking/routes.route_stats).
-    A candidate whose segment was deleted is marked broken (no cascade)."""
+    A candidate whose segment was deleted is marked broken (no cascade).
+    Each step gains 'rank' (best-ranked candidate); the route view gains
+    'avg_rank' (nearest-tier mean of step ranks) and 'weakest_step' index."""
     route = next((r for r in db.routes() if r["id"] == route_id), None)
     if route is None:
         raise LookupError(f"route {route_id} not found")
@@ -547,8 +569,23 @@ def build_route_view(db, route_id: int) -> dict:
                               "star": c["star"],
                               "display": star_name(c["course"], c["star"]),
                               "course_name": course_name(c["course"])})
+        ranks_here = [_candidate_rank(db, service, c) for c in step["candidates"]]
+        best = max((r for r in ranks_here if r),
+                   key=lambda r: classify.RANK_SCORE[r], default=None)
         steps.append({"label": step.get("label"), "need": step["need"],
                       "candidates": cands, "step_rate": st["step_rate"],
-                      "cumulative": st["cumulative"], "broken": broken})
+                      "cumulative": st["cumulative"], "broken": broken,
+                      "rank": best})
+    scored = [classify.RANK_SCORE[s["rank"]] for s in steps if s["rank"]]
+    avg_rank = None
+    weakest_step = None
+    if scored:
+        mean = sum(scored) / len(scored)
+        tier = min(classify.RANK_SCORE, key=lambda n: abs(classify.RANK_SCORE[n] - mean))
+        avg_rank = {"score": round(mean, 1), "tier": tier}
+        ranked = [(i, classify.RANK_SCORE[s["rank"]]) for i, s in enumerate(steps)
+                  if s["rank"]]
+        weakest_step = min(ranked, key=lambda t: t[1])[0]
     return {"id": route["id"], "name": route["name"],
-            "start_condition": route["start_condition"], "steps": steps}
+            "start_condition": route["start_condition"], "steps": steps,
+            "avg_rank": avg_rank, "weakest_step": weakest_step}
