@@ -39,3 +39,16 @@ def test_delete_strategy_and_bad_rank(tmp_path):
         assert r.status_code == 200
         r = client.put("/api/ranks/standards/star:8:2/X/NotARank", json={"seconds": 1.0})
         assert r.status_code == 409          # ValueError -> 409
+
+def test_reset_entity_endpoint(tmp_path):
+    client, svc = make_client(tmp_path)
+    with client:
+        # seed a user edit, confirm it's there
+        client.post("/api/ranks/standards/star:8:2", json={"strategy": "Custom"})
+        r = client.get("/api/ranks/standards", params={"entity": "star:8:2"})
+        assert "Custom" in r.json()["strategies"]
+        # reset (no seed configured in this test store -> entity reverts to empty)
+        r = client.post("/api/ranks/standards/star:8:2/reset")
+        assert r.status_code == 200
+        r = client.get("/api/ranks/standards", params={"entity": "star:8:2"})
+        assert r.json()["strategies"] == {}
