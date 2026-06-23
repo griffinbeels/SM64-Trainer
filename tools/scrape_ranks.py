@@ -33,9 +33,30 @@ DEFAULT_SEGMENT_LADDERS = {
 }
 
 
+def _resolve_jp_us(cell) -> tuple | None:
+    """(jp_cs, us_cs) for a rank cell, or None if not a timed cell.
+    cell['time'] = {'time': primary, 'alt': [other, 'us'|'jp'] | None}.
+    Resolve by alt LABEL: 'us' alt -> primary is JP; 'jp' alt -> primary is US."""
+    if not cell or cell.get("sr") != "time":
+        return None
+    t = cell.get("time", {})
+    prim = t.get("time")
+    if not isinstance(prim, (int, float)):
+        return None
+    alt = t.get("alt")
+    if not alt:
+        return prim, prim
+    other, label = alt[0], alt[1]
+    if label == "us":
+        return prim, other
+    if label == "jp":
+        return other, prim
+    return prim, prim
+
+
 def parse_standards(raw: dict) -> dict[str, dict[str, dict[str, float]]]:
-    """xcams standards object -> {xcams_key: {strategy: {rank: seconds}}}.
-    Excludes ranks whose cell is not sr=='time' (the Iron floor; sometimes Bronze)."""
+    """xcams standards -> {key: {strat: {rank: US-effective seconds}}}.
+    US where a US time exists, else JP. Excludes non-timed (Iron floor) cells."""
     out = {}
     for key, strats in raw.items():
         ladders = {}
@@ -43,16 +64,37 @@ def parse_standards(raw: dict) -> dict[str, dict[str, dict[str, float]]]:
             times = body.get("times", {})
             ladder = {}
             for rank in _RANKS:
-                cell = times.get(rank)
-                if not cell or cell.get("sr") != "time":
+                ju = _resolve_jp_us(times.get(rank))
+                if ju is None:
                     continue
-                cs = cell.get("time", {}).get("time")
-                if isinstance(cs, (int, float)):
-                    ladder[rank] = round(cs / 100, 2)
+                ladder[rank] = round(ju[1] / 100, 2)   # us-effective
             if ladder:
                 ladders[strat] = ladder
         if ladders:
             out[key] = ladders
+    return out
+
+
+def parse_jp_deltas(raw: dict) -> dict:
+    """{key: {strat: {rank: JP seconds}}} for ranks whose JP time differs from
+    US. Sparse: omits strats/entities with no differences. For future JP support."""
+    out = {}
+    for key, strats in raw.items():
+        ent = {}
+        for strat, body in strats.items():
+            times = body.get("times", {})
+            deltas = {}
+            for rank in _RANKS:
+                ju = _resolve_jp_us(times.get(rank))
+                if ju is None:
+                    continue
+                jp, us = ju
+                if jp != us:
+                    deltas[rank] = round(jp / 100, 2)
+            if deltas:
+                ent[strat] = deltas
+        if ent:
+            out[key] = ent
     return out
 
 
@@ -178,7 +220,7 @@ def strat_videos(catalog_star: dict, cam_blobs: list) -> dict:
     return out
 
 
-def build_seed(parsed: dict, catalog=None, cams=None) -> dict:
+def build_seed(parsed: dict, catalog=None, cams=None, jp_deltas=None) -> dict:
     cat_by_stage = {i: {s["id"]: s for s in (st or {}).get("starList", [])}
                     for i, st in enumerate(catalog or [])}
     entities = {}
@@ -188,6 +230,8 @@ def build_seed(parsed: dict, catalog=None, cams=None) -> dict:
             continue
         clock = "rta" if ek.startswith("segment:") else "igt"
         ent = {"clock": clock, "strategies": ladders}
+        if jp_deltas and jp_deltas.get(key):
+            ent["jp_strategies"] = jp_deltas[key]
         if catalog and cams:
             stage, _, starkey = key.partition("_")
             star = cat_by_stage.get(int(stage), {}).get(starkey) if stage.isdigit() else None
@@ -215,13 +259,15 @@ def fetch_all() -> tuple:
 
 def main() -> None:
     standards, catalog, cams = fetch_all()
-    seed = build_seed(parse_standards(standards), catalog, cams)
+    seed = build_seed(parse_standards(standards), catalog, cams,
+                      jp_deltas=parse_jp_deltas(standards))
     out = (Path(__file__).resolve().parent.parent / "src" / "sm64_events"
            / "data" / "rank_standards.seed.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(seed, indent=1))
     n_vid = sum(len(e.get("videos", {})) for e in seed["entities"].values())
-    print(f"wrote {out} ({len(seed['entities'])} entities, {n_vid} videos)")
+    n_jp = sum(len(e.get("jp_strategies", {})) for e in seed["entities"].values())
+    print(f"wrote {out} ({len(seed['entities'])} entities, {n_vid} videos, {n_jp} jp-delta strats)")
 
 
 if __name__ == "__main__":

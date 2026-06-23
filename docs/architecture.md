@@ -535,6 +535,18 @@ disambiguate this blob from the xcam-viewer blob (whose `times` field is a LIST,
 not a rank-keyed dict). See `tools/scrape_ranks.py` docstring for the exact
 selector and disambiguation logic.
 
+**JP vs US version times (verified 2026-06-23).** Each cell carries
+`time = {"time": primary_cs, "alt": [other_cs, "us"|"jp"] | null}`. The trainer
+runs the US Usamune ROM (see `memory/addresses.py`), so `strategies` holds the
+**US-effective** ladder: US time where one exists, else JP. The resolver keys on
+the `alt` **label** (not position): `alt=[x,"us"]` → primary is JP, x is US;
+`alt=[x,"jp"]` → primary is US, x is JP; `alt=null` → US == JP (239 cells).
+`jp_strategies` is a sparse parallel dict carrying JP values only where they
+differ from US (28 strats across 99 entities as of 2026-06-23); reserved for
+future JP-ROM support, which would also require a JP memory map — a separate
+larger effort. Scraper logic: `_resolve_jp_us` + `parse_jp_deltas` in
+`tools/scrape_ranks.py`.
+
 **Key→entity mapping (verified live + smoke-tested 2026-06-23).** Stages 0–14 =
 main courses (course_id = stage+1, star_id = starKey−1); `100c*` deferred.
 Stage 15 = Castle secret stars → single-star courses: wc→21, vc→22, mc→20,

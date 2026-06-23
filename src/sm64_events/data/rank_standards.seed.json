@@ -5,6 +5,28 @@
    "clock": "igt",
    "strategies": {
     "Standard": {
+     "Mario": 45.46,
+     "Grandmaster": 45.83,
+     "Master": 46.7,
+     "Diamond": 47.46,
+     "Platinum": 49.1,
+     "Gold": 50.1,
+     "Silver": 59.06,
+     "Bronze": 63.1
+    },
+    "Left Side": {
+     "Mario": 44.66,
+     "Grandmaster": 45.03,
+     "Master": 45.9,
+     "Diamond": 46.66,
+     "Platinum": 48.3,
+     "Gold": 49.3,
+     "Silver": 50.46,
+     "Bronze": 54.5
+    }
+   },
+   "jp_strategies": {
+    "Standard": {
      "Mario": 44.23,
      "Grandmaster": 44.6,
      "Master": 45.46,
@@ -43,6 +65,18 @@
      "Silver": 92.86,
      "Bronze": 96.36
     },
+    "No Cutscene": {
+     "Mario": 78.23,
+     "Grandmaster": 78.5,
+     "Master": 79.26,
+     "Diamond": 80.23,
+     "Platinum": 80.73,
+     "Gold": 81.73,
+     "Silver": 82.73,
+     "Bronze": 86.23
+    }
+   },
+   "jp_strategies": {
     "No Cutscene": {
      "Mario": 78.26,
      "Grandmaster": 78.53,
@@ -172,6 +206,18 @@
    "clock": "igt",
    "strategies": {
     "Standard": {
+     "Mario": 28.93,
+     "Grandmaster": 29.03,
+     "Master": 29.16,
+     "Diamond": 29.33,
+     "Platinum": 29.6,
+     "Gold": 29.93,
+     "Silver": 31.9,
+     "Bronze": 32.8
+    }
+   },
+   "jp_strategies": {
+    "Standard": {
      "Mario": 29.86,
      "Grandmaster": 29.96,
      "Master": 30.1,
@@ -278,14 +324,14 @@
      "Bronze": 12.86
     },
     "Owl": {
-     "Mario": 15.93,
-     "Grandmaster": 16.1,
-     "Master": 16.96,
-     "Diamond": 17.4,
-     "Platinum": 17.9,
-     "Gold": 18.53,
-     "Silver": 19.16,
-     "Bronze": 21.33
+     "Mario": 15.8,
+     "Grandmaster": 15.96,
+     "Master": 16.83,
+     "Diamond": 17.26,
+     "Platinum": 17.76,
+     "Gold": 18.4,
+     "Silver": 19.03,
+     "Bronze": 21.2
     },
     "Sideflip": {
      "Mario": 10.93,
@@ -296,6 +342,28 @@
      "Gold": 12.2,
      "Silver": 12.56,
      "Bronze": 13.83
+    },
+    "Mad Owl": {
+     "Mario": 14.4,
+     "Grandmaster": 14.56,
+     "Master": 15.43,
+     "Diamond": 15.86,
+     "Platinum": 16.36,
+     "Gold": 17.0,
+     "Silver": 17.63,
+     "Bronze": 19.8
+    }
+   },
+   "jp_strategies": {
+    "Owl": {
+     "Mario": 15.93,
+     "Grandmaster": 16.1,
+     "Master": 16.96,
+     "Diamond": 17.4,
+     "Platinum": 17.9,
+     "Gold": 18.53,
+     "Silver": 19.16,
+     "Bronze": 21.33
     },
     "Mad Owl": {
      "Mario": 14.53,
@@ -468,6 +536,48 @@
    "clock": "igt",
    "strategies": {
     "Cannon (Direct)": {
+     "Mario": 14.63,
+     "Grandmaster": 14.8,
+     "Master": 15.2,
+     "Diamond": 15.53,
+     "Platinum": 16.4,
+     "Gold": 17.23,
+     "Silver": 17.86,
+     "Bronze": 20.03
+    },
+    "Ship LJ": {
+     "Mario": 22.33,
+     "Grandmaster": 22.66,
+     "Master": 23.33,
+     "Diamond": 23.8,
+     "Platinum": 24.33,
+     "Gold": 25.0,
+     "Silver": 25.66,
+     "Bronze": 28.0
+    },
+    "Framewalk": {
+     "Mario": 17.6,
+     "Grandmaster": 18.26,
+     "Master": 19.13,
+     "Diamond": 19.76,
+     "Platinum": 20.46,
+     "Gold": 21.36,
+     "Silver": 22.23,
+     "Bronze": 25.3
+    },
+    "Cannon (Pole)": {
+     "Mario": 16.3,
+     "Grandmaster": 16.46,
+     "Master": 16.86,
+     "Diamond": 17.2,
+     "Platinum": 18.06,
+     "Gold": 18.9,
+     "Silver": 19.53,
+     "Bronze": 21.7
+    }
+   },
+   "jp_strategies": {
+    "Cannon (Direct)": {
      "Mario": 10.96,
      "Grandmaster": 11.13,
      "Master": 11.53,
@@ -565,6 +675,28 @@
    "clock": "igt",
    "strategies": {
     "Standard": {
+     "Mario": 18.53,
+     "Grandmaster": 18.66,
+     "Master": 18.83,
+     "Diamond": 18.96,
+     "Platinum": 19.16,
+     "Gold": 19.56,
+     "Silver": 19.86,
+     "Bronze": 20.86
+    },
+    "Pingu Trick": {
+     "Mario": 17.7,
+     "Grandmaster": 17.83,
+     "Master": 18.0,
+     "Diamond": 18.13,
+     "Platinum": 18.33,
+     "Gold": 18.73,
+     "Silver": 19.03,
+     "Bronze": 20.03
+    }
+   },
+   "jp_strategies": {
+    "Standard": {
      "Mario": 18.56,
      "Grandmaster": 18.7,
      "Master": 18.86,
@@ -611,6 +743,28 @@
   "star:4:4": {
    "clock": "igt",
    "strategies": {
+    "Upper Start": {
+     "Mario": 35.7,
+     "Grandmaster": 35.96,
+     "Master": 36.2,
+     "Diamond": 36.4,
+     "Platinum": 36.63,
+     "Gold": 36.86,
+     "Silver": 37.16,
+     "Bronze": 38.2
+    },
+    "Lower Start": {
+     "Mario": 35.56,
+     "Grandmaster": 35.83,
+     "Master": 36.06,
+     "Diamond": 36.26,
+     "Platinum": 36.5,
+     "Gold": 36.73,
+     "Silver": 37.03,
+     "Bronze": 38.06
+    }
+   },
+   "jp_strategies": {
     "Upper Start": {
      "Mario": 36.8,
      "Grandmaster": 37.06,
@@ -691,14 +845,14 @@
    "clock": "igt",
    "strategies": {
     "Standard": {
-     "Mario": 52.1,
-     "Grandmaster": 52.5,
-     "Master": 53.86,
-     "Diamond": 54.93,
-     "Platinum": 56.5,
-     "Gold": 58.03,
-     "Silver": 60.86,
-     "Bronze": 66.23
+     "Mario": 53.9,
+     "Grandmaster": 54.3,
+     "Master": 55.66,
+     "Diamond": 56.73,
+     "Platinum": 58.3,
+     "Gold": 59.83,
+     "Silver": 62.66,
+     "Bronze": 68.03
     },
     "Door Skips": {
      "Mario": 49.53,
@@ -729,6 +883,18 @@
      "Gold": 57.56,
      "Silver": 59.1,
      "Bronze": 64.46
+    }
+   },
+   "jp_strategies": {
+    "Standard": {
+     "Mario": 52.1,
+     "Grandmaster": 52.5,
+     "Master": 53.86,
+     "Diamond": 54.93,
+     "Platinum": 56.5,
+     "Gold": 58.03,
+     "Silver": 60.86,
+     "Bronze": 66.23
     }
    },
    "videos": {
@@ -1485,6 +1651,38 @@
    "clock": "igt",
    "strategies": {
     "Topless": {
+     "Mario": 47.53,
+     "Grandmaster": 47.83,
+     "Master": 48.36,
+     "Diamond": 49.06,
+     "Platinum": 50.0,
+     "Gold": 50.76,
+     "Silver": 51.53,
+     "Bronze": 54.23
+    },
+    "Backside": {
+     "Mario": 56.0,
+     "Grandmaster": 56.3,
+     "Master": 56.83,
+     "Diamond": 57.53,
+     "Platinum": 58.46,
+     "Gold": 59.23,
+     "Silver": 62.5,
+     "Bronze": 65.2
+    },
+    "TJWK": {
+     "Mario": 53.33,
+     "Grandmaster": 53.63,
+     "Master": 54.16,
+     "Diamond": 54.86,
+     "Platinum": 55.8,
+     "Gold": 56.56,
+     "Silver": 57.33,
+     "Bronze": 60.03
+    }
+   },
+   "jp_strategies": {
+    "Topless": {
      "Mario": 44.96,
      "Grandmaster": 45.26,
      "Master": 45.8,
@@ -2133,6 +2331,38 @@
    "clock": "igt",
    "strategies": {
     "Log WK": {
+     "Mario": 35.16,
+     "Grandmaster": 35.96,
+     "Master": 36.86,
+     "Diamond": 38.16,
+     "Platinum": 39.83,
+     "Gold": 41.46,
+     "Silver": 43.1,
+     "Bronze": 48.8
+    },
+    "Log Firsty": {
+     "Mario": 34.5,
+     "Grandmaster": 35.3,
+     "Master": 36.2,
+     "Diamond": 37.5,
+     "Platinum": 39.16,
+     "Gold": 40.8,
+     "Silver": 42.43,
+     "Bronze": 48.13
+    },
+    "No Log WK": {
+     "Mario": 40.06,
+     "Grandmaster": 40.86,
+     "Master": 41.76,
+     "Diamond": 43.06,
+     "Platinum": 44.73,
+     "Gold": 46.36,
+     "Silver": 50.0,
+     "Bronze": 65.7
+    }
+   },
+   "jp_strategies": {
+    "Log WK": {
      "Mario": 34.96,
      "Grandmaster": 35.76,
      "Master": 36.66,
@@ -2151,16 +2381,6 @@
      "Gold": 40.6,
      "Silver": 42.23,
      "Bronze": 47.93
-    },
-    "No Log WK": {
-     "Mario": 40.06,
-     "Grandmaster": 40.86,
-     "Master": 41.76,
-     "Diamond": 43.06,
-     "Platinum": 44.73,
-     "Gold": 46.36,
-     "Silver": 50.0,
-     "Bronze": 65.7
     }
    },
    "videos": {
@@ -2408,14 +2628,14 @@
    "clock": "igt",
    "strategies": {
     "Standard": {
-     "Mario": 47.63,
-     "Grandmaster": 47.96,
-     "Master": 48.26,
-     "Diamond": 48.76,
-     "Platinum": 49.63,
-     "Gold": 50.46,
-     "Silver": 51.3,
-     "Bronze": 54.2
+     "Mario": 47.36,
+     "Grandmaster": 47.7,
+     "Master": 48.0,
+     "Diamond": 48.5,
+     "Platinum": 49.36,
+     "Gold": 50.2,
+     "Silver": 51.03,
+     "Bronze": 53.93
     },
     "Intended": {
      "Mario": 48.73,
@@ -2426,6 +2646,28 @@
      "Gold": 51.56,
      "Silver": 52.4,
      "Bronze": 55.3
+    },
+    "TJ Dive Start": {
+     "Mario": 46.63,
+     "Grandmaster": 46.96,
+     "Master": 47.26,
+     "Diamond": 47.76,
+     "Platinum": 48.63,
+     "Gold": 49.46,
+     "Silver": 50.3,
+     "Bronze": 53.2
+    }
+   },
+   "jp_strategies": {
+    "Standard": {
+     "Mario": 47.63,
+     "Grandmaster": 47.96,
+     "Master": 48.26,
+     "Diamond": 48.76,
+     "Platinum": 49.63,
+     "Gold": 50.46,
+     "Silver": 51.3,
+     "Bronze": 54.2
     },
     "TJ Dive Start": {
      "Mario": 46.9,
@@ -2502,6 +2744,28 @@
   "star:13:5": {
    "clock": "igt",
    "strategies": {
+    "Standard": {
+     "Mario": 43.56,
+     "Grandmaster": 44.2,
+     "Master": 45.0,
+     "Diamond": 46.33,
+     "Platinum": 47.9,
+     "Gold": 49.23,
+     "Silver": 50.56,
+     "Bronze": 67.23
+    },
+    "TJ Dive Start": {
+     "Mario": 43.03,
+     "Grandmaster": 43.66,
+     "Master": 44.46,
+     "Diamond": 45.8,
+     "Platinum": 47.36,
+     "Gold": 48.7,
+     "Silver": 50.03,
+     "Bronze": 54.7
+    }
+   },
+   "jp_strategies": {
     "Standard": {
      "Mario": 42.23,
      "Grandmaster": 42.86,
@@ -3286,6 +3550,18 @@
    "clock": "rta",
    "strategies": {
     "Standard": {
+     "Mario": 25.23,
+     "Grandmaster": 25.4,
+     "Master": 25.9,
+     "Diamond": 26.16,
+     "Platinum": 26.43,
+     "Gold": 26.76,
+     "Silver": 27.23,
+     "Bronze": 28.8
+    }
+   },
+   "jp_strategies": {
+    "Standard": {
      "Mario": 26.13,
      "Grandmaster": 26.3,
      "Master": 26.8,
@@ -3352,6 +3628,18 @@
   "segment:9": {
    "clock": "rta",
    "strategies": {
+    "Standard": {
+     "Mario": 32.1,
+     "Grandmaster": 32.33,
+     "Master": 32.76,
+     "Diamond": 32.93,
+     "Platinum": 33.03,
+     "Gold": 33.23,
+     "Silver": 33.56,
+     "Bronze": 34.66
+    }
+   },
+   "jp_strategies": {
     "Standard": {
      "Mario": 32.4,
      "Grandmaster": 32.63,
@@ -3420,6 +3708,28 @@
   "segment:10": {
    "clock": "rta",
    "strategies": {
+    "Normal File": {
+     "Mario": 38.46,
+     "Grandmaster": 38.96,
+     "Master": 40.36,
+     "Diamond": 41.4,
+     "Platinum": 42.63,
+     "Gold": 43.53,
+     "Silver": 47.0,
+     "Bronze": 52.1
+    },
+    "120 Star File": {
+     "Mario": 39.2,
+     "Grandmaster": 39.7,
+     "Master": 41.1,
+     "Diamond": 42.13,
+     "Platinum": 43.36,
+     "Gold": 44.26,
+     "Silver": 47.73,
+     "Bronze": 52.83
+    }
+   },
+   "jp_strategies": {
     "Normal File": {
      "Mario": 39.13,
      "Grandmaster": 39.63,
