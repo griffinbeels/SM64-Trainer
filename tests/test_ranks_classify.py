@@ -37,3 +37,6 @@ def test_band_floor_empty_bar():
     b = band(NUTS, 1700)
     assert b["rank"] == "Iron" and b["next"] == "Silver"
     assert b["fill"] == 0.0 and b["gap_cs"] == 1700 - 1676
+
+def test_band_empty_ladder():
+    assert band({}, 1326) == {"rank": None, "next": None, "gap_cs": None, "fill": None}

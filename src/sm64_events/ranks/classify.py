@@ -32,6 +32,8 @@ def rank_for(ladder_cs: dict, time_cs: int) -> str | None:
 
 def next_tier(ladder_cs: dict, rank: str | None) -> str | None:
     """The next HARDER defined tier above `rank` (None at the top)."""
+    if rank is None:
+        return None
     present = _present(ladder_cs)
     if rank == "Iron":
         return present[-1] if present else None
