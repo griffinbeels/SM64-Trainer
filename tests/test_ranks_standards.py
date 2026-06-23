@@ -1,4 +1,5 @@
 import json
+import pytest
 from sm64_events.ranks.standards import RankStandards, entity_key, RANK_COLORS
 
 def _seed(tmp_path):
@@ -46,3 +47,10 @@ def test_reset_entity_restores_seed(tmp_path):
     s.set_threshold("star:9:2", "Nuts Pless", "Mario", 99.0)
     s.reset_entity("star:9:2")
     assert s.ladder_cs("star:9:2", "Nuts Pless")["Mario"] == 1293
+
+def test_set_threshold_rejects_iron_and_unknown(tmp_path):
+    s = RankStandards(tmp_path / "rs.json"); s.load()
+    with pytest.raises(ValueError):
+        s.set_threshold("star:9:2", "Nuts Pless", "Iron", 5.0)
+    with pytest.raises(ValueError):
+        s.set_threshold("star:9:2", "Nuts Pless", "NotARank", 5.0)

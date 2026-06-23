@@ -63,7 +63,7 @@ class RankStandards:
 
     # ---- reads ----
     def to_json(self) -> dict:
-        return self._data
+        return json.loads(json.dumps(self._data))
 
     def _entity(self, ek) -> dict:
         return self._data["entities"].get(ek, {})
