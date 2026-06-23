@@ -917,3 +917,34 @@ def test_run_history_splits_carry_display_and_duration(tmp_path):
     sp = build_run_history(db, route_id=rid)["runs"][0]["splits"][0]
     assert sp["display"] == "Chip off Whomp's Block"
     assert sp["duration_ms"] == 60000 and sp["duration_display"] is not None
+
+
+# -- Task 6: per-attempt rank, section banner, progress-point rank --------------
+
+def _ranks(tmp_path):
+    import json
+    from sm64_events.ranks.standards import RankStandards
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "star:2:2": {"clock": "igt", "strategies": {
+            "fast": {"Mario": 11.0, "Diamond": 12.0, "Silver": 13.0}}}}}))
+    s = RankStandards(p); s.load(); return s
+
+
+def test_session_view_attaches_ranks(tmp_path):
+    db, svc = make(tmp_path)
+    seed(svc)                     # existing helper: seeds course 2 star 2 successes
+    # save the best attempt as PB so the section banner has a time to classify
+    best_aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    asyncio.run(svc.save_pb(best_aid, "igt"))
+    svc.ranks = _ranks(tmp_path)
+    # tag the section's active strat so the banner can classify the PB
+    asyncio.run(svc.set_strat(2, 2, "fast"))
+    # make every seeded attempt carry strat 'fast' so per-attempt rank resolves
+    db._conn.execute("UPDATE attempts SET strat_tag='fast' WHERE course_id=2")
+    db._conn.commit()
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    assert sec["rank"]["rank"] in {"Mario", "Diamond", "Silver", "Iron"}
+    assert "rank" in sec["attempts"][0]
+    assert any(p.get("rank") for s in sec["progress"]["sessions"] for p in s["points"])
