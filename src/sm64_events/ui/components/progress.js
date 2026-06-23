@@ -8,6 +8,7 @@
 import { h } from "preact";
 import htm from "htm";
 import { fmtIgt } from "../format.js";
+import { rankColor } from "./ranks.js";
 
 const html = htm.bind(h);
 
@@ -98,12 +99,12 @@ export function Progress({ prog, clock, onPick }) {
           // hostile click target); it owns the tooltip so hover still works
           html`<g>
           <circle cx=${s.xs[j]} cy=${y(p[fKey])}
-              r=${p[pbKey] ? 5 : 4.5} fill=${p[pbKey] ? GOLD : GREEN}
-              stroke=${p[pbKey] ? GOLD_RIM : "none"} stroke-width="1" />
+              r=${p[pbKey] ? 5.5 : 4.5} fill=${p.rank ? rankColor(p.rank) : (p[pbKey] ? GOLD : GREEN)}
+              stroke=${p[pbKey] ? GOLD_RIM : "none"} stroke-width="1.5" />
           <circle cx=${s.xs[j]} cy=${y(p[fKey])} r="9" fill="transparent"
               style=${onPick ? "cursor:pointer" : ""}
               onclick=${onPick ? () => onPick(p.attempt_id) : null}>
-            <title>${p[pbKey] ? "PB " : ""}${clock === "igt" ? p.igt : p.rta} · ${fmtTick(p.t_utc, true)}${onPick ? " — click to open in the list" : ""}</title>
+            <title>${p.rank ? p.rank + " · " : ""}${p[pbKey] ? "PB " : ""}${clock === "igt" ? p.igt : p.rta} · ${fmtTick(p.t_utc, true)}${onPick ? " — click to open in the list" : ""}</title>
           </circle>
         </g>`)}
         ${s.w >= 60 && html`<text x=${s.left + s.w / 2} y=${H - 8} fill=${TXT} font-size="9"
