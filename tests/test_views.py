@@ -946,5 +946,7 @@ def test_session_view_attaches_ranks(tmp_path):
     view = build_session_view(db, svc, clock="igt")
     [sec] = view["stars"]
     assert sec["rank"]["rank"] in {"Mario", "Diamond", "Silver", "Iron"}
-    assert "rank" in sec["attempts"][0]
+    assert any(at["rank"] in {"Mario", "Grandmaster", "Master", "Diamond",
+                              "Platinum", "Gold", "Silver", "Bronze", "Iron"}
+               for at in sec["attempts"])
     assert any(p.get("rank") for s in sec["progress"]["sessions"] for p in s["points"])

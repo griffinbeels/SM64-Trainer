@@ -288,7 +288,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             seen_segs[a.segment_id] = None  # ...but are NEVER unassigned
             last_id[("segment", a.segment_id)] = journal_id(a.id)
         elif a.course_id is None:
-            unassigned.append(_attempt_json(a, pbs, clock))
+            unassigned.append(_attempt_json(a, pbs, clock, service.ranks))
         else:
             seen[(a.course_id, a.star_id)] = None
             last_id[(a.course_id, a.star_id)] = journal_id(a.id)
