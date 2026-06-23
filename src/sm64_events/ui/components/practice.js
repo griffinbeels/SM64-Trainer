@@ -8,6 +8,7 @@ import { StatMenu } from "./statmenu.js";
 import { Timeline } from "./timeline.js";
 import { Progress } from "./progress.js";
 import { StageBanner } from "./stagebanner.js";
+import { Medal, RankBanner } from "./ranks.js";
 
 const html = htm.bind(h);
 
@@ -141,7 +142,7 @@ function AttemptRow({ a, t, idx, focus, clearFocus, isNew }) {
         ? html` <span class="meta">· ${a.jumps_dustless}/${a.jumps_total} dustless jumps</span>` : ""}
     </td>
     <td>${a.outcome === "success" ? delta(a.pb_delta_frames) : ""}</td>
-    <td class="meta">${a.strat_tag || ""}</td>
+    <td class="meta">${a.rank ? html`<${Medal} rank=${a.rank} size=${14} /> ` : ""}${a.strat_tag || ""}</td>
     <td style="text-align:right">
       <button onclick=${() => setShowReplay(!showReplay)} title="view replay">${showReplay ? "▾" : "▶"}</button>
       ${a.outcome === "success" && !a.cleared
@@ -261,6 +262,7 @@ function StarSection({ sec, t, ui, pinned, freshIds }) {
           ? "wipe this star's data (all sessions)"
           : "wipe this star's data (current session)"}>clear data</button>
     </div>
+    ${sec.rank ? html`<${RankBanner} banner=${sec.rank} />` : null}
     <${Timeline} tl=${sec.timeline} sec=${sec} t=${t} />
     <${Progress} prog=${sec.progress} clock=${t.clock} onPick=${pickFromGraph} />
     <${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t}
@@ -342,6 +344,7 @@ function SegmentSection({ sec, t, ui, pinned, freshIds }) {
           ? "wipe this segment's data (all sessions)"
           : "wipe this segment's data (current session)"}>clear data</button>
     </div>
+    ${sec.rank ? html`<${RankBanner} banner=${sec.rank} />` : null}
     ${!sec.broken && html`<${Timeline} tl=${sec.timeline} sec=${sec} t=${t} />`}
     <${Progress} prog=${sec.progress} clock="rta" />
     <${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t} freshIds=${freshIds} />
