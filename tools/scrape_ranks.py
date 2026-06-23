@@ -112,7 +112,8 @@ def extract_standards_blob(js_text: str) -> dict:
             v = next(iter(obj.values()))
             if isinstance(v, dict) and v:
                 strat = next(iter(v.values()))
-                if isinstance(strat, dict) and "times" in strat:
+                t = strat.get("times") if isinstance(strat, dict) else None
+                if isinstance(t, dict) and any(r in t for r in _RANKS):
                     return obj
 
 

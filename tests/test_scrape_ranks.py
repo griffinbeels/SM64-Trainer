@@ -46,3 +46,11 @@ def test_extract_standards_blob_picks_the_standards_object():
           "\"times\":{\"Mario\":{\"sr\":\"time\",\"time\":{\"time\":1293}}}}}}');")
     blob = scrape.extract_standards_blob(js)
     assert blob["7_3"]["Nuts Pless"]["times"]["Mario"]["time"]["time"] == 1293
+
+def test_extract_standards_blob_skips_viewer_blob_with_list_times():
+    js = ("var g=JSON.parse('{\"335\":{\"strat\":{\"stage\":\"x\"},"
+          "\"times\":[{\"player\":\"a\",\"ms\":6380}]}}');"
+          "var H=JSON.parse('{\"7_3\":{\"Nuts Pless\":{\"name\":\"Nuts Pless\","
+          "\"times\":{\"Mario\":{\"sr\":\"time\",\"time\":{\"time\":1293}}}}}}');")
+    blob = scrape.extract_standards_blob(js)
+    assert "7_3" in blob   # picked the standards blob, not the viewer (list times)
