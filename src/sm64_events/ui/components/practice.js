@@ -80,7 +80,7 @@ function AttemptRow({ a, t, idx, focus, clearFocus, isNew }) {
   const [showReplay, setShowReplay] = useState(false);
   const [flash, setFlash] = useState(false);
   const rowRef = useRef(null);
-  // Progress-graph pick (see StarSection.pickFromGraph): when this row is
+  // Progress-graph pick (see useGraphPick): when this row is
   // the focused one, scroll it into view, flash it, and — when the pick
   // says a saved replay file exists — open the player exactly as if the
   // ▶ button was pressed. Keyed on the nonce so re-clicking the same node
@@ -186,27 +186,17 @@ function HideToggle({ hidden, showHidden, setShowHidden }) {
   </button>`;
 }
 
-function StarSection({ sec, t, ui, pinned, freshIds }) {
-  const [showHidden, setShowHidden] = useState(false);
-  const [visible, setVisible] = useState(10);
+// Progress-graph pick, shared by StarSection and SegmentSection (and the
+// clickable PB tag below). Reveal an attempt's row — bump pagination if it's
+// past the fold — then scroll to it, flash it, and auto-open its replay when a
+// saved file exists (HEAD existence probe). Graph points and the PB attempt are
+// always non-cleared successes, which no list filter removes, so they live in
+// `rows` whenever they're in scope; a pick whose attempt is out of scope (e.g.
+// a PB from another session in session-scope, with no dot either) no-ops.
+function useGraphPick(rows, visible, setVisible) {
   const [focus, setFocus] = useState(null);
   const pickNonce = useRef(0);
-  const pb = sec.pb[t.clock];
-  const base = showHidden ? sec.attempts
-    : sec.attempts.filter((a) => !a.cleared && a.outcome !== "abandoned");
-  const hidden = sec.attempts.filter((a) => a.cleared || a.outcome === "abandoned");
-  const rows = base
-    .filter((a) => !(ui.hideResets
-      && (a.outcome === "reset" || a.outcome === "hard_reset")))
-    .slice()
-    .sort(comparator(ui.sort, t.clock));
-  const shown = rows.slice(0, visible);
-
-  // Progress-graph node click: reveal that attempt's row (bump pagination
-  // if it's past the fold), scroll to it, and auto-open its replay when a
-  // saved file exists (HEAD existence probe — graph points are always in
-  // `rows`: they're non-cleared successes, which no list filter removes).
-  async function pickFromGraph(attemptId) {
+  async function pick(attemptId) {
     let openReplay = false;
     try {
       openReplay = (await fetch(`/api/replay/saved/${attemptId}`,
@@ -217,6 +207,36 @@ function StarSection({ sec, t, ui, pinned, freshIds }) {
     if (idx >= visible) setVisible(Math.ceil((idx + 1) / 10) * 10);
     setFocus({ id: attemptId, nonce: ++pickNonce.current, openReplay });
   }
+  return { focus, pick, clearFocus: () => setFocus(null) };
+}
+
+// PB tag: clickable when the PB's attempt is in the visible `rows` — clicking
+// jumps to that row exactly like clicking its gold progress-graph dot (`pick`).
+// Falls back to plain text otherwise (no PB yet, or the PB is out of scope so
+// there is no row to reach). `mode` is just the clock label shown in parens.
+function PbTag({ pb, mode, rows, pick }) {
+  if (!pb) return html`<span class="pbtag">no PB yet</span>`;
+  const canPick = pick && rows.some((a) => a.id === pb.attempt_id);
+  return html`<span class="pbtag">PB ${canPick
+    ? html`<a class="pblink" onclick=${() => pick(pb.attempt_id)}
+        title="jump to this PB in the list below">${pb.display}</a>`
+    : pb.display} (${mode})</span>`;
+}
+
+function StarSection({ sec, t, ui, pinned, freshIds }) {
+  const [showHidden, setShowHidden] = useState(false);
+  const [visible, setVisible] = useState(10);
+  const pb = sec.pb[t.clock];
+  const base = showHidden ? sec.attempts
+    : sec.attempts.filter((a) => !a.cleared && a.outcome !== "abandoned");
+  const hidden = sec.attempts.filter((a) => a.cleared || a.outcome === "abandoned");
+  const rows = base
+    .filter((a) => !(ui.hideResets
+      && (a.outcome === "reset" || a.outcome === "hard_reset")))
+    .slice()
+    .sort(comparator(ui.sort, t.clock));
+  const shown = rows.slice(0, visible);
+  const { focus, pick, clearFocus } = useGraphPick(rows, visible, setVisible);
 
   async function setStrat(v) {
     if (v === "__new") {
@@ -257,7 +277,7 @@ function StarSection({ sec, t, ui, pinned, freshIds }) {
         ${sec.strategies.map((s) => html`<option value=${s}>${s}</option>`)}
         <option value="__new">+ new strat…</option>
       </select>
-      <span class="pbtag">${pb ? `PB ${pb.display} (${t.clock})` : "no PB yet"}</span>
+      <${PbTag} pb=${pb} mode=${t.clock} rows=${rows} pick=${pick} />
       <button class="meta" onclick=${wipeData}
         title=${t.scope === "lifetime"
           ? "wipe this star's data (all sessions)"
@@ -265,9 +285,9 @@ function StarSection({ sec, t, ui, pinned, freshIds }) {
     </div>
     ${sec.rank ? html`<${RankBanner} banner=${sec.rank} />` : null}
     <${Timeline} tl=${sec.timeline} sec=${sec} t=${t} />
-    <${Progress} prog=${sec.progress} clock=${t.clock} onPick=${pickFromGraph} />
+    <${Progress} prog=${sec.progress} clock=${t.clock} onPick=${pick} />
     <${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t}
-      focus=${focus} clearFocus=${() => setFocus(null)} freshIds=${freshIds} />
+      focus=${focus} clearFocus=${clearFocus} freshIds=${freshIds} />
     ${(rows.length > visible || visible > 10) && html`<div>
       ${rows.length > visible && html`<button class="meta"
           style="background:none;border:none;cursor:pointer"
@@ -313,6 +333,7 @@ function SegmentSection({ sec, t, ui, pinned, freshIds }) {
     .slice()
     .sort(comparator(ui.sort, "rta"));
   const shown = rows.slice(0, visible);
+  const { focus, pick, clearFocus } = useGraphPick(rows, visible, setVisible);
 
   async function wipeData() {
     const msg = t.scope === "lifetime"
@@ -341,7 +362,7 @@ function SegmentSection({ sec, t, ui, pinned, freshIds }) {
       <b>⏱ ${sec.name}</b>
       ${armed && html`<span class="chip good">⏱ active</span>`}
       ${sec.broken && html`<span class="meta">definition deleted — history only</span>`}
-      <span class="pbtag">${sec.pb.rta ? `PB ${sec.pb.rta.display} (rta)` : "no PB yet"}</span>
+      <${PbTag} pb=${sec.pb.rta} mode="rta" rows=${rows} pick=${pick} />
       <button class="meta" onclick=${wipeData}
         title=${t.scope === "lifetime"
           ? "wipe this segment's data (all sessions)"
@@ -349,8 +370,9 @@ function SegmentSection({ sec, t, ui, pinned, freshIds }) {
     </div>
     ${sec.rank ? html`<${RankBanner} banner=${sec.rank} />` : null}
     ${!sec.broken && html`<${Timeline} tl=${sec.timeline} sec=${sec} t=${t} />`}
-    <${Progress} prog=${sec.progress} clock="rta" />
-    <${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t} freshIds=${freshIds} />
+    <${Progress} prog=${sec.progress} clock="rta" onPick=${pick} />
+    <${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t}
+      focus=${focus} clearFocus=${clearFocus} freshIds=${freshIds} />
     ${(rows.length > visible || visible > 10) && html`<div>
       ${rows.length > visible && html`<button class="meta"
           style="background:none;border:none;cursor:pointer"

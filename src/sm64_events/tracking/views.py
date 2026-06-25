@@ -390,8 +390,11 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         pb_json = {}
         for mode in ("igt", "rta"):
             row = pbs.get((course_id, star_id, mode))
+            # attempt_id lets the UI turn the PB tag into a "jump to this row"
+            # link — the same pickFromGraph path a gold progress-graph dot uses.
             pb_json[mode] = ({"frames": row["frames"],
-                              "display": format_igt(row["frames"])}
+                              "display": format_igt(row["frames"]),
+                              "attempt_id": row["attempt_id"]}
                              if row else None)
         # Note: star sections intentionally omit "kind". The UI branches on
         # sec.kind being undefined for stars (SegmentSection vs StarSection),
@@ -441,7 +444,8 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             # payload — UI code reading sec.pb.igt gets null, not undefined.
             "pb": {"igt": None,
                    "rta": ({"frames": pb_row["frames"],
-                            "display": format_igt(pb_row["frames"])}
+                            "display": format_igt(pb_row["frames"]),
+                            "attempt_id": pb_row["attempt_id"]}
                            if pb_row else None)},
             "attempts": [_attempt_json(a, pbs, "rta", service.ranks) for a in in_section],
             "stats": _stats_for(history, stat_menu, "rta"),

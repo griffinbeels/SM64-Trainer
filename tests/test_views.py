@@ -48,6 +48,9 @@ def test_view_groups_by_star_with_stats_and_pb_delta(tmp_path):
     assert sec["star_name"] == "Shoot into the Wild Blue"
     assert sec["links"]["ukikipedia"].endswith("Shoot_into_the_Wild_Blue")
     assert sec["pb"]["igt"]["frames"] == 343
+    # the PB carries its saving attempt's id so the UI can link "PB <time>"
+    # straight to that row (the pickFromGraph path a gold dot uses).
+    assert sec["pb"]["igt"]["attempt_id"] == aid
     # 3 attempts in section (ordered by id): the star at 1350 closed the
     # first anchor as success; the 1400 anchor opened a fresh attempt that
     # the 1900 anchor closed as reset; the 2400 grab closed the last one.
@@ -633,6 +636,7 @@ def test_segment_pb_keying_isolates_segments_and_stars(tmp_path):
     view = build_session_view(db, svc, clock="igt")
     sec = seg_section(view, 1)
     assert sec["pb"]["rta"]["frames"] == 85
+    assert sec["pb"]["rta"]["attempt_id"] == seg_aid   # links PB tag → its row
     [a] = sec["attempts"]
     assert a["pb_delta_frames"] == 0            # kind-aware _attempt_json lookup
     star_sec = next(s for s in view["stars"]
