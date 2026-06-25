@@ -17,6 +17,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from sm64_events.ranks.standards import entity_key  # noqa: E402
 
+SEED_VERSION = 2  # bump whenever the bundled seed should push to existing installs
+
 # Closed vocabulary — update if xcams adds tiers (order = fastest to slowest).
 _RANKS = ["Mario", "Grandmaster", "Master", "Diamond", "Platinum",
           "Gold", "Silver", "Bronze", "Iron"]
@@ -242,7 +244,7 @@ def build_seed(parsed: dict, catalog=None, cams=None, jp_deltas=None) -> dict:
         entities[ek] = ent
     for seg_id, strategies in DEFAULT_SEGMENT_LADDERS.items():
         entities.setdefault(f"segment:{seg_id}", {"clock": "rta", "strategies": strategies})
-    return {"version": 1, "entities": entities}
+    return {"version": SEED_VERSION, "entities": entities}
 
 
 def fetch_all() -> tuple:

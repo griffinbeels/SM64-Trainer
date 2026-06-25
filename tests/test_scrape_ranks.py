@@ -34,7 +34,7 @@ def test_key_to_entity():
 def test_build_seed_maps_and_adds_segment_defaults():
     parsed = {"7_3": {"Nuts Pless": {"Mario": 12.93}}, "0_100c4": {"x": {"Mario": 1.0}}}
     seed = scrape.build_seed(parsed)
-    assert seed["version"] == 1
+    assert seed["version"] == 2
     assert seed["entities"]["star:8:2"]["clock"] == "igt"
     assert seed["entities"]["star:8:2"]["strategies"]["Nuts Pless"]["Mario"] == 12.93
     assert "star:1:6" not in seed["entities"]               # 100-coin skipped
