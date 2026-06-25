@@ -66,3 +66,54 @@ def test_videos_accessors(tmp_path):
     assert s.video_for("star:8:2", "Nuts") == "https://youtu.be/A"
     assert s.video_for("star:8:2", "Missing") is None
     assert s.videos("segment:99") == {}        # absent entity -> empty
+
+
+def _write(p, data):
+    import json; p.write_text(json.dumps(data))
+
+def test_load_reconciles_older_stored_seed_to_newer_bundled(tmp_path):
+    # stored: version 1, no videos, old (JP-ish) time + a user-created entity/strat
+    stored = {"version": 1, "entities": {
+        "star:8:2": {"clock": "igt", "strategies": {"Nuts Pless": {"Mario": 44.23}}},
+        "segment:99": {"clock": "rta", "strategies": {"MyStrat": {"Mario": 5.0}}}}}  # user-created entity
+    seed = {"version": 2, "entities": {
+        "star:8:2": {"clock": "igt",
+                     "strategies": {"Nuts Pless": {"Mario": 45.46}},   # US-corrected
+                     "videos": {"Nuts Pless": "https://youtu.be/A"},
+                     "jp_strategies": {"Nuts Pless": {"Mario": 44.23}}}}}
+    data = tmp_path / "rs.json"; seedf = tmp_path / "seed.json"
+    _write(data, stored); _write(seedf, seed)
+    s = RankStandards(data, seed_path=seedf); s.load()
+    # community data refreshed from the newer seed:
+    assert s.ladder_cs("star:8:2", "Nuts Pless")["Mario"] == 4546   # US now, not 4423
+    assert s.video_for("star:8:2", "Nuts Pless") == "https://youtu.be/A"
+    assert s.videos("star:8:2") and s._entity("star:8:2").get("jp_strategies")
+    # user-created entity preserved:
+    assert s.ladder_cs("segment:99", "MyStrat")["Mario"] == 500
+    assert s.to_json()["version"] == 2                              # bumped
+    # and persisted to disk:
+    s2 = RankStandards(data); s2.load()
+    assert s2.video_for("star:8:2", "Nuts Pless") == "https://youtu.be/A"
+
+def test_load_preserves_user_created_strat_on_reconcile(tmp_path):
+    stored = {"version": 1, "entities": {
+        "star:8:2": {"clock": "igt", "strategies": {
+            "Nuts Pless": {"Mario": 44.23}, "MyCustom": {"Mario": 9.9}}}}}  # MyCustom not in seed
+    seed = {"version": 2, "entities": {
+        "star:8:2": {"clock": "igt", "strategies": {"Nuts Pless": {"Mario": 45.46}}}}}
+    data = tmp_path / "rs.json"; seedf = tmp_path / "seed.json"
+    _write(data, stored); _write(seedf, seed)
+    s = RankStandards(data, seed_path=seedf); s.load()
+    assert s.ladder_cs("star:8:2", "Nuts Pless")["Mario"] == 4546   # refreshed
+    assert s.ladder_cs("star:8:2", "MyCustom")["Mario"] == 990      # user strat kept
+
+def test_load_no_reconcile_when_version_not_older(tmp_path):
+    stored = {"version": 2, "entities": {"star:8:2": {"clock": "igt",
+              "strategies": {"Nuts Pless": {"Mario": 12.0}}}}}
+    seed = {"version": 2, "entities": {"star:8:2": {"clock": "igt",
+            "strategies": {"Nuts Pless": {"Mario": 99.0}}, "videos": {"Nuts Pless": "x"}}}}
+    data = tmp_path / "rs.json"; seedf = tmp_path / "seed.json"
+    _write(data, stored); _write(seedf, seed)
+    s = RankStandards(data, seed_path=seedf); s.load()
+    assert s.ladder_cs("star:8:2", "Nuts Pless")["Mario"] == 1200   # stored kept, NOT 99
+    assert s.videos("star:8:2") == {}                                # not pulled in

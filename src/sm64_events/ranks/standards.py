@@ -26,6 +26,29 @@ def _default_clock(ek: str) -> str:
     return "rta" if ek.startswith("segment:") else "igt"
 
 
+def _seed_version(d: dict) -> int:
+    v = d.get("version")
+    return v if isinstance(v, int) else 0
+
+
+def _reconcile(stored: dict, seed: dict) -> dict:
+    """Bring an older stored seed up to a newer bundled one. The bundled seed
+    wins for community data (strategies/times, videos, jp_strategies, clock, new
+    entities/strats); user-CREATED entities/strats (absent from the seed) are
+    preserved. Returns a new dict (does not mutate inputs)."""
+    out = json.loads(json.dumps(seed))                 # deep copy
+    oent = out.setdefault("entities", {})
+    for ek, se in stored.get("entities", {}).items():
+        if ek not in oent:
+            oent[ek] = json.loads(json.dumps(se))      # user-created entity
+            continue
+        seed_strats = oent[ek].setdefault("strategies", {})
+        for strat, ladder in se.get("strategies", {}).items():
+            if strat not in seed_strats:
+                seed_strats[strat] = json.loads(json.dumps(ladder))  # user-created strat
+    return out
+
+
 class RankStandards:
     def __init__(self, path, seed_path=None):
         self.path = Path(path)
@@ -44,18 +67,30 @@ class RankStandards:
 
     def load(self) -> None:
         data = self._read_valid(self.path)
+        seed = self._read_valid(self.seed_path)
         if data is None:
-            seed = self._read_valid(self.seed_path)
             if seed is not None:
                 self._data = seed
-                try:
-                    self.save()                 # materialize seed into data dir
-                except OSError:
-                    _log.warning("could not write %s", self.path)
+                self._materialize()                    # write seed into the data dir
                 return
             _log.warning("no usable rank standards at %s; starting empty", self.path)
-            data = {"version": 1, "entities": {}}
+            self._data = {"version": 1, "entities": {}}
+            return
+        # existing install: refresh community data from a NEWER bundled seed,
+        # preserving user-created entities/strategies. (Without this an upgraded
+        # install keeps a stale seed — no videos, old times — forever.)
+        if seed is not None and _seed_version(data) < _seed_version(seed):
+            self._data = _reconcile(data, seed)
+            self._materialize()
+            _log.info("rank standards reconciled to seed v%d", _seed_version(seed))
+            return
         self._data = data
+
+    def _materialize(self) -> None:
+        try:
+            self.save()
+        except OSError:
+            _log.warning("could not write %s", self.path)
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
