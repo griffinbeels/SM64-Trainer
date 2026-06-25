@@ -81,6 +81,24 @@ def test_pbs_and_ui_state(tmp_path):
     assert db.get_state("stat_menu", default=None) == [{"key": "best"}]
 
 
+def test_current_pb_filters_by_strategy(tmp_path):
+    """current_pb(strat_tag=...) returns the latest PB achieved WITH that
+    strategy only — the per-strategy ranking lookup. Without the filter it
+    returns the overall latest (strategy-blind)."""
+    db = make_db(tmp_path)
+    db.insert_pb(course_id=2, star_id=2, strat_tag="A", timer_mode="igt",
+                 frames=343, attempt_id=10, saved_utc="2026-06-10T12:01:00Z")
+    db.insert_pb(course_id=2, star_id=2, strat_tag="B", timer_mode="igt",
+                 frames=350, attempt_id=11, saved_utc="2026-06-10T12:02:00Z")
+    # unfiltered → overall latest (strat B, saved last)
+    assert db.current_pb(2, 2, "igt")["frames"] == 350
+    # each strategy resolves to its OWN time, never the other's
+    assert db.current_pb(2, 2, "igt", strat_tag="A")["frames"] == 343
+    assert db.current_pb(2, 2, "igt", strat_tag="B")["frames"] == 350
+    # a strategy with no saved PB → None (the user is unranked on it)
+    assert db.current_pb(2, 2, "igt", strat_tag="C") is None
+
+
 def test_sessions_returns_newest_first_with_attempt_counts(tmp_path):
     from sm64_events.tracking.projection import Attempt
     db = make_db(tmp_path)

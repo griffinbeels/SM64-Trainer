@@ -932,8 +932,9 @@ def _ranks(tmp_path):
 
 
 def test_section_banner_sentinel_when_standards_but_no_strat(tmp_path):
-    """Entity WITH standards + no active strat → sentinel {"rank": None} (truthy).
-    Entity with NO standards → None (banner not rendered)."""
+    """Entity WITH standards but ungradeable → {"rank": None, "reason": ...}
+    sentinel (truthy), the reason saying WHY. Entity with NO standards → None
+    (banner not rendered)."""
     import json
     from sm64_events.ranks.standards import RankStandards
     from sm64_events.tracking.views import _section_banner
@@ -942,15 +943,17 @@ def test_section_banner_sentinel_when_standards_but_no_strat(tmp_path):
         "star:2:2": {"clock": "igt", "strategies": {
             "fast": {"Mario": 11.0, "Diamond": 12.0}}}}}))
     ranks = RankStandards(p); ranks.load()
-    # entity HAS standards, no strat → sentinel
+    # entity HAS standards, no active strat → "pick a strat" sentinel
     result = _section_banner(ranks, "star:2:2", strat=None, pb=None)
-    assert result == {"rank": None}
-    # entity HAS standards, strat set but no pb → sentinel
+    assert result == {"rank": None, "reason": "no_strat"}
+    # entity HAS standards, active strat with a ladder but NO time on it yet →
+    # UNRANKED (a PB on another strat must not be borrowed here)
     result2 = _section_banner(ranks, "star:2:2", strat="fast", pb=None)
-    assert result2 == {"rank": None}
-    # entity HAS standards, strat with no ladder → sentinel
+    assert result2 == {"rank": None, "reason": "unranked"}
+    # entity HAS standards, active strat has no ladder → no_ladder sentinel
+    # (even though a pb is supplied — that strat simply has no thresholds)
     result3 = _section_banner(ranks, "star:2:2", strat="unknown_strat", pb={"frames": 343})
-    assert result3 == {"rank": None}
+    assert result3 == {"rank": None, "reason": "no_ladder"}
     # entity has NO standards → None (don't render banner at all)
     result4 = _section_banner(ranks, "star:8:1", strat=None, pb=None)
     assert result4 is None
@@ -962,15 +965,14 @@ def test_section_banner_sentinel_when_standards_but_no_strat(tmp_path):
 def test_session_view_attaches_ranks(tmp_path):
     db, svc = make(tmp_path)
     seed(svc)                     # existing helper: seeds course 2 star 2 successes
-    # save the best attempt as PB so the section banner has a time to classify
-    best_aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
-    asyncio.run(svc.save_pb(best_aid, "igt"))
     svc.ranks = _ranks(tmp_path)
-    # tag the section's active strat so the banner can classify the PB
     asyncio.run(svc.set_strat(2, 2, "fast"))
-    # make every seeded attempt carry strat 'fast' so per-attempt rank resolves
+    # A PB ranks ONLY the strat it was achieved with: tag the seeded attempts
+    # 'fast' BEFORE saving so the PB row carries 'fast' (per-strategy ranking).
     db._conn.execute("UPDATE attempts SET strat_tag='fast' WHERE course_id=2")
     db._conn.commit()
+    best_aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    asyncio.run(svc.save_pb(best_aid, "igt"))
     view = build_session_view(db, svc, clock="igt")
     [sec] = view["stars"]
     assert sec["rank"]["rank"] in {"Mario", "Diamond", "Silver", "Iron"}
@@ -978,6 +980,82 @@ def test_session_view_attaches_ranks(tmp_path):
                               "Platinum", "Gold", "Silver", "Bronze", "Iron"}
                for at in sec["attempts"])
     assert any(p.get("rank") for s in sec["progress"]["sessions"] for p in s["points"])
+
+
+def test_rank_by_star_grades_active_strat_for_quick_select(tmp_path):
+    """The stage quick-select grid grades each star under its active strat:
+    view['rank_by_star'] maps '<course>:<star>' -> rank name when the star has
+    a strat + PB + ladder, and omits stars that can't be graded. The PB (343f)
+    on the seeded 'fast' ladder lands on Diamond (see _ranks)."""
+    db, svc = make(tmp_path)
+    seed(svc)
+    svc.ranks = _ranks(tmp_path)
+    asyncio.run(svc.set_strat(2, 2, "fast"))
+    # PB must carry the active strat 'fast' to count toward its rank
+    # (per-strategy ranking — a strat-blind PB never grades a strat).
+    db._conn.execute("UPDATE attempts SET strat_tag='fast' WHERE course_id=2")
+    db._conn.commit()
+    best_aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    asyncio.run(svc.save_pb(best_aid, "igt"))
+    view = build_session_view(db, svc, clock="igt")
+    assert view["rank_by_star"]["2:2"] == "Diamond"
+    # a star with a strat but no PB / no ladder is omitted, not None-valued
+    asyncio.run(svc.set_strat(1, 0, "whatever"))
+    view2 = build_session_view(db, svc, clock="igt")
+    assert "1:0" not in view2["rank_by_star"]
+
+
+def test_rank_by_star_empty_without_ranks(tmp_path):
+    """No standards loaded → rank_by_star is present but empty (medals hidden)."""
+    db, svc = make(tmp_path)
+    seed(svc)
+    asyncio.run(svc.set_strat(2, 2, "fast"))
+    view = build_session_view(db, svc, clock="igt")
+    assert view["rank_by_star"] == {}
+
+
+def test_rank_uses_only_that_strategys_pb_not_the_overall_best(tmp_path):
+    """THE per-strategy ranking contract: a PB achieved with strat A ranks
+    ONLY strat A. Switching the active strat to B (no time on it yet) shows
+    UNRANKED — A's faster PB is never borrowed. Saving a time on B then grades
+    B by B's OWN time. The strategy-blind overall PB (sec.pb) is unaffected.
+
+    Ladder shared by A and B: 343f → Diamond, 350f → Silver. So A graded by
+    its 343f reads Diamond; B graded by its 350f reads Silver — different tiers
+    prove each strat is graded by its own time, never the overall best."""
+    import json
+    from sm64_events.ranks.standards import RankStandards
+    db, svc = make(tmp_path)
+    seed(svc)                       # successes at 343f and 350f on star 2:2
+    ladder = {"Mario": 11.0, "Diamond": 11.5, "Silver": 12.0}
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "star:2:2": {"clock": "igt", "strategies": {"A": ladder, "B": ladder}}}}))
+    svc.ranks = RankStandards(p); svc.ranks.load()
+
+    # Save the fast 343f attempt as a PB tagged strat 'A'.
+    asyncio.run(svc.set_strat(2, 2, "A"))
+    db._conn.execute("UPDATE attempts SET strat_tag='A' WHERE course_id=2")
+    db._conn.commit()
+    aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    asyncio.run(svc.save_pb(aid, "igt"))
+    sec = build_session_view(db, svc, clock="igt")["stars"][0]
+    assert sec["rank"]["rank"] == "Diamond"          # A graded by A's 343f
+
+    # Switch active strat to B: no time on B yet → UNRANKED (NOT A's Diamond).
+    asyncio.run(svc.set_strat(2, 2, "B"))
+    sec = build_session_view(db, svc, clock="igt")["stars"][0]
+    assert sec["rank"] == {"rank": None, "reason": "unranked"}
+    assert sec["pb"]["igt"]["frames"] == 343         # overall best PB unchanged
+
+    # Record a time on B (the slower 350f) and save it → B graded by its OWN
+    # 350f (Silver), never A's faster 343f (which would read Diamond).
+    db._conn.execute("UPDATE attempts SET strat_tag='B' WHERE igt_frames=350")
+    db._conn.commit()
+    bid = next(a.id for a in db.attempts() if a.igt_frames == 350)
+    asyncio.run(svc.save_pb(bid, "igt"))
+    sec = build_session_view(db, svc, clock="igt")["stars"][0]
+    assert sec["rank"]["rank"] == "Silver"
 
 
 def test_star_standard_strategies_appear_without_any_attempt(tmp_path):

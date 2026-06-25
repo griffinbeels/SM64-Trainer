@@ -22,9 +22,19 @@ export function Medal({ rank, size = 18 }) {
   </span>`;
 }
 
+// Sentinel wording (server sends {rank:null, reason}): a strategy is ranked
+// ONLY by times achieved with it, so "unranked" means no PB on THIS strat yet
+// (a PB on another strat doesn't count) — distinct from "pick a strat".
+const RANK_SENTINEL = {
+  unranked: "— unranked (no PB on this strategy yet)",
+  no_ladder: "— no rank standards for this strategy",
+  no_strat: "— pick a strat to see your rank",
+};
+
 export function RankBanner({ banner }) {
   if (!banner || !banner.rank) {
-    return html`<span class="meta">— pick a strat to see your rank</span>`;
+    const msg = (banner && RANK_SENTINEL[banner.reason]) || RANK_SENTINEL.no_strat;
+    return html`<span class="meta">${msg}</span>`;
   }
   const c = rankColor(banner.rank);
   const gap = banner.gap_cs != null ? (banner.gap_cs / 100).toFixed(2) : null;

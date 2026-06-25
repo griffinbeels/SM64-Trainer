@@ -13,6 +13,7 @@
 import { h } from "preact";
 import htm from "htm";
 import { send } from "../api.js";
+import { Medal } from "./ranks.js";
 
 const html = htm.bind(h);
 
@@ -37,6 +38,11 @@ function StarRow({ t, v, stage }) {
   const tgt = v.target || {};
   const lastStratFor = (i) =>
     v.last_strat_by_star[`${stage.course_id}:${i}`] || "";
+  // Rank under that star's ACTIVE strat (server-graded, parallel to
+  // last_strat_by_star). Changing the strat refreshes the view and swaps the
+  // medal here automatically — see tracking/views.py rank_by_star.
+  const rankFor = (i) =>
+    (v.rank_by_star || {})[`${stage.course_id}:${i}`];
 
   async function pick(i) {
     await send("POST", "/api/target", {
@@ -54,11 +60,15 @@ function StarRow({ t, v, stage }) {
         const active = tgt.kind !== "segment"
           && tgt.course_id === stage.course_id && tgt.star_id === i;
         const strat = lastStratFor(i);
+        const rank = rankFor(i);
         return html`<button key=${`${stage.course_id}:${i}`}
                             class="stagebtn ${active ? "active-star" : ""}"
                             onclick=${() => pick(i)}>
           <span class="stagebtn-name">${name}</span>
-          <span class="stagebtn-sub meta">${strat || "—"}</span>
+          <span class="stagebtn-sub meta">
+            ${rank ? html`<${Medal} rank=${rank} size=${13} />` : ""}
+            <span>${strat || "—"}</span>
+          </span>
         </button>`;
       })}
     </div>

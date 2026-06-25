@@ -228,8 +228,11 @@ def test_route_view_has_step_ranks_and_average(tmp_path):
     asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
     asyncio.run(svc.publish(ev("star_collected", 1350,
                                {"course_id": 2, "star_id": 2, "igt_frames": 343})))
-    # save that attempt as PB
+    # tag the attempt 'fast' BEFORE saving so its PB ranks the 'fast' strategy
+    # (per-strategy ranking: a strat-blind PB grades no strategy).
     aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    db._conn.execute("UPDATE attempts SET strat_tag='fast' WHERE id=?", (aid,))
+    db._conn.commit()
     asyncio.run(svc.save_pb(aid, "igt"))
 
     # load rank standards with thresholds for star:2:2
@@ -251,3 +254,11 @@ def test_route_view_has_step_ranks_and_average(tmp_path):
     assert rv["avg_rank"] is not None
     assert rv["avg_rank"]["tier"] == step0["rank"]   # single ranked step -> avg tier == its tier
     assert rv["weakest_step"] == 0
+
+    # Per-strategy ranking: switch the candidate's active strat to one with no
+    # time on it. The PB belongs to 'fast' only, so the step is now UNRANKED —
+    # the route must NOT borrow 'fast's PB to rank a different strategy.
+    asyncio.run(svc.set_strat(2, 2, "other"))
+    rv2 = build_route_view(db, svc, route_id)
+    assert rv2["steps"][0]["rank"] is None
+    assert rv2["avg_rank"] is None

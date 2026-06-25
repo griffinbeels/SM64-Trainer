@@ -502,20 +502,27 @@ class Database:
             return [dict(r) for r in rows]
 
     def current_pb(self, course_id: int | None, star_id: int | None,
-                   timer_mode: str, segment_id: int | None = None) -> dict | None:
+                   timer_mode: str, segment_id: int | None = None,
+                   strat_tag: str | None = None) -> dict | None:
         """Latest saved row for one star/segment + mode — the same row
         views._current_pbs picks (later saves win). Kind-aware like
         insert_pb: segment rows match by segment_id, star rows by
-        course+star (segment_id IS NULL keeps the kinds disjoint)."""
+        course+star (segment_id IS NULL keeps the kinds disjoint).
+
+        When strat_tag is given, restricts to PBs achieved WITH that
+        strategy — the per-strategy ranking lookup (only a strategy's own
+        times count toward its rank; the overall/strat-blind PB never does)."""
+        strat_clause = " AND strat_tag=?" if strat_tag is not None else ""
+        strat_param = (strat_tag,) if strat_tag is not None else ()
         if segment_id is not None:
             q = ("SELECT * FROM pbs WHERE segment_id=? AND timer_mode=?"
-                 " ORDER BY id DESC LIMIT 1")
-            params = (segment_id, timer_mode)
+                 + strat_clause + " ORDER BY id DESC LIMIT 1")
+            params = (segment_id, timer_mode) + strat_param
         else:
             q = ("SELECT * FROM pbs WHERE course_id=? AND star_id=?"
                  " AND segment_id IS NULL AND timer_mode=?"
-                 " ORDER BY id DESC LIMIT 1")
-            params = (course_id, star_id, timer_mode)
+                 + strat_clause + " ORDER BY id DESC LIMIT 1")
+            params = (course_id, star_id, timer_mode) + strat_param
         with self._lock:
             row = self._conn.execute(q, params).fetchone()
             return dict(row) if row else None

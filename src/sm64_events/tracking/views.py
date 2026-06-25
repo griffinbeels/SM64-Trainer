@@ -77,12 +77,34 @@ def _current_pbs(pb_rows: list[dict]) -> dict:
     """Latest pb row per kind-aware key: ("segment", segment_id, mode) for
     segment rows, (course_id, star_id, mode) for star rows. Without the
     kind tag every segment pb collapses onto (None, None, "rta") and the
-    newest segment's save shadows all the others (live bug, Task 12)."""
+    newest segment's save shadows all the others (live bug, Task 12).
+
+    This is the STRATEGY-BLIND "overall best PB" — for DISPLAY (sec.pb,
+    pb_delta, is_current_pb) only. It must NEVER drive a rank; ranks use the
+    per-strategy map below so a faster PB on one strat can't rank another."""
     out = {}
     for row in pb_rows:  # ordered by id: later rows win
         key = (("segment", row["segment_id"], row["timer_mode"])
                if row["segment_id"] is not None
                else (row["course_id"], row["star_id"], row["timer_mode"]))
+        out[key] = row
+    return out
+
+
+def _current_pbs_by_strat(pb_rows: list[dict]) -> dict:
+    """Latest pb row keyed like _current_pbs but with the saving attempt's
+    strat_tag appended. THE per-strategy ranking lookup: a strategy is ranked
+    ONLY by times achieved WITH that strategy. PBs with no strat_tag can't be
+    attributed to a strategy and are skipped (the entity stays unranked on
+    every strat until a strat-tagged PB lands)."""
+    out = {}
+    for row in pb_rows:  # ordered by id: later rows win
+        strat = row["strat_tag"]
+        if not strat:
+            continue
+        key = (("segment", row["segment_id"], row["timer_mode"], strat)
+               if row["segment_id"] is not None
+               else (row["course_id"], row["star_id"], row["timer_mode"], strat))
         out[key] = row
     return out
 
@@ -165,23 +187,45 @@ def _attempt_rank(a, frames, ranks) -> str | None:
     return classify.rank_for(ranks.ladder_cs(ek, a.strat_tag), classify.display_cs(frames))
 
 
+def _strat_rank(ranks, ek, strat, pb) -> str | None:
+    """Rank NAME for an entity graded under `strat` at its PB time, or None
+    when ungradeable (no ranks loaded, no active strat, no PB, or the strat has
+    no ladder). THE single grading path shared by route candidates and the
+    stage quick-select star grid (view's rank_by_star) — keep it one place so a
+    medal never disagrees with the section banner / attempt medals."""
+    if ranks is None or not strat or pb is None:
+        return None
+    ladder = ranks.ladder_cs(ek, strat)
+    if not ladder:
+        return None
+    return classify.rank_for(ladder, classify.display_cs(pb["frames"]))
+
+
 def _section_banner(ranks, ek, strat, pb) -> dict | None:
-    """Rank banner for a section: the PB time graded under the ACTIVE strat.
+    """Rank banner for a section: the time graded under the ACTIVE strat. The
+    caller passes the PB achieved WITH `strat` (per-strategy ranking) — never
+    the strategy-blind overall PB.
 
     Returns None when the entity has NO standards (RankBanner not rendered).
-    Returns {"rank": None} sentinel when the entity HAS standards but can't
-    be graded (no active strat, no PB, or the active strat has no ladder) —
-    RankBanner renders this as the "pick a strat to see your rank" prompt."""
+    Otherwise the entity HAS standards; a {"rank": None, "reason": ...}
+    sentinel says why it can't be graded so the UI can word it correctly:
+      - "no_strat"  : no active strategy selected.
+      - "no_ladder" : the active strategy has no rank thresholds defined.
+      - "unranked"  : the strategy has a ladder but the user has NO time on it
+                      yet — they are UNRANKED for this strategy (a PB on a
+                      DIFFERENT strategy does not count)."""
     if ranks is None:
         return None
     has_standards = bool(ranks.ladders(ek))
     if not has_standards:
         return None
-    if not strat or pb is None:
-        return {"rank": None}
+    if not strat:
+        return {"rank": None, "reason": "no_strat"}
     ladder = ranks.ladder_cs(ek, strat)
     if not ladder:
-        return {"rank": None}
+        return {"rank": None, "reason": "no_ladder"}
+    if pb is None:
+        return {"rank": None, "reason": "unranked"}
     return classify.band(ladder, classify.display_cs(pb["frames"]))
 
 
@@ -294,7 +338,8 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     # and unassigned list. Stats always use lifetime (all_attempts).
     scoped = all_attempts if scope == "lifetime" else session_attempts
     pb_rows = db.pbs()
-    pbs = _current_pbs(pb_rows)
+    pbs = _current_pbs(pb_rows)              # strategy-blind, for DISPLAY only
+    pbs_by_strat = _current_pbs_by_strat(pb_rows)   # per-strategy, for RANKS
     pb_ids = {(r["attempt_id"], r["timer_mode"]) for r in pb_rows}
     sessions_list = db.sessions()
     session_meta = {s["id"]: s for s in sessions_list}
@@ -367,9 +412,10 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "markers_by_strat": _markers_for(markers_state, course_id, star_id),
             "progress": _progress(in_section, pb_ids, session_meta, igt_of,
                                   service.ranks, clock),
-            "rank": _section_banner(service.ranks, entity_key(course_id, star_id),
-                                    service.strat_by_star.get((course_id, star_id)),
-                                    pbs.get((course_id, star_id, clock))),
+            "rank": _section_banner(
+                service.ranks, entity_key(course_id, star_id),
+                (star_strat := service.strat_by_star.get((course_id, star_id))),
+                pbs_by_strat.get((course_id, star_id, clock, star_strat))),
         })
     sections.sort(key=lambda s: last_id.get((s["course_id"], s["star_id"]), -1),
                   reverse=True)
@@ -408,9 +454,10 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "markers_by_strat": _markers_for(markers_state, "seg", seg_id),
             "progress": _progress(in_section, pb_ids, session_meta, rta_of,
                                   service.ranks, "rta"),
-            "rank": _section_banner(service.ranks, entity_key(None, None, seg_id),
-                                    service.strat_by_segment.get(seg_id),
-                                    pbs.get(("segment", seg_id, "rta"))),
+            "rank": _section_banner(
+                service.ranks, entity_key(None, None, seg_id),
+                (seg_strat := service.strat_by_segment.get(seg_id)),
+                pbs_by_strat.get(("segment", seg_id, "rta", seg_strat))),
         })
     seg_sections.sort(
         key=lambda s: last_id.get(("segment", s["segment_id"]), -1),
@@ -440,6 +487,17 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         "strategies": registered,
         "last_strat_by_star": {f"{c}:{s}": v
                                for (c, s), v in service.strat_by_star.items()},
+        # Parallel to last_strat_by_star: each star's rank under its ACTIVE
+        # strat, graded on the PB achieved WITH that strat (per-strategy
+        # ranking — pbs_by_strat, never the strategy-blind overall PB), for
+        # the quick-select grid's at-a-glance medal. Only gradeable stars
+        # appear; recomputed every build so changing a star's strat updates
+        # its medal on the next view.
+        "rank_by_star": {
+            f"{c}:{s}": rank
+            for (c, s), strat in service.strat_by_star.items()
+            if (rank := _strat_rank(service.ranks, entity_key(c, s), strat,
+                                    pbs_by_strat.get((c, s, "igt", strat))))},
         "stage": service.current_stage,
         # Enabled segments that start in a known subarea, for the castle
         # quick-select banner (filtered client-side by the current subarea).
@@ -551,23 +609,22 @@ def build_run_history(db, route_id: int | None = None) -> dict:
 
 
 def _candidate_rank(db, service, c) -> str | None:
-    """Best rank for one route candidate under that candidate's active strat."""
+    """Rank for one route candidate under its active strat, graded ONLY by a
+    PB achieved WITH that strat (per-strategy ranking — the strat_tag filter on
+    current_pb; a faster PB on another strat must not rank this candidate)."""
     if service.ranks is None:
-        return None
+        return None  # skip the PB lookup entirely when nothing can be graded
     if c["type"] == "segment":
         ek = entity_key(None, None, c["segment_id"])
         strat = service.strat_by_segment.get(c["segment_id"])
-        pb = db.current_pb(None, None, "rta", segment_id=c["segment_id"])
+        pb = (db.current_pb(None, None, "rta", segment_id=c["segment_id"],
+                            strat_tag=strat) if strat else None)
     else:
         ek = entity_key(c["course"], c["star"])
         strat = service.strat_by_star.get((c["course"], c["star"]))
-        pb = db.current_pb(c["course"], c["star"], "igt")
-    if not strat or pb is None:
-        return None
-    ladder = service.ranks.ladder_cs(ek, strat)
-    if not ladder:
-        return None
-    return classify.rank_for(ladder, classify.display_cs(pb["frames"]))
+        pb = (db.current_pb(c["course"], c["star"], "igt", strat_tag=strat)
+              if strat else None)
+    return _strat_rank(service.ranks, ek, strat, pb)
 
 
 def build_route_view(db, service, route_id: int) -> dict:
