@@ -1047,7 +1047,7 @@ wheels = [
 
 [[package]]
 name = "sm64-events"
-version = "1.2.0"
+version = "1.2.1"
 source = { editable = "." }
 dependencies = [
     { name = "av" },

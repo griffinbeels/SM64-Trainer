@@ -3,4 +3,4 @@
 build, and tools/release.py (which rewrites it on each release). The frozen exe
 can't read pyproject.toml, so this in-package constant is authoritative;
 release.py keeps pyproject.toml [project].version in sync for tooling."""
-__version__ = "1.2.0"
+__version__ = "1.2.1"
