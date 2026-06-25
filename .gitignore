@@ -10,6 +10,7 @@ data/replay_buffer/
 .claude/worktrees/
 _dbg/
 internal_notes/
+.planning/
 
 # bundled package data (rank-standards seed) must be tracked despite the data/ rule above
 !src/sm64_events/data/
