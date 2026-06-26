@@ -48,7 +48,7 @@ class TrackerService:
         self._segment_defs = self._load_segment_defs()
         self._projector = Projector(segments=self._segment_defs)
         self._current_stage = {"course_id": None, "level": None,
-                               "area": None, "in_stage": False}
+                               "area": None, "mode": None}
         self._persisted_runs: list[int] = []
 
     def _load_segment_defs(self) -> list[SegmentDef]:
@@ -216,9 +216,10 @@ class TrackerService:
 
     @property
     def current_stage(self) -> dict:
-        """The main course the player is standing in (else in_stage=False),
-        cached from the broadcast-only stage_changed event for the session
-        view's initial load. See detectors/stage.py."""
+        """The quick-select banner context the player is standing in (payload's
+        `mode`: stars / bowser_course / arena / castle / None), cached from the
+        broadcast-only stage_changed event for the session view's initial load.
+        See detectors/stage.py."""
         return self._current_stage
 
     @property

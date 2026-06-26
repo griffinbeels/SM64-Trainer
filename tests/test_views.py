@@ -739,29 +739,72 @@ def test_view_includes_current_stage(tmp_path):
     db, svc = make(tmp_path)
     asyncio.run(svc.publish(ev("stage_changed", 100,
                                {"course_id": 8, "level": 8, "area": 1,
-                                "in_stage": True})))
+                                "mode": "stars"})))
     view = build_session_view(db, svc, clock="igt")
     assert view["stage"] == {"course_id": 8, "level": 8, "area": 1,
-                             "in_stage": True}
+                             "mode": "stars"}
 
 
-def test_view_stage_defaults_to_not_in_stage(tmp_path):
+def test_view_stage_defaults_to_no_mode(tmp_path):
     db, svc = make(tmp_path)
     view = build_session_view(db, svc, clock="igt")
-    assert view["stage"]["in_stage"] is False
+    assert view["stage"]["mode"] is None
 
 
 def test_segment_targets_carry_castle_start_areas(tmp_path):
     # Seeded LBLJ has attempt_anchor{level:6,area:1} -> lobby; BitS Entry has
-    # area_enter{level:6,area:2} -> upstairs — the banner filters on these.
+    # area_enter{level:6,area:2} -> upstairs — the castle banner filters on these.
     db, svc = make(tmp_path)
     view = build_session_view(db, svc, clock="igt")
     by_name = {s["name"]: s for s in view["segment_targets"]}
     assert by_name["LBLJ"]["start_areas"] == [[6, 1]]
     assert by_name["BitS Entry"]["start_areas"] == [[6, 2]]
-    # MIPS Clip is level_exit{from:7,to:6} with NO destination subarea on
-    # master, so it has no subarea-scoped start trigger -> excluded.
-    assert "MIPS Clip" not in by_name
+    # MIPS Clip is level_exit{from:7,to:6} with NO destination subarea, so it
+    # has no subarea-scoped start trigger (start_areas empty) — but it IS still
+    # listed now via its whole-LEVEL scope (the castle banner filters it out by
+    # start_areas; the Bowser banner uses start_levels).
+    assert by_name["MIPS Clip"]["start_areas"] == []
+    assert by_name["MIPS Clip"]["start_levels"] == [6]
+
+
+def test_segment_targets_carry_bowser_start_levels(tmp_path):
+    # The Bowser banner offers segments by whole level: pipe-entry segments start
+    # in the BitDW/BitFS/BitS course levels (17/19/21); fight segments in the
+    # 1/2/3 arenas (30/33/34). Each target carries `enabled` so the banner can
+    # surface a DISABLED pipe-entry segment (its "no reds" click enables it).
+    db, svc = make(tmp_path)
+    view = build_session_view(db, svc, clock="igt")
+    by_name = {s["name"]: s for s in view["segment_targets"]}
+    assert by_name["BitDW Pipe Entry"]["start_levels"] == [17]
+    assert by_name["Bowser 1"]["start_levels"] == [30]
+    assert by_name["Bowser 3"]["start_levels"] == [34]
+    assert by_name["Bowser 1"]["enabled"] is True
+
+
+def test_segment_targets_include_disabled_segments(tmp_path):
+    # Castle banner filters enabled CLIENT-side; the payload itself carries
+    # disabled segments so the Bowser "no reds" toggle can enable them.
+    db, svc = make(tmp_path)
+    asyncio.run(svc.update_segment(  # disable BitDW Pipe Entry (id 5 in the seed)
+        next(d["id"] for d in db.segment_defs() if d["name"] == "BitDW Pipe Entry"),
+        {"enabled": False}))
+    view = build_session_view(db, svc, clock="igt")
+    by_name = {s["name"]: s for s in view["segment_targets"]}
+    assert by_name["BitDW Pipe Entry"]["enabled"] is False
+    assert by_name["BitDW Pipe Entry"]["start_levels"] == [17]
+
+
+def test_segment_start_levels_reads_level_scoped_triggers():
+    from sm64_events.tracking.views import _segment_start_levels
+    triggers = [
+        {"type": "level_enter", "to": 17},
+        {"type": "attempt_anchor", "level": 17},          # dup -> deduped
+        {"type": "level_exit", "from": 7, "to": 6},
+        {"type": "area_enter", "level": 6, "area": 2},
+        {"type": "spawned", "level": 16},
+    ]
+    assert _segment_start_levels(triggers) == [17, 6, 16]
+    assert _segment_start_levels([{"type": "warp_entered", "level": 17}]) == []
 
 
 def test_segment_start_areas_reads_only_subarea_scoped_triggers():
@@ -788,6 +831,8 @@ def test_segment_banner_param_names_match_the_registry():
     assert {"to", "to_subarea"} <= set(TRIGGERS["level_exit"].params)
     assert {"level", "area"} <= set(TRIGGERS["area_enter"].params)
     assert {"level", "area"} <= set(TRIGGERS["attempt_anchor"].params)
+    # _segment_start_levels (the Bowser banner) ALSO reads `spawned.level`.
+    assert {"level"} <= set(TRIGGERS["spawned"].params)
 
 
 # -- route view (Task 8) -------------------------------------------------------

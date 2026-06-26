@@ -330,6 +330,28 @@ def _segment_start_areas(start_triggers: list) -> list:
     return out
 
 
+# Whole-LEVEL quick-select: the levels a segment EXPLICITLY starts in, ignoring
+# subarea. The Bowser banner (BitDW/BitFS/BitS courses + the 1/2/3 arenas) has no
+# castle-style subareas — it offers segments by level alone (pipe-entry segments
+# start in level 17/19/21; fight segments in 30/33/34). Reads the same trigger
+# param NAMES as _segment_start_areas (decoupled from the matcher), taking only
+# the level; `spawned` carries a level too (e.g. Lakitu Skip). The UI
+# (ui/components/stagebanner.js) filters these by the current level.
+def _segment_start_levels(start_triggers: list) -> list:
+    out: list = []
+    for trig in start_triggers:
+        kind = trig.get("type")
+        if kind in ("area_enter", "attempt_anchor", "spawned"):
+            level = trig.get("level")
+        elif kind in ("level_enter", "level_exit"):
+            level = trig.get("to")
+        else:
+            continue
+        if level is not None and level not in out:
+            out.append(level)
+    return out
+
+
 def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     all_attempts = db.attempts()
     session_attempts = [a for a in all_attempts
@@ -503,12 +525,18 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             if (rank := _strat_rank(service.ranks, entity_key(c, s), strat,
                                     pbs_by_strat.get((c, s, "igt", strat))))},
         "stage": service.current_stage,
-        # Enabled segments that start in a known subarea, for the castle
-        # quick-select banner (filtered client-side by the current subarea).
+        # Segments that start in a known subarea OR level, for the quick-select
+        # banner (filtered client-side by the current subarea/level). `enabled`
+        # is carried so the castle banner can keep its enabled-only rule while
+        # the Bowser banner still shows a DISABLED pipe-entry segment (clicking
+        # its "no reds" option enables it — the mutual-exclusion with "reds").
         "segment_targets": [
-            {"segment_id": d.id, "name": d.name, "start_areas": areas}
+            {"segment_id": d.id, "name": d.name, "enabled": d.enabled,
+             "start_areas": areas, "start_levels": levels}
             for d in service.segment_defs
-            if d.enabled and (areas := _segment_start_areas(d.start_triggers))],
+            if (areas := _segment_start_areas(d.start_triggers)) is not None
+            and (levels := _segment_start_levels(d.start_triggers)) is not None
+            and (areas or levels)],
     }
 
 

@@ -767,20 +767,20 @@ def test_stage_changed_is_broadcast_only_and_cached(tmp_path):
     db, svc, sent = make_rec(tmp_path)
     asyncio.run(svc.publish(ev("stage_changed", 200,
                                {"course_id": 8, "level": 8, "area": 1,
-                                "in_stage": True})))
+                                "mode": "stars"})))
     # broadcast to clients...
     assert "stage_changed" in [e.type for e in sent]
     # ...but NEVER journaled (recomputable; no historical-query value)
     assert "stage_changed" not in [e.type for e in db.events()]
     # ...and cached for the session view's initial load
     assert svc.current_stage == {"course_id": 8, "level": 8, "area": 1,
-                                 "in_stage": True}
+                                 "mode": "stars"}
 
 
-def test_current_stage_defaults_to_not_in_stage(tmp_path):
+def test_current_stage_defaults_to_no_mode(tmp_path):
     db, svc = make(tmp_path)
     assert svc.current_stage == {"course_id": None, "level": None,
-                                 "area": None, "in_stage": False}
+                                 "area": None, "mode": None}
 
 
 # -- routes (Phase A) ---------------------------------------------------------
