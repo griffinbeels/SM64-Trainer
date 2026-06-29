@@ -4,6 +4,8 @@ LookupError->404, ValueError->409, RuntimeError->503."""
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from sm64_events.links import xcams_url
+
 
 def _http(e: Exception) -> HTTPException:
     if isinstance(e, LookupError):
@@ -21,6 +23,10 @@ class StrategyBody(BaseModel):
     strategy: str
 
 
+class VideoBody(BaseModel):
+    url: str
+
+
 def create_ranks_router(service) -> APIRouter:
     router = APIRouter(prefix="/api")
 
@@ -32,12 +38,31 @@ def create_ranks_router(service) -> APIRouter:
             return service.ranks.to_json()
         return {"entity": entity, "clock": service.ranks.clock_for(entity),
                 "strategies": service.ranks.ladders(entity),
-                "videos": service.ranks.videos(entity)}
+                "videos": service.ranks.videos(entity),
+                "cutoff_videos": service.ranks.cutoff_videos(entity),
+                "user_videos": service.ranks.user_videos(entity),
+                "xcams_url": xcams_url(entity)}
 
     @router.put("/ranks/standards/{entity}/{strategy}/{rank}")
     async def put_threshold(entity: str, strategy: str, rank: str, body: ThresholdBody):
         try:
             await service.set_rank_threshold(entity, strategy, rank, body.seconds)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True}
+
+    @router.put("/ranks/standards/{entity}/{strategy}/{rank}/video")
+    async def put_video(entity: str, strategy: str, rank: str, body: VideoBody):
+        try:
+            await service.set_rank_video(entity, strategy, rank, body.url)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True}
+
+    @router.delete("/ranks/standards/{entity}/{strategy}/{rank}/video")
+    async def delete_video(entity: str, strategy: str, rank: str):
+        try:
+            await service.clear_rank_video(entity, strategy, rank)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True}

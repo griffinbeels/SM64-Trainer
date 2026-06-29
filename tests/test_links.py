@@ -1,4 +1,30 @@
-from sm64_events.links import star_links
+from sm64_events.links import star_links, xcams_url
+
+
+_HIST = "https://sm64-xcams.netlify.app/home/history"
+
+
+def test_xcams_url_main_course_star():
+    # star:8:2 = SSL "Inside the Ancient Pyramid"; star:7:3 = LLL "Red-Hot Log Rolling"
+    assert xcams_url("star:8:2") == f"{_HIST}?star=ssl_3"
+    assert xcams_url("star:7:3") == f"{_HIST}?star=lll_4"
+
+
+def test_xcams_url_bowser_segment():
+    assert xcams_url("segment:5") == f"{_HIST}?star=bow_1n"   # BitDW No Reds
+
+
+def test_xcams_url_movement_segment_is_none():
+    assert xcams_url("segment:1") is None                     # LBLJ has no xcams page
+
+
+def test_xcams_url_secret_star():
+    assert xcams_url("star:19:0") == f"{_HIST}?star=pss"      # Princess's Secret Slide
+
+
+def test_xcams_url_unknown_is_none():
+    assert xcams_url("star:99:0") is None
+    assert xcams_url("garbage") is None
 
 
 def test_normal_star_generates_rta_guide_url():

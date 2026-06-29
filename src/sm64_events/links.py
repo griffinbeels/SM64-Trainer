@@ -19,6 +19,39 @@ COURSE_ABBREV = {
 # (course_id, star_id) -> {"example": url} — hand-curated additions.
 OVERRIDES: dict[tuple[int, int], dict] = {}
 
+# xcams "Daily Star" per-star page. URL pattern confirmed live (human, 2026-06-29):
+#   .../home/history?star=<abbrev>_<xcams_star_id>
+# <abbrev> = the lowercase course abbreviation (matches COURSE_ABBREV); for main
+# courses <xcams_star_id> = trainer star_id + 1 (star:8:2 -> ssl_3). Secret stars
+# and Bowser courses key off their own short codes (inverse of the scraper's
+# _SECRET / _BOWSER maps). Movement segments (LBLJ etc.) have no xcams page.
+XCAMS_HISTORY = "https://sm64-xcams.netlify.app/home/history"
+XCAMS_SECRET = {19: "pss", 20: "mc", 21: "wc", 22: "vc", 23: "wmotr", 24: "aqua"}
+XCAMS_BOWSER = {5: "1n", 6: "2n", 7: "3n", 8: "1x", 9: "2x", 10: "3x"}
+
+
+def _xcams_star_key(course_id: int, star_id: int) -> str | None:
+    if course_id in COURSE_ABBREV:                     # main courses 1-15
+        return f"{COURSE_ABBREV[course_id].lower()}_{star_id + 1}"
+    if course_id in XCAMS_SECRET:                       # Castle Secret Stars (VERIFY prefix)
+        return XCAMS_SECRET[course_id]
+    return None
+
+
+def xcams_url(entity_key: str) -> str | None:
+    """xcams Daily Star history page for a rank entity ("star:c:s" / "segment:id"),
+    or None when it has no xcams page. Identity-driven (no seed field) so a wrong
+    abbrev is a one-line fix here, never a re-scrape."""
+    kind, _, rest = entity_key.partition(":")
+    if kind == "star":
+        course, _, star = rest.partition(":")
+        if course.isdigit() and star.isdigit():
+            key = _xcams_star_key(int(course), int(star))
+            return f"{XCAMS_HISTORY}?star={key}" if key else None
+    elif kind == "segment" and rest.isdigit() and int(rest) in XCAMS_BOWSER:
+        return f"{XCAMS_HISTORY}?star=bow_{XCAMS_BOWSER[int(rest)]}"
+    return None
+
 
 def star_links(course_id: int, star_id: int) -> dict:
     if star_id == 6 and course_id in COURSE_ABBREV:

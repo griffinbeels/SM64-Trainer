@@ -423,6 +423,14 @@ class TrackerService:
         self._require_ranks().reset_entity(ek)
         await self._rank_standards_changed()
 
+    async def set_rank_video(self, ek, strat, rank, url) -> None:
+        self._require_ranks().set_video(ek, strat, rank, url)
+        await self._rank_standards_changed()
+
+    async def clear_rank_video(self, ek, strat, rank) -> None:
+        self._require_ranks().clear_video(ek, strat, rank)
+        await self._rank_standards_changed()
+
     # -- run lifecycle ---------------------------------------------------------
     async def _arm_run(self, route_id: int, void_active: bool = False) -> None:
         """Build and publish run_started. When void_active=True the payload

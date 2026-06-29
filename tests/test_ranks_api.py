@@ -80,3 +80,38 @@ def test_get_standards_includes_videos(tmp_path):
         r = client.get("/api/ranks/standards", params={"entity": "star:8:2"})
         assert r.status_code == 200
         assert r.json()["videos"] == {"Nuts": "https://youtu.be/A"}
+
+
+def test_get_standards_includes_cutoff_videos_and_xcams(tmp_path):
+    client, svc = make_client(tmp_path)
+    svc.ranks._data["entities"]["star:8:2"] = {
+        "clock": "igt", "strategies": {"Nuts": {"Mario": 12.93, "Diamond": 13.36}},
+        "clips": {"Nuts": [[1290, "mario"], [1326, "diamond"]]}}
+    with client:
+        d = client.get("/api/ranks/standards", params={"entity": "star:8:2"}).json()
+        assert d["cutoff_videos"]["Nuts"] == {"Mario": "mario", "Diamond": "diamond"}
+        assert d["xcams_url"].endswith("?star=ssl_3")
+        assert d["user_videos"] == {}
+
+
+def test_put_and_delete_cutoff_video_override(tmp_path):
+    client, svc = make_client(tmp_path)
+    with client:
+        client.put("/api/ranks/standards/star:8:2/Nuts/Mario", json={"seconds": 12.93})
+        r = client.put("/api/ranks/standards/star:8:2/Nuts/Gold/video",
+                       json={"url": "https://youtu.be/g"})
+        assert r.status_code == 200
+        d = client.get("/api/ranks/standards", params={"entity": "star:8:2"}).json()
+        assert d["user_videos"]["Nuts"]["Gold"] == "https://youtu.be/g"
+        assert d["cutoff_videos"]["Nuts"]["Gold"] == "https://youtu.be/g"
+        r = client.delete("/api/ranks/standards/star:8:2/Nuts/Gold/video")
+        assert r.status_code == 200
+        d = client.get("/api/ranks/standards", params={"entity": "star:8:2"}).json()
+        assert d["user_videos"] == {}
+
+
+def test_put_video_bad_rank_is_409(tmp_path):
+    client, svc = make_client(tmp_path)
+    with client:
+        r = client.put("/api/ranks/standards/star:8:2/Nuts/Iron/video", json={"url": "x"})
+        assert r.status_code == 409
