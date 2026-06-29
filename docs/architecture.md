@@ -548,6 +548,23 @@ disambiguate this blob from the xcam-viewer blob (whose `times` field is a LIST,
 not a rank-keyed dict). See `tools/scrape_ranks.py` docstring for the exact
 selector and disambiguation logic.
 
+**Per-cutoff example videos (added 2026-06-29).** Each cutoff time in the
+standards table links to the fastest example video that *ranks that tier* (band
+model): the scraper emits per-strat `clips: [[record_cs, url], …]` (every cam
+with a timed record + link, from the catalog's `id_list` + cam blobs), and
+`classify.resolve_cutoff_videos` buckets them by `rank_for(record)`, fastest per
+tier. **Hard-won data fact:** xcams catalogs only near-WR reference runs, so each
+strat's record sits *just under* its Mario cutoff — empirically the band fills the
+**Mario row for 223/226 strats**, with only 34 strats reaching a 2nd+ tier and
+Gold/Platinum almost never (live count, v3 seed 2026-06-29). So the auto-band is
+real but sparse; lower tiers are filled by **manual per-cutoff overrides**
+(`user_videos`, preserved across seed bumps by `_reconcile`) and by the section's
+**xcams Daily Star link** (`links.xcams_url`) for browsing every example. The
+"overall = Mario row" rule: the strat header link uses the Mario-row video, which
+in the common case IS the overall-fastest clip. Don't try to source slower-tier
+videos from the `beg` sheet — those rows are `[time, player, course]` with no
+link.
+
 **JP vs US version times (verified 2026-06-23).** Each cell carries
 `time = {"time": primary_cs, "alt": [other_cs, "us"|"jp"] | null}`. The trainer
 runs the US Usamune ROM (see `memory/addresses.py`), so `strategies` holds the

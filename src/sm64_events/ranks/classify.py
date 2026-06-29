@@ -43,6 +43,26 @@ def next_tier(ladder_cs: dict, rank: str | None) -> str | None:
     return present[i - 1] if i > 0 else None
 
 
+def resolve_cutoff_videos(ladder_cs: dict, clips, overrides=None) -> dict:
+    """{rank: url} for a strategy: per tier, the fastest example whose OWN time
+    RANKS that tier (band model), with manual `overrides` winning per rank (and
+    able to add a tier no clip reaches). Reuses rank_for so a video's tier never
+    disagrees with the displayed rank; Iron (the floor — no cutoff row) is never
+    auto-assigned. `clips` is [[record_cs, url], ...]."""
+    best = {}                                # rank -> (cs, url)
+    for cs, url in clips or []:
+        rank = rank_for(ladder_cs, cs)
+        if not rank or rank == "Iron":
+            continue
+        if rank not in best or cs < best[rank][0]:
+            best[rank] = (cs, url)
+    out = {rank: cu[1] for rank, cu in best.items()}
+    for rank, url in (overrides or {}).items():
+        if url:
+            out[rank] = url
+    return out
+
+
 def band(ladder_cs: dict, time_cs: int) -> dict:
     """Banner data: current rank, next tier, remaining gap (cs), bar fill
     (0..1). fill/next are None at the top tier; fill is 0 at the Iron floor."""

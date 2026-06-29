@@ -34,7 +34,7 @@ def test_key_to_entity():
 def test_build_seed_maps_and_adds_segment_defaults():
     parsed = {"7_3": {"Nuts Pless": {"Mario": 12.93}}, "0_100c4": {"x": {"Mario": 1.0}}}
     seed = scrape.build_seed(parsed)
-    assert seed["version"] == 2
+    assert seed["version"] == 3
     assert seed["entities"]["star:8:2"]["clock"] == "igt"
     assert seed["entities"]["star:8:2"]["strategies"]["Nuts Pless"]["Mario"] == 12.93
     assert "star:1:6" not in seed["entities"]               # 100-coin skipped
@@ -100,6 +100,37 @@ def test_build_seed_attaches_videos():
 def test_build_seed_without_catalog_omits_videos():
     seed = scrape.build_seed({"7_3": {"Nuts": {"Mario": 12.6}}})
     assert "videos" not in seed["entities"]["star:8:2"]
+    assert "clips" not in seed["entities"]["star:8:2"]
+
+
+def test_strat_clips_returns_all_timed_links_fastest_first():
+    star = {"jp_set": {"Multi": {"id_list": [["main", 5], ["ext", 182]]}}, "us_set": {}}
+    # main/5 = 13.00 (SLOW), ext/182 = 12.60 (A) -> sorted ascending by record cs
+    out = scrape.strat_clips(star, _CAMS)
+    assert out["Multi"] == [[1260, "https://youtu.be/A"], [1300, "https://youtu.be/SLOW"]]
+
+
+def test_strat_clips_excludes_unrecorded_or_linkless():
+    # ext/9 has an idealLink but no record-link -> not a usable timed clip
+    star = {"jp_set": {"NoRecLink": {"id_list": [["ext", 9]]}}, "us_set": {}}
+    assert "NoRecLink" not in scrape.strat_clips(star, _CAMS)
+
+
+def test_strat_clips_dedupes_by_link_keeping_fastest():
+    cams = [{"ext": {"1": {"record": "12.90", "link": "https://youtu.be/DUP"},
+                     "2": {"record": "12.40", "link": "https://youtu.be/DUP"}}}]
+    star = {"jp_set": {"S": {"id_list": [["ext", 1], ["ext", 2]]}}, "us_set": {}}
+    assert scrape.strat_clips(star, cams)["S"] == [[1240, "https://youtu.be/DUP"]]
+
+
+def test_build_seed_attaches_clips():
+    parsed = {"7_3": {"Multi": {"Mario": 12.6}}}
+    catalog = [None] * 7 + [{"starList": [{"id": "3", "name": "x",
+                            "jp_set": {"Multi": {"id_list": [["main", 5], ["ext", 182]]}},
+                            "us_set": {}}]}]
+    seed = scrape.build_seed(parsed, catalog, _CAMS)
+    assert seed["entities"]["star:8:2"]["clips"]["Multi"] == \
+        [[1260, "https://youtu.be/A"], [1300, "https://youtu.be/SLOW"]]
 
 
 def test_resolve_jp_us():

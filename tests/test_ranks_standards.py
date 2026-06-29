@@ -68,8 +68,54 @@ def test_videos_accessors(tmp_path):
     assert s.videos("segment:99") == {}        # absent entity -> empty
 
 
+def test_clips_and_cutoff_videos_accessors(tmp_path):
+    import json
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 3, "entities": {
+        "star:8:2": {"clock": "igt",
+            "strategies": {"Nuts": {"Mario": 12.93, "Diamond": 13.36}},
+            "clips": {"Nuts": [[1290, "mario"], [1326, "diamond"]]}}}}))
+    s = RankStandards(p); s.load()
+    assert s.clips("star:8:2")["Nuts"] == [[1290, "mario"], [1326, "diamond"]]
+    assert s.cutoff_videos("star:8:2")["Nuts"] == {"Mario": "mario", "Diamond": "diamond"}
+    assert s.clips("segment:99") == {}                 # absent entity -> empty
+
+
+def test_set_and_clear_video_override(tmp_path):
+    s = RankStandards(tmp_path / "rs.json", seed_path=_seed(tmp_path)); s.load()
+    s.set_video("star:9:2", "Nuts Pless", "Gold", "https://youtu.be/gold")
+    s2 = RankStandards(tmp_path / "rs.json"); s2.load()                 # reload from disk
+    assert s2.user_videos("star:9:2")["Nuts Pless"]["Gold"] == "https://youtu.be/gold"
+    assert s2.cutoff_videos("star:9:2")["Nuts Pless"]["Gold"] == "https://youtu.be/gold"
+    s2.clear_video("star:9:2", "Nuts Pless", "Gold")
+    assert s2.user_videos("star:9:2") == {}            # empties cleaned up
+
+
+def test_set_video_rejects_iron_and_unknown(tmp_path):
+    s = RankStandards(tmp_path / "rs.json"); s.load()
+    with pytest.raises(ValueError):
+        s.set_video("star:9:2", "Nuts", "Iron", "x")
+    with pytest.raises(ValueError):
+        s.set_video("star:9:2", "Nuts", "Nope", "x")
+
+
 def _write(p, data):
     import json; p.write_text(json.dumps(data))
+
+
+def test_reconcile_preserves_user_videos(tmp_path):
+    stored = {"version": 2, "entities": {
+        "star:8:2": {"clock": "igt", "strategies": {"Nuts Pless": {"Mario": 44.23}},
+                     "user_videos": {"Nuts Pless": {"Gold": "https://youtu.be/mine"}}}}}
+    seed = {"version": 3, "entities": {
+        "star:8:2": {"clock": "igt", "strategies": {"Nuts Pless": {"Mario": 45.46}},
+                     "clips": {"Nuts Pless": [[4500, "auto"]]}}}}
+    data = tmp_path / "rs.json"; seedf = tmp_path / "seed.json"
+    _write(data, stored); _write(seedf, seed)
+    s = RankStandards(data, seed_path=seedf); s.load()
+    assert s.ladder_cs("star:8:2", "Nuts Pless")["Mario"] == 4546        # community refreshed
+    assert s.clips("star:8:2")["Nuts Pless"] == [[4500, "auto"]]          # new clips pulled in
+    assert s.user_videos("star:8:2")["Nuts Pless"]["Gold"] == "https://youtu.be/mine"  # kept
 
 def test_load_reconciles_older_stored_seed_to_newer_bundled(tmp_path):
     # stored: version 1, no videos, old (JP-ish) time + a user-created entity/strat
