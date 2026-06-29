@@ -1,5 +1,6 @@
 from sm64_events.ranks.classify import (
-    RANK_NAMES, RANK_SCORE, display_cs, rank_for, next_tier, band)
+    RANK_NAMES, RANK_SCORE, display_cs, rank_for, next_tier, band,
+    resolve_cutoff_videos)
 
 NUTS = {"Mario": 1293, "Grandmaster": 1303, "Master": 1316, "Diamond": 1336,
         "Platinum": 1416, "Gold": 1566, "Silver": 1676}  # centiseconds
@@ -40,3 +41,26 @@ def test_band_floor_empty_bar():
 
 def test_band_empty_ladder():
     assert band({}, 1326) == {"rank": None, "next": None, "gap_cs": None, "fill": None}
+
+
+def test_resolve_cutoff_videos_bands_by_rank():
+    clips = [[1290, "mario"], [1326, "diamond"], [1700, "iron-skip"]]
+    out = resolve_cutoff_videos(NUTS, clips)
+    assert out == {"Mario": "mario", "Diamond": "diamond"}  # Iron floor never shown
+
+
+def test_resolve_cutoff_videos_keeps_fastest_per_tier():
+    clips = [[1330, "slow-diamond"], [1320, "fast-diamond"]]  # both Diamond band
+    assert resolve_cutoff_videos(NUTS, clips)["Diamond"] == "fast-diamond"
+
+
+def test_resolve_cutoff_videos_override_wins_and_adds_a_tier():
+    clips = [[1290, "auto-mario"]]
+    out = resolve_cutoff_videos(NUTS, clips, {"Mario": "hand-mario", "Gold": "hand-gold"})
+    assert out["Mario"] == "hand-mario"   # manual override beats the auto band pick
+    assert out["Gold"] == "hand-gold"     # override adds a tier no clip reaches
+
+
+def test_resolve_cutoff_videos_empty():
+    assert resolve_cutoff_videos(NUTS, []) == {}
+    assert resolve_cutoff_videos({}, [[1290, "x"]]) == {}  # no ladder -> no ranks

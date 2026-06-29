@@ -5,7 +5,7 @@ import json
 import logging
 from pathlib import Path
 
-from sm64_events.ranks.classify import RANK_NAMES
+from sm64_events.ranks.classify import RANK_NAMES, resolve_cutoff_videos
 
 # the registry's color half (order lives in classify.RANK_NAMES; UI mirrors both)
 RANK_COLORS = {
@@ -46,6 +46,8 @@ def _reconcile(stored: dict, seed: dict) -> dict:
         for strat, ladder in se.get("strategies", {}).items():
             if strat not in seed_strats:
                 seed_strats[strat] = json.loads(json.dumps(ladder))  # user-created strat
+        if se.get("user_videos"):                      # hand-attached per-cutoff
+            oent[ek]["user_videos"] = json.loads(json.dumps(se["user_videos"]))
     return out
 
 
@@ -121,6 +123,25 @@ class RankStandards:
     def video_for(self, ek, strat) -> str | None:
         return self.videos(ek).get(strat)
 
+    def clips(self, ek) -> dict:
+        return self._entity(ek).get("clips", {})
+
+    def user_videos(self, ek) -> dict:
+        return self._entity(ek).get("user_videos", {})
+
+    def cutoff_videos(self, ek) -> dict:
+        """{strat: {rank: url}} — auto band videos (from clips) merged with the
+        user's hand-attached overrides, resolved against each strat's ladder. THE
+        per-cutoff video map the standards table links each time cell to."""
+        clips, overrides = self.clips(ek), self.user_videos(ek)
+        out = {}
+        for strat in self.ladders(ek):
+            resolved = resolve_cutoff_videos(
+                self.ladder_cs(ek, strat), clips.get(strat, []), overrides.get(strat))
+            if resolved:
+                out[strat] = resolved
+        return out
+
     # ---- writes ----
     def _ensure(self, ek) -> dict:
         return self._data["entities"].setdefault(
@@ -140,6 +161,30 @@ class RankStandards:
 
     def delete_strategy(self, ek, strat) -> None:
         self.ladders(ek).pop(strat, None)
+        self.user_videos(ek).pop(strat, None)
+        self.save()
+
+    def set_video(self, ek, strat, rank, url) -> None:
+        """Hand-attach an example video to one (strat, rank) cutoff cell. Stored
+        under the entity's user_videos so it survives a seed bump (_reconcile)."""
+        if rank not in RANK_NAMES or rank == "Iron":
+            raise ValueError(f"unknown rank {rank!r}")
+        if not url:
+            raise ValueError("video url required")
+        self._ensure(ek).setdefault("user_videos", {}).setdefault(strat, {})[rank] = str(url)
+        self.save()
+
+    def clear_video(self, ek, strat, rank) -> None:
+        ent = self._data["entities"].get(ek)
+        if ent is None:
+            return
+        uv = ent.get("user_videos", {})
+        if strat in uv:
+            uv[strat].pop(rank, None)
+            if not uv[strat]:
+                uv.pop(strat)
+        if not uv:
+            ent.pop("user_videos", None)
         self.save()
 
     def reset_entity(self, ek) -> None:
