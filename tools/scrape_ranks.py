@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from sm64_events.ranks.standards import entity_key  # noqa: E402
 
-SEED_VERSION = 2  # bump whenever the bundled seed should push to existing installs
+SEED_VERSION = 3  # bump whenever the bundled seed should push to existing installs
 
 # Closed vocabulary — update if xcams adds tiers (order = fastest to slowest).
 _RANKS = ["Mario", "Grandmaster", "Master", "Diamond", "Platinum",
@@ -222,6 +222,40 @@ def strat_videos(catalog_star: dict, cam_blobs: list) -> dict:
     return out
 
 
+def strat_clips(catalog_star: dict, cam_blobs: list) -> dict:
+    """{strat: [[record_cs, url], ...]} for one catalog star — EVERY cam that has
+    both a parseable record AND a link, fastest first, deduped by url (a repeated
+    link keeps its fastest record). Feeds the per-rank band resolution
+    (classify.resolve_cutoff_videos); strat_videos still owns the single primary/
+    fallback url (which may be an untimed idealLink that has no place here)."""
+    def lookup(sheet, cid):
+        for cb in cam_blobs:
+            node = cb.get(sheet, {}).get(str(cid))
+            if node:
+                return node
+        return None
+
+    cams_by_strat = {}
+    for setname in ("jp_set", "us_set"):
+        for strat, info in (catalog_star.get(setname) or {}).items():
+            cams_by_strat.setdefault(strat, []).extend(info.get("id_list") or [])
+
+    out = {}
+    for strat, refs in cams_by_strat.items():
+        best_by_link = {}                      # url -> fastest record_cs
+        for sheet, cid in refs:
+            node = lookup(sheet, cid)
+            if not node:
+                continue
+            link, rec = node.get("link"), _time_to_cs(node.get("record"))
+            if link and rec is not None and rec < best_by_link.get(link, 1 << 30):
+                best_by_link[link] = rec
+        rows = sorted([[rec, link] for link, rec in best_by_link.items()])
+        if rows:
+            out[strat] = rows
+    return out
+
+
 def build_seed(parsed: dict, catalog=None, cams=None, jp_deltas=None) -> dict:
     cat_by_stage = {i: {s["id"]: s for s in (st or {}).get("starList", [])}
                     for i, st in enumerate(catalog or [])}
@@ -241,6 +275,9 @@ def build_seed(parsed: dict, catalog=None, cams=None, jp_deltas=None) -> dict:
                 vids = {s: u for s, u in strat_videos(star, cams).items() if s in ladders}
                 if vids:
                     ent["videos"] = vids
+                clips = {s: c for s, c in strat_clips(star, cams).items() if s in ladders}
+                if clips:
+                    ent["clips"] = clips
         entities[ek] = ent
     for seg_id, strategies in DEFAULT_SEGMENT_LADDERS.items():
         entities.setdefault(f"segment:{seg_id}", {"clock": "rta", "strategies": strategies})
@@ -268,8 +305,11 @@ def main() -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(seed, indent=1))
     n_vid = sum(len(e.get("videos", {})) for e in seed["entities"].values())
+    n_clip = sum(len(rows) for e in seed["entities"].values()
+                 for rows in e.get("clips", {}).values())
     n_jp = sum(len(e.get("jp_strategies", {})) for e in seed["entities"].values())
-    print(f"wrote {out} ({len(seed['entities'])} entities, {n_vid} videos, {n_jp} jp-delta strats)")
+    print(f"wrote {out} ({len(seed['entities'])} entities, {n_vid} videos, "
+          f"{n_clip} clips, {n_jp} jp-delta strats)")
 
 
 if __name__ == "__main__":
