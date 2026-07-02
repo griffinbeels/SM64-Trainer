@@ -12,6 +12,7 @@ file without re-downloading or re-encoding. The downloader (yt-dlp) and the
 ffmpeg runner are injected so tests never touch the network or a codec.
 """
 import logging
+import os
 import shutil
 import subprocess
 import tempfile
@@ -34,12 +35,23 @@ def _default_downloader(source_ref: str, dest_dir: Path) -> Path:
     files = list(dest_dir.glob("src.*"))
     if not files:
         raise RuntimeError("yt-dlp produced no file")
+    # merge_output_format leaves exactly one src.* (the muxed result); the
+    # intermediate stream files are cleaned up by yt-dlp, so files[0] is it.
     return files[0]
 
 
 def _default_runner(cmd: list[str]) -> None:
-    subprocess.run(cmd, check=True, capture_output=True,
-                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    try:
+        subprocess.run(cmd, check=True, capture_output=True,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except subprocess.CalledProcessError as e:
+        # capture_output swallows ffmpeg's stderr; log it and fold the tail into
+        # the message so the RuntimeError names the real reason, not just a code.
+        stderr = e.stderr.decode(errors="replace") if e.stderr else ""
+        log.error("ffmpeg failed (exit %s): %s", e.returncode, stderr)
+        lines = [line for line in stderr.strip().splitlines() if line.strip()]
+        tail = lines[-1] if lines else f"exit {e.returncode}"
+        raise RuntimeError(f"ffmpeg exit {e.returncode}: {tail}") from e
 
 
 class VideoImporter:
@@ -84,18 +96,27 @@ class VideoImporter:
                     raise RuntimeError(f"download failed: {e}") from e
             if progress_cb:
                 progress_cb(0.7, "normalizing")
-            tmp_out = tdp / name                # normalize beside the source
+            # Normalize INTO cache_dir (not TEMP): tmp_out and dest then share
+            # one filesystem, so publishing is an atomic os.replace. Landing in
+            # TEMP would force shutil's copy+unlink fallback across filesystems,
+            # whose interruption leaves a truncated file at dest that dedup
+            # (dest.exists) would forever trust as a valid cache hit.
+            tmp_out = self.cache_dir / f".tmp-{name}"
             cmd = [self.ffmpeg, "-y", "-i", str(raw),
                    "-vf", "scale=-2:min(720\\,ih)", "-c:v", "libx264",
                    "-preset", "veryfast", "-crf", "20",
                    "-movflags", "+faststart", "-c:a", "aac", str(tmp_out)]
             try:
-                self._run(cmd)
-            except Exception as e:
-                raise RuntimeError(f"normalize failed: {e}") from e
-            if not tmp_out.exists():
-                raise RuntimeError("normalize produced no output")
-            shutil.move(str(tmp_out), str(dest))  # atomic publish into cache
+                try:
+                    self._run(cmd)
+                except Exception as e:
+                    raise RuntimeError(f"normalize failed: {e}") from e
+                if not tmp_out.exists():
+                    raise RuntimeError("normalize produced no output")
+                os.replace(tmp_out, dest)       # atomic publish (same filesystem)
+            except Exception:
+                tmp_out.unlink(missing_ok=True)  # never leave a partial dedup would trust
+                raise
         if progress_cb:
             progress_cb(1.0, "done")
         return name

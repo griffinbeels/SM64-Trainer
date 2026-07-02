@@ -57,3 +57,22 @@ def test_unknown_source_kind_raises_value(tmp_path):
     imp, _, _ = _importer(tmp_path)
     with pytest.raises(ValueError):
         imp.import_video("magnet", "x")
+
+
+def test_normalize_failure_leaves_no_cache_file(tmp_path):
+    # Fix 1 regression: a failed normalize must never leave ANY file in the
+    # cache dir — not the published name (dedup would trust it forever) and
+    # not the partial temp. Simulate ffmpeg writing a truncated file then dying.
+    src = tmp_path / "clip.mp4"; src.write_bytes(b"raw")
+
+    def dying_runner(cmd):
+        open(cmd[-1], "wb").write(b"partial")   # ffmpeg wrote some bytes...
+        raise RuntimeError("ffmpeg died mid-encode")  # ...then crashed
+
+    imp, cache, _ = _importer(tmp_path, runner=dying_runner)
+    name = cache_name_for(str(src))
+    with pytest.raises(RuntimeError):
+        imp.import_video("file", str(src))
+    assert not imp.cache_path(name).exists()    # no valid cache hit for dedup
+    assert not (cache / name).exists()
+    assert list(cache.iterdir()) == []          # not even a leftover .tmp- temp
