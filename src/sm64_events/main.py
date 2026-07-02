@@ -6,6 +6,9 @@ import sys
 from sm64_events.core.logging_setup import configure_logging
 from sm64_events.core.paths import (bundled_ffmpeg, db_path, instance_lock_path,
                                     migrate_legacy_data_dir, server_port)
+from sm64_events.compare.importer import VideoImporter
+from sm64_events.compare.service import CompareService
+from sm64_events.core.paths import compare_cache_dir
 from sm64_events.core.updater import UpdateService
 from sm64_events.core.version import __version__
 from sm64_events.detectors.anchors import AnchorDetector
@@ -117,6 +120,15 @@ def build():
             cfg=replay_cfg, recorder=recorder,
             extractor=ClipExtractor(cfg=replay_cfg, codec=codec),
             tracker=service)
+    # Compare tab: import comparison videos (yt-dlp/copy -> ffmpeg normalize)
+    # into the content cache, then serve them as plain clips. Only built when
+    # ffmpeg is available (same binary the replay sink uses).
+    compare = None
+    _ffmpeg_bin = bundled_ffmpeg() or __import__("shutil").which("ffmpeg")
+    if db is not None and _ffmpeg_bin:
+        importer = VideoImporter(compare_cache_dir(), _ffmpeg_bin)
+        compare = CompareService(importer, service, broadcaster,
+                                 compare_cache_dir())
     # Order is load-bearing for attempt state: level changes abandon stale
     # attempts BEFORE the same tick's igt-reset anchor opens the next one;
     # resets before grabs (see projection.py docstring on the same-tick race);
@@ -141,7 +153,7 @@ def build():
     updater = UpdateService(current_version=__version__)
     updater.cleanup_old_exe()   # delete a *.old left by a prior self-update
     return create_app(poller, broadcaster, service=service, replay=replay,
-                      updater=updater)
+                      updater=updater, compare=compare)
 
 
 _app = None
