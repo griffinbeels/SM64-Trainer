@@ -21,7 +21,7 @@ import { h } from "preact";
 import { useEffect } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
-import { Medal } from "./ranks.js";
+import { RankDisc } from "./ranks.js";
 import { GoldStar } from "./goldstar.js";
 
 const html = htm.bind(h);
@@ -92,10 +92,10 @@ function StarRow({ t, v, stage }) {
                          active=${active}
                          dim=${STAR_DIM_IDLE && !active}
                          eyes=${STAR_EYES && !active} />
+            ${rank ? html`<span class="starmedal"><${RankDisc} rank=${rank} /></span>` : ""}
           </span>
           <span class="starname">${name}</span>
           <span class="starsub">
-            ${rank ? html`<${Medal} rank=${rank} size=${14} />` : ""}
             <span class="strat ${strat ? "" : "none"}">${strat || "—"}</span>
           </span>
         </button>`;
