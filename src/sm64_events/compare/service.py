@@ -92,13 +92,19 @@ class CompareService:
         job = self._jobs.get(job_id)
         if job is None:
             raise LookupError("no such import job")
-        return job
+        return dict(job)  # shallow copy: callers never mutate live job state
 
     # -- CRUD ----------------------------------------------------------------
     async def update(self, comp_id: int, **fields) -> dict:
         db = self.tracker.db
         if db is None:
             raise RuntimeError("database unavailable")
+        # Pre-check existence: db.update_comparison only raises LookupError when
+        # it runs an UPDATE, so an empty/no-op fields set on a missing id would
+        # otherwise fall through to a None row (TypeError) AND fire a spurious
+        # comparisons_changed broadcast. Check BEFORE update AND publish.
+        if not any(c["id"] == comp_id for c in db.comparisons()):
+            raise LookupError(f"comparison {comp_id} not found")
         if "touch" in fields:
             fields.pop("touch")
             fields["last_used_utc"] = _iso_now()

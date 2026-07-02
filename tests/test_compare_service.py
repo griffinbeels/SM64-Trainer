@@ -85,3 +85,53 @@ def test_cache_path_rejects_bad_name(tmp_path):
     svc, _, _ = _svc(tmp_path)
     with pytest.raises(LookupError):
         svc.cache_path("../secret")
+
+
+def _import_to_done(svc, entity, strat, src):
+    job = svc.start_import(entity, strat, "x", "file", str(src))
+    for _ in range(100):
+        if svc.import_status(job)["state"] == "done":
+            break
+        time.sleep(0.02)
+
+
+def test_update_unknown_id_raises(tmp_path):
+    svc, _, _ = _svc(tmp_path)
+    with pytest.raises(LookupError):
+        asyncio.run(svc.update(999, name="x"))
+    # pre-check must run BEFORE publish: no spurious broadcast on a missing id
+    assert svc.broadcaster.events == []
+
+
+def test_update_unknown_id_empty_fields_raises(tmp_path):
+    # The real taxonomy hole: with NO (or all no-op) fields, db.update_comparison
+    # returns early WITHOUT an existence check, so pre-fix this fell through to a
+    # None row (TypeError) after firing a spurious broadcast. The pre-check fixes
+    # both: LookupError, and no broadcast.
+    svc, _, _ = _svc(tmp_path)
+    with pytest.raises(LookupError):
+        asyncio.run(svc.update(999))
+    assert svc.broadcaster.events == []
+
+
+def test_update_sets_sync_points_and_returns_clip_url(tmp_path):
+    svc, db, cache = _svc(tmp_path)
+    src = tmp_path / "v.mp4"; src.write_bytes(b"raw")
+    _import_to_done(svc, "star:7:0", "L", src)
+    row = db.comparisons("star:7:0", "L")[0]
+    cid, cname = row["id"], row["cache_name"]
+    r = asyncio.run(svc.update(cid, in_frame=90))
+    assert r["in_frame"] == 90
+    assert r["clip_url"].endswith(cname)
+    assert any(ev.type == "comparisons_changed" for ev in svc.broadcaster.events)
+
+
+def test_update_touch_bumps_last_used(tmp_path):
+    svc, db, cache = _svc(tmp_path)
+    src = tmp_path / "v.mp4"; src.write_bytes(b"raw")
+    _import_to_done(svc, "star:7:0", "L", src)
+    row = db.comparisons("star:7:0", "L")[0]
+    before = row["last_used_utc"]
+    r = asyncio.run(svc.update(row["id"], touch=True))
+    assert r["last_used_utc"] >= before      # ISO-8601 lexical compare
+    assert "clip_url" in r
