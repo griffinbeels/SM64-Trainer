@@ -26,6 +26,7 @@ from sm64_events.ranks.standards import entity_key
 from sm64_events.stats.registry import (DEFAULT_STAT_MENU, REGISTRY,
                                         compute_stat, selection_id,
                                         selection_order)
+from sm64_events.tracking.comparisons import resolve_auto
 from sm64_events.tracking.projection import journal_id
 from sm64_events.tracking.routes import route_stats
 
@@ -707,3 +708,19 @@ def build_route_view(db, service, route_id: int) -> dict:
     return {"id": route["id"], "name": route["name"],
             "start_condition": route["start_condition"], "steps": steps,
             "avg_rank": avg_rank, "weakest_step": weakest_step}
+
+
+def build_compare_view(db, ranks, entity: str, strat: str | None) -> dict:
+    """Compare-tab payload for one (entity, strat): saved comparisons (each with
+    a servable clip_url), the resolved auto-pick, and the rank-standard
+    suggestion (one-click Load) when nothing is saved. Ranks may be None."""
+    saved = []
+    if strat:
+        for c in db.comparisons(entity, strat):
+            saved.append({**c, "clip_url": f"/api/compare/cache/{c['cache_name']}"})
+    suggestion_url = ranks.video_for(entity, strat) if (ranks and strat) else None
+    suggestion = ({"source_kind": "youtube", "source_ref": suggestion_url,
+                   "name": f"{strat} — rank standard"} if suggestion_url else None)
+    auto = resolve_auto(saved, suggestion_url, strat)
+    return {"entity": entity, "strat": strat, "saved": saved,
+            "auto": auto, "suggestion": suggestion}
