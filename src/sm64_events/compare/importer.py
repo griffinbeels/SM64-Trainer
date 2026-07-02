@@ -1,0 +1,101 @@
+"""Comparison-video import: YouTube (yt-dlp) or local file -> ONE normalized
+mp4 in the content cache.
+
+Every comparison becomes a plain <video> the frame-stepping player can drive
+exactly like a replay clip. Normalization (ffmpeg, the bundled binary) forces
+H.264 <=720p + faststart so seeking / single-frame stepping is reliable
+regardless of the source's codec, resolution, or container.
+
+Dedup = "load once": the cache file is named by a hash of source_ref
+(cache_name_for), so importing the same URL/path twice returns the existing
+file without re-downloading or re-encoding. The downloader (yt-dlp) and the
+ffmpeg runner are injected so tests never touch the network or a codec.
+"""
+import logging
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+from sm64_events.tracking.comparisons import cache_name_for
+
+log = logging.getLogger("sm64.compare")
+
+
+def _default_downloader(source_ref: str, dest_dir: Path) -> Path:
+    """Fetch a YouTube URL to dest_dir at <=720p; return the downloaded file."""
+    import yt_dlp
+    out_tmpl = str(dest_dir / "src.%(ext)s")
+    opts = {"format": "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+            "outtmpl": out_tmpl, "quiet": True, "noprogress": True,
+            "merge_output_format": "mp4"}
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        ydl.download([source_ref])
+    files = list(dest_dir.glob("src.*"))
+    if not files:
+        raise RuntimeError("yt-dlp produced no file")
+    return files[0]
+
+
+def _default_runner(cmd: list[str]) -> None:
+    subprocess.run(cmd, check=True, capture_output=True,
+                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
+class VideoImporter:
+    def __init__(self, cache_dir: Path, ffmpeg: str, *,
+                 downloader=None, runner=None):
+        self.cache_dir = Path(cache_dir)
+        self.ffmpeg = ffmpeg
+        self._download = downloader or _default_downloader
+        self._run = runner or _default_runner
+
+    def cache_path(self, cache_name: str) -> Path:
+        return self.cache_dir / cache_name
+
+    def import_video(self, source_kind: str, source_ref: str,
+                     progress_cb=None) -> str:
+        if source_kind not in ("youtube", "file"):
+            raise ValueError(f"unknown source_kind {source_kind!r}")
+        name = cache_name_for(source_ref)
+        dest = self.cache_path(name)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        if dest.exists():                       # dedup / load-once
+            if progress_cb:
+                progress_cb(1.0, "already loaded")
+            return name
+
+        with tempfile.TemporaryDirectory() as td:
+            tdp = Path(td)
+            if source_kind == "file":
+                src = Path(source_ref)
+                if not src.is_file():
+                    raise LookupError(f"no such file: {source_ref}")
+                if progress_cb:
+                    progress_cb(0.3, "copying")
+                raw = tdp / f"src{src.suffix or '.mp4'}"
+                shutil.copy2(src, raw)
+            else:
+                if progress_cb:
+                    progress_cb(0.1, "downloading")
+                try:
+                    raw = self._download(source_ref, tdp)
+                except Exception as e:
+                    raise RuntimeError(f"download failed: {e}") from e
+            if progress_cb:
+                progress_cb(0.7, "normalizing")
+            tmp_out = tdp / name                # normalize beside the source
+            cmd = [self.ffmpeg, "-y", "-i", str(raw),
+                   "-vf", "scale=-2:min(720\\,ih)", "-c:v", "libx264",
+                   "-preset", "veryfast", "-crf", "20",
+                   "-movflags", "+faststart", "-c:a", "aac", str(tmp_out)]
+            try:
+                self._run(cmd)
+            except Exception as e:
+                raise RuntimeError(f"normalize failed: {e}") from e
+            if not tmp_out.exists():
+                raise RuntimeError("normalize produced no output")
+            shutil.move(str(tmp_out), str(dest))  # atomic publish into cache
+        if progress_cb:
+            progress_cb(1.0, "done")
+        return name
