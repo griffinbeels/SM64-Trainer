@@ -166,6 +166,25 @@ MIGRATIONS = [
     ALTER TABLE routes ADD COLUMN start_condition TEXT NOT NULL
       DEFAULT '{"type":"reset_game"}';
     """,
+    # v10 — comparisons: saved side-by-side comparison videos (spec 2026-07-02).
+    # Config (like routes), never journaled. Keyed by (entity_key, strat);
+    # cache_name points into data/compare_cache (content-addressed dedup).
+    # in/out_frame are non-destructive sync bounds in GAME frames (NULL = ends).
+    """
+    CREATE TABLE IF NOT EXISTS comparisons (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      entity_key    TEXT NOT NULL,
+      strat         TEXT NOT NULL,
+      name          TEXT NOT NULL,
+      source_kind   TEXT NOT NULL,
+      source_ref    TEXT NOT NULL,
+      cache_name    TEXT NOT NULL,
+      in_frame      INTEGER,
+      out_frame     INTEGER,
+      created_utc   TEXT NOT NULL,
+      last_used_utc TEXT NOT NULL
+    );
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
@@ -427,6 +446,72 @@ class Database:
             self._conn.commit()
         if cur.rowcount == 0:
             raise LookupError(f"route {route_id} not found")
+
+    # -- comparisons (config) ------------------------------------------------
+    _COMP_COLS = ("id", "entity_key", "strat", "name", "source_kind",
+                  "source_ref", "cache_name", "in_frame", "out_frame",
+                  "created_utc", "last_used_utc")
+
+    def comparisons(self, entity_key: str | None = None,
+                    strat: str | None = None) -> list[dict]:
+        q, params, where = "SELECT * FROM comparisons", [], []
+        if entity_key is not None:
+            where.append("entity_key=?"); params.append(entity_key)
+        if strat is not None:
+            where.append("strat=?"); params.append(strat)
+        if where:
+            q += " WHERE " + " AND ".join(where)
+        q += " ORDER BY id"
+        with self._lock:
+            rows = self._conn.execute(q, params).fetchall()
+        return [{k: r[k] for k in self._COMP_COLS} for r in rows]
+
+    def insert_comparison(self, entity_key: str, strat: str, name: str,
+                          source_kind: str, source_ref: str, cache_name: str,
+                          created_utc: str, last_used_utc: str) -> int:
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO comparisons (entity_key, strat, name, source_kind,"
+                " source_ref, cache_name, created_utc, last_used_utc)"
+                " VALUES (?,?,?,?,?,?,?,?)",
+                (entity_key, strat, name, source_kind, source_ref, cache_name,
+                 created_utc, last_used_utc))
+            self._conn.commit()
+            return cur.lastrowid
+
+    def update_comparison(self, comp_id: int, **fields) -> None:
+        cols = ("name", "in_frame", "out_frame", "last_used_utc")
+        unknown = set(fields) - set(cols)
+        if unknown:
+            raise ValueError(f"unknown fields {sorted(unknown)}")
+        sets, vals = [], []
+        for k in cols:
+            if k in fields:
+                sets.append(f"{k}=?"); vals.append(fields[k])
+        if not sets:
+            return
+        with self._lock:
+            cur = self._conn.execute(
+                f"UPDATE comparisons SET {','.join(sets)} WHERE id=?",
+                (*vals, comp_id))
+            self._conn.commit()
+        if cur.rowcount == 0:
+            raise LookupError(f"comparison {comp_id} not found")
+
+    def delete_comparison(self, comp_id: int) -> None:
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM comparisons WHERE id=?",
+                                     (comp_id,))
+            self._conn.commit()
+        if cur.rowcount == 0:
+            raise LookupError(f"comparison {comp_id} not found")
+
+    def comparison_cache_refs(self, cache_name: str) -> int:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) AS n FROM comparisons WHERE cache_name=?",
+                (cache_name,)).fetchone()
+        return row["n"]
 
     # -- runs (history cache) ------------------------------------------------
     _RUN_COLS = ("id", "route_id", "route_name", "route_steps", "mode",
