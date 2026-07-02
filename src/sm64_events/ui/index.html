@@ -37,6 +37,38 @@
   .stagebtn-name { font-weight: 600; line-height: 1.2; }
   .stagebtn-sub { font-size: .8em; display: flex; align-items: center; gap: .3rem; }
   .stagebtn.active-star { border-color: #e0c36a; }
+  /* SM64 star-select row (StarRow only) — a single line of gold stars that
+     shrinks with the pane but NEVER wraps. Namespaced away from .stagebtn,
+     which the other banner modes (bowser/arena/castle) still use unchanged. */
+  .starrow { display: flex; flex-wrap: nowrap; gap: .3rem; align-items: flex-start;
+             overflow-x: auto; margin-top: .4rem; }
+  .starcell { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column;
+              align-items: center; gap: .28rem; padding: .5rem .25rem .45rem;
+              border: 1px solid transparent; border-radius: 10px; cursor: pointer;
+              text-align: center; background: none; color: inherit; font: inherit;
+              transition: background .12s, border-color .12s; }
+  .starcell:hover { background: #20242b; }
+  .starcell:focus-visible { outline: 2px solid #6fa8ff; outline-offset: 2px; }
+  .starcell.active-star { border-color: #e0c36a; background: #211f14; }
+  .starnum { color: #6c7686; font-size: .72rem; font-variant-numeric: tabular-nums;
+             line-height: 1; height: 1em; }
+  .starholder { display: block; width: min(74px, 72%); aspect-ratio: 1 / 1;
+                transition: transform .18s ease; }
+  .starcell.active-star .starholder { transform: scale(1.16); }
+  .starname { font-size: .8rem; font-weight: 600; line-height: 1.12; min-height: 2.1em;
+              display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+              overflow: hidden; }
+  .starcell.active-star .starname { color: #ffd75f; }
+  .starsub { display: flex; align-items: center; gap: .28rem; justify-content: center;
+             max-width: 100%; }
+  .starsub .strat { color: #6c7686; font-size: .74rem; white-space: nowrap;
+                    overflow: hidden; text-overflow: ellipsis; }
+  .starsub .strat.none { opacity: .6; }
+  @media (prefers-reduced-motion: no-preference) {
+    .starcell.active-star .starholder { animation: starbob 2.4s ease-in-out infinite; }
+    @keyframes starbob { 0%, 100% { transform: scale(1.16) translateY(0); }
+                         50% { transform: scale(1.16) translateY(-3px); } }
+  }
   .segrow { display: flex; gap: .5rem; align-items: center; border: 1px solid #2c3140; border-radius: 8px; padding: .4rem .6rem; margin-bottom: .4rem; }
   .segsection { border: 1px solid #2c3140; border-radius: 8px; padding: .45rem .55rem; margin: .5rem 0; }
   .seghead { padding: .2rem .5rem; border-radius: 5px; margin-bottom: .3rem; font-size: .9em; }

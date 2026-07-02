@@ -22,6 +22,7 @@ import { useEffect } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
 import { Medal } from "./ranks.js";
+import { GoldStar } from "./goldstar.js";
 
 const html = htm.bind(h);
 
@@ -46,6 +47,13 @@ export function StageBanner({ t }) {
 const segsForLevel = (v, level) =>
   (v.segment_targets || []).filter((s) => (s.start_levels || []).includes(level));
 
+// StarRow look flags — flip during the human-audit playtest to taste. Kept as
+// constants (not props) so the call site below stays a single readable line.
+const STAR_SHADED = true;    // false = flat single-tone gold
+const STAR_EYES = false;     // true  = SM64 sleeping-eyes on idle stars
+const STAR_DIM_IDLE = true;  // false = every star equally bright
+const STAR_NUMBERS = true;   // false = hide the 1..N labels above the stars
+
 function StarRow({ t, v, stage }) {
   const course = v.catalog.courses.find((c) => c.id === stage.course_id);
   if (!course) return null;
@@ -53,9 +61,8 @@ function StarRow({ t, v, stage }) {
   const tgt = v.target || {};
   const lastStratFor = (i) =>
     v.last_strat_by_star[`${stage.course_id}:${i}`] || "";
-  // Rank under that star's ACTIVE strat (server-graded, parallel to
-  // last_strat_by_star). Changing the strat refreshes the view and swaps the
-  // medal here automatically — see tracking/views.py rank_by_star.
+  // Rank under that star's ACTIVE strat (server-graded). Changing the strat
+  // refreshes the view and swaps the medal automatically — see views.py.
   const rankFor = (i) =>
     (v.rank_by_star || {})[`${stage.course_id}:${i}`];
 
@@ -70,19 +77,26 @@ function StarRow({ t, v, stage }) {
   return html`<div class="starsec stagebanner">
     <div class="shead"><b>▸ ${course.name}</b>
       <span class="meta">tap a star to practice</span></div>
-    <div class="stagebanner-row">
+    <div class="starrow">
       ${course.stars.map((name, i) => {
         const active = tgt.kind !== "segment"
           && tgt.course_id === stage.course_id && tgt.star_id === i;
         const strat = lastStratFor(i);
         const rank = rankFor(i);
         return html`<button key=${`${stage.course_id}:${i}`}
-                            class="stagebtn ${active ? "active-star" : ""}"
-                            onclick=${() => pick(i)}>
-          <span class="stagebtn-name">${name}</span>
-          <span class="stagebtn-sub meta">
-            ${rank ? html`<${Medal} rank=${rank} size=${13} />` : ""}
-            <span>${strat || "—"}</span>
+                            class="starcell ${active ? "active-star" : ""}"
+                            title=${name} onclick=${() => pick(i)}>
+          ${STAR_NUMBERS ? html`<span class="starnum">${i + 1}</span>` : ""}
+          <span class="starholder">
+            <${GoldStar} size="100%" shaded=${STAR_SHADED}
+                         active=${active}
+                         dim=${STAR_DIM_IDLE && !active}
+                         eyes=${STAR_EYES && !active} />
+          </span>
+          <span class="starname">${name}</span>
+          <span class="starsub">
+            ${rank ? html`<${Medal} rank=${rank} size=${14} />` : ""}
+            <span class="strat ${strat ? "" : "none"}">${strat || "—"}</span>
           </span>
         </button>`;
       })}
