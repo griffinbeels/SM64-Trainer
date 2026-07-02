@@ -192,33 +192,64 @@ function HideToggle({ hidden, showHidden, setShowHidden }) {
 // saved file exists (HEAD existence probe). Graph points and the PB attempt are
 // always non-cleared successes, which no list filter removes, so they live in
 // `rows` whenever they're in scope; a pick whose attempt is out of scope (e.g.
-// a PB from another session in session-scope, with no dot either) no-ops.
+// a PB from an earlier session, viewed in session scope) is held as pending and
+// revealed when a later view brings the row in — the PB tag switches to
+// lifetime scope to make that happen.
 function useGraphPick(rows, visible, setVisible) {
   const [focus, setFocus] = useState(null);
   const pickNonce = useRef(0);
-  async function pick(attemptId) {
+  // pendingId: an attempt picked while it wasn't (yet) in `rows` — e.g. the PB
+  // tag jumping to an out-of-scope PB, which first switches scope to lifetime.
+  // Claimed synchronously in pick() (before the async replay probe) so the
+  // scope refetch can't re-render past us; the effect below reveals it once the
+  // new view brings the row in.
+  const pendingId = useRef(null);
+  async function reveal(attemptId) {
+    // Membership first: bail before the replay probe when the row isn't loaded
+    // (an out-of-scope PB before its scope switch lands), so no wasted request.
+    const idx = rows.findIndex((a) => a.id === attemptId);
+    if (idx === -1) return false;
+    if (idx >= visible) setVisible(Math.ceil((idx + 1) / 10) * 10);
     let openReplay = false;
     try {
       openReplay = (await fetch(`/api/replay/saved/${attemptId}`,
                                 { method: "HEAD" })).ok;
     } catch { /* probe is best-effort: still scroll + flash */ }
-    const idx = rows.findIndex((a) => a.id === attemptId);
-    if (idx === -1) return;
-    if (idx >= visible) setVisible(Math.ceil((idx + 1) / 10) * 10);
     setFocus({ id: attemptId, nonce: ++pickNonce.current, openReplay });
+    return true;
   }
+  async function pick(attemptId) {
+    pendingId.current = attemptId;                    // claim before any await
+    if (await reveal(attemptId)) pendingId.current = null;
+  }
+  // A pick whose attempt wasn't in `rows` waits here until a new view brings it
+  // in (the PB tag switching scope to lifetime), then reveals it.
+  useEffect(() => {
+    if (pendingId.current == null) return;
+    if (!rows.some((a) => a.id === pendingId.current)) return;
+    const id = pendingId.current;
+    pendingId.current = null;
+    reveal(id);
+  }, [rows]);
   return { focus, pick, clearFocus: () => setFocus(null) };
 }
 
-// PB tag: clickable when the PB's attempt is in the visible `rows` — clicking
-// jumps to that row exactly like clicking its gold progress-graph dot (`pick`).
-// Falls back to plain text otherwise (no PB yet, or the PB is out of scope so
-// there is no row to reach). `mode` is just the clock label shown in parens.
-function PbTag({ pb, mode, rows, pick }) {
+// PB tag: always a clickable jump to the PB's attempt row — same reveal path as
+// its gold progress-graph dot (scroll, flash, open saved replay). When the PB
+// is out of the current scope (a lifetime PB from an earlier session, viewed in
+// session scope) its row isn't loaded, so clicking first switches to lifetime
+// scope; pick() holds the request until the lifetime view brings the row in.
+// `mode` is just the clock label shown in parens.
+function PbTag({ pb, mode, rows, pick, t }) {
   if (!pb) return html`<span class="pbtag">no PB yet</span>`;
-  const canPick = pick && rows.some((a) => a.id === pb.attempt_id);
-  return html`<span class="pbtag">PB ${canPick
-    ? html`<a class="pblink" onclick=${() => pick(pb.attempt_id)}
+  function jump() {
+    if (!pick) return;
+    if (!rows.some((a) => a.id === pb.attempt_id) && t.scope !== "lifetime")
+      t.pickScope("lifetime");
+    pick(pb.attempt_id);
+  }
+  return html`<span class="pbtag">PB ${pick
+    ? html`<a class="pblink" onclick=${jump}
         title="jump to this PB in the list below">${pb.display}</a>`
     : pb.display} (${mode})</span>`;
 }
@@ -277,7 +308,7 @@ function StarSection({ sec, t, ui, pinned, freshIds }) {
         ${sec.strategies.map((s) => html`<option value=${s}>${s}</option>`)}
         <option value="__new">+ new strat…</option>
       </select>
-      <${PbTag} pb=${pb} mode=${t.clock} rows=${rows} pick=${pick} />
+      <${PbTag} pb=${pb} mode=${t.clock} rows=${rows} pick=${pick} t=${t} />
       <button class="meta" onclick=${wipeData}
         title=${t.scope === "lifetime"
           ? "wipe this star's data (all sessions)"
@@ -362,7 +393,7 @@ function SegmentSection({ sec, t, ui, pinned, freshIds }) {
       <b>⏱ ${sec.name}</b>
       ${armed && html`<span class="chip good">⏱ active</span>`}
       ${sec.broken && html`<span class="meta">definition deleted — history only</span>`}
-      <${PbTag} pb=${sec.pb.rta} mode="rta" rows=${rows} pick=${pick} />
+      <${PbTag} pb=${sec.pb.rta} mode="rta" rows=${rows} pick=${pick} t=${t} />
       <button class="meta" onclick=${wipeData}
         title=${t.scope === "lifetime"
           ? "wipe this segment's data (all sessions)"
