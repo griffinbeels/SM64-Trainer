@@ -2,7 +2,7 @@
 """Compare REST surface. Same error taxonomy as api.py/replay_api.py:
 LookupError->404, ValueError->409, RuntimeError->503. Import is a polled job
 (download + re-encode is long); cache serving uses FileResponse (Range/206)."""
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -56,6 +56,17 @@ def create_compare_router(service) -> APIRouter:
             return service.import_status(job_id)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
+
+    @router.post("/compare/upload")
+    async def upload(entity_key: str, strat: str, name: str, filename: str,
+                     request: Request):
+        data = await request.body()
+        try:
+            job_id = service.start_upload(entity_key=entity_key, strat=strat,
+                                          name=name, filename=filename, data=data)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"job_id": job_id}
 
     @router.put("/compare/videos/{comp_id}")
     async def edit(comp_id: int, body: EditBody):

@@ -59,21 +59,37 @@ class CompareService:
         self._jobs[job_id] = {"state": "running", "progress": 0.0,
                               "message": "starting", "comparison": None}
         threading.Thread(
-            target=self._run_import, name="compare-import", daemon=True,
-            args=(job_id, entity_key, strat, name, source_kind, source_ref),
+            target=self._run_job, name="compare-import", daemon=True,
+            args=(job_id, entity_key, strat, name, source_kind, source_ref,
+                  lambda progress: self.importer.import_video(
+                      source_kind, source_ref, progress_cb=progress)),
         ).start()
         return job_id
 
-    def _run_import(self, job_id, entity_key, strat, name, source_kind,
-                    source_ref) -> None:
+    def start_upload(self, entity_key: str, strat: str, name: str,
+                     filename: str, data: bytes) -> str:
+        if self.tracker.db is None:
+            raise RuntimeError("database unavailable")
+        job_id = uuid.uuid4().hex
+        self._jobs[job_id] = {"state": "running", "progress": 0.0,
+                              "message": "starting", "comparison": None}
+        threading.Thread(
+            target=self._run_job, name="compare-upload", daemon=True,
+            args=(job_id, entity_key, strat, name, "file", f"upload:{filename}",
+                  lambda progress: self.importer.import_bytes(
+                      data, progress_cb=progress)),
+        ).start()
+        return job_id
+
+    def _run_job(self, job_id, entity_key, strat, name, source_kind,
+                source_ref, produce) -> None:
         job = self._jobs[job_id]
 
         def progress(frac, msg):
             job["progress"] = frac; job["message"] = msg
 
         try:
-            cache_name = self.importer.import_video(source_kind, source_ref,
-                                                    progress_cb=progress)
+            cache_name = produce(progress)
             now = _iso_now()
             cid = self.tracker.db.insert_comparison(
                 entity_key, strat, name, source_kind, source_ref, cache_name,

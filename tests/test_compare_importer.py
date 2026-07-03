@@ -76,3 +76,24 @@ def test_normalize_failure_leaves_no_cache_file(tmp_path):
     assert not imp.cache_path(name).exists()    # no valid cache hit for dedup
     assert not (cache / name).exists()
     assert list(cache.iterdir()) == []          # not even a leftover .tmp- temp
+
+
+def test_import_bytes_dedups_by_content(tmp_path):
+    imp, cache, calls = _importer(tmp_path)
+    name1 = imp.import_bytes(b"same")
+    name2 = imp.import_bytes(b"same")
+    assert name1 == name2
+    assert len(calls) == 1              # ffmpeg ran once (second call deduped)
+    assert name1.endswith(".mp4")
+    assert len(name1) == len("0123456789abcdef.mp4")  # 16 hex chars + .mp4
+    assert (cache / name1).exists()
+
+
+def test_import_bytes_distinct_content_distinct_name(tmp_path):
+    imp, cache, calls = _importer(tmp_path)
+    name1 = imp.import_bytes(b"alpha")
+    name2 = imp.import_bytes(b"beta")
+    assert name1 != name2
+    assert len(calls) == 2
+    assert (cache / name1).exists()
+    assert (cache / name2).exists()

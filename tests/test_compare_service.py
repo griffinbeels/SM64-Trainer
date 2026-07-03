@@ -135,3 +135,19 @@ def test_update_touch_bumps_last_used(tmp_path):
     r = asyncio.run(svc.update(row["id"], touch=True))
     assert r["last_used_utc"] >= before      # ISO-8601 lexical compare
     assert "clip_url" in r
+
+
+def test_start_upload_inserts_file_row(tmp_path):
+    svc, db, cache = _svc(tmp_path)
+    job = svc.start_upload("star:7:0", "L", "up", "clip.mp4", b"rawbytes")
+    for _ in range(100):                        # poll to completion
+        st = svc.import_status(job)
+        if st["state"] in ("done", "error"):
+            break
+        time.sleep(0.02)
+    assert st["state"] == "done", st
+    row = db.comparisons("star:7:0", "L")[0]
+    assert row["name"] == "up"
+    assert row["source_kind"] == "file"
+    assert row["source_ref"] == "upload:clip.mp4"
+    assert st["comparison"]["clip_url"].endswith(row["cache_name"])

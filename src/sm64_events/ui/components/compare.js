@@ -75,6 +75,17 @@ function AddComparison({ entity, strat, suggestion, onAdded }) {
       { entity_key: entity, strat, name, source_kind, source_ref });
     pollJob(r.job_id);
   }
+  async function startUpload(file) {
+    const q = new URLSearchParams({ entity_key: entity, strat,
+      name: file.name, filename: file.name });
+    setJob({ state: "running", progress: 0, message: "uploading" });
+    let r;
+    try { r = await fetch(`/api/compare/upload?${q}`, { method: "POST", body: file }); }
+    catch (e) { setJob({ state: "error", message: String(e) }); return; }
+    if (!r.ok) { setJob({ state: "error", message: `upload failed (${r.status})` }); return; }
+    const { job_id } = await r.json();
+    pollJob(job_id);
+  }
   function pollJob(jobId) {
     setJob({ state: "running", progress: 0 });
     if (pollRef.current) clearInterval(pollRef.current);
@@ -90,7 +101,7 @@ function AddComparison({ entity, strat, suggestion, onAdded }) {
   function onDrop(e) {
     e.preventDefault();
     const f = e.dataTransfer.files[0];
-    if (f) startImport("file", f.path || f.name, f.name);
+    if (f) startUpload(f);
   }
 
   if (strat == null)
@@ -107,7 +118,7 @@ function AddComparison({ entity, strat, suggestion, onAdded }) {
     <button onclick=${() => fileRef.current && fileRef.current.click()}>Choose file…</button>
     <input type="file" accept="video/*" style="display:none" ref=${fileRef}
       onchange=${(e) => { const f = e.target.files[0];
-        if (f) startImport("file", f.path || f.name, f.name); }} />
+        if (f) startUpload(f); }} />
     <span class="meta"> or drag a video here</span>
     ${job && job.state === "running" && html`<div class="meta">
       loading… ${Math.round((job.progress || 0) * 100)}% ${job.message || ""}</div>`}

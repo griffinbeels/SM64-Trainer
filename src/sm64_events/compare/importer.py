@@ -11,6 +11,7 @@ Dedup = "load once": the cache file is named by a hash of source_ref
 file without re-downloading or re-encoding. The downloader (yt-dlp) and the
 ffmpeg runner are injected so tests never touch the network or a codec.
 """
+import hashlib
 import logging
 import os
 import shutil
@@ -65,6 +66,33 @@ class VideoImporter:
     def cache_path(self, cache_name: str) -> Path:
         return self.cache_dir / cache_name
 
+    def _normalize_to_cache(self, raw: Path, name: str, progress_cb=None) -> None:
+        """ffmpeg-normalize `raw` and publish it into the cache as `name`.
+        Normalize INTO cache_dir (not TEMP): tmp_out and dest then share one
+        filesystem, so publishing is an atomic os.replace. Landing in TEMP
+        would force shutil's copy+unlink fallback across filesystems, whose
+        interruption leaves a truncated file at dest that dedup (dest.exists)
+        would forever trust as a valid cache hit."""
+        if progress_cb:
+            progress_cb(0.7, "normalizing")
+        dest = self.cache_path(name)
+        tmp_out = self.cache_dir / f".tmp-{name}"
+        cmd = [self.ffmpeg, "-y", "-i", str(raw),
+               "-vf", "scale=-2:min(720\\,ih)", "-c:v", "libx264",
+               "-preset", "veryfast", "-crf", "20",
+               "-movflags", "+faststart", "-c:a", "aac", str(tmp_out)]
+        try:
+            try:
+                self._run(cmd)
+            except Exception as e:
+                raise RuntimeError(f"normalize failed: {e}") from e
+            if not tmp_out.exists():
+                raise RuntimeError("normalize produced no output")
+            os.replace(tmp_out, dest)       # atomic publish (same filesystem)
+        except Exception:
+            tmp_out.unlink(missing_ok=True)  # never leave a partial dedup would trust
+            raise
+
     def import_video(self, source_kind: str, source_ref: str,
                      progress_cb=None) -> str:
         if source_kind not in ("youtube", "file"):
@@ -94,29 +122,26 @@ class VideoImporter:
                     raw = self._download(source_ref, tdp)
                 except Exception as e:
                     raise RuntimeError(f"download failed: {e}") from e
+            self._normalize_to_cache(raw, name, progress_cb)
+        if progress_cb:
+            progress_cb(1.0, "done")
+        return name
+
+    def import_bytes(self, data: bytes, progress_cb=None) -> str:
+        """Import raw uploaded video bytes. Content-addressed (dedup by
+        CONTENT, not filename): the same file uploaded twice reuses the
+        cache ("load once")."""
+        name = hashlib.sha1(data).hexdigest()[:16] + ".mp4"
+        dest = self.cache_path(name)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        if dest.exists():                       # dedup / load-once
             if progress_cb:
-                progress_cb(0.7, "normalizing")
-            # Normalize INTO cache_dir (not TEMP): tmp_out and dest then share
-            # one filesystem, so publishing is an atomic os.replace. Landing in
-            # TEMP would force shutil's copy+unlink fallback across filesystems,
-            # whose interruption leaves a truncated file at dest that dedup
-            # (dest.exists) would forever trust as a valid cache hit.
-            tmp_out = self.cache_dir / f".tmp-{name}"
-            cmd = [self.ffmpeg, "-y", "-i", str(raw),
-                   "-vf", "scale=-2:min(720\\,ih)", "-c:v", "libx264",
-                   "-preset", "veryfast", "-crf", "20",
-                   "-movflags", "+faststart", "-c:a", "aac", str(tmp_out)]
-            try:
-                try:
-                    self._run(cmd)
-                except Exception as e:
-                    raise RuntimeError(f"normalize failed: {e}") from e
-                if not tmp_out.exists():
-                    raise RuntimeError("normalize produced no output")
-                os.replace(tmp_out, dest)       # atomic publish (same filesystem)
-            except Exception:
-                tmp_out.unlink(missing_ok=True)  # never leave a partial dedup would trust
-                raise
+                progress_cb(1.0, "already loaded")
+            return name
+        with tempfile.TemporaryDirectory() as td:
+            raw = Path(td) / "upload.bin"
+            raw.write_bytes(data)
+            self._normalize_to_cache(raw, name, progress_cb)
         if progress_cb:
             progress_cb(1.0, "done")
         return name

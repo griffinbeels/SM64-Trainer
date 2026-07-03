@@ -5,11 +5,14 @@ from sm64_events.server.compare_api import create_compare_router
 
 
 class _FakeService:
-    def __init__(self): self.deleted = []
+    def __init__(self): self.deleted = []; self.uploads = []
     def view(self, entity, strat):
         return {"entity": entity, "strat": strat, "saved": [], "auto": None,
                 "suggestion": None}
     def start_import(self, **kw): return "job123"
+    def start_upload(self, **kw):
+        self.uploads.append(kw)
+        return "job456"
     def import_status(self, job_id):
         if job_id != "job123":
             raise LookupError("no such import job")
@@ -51,3 +54,15 @@ def test_put_and_delete():
     assert r.json()["in_frame"] == 90
     assert c.delete("/api/compare/videos/5").json()["ok"] is True
     assert svc.deleted == [5]
+
+
+def test_upload_route():
+    svc = _FakeService()
+    c = _client(svc)
+    r = c.post("/api/compare/upload", params={"entity_key": "star:7:0",
+        "strat": "L", "name": "n", "filename": "clip.mp4"}, content=b"rawbytes")
+    assert r.status_code == 200
+    assert r.json()["job_id"] == "job456"
+    assert len(svc.uploads) == 1
+    assert svc.uploads[0]["data"] == b"rawbytes"
+    assert svc.uploads[0]["filename"] == "clip.mp4"
