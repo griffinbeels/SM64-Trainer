@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from sm64_events.core import paths
+from sm64_events.core.paths import compare_cache_dir, db_path
 
 
 def test_source_paths_match_historical_relative_layout(monkeypatch):
@@ -108,3 +109,9 @@ def test_migrate_noop_from_source(monkeypatch, tmp_path):
     (tmp_path / "sm64_tracker").mkdir()
     paths.migrate_legacy_data_dir()
     assert (tmp_path / "sm64_tracker").exists()   # inert from source
+
+
+def test_compare_cache_dir_under_data_root():
+    # Sits beside the db, under the same data root (frozen or source).
+    assert compare_cache_dir() == db_path().parent / "compare_cache"
+    assert compare_cache_dir().name == "compare_cache"

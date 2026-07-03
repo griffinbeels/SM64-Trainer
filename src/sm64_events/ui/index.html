@@ -218,6 +218,12 @@
   .stdtools a.meta:hover{text-decoration:underline}
   .weakflag{font-size:9px;color:#e0707a;border:1px solid #5a2e2e;border-radius:4px;padding:1px 5px;text-transform:uppercase;letter-spacing:.4px;margin:0 4px}
   .routeavg{display:flex;align-items:center;gap:6px;margin:4px 0;font-size:13px}
+  .compare-grid { display:flex; gap:1rem; align-items:flex-start; }
+  .compare-col { flex:1; min-width:0; }
+  .compare-center { display:flex; flex-direction:column; align-items:center; padding-top:2rem; }
+  .compare-transport { display:flex; flex-direction:column; gap:.4rem; align-items:center; }
+  .compare-transport button { min-width:7rem; }
+  @media (max-width:900px){ .compare-grid{ flex-direction:column; } }
 </style></head>
 <body>
 <div id="app"></div>

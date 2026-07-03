@@ -17,7 +17,7 @@ SEP = ";" if os.name == "nt" else ":"
 # Native/binary deps whose data files or submodules PyInstaller's auto
 # analysis can miss — collect everything for each.
 COLLECT = ["av", "windows_capture", "pyaudiowpatch", "pycaw", "comtypes",
-           "pymem", "webview", "pystray", "numpy"]
+           "pymem", "webview", "pystray", "numpy", "yt_dlp"]
 
 
 def main() -> int:

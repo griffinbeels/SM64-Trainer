@@ -3,6 +3,7 @@ import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
+import { stepGameFrame, jumpToStart } from "../frame.js";
 
 const html = htm.bind(h);
 
@@ -35,7 +36,7 @@ function attachSharedVolume(el) {
 }
 
 // Expanded row under an attempt: extract on mount (server caches), then play.
-export function ReplayPlayer({ attemptId }) {
+export function ReplayPlayer({ attemptId, onCompare }) {
   const [state, setState] = useState({ phase: "loading" });
   const [savedPath, setSavedPath] = useState(null);
   const [playing, setPlaying] = useState(false); // event-driven (onplay/onpause)
@@ -79,13 +80,10 @@ export function ReplayPlayer({ attemptId }) {
   // frame occasionally spans 1 or 3 encoded frames, so once in a while a
   // single press lands on a duplicate; the next press recovers.
   function step(dir) {
-    const v = videoEl.current;
-    if (!v) return;
-    if (!v.paused) v.pause();
-    const fps = state.game_fps || 30;
-    const n = Math.floor(v.currentTime * fps + 1e-4);
-    const t = (n + dir + 0.5) / fps;
-    v.currentTime = Math.min(Math.max(t, 0), v.duration || 0);
+    stepGameFrame(videoEl.current, dir, state.game_fps || 30);
+  }
+  function toStart() {
+    jumpToStart(videoEl.current, 0);
   }
 
   function togglePlay() {
@@ -124,6 +122,7 @@ export function ReplayPlayer({ attemptId }) {
              }
            }}></video>
     <div style="display:flex;gap:.3rem;margin:.3rem 0;align-items:center">
+      <button onclick=${toStart} title="jump to the beginning">⏮ start</button>
       <button onclick=${() => step(-1)} title="pause + back one frame">⏴ frame</button>
       <button onclick=${togglePlay} style="min-width:5.5rem"
               title="play / pause">${playing ? "❚❚ pause" : "▶ play"}</button>
@@ -135,6 +134,8 @@ export function ReplayPlayer({ attemptId }) {
         ${savedPath ? "Saved" : "Save Replay"}</button>
       ${savedPath && html` <a href="#" class="meta replay-path" title="show in Explorer"
             onclick=${revealSaved}>→ ${savedPath}</a>`}
+      ${onCompare && html` <button onclick=${onCompare}
+          title="open this run in the Compare tab">⇆ Compare</button>`}
     </div>
   </div>`;
 }

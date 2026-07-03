@@ -93,6 +93,12 @@ def replay_scratch_dir() -> Path:
     return data_root() / "data" / "replay_buffer"
 
 
+def compare_cache_dir() -> Path:
+    # Normalized comparison videos (yt-dlp'd / copied + ffmpeg-normalized).
+    # Content-addressed by source; survives restarts (unlike the replay ring).
+    return data_root() / "data" / "compare_cache"
+
+
 def replays_root() -> Path:
     return data_root() / "replays"
 

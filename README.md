@@ -40,6 +40,31 @@ tools/scrape_ranks.py`). REST/WS surface:
 
 `rank_standards_changed` is broadcast-only (no journal entry).
 
+**Compare** puts your run side-by-side with a reference video: the left
+stage plays a past attempt by id through the same replay pipeline as the
+Replay tab, the right stage plays an imported comparison video — pulled
+from YouTube (via `yt-dlp`), a local file, or a browser upload, normalized
+to a local mp4 and cached — and one frame-accurate transport drives every
+stage in lockstep (play/pause, ±1-frame step, jump-to-start). Per-clip in/out
+sync-point sliders align the two videos; the shared transport itself has no
+drag-scrub. With nothing saved yet, Compare **suggests** the rank standard's
+example video for the active strategy (auto-selected, offered as a one-click
+**▸ Load** — nothing downloads or plays until you click it). REST surface:
+
+| Method | Path | Body / Query | Effect |
+|---|---|---|---|
+| `GET` | `/api/compare/view` | `?entity=<key>&strat=<tag>` | Saved comparisons for one (entity, strat) with servable `clip_url`s, the resolved auto-pick, and a rank-standard suggestion when nothing is saved yet |
+| `POST` | `/api/compare/import` | `{entity_key, strat, name, source_kind: "youtube"\|"file", source_ref}` | Start a background import job (download/copy → ffmpeg-normalize → content-addressed cache) → `{job_id}` |
+| `GET` | `/api/compare/import/{job_id}` | — | Poll job status: `{state: "running"\|"done"\|"error", progress, message, comparison?}` |
+| `POST` | `/api/compare/upload` | `?entity_key=&strat=&name=&filename=`, raw video bytes as the request body | Start an import job from a browser-uploaded file → `{job_id}` |
+| `PUT` | `/api/compare/videos/{id}` | `{name?, in_frame?, out_frame?, touch?}` | Edit a saved comparison (rename, set sync in/out frames, or bump `last_used_utc`). Broadcasts `comparisons_changed`. |
+| `DELETE` | `/api/compare/videos/{id}` | — | Delete a saved comparison; evicts its cached file once no other comparison shares it. Broadcasts `comparisons_changed`. |
+| `GET` | `/api/compare/cache/{name}` | — | The cached mp4 (Range/206) |
+
+Import completion is not broadcast — the initiating client polls the job
+instead, since imports are a focused single-client action; `comparisons_changed`
+fires only from edits/deletes, so other clients pick up those.
+
 ## Quick start (just want to use it)
 
 1. **Download** the latest `SM64Trainer.exe` from the
