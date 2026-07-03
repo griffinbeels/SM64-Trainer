@@ -139,6 +139,7 @@ export function WorkArea({ videoEl, inFrame, outFrame, onCommit }) {
   const [dur, setDur] = useState(0);
   const [inF, setInF] = useState(inFrame || 0);
   const [outF, setOutF] = useState(outFrame == null ? null : outFrame);
+  const [playFrac, setPlayFrac] = useState(0);   // live playhead position (0..1)
   const trackRef = useRef(null);
   useEffect(() => { setInF(inFrame || 0); setOutF(outFrame == null ? null : outFrame); },
     [inFrame, outFrame]);
@@ -148,6 +149,21 @@ export function WorkArea({ videoEl, inFrame, outFrame, onCommit }) {
     videoEl.addEventListener("loadedmetadata", on);
     if (videoEl.duration) setDur(videoEl.duration);
     return () => videoEl.removeEventListener("loadedmetadata", on);
+  }, [videoEl]);
+  // live playhead: follow the video's currentTime via requestAnimationFrame
+  // (smooth left->right). Only re-render when it actually moves, so a paused
+  // video costs nothing.
+  useEffect(() => {
+    if (!videoEl) return;
+    let raf, last = -1;
+    const tick = () => {
+      const d = videoEl.duration || 0;
+      const frac = d > 0 ? Math.min(1, videoEl.currentTime / d) : 0;
+      if (Math.abs(frac - last) > 0.0004) { last = frac; setPlayFrac(frac); }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
   }, [videoEl]);
 
   const maxF = Math.max(1, Math.round(dur * 30));
@@ -195,6 +211,7 @@ export function WorkArea({ videoEl, inFrame, outFrame, onCommit }) {
   return html`<div class="workarea">
     <div class="wa-track" ref=${trackRef}>
       <div class="wa-region" style=${`left:${inPct}%;width:${Math.max(0, outPct - inPct)}%`}></div>
+      <div class="wa-playhead" style=${`left:${playFrac * 100}%`}></div>
       <div class="wa-handle" style=${`left:${inPct}%`}
            onpointerdown=${(e) => drag("in", e)} title="clip start"></div>
       <div class="wa-handle" style=${`left:${outPct}%`}

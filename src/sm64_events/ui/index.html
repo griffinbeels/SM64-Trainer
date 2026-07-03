@@ -248,6 +248,9 @@
               margin:.25rem 0; user-select:none; touch-action:none; }
   .wa-region { position:absolute; top:0; bottom:0; background:rgba(122,162,247,.35);
                border-left:2px solid #7aa2f7; border-right:2px solid #7aa2f7; box-sizing:border-box; }
+  /* live playhead: a white line tracking the video's current position */
+  .wa-playhead { position:absolute; top:-2px; bottom:-2px; width:2px; margin-left:-1px;
+                 background:#fff; pointer-events:none; }
   .wa-handle { position:absolute; top:-3px; width:10px; height:20px; margin-left:-5px;
                background:#7aa2f7; border-radius:3px; cursor:ew-resize; }
   .wa-handle:hover { background:#9bb8ff; }
