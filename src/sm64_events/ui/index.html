@@ -245,10 +245,12 @@
   /* Premiere-style single-bar work area (in/out over the whole clip) */
   .workarea { margin:.4rem 0; }
   .wa-track { position:relative; height:14px; background:#20242c; border-radius:4px;
-              margin:.25rem 0; user-select:none; touch-action:none; }
+              margin:.25rem 0; user-select:none; touch-action:none; cursor:pointer; }
+  /* the region is decorative — let pointerdowns fall through to the track to scrub */
   .wa-region { position:absolute; top:0; bottom:0; background:rgba(122,162,247,.35);
-               border-left:2px solid #7aa2f7; border-right:2px solid #7aa2f7; box-sizing:border-box; }
-  /* live playhead: a white line tracking the video's current position */
+               border-left:2px solid #7aa2f7; border-right:2px solid #7aa2f7; box-sizing:border-box;
+               pointer-events:none; }
+  /* live playhead: a white line tracking the video's current position (drag anywhere to scrub) */
   .wa-playhead { position:absolute; top:-2px; bottom:-2px; width:2px; margin-left:-1px;
                  background:#fff; pointer-events:none; }
   .wa-handle { position:absolute; top:-3px; width:10px; height:20px; margin-left:-5px;

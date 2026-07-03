@@ -85,11 +85,16 @@ export function useSyncController() {
     seekAll(0);
     playingRef.current = false; setPlaying(false);
   };
+  // seek EVERY stage to a master frame (frames since each clip's in-point) —
+  // backs the work-area playhead scrub + click-to-seek. seekAll clamps each
+  // video's time to its own duration, so differing lengths just pin at their
+  // ends. Play state is the caller's job (the scrub pauses once at grab).
+  const seek = (master) => seekAll(master);
   // click-a-video toggle: play/pause ALL stages. playingRef holds the live
   // state (a click can land between renders) so it's correct either way.
   const toggle = () => { if (playingRef.current) pause(); else play(); };
 
-  return { register, unregister, play, pause, step, toStart, toggle, playing };
+  return { register, unregister, play, pause, step, toStart, seek, toggle, playing };
 }
 
 export function VideoStage({ src, inFrame, controller, id, onEl, caption }) {
@@ -136,7 +141,7 @@ export function VideoStage({ src, inFrame, controller, id, onEl, caption }) {
 // draggable handles is the in/out. Dragging a handle scrub-seeks the video and,
 // on release, calls onCommit(inFrame, outFrame|null) so the caller can persist
 // it (null out = "to the end"). in/out are GAME frames (30 fps).
-export function WorkArea({ videoEl, inFrame, outFrame, onCommit, extra }) {
+export function WorkArea({ videoEl, inFrame, outFrame, onCommit, extra, controller }) {
   const [dur, setDur] = useState(0);
   const [inF, setInF] = useState(inFrame || 0);
   const [outF, setOutF] = useState(outFrame == null ? null : outFrame);
@@ -191,6 +196,27 @@ export function WorkArea({ videoEl, inFrame, outFrame, onCommit, extra }) {
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   }
+  // scrub the PLAYHEAD: click anywhere on the track to jump there, or drag to
+  // scrub — moving EVERY synced video together (master frame = this clip's
+  // frame minus its in-point). The start/end handles stopPropagation so
+  // grabbing one doesn't also scrub.
+  function scrub(e) {
+    e.preventDefault();
+    if (controller) controller.pause();          // stop playback; scrub from here
+    const go = (clientX) => {
+      const f = frameAt(clientX);
+      if (controller) controller.seek(f - inF);  // master = frame - this in-point
+      else seek(f);
+    };
+    go(e.clientX);
+    const move = (ev) => go(ev.clientX);
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
   // Set start/end to the video's CURRENT frame (use with frame-step for
   // frame-exact markers). Clamped so start < end can never invert: a start
   // past the end pins to end-1; an end before the start pins to start+1.
@@ -210,13 +236,14 @@ export function WorkArea({ videoEl, inFrame, outFrame, onCommit, extra }) {
   const inPct = (inF / maxF) * 100;
   const outPct = (outEff / maxF) * 100;
   return html`<div class="workarea">
-    <div class="wa-track" ref=${trackRef}>
+    <div class="wa-track" ref=${trackRef} onpointerdown=${scrub}
+         title="click or drag to scrub both videos">
       <div class="wa-region" style=${`left:${inPct}%;width:${Math.max(0, outPct - inPct)}%`}></div>
       <div class="wa-playhead" style=${`left:${playFrac * 100}%`}></div>
       <div class="wa-handle" style=${`left:${inPct}%`}
-           onpointerdown=${(e) => drag("in", e)} title="clip start"></div>
+           onpointerdown=${(e) => { e.stopPropagation(); drag("in", e); }} title="clip start"></div>
       <div class="wa-handle" style=${`left:${outPct}%`}
-           onpointerdown=${(e) => drag("out", e)} title="clip end"></div>
+           onpointerdown=${(e) => { e.stopPropagation(); drag("out", e); }} title="clip end"></div>
     </div>
     <div class="wa-times meta">${(inF / 30).toFixed(2)}s – ${(outEff / 30).toFixed(2)}s
       <span class="wa-total">/ ${(maxF / 30).toFixed(2)}s</span></div>

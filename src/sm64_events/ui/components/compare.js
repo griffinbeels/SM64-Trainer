@@ -109,7 +109,7 @@ function MyRun({ attemptId, controller, inFrame, outFrame, onSync }) {
     <${VideoStage} id="mine" src=${st.clip_url} inFrame=${inFrame || 0}
       controller=${controller} onEl=${setVideoEl} />
     <${WorkArea} videoEl=${videoEl} inFrame=${inFrame} outFrame=${outFrame}
-      onCommit=${(i, o) => onSync(i, o)} />
+      controller=${controller} onCommit=${(i, o) => onSync(i, o)} />
   </div>`;
 }
 
@@ -154,7 +154,7 @@ function ComparisonStage({ comp, controller, onEdit, onDelete }) {
       inFrame=${comp.in_frame || 0} controller=${controller} onEl=${setVideoEl}
       caption=${caption} />
     <${WorkArea} videoEl=${videoEl} inFrame=${comp.in_frame} outFrame=${comp.out_frame}
-      onCommit=${(i, o) => onEdit(comp.id, { in_frame: i, out_frame: o })}
+      controller=${controller} onCommit=${(i, o) => onEdit(comp.id, { in_frame: i, out_frame: o })}
       extra=${html`<button class="meta" onclick=${() => onDelete(comp.id)}
         title="remove this comparison">×</button>`} />
     <div class="cmp-save">
