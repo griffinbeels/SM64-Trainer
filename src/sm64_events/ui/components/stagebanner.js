@@ -46,6 +46,13 @@ export function StageBanner({ t }) {
 const segsForLevel = (v, level) =>
   (v.segment_targets || []).filter((s) => (s.start_levels || []).includes(level));
 
+// StarRow look flags — flip during the human-audit playtest to taste. Kept as
+// constants (not props) so the call site below stays a single readable line.
+// Each star slot shows PNG art `ui/assets/star_{n}.png`; the slot index is
+// clamped to STAR_IMG_COUNT, so the 100-coin/7th slot reuses star_6.
+const STAR_IMG_COUNT = 6;    // star_1.png .. star_6.png in ui/assets/
+const STAR_DIM_IDLE = true;  // false = every star equally bright
+
 function StarRow({ t, v, stage }) {
   const course = v.catalog.courses.find((c) => c.id === stage.course_id);
   if (!course) return null;
@@ -53,9 +60,8 @@ function StarRow({ t, v, stage }) {
   const tgt = v.target || {};
   const lastStratFor = (i) =>
     v.last_strat_by_star[`${stage.course_id}:${i}`] || "";
-  // Rank under that star's ACTIVE strat (server-graded, parallel to
-  // last_strat_by_star). Changing the strat refreshes the view and swaps the
-  // medal here automatically — see tracking/views.py rank_by_star.
+  // Rank under that star's ACTIVE strat (server-graded). Changing the strat
+  // refreshes the view and swaps the medal automatically — see views.py.
   const rankFor = (i) =>
     (v.rank_by_star || {})[`${stage.course_id}:${i}`];
 
@@ -70,19 +76,25 @@ function StarRow({ t, v, stage }) {
   return html`<div class="starsec stagebanner">
     <div class="shead"><b>▸ ${course.name}</b>
       <span class="meta">tap a star to practice</span></div>
-    <div class="stagebanner-row">
+    <div class="starrow">
       ${course.stars.map((name, i) => {
         const active = tgt.kind !== "segment"
           && tgt.course_id === stage.course_id && tgt.star_id === i;
         const strat = lastStratFor(i);
         const rank = rankFor(i);
         return html`<button key=${`${stage.course_id}:${i}`}
-                            class="stagebtn ${active ? "active-star" : ""}"
-                            onclick=${() => pick(i)}>
-          <span class="stagebtn-name">${name}</span>
-          <span class="stagebtn-sub meta">
-            ${rank ? html`<${Medal} rank=${rank} size=${13} />` : ""}
-            <span>${strat || "—"}</span>
+                            class="starcell ${active ? "active-star" : ""}"
+                            title=${name} onclick=${() => pick(i)}>
+          <span class="starholder">
+            <img class="starimg ${STAR_DIM_IDLE && !active ? "dim" : ""}"
+                 src=${`/ui/assets/star_${Math.min(i + 1, STAR_IMG_COUNT)}.png`}
+                 alt="" draggable="false" />
+          </span>
+          <span class="starrank">
+            ${rank ? html`<${Medal} rank=${rank} size=${16} />` : "–"}</span>
+          <span class="starname">${name}</span>
+          <span class="starsub">
+            <span class="strat ${strat ? "" : "none"}">${strat || "—"}</span>
           </span>
         </button>`;
       })}
