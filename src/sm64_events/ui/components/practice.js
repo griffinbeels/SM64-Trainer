@@ -267,6 +267,13 @@ function PbTag({ pb, mode, rows, pick, t }) {
 function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
   const [showHidden, setShowHidden] = useState(false);
   const [visible, setVisible] = useState(10);
+  // Bumped to force the strat <select> to remount and re-read sec.last_strat.
+  // A native <select> change updates the DOM immediately, but if the write is
+  // dropped (or cancelled) last_strat stays null, so its `value` prop never
+  // changes and Preact won't reset the element — the dropdown would keep
+  // showing a phantom pick while the border stays red, then revert on the next
+  // unrelated remount. Bumping the key snaps it back to the server's truth.
+  const [stratNonce, setStratNonce] = useState(0);
   const pb = sec.pb[t.clock];
   const base = showHidden ? sec.attempts
     : sec.attempts.filter((a) => !a.cleared && a.outcome !== "abandoned");
@@ -282,13 +289,22 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
   async function setStrat(v) {
     if (v === "__new") {
       v = (window.prompt("New strategy name:") || "").trim();
-      if (!v) { t.refresh(); return; }   // refresh resets the select to current
+      if (!v) { setStratNonce((n) => n + 1); return; }   // cancelled: snap back
     }
-    await send("POST", "/api/strat", {
-      course_id: sec.course_id, star_id: sec.star_id,
-      strat_tag: v || null,
-    });
-    t.refresh();
+    try {
+      await send("POST", "/api/strat", {
+        course_id: sec.course_id, star_id: sec.star_id,
+        strat_tag: v || null,
+      });
+    } catch (e) {
+      // A dropped write (tracker reconnecting, or a second copy running) must
+      // NOT silently leave a phantom selection that later reverts. Tell the
+      // user and force the dropdown back to the real, still-unset value.
+      window.alert("Couldn't save the strategy — the tracker may be reconnecting "
+        + "or a second copy of it is running. Please try again.");
+      setStratNonce((n) => n + 1);
+    }
+    t.refresh();   // resync the dropdown to the server's truth either way
   }
 
   async function wipeData() {
@@ -312,7 +328,8 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
       <b>${sec.course_name} · ${sec.star_name}</b>
       <a href=${sec.links.ukikipedia} target="_blank">RTA Guide</a>
       ${sec.links.example && html`<a href=${sec.links.example} target="_blank">Example</a>`}
-      <select class="meta ${sec.last_strat ? "" : "needs-strat"}" value=${sec.last_strat || ""}
+      <select key=${`strat-${stratNonce}`}
+              class="meta ${sec.last_strat ? "" : "needs-strat"}" value=${sec.last_strat || ""}
               onchange=${(e) => setStrat(e.target.value)}>
         <option value="">— no strat —</option>
         ${sec.strategies.map((s) => html`<option value=${s}>${s}</option>`)}
