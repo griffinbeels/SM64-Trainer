@@ -20,6 +20,7 @@ function storedVolume() {
 export function useSyncController() {
   const stages = useRef(new Map());   // id -> { el, getInFrame }
   const [playing, setPlaying] = useState(false);
+  const playingRef = useRef(false);   // live state for click-toggle (see toggle)
 
   const register = useCallback((id, el, getInFrame) => {
     if (el) stages.current.set(id, { el, getInFrame });
@@ -46,27 +47,30 @@ export function useSyncController() {
   const play = () => {
     for (const { el } of stages.current.values())
       if (el) el.play().catch(() => {});
-    setPlaying(true);
+    playingRef.current = true; setPlaying(true);
   };
   const pause = () => {
     const m = masterFrame();
     for (const { el } of stages.current.values()) if (el) el.pause();
     seekAll(m);                        // re-sync on pause (corrects drift)
-    setPlaying(false);
+    playingRef.current = false; setPlaying(false);
   };
   const step = (dir) => {
     const m = Math.max(0, masterFrame() + dir);
     for (const { el } of stages.current.values()) if (el && !el.paused) el.pause();
     seekAll(m);
-    setPlaying(false);
+    playingRef.current = false; setPlaying(false);
   };
   const toStart = () => {
     for (const { el } of stages.current.values()) if (el) el.pause();
     seekAll(0);
-    setPlaying(false);
+    playingRef.current = false; setPlaying(false);
   };
+  // click-a-video toggle: play/pause ALL stages. playingRef holds the live
+  // state (a click can land between renders) so it's correct either way.
+  const toggle = () => { if (playingRef.current) pause(); else play(); };
 
-  return { register, unregister, play, pause, step, toStart, playing };
+  return { register, unregister, play, pause, step, toStart, toggle, playing };
 }
 
 export function VideoStage({ src, inFrame, controller, id, onEl }) {
@@ -80,8 +84,10 @@ export function VideoStage({ src, inFrame, controller, id, onEl }) {
     if (el && !el.dataset.vol) { el.dataset.vol = "1"; el.volume = storedVolume(); }
     if (onEl) onEl(el);
   }, [id, controller.register, onEl]);
-  return html`<video class="replay-player" style="width:100%" preload="auto"
-      src=${src} playsinline ref=${setRef}></video>`;
+  // clicking the video toggles play/pause for EVERY synced stage
+  return html`<video class="replay-player" style="width:100%;cursor:pointer" preload="auto"
+      src=${src} playsinline ref=${setRef}
+      onclick=${() => controller.toggle()}></video>`;
 }
 
 // Premiere-style single-bar "work area": the whole track IS the clip

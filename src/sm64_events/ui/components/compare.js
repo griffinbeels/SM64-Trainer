@@ -127,7 +127,7 @@ function ComparisonStage({ comp, controller, onEdit, onDelete }) {
 }
 
 // Video-sized drop zone (drag-drop / browse / rank-standard Load / YouTube URL).
-function AddComparison({ entity, strat, suggestion, onAdded }) {
+function AddComparison({ entity, strat, suggestion, onAdded, hasVideos }) {
   const [job, setJob] = useState(null);
   const [url, setUrl] = useState("");
   const [over, setOver] = useState(false);
@@ -181,7 +181,7 @@ function AddComparison({ entity, strat, suggestion, onAdded }) {
           <div class="meta">loading… ${Math.round((job.progress || 0) * 100)}% ${job.message || ""}</div></div>`
       : html`<div class="cd-inner">
           <div class="cd-icon">⬆</div>
-          <div>Drag & drop a video here</div>
+          <div>Drag & drop ${hasVideos ? "another" : "a"} video here</div>
           <div class="meta">or</div>
           <div class="cd-actions">
             <button onclick=${() => fileRef.current && fileRef.current.click()}>Browse files</button>
@@ -192,7 +192,7 @@ function AddComparison({ entity, strat, suggestion, onAdded }) {
           <div class="cd-url">
             <input placeholder="paste a YouTube URL" value=${url}
               oninput=${(e) => setUrl(e.target.value)} />
-            <button disabled=${!url} onclick=${() => startImport("youtube", url, url)}>Add URL</button>
+            <button disabled=${!url} onclick=${() => startImport("youtube", url, url)}>Load video</button>
           </div>
           ${job && job.state === "error" && html`<div class="badx">import failed: ${job.message}</div>`}
         </div>`}
@@ -314,7 +314,7 @@ export function Compare({ t, intent, clearIntent, active }) {
         ${shown.map((c) => html`<${ComparisonStage} key=${c.id} comp=${c}
           controller=${controller} onEdit=${editCmp} onDelete=${delCmp} />`)}
         <${AddComparison} entity=${entity} strat=${strat} suggestion=${suggestion}
-          onAdded=${reloadCmp} />
+          onAdded=${reloadCmp} hasVideos=${shown.length > 0} />
       </div>
     </div>
   </div>`;
