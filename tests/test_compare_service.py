@@ -94,6 +94,23 @@ def test_youtube_import_uses_extracted_title_as_name(tmp_path):
     assert db.comparisons("star:7:0", "L")[0]["name"] == "Cool Video Title"
 
 
+def test_adopt_copies_comparison_into_another_strat_reusing_cache(tmp_path):
+    svc, db, cache = _svc(tmp_path)
+    src = tmp_path / "v.mp4"; src.write_bytes(b"raw")
+    job = svc.start_import("star:7:0", "A", "vid", "file", str(src))
+    for _ in range(100):
+        if svc.import_status(job)["state"] == "done":
+            break
+        time.sleep(0.02)
+    a = db.comparisons("star:7:0", "A")[0]
+    row = svc.adopt(a["id"], "B")                        # load existing into strat B
+    assert row["strat"] == "B" and row["cache_name"] == a["cache_name"]
+    assert len(db.comparisons("star:7:0", "B")) == 1
+    row2 = svc.adopt(a["id"], "B")                       # again -> dedup, same row
+    assert row2["id"] == row["id"]
+    assert len(db.comparisons("star:7:0", "B")) == 1
+
+
 def test_import_error_reported(tmp_path):
     svc, db, cache = _svc(tmp_path)
     job = svc.start_import("star:7:0", "L", "x", "file",

@@ -710,17 +710,21 @@ def build_route_view(db, service, route_id: int) -> dict:
 
 
 def build_compare_view(db, ranks, entity: str, strat: str | None) -> dict:
-    """Compare-tab payload for one entity: ALL saved comparison videos for the
-    entity (across every strategy — the user compares strategies side by side),
-    each with a servable clip_url and its own `strat`; plus the rank-standard
-    suggestion (one-click Load) for the currently-focused `strat` when that strat
-    has a standard video and isn't already saved. Ranks may be None; `strat` may
-    be None/'' (no strategy focused → no suggestion)."""
+    """Compare-tab payload for one (entity, strat): the saved comparison videos
+    for THAT combo (each with a servable clip_url) — reloaded whenever a run of
+    that star+strategy is opened. Plus the rank-standard `suggestion` (the
+    default to auto-load when the combo has none) and `library` — the entity's
+    comparisons saved under OTHER strategies, for the 'load existing' picker.
+    Ranks may be None; `strat` may be None/'' (no strategy → no suggestion)."""
     saved = [{**c, "clip_url": f"/api/compare/cache/{c['cache_name']}"}
-             for c in db.comparisons(entity)]
+             for c in db.comparisons(entity, strat)]
     suggestion_url = ranks.video_for(entity, strat) if (ranks and strat) else None
-    already = any(c["strat"] == strat for c in saved)
+    already = any(c["source_ref"] == suggestion_url for c in saved)
     suggestion = ({"source_kind": "youtube", "source_ref": suggestion_url,
                    "name": f"{strat} — rank standard", "strat": strat}
                   if suggestion_url and not already else None)
-    return {"entity": entity, "strat": strat, "saved": saved, "suggestion": suggestion}
+    library = [{"id": c["id"], "name": c["name"], "strat": c["strat"],
+                "source_kind": c["source_kind"], "source_ref": c["source_ref"]}
+               for c in db.comparisons(entity) if c["strat"] != strat]
+    return {"entity": entity, "strat": strat, "saved": saved,
+            "suggestion": suggestion, "library": library}

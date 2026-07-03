@@ -140,6 +140,8 @@ function displayTitle(comp) {
 // header; the remove (×) button rides the work-area button row (after set end).
 function ComparisonStage({ comp, controller, onEdit, onDelete }) {
   const [videoEl, setVideoEl] = useState(null);
+  const [name, setName] = useState(comp.name || "");
+  useEffect(() => { setName(comp.name || ""); }, [comp.name]);   // follow title backfill
   const label = displayTitle(comp);
   const stratSuffix = comp.strat ? ` · ${comp.strat}` : "";
   // YouTube title is hyperlinked to its source URL
@@ -155,11 +157,17 @@ function ComparisonStage({ comp, controller, onEdit, onDelete }) {
       onCommit=${(i, o) => onEdit(comp.id, { in_frame: i, out_frame: o })}
       extra=${html`<button class="meta" onclick=${() => onDelete(comp.id)}
         title="remove this comparison">×</button>`} />
+    <div class="cmp-save">
+      <input value=${name} oninput=${(e) => setName(e.target.value)}
+        placeholder="name this comparison" />
+      <button onclick=${() => onEdit(comp.id, { name })} title="save this name">Save</button>
+    </div>
   </div>`;
 }
 
 // Video-sized drop zone (drag-drop / browse / rank-standard Load / YouTube URL).
-function AddComparison({ entity, strat, strategies, suggestion, onAdded, hasVideos }) {
+function AddComparison({ entity, strat, strategies, suggestion, onAdded, hasVideos,
+                        library, onAdopt }) {
   const [job, setJob] = useState(null);
   const [url, setUrl] = useState("");
   const [over, setOver] = useState(false);
@@ -230,6 +238,12 @@ function AddComparison({ entity, strat, strategies, suggestion, onAdded, hasVide
               oninput=${(e) => setUrl(e.target.value)} />
             <button disabled=${!url} onclick=${() => startImport("youtube", url, url)}>Load video</button>
           </div>
+          ${library && library.length > 0 ? html`<div class="cd-existing meta">or load existing:
+            <select onchange=${(e) => { const v = e.target.value; e.target.value = "";
+                if (v) onAdopt(Number(v)); }}>
+              <option value="">— a saved comparison —</option>
+              ${library.map((l) => html`<option value=${l.id}>${l.name || "video"}${l.strat ? ` (${l.strat})` : ""}</option>`)}
+            </select></div>` : null}
           ${job && job.state === "error" && html`<div class="badx">import failed: ${job.message}</div>`}
         </div>`}
     <input type="file" accept="video/*" style="display:none" ref=${fileRef}
@@ -256,11 +270,12 @@ export function Compare({ t, intent, clearIntent, active }) {
   const [entity, setEntity] = useState(null);
   const [strat, setStrat] = useState(null);
   const [attemptId, setAttemptId] = useState(null);
-  const [cmp, setCmp] = useState({ saved: [], suggestion: null });
+  const [cmp, setCmp] = useState({ saved: [], suggestion: null, library: [] });
   const [myIn, setMyIn] = useState(0);             // My Run work-area (in-memory)
   const [myOut, setMyOut] = useState(null);
   const deepLinked = useRef(false);
   const initialized = useRef(false);
+  const autoLoaded = useRef(new Set());            // combos whose default was auto-loaded
 
   // (re)load the view + replayable-run set whenever the tab becomes active — the
   // buffer shifts, so the feed/availability refresh on each open. The default
@@ -330,12 +345,42 @@ export function Compare({ t, intent, clearIntent, active }) {
   };
   useEffect(reloadCmp, [entity, strat]);
 
+  // shared import + poll (used by the rank-standard auto-load)
+  function importAndReload(source_kind, source_ref, name, useStrat) {
+    send("POST", "/api/compare/import",
+      { entity_key: entity, strat: useStrat != null ? useStrat : (strat || ""),
+        name, source_kind, source_ref })
+      .then((r) => {
+        const id = setInterval(async () => {
+          try {
+            const s = await getJSON(`/api/compare/import/${r.job_id}`);
+            if (s.state === "done") { clearInterval(id); reloadCmp(); }
+            else if (s.state === "error") clearInterval(id);
+          } catch { clearInterval(id); }
+        }, 800);
+      }).catch(() => {});
+  }
+  // auto-load the rank-standard DEFAULT when a combo has no saved comparison,
+  // so every star+strategy has at least one example (materialized lazily, once)
+  useEffect(() => {
+    if (!entity || cmp.saved.length > 0 || !cmp.suggestion) return;
+    const key = `${entity}|${strat || ""}`;
+    if (autoLoaded.current.has(key)) return;
+    autoLoaded.current.add(key);
+    importAndReload(cmp.suggestion.source_kind, cmp.suggestion.source_ref,
+      cmp.suggestion.name, cmp.suggestion.strat);
+  }, [cmp, entity, strat]);
+
   async function editCmp(id, pts) {
     await send("PUT", `/api/compare/videos/${id}`, pts);   // auto-save in/out
     reloadCmp();
   }
   async function delCmp(id) {
     await send("DELETE", `/api/compare/videos/${id}`);
+    reloadCmp();
+  }
+  async function adoptExisting(sourceId) {                  // "load existing"
+    await send("POST", "/api/compare/adopt", { source_id: sourceId, strat: strat || "" });
     reloadCmp();
   }
   // picking a run from the feed sets its entity + strategy (so the matching
@@ -373,7 +418,8 @@ export function Compare({ t, intent, clearIntent, active }) {
         ${shown.map((c) => html`<${ComparisonStage} key=${c.id} comp=${c}
           controller=${controller} onEdit=${editCmp} onDelete=${delCmp} />`)}
         <${AddComparison} entity=${entity} strat=${strat} strategies=${entityStrategies}
-          suggestion=${suggestion} onAdded=${reloadCmp} hasVideos=${shown.length > 0} />
+          suggestion=${suggestion} onAdded=${reloadCmp} hasVideos=${shown.length > 0}
+          library=${cmp.library} onAdopt=${adoptExisting} />
       </div>
     </div>
   </div>`;

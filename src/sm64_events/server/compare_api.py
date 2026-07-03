@@ -31,6 +31,11 @@ class EditBody(BaseModel):
     touch: bool | None = None
 
 
+class AdoptBody(BaseModel):
+    source_id: int                 # copy this comparison into (its entity, strat)
+    strat: str
+
+
 def create_compare_router(service) -> APIRouter:
     router = APIRouter(prefix="/api")
 
@@ -68,6 +73,13 @@ def create_compare_router(service) -> APIRouter:
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"job_id": job_id}
+
+    @router.post("/compare/adopt")
+    def adopt(body: AdoptBody):
+        try:
+            return service.adopt(body.source_id, body.strat)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
 
     @router.put("/compare/videos/{comp_id}")
     async def edit(comp_id: int, body: EditBody):

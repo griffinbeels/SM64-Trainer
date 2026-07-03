@@ -78,6 +78,26 @@ class CompareService:
                     except Exception:
                         log.exception("title backfill failed for comparison %s", c["id"])
 
+    def adopt(self, source_id: int, strat: str) -> dict:
+        """'Load existing': copy an existing comparison into (its entity, strat)
+        — reuses the same source + cache (no re-download). Dedup'd, so adopting
+        one already present under that strat just returns it."""
+        db = self.tracker.db
+        if db is None:
+            raise RuntimeError("database unavailable")
+        src = next((c for c in db.comparisons() if c["id"] == source_id), None)
+        if src is None:
+            raise LookupError(f"comparison {source_id} not found")
+        entity = src["entity_key"]
+        row = next((c for c in db.comparisons(entity, strat)
+                    if c["source_ref"] == src["source_ref"]), None)
+        if row is None:
+            now = _iso_now()
+            cid = db.insert_comparison(entity, strat, src["name"], src["source_kind"],
+                                       src["source_ref"], src["cache_name"], now, now)
+            row = next(c for c in db.comparisons(entity, strat) if c["id"] == cid)
+        return {**row, "clip_url": f"/api/compare/cache/{row['cache_name']}"}
+
     def cache_path(self, cache_name: str):
         if not _CACHE_RE.fullmatch(cache_name):
             raise LookupError("no such comparison video")

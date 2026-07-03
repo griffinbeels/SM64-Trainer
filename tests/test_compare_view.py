@@ -8,7 +8,6 @@ class _FakeRanks:
 
 class _FakeDB:
     def __init__(self, rows): self._rows = rows
-    # build_compare_view loads ALL comparisons for the entity (across strats)
     def comparisons(self, entity, strat=None):
         return [r for r in self._rows
                 if r["entity_key"] == entity
@@ -23,42 +22,38 @@ def _row(**kw):
     base.update(kw); return base
 
 
-def test_view_returns_all_entity_comparisons_with_clip_url():
-    # two comparisons under DIFFERENT strategies both show (compare side by side)
+def test_saved_is_scoped_to_the_focused_strat_with_clip_url():
     db = _FakeDB([_row(id=5, strat="Ledgegrab", cache_name="abc.mp4"),
                   _row(id=6, strat="Standard", cache_name="def.mp4")])
     v = build_compare_view(db, _FakeRanks(None), "star:7:0", "Ledgegrab")
-    ids = {c["id"] for c in v["saved"]}
-    assert ids == {5, 6}
-    urls = {c["clip_url"] for c in v["saved"]}
-    assert urls == {"/api/compare/cache/abc.mp4", "/api/compare/cache/def.mp4"}
+    assert {c["id"] for c in v["saved"]} == {5}                 # only this strat
+    assert v["saved"][0]["clip_url"] == "/api/compare/cache/abc.mp4"
 
 
-def test_view_suggestion_when_focused_strat_not_saved():
-    # Ledgegrab has a rank-standard video and no saved comparison yet -> suggest
-    db = _FakeDB([_row(id=6, strat="Standard", cache_name="def.mp4")])
+def test_library_lists_other_strats_comparisons():
+    db = _FakeDB([_row(id=5, strat="Ledgegrab"),
+                  _row(id=6, strat="Standard"),
+                  _row(id=7, strat="Standard")])
+    v = build_compare_view(db, _FakeRanks(None), "star:7:0", "Ledgegrab")
+    assert {c["id"] for c in v["library"]} == {6, 7}            # not the focused strat
+    assert all(c["strat"] == "Standard" for c in v["library"])
+
+
+def test_suggestion_when_focused_strat_has_no_saved():
+    db = _FakeDB([_row(id=6, strat="Standard")])
     v = build_compare_view(db, _FakeRanks("https://youtu.be/std"),
                            "star:7:0", "Ledgegrab")
     assert v["suggestion"]["source_ref"] == "https://youtu.be/std"
     assert v["suggestion"]["strat"] == "Ledgegrab"
 
 
-def test_view_no_suggestion_when_focused_strat_already_saved():
-    # a comparison for the focused strat already exists -> don't suggest it again
-    db = _FakeDB([_row(id=5, strat="Ledgegrab", cache_name="abc.mp4")])
+def test_no_suggestion_when_rank_video_already_saved_for_strat():
+    db = _FakeDB([_row(id=5, strat="Ledgegrab", source_ref="https://youtu.be/std")])
     v = build_compare_view(db, _FakeRanks("https://youtu.be/std"),
                            "star:7:0", "Ledgegrab")
     assert v["suggestion"] is None
-    assert {c["id"] for c in v["saved"]} == {5}
 
 
-def test_view_no_strat_no_suggestion_but_still_lists_saved():
-    db = _FakeDB([_row(id=7, strat="", cache_name="loose.mp4")])
-    v = build_compare_view(db, _FakeRanks("x"), "star:7:0", None)
-    assert v["suggestion"] is None            # no focused strat -> no suggestion
-    assert {c["id"] for c in v["saved"]} == {7}   # loose (strat "") video still shows
-
-
-def test_view_none_ranks_no_suggestion():
-    v = build_compare_view(_FakeDB([]), None, "star:7:0", "Ledgegrab")
-    assert v["suggestion"] is None and v["saved"] == []
+def test_no_suggestion_when_no_ranks_or_no_strat():
+    assert build_compare_view(_FakeDB([]), None, "star:7:0", "Ledgegrab")["suggestion"] is None
+    assert build_compare_view(_FakeDB([]), _FakeRanks("x"), "star:7:0", None)["suggestion"] is None
