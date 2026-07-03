@@ -26,7 +26,6 @@ from sm64_events.ranks.standards import entity_key
 from sm64_events.stats.registry import (DEFAULT_STAT_MENU, REGISTRY,
                                         compute_stat, selection_id,
                                         selection_order)
-from sm64_events.tracking.comparisons import resolve_auto
 from sm64_events.tracking.projection import journal_id
 from sm64_events.tracking.routes import route_stats
 
@@ -711,16 +710,17 @@ def build_route_view(db, service, route_id: int) -> dict:
 
 
 def build_compare_view(db, ranks, entity: str, strat: str | None) -> dict:
-    """Compare-tab payload for one (entity, strat): saved comparisons (each with
-    a servable clip_url), the resolved auto-pick, and the rank-standard
-    suggestion (one-click Load) when nothing is saved. Ranks may be None."""
-    saved = []
-    if strat:
-        for c in db.comparisons(entity, strat):
-            saved.append({**c, "clip_url": f"/api/compare/cache/{c['cache_name']}"})
+    """Compare-tab payload for one entity: ALL saved comparison videos for the
+    entity (across every strategy — the user compares strategies side by side),
+    each with a servable clip_url and its own `strat`; plus the rank-standard
+    suggestion (one-click Load) for the currently-focused `strat` when that strat
+    has a standard video and isn't already saved. Ranks may be None; `strat` may
+    be None/'' (no strategy focused → no suggestion)."""
+    saved = [{**c, "clip_url": f"/api/compare/cache/{c['cache_name']}"}
+             for c in db.comparisons(entity)]
     suggestion_url = ranks.video_for(entity, strat) if (ranks and strat) else None
+    already = any(c["strat"] == strat for c in saved)
     suggestion = ({"source_kind": "youtube", "source_ref": suggestion_url,
-                   "name": f"{strat} — rank standard"} if suggestion_url else None)
-    auto = resolve_auto(saved, suggestion_url, strat)
-    return {"entity": entity, "strat": strat, "saved": saved,
-            "auto": auto, "suggestion": suggestion}
+                   "name": f"{strat} — rank standard", "strat": strat}
+                  if suggestion_url and not already else None)
+    return {"entity": entity, "strat": strat, "saved": saved, "suggestion": suggestion}

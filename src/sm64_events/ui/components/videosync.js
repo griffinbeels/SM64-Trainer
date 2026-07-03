@@ -10,12 +10,6 @@ import htm from "htm";
 import { gameFrameOf } from "../frame.js";
 
 const html = htm.bind(h);
-const VOLUME_KEY = "replay_volume";
-function storedVolume() {
-  let v = NaN;
-  try { v = parseFloat(localStorage.getItem(VOLUME_KEY)); } catch {}
-  return v >= 0 && v <= 1 ? v : 0.3;
-}
 
 export function useSyncController() {
   const stages = useRef(new Map());   // id -> { el, getInFrame }
@@ -76,18 +70,32 @@ export function useSyncController() {
 export function VideoStage({ src, inFrame, controller, id, onEl }) {
   const ref = useRef(null);
   const inRef = useRef(inFrame || 0);
+  // independent per-video audio: default ON at half volume, adjustable/mutable
+  // WITHOUT affecting any other stage (each VideoStage owns its own vol/mute).
+  const [vol, setVol] = useState(0.5);
+  const [muted, setMuted] = useState(false);
   useEffect(() => { inRef.current = inFrame || 0; }, [inFrame]);
   useEffect(() => () => controller.unregister(id), [id]);
+  useEffect(() => {
+    if (ref.current) { ref.current.volume = vol; ref.current.muted = muted; }
+  }, [vol, muted]);
   const setRef = useCallback((el) => {
     ref.current = el;
     controller.register(id, el, () => inRef.current);
-    if (el && !el.dataset.vol) { el.dataset.vol = "1"; el.volume = storedVolume(); }
+    if (el) { el.volume = 0.5; el.muted = false; }   // initial; live changes via the effect
     if (onEl) onEl(el);
   }, [id, controller.register, onEl]);
   // clicking the video toggles play/pause for EVERY synced stage
-  return html`<video class="replay-player" style="width:100%;cursor:pointer" preload="auto"
-      src=${src} playsinline ref=${setRef}
-      onclick=${() => controller.toggle()}></video>`;
+  return html`<div class="vstage">
+    <video class="replay-player" style="width:100%;cursor:pointer" preload="auto"
+        src=${src} playsinline ref=${setRef} onclick=${() => controller.toggle()}></video>
+    <div class="vaudio">
+      <button class="meta" title=${muted ? "unmute" : "mute"}
+        onclick=${() => setMuted(!muted)}>${muted ? "🔇" : "🔊"}</button>
+      <input type="range" min="0" max="1" step="0.05" value=${vol} title="volume"
+        oninput=${(e) => setVol(Number(e.target.value))} />
+    </div>
+  </div>`;
 }
 
 // Premiere-style single-bar "work area": the whole track IS the clip
@@ -160,11 +168,13 @@ export function WorkArea({ videoEl, inFrame, outFrame, onCommit }) {
       <div class="wa-handle" style=${`left:${outPct}%`}
            onpointerdown=${(e) => drag("out", e)} title="clip end"></div>
     </div>
-    <div class="wa-row meta">
-      <button onclick=${setStart} title="set the clip start to the current frame">⇤ set start</button>
-      <span class="wa-times">${(inF / 30).toFixed(2)}s – ${(outEff / 30).toFixed(2)}s
-        <span class="wa-total">/ ${(maxF / 30).toFixed(2)}s</span></span>
-      <button onclick=${setEnd} title="set the clip end to the current frame">set end ⇥</button>
+    <div class="wa-times meta">${(inF / 30).toFixed(2)}s – ${(outEff / 30).toFixed(2)}s
+      <span class="wa-total">/ ${(maxF / 30).toFixed(2)}s</span></div>
+    <div class="wa-btns">
+      <button class="meta" onclick=${setStart}
+        title="set the clip start to the current frame">⇤ set start</button>
+      <button class="meta" onclick=${setEnd}
+        title="set the clip end to the current frame">set end ⇥</button>
     </div>
   </div>`;
 }

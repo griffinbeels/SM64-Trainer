@@ -480,7 +480,7 @@ class Database:
             return cur.lastrowid
 
     def update_comparison(self, comp_id: int, **fields) -> None:
-        cols = ("name", "in_frame", "out_frame", "last_used_utc")
+        cols = ("name", "strat", "in_frame", "out_frame", "last_used_utc")
         unknown = set(fields) - set(cols)
         if unknown:
             raise ValueError(f"unknown fields {sorted(unknown)}")

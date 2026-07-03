@@ -114,10 +114,25 @@ function MyRun({ attemptId, controller, inFrame, outFrame, onSync }) {
 }
 
 // ---- right: comparisons ----------------------------------------------------
-function ComparisonStage({ comp, controller, onEdit, onDelete }) {
+// Strategy picker: the entity's strategies + "— none —". Always includes the
+// current value so an unknown/legacy strat still shows.
+function StrategySelect({ strategies, value, onChange }) {
+  const opts = [];
+  for (const s of strategies) if (s && !opts.includes(s)) opts.push(s);
+  if (value && !opts.includes(value)) opts.unshift(value);
+  return html`<select class="cmp-strat meta" value=${value || ""}
+      onchange=${(e) => onChange(e.target.value)}>
+    <option value="">— no strategy —</option>
+    ${opts.map((s) => html`<option value=${s}>${s}</option>`)}
+  </select>`;
+}
+
+function ComparisonStage({ comp, controller, strategies, onEdit, onDelete }) {
   const [videoEl, setVideoEl] = useState(null);
   return html`<div class="compare-cmp">
     <div class="shead"><b>${comp.name}</b>
+      <${StrategySelect} strategies=${strategies} value=${comp.strat}
+        onChange=${(s) => onEdit(comp.id, { strat: s })} />
       <button class="meta" onclick=${() => onDelete(comp.id)} title="remove">×</button></div>
     <${VideoStage} id=${`cmp:${comp.id}`} src=${comp.clip_url}
       inFrame=${comp.in_frame || 0} controller=${controller} onEl=${setVideoEl} />
@@ -127,21 +142,24 @@ function ComparisonStage({ comp, controller, onEdit, onDelete }) {
 }
 
 // Video-sized drop zone (drag-drop / browse / rank-standard Load / YouTube URL).
-function AddComparison({ entity, strat, suggestion, onAdded, hasVideos }) {
+function AddComparison({ entity, strat, strategies, suggestion, onAdded, hasVideos }) {
   const [job, setJob] = useState(null);
   const [url, setUrl] = useState("");
   const [over, setOver] = useState(false);
+  const [addStrat, setAddStrat] = useState(strat || "");   // "" = no strategy
+  useEffect(() => { setAddStrat(strat || ""); }, [strat]); // follow the picked run's strat
   const fileRef = useRef(null);
   const pollRef = useRef(null);
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
-  async function startImport(source_kind, source_ref, name) {
+  async function startImport(source_kind, source_ref, name, useStrat) {
     const r = await send("POST", "/api/compare/import",
-      { entity_key: entity, strat, name, source_kind, source_ref });
+      { entity_key: entity, strat: useStrat != null ? useStrat : addStrat,
+        name, source_kind, source_ref });
     pollJob(r.job_id);
   }
   async function startUpload(file) {
-    const q = new URLSearchParams({ entity_key: entity, strat,
+    const q = new URLSearchParams({ entity_key: entity, strat: addStrat,
       name: file.name, filename: file.name });
     setJob({ state: "running", progress: 0, message: "uploading" });
     let r;
@@ -169,9 +187,8 @@ function AddComparison({ entity, strat, suggestion, onAdded, hasVideos }) {
     if (f) startUpload(f);
   }
 
-  if (strat == null)
-    return html`<div class="compare-empty meta">Pick a run above (or set a strategy in Practice)
-      to add comparisons.</div>`;
+  if (!entity)
+    return html`<div class="compare-empty meta">Pick a run above to add comparison videos.</div>`;
   const busy = job && job.state === "running";
   return html`<div class="compare-drop ${over ? "over" : ""}"
       ondragover=${(e) => { e.preventDefault(); setOver(true); }}
@@ -180,13 +197,15 @@ function AddComparison({ entity, strat, suggestion, onAdded, hasVideos }) {
       ? html`<div class="cd-inner"><div class="cd-icon">⏳</div>
           <div class="meta">loading… ${Math.round((job.progress || 0) * 100)}% ${job.message || ""}</div></div>`
       : html`<div class="cd-inner">
+          <div class="cd-strat meta">Strategy:
+            <${StrategySelect} strategies=${strategies} value=${addStrat} onChange=${setAddStrat} /></div>
           <div class="cd-icon">⬆</div>
           <div>Drag & drop ${hasVideos ? "another" : "a"} video here</div>
           <div class="meta">or</div>
           <div class="cd-actions">
             <button onclick=${() => fileRef.current && fileRef.current.click()}>Browse files</button>
             ${suggestion && html`<button onclick=${() =>
-              startImport(suggestion.source_kind, suggestion.source_ref, suggestion.name)}>
+              startImport(suggestion.source_kind, suggestion.source_ref, suggestion.name, suggestion.strat)}>
               ▸ Load ${suggestion.name}</button>`}
           </div>
           <div class="cd-url">
@@ -295,7 +314,11 @@ export function Compare({ t, intent, clearIntent, active }) {
 
   if (!view) return html`<p class="meta">loading…</p>`;
   const shown = cmp.saved;
-  const suggestion = cmp.auto && cmp.auto.mode === "suggestion" ? cmp.suggestion : null;
+  const suggestion = cmp.suggestion || null;
+  // the entity's strategies (for the per-video + add-zone dropdowns)
+  const curSec = [...(view.stars || []), ...(view.segments || [])]
+    .find((s) => entityOf(s) === entity);
+  const entityStrategies = (curSec && curSec.strategies) || [];
 
   return html`<div class="compare">
     <${StageFeed} view=${view} available=${availSet} attemptId=${attemptId} onPick=${pickRun} />
@@ -310,11 +333,12 @@ export function Compare({ t, intent, clearIntent, active }) {
         <${Transport} controller=${controller} />
       </div>
       <div class="compare-col">
-        <div class="meta listhead">Comparison ${strat ? `· ${strat}` : ""}</div>
+        <div class="meta listhead">Comparison</div>
         ${shown.map((c) => html`<${ComparisonStage} key=${c.id} comp=${c}
-          controller=${controller} onEdit=${editCmp} onDelete=${delCmp} />`)}
-        <${AddComparison} entity=${entity} strat=${strat} suggestion=${suggestion}
-          onAdded=${reloadCmp} hasVideos=${shown.length > 0} />
+          controller=${controller} strategies=${entityStrategies}
+          onEdit=${editCmp} onDelete=${delCmp} />`)}
+        <${AddComparison} entity=${entity} strat=${strat} strategies=${entityStrategies}
+          suggestion=${suggestion} onAdded=${reloadCmp} hasVideos=${shown.length > 0} />
       </div>
     </div>
   </div>`;

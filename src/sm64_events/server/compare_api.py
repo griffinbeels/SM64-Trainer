@@ -25,6 +25,7 @@ class ImportBody(BaseModel):
 
 class EditBody(BaseModel):
     name: str | None = None
+    strat: str | None = None       # reassign a comparison to a different strategy
     in_frame: int | None = None
     out_frame: int | None = None
     touch: bool | None = None
