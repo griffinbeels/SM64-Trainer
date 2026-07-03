@@ -181,7 +181,7 @@ function AddComparison({ entity, strat, suggestion, onAdded }) {
           <div class="meta">loading… ${Math.round((job.progress || 0) * 100)}% ${job.message || ""}</div></div>`
       : html`<div class="cd-inner">
           <div class="cd-icon">⬆</div>
-          <div>Drag &amp; drop a video here</div>
+          <div>Drag & drop a video here</div>
           <div class="meta">or</div>
           <div class="cd-actions">
             <button onclick=${() => fileRef.current && fileRef.current.click()}>Browse files</button>
