@@ -54,9 +54,11 @@
   .starcell:focus-visible { outline: 2px solid #6fa8ff; outline-offset: 2px; }
   .starcell.active-star { border-color: #e0c36a; background: #211f14; }
   /* rank medal (or "–" when unranked) sitting between the star and its name;
-     bobs with the star when active (see rankbob below) */
+     nudged up (negative margin) to sit centered in the gap — the star art has
+     transparent bottom margin below its legs. Bobs with the active star. */
   .starrank { display: flex; align-items: center; justify-content: center;
-              height: 18px; color: #6c7686; font-size: .9rem; line-height: 1; }
+              height: 18px; margin-top: -6px; color: #6c7686; font-size: .9rem;
+              line-height: 1; }
   .starholder { display: block; width: min(74px, 72%);
                 aspect-ratio: 1 / 1; transition: transform .18s ease; }
   .starcell.active-star .starholder { transform: scale(1.16); }
