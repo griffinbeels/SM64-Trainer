@@ -76,7 +76,7 @@ function delta(frames) {
   return html` <span class=${cls}>${sign}${(frames / 30).toFixed(2)}s</span>`;
 }
 
-function AttemptRow({ a, t, idx, focus, clearFocus, isNew }) {
+function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, sec }) {
   const [showReplay, setShowReplay] = useState(false);
   const [flash, setFlash] = useState(false);
   const rowRef = useRef(null);
@@ -157,8 +157,17 @@ function AttemptRow({ a, t, idx, focus, clearFocus, isNew }) {
         : html` <button onclick=${clear} title="clear (mistake)">×</button>`}
     </td>
   </tr>`;
+  // Star rows don't carry course/star on the attempt itself (_attempt_json
+  // omits them) — derive the entity from the section for stars, from the
+  // attempt for segments.
+  const entity = a.segment_id != null ? `segment:${a.segment_id}`
+    : (sec ? `star:${sec.course_id}:${sec.star_id}` : null);
+  const strat = a.strat_tag || (sec && sec.last_strat) || null;
+  const onCompare = (openCompare && entity)
+    ? () => openCompare({ attemptId: a.id, entity, strat })
+    : null;
   const expandedRow = showReplay
-    ? html`<tr class="replay-row"><td colspan="5"><${ReplayPlayer} attemptId=${a.id} /></td></tr>`
+    ? html`<tr class="replay-row"><td colspan="5"><${ReplayPlayer} attemptId=${a.id} onCompare=${onCompare} /></td></tr>`
     : null;
   return [row, expandedRow];
 }
@@ -166,13 +175,14 @@ function AttemptRow({ a, t, idx, focus, clearFocus, isNew }) {
 // Shared table component used by both StarSection and the unassigned block.
 // attempts: the full ordered list for stable numbering;
 // rows: the filtered/sorted subset to actually render.
-function AttemptTable({ attempts, rows, t, focus, clearFocus, freshIds }) {
+function AttemptTable({ attempts, rows, t, focus, clearFocus, freshIds, openCompare, sec }) {
   return html`<table>
     ${rows.map((a) => {
       const idx = attempts.indexOf(a);
       return html`<${AttemptRow} key=${a.id} a=${a} t=${t} idx=${idx}
         focus=${focus} clearFocus=${clearFocus}
-        isNew=${freshIds ? freshIds.has(a.id) : false} />`;
+        isNew=${freshIds ? freshIds.has(a.id) : false}
+        openCompare=${openCompare} sec=${sec} />`;
     })}
   </table>`;
 }
@@ -254,7 +264,7 @@ function PbTag({ pb, mode, rows, pick, t }) {
     : pb.display} (${mode})</span>`;
 }
 
-function StarSection({ sec, t, ui, pinned, freshIds }) {
+function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
   const [showHidden, setShowHidden] = useState(false);
   const [visible, setVisible] = useState(10);
   const pb = sec.pb[t.clock];
@@ -318,7 +328,8 @@ function StarSection({ sec, t, ui, pinned, freshIds }) {
     <${Timeline} tl=${sec.timeline} sec=${sec} t=${t} />
     <${Progress} prog=${sec.progress} clock=${t.clock} onPick=${pick} />
     <${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t}
-      focus=${focus} clearFocus=${clearFocus} freshIds=${freshIds} />
+      focus=${focus} clearFocus=${clearFocus} freshIds=${freshIds}
+      openCompare=${openCompare} sec=${sec} />
     ${(rows.length > visible || visible > 10) && html`<div>
       ${rows.length > visible && html`<button class="meta"
           style="background:none;border:none;cursor:pointer"
@@ -347,7 +358,7 @@ function StarSection({ sec, t, ui, pinned, freshIds }) {
 // required, no kind — sec.strategies stays display-only until it grows one).
 // Broken sections (definition deleted, history remains) render but drop the
 // timeline/marker editor — markers key off the deleted definition.
-function SegmentSection({ sec, t, ui, pinned, freshIds }) {
+function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare }) {
   const [showHidden, setShowHidden] = useState(false);
   const [visible, setVisible] = useState(10);
   // armedSegs is the single live source: WS notices are instant, every view
@@ -403,7 +414,8 @@ function SegmentSection({ sec, t, ui, pinned, freshIds }) {
     ${!sec.broken && html`<${Timeline} tl=${sec.timeline} sec=${sec} t=${t} />`}
     <${Progress} prog=${sec.progress} clock="rta" onPick=${pick} />
     <${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t}
-      focus=${focus} clearFocus=${clearFocus} freshIds=${freshIds} />
+      focus=${focus} clearFocus=${clearFocus} freshIds=${freshIds}
+      openCompare=${openCompare} sec=${sec} />
     ${(rows.length > visible || visible > 10) && html`<div>
       ${rows.length > visible && html`<button class="meta"
           style="background:none;border:none;cursor:pointer"
@@ -448,7 +460,7 @@ async function setTargetCandidate(c, t) {
   t.refresh();
 }
 
-function RouteFocus({ rv, t, ui, freshIds }) {
+function RouteFocus({ rv, t, ui, freshIds, openCompare }) {
   const v = t.view;
   const tgt = v.target || {};
   // current = first step whose any candidate is the live target; else step 0
@@ -494,9 +506,11 @@ function RouteFocus({ rv, t, ui, freshIds }) {
           if (!sec) return null;   // not the target yet / no history — compact only
           return c.kind === "segment"
             ? html`<${SegmentSection} key=${`seg:${sec.segment_id}`}
-                sec=${sec} t=${t} ui=${ui} pinned=${false} freshIds=${freshIds} />`
+                sec=${sec} t=${t} ui=${ui} pinned=${false} freshIds=${freshIds}
+                openCompare=${openCompare} />`
             : html`<${StarSection} key=${`${sec.course_id}:${sec.star_id}`}
-                sec=${sec} t=${t} ui=${ui} pinned=${false} freshIds=${freshIds} />`;
+                sec=${sec} t=${t} ui=${ui} pinned=${false} freshIds=${freshIds}
+                openCompare=${openCompare} />`;
         }) : null}
       </div>`;
     })}
@@ -516,7 +530,7 @@ function ControlBar({ ui }) {
   </div>`;
 }
 
-export function Practice({ t }) {
+export function Practice({ t, openCompare }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [showUnassignedHidden, setShowUnassignedHidden] = useState(false);
   const stored = localStorage.getItem("sm64.sort");
@@ -614,21 +628,21 @@ export function Practice({ t }) {
         history still records</span>` : null}
     </div>
     ${routeView
-      ? html`<${RouteFocus} rv=${routeView} t=${t} ui=${ui} freshIds=${freshIds} />`
+      ? html`<${RouteFocus} rv=${routeView} t=${t} ui=${ui} freshIds=${freshIds} openCompare=${openCompare} />`
       : html`<div>
         <${StageBanner} t=${t} />
-        ${pinnedSegs.map((sec) => html`<${SegmentSection} key=${`seg:${sec.segment_id}`} sec=${sec} t=${t} ui=${ui} pinned=${true} freshIds=${freshIds} />`)}
-        ${activeStar && html`<${StarSection} key=${`${activeStar.course_id}:${activeStar.star_id}`} sec=${activeStar} t=${t} ui=${ui} pinned=${true} freshIds=${freshIds} />`}
+        ${pinnedSegs.map((sec) => html`<${SegmentSection} key=${`seg:${sec.segment_id}`} sec=${sec} t=${t} ui=${ui} pinned=${true} freshIds=${freshIds} openCompare=${openCompare} />`)}
+        ${activeStar && html`<${StarSection} key=${`${activeStar.course_id}:${activeStar.star_id}`} sec=${activeStar} t=${t} ui=${ui} pinned=${true} freshIds=${freshIds} openCompare=${openCompare} />`}
         ${v.stars.length === 0 && segs.length === 0 && v.unassigned.length === 0
           ? html`<p class="meta">No attempts this session yet — grab a star.</p>` : ""}
         ${restSegs.length > 0 && html`<div class="meta listhead">segments — recent activity first</div>`}
-        ${restSegs.map((sec) => html`<${SegmentSection} key=${`seg:${sec.segment_id}`} sec=${sec} t=${t} ui=${ui} pinned=${false} freshIds=${freshIds} />`)}
+        ${restSegs.map((sec) => html`<${SegmentSection} key=${`seg:${sec.segment_id}`} sec=${sec} t=${t} ui=${ui} pinned=${false} freshIds=${freshIds} openCompare=${openCompare} />`)}
         ${restStars.length > 0 && html`<div class="meta listhead">stars — recent activity first</div>`}
-        ${restStars.map((sec) => html`<${StarSection} key=${`${sec.course_id}:${sec.star_id}`} sec=${sec} t=${t} ui=${ui} pinned=${false} freshIds=${freshIds} />`)}
+        ${restStars.map((sec) => html`<${StarSection} key=${`${sec.course_id}:${sec.star_id}`} sec=${sec} t=${t} ui=${ui} pinned=${false} freshIds=${freshIds} openCompare=${openCompare} />`)}
         ${v.unassigned.length > 0 && html`<div class="starsec">
           <div class="shead"><b>No target</b>
             <span class="meta">failures before any star was grabbed or set</span></div>
-          <${AttemptTable} attempts=${v.unassigned} rows=${unassignedRows} t=${t} freshIds=${freshIds} />
+          <${AttemptTable} attempts=${v.unassigned} rows=${unassignedRows} t=${t} freshIds=${freshIds} openCompare=${openCompare} />
           <${HideToggle} hidden=${unassignedHidden}
                          showHidden=${showUnassignedHidden}
                          setShowHidden=${setShowUnassignedHidden} />

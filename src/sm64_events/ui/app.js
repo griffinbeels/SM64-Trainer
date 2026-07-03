@@ -9,14 +9,17 @@ import { Feed } from "./components/feed.js";
 import { Segments } from "./components/segments.js";
 import { Routes } from "./components/routes.js";
 import { Run } from "./components/runview.js";
+import { Compare } from "./components/compare.js";
 import { UpdatePopup } from "./components/update.js";
 
 const html = htm.bind(h);
-const TABS = ["Practice", "Segments", "Routes", "Run", "Live feed"];
+const TABS = ["Practice", "Segments", "Routes", "Run", "Compare", "Live feed"];
 
 function App() {
   const t = useTracker();
   const [tab, setTab] = useState("Practice");
+  const [compareIntent, setCompareIntent] = useState(null);
+  const openCompare = (intent) => { setCompareIntent(intent); setTab("Compare"); };
   return html`
     <h1>SM64 Trainer</h1>
     <${Header} t=${t} />
@@ -26,10 +29,12 @@ function App() {
              onclick=${() => setTab(name)}>${name}</div>`)}
     </div>
     <div class="pane">
-      ${tab === "Practice" ? html`<${Practice} t=${t} />`
+      ${tab === "Practice" ? html`<${Practice} t=${t} openCompare=${openCompare} />`
         : tab === "Segments" ? html`<${Segments} t=${t} />`
         : tab === "Routes" ? html`<${Routes} t=${t} />`
         : tab === "Run" ? html`<${Run} t=${t} />`
+        : tab === "Compare" ? html`<${Compare} t=${t} intent=${compareIntent}
+            clearIntent=${() => setCompareIntent(null)} />`
         : html`<${Feed} t=${t} />`}
     </div>
     <${UpdatePopup} t=${t} />`;

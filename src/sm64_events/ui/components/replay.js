@@ -36,7 +36,7 @@ function attachSharedVolume(el) {
 }
 
 // Expanded row under an attempt: extract on mount (server caches), then play.
-export function ReplayPlayer({ attemptId }) {
+export function ReplayPlayer({ attemptId, onCompare }) {
   const [state, setState] = useState({ phase: "loading" });
   const [savedPath, setSavedPath] = useState(null);
   const [playing, setPlaying] = useState(false); // event-driven (onplay/onpause)
@@ -134,6 +134,8 @@ export function ReplayPlayer({ attemptId }) {
         ${savedPath ? "Saved" : "Save Replay"}</button>
       ${savedPath && html` <a href="#" class="meta replay-path" title="show in Explorer"
             onclick=${revealSaved}>→ ${savedPath}</a>`}
+      ${onCompare && html` <button onclick=${onCompare}
+          title="open this run in the Compare tab">⇆ Compare</button>`}
     </div>
   </div>`;
 }

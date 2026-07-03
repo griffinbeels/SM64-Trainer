@@ -34,7 +34,7 @@ function MyRunPicker({ view, entity, attemptId, onPick }) {
       ${sections.map((s) => html`<option value=${entityOf(s)}>${sectionLabel(s)}</option>`)}
     </select>
     <select value=${attemptId ?? ""}
-        onchange=${(e) => onPick(entityOf(cur), Number(e.target.value))}>
+        onchange=${(e) => onPick(entityOf(cur), e.target.value === "" ? null : Number(e.target.value))}>
       <option value="">— pick a run —</option>
       ${runs.map((a) => html`<option value=${a.id}>#${a.id} · ${a.igt || a.rta || "?"}
         ${a.strat_tag ? `· ${a.strat_tag}` : ""}</option>`)}
