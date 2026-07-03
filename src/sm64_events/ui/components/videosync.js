@@ -5,9 +5,9 @@
 // play just runs every <video> at true rate (they start aligned); pause
 // re-syncs to correct any drift.
 import { h } from "preact";
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
-import { stepGameFrame, jumpToStart, gameFrameOf } from "../frame.js";
+import { gameFrameOf } from "../frame.js";
 
 const html = htm.bind(h);
 const VOLUME_KEY = "replay_volume";
@@ -21,11 +21,11 @@ export function useSyncController() {
   const stages = useRef(new Map());   // id -> { el, getInFrame }
   const [playing, setPlaying] = useState(false);
 
-  const register = (id, el, getInFrame) => {
+  const register = useCallback((id, el, getInFrame) => {
     if (el) stages.current.set(id, { el, getInFrame });
     else stages.current.delete(id);
-  };
-  const unregister = (id) => stages.current.delete(id);
+  }, []);
+  const unregister = useCallback((id) => stages.current.delete(id), []);
 
   // master frame = the first stage's game frame minus its own in-point
   const masterFrame = () => {
@@ -38,7 +38,8 @@ export function useSyncController() {
     for (const { el, getInFrame } of stages.current.values()) {
       if (!el) continue;
       const t = ((getInFrame() || 0) + master + 0.5) / 30;
-      el.currentTime = Math.min(Math.max(t, 0), el.duration || 0);
+      const max = Number.isFinite(el.duration) ? el.duration : Infinity;
+      el.currentTime = Math.min(Math.max(t, 0), max);
     }
   };
 
@@ -73,13 +74,13 @@ export function VideoStage({ src, inFrame, controller, id }) {
   const inRef = useRef(inFrame || 0);
   useEffect(() => { inRef.current = inFrame || 0; }, [inFrame]);
   useEffect(() => () => controller.unregister(id), [id]);
+  const setRef = useCallback((el) => {
+    ref.current = el;
+    controller.register(id, el, () => inRef.current);
+    if (el && !el.dataset.vol) { el.dataset.vol = "1"; el.volume = storedVolume(); }
+  }, [id, controller.register]);
   return html`<video class="replay-player" style="width:100%" preload="auto"
-      src=${src} playsinline
-      ref=${(el) => {
-        ref.current = el;
-        controller.register(id, el, () => inRef.current);
-        if (el && !el.dataset.vol) { el.dataset.vol = "1"; el.volume = storedVolume(); }
-      }}></video>`;
+      src=${src} playsinline ref=${setRef}></video>`;
 }
 
 // Dual-handle in/out selector over the video duration (game frames).
@@ -95,7 +96,7 @@ export function SyncTrack({ video, inFrame, outFrame, onChange }) {
   }, [video && video.current]);
   const maxF = Math.max(1, Math.floor(dur * 30));
   const preview = (f) => { const v = video && video.current;
-    if (v) v.currentTime = f / 30; };
+    if (v) v.currentTime = (f + 0.5) / 30; };
   return html`<div class="synctrack" style="margin:.3rem 0">
     <label class="meta">start
       <input type="range" min="0" max=${maxF} step="1" value=${inFrame || 0}
