@@ -1,65 +1,94 @@
 // src/sm64_events/ui/components/compare.js — side-by-side comparison tab.
-// Left = my run (reuses the replay extract/serve pipeline by attempt_id).
-// Right = comparison video(s) normalized to local mp4 (yt-dlp/file import).
-// One centered transport (useSyncController) drives every <video> in lockstep.
+// Top: a combined, recency-sorted feed of every replayable run (stage filter) —
+// pick one to load it as MY RUN (left). Right = comparison video(s). One
+// centered transport (useSyncController) drives every <video> in lockstep; each
+// video has a Premiere-style work-area (in/out) — comparison in/out auto-saves.
 import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
-import { useSyncController, VideoStage, SyncTrack } from "./videosync.js";
+import { useSyncController, VideoStage, WorkArea } from "./videosync.js";
 
 const html = htm.bind(h);
 
-// entity_key <-> section helpers
 function entityOf(sec) {
   return sec.kind === "segment"
     ? `segment:${sec.segment_id}`
     : `star:${sec.course_id}:${sec.star_id}`;
 }
-function sectionLabel(sec) {
-  return sec.kind === "segment" ? `⏱ ${sec.name}`
-    : `${sec.course_name} · ${sec.star_name}`;
-}
-
-// ---- left: my run ----------------------------------------------------------
 // Sort key: completion frames (stars = igt, segments = rta); nulls sort last.
 function framesOf(a) {
   const f = a.igt_frames != null ? a.igt_frames : a.rta_frames;
   return f == null ? Infinity : f;
 }
 
-// `available` is a Set of attempt ids whose replay is obtainable now (saved or
-// buffer-covered, from GET /api/replay/available), or null while it loads. The
-// run list shows ONLY replayable successes — clicking anything else would just
-// 409 "no footage" — sorted fastest first.
-function MyRunPicker({ view, entity, attemptId, onPick, available }) {
-  const sections = [...(view.stars || []), ...(view.segments || [])];
-  const cur = sections.find((s) => entityOf(s) === entity) || sections[0];
-  const loading = available == null;
-  const runs = (cur && !loading)
-    ? cur.attempts
-        .filter((a) => !a.cleared && a.outcome === "success" && available.has(a.id))
-        .slice()
-        .sort((a, b) => framesOf(a) - framesOf(b))
-    : [];
-  const placeholder = loading ? "— checking runs… —"
-    : runs.length === 0 ? "— no replayable runs —" : "— pick a run —";
-  return html`<div class="compare-pick">
-    <select value=${cur ? entityOf(cur) : ""}
-        onchange=${(e) => onPick(e.target.value, null)}>
-      ${sections.map((s) => html`<option value=${entityOf(s)}>${sectionLabel(s)}</option>`)}
-    </select>
-    <select value=${attemptId ?? ""}
-        onchange=${(e) => onPick(entityOf(cur), e.target.value === "" ? null : Number(e.target.value))}>
-      <option value="">${placeholder}</option>
-      ${runs.map((a) => html`<option value=${a.id}>${a.igt || a.rta || "?"} · #${a.id}
-        ${a.strat_tag ? `· ${a.strat_tag}` : ""}</option>`)}
-    </select>
+// ---- top: combined replayable-run feed -------------------------------------
+// Flatten every star/segment section into one list of replayable successes,
+// each carrying its stage (course, or "Segments"), item, strategy, time and
+// recency. Newest first. `available` is the Set of replayable attempt ids.
+function buildFeed(view, available) {
+  const out = [];
+  for (const sec of (view.stars || [])) {
+    for (const a of sec.attempts) {
+      if (a.cleared || a.outcome !== "success" || !available.has(a.id)) continue;
+      out.push({ attemptId: a.id, entity: `star:${sec.course_id}:${sec.star_id}`,
+        stageId: `c${sec.course_id}`, stageName: sec.course_name,
+        itemName: sec.star_name, strat: a.strat_tag || null,
+        time: a.igt || a.rta || "?", ended: a.ended_utc || "" });
+    }
+  }
+  for (const sec of (view.segments || [])) {
+    for (const a of sec.attempts) {
+      if (a.cleared || a.outcome !== "success" || !available.has(a.id)) continue;
+      out.push({ attemptId: a.id, entity: `segment:${sec.segment_id}`,
+        stageId: "seg", stageName: "Segments",
+        itemName: sec.name, strat: a.strat_tag || null,
+        time: a.rta || a.igt || "?", ended: a.ended_utc || "" });
+    }
+  }
+  // recency: ISO ended_utc desc; tie-break newest attempt id
+  out.sort((x, y) => (y.ended || "").localeCompare(x.ended || "")
+    || (y.attemptId - x.attemptId));
+  return out;
+}
+
+function StageFeed({ view, available, attemptId, onPick }) {
+  const [stage, setStage] = useState("all");
+  if (available == null)
+    return html`<div class="compare-feed"><div class="meta cf-empty">checking replayable runs…</div></div>`;
+  const feed = buildFeed(view, available);
+  const stages = [];
+  for (const e of feed)
+    if (!stages.find((s) => s.id === e.stageId)) stages.push({ id: e.stageId, name: e.stageName });
+  const rows = stage === "all" ? feed : feed.filter((e) => e.stageId === stage);
+  return html`<div class="compare-feed">
+    <div class="cf-head">
+      <span class="listhead" style="margin:0">My runs — newest first</span>
+      <select value=${stage} onchange=${(e) => setStage(e.target.value)}>
+        <option value="all">All stages</option>
+        ${stages.map((s) => html`<option value=${s.id}>${s.name}</option>`)}
+      </select>
+    </div>
+    ${rows.length === 0
+      ? html`<div class="meta cf-empty">No replayable runs${stage === "all" ? "" : " for this stage"} yet
+          — a run must be saved to disk or still in the replay buffer.</div>`
+      : html`<div class="cf-list">
+        ${rows.map((e) => html`<div class="cf-row ${e.attemptId === attemptId ? "on" : ""}"
+            onclick=${() => onPick(e.entity, e.strat, e.attemptId)} title="load as My Run">
+          <b>${e.time}</b>
+          <span class="cf-stage">${e.stageName}</span>
+          <span class="cf-item">${e.itemName}</span>
+          ${e.strat ? html`<span class="chip">${e.strat}</span>`
+            : html`<span class="meta">— no strat —</span>`}
+        </div>`)}
+      </div>`}
   </div>`;
 }
 
-function MyRunStage({ attemptId, controller }) {
+// ---- left: my run (video + work-area) --------------------------------------
+function MyRun({ attemptId, controller, inFrame, outFrame, onSync }) {
   const [st, setSt] = useState({ phase: "idle" });
+  const [videoEl, setVideoEl] = useState(null);
   useEffect(() => {
     if (attemptId == null) { setSt({ phase: "idle" }); return; }
     let alive = true;
@@ -69,19 +98,39 @@ function MyRunStage({ attemptId, controller }) {
       .catch((e) => alive && setSt({ phase: "error", message: String(e) }));
     return () => { alive = false; };
   }, [attemptId]);
-  if (st.phase === "idle") return html`<div class="meta">Pick one of your runs on the left.</div>`;
-  if (st.phase === "loading") return html`<div class="meta">extracting replay…</div>`;
+  if (st.phase === "idle")
+    return html`<div class="compare-empty meta">Pick one of your runs above to load it here.</div>`;
+  if (st.phase === "loading")
+    return html`<div class="compare-empty meta">extracting replay…</div>`;
   if (st.phase === "error")
-    return html`<div class="badx">run footage unavailable</div>
-      <div class="meta">${st.message}</div>`;
-  return html`<${VideoStage} id="mine" src=${st.clip_url} inFrame=${0}
-    controller=${controller} />`;
+    return html`<div class="compare-empty"><div class="badx">run footage unavailable</div>
+      <div class="meta">${st.message}</div></div>`;
+  return html`<div>
+    <${VideoStage} id="mine" src=${st.clip_url} inFrame=${inFrame || 0}
+      controller=${controller} onEl=${setVideoEl} />
+    <${WorkArea} videoEl=${videoEl} inFrame=${inFrame} outFrame=${outFrame}
+      onCommit=${(i, o) => onSync(i, o)} />
+  </div>`;
 }
 
 // ---- right: comparisons ----------------------------------------------------
+function ComparisonStage({ comp, controller, onEdit, onDelete }) {
+  const [videoEl, setVideoEl] = useState(null);
+  return html`<div class="compare-cmp">
+    <div class="shead"><b>${comp.name}</b>
+      <button class="meta" onclick=${() => onDelete(comp.id)} title="remove">×</button></div>
+    <${VideoStage} id=${`cmp:${comp.id}`} src=${comp.clip_url}
+      inFrame=${comp.in_frame || 0} controller=${controller} onEl=${setVideoEl} />
+    <${WorkArea} videoEl=${videoEl} inFrame=${comp.in_frame} outFrame=${comp.out_frame}
+      onCommit=${(i, o) => onEdit(comp.id, { in_frame: i, out_frame: o })} />
+  </div>`;
+}
+
+// Video-sized drop zone (drag-drop / browse / rank-standard Load / YouTube URL).
 function AddComparison({ entity, strat, suggestion, onAdded }) {
   const [job, setJob] = useState(null);
   const [url, setUrl] = useState("");
+  const [over, setOver] = useState(false);
   const fileRef = useRef(null);
   const pollRef = useRef(null);
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
@@ -115,42 +164,40 @@ function AddComparison({ entity, strat, suggestion, onAdded }) {
     }, 800);
   }
   function onDrop(e) {
-    e.preventDefault();
+    e.preventDefault(); setOver(false);
     const f = e.dataTransfer.files[0];
     if (f) startUpload(f);
   }
 
   if (strat == null)
-    return html`<div class="meta">Select a strategy in Practice to enable comparisons.</div>`;
-  return html`<div class="compare-add" ondragover=${(e) => e.preventDefault()}
-      ondrop=${onDrop}>
-    ${suggestion && html`<button onclick=${() =>
-        startImport(suggestion.source_kind, suggestion.source_ref, suggestion.name)}>
-      ▸ Load ${suggestion.name}</button>`}
-    <input placeholder="paste a YouTube URL" value=${url}
-      oninput=${(e) => setUrl(e.target.value)} />
-    <button disabled=${!url} onclick=${() =>
-      startImport("youtube", url, url)}>Add URL</button>
-    <button onclick=${() => fileRef.current && fileRef.current.click()}>Choose file…</button>
+    return html`<div class="compare-empty meta">Pick a run above (or set a strategy in Practice)
+      to add comparisons.</div>`;
+  const busy = job && job.state === "running";
+  return html`<div class="compare-drop ${over ? "over" : ""}"
+      ondragover=${(e) => { e.preventDefault(); setOver(true); }}
+      ondragleave=${() => setOver(false)} ondrop=${onDrop}>
+    ${busy
+      ? html`<div class="cd-inner"><div class="cd-icon">⏳</div>
+          <div class="meta">loading… ${Math.round((job.progress || 0) * 100)}% ${job.message || ""}</div></div>`
+      : html`<div class="cd-inner">
+          <div class="cd-icon">⬆</div>
+          <div>Drag &amp; drop a video here</div>
+          <div class="meta">or</div>
+          <div class="cd-actions">
+            <button onclick=${() => fileRef.current && fileRef.current.click()}>Browse files</button>
+            ${suggestion && html`<button onclick=${() =>
+              startImport(suggestion.source_kind, suggestion.source_ref, suggestion.name)}>
+              ▸ Load ${suggestion.name}</button>`}
+          </div>
+          <div class="cd-url">
+            <input placeholder="paste a YouTube URL" value=${url}
+              oninput=${(e) => setUrl(e.target.value)} />
+            <button disabled=${!url} onclick=${() => startImport("youtube", url, url)}>Add URL</button>
+          </div>
+          ${job && job.state === "error" && html`<div class="badx">import failed: ${job.message}</div>`}
+        </div>`}
     <input type="file" accept="video/*" style="display:none" ref=${fileRef}
-      onchange=${(e) => { const f = e.target.files[0];
-        if (f) startUpload(f); }} />
-    <span class="meta"> or drag a video here</span>
-    ${job && job.state === "running" && html`<div class="meta">
-      loading… ${Math.round((job.progress || 0) * 100)}% ${job.message || ""}</div>`}
-    ${job && job.state === "error" && html`<div class="badx">import failed: ${job.message}</div>`}
-  </div>`;
-}
-
-function ComparisonStage({ comp, controller, onEdit, onDelete }) {
-  const [videoEl, setVideoEl] = useState(null);
-  return html`<div>
-    <div class="shead"><b>${comp.name}</b>
-      <button class="meta" onclick=${() => onDelete(comp.id)} title="remove">×</button></div>
-    <${VideoStage} id=${`cmp:${comp.id}`} src=${comp.clip_url}
-      inFrame=${comp.in_frame || 0} controller=${controller} onEl=${setVideoEl} />
-    <${SyncTrack} videoEl=${videoEl} inFrame=${comp.in_frame} outFrame=${comp.out_frame}
-      onChange=${(pts) => onEdit(comp.id, pts)} />
+      onchange=${(e) => { const f = e.target.files[0]; if (f) startUpload(f); }} />
   </div>`;
 }
 
@@ -166,44 +213,51 @@ function Transport({ controller }) {
   </div>`;
 }
 
-export function Compare({ t, intent, clearIntent }) {
+export function Compare({ t, intent, clearIntent, active }) {
   const controller = useSyncController();
   const [view, setView] = useState(null);          // lifetime session view
+  const [availSet, setAvailSet] = useState(null);  // replayable attempt ids (null = loading)
   const [entity, setEntity] = useState(null);
   const [strat, setStrat] = useState(null);
   const [attemptId, setAttemptId] = useState(null);
   const [cmp, setCmp] = useState({ saved: [], suggestion: null });
-  const [availSet, setAvailSet] = useState(null); // replayable attempt ids (null = loading)
+  const [myIn, setMyIn] = useState(0);             // My Run work-area (in-memory)
+  const [myOut, setMyOut] = useState(null);
   const deepLinked = useRef(false);
+  const initialized = useRef(false);
 
-  // load the lifetime session view once (left-side picker source), and the set
-  // of currently-replayable runs — recomputed on every open because the ring
-  // shifts, so runs that aged out of the buffer (and were never saved) drop off.
+  // (re)load the view + replayable-run set whenever the tab becomes active — the
+  // buffer shifts, so the feed/availability refresh on each open. The default
+  // entity is chosen only on the FIRST activation (later activations keep the
+  // user's selection — that's what makes the comparison persist across tabs).
   useEffect(() => {
+    if (!active) return;
+    const first = !initialized.current;
+    initialized.current = true;
     getJSON("/api/session?scope=lifetime").then((v) => {
       setView(v);
-      // default: the live target's section, else the first section
-      const tgt = v.target || {};
-      const def = tgt.kind === "segment" ? `segment:${tgt.segment_id}`
-        : tgt.course_id != null ? `star:${tgt.course_id}:${tgt.star_id}` : null;
-      if (!intent) setEntity(def);
+      if (first && !intent) {
+        const tgt = v.target || {};
+        const def = tgt.kind === "segment" ? `segment:${tgt.segment_id}`
+          : tgt.course_id != null ? `star:${tgt.course_id}:${tgt.star_id}` : null;
+        if (def) setEntity(def);
+      }
     }).catch(() => {});
     getJSON("/api/replay/available")
       .then((r) => setAvailSet(new Set(r.available)))
       .catch(() => setAvailSet(new Set()));
-  }, []);
+  }, [active]);
 
-  // apply a deep-link intent (Compare button from Practice)
+  // deep-link intent (Compare button from Practice) — sets entity+strat+run
   useEffect(() => {
     if (!intent) return;
-    setEntity(intent.entity);
-    setStrat(intent.strat);
-    setAttemptId(intent.attemptId);
+    setEntity(intent.entity); setStrat(intent.strat); setAttemptId(intent.attemptId);
     deepLinked.current = true;
     clearIntent();
   }, [intent]);
 
-  // resolve the active strat for the chosen entity from the session view
+  // resolve the strat from the section when entity changes by plain browsing;
+  // skip once right after a deep-link / feed pick (which set the strat itself)
   useEffect(() => {
     if (!view || !entity) return;
     if (deepLinked.current) { deepLinked.current = false; return; }
@@ -212,7 +266,9 @@ export function Compare({ t, intent, clearIntent }) {
     if (sec) setStrat(sec.last_strat || null);
   }, [entity, view]);
 
-  // fetch comparisons + auto-pick whenever (entity, strat) changes
+  // reset My Run's work-area when a different run is picked
+  useEffect(() => { setMyIn(0); setMyOut(null); }, [attemptId]);
+
   const reloadCmp = () => {
     if (!entity) return;
     getJSON(`/api/compare/view?entity=${encodeURIComponent(entity)}`
@@ -222,30 +278,33 @@ export function Compare({ t, intent, clearIntent }) {
   useEffect(reloadCmp, [entity, strat]);
 
   async function editCmp(id, pts) {
-    await send("PUT", `/api/compare/videos/${id}`, pts);
+    await send("PUT", `/api/compare/videos/${id}`, pts);   // auto-save in/out
     reloadCmp();
   }
   async function delCmp(id) {
     await send("DELETE", `/api/compare/videos/${id}`);
     reloadCmp();
   }
-  function pickRun(ent, aid) {
+  // picking a run from the feed sets its entity + strategy (so the matching
+  // comparison auto-loads) + the run itself
+  function pickRun(ent, s, aid) {
     setEntity(ent);
-    setAttemptId(aid);
+    if (s !== undefined) { setStrat(s || null); deepLinked.current = true; }
+    setAttemptId(aid == null ? null : aid);
   }
 
   if (!view) return html`<p class="meta">loading…</p>`;
-  // auto-selected saved comparison shows by default; others are addable
   const shown = cmp.saved;
   const suggestion = cmp.auto && cmp.auto.mode === "suggestion" ? cmp.suggestion : null;
 
   return html`<div class="compare">
+    <${StageFeed} view=${view} available=${availSet} attemptId=${attemptId} onPick=${pickRun} />
     <div class="compare-grid">
       <div class="compare-col">
         <div class="meta listhead">My run</div>
-        <${MyRunPicker} view=${view} entity=${entity} attemptId=${attemptId}
-          onPick=${pickRun} available=${availSet} />
-        <${MyRunStage} attemptId=${attemptId} controller=${controller} />
+        <${MyRun} attemptId=${attemptId} controller=${controller}
+          inFrame=${myIn} outFrame=${myOut}
+          onSync=${(i, o) => { setMyIn(i); setMyOut(o); }} />
       </div>
       <div class="compare-center">
         <${Transport} controller=${controller} />

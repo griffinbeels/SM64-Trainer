@@ -29,13 +29,19 @@ function App() {
              onclick=${() => setTab(name)}>${name}</div>`)}
     </div>
     <div class="pane">
+      ${/* Compare stays MOUNTED across tab switches (hidden when inactive) so
+           the loaded videos + sync survive leaving and returning; `active`
+           drives its feed/availability refresh. */""}
+      <div style=${tab === "Compare" ? "" : "display:none"}>
+        <${Compare} t=${t} intent=${compareIntent}
+          clearIntent=${() => setCompareIntent(null)} active=${tab === "Compare"} />
+      </div>
       ${tab === "Practice" ? html`<${Practice} t=${t} openCompare=${openCompare} />`
         : tab === "Segments" ? html`<${Segments} t=${t} />`
         : tab === "Routes" ? html`<${Routes} t=${t} />`
         : tab === "Run" ? html`<${Run} t=${t} />`
-        : tab === "Compare" ? html`<${Compare} t=${t} intent=${compareIntent}
-            clearIntent=${() => setCompareIntent(null)} />`
-        : html`<${Feed} t=${t} />`}
+        : tab === "Live feed" ? html`<${Feed} t=${t} />`
+        : null}
     </div>
     <${UpdatePopup} t=${t} />`;
 }

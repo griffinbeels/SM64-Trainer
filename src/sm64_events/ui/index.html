@@ -218,16 +218,52 @@
   .stdtools a.meta:hover{text-decoration:underline}
   .weakflag{font-size:9px;color:#e0707a;border:1px solid #5a2e2e;border-radius:4px;padding:1px 5px;text-transform:uppercase;letter-spacing:.4px;margin:0 4px}
   .routeavg{display:flex;align-items:center;gap:6px;margin:4px 0;font-size:13px}
+  /* combined replayable-run feed at the top */
+  .compare-feed { max-width:760px; margin:0 auto 1rem; }
+  .cf-head { display:flex; align-items:center; gap:.6rem; justify-content:center; margin-bottom:.35rem; }
+  .cf-list { max-height:210px; overflow-y:auto; border:1px solid #2a2f3a; border-radius:6px; }
+  .cf-row { display:flex; align-items:center; gap:.5rem; padding:.28rem .55rem; cursor:pointer;
+            border-bottom:1px solid #20242c; }
+  .cf-row:last-child { border-bottom:none; }
+  .cf-row:hover { background:#20242c; }
+  .cf-row.on { background:#2b3a55; }
+  .cf-row b { min-width:5.5rem; }
+  .cf-stage { color:#9aa4b2; white-space:nowrap; }
+  .cf-item { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .cf-empty { text-align:center; padding:.9rem; }
+
   .compare-grid { display:flex; gap:1rem; align-items:flex-start; }
-  /* two video columns share the space; the controls column never stretches */
   .compare-col { flex:1 1 0; min-width:0; }
   .compare-center { flex:0 0 auto; display:flex; flex-direction:column; align-items:center; padding-top:2rem; }
-  /* constrain every child to its column so a long run label / wide video can't
-     overflow into the centered transport (the overlap bug) */
+  /* keep every child inside its column (no overlap into the centered transport) */
   .compare-col select, .compare-col input, .compare-col video { width:100%; max-width:100%; box-sizing:border-box; }
-  .compare-pick { display:flex; flex-direction:column; gap:.3rem; min-width:0; }
   .compare-transport { display:flex; flex-direction:column; gap:.4rem; align-items:center; }
   .compare-transport button { min-width:7rem; }
+  .compare-empty { min-height:180px; display:flex; flex-direction:column; align-items:center;
+                   justify-content:center; text-align:center; border:1px solid #2a2f3a; border-radius:6px; padding:1rem; }
+
+  /* Premiere-style single-bar work area (in/out over the whole clip) */
+  .workarea { margin:.4rem 0; }
+  .wa-track { position:relative; height:14px; background:#20242c; border-radius:4px;
+              margin:.25rem 0; user-select:none; touch-action:none; }
+  .wa-region { position:absolute; top:0; bottom:0; background:rgba(122,162,247,.35);
+               border-left:2px solid #7aa2f7; border-right:2px solid #7aa2f7; box-sizing:border-box; }
+  .wa-handle { position:absolute; top:-3px; width:10px; height:20px; margin-left:-5px;
+               background:#7aa2f7; border-radius:3px; cursor:ew-resize; }
+  .wa-handle:hover { background:#9bb8ff; }
+  .wa-times { text-align:center; }
+  .wa-total { color:#6b7280; }
+
+  /* comparison add: a video-sized drop zone */
+  .compare-drop { border:2px dashed #3a4150; border-radius:8px; min-height:200px; margin-top:.5rem;
+                  display:flex; align-items:center; justify-content:center; text-align:center; padding:1rem; box-sizing:border-box; }
+  .compare-drop.over { border-color:#7aa2f7; background:rgba(122,162,247,.08); }
+  .cd-inner { display:flex; flex-direction:column; gap:.5rem; align-items:center; width:100%; }
+  .cd-icon { font-size:1.7rem; }
+  .cd-actions { display:flex; gap:.5rem; flex-wrap:wrap; justify-content:center; }
+  .cd-url { display:flex; gap:.4rem; width:100%; max-width:340px; }
+  .cd-url input { flex:1; min-width:0; }
+
   /* narrow screens: stack (video / controls / video) with a horizontal control row */
   @media (max-width:820px){
     .compare-grid { flex-direction:column; }

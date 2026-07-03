@@ -84,9 +84,18 @@ export function VideoStage({ src, inFrame, controller, id, onEl }) {
       src=${src} playsinline ref=${setRef}></video>`;
 }
 
-// Dual-handle in/out selector over the video duration (game frames).
-export function SyncTrack({ videoEl, inFrame, outFrame, onChange }) {
+// Premiere-style single-bar "work area": the whole track IS the clip
+// (far-left = 0:00, far-right = duration); a highlighted region between two
+// draggable handles is the in/out. Dragging a handle scrub-seeks the video and,
+// on release, calls onCommit(inFrame, outFrame|null) so the caller can persist
+// it (null out = "to the end"). in/out are GAME frames (30 fps).
+export function WorkArea({ videoEl, inFrame, outFrame, onCommit }) {
   const [dur, setDur] = useState(0);
+  const [inF, setInF] = useState(inFrame || 0);
+  const [outF, setOutF] = useState(outFrame == null ? null : outFrame);
+  const trackRef = useRef(null);
+  useEffect(() => { setInF(inFrame || 0); setOutF(outFrame == null ? null : outFrame); },
+    [inFrame, outFrame]);
   useEffect(() => {
     if (!videoEl) return;
     const on = () => setDur(videoEl.duration || 0);
@@ -94,21 +103,43 @@ export function SyncTrack({ videoEl, inFrame, outFrame, onChange }) {
     if (videoEl.duration) setDur(videoEl.duration);
     return () => videoEl.removeEventListener("loadedmetadata", on);
   }, [videoEl]);
-  const maxF = Math.max(1, Math.floor(dur * 30));
-  const preview = (f) => { if (videoEl) videoEl.currentTime = (f + 0.5) / 30; };
-  return html`<div class="synctrack" style="margin:.3rem 0">
-    <label class="meta">start
-      <input type="range" min="0" max=${maxF} step="1" value=${inFrame || 0}
-        oninput=${(e) => { const f = Number(e.target.value); preview(f);
-          onChange({ in_frame: f, out_frame: outFrame }); }} />
-    </label>
-    <label class="meta">end
-      <input type="range" min="0" max=${maxF} step="1"
-        value=${outFrame == null ? maxF : outFrame}
-        oninput=${(e) => { const f = Number(e.target.value); preview(f);
-          onChange({ in_frame: inFrame || 0, out_frame: f }); }} />
-    </label>
-    <span class="meta">${((inFrame || 0) / 30).toFixed(2)}s –
-      ${((outFrame == null ? maxF : outFrame) / 30).toFixed(2)}s</span>
+
+  const maxF = Math.max(1, Math.round(dur * 30));
+  const outEff = outF == null ? maxF : outF;
+  const seek = (f) => { if (videoEl) videoEl.currentTime = (f + 0.5) / 30; };
+  const frameAt = (clientX) => {
+    const r = trackRef.current.getBoundingClientRect();
+    const pct = r.width ? (clientX - r.left) / r.width : 0;
+    return Math.round(Math.min(1, Math.max(0, pct)) * maxF);
+  };
+  function drag(which, e) {
+    e.preventDefault();
+    const live = { in: inF, out: outEff };
+    const move = (ev) => {
+      const f = frameAt(ev.clientX);
+      if (which === "in") { live.in = Math.min(f, live.out - 1); setInF(live.in); seek(live.in); }
+      else { live.out = Math.max(f, live.in + 1); setOutF(live.out); seek(live.out); }
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      if (onCommit) onCommit(live.in, live.out >= maxF ? null : live.out);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
+
+  const inPct = (inF / maxF) * 100;
+  const outPct = (outEff / maxF) * 100;
+  return html`<div class="workarea">
+    <div class="wa-track" ref=${trackRef}>
+      <div class="wa-region" style=${`left:${inPct}%;width:${Math.max(0, outPct - inPct)}%`}></div>
+      <div class="wa-handle" style=${`left:${inPct}%`}
+           onpointerdown=${(e) => drag("in", e)} title="clip start"></div>
+      <div class="wa-handle" style=${`left:${outPct}%`}
+           onpointerdown=${(e) => drag("out", e)} title="clip end"></div>
+    </div>
+    <div class="meta wa-times">${(inF / 30).toFixed(2)}s – ${(outEff / 30).toFixed(2)}s
+      <span class="wa-total">/ ${(maxF / 30).toFixed(2)}s</span></div>
   </div>`;
 }
