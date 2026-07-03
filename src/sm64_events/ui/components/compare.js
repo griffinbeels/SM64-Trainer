@@ -127,12 +127,26 @@ function StrategySelect({ strategies, value, onChange }) {
   </select>`;
 }
 
+// A raw URL is never shown — the title is (backfilled server-side); if a title
+// still can't be resolved, fall back to a friendly label, never the URL.
+function displayTitle(comp) {
+  const n = comp.name || "";
+  if (comp.source_kind === "youtube" && /^https?:\/\//i.test(n)) return "YouTube video";
+  return n || "video";
+}
+
 // No header ABOVE the video, so the comparison video top-aligns with My Run.
 // Title (italic subheader) sits under the video; strategy moved to the section
 // header; the remove (×) button rides the work-area button row (after set end).
 function ComparisonStage({ comp, controller, onEdit, onDelete }) {
   const [videoEl, setVideoEl] = useState(null);
-  const caption = comp.name + (comp.strat ? ` · ${comp.strat}` : "");
+  const label = displayTitle(comp);
+  const stratSuffix = comp.strat ? ` · ${comp.strat}` : "";
+  // YouTube title is hyperlinked to its source URL
+  const caption = comp.source_kind === "youtube" && comp.source_ref
+    ? html`<a href=${comp.source_ref} target="_blank" rel="noopener"
+        title=${comp.source_ref}>${label}</a>${stratSuffix}`
+    : html`${label}${stratSuffix}`;
   return html`<div class="compare-cmp">
     <${VideoStage} id=${`cmp:${comp.id}`} src=${comp.clip_url}
       inFrame=${comp.in_frame || 0} controller=${controller} onEl=${setVideoEl}

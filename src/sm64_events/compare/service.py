@@ -58,8 +58,25 @@ class CompareService:
     def view(self, entity: str, strat: str | None) -> dict:
         if self.tracker.db is None:
             raise RuntimeError("database unavailable")
+        self._backfill_titles(entity)
         return build_compare_view(self.tracker.db, self.tracker.ranks,
                                   entity, strat)
+
+    def _backfill_titles(self, entity: str) -> None:
+        """Give URL-named YouTube comparisons their real title. Older rows (and
+        any whose title-probe failed at import) stored the URL as the name;
+        resolve + persist it once so the raw URL is never shown. Probes each
+        row at most once — after backfill the name no longer starts with http."""
+        db = self.tracker.db
+        for c in db.comparisons(entity):
+            name = c["name"] or ""
+            if c["source_kind"] == "youtube" and name.startswith("http"):
+                title = self._title_probe(c["source_ref"])
+                if title and title != name:
+                    try:
+                        db.update_comparison(c["id"], name=title)
+                    except Exception:
+                        log.exception("title backfill failed for comparison %s", c["id"])
 
     def cache_path(self, cache_name: str):
         if not _CACHE_RE.fullmatch(cache_name):
