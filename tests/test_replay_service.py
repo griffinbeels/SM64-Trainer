@@ -86,6 +86,38 @@ def test_view_pads_span_and_returns_clip_url(tmp_path):
     assert end == T0 + timedelta(seconds=12 + 2)         # post_pad
 
 
+def test_available_attempt_ids_saved_or_buffer_covered(tmp_path):
+    # buffer covers [T0-60, T0+60]
+    inside = attempt(id=1)                       # T0..T0+12 -> fully covered
+    aged = attempt(id=2,                         # ended before the buffer -> gone
+        started_utc=(T0 - timedelta(seconds=120)).isoformat().replace("+00:00", "Z"),
+        ended_utc=(T0 - timedelta(seconds=110)).isoformat().replace("+00:00", "Z"))
+    saved_only = attempt(id=3,                   # aged out but SAVED on disk
+        started_utc=(T0 - timedelta(seconds=200)).isoformat().replace("+00:00", "Z"),
+        ended_utc=(T0 - timedelta(seconds=190)).isoformat().replace("+00:00", "Z"))
+    straddle = attempt(id=4,                      # started before buffer -> partial, excluded
+        started_utc=(T0 - timedelta(seconds=70)).isoformat().replace("+00:00", "Z"),
+        ended_utc=(T0 + timedelta(seconds=5)).isoformat().replace("+00:00", "Z"))
+    svc = make_service(tmp_path, [inside, aged, saved_only, straddle],
+                       cov=(T0 - timedelta(seconds=60), T0 + timedelta(seconds=60)))
+    d = tmp_path / "replays" / "2026-06-11" / "session_3"
+    d.mkdir(parents=True)
+    (d / "attempt_0003_a_b_0m11s43.mp4").write_bytes(b"x")   # saved clip for id 3
+    assert set(svc.available_attempt_ids()) == {1, 3}        # covered + saved only
+
+
+def test_available_attempt_ids_empty_buffer_only_disk(tmp_path):
+    a = attempt(id=1)
+    svc = ReplayService(
+        cfg=ReplayConfig(save_root=tmp_path / "replays",
+                         scratch_dir=tmp_path / "buf", extract_wait_s=0.0),
+        recorder=FakeRecorder(None),             # no coverage -> nothing buffer-covered
+        extractor=FakeExtractor(), tracker=FakeTracker([a]))
+    assert svc.available_attempt_ids() == []     # not saved, no buffer -> excluded
+    svc.save(1)                                  # extracts to scratch + saves to disk
+    assert svc.available_attempt_ids() == [1]    # now on disk -> available
+
+
 def test_view_unknown_attempt_raises_lookup(tmp_path):
     svc = make_service(tmp_path, [])
     try:

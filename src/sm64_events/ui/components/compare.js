@@ -22,12 +22,28 @@ function sectionLabel(sec) {
 }
 
 // ---- left: my run ----------------------------------------------------------
-function MyRunPicker({ view, entity, attemptId, onPick }) {
+// Sort key: completion frames (stars = igt, segments = rta); nulls sort last.
+function framesOf(a) {
+  const f = a.igt_frames != null ? a.igt_frames : a.rta_frames;
+  return f == null ? Infinity : f;
+}
+
+// `available` is a Set of attempt ids whose replay is obtainable now (saved or
+// buffer-covered, from GET /api/replay/available), or null while it loads. The
+// run list shows ONLY replayable successes — clicking anything else would just
+// 409 "no footage" — sorted fastest first.
+function MyRunPicker({ view, entity, attemptId, onPick, available }) {
   const sections = [...(view.stars || []), ...(view.segments || [])];
   const cur = sections.find((s) => entityOf(s) === entity) || sections[0];
-  const runs = cur
-    ? cur.attempts.filter((a) => !a.cleared && a.outcome === "success")
+  const loading = available == null;
+  const runs = (cur && !loading)
+    ? cur.attempts
+        .filter((a) => !a.cleared && a.outcome === "success" && available.has(a.id))
+        .slice()
+        .sort((a, b) => framesOf(a) - framesOf(b))
     : [];
+  const placeholder = loading ? "— checking runs… —"
+    : runs.length === 0 ? "— no replayable runs —" : "— pick a run —";
   return html`<div class="compare-pick">
     <select value=${cur ? entityOf(cur) : ""}
         onchange=${(e) => onPick(e.target.value, null)}>
@@ -35,8 +51,8 @@ function MyRunPicker({ view, entity, attemptId, onPick }) {
     </select>
     <select value=${attemptId ?? ""}
         onchange=${(e) => onPick(entityOf(cur), e.target.value === "" ? null : Number(e.target.value))}>
-      <option value="">— pick a run —</option>
-      ${runs.map((a) => html`<option value=${a.id}>#${a.id} · ${a.igt || a.rta || "?"}
+      <option value="">${placeholder}</option>
+      ${runs.map((a) => html`<option value=${a.id}>${a.igt || a.rta || "?"} · #${a.id}
         ${a.strat_tag ? `· ${a.strat_tag}` : ""}</option>`)}
     </select>
   </div>`;
@@ -157,9 +173,12 @@ export function Compare({ t, intent, clearIntent }) {
   const [strat, setStrat] = useState(null);
   const [attemptId, setAttemptId] = useState(null);
   const [cmp, setCmp] = useState({ saved: [], suggestion: null });
+  const [availSet, setAvailSet] = useState(null); // replayable attempt ids (null = loading)
   const deepLinked = useRef(false);
 
-  // load the lifetime session view once (left-side picker source)
+  // load the lifetime session view once (left-side picker source), and the set
+  // of currently-replayable runs — recomputed on every open because the ring
+  // shifts, so runs that aged out of the buffer (and were never saved) drop off.
   useEffect(() => {
     getJSON("/api/session?scope=lifetime").then((v) => {
       setView(v);
@@ -169,6 +188,9 @@ export function Compare({ t, intent, clearIntent }) {
         : tgt.course_id != null ? `star:${tgt.course_id}:${tgt.star_id}` : null;
       if (!intent) setEntity(def);
     }).catch(() => {});
+    getJSON("/api/replay/available")
+      .then((r) => setAvailSet(new Set(r.available)))
+      .catch(() => setAvailSet(new Set()));
   }, []);
 
   // apply a deep-link intent (Compare button from Practice)
@@ -222,7 +244,7 @@ export function Compare({ t, intent, clearIntent }) {
       <div class="compare-col">
         <div class="meta listhead">My run</div>
         <${MyRunPicker} view=${view} entity=${entity} attemptId=${attemptId}
-          onPick=${pickRun} />
+          onPick=${pickRun} available=${availSet} />
         <${MyRunStage} attemptId=${attemptId} controller=${controller} />
       </div>
       <div class="compare-center">

@@ -164,6 +164,49 @@ class ReplayService:
         matches = sorted(root.rglob(f"attempt_{attempt_id:04d}_*.mp4"))
         return matches[0] if matches else None
 
+    def _saved_attempt_ids(self) -> set[int]:
+        """One walk of the save tree -> the set of attempt ids that have a
+        saved clip (the filename carries the id: attempt_<id>_...). Bulk form
+        of find_saved for available_attempt_ids — avoids a glob per attempt."""
+        root = self.cfg.save_root
+        if not root.exists():
+            return set()
+        ids: set[int] = set()
+        for p in root.rglob("attempt_*.mp4"):
+            m = re.match(r"attempt_(\d+)_", p.name)
+            if m:
+                ids.add(int(m.group(1)))
+        return ids
+
+    def available_attempt_ids(self) -> list[int]:
+        """Attempt ids whose replay is obtainable RIGHT NOW: a saved clip on
+        disk, an already-extracted scratch clip, OR fully inside the live ring
+        (extractable on demand — clicking runs the same view() extraction).
+
+        The ring evicts old footage as it fills, so buffer coverage shifts over
+        time; the Compare page recomputes this on every open so runs that have
+        aged out of the buffer (and were never saved) drop off the picker
+        instead of 409-ing 'no footage' on click. A run is buffer-covered only
+        when the ring FULLY contains its span (start included) — a run whose
+        beginning was already evicted would extract to a broken partial clip,
+        so it counts as unavailable."""
+        if self.tracker.db is None:
+            return []
+        saved_ids = self._saved_attempt_ids()
+        cov = self.recorder.ring.coverage("video")
+        buf_start, buf_end = cov if cov else (None, None)
+        out: list[int] = []
+        for a in self.tracker.db.attempts():
+            if (a.id in saved_ids
+                    or (self.clips_dir / _CLIP_NAME.format(id=a.id)).exists()):
+                out.append(a.id)
+                continue
+            if (buf_start is not None and a.started_utc and a.ended_utc
+                    and buf_start <= _parse_utc(a.started_utc)
+                    and _parse_utc(a.ended_utc) <= buf_end):
+                out.append(a.id)
+        return out
+
     @staticmethod
     def _saved_meta(saved: Path) -> dict:
         """Sidecar metadata for a saved clip. Files saved before sidecars

@@ -42,6 +42,13 @@ def create_replay_router(replay) -> APIRouter:
     def get_settings():
         return replay.settings()
 
+    @router.get("/replay/available")
+    def available():
+        # Attempt ids replayable right now (saved on disk OR covered by the live
+        # ring). The Compare tab calls this on open to list only runs that will
+        # actually extract — recomputed each time as the ring shifts.
+        return {"available": replay.available_attempt_ids()}
+
     @router.put("/replay/settings")
     def put_settings(body: SettingsBody):
         try:
