@@ -277,40 +277,35 @@ export function Compare({ t, intent, clearIntent, active }) {
   const [openSet, setOpenSet] = useState(() => new Set());   // comparison ids shown now
   const [myIn, setMyIn] = useState(0);             // My Run work-area (in-memory)
   const [myOut, setMyOut] = useState(null);
-  const deepLinked = useRef(false);
   const initialized = useRef(false);
   const autoLoaded = useRef(new Set());            // combos whose default was auto-loaded
 
-  // (re)load the view + replayable-run set whenever the tab becomes active — the
-  // buffer shifts, so the feed/availability refresh on each open. We do NOT pick
-  // a default run/entity: on a fresh load the right side stays empty until YOU
-  // pick a run from the feed; then that run's saved comparisons load.
-  useEffect(() => {
-    if (!active) return;
-    initialized.current = true;
-    getJSON("/api/session?scope=lifetime").then((v) => setView(v)).catch(() => {});
+  // (re)load the feed + replayable-run set. We do NOT pick a default run/entity:
+  // on a fresh load the right side stays empty until YOU pick a run. Refreshed
+  // when the tab becomes active AND whenever the store sees a new run
+  // (t.view changes) — so the feed updates in REAL TIME as you play. This never
+  // touches entity/strat/openSet, so the loaded comparison is left alone.
+  const refreshFeed = () => {
+    getJSON("/api/session?scope=lifetime").then(setView).catch(() => {});
     getJSON("/api/replay/available")
       .then((r) => setAvailSet(new Set(r.available)))
       .catch(() => setAvailSet(new Set()));
+  };
+  useEffect(() => {
+    if (!active) return;
+    initialized.current = true;
+    refreshFeed();
   }, [active]);
+  useEffect(() => {
+    if (active && initialized.current) refreshFeed();
+  }, [t.view]);
 
   // deep-link intent (Compare button from Practice) — sets entity+strat+run
   useEffect(() => {
     if (!intent) return;
     setEntity(intent.entity); setStrat(intent.strat); setAttemptId(intent.attemptId);
-    deepLinked.current = true;
     clearIntent();
   }, [intent]);
-
-  // resolve the strat from the section when entity changes by plain browsing;
-  // skip once right after a deep-link / feed pick (which set the strat itself)
-  useEffect(() => {
-    if (!view || !entity) return;
-    if (deepLinked.current) { deepLinked.current = false; return; }
-    const secs = [...(view.stars || []), ...(view.segments || [])];
-    const sec = secs.find((s) => entityOf(s) === entity);
-    if (sec) setStrat(sec.last_strat || null);
-  }, [entity, view]);
 
   // My Run's start/end persist PER ATTEMPT (localStorage) — configure a run once
   // and it's restored (the playhead opens at the saved start) on every reload.
@@ -398,9 +393,12 @@ export function Compare({ t, intent, clearIntent, active }) {
   }
   // picking a run from the feed sets its entity + strategy (so the matching
   // comparison auto-loads) + the run itself
+  // pick a run: set its entity + strategy + the run. Same (entity, strategy) as
+  // already loaded → setEntity/setStrat are no-ops (unchanged values), so the
+  // comparison's reload/openSet effects don't fire — the right side is untouched.
   function pickRun(ent, s, aid) {
     setEntity(ent);
-    if (s !== undefined) { setStrat(s || null); deepLinked.current = true; }
+    if (s !== undefined) setStrat(s || null);
     setAttemptId(aid == null ? null : aid);
   }
 
@@ -434,7 +432,7 @@ export function Compare({ t, intent, clearIntent, active }) {
       <div class="compare-col">
         <div class="meta listhead cmp-head">Comparison
           <${StrategySelect} strategies=${entityStrategies} value=${strat || ""}
-            onChange=${(s) => { setStrat(s || null); deepLinked.current = true; }} />
+            onChange=${(s) => setStrat(s || null)} />
         </div>
         ${shown.map((c) => html`<${ComparisonStage} key=${c.id} comp=${c}
           controller=${controller} onEdit=${editCmp} onDelete=${closeComp} />`)}
