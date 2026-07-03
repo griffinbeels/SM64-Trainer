@@ -134,6 +134,21 @@ export function WorkArea({ videoEl, inFrame, outFrame, onCommit }) {
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   }
+  // Set start/end to the video's CURRENT frame (use with frame-step for
+  // frame-exact markers). Clamped so start < end can never invert: a start
+  // past the end pins to end-1; an end before the start pins to start+1.
+  function setStart() {
+    if (!videoEl) return;
+    const ni = Math.max(0, Math.min(gameFrameOf(videoEl), outEff - 1));
+    setInF(ni);
+    if (onCommit) onCommit(ni, outF == null ? null : outF);
+  }
+  function setEnd() {
+    if (!videoEl) return;
+    const no = Math.min(maxF, Math.max(gameFrameOf(videoEl), inF + 1));
+    setOutF(no);
+    if (onCommit) onCommit(inF, no >= maxF ? null : no);
+  }
 
   const inPct = (inF / maxF) * 100;
   const outPct = (outEff / maxF) * 100;
@@ -145,7 +160,11 @@ export function WorkArea({ videoEl, inFrame, outFrame, onCommit }) {
       <div class="wa-handle" style=${`left:${outPct}%`}
            onpointerdown=${(e) => drag("out", e)} title="clip end"></div>
     </div>
-    <div class="meta wa-times">${(inF / 30).toFixed(2)}s – ${(outEff / 30).toFixed(2)}s
-      <span class="wa-total">/ ${(maxF / 30).toFixed(2)}s</span></div>
+    <div class="wa-row meta">
+      <button onclick=${setStart} title="set the clip start to the current frame">⇤ set start</button>
+      <span class="wa-times">${(inF / 30).toFixed(2)}s – ${(outEff / 30).toFixed(2)}s
+        <span class="wa-total">/ ${(maxF / 30).toFixed(2)}s</span></span>
+      <button onclick=${setEnd} title="set the clip end to the current frame">set end ⇥</button>
+    </div>
   </div>`;
 }
