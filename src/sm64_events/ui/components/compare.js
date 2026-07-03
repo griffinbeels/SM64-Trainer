@@ -285,8 +285,25 @@ export function Compare({ t, intent, clearIntent, active }) {
     if (sec) setStrat(sec.last_strat || null);
   }, [entity, view]);
 
-  // reset My Run's work-area when a different run is picked
-  useEffect(() => { setMyIn(0); setMyOut(null); }, [attemptId]);
+  // My Run's start/end persist PER ATTEMPT (localStorage) — configure a run once
+  // and it's restored (the playhead opens at the saved start) on every reload.
+  useEffect(() => {
+    if (attemptId == null) { setMyIn(0); setMyOut(null); return; }
+    let sync = { in: 0, out: null };
+    try {
+      const raw = localStorage.getItem(`sm64.compareRunSync.${attemptId}`);
+      if (raw) { const p = JSON.parse(raw); sync = { in: p.in || 0, out: p.out == null ? null : p.out }; }
+    } catch {}
+    setMyIn(sync.in); setMyOut(sync.out);
+  }, [attemptId]);
+  function saveMyRunSync(i, o) {
+    setMyIn(i); setMyOut(o);
+    if (attemptId != null) {
+      try {
+        localStorage.setItem(`sm64.compareRunSync.${attemptId}`, JSON.stringify({ in: i, out: o }));
+      } catch {}
+    }
+  }
 
   const reloadCmp = () => {
     if (!entity) return;
@@ -326,8 +343,7 @@ export function Compare({ t, intent, clearIntent, active }) {
       <div class="compare-col">
         <div class="meta listhead">My run</div>
         <${MyRun} attemptId=${attemptId} controller=${controller}
-          inFrame=${myIn} outFrame=${myOut}
-          onSync=${(i, o) => { setMyIn(i); setMyOut(o); }} />
+          inFrame=${myIn} outFrame=${myOut} onSync=${saveMyRunSync} />
       </div>
       <div class="compare-center">
         <${Transport} controller=${controller} />

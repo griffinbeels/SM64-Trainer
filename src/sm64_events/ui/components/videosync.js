@@ -11,6 +11,31 @@ import { gameFrameOf } from "../frame.js";
 
 const html = htm.bind(h);
 
+// ONE global audio setting (mute + volume) shared by EVERY synced video and
+// persisted across sessions/restarts (localStorage). Adjusting any video's
+// control changes it everywhere; default is on at half volume.
+const AUDIO_KEY = "sm64.compareAudio";
+function loadAudio() {
+  try {
+    const a = JSON.parse(localStorage.getItem(AUDIO_KEY));
+    if (a && typeof a.vol === "number")
+      return { vol: Math.min(1, Math.max(0, a.vol)), muted: !!a.muted };
+  } catch {}
+  return { vol: 0.5, muted: false };
+}
+let AUDIO = loadAudio();
+const audioSubs = new Set();
+function setSharedAudio(next) {
+  AUDIO = next;
+  try { localStorage.setItem(AUDIO_KEY, JSON.stringify(next)); } catch {}
+  audioSubs.forEach((fn) => fn(next));   // fan out to every mounted VideoStage
+}
+function useSharedAudio() {
+  const [a, setA] = useState(AUDIO);
+  useEffect(() => { audioSubs.add(setA); return () => audioSubs.delete(setA); }, []);
+  return a;
+}
+
 export function useSyncController() {
   const stages = useRef(new Map());   // id -> { el, getInFrame }
   const [playing, setPlaying] = useState(false);
@@ -70,19 +95,26 @@ export function useSyncController() {
 export function VideoStage({ src, inFrame, controller, id, onEl }) {
   const ref = useRef(null);
   const inRef = useRef(inFrame || 0);
-  // independent per-video audio: default ON at half volume, adjustable/mutable
-  // WITHOUT affecting any other stage (each VideoStage owns its own vol/mute).
-  const [vol, setVol] = useState(0.5);
-  const [muted, setMuted] = useState(false);
+  const audio = useSharedAudio();          // ONE shared, persisted setting
   useEffect(() => { inRef.current = inFrame || 0; }, [inFrame]);
   useEffect(() => () => controller.unregister(id), [id]);
   useEffect(() => {
-    if (ref.current) { ref.current.volume = vol; ref.current.muted = muted; }
-  }, [vol, muted]);
+    if (ref.current) { ref.current.volume = audio.vol; ref.current.muted = audio.muted; }
+  }, [audio.vol, audio.muted]);
+  // open the playhead AT the saved in-point (default 0) on load / src change,
+  // so a re-loaded video starts exactly where its saved start marker is
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const seekIn = () => { el.currentTime = (inRef.current + 0.5) / 30; };
+    el.addEventListener("loadedmetadata", seekIn);
+    if (el.readyState >= 1) seekIn();
+    return () => el.removeEventListener("loadedmetadata", seekIn);
+  }, [src]);
   const setRef = useCallback((el) => {
     ref.current = el;
     controller.register(id, el, () => inRef.current);
-    if (el) { el.volume = 0.5; el.muted = false; }   // initial; live changes via the effect
+    if (el) { el.volume = AUDIO.vol; el.muted = AUDIO.muted; }   // current global
     if (onEl) onEl(el);
   }, [id, controller.register, onEl]);
   // clicking the video toggles play/pause for EVERY synced stage
@@ -90,10 +122,10 @@ export function VideoStage({ src, inFrame, controller, id, onEl }) {
     <video class="replay-player" style="width:100%;cursor:pointer" preload="auto"
         src=${src} playsinline ref=${setRef} onclick=${() => controller.toggle()}></video>
     <div class="vaudio">
-      <button class="meta" title=${muted ? "unmute" : "mute"}
-        onclick=${() => setMuted(!muted)}>${muted ? "🔇" : "🔊"}</button>
-      <input type="range" min="0" max="1" step="0.05" value=${vol} title="volume"
-        oninput=${(e) => setVol(Number(e.target.value))} />
+      <button class="meta" title=${audio.muted ? "unmute (all videos)" : "mute (all videos)"}
+        onclick=${() => setSharedAudio({ ...AUDIO, muted: !AUDIO.muted })}>${audio.muted ? "🔇" : "🔊"}</button>
+      <input type="range" min="0" max="1" step="0.05" value=${audio.vol} title="volume (all videos)"
+        oninput=${(e) => setSharedAudio({ ...AUDIO, vol: Number(e.target.value) })} />
     </div>
   </div>`;
 }

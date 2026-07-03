@@ -46,6 +46,30 @@ def test_import_job_completes_and_inserts_row(tmp_path):
     assert db.comparisons("star:7:0", "Ledgegrab")[0]["name"] == "mine"
 
 
+def test_reimport_same_source_reuses_row(tmp_path):
+    # adding the same video again (same entity+strat+source) must REUSE the
+    # existing comparison (keeping its saved trim), not insert a duplicate.
+    svc, db, cache = _svc(tmp_path)
+    src = tmp_path / "v.mp4"; src.write_bytes(b"raw")
+
+    def run(name):
+        job = svc.start_import("star:7:0", "L", name, "file", str(src))
+        for _ in range(100):
+            st = svc.import_status(job)
+            if st["state"] in ("done", "error"):
+                break
+            time.sleep(0.02)
+        return st
+
+    st1 = run("first")
+    st2 = run("second")
+    assert st1["state"] == "done" and st2["state"] == "done"
+    rows = db.comparisons("star:7:0", "L")
+    assert len(rows) == 1                                # no duplicate
+    assert st2["comparison"]["id"] == st1["comparison"]["id"]
+    assert st2["comparison"]["name"] == "first"          # kept the original row
+
+
 def test_import_error_reported(tmp_path):
     svc, db, cache = _svc(tmp_path)
     job = svc.start_import("star:7:0", "L", "x", "file",

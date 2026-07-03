@@ -89,15 +89,24 @@ class CompareService:
             job["progress"] = frac; job["message"] = msg
 
         try:
-            cache_name = produce(progress)
-            now = _iso_now()
-            cid = self.tracker.db.insert_comparison(
-                entity_key, strat, name, source_kind, source_ref, cache_name,
-                now, now)
-            row = next(c for c in self.tracker.db.comparisons(entity_key, strat)
-                       if c["id"] == cid)
+            db = self.tracker.db
+            # dedup: if this exact video is already a comparison for
+            # (entity, strat), REUSE it — keeps its saved in/out (trim) instead
+            # of inserting a duplicate. This is what makes re-adding a YouTube
+            # URL you've configured before come back with its saved start/end.
+            row = next((c for c in db.comparisons(entity_key, strat)
+                        if c["source_ref"] == source_ref), None)
+            if row is not None:
+                progress(1.0, "already added")
+            else:
+                cache_name = produce(progress)
+                now = _iso_now()
+                cid = db.insert_comparison(entity_key, strat, name, source_kind,
+                                           source_ref, cache_name, now, now)
+                row = next(c for c in db.comparisons(entity_key, strat)
+                           if c["id"] == cid)
             job["comparison"] = {**row,
-                                 "clip_url": f"/api/compare/cache/{cache_name}"}
+                                 "clip_url": f"/api/compare/cache/{row['cache_name']}"}
             job["progress"] = 1.0; job["message"] = "done"
             job["state"] = "done"
         except Exception as e:
