@@ -22,7 +22,6 @@ import { useEffect } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
 import { RankDisc } from "./ranks.js";
-import { GoldStar } from "./goldstar.js";
 
 const html = htm.bind(h);
 
@@ -49,13 +48,9 @@ const segsForLevel = (v, level) =>
 
 // StarRow look flags — flip during the human-audit playtest to taste. Kept as
 // constants (not props) so the call site below stays a single readable line.
-// Star slots 0..STAR_IMG_COUNT-1 use the PNG art `ui/assets/star_{n}.png`
-// (n = slot+1). Any slot beyond it — e.g. the 100-coin star at index 6, for
-// which there is no art — falls back to the drawn GoldStar, so STAR_SHADED /
-// STAR_EYES now only affect that fallback.
+// Each star slot shows PNG art `ui/assets/star_{n}.png`; the slot index is
+// clamped to STAR_IMG_COUNT, so the 100-coin/7th slot reuses star_6.
 const STAR_IMG_COUNT = 6;    // star_1.png .. star_6.png in ui/assets/
-const STAR_SHADED = true;    // (fallback star) false = flat single-tone gold
-const STAR_EYES = false;     // (fallback star) SM64 sleeping-eyes on idle
 const STAR_DIM_IDLE = true;  // false = every star equally bright
 const STAR_NUMBERS = true;   // false = hide the 1..N labels above the stars
 
@@ -93,11 +88,9 @@ function StarRow({ t, v, stage }) {
                             title=${name} onclick=${() => pick(i)}>
           ${STAR_NUMBERS ? html`<span class="starnum">${i + 1}</span>` : ""}
           <span class="starholder">
-            ${i < STAR_IMG_COUNT
-              ? html`<img class="starimg ${STAR_DIM_IDLE && !active ? "dim" : ""}"
-                          src=${`/ui/assets/star_${i + 1}.png`} alt="" draggable="false" />`
-              : html`<${GoldStar} size="100%" shaded=${STAR_SHADED} active=${active}
-                          dim=${STAR_DIM_IDLE && !active} eyes=${STAR_EYES && !active} />`}
+            <img class="starimg ${STAR_DIM_IDLE && !active ? "dim" : ""}"
+                 src=${`/ui/assets/star_${Math.min(i + 1, STAR_IMG_COUNT)}.png`}
+                 alt="" draggable="false" />
             ${rank ? html`<span class="starmedal"><${RankDisc} rank=${rank} /></span>` : ""}
           </span>
           <span class="starname">${name}</span>
