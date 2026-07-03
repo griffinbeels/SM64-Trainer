@@ -29,9 +29,9 @@ export function useSyncController() {
 
   // master frame = the first stage's game frame minus its own in-point
   const masterFrame = () => {
-    const first = stages.current.values().next().value;
-    if (!first || !first.el) return 0;
-    return Math.max(0, gameFrameOf(first.el) - (first.getInFrame() || 0));
+    const m = stages.current.get("mine") || stages.current.values().next().value;
+    if (!m || !m.el) return 0;
+    return Math.max(0, gameFrameOf(m.el) - (m.getInFrame() || 0));
   };
 
   const seekAll = (master) => {

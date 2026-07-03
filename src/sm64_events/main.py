@@ -1,14 +1,15 @@
 # src/sm64_events/main.py
 """Composition root: registry -> memory -> poller -> detectors -> tracking -> app."""
 import logging
+import shutil
 import sys
 
 from sm64_events.core.logging_setup import configure_logging
-from sm64_events.core.paths import (bundled_ffmpeg, db_path, instance_lock_path,
-                                    migrate_legacy_data_dir, server_port)
+from sm64_events.core.paths import (bundled_ffmpeg, compare_cache_dir, db_path,
+                                    instance_lock_path, migrate_legacy_data_dir,
+                                    server_port)
 from sm64_events.compare.importer import VideoImporter
 from sm64_events.compare.service import CompareService
-from sm64_events.core.paths import compare_cache_dir
 from sm64_events.core.updater import UpdateService
 from sm64_events.core.version import __version__
 from sm64_events.detectors.anchors import AnchorDetector
@@ -124,7 +125,7 @@ def build():
     # into the content cache, then serve them as plain clips. Only built when
     # ffmpeg is available (same binary the replay sink uses).
     compare = None
-    _ffmpeg_bin = bundled_ffmpeg() or __import__("shutil").which("ffmpeg")
+    _ffmpeg_bin = bundled_ffmpeg() or shutil.which("ffmpeg")
     if db is not None and _ffmpeg_bin:
         importer = VideoImporter(compare_cache_dir(), _ffmpeg_bin)
         compare = CompareService(importer, service, broadcaster,
