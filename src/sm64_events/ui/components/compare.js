@@ -167,7 +167,7 @@ function ComparisonStage({ comp, controller, onEdit, onDelete }) {
 
 // Video-sized drop zone (drag-drop / browse / rank-standard Load / YouTube URL).
 function AddComparison({ entity, strat, strategies, suggestion, onAdded, hasVideos,
-                        library, onAdopt }) {
+                        existing, onExisting }) {
   const [job, setJob] = useState(null);
   const [url, setUrl] = useState("");
   const [over, setOver] = useState(false);
@@ -201,7 +201,7 @@ function AddComparison({ entity, strat, strategies, suggestion, onAdded, hasVide
       try {
         const s = await getJSON(`/api/compare/import/${jobId}`);
         setJob(s);
-        if (s.state === "done") { clearInterval(pollRef.current); pollRef.current = null; setJob(null); onAdded(); }
+        if (s.state === "done") { clearInterval(pollRef.current); pollRef.current = null; setJob(null); onAdded(s.comparison && s.comparison.id); }
         else if (s.state === "error") { clearInterval(pollRef.current); pollRef.current = null; }
       } catch { clearInterval(pollRef.current); pollRef.current = null; }
     }, 800);
@@ -238,11 +238,12 @@ function AddComparison({ entity, strat, strategies, suggestion, onAdded, hasVide
               oninput=${(e) => setUrl(e.target.value)} />
             <button disabled=${!url} onclick=${() => startImport("youtube", url, url)}>Load video</button>
           </div>
-          ${library && library.length > 0 ? html`<div class="cd-existing meta">or load existing:
+          ${existing && existing.length > 0 ? html`<div class="cd-existing meta">or load a saved comparison:
             <select onchange=${(e) => { const v = e.target.value; e.target.value = "";
-                if (v) onAdopt(Number(v)); }}>
-              <option value="">— a saved comparison —</option>
-              ${library.map((l) => html`<option value=${l.id}>${l.name || "video"}${l.strat ? ` (${l.strat})` : ""}</option>`)}
+                const it = existing.find((x) => String(x.id) === v);
+                if (it) onExisting(it); }}>
+              <option value="">— pick one —</option>
+              ${existing.map((l) => html`<option value=${l.id}>${l.name || "video"}${l.strat && l.strat !== strat ? ` (${l.strat})` : ""}</option>`)}
             </select></div>` : null}
           ${job && job.state === "error" && html`<div class="badx">import failed: ${job.message}</div>`}
         </div>`}
@@ -271,6 +272,7 @@ export function Compare({ t, intent, clearIntent, active }) {
   const [strat, setStrat] = useState(null);
   const [attemptId, setAttemptId] = useState(null);
   const [cmp, setCmp] = useState({ saved: [], suggestion: null, library: [] });
+  const [openSet, setOpenSet] = useState(() => new Set());   // comparison ids shown now
   const [myIn, setMyIn] = useState(0);             // My Run work-area (in-memory)
   const [myOut, setMyOut] = useState(null);
   const deepLinked = useRef(false);
@@ -278,22 +280,13 @@ export function Compare({ t, intent, clearIntent, active }) {
   const autoLoaded = useRef(new Set());            // combos whose default was auto-loaded
 
   // (re)load the view + replayable-run set whenever the tab becomes active — the
-  // buffer shifts, so the feed/availability refresh on each open. The default
-  // entity is chosen only on the FIRST activation (later activations keep the
-  // user's selection — that's what makes the comparison persist across tabs).
+  // buffer shifts, so the feed/availability refresh on each open. We do NOT pick
+  // a default run/entity: on a fresh load the right side stays empty until YOU
+  // pick a run from the feed; then that run's saved comparisons load.
   useEffect(() => {
     if (!active) return;
-    const first = !initialized.current;
     initialized.current = true;
-    getJSON("/api/session?scope=lifetime").then((v) => {
-      setView(v);
-      if (first && !intent) {
-        const tgt = v.target || {};
-        const def = tgt.kind === "segment" ? `segment:${tgt.segment_id}`
-          : tgt.course_id != null ? `star:${tgt.course_id}:${tgt.star_id}` : null;
-        if (def) setEntity(def);
-      }
-    }).catch(() => {});
+    getJSON("/api/session?scope=lifetime").then((v) => setView(v)).catch(() => {});
     getJSON("/api/replay/available")
       .then((r) => setAvailSet(new Set(r.available)))
       .catch(() => setAvailSet(new Set()));
@@ -345,7 +338,25 @@ export function Compare({ t, intent, clearIntent, active }) {
   };
   useEffect(reloadCmp, [entity, strat]);
 
-  // shared import + poll (used by the rank-standard auto-load)
+  // The OPEN SET (which saved comparisons are shown) is remembered per combo in
+  // localStorage: opening a run reloads the last set you had open; closing (×)
+  // keeps the comparison saved so you can re-open it from "load existing".
+  const openKey = entity ? `sm64.compareOpen.${entity}|${strat || ""}` : null;
+  useEffect(() => {
+    if (!openKey) { setOpenSet(new Set()); return; }
+    let ids = [];
+    try { const raw = localStorage.getItem(openKey); if (raw) ids = JSON.parse(raw); } catch {}
+    setOpenSet(new Set(ids));
+  }, [openKey]);
+  const persistOpen = (next) => {
+    if (openKey) { try { localStorage.setItem(openKey, JSON.stringify([...next])); } catch {} }
+  };
+  const openComp = (id) => { if (id == null) return;
+    setOpenSet((prev) => { const n = new Set(prev); n.add(id); persistOpen(n); return n; }); };
+  const closeComp = (id) => {
+    setOpenSet((prev) => { const n = new Set(prev); n.delete(id); persistOpen(n); return n; }); };
+
+  // shared import + poll (rank-standard auto-load below); OPENS the new comparison
   function importAndReload(source_kind, source_ref, name, useStrat) {
     send("POST", "/api/compare/import",
       { entity_key: entity, strat: useStrat != null ? useStrat : (strat || ""),
@@ -354,33 +365,33 @@ export function Compare({ t, intent, clearIntent, active }) {
         const id = setInterval(async () => {
           try {
             const s = await getJSON(`/api/compare/import/${r.job_id}`);
-            if (s.state === "done") { clearInterval(id); reloadCmp(); }
+            if (s.state === "done") { clearInterval(id);
+              if (s.comparison) openComp(s.comparison.id); reloadCmp(); }
             else if (s.state === "error") clearInterval(id);
           } catch { clearInterval(id); }
         }, 800);
       }).catch(() => {});
   }
-  // auto-load the rank-standard DEFAULT when a combo has no saved comparison,
-  // so every star+strategy has at least one example (materialized lazily, once)
+  // auto-load the rank-standard DEFAULT only for a FRESH combo (never configured —
+  // no open-set saved), so every star+strategy gets one example the first time you
+  // open it; a combo you emptied on purpose stays empty.
   useEffect(() => {
-    if (!entity || cmp.saved.length > 0 || !cmp.suggestion) return;
-    const key = `${entity}|${strat || ""}`;
-    if (autoLoaded.current.has(key)) return;
-    autoLoaded.current.add(key);
+    if (!entity || !openKey || !cmp.suggestion) return;
+    if (cmp.entity !== entity || (cmp.strat || "") !== (strat || "")) return;  // stale cmp
+    if (autoLoaded.current.has(openKey)) return;
+    if (localStorage.getItem(openKey) != null) return;      // already configured
+    autoLoaded.current.add(openKey);
     importAndReload(cmp.suggestion.source_kind, cmp.suggestion.source_ref,
       cmp.suggestion.name, cmp.suggestion.strat);
-  }, [cmp, entity, strat]);
+  }, [cmp, entity, strat, openKey]);
 
   async function editCmp(id, pts) {
     await send("PUT", `/api/compare/videos/${id}`, pts);   // auto-save in/out
     reloadCmp();
   }
-  async function delCmp(id) {
-    await send("DELETE", `/api/compare/videos/${id}`);
-    reloadCmp();
-  }
-  async function adoptExisting(sourceId) {                  // "load existing"
-    await send("POST", "/api/compare/adopt", { source_id: sourceId, strat: strat || "" });
+  async function adoptExisting(sourceId) {                  // pull an other-strat video in
+    const row = await send("POST", "/api/compare/adopt", { source_id: sourceId, strat: strat || "" });
+    if (row && row.id != null) openComp(row.id);
     reloadCmp();
   }
   // picking a run from the feed sets its entity + strategy (so the matching
@@ -392,8 +403,16 @@ export function Compare({ t, intent, clearIntent, active }) {
   }
 
   if (!view) return html`<p class="meta">loading…</p>`;
-  const shown = cmp.saved;
   const suggestion = cmp.suggestion || null;
+  const shown = cmp.saved.filter((c) => openSet.has(c.id));         // only the OPEN set
+  // "load existing": your saved comparisons that aren't currently open — this
+  // strat's closed ones (re-open), plus other strats' (adopt into this strat).
+  const existing = [
+    ...cmp.saved.filter((c) => !openSet.has(c.id))
+      .map((c) => ({ id: c.id, name: c.name, strat: c.strat, adopt: false })),
+    ...cmp.library.map((c) => ({ id: c.id, name: c.name, strat: c.strat, adopt: true })),
+  ];
+  const onExisting = (item) => item.adopt ? adoptExisting(item.id) : openComp(item.id);
   // the entity's strategies (for the per-video + add-zone dropdowns)
   const curSec = [...(view.stars || []), ...(view.segments || [])]
     .find((s) => entityOf(s) === entity);
@@ -416,10 +435,11 @@ export function Compare({ t, intent, clearIntent, active }) {
             onChange=${(s) => { setStrat(s || null); deepLinked.current = true; }} />
         </div>
         ${shown.map((c) => html`<${ComparisonStage} key=${c.id} comp=${c}
-          controller=${controller} onEdit=${editCmp} onDelete=${delCmp} />`)}
+          controller=${controller} onEdit=${editCmp} onDelete=${closeComp} />`)}
         <${AddComparison} entity=${entity} strat=${strat} strategies=${entityStrategies}
-          suggestion=${suggestion} onAdded=${reloadCmp} hasVideos=${shown.length > 0}
-          library=${cmp.library} onAdopt=${adoptExisting} />
+          suggestion=${suggestion} hasVideos=${shown.length > 0}
+          onAdded=${(id) => { if (id != null) openComp(id); reloadCmp(); }}
+          existing=${existing} onExisting=${onExisting} />
       </div>
     </div>
   </div>`;
