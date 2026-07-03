@@ -22,21 +22,6 @@ export function Medal({ rank, size = 18 }) {
   </span>`;
 }
 
-// Scalable rank disc — same colors as Medal but drawn as SVG, so it fills (and
-// scales with) its container instead of a fixed px box. Used to overlay a rank
-// badge centered on a star (stagebanner.js StarRow), where the star itself
-// scales with the pane. The caller's wrapper owns positioning + pointer-events.
-export function RankDisc({ rank }) {
-  const bg = rankColor(rank), fg = FG[rank] || "#7e8796";
-  return html`<svg viewBox="0 0 100 100" width="100%" height="100%"
-      style="display:block" aria-hidden="true">
-    <circle cx="50" cy="50" r="45" fill=${bg}
-            stroke="rgba(255,255,255,.65)" stroke-width="6" />
-    <text x="50" y="52" text-anchor="middle" dominant-baseline="central"
-          font-size="56" font-weight="700" fill=${fg}>${rank ? "★" : "–"}</text>
-  </svg>`;
-}
-
 // Sentinel wording (server sends {rank:null, reason}): a strategy is ranked
 // ONLY by times achieved with it, so "unranked" means no PB on THIS strat yet
 // (a PB on another strat doesn't count) — distinct from "pick a strat".

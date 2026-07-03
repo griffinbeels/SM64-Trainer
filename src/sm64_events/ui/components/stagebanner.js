@@ -21,7 +21,7 @@ import { h } from "preact";
 import { useEffect } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
-import { RankDisc } from "./ranks.js";
+import { Medal } from "./ranks.js";
 
 const html = htm.bind(h);
 
@@ -52,7 +52,6 @@ const segsForLevel = (v, level) =>
 // clamped to STAR_IMG_COUNT, so the 100-coin/7th slot reuses star_6.
 const STAR_IMG_COUNT = 6;    // star_1.png .. star_6.png in ui/assets/
 const STAR_DIM_IDLE = true;  // false = every star equally bright
-const STAR_NUMBERS = true;   // false = hide the 1..N labels above the stars
 
 function StarRow({ t, v, stage }) {
   const course = v.catalog.courses.find((c) => c.id === stage.course_id);
@@ -86,12 +85,12 @@ function StarRow({ t, v, stage }) {
         return html`<button key=${`${stage.course_id}:${i}`}
                             class="starcell ${active ? "active-star" : ""}"
                             title=${name} onclick=${() => pick(i)}>
-          ${STAR_NUMBERS ? html`<span class="starnum">${i + 1}</span>` : ""}
+          <span class="starnum">
+            ${rank ? html`<${Medal} rank=${rank} size=${16} />` : "–"}</span>
           <span class="starholder">
             <img class="starimg ${STAR_DIM_IDLE && !active ? "dim" : ""}"
                  src=${`/ui/assets/star_${Math.min(i + 1, STAR_IMG_COUNT)}.png`}
                  alt="" draggable="false" />
-            ${rank ? html`<span class="starmedal"><${RankDisc} rank=${rank} /></span>` : ""}
           </span>
           <span class="starname">${name}</span>
           <span class="starsub">
