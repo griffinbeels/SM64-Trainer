@@ -433,6 +433,17 @@ swapped (`SM64_UPDATE_FAKE=1` renders the popup in dev without a real
 release). The exe is unsigned, so the FIRST manual (browser) download trips
 SmartScreen; in-app updates don't (the app, not the browser, fetches the
 file). Code signing is the documented future fix.
+
+**yt-dlp must be `--collect-all`'d into the build (2026-07-02).** yt-dlp
+lazily imports its ~1800 site extractors by name (a string→module lookup),
+so PyInstaller's static analysis never sees them and the frozen exe raises
+`No module named yt_dlp.extractor...` at the FIRST comparison download — a
+failure invisible from source (dev has the full package on disk). Fix:
+`yt_dlp` is in `tools/build_exe.py`'s `COLLECT` list, which feeds
+`--collect-all` per entry (bundles every submodule + data file). Evidence:
+the Compare importer (`compare/importer.py`) is the only yt-dlp consumer and
+only runs at import time, so a broken bundle would slip past every test and
+first surface at a live YouTube import.
 - WASAPI loopback delivers nothing while the endpoint is idle: place PCM
   by wall clock; never assume a continuous stream.
 - AAC consumes EXACT 1024-sample frames: feeding rate//fps blocks (800 at

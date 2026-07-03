@@ -45,9 +45,11 @@ stage plays a past attempt by id through the same replay pipeline as the
 Replay tab, the right stage plays an imported comparison video — pulled
 from YouTube (via `yt-dlp`), a local file, or a browser upload, normalized
 to a local mp4 and cached — and one frame-accurate transport drives every
-stage in lockstep (play/pause/step/scrub). With nothing saved yet, Compare
-auto-loads the rank standard's example video for the active strategy. REST
-surface:
+stage in lockstep (play/pause, ±1-frame step, jump-to-start). Per-clip in/out
+sync-point sliders align the two videos; the shared transport itself has no
+drag-scrub. With nothing saved yet, Compare **suggests** the rank standard's
+example video for the active strategy (auto-selected, offered as a one-click
+**▸ Load** — nothing downloads or plays until you click it). REST surface:
 
 | Method | Path | Body / Query | Effect |
 |---|---|---|---|
