@@ -238,13 +238,15 @@ function AddComparison({ entity, strat, strategies, suggestion, onAdded, hasVide
               oninput=${(e) => setUrl(e.target.value)} />
             <button disabled=${!url} onclick=${() => startImport("youtube", url, url)}>Load video</button>
           </div>
-          ${existing && existing.length > 0 ? html`<div class="cd-existing meta">or load a saved comparison:
-            <select onchange=${(e) => { const v = e.target.value; e.target.value = "";
-                const it = existing.find((x) => String(x.id) === v);
-                if (it) onExisting(it); }}>
-              <option value="">— pick one —</option>
-              ${existing.map((l) => html`<option value=${l.id}>${l.name || "video"}${l.strat && l.strat !== strat ? ` (${l.strat})` : ""}</option>`)}
-            </select></div>` : null}
+          ${/* always present so you can keep loading more; empty = no options */""}
+          <div class="cd-existing meta">or load a saved comparison:
+            <select disabled=${!(existing && existing.length)}
+                onchange=${(e) => { const v = e.target.value; e.target.value = "";
+                  const it = (existing || []).find((x) => String(x.id) === v);
+                  if (it) onExisting(it); }}>
+              <option value="">${existing && existing.length ? "— pick one —" : "— none saved —"}</option>
+              ${(existing || []).map((l) => html`<option value=${l.id}>${l.name || "video"}${l.strat && l.strat !== strat ? ` (${l.strat})` : ""}</option>`)}
+            </select></div>
           ${job && job.state === "error" && html`<div class="badx">import failed: ${job.message}</div>`}
         </div>`}
     <input type="file" accept="video/*" style="display:none" ref=${fileRef}
