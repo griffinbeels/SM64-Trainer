@@ -302,7 +302,7 @@ function StarSection({ sec, t, ui, pinned, freshIds }) {
       <b>${sec.course_name} · ${sec.star_name}</b>
       <a href=${sec.links.ukikipedia} target="_blank">RTA Guide</a>
       ${sec.links.example && html`<a href=${sec.links.example} target="_blank">Example</a>`}
-      <select class="meta" value=${sec.last_strat || ""}
+      <select class="meta ${sec.last_strat ? "" : "needs-strat"}" value=${sec.last_strat || ""}
               onchange=${(e) => setStrat(e.target.value)}>
         <option value="">— no strat —</option>
         ${sec.strategies.map((s) => html`<option value=${s}>${s}</option>`)}

@@ -140,6 +140,13 @@
   @keyframes pbglow { from { box-shadow: 0 0 3px #ffd75f; } to { box-shadow: 0 0 10px #ffd75f; } }
   .pb-glow { border-color: #ffd75f; color: #ffd75f;
              animation: pbglow 0.9s ease-in-out infinite alternate; }
+  /* no-strat nudge: blink the strat selector red until a strategy is picked */
+  @keyframes needstrat {
+    0%, 100% { box-shadow: 0 0 4px #e0473e;  border-color: #e0473e; background: rgba(224,71,62,.10); }
+    50%      { box-shadow: 0 0 13px #ff4d42; border-color: #ff4d42; background: rgba(255,77,66,.28); }
+  }
+  .needs-strat { border-color: #e0473e; color: #ff8880;
+                 animation: needstrat 0.85s ease-in-out infinite; }
   /* progress-graph pick: one fading gold pulse lands the eye on the row */
   @keyframes rowflash { from { background: #3a321d; } to { background: transparent; } }
   .row-flash td { animation: rowflash 1.6s ease-out; }
