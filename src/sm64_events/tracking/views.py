@@ -726,5 +726,8 @@ def build_compare_view(db, ranks, entity: str, strat: str | None) -> dict:
     library = [{"id": c["id"], "name": c["name"], "strat": c["strat"],
                 "source_kind": c["source_kind"], "source_ref": c["source_ref"]}
                for c in db.comparisons(entity) if c["strat"] != strat]
+    # rank_source is the rank-standard URL for this strat whether or not it is
+    # already saved — the UI opens it by DEFAULT (opt-out) when nothing is open.
     return {"entity": entity, "strat": strat, "saved": saved,
-            "suggestion": suggestion, "library": library}
+            "suggestion": suggestion, "library": library,
+            "rank_source": suggestion_url}

@@ -54,6 +54,20 @@ def test_no_suggestion_when_rank_video_already_saved_for_strat():
     assert v["suggestion"] is None
 
 
+def test_rank_source_present_even_when_saved_so_default_is_opt_out():
+    # rank_source drives the OPT-OUT default: the UI opens the rank standard when
+    # nothing's open, so it must be exposed even once the video is saved (unlike
+    # `suggestion`, which is add-zone-only and suppressed once saved).
+    db = _FakeDB([_row(id=5, strat="Ledgegrab", source_ref="https://youtu.be/std")])
+    v = build_compare_view(db, _FakeRanks("https://youtu.be/std"),
+                           "star:7:0", "Ledgegrab")
+    assert v["suggestion"] is None
+    assert v["rank_source"] == "https://youtu.be/std"
+
+
 def test_no_suggestion_when_no_ranks_or_no_strat():
     assert build_compare_view(_FakeDB([]), None, "star:7:0", "Ledgegrab")["suggestion"] is None
     assert build_compare_view(_FakeDB([]), _FakeRanks("x"), "star:7:0", None)["suggestion"] is None
+    # rank_source is likewise None without ranks or a strat
+    assert build_compare_view(_FakeDB([]), None, "star:7:0", "Ledgegrab")["rank_source"] is None
+    assert build_compare_view(_FakeDB([]), _FakeRanks("x"), "star:7:0", None)["rank_source"] is None

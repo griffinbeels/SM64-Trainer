@@ -278,7 +278,13 @@ export function Compare({ t, intent, clearIntent, active }) {
   const [myIn, setMyIn] = useState(0);             // My Run work-area (in-memory)
   const [myOut, setMyOut] = useState(null);
   const initialized = useRef(false);
-  const autoLoaded = useRef(new Set());            // combos whose default was auto-loaded
+  const autoLoaded = useRef(new Set());            // combos whose default was auto-opened this mount
+  // combos where the user CLOSED the rank-standard default (opt-out, persisted)
+  const rankOff = useRef(null);
+  if (rankOff.current === null) {
+    try { rankOff.current = new Set(JSON.parse(localStorage.getItem("sm64.compareRankOff")) || []); }
+    catch { rankOff.current = new Set(); }
+  }
 
   // (re)load the feed + replayable-run set. We do NOT pick a default run/entity:
   // on a fresh load the right side stays empty until YOU pick a run. Refreshed
@@ -338,7 +344,8 @@ export function Compare({ t, intent, clearIntent, active }) {
   // The OPEN SET (which saved comparisons are shown) is remembered per combo in
   // localStorage: opening a run reloads the last set you had open; closing (×)
   // keeps the comparison saved so you can re-open it from "load existing".
-  const openKey = entity ? `sm64.compareOpen.${entity}|${strat || ""}` : null;
+  const comboKey = entity ? `${entity}|${strat || ""}` : null;
+  const openKey = comboKey ? `sm64.compareOpen.${comboKey}` : null;
   useEffect(() => {
     if (!openKey) { setOpenSet(new Set()); return; }
     let ids = [];
@@ -348,10 +355,18 @@ export function Compare({ t, intent, clearIntent, active }) {
   const persistOpen = (next) => {
     if (openKey) { try { localStorage.setItem(openKey, JSON.stringify([...next])); } catch {} }
   };
+  const dismissRank = (k) => {                       // remember the opt-out across sessions
+    rankOff.current.add(k);
+    try { localStorage.setItem("sm64.compareRankOff", JSON.stringify([...rankOff.current])); } catch {}
+  };
   const openComp = (id) => { if (id == null) return;
     setOpenSet((prev) => { const n = new Set(prev); n.add(id); persistOpen(n); return n; }); };
   const closeComp = (id) => {
-    setOpenSet((prev) => { const n = new Set(prev); n.delete(id); persistOpen(n); return n; }); };
+    setOpenSet((prev) => { const n = new Set(prev); n.delete(id); persistOpen(n); return n; });
+    // closing the rank-standard video = opting OUT of the default for this combo
+    const c = cmp.saved.find((x) => x.id === id);
+    if (c && cmp.rank_source && c.source_ref === cmp.rank_source && comboKey) dismissRank(comboKey);
+  };
 
   // shared import + poll (rank-standard auto-load below); OPENS the new comparison
   function importAndReload(source_kind, source_ref, name, useStrat) {
@@ -369,18 +384,22 @@ export function Compare({ t, intent, clearIntent, active }) {
         }, 800);
       }).catch(() => {});
   }
-  // auto-load the rank-standard DEFAULT only for a FRESH combo (never configured —
-  // no open-set saved), so every star+strategy gets one example the first time you
-  // open it; a combo you emptied on purpose stays empty.
+  // Rank-standard is OPT-OUT: whenever a combo has nothing open and its strategy
+  // has a rank-standard example, open it by DEFAULT (open the saved copy, or
+  // import it if not saved yet). Closing that video opts out (persisted in
+  // rankOff); a combo with other videos open is left alone. autoLoaded guards
+  // the async import gap so it fires once per combo per mount.
   useEffect(() => {
-    if (!entity || !openKey || !cmp.suggestion) return;
+    if (!comboKey || !cmp.rank_source) return;
     if (cmp.entity !== entity || (cmp.strat || "") !== (strat || "")) return;  // stale cmp
-    if (autoLoaded.current.has(openKey)) return;
-    if (localStorage.getItem(openKey) != null) return;      // already configured
-    autoLoaded.current.add(openKey);
-    importAndReload(cmp.suggestion.source_kind, cmp.suggestion.source_ref,
-      cmp.suggestion.name, cmp.suggestion.strat);
-  }, [cmp, entity, strat, openKey]);
+    if (openSet.size > 0) return;                    // something already open
+    if (rankOff.current.has(comboKey)) return;       // user opted out of the default
+    if (autoLoaded.current.has(comboKey)) return;    // don't retrigger mid-import
+    autoLoaded.current.add(comboKey);
+    const saved = cmp.saved.find((c) => c.source_ref === cmp.rank_source);
+    if (saved) openComp(saved.id);
+    else importAndReload("youtube", cmp.rank_source, `${strat || ""} — rank standard`, strat);
+  }, [cmp, entity, strat, comboKey, openSet]);
 
   async function editCmp(id, pts) {
     await send("PUT", `/api/compare/videos/${id}`, pts);   // auto-save in/out
