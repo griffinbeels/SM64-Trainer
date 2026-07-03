@@ -262,8 +262,12 @@
   .vaudio { display:flex; align-items:center; gap:.4rem; margin-top:.2rem; }
   .vaudio button { padding:.05rem .35rem; }
   .vaudio input[type=range] { flex:1; min-width:0; max-width:180px; }
-  .compare-cmp { margin-bottom:.6rem; }
-  .compare-cmp .shead { display:flex; align-items:center; gap:.4rem; }
+  /* video title subheader (between the video and the audio row) */
+  .vcaption { text-align:center; margin:.15rem 0; overflow:hidden;
+              text-overflow:ellipsis; white-space:nowrap; }
+  .compare-cmp { margin-bottom:1rem; }
+  /* strategy selector next to the "Comparison" heading */
+  .cmp-head { display:flex; align-items:center; gap:.5rem; }
   .cmp-strat { max-width:12rem; }
 
   /* comparison add: a video-sized drop zone */

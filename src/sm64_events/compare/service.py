@@ -27,12 +27,31 @@ def _iso_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _youtube_title(url: str) -> str | None:
+    """Resolve a YouTube video's TITLE from its URL via the public oEmbed
+    endpoint (no API key, no download). Best-effort — returns None on any
+    failure so the import falls back to the URL as the name."""
+    import json
+    import urllib.parse
+    import urllib.request
+    try:
+        api = "https://www.youtube.com/oembed?" + urllib.parse.urlencode(
+            {"url": url, "format": "json"})
+        req = urllib.request.Request(api, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            return json.loads(r.read().decode()).get("title") or None
+    except Exception:
+        return None
+
+
 class CompareService:
-    def __init__(self, importer, tracker, broadcaster, cache_dir):
+    def __init__(self, importer, tracker, broadcaster, cache_dir,
+                 title_probe=_youtube_title):
         self.importer = importer
         self.tracker = tracker              # exposes .db and .ranks
         self.broadcaster = broadcaster
         self.cache_dir = cache_dir
+        self._title_probe = title_probe     # url -> title | None (injectable)
         self._jobs: dict[str, dict] = {}
 
     # -- queries -------------------------------------------------------------
@@ -99,6 +118,10 @@ class CompareService:
             if row is not None:
                 progress(1.0, "already added")
             else:
+                if source_kind == "youtube":         # nicer name than the URL
+                    title = self._title_probe(source_ref)
+                    if title:
+                        name = title
                 cache_name = produce(progress)
                 now = _iso_now()
                 cid = db.insert_comparison(entity_key, strat, name, source_kind,

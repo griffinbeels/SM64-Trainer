@@ -92,7 +92,7 @@ export function useSyncController() {
   return { register, unregister, play, pause, step, toStart, toggle, playing };
 }
 
-export function VideoStage({ src, inFrame, controller, id, onEl }) {
+export function VideoStage({ src, inFrame, controller, id, onEl, caption }) {
   const ref = useRef(null);
   const inRef = useRef(inFrame || 0);
   const audio = useSharedAudio();          // ONE shared, persisted setting
@@ -121,6 +121,7 @@ export function VideoStage({ src, inFrame, controller, id, onEl }) {
   return html`<div class="vstage">
     <video class="replay-player" style="width:100%;cursor:pointer" preload="auto"
         src=${src} playsinline ref=${setRef} onclick=${() => controller.toggle()}></video>
+    ${caption ? html`<div class="vcaption meta"><i>${caption}</i></div>` : null}
     <div class="vaudio">
       <button class="meta" title=${audio.muted ? "unmute (all videos)" : "mute (all videos)"}
         onclick=${() => setSharedAudio({ ...AUDIO, muted: !AUDIO.muted })}>${audio.muted ? "🔇" : "🔊"}</button>
@@ -135,7 +136,7 @@ export function VideoStage({ src, inFrame, controller, id, onEl }) {
 // draggable handles is the in/out. Dragging a handle scrub-seeks the video and,
 // on release, calls onCommit(inFrame, outFrame|null) so the caller can persist
 // it (null out = "to the end"). in/out are GAME frames (30 fps).
-export function WorkArea({ videoEl, inFrame, outFrame, onCommit }) {
+export function WorkArea({ videoEl, inFrame, outFrame, onCommit, extra }) {
   const [dur, setDur] = useState(0);
   const [inF, setInF] = useState(inFrame || 0);
   const [outF, setOutF] = useState(outFrame == null ? null : outFrame);
@@ -224,6 +225,7 @@ export function WorkArea({ videoEl, inFrame, outFrame, onCommit }) {
         title="set the clip start to the current frame">⇤ set start</button>
       <button class="meta" onclick=${setEnd}
         title="set the clip end to the current frame">set end ⇥</button>
+      ${extra || null}
     </div>
   </div>`;
 }

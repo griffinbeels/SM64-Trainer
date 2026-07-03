@@ -127,17 +127,20 @@ function StrategySelect({ strategies, value, onChange }) {
   </select>`;
 }
 
-function ComparisonStage({ comp, controller, strategies, onEdit, onDelete }) {
+// No header ABOVE the video, so the comparison video top-aligns with My Run.
+// Title (italic subheader) sits under the video; strategy moved to the section
+// header; the remove (×) button rides the work-area button row (after set end).
+function ComparisonStage({ comp, controller, onEdit, onDelete }) {
   const [videoEl, setVideoEl] = useState(null);
+  const caption = comp.name + (comp.strat ? ` · ${comp.strat}` : "");
   return html`<div class="compare-cmp">
-    <div class="shead"><b>${comp.name}</b>
-      <${StrategySelect} strategies=${strategies} value=${comp.strat}
-        onChange=${(s) => onEdit(comp.id, { strat: s })} />
-      <button class="meta" onclick=${() => onDelete(comp.id)} title="remove">×</button></div>
     <${VideoStage} id=${`cmp:${comp.id}`} src=${comp.clip_url}
-      inFrame=${comp.in_frame || 0} controller=${controller} onEl=${setVideoEl} />
+      inFrame=${comp.in_frame || 0} controller=${controller} onEl=${setVideoEl}
+      caption=${caption} />
     <${WorkArea} videoEl=${videoEl} inFrame=${comp.in_frame} outFrame=${comp.out_frame}
-      onCommit=${(i, o) => onEdit(comp.id, { in_frame: i, out_frame: o })} />
+      onCommit=${(i, o) => onEdit(comp.id, { in_frame: i, out_frame: o })}
+      extra=${html`<button class="meta" onclick=${() => onDelete(comp.id)}
+        title="remove this comparison">×</button>`} />
   </div>`;
 }
 
@@ -349,10 +352,12 @@ export function Compare({ t, intent, clearIntent, active }) {
         <${Transport} controller=${controller} />
       </div>
       <div class="compare-col">
-        <div class="meta listhead">Comparison</div>
+        <div class="meta listhead cmp-head">Comparison
+          <${StrategySelect} strategies=${entityStrategies} value=${strat || ""}
+            onChange=${(s) => { setStrat(s || null); deepLinked.current = true; }} />
+        </div>
         ${shown.map((c) => html`<${ComparisonStage} key=${c.id} comp=${c}
-          controller=${controller} strategies=${entityStrategies}
-          onEdit=${editCmp} onDelete=${delCmp} />`)}
+          controller=${controller} onEdit=${editCmp} onDelete=${delCmp} />`)}
         <${AddComparison} entity=${entity} strat=${strat} strategies=${entityStrategies}
           suggestion=${suggestion} onAdded=${reloadCmp} hasVideos=${shown.length > 0} />
       </div>

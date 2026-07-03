@@ -70,6 +70,30 @@ def test_reimport_same_source_reuses_row(tmp_path):
     assert st2["comparison"]["name"] == "first"          # kept the original row
 
 
+def test_youtube_import_uses_extracted_title_as_name(tmp_path):
+    cache = tmp_path / "cache"; cache.mkdir()
+
+    def runner(cmd):
+        open(cmd[-1], "wb").write(b"norm")
+
+    def fake_dl(ref, dest_dir):
+        p = dest_dir / "dl.mp4"; p.write_bytes(b"yt"); return p
+
+    imp = VideoImporter(cache, "ffmpeg", downloader=fake_dl, runner=runner)
+    db = Database(tmp_path / "t.db")
+    svc = CompareService(imp, _Tracker(db, _Ranks()), _Bc(), cache,
+                         title_probe=lambda url: "Cool Video Title")
+    job = svc.start_import("star:7:0", "L", "https://youtu.be/x", "youtube",
+                           "https://youtu.be/x")
+    for _ in range(100):
+        st = svc.import_status(job)
+        if st["state"] in ("done", "error"):
+            break
+        time.sleep(0.02)
+    assert st["state"] == "done", st
+    assert db.comparisons("star:7:0", "L")[0]["name"] == "Cool Video Title"
+
+
 def test_import_error_reported(tmp_path):
     svc, db, cache = _svc(tmp_path)
     job = svc.start_import("star:7:0", "L", "x", "file",
