@@ -269,7 +269,7 @@ Composed segments (LBLJ, pipe entries, Bowser fights) as first-class practice ta
 
 **Segment/replay boundary ownership.** An attempt's boundaries ARE its trigger events: `start_frame`/`started_utc` stamp the arming event (or the rebasing real anchor), `ended_utc` stamps the closing event, and the replay clip span is `started_utc → ended_utc` ± padding **by construction** (`replay/service.py _span`). When a clip or total time looks wrong, the boundary OWNER is the segment engine's arm bookkeeping — not the replay renderer; the 2026-06-12 "replay starts at the wrong door" reports were all stale/rebased `_Arm` state (menu warp eaten as echo; door echo re-arming through the arm phase). Debug order: journal → attempt row's started/ended → only then the ring.
 
-**Stage quick-select banner (2026-06-13/14; Bowser geography 2026-06-25).** A presentation-only consumer of the course/segment registries: `ui/components/stagebanner.js` offers one-click practice targets for wherever Mario stands. Context comes from a broadcast-only `stage_changed {course_id, level, area, mode}` event (`detectors/stage.py`) — a live signal, **never journaled** (fully recomputable from `curr_level`/`curr_area`, no historical-query value; cached on `TrackerService.current_stage` for initial page load). The single `mode` field is the dispatch: `stars` (a main course → its stars), `castle` (a Castle Inside subarea → that subarea's segments), `bowser_course` (BitDW/BitFS/BitS → the reds 8-coin star + the level's no-reds pipe-entry segment), `arena` (a Bowser 1/2/3 fight → the single fight segment, auto-selected), or `None` (no banner). Which segments a context offers is **derived from the definitions, not the matcher**: `views._segment_start_areas` reads the `to_subarea`/`area` trigger param names *statically* for the castle's per-SUBAREA offer (a bare "enter Castle Inside" never qualifies, so LBLJ stays lobby-only), and the parallel `views._segment_start_levels` reads the whole-LEVEL scope for the Bowser banners (pipe segments start in 17/19/21, fights in 30/33/34). The `segment_targets` payload now carries `enabled` + `start_levels` and includes DISABLED segments — the castle row filters `enabled` client-side, but the Bowser row shows a disabled pipe-entry segment so its **no-reds** click can ENABLE it (mutual exclusion: **reds** disables the pipe + targets the star, **no-reds** enables it + targets the segment). The banner answers "where does this *start*?" as a static value (no live `_pending` deferral like the matcher). The param-name coupling is pinned by `test_views.test_segment_banner_param_names_match_the_registry`. Auto-select (arenas) is client-side — the banner POSTs `/api/target`, keeping the detector pure/broadcast-only and browser↔GUI parity intact. Rules live in the `detectors/stage.py` docstring + `views.py` comments; the wire payload is in `docs/api.md`.
+**Stage quick-select banner (2026-06-13/14; Bowser geography 2026-06-25).** A presentation-only consumer of the course/segment registries: `ui/components/stagebanner.js` offers one-click practice targets for wherever Mario stands. Context comes from a broadcast-only `stage_changed {course_id, level, area, mode}` event (`detectors/stage.py`) — a live signal, **never journaled** (fully recomputable from `curr_level`/`curr_area`, no historical-query value; cached on `TrackerService.current_stage` for initial page load). The single `mode` field is the dispatch: `stars` (a main course → its stars), `castle` (a Castle Inside subarea → that subarea's segments), `bowser_course` (BitDW/BitFS/BitS → the reds 8-coin star + the level's no-reds pipe-entry segment), `arena` (a Bowser 1/2/3 fight → the single fight segment, auto-selected), or `None` (no banner). Which segments a context offers is **derived from the definitions, not the matcher**: `views._segment_start_areas` reads the `to_subarea`/`area` trigger param names *statically* for the castle's per-SUBAREA offer (a bare "enter Castle Inside" never qualifies, so LBLJ stays lobby-only), and the parallel `views._segment_start_levels` reads the whole-LEVEL scope for the Bowser banners (pipe segments start in 17/19/21, fights in 30/33/34). The `segment_targets` payload now carries `enabled` + `start_levels` and includes DISABLED segments — the castle row filters `enabled` client-side, but the Bowser row shows a disabled pipe-entry segment so its **no-reds** click can ENABLE it (mutual exclusion: **reds** disables the pipe + targets the star, **no-reds** enables it + targets the segment). The banner answers "where does this *start*?" as a static value (no live `_pending` deferral like the matcher). The param-name coupling is pinned by `test_views.test_segment_banner_param_names_match_the_registry`. Auto-select (arenas) is client-side — the banner POSTs `/api/target`, keeping the detector pure/broadcast-only and browser↔GUI parity intact. Rules live in the `detectors/stage.py` docstring + `views.py` comments; the wire payload is in `docs/api.md`. (v1.3.0 revamp: main-course stars now render as per-slot SM64 star art `ui/assets/star_{1..6}.png` with a rank Medal per star — presentation-only; detail in the CLAUDE.md module map.)
 
 ## Roadmap (unbuilt)
 
@@ -299,7 +299,13 @@ live-feedback round + incident-response from the spec). Remaining phases per
   Urgency reduced: the AFK rule already covers the practice-relevant menu
   case via the IGT-freeze inference; hunt the address only if that inference
   misfires live.
-- **Phase 4** — Routes storage + probability board + Routes tab.
+- ~~**Phase 4** — Routes storage + probability board + Routes tab~~ — **Delivered:**
+  ordered star/segment route plans with cumulative best-K success + import/
+  export (`tracking/routes.py`, `ui/components/routes.js`, `routes` table v7).
+- **Full-game run timer — Delivered (Runs):** forgiving-RTA timer over a
+  route (`tracking/runs.py`, `ui/components/runview.js`, `runs` table v8) —
+  see the "Routes & runs" section below.
+- **Side-by-side compare — Delivered (v1.3.0):** see the "Compare" section below.
 - ~~Dedicated key / grand-star events~~ — **Delivered in segment-events branch**: `key_grabbed` claims all three fight-ending grabs (B1/B2 keys + B3 grand star via `ACT_JUMBO_STAR_CUTSCENE` — the grand star never enters a star-dance action; evidence in `addresses.py`).
 - **`door_used` primitive (designed follow-up, 2026-06-12):** doors are
   object-pool objects with fixed positions, and `MarioState`'s used-object
@@ -390,60 +396,6 @@ contain only GIL-releasing syscalls — anything heavier goes out of process.
   WASAPI loopback goes silently deaf when the target app restarts or
   endpoints re-enumerate. The deaf-stream watchdog compares pump loudness
   against the pid's session peak and reopens the stream.
-
-## Self-update (2026-06-16)
-
-The packaged exe updates itself from GitHub releases (`core/updater.py`,
-`server/update_api.py`, `ui/components/update.js`, `tools/release.py`). The
-facts that make it safe, so the next session doesn't re-derive them.
-
-**The enabling OS fact: Windows forbids DELETING a running exe but ALLOWS
-RENAMING one.** So the swap is two `os.replace` calls — rename the running
-`sm64_tracker.exe` aside to `*.exe.old`, then move the downloaded
-`*.exe.new` into the canonical name. The old process keeps executing from the
-renamed file (the OS tracks the open file object, not the path). This is why
-no separate helper/.bat is needed.
-
-**`sys.executable` does the rest for free.** It is the canonical path string,
-captured at process start. After the swap that path points at the NEW exe, so
-`core/relaunch.spawn_replacement()` (which relaunches `sys.executable`)
-launches the new build with ZERO change to relaunch.py — apply just calls the
-same restart path as `/api/admin/restart`. `wait_port_free` hands the port
-from old to new; `cleanup_old_exe()` (run at startup in `main.py`) deletes the
-now-unlocked `*.old`.
-
-**Failure-safety is non-negotiable for a self-overwriting exe** (a review
-caught both of these before ship):
-- The two-rename retry must hoist the rename-aside OUT of the retry loop. The
-  naive "retry the whole pair" bug: step 1 succeeds, step 2 fails (AV briefly
-  locks the new file), the retry deletes the backup then hits
-  `FileNotFoundError` on the already-moved current — leaving the user with NO
-  exe. Fix: rename aside once; retry only the staged→current move; on final
-  failure restore the backup (`apply_update`).
-- A release with no `.sha256` asset must mean "no update", never "skip
-  verification". `check_for_update` returns None without the checksum asset,
-  so an unverified exe can never be applied. The download verifies SHA-256
-  before any rename; a mismatch raises and keeps the current exe.
-
-**The user's state survives every update** because `%LOCALAPPDATA%\sm64_tracker`
-(DB, PBs, saved replays) is separate from the exe (`core/paths.py`), and the
-new exe runs its DB migrations on launch. Everything is guarded on
-`is_frozen()` — from source the updater is inert so a dev tree is never
-swapped (`SM64_UPDATE_FAKE=1` renders the popup in dev without a real
-release). The exe is unsigned, so the FIRST manual (browser) download trips
-SmartScreen; in-app updates don't (the app, not the browser, fetches the
-file). Code signing is the documented future fix.
-
-**yt-dlp must be `--collect-all`'d into the build (2026-07-02).** yt-dlp
-lazily imports its ~1800 site extractors by name (a string→module lookup),
-so PyInstaller's static analysis never sees them and the frozen exe raises
-`No module named yt_dlp.extractor...` at the FIRST comparison download — a
-failure invisible from source (dev has the full package on disk). Fix:
-`yt_dlp` is in `tools/build_exe.py`'s `COLLECT` list, which feeds
-`--collect-all` per entry (bundles every submodule + data file). Evidence:
-the Compare importer (`compare/importer.py`) is the only yt-dlp consumer and
-only runs at import time, so a broken bundle would slip past every test and
-first surface at a live YouTube import.
 - WASAPI loopback delivers nothing while the endpoint is idle: place PCM
   by wall clock; never assume a continuous stream.
 - AAC consumes EXACT 1024-sample frames: feeding rate//fps blocks (800 at
@@ -526,6 +478,115 @@ joined at interpreter exit, which recreates the hang one layer down;
 kill-on-close Job Object assigned to every ffmpeg child
 (`ffmpeg_sink._assign_kill_on_close`, behaviorally tested) — an orphan
 encoder is structurally impossible no matter how Python dies.
+
+## Self-update (2026-06-16)
+
+The packaged exe updates itself from GitHub releases (`core/updater.py`,
+`server/update_api.py`, `ui/components/update.js`, `tools/release.py`). The
+facts that make it safe, so the next session doesn't re-derive them.
+
+**The enabling OS fact: Windows forbids DELETING a running exe but ALLOWS
+RENAMING one.** So the swap is two `os.replace` calls — rename the running
+`SM64Trainer.exe` aside to `*.exe.old`, then move the downloaded
+`*.exe.new` into the canonical name. The old process keeps executing from the
+renamed file (the OS tracks the open file object, not the path). This is why
+no separate helper/.bat is needed.
+
+**`sys.executable` does the rest for free.** It is the canonical path string,
+captured at process start. After the swap that path points at the NEW exe, so
+`core/relaunch.spawn_replacement()` (which relaunches `sys.executable`)
+launches the new build with ZERO change to relaunch.py — apply just calls the
+same restart path as `/api/admin/restart`. `wait_port_free` hands the port
+from old to new; `cleanup_old_exe()` (run at startup in `main.py`) deletes the
+now-unlocked `*.old`.
+
+**Failure-safety is non-negotiable for a self-overwriting exe** (a review
+caught both of these before ship):
+- The two-rename retry must hoist the rename-aside OUT of the retry loop. The
+  naive "retry the whole pair" bug: step 1 succeeds, step 2 fails (AV briefly
+  locks the new file), the retry deletes the backup then hits
+  `FileNotFoundError` on the already-moved current — leaving the user with NO
+  exe. Fix: rename aside once; retry only the staged→current move; on final
+  failure restore the backup (`apply_update`).
+- A release with no `.sha256` asset must mean "no update", never "skip
+  verification". `check_for_update` returns None without the checksum asset,
+  so an unverified exe can never be applied. The download verifies SHA-256
+  before any rename; a mismatch raises and keeps the current exe.
+
+**The user's state survives every update** because `%LOCALAPPDATA%\SM64Trainer`
+(DB, PBs, saved replays; the pre-1.0.2 `sm64_tracker` dir is migrated on first
+launch) is separate from the exe (`core/paths.py`), and the new exe runs its DB
+migrations on launch. Everything is guarded on
+`is_frozen()` — from source the updater is inert so a dev tree is never
+swapped (`SM64_UPDATE_FAKE=1` renders the popup in dev without a real
+release). The exe is unsigned, so the FIRST manual (browser) download trips
+SmartScreen; in-app updates don't (the app, not the browser, fetches the
+file). Code signing is the documented future fix.
+
+## Compare (side-by-side, v1.3.0)
+
+Play your own run beside reference footage frame-for-frame in one synced
+transport (the "Compare" tab). Cross-cutting facts only; module-local detail
+lives in the code (`compare/*`, `ui/components/compare.js` + `videosync.js`,
+`tracking/views.py::build_compare_view`) and the CLAUDE.md module map.
+
+**Reuses the replay pipeline; adds an import + a sync layer.** "My run" clips
+come from the SAME replay extraction as the Practice tab (`replay/extract.py`).
+Compare touches no memory/detector code — it is a pure consumer of
+already-journaled runs plus an external-video service.
+
+**Import → normalize → content-addressed cache.** `compare/importer.py`
+pulls a source (yt-dlp for YouTube, copy for a file, raw bytes for an upload),
+ffmpeg normalizes it, and the result lands in `paths.compare_cache_dir()` under
+a content-addressed name, so the SAME video is only ever downloaded/encoded once
+(dedup = "load once"). Publish is atomic (`.tmp-<name>` + `os.replace`). Rows
+live in the `comparisons` table (migration v10), scoped per `(entity, strat)`.
+
+**Offset-only lockstep sync.** Every video shares one master game-frame; each
+stage carries an in-point (its clip start), and the transport re-seeks each
+`<video>` to `inFrame + master` on every discrete action. Continuous play runs
+them at true rate (they start aligned); pause and scrub re-sync. Scrubbing the
+work-area timeline drives `controller.seek(master)` so both videos move together
+(`ui/components/videosync.js`).
+
+**Rank-standard default is opt-out.** When a `(star, strategy)` combo has nothing
+open and its strategy has a rank-standard example, the UI opens it by default;
+closing it opts out (persisted per combo, client-side). The source is
+`build_compare_view`'s `rank_source` (the strategy's rank-standard URL, exposed
+whether or not it is already saved). Everything you load is remembered per combo
+and reloads next time.
+
+**yt-dlp must be `--collect-all`'d into the build (2026-07-02).** yt-dlp lazily
+imports its ~1800 site extractors by name (a string→module lookup), so
+PyInstaller's static analysis never sees them and the frozen exe raises
+`No module named yt_dlp.extractor...` at the FIRST comparison download — a
+failure invisible from source (dev has the full package on disk). Fix: `yt_dlp`
+is in `tools/build_exe.py`'s `COLLECT` list, which feeds `--collect-all` per
+entry (bundles every submodule + data file). The Compare importer
+(`compare/importer.py`) is the only yt-dlp consumer, so a broken bundle slips
+past every test and first surfaces at a live YouTube import.
+
+## Routes & runs
+
+Ordered star/segment plans and a forgiving full-game run timer. Pure logic +
+storage; consumer detail is in the CLAUDE.md module map and the module
+docstrings.
+
+**Routes** (`tracking/routes.py`, `routes` table v7) are ordered plans of K-of-N
+candidate groups (`{label?, need:K, candidates:[star|segment]}`) plus a
+`start_condition` trigger. `route_stats` scores cumulative success as the best-K
+product (no-data = 0); `export_route` embeds the segment defs and
+`resolve_import` reuses exact matches or creates the rest. Pure and replay-safe.
+
+**Runs** (`tracking/runs.py::RunTracker`, `runs` table v8) time a route as a
+forgiving RTA: arm on `run_started`, START the clock when the route's
+`start_condition` trigger fires (default `reset_game` = F1) plus `start_offset`,
+forgiving splits (wall-clock per step MINUS paused time; retries roll up),
+K-of-N no-dup completion, finish on the last step. `run_paused`/`run_resumed`
+exclude paused time; editing the armed route re-arms with `void_active` so the
+in-flight run is voided. Run id = the starting `game_reset` journal id, so runs
+re-derive on replay exactly like attempts (`tracking/projection.py` embeds the
+tracker).
 
 ## Ranks
 
