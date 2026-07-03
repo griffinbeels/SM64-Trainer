@@ -53,10 +53,10 @@
   .starcell:hover { background: #20242b; }
   .starcell:focus-visible { outline: 2px solid #6fa8ff; outline-offset: 2px; }
   .starcell.active-star { border-color: #e0c36a; background: #211f14; }
-  /* the number row now holds the rank medal (or "–" when unranked); it bobs
-     with the star when active (see numbob below) */
-  .starnum { display: flex; align-items: center; justify-content: center;
-             height: 18px; color: #6c7686; font-size: .9rem; line-height: 1; }
+  /* rank medal (or "–" when unranked) sitting between the star and its name;
+     bobs with the star when active (see rankbob below) */
+  .starrank { display: flex; align-items: center; justify-content: center;
+              height: 18px; color: #6c7686; font-size: .9rem; line-height: 1; }
   .starholder { display: block; width: min(74px, 72%);
                 aspect-ratio: 1 / 1; transition: transform .18s ease; }
   .starcell.active-star .starholder { transform: scale(1.16); }
@@ -81,10 +81,10 @@
     .starcell.active-star .starholder { animation: starbob 2.4s ease-in-out infinite; }
     @keyframes starbob { 0%, 100% { transform: scale(1.16) translateY(0); }
                          50% { transform: scale(1.16) translateY(-3px); } }
-    /* the rank medal above the active star bobs in sync with it */
-    .starcell.active-star .starnum { animation: numbob 2.4s ease-in-out infinite; }
-    @keyframes numbob { 0%, 100% { transform: translateY(0); }
-                        50% { transform: translateY(-3px); } }
+    /* the rank medal bobs in sync with the active star */
+    .starcell.active-star .starrank { animation: rankbob 2.4s ease-in-out infinite; }
+    @keyframes rankbob { 0%, 100% { transform: translateY(0); }
+                         50% { transform: translateY(-3px); } }
   }
   .segrow { display: flex; gap: .5rem; align-items: center; border: 1px solid #2c3140; border-radius: 8px; padding: .4rem .6rem; margin-bottom: .4rem; }
   .segsection { border: 1px solid #2c3140; border-radius: 8px; padding: .45rem .55rem; margin: .5rem 0; }

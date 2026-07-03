@@ -85,13 +85,13 @@ function StarRow({ t, v, stage }) {
         return html`<button key=${`${stage.course_id}:${i}`}
                             class="starcell ${active ? "active-star" : ""}"
                             title=${name} onclick=${() => pick(i)}>
-          <span class="starnum">
-            ${rank ? html`<${Medal} rank=${rank} size=${16} />` : "–"}</span>
           <span class="starholder">
             <img class="starimg ${STAR_DIM_IDLE && !active ? "dim" : ""}"
                  src=${`/ui/assets/star_${Math.min(i + 1, STAR_IMG_COUNT)}.png`}
                  alt="" draggable="false" />
           </span>
+          <span class="starrank">
+            ${rank ? html`<${Medal} rank=${rank} size=${16} />` : "–"}</span>
           <span class="starname">${name}</span>
           <span class="starsub">
             <span class="strat ${strat ? "" : "none"}">${strat || "—"}</span>
