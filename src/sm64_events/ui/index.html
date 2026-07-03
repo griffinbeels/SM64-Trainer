@@ -57,10 +57,12 @@
              line-height: 1; height: 1em; }
   .starholder { display: block; position: relative; width: min(74px, 72%);
                 aspect-ratio: 1 / 1; transition: transform .18s ease; }
-  /* small rank badge, sat just below the star's eyes (only when the star's
-     active strat is ranked); scales + bobs with .starholder at any size */
-  .starmedal { position: absolute; left: 50%; top: 70%;
-               transform: translate(-50%, -50%); width: 24%; height: 24%;
+  /* small rank badge on the star's forehead — above the eyes. Measured eye
+     band is y~0.37-0.55 of the box, star-top ~0.075, so the forehead is
+     ~0.08-0.37 (center ~0.22); a 20% badge at top:22% spans 0.12-0.32, clear
+     of both. Only when the active strat is ranked; scales + bobs with the star. */
+  .starmedal { position: absolute; left: 50%; top: 22%;
+               transform: translate(-50%, -50%); width: 20%; height: 20%;
                pointer-events: none; }
   .starcell.active-star .starholder { transform: scale(1.16); }
   /* PNG star art (ui/assets/star_N.png). object-fit:contain honours the
