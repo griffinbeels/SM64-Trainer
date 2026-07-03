@@ -67,6 +67,8 @@ function AddComparison({ entity, strat, suggestion, onAdded }) {
   const [job, setJob] = useState(null);
   const [url, setUrl] = useState("");
   const fileRef = useRef(null);
+  const pollRef = useRef(null);
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
   async function startImport(source_kind, source_ref, name) {
     const r = await send("POST", "/api/compare/import",
@@ -75,13 +77,14 @@ function AddComparison({ entity, strat, suggestion, onAdded }) {
   }
   function pollJob(jobId) {
     setJob({ state: "running", progress: 0 });
-    const id = setInterval(async () => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = setInterval(async () => {
       try {
         const s = await getJSON(`/api/compare/import/${jobId}`);
         setJob(s);
-        if (s.state === "done") { clearInterval(id); setJob(null); onAdded(); }
-        else if (s.state === "error") clearInterval(id);
-      } catch { clearInterval(id); }
+        if (s.state === "done") { clearInterval(pollRef.current); pollRef.current = null; setJob(null); onAdded(); }
+        else if (s.state === "error") { clearInterval(pollRef.current); pollRef.current = null; }
+      } catch { clearInterval(pollRef.current); pollRef.current = null; }
     }, 800);
   }
   function onDrop(e) {
@@ -113,13 +116,13 @@ function AddComparison({ entity, strat, suggestion, onAdded }) {
 }
 
 function ComparisonStage({ comp, controller, onEdit, onDelete }) {
-  const vref = useRef(null);
+  const [videoEl, setVideoEl] = useState(null);
   return html`<div>
     <div class="shead"><b>${comp.name}</b>
       <button class="meta" onclick=${() => onDelete(comp.id)} title="remove">×</button></div>
     <${VideoStage} id=${`cmp:${comp.id}`} src=${comp.clip_url}
-      inFrame=${comp.in_frame || 0} controller=${controller} />
-    <${SyncTrack} video=${vref} inFrame=${comp.in_frame} outFrame=${comp.out_frame}
+      inFrame=${comp.in_frame || 0} controller=${controller} onEl=${setVideoEl} />
+    <${SyncTrack} videoEl=${videoEl} inFrame=${comp.in_frame} outFrame=${comp.out_frame}
       onChange=${(pts) => onEdit(comp.id, pts)} />
   </div>`;
 }
@@ -143,6 +146,7 @@ export function Compare({ t, intent, clearIntent }) {
   const [strat, setStrat] = useState(null);
   const [attemptId, setAttemptId] = useState(null);
   const [cmp, setCmp] = useState({ saved: [], suggestion: null });
+  const deepLinked = useRef(false);
 
   // load the lifetime session view once (left-side picker source)
   useEffect(() => {
@@ -162,15 +166,17 @@ export function Compare({ t, intent, clearIntent }) {
     setEntity(intent.entity);
     setStrat(intent.strat);
     setAttemptId(intent.attemptId);
+    deepLinked.current = true;
     clearIntent();
   }, [intent]);
 
   // resolve the active strat for the chosen entity from the session view
   useEffect(() => {
     if (!view || !entity) return;
+    if (deepLinked.current) { deepLinked.current = false; return; }
     const secs = [...(view.stars || []), ...(view.segments || [])];
     const sec = secs.find((s) => entityOf(s) === entity);
-    if (sec && intent == null) setStrat(sec.last_strat || null);
+    if (sec) setStrat(sec.last_strat || null);
   }, [entity, view]);
 
   // fetch comparisons + auto-pick whenever (entity, strat) changes
@@ -192,7 +198,7 @@ export function Compare({ t, intent, clearIntent }) {
   }
   function pickRun(ent, aid) {
     setEntity(ent);
-    if (aid != null) setAttemptId(aid);
+    setAttemptId(aid);
   }
 
   if (!view) return html`<p class="meta">loading…</p>`;

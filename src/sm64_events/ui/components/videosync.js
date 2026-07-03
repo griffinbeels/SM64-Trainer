@@ -69,7 +69,7 @@ export function useSyncController() {
   return { register, unregister, play, pause, step, toStart, playing };
 }
 
-export function VideoStage({ src, inFrame, controller, id }) {
+export function VideoStage({ src, inFrame, controller, id, onEl }) {
   const ref = useRef(null);
   const inRef = useRef(inFrame || 0);
   useEffect(() => { inRef.current = inFrame || 0; }, [inFrame]);
@@ -78,25 +78,24 @@ export function VideoStage({ src, inFrame, controller, id }) {
     ref.current = el;
     controller.register(id, el, () => inRef.current);
     if (el && !el.dataset.vol) { el.dataset.vol = "1"; el.volume = storedVolume(); }
-  }, [id, controller.register]);
+    if (onEl) onEl(el);
+  }, [id, controller.register, onEl]);
   return html`<video class="replay-player" style="width:100%" preload="auto"
       src=${src} playsinline ref=${setRef}></video>`;
 }
 
 // Dual-handle in/out selector over the video duration (game frames).
-export function SyncTrack({ video, inFrame, outFrame, onChange }) {
+export function SyncTrack({ videoEl, inFrame, outFrame, onChange }) {
   const [dur, setDur] = useState(0);
   useEffect(() => {
-    const v = video && video.current;
-    if (!v) return;
-    const on = () => setDur(v.duration || 0);
-    v.addEventListener("loadedmetadata", on);
-    if (v.duration) setDur(v.duration);
-    return () => v.removeEventListener("loadedmetadata", on);
-  }, [video && video.current]);
+    if (!videoEl) return;
+    const on = () => setDur(videoEl.duration || 0);
+    videoEl.addEventListener("loadedmetadata", on);
+    if (videoEl.duration) setDur(videoEl.duration);
+    return () => videoEl.removeEventListener("loadedmetadata", on);
+  }, [videoEl]);
   const maxF = Math.max(1, Math.floor(dur * 30));
-  const preview = (f) => { const v = video && video.current;
-    if (v) v.currentTime = (f + 0.5) / 30; };
+  const preview = (f) => { if (videoEl) videoEl.currentTime = (f + 0.5) / 30; };
   return html`<div class="synctrack" style="margin:.3rem 0">
     <label class="meta">start
       <input type="range" min="0" max=${maxF} step="1" value=${inFrame || 0}
