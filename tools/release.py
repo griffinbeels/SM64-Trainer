@@ -1,16 +1,23 @@
 # tools/release.py
-"""One-command release: bump -> tag -> build -> SHA-256 -> publish.
+"""One-command release: bump -> tag -> build -> zip+manifest -> SHA-256 -> publish.
 
     uv run python tools/release.py 1.1.0 [--notes-file NOTES.md] [--dry-run]
 
 Refuses unless the tree is clean, you're on main, `gh` is authed, and the
-full test suite passes. Builds the self-contained exe via tools/build_exe.py
-(ffmpeg must be on PATH so it gets bundled), writes a SHA-256 the in-app updater
-verifies, then `gh release create` with the exe + checksum. GitHub attaches the
-source zip/tar.gz to every release automatically.
+full test suite passes. Builds the onedir app + bootstrap installer via
+tools/build_exe.py (ffmpeg must be on PATH so it gets bundled), zips the
+onedir tree, emits the per-file update manifest, and publishes SIX assets
+the incremental updater + bootstrap consume:
 
-Pure helpers (bump_*, sha256_file, valid_version) are unit-tested; the git/gh/
-build orchestration is exercised by cutting a real release."""
+    SM64Trainer-full.zip(.sha256)   the whole app tree (first install/fallback)
+    manifest.json(.sha256)          per-file hashes + zip byte offsets
+    SM64Trainer.exe(.sha256)        the BOOTSTRAP installer under the
+                                    load-bearing name old shipped updaters
+                                    can install (their migration vehicle)
+
+Pure helpers (bump_*, sha256_file, valid_version, write_sha, release_assets)
+are unit-tested; the git/gh/build orchestration is exercised by cutting a
+real release."""
 import argparse
 import hashlib
 import re
@@ -19,10 +26,23 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "src"))
+
+from sm64_events.core.update_plan import (BOOTSTRAP_ASSET,  # noqa: E402
+                                          MANIFEST_ASSET, ZIP_ASSET)
+
 VERSION_PY = REPO / "src" / "sm64_events" / "core" / "version.py"
 PYPROJECT = REPO / "pyproject.toml"
 UV_LOCK = REPO / "uv.lock"
-EXE = REPO / "dist" / "SM64Trainer.exe"
+DIST = REPO / "dist"
+APP_DIR = DIST / "SM64Trainer"                    # onedir build
+APP_EXE = APP_DIR / "SM64Trainer.exe"
+BOOTSTRAP_BUILD = DIST / "SM64TrainerSetup.exe"   # bootstrap onefile build
+# Asset names come from THE registry (core/update_plan.py) — a rename there
+# must flow through here or updater+bootstrap would find nothing.
+ZIP_PATH = DIST / ZIP_ASSET
+MANIFEST_PATH = DIST / MANIFEST_ASSET
+UPLOAD_EXE = DIST / BOOTSTRAP_ASSET     # bootstrap copy under the asset name
 
 
 def valid_version(v: str) -> bool:
@@ -53,6 +73,19 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def write_sha(path: Path) -> Path:
+    digest = sha256_file(path)
+    side = path.with_name(path.name + ".sha256")
+    side.write_text(f"{digest}  {path.name}\n")
+    return side
+
+
+def release_assets(dist: Path) -> list[Path]:
+    return [dist / ZIP_ASSET, dist / (ZIP_ASSET + ".sha256"),
+            dist / MANIFEST_ASSET, dist / (MANIFEST_ASSET + ".sha256"),
+            dist / BOOTSTRAP_ASSET, dist / (BOOTSTRAP_ASSET + ".sha256")]
 
 
 def _run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
@@ -94,13 +127,24 @@ def main() -> int:
     PYPROJECT.write_text(bump_pyproject(PYPROJECT.read_text(), args.version))
 
     # Build first so a broken build aborts BEFORE any tag/push.
-    _run(["uv", "run", "python", "tools/build_exe.py"])
-    if not EXE.exists():
-        sys.exit("build did not produce dist/SM64Trainer.exe")
-    digest = sha256_file(EXE)
-    sha_path = EXE.with_name(EXE.name + ".sha256")
-    sha_path.write_text(f"{digest}  {EXE.name}\n")
-    print("sha256", digest)
+    _run(["uv", "run", "python", "tools/build_exe.py", "--mode", "all"])
+    if not APP_EXE.exists():
+        sys.exit("build did not produce dist/SM64Trainer/SM64Trainer.exe")
+    if not BOOTSTRAP_BUILD.exists():
+        sys.exit("build did not produce dist/SM64TrainerSetup.exe")
+    import shutil as _shutil
+
+    from make_manifest import build_zip, make_manifest
+    print("zipping onedir tree…")
+    build_zip(APP_DIR, ZIP_PATH)
+    MANIFEST_PATH.write_text(make_manifest(ZIP_PATH, args.version))
+    # The bootstrap is uploaded under the LOAD-BEARING name SM64Trainer.exe:
+    # already-shipped onefile updaters can only install that asset, and it
+    # migrates them to the onedir install (spec 2026-07-23).
+    _shutil.copy2(BOOTSTRAP_BUILD, UPLOAD_EXE)
+    for artifact in (ZIP_PATH, MANIFEST_PATH, UPLOAD_EXE):
+        write_sha(artifact)
+    print("assets ready:", ", ".join(a.name for a in release_assets(DIST)))
 
     if args.dry_run:
         print("dry-run: built + checksummed, skipping commit/tag/publish")
@@ -120,7 +164,8 @@ def main() -> int:
 
     notes = (["--notes-file", args.notes_file] if args.notes_file
              else ["--generate-notes"])
-    _run(["gh", "release", "create", tag, str(EXE), str(sha_path),
+    _run(["gh", "release", "create", tag,
+          *[str(a) for a in release_assets(DIST)],
           "--title", tag, *notes])
     print(f"\nReleased {tag}. Users see the update popup on next launch.")
     return 0

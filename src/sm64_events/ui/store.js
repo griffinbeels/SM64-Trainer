@@ -188,7 +188,21 @@ export function useTracker() {
   }, [updateMsg]);
   const applyUpdate = useCallback(async () => {
     setUpdateApplying(true);
-    try { await send("POST", "/api/update/apply"); } catch (e) { /* status poll shows error */ }
+    try {
+      const res = await send("POST", "/api/update/apply");
+      if (!res || (res.state !== "downloading" && res.state !== "installing")) {
+        // begin_apply refused WITHOUT starting the worker (re-check failed,
+        // folder not writable): the service stays "idle", so the status poll
+        // would render the button-less "Installing…" branch forever. Unstick
+        // the popup and surface the reason as a header toast.
+        setUpdateApplying(false);
+        setUpdateMsg("Update could not start" +
+                     (res && res.error ? `: ${res.error}` : ""));
+      }
+    } catch (e) {
+      setUpdateApplying(false);
+      setUpdateMsg("Update could not start");
+    }
   }, []);
   useEffect(() => {   // poll progress while installing; the WS drop on restart ends the session
     if (!updateApplying) return;

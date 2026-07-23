@@ -26,15 +26,28 @@ def test_is_newer_compares_numerically():
     assert is_newer("0.9.9", "1.0.0") is False
 
 
+# --- new-format release fixtures (real zip + manifest, network-free) ---
+
+import hashlib as _hashlib
 import io
 import json as _json
+import sys as _sys
+from pathlib import Path
 
-from sm64_events.core.updater import UpdateInfo, check_for_update
+_tools = str(Path(__file__).resolve().parents[1] / "tools")
+if _tools not in _sys.path:
+    _sys.path.insert(0, _tools)
+from make_manifest import build_zip, make_manifest  # noqa: E402
+
+from sm64_events.core.update_plan import (INSTALLED_MANIFEST,  # noqa: E402
+                                          MANIFEST_ASSET, ZIP_ASSET)
+from sm64_events.core.updater import UpdateInfo, check_for_update  # noqa: E402
 
 
 class _Resp(io.BytesIO):
     def __init__(self, data: bytes, headers: dict | None = None):
         super().__init__(data)
+        self.status = 200
         self.headers = headers or {}
 
     def __enter__(self):
@@ -56,38 +69,76 @@ def _fake_http(routes: dict):
     return opener
 
 
+LATEST = "https://api.github.com/repos/griffinbeels/SM64-Trainer/releases/latest"
+
+FULL_ASSETS = {
+    ZIP_ASSET: "https://dl/full.zip",
+    ZIP_ASSET + ".sha256": "https://dl/full.sha",
+    MANIFEST_ASSET: "https://dl/manifest.json",
+    MANIFEST_ASSET + ".sha256": "https://dl/manifest.sha",
+}
+
+
 def _release_json(tag, assets):
     return _json.dumps({
         "tag_name": tag, "body": "notes here",
         "html_url": f"https://github.com/x/y/releases/tag/{tag}",
         "assets": [{"name": n, "browser_download_url": u}
-                   for n, u in assets.items()],
-    }).encode()
+                   for n, u in assets.items()]}).encode()
 
 
-LATEST = "https://api.github.com/repos/griffinbeels/SM64-Trainer/releases/latest"
+def _sha_line(data: bytes, name: str) -> bytes:
+    return (_hashlib.sha256(data).hexdigest() + "  " + name).encode()
 
 
-def test_check_returns_info_when_newer_with_asset():
-    http = _fake_http({LATEST: _release_json("v2.0.0", {
-        "SM64Trainer.exe": "https://dl/exe",
-        "SM64Trainer.exe.sha256": "https://dl/sha",
-    })})
-    info = check_for_update("1.0.0", http=http)
+def _fake_release(tmp_path, tag: str, files: dict[str, bytes]) -> dict:
+    """Build a real zip+manifest for `files` and return an http routes dict."""
+    src = tmp_path / f"src-{tag}"
+    for rel, content in files.items():
+        p = src.joinpath(*rel.split("/"))
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(content)
+    zp = tmp_path / f"{tag}.zip"
+    build_zip(src, zp)
+    manifest = make_manifest(zp, tag.lstrip("v")).encode()
+    blob = zp.read_bytes()
+    return {
+        LATEST: _release_json(tag, FULL_ASSETS),
+        "https://dl/full.zip": blob,
+        "https://dl/full.sha": _sha_line(blob, ZIP_ASSET),
+        "https://dl/manifest.json": manifest,
+        "https://dl/manifest.sha": _sha_line(manifest, MANIFEST_ASSET),
+    }
+
+
+# --- check_for_update ---
+
+def test_check_returns_info_when_all_assets_present(tmp_path):
+    routes = _fake_release(tmp_path, "v2.0.0", {"SM64Trainer.exe": b"X"})
+    info = check_for_update("1.0.0", http=_fake_http(routes))
     assert isinstance(info, UpdateInfo)
     assert info.version == "2.0.0"
-    assert info.asset_url == "https://dl/exe"
-    assert info.sha256_url == "https://dl/sha"
+    assert info.zip_url == "https://dl/full.zip"
+    assert info.zip_sha_url == "https://dl/full.sha"
+    assert info.manifest_url == "https://dl/manifest.json"
+    assert info.manifest_sha_url == "https://dl/manifest.sha"
 
 
-def test_check_none_when_not_newer():
-    http = _fake_http({LATEST: _release_json("v1.0.0", {
-        "SM64Trainer.exe": "https://dl/exe"})})
+def test_check_none_when_missing_manifest_assets():
+    partial = {k: v for k, v in FULL_ASSETS.items() if k != MANIFEST_ASSET}
+    http = _fake_http({LATEST: _release_json("v2.0.0", partial)})
     assert check_for_update("1.0.0", http=http) is None
 
 
-def test_check_none_when_no_exe_asset():
-    http = _fake_http({LATEST: _release_json("v2.0.0", {"notes.txt": "u"})})
+def test_check_none_when_missing_sha_assets():
+    partial = {k: v for k, v in FULL_ASSETS.items()
+               if k != ZIP_ASSET + ".sha256"}
+    http = _fake_http({LATEST: _release_json("v2.0.0", partial)})
+    assert check_for_update("1.0.0", http=http) is None
+
+
+def test_check_none_when_not_newer():
+    http = _fake_http({LATEST: _release_json("v1.0.0", FULL_ASSETS)})
     assert check_for_update("1.0.0", http=http) is None
 
 
@@ -97,62 +148,9 @@ def test_check_none_on_http_error():
     assert check_for_update("1.0.0", http=boom) is None
 
 
-import hashlib as _hashlib
+# --- exe_dir_writable ---
 
-import pytest
-
-from sm64_events.core.updater import (apply_update, cleanup_old,
-                                      download_and_stage, exe_dir_writable)
-
-
-def test_download_stage_verifies_good_hash(tmp_path):
-    payload = b"new exe bytes"
-    digest = _hashlib.sha256(payload).hexdigest()
-    info = UpdateInfo("2.0.0", "n", "h", "https://dl/exe", "https://dl/sha")
-    http = _fake_http({"https://dl/exe": payload,
-                       "https://dl/sha": (digest + "  SM64Trainer.exe").encode()})
-    seen = []
-    staged = download_and_stage(info, tmp_path, http=http,
-                                progress=seen.append)
-    assert staged.read_bytes() == payload
-    assert staged.name == "SM64Trainer.exe.new"
-    assert seen and seen[-1] == 1.0
-
-
-def test_download_stage_rejects_bad_hash(tmp_path):
-    info = UpdateInfo("2.0.0", "n", "h", "https://dl/exe", "https://dl/sha")
-    http = _fake_http({"https://dl/exe": b"corrupt",
-                       "https://dl/sha": (("0" * 64) + "  x").encode()})
-    with pytest.raises(ValueError):
-        download_and_stage(info, tmp_path, http=http)
-    assert not (tmp_path / "SM64Trainer.exe.new").exists()
-
-
-def test_apply_update_swaps_running_exe(tmp_path):
-    current = tmp_path / "SM64Trainer.exe"
-    current.write_text("OLD")
-    staged = tmp_path / "SM64Trainer.exe.new"
-    staged.write_text("NEW")
-    apply_update(staged, current)
-    assert current.read_text() == "NEW"
-    assert (tmp_path / "SM64Trainer.exe.old").read_text() == "OLD"
-
-
-def test_cleanup_old_removes_old_backup(tmp_path):
-    exe = tmp_path / "SM64Trainer.exe"
-    (tmp_path / "SM64Trainer.exe.old").write_text("x")
-    assert cleanup_old(exe) is True
-    assert not (tmp_path / "SM64Trainer.exe.old").exists()
-
-
-def test_cleanup_old_retries_then_gives_up(tmp_path):
-    # A directory named like the backup can't be unlink()'d, so every attempt
-    # fails — exercises the retry/sleep budget and the False return.
-    exe = tmp_path / "SM64Trainer.exe"
-    (tmp_path / "SM64Trainer.exe.old").mkdir()
-    sleeps = []
-    assert cleanup_old(exe, attempts=3, sleep=sleeps.append) is False
-    assert len(sleeps) == 2   # slept between the 3 attempts
+from sm64_events.core.updater import exe_dir_writable  # noqa: E402
 
 
 def test_exe_dir_writable(tmp_path):
@@ -160,12 +158,17 @@ def test_exe_dir_writable(tmp_path):
     assert exe_dir_writable(tmp_path / "does-not-exist") is False
 
 
-from sm64_events.core.updater import UpdateService
+# --- UpdateService ---
+
+from sm64_events.core.updater import UpdateService  # noqa: E402
 
 
 def _svc(tmp_path, http, *, frozen=True):
-    exe = tmp_path / "SM64Trainer.exe"
-    exe.write_text("OLD")
+    root = tmp_path / "app"
+    root.mkdir(parents=True, exist_ok=True)
+    exe = root / "SM64Trainer.exe"
+    if not exe.exists():
+        exe.write_bytes(b"OLD")
     return UpdateService(current_version="1.0.0", http=http, exe_path=exe,
                          state_path=tmp_path / "update_state.json",
                          frozen=frozen)
@@ -178,87 +181,31 @@ def test_status_inert_from_source(tmp_path):
     assert st["update_available"] is False
 
 
-def test_status_reports_available(tmp_path):
-    http = _fake_http({LATEST: _release_json("v2.0.0", {
-        "SM64Trainer.exe": "https://dl/exe",
-        "SM64Trainer.exe.sha256": "https://dl/sha"})})
-    svc = _svc(tmp_path, http)
+def test_status_reports_available_with_download_bytes(tmp_path):
+    routes = _fake_release(tmp_path, "v2.0.0", {"SM64Trainer.exe": b"NEW"})
+    svc = _svc(tmp_path, _fake_http(routes))
     st = svc.status()
     assert st["update_available"] is True
     assert st["latest"] == "2.0.0"
+    assert st["download_bytes"] > 0
     assert st["writable"] is True          # tmp dir is writable
 
 
+def test_status_manifest_tamper_means_no_update(tmp_path):
+    routes = _fake_release(tmp_path, "v2.0.0", {"SM64Trainer.exe": b"NEW"})
+    routes["https://dl/manifest.sha"] = ("0" * 64 + "  x").encode()
+    svc = _svc(tmp_path, _fake_http(routes))
+    assert svc.status()["update_available"] is False
+
+
 def test_skip_persists_and_round_trips(tmp_path):
-    http = _fake_http({LATEST: _release_json("v2.0.0", {
-        "SM64Trainer.exe": "https://dl/exe"})})
-    svc = _svc(tmp_path, http)
+    routes = _fake_release(tmp_path, "v2.0.0", {"SM64Trainer.exe": b"NEW"})
+    svc = _svc(tmp_path, _fake_http(routes))
     svc.skip("2.0.0")
     assert svc.status()["skipped"] == "2.0.0"
 
 
-def test_run_apply_swaps_and_calls_on_success(tmp_path):
-    payload = b"NEWEXE"
-    digest = _hashlib.sha256(payload).hexdigest()
-    http = _fake_http({
-        LATEST: _release_json("v2.0.0", {
-            "SM64Trainer.exe": "https://dl/exe",
-            "SM64Trainer.exe.sha256": "https://dl/sha"}),
-        "https://dl/exe": payload,
-        "https://dl/sha": (digest + "  SM64Trainer.exe").encode()})
-    svc = _svc(tmp_path, http)
-    info = svc._check(force=True)
-    restarted = []
-    svc._run_apply(info, lambda: restarted.append(True))
-    assert (tmp_path / "SM64Trainer.exe").read_bytes() == payload
-    assert restarted == [True]
-
-
 def test_begin_apply_errors_when_no_update(tmp_path):
-    http = _fake_http({LATEST: _release_json("v1.0.0", {
-        "SM64Trainer.exe": "https://dl/exe"})})
+    http = _fake_http({LATEST: _release_json("v1.0.0", FULL_ASSETS)})
     svc = _svc(tmp_path, http)
     assert svc.begin_apply(lambda: None)["state"] == "error"
-
-
-def test_check_none_when_no_sha256_asset():
-    http = _fake_http({LATEST: _release_json("v2.0.0", {
-        "SM64Trainer.exe": "https://dl/exe"})})   # exe but NO .sha256
-    assert check_for_update("1.0.0", http=http) is None
-
-
-import os as _os
-
-def test_apply_update_restores_backup_on_persistent_failure(tmp_path, monkeypatch):
-    current = tmp_path / "SM64Trainer.exe"
-    current.write_text("OLD")
-    staged = tmp_path / "SM64Trainer.exe.new"
-    staged.write_text("NEW")
-    real = _os.replace
-    def flaky(src, dst):
-        if str(src) == str(staged):          # fail only the staged->current move
-            raise PermissionError("locked")
-        return real(src, dst)
-    monkeypatch.setattr("sm64_events.core.updater.os.replace", flaky)
-    import pytest
-    with pytest.raises(PermissionError):
-        apply_update(staged, current, retries=2, sleep=lambda s: None)
-    assert current.read_text() == "OLD"      # restored, not bricked
-
-
-import threading as _threading
-
-def test_begin_apply_happy_path_swaps_and_calls_back(tmp_path):
-    payload = b"NEWEXE"
-    digest = _hashlib.sha256(payload).hexdigest()
-    http = _fake_http({
-        LATEST: _release_json("v2.0.0", {
-            "SM64Trainer.exe": "https://dl/exe",
-            "SM64Trainer.exe.sha256": "https://dl/sha"}),
-        "https://dl/exe": payload,
-        "https://dl/sha": (digest + "  SM64Trainer.exe").encode()})
-    svc = _svc(tmp_path, http)
-    done = _threading.Event()
-    assert svc.begin_apply(done.set)["state"] == "downloading"
-    assert done.wait(timeout=5)
-    assert (tmp_path / "SM64Trainer.exe").read_bytes() == payload

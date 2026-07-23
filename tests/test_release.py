@@ -31,3 +31,20 @@ def test_valid_version_accepts_semver():
     assert release.valid_version("1.2.3") is True
     assert release.valid_version("v1.2.3") is False
     assert release.valid_version("1.2") is False
+
+
+def test_write_sha_writes_verifiable_line(tmp_path):
+    p = tmp_path / "SM64Trainer-full.zip"
+    p.write_bytes(b"payload")
+    side = release.write_sha(p)
+    digest, name = side.read_text().split()
+    assert name == "SM64Trainer-full.zip"
+    assert digest == hashlib.sha256(b"payload").hexdigest()
+
+
+def test_release_assets_names_and_order(tmp_path):
+    assets = release.release_assets(tmp_path)
+    assert [a.name for a in assets] == [
+        "SM64Trainer-full.zip", "SM64Trainer-full.zip.sha256",
+        "manifest.json", "manifest.json.sha256",
+        "SM64Trainer.exe", "SM64Trainer.exe.sha256"]

@@ -68,21 +68,30 @@ fires only from edits/deletes, so other clients pick up those.
 ## Quick start (just want to use it)
 
 1. **Download** the latest `SM64Trainer.exe` from the
-   [Releases page](../../releases).
+   [Releases page](../../releases) — it's a small installer.
 2. **Run it.** First launch shows a Windows SmartScreen notice (the app is
-   unsigned) — click **More info → Run anyway**. A window opens.
+   unsigned) — click **More info → Run anyway**. It installs the app to
+   `%LOCALAPPDATA%\Programs\SM64Trainer`, puts an **SM64 Trainer** shortcut
+   on your Desktop, and launches it. (Prefer a portable copy? Grab
+   `SM64Trainer-full.zip` instead, extract anywhere, run the exe inside —
+   it self-updates in place wherever it lives.)
 3. **Start Project64 1.6** with **Usamune v1.93u (US)**, **windowed** (replay
    can't capture exclusive fullscreen). The tracker attaches automatically.
 
-That's it — no install, no Python, nothing else to set up.
+That's it — no Python, nothing else to set up.
 
-**Updates are automatic.** On launch the app checks GitHub for a newer
-release; if one exists you get an in-app popup with the patch notes and a
-link. Click **Update now** and it downloads the new exe (SHA-256 verified),
-swaps itself, and restarts — your history and PBs are untouched. **Skip this
-version** silences that one release (a newer one will still notify);
-**Later** dismisses until next launch. (In-app updates don't trigger
-SmartScreen — only the first manual download does.)
+**Updates are automatic and small.** On launch the app checks GitHub for a
+newer release; if one exists you get an in-app popup with the patch notes,
+a link, and the exact download size. Updates download **only the files that
+changed** (typically ~25 MB, sometimes just kilobytes — never the full
+app; every file SHA-256 verified, with automatic rollback if anything is
+interrupted), then the app restarts — your history and PBs are untouched,
+and your Desktop shortcut keeps working forever. **Skip this version** silences that one release (a
+newer one will still notify); **Later** dismisses until next launch.
+(In-app updates don't trigger SmartScreen — only the first manual download
+does. One caveat for **portable-zip** copies: the very first update
+re-downloads the full app — an extracted zip has no install record yet —
+and every update after that is small.)
 
 ### Requirements / assumptions
 
@@ -121,15 +130,19 @@ being hunted. To turn it fully off (zero per-60 s overhead — no heap walk, no
 GPU/process probes), set `SM64_PERFMON=0` before launching. Useful for A/B
 testing whether the instrumentation contributes to any capture/audio hitch.
 
-## Build the portable exe
+## Build the app
 
 ```
-uv run python tools/build_exe.py
+uv run python tools/build_exe.py                # --mode app|bootstrap|all
 ```
 
-→ `dist\SM64Trainer.exe` (one self-contained onefile build; ffmpeg on PATH is
-bundled automatically — pass `--ffmpeg PATH` to point at a specific binary).
-See `tools/build_exe.py` for what gets bundled.
+→ `dist\SM64Trainer\` (the onedir app: `SM64Trainer.exe` + `_internal\`) and
+`dist\SM64TrainerSetup.exe` (the tiny bootstrap installer, published to
+releases as the `SM64Trainer.exe` asset). ffmpeg on PATH is bundled into the
+app automatically — pass `--ffmpeg PATH` to point at a specific binary. The
+build re-execs itself with `PYTHONHASHSEED=1` + `SOURCE_DATE_EPOCH` so
+unchanged files hash identically across releases (that's what keeps update
+downloads small). See `tools/build_exe.py` for what gets bundled.
 
 > The released exe bundles **ffmpeg** (FFmpeg, https://ffmpeg.org) for replay
 > encoding. FFmpeg is licensed under the GPL/LGPL; it ships as a separate
@@ -143,17 +156,22 @@ uv run python tools/release.py 1.1.0          # or --notes-file NOTES.md
 
 One command: it refuses unless you're on `main` with a clean tree and `gh`
 is authenticated, runs the full test suite, bumps `core/version.py` +
-`pyproject.toml`, **builds the exe before tagging** (a broken build aborts
-with nothing pushed), writes `dist\SM64Trainer.exe.sha256`, pushes the
-commit + tag, and runs `gh release create` with the exe + checksum attached
-(GitHub adds the source zip/tar.gz automatically). Notes default to GitHub's
-auto-generated changelog; the popup fetches the release body live, so you can
-also edit the notes on GitHub afterward.
+`pyproject.toml`, **builds before tagging** (a broken build aborts with
+nothing pushed), zips the onedir tree, generates the per-file update
+manifest, pushes the commit + tag, and runs `gh release create` with SIX
+assets: `SM64Trainer-full.zip(.sha256)` (the whole app), `manifest.json(.sha256)`
+(per-file hashes + zip byte offsets — what makes incremental updates
+possible), and `SM64Trainer.exe(.sha256)` (the bootstrap installer under the
+name old shipped updaters can install — their migration vehicle; keep
+publishing it forever). Notes default to GitHub's auto-generated changelog;
+the popup fetches the release body live, so you can also edit the notes on
+GitHub afterward.
 
-**Prereqs:** ffmpeg on PATH (so the exe bundles it) and `gh auth login`. The
-in-app updater requires the `.sha256` asset — `release.py` always uploads it,
-and a release published without one is simply never offered to users.
-`--dry-run` builds + checksums without committing/tagging/publishing.
+**Prereqs:** ffmpeg on PATH (so the app bundles it) and `gh auth login`. The
+in-app updater requires the manifest + `.sha256` assets — `release.py`
+always uploads them, and a release published without them is simply never
+offered to users. `--dry-run` builds + checksums without
+committing/tagging/publishing.
 
 ## What it does
 

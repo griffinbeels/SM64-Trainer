@@ -35,8 +35,26 @@ def _error(msg: str) -> None:
     ctypes.windll.user32.MessageBoxW(None, msg, APP_DISPLAY_NAME, _MB_ICONERROR)
 
 
+def _repair_interrupted_update() -> bool:
+    """Roll back a crash-interrupted update swap BEFORE anything loads from
+    the install tree. True => a relaunch was spawned; caller must return.
+    No restart loop: startup_repair flips the journal to a terminal state
+    before we relaunch, so the next boot returns 'cleaned'."""
+    from sm64_events.core.paths import install_root, is_frozen
+    if not is_frozen():
+        return False
+    from sm64_events.core.update_apply import startup_repair
+    if startup_repair(install_root()) == "rolled_back":
+        log.warning("interrupted update rolled back — relaunching")
+        spawn_replacement()
+        return True
+    return False
+
+
 def main() -> None:
     configure_logging()
+    if _repair_interrupted_update():
+        return
     # Rename %LOCALAPPDATA%\sm64_tracker -> SM64Trainer BEFORE the mkdir below
     # touches the new dir, so existing PBs/replays carry over.
     migrate_legacy_data_dir()

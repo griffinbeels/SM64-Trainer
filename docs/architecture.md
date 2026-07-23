@@ -479,7 +479,12 @@ kill-on-close Job Object assigned to every ffmpeg child
 (`ffmpeg_sink._assign_kill_on_close`, behaviorally tested) — an orphan
 encoder is structurally impossible no matter how Python dies.
 
-## Self-update (2026-06-16)
+## Self-update (2026-06-16) — SUPERSEDED by "Incremental updates" below
+
+> The single-exe swap described here shipped in v1.0.x–v1.3.x and was
+> replaced by the manifest-sync system (next section) on 2026-07-23. The
+> OS facts (rename-a-running-exe, sys.executable) still underpin the new
+> apply layer; the `download_and_stage`/`apply_update` code itself is gone.
 
 The packaged exe updates itself from GitHub releases (`core/updater.py`,
 `server/update_api.py`, `ui/components/update.js`, `tools/release.py`). The
@@ -522,6 +527,74 @@ swapped (`SM64_UPDATE_FAKE=1` renders the popup in dev without a real
 release). The exe is unsigned, so the FIRST manual (browser) download trips
 SmartScreen; in-app updates don't (the app, not the browser, fetches the
 file). Code signing is the documented future fix.
+
+## Incremental updates (2026-07-23)
+
+Spec: `docs/superpowers/specs/2026-07-23-incremental-updates-design.md` ·
+Plan: `docs/superpowers/plans/2026-07-23-incremental-updates.md`. Why: the
+onefile exe was 220 MB and every update re-downloaded all of it; the bulk
+(ffmpeg, Python runtime, numpy/av DLLs) never changes between releases.
+
+**Packaging flipped to onedir** (`dist/SM64Trainer/` = exe + `_internal\`),
+installed at `%LOCALAPPDATA%\Programs\SM64Trainer`, launched via a Desktop
+shortcut whose target never changes — updates swap files UNDER a stable exe
+path. User data (`%LOCALAPPDATA%\SM64Trainer`) remains a separate tree,
+untouched by any update, exactly as before.
+
+**The mechanism is per-file manifest sync** (the ClickOnce/MSIX/Chrome
+family; the Range-fetch-from-a-release-asset trick is the same one
+electron-updater's differential downloads use in production): each release
+publishes the full zip + `manifest.json` recording, per file, the SHA-256 of
+its content AND the byte range of its compressed data inside the zip
+(offsets read from LOCAL zip headers — the central directory's extra field
+can differ in length; a wrong offset would Range-fetch garbage; the
+round-trip is proven in `tests/test_make_manifest.py`). The updater diffs
+the remote manifest against `installed_manifest.json` + the disk, shows the
+exact download size in the popup, Range-fetches only the changed files'
+byte spans (coalesced; full-zip fallback when Range breaks), verifies every
+file, and swaps via a **journaled generalization of the rename trick**: all
+originals rename into `.update_backup/`, a journal written before the first
+file op makes ANY interruption — including a hard kill mid-swap —
+recoverable by `startup_repair` at next launch (rollback → single relaunch;
+the journal flips to a terminal state first, so no restart loop). Because
+plans are hash diffs, skipping five versions costs the same as one.
+
+**Migration rides the OLD updater's only capability**: it can install
+exactly one asset name, `SM64Trainer.exe`. That asset is now the ~tiny
+bootstrap installer (stdlib + tkinter, `bootstrap/installer.py`): the old
+onefile app self-updates INTO the bootstrap, which downloads the zip once,
+installs the folder, creates the shortcut, launches the app, and hands its
+own path over via `--cleanup-bootstrap` for deletion (a running exe can't
+delete itself). The asset must be published under that name **forever** so
+a user who ignored updates for a year still migrates. It doubles as the
+new-user installer, preserving the "download SM64Trainer.exe, double-click"
+habit.
+
+**Reproducibility keeps deltas small**: `build_exe.py` re-execs itself with
+`PYTHONHASHSEED=1` + `SOURCE_DATE_EPOCH=<HEAD commit time>` because Python's
+hash randomization perturbs compiled bytecode — without it, every `.pyc`
+inside the PYZ hashes differently each build and the "changed files" set
+balloons. The zip is deterministic too (sorted entries, fixed 1980
+timestamps).
+
+**Measured volatile set (2026-07-23, live-gate build machine):**
+- Two `--mode app` builds at the SAME commit: 2,878 files / 553 MB —
+  **0 changed bytes** (byte-identical). The `PYTHONHASHSEED=1` +
+  `SOURCE_DATE_EPOCH` re-exec fully works. One first-build-only artifact:
+  PyInstaller's analysis of build 1 generated `comtypes/gen/__init__.py`
+  into site-packages, which build 2+ then collects (sub-KB, stable after
+  the first build on a machine).
+- The onedir `SM64Trainer.exe` is 24.8 MB raw / **23.4 MB deflated** and
+  embeds the PYZ (ALL our Python code) — so any Python change costs
+  ~23.4 MB of download. Data files (`_internal/sm64_events/ui/*.js`, seeds,
+  ffmpeg) are separate files: a UI-only release deltas in KILOBYTES, and
+  the ~200 MB dependency bulk moves only when `uv.lock` bumps a package.
+- Real-CDN Range probe: GitHub release assets answer
+  `Range: bytes=0-99` with 302→302→**206 Partial Content**, exactly 100
+  bytes — the incremental premise holds against production infrastructure.
+- Bootstrap installer builds at **11.2 MB** (vs the ~25 MB estimate).
+- Net: typical update ≈ **23-25 MB** (was 220 MB); best case KBs; worst
+  case (dependency bump) proportional to the bumped packages only.
 
 ## Compare (side-by-side, v1.3.0)
 

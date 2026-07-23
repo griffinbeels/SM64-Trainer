@@ -115,3 +115,7 @@ def test_compare_cache_dir_under_data_root():
     # Sits beside the db, under the same data root (frozen or source).
     assert compare_cache_dir() == db_path().parent / "compare_cache"
     assert compare_cache_dir().name == "compare_cache"
+
+
+def test_install_root_is_exe_parent():
+    assert paths.install_root() == Path(sys.executable).resolve().parent
