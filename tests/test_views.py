@@ -1204,3 +1204,22 @@ def test_segment_section_time_filter_reads_def_guards(tmp_path):
     sec = next(s for s in view["segments"] if s["segment_id"] == sid)
     assert sec["time_filter"] == {"min_frames": 180, "max_frames": 600,
                                   "is_default": False}
+
+
+def test_deleted_strat_hidden_and_masked(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.set_strat(2, 2, "oldstrat"))
+    asyncio.run(svc.publish(star(1350)))                   # attempt tagged oldstrat
+    db.set_state("strategies", {})                         # not registered anymore
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    assert "oldstrat" in sec["strategies"]                 # sanity: observed source
+    assert sec["last_strat"] == "oldstrat"
+    db.set_state("deleted_strats", {"star:2:2": ["oldstrat"]})
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    assert "oldstrat" not in sec["strategies"]             # observed hidden
+    assert sec["last_strat"] is None                       # ghost masked
+    assert view["last_strat_by_star"].get("2:2") is None
+    assert (view["target"].get("strat_tag") or None) is None

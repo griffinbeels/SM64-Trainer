@@ -159,10 +159,13 @@ _CATALOG = _catalog()
 
 
 def _strategies_for(registered: dict, attempts, course_id: int, star_id: int,
-                    ranks=None) -> list[str]:
+                    ranks=None, deleted=()) -> list[str]:
     """Registered strategies (ui_state) merged with every strat ever used
     on this star's attempts, plus any strategies defined in rank standards —
-    union preserves registration order first, then observed, then standard."""
+    union preserves registration order first, then observed, then standard.
+    `deleted` (the star's deleted_strats tombstone list) is filtered out last —
+    the observed-on-attempts union source is journal-derived and can't itself
+    be deleted, so this is where a tombstoned name stops surfacing."""
     out = list(registered.get(f"{course_id}:{star_id}", []))
     for a in attempts:
         if (a.course_id, a.star_id) == (course_id, star_id) \
@@ -172,18 +175,19 @@ def _strategies_for(registered: dict, attempts, course_id: int, star_id: int,
         for strat in ranks.strategies(entity_key(course_id, star_id)):
             if strat not in out:
                 out.append(strat)
-    return out
+    return [s for s in out if s not in deleted]
 
 
-def _seg_strategies(history, seg_id: int, ranks=None) -> list[str]:
+def _seg_strategies(history, seg_id: int, ranks=None, deleted=()) -> list:
     """Observed strats (sorted) union rank-standard strats for a segment section.
-    Segments have no registered-strategies KV yet, so observed comes first."""
+    Segments have no registered-strategies KV yet, so observed comes first.
+    `deleted` filters the segment's tombstoned names, same as _strategies_for."""
     out = sorted({a.strat_tag for a in history if a.strat_tag})
     if ranks is not None:
         for strat in ranks.strategies(entity_key(None, None, seg_id)):
             if strat not in out:
                 out.append(strat)
-    return out
+    return [s for s in out if s not in deleted]
 
 
 def _attempt_rank(a, frames, ranks) -> str | None:
@@ -391,6 +395,12 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     registered = db.get_state("strategies", {})
     markers_state = db.get_state("timeline_markers", {})
     time_filters_state = db.get_state("time_filters", {})
+    deleted_strats = db.get_state("deleted_strats", {})
+
+    def masked(strat, ek):
+        """A tombstoned (fully deleted) strat must never surface as an
+        active/last strat — the dropdowns no longer offer it."""
+        return None if strat and strat in deleted_strats.get(ek, []) else strat
 
     sections, unassigned = [], []
     seen: dict[tuple[int, int], None] = {}
@@ -429,6 +439,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     scoped_set = set(scoped)
     igt_of = lambda a: a.igt_frames
     for course_id, star_id in seen:
+        ek = entity_key(course_id, star_id)
         history = [a for a in all_attempts
                    if a.course_id == course_id and a.star_id == star_id]
         in_section = [a for a in history if a in scoped_set]
@@ -455,8 +466,8 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "attempts": [_attempt_json(a, pbs, clock, service.ranks) for a in in_section],
             "stats": _stats_for(history, stat_menu, clock),
             "strategies": _strategies_for(registered, all_attempts, course_id, star_id,
-                                         service.ranks),
-            "last_strat": service.strat_by_star.get((course_id, star_id)),
+                                         service.ranks, deleted_strats.get(ek, [])),
+            "last_strat": masked(service.strat_by_star.get((course_id, star_id)), ek),
             "timeline": _timeline(history, igt_of),
             "markers_by_strat": _markers_for(markers_state, course_id, star_id),
             "time_filter": _time_filter_json(
@@ -464,7 +475,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "progress": _progress(in_section, pb_ids, session_meta, igt_of,
                                   service.ranks, clock),
             "rank": _section_banner(
-                service.ranks, entity_key(course_id, star_id),
+                service.ranks, ek,
                 (star_strat := service.strat_by_star.get((course_id, star_id))),
                 pbs_by_strat.get((course_id, star_id, clock, star_strat))),
         })
@@ -479,6 +490,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     rta_of = lambda a: a.rta_frames
     seg_sections = []
     for seg_id in seen_segs:
+        seg_ek = entity_key(None, None, seg_id)
         d = seg_defs.get(seg_id)
         history = [a for a in all_attempts if a.segment_id == seg_id]
         in_section = [a for a in history if a in scoped_set]
@@ -501,8 +513,9 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             # observed-from-attempts union rank-standard strategies; segments
             # have no registered-strategies KV yet so observed comes first
             # (sorted), then any standard strats not already present.
-            "strategies": _seg_strategies(history, seg_id, service.ranks),
-            "last_strat": service.strat_by_segment.get(seg_id),
+            "strategies": _seg_strategies(history, seg_id, service.ranks,
+                                         deleted_strats.get(seg_ek, [])),
+            "last_strat": masked(service.strat_by_segment.get(seg_id), seg_ek),
             "timeline": _timeline(history, rta_of),
             "markers_by_strat": _markers_for(markers_state, "seg", seg_id),
             "time_filter": _time_filter_json(
@@ -510,7 +523,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "progress": _progress(in_section, pb_ids, session_meta, rta_of,
                                   service.ranks, "rta"),
             "rank": _section_banner(
-                service.ranks, entity_key(None, None, seg_id),
+                service.ranks, seg_ek,
                 (seg_strat := service.strat_by_segment.get(seg_id)),
                 pbs_by_strat.get(("segment", seg_id, "rta", seg_strat))),
         })
@@ -527,6 +540,9 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     tgt_c, tgt_s = target["course_id"], target["star_id"]
     target["course_name"] = course_name(tgt_c) if tgt_c is not None else None
     target["star_name"] = star_name(tgt_c, tgt_s) if tgt_c is not None else None
+    target_ek = (entity_key(None, None, target["segment_id"])
+                if target["kind"] == "segment" else entity_key(tgt_c, tgt_s))
+    target["strat_tag"] = masked(target.get("strat_tag"), target_ek)
 
     return {
         "session": {"id": service.session_id},
@@ -540,19 +556,21 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         "segments": seg_sections,
         "unassigned": unassigned,
         "strategies": registered,
-        "last_strat_by_star": {f"{c}:{s}": v
+        "last_strat_by_star": {f"{c}:{s}": masked(v, entity_key(c, s))
                                for (c, s), v in service.strat_by_star.items()},
         # Parallel to last_strat_by_star: each star's rank under its ACTIVE
         # strat, graded on the PB achieved WITH that strat (per-strategy
         # ranking — pbs_by_strat, never the strategy-blind overall PB), for
         # the quick-select grid's at-a-glance medal. Only gradeable stars
         # appear; recomputed every build so changing a star's strat updates
-        # its medal on the next view.
+        # its medal on the next view. A tombstoned strat is masked to None
+        # before grading — a deleted strategy must not keep showing a medal.
         "rank_by_star": {
             f"{c}:{s}": rank
             for (c, s), strat in service.strat_by_star.items()
-            if (rank := _strat_rank(service.ranks, entity_key(c, s), strat,
-                                    pbs_by_strat.get((c, s, "igt", strat))))},
+            if (live_strat := masked(strat, entity_key(c, s)))
+            and (rank := _strat_rank(service.ranks, entity_key(c, s), live_strat,
+                                    pbs_by_strat.get((c, s, "igt", live_strat))))},
         "stage": service.current_stage,
         # Segments that start in a known subarea OR level, for the quick-select
         # banner (filtered client-side by the current subarea/level). `enabled`
@@ -669,20 +687,28 @@ def build_run_history(db, route_id: int | None = None) -> dict:
             "pb": {"total_ms": pb["total_ms"]} if pb else None}
 
 
-def _candidate_rank(db, service, c) -> str | None:
+def _candidate_rank(db, service, c, deleted_strats: dict) -> str | None:
     """Rank for one route candidate under its active strat, graded ONLY by a
     PB achieved WITH that strat (per-strategy ranking — the strat_tag filter on
-    current_pb; a faster PB on another strat must not rank this candidate)."""
+    current_pb; a faster PB on another strat must not rank this candidate).
+    `deleted_strats` is the deleted_strats KV (read once per route view build,
+    by the caller) — a tombstoned active strat is masked to None here before
+    grading, same rule as build_session_view's `masked` helper, so a deleted
+    strategy can't keep showing a route medal."""
     if service.ranks is None:
         return None  # skip the PB lookup entirely when nothing can be graded
     if c["type"] == "segment":
         ek = entity_key(None, None, c["segment_id"])
         strat = service.strat_by_segment.get(c["segment_id"])
+        if strat in deleted_strats.get(ek, []):
+            strat = None
         pb = (db.current_pb(None, None, "rta", segment_id=c["segment_id"],
                             strat_tag=strat) if strat else None)
     else:
         ek = entity_key(c["course"], c["star"])
         strat = service.strat_by_star.get((c["course"], c["star"]))
+        if strat in deleted_strats.get(ek, []):
+            strat = None
         pb = (db.current_pb(c["course"], c["star"], "igt", strat_tag=strat)
               if strat else None)
     return _strat_rank(service.ranks, ek, strat, pb)
@@ -699,6 +725,7 @@ def build_route_view(db, service, route_id: int) -> dict:
         raise LookupError(f"route {route_id} not found")
     attempts = db.attempts()
     seg_names = {d["id"]: d["name"] for d in db.segment_defs()}
+    deleted_strats = db.get_state("deleted_strats", {})
     stats = route_stats(route["steps"], attempts)
     steps = []
     for step, st in zip(route["steps"], stats):
@@ -716,7 +743,8 @@ def build_route_view(db, service, route_id: int) -> dict:
                               "star": c["star"],
                               "display": star_name(c["course"], c["star"]),
                               "course_name": course_name(c["course"])})
-        ranks_here = [_candidate_rank(db, service, c) for c in step["candidates"]]
+        ranks_here = [_candidate_rank(db, service, c, deleted_strats)
+                     for c in step["candidates"]]
         best = max((r for r in ranks_here if r),
                    key=lambda r: classify.RANK_SCORE[r], default=None)
         steps.append({"label": step.get("label"), "need": step["need"],
