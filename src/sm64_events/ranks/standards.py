@@ -35,7 +35,15 @@ def _reconcile(stored: dict, seed: dict) -> dict:
     """Bring an older stored seed up to a newer bundled one. The bundled seed
     wins for community data (strategies/times, videos, jp_strategies, clock, new
     entities/strats); user-CREATED entities/strats (absent from the seed) are
-    preserved. Returns a new dict (does not mutate inputs)."""
+    preserved. Returns a new dict (does not mutate inputs).
+
+    KNOWN GAP (found 2026-07-23, not yet fixed): this does not clear the
+    `deleted_strats` tombstone KV (storage-side, see tracking/service.py
+    purge_strategy). If a future seed ships a strategy whose name matches one
+    the user previously deleted on that entity, the tombstone keeps the NEW
+    seeded strat hidden from every dropdown while its column still renders,
+    and no UI path clears it. Fix when it bites: drop tombstones for names the
+    incoming seed defines (here) or on reset_entity."""
     out = json.loads(json.dumps(seed))                 # deep copy
     oent = out.setdefault("entities", {})
     for ek, se in stored.get("entities", {}).items():

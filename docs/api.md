@@ -134,7 +134,43 @@ All endpoints are under `/api`. JSON in, JSON out.
 "complete K of N" group steps), showing per-step and cumulative success rates,
 and import/export of a route as copy-pastable JSON to share. Picking an active
 route focuses the Practice tab on that route's stars/segments, in route order.
-(The full-game run timer arrives in a later phase.)
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/routes` | All routes with their raw `steps` (each step `{label?, need, candidates[]}`) |
+| `POST /api/routes` `{name, steps}` | Create a route. `409` if a step names a segment that doesn't exist |
+| `GET /api/routes/{route_id}` | One route resolved for display: candidate names, per-step and cumulative success rates, per-step rank, `broken` when a candidate's segment was deleted |
+| `PUT /api/routes/{route_id}` `{name?, steps?, start_condition?}` | Update a route. Editing the ARMED route re-arms it and voids any in-flight run (the run's plan changed under it) |
+| `DELETE /api/routes/{route_id}` | Delete a route |
+| `GET /api/routes/{route_id}/export` | The route as portable JSON — embeds the definitions of every segment it references, so it survives an import into a db that lacks them |
+| `POST /api/routes/import?dry_run=true\|false` | Import an exported route. `dry_run=true` previews the resolution (which embedded segments match existing definitions and which would be created) without writing |
+
+**Runs (full-game timer):** a run is armed by selecting a route (there is no
+Start button) and its clock starts when the route's `start_condition` trigger
+fires — default `reset_game` (F1) — plus the configured `start_offset_ms`.
+Splits are forgiving RTA: wall-clock per step **minus paused time**, retries
+roll up into the step, K-of-N steps complete without duplicates, and the run
+finishes on its last step. Cleared attempts (manual or auto-ignored) are
+invisible to runs. Run ids are the journal id of the starting `game_reset`,
+and stored split times are offset-free.
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/run` | The active run view: per-step cumulative times, ± vs PB, gold splits, paused ms |
+| `POST /api/run/start` `{route_id}` | Arm a route (selecting a route in the Run tab calls this). The clock waits for the start condition |
+| `POST /api/run/end` | End the active run |
+| `POST /api/run/pause` · `POST /api/run/resume` | Exclude paused time from splits and suspend step completions while paused |
+| `POST /api/run/reset` | Abort the active run without saving it |
+| `GET /api/run/history?finished_only=true\|false` | Finished (and optionally aborted) runs with their splits, for the history list and PB-progression graph |
+| `GET/PUT /api/run/settings` `{start_offset_ms}` | The run start offset (default 1360 ms), persisted in `ui_state` |
+
+Run lifecycle events `run_started`/`run_ended`/`run_paused`/`run_resumed`/
+`run_reset` are journaled; `run_finished`/`run_aborted`/`run_progress` are
+broadcast-only.
+
+**Rank standards** (`/api/ranks/*` — per-strategy rank ladders, the rank mode,
+and full deletion of custom strategies) are documented in the
+[README](../README.md#rank-badges) rather than here.
 
 **Error taxonomy:** `404` = no such attempt; `409` = attempt exists but is not valid for the
 operation (bad timer mode, already cleared, non-success outcome, missing clock, or — for

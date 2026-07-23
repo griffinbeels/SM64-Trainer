@@ -291,6 +291,13 @@ class TrackerService:
                          strat_tag: str | None = None) -> None:
         db = self._require_db()
         payload = {"course_id": course_id, "star_id": star_id}
+        # KNOWN GAP (found 2026-07-23, not yet fixed): a None strat_tag is
+        # omitted from the payload rather than journaled as an explicit clear,
+        # so picking "(no strategy)" in the header target editor leaves an
+        # already-set strat in place. Use set_strat(course, star, None), which
+        # DOES journal the null, until this is made symmetric — changing the
+        # shape here means auditing every target_set consumer (projection's
+        # strat_by_star, views' target payload, the run/segment target paths).
         if strat_tag is not None:
             payload["strat_tag"] = strat_tag
         await self.publish(Event(type="target_set", frame=0,
