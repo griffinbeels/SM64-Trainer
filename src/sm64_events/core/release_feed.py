@@ -18,6 +18,7 @@ Published release bodies come in exactly two shapes (all 15 releases audited
 
 strip_body() is THE rule for both, which is why the popup can stack notes all
 the way back to v1.0.0 with no per-release special-casing."""
+import json
 import logging
 import re
 import urllib.request
@@ -34,6 +35,9 @@ _UA = "SM64Trainer-updater"
 _PER_PAGE = 100
 # A legacy body's own title line, e.g. '## SM64 Trainer v1.2.0 - first release'.
 # The popup renders its own version header, so this would render twice.
+# This heuristic only ever sees marker-less bodies, i.e. releases at or below
+# v1.3.0 (all audited 2026-07-23) — a future marker-less release would need
+# re-checking against it.
 _LEGACY_TITLE = re.compile(r"^\s*#{1,6}\s+.*v\d+\.\d+\.\d+")
 
 
@@ -92,3 +96,29 @@ def notes_from_release(rel: dict) -> ReleaseNotes:
     return ReleaseNotes(version=(rel.get("tag_name") or "").lstrip("vV"),
                         date=(rel.get("published_at") or "")[:10],
                         notes=strip_body(rel.get("body") or ""))
+
+
+def missed_releases(current: str, *, http, repo: str,
+                    api_base: str) -> list[ReleaseNotes]:
+    """Every published release strictly newer than `current`, newest first —
+    the stack of notes a user who skipped N versions needs to read.
+
+    Best effort by design: ANY failure (network, rate limit, malformed
+    payload) returns [] so the caller degrades to the single latest release's
+    notes. Aggregation must never cost the user the update itself."""
+    try:
+        url = f"{api_base}/repos/{repo}/releases?per_page={_PER_PAGE}"
+        with http_get(http, url,
+                      accept="application/vnd.github+json") as response:
+            feed = json.loads(response.read().decode("utf-8"))
+        newer = [rel for rel in feed
+                 if not rel.get("draft") and not rel.get("prerelease")
+                 and is_newer(rel.get("tag_name") or "", current)]
+        # Sort by PARSED VERSION, never publish order: a backport published
+        # after a higher minor must not jump to the top of the stack.
+        newer.sort(key=lambda rel: parse_version(rel.get("tag_name") or ""),
+                   reverse=True)
+        return [notes_from_release(rel) for rel in newer]
+    except Exception:
+        log.info("release history unavailable", exc_info=True)
+        return []
