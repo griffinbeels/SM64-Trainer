@@ -631,7 +631,7 @@ git commit -m "docs: module-map rows for the modal shell + strategy modal"
   seed defines for `ek`; `[]` when there is no seed or the entity is absent.
   Task 8's seeded-protection check and Task 10's GET field consume this.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `tests/test_ranks_standards.py`:
 
@@ -651,12 +651,12 @@ def test_seeded_strategies_without_seed_is_empty(tmp_path):
     assert s.seeded_strategies("star:1:0") == []
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `uv run pytest tests/test_ranks_standards.py -q`
 Expected: 2 FAIL with `AttributeError: ... 'seeded_strategies'`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `standards.py`, after `user_videos` (≈ line 130):
 
@@ -671,11 +671,11 @@ In `standards.py`, after `user_videos` (≈ line 130):
         return list(seed["entities"].get(ek, {}).get("strategies", {}).keys())
 ```
 
-- [ ] **Step 4: Run to verify green**
+- [x] **Step 4: Run to verify green**
 
 Run: `uv run pytest tests/test_ranks_standards.py -q` → all pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/sm64_events/ranks/standards.py tests/test_ranks_standards.py
@@ -697,7 +697,7 @@ path can refuse community strats without a stored flag."
 - Consumes: `seeded_strategies(ek)` (Task 7); existing `set_strat`, `_register_strategy`, `create_rank_strategy`, `_rank_standards_changed`.
 - Produces: `async purge_strategy(ek: str, strat: str)` — raises ValueError on seeded strats; `_clear_tombstone(db, ek, strat)` called by BOTH create paths. Task 9 reads the `deleted_strats` KV shape `{ek: [names]}`; Task 10 exposes the command over REST.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `tests/test_tracker_service.py` (add `import json` and the `RankStandards` import at the top with the other imports):
 
@@ -755,12 +755,12 @@ def test_purge_segment_strategy_tombstones(tmp_path):
     assert "fast" in db.get_state("deleted_strats", {}).get("segment:3", [])
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `uv run pytest tests/test_tracker_service.py -q -k "purge or recreate"`
 Expected: FAIL with `AttributeError: ... 'purge_strategy'`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `service.py`. Helper next to `_register_strategy`:
 
@@ -827,11 +827,11 @@ Note the ORDER: the tombstone is written AFTER the `set_strat(None)` call —
 tombstone, but keep the order anyway so a future register-on-null change
 fails the recreate test instead of silently breaking delete.
 
-- [ ] **Step 4: Run to green**
+- [x] **Step 4: Run to green**
 
 Run: `uv run pytest tests/test_tracker_service.py -q` → all pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/sm64_events/tracking/service.py tests/test_tracker_service.py
@@ -856,7 +856,7 @@ name is the undo."
 - Consumes: the `deleted_strats` KV `{ek: [names]}` (Task 8).
 - Produces: sections whose `strategies` lists and every active-strat read exclude tombstoned names. The masked read sites: star section `last_strat`, segment section `last_strat`, top-level `last_strat_by_star`, `rank_by_star` grading, `_candidate_rank` (route medals), and `view["target"]["strat_tag"]`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/test_views.py`:
 
@@ -880,12 +880,12 @@ def test_deleted_strat_hidden_and_masked(tmp_path):
     assert (view["target"].get("strat_tag") or None) is None
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `uv run pytest tests/test_views.py -q -k deleted_strat`
 Expected: FAIL on `"oldstrat" not in sec["strategies"]` (hidden not implemented)
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Add `deleted=()` params and final filters:
 
@@ -926,11 +926,11 @@ at the point the value is read. (`_candidate_rank` lives outside
 `build_session_view` — pass the deleted-KV or re-read it there; keep it
 one read per view build where practical.)
 
-- [ ] **Step 4: Run to green + full suite**
+- [x] **Step 4: Run to green + full suite**
 
 Run: `uv run pytest tests/test_views.py -q` then `uv run pytest -q` → all pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/sm64_events/tracking/views.py tests/test_views.py
@@ -954,7 +954,7 @@ medal, or target line."
 - Consumes: `purge_strategy` (Task 8), `seeded_strategies` (Task 7).
 - Produces: `DELETE /api/ranks/standards/{entity}/{strategy}?purge=true` (409 on seeded via the existing ValueError mapping); GET response gains `"seeded": [names]`. Task 11 consumes both.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `tests/test_ranks_api.py`. IMPORTANT: read the file's existing
 harness first and adapt construction — the helper below is referred to as
@@ -1003,12 +1003,12 @@ If the harness's ranks store has no seed file, extend the harness (or add a
 seeded variant) so `seeded_strategies` is non-empty — the 409 test needs a
 real seeded strat.
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `uv run pytest tests/test_ranks_api.py -q -k "seeded or purge"`
 Expected: FAIL (`seeded` KeyError; purge param ignored → no tombstone)
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 GET gains one field:
 
@@ -1031,11 +1031,11 @@ DELETE gains the param and dispatch:
         return {"ok": True}
 ```
 
-- [ ] **Step 4: Run to green + full suite**
+- [x] **Step 4: Run to green + full suite**
 
 Run: `uv run pytest tests/test_ranks_api.py -q` then `uv run pytest -q` → all pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/sm64_events/server/ranks_api.py tests/test_ranks_api.py
@@ -1056,7 +1056,7 @@ what lets the UI pick clear-vs-delete per column."
 - Consumes: GET `seeded` field + `?purge=true` (Task 10).
 - Produces: seeded strat × = clear-data (existing confirm/behavior); custom strat × = full delete with its own confirm.
 
-- [ ] **Step 1: Implement**
+- [x] **Step 1: Implement**
 
 Add next to the other per-strat accessors:
 
@@ -1089,7 +1089,7 @@ Change the × button's title to:
 title=${isSeeded(s) ? "clear this strategy's standards" : "delete this strategy"}
 ```
 
-- [ ] **Step 2: Verify**
+- [x] **Step 2: Verify**
 
 `node --check` on standards.js; `uv run pytest -q` (regression). Browser
 (dev server in the worktree, :8065): create a custom strat via the modal,
@@ -1100,7 +1100,7 @@ the old data's column returns. On a seeded strat, × shows the CLEAR
 variant and the column survives (store data cleared — restore it after
 via "Reset to community defaults"). Console clean.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/sm64_events/ui/components/standards.js
@@ -1116,7 +1116,7 @@ git commit -m "feat(ui): dual-meaning x — clear seeded strats, delete custom o
 - Modify: `docs/api.md` if it documents the ranks DELETE (check; update with `purge` + `seeded`)
 - Modify: this plan file (tick addendum checkboxes)
 
-- [ ] **Step 1: Full suite** — `uv run pytest -q` → all pass (count > 1077: new tests landed).
-- [ ] **Step 2: Browser spot-sweep** — the Task 11 scenario end-to-end once more on a fresh server start, plus one seeded-clear + reset-to-defaults; console clean.
-- [ ] **Step 3: Docs** — CLAUDE.md: amend the Rank UI row's standards.js text ("× clears data" → "× clears seeded / DELETES custom via ?purge=true (tombstone; recreate = undo)"), and the Rank REST surface row to name `purge` + `seeded`; update docs/api.md ranks section if present.
-- [ ] **Step 4: Commit** — CLAUDE.md + docs/api.md + this plan file.
+- [x] **Step 1: Full suite** — `uv run pytest -q` → all pass (count > 1077: new tests landed).
+- [x] **Step 2: Browser spot-sweep** — the Task 11 scenario end-to-end once more on a fresh server start, plus one seeded-clear + reset-to-defaults; console clean.
+- [x] **Step 3: Docs** — CLAUDE.md: amend the Rank UI row's standards.js text ("× clears data" → "× clears seeded / DELETES custom via ?purge=true (tombstone; recreate = undo)"), and the Rank REST surface row to name `purge` + `seeded`; update docs/api.md ranks section if present.
+- [x] **Step 4: Commit** — CLAUDE.md + docs/api.md + this plan file.
