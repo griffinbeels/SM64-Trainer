@@ -162,6 +162,10 @@ export function Routes({ t }) {
   }, []);
   // re-fetch the resolved view whenever the selection OR the raw routes change
   // (a saveSteps PUT reloads routes -> this refreshes the % columns).
+  // Known limitation (accepted, final review 2026-07-23): this tab has no WS
+  // subscription, so step medals / avg_rank go stale on rank_mode_changed or
+  // rank_standards_changed until reselect/edit. The live surface is the
+  // Practice tab's RouteFocus, which re-fetches on every t.view update.
   useEffect(() => { loadView(selId); }, [selId, routes]);
   // mirror the loaded route's start_condition into a local edit buffer, so a
   // half-typed parameterized trigger (type chosen, required param not yet) can
