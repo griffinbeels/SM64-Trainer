@@ -81,7 +81,6 @@ def test_reset_entity_endpoint(tmp_path):
         assert r.json()["strategies"] == {}
 
 def test_get_standards_includes_videos(tmp_path):
-    import json
     client, svc = make_client(tmp_path)
     # seed a video directly into the store
     svc.ranks._data["entities"]["star:8:2"] = {
