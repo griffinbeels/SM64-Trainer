@@ -43,6 +43,16 @@ export function ParamInput({ schema, name, value, vocab, clause, onChange }) {
       ${names.map((n, i) => html`<option value=${i}>${n}</option>`)}
     </select>`;
   }
+  if (schema.kind === "seconds") {
+    // Stored as FRAMES (30 fps int — the project's primary clock); edited as
+    // decimal seconds. "" stays null so a cleared input doesn't become 0
+    // (0 is meaningful: "no minimum").
+    return html`<input type="number" min="0" step="0.1" style="width:5rem"
+        value=${value == null ? "" : value / 30}
+        placeholder="seconds"
+        onchange=${(e) => onChange(e.target.value === ""
+          ? null : Math.round(Number(e.target.value) * 30))} />`;
+  }
   return html`<input type="number" style="width:5rem" value=${value ?? ""}
       placeholder=${name}
       onchange=${(e) => onChange(numOrNull(e.target.value))} />`;
