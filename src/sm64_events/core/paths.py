@@ -139,6 +139,14 @@ def bundled_rank_standards() -> Path | None:
     return cand if cand.exists() else None
 
 
+def install_root() -> Path:
+    """Directory containing the running executable — the onedir install root
+    when frozen (SM64Trainer.exe + _internal\\ live here). The updater and the
+    startup update-repair operate relative to THIS, never a hardcoded install
+    location, so a user who moves the folder keeps working updates."""
+    return Path(sys.executable).resolve().parent
+
+
 def bundled_ffmpeg() -> str | None:
     """Absolute path to the ffmpeg.exe bundled beside a frozen exe, else None.
     PyInstaller unpacks --add-binary files into ``sys._MEIPASS``."""
