@@ -130,8 +130,9 @@ Caveats (hard-won — keep these current):
     wins. Only successes are judged (a fast reset is legitimate practice; no
     clock at all is not judged either). An auto-cleared row doesn't move the
     target (the seg_closed loop's "not a.cleared" follow-check and
-    _close_by_grab's identical check both skip it for free) and, per Task 6,
-    won't advance a run.
+    _close_by_grab's identical check both skip it for free) — but it still
+    advances a run today (RunTracker never checks .cleared); the runs-side
+    guard lands separately.
 """
 from dataclasses import dataclass, replace
 
