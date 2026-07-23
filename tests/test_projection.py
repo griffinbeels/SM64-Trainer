@@ -1162,3 +1162,88 @@ def test_run_starts_on_configured_level_enter(tmp_path):
         payload={"course_id": 9, "star_id": 0, "igt_frames": 1}))
     attempts, proj = replay(db.events())
     assert len(proj.finished_runs()) == 1
+
+
+def test_success_below_default_min_is_auto_ignored():
+    # igt 10 < DEFAULT_MIN_FRAMES 15: a detection artifact, auto-cleared
+    attempts = project([
+        jev(1, "practice_reset", 1000, {"igt_frames_before": 0}),
+        star(2, 1350, igt=10),
+    ])
+    a = attempts[0]
+    assert a.outcome == "success" and a.cleared is True
+    assert a.cleared_reason == "auto: below 0.50s min"
+
+
+def test_star_min_override_flags_what_default_allows():
+    tf = {"2:2": {"min_frames": 180, "max_frames": None}}
+    attempts = project([
+        jev(1, "practice_reset", 1000, {"igt_frames_before": 0}),
+        star(2, 1350, igt=150),
+    ], time_filters=tf)
+    assert attempts[0].cleared is True
+    assert attempts[0].cleared_reason == "auto: below 6.00s min"
+
+
+def test_star_max_override_flags_slow_success():
+    tf = {"2:2": {"min_frames": 15, "max_frames": 300}}
+    attempts = project([star(1, 900, igt=343)], time_filters=tf)
+    assert attempts[0].cleared is True
+    assert attempts[0].cleared_reason == "auto: above 10.00s max"
+
+
+def test_min_zero_disables_the_floor():
+    tf = {"2:2": {"min_frames": 0, "max_frames": None}}
+    attempts = project([star(1, 900, igt=1)], time_filters=tf)
+    assert attempts[0].cleared is False
+
+
+def test_exactly_at_min_counts():
+    tf = {"2:2": {"min_frames": 150, "max_frames": None}}
+    attempts = project([star(1, 900, igt=150)], time_filters=tf)
+    assert attempts[0].cleared is False
+
+
+def test_failures_are_never_auto_flagged():
+    # a 2-frame reset is legitimate practice behavior (fail fast)
+    attempts = project([
+        star(1, 900),                                     # sets target (2,2)
+        jev(2, "practice_reset", 1000, {"igt_frames_before": 0}),
+        jev(3, "practice_reset", 1002,
+            {"igt_frames_before": 2, "mario_acted": True}),
+    ])
+    reset_row = [a for a in attempts if a.outcome == "reset"][0]
+    assert reset_row.cleared is False
+
+
+def test_rta_fallback_when_igt_missing():
+    # star_collected without igt_frames: judge on the wall-frame delta
+    attempts = project([
+        jev(1, "practice_reset", 1000, {"igt_frames_before": 0}),
+        jev(2, "star_collected", 1005, {"course_id": 2, "star_id": 2}),
+    ])
+    assert attempts[0].cleared is True          # rta 5 < 15
+    attempts = project([
+        jev(1, "practice_reset", 1000, {"igt_frames_before": 0}),
+        jev(2, "star_collected", 1350, {"course_id": 2, "star_id": 2}),
+    ])
+    assert attempts[0].cleared is False         # rta 350
+
+
+def test_manual_restore_wins_over_auto_flag():
+    # journaled clear/restore history exempts the id from the auto rule
+    attempts = project([
+        jev(1, "practice_reset", 1000, {"igt_frames_before": 0}),
+        star(2, 1350, igt=10),
+        jev(3, "attempt_restored", 0, {"attempt_id": 1}),
+    ])
+    assert attempts[0].cleared is False
+
+
+def test_auto_ignored_grab_does_not_move_target():
+    _, proj = replay([
+        star(1, 900),                            # valid grab: target (2,2)
+        jev(2, "practice_reset", 1000, {"igt_frames_before": 0}),
+        star(3, 1005, course=8, star_id=1, igt=5),   # bogus grab of (8,1)
+    ])
+    assert proj.target == ("star", 2, 2)
