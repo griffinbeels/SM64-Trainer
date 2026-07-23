@@ -6,7 +6,9 @@ Contract (the UI builds against ALL of this):
   Stat chips and the timeline ALWAYS compute over lifetime history (spec §8).
 - Star sections are ordered newest-activity-first (max scoped journal
   recency via projection.journal_id; fresh targets sort last); segment
-  sections order among themselves the same way.
+  sections order among themselves the same way. Every section ALSO carries
+  `last_activity` (that same journal recency, -1 for fresh) so the UI can
+  interleave the two arrays into one recency-ordered list.
 - The practice target's section is ALWAYS present, even with zero scoped
   attempts — the UI pins it as the active block (star AND segment kinds).
   ARMED segments are pinned the same way: active now => section present.
@@ -424,6 +426,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         # add the key unless the UI branch is updated at the same time.
         sections.append({
             "course_id": course_id, "star_id": star_id,
+            "last_activity": last_id.get((course_id, star_id), -1),
             "course_name": course_name(course_id),
             "star_name": star_name(course_id, star_id),
             "links": star_links(course_id, star_id),
@@ -459,6 +462,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         pb_row = pbs.get(("segment", seg_id, "rta"))
         seg_sections.append({
             "kind": "segment", "segment_id": seg_id,
+            "last_activity": last_id.get(("segment", seg_id), -1),
             "name": d.name if d else f"segment {seg_id} (deleted)",
             "broken": d is None,
             "armed": seg_id in armed,

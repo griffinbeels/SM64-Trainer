@@ -673,6 +673,27 @@ def test_segment_sections_order_by_journal_recency_not_raw_id(tmp_path):
     assert [s["segment_id"] for s in view["segments"]] == [1, 2, 5]
 
 
+def test_sections_carry_cross_kind_recency_for_interleaving(tmp_path):
+    # the UI renders ONE stars+segments list interleaved by recency, but the
+    # payload ships two arrays — each section must carry last_activity
+    # (journal recency, -1 for fresh) comparable ACROSS kinds. Raw segment
+    # attempt ids carry the def-id namespace offset, so a raw-id key would
+    # always float segments above stars.
+    db, svc = make(tmp_path)
+    lblj_success(svc, t0=1000)                       # segment activity first
+    asyncio.run(svc.publish(ev("practice_reset", 5000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(5400, igt=343)))    # star activity later
+    view = build_session_view(db, svc, clock="igt")
+    star_sec = next(s for s in view["stars"]
+                    if (s["course_id"], s["star_id"]) == (2, 2))
+    lblj = seg_section(view, 1)
+    assert star_sec["last_activity"] > lblj["last_activity"] > 0
+    # a zero-attempt target section is fresh: recency -1, sorts last
+    asyncio.run(svc.set_target_segment(3))
+    view2 = build_session_view(db, svc, clock="igt")
+    assert seg_section(view2, 3)["last_activity"] == -1
+
+
 def test_unassigned_excludes_segment_attempts(tmp_path):
     db, svc = make(tmp_path)
     lblj_success(svc)               # segment attempts have course_id None

@@ -621,6 +621,12 @@ export function Practice({ t, openCompare }) {
     : stickyPin ? [stickyPin] : activeSeg ? [activeSeg] : [];
   const restStars = v.stars.filter((sec) => sec !== activeStar);
   const restSegs = segs.filter((sec) => !pinnedSegs.includes(sec));
+  // ONE list, stars and segments interleaved by recency — the server ships
+  // last_activity (journal recency, comparable ACROSS kinds; -1 = fresh)
+  // precisely so this merge works; raw attempt ids would not (segment ids
+  // carry a namespace offset). Stable sort keeps ties deterministic.
+  const restSections = [...restSegs, ...restStars]
+    .sort((a, b) => (b.last_activity ?? -1) - (a.last_activity ?? -1));
 
   const unassignedVisible = v.unassigned.filter(
     (a) => !a.cleared && a.outcome !== "abandoned");
@@ -652,10 +658,10 @@ export function Practice({ t, openCompare }) {
         ${activeStar && html`<${StarSection} key=${`${activeStar.course_id}:${activeStar.star_id}`} sec=${activeStar} t=${t} ui=${ui} pinned=${true} freshIds=${freshIds} openCompare=${openCompare} />`}
         ${v.stars.length === 0 && segs.length === 0 && v.unassigned.length === 0
           ? html`<p class="meta">No attempts this session yet — grab a star.</p>` : ""}
-        ${restSegs.length > 0 && html`<div class="meta listhead">segments — recent activity first</div>`}
-        ${restSegs.map((sec) => html`<${SegmentSection} key=${`seg:${sec.segment_id}`} sec=${sec} t=${t} ui=${ui} pinned=${false} freshIds=${freshIds} openCompare=${openCompare} />`)}
-        ${restStars.length > 0 && html`<div class="meta listhead">stars — recent activity first</div>`}
-        ${restStars.map((sec) => html`<${StarSection} key=${`${sec.course_id}:${sec.star_id}`} sec=${sec} t=${t} ui=${ui} pinned=${false} freshIds=${freshIds} openCompare=${openCompare} />`)}
+        ${restSections.length > 0 && html`<div class="meta listhead">recent activity first</div>`}
+        ${restSections.map((sec) => sec.kind === "segment"
+          ? html`<${SegmentSection} key=${`seg:${sec.segment_id}`} sec=${sec} t=${t} ui=${ui} pinned=${false} freshIds=${freshIds} openCompare=${openCompare} />`
+          : html`<${StarSection} key=${`${sec.course_id}:${sec.star_id}`} sec=${sec} t=${t} ui=${ui} pinned=${false} freshIds=${freshIds} openCompare=${openCompare} />`)}
         ${v.unassigned.length > 0 && html`<div class="starsec">
           <div class="shead"><b>No target</b>
             <span class="meta">failures before any star was grabbed or set</span></div>
