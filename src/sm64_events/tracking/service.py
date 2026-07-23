@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from sm64_events.core.events import Event
 from sm64_events.core.timefmt import format_igt
 from sm64_events.memory.addresses import course_name, star_name
+from sm64_events.ranks.classify import RANK_MODES
 from sm64_events.storage.db import Database, EventRow
 from sm64_events.tracking.projection import Projector, replay, wipe_matches
 from sm64_events.tracking.segments import SegmentDef, validate_definition
@@ -477,6 +478,19 @@ class TrackerService:
     async def clear_rank_video(self, ek, strat, rank) -> None:
         self._require_ranks().clear_video(ek, strat, rank)
         await self._rank_standards_changed()
+
+    async def set_rank_mode(self, mode: str) -> None:
+        """Persist the global rank-grading mode (average rank mode spec) to
+        the ui_state KV and notify. Broadcast-only like the other rank
+        commands: a display preference, never journaled."""
+        if mode not in RANK_MODES:
+            raise ValueError(f"unknown rank mode: {mode!r}")
+        if self.db is None:
+            raise RuntimeError("tracking database unavailable")
+        self.db.set_state("rank_mode", mode)
+        await self.broadcaster.publish(Event(type="rank_mode_changed",
+                                             frame=0, timestamp_utc=_now(),
+                                             payload={"mode": mode}))
 
     # -- run lifecycle ---------------------------------------------------------
     async def _arm_run(self, route_id: int, void_active: bool = False) -> None:
