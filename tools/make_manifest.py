@@ -55,9 +55,16 @@ def entry_spans(zip_path: Path) -> dict[str, tuple[int, int, int]]:
 
 
 def make_manifest(zip_path: Path, version: str) -> str:
+    """Reads each entry fully into memory (peak = largest single file,
+    ~130 MB for ffmpeg) — fine for build-time tooling, unstated otherwise."""
     spans = entry_spans(zip_path)
     files = []
     with zipfile.ZipFile(zip_path) as zf:
+        names = [info.filename for info in zf.infolist()]
+        if len(names) != len(set(names)):
+            # zipfile happily writes duplicate arcnames; spans{} would keep
+            # only the LAST one and both manifest rows would get its offsets.
+            raise ValueError("zip contains duplicate entry names")
         for info in zf.infolist():
             data = zf.read(info.filename)
             offset, csize, method = spans[info.filename]

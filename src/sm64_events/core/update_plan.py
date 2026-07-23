@@ -17,6 +17,7 @@ Stays stdlib-only (json/hashlib/dataclasses/pathlib): the bootstrap
 installer imports this module and must remain a tiny PyInstaller build."""
 import hashlib
 import json
+import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -27,6 +28,22 @@ MANIFEST_ASSET = "manifest.json"
 # every release publishes the bootstrap installer under it, forever.
 BOOTSTRAP_ASSET = "SM64Trainer.exe"
 INSTALLED_MANIFEST = "installed_manifest.json"
+# The apply layer's on-disk state (core/update_apply.py imports these from
+# here — ONE registry). Reserved below: a manifest that named these could
+# rename the crash-recovery journal away mid-swap (defeating rollback) or
+# nest the backup tree into itself (wave-0 review, 2026-07-23).
+BACKUP_DIR = ".update_backup"
+STAGING_DIR = ".update_staging"
+JOURNAL_NAME = "update_journal.json"
+
+_RESERVED_FIRST_SEGMENTS = {INSTALLED_MANIFEST, JOURNAL_NAME,
+                            BACKUP_DIR, STAGING_DIR}
+# Windows-invalid filename characters + NUL/control chars. The colon matters
+# most: 'C:/x' is DRIVE-RELATIVE (root.joinpath('C:', 'x') escapes the
+# install root entirely) and 'file.dll:name' is an NTFS alternate data
+# stream (wave-0 review, 2026-07-23).
+_BAD_PATH_CHARS = set('<>:"|?*') | {chr(code) for code in range(32)}
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 
 @dataclass(frozen=True)
@@ -48,7 +65,12 @@ class Manifest:
 def _safe_path(path: str) -> bool:
     if not path or "\\" in path or path.startswith("/"):
         return False
-    return all(seg not in ("", ".", "..") for seg in path.split("/"))
+    if any(ch in _BAD_PATH_CHARS for ch in path):
+        return False
+    segments = path.split("/")
+    if segments[0] in _RESERVED_FIRST_SEGMENTS:
+        return False
+    return all(seg not in ("", ".", "..") for seg in segments)
 
 
 def parse_manifest(text: str) -> Manifest:
@@ -74,7 +96,17 @@ def parse_manifest(text: str) -> Manifest:
             raise ValueError(f"bad manifest entry: {raw!r}") from err
         if not _safe_path(entry.path):
             raise ValueError(f"unsafe manifest path: {entry.path!r}")
+        if not _SHA256_RE.fullmatch(entry.sha256):
+            raise ValueError(f"{entry.path}: sha256 is not 64 hex chars")
+        if entry.size < 0 or entry.zip_offset < 0 or entry.zip_csize < 0:
+            raise ValueError(f"{entry.path}: negative size/offset/csize")
+        if entry.zip_method not in (0, 8):
+            raise ValueError(f"{entry.path}: unsupported zip method "
+                             f"{entry.zip_method}")
         entries.append(entry)
+    paths = [entry.path for entry in entries]
+    if len(paths) != len(set(paths)):
+        raise ValueError("manifest lists a path more than once")
     return Manifest(version=str(doc.get("version", "")), files=tuple(entries))
 
 
@@ -106,6 +138,10 @@ def build_plan(remote: Manifest, installed: "Manifest | None", root: Path, *,
     verify_local=True re-hashes every supposedly-unchanged file (a forced
     'Check for updates' passes it) so silent same-size corruption self-heals;
     the routine hourly check uses the cheap existence+size path."""
+    if not remote.files:
+        # A self-consistent-but-empty manifest (release-side build bug)
+        # would otherwise plan deleting the ENTIRE install.
+        raise ValueError("remote manifest lists no files")
     installed_files = {e.path: e for e in (installed.files if installed else ())}
     fetch: list[ManifestEntry] = []
     for entry in remote.files:

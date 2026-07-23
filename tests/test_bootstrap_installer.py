@@ -161,6 +161,9 @@ def test_run_install_end_to_end(tmp_path, monkeypatch):
         "https://dl/full.sha": (hashlib.sha256(blob).hexdigest()
                                 + "  SM64Trainer-full.zip").encode(),
         "https://dl/manifest.json": manifest.encode(),
+        "https://dl/manifest.sha": (
+            hashlib.sha256(manifest.encode()).hexdigest()
+            + "  manifest.json").encode(),
     }
     launched = []
     monkeypatch.setattr("sm64_events.bootstrap.installer.create_desktop_shortcut",
@@ -221,3 +224,84 @@ def test_main_silent_runs_install(monkeypatch, tmp_path):
 def test_main_silent_failure_returns_1(monkeypatch):
     monkeypatch.setattr(boot, "run_install", lambda **kw: False)
     assert boot.main(["--silent"]) == 1
+
+
+# --- review findings (2026-07-23 wave-1 review) ---
+
+def test_shortcut_escapes_apostrophes_in_paths(tmp_path):
+    """A username like O'Brien puts an apostrophe in the exe path; inside a
+    single-quoted PS literal it must be doubled or the script is a parse
+    error and the shortcut silently never appears (I-2)."""
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        class R:
+            returncode = 0
+        return R()
+
+    exe = tmp_path / "O'Brien" / "SM64Trainer.exe"
+    assert create_desktop_shortcut(exe, run=fake_run) is True
+    script = calls[0][-1]
+    assert "O''Brien" in script
+    assert "O'Brien\\SM64Trainer" not in script.replace("''", "\x00")
+
+
+def test_run_install_bad_manifest_hash_reports_error(tmp_path, monkeypatch):
+    """The installed manifest must be verified like the zip (M-1)."""
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "lad"))
+    blob = _zip_bytes({APP_EXE: b"EXE"})
+    routes = {
+        LATEST: _release_json("v2.0.0", FULL_ASSETS),
+        "https://dl/full.zip": blob,
+        "https://dl/full.sha": (hashlib.sha256(blob).hexdigest()
+                                + "  SM64Trainer-full.zip").encode(),
+        "https://dl/manifest.json": b'{"schema": 1}',
+        "https://dl/manifest.sha": ("0" * 64 + "  manifest.json").encode(),
+    }
+    ui = _UI()
+    assert run_install(http=_http(routes), ui=ui) is False
+    assert ui.errors
+    assert not (tmp_path / "lad" / "Programs" / "SM64Trainer").exists()
+
+
+def test_install_tree_rejects_zip_without_exe(tmp_path):
+    """A sha-valid but malformed zip (missing the exe) must never replace a
+    working install (M-3)."""
+    import pytest
+    target = tmp_path / "Programs" / "SM64Trainer"
+    good = _zip_bytes({APP_EXE: b"GOOD"})
+    zp = tmp_path / "full.zip"
+    zp.write_bytes(good)
+    install_tree(zp, '{"schema": 1}', target)
+    zp.write_bytes(_zip_bytes({"_internal/only.dll": b"X"}))   # no exe
+    with pytest.raises(RuntimeError):
+        install_tree(zp, '{"schema": 1}', target)
+    assert (target / APP_EXE).read_bytes() == b"GOOD"          # intact
+
+
+def test_install_tree_restores_old_when_swap_fails(tmp_path, monkeypatch):
+    """If current->old succeeds but new->current fails, the last-good
+    install must be moved back, never left stranded as .old (M-2)."""
+    import pytest
+    target = tmp_path / "Programs" / "SM64Trainer"
+    zp = tmp_path / "full.zip"
+    zp.write_bytes(_zip_bytes({APP_EXE: b"V1"}))
+    install_tree(zp, '{"schema": 1}', target)
+    zp.write_bytes(_zip_bytes({APP_EXE: b"V2"}))
+    real = os.replace
+
+    def fail_fresh_move(src, dst):
+        if str(src).endswith(".new"):
+            raise PermissionError("locked")
+        return real(src, dst)
+
+    import sm64_events.bootstrap.installer as installer_mod
+    monkeypatch.setattr(installer_mod.os, "replace", fail_fresh_move)
+    with pytest.raises(RuntimeError):
+        install_tree(zp, '{"schema": 1}', target)
+    monkeypatch.setattr(installer_mod.os, "replace", real)
+    assert (target / APP_EXE).read_bytes() == b"V1"            # restored
+
+
+import os  # noqa: E402  (used by the monkeypatch tests above)

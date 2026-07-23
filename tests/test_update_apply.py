@@ -136,3 +136,87 @@ def test_sweep_backup_never_touches_an_applying_journal(tmp_path):
         "state": "applying", "replace": [], "delete": [], "added": []}))
     assert sweep_backup(install, attempts=1) is False
     assert read_journal(install)["state"] == "applying"
+
+
+# --- review findings (2026-07-23 wave-1 review) ---
+
+def test_journal_write_is_durable_and_leaves_no_tmp(tmp_path):
+    """The journal IS the crash-recovery record: it must be written via
+    temp+fsync+rename so power loss can't leave it missing/torn (I-4)."""
+    install, staging = _setup(tmp_path)
+    apply_plan(install, staging, replace=["SM64Trainer.exe"], delete=[])
+    assert read_journal(install)["state"] == "done"
+    assert not (install / (JOURNAL_NAME + ".tmp")).exists()
+
+
+def test_apply_plan_pairs_backup_and_place_per_file(tmp_path):
+    """Each file's place must IMMEDIATELY follow its backup (per-file pairs,
+    not backup-all-then-place-all): the window where a boot-critical file is
+    absent from the live tree shrinks to two back-to-back renames (I-3)."""
+    install, staging = _setup(tmp_path)
+    (staging / "_internal").mkdir(parents=True, exist_ok=True)
+    (staging / "_internal/lib.dll").write_bytes(b"NEW-DLL")
+    order = []
+    real = os.replace
+
+    def spy(src, dst):
+        order.append((Path(src).name, str(dst)))
+        return real(src, dst)
+
+    apply_plan(install, staging,
+               replace=["SM64Trainer.exe", "_internal/lib.dll"], delete=[],
+               os_replace=spy)
+    ops = [dst for _, dst in order]
+    exe_place = next(i for i, d in enumerate(ops)
+                     if d.endswith("SM64Trainer.exe") and BACKUP_DIR not in d)
+    dll_backup = next(i for i, d in enumerate(ops)
+                      if d.endswith("lib.dll") and BACKUP_DIR in d)
+    assert exe_place < dll_backup    # file 1 fully swapped before file 2 starts
+
+
+def test_failed_apply_marks_journal_rolled_back(tmp_path):
+    install, staging = _setup(tmp_path)
+    real = os.replace
+
+    def flaky(src, dst):
+        if "newfile" in str(src):
+            raise PermissionError("locked")
+        return real(src, dst)
+
+    with pytest.raises(PermissionError):
+        apply_plan(install, staging,
+                   replace=["SM64Trainer.exe", "_internal/newfile.dat"],
+                   delete=[], os_replace=flaky, retries=1,
+                   sleep=lambda s: None)
+    journal = read_journal(install)
+    assert journal["state"] == "rolled_back"
+    assert journal["rollback_failures"] == 0
+
+
+def test_startup_repair_displaces_locked_live_exe(tmp_path):
+    """Rollback must restore the exe even while the NEW exe is the RUNNING
+    one: Windows refuses to replace-over a running exe but allows renaming
+    it aside (I-3). Simulated by an os_replace that raises PermissionError
+    for any direct overwrite of the live exe path."""
+    install, _ = _setup(tmp_path)
+    backup = install / BACKUP_DIR
+    backup.mkdir()
+    live_exe = install / "SM64Trainer.exe"
+    os.replace(live_exe, backup / "SM64Trainer.exe")   # OLD-EXE into backup
+    live_exe.write_bytes(b"NEW-EXE")                   # the "running" exe
+    (install / JOURNAL_NAME).write_text(json.dumps({
+        "state": "applying", "replace": ["SM64Trainer.exe"],
+        "delete": [], "added": []}))
+    real = os.replace
+
+    def windows_like(src, dst):
+        if Path(dst) == live_exe and Path(dst).exists():
+            raise PermissionError("running exe")       # can't overwrite...
+        return real(src, dst)                          # ...but CAN rename away
+
+    assert startup_repair(install, os_replace=windows_like) == "rolled_back"
+    assert live_exe.read_bytes() == b"OLD-EXE"
+    journal = read_journal(install)
+    assert journal["rollback_failures"] == 0
+    displaced = backup / "SM64Trainer.exe.displaced"
+    assert displaced.read_bytes() == b"NEW-EXE"        # swept with the backup

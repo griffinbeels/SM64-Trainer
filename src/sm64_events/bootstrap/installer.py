@@ -46,7 +46,8 @@ def latest_release(http, repo: str = DEFAULT_REPO) -> tuple[str, dict]:
         rel = json.loads(r.read().decode("utf-8"))
     assets = {a.get("name"): a.get("browser_download_url")
               for a in rel.get("assets", [])}
-    for need in (ZIP_ASSET, ZIP_ASSET + ".sha256", MANIFEST_ASSET):
+    for need in (ZIP_ASSET, ZIP_ASSET + ".sha256",
+                 MANIFEST_ASSET, MANIFEST_ASSET + ".sha256"):
         if not assets.get(need):
             raise RuntimeError(f"latest release is missing asset {need}")
     return rel.get("tag_name") or "", assets
@@ -93,13 +94,28 @@ def install_tree(zip_path: Path, manifest_text: str, install_dir: Path) -> Path:
     shutil.rmtree(old, ignore_errors=True)
     with zipfile.ZipFile(zip_path) as zf:
         zf.extractall(fresh)
+    if not (fresh / APP_EXE).is_file():
+        # Never replace a working install with a zip that can't launch
+        # (sha-valid but malformed release). Wave-1 review M-3.
+        shutil.rmtree(fresh, ignore_errors=True)
+        raise RuntimeError(f"downloaded release is missing {APP_EXE}")
     (fresh / INSTALLED_MANIFEST).write_text(manifest_text)
     install_dir.parent.mkdir(parents=True, exist_ok=True)
+    moved_aside = False
     try:
         if install_dir.exists():
             os.replace(install_dir, old)
+            moved_aside = True
         os.replace(fresh, install_dir)
     except OSError as err:
+        if moved_aside and not install_dir.exists():
+            # The aside-move succeeded but the fresh-move failed: put the
+            # last-good install back so a failed run never leaves the user
+            # without a program dir. Wave-1 review M-2.
+            try:
+                os.replace(old, install_dir)
+            except OSError:
+                pass
         raise RuntimeError(
             "could not replace the existing install — close SM64 Trainer "
             f"and run this installer again ({err})") from err
@@ -117,10 +133,18 @@ _SHORTCUT_PS = (
     "$s.Save()")
 
 
+def _ps_quote(value: str) -> str:
+    """Escape for a single-quoted PowerShell literal: only the apostrophe is
+    special (doubled). Without this, a username like O'Brien closes the
+    string early and the shortcut silently fails. Wave-1 review I-2."""
+    return value.replace("'", "''")
+
+
 def create_desktop_shortcut(exe: Path, run=subprocess.run) -> bool:
     """[Environment]::GetFolderPath('Desktop') (not %USERPROFILE%\\Desktop)
     so OneDrive-redirected Desktops get the shortcut too."""
-    script = _SHORTCUT_PS.format(exe=str(exe), workdir=str(exe.parent))
+    script = _SHORTCUT_PS.format(exe=_ps_quote(str(exe)),
+                                 workdir=_ps_quote(str(exe.parent)))
     try:
         run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
             check=True, capture_output=True, timeout=30,
@@ -157,9 +181,21 @@ def run_install(*, http, ui, repo: str = DEFAULT_REPO,
                 raise RuntimeError("download failed verification "
                                    "(checksum mismatch)")
             manifest_text = fetch_text(http, assets[MANIFEST_ASSET])
+            manifest_sha = fetch_text(http,
+                                      assets[MANIFEST_ASSET + ".sha256"]).split()
+            manifest_digest = hashlib.sha256(
+                manifest_text.encode("utf-8")).hexdigest()
+            if not manifest_sha or \
+                    manifest_sha[0].strip().lower() != manifest_digest:
+                # Same no-unverified-bytes rule as the zip: a bad installed
+                # manifest would force a full re-download at the next update.
+                raise RuntimeError("manifest failed verification "
+                                   "(checksum mismatch)")
             ui.status("Installing…")
             exe = install_tree(zip_path, manifest_text, target)
-        create_desktop_shortcut(exe)
+        if not create_desktop_shortcut(exe):
+            ui.status("Note: could not create the Desktop shortcut — "
+                      f"the app is installed at {exe}")
         ui.status("Starting SM64 Trainer…")
         launch_app(exe, own_path)
         ui.done(exe)

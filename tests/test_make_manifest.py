@@ -74,3 +74,21 @@ def test_entry_spans_match_manifest(tmp_path):
         off, csize, method = spans[entry.path]
         assert (off, csize, method) == (entry.zip_offset, entry.zip_csize,
                                         entry.zip_method)
+
+
+def test_make_manifest_rejects_duplicate_arcnames(tmp_path):
+    """zipfile allows writing the same arcname twice; a manifest built from
+    such a zip would silently record the LAST entry's offsets for both rows.
+    Review finding M-6 (defensive — build_zip can't produce duplicates)."""
+    import warnings
+    import zipfile
+
+    import pytest
+    zp = tmp_path / "dup.zip"
+    with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("dup.txt", b"one")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")   # zipfile warns on the dup — intended
+            zf.writestr("dup.txt", b"two")
+    with pytest.raises(ValueError):
+        make_manifest(zp, "1.0.0")

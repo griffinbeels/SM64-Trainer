@@ -63,6 +63,45 @@ def test_parse_manifest_rejects_missing_field():
         parse_manifest(json.dumps(doc))
 
 
+# --- review findings (2026-07-23 wave-0 review) ---
+
+@pytest.mark.parametrize("bad", ["C:/x", "C:", "C:evil.dll",
+                                 "good.dll:hidden.exe", "x\x00y", "a<b",
+                                 "a?b", "a*b"])
+def test_parse_manifest_rejects_windows_colon_and_control_chars(bad):
+    """Colon paths are drive-relative on Windows (root.joinpath('C:', ...)
+    ESCAPES the install root) or NTFS alternate data streams; control chars
+    are never legitimate. Review finding W0-I-1."""
+    with pytest.raises(ValueError):
+        parse_manifest(_doc({"path": bad}))
+
+
+@pytest.mark.parametrize("reserved", [
+    "installed_manifest.json", "update_journal.json",
+    ".update_backup/x.dll", ".update_staging/y.dll"])
+def test_parse_manifest_rejects_updater_control_paths(reserved):
+    """A manifest naming the updater's own state files could rename the
+    crash-recovery journal away mid-swap or nest the backup tree into
+    itself. Review finding W0-I-2."""
+    with pytest.raises(ValueError):
+        parse_manifest(_doc({"path": reserved}))
+
+
+def test_parse_manifest_rejects_duplicate_paths():
+    with pytest.raises(ValueError):
+        parse_manifest(_doc({"path": "dup.dll"}, {"path": "dup.dll"}))
+
+
+@pytest.mark.parametrize("field,value", [
+    ("size", -5), ("zip_offset", -1), ("zip_csize", -3),
+    ("zip_method", 12), ("sha256", "xyz"), ("sha256", "AB" * 31)])
+def test_parse_manifest_rejects_invalid_field_values(field, value):
+    """Negative sizes understate download totals and produce malformed Range
+    headers; sha256 must be 64 hex chars. Review finding W0-M-5."""
+    with pytest.raises(ValueError):
+        parse_manifest(_doc({field: value}))
+
+
 def test_manifest_json_round_trips():
     m = parse_manifest(_doc({}, {"path": "c.dll", "zip_offset": 500}))
     assert parse_manifest(manifest_to_json(m)) == m
@@ -156,3 +195,12 @@ def test_build_plan_deletes_removed_files(tmp_path):
     plan = build_plan(Manifest("2", (kept,)), Manifest("1", (kept, gone)),
                       tmp_path)
     assert plan.delete == ("gone.dll",)
+
+
+def test_build_plan_rejects_empty_remote_manifest(tmp_path):
+    """A self-consistent-but-empty manifest (release-side build bug: an
+    empty dir got zipped) would otherwise plan deleting the ENTIRE install.
+    Review finding W0-M-4."""
+    installed = Manifest("1", (_mk("a.txt", "aa" * 32),))
+    with pytest.raises(ValueError):
+        build_plan(Manifest("2", ()), installed, tmp_path)

@@ -192,3 +192,48 @@ def test_fetch_full_zip_rejects_bad_zip_hash(tmp_path):
 def test_free_disk_ok(tmp_path):
     assert free_disk_ok(tmp_path, 0) is True
     assert free_disk_ok(tmp_path, 1 << 62) is False
+
+
+# --- review findings (2026-07-23 wave-1 review) ---
+
+def test_fetch_plan_corrupt_range_bytes_fall_back_not_abort(tmp_path):
+    """A proxy returning 206 with the right LENGTH but mangled bytes must
+    raise RangeUnsupported (=> full-zip fallback), not zlib.error/ValueError
+    (=> whole update aborts). Review finding I-1."""
+    blob, entries = _fake_zip([("a.bin", b"REAL-CONTENT" * 10)])
+    corrupt = bytes(b ^ 0xFF for b in blob)     # same length, garbage bytes
+    plan = UpdatePlan(fetch=tuple(entries), delete=(),
+                      download_bytes=sum(e.zip_csize for e in entries))
+    with pytest.raises(RangeUnsupported):
+        fetch_plan(plan, "https://dl/z.zip", tmp_path / "st",
+                   http=_range_http(corrupt))
+
+
+def test_fetch_plan_isolated_empty_stored_file_stages_without_request(tmp_path):
+    """A zero-byte stored entry isolated by a big gap makes a zero-length
+    span; 'bytes=N-(N-1)' is an invalid Range, so no request may be issued.
+    Review finding M-5."""
+    import hashlib as _h
+    empty = ManifestEntry(path="empty.marker",
+                          sha256=_h.sha256(b"").hexdigest(), size=0,
+                          zip_offset=5_000_000, zip_csize=0, zip_method=0)
+    plan = UpdatePlan(fetch=(empty,), delete=(), download_bytes=0)
+    requests = []
+    fetch_plan(plan, "https://dl/z.zip", tmp_path / "st",
+               http=_range_http(b"", log=requests))
+    assert requests == []                       # no HTTP call at all
+    assert (tmp_path / "st" / "empty.marker").read_bytes() == b""
+
+
+def test_fetch_full_zip_missing_planned_path_raises_valueerror(tmp_path):
+    """A manifest entry absent from the zip must raise the documented
+    ValueError, not KeyError. Review finding M-4."""
+    blob = _real_zip(tmp_path, {"present.txt": b"AAA"})
+    sha = hashlib.sha256(blob).hexdigest()
+    ghost = ManifestEntry(path="ghost.txt",
+                          sha256=hashlib.sha256(b"X").hexdigest(), size=1,
+                          zip_offset=0, zip_csize=0, zip_method=8)
+    plan = UpdatePlan(fetch=(ghost,), delete=(), download_bytes=0)
+    with pytest.raises(ValueError):
+        fetch_full_zip(plan, "https://dl/z.zip", sha, tmp_path / "st",
+                       http=_range_http(blob, honor_range=False))

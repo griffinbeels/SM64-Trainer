@@ -104,16 +104,31 @@ def _stage(staging: Path, entry: ManifestEntry, data: bytes) -> None:
 def fetch_plan(plan: UpdatePlan, zip_url: str, staging: Path, *, http,
                progress=None) -> None:
     """Range-fetch every planned file into `staging` (tree mirrors install).
-    Raises RangeUnsupported (fall back to fetch_full_zip) or ValueError
-    (integrity failure — abort)."""
+    Raises ONLY RangeUnsupported — any decode/verify failure of ranged bytes
+    (zlib.error, wrong size, wrong hash) is treated as a mangled Range
+    response and converted to RangeUnsupported so the caller falls back to
+    fetch_full_zip, where every file is STILL verified against the manifest.
+    A genuinely-bad manifest therefore still aborts — in the fallback."""
     total = max(1, plan.download_bytes)
     done = 0
     for span in coalesce(plan.fetch):
-        body = _ranged_get(http, zip_url, span.offset, span.length)
+        # A span can be length 0 (an isolated empty stored file): there are
+        # no bytes to request, and "bytes=N-(N-1)" is an invalid Range.
+        body = b"" if span.length == 0 else _ranged_get(
+            http, zip_url, span.offset, span.length)
         for entry in span.entries:
             start = entry.zip_offset - span.offset
             comp = body[start:start + entry.zip_csize]
-            _stage(staging, entry, decode_entry(entry, comp))
+            try:
+                data = decode_entry(entry, comp)
+            except (ValueError, zlib.error) as err:
+                # Corrupt ranged bytes (some proxies return 206 with mangled
+                # content). zlib.error is NOT a ValueError — without this
+                # clause it would escape and abort instead of falling back.
+                raise RangeUnsupported(
+                    f"{entry.path}: ranged bytes failed verification "
+                    f"({err})") from err
+            _stage(staging, entry, data)
             done += entry.zip_csize
             if progress:
                 progress(min(1.0, done / total))
@@ -145,7 +160,11 @@ def fetch_full_zip(plan: UpdatePlan, zip_url: str, zip_sha256: str,
             raise ValueError("full zip checksum mismatch")
         with zipfile.ZipFile(tmp) as zf:
             for entry in plan.fetch:
-                data = zf.read(entry.path)
+                try:
+                    data = zf.read(entry.path)
+                except KeyError as err:
+                    raise ValueError(f"{entry.path}: listed in the manifest "
+                                     "but absent from the zip") from err
                 if (len(data) != entry.size
                         or hashlib.sha256(data).hexdigest() != entry.sha256):
                     raise ValueError(f"{entry.path}: zip content does not "
