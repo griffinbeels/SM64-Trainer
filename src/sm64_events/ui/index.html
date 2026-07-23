@@ -37,6 +37,13 @@
   .stagebtn-name { font-weight: 600; line-height: 1.2; }
   .stagebtn-sub { font-size: .8em; display: flex; align-items: center; gap: .3rem; }
   .stagebtn.active-star { border-color: #e0c36a; }
+  /* a segment whose start condition is met — the timer is running NOW */
+  .stagebtn.armed { border-color: #3f8a5f; background: #16241c; }
+  @keyframes armedpulse { from { box-shadow: 0 0 2px #3f8a5f; }
+                          to { box-shadow: 0 0 9px #3f8a5f; } }
+  .armedchip { animation: armedpulse 1.1s ease-in-out infinite alternate; }
+  .armedchip b, .armedchip .armedword { color: inherit; }
+  .armedword { opacity: .7; font-size: .85em; }
   /* SM64 star-select row (StarRow only) — a single line of gold stars that
      shrinks with the pane but NEVER wraps. Namespaced away from .stagebtn,
      which the other banner modes (bowser/arena/castle) still use unchanged. */

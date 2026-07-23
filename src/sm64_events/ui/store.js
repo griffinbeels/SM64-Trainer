@@ -18,6 +18,12 @@ export function useTracker() {
   // reconciled from each view fetch (membership authoritative, order
   // best-effort). armedSegs (Set) is derived from it.
   const [armedOrder, setArmedOrder] = useState([]);
+  // armedNames: segment_id -> display name, fed by segment_armed payloads and
+  // every view fetch. Lets tab-independent surfaces (the header's "running"
+  // chip) name an armed segment even before the next view lands — live report
+  // 2026-07-23: a segment armed and timed a full run with zero indication on
+  // the header/banner/Segments tab, so the user assumed nothing was armed.
+  const [armedNames, setArmedNames] = useState({});
   // lastPinnedSeg: STICKY pin for the practice page — set on every
   // segment_armed, NEVER cleared on segment_disarmed. An accidental exit
   // disarms (correct timing semantics — re-entry re-arms fresh) but the page
@@ -78,6 +84,11 @@ export function useTracker() {
       // ids not already present (order unknown for those — arbitrary append).
       const viewArmed = new Set(((v && v.segments) || [])
         .filter((s) => s.armed).map((s) => s.segment_id));
+      setArmedNames((prev) => {
+        const next = { ...prev };
+        for (const s of (v && v.segments) || []) next[s.segment_id] = s.name;
+        return next;
+      });
       setArmedOrder((prev) => {
         const kept = prev.filter((id) => viewArmed.has(id));
         const keptSet = new Set(kept);
@@ -118,6 +129,7 @@ export function useTracker() {
         if (RUN_REFRESH_ON.has(ev.type)) refreshRun();
         if (ev.type === "segment_armed") {
           const id = ev.payload.segment_id;
+          setArmedNames((prev) => ({ ...prev, [id]: ev.payload.name }));
           setArmedOrder((prev) => prev.includes(id) ? prev : [...prev, id]);
           setLastPinnedSeg(id);   // sticky: only another arm moves the pin
         } else if (ev.type === "segment_disarmed") {
@@ -195,7 +207,7 @@ export function useTracker() {
   return { view, clock, pickClock, scope, pickScope, feed, connected,
            refresh, paused: pauseState.paused,
            pauseReason: pauseState.reason, togglePause,
-           armedSegs, armedOrder, lastPinnedSeg, stage,
+           armedSegs, armedOrder, armedNames, lastPinnedSeg, stage,
            run, refreshRun,
            update, updateForced, setUpdateForced, updateApplying,
            setUpdateApplying, updateMsg, checkUpdates, applyUpdate, skipUpdate };

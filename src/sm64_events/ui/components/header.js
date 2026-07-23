@@ -100,6 +100,17 @@ export function Header({ t }) {
       ${tgt && tgt.strat_tag ? html` <span class="meta">«${tgt.strat_tag}»</span>` : ""}
       <button onclick=${() => setEditing(!editing)} disabled=${!v}>▾</button>
     </span>
+    ${/* Live armed indicator — visible on EVERY tab, unlike the practice-list
+         pin. Arming retires a star target (projection.py caveat 12), so
+         without this the header actively read "Target: none" while a segment
+         was being timed (live report 2026-07-23: SSL -> LLL armed + recorded
+         a full run with no visible indication anywhere the user was looking).
+         armedOrder appends on arm — reversed, the newest armed shows first. */""}
+    ${t.armedOrder.length > 0 && html`<span class="chip good armedchip"
+        title="start condition met — the segment timer is running">
+      ⏱ ${[...t.armedOrder].reverse()
+            .map((id) => t.armedNames[id] || `segment ${id}`).join(" · ")}${" "}
+      <span class="armedword">running</span></span>`}
     <span style="margin-left:auto">Clock:
       <select id="clock-select" name="clock" value=${t.clock} onchange=${(e) => t.pickClock(e.target.value)}>
         <option value="igt">Usamune IGT</option>

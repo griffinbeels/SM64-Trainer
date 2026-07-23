@@ -142,11 +142,13 @@ function BowserCourseRow({ t, v, stage }) {
       </button>
       ${pipes.map((s) => {
         const active = tgt.kind === "segment" && tgt.segment_id === s.segment_id;
+        const armed = t.armedSegs.has(s.segment_id);
         return html`<button key=${`seg:${s.segment_id}`}
-                            class="stagebtn ${active ? "active-star" : ""}"
+                            class="stagebtn ${active ? "active-star" : ""} ${armed ? "armed" : ""}"
                             onclick=${() => pickNoReds(s)}>
           <span class="stagebtn-name">No reds</span>
           <span class="stagebtn-sub meta">${s.name}</span>
+          ${armed && html`<span class="stagebtn-sub chip good">⏱ running</span>`}
         </button>`;
       })}
     </div>
@@ -189,10 +191,12 @@ function ArenaRow({ t, v, stage }) {
     <div class="stagebanner-row">
       ${fights.map((s) => {
         const active = tgt.kind === "segment" && tgt.segment_id === s.segment_id;
+        const armed = t.armedSegs.has(s.segment_id);
         return html`<button key=${`seg:${s.segment_id}`}
-                            class="stagebtn ${active ? "active-star" : ""}"
+                            class="stagebtn ${active ? "active-star" : ""} ${armed ? "armed" : ""}"
                             onclick=${() => pick(s)}>
           <span class="stagebtn-name">${s.name}</span>
+          ${armed && html`<span class="stagebtn-sub chip good">⏱ running</span>`}
         </button>`;
       })}
     </div>
@@ -217,10 +221,12 @@ function SegmentRow({ t, v, stage }) {
     <div class="stagebanner-row">
       ${segs.map((s) => {
         const active = tgt.kind === "segment" && tgt.segment_id === s.segment_id;
+        const armed = t.armedSegs.has(s.segment_id);
         return html`<button key=${`seg:${s.segment_id}`}
-                            class="stagebtn ${active ? "active-star" : ""}"
+                            class="stagebtn ${active ? "active-star" : ""} ${armed ? "armed" : ""}"
                             onclick=${() => pick(s.segment_id)}>
           <span class="stagebtn-name">${s.name}</span>
+          ${armed && html`<span class="stagebtn-sub chip good">⏱ running</span>`}
         </button>`;
       })}
     </div>
