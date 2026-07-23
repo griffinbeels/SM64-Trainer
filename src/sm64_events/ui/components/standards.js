@@ -30,8 +30,17 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged }) {
     await load(); onChanged && onChanged();
   }
   async function delStrat(s) {
-    if (!window.confirm(`Clear rank standards for "${s}"? (The column stays while the strategy is in use.)`)) return;
-    await send("DELETE", `/api/ranks/standards/${enc(entity)}/${enc(s)}`);
+    // Dual-meaning x (user-picked): seeded strats are community data —
+    // clear-only; custom strats fully delete (tombstone hides attempt-
+    // observed occurrences server-side; re-creating the name restores).
+    const msg = isSeeded(s)
+      ? `Clear rank standards for "${s}"? (The column stays while the strategy is in use.)`
+      : `Delete strategy "${s}"?\nRemoves it from all dropdowns and clears its rank `
+        + `standards. Past attempts keep their recorded times; re-creating the same `
+        + `name restores them.`;
+    if (!window.confirm(msg)) return;
+    const qs = isSeeded(s) ? "" : "?purge=true";
+    await send("DELETE", `/api/ranks/standards/${enc(entity)}/${enc(s)}${qs}`);
     await load(); onChanged && onChanged();
   }
   async function editVideo(strat, rank) {
@@ -54,6 +63,7 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged }) {
   const userVid = (s, rank) =>
     (data.user_videos && data.user_videos[s] && data.user_videos[s][rank]) || null;
   const headVid = (s) => cutoffVid(s, "Mario") || (data.videos && data.videos[s]) || null;
+  const isSeeded = (s) => (data.seeded || []).includes(s);
 
   // Columns = store strategies (community order first) + every other strat
   // this section knows (registered / used on attempts — sec.strategies from
@@ -82,7 +92,7 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged }) {
       <table class="stdtable"><thead><tr><th>Strat</th>
         ${strats.map((s) => html`<th class=${s === activeStrat ? "col-active" : ""}>${headVid(s)
           ? html`<a href=${headVid(s)} target="_blank" rel="noopener" title="fastest-time video">${s}</a>`
-          : s}${editing ? html` <button class="candx" title="clear this strategy's standards" onclick=${() => delStrat(s)}>×</button>` : ""}</th>`)}</tr></thead>
+          : s}${editing ? html` <button class="candx" title=${isSeeded(s) ? "clear this strategy's standards" : "delete this strategy"} onclick=${() => delStrat(s)}>×</button>` : ""}</th>`)}</tr></thead>
         <tbody>
         ${RANK_NAMES.filter((r) => r !== "Iron").map((rank) => html`<tr>
           <td style=${`background:${rankColor(rank)};color:#111;font-weight:700`}>${rank}</td>
