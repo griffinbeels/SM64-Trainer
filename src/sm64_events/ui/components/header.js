@@ -4,6 +4,7 @@ import { useState } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
 import { RecordingDot } from "./replay.js";
+import { StratModal } from "./stratmodal.js";
 
 const html = htm.bind(h);
 
@@ -141,17 +142,19 @@ function TargetEditor({ t, close }) {
   const lastStratFor = (c, s) => v.last_strat_by_star[`${Number(c)}:${Number(s)}`] ?? "";
   const stratsFor = (c, s) => v.strategies[`${Number(c)}:${Number(s)}`] || [];
   const [strat, setStrat] = useState(lastStratFor(course, star));
-  const [adding, setAdding] = useState(false);
-  const [newStrat, setNewStrat] = useState("");
+  const [showStratModal, setShowStratModal] = useState(false);
+  // Remounts the select after a cancelled "+ new strategy…" pick — same
+  // phantom-value pathology and fix as practice.js's stratNonce.
+  const [stratNonce, setStratNonce] = useState(0);
 
   function pickStar(c, s) {
     setCourse(c); setStar(s);
     setStrat(lastStratFor(c, s));   // load the star's own remembered strat
-    setAdding(false);
+    setShowStratModal(false);
   }
 
   async function apply() {
-    const chosen = adding ? newStrat.trim() : strat;
+    const chosen = strat;
     await send("POST", "/api/target", {
       course_id: Number(course), star_id: Number(star),
       strat_tag: chosen || null,
@@ -173,18 +176,20 @@ function TargetEditor({ t, close }) {
       </select>
     </div>
     <div style="margin-top:.4rem">
-      ${adding
-        ? html`<input id="strat-name-input" name="strat_name" placeholder="new strategy name"
-                      value=${newStrat} oninput=${(e) => setNewStrat(e.target.value)} />
-               <button onclick=${() => setAdding(false)}>↩</button>`
-        : html`<select value=${strat}
-                       onchange=${(e) => e.target.value === "__new__"
-                         ? setAdding(true) : setStrat(e.target.value)}>
-                 <option value="">(no strategy)</option>
-                 ${options.map((s) => html`<option value=${s}>${s}</option>`)}
-                 <option value="__new__">+ new strategy…</option>
-               </select>`}
+      <select key=${`hstrat-${stratNonce}`} value=${strat}
+              onchange=${(changeEvent) => changeEvent.target.value === "__new__"
+                ? setShowStratModal(true) : setStrat(changeEvent.target.value)}>
+        <option value="">(no strategy)</option>
+        ${options.map((s) => html`<option value=${s}>${s}</option>`)}
+        ${strat && !options.includes(strat)
+          ? html`<option value=${strat}>${strat}</option>` : null}
+        <option value="__new__">+ new strategy…</option>
+      </select>
       <button onclick=${apply}>Set target</button>
     </div>
+    ${showStratModal ? html`<${StratModal}
+        entity=${`star:${Number(course)}:${Number(star)}`} existing=${options}
+        onSaved=${(stratName) => { setShowStratModal(false); setStrat(stratName); }}
+        onClose=${() => { setShowStratModal(false); setStratNonce((n) => n + 1); }} />` : null}
   </div>`;
 }
