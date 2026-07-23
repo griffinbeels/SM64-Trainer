@@ -41,6 +41,7 @@ def create_ranks_router(service) -> APIRouter:
                 "videos": service.ranks.videos(entity),
                 "cutoff_videos": service.ranks.cutoff_videos(entity),
                 "user_videos": service.ranks.user_videos(entity),
+                "seeded": service.ranks.seeded_strategies(entity),
                 "xcams_url": xcams_url(entity)}
 
     @router.put("/ranks/standards/{entity}/{strategy}/{rank}")
@@ -76,9 +77,12 @@ def create_ranks_router(service) -> APIRouter:
         return {"ok": True}
 
     @router.delete("/ranks/standards/{entity}/{strategy}")
-    async def delete_strategy(entity: str, strategy: str):
+    async def delete_strategy(entity: str, strategy: str, purge: bool = False):
         try:
-            await service.delete_rank_strategy(entity, strategy)
+            if purge:
+                await service.purge_strategy(entity, strategy)
+            else:
+                await service.delete_rank_strategy(entity, strategy)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True}
