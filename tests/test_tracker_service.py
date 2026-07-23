@@ -1,10 +1,12 @@
 # tests/test_tracker_service.py
 import asyncio
+import json
 from datetime import datetime, timezone
 
 import pytest
 
 from sm64_events.core.events import Event
+from sm64_events.ranks.standards import RankStandards
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.storage.db import Database
 from sm64_events.tracking.service import TrackerService
@@ -1042,3 +1044,55 @@ def test_set_time_filter_validates_bounds(tmp_path):
         asyncio.run(svc.set_time_filter(2, 2, 300, 300))   # max must exceed min
     with pytest.raises(ValueError):
         asyncio.run(svc.set_time_filter(2, 2, -1, None))
+
+
+# -- purge_strategy (strategy-delete addendum, Task 8) ------------------------
+
+def make_with_ranks(tmp_path):
+    seed = {"version": 1, "entities": {
+        "star:7:2": {"clock": "igt", "strategies": {"Standard": {"Mario": 11.76}}}}}
+    seed_path = tmp_path / "seed.json"
+    seed_path.write_text(json.dumps(seed))
+    ranks = RankStandards(tmp_path / "rs.json", seed_path=seed_path)
+    ranks.load()
+    db = Database(tmp_path / "t.db")
+    svc = TrackerService(db, Broadcaster(), ranks=ranks)
+    asyncio.run(svc.start())
+    return db, svc
+
+
+def test_purge_strategy_removes_custom_everywhere(tmp_path):
+    db, svc = make_with_ranks(tmp_path)
+    asyncio.run(svc.set_strat(7, 2, "logless"))            # registers + activates
+    asyncio.run(svc.create_rank_strategy("star:7:2", "logless"))
+    asyncio.run(svc.purge_strategy("star:7:2", "logless"))
+    assert "logless" not in svc.ranks.strategies("star:7:2")
+    assert "logless" not in db.get_state("strategies", {}).get("7:2", [])
+    assert "logless" in db.get_state("deleted_strats", {}).get("star:7:2", [])
+    assert svc.strat_by_star.get((7, 2)) is None           # strat_set null published
+
+
+def test_purge_refuses_seeded_strategy(tmp_path):
+    db, svc = make_with_ranks(tmp_path)
+    with pytest.raises(ValueError):
+        asyncio.run(svc.purge_strategy("star:7:2", "Standard"))
+    assert "Standard" in svc.ranks.strategies("star:7:2")  # untouched
+
+
+def test_recreate_after_purge_clears_tombstone(tmp_path):
+    db, svc = make_with_ranks(tmp_path)
+    asyncio.run(svc.set_strat(7, 2, "logless"))
+    asyncio.run(svc.purge_strategy("star:7:2", "logless"))
+    asyncio.run(svc.set_strat(7, 2, "logless"))            # register path
+    assert "logless" not in db.get_state("deleted_strats", {}).get("star:7:2", [])
+    asyncio.run(svc.purge_strategy("star:7:2", "logless"))
+    asyncio.run(svc.create_rank_strategy("star:7:2", "logless"))   # ranks path
+    assert "logless" not in db.get_state("deleted_strats", {}).get("star:7:2", [])
+
+
+def test_purge_segment_strategy_tombstones(tmp_path):
+    db, svc = make_with_ranks(tmp_path)
+    asyncio.run(svc.create_rank_strategy("segment:3", "fast"))
+    asyncio.run(svc.purge_strategy("segment:3", "fast"))
+    assert "fast" not in svc.ranks.strategies("segment:3")
+    assert "fast" in db.get_state("deleted_strats", {}).get("segment:3", [])
