@@ -38,7 +38,8 @@ from sm64_events.core.paths import is_frozen, update_state_path
 from sm64_events.core.update_apply import STAGING_DIR, apply_plan, sweep_backup
 from sm64_events.core.update_fetch import (RangeUnsupported, fetch_full_zip,
                                            fetch_plan, free_disk_ok)
-from sm64_events.core.release_feed import http_get, is_newer, strip_body
+from sm64_events.core.release_feed import (ReleaseNotes, http_get, is_newer,
+                                           missed_releases, notes_from_release)
 from sm64_events.core.update_plan import (INSTALLED_MANIFEST, MANIFEST_ASSET,
                                           ZIP_ASSET, Manifest, build_plan,
                                           parse_manifest)
@@ -53,12 +54,15 @@ _CHECK_TTL_S = 3600.0
 @dataclass
 class UpdateInfo:
     version: str
-    notes: str
+    notes: str          # the offered release alone (= releases[0].notes)
     html_url: str
     zip_url: str
     zip_sha_url: str
     manifest_url: str
     manifest_sha_url: str
+    # Every version between the installed one and `version`, newest first.
+    # A tuple, not a list, so the default needs no field(default_factory=…).
+    releases: tuple[ReleaseNotes, ...] = ()
 
 
 def check_for_update(current: str, *, http=urllib.request.urlopen,
@@ -85,15 +89,24 @@ def check_for_update(current: str, *, http=urllib.request.urlopen,
         # The body's leading first-time-setup section is for the GitHub page
         # only, and legacy bodies title themselves — release_feed.strip_body
         # is THE rule for both shapes.
-        notes = strip_body(rel.get("body") or "")
+        offered = notes_from_release(rel)
+        # Everything the user skipped, newest first. Clamped to the offered
+        # tag: GitHub's 'latest' is the most RECENT publish, so a backport
+        # published afterwards could otherwise stack notes for a version this
+        # update does not install. Empty (history unavailable, or a lone
+        # release) -> the offered release alone, exactly as before.
+        history = [row for row in missed_releases(current, http=http,
+                                                  repo=repo, api_base=api_base)
+                   if not is_newer(row.version, tag)]
         return UpdateInfo(
             version=tag.lstrip("vV"),
-            notes=notes,
+            notes=offered.notes,
             html_url=rel.get("html_url") or "",
             zip_url=assets[ZIP_ASSET],
             zip_sha_url=assets[ZIP_ASSET + ".sha256"],
             manifest_url=assets[MANIFEST_ASSET],
-            manifest_sha_url=assets[MANIFEST_ASSET + ".sha256"])
+            manifest_sha_url=assets[MANIFEST_ASSET + ".sha256"],
+            releases=tuple(history) if history else (offered,))
     except Exception:
         log.info("update check failed", exc_info=True)
         return None
@@ -154,17 +167,34 @@ class UpdateService:
     def _fake(self) -> "UpdateInfo | None":
         if not os.environ.get("SM64_UPDATE_FAKE"):
             return None
+        # THREE releases so SM64_UPDATE_FAKE=1 renders the stacked layout —
+        # version headers, dividers, and the inner scroll — without cutting
+        # a real release.
+        rows = (
+            ReleaseNotes(
+                "9.9.9", "2026-07-23",
+                "## Demo release\n"
+                "- **New:** a sample bullet whose text is long enough to wrap\n"
+                "  onto a second source line, exercising the soft-wrap join.\n"
+                "- A second bullet that mentions the `.old` backup as code.\n"
+                "\n"
+                "A trailing paragraph after a blank line, also wrapping across\n"
+                "two source lines, to confirm paragraphs join too."),
+            ReleaseNotes(
+                "9.9.8", "2026-07-20",
+                "- **Fix:** the middle version of the stack, here so the\n"
+                "  version headers and dividers can be eyeballed in dev."),
+            ReleaseNotes(
+                "9.9.7", "2026-07-18",
+                "- **New:** the oldest missed version, proving the popup\n"
+                "  stacks every skipped release rather than just the newest."),
+        )
         return UpdateInfo(
             version="9.9.9",
-            notes="## Demo release\n"
-                  "- **New:** a sample bullet whose text is long enough to wrap\n"
-                  "  onto a second source line, exercising the soft-wrap join.\n"
-                  "- A second bullet that mentions the `.old` backup as code.\n"
-                  "\n"
-                  "A trailing paragraph after a blank line, also wrapping across\n"
-                  "two source lines, to confirm paragraphs join too.",
+            notes=rows[0].notes,
             html_url=f"https://github.com/{self.repo}/releases",
-            zip_url="", zip_sha_url="", manifest_url="", manifest_sha_url="")
+            zip_url="", zip_sha_url="", manifest_url="", manifest_sha_url="",
+            releases=rows)
 
     def _fetch_text(self, url: str) -> str:
         with http_get(self._http, url) as r:
@@ -229,6 +259,9 @@ class UpdateService:
             "state": self._state,
             "progress": self._progress,
             "download_bytes": self._plan.download_bytes if self._plan else None,
+            "releases": [{"version": row.version, "date": row.date,
+                          "notes": row.notes}
+                         for row in info.releases] if info else [],
         }
 
     # --- apply (off-thread; UI polls status for progress) ---

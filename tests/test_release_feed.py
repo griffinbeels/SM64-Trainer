@@ -142,3 +142,11 @@ def test_missed_releases_empty_on_malformed_payload():
         return _Resp(b'{"message": "API rate limit exceeded"}')
     assert missed_releases("1.0.0", http=opener, repo="owner/repo",
                            api_base=API) == []
+
+
+def test_missed_releases_empty_on_list_of_non_objects():
+    """A payload that parses as a JSON list but holds no release dicts."""
+    def opener(req):
+        return _Resp(b'[1, 2, 3]')
+    assert missed_releases("1.0.0", http=opener, repo="owner/repo",
+                           api_base=API) == []
