@@ -296,15 +296,27 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
     # area hub matches any area in that level. Matches area_changed, so it
     # fires on intra-castle movement too (lobby->basement = "enter Basement"),
     # unlike level_enter which fires only on the level boundary crossing.
+    # `from` scopes the SOURCE subarea ("enter Basement coming from Lobby",
+    # live request 2026-07-23) and additionally rejects TRANSIENT sources:
+    # every castle entry passes through the lobby before settling
+    # (detectors/level.py), so a course exit into the basement emits from=1
+    # exactly like a genuine lobby walk — from_transient (detectors/area.py)
+    # is the discriminator. Legacy events without the key conservatively
+    # match (None = unknown -> match, the codebase-wide convention).
     TriggerType("area_enter", "You enter area",
                 {"level": {"kind": "level", "required": True,
                            "enum": list(CASTLE_REGION_LEVELS)},
                  "area": {"kind": "subarea", "required": False,
+                          "only_when": _only_castle("level")},
+                 "from": {"kind": "subarea", "required": False,
                           "only_when": _only_castle("level")}},
-                "{level} {area}",
+                "{level} {area} coming from {from}",
                 lambda p, ev, ctx: ev.type == "area_changed" and _real_edge(ev)
                 and ev.payload["level"] == p["level"]
-                and (p.get("area") is None or ev.payload["to"] == p["area"])),
+                and (p.get("area") is None or ev.payload["to"] == p["area"])
+                and (p.get("from") is None
+                     or (ev.payload["from"] == p["from"]
+                         and not ev.payload.get("from_transient", False)))),
     TriggerType("warp_entered", "You enter a warp/pipe",
                 {"level": {"kind": "level", "required": True}},
                 "in {level}",
@@ -407,6 +419,22 @@ def _check_clause(clause: dict, registry: dict, what: str) -> None:
     extras = set(clause) - {"type"} - set(spec.params)
     if extras:
         raise ValueError(f"{kind}: unknown params {sorted(extras)}")
+    # Impossible-by-construction clauses fail LOUDLY instead of silently
+    # never matching (live report 2026-07-23: "enter Castle Inside coming
+    # from Castle Inside" was saved, but a within-level move never fires
+    # level_changed — only area_changed does).
+    if kind in ("level_enter", "level_exit") \
+            and clause.get("to") is not None \
+            and clause.get("to") == clause.get("from"):
+        raise ValueError(
+            f"{kind}: 'from' and 'to' are the same level — movement inside "
+            "a level never fires a level change; use \"You enter area\" "
+            "with 'coming from' instead")
+    if kind == "area_enter" and clause.get("area") is not None \
+            and clause.get("area") == clause.get("from"):
+        raise ValueError("area_enter: 'coming from' and the destination are "
+                         "the same subarea — an area crossing always "
+                         "changes the area")
 
 
 def validate_definition(d: dict) -> None:

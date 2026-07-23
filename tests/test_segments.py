@@ -1631,6 +1631,88 @@ def test_area_enter_with_subarea_still_scopes_to_that_area():
     assert e.armed_ids() == {1}
 
 
+def test_area_enter_coming_from_matches_a_settled_lobby_walk():
+    # THE USER SCENARIO (live report 2026-07-23): "enter the basement coming
+    # from the lobby" — arm only on a genuine walk through the basement door.
+    e = SegmentEngine([_seg(start_triggers=[
+        {"type": "area_enter", "level": 6, "area": 3, "from": 1}])])
+    e.feed(jev(10, "area_changed", 2000,
+               {"level": 6, "from": 1, "to": 3, "from_transient": False}),
+           ctx(level=6, area=3))
+    assert e.armed_ids() == {1}
+
+
+def test_area_enter_coming_from_ignores_the_transient_course_exit_lobby():
+    # Exiting a basement course re-enters via the TRANSIENT lobby: the castle
+    # loads area 1 then warps to 3 on the same frame (detectors/level.py), so
+    # the settle event reads from=1 — payload-identical to a real lobby walk.
+    # from_transient (detectors/area.py) is the discriminator.
+    e = SegmentEngine([_seg(start_triggers=[
+        {"type": "area_enter", "level": 6, "area": 3, "from": 1}])])
+    e.feed(jev(10, "area_changed", 2000,
+               {"level": 6, "from": 1, "to": 3, "from_transient": True}),
+           ctx(level=6, area=3))
+    assert e.armed_ids() == set(), "course exit must not arm a lobby-walk def"
+
+
+def test_area_enter_coming_from_scopes_the_source_area():
+    e = SegmentEngine([_seg(start_triggers=[
+        {"type": "area_enter", "level": 6, "area": 3, "from": 1}])])
+    e.feed(jev(10, "area_changed", 2000,
+               {"level": 6, "from": 2, "to": 3, "from_transient": False}),
+           ctx(level=6, area=3))
+    assert e.armed_ids() == set(), "came from the upstairs, not the lobby"
+
+
+def test_area_enter_coming_from_is_conservative_on_legacy_events():
+    # journal events recorded before from_transient existed: .get() -> False
+    # -> match (None = unknown -> conservative match, codebase convention)
+    e = SegmentEngine([_seg(start_triggers=[
+        {"type": "area_enter", "level": 6, "area": 3, "from": 1}])])
+    e.feed(jev(10, "area_changed", 2000, {"level": 6, "from": 1, "to": 3}),
+           ctx(level=6, area=3))
+    assert e.armed_ids() == {1}
+
+
+def test_area_enter_without_from_still_matches_transient_entries():
+    # backward compat: a def NOT scoped by source must keep arming on course
+    # exits (the pre-'coming from' behaviour).
+    e = SegmentEngine([_seg(start_triggers=[
+        {"type": "area_enter", "level": 6, "area": 3}])])
+    e.feed(jev(10, "area_changed", 2000,
+               {"level": 6, "from": 1, "to": 3, "from_transient": True}),
+           ctx(level=6, area=3))
+    assert e.armed_ids() == {1}
+
+
+def test_validate_rejects_level_enter_within_the_same_level():
+    # The builder let "enter Castle Inside coming from Castle Inside" be
+    # saved, but a within-level move never fires level_changed (live report
+    # 2026-07-23) — reject loudly and point at the trigger that CAN say it.
+    with pytest.raises(ValueError, match="enter area"):
+        validate_definition({
+            "name": "x",
+            "start_triggers": [{"type": "level_enter", "to": 6, "from": 6}],
+            "end_triggers": [{"type": "spawned"}], "guards": []})
+
+
+def test_validate_rejects_level_exit_within_the_same_level():
+    with pytest.raises(ValueError, match="enter area"):
+        validate_definition({
+            "name": "x",
+            "start_triggers": [{"type": "level_exit", "from": 6, "to": 6}],
+            "end_triggers": [{"type": "spawned"}], "guards": []})
+
+
+def test_validate_rejects_area_enter_from_equal_to_area():
+    with pytest.raises(ValueError, match="area_enter"):
+        validate_definition({
+            "name": "x",
+            "start_triggers": [{"type": "area_enter", "level": 6,
+                                "area": 3, "from": 3}],
+            "end_triggers": [{"type": "spawned"}], "guards": []})
+
+
 def test_validate_accepts_subarea_and_optional_area_params():
     validate_definition({
         "name": "x",
@@ -1655,6 +1737,8 @@ def test_vocab_exposes_region_enum_and_conditional_subareas():
     assert ae["level"]["enum"] == [6, 16, 26]
     assert ae["area"]["required"] is False
     assert ae["area"]["only_when"] == {"param": "level", "equals": 6}
+    assert ae["from"]["required"] is False
+    assert ae["from"]["only_when"] == {"param": "level", "equals": 6}
     le = by_key["level_enter"]["params"]
     assert le["to_subarea"]["only_when"] == {"param": "to", "equals": 6}
     assert le["from_subarea"]["only_when"] == {"param": "from", "equals": 6}

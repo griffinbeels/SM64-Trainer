@@ -76,14 +76,20 @@ export function ClauseRow({ clause, types, vocab, tint, onChange, onRemove }) {
   // Hidden (only_when unmet) params render nothing but stay "mentioned" so
   // they don't reappear in the extras tail.
   const mentioned = new Set();
-  const rendered = (spec.template || "").split(/(\{\w+\})/).map((tok) => {
+  const toks = (spec.template || "").split(/(\{\w+\})/);
+  const rendered = toks.map((tok, i) => {
     const m = /^\{(\w+)\}$/.exec(tok);
     if (m && spec.params[m[1]]) {
       mentioned.add(m[1]);
       return visible(m[1]) ? param(m[1]) : null;
     }
     const word = tok.trim();
-    return word ? html`<span class="segword">${word}</span>` : null;
+    if (!word) return null;
+    // words introducing a hidden param hide with it — "coming from" must
+    // not dangle when the castle-only 'from' selector is hidden
+    const next = /^\{(\w+)\}$/.exec(toks[i + 1] || "");
+    if (next && spec.params[next[1]] && !visible(next[1])) return null;
+    return html`<span class="segword">${word}</span>`;
   });
   const extras = Object.keys(spec.params).filter(
     (p) => !mentioned.has(p) && visible(p));
