@@ -133,6 +133,14 @@ Caveats (hard-won — keep these current):
     _close_by_grab's identical check both skip it for free) — but it still
     advances a run today (RunTracker never checks .cleared); the runs-side
     guard lands separately.
+
+15. Last-star memory: _last_star_grabbed/_last_star_attempted update from the
+    current event's closures (attributed star attempts only: grabs set both,
+    non-success attributed rows set attempted; cleared rows still update —
+    the grab happened physically) BEFORE the engine's ctx is built, so a
+    guard evaluated on the closing event sees the fresh value; game_reset
+    clears both to unknown (file can change), and unknown conservatively
+    fails the last_star_* guards.
 """
 from dataclasses import dataclass, replace
 
@@ -243,6 +251,14 @@ class Projector:
         self._runs = RunTracker()
         self.run_notices: list[dict] = []   # live-broadcast queue, drained by service
         self._num_stars: int | None = None
+        # (course_id, star_id) of the most recent star grab / attributed star
+        # attempt — feeds MatchContext for the last_star_* guards (spec
+        # 2026-07-23). Updated from closures BEFORE the engine sees the same
+        # event; game_reset clears both (file can change at the title screen,
+        # same rationale as _num_stars). Cleared rows still update: the grab/
+        # attempt happened physically, validity is a separate judgment.
+        self._last_star_grabbed: tuple[int, int] | None = None
+        self._last_star_attempted: tuple[int, int] | None = None
         self._open = None  # EventRow of the open attempt's anchor
         self._open_acted = False  # mario_acted seen since the last anchor; only meaningful while _open is set
         self._level: int | None = None   # gCurrLevelNum per level_changed; None = unknown (legacy journals)
@@ -287,12 +303,21 @@ class Projector:
     def feed(self, ev) -> list[Attempt]:
         prev_level = self._level  # _dispatch may move it (level_changed)
         closed = self._dispatch(ev)
+        for a in closed:
+            if a.segment_id is None and a.course_id is not None:
+                self._last_star_attempted = (a.course_id, a.star_id)
+                if a.outcome == "success":
+                    self._last_star_grabbed = (a.course_id, a.star_id)
         if ev.type == "star_collected" and "num_stars" in ev.payload:
             self._num_stars = ev.payload["num_stars"]
         elif ev.type == "game_reset":
             self._num_stars = None  # file can change at the title screen: unknown until the next grab
+            self._last_star_grabbed = None
+            self._last_star_attempted = None
         ctx = MatchContext(level=self._level, prev_level=prev_level,
-                           num_stars=self._num_stars, area=self._area)
+                           num_stars=self._num_stars, area=self._area,
+                           last_star_grabbed=self._last_star_grabbed,
+                           last_star_attempted=self._last_star_attempted)
         seg_closed, self.segment_notices = self._segments.feed(ev, ctx)
         for a in seg_closed:
             # same first-event-id cleared keying as _build (caveat 2/11)

@@ -1317,3 +1317,57 @@ def test_star_success_with_no_clock_at_all_is_not_flagged():
     [a] = attempts
     assert a.outcome == "success" and a.igt_frames is None and a.rta_frames is None
     assert a.cleared is False
+
+
+# -- last-star tracking feeds MatchContext (spec 2026-07-23) --------------
+
+def test_last_star_grabbed_guard_gates_arming():
+    d = seg_def(guards=[{"type": "last_star_grabbed", "course": 2}])
+    # no grab yet: unknown history conservatively fails -> no arm
+    _, proj = replay([jev(1, "spawned", 1000, {"level": 16})], segments=[d])
+    assert proj.armed_segment_ids() == set()
+    # after grabbing (2,2) the same spawn arms
+    _, proj = replay([
+        star(1, 900),
+        jev(2, "spawned", 1000, {"level": 16}),
+    ], segments=[d])
+    assert proj.armed_segment_ids() == {1}
+
+
+def test_last_star_attempted_counts_failures_grabbed_does_not():
+    dg = seg_def(id=1, guards=[{"type": "last_star_grabbed", "course": 8}])
+    da = seg_def(id=2, guards=[{"type": "last_star_attempted", "course": 8}])
+    _, proj = replay([
+        star(1, 900),                                  # grab (2,2)
+        jev(2, "target_set", 950, {"course_id": 8, "star_id": 1}),
+        jev(3, "practice_reset", 1000, {"igt_frames_before": 0}),
+        jev(4, "practice_reset", 1400,
+            {"igt_frames_before": 380, "mario_acted": True}),  # reset on (8,1)
+        jev(5, "spawned", 1500, {"level": 16}),
+    ], segments=[dg, da])
+    # last ATTEMPT is (8,1); last GRAB is still (2,2)
+    assert proj.armed_segment_ids() == {2}
+
+
+def test_game_reset_clears_last_star_memory():
+    d = seg_def(guards=[{"type": "last_star_grabbed", "course": 2}])
+    _, proj = replay([
+        star(1, 900),
+        jev(2, "game_reset", 50, {}),
+        jev(3, "spawned", 1000, {"level": 16}),
+    ], segments=[d])
+    assert proj.armed_segment_ids() == set()
+
+
+def test_last_star_guard_star_param_narrows():
+    d = seg_def(guards=[{"type": "last_star_grabbed", "course": 2, "star": 3}])
+    _, proj = replay([
+        star(1, 900, star_id=2),
+        jev(2, "spawned", 1000, {"level": 16}),
+    ], segments=[d])
+    assert proj.armed_segment_ids() == set()
+    _, proj = replay([
+        star(1, 900, star_id=3),
+        jev(2, "spawned", 1000, {"level": 16}),
+    ], segments=[d])
+    assert proj.armed_segment_ids() == {1}
