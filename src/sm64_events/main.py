@@ -43,6 +43,18 @@ from sm64_events.tracking.service import TrackerService
 _instance_lock = None
 
 
+def _bootstrap_cleanup_arg(argv=None) -> "str | None":
+    """--cleanup-bootstrap <path>: the bootstrap installer hands us its own
+    exe path at launch; startup_maintenance deletes it (and its .old) once
+    the bootstrap process has exited."""
+    argv = sys.argv if argv is None else argv
+    if "--cleanup-bootstrap" in argv:
+        idx = argv.index("--cleanup-bootstrap")
+        if idx + 1 < len(argv):
+            return argv[idx + 1]
+    return None
+
+
 def build():
     global _instance_lock
     configure_logging()
@@ -152,7 +164,7 @@ def build():
         detectors.append(ActivityTap(replay.recorder))
     poller = Poller(memory, detectors, service)  # service IS the event sink
     updater = UpdateService(current_version=__version__)
-    updater.startup_maintenance()   # reap update backups left by a prior apply
+    updater.startup_maintenance(bootstrap_path=_bootstrap_cleanup_arg())
     return create_app(poller, broadcaster, service=service, replay=replay,
                       updater=updater, compare=compare)
 
