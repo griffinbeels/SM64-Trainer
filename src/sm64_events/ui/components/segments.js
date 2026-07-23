@@ -50,12 +50,12 @@ export function ParamInput({ schema, name, value, vocab, clause, onChange }) {
     return html`<input type="number" min="0" step="0.1" style="width:5rem"
         value=${value == null ? "" : value / 30}
         placeholder="seconds"
-        onchange=${(e) => onChange(e.target.value === ""
+        oninput=${(e) => onChange(e.target.value === ""
           ? null : Math.round(Number(e.target.value) * 30))} />`;
   }
   return html`<input type="number" style="width:5rem" value=${value ?? ""}
       placeholder=${name}
-      onchange=${(e) => onChange(numOrNull(e.target.value))} />`;
+      oninput=${(e) => onChange(numOrNull(e.target.value))} />`;
 }
 
 export function ClauseRow({ clause, types, vocab, tint, onChange, onRemove }) {
