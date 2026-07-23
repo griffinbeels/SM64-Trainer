@@ -118,6 +118,20 @@ Caveats (hard-won — keep these current):
     into a stage stays "nothing active"). If re-entry ALSO arms a segment, the
     arm-clear in feed() retires the just-restored star again — segment wins,
     matching caveat 12.
+
+14. Validity bounds (spec 2026-07-23): a SUCCESS whose completion time falls
+    outside [min, max] is stamped cleared with an "auto: " reason at close
+    time via _auto_ignored — stars judge igt (falling back to rta) against
+    the time_filters KV (per "<course>:<star>", DEFAULT_MIN_FRAMES applies
+    when no override sets min_frames); segments judge rta against their
+    def's close-phase min_time/max_time guard rows (time_bounds), same
+    DEFAULT_MIN_FRAMES floor when neither guard is present. Ids with ANY
+    journaled clear/restore history (touched_ids) are exempt — manual always
+    wins. Only successes are judged (a fast reset is legitimate practice; no
+    clock at all is not judged either). An auto-cleared row doesn't move the
+    target (the seg_closed loop's "not a.cleared" follow-check and
+    _close_by_grab's identical check both skip it for free) and, per Task 6,
+    won't advance a run.
 """
 from dataclasses import dataclass, replace
 
@@ -285,6 +299,7 @@ class Projector:
                         strat_tag=self.strat_by_segment.get(a.segment_id),
                         cleared=a.id in self._cleared,
                         cleared_reason=self._cleared.get(a.id))
+            a = self._auto_ignored(a)
             if a.outcome == "success" and not a.cleared:
                 # A segment that COMPLETES by entering a star stage (the
                 # closing event is a level_changed into a course-bearing level)

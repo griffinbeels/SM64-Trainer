@@ -1247,3 +1247,73 @@ def test_auto_ignored_grab_does_not_move_target():
         star(3, 1005, course=8, star_id=1, igt=5),   # bogus grab of (8,1)
     ])
     assert proj.target == ("star", 2, 2)
+
+
+# -- segment-attempt validity bounds (spec 2026-07-23) --------------------
+
+from sm64_events.tracking.segments import SegmentDef
+
+
+def seg_def(**over):
+    base = dict(id=1, name="S", enabled=True,
+                start_triggers=[{"type": "spawned"}],
+                end_triggers=[{"type": "warp_entered", "level": 16}],
+                guards=[])
+    base.update(over)
+    return SegmentDef(**base)
+
+
+def test_segment_success_below_default_min_is_auto_ignored():
+    attempts = project([
+        jev(1, "spawned", 1000, {"level": 16}),
+        jev(2, "warp_entered", 1005, {"level": 16}),   # rta 5 < 15
+    ], segments=[seg_def()])
+    [a] = [a for a in attempts if a.segment_id == 1]
+    assert a.outcome == "success" and a.cleared is True
+    assert a.cleared_reason == "auto: below 0.50s min"
+
+
+def test_segment_min_time_guard_overrides_the_default():
+    d = seg_def(guards=[{"type": "min_time", "frames": 180}])
+    flagged = project([
+        jev(1, "spawned", 1000, {"level": 16}),
+        jev(2, "warp_entered", 1150, {"level": 16}),   # rta 150 < 180
+    ], segments=[d])
+    [a] = [a for a in flagged if a.segment_id == 1]
+    assert a.cleared is True and a.cleared_reason == "auto: below 6.00s min"
+    ok = project([
+        jev(1, "spawned", 1000, {"level": 16}),
+        jev(2, "warp_entered", 1200, {"level": 16}),   # rta 200 >= 180
+    ], segments=[d])
+    [a] = [a for a in ok if a.segment_id == 1]
+    assert a.cleared is False
+
+
+def test_segment_max_time_guard_flags_slow_success():
+    d = seg_def(guards=[{"type": "max_time", "frames": 300}])
+    attempts = project([
+        jev(1, "spawned", 1000, {"level": 16}),
+        jev(2, "warp_entered", 1400, {"level": 16}),   # rta 400 > 300
+    ], segments=[d])
+    [a] = [a for a in attempts if a.segment_id == 1]
+    assert a.cleared is True and a.cleared_reason == "auto: above 10.00s max"
+
+
+def test_auto_ignored_segment_success_does_not_follow_target():
+    _, proj = replay([
+        jev(1, "spawned", 1000, {"level": 16}),
+        jev(2, "warp_entered", 1005, {"level": 16}),   # bogus: rta 5
+    ], segments=[seg_def()])
+    assert proj.target is None
+
+
+def test_star_success_with_no_clock_at_all_is_not_flagged():
+    # grab-only attempt (no anchor -> rta None) with no igt_frames in the
+    # payload: _auto_ignored's "no clock -> no flag" branch — nothing to
+    # judge, so the success stands.
+    attempts = project([
+        jev(1, "star_collected", 1000, {"course_id": 2, "star_id": 2}),
+    ])
+    [a] = attempts
+    assert a.outcome == "success" and a.igt_frames is None and a.rta_frames is None
+    assert a.cleared is False
