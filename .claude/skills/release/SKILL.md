@@ -1,8 +1,9 @@
 ---
 name: release
 description: >-
-  Build and publish a new GitHub release of SM64 Trainer — the packaged
-  SM64Trainer.exe plus the in-app auto-update notes. Use this whenever the user
+  Build and publish a new GitHub release of SM64 Trainer — the six-asset
+  incremental-update set (app zip + manifest + bootstrap installer, each with
+  a .sha256) plus the in-app auto-update notes. Use this whenever the user
   wants to cut, ship, or publish a release, bump the version, or "make a new
   version / new build", even if they don't name tools/release.py. It picks the
   next version, generates plain-language user-facing release notes from the
@@ -14,11 +15,21 @@ description: >-
 
 # Release SM64 Trainer
 
-This project ships as a self-updating Windows exe. A release = bump the version,
-build `dist/SM64Trainer.exe`, attach it (+ a SHA-256) to a GitHub release with
-**user-facing notes**, and push. The running exe checks GitHub on launch (and via
-the "⟳ updates" button), so **whatever notes you publish are what users read in
-the in-app update popup** — write them for a player, not a developer.
+This project ships as a self-updating Windows app with **incremental updates**
+(since v1.4.0, 2026-07-23 — spec/plan under `docs/superpowers/`). A release =
+bump the version, build the **onedir app + bootstrap installer**, and publish
+**SIX assets** with **user-facing notes**:
+
+| Asset | What it is |
+|---|---|
+| `SM64Trainer-full.zip` (+`.sha256`) | The whole onedir app tree — first installs, portable users, full-download fallback |
+| `manifest.json` (+`.sha256`) | Per-file SHA-256 + zip byte offsets — what lets installed apps download ONLY changed files (typically ~25 MB) |
+| `SM64Trainer.exe` (+`.sha256`) | The **BOOTSTRAP INSTALLER** (~11 MB), NOT the app itself — new-user installer AND the migration vehicle pre-1.4.0 onefile installs update through. **This asset name is load-bearing and must be published under exactly this name in EVERY release, forever** (old shipped updaters can only install that name; names come from THE registry `core/update_plan.py`) |
+
+The running app checks GitHub on launch (and via the "⟳ updates" button), so
+**whatever notes you publish are what users read in the in-app update popup**
+(which also shows the exact download size) — write them for a player, not a
+developer.
 
 `tools/release.py` does the mechanical part (bump → tag → build → checksum →
 `gh release create`). Your job in this skill is the part a script can't do well:
@@ -128,11 +139,14 @@ Show the user the final memo before publishing.
 uv run python tools/release.py <version> --notes-file internal_notes/release-notes-<version>.md
 ```
 
-Run it **in the background** — the PyInstaller build takes a few minutes. The
-script: runs the full test suite, bumps `core/version.py` + `pyproject.toml`
-(+ `uv.lock`), builds the exe with ffmpeg bundled, writes the SHA-256, pushes the
-commit + annotated tag, and `gh release create`s with the exe + checksum
-attached (GitHub adds the source archives automatically).
+Run it **in the background** — the two PyInstaller builds + zipping the ~550 MB
+onedir tree take ~10-15 minutes. The script: runs the full test suite, bumps
+`core/version.py` + `pyproject.toml` (+ `uv.lock`), builds `--mode all`
+(onedir app with ffmpeg bundled + bootstrap), zips the tree
+(`tools/make_manifest.build_zip`), generates `manifest.json`, copies the
+bootstrap to `dist/SM64Trainer.exe`, writes all three `.sha256`s, pushes the
+commit + annotated tag, and `gh release create`s with the six assets (GitHub
+adds the source archives automatically).
 
 Add `--dry-run` first if you want to build + checksum without committing/tagging
 /publishing (e.g. to sanity-check a heavy change).
@@ -146,11 +160,16 @@ gh release view v<version> --json tagName,assets --jq '{tag: .tagName, assets: [
 git rev-parse --short HEAD; git rev-parse --short origin/main; git status --porcelain
 ```
 
-Expect the two assets `SM64Trainer.exe` + `SM64Trainer.exe.sha256`, local `main`
-== `origin/main`, and a clean tree. Report the release URL
+Expect ALL SIX assets — `SM64Trainer-full.zip`, `manifest.json`,
+`SM64Trainer.exe`, each with its `.sha256` — local `main` == `origin/main`,
+and a clean tree. **A release missing the zip/manifest/checksums is never
+offered by the in-app updater and is refused by the bootstrap** (the
+"no unverified bytes" rule), so a partial upload silently strands users —
+verify the full set. Report the release URL
 (`https://github.com/griffinbeels/SM64-Trainer/releases/tag/v<version>`) and
-remind the user they can verify the in-app update from an older install (or the
-"⟳ updates" button) — clicking **Update now** swaps in place and restarts.
+remind the user they can verify the in-app update from an older install (or
+the "⟳ updates" button) — the popup shows the download size; **Update now**
+downloads only changed files and restarts.
 
 ## Gotchas (learned the hard way)
 
@@ -162,12 +181,20 @@ remind the user they can verify the in-app update from an older install (or the
   published — safe to retry.
 - **If `release.py` fails *after* the build** (e.g. a transient `gh` error), the
   version commit + tag may already be local. Don't re-run from scratch — push the
-  tag (`git push origin v<version>`) and finish with `gh release create` using the
-  already-built `dist/SM64Trainer.exe` + `.sha256`. Re-running `release.py` with
-  the same version fails because there's nothing new to commit.
-- **Renaming the exe is breaking** for auto-update: an installed older exe looks
-  for the *old* asset name and won't see the new release, and auto-update keeps
-  the existing filename anyway. Such a release needs a one-time manual download —
-  call it out in the notes.
+  tag (`git push origin v<version>`) and finish with `gh release create` listing
+  ALL SIX already-built assets from `dist/` (zip, manifest, exe + three
+  `.sha256`s — `release_assets()` in tools/release.py is the authoritative
+  list). Re-running `release.py` with the same version fails because there's
+  nothing new to commit.
+- **NEVER rename or drop the `SM64Trainer.exe` asset** — it's the bootstrap
+  under the only name pre-1.4.0 updaters can install, AND what the README
+  tells new users to download. Asset names live in `core/update_plan.py`
+  (ZIP_ASSET / MANIFEST_ASSET / BOOTSTRAP_ASSET); release.py imports them —
+  a rename there without a migration story strands every old install.
+- **`dist/SM64Trainer.exe` in a fresh build is the ~11 MB BOOTSTRAP, not the
+  app** — the app is the `dist/SM64Trainer/` folder. Don't "fix" this.
+- **Delta size sanity:** any Python change costs ~25 MB (the onedir exe embeds
+  the PYZ); UI/data-only changes cost KBs; a dependency bump adds those
+  packages. Measured facts in docs/architecture.md → "Incremental updates".
 - The notes you publish are what the **next** version's users see in the popup —
   always user-facing.
