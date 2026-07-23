@@ -1366,3 +1366,53 @@ def test_valid_frames_filters_the_average_inputs():
     ]
     assert _valid_frames(history, "fast", "igt") == [343, 0]
     assert _valid_frames(history, "fast", "rta") == [400, 400]
+def test_deleted_strat_hidden_and_masked(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.set_strat(2, 2, "oldstrat"))
+    asyncio.run(svc.publish(star(1350)))                   # attempt tagged oldstrat
+    db.set_state("strategies", {})                         # not registered anymore
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    assert "oldstrat" in sec["strategies"]                 # sanity: observed source
+    assert sec["last_strat"] == "oldstrat"
+    db.set_state("deleted_strats", {"star:2:2": ["oldstrat"]})
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    assert "oldstrat" not in sec["strategies"]             # observed hidden
+    assert sec["last_strat"] is None                       # ghost masked
+    assert view["last_strat_by_star"].get("2:2") is None
+    assert (view["target"].get("strat_tag") or None) is None
+
+
+def test_segment_section_banner_masks_deleted_active_strat(tmp_path):
+    """purge_strategy clears the active strat only for STAR entities (a
+    journaled strat_set null) — segments have no equivalent, so a purged
+    segment's active strat can linger in strat_by_segment. The section's
+    OWN rank banner must read the masked strat too (matching last_strat,
+    which is already masked) — otherwise a deleted strat with no ladder
+    reads as 'no_ladder' ("no rank standards for this strategy") instead of
+    'no_strat' ("pick a strat to see your rank")."""
+    import json
+    from sm64_events.ranks.standards import RankStandards
+    db, svc = make(tmp_path)
+    ek = "segment:1"                                 # LBLJ (seeded def id 1)
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        ek: {"clock": "rta", "strategies": {
+            "hyperspeed": {"Mario": 2.5, "Diamond": 3.0}}}}}))
+    svc.ranks = RankStandards(p); svc.ranks.load()
+    asyncio.run(svc.set_target_segment(1, strat_tag="ghoststrat"))  # no ladder
+    view = build_session_view(db, svc, clock="igt")
+    sec = seg_section(view, 1)
+    assert sec["last_strat"] == "ghoststrat"
+    # reason is the contract here; the banner payload also carries rank-mode
+    # keys (mode/basis) owned by the average-rank-mode feature — don't pin them
+    assert sec["rank"]["rank"] is None
+    assert sec["rank"]["reason"] == "no_ladder"                    # sanity, pre-tombstone
+    db.set_state("deleted_strats", {ek: ["ghoststrat"]})
+    view = build_session_view(db, svc, clock="igt")
+    sec = seg_section(view, 1)
+    assert sec["last_strat"] is None                               # already masked (Task 9)
+    assert sec["rank"]["rank"] is None
+    assert sec["rank"]["reason"] == "no_strat"                      # banner masked too

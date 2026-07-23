@@ -22,6 +22,7 @@ from sm64_events.core.events import Event
 from sm64_events.core.timefmt import format_igt
 from sm64_events.memory.addresses import course_name, star_name
 from sm64_events.ranks.classify import RANK_MODES
+from sm64_events.ranks.standards import entity_key
 from sm64_events.storage.db import Database, EventRow
 from sm64_events.tracking.projection import Projector, replay, wipe_matches
 from sm64_events.tracking.segments import SegmentDef, validate_definition
@@ -273,6 +274,18 @@ class TrackerService:
         if strat_tag not in existing:
             strategies[key] = existing + [strat_tag]
             db.set_state("strategies", strategies)
+        self._clear_tombstone(db, entity_key(course_id, star_id), strat_tag)
+
+    def _clear_tombstone(self, db: Database, ek: str, strat: str) -> None:
+        """Re-creating a strat un-deletes it: the tombstone (see
+        purge_strategy) must not outlive the name's next creation, or the
+        new strat would be invisible in every dropdown."""
+        tombs = db.get_state("deleted_strats", {})
+        if strat in tombs.get(ek, []):
+            tombs[ek] = [s for s in tombs[ek] if s != strat]
+            if not tombs[ek]:
+                tombs.pop(ek)
+            db.set_state("deleted_strats", tombs)
 
     async def set_target(self, course_id: int, star_id: int,
                          strat_tag: str | None = None) -> None:
@@ -461,10 +474,40 @@ class TrackerService:
 
     async def create_rank_strategy(self, ek, strat) -> None:
         self._require_ranks().create_strategy(ek, strat)
+        if self.db is not None:
+            self._clear_tombstone(self.db, ek, strat)
         await self._rank_standards_changed()
 
     async def delete_rank_strategy(self, ek, strat) -> None:
         self._require_ranks().delete_strategy(ek, strat)
+        await self._rank_standards_changed()
+
+    async def purge_strategy(self, ek: str, strat: str) -> None:
+        """Fully delete a CUSTOM strategy: standards data + registration +
+        a tombstone hiding attempt-observed occurrences (attempts are
+        journal-derived and must not be rewritten), and a journaled
+        strat_set null when it was the star's active strat. Seeded
+        (community) strats are protected. Re-creating the name clears the
+        tombstone — see _clear_tombstone."""
+        ranks = self._require_ranks()
+        db = self._require_db()
+        if strat in ranks.seeded_strategies(ek):
+            raise ValueError(f"{strat!r} is a community default and can't be deleted")
+        ranks.delete_strategy(ek, strat)
+        if ek.startswith("star:"):
+            _, course_s, star_s = ek.split(":")
+            course_id, star_id = int(course_s), int(star_s)
+            strategies = db.get_state("strategies", {})
+            key = f"{course_id}:{star_id}"
+            if strat in strategies.get(key, []):
+                strategies[key] = [s for s in strategies[key] if s != strat]
+                db.set_state("strategies", strategies)
+            if self.strat_by_star.get((course_id, star_id)) == strat:
+                await self.set_strat(course_id, star_id, None)
+        tombs = db.get_state("deleted_strats", {})
+        if strat not in tombs.get(ek, []):
+            tombs[ek] = tombs.get(ek, []) + [strat]
+            db.set_state("deleted_strats", tombs)
         await self._rank_standards_changed()
 
     async def reset_rank_entity(self, ek) -> None:

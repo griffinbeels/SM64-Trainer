@@ -129,6 +129,15 @@ class RankStandards:
     def user_videos(self, ek) -> dict:
         return self._entity(ek).get("user_videos", {})
 
+    def seeded_strategies(self, ek) -> list:
+        """Strategy names the bundled community seed defines for this entity —
+        THE custom-vs-default distinction (the same one _reconcile uses).
+        Seeded strats are community data: protected from full deletion."""
+        seed = self._read_valid(self.seed_path)
+        if seed is None:
+            return []
+        return list(seed["entities"].get(ek, {}).get("strategies", {}).keys())
+
     def cutoff_videos(self, ek) -> dict:
         """{strat: {rank: url}} — auto band videos (from clips) merged with the
         user's hand-attached overrides, resolved against each strat's ladder. THE

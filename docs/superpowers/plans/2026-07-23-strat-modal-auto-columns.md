@@ -47,7 +47,7 @@ One deliverable: the shell has no standalone UI until something renders it, and 
 - Consumes: existing `.modal-backdrop` / `.modal` / `.modal-actions` CSS in `ui/index.html` (unchanged).
 - Produces: `Modal({ title, onClose, footer, children })` exported from `ui/components/modal.js`. `onClose` optional — when absent, Esc and backdrop-click do nothing (the update popup relies on this). `footer` optional — renders inside `.modal-actions`. Tasks 2–5 consume this exact signature.
 
-- [ ] **Step 1: Create the shell**
+- [x] **Step 1: Create the shell**
 
 Create `src/sm64_events/ui/components/modal.js` with exactly:
 
@@ -81,7 +81,7 @@ export function Modal({ title, onClose, footer, children }) {
 }
 ```
 
-- [ ] **Step 2: Migrate update.js onto it**
+- [x] **Step 2: Migrate update.js onto it**
 
 In `src/sm64_events/ui/components/update.js`, add the import after the `htm` import (line 8):
 
@@ -124,12 +124,12 @@ Replace the entire `return html` block (lines 76–107) with:
 
 Note: NO `onClose` prop is passed — Esc/backdrop must stay inert on this popup. The state-dependent `.modal-actions` blocks stay as children (the `footer` prop is a convenience, not mandatory). `<//>` is htm's close-component tag.
 
-- [ ] **Step 3: Regression + browser check**
+- [x] **Step 3: Regression + browser check**
 
 Run: `uv run pytest -q` → all pass.
 Start the dev server (`uv run python -m sm64_events.main` from repo root, background). Open `http://127.0.0.1:8065` via Chrome DevTools MCP: **zero console errors**. Then restart the server with `SM64_UPDATE_FAKE=1` set to render the update popup in dev: it must look exactly as before (title, notes box, buttons), Esc and backdrop-click must NOT dismiss it, and "Later" must dismiss it.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/sm64_events/ui/components/modal.js src/sm64_events/ui/components/update.js
@@ -154,7 +154,7 @@ Independent of Task 1. The table's columns become the union of the store's strat
 - Consumes: `sec.strategies` (array of strat names — views.py's registered+observed+standards union, present on BOTH star and segment sections).
 - Produces: `StandardsPanel({ entity, activeStrat, strategies, onChanged })` — the new optional `strategies` prop. Task 3 modifies this same file and assumes this signature.
 
-- [ ] **Step 1: Union the columns in standards.js**
+- [x] **Step 1: Union the columns in standards.js**
 
 Change the signature (line 16) to:
 
@@ -195,7 +195,7 @@ On the × button (line 76), change the tooltip from `title="remove strategy"` to
 title="clear this strategy's standards"
 ```
 
-- [ ] **Step 2: Pass the section list from practice.js**
+- [x] **Step 2: Pass the section list from practice.js**
 
 Both call sites gain the prop. Lines 443–444 (StarSection):
 
@@ -211,12 +211,12 @@ Lines 530–531 (SegmentSection):
         activeStrat=${sec.last_strat} strategies=${sec.strategies} onChanged=${t.refresh} />
 ```
 
-- [ ] **Step 3: Regression + browser check**
+- [x] **Step 3: Regression + browser check**
 
 Run: `uv run pytest -q` → all pass.
 Browser (`http://127.0.0.1:8065`): zero console errors. Open the LLL Red-Hot Log Rolling section's "Rank standards" panel: a **logless** column now appears after the seed strats, every cell "—", no × behavior change needed yet, and the active-strat column highlight still works when logless is the active strat. The star's rank banner must still show "no rank standards for this strategy" (empty ladder → no rank) until times exist.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/sm64_events/ui/components/standards.js src/sm64_events/ui/components/practice.js
@@ -245,7 +245,7 @@ The strategy-creation modal itself, wired into its first entry point (`+ Strateg
 - Consumes: `Modal({ title, onClose, footer, children })` from Task 1; `RANK_NAMES`, `rankColor` from `./ranks.js`; `send(method, path, body)` from `../api.js` (throws on non-2xx); existing endpoints `POST /api/ranks/standards/{entity}` `{strategy}`, `PUT …/{entity}/{strat}/{rank}` `{seconds}`, `PUT …/{entity}/{strat}/{rank}/video` `{url}`.
 - Produces: `StratModal({ entity, existing, onSaved, onClose })` from `ui/components/stratmodal.js` — `entity` is `star:{c}:{s}` or `segment:{id}`; `existing` is an array of strat names for duplicate rejection; `onSaved(name)` fires after all writes succeed; `onClose` on Cancel/Esc/backdrop. Tasks 4–5 consume this exact signature.
 
-- [ ] **Step 1: Create the modal component**
+- [x] **Step 1: Create the modal component**
 
 Create `src/sm64_events/ui/components/stratmodal.js` with exactly:
 
@@ -340,7 +340,7 @@ export function StratModal({ entity, existing, onSaved, onClose }) {
 }
 ```
 
-- [ ] **Step 2: Add the CSS**
+- [x] **Step 2: Add the CSS**
 
 In `src/sm64_events/ui/index.html`, after the `.btnlink { … }` rule (≈ line 207), insert:
 
@@ -350,7 +350,7 @@ In `src/sm64_events/ui/index.html`, after the `.btnlink { … }` rule (≈ line 
   .modal-error { color: #e08585; font-size: .85em; margin-top: .5rem; }
 ```
 
-- [ ] **Step 3: Wire `+ Strategy` in standards.js**
+- [x] **Step 3: Wire `+ Strategy` in standards.js**
 
 Add the import after the `ranks.js` import (line 12):
 
@@ -389,12 +389,12 @@ to
 
 (`strats` is Task 2's union list — the correct duplicate-rejection set; it is only non-empty when the panel is open with data, which is the only time `showAdd` is reachable.)
 
-- [ ] **Step 4: Regression + browser check**
+- [x] **Step 4: Regression + browser check**
 
 Run: `uv run pytest -q` → all pass.
 Browser: zero console errors. In a star section → Rank standards → Edit → `+ Strategy`: the modal opens with the name field, 8 colored rank rows (Mario→Bronze, NO Iron), blank time + video inputs. Check: empty-name Save shows the inline error; a duplicate name (e.g. `Standard`) shows the inline error; Cancel/Esc/backdrop close with **no new column**; saving a strat with two times filled creates its column showing exactly those two times (others "—"); saving with a video URL makes that rank's time a link in view mode. Type into inputs across a poll tick (~1 s) — text must not be wiped (oninput rule).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/sm64_events/ui/components/stratmodal.js src/sm64_events/ui/components/standards.js src/sm64_events/ui/index.html
@@ -419,7 +419,7 @@ Replaces the `window.prompt` in StarSection's `setStrat`. Depends on Task 3.
 - Consumes: `StratModal({ entity, existing, onSaved, onClose })` from Task 3; existing `setStrat`, `stratNonce`, `sec.strategies`, `POST /api/strat`.
 - Produces: nothing new for later tasks.
 
-- [ ] **Step 1: Wire the modal into StarSection**
+- [x] **Step 1: Wire the modal into StarSection**
 
 Add the import after the StandardsPanel import (line 12):
 
@@ -461,12 +461,12 @@ After the `.shead` closing `</div>` (line 419), add the modal render:
 
 `onSaved` reuses `setStrat` (the saved name is never `"__new"`), which POSTs `/api/strat` — registering and activating the strat — then refreshes; `onClose` uses the established `stratNonce` snap-back so the dropdown returns to the server's truth.
 
-- [ ] **Step 2: Regression + browser check**
+- [x] **Step 2: Regression + browser check**
 
 Run: `uv run pytest -q` → all pass.
 Browser: zero console errors. In the Active Star section, pick `+ new strat…`: the modal opens (no browser prompt). Cancel → dropdown snaps back to the previous value. Create `testmodal` with a Mario time of `11.5` → dropdown now shows `testmodal` selected, the standards panel shows its column with `11.50` in the Mario row, and the rank banner switches off "no rank standards" once a PB with that strat exists. Clean up: × the `testmodal` column (clears data), set the strat back.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/sm64_events/ui/components/practice.js
@@ -490,7 +490,7 @@ Replaces TargetEditor's `adding` inline-input state. Depends on Task 3.
 - Consumes: `StratModal({ entity, existing, onSaved, onClose })` from Task 3; `v.strategies` (the view's REGISTERED-strategies KV — note it does NOT include a just-created strat until Set target registers it).
 - Produces: nothing new for later tasks.
 
-- [ ] **Step 1: Rewire TargetEditor**
+- [x] **Step 1: Rewire TargetEditor**
 
 Add the import next to header.js's other component imports:
 
@@ -553,12 +553,12 @@ After the closing `</div>` of that row (line 188), before the popover's final `<
         onClose=${() => { setShowStratModal(false); setStratNonce((n) => n + 1); }} />` : null}
 ```
 
-- [ ] **Step 2: Regression + browser check**
+- [x] **Step 2: Regression + browser check**
 
 Run: `uv run pytest -q` → all pass.
 Browser: zero console errors. Header → edit target → strat select → `+ new strategy…`: modal opens; Cancel → select snaps back. Create `headertest` → the select shows `headertest` selected (the unlisted-value option); "Set target" applies it (header target line shows the strat; it is now registered). The standards panel for that star shows the `headertest` column. Clean up: × the column, reset the target.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/sm64_events/ui/components/header.js
@@ -580,15 +580,15 @@ can't display blank after save."
 
 **Interfaces:** none — verification + documentation only.
 
-- [ ] **Step 1: Full-suite regression**
+- [x] **Step 1: Full-suite regression**
 
 Run: `uv run pytest -q` → all pass (zero Python changed; any failure means scope leaked).
 
-- [ ] **Step 2: Frontend smoke sweep (frontend-smoke-test skill)**
+- [x] **Step 2: Frontend smoke sweep (frontend-smoke-test skill)**
 
 With the dev server up, walk the whole surface once in the browser via Chrome DevTools MCP, console clean throughout: (1) logless auto-column present+empty; (2) create a strat from each of the three entry points; (3) × on an in-use strat clears data but keeps the column, × on a modal-only never-used strat removes the column; (4) rank banner stays "no rank standards" until a time is entered, then ranks; (5) `SM64_UPDATE_FAKE=1` popup renders and is not Esc-dismissable; (6) Compare/Routes tabs still load (shared-file regression sniff).
 
-- [ ] **Step 3: Update the module map**
+- [x] **Step 3: Update the module map**
 
 In `CLAUDE.md`'s module map, add two rows after the "Rank UI" row and amend the Rank UI row's standards.js text:
 
@@ -603,9 +603,520 @@ and in the Rank UI row, change "collapsible editable table" to "collapsible edit
 
 Pause for the user: modal look/feel at all three entry points, the logless column, × semantics. This plan is done only after their sign-off.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add CLAUDE.md docs/superpowers/plans/2026-07-23-strat-modal-auto-columns.md
 git commit -m "docs: module-map rows for the modal shell + strategy modal"
 ```
+
+---
+
+# Addendum tasks: full delete for custom strategies (spec addendum 2026-07-23)
+
+> These tasks END the pure-frontend constraint: Tasks 7-10 are Python with
+> true red/green TDD (`uv run pytest` gates). The no-JS-test-runner rule and
+> the oninput rule still bind Task 11. Entity keys are `star:{c}:{s}` /
+> `segment:{id}` (ranks/standards.py `entity_key`). The tombstone lives in
+> ui_state KV `deleted_strats`: `{entity_key: [names]}`.
+
+### Task 7: `RankStandards.seeded_strategies`
+
+**Files:**
+- Modify: `src/sm64_events/ranks/standards.py` (after `user_videos`, ≈ line 130)
+- Test: `tests/test_ranks_standards.py` (uses the existing `_seed(tmp_path)` helper)
+
+**Interfaces:**
+- Produces: `seeded_strategies(ek) -> list[str]` — strategy names the bundled
+  seed defines for `ek`; `[]` when there is no seed or the entity is absent.
+  Task 8's seeded-protection check and Task 10's GET field consume this.
+
+- [x] **Step 1: Write the failing tests**
+
+Append to `tests/test_ranks_standards.py`:
+
+```python
+def test_seeded_strategies_lists_seed_strats_only(tmp_path):
+    s = RankStandards(tmp_path / "rs.json", seed_path=_seed(tmp_path)); s.load()
+    ek = next(iter(s.to_json()["entities"]))
+    seed_strats = s.seeded_strategies(ek)
+    assert seed_strats == s.strategies(ek)          # fresh install: store == seed
+    s.create_strategy(ek, "customx")
+    assert "customx" in s.strategies(ek)
+    assert "customx" not in s.seeded_strategies(ek)  # custom never seeded
+
+
+def test_seeded_strategies_without_seed_is_empty(tmp_path):
+    s = RankStandards(tmp_path / "rs.json", seed_path=None); s.load()
+    assert s.seeded_strategies("star:1:0") == []
+```
+
+- [x] **Step 2: Run to verify they fail**
+
+Run: `uv run pytest tests/test_ranks_standards.py -q`
+Expected: 2 FAIL with `AttributeError: ... 'seeded_strategies'`
+
+- [x] **Step 3: Implement**
+
+In `standards.py`, after `user_videos` (≈ line 130):
+
+```python
+    def seeded_strategies(self, ek) -> list:
+        """Strategy names the bundled community seed defines for this entity —
+        THE custom-vs-default distinction (the same one _reconcile uses).
+        Seeded strats are community data: protected from full deletion."""
+        seed = self._read_valid(self.seed_path)
+        if seed is None:
+            return []
+        return list(seed["entities"].get(ek, {}).get("strategies", {}).keys())
+```
+
+- [x] **Step 4: Run to verify green**
+
+Run: `uv run pytest tests/test_ranks_standards.py -q` → all pass.
+
+- [x] **Step 5: Commit**
+
+```bash
+git add src/sm64_events/ranks/standards.py tests/test_ranks_standards.py
+git commit -m "feat(ranks): seeded_strategies — the custom-vs-default distinction
+
+Reads the bundled seed (same source _reconcile trusts) so the delete
+path can refuse community strats without a stored flag."
+```
+
+---
+
+### Task 8: `purge_strategy` service command + tombstone lifecycle
+
+**Files:**
+- Modify: `src/sm64_events/tracking/service.py` (`_register_strategy` ≈ line 250; the rank-command block ≈ lines 441-463; add an import of `entity_key` from `sm64_events.ranks.standards` if not present)
+- Test: `tests/test_tracker_service.py` (harness: `make(tmp_path)`, `ev`, `star`; add a ranks-bearing variant below)
+
+**Interfaces:**
+- Consumes: `seeded_strategies(ek)` (Task 7); existing `set_strat`, `_register_strategy`, `create_rank_strategy`, `_rank_standards_changed`.
+- Produces: `async purge_strategy(ek: str, strat: str)` — raises ValueError on seeded strats; `_clear_tombstone(db, ek, strat)` called by BOTH create paths. Task 9 reads the `deleted_strats` KV shape `{ek: [names]}`; Task 10 exposes the command over REST.
+
+- [x] **Step 1: Write the failing tests**
+
+Append to `tests/test_tracker_service.py` (add `import json` and the `RankStandards` import at the top with the other imports):
+
+```python
+from sm64_events.ranks.standards import RankStandards
+
+
+def make_with_ranks(tmp_path):
+    seed = {"version": 1, "entities": {
+        "star:7:2": {"clock": "igt", "strategies": {"Standard": {"Mario": 11.76}}}}}
+    seed_path = tmp_path / "seed.json"
+    seed_path.write_text(json.dumps(seed))
+    ranks = RankStandards(tmp_path / "rs.json", seed_path=seed_path)
+    ranks.load()
+    db = Database(tmp_path / "t.db")
+    svc = TrackerService(db, Broadcaster(), ranks=ranks)
+    asyncio.run(svc.start())
+    return db, svc
+
+
+def test_purge_strategy_removes_custom_everywhere(tmp_path):
+    db, svc = make_with_ranks(tmp_path)
+    asyncio.run(svc.set_strat(7, 2, "logless"))            # registers + activates
+    asyncio.run(svc.create_rank_strategy("star:7:2", "logless"))
+    asyncio.run(svc.purge_strategy("star:7:2", "logless"))
+    assert "logless" not in svc.ranks.strategies("star:7:2")
+    assert "logless" not in db.get_state("strategies", {}).get("7:2", [])
+    assert "logless" in db.get_state("deleted_strats", {}).get("star:7:2", [])
+    assert svc.strat_by_star.get((7, 2)) is None           # strat_set null published
+
+
+def test_purge_refuses_seeded_strategy(tmp_path):
+    db, svc = make_with_ranks(tmp_path)
+    with pytest.raises(ValueError):
+        asyncio.run(svc.purge_strategy("star:7:2", "Standard"))
+    assert "Standard" in svc.ranks.strategies("star:7:2")  # untouched
+
+
+def test_recreate_after_purge_clears_tombstone(tmp_path):
+    db, svc = make_with_ranks(tmp_path)
+    asyncio.run(svc.set_strat(7, 2, "logless"))
+    asyncio.run(svc.purge_strategy("star:7:2", "logless"))
+    asyncio.run(svc.set_strat(7, 2, "logless"))            # register path
+    assert "logless" not in db.get_state("deleted_strats", {}).get("star:7:2", [])
+    asyncio.run(svc.purge_strategy("star:7:2", "logless"))
+    asyncio.run(svc.create_rank_strategy("star:7:2", "logless"))   # ranks path
+    assert "logless" not in db.get_state("deleted_strats", {}).get("star:7:2", [])
+
+
+def test_purge_segment_strategy_tombstones(tmp_path):
+    db, svc = make_with_ranks(tmp_path)
+    asyncio.run(svc.create_rank_strategy("segment:3", "fast"))
+    asyncio.run(svc.purge_strategy("segment:3", "fast"))
+    assert "fast" not in svc.ranks.strategies("segment:3")
+    assert "fast" in db.get_state("deleted_strats", {}).get("segment:3", [])
+```
+
+- [x] **Step 2: Run to verify they fail**
+
+Run: `uv run pytest tests/test_tracker_service.py -q -k "purge or recreate"`
+Expected: FAIL with `AttributeError: ... 'purge_strategy'`
+
+- [x] **Step 3: Implement**
+
+In `service.py`. Helper next to `_register_strategy`:
+
+```python
+    def _clear_tombstone(self, db: Database, ek: str, strat: str) -> None:
+        """Re-creating a strat un-deletes it: the tombstone (see
+        purge_strategy) must not outlive the name's next creation, or the
+        new strat would be invisible in every dropdown."""
+        tombs = db.get_state("deleted_strats", {})
+        if strat in tombs.get(ek, []):
+            tombs[ek] = [s for s in tombs[ek] if s != strat]
+            if not tombs[ek]:
+                tombs.pop(ek)
+            db.set_state("deleted_strats", tombs)
+```
+
+At the END of `_register_strategy` (unconditionally — registration is creation):
+
+```python
+        self._clear_tombstone(db, entity_key(course_id, star_id), strat_tag)
+```
+
+In `create_rank_strategy`, after the `create_strategy` call:
+
+```python
+        if self.db is not None:
+            self._clear_tombstone(self.db, ek, strat)
+```
+
+New command in the rank-command block:
+
+```python
+    async def purge_strategy(self, ek: str, strat: str) -> None:
+        """Fully delete a CUSTOM strategy: standards data + registration +
+        a tombstone hiding attempt-observed occurrences (attempts are
+        journal-derived and must not be rewritten), and a journaled
+        strat_set null when it was the star's active strat. Seeded
+        (community) strats are protected. Re-creating the name clears the
+        tombstone — see _clear_tombstone."""
+        ranks = self._require_ranks()
+        db = self._require_db()
+        if strat in ranks.seeded_strategies(ek):
+            raise ValueError(f"{strat!r} is a community default and can't be deleted")
+        ranks.delete_strategy(ek, strat)
+        if ek.startswith("star:"):
+            _, course_s, star_s = ek.split(":")
+            course_id, star_id = int(course_s), int(star_s)
+            strategies = db.get_state("strategies", {})
+            key = f"{course_id}:{star_id}"
+            if strat in strategies.get(key, []):
+                strategies[key] = [s for s in strategies[key] if s != strat]
+                db.set_state("strategies", strategies)
+            if self.strat_by_star.get((course_id, star_id)) == strat:
+                await self.set_strat(course_id, star_id, None)
+        tombs = db.get_state("deleted_strats", {})
+        if strat not in tombs.get(ek, []):
+            tombs[ek] = tombs.get(ek, []) + [strat]
+            db.set_state("deleted_strats", tombs)
+        await self._rank_standards_changed()
+```
+
+Note the ORDER: the tombstone is written AFTER the `set_strat(None)` call —
+`set_strat` with a null tag never registers, so it cannot re-clear the
+tombstone, but keep the order anyway so a future register-on-null change
+fails the recreate test instead of silently breaking delete.
+
+- [x] **Step 4: Run to green**
+
+Run: `uv run pytest tests/test_tracker_service.py -q` → all pass.
+
+- [x] **Step 5: Commit**
+
+```bash
+git add src/sm64_events/tracking/service.py tests/test_tracker_service.py
+git commit -m "feat(tracking): purge_strategy — full delete for custom strats
+
+Standards + registration removed directly; attempt-observed occurrences
+are journal-derived so a deleted_strats tombstone hides them instead of
+rewriting history. Active-strat clears ride the existing journaled
+strat_set path; both create paths clear the tombstone so re-creating a
+name is the undo."
+```
+
+---
+
+### Task 9: views filter + mask tombstoned strats
+
+**Files:**
+- Modify: `src/sm64_events/tracking/views.py` (`_strategies_for` ≈ line 161, `_seg_strategies` ≈ line 178, `build_session_view` KV reads ≈ line 390 and the star/segment section dicts + top-level maps)
+- Test: `tests/test_views.py` (harness: `make(tmp_path)`, `ev`, `star`, `build_session_view`)
+
+**Interfaces:**
+- Consumes: the `deleted_strats` KV `{ek: [names]}` (Task 8).
+- Produces: sections whose `strategies` lists and every active-strat read exclude tombstoned names. The masked read sites: star section `last_strat`, segment section `last_strat`, top-level `last_strat_by_star`, `rank_by_star` grading, `_candidate_rank` (route medals), and `view["target"]["strat_tag"]`.
+
+- [x] **Step 1: Write the failing test**
+
+Append to `tests/test_views.py`:
+
+```python
+def test_deleted_strat_hidden_and_masked(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.set_strat(2, 2, "oldstrat"))
+    asyncio.run(svc.publish(star(1350)))                   # attempt tagged oldstrat
+    db.set_state("strategies", {})                         # not registered anymore
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    assert "oldstrat" in sec["strategies"]                 # sanity: observed source
+    assert sec["last_strat"] == "oldstrat"
+    db.set_state("deleted_strats", {"star:2:2": ["oldstrat"]})
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    assert "oldstrat" not in sec["strategies"]             # observed hidden
+    assert sec["last_strat"] is None                       # ghost masked
+    assert view["last_strat_by_star"].get("2:2") is None
+    assert (view["target"].get("strat_tag") or None) is None
+```
+
+- [x] **Step 2: Run to verify it fails**
+
+Run: `uv run pytest tests/test_views.py -q -k deleted_strat`
+Expected: FAIL on `"oldstrat" not in sec["strategies"]` (hidden not implemented)
+
+- [x] **Step 3: Implement**
+
+Add `deleted=()` params and final filters:
+
+```python
+def _strategies_for(registered: dict, attempts, course_id: int, star_id: int,
+                    ranks=None, deleted=()) -> list[str]:
+    ...existing body...
+    return [s for s in out if s not in deleted]
+
+
+def _seg_strategies(history, seg_id: int, ranks=None, deleted=()) -> list:
+    ...existing body...
+    return [s for s in out if s not in deleted]
+```
+
+In `build_session_view`, read the KV once next to the other state reads:
+
+```python
+    deleted_strats = db.get_state("deleted_strats", {})
+```
+
+and a local masking helper:
+
+```python
+    def masked(strat, ek):
+        """A tombstoned (fully deleted) strat must never surface as an
+        active/last strat — the dropdowns no longer offer it."""
+        return None if strat and strat in deleted_strats.get(ek, []) else strat
+```
+
+Then: star sections pass `deleted=deleted_strats.get(f"star:{course_id}:{star_id}", [])`
+to `_strategies_for` and wrap `last_strat` in `masked(..., ek)`; segment
+sections likewise with `f"segment:{seg_id}"`; `last_strat_by_star` filters
+each value through `masked`; the `rank_by_star` grading and
+`_candidate_rank` treat a masked strat as None (unranked); `view["target"]`'s
+`strat_tag` is wrapped in `masked` for the target's entity. Keep each mask
+at the point the value is read. (`_candidate_rank` lives outside
+`build_session_view` — pass the deleted-KV or re-read it there; keep it
+one read per view build where practical.)
+
+- [x] **Step 4: Run to green + full suite**
+
+Run: `uv run pytest tests/test_views.py -q` then `uv run pytest -q` → all pass.
+
+- [x] **Step 5: Commit**
+
+```bash
+git add src/sm64_events/tracking/views.py tests/test_views.py
+git commit -m "feat(views): hide tombstoned strats from unions and mask ghost reads
+
+The observed-on-attempts union source can't be deleted (journal-derived),
+so the view layer is where deleted_strats takes effect; every active-strat
+read masks a tombstoned name to None so no ghost reaches a dropdown,
+medal, or target line."
+```
+
+---
+
+### Task 10: REST surface — `?purge=true` + `seeded` in GET
+
+**Files:**
+- Modify: `src/sm64_events/server/ranks_api.py` (GET ≈ line 33; DELETE ≈ line 78)
+- Test: `tests/test_ranks_api.py` (reuse the file's existing client/ranks harness)
+
+**Interfaces:**
+- Consumes: `purge_strategy` (Task 8), `seeded_strategies` (Task 7).
+- Produces: `DELETE /api/ranks/standards/{entity}/{strategy}?purge=true` (409 on seeded via the existing ValueError mapping); GET response gains `"seeded": [names]`. Task 11 consumes both.
+
+- [x] **Step 1: Write the failing tests**
+
+Append to `tests/test_ranks_api.py`. IMPORTANT: read the file's existing
+harness first and adapt construction — the helper below is referred to as
+`make(tmp_path)` returning `(client, svc)` with a seeded RankStandards; use
+whatever the file actually provides (it already builds
+`TrackerService(db, b, ranks=ranks)`), and pick the entity/strat from the
+harness's own seed rather than hardcoding:
+
+```python
+def test_get_lists_seeded_strategies(tmp_path):
+    client, svc = make(tmp_path)
+    ek = next(iter(svc.ranks.to_json()["entities"]))
+    body = client.get(f"/api/ranks/standards?entity={ek}").json()
+    assert body["seeded"] == svc.ranks.seeded_strategies(ek)
+
+
+def test_delete_purge_true_fully_deletes_custom(tmp_path):
+    client, svc = make(tmp_path)
+    ek = next(iter(svc.ranks.to_json()["entities"]))
+    client.post(f"/api/ranks/standards/{ek}", json={"strategy": "customx"})
+    r = client.delete(f"/api/ranks/standards/{ek}/customx?purge=true")
+    assert r.status_code == 200
+    assert "customx" not in svc.ranks.strategies(ek)
+    assert "customx" in svc.db.get_state("deleted_strats", {}).get(ek, [])
+
+
+def test_delete_purge_true_refuses_seeded(tmp_path):
+    client, svc = make(tmp_path)
+    ek = next(iter(svc.ranks.to_json()["entities"]))
+    seeded = svc.ranks.seeded_strategies(ek)[0]
+    r = client.delete(f"/api/ranks/standards/{ek}/{seeded}?purge=true")
+    assert r.status_code == 409
+    assert seeded in svc.ranks.strategies(ek)
+
+
+def test_delete_without_purge_keeps_clear_semantics(tmp_path):
+    client, svc = make(tmp_path)
+    ek = next(iter(svc.ranks.to_json()["entities"]))
+    client.post(f"/api/ranks/standards/{ek}", json={"strategy": "customy"})
+    r = client.delete(f"/api/ranks/standards/{ek}/customy")
+    assert r.status_code == 200
+    assert "customy" not in svc.db.get_state("deleted_strats", {}).get(ek, [])
+```
+
+If the harness's ranks store has no seed file, extend the harness (or add a
+seeded variant) so `seeded_strategies` is non-empty — the 409 test needs a
+real seeded strat.
+
+- [x] **Step 2: Run to verify they fail**
+
+Run: `uv run pytest tests/test_ranks_api.py -q -k "seeded or purge"`
+Expected: FAIL (`seeded` KeyError; purge param ignored → no tombstone)
+
+- [x] **Step 3: Implement**
+
+GET gains one field:
+
+```python
+                "seeded": service.ranks.seeded_strategies(entity),
+```
+
+DELETE gains the param and dispatch:
+
+```python
+    @router.delete("/ranks/standards/{entity}/{strategy}")
+    async def delete_strategy(entity: str, strategy: str, purge: bool = False):
+        try:
+            if purge:
+                await service.purge_strategy(entity, strategy)
+            else:
+                await service.delete_rank_strategy(entity, strategy)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True}
+```
+
+- [x] **Step 4: Run to green + full suite**
+
+Run: `uv run pytest tests/test_ranks_api.py -q` then `uv run pytest -q` → all pass.
+
+- [x] **Step 5: Commit**
+
+```bash
+git add src/sm64_events/server/ranks_api.py tests/test_ranks_api.py
+git commit -m "feat(api): DELETE ?purge=true full-deletes a custom strat; GET lists seeded
+
+409 on seeded rides the existing ValueError mapping; the seeded list is
+what lets the UI pick clear-vs-delete per column."
+```
+
+---
+
+### Task 11: dual-meaning × in the standards table
+
+**Files:**
+- Modify: `src/sm64_events/ui/components/standards.js` (`delStrat` ≈ line 28; the × button title in the header row)
+
+**Interfaces:**
+- Consumes: GET `seeded` field + `?purge=true` (Task 10).
+- Produces: seeded strat × = clear-data (existing confirm/behavior); custom strat × = full delete with its own confirm.
+
+- [x] **Step 1: Implement**
+
+Add next to the other per-strat accessors:
+
+```js
+  const isSeeded = (s) => (data.seeded || []).includes(s);
+```
+
+Replace `delStrat` with:
+
+```js
+  async function delStrat(s) {
+    // Dual-meaning x (user-picked): seeded strats are community data —
+    // clear-only; custom strats fully delete (tombstone hides attempt-
+    // observed occurrences server-side; re-creating the name restores).
+    const msg = isSeeded(s)
+      ? `Clear rank standards for "${s}"? (The column stays while the strategy is in use.)`
+      : `Delete strategy "${s}"?\nRemoves it from all dropdowns and clears its rank `
+        + `standards. Past attempts keep their recorded times; re-creating the same `
+        + `name restores them.`;
+    if (!window.confirm(msg)) return;
+    const qs = isSeeded(s) ? "" : "?purge=true";
+    await send("DELETE", `/api/ranks/standards/${enc(entity)}/${enc(s)}${qs}`);
+    await load(); onChanged && onChanged();
+  }
+```
+
+Change the × button's title to:
+
+```js
+title=${isSeeded(s) ? "clear this strategy's standards" : "delete this strategy"}
+```
+
+- [x] **Step 2: Verify**
+
+`node --check` on standards.js; `uv run pytest -q` (regression). Browser
+(dev server in the worktree, :8065): create a custom strat via the modal,
+give it a time, set it active on the star → × it → confirm text is the
+DELETE variant → column gone AND the practice dropdown no longer lists it
+AND the section shows no ghost active strat; re-create the same name →
+the old data's column returns. On a seeded strat, × shows the CLEAR
+variant and the column survives (store data cleared — restore it after
+via "Reset to community defaults"). Console clean.
+
+- [x] **Step 3: Commit**
+
+```bash
+git add src/sm64_events/ui/components/standards.js
+git commit -m "feat(ui): dual-meaning x — clear seeded strats, delete custom ones"
+```
+
+---
+
+### Task 12: addendum docs + consolidated verification
+
+**Files:**
+- Modify: `CLAUDE.md` (Rank UI row + rank service/API rows mention purge/tombstone)
+- Modify: `docs/api.md` if it documents the ranks DELETE (check; update with `purge` + `seeded`)
+- Modify: this plan file (tick addendum checkboxes)
+
+- [x] **Step 1: Full suite** — `uv run pytest -q` → all pass (count > 1077: new tests landed).
+- [x] **Step 2: Browser spot-sweep** — the Task 11 scenario end-to-end once more on a fresh server start, plus one seeded-clear + reset-to-defaults; console clean.
+- [x] **Step 3: Docs** — CLAUDE.md: amend the Rank UI row's standards.js text ("× clears data" → "× clears seeded / DELETES custom via ?purge=true (tombstone; recreate = undo)"), and the Rank REST surface row to name `purge` + `seeded`; update docs/api.md ranks section if present.
+- [x] **Step 4: Commit** — CLAUDE.md + docs/api.md + this plan file.

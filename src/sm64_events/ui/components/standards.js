@@ -10,28 +10,37 @@ import { useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { RANK_NAMES, rankColor } from "./ranks.js";
+import { StratModal } from "./stratmodal.js";
 const html = htm.bind(h);
 const enc = encodeURIComponent;
 
-export function StandardsPanel({ entity, activeStrat, onChanged }) {
+export function StandardsPanel({ entity, activeStrat, strategies, onChanged }) {
   const [open, setOpen] = useState(false);
   const [data, setData] = useState(null);
   const [editing, setEditing] = useState(false);
+  const [showAdd, setShowAdd] = useState(false);
   async function load() { setData(await getJSON(`/api/ranks/standards?entity=${enc(entity)}`)); }
-  function toggle() { const n = !open; setOpen(n); if (n && !data) load(); }
+  // Reload on EVERY open, not just the first: a strat created from the
+  // practice dropdown or header picker while this panel sat cached would
+  // otherwise show empty cells forever (its data is fetched out-of-band,
+  // not via the session view). Old data stays visible until replaced.
+  function toggle() { const n = !open; setOpen(n); if (n) load(); }
   async function put(strat, rank, seconds) {
     await send("PUT", `/api/ranks/standards/${enc(entity)}/${enc(strat)}/${enc(rank)}`, { seconds });
     await load(); onChanged && onChanged();
   }
-  async function addStrat() {
-    const s = (window.prompt("New strategy name:") || "").trim();
-    if (!s) return;
-    await send("POST", `/api/ranks/standards/${enc(entity)}`, { strategy: s });
-    await load(); onChanged && onChanged();
-  }
   async function delStrat(s) {
-    if (!window.confirm(`Remove strategy "${s}"?`)) return;
-    await send("DELETE", `/api/ranks/standards/${enc(entity)}/${enc(s)}`);
+    // Dual-meaning x (user-picked): seeded strats are community data —
+    // clear-only; custom strats fully delete (tombstone hides attempt-
+    // observed occurrences server-side; re-creating the name restores).
+    const msg = isSeeded(s)
+      ? `Clear rank standards for "${s}"? (The column stays while the strategy is in use.)`
+      : `Delete strategy "${s}"?\nRemoves it from all dropdowns and clears its rank `
+        + `standards. Past attempts keep their recorded times; re-creating the same `
+        + `name restores them.`;
+    if (!window.confirm(msg)) return;
+    const qs = isSeeded(s) ? "" : "?purge=true";
+    await send("DELETE", `/api/ranks/standards/${enc(entity)}/${enc(s)}${qs}`);
     await load(); onChanged && onChanged();
   }
   async function editVideo(strat, rank) {
@@ -54,8 +63,18 @@ export function StandardsPanel({ entity, activeStrat, onChanged }) {
   const userVid = (s, rank) =>
     (data.user_videos && data.user_videos[s] && data.user_videos[s][rank]) || null;
   const headVid = (s) => cutoffVid(s, "Mario") || (data.videos && data.videos[s]) || null;
+  const isSeeded = (s) => (data.seeded || []).includes(s);
 
-  const strats = data ? Object.keys(data.strategies) : [];
+  // Columns = store strategies (community order first) + every other strat
+  // this section knows (registered / used on attempts — sec.strategies from
+  // views.py). A known strat with no store entry renders an empty column, so
+  // custom strats are fillable the moment they exist. Object.hasOwn (not
+  // `in`): a strat named e.g. "constructor" must not vanish via the proto
+  // chain.
+  const strats = data
+    ? [...Object.keys(data.strategies),
+       ...(strategies || []).filter((s) => !Object.hasOwn(data.strategies, s))]
+    : [];
   return html`<div class="stdpanel">
     <div class="disc" onclick=${toggle} style="cursor:pointer">
       <span>${open ? "▾" : "▸"}</span> Rank standards
@@ -65,7 +84,7 @@ export function StandardsPanel({ entity, activeStrat, onChanged }) {
     ${open && data ? html`<div class="stdbody">
       <div class="stdtools">
         <button class="meta" onclick=${() => setEditing(!editing)}>${editing ? "Done" : "Edit"}</button>
-        ${editing ? html`<button class="meta" onclick=${addStrat}>+ Strategy</button>` : null}
+        ${editing ? html`<button class="meta" onclick=${() => setShowAdd(true)}>+ Strategy</button>` : null}
         <button class="meta" onclick=${reset}>Reset to community defaults</button>
         ${data.xcams_url ? html`<a class="meta" href=${data.xcams_url} target="_blank" rel="noopener"
             title="browse every example run for this star on the xcams Daily Star page">Examples on xcams ↗</a>` : null}
@@ -73,12 +92,12 @@ export function StandardsPanel({ entity, activeStrat, onChanged }) {
       <table class="stdtable"><thead><tr><th>Strat</th>
         ${strats.map((s) => html`<th class=${s === activeStrat ? "col-active" : ""}>${headVid(s)
           ? html`<a href=${headVid(s)} target="_blank" rel="noopener" title="fastest-time video">${s}</a>`
-          : s}${editing ? html` <button class="candx" title="remove strategy" onclick=${() => delStrat(s)}>×</button>` : ""}</th>`)}</tr></thead>
+          : s}${editing ? html` <button class="candx" title=${isSeeded(s) ? "clear this strategy's standards" : "delete this strategy"} onclick=${() => delStrat(s)}>×</button>` : ""}</th>`)}</tr></thead>
         <tbody>
         ${RANK_NAMES.filter((r) => r !== "Iron").map((rank) => html`<tr>
           <td style=${`background:${rankColor(rank)};color:#111;font-weight:700`}>${rank}</td>
           ${strats.map((s) => {
-            const v = data.strategies[s][rank];
+            const v = (data.strategies[s] || {})[rank];
             const vid = cutoffVid(s, rank);
             const label = v != null ? v.toFixed(2) : "—";
             return html`<td class=${s === activeStrat ? "col-active" : ""}>
@@ -93,5 +112,8 @@ export function StandardsPanel({ entity, activeStrat, onChanged }) {
           })}</tr>`)}
         </tbody></table>
     </div>` : null}
+    ${showAdd ? html`<${StratModal} entity=${entity} existing=${strats}
+        onSaved=${async () => { setShowAdd(false); await load(); onChanged && onChanged(); }}
+        onClose=${() => setShowAdd(false)} />` : null}
   </div>`;
 }

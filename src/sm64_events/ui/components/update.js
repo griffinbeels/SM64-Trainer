@@ -6,6 +6,7 @@
 import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
+import { Modal } from "./modal.js";
 
 const html = htm.bind(h);
 
@@ -73,40 +74,36 @@ export function UpdatePopup({ t }) {
   const onClose = () => { t.setUpdateApplying(false); setDismissed(true); };
   const pct = Math.round((st.progress || 0) * 100);
 
-  return html`
-    <div class="modal-backdrop">
-      <div class="modal">
-        <h2>Update available — v${st.latest}</h2>
-        <div class="meta">You're on v${st.current}.</div>
-        <div class="update-notes"
-             dangerouslySetInnerHTML=${{ __html: renderNotes(st.notes) }}></div>
-        <p><a href=${st.html_url} target="_blank">View this release on GitHub →</a></p>
-        ${applying
-          ? (st.state === "error"
-            ? html`
-              <div class="meta">Update failed — your current version is unchanged.</div>
-              <div class="modal-actions">
-                <button onclick=${onClose}>Close</button>
-                <a class="btnlink" href=${st.html_url}
-                   target="_blank">Download from GitHub</a>
-              </div>`
-            : html`
-              <div class="meta">Installing… the app will restart automatically.</div>
-              <div class="progress"><div class="progress-bar"
-                   style=${{ width: pct + "%" }}></div></div>`)
-          : html`
-            ${st.download_bytes != null
-              ? html`<div class="meta">Download size: ${
-                  (st.download_bytes / 1048576).toFixed(1)} MB</div>`
-              : ""}
-            <div class="modal-actions">
-              ${st.writable
-                ? html`<button onclick=${() => t.applyUpdate()}>Update now</button>`
-                : html`<a class="btnlink" href=${st.html_url}
-                          target="_blank">Download from GitHub</a>`}
-              <button onclick=${onSkip}>Skip this version</button>
-              <button onclick=${onLater}>Later</button>
-            </div>`}
-      </div>
-    </div>`;
+  return html`<${Modal} title=${`Update available — v${st.latest}`}>
+    <div class="meta">You're on v${st.current}.</div>
+    <div class="update-notes"
+         dangerouslySetInnerHTML=${{ __html: renderNotes(st.notes) }}></div>
+    <p><a href=${st.html_url} target="_blank">View this release on GitHub →</a></p>
+    ${applying
+      ? (st.state === "error"
+        ? html`
+          <div class="meta">Update failed — your current version is unchanged.</div>
+          <div class="modal-actions">
+            <button onclick=${onClose}>Close</button>
+            <a class="btnlink" href=${st.html_url}
+               target="_blank">Download from GitHub</a>
+          </div>`
+        : html`
+          <div class="meta">Installing… the app will restart automatically.</div>
+          <div class="progress"><div class="progress-bar"
+               style=${{ width: pct + "%" }}></div></div>`)
+      : html`
+        ${st.download_bytes != null
+          ? html`<div class="meta">Download size: ${
+              (st.download_bytes / 1048576).toFixed(1)} MB</div>`
+          : ""}
+        <div class="modal-actions">
+          ${st.writable
+            ? html`<button onclick=${() => t.applyUpdate()}>Update now</button>`
+            : html`<a class="btnlink" href=${st.html_url}
+                      target="_blank">Download from GitHub</a>`}
+          <button onclick=${onSkip}>Skip this version</button>
+          <button onclick=${onLater}>Later</button>
+        </div>`}
+  <//>`;
 }

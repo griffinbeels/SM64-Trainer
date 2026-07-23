@@ -163,3 +163,18 @@ def test_load_no_reconcile_when_version_not_older(tmp_path):
     s = RankStandards(data, seed_path=seedf); s.load()
     assert s.ladder_cs("star:8:2", "Nuts Pless")["Mario"] == 1200   # stored kept, NOT 99
     assert s.videos("star:8:2") == {}                                # not pulled in
+
+
+def test_seeded_strategies_lists_seed_strats_only(tmp_path):
+    s = RankStandards(tmp_path / "rs.json", seed_path=_seed(tmp_path)); s.load()
+    ek = next(iter(s.to_json()["entities"]))
+    seed_strats = s.seeded_strategies(ek)
+    assert seed_strats == s.strategies(ek)          # fresh install: store == seed
+    s.create_strategy(ek, "customx")
+    assert "customx" in s.strategies(ek)
+    assert "customx" not in s.seeded_strategies(ek)  # custom never seeded
+
+
+def test_seeded_strategies_without_seed_is_empty(tmp_path):
+    s = RankStandards(tmp_path / "rs.json", seed_path=None); s.load()
+    assert s.seeded_strategies("star:1:0") == []

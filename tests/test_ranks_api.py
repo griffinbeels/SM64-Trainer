@@ -1,4 +1,5 @@
 # tests/test_ranks_api.py
+import json
 from fastapi.testclient import TestClient
 from sm64_events.storage.db import Database
 from sm64_events.server.broadcaster import Broadcaster
@@ -12,10 +13,20 @@ class OfflineMemory:
     def attach(self): return False
     def detach(self): pass
 
+def _seed(tmp_path):
+    """A real seed file so seeded_strategies() is non-empty (star:9:2 stays
+    clear of the star:8:2/star:2:1 entities the rest of this file pokes at
+    directly, so existing tests' "starts empty" assumptions hold)."""
+    p = tmp_path / "seed.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "star:9:2": {"clock": "igt", "strategies": {
+            "Nuts Pless": {"Mario": 12.93, "Master": 13.16, "Diamond": 13.36}}}}}))
+    return p
+
 def make_client(tmp_path):
     db = Database(tmp_path / "t.db")
     b = Broadcaster()
-    ranks = RankStandards(tmp_path / "rs.json"); ranks.load()
+    ranks = RankStandards(tmp_path / "rs.json", seed_path=_seed(tmp_path)); ranks.load()
     svc = TrackerService(db, b, ranks=ranks)
     app = create_app(Poller(OfflineMemory(), [], svc), b, service=svc)
     return TestClient(app), svc
@@ -70,7 +81,6 @@ def test_reset_entity_endpoint(tmp_path):
         assert r.json()["strategies"] == {}
 
 def test_get_standards_includes_videos(tmp_path):
-    import json
     client, svc = make_client(tmp_path)
     # seed a video directly into the store
     svc.ranks._data["entities"]["star:8:2"] = {
@@ -147,3 +157,42 @@ def test_set_rank_mode_broadcasts_rank_mode_changed(tmp_path):
     asyncio.run(svc.set_rank_mode("best10"))
     assert [e.type for e in seen] == ["rank_mode_changed"]
     assert seen[0].payload == {"mode": "best10"}
+# -- strategy-delete addendum: ?purge=true + GET seeded (Task 10) ------------
+
+def test_get_lists_seeded_strategies(tmp_path):
+    client, svc = make_client(tmp_path)
+    with client:
+        ek = next(iter(svc.ranks.to_json()["entities"]))
+        body = client.get("/api/ranks/standards", params={"entity": ek}).json()
+        assert body["seeded"] == svc.ranks.seeded_strategies(ek)
+
+
+def test_delete_purge_true_fully_deletes_custom(tmp_path):
+    client, svc = make_client(tmp_path)
+    with client:
+        ek = next(iter(svc.ranks.to_json()["entities"]))
+        client.post(f"/api/ranks/standards/{ek}", json={"strategy": "customx"})
+        r = client.delete(f"/api/ranks/standards/{ek}/customx", params={"purge": "true"})
+        assert r.status_code == 200
+        assert "customx" not in svc.ranks.strategies(ek)
+        assert "customx" in svc.db.get_state("deleted_strats", {}).get(ek, [])
+
+
+def test_delete_purge_true_refuses_seeded(tmp_path):
+    client, svc = make_client(tmp_path)
+    with client:
+        ek = next(iter(svc.ranks.to_json()["entities"]))
+        seeded = svc.ranks.seeded_strategies(ek)[0]
+        r = client.delete(f"/api/ranks/standards/{ek}/{seeded}", params={"purge": "true"})
+        assert r.status_code == 409
+        assert seeded in svc.ranks.strategies(ek)
+
+
+def test_delete_without_purge_keeps_clear_semantics(tmp_path):
+    client, svc = make_client(tmp_path)
+    with client:
+        ek = next(iter(svc.ranks.to_json()["entities"]))
+        client.post(f"/api/ranks/standards/{ek}", json={"strategy": "customy"})
+        r = client.delete(f"/api/ranks/standards/{ek}/customy")
+        assert r.status_code == 200
+        assert "customy" not in svc.db.get_state("deleted_strats", {}).get(ek, [])
