@@ -95,6 +95,10 @@ export function UpdatePopup({ t }) {
               <div class="progress"><div class="progress-bar"
                    style=${{ width: pct + "%" }}></div></div>`)
           : html`
+            ${st.download_bytes != null
+              ? html`<div class="meta">Download size: ${
+                  (st.download_bytes / 1048576).toFixed(1)} MB</div>`
+              : ""}
             <div class="modal-actions">
               ${st.writable
                 ? html`<button onclick=${() => t.applyUpdate()}>Update now</button>`
