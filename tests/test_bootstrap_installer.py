@@ -190,3 +190,34 @@ def test_run_install_bad_zip_hash_reports_error(tmp_path, monkeypatch):
     assert run_install(http=_http(routes), ui=ui) is False
     assert ui.errors
     assert not (tmp_path / "lad" / "Programs" / "SM64Trainer").exists()
+
+
+from sm64_events.bootstrap import installer as boot
+
+
+def test_console_ui_reports_and_swallows_output(capsys):
+    ui = boot.ConsoleUI()
+    ui.status("hello")
+    ui.progress(0.5)
+    ui.error("bad")
+    ui.done(Path("x"))
+    out = capsys.readouterr().out
+    assert "hello" in out and "bad" in out
+
+
+def test_main_silent_runs_install(monkeypatch, tmp_path):
+    called = {}
+
+    def fake_run_install(**kw):
+        called.update(kw)
+        return True
+
+    monkeypatch.setattr(boot, "run_install", fake_run_install)
+    assert boot.main(["--silent"]) == 0
+    assert isinstance(called["ui"], boot.ConsoleUI)
+    assert called["own_path"] is None      # not frozen under pytest
+
+
+def test_main_silent_failure_returns_1(monkeypatch):
+    monkeypatch.setattr(boot, "run_install", lambda **kw: False)
+    assert boot.main(["--silent"]) == 1

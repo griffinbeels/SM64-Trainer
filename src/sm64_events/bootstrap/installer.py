@@ -167,3 +167,79 @@ def run_install(*, http, ui, repo: str = DEFAULT_REPO,
     except Exception as err:
         ui.error(str(err))
         return False
+
+
+class ConsoleUI:
+    """--silent / test UI: prints instead of windowing."""
+
+    def status(self, msg: str) -> None:
+        print(msg)
+
+    def progress(self, frac: float) -> None:
+        print(f"  {frac * 100:5.1f}%")
+
+    def error(self, msg: str) -> None:
+        print(f"ERROR: {msg}")
+
+    def done(self, exe: Path) -> None:
+        print(f"Installed: {exe}")
+
+
+class TkUI:
+    """Minimal tkinter progress window. All widget mutations are marshalled
+    onto the Tk main thread via after(); the worker thread only calls these
+    methods."""
+
+    def __init__(self):
+        import tkinter as tk
+        from tkinter import ttk
+        self._tk = tk
+        self.root = tk.Tk()
+        self.root.title("SM64 Trainer Setup")
+        self.root.geometry("420x120")
+        self.root.resizable(False, False)
+        self.label = tk.Label(self.root, text="Starting…", anchor="w")
+        self.label.pack(fill="x", padx=16, pady=(18, 6))
+        self.bar = ttk.Progressbar(self.root, maximum=1000)
+        self.bar.pack(fill="x", padx=16)
+        self.failed = False
+
+    def status(self, msg: str) -> None:
+        self.root.after(0, lambda: self.label.config(text=msg))
+
+    def progress(self, frac: float) -> None:
+        self.root.after(0, lambda: self.bar.config(value=int(frac * 1000)))
+
+    def error(self, msg: str) -> None:
+        self.failed = True
+
+        def show():
+            from tkinter import messagebox
+            messagebox.showerror("SM64 Trainer Setup", msg)
+            self.root.destroy()
+        self.root.after(0, show)
+
+    def done(self, exe: Path) -> None:
+        self.root.after(0, self.root.destroy)
+
+
+def main(argv: "list[str] | None" = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    silent = "--silent" in args
+    own_path = Path(sys.executable) if getattr(sys, "frozen", False) else None
+    if silent:
+        ui = ConsoleUI()
+        ok = run_install(http=urllib.request.urlopen, ui=ui,
+                         own_path=own_path)
+        return 0 if ok else 1
+    ui = TkUI()
+    result = {"ok": False}
+
+    def work():
+        result["ok"] = run_install(http=urllib.request.urlopen, ui=ui,
+                                   own_path=own_path)
+
+    import threading
+    threading.Thread(target=work, daemon=True).start()
+    ui.root.mainloop()
+    return 0 if result["ok"] and not ui.failed else 1
