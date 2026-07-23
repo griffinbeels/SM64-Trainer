@@ -51,7 +51,9 @@ def test_vocab_lists_triggers_guards_and_level_enum():
     assert {g["key"] for g in v["guards"]} == {"prev_level",
                                                "star_count_min",
                                                "star_count_max",
-                                               "min_time", "max_time"}
+                                               "min_time", "max_time",
+                                               "last_star_grabbed",
+                                               "last_star_attempted"}
 
 
 def test_string_clause_raises_value_error_not_500():
@@ -1806,3 +1808,43 @@ def test_time_bounds_reads_guard_rows():
     assert time_bounds([{"type": "min_time", "frames": 0},
                         {"type": "max_time", "frames": 600},
                         {"type": "prev_level", "level": 16}]) == (0, 600)
+
+
+def _ctx_ls(grabbed=None, attempted=None):
+    return MatchContext(level=16, prev_level=None, num_stars=None,
+                        last_star_grabbed=grabbed,
+                        last_star_attempted=attempted)
+
+
+def test_last_star_guards_match_course_and_optional_star():
+    g = GUARDS["last_star_grabbed"]
+    assert g.phase == "arm"
+    assert g.check({"type": "last_star_grabbed", "course": 6},
+                   _ctx_ls(grabbed=(6, 0))) is True
+    assert g.check({"type": "last_star_grabbed", "course": 6, "star": 3},
+                   _ctx_ls(grabbed=(6, 0))) is False
+    assert g.check({"type": "last_star_grabbed", "course": 6, "star": 3},
+                   _ctx_ls(grabbed=(6, 3))) is True
+    # unknown history conservatively FAILS (mirrors star_count_min)
+    assert g.check({"type": "last_star_grabbed", "course": 6},
+                   _ctx_ls()) is False
+
+
+def test_last_star_attempted_reads_its_own_field():
+    g = GUARDS["last_star_attempted"]
+    assert g.check({"type": "last_star_attempted", "course": 6},
+                   _ctx_ls(grabbed=(6, 0))) is False   # grab != attempt field
+    assert g.check({"type": "last_star_attempted", "course": 6},
+                   _ctx_ls(attempted=(6, 4))) is True
+
+
+def test_last_star_guards_validate_and_appear_in_vocab():
+    validate_definition({
+        "name": "after WFRR",
+        "start_triggers": [{"type": "spawned"}],
+        "end_triggers": [{"type": "spawned"}],
+        "guards": [{"type": "last_star_grabbed", "course": 6, "star": 4},
+                   {"type": "last_star_attempted", "course": 6}]})  # no raise
+    by_key = {g["key"]: g for g in vocab()["guards"]}
+    assert by_key["last_star_grabbed"]["params"]["course"]["kind"] == "course"
+    assert by_key["last_star_grabbed"]["params"]["star"]["required"] is False

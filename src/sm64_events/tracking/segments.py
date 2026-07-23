@@ -212,6 +212,12 @@ class MatchContext:
     num_stars: int | None    # last star_collected payload num_stars; None = unknown
     area: int | None = None  # tracked area AFTER this event (area_changed "to");
                              # None = unknown (legacy journals without area events)
+    # (course_id, star_id) of the most recent star GRAB / attributed star
+    # ATTEMPT (any outcome), tracked by the Projector from closed attempts;
+    # None = unknown (fresh boot, post-game_reset, legacy journals) — the
+    # last_star_* guards conservatively FAIL on None (spec 2026-07-23).
+    last_star_grabbed: tuple | None = None
+    last_star_attempted: tuple | None = None
 
 
 @dataclass(frozen=True)
@@ -416,6 +422,26 @@ GUARDS: dict[str, GuardType] = {g.key: g for g in [
               {"frames": {"kind": "seconds", "required": True}},
               "{frames}",
               lambda p, ctx: True, phase="close"),
+    # Arm-time history gates (spec 2026-07-23): "only arm this segment when
+    # the player just came from star X" — e.g. a basement segment that only
+    # makes sense right after Watch for Rolling Rocks. star None = any star
+    # of the course. Unknown history (None) conservatively fails.
+    GuardType("last_star_grabbed", "Last star grabbed was",
+              {"course": {"kind": "course", "required": True},
+               "star": {"kind": "star", "required": False}},
+              "{course}, star {star}",
+              lambda p, ctx: ctx.last_star_grabbed is not None
+              and ctx.last_star_grabbed[0] == p["course"]
+              and (p.get("star") is None
+                   or ctx.last_star_grabbed[1] == p["star"])),
+    GuardType("last_star_attempted", "Last star attempted was",
+              {"course": {"kind": "course", "required": True},
+               "star": {"kind": "star", "required": False}},
+              "{course}, star {star}",
+              lambda p, ctx: ctx.last_star_attempted is not None
+              and ctx.last_star_attempted[0] == p["course"]
+              and (p.get("star") is None
+                   or ctx.last_star_attempted[1] == p["star"])),
 ]}
 
 
