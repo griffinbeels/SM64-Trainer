@@ -1790,6 +1790,33 @@ def test_min_time_requires_frames_param():
             "guards": [{"type": "min_time"}]})
 
 
+def test_max_time_must_exceed_min_time():
+    with pytest.raises(ValueError, match="max_time must exceed min_time"):
+        validate_definition({
+            "name": "x",
+            "start_triggers": [{"type": "spawned"}],
+            "end_triggers": [{"type": "spawned"}],
+            "guards": [{"type": "min_time", "frames": 300},
+                       {"type": "max_time", "frames": 150}]})
+
+
+def test_max_time_rejects_non_positive_frames():
+    with pytest.raises(ValueError, match="max_time frames"):
+        validate_definition({
+            "name": "x",
+            "start_triggers": [{"type": "spawned"}],
+            "end_triggers": [{"type": "spawned"}],
+            "guards": [{"type": "max_time", "frames": -30}]})
+
+
+def test_min_time_zero_alone_is_valid():
+    validate_definition({
+        "name": "x",
+        "start_triggers": [{"type": "spawned"}],
+        "end_triggers": [{"type": "spawned"}],
+        "guards": [{"type": "min_time", "frames": 0}]})  # no raise
+
+
 def test_close_phase_guards_do_not_gate_arming():
     eng = SegmentEngine([SegmentDef(
         id=1, name="s", enabled=True,

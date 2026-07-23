@@ -512,6 +512,21 @@ def validate_definition(d: dict) -> None:
         raise ValueError("guards must be a list")
     for g in guards:
         _check_clause(g, GUARDS, "guards")
+    # Cross-check the resolved time-guard bounds (post-review 2026-07-23):
+    # _check_clause only confirmed `frames` is an int, so a segment's
+    # min_time/max_time guard rows carried NO range/relation validation —
+    # unlike the star-side set_time_filter (service.py), which 409s on the
+    # same shape of bad input. The shared chip editor serves both kinds, so
+    # a user action that gets rejected for a star silently poisoned a
+    # segment's history instead (every success flagged auto-cleared).
+    # Wording mirrors set_time_filter's ValueErrors for consistency.
+    lo, hi = time_bounds(guards)
+    if lo is not None and lo < 0:
+        raise ValueError("min_time frames must be >= 0")
+    if hi is not None and hi < 1:
+        raise ValueError("max_time frames must be >= 1")
+    if lo is not None and hi is not None and hi <= lo:
+        raise ValueError("max_time must exceed min_time")
 
 
 def vocab() -> dict:

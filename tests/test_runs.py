@@ -279,6 +279,13 @@ def test_cleared_attempts_are_invisible_to_runs():
     assert v["current_step"] == 0
     assert v["steps"][0]["attempts"] == 0 and v["steps"][0]["fails"] == 0
     done = rt.feed(Ev("star_collected", id=102,
+                      wall="2026-06-14T00:00:30Z"),
+                   [att(outcome="reset", course=2, star=0, cleared=True)], CTX)
+    assert done == []
+    v = rt.active_run_view()
+    assert v["current_step"] == 0
+    assert v["steps"][0]["attempts"] == 0 and v["steps"][0]["fails"] == 0
+    done = rt.feed(Ev("star_collected", id=103,
                       wall="2026-06-14T00:01:00Z"),
                    [att(course=2, star=0)], CTX)
     assert done and done[0].status == "finished"

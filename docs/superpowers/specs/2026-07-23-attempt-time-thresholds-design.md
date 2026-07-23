@@ -57,7 +57,12 @@ One resolver, used for both kinds:
 - **Segments:** guard rows on the definition — `{"type": "min_time",
   "frames": N}` / `{"type": "max_time", "frames": N}`. Guard absent →
   default. `min_time` with `frames: 0` = no minimum (same rule as stars).
-  All frames are ints ≥ 0 (existing guard param validation).
+  `frames` is an int (existing guard param validation); range/relation
+  validation — min ≥ 0, max ≥ 1, max > min — is enforced by
+  `validate_definition`'s cross-check of the resolved bounds (added
+  post-review 2026-07-23; the guard-param check alone let a segment ship
+  `min_time > max_time` or a negative `max_time` where the star-side
+  `set_time_filter` already rejected the equivalent input).
 - Times are **frames** in storage and on the wire (the project's primary
   clock, domain rule 7); the UI edits in seconds (×30, rounded).
 
