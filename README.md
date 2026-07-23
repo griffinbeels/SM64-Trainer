@@ -89,7 +89,9 @@ restarts — your history and PBs are untouched, and your Desktop shortcut
 keeps working forever. **Skip this version** silences that one release (a
 newer one will still notify); **Later** dismisses until next launch.
 (In-app updates don't trigger SmartScreen — only the first manual download
-does.)
+does. One caveat for **portable-zip** copies: the very first update
+re-downloads the full app — an extracted zip has no install record yet —
+and every update after that is small.)
 
 ### Requirements / assumptions
 

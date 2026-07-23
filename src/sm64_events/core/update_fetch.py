@@ -145,6 +145,13 @@ def fetch_full_zip(plan: UpdatePlan, zip_url: str, zip_sha256: str,
     try:
         with http(req) as resp:
             total = int((resp.headers or {}).get("Content-Length") or 0)
+            if total and not free_disk_ok(staging, total + sum(
+                    entry.size for entry in plan.fetch)):
+                # The caller's pre-check covered only the incremental
+                # footprint; the fallback streams the ENTIRE zip (final
+                # review, minor 2).
+                raise RuntimeError("not enough free disk space for the "
+                                   "full-download fallback")
             done = 0
             with open(tmp, "wb") as out:
                 while True:

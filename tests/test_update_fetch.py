@@ -225,6 +225,23 @@ def test_fetch_plan_isolated_empty_stored_file_stages_without_request(tmp_path):
     assert (tmp_path / "st" / "empty.marker").read_bytes() == b""
 
 
+def test_fetch_full_zip_checks_disk_for_whole_zip(tmp_path):
+    """The caller's pre-check covers only the incremental footprint; the
+    fallback streams the WHOLE zip and must re-check (final review, minor 2).
+    Simulated with an absurd Content-Length."""
+    entry = ManifestEntry(path="a.txt",
+                          sha256=hashlib.sha256(b"AAA").hexdigest(), size=3,
+                          zip_offset=0, zip_csize=0, zip_method=8)
+    plan = UpdatePlan(fetch=(entry,), delete=(), download_bytes=0)
+
+    def huge_http(req):
+        return _Resp(b"tiny", headers={"Content-Length": str(1 << 62)})
+
+    with pytest.raises(RuntimeError):
+        fetch_full_zip(plan, "https://dl/z.zip", "0" * 64, tmp_path / "st",
+                       http=huge_http)
+
+
 def test_fetch_full_zip_missing_planned_path_raises_valueerror(tmp_path):
     """A manifest entry absent from the zip must raise the documented
     ValueError, not KeyError. Review finding M-4."""

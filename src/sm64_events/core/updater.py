@@ -276,6 +276,7 @@ class UpdateService:
     def _run_apply(self, info, plan, manifest_text, on_success) -> None:
         root = self._exe.parent
         staging = root / STAGING_DIR
+        applied = False
         try:
             shutil.rmtree(staging, ignore_errors=True)
             staging.mkdir(parents=True)
@@ -301,9 +302,18 @@ class UpdateService:
                        + [INSTALLED_MANIFEST],
                        delete=list(plan.delete))
             shutil.rmtree(staging, ignore_errors=True)
+            applied = True
             on_success()
         except Exception:
-            log.exception("update apply failed")
+            if applied:
+                # Files ARE swapped (apply_plan succeeded) — only the restart
+                # failed. The popup's "your current version is unchanged" is
+                # inaccurate for this corner; the new version simply runs on
+                # the next manual launch (final review, minor 6).
+                log.exception("update applied but the restart failed — the "
+                              "new version runs on next launch")
+            else:
+                log.exception("update apply failed")
             shutil.rmtree(staging, ignore_errors=True)
             self._state = "error"
 

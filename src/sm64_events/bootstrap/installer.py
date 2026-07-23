@@ -159,7 +159,14 @@ def launch_app(exe: Path, own_path: "Path | None",
     args = [str(exe)]
     if own_path is not None:
         args += ["--cleanup-bootstrap", str(own_path)]
-    popen(args, cwd=str(exe.parent), close_fds=True)
+    # Scrub inherited launcher state: SM64_RESTART (the OLD app's restart
+    # handoff — the fresh install must do a NORMAL first boot, not skip the
+    # single-instance takeover) and this onefile bootstrap's PyInstaller
+    # bootloader vars (_MEIPASS2/_PYI_*), which would confuse the onedir
+    # app's bootloader. Mirrors core/relaunch.spawn_replacement's scrub.
+    env = {key: value for key, value in os.environ.items()
+           if key != "SM64_RESTART" and not key.startswith(("_MEI", "_PYI"))}
+    popen(args, cwd=str(exe.parent), close_fds=True, env=env)
 
 
 def run_install(*, http, ui, repo: str = DEFAULT_REPO,

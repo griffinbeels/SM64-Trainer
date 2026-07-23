@@ -134,6 +134,26 @@ def test_launch_app_passes_cleanup_arg(tmp_path):
                        str(tmp_path / "bootstrap.exe")]
 
 
+def test_launch_app_scrubs_launcher_env(tmp_path, monkeypatch):
+    """The migration chain sets SM64_RESTART (old app's restart handoff) and
+    PyInstaller bootloader vars in the BOOTSTRAP's env; leaking them makes
+    the fresh install skip its single-instance takeover / confuses the
+    onedir bootloader (final review, minor 4)."""
+    monkeypatch.setenv("SM64_RESTART", "1")
+    monkeypatch.setenv("_MEIPASS2", r"C:\temp\_MEI123")
+    monkeypatch.setenv("_PYI_APPLICATION_HOME_DIR", r"C:\temp\_MEI123")
+    monkeypatch.setenv("KEEP_ME", "yes")
+    kwargs_seen = {}
+    exe = tmp_path / "SM64Trainer.exe"
+    launch_app(exe, None,
+               popen=lambda args, **kw: kwargs_seen.update(kw))
+    env = kwargs_seen["env"]
+    assert "SM64_RESTART" not in env
+    assert "_MEIPASS2" not in env
+    assert "_PYI_APPLICATION_HOME_DIR" not in env
+    assert env["KEEP_ME"] == "yes"
+
+
 class _UI:
     def __init__(self):
         self.errors, self.done_exe = [], None

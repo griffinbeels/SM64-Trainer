@@ -26,6 +26,11 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "src"))
+
+from sm64_events.core.update_plan import (BOOTSTRAP_ASSET,  # noqa: E402
+                                          MANIFEST_ASSET, ZIP_ASSET)
+
 VERSION_PY = REPO / "src" / "sm64_events" / "core" / "version.py"
 PYPROJECT = REPO / "pyproject.toml"
 UV_LOCK = REPO / "uv.lock"
@@ -33,9 +38,11 @@ DIST = REPO / "dist"
 APP_DIR = DIST / "SM64Trainer"                    # onedir build
 APP_EXE = APP_DIR / "SM64Trainer.exe"
 BOOTSTRAP_BUILD = DIST / "SM64TrainerSetup.exe"   # bootstrap onefile build
-ZIP_PATH = DIST / "SM64Trainer-full.zip"
-MANIFEST_PATH = DIST / "manifest.json"
-UPLOAD_EXE = DIST / "SM64Trainer.exe"   # bootstrap copy under the asset name
+# Asset names come from THE registry (core/update_plan.py) — a rename there
+# must flow through here or updater+bootstrap would find nothing.
+ZIP_PATH = DIST / ZIP_ASSET
+MANIFEST_PATH = DIST / MANIFEST_ASSET
+UPLOAD_EXE = DIST / BOOTSTRAP_ASSET     # bootstrap copy under the asset name
 
 
 def valid_version(v: str) -> bool:
@@ -76,10 +83,9 @@ def write_sha(path: Path) -> Path:
 
 
 def release_assets(dist: Path) -> list[Path]:
-    return [dist / "SM64Trainer-full.zip",
-            dist / "SM64Trainer-full.zip.sha256",
-            dist / "manifest.json", dist / "manifest.json.sha256",
-            dist / "SM64Trainer.exe", dist / "SM64Trainer.exe.sha256"]
+    return [dist / ZIP_ASSET, dist / (ZIP_ASSET + ".sha256"),
+            dist / MANIFEST_ASSET, dist / (MANIFEST_ASSET + ".sha256"),
+            dist / BOOTSTRAP_ASSET, dist / (BOOTSTRAP_ASSET + ".sha256")]
 
 
 def _run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
