@@ -47,12 +47,20 @@ export function ParamInput({ schema, name, value, vocab, clause, onChange }) {
     // Stored as FRAMES (30 fps int — the project's primary clock); edited as
     // decimal seconds. "" stays null so a cleared input doesn't become 0
     // (0 is meaningful: "no minimum").
+    // oninput, NOT onchange: the app re-renders on ~1s poll ticks, and a
+    // controlled input's uncommitted keystrokes are wiped by every re-render
+    // (onchange only commits on blur/Enter — live smoke test 2026-07-23 lost
+    // typed values ~1s in). Any typed input in this UI must commit per
+    // keystroke or hold local state; <select> commits instantly, so onchange
+    // stays fine there.
     return html`<input type="number" min="0" step="0.1" style="width:5rem"
         value=${value == null ? "" : value / 30}
         placeholder="seconds"
         oninput=${(e) => onChange(e.target.value === ""
           ? null : Math.round(Number(e.target.value) * 30))} />`;
   }
+  // oninput for the same reason as the seconds branch above (poll re-render
+  // wipes uncommitted onchange values — this bit star_count guards too).
   return html`<input type="number" style="width:5rem" value=${value ?? ""}
       placeholder=${name}
       oninput=${(e) => onChange(numOrNull(e.target.value))} />`;
