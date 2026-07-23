@@ -476,7 +476,8 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                                   service.ranks, clock),
             "rank": _section_banner(
                 service.ranks, ek,
-                (star_strat := service.strat_by_star.get((course_id, star_id))),
+                (star_strat := masked(
+                    service.strat_by_star.get((course_id, star_id)), ek)),
                 pbs_by_strat.get((course_id, star_id, clock, star_strat))),
         })
     sections.sort(key=lambda s: last_id.get((s["course_id"], s["star_id"]), -1),
@@ -524,7 +525,8 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                                   service.ranks, "rta"),
             "rank": _section_banner(
                 service.ranks, seg_ek,
-                (seg_strat := service.strat_by_segment.get(seg_id)),
+                (seg_strat := masked(
+                    service.strat_by_segment.get(seg_id), seg_ek)),
                 pbs_by_strat.get(("segment", seg_id, "rta", seg_strat))),
         })
     seg_sections.sort(

@@ -1223,3 +1223,32 @@ def test_deleted_strat_hidden_and_masked(tmp_path):
     assert sec["last_strat"] is None                       # ghost masked
     assert view["last_strat_by_star"].get("2:2") is None
     assert (view["target"].get("strat_tag") or None) is None
+
+
+def test_segment_section_banner_masks_deleted_active_strat(tmp_path):
+    """purge_strategy clears the active strat only for STAR entities (a
+    journaled strat_set null) — segments have no equivalent, so a purged
+    segment's active strat can linger in strat_by_segment. The section's
+    OWN rank banner must read the masked strat too (matching last_strat,
+    which is already masked) — otherwise a deleted strat with no ladder
+    reads as 'no_ladder' ("no rank standards for this strategy") instead of
+    'no_strat' ("pick a strat to see your rank")."""
+    import json
+    from sm64_events.ranks.standards import RankStandards
+    db, svc = make(tmp_path)
+    ek = "segment:1"                                 # LBLJ (seeded def id 1)
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        ek: {"clock": "rta", "strategies": {
+            "hyperspeed": {"Mario": 2.5, "Diamond": 3.0}}}}}))
+    svc.ranks = RankStandards(p); svc.ranks.load()
+    asyncio.run(svc.set_target_segment(1, strat_tag="ghoststrat"))  # no ladder
+    view = build_session_view(db, svc, clock="igt")
+    sec = seg_section(view, 1)
+    assert sec["last_strat"] == "ghoststrat"
+    assert sec["rank"] == {"rank": None, "reason": "no_ladder"}    # sanity, pre-tombstone
+    db.set_state("deleted_strats", {ek: ["ghoststrat"]})
+    view = build_session_view(db, svc, clock="igt")
+    sec = seg_section(view, 1)
+    assert sec["last_strat"] is None                               # already masked (Task 9)
+    assert sec["rank"] == {"rank": None, "reason": "no_strat"}      # banner masked too
