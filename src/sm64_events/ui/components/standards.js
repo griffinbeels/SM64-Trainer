@@ -10,6 +10,7 @@ import { useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { RANK_NAMES, rankColor } from "./ranks.js";
+import { StratModal } from "./stratmodal.js";
 const html = htm.bind(h);
 const enc = encodeURIComponent;
 
@@ -17,20 +18,15 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged }) {
   const [open, setOpen] = useState(false);
   const [data, setData] = useState(null);
   const [editing, setEditing] = useState(false);
+  const [showAdd, setShowAdd] = useState(false);
   async function load() { setData(await getJSON(`/api/ranks/standards?entity=${enc(entity)}`)); }
   function toggle() { const n = !open; setOpen(n); if (n && !data) load(); }
   async function put(strat, rank, seconds) {
     await send("PUT", `/api/ranks/standards/${enc(entity)}/${enc(strat)}/${enc(rank)}`, { seconds });
     await load(); onChanged && onChanged();
   }
-  async function addStrat() {
-    const s = (window.prompt("New strategy name:") || "").trim();
-    if (!s) return;
-    await send("POST", `/api/ranks/standards/${enc(entity)}`, { strategy: s });
-    await load(); onChanged && onChanged();
-  }
   async function delStrat(s) {
-    if (!window.confirm(`Remove strategy "${s}"?`)) return;
+    if (!window.confirm(`Clear rank standards for "${s}"? (The column stays while the strategy is in use.)`)) return;
     await send("DELETE", `/api/ranks/standards/${enc(entity)}/${enc(s)}`);
     await load(); onChanged && onChanged();
   }
@@ -74,7 +70,7 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged }) {
     ${open && data ? html`<div class="stdbody">
       <div class="stdtools">
         <button class="meta" onclick=${() => setEditing(!editing)}>${editing ? "Done" : "Edit"}</button>
-        ${editing ? html`<button class="meta" onclick=${addStrat}>+ Strategy</button>` : null}
+        ${editing ? html`<button class="meta" onclick=${() => setShowAdd(true)}>+ Strategy</button>` : null}
         <button class="meta" onclick=${reset}>Reset to community defaults</button>
         ${data.xcams_url ? html`<a class="meta" href=${data.xcams_url} target="_blank" rel="noopener"
             title="browse every example run for this star on the xcams Daily Star page">Examples on xcams ↗</a>` : null}
@@ -102,5 +98,8 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged }) {
           })}</tr>`)}
         </tbody></table>
     </div>` : null}
+    ${showAdd ? html`<${StratModal} entity=${entity} existing=${strats}
+        onSaved=${async () => { setShowAdd(false); await load(); onChanged && onChanged(); }}
+        onClose=${() => setShowAdd(false)} />` : null}
   </div>`;
 }
