@@ -151,3 +151,64 @@ No new server surface: every write rides an existing ranks endpoint, and
   data but keeps its column, Cancel writes nothing, and the update popup
   still renders after its migration to the shell.
 - Human audit (frontend feel change): user verifies the modal flow live.
+
+## Addendum (2026-07-23, user-approved): full delete for custom strategies
+
+### Goal
+
+A way to DELETE a custom strategy entirely: its rank standards are cleared
+AND it disappears from every dropdown. Community-seeded ("default") strats
+cannot be deleted — only custom ones.
+
+### Why a tombstone
+
+Dropdown lists are a three-source union: standards store + registered KV +
+strategies OBSERVED on past attempts. The first two can be truly removed.
+The third cannot: attempts live in the append-only journal and re-derive on
+reprojection, so stripping `strat_tag` from history would corrupt
+attribution or silently undo itself. A per-entity tombstone
+(`deleted_strats` ui_state KV, keyed by entity key `star:{c}:{s}` /
+`segment:{id}`) filters observed occurrences at view time instead.
+
+### Semantics (user-confirmed)
+
+- **Delete (custom strat):** remove ladder + user_videos from the standards
+  store; unregister from the star's registered-strategies KV (segments have
+  none); add the tombstone; if it is the star's active strat, publish a
+  journaled `strat_set` null (existing `set_strat` path). Views mask any
+  remaining reads of a tombstoned name (section `last_strat`, top-level
+  `last_strat_by_star`, `rank_by_star` grading, route-candidate ranks,
+  target `strat_tag`) to None.
+- **Historical data preserved:** attempts keep their `strat_tag`; PBs,
+  markers, comparisons stay in the db, invisible until the name exists
+  again. **Re-creating the same name clears the tombstone** and re-attaches
+  the old data (undo-able delete, by design) — both creation paths
+  (`_register_strategy`, `create_rank_strategy`) clear it.
+- **Seeded strats protected:** "custom" = not in the bundled seed for that
+  entity (`RankStandards.seeded_strategies(ek)`, the same distinction
+  `_reconcile` uses). Purging a seeded strat → ValueError → 409.
+- **Affordance (user-picked: dual-meaning ×):** the standards table's edit
+  mode keeps ONE × per column — seeded strat: existing clear-data behavior
+  and confirm; custom strat: "Delete strategy" confirm (spells out dropdown
+  removal + past attempts keep their times + re-create restores) →
+  `DELETE …?purge=true`. Tooltip varies to match.
+
+### Surface
+
+- `ranks/standards.py`: `seeded_strategies(ek)`.
+- `tracking/service.py`: `purge_strategy(ek, strat)` command +
+  `_clear_tombstone` on both create paths.
+- `tracking/views.py`: filter section strategy unions against the
+  tombstone; mask tombstoned active-strat reads.
+- `server/ranks_api.py`: `DELETE …/{strategy}?purge=true`; GET gains
+  `"seeded"` list.
+- `ui/components/standards.js`: dual-meaning ×.
+- This ENDS the branch's pure-frontend status; the new behavior gets real
+  pytest coverage (standards/service/views/api).
+
+### Out of scope
+
+- Deleting the orphaned auxiliary data (markers, comparisons, PBs) — kept,
+  by design (restoration on re-create).
+- A "hide" distinct from delete; un-delete UI (re-create the name instead).
+- Purging seeded strats or editing the seed.
