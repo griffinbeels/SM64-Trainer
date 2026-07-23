@@ -89,3 +89,36 @@ def file_sha256(path: Path) -> str:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+@dataclass(frozen=True)
+class UpdatePlan:
+    fetch: tuple[ManifestEntry, ...]   # download these (new/changed/corrupt)
+    delete: tuple[str, ...]            # remove these (no longer shipped)
+    download_bytes: int                # sum of zip_csize over fetch
+
+
+def build_plan(remote: Manifest, installed: "Manifest | None", root: Path, *,
+               verify_local: bool = False,
+               file_hash=file_sha256) -> UpdatePlan:
+    """Diff the remote manifest against the installed record + the disk.
+
+    verify_local=True re-hashes every supposedly-unchanged file (a forced
+    'Check for updates' passes it) so silent same-size corruption self-heals;
+    the routine hourly check uses the cheap existence+size path."""
+    installed_files = {e.path: e for e in (installed.files if installed else ())}
+    fetch: list[ManifestEntry] = []
+    for entry in remote.files:
+        local = root.joinpath(*entry.path.split("/"))
+        recorded = installed_files.get(entry.path)
+        stale = (recorded is None
+                 or recorded.sha256 != entry.sha256
+                 or not local.is_file()
+                 or local.stat().st_size != entry.size
+                 or (verify_local and file_hash(local) != entry.sha256))
+        if stale:
+            fetch.append(entry)
+    remote_paths = {e.path for e in remote.files}
+    delete = tuple(sorted(p for p in installed_files if p not in remote_paths))
+    return UpdatePlan(fetch=tuple(fetch), delete=delete,
+                      download_bytes=sum(e.zip_csize for e in fetch))

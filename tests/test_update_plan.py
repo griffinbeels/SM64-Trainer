@@ -73,3 +73,86 @@ def test_file_sha256_streams(tmp_path):
     p.write_bytes(b"hello")
     import hashlib
     assert file_sha256(p) == hashlib.sha256(b"hello").hexdigest()
+
+
+from sm64_events.core.update_plan import UpdatePlan, build_plan  # noqa: E402
+
+
+def _mk(path, sha, size=3, off=0, csize=10):
+    return ManifestEntry(path=path, sha256=sha, size=size,
+                         zip_offset=off, zip_csize=csize, zip_method=8)
+
+
+def _tree(tmp_path, files):
+    for rel, content in files.items():
+        p = tmp_path.joinpath(*rel.split("/"))
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(content)
+    return tmp_path
+
+
+def test_build_plan_fresh_install_fetches_everything(tmp_path):
+    remote = Manifest("2.0.0", (_mk("a.txt", "aa" * 32, csize=7),
+                                _mk("b/c.dll", "bb" * 32, csize=9)))
+    plan = build_plan(remote, None, tmp_path)
+    assert [e.path for e in plan.fetch] == ["a.txt", "b/c.dll"]
+    assert plan.delete == ()
+    assert plan.download_bytes == 16
+
+
+def test_build_plan_unchanged_files_skipped(tmp_path):
+    import hashlib
+    content = b"abc"
+    sha = hashlib.sha256(content).hexdigest()
+    _tree(tmp_path, {"a.txt": content})
+    entry = _mk("a.txt", sha, size=3)
+    remote = Manifest("2.0.0", (entry,))
+    installed = Manifest("1.0.0", (entry,))
+    plan = build_plan(remote, installed, tmp_path)
+    assert plan.fetch == () and plan.download_bytes == 0
+
+
+def test_build_plan_hash_change_fetches(tmp_path):
+    _tree(tmp_path, {"a.txt": b"abc"})
+    old = _mk("a.txt", "aa" * 32, size=3)
+    new = _mk("a.txt", "bb" * 32, size=3)
+    plan = build_plan(Manifest("2", (new,)), Manifest("1", (old,)), tmp_path)
+    assert [e.path for e in plan.fetch] == ["a.txt"]
+
+
+def test_build_plan_missing_or_wrong_size_refetches(tmp_path):
+    import hashlib
+    sha = hashlib.sha256(b"abc").hexdigest()
+    entry = _mk("a.txt", sha, size=3)
+    installed = Manifest("1", (entry,))
+    # missing on disk
+    plan = build_plan(Manifest("2", (entry,)), installed, tmp_path)
+    assert [e.path for e in plan.fetch] == ["a.txt"]
+    # wrong size on disk (truncated)
+    _tree(tmp_path, {"a.txt": b"ab"})
+    plan = build_plan(Manifest("2", (entry,)), installed, tmp_path)
+    assert [e.path for e in plan.fetch] == ["a.txt"]
+
+
+def test_build_plan_verify_local_catches_silent_corruption(tmp_path):
+    import hashlib
+    sha = hashlib.sha256(b"abc").hexdigest()
+    _tree(tmp_path, {"a.txt": b"abX"})   # same size, different bytes
+    entry = _mk("a.txt", sha, size=3)
+    installed = Manifest("1", (entry,))
+    fast = build_plan(Manifest("2", (entry,)), installed, tmp_path)
+    assert fast.fetch == ()              # fast path trusts size+record
+    slow = build_plan(Manifest("2", (entry,)), installed, tmp_path,
+                      verify_local=True)
+    assert [e.path for e in slow.fetch] == ["a.txt"]   # self-heal
+
+
+def test_build_plan_deletes_removed_files(tmp_path):
+    import hashlib
+    sha = hashlib.sha256(b"abc").hexdigest()
+    _tree(tmp_path, {"gone.dll": b"abc", "kept.txt": b"abc"})
+    kept = _mk("kept.txt", sha, size=3)
+    gone = _mk("gone.dll", sha, size=3)
+    plan = build_plan(Manifest("2", (kept,)), Manifest("1", (kept, gone)),
+                      tmp_path)
+    assert plan.delete == ("gone.dll",)
