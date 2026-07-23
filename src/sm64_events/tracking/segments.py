@@ -380,6 +380,11 @@ class GuardType:
     params: dict
     template: str
     check: Callable[[dict, MatchContext], bool]
+    # "arm" gates arming (checked in the engine's arm phase, re-evaluated on
+    # every arm/re-arm); "close" rows are DECLARATIVE result filters — never
+    # checked here, read by projection's validity-bounds stamp (spec
+    # 2026-07-23). Their check is a stub so a stray call can't block arming.
+    phase: str = "arm"
 
 
 GUARDS: dict[str, GuardType] = {g.key: g for g in [
@@ -398,6 +403,19 @@ GUARDS: dict[str, GuardType] = {g.key: g for g in [
               "{n}",
               lambda p, ctx: ctx.num_stars is not None
               and ctx.num_stars <= p["n"]),
+    # Close-phase validity bounds (spec 2026-07-23): storage + builder UI for
+    # a segment's min/max completion time. `frames` is an INT of game frames
+    # (30 fps); the builder edits it in seconds (ParamInput kind "seconds").
+    # frames: 0 on min_time = "no minimum" (deliberately below the implicit
+    # 0.5 s default — projection.DEFAULT_MIN_FRAMES applies when absent).
+    GuardType("min_time", "Takes at least",
+              {"frames": {"kind": "seconds", "required": True}},
+              "{frames}",
+              lambda p, ctx: True, phase="close"),
+    GuardType("max_time", "Takes at most",
+              {"frames": {"kind": "seconds", "required": True}},
+              "{frames}",
+              lambda p, ctx: True, phase="close"),
 ]}
 
 
@@ -437,6 +455,20 @@ def _check_clause(clause: dict, registry: dict, what: str) -> None:
                          "changes the area")
 
 
+def time_bounds(guards: list) -> tuple[int | None, int | None]:
+    """(min_frames, max_frames) declared by a def's close-phase time guards,
+    None where absent. Later rows win (the chip editor writes at most one of
+    each). THE reader for projection's segment validity bounds — keep the
+    guard row shape knowledge here, not in projection."""
+    lo = hi = None
+    for g in guards or []:
+        if g.get("type") == "min_time":
+            lo = g["frames"]
+        elif g.get("type") == "max_time":
+            hi = g["frames"]
+    return lo, hi
+
+
 def validate_definition(d: dict) -> None:
     """Raises ValueError listing the first problem (API maps it to 409)."""
     if not str(d.get("name", "")).strip():
@@ -462,7 +494,8 @@ def vocab() -> dict:
         "triggers": [{"key": t.key, "label": t.label, "params": t.params,
                       "template": t.template} for t in TRIGGERS.values()],
         "guards": [{"key": g.key, "label": g.label, "params": g.params,
-                    "template": g.template} for g in GUARDS.values()],
+                    "template": g.template, "phase": g.phase}
+                   for g in GUARDS.values()],
         "levels": {str(k): v for k, v in sorted(LEVEL_NAMES.items())},
         "castle_areas": {str(k): v for k, v in CASTLE_AREA_NAMES.items()},
         "courses": {str(k): v for k, v in COURSE_NAMES.items()},
@@ -761,7 +794,8 @@ class SegmentEngine:
                               and d.id not in self._armed)
             if starts and (not echo_invisible or relocation_arm) \
                     and all(GUARDS[g["type"]].check(g, ctx)
-                            for g in d.guards):
+                            for g in d.guards
+                            if GUARDS[g["type"]].phase == "arm"):
                 # A destination-subarea level trigger can't be confirmed yet
                 # (the castle lobby loads before the warp settles) — DEFER it
                 # into _pending keyed on the required interior area, to be
