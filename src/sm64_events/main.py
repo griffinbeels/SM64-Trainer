@@ -152,7 +152,7 @@ def build():
         detectors.append(ActivityTap(replay.recorder))
     poller = Poller(memory, detectors, service)  # service IS the event sink
     updater = UpdateService(current_version=__version__)
-    updater.cleanup_old_exe()   # delete a *.old left by a prior self-update
+    updater.startup_maintenance()   # reap update backups left by a prior apply
     return create_app(poller, broadcaster, service=service, replay=replay,
                       updater=updater, compare=compare)
 

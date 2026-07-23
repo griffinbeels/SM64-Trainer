@@ -1,19 +1,30 @@
 # src/sm64_events/core/updater.py
-"""Self-update for the frozen exe: check the GitHub 'latest' release, download
-the new exe, verify its SHA-256, and swap it in over the running process using
-the Windows rename-a-running-exe trick (the OS forbids DELETING a running exe
-but ALLOWS renaming one). The restart rides core/relaunch.spawn_replacement.
+"""Self-update for the frozen onedir install: check the GitHub 'latest'
+release, verify its manifest, diff it against the installed files, download
+ONLY what changed (core/update_fetch, HTTP Range into the release zip), and
+swap files crash-safely (core/update_apply journaled rename dance). The
+restart rides core/relaunch.spawn_replacement, same as always.
 
-Pure helpers (parse_version … exe_dir_writable) take an injected HTTP opener and
-operate on explicit paths so tests never touch the network or a real exe. The
-stateful UpdateService orchestrates them, caches the check, tracks download
-progress, and persists the 'skipped' version. Everything is guarded on
-is_frozen(): from source it is inert (update_available is always False) so a dev
-tree is never swapped."""
+Pure helpers (parse_version, is_newer, check_for_update, exe_dir_writable)
+take an injected HTTP opener and operate on explicit paths so tests never
+touch the network or a real install. The stateful UpdateService orchestrates
+them, caches the check (manifest + plan included), tracks download progress,
+and persists the 'skipped' version. Everything is guarded on is_frozen():
+from source it is inert (update_available is always False) so a dev tree is
+never swapped.
+
+A release is only ever offered when ALL FOUR update assets are present
+(SM64Trainer-full.zip + manifest.json + both .sha256 companions) and the
+manifest text verifies against its published digest — no unverified bytes
+are ever applied. The old single-exe swap path (download_and_stage /
+apply_update / cleanup_old) is gone: already-shipped onefile versions
+migrate through the bootstrap installer published as the SM64Trainer.exe
+asset (see bootstrap/installer.py)."""
 import hashlib
 import json
 import logging
 import os
+import shutil
 import sys
 import threading
 import time
@@ -22,12 +33,17 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from sm64_events.core.paths import is_frozen, update_state_path
+from sm64_events.core.update_apply import STAGING_DIR, apply_plan, sweep_backup
+from sm64_events.core.update_fetch import (RangeUnsupported, fetch_full_zip,
+                                           fetch_plan, free_disk_ok)
+from sm64_events.core.update_plan import (INSTALLED_MANIFEST, MANIFEST_ASSET,
+                                          ZIP_ASSET, Manifest, build_plan,
+                                          parse_manifest)
 
 log = logging.getLogger("sm64.updater")
 
 DEFAULT_REPO = "griffinbeels/SM64-Trainer"
 GITHUB_API = "https://api.github.com"
-EXE_NAME = "SM64Trainer.exe"
 _UA = "SM64Trainer-updater"
 _CHECK_TTL_S = 3600.0
 
@@ -58,8 +74,10 @@ class UpdateInfo:
     version: str
     notes: str
     html_url: str
-    asset_url: str
-    sha256_url: str
+    zip_url: str
+    zip_sha_url: str
+    manifest_url: str
+    manifest_sha_url: str
 
 
 def _get(http, url: str, *, accept: str | None = None):
@@ -73,7 +91,9 @@ def check_for_update(current: str, *, http=urllib.request.urlopen,
                      repo: str = DEFAULT_REPO,
                      api_base: str = GITHUB_API) -> "UpdateInfo | None":
     """GET the latest release; return UpdateInfo iff it is strictly newer AND
-    carries an EXE_NAME asset. Best-effort: any error -> None (no popup)."""
+    carries the zip + manifest assets WITH their .sha256 companions (the
+    'no unverified bytes ever applied' rule). Best-effort: any error ->
+    None (no popup)."""
     try:
         url = f"{api_base}/repos/{repo}/releases/latest"
         with _get(http, url, accept="application/vnd.github+json") as r:
@@ -83,101 +103,22 @@ def check_for_update(current: str, *, http=urllib.request.urlopen,
             return None
         assets = {a.get("name"): a.get("browser_download_url")
                   for a in rel.get("assets", [])}
-        asset_url = assets.get(EXE_NAME)
-        if not asset_url:
-            return None
-        sha256_url = assets.get(EXE_NAME + ".sha256")
-        if not sha256_url:
-            log.info("release %s has no .sha256 asset; not offering", tag)
+        needed = (ZIP_ASSET, ZIP_ASSET + ".sha256",
+                  MANIFEST_ASSET, MANIFEST_ASSET + ".sha256")
+        if not all(assets.get(name) for name in needed):
+            log.info("release %s is missing update assets; not offering", tag)
             return None
         return UpdateInfo(
             version=tag.lstrip("vV"),
             notes=rel.get("body") or "",
             html_url=rel.get("html_url") or "",
-            asset_url=asset_url,
-            sha256_url=sha256_url)
+            zip_url=assets[ZIP_ASSET],
+            zip_sha_url=assets[ZIP_ASSET + ".sha256"],
+            manifest_url=assets[MANIFEST_ASSET],
+            manifest_sha_url=assets[MANIFEST_ASSET + ".sha256"])
     except Exception:
         log.info("update check failed", exc_info=True)
         return None
-
-
-def download_and_stage(info: "UpdateInfo", exe_dir: Path, *,
-                       http=urllib.request.urlopen, progress=None) -> Path:
-    """Stream the new exe to <exe_dir>/SM64Trainer.exe.new, verify SHA-256
-    against the published .sha256, return the staged path. Raises ValueError on
-    a hash mismatch (caller keeps the current exe)."""
-    staged = exe_dir / (EXE_NAME + ".new")
-    h = hashlib.sha256()
-    with _get(http, info.asset_url) as r:
-        total = int((r.headers or {}).get("Content-Length") or 0)
-        done = 0
-        with open(staged, "wb") as f:
-            while True:
-                chunk = r.read(1 << 16)
-                if not chunk:
-                    break
-                f.write(chunk)
-                h.update(chunk)
-                done += len(chunk)
-                if progress and total:
-                    progress(min(1.0, done / total))
-    if info.sha256_url:
-        with _get(http, info.sha256_url) as r:
-            text = r.read().decode("utf-8")
-        parts = text.split()
-        if not parts:
-            staged.unlink(missing_ok=True)
-            raise ValueError("sha256 file is empty or malformed")
-        published = parts[0].strip().lower()
-        if published != h.hexdigest():
-            staged.unlink(missing_ok=True)
-            raise ValueError("update checksum mismatch")
-    return staged
-
-
-def apply_update(staged: Path, current_exe: Path, *, retries: int = 5,
-                 sleep=time.sleep) -> None:
-    """Swap `staged` in for the running exe via two renames (Windows allows
-    renaming a running exe). Renaming the running exe aside happens once; only
-    the staged->current move is retried (AV can briefly lock the new file). On
-    final failure the backup is restored so the install is never left exe-less."""
-    old = current_exe.parent / (current_exe.name + ".old")
-    old.unlink(missing_ok=True)
-    os.replace(current_exe, old)            # fails here -> current_exe untouched
-    for attempt in range(retries):
-        try:
-            os.replace(staged, current_exe)
-            return
-        except PermissionError:
-            if attempt == retries - 1:
-                try:
-                    os.replace(old, current_exe)   # restore the backup
-                except OSError:
-                    log.error("update failed AND backup restore failed; "
-                              "exe at %s", old)
-                raise
-            sleep(0.5)
-
-
-def cleanup_old(exe_path: Path, *, attempts: int = 1, sleep=time.sleep) -> bool:
-    """Delete the `.old` backup of `exe_path` left by a prior self-update.
-    Derives ``<name>.old`` from the ACTUAL running-exe path (not a glob or a
-    constant) so a shared dir's foreign .old files are never touched and any
-    future exe rename stays consistent with apply_update. Retries up to
-    `attempts` times (1 s apart): right after a restart the OLD process — which
-    executes FROM the .old file — is often still alive and locking it. Returns
-    True once the backup is gone."""
-    old = exe_path.parent / (exe_path.name + ".old")
-    for i in range(attempts):
-        if not old.exists():
-            return True
-        try:
-            old.unlink()
-            return True
-        except OSError:
-            if i < attempts - 1:
-                sleep(1.0)
-    return False
 
 
 def exe_dir_writable(exe_dir: Path) -> bool:
@@ -191,12 +132,13 @@ def exe_dir_writable(exe_dir: Path) -> bool:
 
 
 class UpdateService:
-    """Stateful orchestrator the REST layer talks to: caches the check, tracks
-    download progress/state, persists the skipped version. Inert unless frozen.
+    """Stateful orchestrator the REST layer talks to: caches the check
+    (release info + verified manifest + computed plan), tracks download
+    progress/state, persists the skipped version. Inert unless frozen.
 
-    SM64_UPDATE_FAKE=1 makes status() report a synthetic update (writable forced
-    False, so the only action is the GitHub link) — lets the popup be verified
-    in dev WITHOUT cutting a real release."""
+    SM64_UPDATE_FAKE=1 makes status() report a synthetic update (writable
+    forced False, so the only action is the GitHub link) — lets the popup be
+    verified in dev WITHOUT cutting a real release."""
 
     def __init__(self, *, current_version: str, repo: str = DEFAULT_REPO,
                  exe_path: "Path | None" = None,
@@ -213,6 +155,9 @@ class UpdateService:
         self._state = "idle"        # idle | downloading | installing | error
         self._progress = 0.0
         self._cache: "UpdateInfo | None" = None
+        self._manifest: "Manifest | None" = None
+        self._manifest_text: "str | None" = None
+        self._plan = None           # UpdatePlan for the cached release
         self._checked_at = 0.0      # monotonic of last real check; 0 = never
         self._writable: "bool | None" = None   # probed once, then cached
 
@@ -241,7 +186,18 @@ class UpdateService:
                   "A trailing paragraph after a blank line, also wrapping across\n"
                   "two source lines, to confirm paragraphs join too.",
             html_url=f"https://github.com/{self.repo}/releases",
-            asset_url="", sha256_url="")
+            zip_url="", zip_sha_url="", manifest_url="", manifest_sha_url="")
+
+    def _fetch_text(self, url: str) -> str:
+        with _get(self._http, url) as r:
+            return r.read().decode("utf-8")
+
+    def _read_installed(self) -> "Manifest | None":
+        try:
+            return parse_manifest(
+                (self._exe.parent / INSTALLED_MANIFEST).read_text())
+        except (OSError, ValueError):
+            return None   # fresh/damaged record -> plan refetches everything
 
     def _check(self, force: bool) -> "UpdateInfo | None":
         fake = self._fake()
@@ -252,8 +208,27 @@ class UpdateService:
         now = time.monotonic()
         if not force and self._checked_at and (now - self._checked_at) < _CHECK_TTL_S:
             return self._cache
-        self._cache = check_for_update(self.current, http=self._http,
-                                       repo=self.repo)
+        self._cache = None
+        self._manifest = self._manifest_text = self._plan = None
+        info = check_for_update(self.current, http=self._http, repo=self.repo)
+        if info is not None:
+            try:
+                text = self._fetch_text(info.manifest_url)
+                published = self._fetch_text(info.manifest_sha_url).split()
+                digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+                if not published or published[0].strip().lower() != digest:
+                    raise ValueError("manifest checksum mismatch")
+                remote = parse_manifest(text)
+                installed = self._read_installed()
+                # A FORCED check ('Check for updates' button) re-hashes every
+                # local file so silent corruption self-heals via re-download;
+                # the routine hourly check stays cheap (existence+size).
+                self._plan = build_plan(remote, installed, self._exe.parent,
+                                        verify_local=force)
+                self._manifest, self._manifest_text = remote, text
+                self._cache = info
+            except Exception:
+                log.warning("update manifest rejected", exc_info=True)
         self._checked_at = now
         return self._cache
 
@@ -275,12 +250,13 @@ class UpdateService:
             "writable": writable,
             "state": self._state,
             "progress": self._progress,
+            "download_bytes": self._plan.download_bytes if self._plan else None,
         }
 
     # --- apply (off-thread; UI polls status for progress) ---
     def begin_apply(self, on_success) -> dict:
         info = self._check(force=False)
-        if not self._frozen or info is None:
+        if not self._frozen or info is None or self._plan is None:
             return {"state": "error", "error": "no update available"}
         if os.environ.get("SM64_UPDATE_FAKE"):
             return {"state": "error", "error": "fake update"}
@@ -291,36 +267,69 @@ class UpdateService:
                 return {"state": "error", "error": "exe folder not writable"}
             self._state = "downloading"
             self._progress = 0.0
-        threading.Thread(target=self._run_apply, args=(info, on_success),
-                         daemon=True, name="update-apply").start()
+        threading.Thread(
+            target=self._run_apply,
+            args=(info, self._plan, self._manifest_text, on_success),
+            daemon=True, name="update-apply").start()
         return {"state": "downloading"}
 
-    def _run_apply(self, info: "UpdateInfo", on_success) -> None:
-        staged = None
+    def _run_apply(self, info, plan, manifest_text, on_success) -> None:
+        root = self._exe.parent
+        staging = root / STAGING_DIR
         try:
-            staged = download_and_stage(info, self._exe.parent, http=self._http,
-                                        progress=self._set_progress)
+            shutil.rmtree(staging, ignore_errors=True)
+            staging.mkdir(parents=True)
+            needed = sum(entry.size for entry in plan.fetch)
+            if not free_disk_ok(root, needed):
+                raise RuntimeError("not enough free disk space for the update")
+            try:
+                fetch_plan(plan, info.zip_url, staging, http=self._http,
+                           progress=self._set_progress)
+            except RangeUnsupported:
+                log.info("ranged download unavailable — full zip fallback")
+                published = self._fetch_text(info.zip_sha_url).split()
+                if not published:
+                    raise ValueError("zip sha256 file is empty")
+                fetch_full_zip(plan, info.zip_url, published[0], staging,
+                               http=self._http, progress=self._set_progress)
+            # The verified manifest text becomes the new installed record,
+            # swapped in atomically WITH the files it describes.
+            (staging / INSTALLED_MANIFEST).write_text(manifest_text)
             self._state = "installing"
-            apply_update(staged, self._exe)
+            apply_plan(root, staging,
+                       replace=[entry.path for entry in plan.fetch]
+                       + [INSTALLED_MANIFEST],
+                       delete=list(plan.delete))
+            shutil.rmtree(staging, ignore_errors=True)
             on_success()
         except Exception:
             log.exception("update apply failed")
-            if staged is not None:
-                staged.unlink(missing_ok=True)
+            shutil.rmtree(staging, ignore_errors=True)
             self._state = "error"
 
     def _set_progress(self, frac: float) -> None:
         self._progress = max(0.0, min(1.0, frac))
 
-    def cleanup_old_exe(self) -> None:
-        """Background-reap the prior update's `.old` backup. Off-thread with
-        bounded retries: right after a self-update restart the OLD process
-        (running FROM the .old file) is often still tearing down and locking it,
-        so one attempt at startup is too early — without retries the .old
-        lingered until the NEXT launch, leaving a visible artifact next to the
-        exe."""
+    def startup_maintenance(self, bootstrap_path: "str | None" = None) -> None:
+        """Background-reap update leftovers: the backup tree + finished
+        journal from the last apply, and (post-migration) the bootstrap
+        installer file + its .old sibling on whatever path the bootstrap
+        handed us via --cleanup-bootstrap. Bounded retries: the previous
+        process may still be exiting and holding locks."""
         if not self._frozen:
             return
-        exe = self._exe
-        threading.Thread(target=lambda: cleanup_old(exe, attempts=60),
-                         name="update-cleanup", daemon=True).start()
+        root = self._exe.parent
+
+        def work():
+            sweep_backup(root, attempts=60)
+            if bootstrap_path:
+                for leftover in (Path(bootstrap_path),
+                                 Path(bootstrap_path + ".old")):
+                    for _ in range(60):
+                        try:
+                            leftover.unlink(missing_ok=True)
+                            break
+                        except OSError:
+                            time.sleep(1.0)
+        threading.Thread(target=work, daemon=True,
+                         name="update-maintenance").start()
