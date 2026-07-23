@@ -671,3 +671,29 @@ def test_run_pause_resume_reset_endpoints(tmp_path):
         assert client.post("/api/run/pause").status_code == 200
         assert client.post("/api/run/resume").status_code == 200
         assert client.post("/api/run/reset").status_code == 200
+
+
+# -- Task 9: PUT/DELETE star time-filter endpoints -----------------------------
+
+def test_time_filter_put_reflags_and_delete_reverts(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)                                   # success at igt 343
+        r = client.put("/api/stars/2/2/time-filter",
+                       json={"min_frames": 400, "max_frames": None})
+        assert r.status_code == 200
+        assert db.attempts()[0].cleared is True
+        assert db.attempts()[0].cleared_reason == "auto: below 13.33s min"
+        assert client.delete("/api/stars/2/2/time-filter").status_code == 200
+        assert db.attempts()[0].cleared is False
+
+
+def test_time_filter_rejects_bad_bounds(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.put("/api/stars/2/2/time-filter",
+                       json={"min_frames": 300, "max_frames": 200})
+        assert r.status_code == 409                     # ValueError taxonomy
+        r = client.put("/api/stars/2/2/time-filter",
+                       json={"min_frames": -1, "max_frames": None})
+        assert r.status_code == 422                     # pydantic ge=0

@@ -106,6 +106,13 @@ class SegmentPatch(BaseModel):
     enabled: bool | None = None
 
 
+class TimeFilterBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    min_frames: int = Field(ge=0)                 # 0 = no floor
+    max_frames: int | None = Field(default=None, ge=1)  # None = no ceiling
+
+
 class RouteBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -174,6 +181,27 @@ def create_api_router(service) -> APIRouter:
     async def session_delete(session_id: int):
         try:
             await service.delete_session(session_id)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True}
+
+    @router.put("/stars/{course_id}/{star_id}/time-filter")
+    async def put_time_filter(course_id: int, star_id: int,
+                              body: TimeFilterBody):
+        """Override one star's validity bounds (frames); history reflags
+        via reproject. min 0 disables the implicit 0.5s floor."""
+        try:
+            await service.set_time_filter(course_id, star_id,
+                                          body.min_frames, body.max_frames)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True}
+
+    @router.delete("/stars/{course_id}/{star_id}/time-filter")
+    async def delete_time_filter(course_id: int, star_id: int):
+        """Back to the implicit defaults (0.5s min, no max)."""
+        try:
+            await service.clear_time_filter(course_id, star_id)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True}
