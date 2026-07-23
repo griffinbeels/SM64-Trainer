@@ -51,8 +51,12 @@ class ContinueBody(BaseModel):
 
 
 class StratBody(BaseModel):
-    course_id: int = Field(ge=0)
-    star_id: int = Field(ge=0)
+    # kind-dispatched like TargetBody: star (default) needs course_id+star_id,
+    # segment needs segment_id
+    kind: str = "star"
+    course_id: int | None = Field(default=None, ge=0)
+    star_id: int | None = Field(default=None, ge=0)
+    segment_id: int | None = None
     strat_tag: str | None = None
 
 
@@ -398,8 +402,21 @@ def create_api_router(service) -> APIRouter:
 
     @router.post("/strat")
     async def strat(body: StratBody):
+        """Set an entity's active strategy without moving the target.
+
+        Kind-dispatched exactly like /target — stars and segments are both
+        practiced through the same UI card, so both must be settable here.
+        """
         try:
-            await service.set_strat(body.course_id, body.star_id, body.strat_tag)
+            if body.kind == "segment":
+                if body.segment_id is None:
+                    raise ValueError("segment strat needs segment_id")
+                await service.set_strat_segment(body.segment_id, body.strat_tag)
+            else:
+                if body.course_id is None or body.star_id is None:
+                    raise ValueError("star strat needs course_id and star_id")
+                await service.set_strat(body.course_id, body.star_id,
+                                        body.strat_tag)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True}

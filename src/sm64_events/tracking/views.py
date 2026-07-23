@@ -178,11 +178,17 @@ def _strategies_for(registered: dict, attempts, course_id: int, star_id: int,
     return [s for s in out if s not in deleted]
 
 
-def _seg_strategies(history, seg_id: int, ranks=None, deleted=()) -> list:
-    """Observed strats (sorted) union rank-standard strats for a segment section.
-    Segments have no registered-strategies KV yet, so observed comes first.
+def _seg_strategies(registered: dict, history, seg_id: int, ranks=None,
+                    deleted=()) -> list:
+    """Segment sibling of _strategies_for: registered strats (ui_state, keyed
+    "seg:{id}" — see service._strategies_key) then observed-on-attempts
+    (sorted) then rank-standard strats. Registration is what keeps a
+    just-picked strategy in the dropdown before any attempt exists under it.
     `deleted` filters the segment's tombstoned names, same as _strategies_for."""
-    out = sorted({a.strat_tag for a in history if a.strat_tag})
+    out = list(registered.get(f"seg:{seg_id}", []))
+    for strat in sorted({a.strat_tag for a in history if a.strat_tag}):
+        if strat not in out:
+            out.append(strat)
     if ranks is not None:
         for strat in ranks.strategies(entity_key(None, None, seg_id)):
             if strat not in out:
@@ -571,11 +577,10 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                            if pb_row else None)},
             "attempts": [_attempt_json(a, pbs, "rta", service.ranks) for a in in_section],
             "stats": _stats_for(history, stat_menu, "rta"),
-            # observed-from-attempts union rank-standard strategies; segments
-            # have no registered-strategies KV yet so observed comes first
-            # (sorted), then any standard strats not already present.
-            "strategies": _seg_strategies(history, seg_id, service.ranks,
-                                         deleted_strats.get(seg_ek, [])),
+            # registered ∪ observed-on-attempts ∪ rank-standard strategies
+            "strategies": _seg_strategies(registered, history, seg_id,
+                                          service.ranks,
+                                          deleted_strats.get(seg_ek, [])),
             "last_strat": masked(service.strat_by_segment.get(seg_id), seg_ek),
             "timeline": _timeline(history, rta_of),
             "markers_by_strat": _markers_for(markers_state, "seg", seg_id),

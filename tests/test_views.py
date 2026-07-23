@@ -728,7 +728,7 @@ def test_segment_pb_dict_ships_igt_as_none(tmp_path):
     assert pb["igt"] is None and pb["rta"]["frames"] == 85
 
 
-def test_segment_section_lists_observed_strategies_sorted(tmp_path):
+def test_segment_section_lists_registered_then_observed_strategies(tmp_path):
     db, svc = make(tmp_path)
     asyncio.run(svc.set_target_segment(1, strat_tag="hyperspeed"))
     lblj_success(svc, t0=1000)
@@ -736,7 +736,9 @@ def test_segment_section_lists_observed_strategies_sorted(tmp_path):
     lblj_success(svc, t0=3000)
     view = build_session_view(db, svc, clock="igt")
     sec = seg_section(view, 1)
-    assert sec["strategies"] == ["bljless", "hyperspeed"]   # distinct, sorted
+    # registration order first (star parity), observed names appended after —
+    # distinct either way
+    assert sec["strategies"] == ["hyperspeed", "bljless"]
     assert sec["last_strat"] == "bljless"
 
 

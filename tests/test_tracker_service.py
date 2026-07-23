@@ -1123,3 +1123,30 @@ def test_purge_segment_strategy_tombstones(tmp_path):
     asyncio.run(svc.purge_strategy("segment:3", "fast"))
     assert "fast" not in svc.ranks.strategies("segment:3")
     assert "fast" in db.get_state("deleted_strats", {}).get("segment:3", [])
+
+
+# -- segment strategies (star parity: set_strat / registration / purge) -------
+
+def test_set_strat_segment_registers_and_activates(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.set_strat_segment(1, "no bljs"))
+    assert svc.strat_by_segment.get(1) == "no bljs"
+    assert db.get_state("strategies", {}).get("seg:1") == ["no bljs"]
+    asyncio.run(svc.set_strat_segment(1, None))       # explicit clear
+    assert svc.strat_by_segment.get(1) is None
+    assert db.get_state("strategies", {}).get("seg:1") == ["no bljs"]
+
+
+def test_set_strat_segment_unknown_id_raises(tmp_path):
+    db, svc = make(tmp_path)
+    with pytest.raises(LookupError):
+        asyncio.run(svc.set_strat_segment(9999, "x"))
+
+
+def test_purge_segment_strategy_clears_active_and_registration(tmp_path):
+    db, svc = make_with_ranks(tmp_path)
+    asyncio.run(svc.set_strat_segment(1, "fast"))
+    asyncio.run(svc.create_rank_strategy("segment:1", "fast"))
+    asyncio.run(svc.purge_strategy("segment:1", "fast"))
+    assert svc.strat_by_segment.get(1) is None         # strat_set null published
+    assert "fast" not in db.get_state("strategies", {}).get("seg:1", [])

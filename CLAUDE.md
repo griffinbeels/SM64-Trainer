@@ -117,6 +117,7 @@ exe's single-instance takeover would otherwise fight a dev server on :8064).
 | Rank REST surface | `server/ranks_api.py` — CRUD; GET adds `cutoff_videos`/`user_videos`/`xcams_url`/`seeded` (entity's seeded strategy names — `ranks/standards.py::RankStandards.seeded_strategies`, the custom-vs-default distinction); PUT/DELETE `…/{rank}/video` (manual override); `DELETE /api/ranks/standards/{entity}/{strategy}?purge=true` full-deletes a CUSTOM strategy (`tracking/service.py::purge_strategy` — writes a `deleted_strats` tombstone KV so the name stays hidden from strategy unions/dropdowns/active-strat reads until re-created, which clears the tombstone = undo; past attempts keep their recorded times); without `purge`, DELETE on a seeded strategy just clears its standards (column persists while the strat is in use); service commands broadcast `rank_standards_changed`; `PUT /api/ranks/mode` (global rank mode → ui_state KV, broadcast-only `rank_mode_changed`; unknown stored value reads back as pb) |
 | Rank UI (badge/banner/table/route medals) | `ui/components/ranks.js` (Medal/RankBanner + registry mirror) + `standards.js` (collapsible editable table; columns = store ∪ section strategies (custom strats get empty fillable columns; × is dual-meaning — on a SEEDED strat it clears its standards (column persists while the strat is in use); on a CUSTOM strat it DELETES the strategy via `?purge=true` (confirm dialog; tombstone hides it from every dropdown/column/active-strat read; re-creating the same name restores it — undo)); each cutoff time links to its tier's example video, strat header = Mario-row/primary, Edit-mode ▶ per-cell override, section "Examples on xcams ↗" link); wired into practice.js (section banner + attempt medals), progress.js (medal nodes), routes.js + RouteFocus (per-step medals + route avg); header Rank picker (`RANK_MODE_OPTIONS` mirror in ranks.js) + banner "avg of N" basis line + mode-aware unranked sentinel |
 | Shared modal shell | `ui/components/modal.js` — `Modal({title,onClose,footer,children})`: backdrop+panel extracted from the update popup; onClose optional (absent = not dismissable — the update popup relies on that) |
+| Active-strategy picker (star + segment) | `ui/components/stratpicker.js` — THE strat dropdown + "new strat…" modal for a practice card; owns the `POST /api/strat` write, the dropped-write alert, and the phantom-pick snap-back. ONE component for both kinds (`identity` = the endpoint's kind-dispatched body), so a change can't land on stars and miss segments — the omission this fixed. Parity pinned by `tests/test_ui_section_parity.py` |
 | Strategy-creation modal | `ui/components/stratmodal.js` — name + full rank ladder (time + optional example video per rank) on the Modal shell; Save rides the existing ranks endpoints (create→PUT thresholds→PUT videos, idempotent re-Save); opened from the practice strat dropdown, the standards table's + Strategy, and the header target picker |
 
 (All paths under `src/sm64_events/` unless noted.) Tests mirror modules:
@@ -155,6 +156,17 @@ with `--no-ff`; run the full suite on the merged result; delete the branch.
    server, so it appears in BOTH the browser tab and the desktop window. The
    `desktop/` shell adds ONLY native chrome (window, tray, icon,
    single-instance, restart) and must never fork or special-case the UI.
+11. **Star ↔ segment parity.** Stars and segments are two kinds of the SAME
+   practiced thing — attempts, PBs, strats, ranks, markers, replays, routes.
+   A feature built for one ships for both in the same change, or the
+   asymmetry is written down with its reason. Enforced structurally (shared
+   components: `stratpicker.js`, `PbTag`, `TimeFilterChip`, `StandardsPanel`;
+   kind-dispatched endpoints: `/api/target`, `/api/strat`, `/api/wipe`) and
+   by `tests/test_ui_section_parity.py`, which fails when one practice card
+   renders a component the other doesn't. Evidence for the rule: the strat
+   picker shipped star-only and stayed missing from segments for months
+   (user-reported 2026-07-23) even though ranks/standards/compare were
+   already segment-aware.
 
 ## Recipes
 

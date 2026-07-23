@@ -41,6 +41,17 @@ def _iso(dt: datetime) -> str:
     return dt.isoformat().replace("+00:00", "Z")
 
 
+def _strategies_key(ek: str) -> str:
+    """`strategies` ui_state KV key for a rank entity_key.
+
+    star:C:S -> "C:S" (the historical shape — live dbs are keyed that way,
+    don't change it); segment:N -> "seg:N", mirroring the timeline_markers
+    namespace. views.py reads both back."""
+    if ek.startswith("segment:"):
+        return f"seg:{ek.split(':')[1]}"
+    return ek[len("star:"):]
+
+
 class TrackerService:
     def __init__(self, db: Database | None, broadcaster, ranks=None):
         self.db = db
@@ -265,16 +276,20 @@ class TrackerService:
         return self.db
 
     # -- commands ----------------------------------------------------------------
-    def _register_strategy(self, db: Database, course_id: int, star_id: int,
-                           strat_tag: str) -> None:
-        """Append strat_tag to the star's registered list (ui_state KV) if new."""
-        key = f"{course_id}:{star_id}"
+    def _register_strategy(self, db: Database, ek: str, strat_tag: str) -> None:
+        """Append strat_tag to the entity's registered list (ui_state KV) if new.
+
+        Registration is what makes a just-picked strategy survive in the
+        dropdown before any attempt has been recorded under it — stars and
+        segments both need it (views.py unions this with the observed and
+        rank-standard names)."""
+        key = _strategies_key(ek)
         strategies = db.get_state("strategies", {})
         existing = strategies.get(key, [])
         if strat_tag not in existing:
             strategies[key] = existing + [strat_tag]
             db.set_state("strategies", strategies)
-        self._clear_tombstone(db, entity_key(course_id, star_id), strat_tag)
+        self._clear_tombstone(db, ek, strat_tag)
 
     def _clear_tombstone(self, db: Database, ek: str, strat: str) -> None:
         """Re-creating a strat un-deletes it: the tombstone (see
@@ -303,7 +318,7 @@ class TrackerService:
         await self.publish(Event(type="target_set", frame=0,
                                  timestamp_utc=_now(), payload=payload))
         if strat_tag:
-            self._register_strategy(db, course_id, star_id, strat_tag)
+            self._register_strategy(db, entity_key(course_id, star_id), strat_tag)
 
     async def set_target_segment(self, segment_id: int,
                                  strat_tag: str | None = None) -> None:
@@ -317,11 +332,7 @@ class TrackerService:
         if strat_tag is not None:
             # segment strat memory is written via strat_set (the projector
             # ignores strat_tag inside segment target_set payloads)
-            await self.publish(Event(type="strat_set", frame=0,
-                                     timestamp_utc=_now(),
-                                     payload={"kind": "segment",
-                                              "segment_id": segment_id,
-                                              "strat_tag": strat_tag}))
+            await self.set_strat_segment(segment_id, strat_tag)
 
     async def set_strat(self, course_id: int, star_id: int,
                         strat_tag: str | None) -> None:
@@ -333,10 +344,32 @@ class TrackerService:
                                           "star_id": star_id,
                                           "strat_tag": strat_tag}))
         if strat_tag:
-            self._register_strategy(db, course_id, star_id, strat_tag)
+            self._register_strategy(db, entity_key(course_id, star_id), strat_tag)
         if self.target == ("star", course_id, star_id):
             # the target's strat changed: keep the WS contract honest so
             # other clients refresh (REFRESH_ON includes target_changed)
+            await self.publish(Event(type="target_changed", frame=0,
+                                     timestamp_utc=_now(),
+                                     payload=self.target_payload()))
+
+    async def set_strat_segment(self, segment_id: int,
+                                strat_tag: str | None) -> None:
+        """Segment sibling of set_strat — same journaled shape, same
+        registration, same target-changed republish. Kept in step with the
+        star version deliberately: the practice UI drives both through one
+        picker (ui/components/stratpicker.js)."""
+        db = self._require_db()
+        if all(d.id != segment_id for d in self._segment_defs):
+            raise LookupError(f"segment {segment_id} not found")
+        await self.publish(Event(type="strat_set", frame=0,
+                                 timestamp_utc=_now(),
+                                 payload={"kind": "segment",
+                                          "segment_id": segment_id,
+                                          "strat_tag": strat_tag}))
+        if strat_tag:
+            self._register_strategy(db, entity_key(None, None, segment_id),
+                                    strat_tag)
+        if self.target == ("segment", segment_id):
             await self.publish(Event(type="target_changed", frame=0,
                                      timestamp_utc=_now(),
                                      payload=self.target_payload()))
@@ -501,16 +534,23 @@ class TrackerService:
         if strat in ranks.seeded_strategies(ek):
             raise ValueError(f"{strat!r} is a community default and can't be deleted")
         ranks.delete_strategy(ek, strat)
+        strategies = db.get_state("strategies", {})
+        key = _strategies_key(ek)
+        if strat in strategies.get(key, []):
+            strategies[key] = [s for s in strategies[key] if s != strat]
+            db.set_state("strategies", strategies)
         if ek.startswith("star:"):
             _, course_s, star_s = ek.split(":")
             course_id, star_id = int(course_s), int(star_s)
-            strategies = db.get_state("strategies", {})
-            key = f"{course_id}:{star_id}"
-            if strat in strategies.get(key, []):
-                strategies[key] = [s for s in strategies[key] if s != strat]
-                db.set_state("strategies", strategies)
             if self.strat_by_star.get((course_id, star_id)) == strat:
                 await self.set_strat(course_id, star_id, None)
+        else:
+            segment_id = int(ek.split(":")[1])
+            # a deleted definition keeps its history (and its standards), so
+            # only journal the clear while the segment still exists
+            if self.strat_by_segment.get(segment_id) == strat \
+                    and any(d.id == segment_id for d in self._segment_defs):
+                await self.set_strat_segment(segment_id, None)
         tombs = db.get_state("deleted_strats", {})
         if strat not in tombs.get(ek, []):
             tombs[ek] = tombs.get(ek, []) + [strat]

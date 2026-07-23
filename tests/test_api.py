@@ -382,6 +382,32 @@ def test_strat_endpoint_sets_without_moving_target(tmp_path):
         assert "owlless" in view["strategies"]["2:2"]
 
 
+def test_strat_endpoint_accepts_segment_kind(tmp_path):
+    """Segment sibling of the star strat write — the practice card's strat
+    picker is shared by both kinds, so the endpoint must be too."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        client.post("/api/target", json={"kind": "segment", "segment_id": 1})
+        r = client.post("/api/strat", json={"kind": "segment", "segment_id": 1,
+                                            "strat_tag": "no bljs"})
+        assert r.status_code == 200
+        assert service.target == ("segment", 1)          # unmoved
+        assert service.strat_by_segment[1] == "no bljs"
+        # registered, so the picker lists the pick even before any attempt
+        sec = next(s for s in client.get("/api/session").json()["segments"]
+                   if s["segment_id"] == 1)
+        assert sec["last_strat"] == "no bljs"
+        assert "no bljs" in sec["strategies"]
+        # explicit null clears it (same journaled shape as stars)
+        assert client.post("/api/strat", json={
+            "kind": "segment", "segment_id": 1,
+            "strat_tag": None}).status_code == 200
+        assert service.strat_by_segment[1] is None
+        assert client.post("/api/strat", json={
+            "kind": "segment", "segment_id": 9999,
+            "strat_tag": "x"}).status_code == 404
+
+
 def test_strat_endpoint_degraded_503(tmp_path):
     broadcaster = Broadcaster()
     service = TrackerService(None, broadcaster)
