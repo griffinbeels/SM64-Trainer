@@ -479,7 +479,12 @@ kill-on-close Job Object assigned to every ffmpeg child
 (`ffmpeg_sink._assign_kill_on_close`, behaviorally tested) — an orphan
 encoder is structurally impossible no matter how Python dies.
 
-## Self-update (2026-06-16)
+## Self-update (2026-06-16) — SUPERSEDED by "Incremental updates" below
+
+> The single-exe swap described here shipped in v1.0.x–v1.3.x and was
+> replaced by the manifest-sync system (next section) on 2026-07-23. The
+> OS facts (rename-a-running-exe, sys.executable) still underpin the new
+> apply layer; the `download_and_stage`/`apply_update` code itself is gone.
 
 The packaged exe updates itself from GitHub releases (`core/updater.py`,
 `server/update_api.py`, `ui/components/update.js`, `tools/release.py`). The
@@ -522,6 +527,59 @@ swapped (`SM64_UPDATE_FAKE=1` renders the popup in dev without a real
 release). The exe is unsigned, so the FIRST manual (browser) download trips
 SmartScreen; in-app updates don't (the app, not the browser, fetches the
 file). Code signing is the documented future fix.
+
+## Incremental updates (2026-07-23)
+
+Spec: `docs/superpowers/specs/2026-07-23-incremental-updates-design.md` ·
+Plan: `docs/superpowers/plans/2026-07-23-incremental-updates.md`. Why: the
+onefile exe was 220 MB and every update re-downloaded all of it; the bulk
+(ffmpeg, Python runtime, numpy/av DLLs) never changes between releases.
+
+**Packaging flipped to onedir** (`dist/SM64Trainer/` = exe + `_internal\`),
+installed at `%LOCALAPPDATA%\Programs\SM64Trainer`, launched via a Desktop
+shortcut whose target never changes — updates swap files UNDER a stable exe
+path. User data (`%LOCALAPPDATA%\SM64Trainer`) remains a separate tree,
+untouched by any update, exactly as before.
+
+**The mechanism is per-file manifest sync** (the ClickOnce/MSIX/Chrome
+family; the Range-fetch-from-a-release-asset trick is the same one
+electron-updater's differential downloads use in production): each release
+publishes the full zip + `manifest.json` recording, per file, the SHA-256 of
+its content AND the byte range of its compressed data inside the zip
+(offsets read from LOCAL zip headers — the central directory's extra field
+can differ in length; a wrong offset would Range-fetch garbage; the
+round-trip is proven in `tests/test_make_manifest.py`). The updater diffs
+the remote manifest against `installed_manifest.json` + the disk, shows the
+exact download size in the popup, Range-fetches only the changed files'
+byte spans (coalesced; full-zip fallback when Range breaks), verifies every
+file, and swaps via a **journaled generalization of the rename trick**: all
+originals rename into `.update_backup/`, a journal written before the first
+file op makes ANY interruption — including a hard kill mid-swap —
+recoverable by `startup_repair` at next launch (rollback → single relaunch;
+the journal flips to a terminal state first, so no restart loop). Because
+plans are hash diffs, skipping five versions costs the same as one.
+
+**Migration rides the OLD updater's only capability**: it can install
+exactly one asset name, `SM64Trainer.exe`. That asset is now the ~tiny
+bootstrap installer (stdlib + tkinter, `bootstrap/installer.py`): the old
+onefile app self-updates INTO the bootstrap, which downloads the zip once,
+installs the folder, creates the shortcut, launches the app, and hands its
+own path over via `--cleanup-bootstrap` for deletion (a running exe can't
+delete itself). The asset must be published under that name **forever** so
+a user who ignored updates for a year still migrates. It doubles as the
+new-user installer, preserving the "download SM64Trainer.exe, double-click"
+habit.
+
+**Reproducibility keeps deltas small**: `build_exe.py` re-execs itself with
+`PYTHONHASHSEED=1` + `SOURCE_DATE_EPOCH=<HEAD commit time>` because Python's
+hash randomization perturbs compiled bytecode — without it, every `.pyc`
+inside the PYZ hashes differently each build and the "changed files" set
+balloons. The zip is deterministic too (sorted entries, fixed 1980
+timestamps).
+
+**Measured volatile set:** _to be filled at the live gate_ — build at two
+adjacent commits, diff manifests, record which files changed and the typical
+delta download size here.
 
 ## Compare (side-by-side, v1.3.0)
 
