@@ -441,7 +441,7 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
         <span class="chip" title=${s.key}>${s.label} ${s.display ?? "–"}</span>`)}
     </div>
     <${StandardsPanel} entity=${`star:${sec.course_id}:${sec.star_id}`}
-        activeStrat=${sec.last_strat} onChanged=${t.refresh} />
+        activeStrat=${sec.last_strat} strategies=${sec.strategies} onChanged=${t.refresh} />
   </div>`;
 }
 
@@ -528,7 +528,7 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare }) {
         <span class="chip" title=${s.key}>${s.label} ${s.display ?? "–"}</span>`)}
     </div>
     <${StandardsPanel} entity=${`segment:${sec.segment_id}`}
-        activeStrat=${sec.last_strat} onChanged=${t.refresh} />
+        activeStrat=${sec.last_strat} strategies=${sec.strategies} onChanged=${t.refresh} />
   </div>`;
 }
 

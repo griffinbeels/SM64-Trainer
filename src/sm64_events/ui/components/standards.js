@@ -13,7 +13,7 @@ import { RANK_NAMES, rankColor } from "./ranks.js";
 const html = htm.bind(h);
 const enc = encodeURIComponent;
 
-export function StandardsPanel({ entity, activeStrat, onChanged }) {
+export function StandardsPanel({ entity, activeStrat, strategies, onChanged }) {
   const [open, setOpen] = useState(false);
   const [data, setData] = useState(null);
   const [editing, setEditing] = useState(false);
@@ -55,7 +55,16 @@ export function StandardsPanel({ entity, activeStrat, onChanged }) {
     (data.user_videos && data.user_videos[s] && data.user_videos[s][rank]) || null;
   const headVid = (s) => cutoffVid(s, "Mario") || (data.videos && data.videos[s]) || null;
 
-  const strats = data ? Object.keys(data.strategies) : [];
+  // Columns = store strategies (community order first) + every other strat
+  // this section knows (registered / used on attempts — sec.strategies from
+  // views.py). A known strat with no store entry renders an empty column, so
+  // custom strats are fillable the moment they exist. Object.hasOwn (not
+  // `in`): a strat named e.g. "constructor" must not vanish via the proto
+  // chain.
+  const strats = data
+    ? [...Object.keys(data.strategies),
+       ...(strategies || []).filter((s) => !Object.hasOwn(data.strategies, s))]
+    : [];
   return html`<div class="stdpanel">
     <div class="disc" onclick=${toggle} style="cursor:pointer">
       <span>${open ? "▾" : "▸"}</span> Rank standards
@@ -73,12 +82,12 @@ export function StandardsPanel({ entity, activeStrat, onChanged }) {
       <table class="stdtable"><thead><tr><th>Strat</th>
         ${strats.map((s) => html`<th class=${s === activeStrat ? "col-active" : ""}>${headVid(s)
           ? html`<a href=${headVid(s)} target="_blank" rel="noopener" title="fastest-time video">${s}</a>`
-          : s}${editing ? html` <button class="candx" title="remove strategy" onclick=${() => delStrat(s)}>×</button>` : ""}</th>`)}</tr></thead>
+          : s}${editing ? html` <button class="candx" title="clear this strategy's standards" onclick=${() => delStrat(s)}>×</button>` : ""}</th>`)}</tr></thead>
         <tbody>
         ${RANK_NAMES.filter((r) => r !== "Iron").map((rank) => html`<tr>
           <td style=${`background:${rankColor(rank)};color:#111;font-weight:700`}>${rank}</td>
           ${strats.map((s) => {
-            const v = data.strategies[s][rank];
+            const v = (data.strategies[s] || {})[rank];
             const vid = cutoffVid(s, rank);
             const label = v != null ? v.toFixed(2) : "—";
             return html`<td class=${s === activeStrat ? "col-active" : ""}>
