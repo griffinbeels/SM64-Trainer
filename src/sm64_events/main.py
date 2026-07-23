@@ -67,11 +67,25 @@ def build():
     db_file = db_path()
     db_file.parent.mkdir(parents=True, exist_ok=True)
     lock = acquire_instance_lock(instance_lock_path())
+    db_retry = None
     if lock is None:
         logging.getLogger("sm64.tracker").error(
             "another tracker instance owns %s - running broadcast-only "
             "(events will NOT be recorded twice)", db_file)
         db = None
+
+        def db_retry():
+            """Self-heal probe for server/app.py's reattach loop. The usual
+            cause of a held lock is a restart handoff racing the old
+            process's exit — the handoff's wait_lock_free bounds that wait,
+            and this closes the gap if it still loses. None while the lock
+            is held elsewhere; raising (a broken db) ends the retry."""
+            global _instance_lock
+            retry_lock = acquire_instance_lock(instance_lock_path())
+            if retry_lock is None:
+                return None
+            _instance_lock = retry_lock
+            return Database(db_file)
     else:
         _instance_lock = lock
         try:
@@ -166,7 +180,7 @@ def build():
     updater = UpdateService(current_version=__version__)
     updater.startup_maintenance(bootstrap_path=_bootstrap_cleanup_arg())
     return create_app(poller, broadcaster, service=service, replay=replay,
-                      updater=updater, compare=compare)
+                      updater=updater, compare=compare, db_retry=db_retry)
 
 
 _app = None
@@ -212,10 +226,16 @@ def run() -> None:
     """
     import os
     if os.environ.pop("SM64_RESTART", None):
-        # A restart relaunch: the old process is exiting — wait for it to
-        # free the port so build()'s instance-lock acquisition hands off cleanly.
+        # A restart relaunch: the old process is exiting — wait for the
+        # port, THEN the db instance lock. Both waits are needed: uvicorn
+        # frees the port seconds BEFORE process exit releases the lock
+        # (replay teardown + window destruction run in between), and a
+        # handoff that waited only on the port lost the lock race and came
+        # up broadcast-only (post-update incident 2026-07-23).
         from sm64_events.core.relaunch import wait_port_free
+        from sm64_events.storage.instance_lock import wait_lock_free
         wait_port_free()
+        wait_lock_free(instance_lock_path())
     import uvicorn
     uvicorn.run(get_app(), host="127.0.0.1", port=server_port(),
                 timeout_graceful_shutdown=3)

@@ -114,11 +114,15 @@ export function useTracker() {
         if (everConnected.current) {
           setFeed((f) => [{ type: "ws_reconnected", seq: "", frame: "",
                             payload: {} }, ...f].slice(0, 200));
-          refresh();   // events were missed during the outage — the view is
-                       // the authoritative state (armed flags, attempts, target)
         }
         everConnected.current = true;
         setConnected(true);
+        refresh();   // on EVERY open, not just reconnects: reconnects missed
+                     // events (the view is the authoritative state), and the
+                     // FIRST connect can follow a failed mount-time fetch
+                     // (server briefly db-less during an update/restart
+                     // handoff — live incident 2026-07-23: view stayed null
+                     // forever under a "live" header).
       };
       ws.onclose = () => { setConnected(false);
         if (!closed) setTimeout(connect, 2000); };
@@ -158,6 +162,18 @@ export function useTracker() {
     connect();
     return () => { closed = true; ws && ws.close(); };
   }, [refresh]);   // refresh is now stable -> this effect runs exactly once
+
+  // Fallback of last resort: the page must never sit on "loading…" while
+  // the server is reachable. If the view has NEVER loaded (mount fetch and
+  // ws-open refresh both failed — e.g. /api/session 503 while the server
+  // waits out a lost instance-lock race), keep retrying until the first
+  // view lands; after that, WS-driven refreshes own freshness.
+  const viewLoaded = view !== null;
+  useEffect(() => {
+    if (viewLoaded) return;
+    const retry = setInterval(refresh, 3000);
+    return () => clearInterval(retry);
+  }, [viewLoaded, refresh]);
 
   // --- auto-update (shared so the header "Check for updates" button and the
   // popup agree on one status / one in-flight install) ---

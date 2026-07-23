@@ -79,6 +79,39 @@ def _log_poller_exit(task: asyncio.Task) -> None:
         log.critical("poll loop died: %r", exc)
 
 
+# Self-heal for a lost instance-lock race (post-update incident 2026-07-23):
+# the restart handoff waits for the lock (instance_lock.wait_lock_free), but
+# if a server STILL boots db-less — old process wedged past the bounded wait,
+# or a plain second launch whose rival later exits — this loop upgrades it to
+# full tracking the moment the lock frees, instead of degrading forever.
+_DB_RETRY_INTERVAL_S = 2.0
+
+
+async def _db_reattach_loop(service, db_retry) -> None:
+    """Poll db_retry until it returns a Database (None = lock still held
+    elsewhere), then attach it to the service. Any exception ends the loop:
+    the retry exists ONLY for the lock race — a broken database must not be
+    re-opened in a loop forever."""
+    while True:
+        await asyncio.sleep(_DB_RETRY_INTERVAL_S)
+        try:
+            db = db_retry()
+        except Exception:
+            log.exception("db reattach failed - staying broadcast-only")
+            return
+        if db is None:
+            continue
+        try:
+            await service.attach_db(db)
+        except Exception:
+            log.exception("db attach failed - staying broadcast-only")
+            return
+        log.warning("instance lock freed - database attached, tracking "
+                    "enabled (was broadcast-only; the compare tab appears "
+                    "after the next restart)")
+        return
+
+
 # Replay teardown joins capture threads and waits for ffmpeg to flush —
 # worst-case tens of seconds of SYNC work. Run inside the event loop it
 # blocks uvicorn's shutdown (and the force-exit CTRL+C path) — live
@@ -213,7 +246,7 @@ def _quiet_connection_resets(loop, context) -> None:
 
 def create_app(poller: Poller, broadcaster: Broadcaster,
                service=None, replay=None, updater=None, compare=None,
-               debug_hooks: bool = False) -> FastAPI:
+               db_retry=None, debug_hooks: bool = False) -> FastAPI:
     # Observability for long-running sessions: samples self + CHILD (ffmpeg)
     # memory, handle/GDI/USER counts, system pressure, and a per-type heap
     # histogram on a cadence — logs an expanded line, fires one-shot per-class
@@ -266,6 +299,10 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
                 log.exception("tracker start failed - degrading to broadcast-only")
                 service.db = None
                 service.session_id = None
+        reattach_task = None
+        if service is not None and service.db is None and db_retry is not None:
+            reattach_task = asyncio.create_task(
+                _db_reattach_loop(service, db_retry))
         if replay is not None:
             try:
                 replay.lifecycle_start()
@@ -285,6 +322,10 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
         task.add_done_callback(_log_poller_exit)
         mon_task = asyncio.create_task(monitor.run())
         yield
+        if reattach_task is not None:
+            reattach_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await reattach_task
         mon_task.cancel()
         with suppress(asyncio.CancelledError):
             await mon_task

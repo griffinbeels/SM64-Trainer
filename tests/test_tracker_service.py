@@ -74,6 +74,33 @@ def test_events_are_journaled_and_attempts_persisted(tmp_path):
     assert "target_changed" in types
 
 
+def test_attach_db_upgrades_broadcast_only_to_full_tracking(tmp_path):
+    """A server that lost the instance-lock race starts with db=None
+    (broadcast-only). attach_db is the self-heal: once the lock frees, the
+    service must open a session, journal, and project exactly as if the db
+    had been there from the start — and broadcast session_started so the
+    UI refetches the view (live incident 2026-07-23: post-update page
+    stuck on 'loading…')."""
+    bc = RecordingBroadcaster()
+    svc = TrackerService(None, bc)
+    asyncio.run(svc.start())
+    asyncio.run(svc.publish(star(900)))       # degraded: broadcast, no journal
+    assert svc.session_id is None
+
+    db = Database(tmp_path / "t.db")
+    asyncio.run(svc.attach_db(db))
+
+    assert svc.db is db
+    assert svc.session_id == 1
+    assert [e.type for e in db.events()] == ["session_started"]
+    assert any(e.type == "session_started" for e in bc.sent)
+    # Full pipeline live post-attach: journal + projection + persistence.
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350)))
+    attempts = db.attempts()
+    assert len(attempts) == 1 and attempts[0].outcome == "success"
+
+
 def test_broadcaster_seq_returned_and_stored(tmp_path):
     db, svc = make(tmp_path)
     asyncio.run(svc.publish(star(900)))

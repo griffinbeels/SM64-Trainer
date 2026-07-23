@@ -66,6 +66,22 @@ class TrackerService:
         {} in degraded mode. Segment bounds ride the defs themselves."""
         return self.db.get_state("time_filters", {}) if self.db is not None else {}
 
+    async def attach_db(self, db: Database) -> None:
+        """Late DB attach: upgrade a broadcast-only instance to full
+        tracking. A restart handoff that loses the instance-lock race
+        builds this service with db=None; once the lock frees (the old
+        process finally exited) the reattach loop in server/app.py hands
+        the freshly opened Database here. start() rebuilds the projector
+        from the journal and opens a session exactly as a clean boot
+        would, and its session_started broadcast makes the UI refetch the
+        view — the page un-sticks without a reload (live incident
+        2026-07-23: post-update GUI stuck on 'loading…')."""
+        self.db = db
+        self._segment_defs = self._load_segment_defs()
+        self._projector = Projector(segments=self._segment_defs,
+                                    time_filters=self._time_filters())
+        await self.start()
+
     # -- pipeline -------------------------------------------------------------
     async def start(self) -> None:
         if self.db is None:

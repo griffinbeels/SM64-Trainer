@@ -65,6 +65,65 @@ def test_websocket_receives_published_events():
             assert msg["type"] == "debug"
 
 
+# -- db reattach loop (post-update broadcast-only incident 2026-07-23) -------
+# Contract: a server that started without the db (instance lock still held
+# by the exiting old process) must upgrade itself to full tracking once the
+# lock frees — /health flips db "error" -> "ok" and /api/session serves.
+
+
+def test_db_reattach_upgrades_broadcast_only(tmp_path, monkeypatch):
+    import sm64_events.server.app as app_mod
+    from sm64_events.storage.db import Database
+    from sm64_events.tracking.service import TrackerService
+
+    monkeypatch.setattr(app_mod, "_DB_RETRY_INTERVAL_S", 0.01)
+    broadcaster = Broadcaster()
+    svc = TrackerService(None, broadcaster)
+    poller = Poller(OfflineMemory(), [StarGrabDetector()], svc)
+    attempts_before_free = 3
+    calls: list[int] = []
+
+    def db_retry():
+        calls.append(1)
+        if len(calls) < attempts_before_free:
+            return None            # lock still held by the old process
+        return Database(tmp_path / "t.db")
+
+    app = create_app(poller, broadcaster, service=svc, db_retry=db_retry)
+    with TestClient(app) as client:
+        assert client.get("/health").json()["db"] == "error"
+        deadline = time.monotonic() + 5.0
+        while (time.monotonic() < deadline
+               and client.get("/health").json()["db"] != "ok"):
+            time.sleep(0.02)
+        assert client.get("/health").json()["db"] == "ok"
+        assert client.get("/api/session").status_code == 200
+    assert len(calls) >= attempts_before_free
+
+
+def test_db_retry_exception_ends_loop_and_stays_degraded(tmp_path, monkeypatch):
+    """The retry exists ONLY for the lock race — a broken database must not
+    be re-tried in a hot loop forever."""
+    import sm64_events.server.app as app_mod
+    from sm64_events.tracking.service import TrackerService
+
+    monkeypatch.setattr(app_mod, "_DB_RETRY_INTERVAL_S", 0.01)
+    broadcaster = Broadcaster()
+    svc = TrackerService(None, broadcaster)
+    poller = Poller(OfflineMemory(), [StarGrabDetector()], svc)
+    calls: list[int] = []
+
+    def db_retry():
+        calls.append(1)
+        raise RuntimeError("db is broken")
+
+    app = create_app(poller, broadcaster, service=svc, db_retry=db_retry)
+    with TestClient(app) as client:
+        time.sleep(0.2)
+        assert client.get("/health").json()["db"] == "error"
+    assert len(calls) == 1
+
+
 # -- force-exit watchdog (CTRL+C stall incidents 2026-06-12 / 2026-06-13) ----
 # Contract: the first stop signal arms a bounded force-exit so the process
 # terminates even when uvicorn's connection drain wedges forever (browser
