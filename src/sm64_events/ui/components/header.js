@@ -4,6 +4,7 @@ import { useState } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
 import { RecordingDot } from "./replay.js";
+import { RANK_MODE_OPTIONS } from "./ranks.js";
 
 const html = htm.bind(h);
 
@@ -117,6 +118,13 @@ export function Header({ t }) {
         <option value="rta">anchor → grab</option>
       </select>
     </span>
+    ${v && html`<span>Rank:
+      <select id="rankmode-select" name="rank_mode" value=${v.rank_mode}
+              title="What rank medals grade: your saved PB, or the average of your last/best N valid runs"
+              onchange=${(e) => send("PUT", "/api/ranks/mode", { mode: e.target.value }).then(() => t.refresh())}>
+        ${RANK_MODE_OPTIONS.map(([k, label]) => html`<option value=${k}>${label}</option>`)}
+      </select>
+    </span>`}
     ${managing && v && html`<div class="popover">
       ${v.sessions.map((s) => html`<div style="display:flex;gap:.5rem;align-items:center">
         <span>Session ${s.id} · ${s.attempts} attempts · ${(s.started_utc || "").slice(0, 10)}</span>
