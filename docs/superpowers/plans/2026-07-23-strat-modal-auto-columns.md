@@ -47,7 +47,7 @@ One deliverable: the shell has no standalone UI until something renders it, and 
 - Consumes: existing `.modal-backdrop` / `.modal` / `.modal-actions` CSS in `ui/index.html` (unchanged).
 - Produces: `Modal({ title, onClose, footer, children })` exported from `ui/components/modal.js`. `onClose` optional — when absent, Esc and backdrop-click do nothing (the update popup relies on this). `footer` optional — renders inside `.modal-actions`. Tasks 2–5 consume this exact signature.
 
-- [ ] **Step 1: Create the shell**
+- [x] **Step 1: Create the shell**
 
 Create `src/sm64_events/ui/components/modal.js` with exactly:
 
@@ -81,7 +81,7 @@ export function Modal({ title, onClose, footer, children }) {
 }
 ```
 
-- [ ] **Step 2: Migrate update.js onto it**
+- [x] **Step 2: Migrate update.js onto it**
 
 In `src/sm64_events/ui/components/update.js`, add the import after the `htm` import (line 8):
 
@@ -124,12 +124,12 @@ Replace the entire `return html` block (lines 76–107) with:
 
 Note: NO `onClose` prop is passed — Esc/backdrop must stay inert on this popup. The state-dependent `.modal-actions` blocks stay as children (the `footer` prop is a convenience, not mandatory). `<//>` is htm's close-component tag.
 
-- [ ] **Step 3: Regression + browser check**
+- [x] **Step 3: Regression + browser check**
 
 Run: `uv run pytest -q` → all pass.
 Start the dev server (`uv run python -m sm64_events.main` from repo root, background). Open `http://127.0.0.1:8065` via Chrome DevTools MCP: **zero console errors**. Then restart the server with `SM64_UPDATE_FAKE=1` set to render the update popup in dev: it must look exactly as before (title, notes box, buttons), Esc and backdrop-click must NOT dismiss it, and "Later" must dismiss it.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/sm64_events/ui/components/modal.js src/sm64_events/ui/components/update.js
@@ -154,7 +154,7 @@ Independent of Task 1. The table's columns become the union of the store's strat
 - Consumes: `sec.strategies` (array of strat names — views.py's registered+observed+standards union, present on BOTH star and segment sections).
 - Produces: `StandardsPanel({ entity, activeStrat, strategies, onChanged })` — the new optional `strategies` prop. Task 3 modifies this same file and assumes this signature.
 
-- [ ] **Step 1: Union the columns in standards.js**
+- [x] **Step 1: Union the columns in standards.js**
 
 Change the signature (line 16) to:
 
@@ -195,7 +195,7 @@ On the × button (line 76), change the tooltip from `title="remove strategy"` to
 title="clear this strategy's standards"
 ```
 
-- [ ] **Step 2: Pass the section list from practice.js**
+- [x] **Step 2: Pass the section list from practice.js**
 
 Both call sites gain the prop. Lines 443–444 (StarSection):
 
@@ -211,12 +211,12 @@ Lines 530–531 (SegmentSection):
         activeStrat=${sec.last_strat} strategies=${sec.strategies} onChanged=${t.refresh} />
 ```
 
-- [ ] **Step 3: Regression + browser check**
+- [x] **Step 3: Regression + browser check**
 
 Run: `uv run pytest -q` → all pass.
 Browser (`http://127.0.0.1:8065`): zero console errors. Open the LLL Red-Hot Log Rolling section's "Rank standards" panel: a **logless** column now appears after the seed strats, every cell "—", no × behavior change needed yet, and the active-strat column highlight still works when logless is the active strat. The star's rank banner must still show "no rank standards for this strategy" (empty ladder → no rank) until times exist.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/sm64_events/ui/components/standards.js src/sm64_events/ui/components/practice.js
@@ -245,7 +245,7 @@ The strategy-creation modal itself, wired into its first entry point (`+ Strateg
 - Consumes: `Modal({ title, onClose, footer, children })` from Task 1; `RANK_NAMES`, `rankColor` from `./ranks.js`; `send(method, path, body)` from `../api.js` (throws on non-2xx); existing endpoints `POST /api/ranks/standards/{entity}` `{strategy}`, `PUT …/{entity}/{strat}/{rank}` `{seconds}`, `PUT …/{entity}/{strat}/{rank}/video` `{url}`.
 - Produces: `StratModal({ entity, existing, onSaved, onClose })` from `ui/components/stratmodal.js` — `entity` is `star:{c}:{s}` or `segment:{id}`; `existing` is an array of strat names for duplicate rejection; `onSaved(name)` fires after all writes succeed; `onClose` on Cancel/Esc/backdrop. Tasks 4–5 consume this exact signature.
 
-- [ ] **Step 1: Create the modal component**
+- [x] **Step 1: Create the modal component**
 
 Create `src/sm64_events/ui/components/stratmodal.js` with exactly:
 
@@ -340,7 +340,7 @@ export function StratModal({ entity, existing, onSaved, onClose }) {
 }
 ```
 
-- [ ] **Step 2: Add the CSS**
+- [x] **Step 2: Add the CSS**
 
 In `src/sm64_events/ui/index.html`, after the `.btnlink { … }` rule (≈ line 207), insert:
 
@@ -350,7 +350,7 @@ In `src/sm64_events/ui/index.html`, after the `.btnlink { … }` rule (≈ line 
   .modal-error { color: #e08585; font-size: .85em; margin-top: .5rem; }
 ```
 
-- [ ] **Step 3: Wire `+ Strategy` in standards.js**
+- [x] **Step 3: Wire `+ Strategy` in standards.js**
 
 Add the import after the `ranks.js` import (line 12):
 
@@ -389,12 +389,12 @@ to
 
 (`strats` is Task 2's union list — the correct duplicate-rejection set; it is only non-empty when the panel is open with data, which is the only time `showAdd` is reachable.)
 
-- [ ] **Step 4: Regression + browser check**
+- [x] **Step 4: Regression + browser check**
 
 Run: `uv run pytest -q` → all pass.
 Browser: zero console errors. In a star section → Rank standards → Edit → `+ Strategy`: the modal opens with the name field, 8 colored rank rows (Mario→Bronze, NO Iron), blank time + video inputs. Check: empty-name Save shows the inline error; a duplicate name (e.g. `Standard`) shows the inline error; Cancel/Esc/backdrop close with **no new column**; saving a strat with two times filled creates its column showing exactly those two times (others "—"); saving with a video URL makes that rank's time a link in view mode. Type into inputs across a poll tick (~1 s) — text must not be wiped (oninput rule).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/sm64_events/ui/components/stratmodal.js src/sm64_events/ui/components/standards.js src/sm64_events/ui/index.html
@@ -419,7 +419,7 @@ Replaces the `window.prompt` in StarSection's `setStrat`. Depends on Task 3.
 - Consumes: `StratModal({ entity, existing, onSaved, onClose })` from Task 3; existing `setStrat`, `stratNonce`, `sec.strategies`, `POST /api/strat`.
 - Produces: nothing new for later tasks.
 
-- [ ] **Step 1: Wire the modal into StarSection**
+- [x] **Step 1: Wire the modal into StarSection**
 
 Add the import after the StandardsPanel import (line 12):
 
@@ -461,12 +461,12 @@ After the `.shead` closing `</div>` (line 419), add the modal render:
 
 `onSaved` reuses `setStrat` (the saved name is never `"__new"`), which POSTs `/api/strat` — registering and activating the strat — then refreshes; `onClose` uses the established `stratNonce` snap-back so the dropdown returns to the server's truth.
 
-- [ ] **Step 2: Regression + browser check**
+- [x] **Step 2: Regression + browser check**
 
 Run: `uv run pytest -q` → all pass.
 Browser: zero console errors. In the Active Star section, pick `+ new strat…`: the modal opens (no browser prompt). Cancel → dropdown snaps back to the previous value. Create `testmodal` with a Mario time of `11.5` → dropdown now shows `testmodal` selected, the standards panel shows its column with `11.50` in the Mario row, and the rank banner switches off "no rank standards" once a PB with that strat exists. Clean up: × the `testmodal` column (clears data), set the strat back.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/sm64_events/ui/components/practice.js
@@ -490,7 +490,7 @@ Replaces TargetEditor's `adding` inline-input state. Depends on Task 3.
 - Consumes: `StratModal({ entity, existing, onSaved, onClose })` from Task 3; `v.strategies` (the view's REGISTERED-strategies KV — note it does NOT include a just-created strat until Set target registers it).
 - Produces: nothing new for later tasks.
 
-- [ ] **Step 1: Rewire TargetEditor**
+- [x] **Step 1: Rewire TargetEditor**
 
 Add the import next to header.js's other component imports:
 
@@ -553,12 +553,12 @@ After the closing `</div>` of that row (line 188), before the popover's final `<
         onClose=${() => { setShowStratModal(false); setStratNonce((n) => n + 1); }} />` : null}
 ```
 
-- [ ] **Step 2: Regression + browser check**
+- [x] **Step 2: Regression + browser check**
 
 Run: `uv run pytest -q` → all pass.
 Browser: zero console errors. Header → edit target → strat select → `+ new strategy…`: modal opens; Cancel → select snaps back. Create `headertest` → the select shows `headertest` selected (the unlisted-value option); "Set target" applies it (header target line shows the strat; it is now registered). The standards panel for that star shows the `headertest` column. Clean up: × the column, reset the target.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/sm64_events/ui/components/header.js
@@ -580,15 +580,15 @@ can't display blank after save."
 
 **Interfaces:** none — verification + documentation only.
 
-- [ ] **Step 1: Full-suite regression**
+- [x] **Step 1: Full-suite regression**
 
 Run: `uv run pytest -q` → all pass (zero Python changed; any failure means scope leaked).
 
-- [ ] **Step 2: Frontend smoke sweep (frontend-smoke-test skill)**
+- [x] **Step 2: Frontend smoke sweep (frontend-smoke-test skill)**
 
 With the dev server up, walk the whole surface once in the browser via Chrome DevTools MCP, console clean throughout: (1) logless auto-column present+empty; (2) create a strat from each of the three entry points; (3) × on an in-use strat clears data but keeps the column, × on a modal-only never-used strat removes the column; (4) rank banner stays "no rank standards" until a time is entered, then ranks; (5) `SM64_UPDATE_FAKE=1` popup renders and is not Esc-dismissable; (6) Compare/Routes tabs still load (shared-file regression sniff).
 
-- [ ] **Step 3: Update the module map**
+- [x] **Step 3: Update the module map**
 
 In `CLAUDE.md`'s module map, add two rows after the "Rank UI" row and amend the Rank UI row's standards.js text:
 
@@ -603,7 +603,7 @@ and in the Rank UI row, change "collapsible editable table" to "collapsible edit
 
 Pause for the user: modal look/feel at all three entry points, the logless column, × semantics. This plan is done only after their sign-off.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add CLAUDE.md docs/superpowers/plans/2026-07-23-strat-modal-auto-columns.md
