@@ -5,9 +5,11 @@ ONLY what changed (core/update_fetch, HTTP Range into the release zip), and
 swap files crash-safely (core/update_apply journaled rename dance). The
 restart rides core/relaunch.spawn_replacement, same as always.
 
-Pure helpers (parse_version, is_newer, check_for_update, exe_dir_writable)
-take an injected HTTP opener and operate on explicit paths so tests never
-touch the network or a real install. The stateful UpdateService orchestrates
+Pure helpers (check_for_update, exe_dir_writable) take an injected HTTP
+opener and operate on explicit paths so tests never touch the network or a
+real install. Version comparison, the shared request builder, and patch-notes
+extraction live one layer down in core/release_feed.py. The stateful
+UpdateService orchestrates
 them, caches the check (manifest + plan included), tracks download progress,
 and persists the 'skipped' version. Everything is guarded on is_frozen():
 from source it is inert (update_available is always False) so a dev tree is
@@ -36,38 +38,16 @@ from sm64_events.core.paths import is_frozen, update_state_path
 from sm64_events.core.update_apply import STAGING_DIR, apply_plan, sweep_backup
 from sm64_events.core.update_fetch import (RangeUnsupported, fetch_full_zip,
                                            fetch_plan, free_disk_ok)
+from sm64_events.core.release_feed import http_get, is_newer, strip_body
 from sm64_events.core.update_plan import (INSTALLED_MANIFEST, MANIFEST_ASSET,
-                                          PATCH_NOTES_MARKER, ZIP_ASSET,
-                                          Manifest, build_plan,
+                                          ZIP_ASSET, Manifest, build_plan,
                                           parse_manifest)
 
 log = logging.getLogger("sm64.updater")
 
 DEFAULT_REPO = "griffinbeels/SM64-Trainer"
 GITHUB_API = "https://api.github.com"
-_UA = "SM64Trainer-updater"
 _CHECK_TTL_S = 3600.0
-
-
-def parse_version(tag: str) -> tuple[int, ...]:
-    """'v1.2.3' / '1.2.3' -> (1, 2, 3). A non-numeric piece stops the parse, so
-    '1.2.3-beta' compares as (1, 2, 3)."""
-    out: list[int] = []
-    for part in tag.lstrip("vV").split("."):
-        num = ""
-        for ch in part:
-            if ch.isdigit():
-                num += ch
-            else:
-                break
-        if num == "":
-            break
-        out.append(int(num))
-    return tuple(out)
-
-
-def is_newer(candidate: str, current: str) -> bool:
-    return parse_version(candidate) > parse_version(current)
 
 
 @dataclass
@@ -81,13 +61,6 @@ class UpdateInfo:
     manifest_sha_url: str
 
 
-def _get(http, url: str, *, accept: str | None = None):
-    req = urllib.request.Request(url, headers={"User-Agent": _UA})
-    if accept:
-        req.add_header("Accept", accept)
-    return http(req)
-
-
 def check_for_update(current: str, *, http=urllib.request.urlopen,
                      repo: str = DEFAULT_REPO,
                      api_base: str = GITHUB_API) -> "UpdateInfo | None":
@@ -97,7 +70,7 @@ def check_for_update(current: str, *, http=urllib.request.urlopen,
     None (no popup)."""
     try:
         url = f"{api_base}/repos/{repo}/releases/latest"
-        with _get(http, url, accept="application/vnd.github+json") as r:
+        with http_get(http, url, accept="application/vnd.github+json") as r:
             rel = json.loads(r.read().decode("utf-8"))
         tag = rel.get("tag_name") or ""
         if not is_newer(tag, current):
@@ -109,11 +82,10 @@ def check_for_update(current: str, *, http=urllib.request.urlopen,
         if not all(assets.get(name) for name in needed):
             log.info("release %s is missing update assets; not offering", tag)
             return None
-        notes = rel.get("body") or ""
-        if PATCH_NOTES_MARKER in notes:
-            # The body's leading first-time-setup section is for the GitHub
-            # page only — the popup shows just the patch notes.
-            notes = notes.split(PATCH_NOTES_MARKER, 1)[1].lstrip()
+        # The body's leading first-time-setup section is for the GitHub page
+        # only, and legacy bodies title themselves — release_feed.strip_body
+        # is THE rule for both shapes.
+        notes = strip_body(rel.get("body") or "")
         return UpdateInfo(
             version=tag.lstrip("vV"),
             notes=notes,
@@ -195,7 +167,7 @@ class UpdateService:
             zip_url="", zip_sha_url="", manifest_url="", manifest_sha_url="")
 
     def _fetch_text(self, url: str) -> str:
-        with _get(self._http, url) as r:
+        with http_get(self._http, url) as r:
             return r.read().decode("utf-8")
 
     def _read_installed(self) -> "Manifest | None":
