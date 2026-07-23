@@ -65,20 +65,24 @@ Import completion is not broadcast — the initiating client polls the job
 instead, since imports are a focused single-client action; `comparisons_changed`
 fires only from edits/deletes, so other clients pick up those.
 
-## Quick start (just want to use it)
+## First-time setup (just want to use it)
 
 1. **Download** the latest `SM64Trainer.exe` from the
-   [Releases page](../../releases) — it's a small installer.
+   [Releases page](../../releases) — it's a small installer (~11 MB).
 2. **Run it.** First launch shows a Windows SmartScreen notice (the app is
    unsigned) — click **More info → Run anyway**. It installs the app to
    `%LOCALAPPDATA%\Programs\SM64Trainer`, puts an **SM64 Trainer** shortcut
-   on your Desktop, and launches it. (Prefer a portable copy? Grab
-   `SM64Trainer-full.zip` instead, extract anywhere, run the exe inside —
-   it self-updates in place wherever it lives.)
+   on your Desktop, and launches it. **That shortcut is your launcher from
+   now on** — it never breaks, no matter how many updates land. (Prefer a
+   portable copy? Grab `SM64Trainer-full.zip` instead, extract anywhere,
+   run the exe inside — it self-updates in place wherever it lives.)
 3. **Start Project64 1.6** with **Usamune v1.93u (US)**, **windowed** (replay
-   can't capture exclusive fullscreen). The tracker attaches automatically.
+   can't capture exclusive fullscreen). The tracker attaches automatically
+   and starts recording your practice.
 
-That's it — no Python, nothing else to set up.
+That's it — no Python, nothing else to set up. (These same steps are
+prepended to every release page from `docs/release_setup_header.md` — keep
+the two in sync when the flow changes.)
 
 **Updates are automatic and small.** On launch the app checks GitHub for a
 newer release; if one exists you get an in-app popup with the patch notes,

@@ -131,6 +131,18 @@ is deliberate: `internal_notes/` is gitignored, so the file doesn't dirty the
 working tree — and `tools/release.py` refuses to run on a dirty tree. A notes
 file anywhere tracked would block the release.
 
+**Write ONLY the patch notes — no setup instructions.** `release.py`
+automatically composes the published release body as:
+`docs/release_setup_header.md` (the standing first-time-setup section every
+release page carries for new users) + the `## What's new` marker
+(`PATCH_NOTES_MARKER` in `core/update_plan.py`) + your memo. The in-app
+popup strips through the marker, so **recurring users see only your patch
+notes** while the GitHub page shows setup + notes. Never hand-add setup
+steps to the memo (they'd duplicate the header), and never remove the
+marker mechanism. If the setup flow ever changes, edit
+`docs/release_setup_header.md` AND the README's First-time setup section
+together — they mirror each other.
+
 Show the user the final memo before publishing.
 
 ## Step 6 — build and publish

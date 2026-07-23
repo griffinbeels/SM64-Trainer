@@ -28,6 +28,13 @@ MANIFEST_ASSET = "manifest.json"
 # every release publishes the bootstrap installer under it, forever.
 BOOTSTRAP_ASSET = "SM64Trainer.exe"
 INSTALLED_MANIFEST = "installed_manifest.json"
+# Release bodies are composed as: first-time-setup header + THIS MARKER +
+# patch notes (tools/release.py compose_release_body). The GitHub release
+# page shows everything (new users get setup steps); check_for_update strips
+# through the marker so the in-app popup shows ONLY the patch notes. It's a
+# natural heading on purpose: clients too old to strip (≤1.4.0) render it as
+# a plausible section title instead of stray markup.
+PATCH_NOTES_MARKER = "## What's new"
 # The apply layer's on-disk state (core/update_apply.py imports these from
 # here — ONE registry). Reserved below: a manifest that named these could
 # rename the crash-recovery journal away mid-swap (defeating rollback) or

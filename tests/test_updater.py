@@ -124,6 +124,27 @@ def test_check_returns_info_when_all_assets_present(tmp_path):
     assert info.manifest_sha_url == "https://dl/manifest.sha"
 
 
+def test_check_strips_setup_header_from_notes(tmp_path):
+    """Release bodies carry a first-time-setup section for the GitHub page;
+    the in-app popup must show ONLY what follows the PATCH_NOTES_MARKER."""
+    from sm64_events.core.update_plan import PATCH_NOTES_MARKER
+    routes = _fake_release(tmp_path, "v2.0.0", {"SM64Trainer.exe": b"X"})
+    body = ("# First time here?\nDownload the installer, run it, done.\n\n"
+            + PATCH_NOTES_MARKER + "\n\n- **New:** a thing\n- **Fix:** a bug")
+    rel = _json.loads(routes[LATEST])
+    rel["body"] = body
+    routes[LATEST] = _json.dumps(rel).encode()
+    info = check_for_update("1.0.0", http=_fake_http(routes))
+    assert info.notes == "- **New:** a thing\n- **Fix:** a bug"
+    assert "First time here" not in info.notes
+
+
+def test_check_keeps_notes_without_marker(tmp_path):
+    routes = _fake_release(tmp_path, "v2.0.0", {"SM64Trainer.exe": b"X"})
+    info = check_for_update("1.0.0", http=_fake_http(routes))
+    assert info.notes == "notes here"      # marker-less body passes verbatim
+
+
 def test_check_none_when_missing_manifest_assets():
     partial = {k: v for k, v in FULL_ASSETS.items() if k != MANIFEST_ASSET}
     http = _fake_http({LATEST: _release_json("v2.0.0", partial)})

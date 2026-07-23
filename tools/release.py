@@ -29,7 +29,10 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
 from sm64_events.core.update_plan import (BOOTSTRAP_ASSET,  # noqa: E402
-                                          MANIFEST_ASSET, ZIP_ASSET)
+                                          MANIFEST_ASSET, PATCH_NOTES_MARKER,
+                                          ZIP_ASSET)
+
+SETUP_HEADER = REPO / "docs" / "release_setup_header.md"
 
 VERSION_PY = REPO / "src" / "sm64_events" / "core" / "version.py"
 PYPROJECT = REPO / "pyproject.toml"
@@ -86,6 +89,15 @@ def release_assets(dist: Path) -> list[Path]:
     return [dist / ZIP_ASSET, dist / (ZIP_ASSET + ".sha256"),
             dist / MANIFEST_ASSET, dist / (MANIFEST_ASSET + ".sha256"),
             dist / BOOTSTRAP_ASSET, dist / (BOOTSTRAP_ASSET + ".sha256")]
+
+
+def compose_release_body(setup_header: str, patch_notes: str) -> str:
+    """GitHub release body = first-time-setup header (for new users landing
+    on the page) + PATCH_NOTES_MARKER + the patch notes. The in-app popup
+    strips through the marker (core/updater.check_for_update), so recurring
+    users see only the patch notes."""
+    return (setup_header.rstrip() + "\n\n" + PATCH_NOTES_MARKER + "\n\n"
+            + patch_notes.lstrip())
 
 
 def _run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
@@ -162,8 +174,19 @@ def main() -> int:
     _run(["git", "tag", "-a", tag, "-m", tag])
     _run(["git", "push", "origin", "main", "--follow-tags"])
 
-    notes = (["--notes-file", args.notes_file] if args.notes_file
-             else ["--generate-notes"])
+    if args.notes_file:
+        # Prepend the standing first-time-setup header to the release PAGE;
+        # the in-app popup strips through PATCH_NOTES_MARKER so updaters see
+        # only the patch notes. Composed into dist/ (gitignored) to keep the
+        # tree clean.
+        body = compose_release_body(SETUP_HEADER.read_text(encoding="utf-8"),
+                                    Path(args.notes_file).read_text(
+                                        encoding="utf-8"))
+        body_file = DIST / "release_body.md"
+        body_file.write_text(body, encoding="utf-8")
+        notes = ["--notes-file", str(body_file)]
+    else:
+        notes = ["--generate-notes"]
     _run(["gh", "release", "create", tag,
           *[str(a) for a in release_assets(DIST)],
           "--title", tag, *notes])

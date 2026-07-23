@@ -37,7 +37,8 @@ from sm64_events.core.update_apply import STAGING_DIR, apply_plan, sweep_backup
 from sm64_events.core.update_fetch import (RangeUnsupported, fetch_full_zip,
                                            fetch_plan, free_disk_ok)
 from sm64_events.core.update_plan import (INSTALLED_MANIFEST, MANIFEST_ASSET,
-                                          ZIP_ASSET, Manifest, build_plan,
+                                          PATCH_NOTES_MARKER, ZIP_ASSET,
+                                          Manifest, build_plan,
                                           parse_manifest)
 
 log = logging.getLogger("sm64.updater")
@@ -108,9 +109,14 @@ def check_for_update(current: str, *, http=urllib.request.urlopen,
         if not all(assets.get(name) for name in needed):
             log.info("release %s is missing update assets; not offering", tag)
             return None
+        notes = rel.get("body") or ""
+        if PATCH_NOTES_MARKER in notes:
+            # The body's leading first-time-setup section is for the GitHub
+            # page only — the popup shows just the patch notes.
+            notes = notes.split(PATCH_NOTES_MARKER, 1)[1].lstrip()
         return UpdateInfo(
             version=tag.lstrip("vV"),
-            notes=rel.get("body") or "",
+            notes=notes,
             html_url=rel.get("html_url") or "",
             zip_url=assets[ZIP_ASSET],
             zip_sha_url=assets[ZIP_ASSET + ".sha256"],

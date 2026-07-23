@@ -48,3 +48,15 @@ def test_release_assets_names_and_order(tmp_path):
         "SM64Trainer-full.zip", "SM64Trainer-full.zip.sha256",
         "manifest.json", "manifest.json.sha256",
         "SM64Trainer.exe", "SM64Trainer.exe.sha256"]
+
+
+def test_compose_release_body_prepends_setup_and_marker():
+    from sm64_events.core.update_plan import PATCH_NOTES_MARKER
+    body = release.compose_release_body(
+        "# First time here?\nInstall steps.\n",
+        "\n- **New:** a thing\n")
+    header_part, notes_part = body.split(PATCH_NOTES_MARKER)
+    assert "Install steps." in header_part
+    assert notes_part.strip() == "- **New:** a thing"
+    # the popup-side strip (updater) recovers exactly the patch notes
+    assert body.split(PATCH_NOTES_MARKER, 1)[1].lstrip() == "- **New:** a thing\n"
