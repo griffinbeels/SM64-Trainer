@@ -1159,6 +1159,215 @@ def test_run_starts_on_configured_level_enter(tmp_path):
     db.append_event(sid, 3, Event(type="level_changed", frame=0, timestamp_utc=T,
         payload={"from": 1, "to": 9}))
     db.append_event(sid, 4, Event(type="star_collected", frame=0, timestamp_utc=T,
-        payload={"course_id": 9, "star_id": 0, "igt_frames": 1}))
+        payload={"course_id": 9, "star_id": 0, "igt_frames": 300}))
     attempts, proj = replay(db.events())
     assert len(proj.finished_runs()) == 1
+
+
+def test_success_below_default_min_is_auto_ignored():
+    # igt 10 < DEFAULT_MIN_FRAMES 15: a detection artifact, auto-cleared
+    attempts = project([
+        jev(1, "practice_reset", 1000, {"igt_frames_before": 0}),
+        star(2, 1350, igt=10),
+    ])
+    a = attempts[0]
+    assert a.outcome == "success" and a.cleared is True
+    assert a.cleared_reason == "auto: below 0.50s min"
+
+
+def test_star_min_override_flags_what_default_allows():
+    tf = {"2:2": {"min_frames": 180, "max_frames": None}}
+    attempts = project([
+        jev(1, "practice_reset", 1000, {"igt_frames_before": 0}),
+        star(2, 1350, igt=150),
+    ], time_filters=tf)
+    assert attempts[0].cleared is True
+    assert attempts[0].cleared_reason == "auto: below 6.00s min"
+
+
+def test_star_max_override_flags_slow_success():
+    tf = {"2:2": {"min_frames": 15, "max_frames": 300}}
+    attempts = project([star(1, 900, igt=343)], time_filters=tf)
+    assert attempts[0].cleared is True
+    assert attempts[0].cleared_reason == "auto: above 10.00s max"
+
+
+def test_min_zero_disables_the_floor():
+    tf = {"2:2": {"min_frames": 0, "max_frames": None}}
+    attempts = project([star(1, 900, igt=1)], time_filters=tf)
+    assert attempts[0].cleared is False
+
+
+def test_exactly_at_min_counts():
+    tf = {"2:2": {"min_frames": 150, "max_frames": None}}
+    attempts = project([star(1, 900, igt=150)], time_filters=tf)
+    assert attempts[0].cleared is False
+
+
+def test_failures_are_never_auto_flagged():
+    # a 2-frame reset is legitimate practice behavior (fail fast)
+    attempts = project([
+        star(1, 900),                                     # sets target (2,2)
+        jev(2, "practice_reset", 1000, {"igt_frames_before": 0}),
+        jev(3, "practice_reset", 1002,
+            {"igt_frames_before": 2, "mario_acted": True}),
+    ])
+    reset_row = [a for a in attempts if a.outcome == "reset"][0]
+    assert reset_row.cleared is False
+
+
+def test_rta_fallback_when_igt_missing():
+    # star_collected without igt_frames: judge on the wall-frame delta
+    attempts = project([
+        jev(1, "practice_reset", 1000, {"igt_frames_before": 0}),
+        jev(2, "star_collected", 1005, {"course_id": 2, "star_id": 2}),
+    ])
+    assert attempts[0].cleared is True          # rta 5 < 15
+    attempts = project([
+        jev(1, "practice_reset", 1000, {"igt_frames_before": 0}),
+        jev(2, "star_collected", 1350, {"course_id": 2, "star_id": 2}),
+    ])
+    assert attempts[0].cleared is False         # rta 350
+
+
+def test_manual_restore_wins_over_auto_flag():
+    # journaled clear/restore history exempts the id from the auto rule
+    attempts = project([
+        jev(1, "practice_reset", 1000, {"igt_frames_before": 0}),
+        star(2, 1350, igt=10),
+        jev(3, "attempt_restored", 0, {"attempt_id": 1}),
+    ])
+    assert attempts[0].cleared is False
+
+
+def test_auto_ignored_grab_does_not_move_target():
+    _, proj = replay([
+        star(1, 900),                            # valid grab: target (2,2)
+        jev(2, "practice_reset", 1000, {"igt_frames_before": 0}),
+        star(3, 1005, course=8, star_id=1, igt=5),   # bogus grab of (8,1)
+    ])
+    assert proj.target == ("star", 2, 2)
+
+
+# -- segment-attempt validity bounds (spec 2026-07-23) --------------------
+
+from sm64_events.tracking.segments import SegmentDef
+
+
+def seg_def(**over):
+    base = dict(id=1, name="S", enabled=True,
+                start_triggers=[{"type": "spawned"}],
+                end_triggers=[{"type": "warp_entered", "level": 16}],
+                guards=[])
+    base.update(over)
+    return SegmentDef(**base)
+
+
+def test_segment_success_below_default_min_is_auto_ignored():
+    attempts = project([
+        jev(1, "spawned", 1000, {"level": 16}),
+        jev(2, "warp_entered", 1005, {"level": 16}),   # rta 5 < 15
+    ], segments=[seg_def()])
+    [a] = [a for a in attempts if a.segment_id == 1]
+    assert a.outcome == "success" and a.cleared is True
+    assert a.cleared_reason == "auto: below 0.50s min"
+
+
+def test_segment_min_time_guard_overrides_the_default():
+    d = seg_def(guards=[{"type": "min_time", "frames": 180}])
+    flagged = project([
+        jev(1, "spawned", 1000, {"level": 16}),
+        jev(2, "warp_entered", 1150, {"level": 16}),   # rta 150 < 180
+    ], segments=[d])
+    [a] = [a for a in flagged if a.segment_id == 1]
+    assert a.cleared is True and a.cleared_reason == "auto: below 6.00s min"
+    ok = project([
+        jev(1, "spawned", 1000, {"level": 16}),
+        jev(2, "warp_entered", 1200, {"level": 16}),   # rta 200 >= 180
+    ], segments=[d])
+    [a] = [a for a in ok if a.segment_id == 1]
+    assert a.cleared is False
+
+
+def test_segment_max_time_guard_flags_slow_success():
+    d = seg_def(guards=[{"type": "max_time", "frames": 300}])
+    attempts = project([
+        jev(1, "spawned", 1000, {"level": 16}),
+        jev(2, "warp_entered", 1400, {"level": 16}),   # rta 400 > 300
+    ], segments=[d])
+    [a] = [a for a in attempts if a.segment_id == 1]
+    assert a.cleared is True and a.cleared_reason == "auto: above 10.00s max"
+
+
+def test_auto_ignored_segment_success_does_not_follow_target():
+    _, proj = replay([
+        jev(1, "spawned", 1000, {"level": 16}),
+        jev(2, "warp_entered", 1005, {"level": 16}),   # bogus: rta 5
+    ], segments=[seg_def()])
+    assert proj.target is None
+
+
+def test_star_success_with_no_clock_at_all_is_not_flagged():
+    # grab-only attempt (no anchor -> rta None) with no igt_frames in the
+    # payload: _auto_ignored's "no clock -> no flag" branch — nothing to
+    # judge, so the success stands.
+    attempts = project([
+        jev(1, "star_collected", 1000, {"course_id": 2, "star_id": 2}),
+    ])
+    [a] = attempts
+    assert a.outcome == "success" and a.igt_frames is None and a.rta_frames is None
+    assert a.cleared is False
+
+
+# -- last-star tracking feeds MatchContext (spec 2026-07-23) --------------
+
+def test_last_star_grabbed_guard_gates_arming():
+    d = seg_def(guards=[{"type": "last_star_grabbed", "course": 2}])
+    # no grab yet: unknown history conservatively fails -> no arm
+    _, proj = replay([jev(1, "spawned", 1000, {"level": 16})], segments=[d])
+    assert proj.armed_segment_ids() == set()
+    # after grabbing (2,2) the same spawn arms
+    _, proj = replay([
+        star(1, 900),
+        jev(2, "spawned", 1000, {"level": 16}),
+    ], segments=[d])
+    assert proj.armed_segment_ids() == {1}
+
+
+def test_last_star_attempted_counts_failures_grabbed_does_not():
+    dg = seg_def(id=1, guards=[{"type": "last_star_grabbed", "course": 8}])
+    da = seg_def(id=2, guards=[{"type": "last_star_attempted", "course": 8}])
+    _, proj = replay([
+        star(1, 900),                                  # grab (2,2)
+        jev(2, "target_set", 950, {"course_id": 8, "star_id": 1}),
+        jev(3, "practice_reset", 1000, {"igt_frames_before": 0}),
+        jev(4, "practice_reset", 1400,
+            {"igt_frames_before": 380, "mario_acted": True}),  # reset on (8,1)
+        jev(5, "spawned", 1500, {"level": 16}),
+    ], segments=[dg, da])
+    # last ATTEMPT is (8,1); last GRAB is still (2,2)
+    assert proj.armed_segment_ids() == {2}
+
+
+def test_game_reset_clears_last_star_memory():
+    d = seg_def(guards=[{"type": "last_star_grabbed", "course": 2}])
+    _, proj = replay([
+        star(1, 900),
+        jev(2, "game_reset", 50, {}),
+        jev(3, "spawned", 1000, {"level": 16}),
+    ], segments=[d])
+    assert proj.armed_segment_ids() == set()
+
+
+def test_last_star_guard_star_param_narrows():
+    d = seg_def(guards=[{"type": "last_star_grabbed", "course": 2, "star": 3}])
+    _, proj = replay([
+        star(1, 900, star_id=2),
+        jev(2, "spawned", 1000, {"level": 16}),
+    ], segments=[d])
+    assert proj.armed_segment_ids() == set()
+    _, proj = replay([
+        star(1, 900, star_id=3),
+        jev(2, "spawned", 1000, {"level": 16}),
+    ], segments=[d])
+    assert proj.armed_segment_ids() == {1}

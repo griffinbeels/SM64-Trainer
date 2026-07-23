@@ -46,7 +46,8 @@ class TrackerService:
         self.ranks = ranks            # RankStandards | None
         self.session_id: int | None = None
         self._segment_defs = self._load_segment_defs()
-        self._projector = Projector(segments=self._segment_defs)
+        self._projector = Projector(segments=self._segment_defs,
+                                    time_filters=self._time_filters())
         self._current_stage = {"course_id": None, "level": None,
                                "area": None, "mode": None}
         self._persisted_runs: list[int] = []
@@ -60,13 +61,19 @@ class TrackerService:
         return [SegmentDef(**{k: row[k] for k in keys})
                 for row in self.db.segment_defs()]
 
+    def _time_filters(self) -> dict:
+        """Star validity-bounds overrides (ui_state KV) for the projector;
+        {} in degraded mode. Segment bounds ride the defs themselves."""
+        return self.db.get_state("time_filters", {}) if self.db is not None else {}
+
     # -- pipeline -------------------------------------------------------------
     async def start(self) -> None:
         if self.db is None:
             log.error("tracker running WITHOUT a database (broadcast-only)")
             return
         events = self.db.events()
-        attempts, self._projector = replay(events, segments=self._segment_defs)
+        attempts, self._projector = replay(events, segments=self._segment_defs,
+                                           time_filters=self._time_filters())
         self.db.replace_attempts(attempts)
         self.db.replace_runs([r.as_row() for r in self._projector.finished_runs()])
         self._persisted_runs = [r.id for r in self._projector.finished_runs()]
@@ -313,6 +320,30 @@ class TrackerService:
         await self.publish(Event(type="attempt_restored", frame=0,
                                  timestamp_utc=_now(),
                                  payload={"attempt_id": attempt_id}))
+        await self._reproject()
+
+    async def set_time_filter(self, course_id: int, star_id: int,
+                              min_frames: int, max_frames: int | None) -> None:
+        """Override one star's validity bounds (frames; min 0 = no floor,
+        max None = no ceiling) and re-derive history. Mirrors the strategies
+        KV RMW; the reproject applies the new bounds retroactively."""
+        db = self._require_db()
+        if min_frames < 0:
+            raise ValueError("min_frames must be >= 0")
+        if max_frames is not None and max_frames <= min_frames:
+            raise ValueError("max_frames must exceed min_frames")
+        filters = db.get_state("time_filters", {})
+        filters[f"{course_id}:{star_id}"] = {"min_frames": min_frames,
+                                             "max_frames": max_frames}
+        db.set_state("time_filters", filters)
+        await self._reproject()
+
+    async def clear_time_filter(self, course_id: int, star_id: int) -> None:
+        """Drop the star's override (back to the implicit defaults)."""
+        db = self._require_db()
+        filters = db.get_state("time_filters", {})
+        if filters.pop(f"{course_id}:{star_id}", None) is not None:
+            db.set_state("time_filters", filters)
         await self._reproject()
 
     # -- segment definitions ---------------------------------------------------
@@ -567,7 +598,8 @@ class TrackerService:
         db = self._require_db()
         before = self._projector.target
         old_armed = self._projector.armed_segment_ids()
-        attempts, projector = replay(db.events(), segments=self._segment_defs)
+        attempts, projector = replay(db.events(), segments=self._segment_defs,
+                                     time_filters=self._time_filters())
         # keep the live session: replayed projector state is authoritative
         self._projector = projector
         db.replace_attempts(attempts)

@@ -66,7 +66,9 @@ def test_build_wires_replay_endpoints(monkeypatch, tmp_path):
     # unaffected.  Return a sentinel stub; TrackerService accepts db=None
     # too, but a truthy object exercises the normal path.
     # TrackerService.__init__ now loads segment defs eagerly, so the stub
-    # must answer segment_defs().
+    # must answer segment_defs(). It also now reads the time_filters KV
+    # (via _time_filters()) up front, so the stub must answer get_state()
+    # too — mirroring Database.get_state's default-passthrough contract.
     import importlib
     import sm64_events.main as main_mod
     importlib.reload(main_mod)
@@ -74,6 +76,9 @@ def test_build_wires_replay_endpoints(monkeypatch, tmp_path):
     class _DbStub:
         def segment_defs(self):
             return []
+
+        def get_state(self, key, default):
+            return default
 
     monkeypatch.setattr(main_mod, "Database", lambda path: _DbStub())
     app = main_mod.build()

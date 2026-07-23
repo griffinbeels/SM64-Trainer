@@ -50,7 +50,10 @@ def test_vocab_lists_triggers_guards_and_level_enum():
     assert v["levels"]["17"] == "Bowser in the Dark World"
     assert {g["key"] for g in v["guards"]} == {"prev_level",
                                                "star_count_min",
-                                               "star_count_max"}
+                                               "star_count_max",
+                                               "min_time", "max_time",
+                                               "last_star_grabbed",
+                                               "last_star_attempted"}
 
 
 def test_string_clause_raises_value_error_not_500():
@@ -1761,3 +1764,114 @@ def test_reset_game_trigger_matches_game_reset():
 def test_vocab_includes_reset_game():
     from sm64_events.tracking.segments import vocab
     assert any(t["key"] == "reset_game" for t in vocab()["triggers"])
+
+
+def test_time_guards_validate_and_ship_phase_in_vocab():
+    validate_definition({
+        "name": "WF->Basement",
+        "start_triggers": [{"type": "spawned"}],
+        "end_triggers": [{"type": "warp_entered", "level": 16}],
+        "guards": [{"type": "min_time", "frames": 180},
+                   {"type": "max_time", "frames": 600}]})  # no raise
+    v = vocab()
+    by_key = {g["key"]: g for g in v["guards"]}
+    assert by_key["min_time"]["phase"] == "close"
+    assert by_key["max_time"]["phase"] == "close"
+    assert by_key["prev_level"]["phase"] == "arm"
+    assert by_key["min_time"]["params"]["frames"]["kind"] == "seconds"
+
+
+def test_min_time_requires_frames_param():
+    with pytest.raises(ValueError, match="min_time"):
+        validate_definition({
+            "name": "x",
+            "start_triggers": [{"type": "spawned"}],
+            "end_triggers": [{"type": "spawned"}],
+            "guards": [{"type": "min_time"}]})
+
+
+def test_max_time_must_exceed_min_time():
+    with pytest.raises(ValueError, match="max_time must exceed min_time"):
+        validate_definition({
+            "name": "x",
+            "start_triggers": [{"type": "spawned"}],
+            "end_triggers": [{"type": "spawned"}],
+            "guards": [{"type": "min_time", "frames": 300},
+                       {"type": "max_time", "frames": 150}]})
+
+
+def test_max_time_rejects_non_positive_frames():
+    with pytest.raises(ValueError, match="max_time frames"):
+        validate_definition({
+            "name": "x",
+            "start_triggers": [{"type": "spawned"}],
+            "end_triggers": [{"type": "spawned"}],
+            "guards": [{"type": "max_time", "frames": -30}]})
+
+
+def test_min_time_zero_alone_is_valid():
+    validate_definition({
+        "name": "x",
+        "start_triggers": [{"type": "spawned"}],
+        "end_triggers": [{"type": "spawned"}],
+        "guards": [{"type": "min_time", "frames": 0}]})  # no raise
+
+
+def test_close_phase_guards_do_not_gate_arming():
+    eng = SegmentEngine([SegmentDef(
+        id=1, name="s", enabled=True,
+        start_triggers=[{"type": "spawned"}],
+        end_triggers=[{"type": "warp_entered", "level": 16}],
+        guards=[{"type": "min_time", "frames": 180}])])
+    eng.feed(jev(1, "spawned", 1000, {"level": 16}),
+             MatchContext(level=16, prev_level=None, num_stars=None))
+    assert eng.armed_ids() == {1}
+
+
+def test_time_bounds_reads_guard_rows():
+    from sm64_events.tracking.segments import time_bounds
+    assert time_bounds([]) == (None, None)
+    assert time_bounds([{"type": "min_time", "frames": 180}]) == (180, None)
+    assert time_bounds([{"type": "min_time", "frames": 0},
+                        {"type": "max_time", "frames": 600},
+                        {"type": "prev_level", "level": 16}]) == (0, 600)
+
+
+def _ctx_ls(grabbed=None, attempted=None):
+    return MatchContext(level=16, prev_level=None, num_stars=None,
+                        last_star_grabbed=grabbed,
+                        last_star_attempted=attempted)
+
+
+def test_last_star_guards_match_course_and_optional_star():
+    g = GUARDS["last_star_grabbed"]
+    assert g.phase == "arm"
+    assert g.check({"type": "last_star_grabbed", "course": 6},
+                   _ctx_ls(grabbed=(6, 0))) is True
+    assert g.check({"type": "last_star_grabbed", "course": 6, "star": 3},
+                   _ctx_ls(grabbed=(6, 0))) is False
+    assert g.check({"type": "last_star_grabbed", "course": 6, "star": 3},
+                   _ctx_ls(grabbed=(6, 3))) is True
+    # unknown history conservatively FAILS (mirrors star_count_min)
+    assert g.check({"type": "last_star_grabbed", "course": 6},
+                   _ctx_ls()) is False
+
+
+def test_last_star_attempted_reads_its_own_field():
+    g = GUARDS["last_star_attempted"]
+    assert g.check({"type": "last_star_attempted", "course": 6},
+                   _ctx_ls(grabbed=(6, 0))) is False   # grab != attempt field
+    assert g.check({"type": "last_star_attempted", "course": 6},
+                   _ctx_ls(attempted=(6, 4))) is True
+
+
+def test_last_star_guards_validate_and_appear_in_vocab():
+    validate_definition({
+        "name": "after WFRR",
+        "start_triggers": [{"type": "spawned"}],
+        "end_triggers": [{"type": "spawned"}],
+        "guards": [{"type": "last_star_grabbed", "course": 6, "star": 4},
+                   {"type": "last_star_attempted", "course": 6}]})  # no raise
+    by_key = {g["key"]: g for g in vocab()["guards"]}
+    assert by_key["last_star_grabbed"]["params"]["course"]["kind"] == "course"
+    assert by_key["last_star_grabbed"]["params"]["star"]["required"] is False

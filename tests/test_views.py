@@ -1170,3 +1170,37 @@ def test_segment_standard_strategies_appear_without_any_attempt(tmp_path):
     sec = seg_section(view, lblj_id)
     assert sec["attempts"] == []
     assert "hyperspeed BLJ" in sec["strategies"]
+
+
+def test_sections_carry_time_filter_with_defaults(tmp_path):
+    db, svc = make(tmp_path)
+    seed(svc)
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    assert sec["time_filter"] == {"min_frames": 15, "max_frames": None,
+                                  "is_default": True}
+
+
+def test_star_time_filter_override_is_reflected(tmp_path):
+    db, svc = make(tmp_path)
+    seed(svc)
+    asyncio.run(svc.set_time_filter(2, 2, 180, 600))
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    assert sec["time_filter"] == {"min_frames": 180, "max_frames": 600,
+                                  "is_default": False}
+
+
+def test_segment_section_time_filter_reads_def_guards(tmp_path):
+    db, svc = make(tmp_path)
+    sid = asyncio.run(svc.create_segment({
+        "name": "TF", "start_triggers": [{"type": "spawned"}],
+        "end_triggers": [{"type": "warp_entered", "level": 16}],
+        "guards": [{"type": "min_time", "frames": 180},
+                   {"type": "max_time", "frames": 600}]}))
+    asyncio.run(svc.publish(ev("spawned", 1000, {"level": 16})))
+    asyncio.run(svc.publish(ev("warp_entered", 1200, {"level": 16})))
+    view = build_session_view(db, svc, clock="igt")
+    sec = next(s for s in view["segments"] if s["segment_id"] == sid)
+    assert sec["time_filter"] == {"min_frames": 180, "max_frames": 600,
+                                  "is_default": False}

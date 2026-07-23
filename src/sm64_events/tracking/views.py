@@ -18,7 +18,10 @@ Contract (the UI builds against ALL of this):
   (segments have no IGT): pb / attempts / stats / timeline / progress all
   read rta_frames whatever the view clock. Marker keys: 'seg:<id>:<strat>'.
 - `target` is kind-aware: service.target_payload() identity + display
-  names, every key present for both kinds (shape stability)."""
+  names, every key present for both kinds (shape stability).
+- Every star AND segment section carries `time_filter: {min_frames,
+  max_frames, is_default}` — effective validity bounds after the implicit
+  0.5 s default is filled in; drives the header's `⏱` chip."""
 from sm64_events.core.timefmt import format_igt
 from sm64_events.links import star_links
 from sm64_events.memory.addresses import (COURSE_NAMES, course_name,
@@ -28,8 +31,9 @@ from sm64_events.ranks.standards import entity_key
 from sm64_events.stats.registry import (DEFAULT_STAT_MENU, REGISTRY,
                                         compute_stat, selection_id,
                                         selection_order)
-from sm64_events.tracking.projection import journal_id
+from sm64_events.tracking.projection import DEFAULT_MIN_FRAMES, journal_id
 from sm64_events.tracking.routes import route_stats
+from sm64_events.tracking.segments import time_bounds
 
 # Timeline markers (per-section event graph): outcomes that plot as points.
 # Adding a marker kind is one row here (+ a style row in ui timeline.js).
@@ -240,6 +244,22 @@ def _markers_for(markers_state: dict, course_id, star_id) -> dict:
             if k.startswith(prefix)}
 
 
+def _time_filter_json(override: dict | None,
+                      seg_guards: list | None = None) -> dict:
+    """Effective validity bounds for one section (chip data). Stars pass the
+    time_filters KV entry (None = no override); segments pass their def's
+    guard rows (deleted def -> [] -> defaults). is_default drives the chip's
+    dimmed state."""
+    if seg_guards is not None:
+        lo, hi = time_bounds(seg_guards)
+    else:
+        lo = (override or {}).get("min_frames")
+        hi = (override or {}).get("max_frames")
+    is_default = lo is None and hi is None
+    return {"min_frames": DEFAULT_MIN_FRAMES if lo is None else lo,
+            "max_frames": hi, "is_default": is_default}
+
+
 def _stats_for(history, stat_menu, clock) -> list[dict]:
     """Stat chips for one section: canonical registry order, deduped by
     selection identity, computed over the LIFETIME history (spec §8).
@@ -370,6 +390,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     stat_menu = db.get_state("stat_menu", default=DEFAULT_STAT_MENU)
     registered = db.get_state("strategies", {})
     markers_state = db.get_state("timeline_markers", {})
+    time_filters_state = db.get_state("time_filters", {})
 
     sections, unassigned = [], []
     seen: dict[tuple[int, int], None] = {}
@@ -438,6 +459,8 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "last_strat": service.strat_by_star.get((course_id, star_id)),
             "timeline": _timeline(history, igt_of),
             "markers_by_strat": _markers_for(markers_state, course_id, star_id),
+            "time_filter": _time_filter_json(
+                time_filters_state.get(f"{course_id}:{star_id}")),
             "progress": _progress(in_section, pb_ids, session_meta, igt_of,
                                   service.ranks, clock),
             "rank": _section_banner(
@@ -482,6 +505,8 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "last_strat": service.strat_by_segment.get(seg_id),
             "timeline": _timeline(history, rta_of),
             "markers_by_strat": _markers_for(markers_state, "seg", seg_id),
+            "time_filter": _time_filter_json(
+                None, seg_guards=d.guards if d else []),
             "progress": _progress(in_section, pb_ids, session_meta, rta_of,
                                   service.ranks, "rta"),
             "rank": _section_banner(

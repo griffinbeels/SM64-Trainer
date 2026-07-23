@@ -212,6 +212,12 @@ class MatchContext:
     num_stars: int | None    # last star_collected payload num_stars; None = unknown
     area: int | None = None  # tracked area AFTER this event (area_changed "to");
                              # None = unknown (legacy journals without area events)
+    # (course_id, star_id) of the most recent star GRAB / attributed star
+    # ATTEMPT (any outcome), tracked by the Projector from closed attempts;
+    # None = unknown (fresh boot, post-game_reset, legacy journals) — the
+    # last_star_* guards conservatively FAIL on None (spec 2026-07-23).
+    last_star_grabbed: tuple | None = None
+    last_star_attempted: tuple | None = None
 
 
 @dataclass(frozen=True)
@@ -380,6 +386,11 @@ class GuardType:
     params: dict
     template: str
     check: Callable[[dict, MatchContext], bool]
+    # "arm" gates arming (checked in the engine's arm phase, re-evaluated on
+    # every arm/re-arm); "close" rows are DECLARATIVE result filters — never
+    # checked here, read by projection's validity-bounds stamp (spec
+    # 2026-07-23). Their check is a stub so a stray call can't block arming.
+    phase: str = "arm"
 
 
 GUARDS: dict[str, GuardType] = {g.key: g for g in [
@@ -398,6 +409,39 @@ GUARDS: dict[str, GuardType] = {g.key: g for g in [
               "{n}",
               lambda p, ctx: ctx.num_stars is not None
               and ctx.num_stars <= p["n"]),
+    # Close-phase validity bounds (spec 2026-07-23): storage + builder UI for
+    # a segment's min/max completion time. `frames` is an INT of game frames
+    # (30 fps); the builder edits it in seconds (ParamInput kind "seconds").
+    # frames: 0 on min_time = "no minimum" (deliberately below the implicit
+    # 0.5 s default — projection.DEFAULT_MIN_FRAMES applies when absent).
+    GuardType("min_time", "Takes at least",
+              {"frames": {"kind": "seconds", "required": True}},
+              "{frames}",
+              lambda p, ctx: True, phase="close"),
+    GuardType("max_time", "Takes at most",
+              {"frames": {"kind": "seconds", "required": True}},
+              "{frames}",
+              lambda p, ctx: True, phase="close"),
+    # Arm-time history gates (spec 2026-07-23): "only arm this segment when
+    # the player just came from star X" — e.g. a basement segment that only
+    # makes sense right after Watch for Rolling Rocks. star None = any star
+    # of the course. Unknown history (None) conservatively fails.
+    GuardType("last_star_grabbed", "Last star grabbed was",
+              {"course": {"kind": "course", "required": True},
+               "star": {"kind": "star", "required": False}},
+              "{course}, star {star}",
+              lambda p, ctx: ctx.last_star_grabbed is not None
+              and ctx.last_star_grabbed[0] == p["course"]
+              and (p.get("star") is None
+                   or ctx.last_star_grabbed[1] == p["star"])),
+    GuardType("last_star_attempted", "Last star attempted was",
+              {"course": {"kind": "course", "required": True},
+               "star": {"kind": "star", "required": False}},
+              "{course}, star {star}",
+              lambda p, ctx: ctx.last_star_attempted is not None
+              and ctx.last_star_attempted[0] == p["course"]
+              and (p.get("star") is None
+                   or ctx.last_star_attempted[1] == p["star"])),
 ]}
 
 
@@ -437,6 +481,20 @@ def _check_clause(clause: dict, registry: dict, what: str) -> None:
                          "changes the area")
 
 
+def time_bounds(guards: list) -> tuple[int | None, int | None]:
+    """(min_frames, max_frames) declared by a def's close-phase time guards,
+    None where absent. Later rows win (the chip editor writes at most one of
+    each). THE reader for projection's segment validity bounds — keep the
+    guard row shape knowledge here, not in projection."""
+    lo = hi = None
+    for g in guards or []:
+        if g.get("type") == "min_time":
+            lo = g["frames"]
+        elif g.get("type") == "max_time":
+            hi = g["frames"]
+    return lo, hi
+
+
 def validate_definition(d: dict) -> None:
     """Raises ValueError listing the first problem (API maps it to 409)."""
     if not str(d.get("name", "")).strip():
@@ -454,6 +512,21 @@ def validate_definition(d: dict) -> None:
         raise ValueError("guards must be a list")
     for g in guards:
         _check_clause(g, GUARDS, "guards")
+    # Cross-check the resolved time-guard bounds (post-review 2026-07-23):
+    # _check_clause only confirmed `frames` is an int, so a segment's
+    # min_time/max_time guard rows carried NO range/relation validation —
+    # unlike the star-side set_time_filter (service.py), which 409s on the
+    # same shape of bad input. The shared chip editor serves both kinds, so
+    # a user action that gets rejected for a star silently poisoned a
+    # segment's history instead (every success flagged auto-cleared).
+    # Wording mirrors set_time_filter's ValueErrors for consistency.
+    lo, hi = time_bounds(guards)
+    if lo is not None and lo < 0:
+        raise ValueError("min_time frames must be >= 0")
+    if hi is not None and hi < 1:
+        raise ValueError("max_time frames must be >= 1")
+    if lo is not None and hi is not None and hi <= lo:
+        raise ValueError("max_time must exceed min_time")
 
 
 def vocab() -> dict:
@@ -462,7 +535,8 @@ def vocab() -> dict:
         "triggers": [{"key": t.key, "label": t.label, "params": t.params,
                       "template": t.template} for t in TRIGGERS.values()],
         "guards": [{"key": g.key, "label": g.label, "params": g.params,
-                    "template": g.template} for g in GUARDS.values()],
+                    "template": g.template, "phase": g.phase}
+                   for g in GUARDS.values()],
         "levels": {str(k): v for k, v in sorted(LEVEL_NAMES.items())},
         "castle_areas": {str(k): v for k, v in CASTLE_AREA_NAMES.items()},
         "courses": {str(k): v for k, v in COURSE_NAMES.items()},
@@ -761,7 +835,8 @@ class SegmentEngine:
                               and d.id not in self._armed)
             if starts and (not echo_invisible or relocation_arm) \
                     and all(GUARDS[g["type"]].check(g, ctx)
-                            for g in d.guards):
+                            for g in d.guards
+                            if GUARDS[g["type"]].phase == "arm"):
                 # A destination-subarea level trigger can't be confirmed yet
                 # (the castle lobby loads before the warp settles) — DEFER it
                 # into _pending keyed on the required interior area, to be

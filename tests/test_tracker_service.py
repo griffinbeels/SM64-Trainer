@@ -1022,3 +1022,23 @@ def test_editing_armed_route_mid_run_voids_not_aborts(tmp_path):
     asyncio.run(svc.publish(ev("game_reset", 0)))
     asyncio.run(svc.publish(star(900, course=8, star_id=2)))
     assert [r["status"] for r in db.runs()] == ["finished"]
+
+
+def test_set_time_filter_reflags_history_and_clear_reverts(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350, igt=150)))     # 5.00s: fine by default
+    assert db.attempts()[0].cleared is False
+    asyncio.run(svc.set_time_filter(2, 2, 180, None))  # min 6s
+    a = db.attempts()[0]
+    assert a.cleared is True and a.cleared_reason == "auto: below 6.00s min"
+    asyncio.run(svc.clear_time_filter(2, 2))
+    assert db.attempts()[0].cleared is False
+
+
+def test_set_time_filter_validates_bounds(tmp_path):
+    db, svc = make(tmp_path)
+    with pytest.raises(ValueError):
+        asyncio.run(svc.set_time_filter(2, 2, 300, 300))   # max must exceed min
+    with pytest.raises(ValueError):
+        asyncio.run(svc.set_time_filter(2, 2, -1, None))

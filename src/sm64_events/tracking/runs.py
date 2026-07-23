@@ -184,6 +184,8 @@ class RunTracker:
                       for _ in self._armed["route_steps"]]}
 
     def _apply(self, a, ev):
+        if a.cleared:
+            return None   # cleared attempts (manual or auto-ignored) are invisible to runs
         act, steps = self._active, self._armed["route_steps"]
         i = act["current"]
         if i >= len(steps):

@@ -14,12 +14,13 @@ class Ev:
         self.payload = payload or {}
 
 
-def att(outcome="success", course=None, star=None, segment_id=None):
+def att(outcome="success", course=None, star=None, segment_id=None,
+        cleared=False):
     return Attempt(id=1, session_id=1, course_id=course, star_id=star,
                    strat_tag=None, anchor_type="none", anchor_frame=None,
                    outcome=outcome, outcome_detail=None, igt_frames=None,
                    rta_frames=None, started_utc="t", ended_utc="t",
-                   cleared=False, cleared_reason=None, segment_id=segment_id)
+                   cleared=cleared, cleared_reason=None, segment_id=segment_id)
 
 
 STAR = {"type": "star", "course": 2, "star": 0}
@@ -263,3 +264,28 @@ def test_run_reset_aborts_active_and_stays_armed():
     rt.feed(Ev("game_reset", id=300, wall="2026-06-14T00:01:00Z"), [], CTX)
     v = rt.active_run_view()
     assert v is not None and v["id"] == 300 and v["current_step"] == 0
+
+
+def test_cleared_attempts_are_invisible_to_runs():
+    # an auto-ignored (or manually cleared) success must not complete a step,
+    # and a cleared failure must not count a fail
+    rt = RunTracker()
+    rt.feed(started([{"need": 1, "candidates": [STAR]}]), [], CTX)
+    rt.feed(Ev("game_reset", id=100), [], CTX)
+    done = rt.feed(Ev("star_collected", id=101),
+                   [att(course=2, star=0, cleared=True)], CTX)
+    assert done == []
+    v = rt.active_run_view()
+    assert v["current_step"] == 0
+    assert v["steps"][0]["attempts"] == 0 and v["steps"][0]["fails"] == 0
+    done = rt.feed(Ev("star_collected", id=102,
+                      wall="2026-06-14T00:00:30Z"),
+                   [att(outcome="reset", course=2, star=0, cleared=True)], CTX)
+    assert done == []
+    v = rt.active_run_view()
+    assert v["current_step"] == 0
+    assert v["steps"][0]["attempts"] == 0 and v["steps"][0]["fails"] == 0
+    done = rt.feed(Ev("star_collected", id=103,
+                      wall="2026-06-14T00:01:00Z"),
+                   [att(course=2, star=0)], CTX)
+    assert done and done[0].status == "finished"

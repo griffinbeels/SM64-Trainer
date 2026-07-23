@@ -141,6 +141,8 @@ function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, sec }) {
         ? html` <span class="meta">· ${a.rollouts_dustless}/${a.rollouts_total} dustless rollouts</span>` : ""}
       ${a.jumps_total > 0
         ? html` <span class="meta">· ${a.jumps_dustless}/${a.jumps_total} dustless jumps</span>` : ""}
+      ${a.cleared && a.cleared_reason
+        ? html` <span class="meta">(${a.cleared_reason})</span>` : ""}
     </td>
     <td>${a.outcome === "success" ? delta(a.pb_delta_frames) : ""}</td>
     <td class="meta">${a.rank ? html`<${Medal} rank=${a.rank} size=${14} /> ` : ""}${a.strat_tag || ""}</td>
@@ -264,6 +266,79 @@ function PbTag({ pb, mode, rows, pick, t }) {
     : pb.display} (${mode})</span>`;
 }
 
+// Validity-bounds chip (spec 2026-07-23): the section's effective min/max
+// completion time — successes outside the range are auto-ignored server-side
+// (auto-cleared into the hidden bucket; stats/PBs/graphs/runs skip them).
+// Dimmed while on the implicit 0.5s default. Edited in SECONDS, stored as
+// frames (x30). Stars persist via PUT/DELETE /api/stars/{c}/{s}/time-filter;
+// segments rewrite their def's min_time/max_time guard rows through
+// PUT /api/segments/{id} — both paths reproject, so history reflags
+// immediately. Blank min = the 0.5s default; typed 0 = no minimum; blank
+// max = no max.
+function TimeFilterChip({ sec, t }) {
+  const [open, setOpen] = useState(false);
+  const [minS, setMinS] = useState("");
+  const [maxS, setMaxS] = useState("");
+  const tf = sec.time_filter;
+  if (!tf) return null;
+  const isSeg = sec.segment_id != null;
+  const fmtS = (f) => (f % 30 === 0 ? String(f / 30) : (f / 30).toFixed(2));
+  const label = tf.max_frames != null
+    ? `⏱ ${fmtS(tf.min_frames)}–${fmtS(tf.max_frames)}s`
+    : `⏱ ≥ ${fmtS(tf.min_frames)}s`;
+
+  function openEditor() {
+    setMinS(fmtS(tf.min_frames));
+    setMaxS(tf.max_frames != null ? fmtS(tf.max_frames) : "");
+    setOpen(true);
+  }
+
+  async function putSegGuards(minF, maxF) {
+    // RMW the def's guard list: time rows replaced, other guards untouched
+    const defs = await getJSON("/api/segments");
+    const d = defs.find((x) => x.id === sec.segment_id);
+    if (!d) return;
+    const guards = (d.guards || []).filter(
+      (g) => g.type !== "min_time" && g.type !== "max_time");
+    if (minF != null) guards.push({ type: "min_time", frames: minF });
+    if (maxF != null) guards.push({ type: "max_time", frames: maxF });
+    await send("PUT", `/api/segments/${sec.segment_id}`, { guards });
+  }
+
+  async function save() {
+    const minF = minS === "" ? null : Math.round(Number(minS) * 30);
+    const maxF = maxS === "" ? null : Math.round(Number(maxS) * 30);
+    if (isSeg) await putSegGuards(minF, maxF);
+    // 15 mirrors projection.DEFAULT_MIN_FRAMES (blank min = keep the default)
+    else await send("PUT",
+      `/api/stars/${sec.course_id}/${sec.star_id}/time-filter`,
+      { min_frames: minF == null ? 15 : minF, max_frames: maxF });
+    setOpen(false);
+    t.refresh();
+  }
+
+  async function reset() {
+    if (isSeg) await putSegGuards(null, null);
+    else await send("DELETE",
+      `/api/stars/${sec.course_id}/${sec.star_id}/time-filter`);
+    setOpen(false);
+    t.refresh();
+  }
+
+  if (!open) return html`<button class="meta" style=${tf.is_default ? "opacity:.55" : ""}
+      title="valid-time bounds — successes outside this range are ignored"
+      onclick=${openEditor}>${label}</button>`;
+  return html`<span class="meta">
+    min <input type="number" min="0" step="0.1" style="width:4rem"
+      value=${minS} oninput=${(e) => setMinS(e.target.value)} />s
+    max <input type="number" min="0" step="0.1" style="width:4rem"
+      value=${maxS} placeholder="∞" oninput=${(e) => setMaxS(e.target.value)} />s
+    <button onclick=${save}>save</button>
+    <button onclick=${reset} title="back to the 0.5s default">reset</button>
+    <button onclick=${() => setOpen(false)}>cancel</button>
+  </span>`;
+}
+
 function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
   const [showHidden, setShowHidden] = useState(false);
   const [visible, setVisible] = useState(10);
@@ -336,6 +411,7 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
         <option value="__new">+ new strat…</option>
       </select>
       <${PbTag} pb=${pb} mode=${t.clock} rows=${rows} pick=${pick} t=${t} />
+      <${TimeFilterChip} sec=${sec} t=${t} />
       <button class="meta" onclick=${wipeData}
         title=${t.scope === "lifetime"
           ? "wipe this star's data (all sessions)"
@@ -422,6 +498,7 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare }) {
       ${armed && html`<span class="chip good">⏱ active</span>`}
       ${sec.broken && html`<span class="meta">definition deleted — history only</span>`}
       <${PbTag} pb=${sec.pb.rta} mode="rta" rows=${rows} pick=${pick} t=${t} />
+      ${!sec.broken && html`<${TimeFilterChip} sec=${sec} t=${t} />`}
       <button class="meta" onclick=${wipeData}
         title=${t.scope === "lifetime"
           ? "wipe this segment's data (all sessions)"

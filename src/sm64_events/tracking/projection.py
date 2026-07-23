@@ -118,6 +118,28 @@ Caveats (hard-won — keep these current):
     into a stage stays "nothing active"). If re-entry ALSO arms a segment, the
     arm-clear in feed() retires the just-restored star again — segment wins,
     matching caveat 12.
+
+14. Validity bounds (spec 2026-07-23): a SUCCESS whose completion time falls
+    outside [min, max] is stamped cleared with an "auto: " reason at close
+    time via _auto_ignored — stars judge igt (falling back to rta) against
+    the time_filters KV (per "<course>:<star>", DEFAULT_MIN_FRAMES applies
+    when no override sets min_frames); segments judge rta against their
+    def's close-phase min_time/max_time guard rows (time_bounds), same
+    DEFAULT_MIN_FRAMES floor when neither guard is present. Ids with ANY
+    journaled clear/restore history (touched_ids) are exempt — manual always
+    wins. Only successes are judged (a fast reset is legitimate practice; no
+    clock at all is not judged either). An auto-cleared row doesn't move the
+    target (the seg_closed loop's "not a.cleared" follow-check and
+    _close_by_grab's identical check both skip it for free), and cleared rows
+    are invisible to runs (RunTracker._apply skips them).
+
+15. Last-star memory: _last_star_grabbed/_last_star_attempted update from the
+    current event's closures (attributed star attempts only: grabs set both,
+    non-success attributed rows set attempted; cleared rows still update —
+    the grab happened physically) BEFORE the engine's ctx is built, so a
+    guard evaluated on the closing event sees the fresh value; game_reset
+    clears both to unknown (file can change), and unknown conservatively
+    fails the last_star_* guards.
 """
 from dataclasses import dataclass, replace
 
@@ -126,7 +148,7 @@ from sm64_events.memory.addresses import CASTLE_LEVELS, course_for_level
 # module-level import cannot cycle (see SegmentEngine.feed).
 from sm64_events.tracking.runs import RunTracker
 from sm64_events.tracking.segments import (
-    SEGMENT_ATTEMPT_OFFSET, MatchContext, SegmentEngine)
+    SEGMENT_ATTEMPT_OFFSET, MatchContext, SegmentEngine, time_bounds)
 
 
 @dataclass(frozen=True)
@@ -162,6 +184,12 @@ ANCHOR_EVENT_TYPES = ("practice_reset", "state_loaded")
 # even when the attempt had real activity before the pause (user decision).
 PAUSE_DISCARD_FRAMES = 150  # 5 s x 30 fps
 
+# Validity floor (spec 2026-07-23): a SUCCESS faster than this is a detection
+# artifact (reset-race rows, mis-triggers), auto-cleared with an "auto: "
+# reason. Applies to every star/segment unless an override says otherwise
+# (stars: time_filters KV, min_frames 0 disables; segments: min_time guard).
+DEFAULT_MIN_FRAMES = 15  # 0.5 s x 30 fps
+
 # Events that delimit attempts; each one zeroes the rollout accumulator
 # after its close runs (see docstring caveat 7).
 BOUNDARY_EVENT_TYPES = frozenset(ANCHOR_EVENT_TYPES) | {
@@ -180,11 +208,24 @@ def cleared_ids(events) -> dict[int, str | None]:
     return cleared
 
 
+def touched_ids(events) -> set[int]:
+    """Attempt ids with ANY journaled clear/restore history — the manual
+    domain. The auto validity-bounds rule never touches them (manual always
+    wins), so Restore on an auto-ignored row is a per-row exemption."""
+    out: set[int] = set()
+    for ev in events:
+        if ev.type in ("attempt_cleared", "attempt_restored"):
+            out.add(int(ev.payload["attempt_id"]))
+    return out
+
+
 class Projector:
     """Sequential pass; feed() returns attempts CLOSED by that event."""
 
     def __init__(self, cleared: dict[int, str | None] | None = None,
-                 segments: list | None = None):
+                 segments: list | None = None,
+                 time_filters: dict | None = None,
+                 touched: set[int] | None = None):
         self._cleared = cleared if cleared is not None else {}
         # ("star", course_id, star_id) | ("segment", segment_id) | None
         self.target: tuple | None = None
@@ -198,10 +239,25 @@ class Projector:
         self.strat_by_star: dict[tuple[int, int], str | None] = {}
         self.strat_by_segment: dict[int, str | None] = {}
         self._segments = SegmentEngine(segments or [])
+        # Validity bounds (spec 2026-07-23). Stars: "<course>:<star>" ->
+        # {min_frames, max_frames} from the time_filters ui_state KV.
+        # Segments: derived here from each def's close-phase time guards.
+        self._time_filters = time_filters or {}
+        self._touched = touched if touched is not None else set()
+        self._seg_bounds = {d.id: time_bounds(d.guards)
+                            for d in (segments or [])}
         self.segment_notices: list[dict] = []  # live-broadcast queue, drained by service
         self._runs = RunTracker()
         self.run_notices: list[dict] = []   # live-broadcast queue, drained by service
         self._num_stars: int | None = None
+        # (course_id, star_id) of the most recent star grab / attributed star
+        # attempt — feeds MatchContext for the last_star_* guards (spec
+        # 2026-07-23). Updated from closures BEFORE the engine sees the same
+        # event; game_reset clears both (file can change at the title screen,
+        # same rationale as _num_stars). Cleared rows still update: the grab/
+        # attempt happened physically, validity is a separate judgment.
+        self._last_star_grabbed: tuple[int, int] | None = None
+        self._last_star_attempted: tuple[int, int] | None = None
         self._open = None  # EventRow of the open attempt's anchor
         self._open_acted = False  # mario_acted seen since the last anchor; only meaningful while _open is set
         self._level: int | None = None   # gCurrLevelNum per level_changed; None = unknown (legacy journals)
@@ -246,12 +302,21 @@ class Projector:
     def feed(self, ev) -> list[Attempt]:
         prev_level = self._level  # _dispatch may move it (level_changed)
         closed = self._dispatch(ev)
+        for a in closed:
+            if a.segment_id is None and a.course_id is not None:
+                self._last_star_attempted = (a.course_id, a.star_id)
+                if a.outcome == "success":
+                    self._last_star_grabbed = (a.course_id, a.star_id)
         if ev.type == "star_collected" and "num_stars" in ev.payload:
             self._num_stars = ev.payload["num_stars"]
         elif ev.type == "game_reset":
             self._num_stars = None  # file can change at the title screen: unknown until the next grab
+            self._last_star_grabbed = None
+            self._last_star_attempted = None
         ctx = MatchContext(level=self._level, prev_level=prev_level,
-                           num_stars=self._num_stars, area=self._area)
+                           num_stars=self._num_stars, area=self._area,
+                           last_star_grabbed=self._last_star_grabbed,
+                           last_star_attempted=self._last_star_attempted)
         seg_closed, self.segment_notices = self._segments.feed(ev, ctx)
         for a in seg_closed:
             # same first-event-id cleared keying as _build (caveat 2/11)
@@ -259,6 +324,7 @@ class Projector:
                         strat_tag=self.strat_by_segment.get(a.segment_id),
                         cleared=a.id in self._cleared,
                         cleared_reason=self._cleared.get(a.id))
+            a = self._auto_ignored(a)
             if a.outcome == "success" and not a.cleared:
                 # A segment that COMPLETES by entering a star stage (the
                 # closing event is a level_changed into a course-bearing level)
@@ -490,7 +556,7 @@ class Projector:
         is_anchored = first.type in ANCHOR_EVENT_TYPES
         rta = (close.frame - first.frame
                if is_anchored and close.frame >= first.frame else None)
-        return Attempt(
+        return self._auto_ignored(Attempt(
             id=first.id, session_id=first.session_id,
             course_id=course_id, star_id=star_id, strat_tag=strat,
             anchor_type=first.type if is_anchored else "none",
@@ -504,7 +570,35 @@ class Projector:
             rollouts_total=self._rollouts_total,
             rollouts_dustless=self._rollouts_dustless,
             jumps_total=self._jumps_total,
-            jumps_dustless=self._jumps_dustless)
+            jumps_dustless=self._jumps_dustless))
+
+    def _auto_ignored(self, a: Attempt) -> Attempt:
+        """Range/validity check (spec 2026-07-23): an out-of-bounds SUCCESS
+        is auto-cleared with an "auto: " reason — excluded everywhere cleared
+        is (stats, rates, PBs, graphs, runs) but still visible in the hidden
+        bucket. Manual clear/restore history exempts the id entirely; only
+        successes are judged (a fast reset is legitimate practice). Stars are
+        judged on igt (rta fallback), segments on rta; no clock -> no flag."""
+        if a.outcome != "success" or a.cleared or a.id in self._touched:
+            return a
+        if a.segment_id is not None:
+            lo, hi = self._seg_bounds.get(a.segment_id, (None, None))
+            frames = a.rta_frames
+        else:
+            f = self._time_filters.get(f"{a.course_id}:{a.star_id}", {})
+            lo, hi = f.get("min_frames"), f.get("max_frames")
+            frames = a.igt_frames if a.igt_frames is not None else a.rta_frames
+        if lo is None:
+            lo = DEFAULT_MIN_FRAMES
+        if frames is None:
+            return a
+        if frames < lo:
+            return replace(a, cleared=True,
+                           cleared_reason=f"auto: below {lo / 30:.2f}s min")
+        if hi is not None and frames > hi:
+            return replace(a, cleared=True,
+                           cleared_reason=f"auto: above {hi / 30:.2f}s max")
+        return a
 
 
 def wipe_matches(a: Attempt, p: dict) -> bool:
@@ -523,8 +617,9 @@ def wipe_matches(a: Attempt, p: dict) -> bool:
     return True  # kind == "all"
 
 
-def replay(events, segments=None) -> tuple[list[Attempt], Projector]:
-    proj = Projector(cleared_ids(events), segments=segments)
+def replay(events, segments=None, time_filters=None) -> tuple[list[Attempt], Projector]:
+    proj = Projector(cleared_ids(events), segments=segments,
+                     time_filters=time_filters, touched=touched_ids(events))
     attempts: list[Attempt] = []
     for ev in events:
         if ev.type == "data_wiped":
@@ -539,8 +634,8 @@ def replay(events, segments=None) -> tuple[list[Attempt], Projector]:
     return attempts, proj
 
 
-def project(events, segments=None) -> list[Attempt]:
-    return replay(events, segments=segments)[0]
+def project(events, segments=None, time_filters=None) -> list[Attempt]:
+    return replay(events, segments=segments, time_filters=time_filters)[0]
 
 
 def journal_id(attempt_id: int) -> int:
