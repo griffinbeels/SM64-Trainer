@@ -130,9 +130,8 @@ Caveats (hard-won — keep these current):
     wins. Only successes are judged (a fast reset is legitimate practice; no
     clock at all is not judged either). An auto-cleared row doesn't move the
     target (the seg_closed loop's "not a.cleared" follow-check and
-    _close_by_grab's identical check both skip it for free) — but it still
-    advances a run today (RunTracker never checks .cleared); the runs-side
-    guard lands separately.
+    _close_by_grab's identical check both skip it for free), and cleared rows
+    are invisible to runs (RunTracker._apply skips them).
 
 15. Last-star memory: _last_star_grabbed/_last_star_attempted update from the
     current event's closures (attributed star attempts only: grabs set both,

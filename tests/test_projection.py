@@ -1159,7 +1159,7 @@ def test_run_starts_on_configured_level_enter(tmp_path):
     db.append_event(sid, 3, Event(type="level_changed", frame=0, timestamp_utc=T,
         payload={"from": 1, "to": 9}))
     db.append_event(sid, 4, Event(type="star_collected", frame=0, timestamp_utc=T,
-        payload={"course_id": 9, "star_id": 0, "igt_frames": 1}))
+        payload={"course_id": 9, "star_id": 0, "igt_frames": 300}))
     attempts, proj = replay(db.events())
     assert len(proj.finished_runs()) == 1
 
