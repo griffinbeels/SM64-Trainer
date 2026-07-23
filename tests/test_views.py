@@ -1337,3 +1337,32 @@ def test_route_candidate_rank_follows_rank_mode(tmp_path):
     assert build_route_view(db, svc, rid)["steps"][0]["rank"] == "Mario"
     db.set_state("rank_mode", "avg10")
     assert build_route_view(db, svc, rid)["steps"][0]["rank"] == "Diamond"
+
+
+def test_valid_frames_filters_the_average_inputs():
+    """_valid_frames is the single funnel for every rank-mode average: only
+    successful, uncleared, strat-matching attempts with a real time on the
+    grading clock count. rta==0 reset-race junk rows are excluded on the rta
+    clock (projection.py docstring) but igt 0 is a legal time; attempts
+    predating strat tagging (strat_tag None) never grade a named strat."""
+    from types import SimpleNamespace
+
+    from sm64_events.tracking.views import _valid_frames
+
+    def att(**overrides):
+        base = dict(outcome="success", cleared=False, strat_tag="fast",
+                    igt_frames=343, rta_frames=400)
+        base.update(overrides)
+        return SimpleNamespace(**base)
+
+    history = [
+        att(),                              # counts on both clocks
+        att(outcome="reset"),               # not a success
+        att(cleared=True),                  # purged / auto-ignored
+        att(strat_tag="slow"),              # another strategy
+        att(strat_tag=None),                # predates strat tagging
+        att(igt_frames=None),               # no time on the igt clock
+        att(rta_frames=0, igt_frames=0),    # rta race row; igt 0 is legal
+    ]
+    assert _valid_frames(history, "fast", "igt") == [343, 0]
+    assert _valid_frames(history, "fast", "rta") == [400, 400]

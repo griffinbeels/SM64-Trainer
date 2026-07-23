@@ -435,6 +435,19 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     if rank_mode not in classify.RANK_MODES:   # forward-safe: junk reads as pb
         rank_mode = classify.DEFAULT_RANK_MODE
 
+    # ONE pass over all_attempts → per-entity lifetime histories (id order
+    # preserved). Shared by the section builders and every rank-mode average;
+    # the per-star list-comp scans this replaces were O(stars × attempts) per
+    # view build and ran even in pb mode, which discards the history entirely
+    # (final-review finding, 2026-07-23).
+    attempts_by_star: dict = {}
+    attempts_by_seg: dict = {}
+    for a in all_attempts:
+        if a.segment_id is not None:
+            attempts_by_seg.setdefault(a.segment_id, []).append(a)
+        elif a.course_id is not None:
+            attempts_by_star.setdefault((a.course_id, a.star_id), []).append(a)
+
     sections, unassigned = [], []
     seen: dict[tuple[int, int], None] = {}
     seen_segs: dict[int, None] = {}
@@ -472,8 +485,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     scoped_set = set(scoped)
     igt_of = lambda a: a.igt_frames
     for course_id, star_id in seen:
-        history = [a for a in all_attempts
-                   if a.course_id == course_id and a.star_id == star_id]
+        history = attempts_by_star.get((course_id, star_id), [])
         in_section = [a for a in history if a in scoped_set]
         pb_json = {}
         for mode in ("igt", "rta"):
@@ -527,7 +539,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     seg_sections = []
     for seg_id in seen_segs:
         d = seg_defs.get(seg_id)
-        history = [a for a in all_attempts if a.segment_id == seg_id]
+        history = attempts_by_seg.get(seg_id, [])
         in_section = [a for a in history if a in scoped_set]
         pb_row = pbs.get(("segment", seg_id, "rta"))
         seg_sections.append({
@@ -606,9 +618,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                 service.ranks, entity_key(c, s), strat,
                 _grading_basis(
                     rank_mode, pbs_by_strat.get((c, s, "igt", strat)),
-                    [a for a in all_attempts
-                     if a.course_id == c and a.star_id == s],
-                    strat, "igt")))},
+                    attempts_by_star.get((c, s), []), strat, "igt")))},
         "rank_mode": rank_mode,
         "stage": service.current_stage,
         # Segments that start in a known subarea OR level, for the quick-select
@@ -726,24 +736,25 @@ def build_run_history(db, route_id: int | None = None) -> dict:
             "pb": {"total_ms": pb["total_ms"]} if pb else None}
 
 
-def _candidate_rank(db, service, c, mode, attempts) -> str | None:
+def _candidate_rank(db, service, c, mode, by_star, by_seg) -> str | None:
     """Rank for one route candidate under its active strat, graded by the
-    rank-mode basis (per-strategy: another strat's times never count)."""
+    rank-mode basis (per-strategy: another strat's times never count).
+    `by_star`/`by_seg` are the caller's one-pass attempt groupings (id order)
+    so a route with many candidates never rescans the attempt list."""
     if service.ranks is None:
         return None  # skip the lookups entirely when nothing can be graded
     if c["type"] == "segment":
         ek = entity_key(None, None, c["segment_id"])
         strat = service.strat_by_segment.get(c["segment_id"])
         clock = "rta"
-        history = [a for a in attempts if a.segment_id == c["segment_id"]]
+        history = by_seg.get(c["segment_id"], [])
         pb = (db.current_pb(None, None, "rta", segment_id=c["segment_id"],
                             strat_tag=strat) if strat else None)
     else:
         ek = entity_key(c["course"], c["star"])
         strat = service.strat_by_star.get((c["course"], c["star"]))
         clock = "igt"
-        history = [a for a in attempts
-                   if a.course_id == c["course"] and a.star_id == c["star"]]
+        history = by_star.get((c["course"], c["star"]), [])
         pb = (db.current_pb(c["course"], c["star"], "igt", strat_tag=strat)
               if strat else None)
     return _strat_rank(service.ranks, ek, strat,
@@ -765,6 +776,15 @@ def build_route_view(db, service, route_id: int) -> dict:
         rank_mode = classify.DEFAULT_RANK_MODE
     seg_names = {d["id"]: d["name"] for d in db.segment_defs()}
     stats = route_stats(route["steps"], attempts)
+    # one-pass groupings for _candidate_rank (same shape as the session
+    # view's attempts_by_star/seg — never rescan attempts per candidate)
+    by_star: dict = {}
+    by_seg: dict = {}
+    for a in attempts:
+        if a.segment_id is not None:
+            by_seg.setdefault(a.segment_id, []).append(a)
+        elif a.course_id is not None:
+            by_star.setdefault((a.course_id, a.star_id), []).append(a)
     steps = []
     for step, st in zip(route["steps"], stats):
         cands, broken = [], False
@@ -781,7 +801,7 @@ def build_route_view(db, service, route_id: int) -> dict:
                               "star": c["star"],
                               "display": star_name(c["course"], c["star"]),
                               "course_name": course_name(c["course"])})
-        ranks_here = [_candidate_rank(db, service, c, rank_mode, attempts)
+        ranks_here = [_candidate_rank(db, service, c, rank_mode, by_star, by_seg)
                       for c in step["candidates"]]
         best = max((r for r in ranks_here if r),
                    key=lambda r: classify.RANK_SCORE[r], default=None)
