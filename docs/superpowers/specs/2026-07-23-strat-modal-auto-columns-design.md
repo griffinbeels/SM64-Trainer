@@ -181,7 +181,9 @@ attribution or silently undo itself. A per-entity tombstone
   target `strat_tag`) to None.
 - **Historical data preserved:** attempts keep their `strat_tag`; PBs,
   markers, comparisons stay in the db, invisible until the name exists
-  again. **Re-creating the same name clears the tombstone** and re-attaches
+  again (one exception: the Compare tab's "load existing" library lists
+  saved comparisons under their original strat label — historical data
+  display, accepted). **Re-creating the same name clears the tombstone** and re-attaches
   the old data (undo-able delete, by design) — both creation paths
   (`_register_strategy`, `create_rank_strategy`) clear it.
 - **Seeded strats protected:** "custom" = not in the bundled seed for that

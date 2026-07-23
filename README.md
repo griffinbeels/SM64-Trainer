@@ -30,12 +30,12 @@ tools/scrape_ranks.py`). REST/WS surface:
 
 | Method | Path | Body / Query | Effect |
 |---|---|---|---|
-| `GET` | `/api/ranks/standards` | `?entity=<key>` | One entity (`star:c:s` / `segment:id`): `strategies` + tiers, plus `cutoff_videos` ({strat:{rank:url}} — fastest example per tier, auto-banded from clips + user overrides), `user_videos` (raw overrides), `videos` (primary), and `xcams_url` (Daily Star page). Omit `entity` for all. |
+| `GET` | `/api/ranks/standards` | `?entity=<key>` | One entity (`star:c:s` / `segment:id`): `strategies` + tiers, plus `cutoff_videos` ({strat:{rank:url}} — fastest example per tier, auto-banded from clips + user overrides), `user_videos` (raw overrides), `videos` (primary), `seeded` (the community-seed strat names — the custom-vs-default distinction), and `xcams_url` (Daily Star page). Omit `entity` for all. |
 | `PUT` | `/api/ranks/standards/{entity}/{strategy}/{rank}` | `{"seconds": N}` | Set one threshold. Broadcasts `rank_standards_changed`. |
 | `PUT` | `/api/ranks/standards/{entity}/{strategy}/{rank}/video` | `{"url": "..."}` | Hand-attach an example video to one cutoff (survives seed bumps). |
 | `DELETE` | `/api/ranks/standards/{entity}/{strategy}/{rank}/video` | — | Remove a hand-attached cutoff video. |
 | `POST` | `/api/ranks/standards/{entity}` | `{"strategy": "..."}` | Create a new strategy for an entity. |
-| `DELETE` | `/api/ranks/standards/{entity}/{strategy}` | — | Remove a strategy. |
+| `DELETE` | `/api/ranks/standards/{entity}/{strategy}` | `?purge=true` (optional) | Without `purge`: clear the strategy's standards (its column persists while the strat is registered or on past attempts). With `purge=true`: fully DELETE a CUSTOM strategy — standards + registration removed, a tombstone hides it from every dropdown; past attempts keep their times, and re-creating the same name restores them (undo). `409` on community-seeded strategies. |
 | `POST` | `/api/ranks/standards/{entity}/reset` | — | Restore entity to seed defaults. |
 
 `rank_standards_changed` is broadcast-only (no journal entry).
