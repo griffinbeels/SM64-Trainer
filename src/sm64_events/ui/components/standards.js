@@ -20,7 +20,11 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged }) {
   const [editing, setEditing] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   async function load() { setData(await getJSON(`/api/ranks/standards?entity=${enc(entity)}`)); }
-  function toggle() { const n = !open; setOpen(n); if (n && !data) load(); }
+  // Reload on EVERY open, not just the first: a strat created from the
+  // practice dropdown or header picker while this panel sat cached would
+  // otherwise show empty cells forever (its data is fetched out-of-band,
+  // not via the session view). Old data stays visible until replaced.
+  function toggle() { const n = !open; setOpen(n); if (n) load(); }
   async function put(strat, rank, seconds) {
     await send("PUT", `/api/ranks/standards/${enc(entity)}/${enc(strat)}/${enc(rank)}`, { seconds });
     await load(); onChanged && onChanged();

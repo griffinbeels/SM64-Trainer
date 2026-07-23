@@ -6,9 +6,9 @@
 // PUTs overwrite). Callers own what happens after save (set active / reload)
 // via onSaved; Cancel/Esc/backdrop write nothing.
 import { h } from "preact";
-import { useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
-import { send } from "../api.js";
+import { getJSON, send } from "../api.js";
 import { Modal } from "./modal.js";
 import { RANK_NAMES, rankColor } from "./ranks.js";
 
@@ -23,6 +23,8 @@ export function StratModal({ entity, existing, onSaved, onClose }) {
   const [videos, setVideos] = useState({});   // rank -> raw input string
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
+  const nameRef = useRef(null);
+  useEffect(() => { nameRef.current && nameRef.current.focus(); }, []);
 
   async function save() {
     const strat = name.trim();
@@ -35,8 +37,22 @@ export function StratModal({ entity, existing, onSaved, onClose }) {
     if (strat === "__new" || strat === "__new__") {
       setError(`"${strat}" is a reserved name.`); return;
     }
+    // "/" or "\" would split the REST path after percent-decoding — the
+    // create POST (name travels in the body) succeeds but every per-strat
+    // PUT 404s, stranding the strat with no data.
+    if (/[/\\]/.test(strat)) {
+      setError("Strategy names can't contain slashes."); return;
+    }
     setSaving(true); setError(null);
     try {
+      // Server-truth duplicate check: `existing` (the caller's list) can be
+      // narrower than the store — the header picker passes registered-only
+      // strats, which would let a community-seeded name slip through and
+      // silently overwrite its times.
+      const current = await getJSON(`/api/ranks/standards?entity=${enc(entity)}`);
+      if (Object.hasOwn(current.strategies || {}, strat)) {
+        setError(`"${strat}" already exists here.`); setSaving(false); return;
+      }
       await send("POST", `/api/ranks/standards/${enc(entity)}`, { strategy: strat });
       for (const rank of LADDER_RANKS) {
         const rawTime = (times[rank] || "").trim();
@@ -69,7 +85,7 @@ export function StratModal({ entity, existing, onSaved, onClose }) {
       footer=${html`
         <button onclick=${save} disabled=${saving}>${saving ? "Saving…" : "Save"}</button>
         <button onclick=${onClose} disabled=${saving}>Cancel</button>`}>
-    <input class="stratname" placeholder="strategy name" value=${name}
+    <input class="stratname" placeholder="strategy name" value=${name} ref=${nameRef}
            oninput=${(inputEvent) => setName(inputEvent.target.value)} />
     <div class="meta" style="margin:.4rem 0 .2rem">
       Rank standards — optional; leave blank and no rank is awarded until times are entered.
