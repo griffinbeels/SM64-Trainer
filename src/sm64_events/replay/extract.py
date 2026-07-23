@@ -10,6 +10,10 @@ stream-copy the already-synced audio. No PCM assembly, no per-frame interleave,
 no timestamp reconstruction — those (and the whole two-clock drift class they
 caused) are gone with the PCM-sidecar design.
 
+The re-encode exists ONLY to move the keyframes, so it runs at a constant-
+quality target (`config.py::video_quality_args`): a saved clip must never look
+softer than the ring segments it was cut from.
+
 Why re-encode video but copy audio: `-c copy` can only cut on keyframes (our
 2 s segment boundaries), so frame-accurate edges need a video re-encode; audio
 copies losslessly and the cut lands on the nearest AAC frame (<~21 ms, a fixed
@@ -29,7 +33,8 @@ from datetime import datetime
 from pathlib import Path
 
 from sm64_events.core.paths import bundled_ffmpeg
-from sm64_events.replay.config import ReplayConfig
+from sm64_events.replay.config import (CLIP_MAXRATE, ReplayConfig,
+                                       video_quality_args)
 from sm64_events.replay.ring import SegmentRing
 
 _EDGE_TOLERANCE_S = 0.5   # clamping beyond this marks the clip truncated
@@ -146,8 +151,14 @@ class ClipExtractor:
         return ClipResult(path=out_path, duration_s=dur, truncated=truncated)
 
     def _codec_opts(self) -> list[str]:
-        if self._codec == "libx264":
-            return ["-preset", "ultrafast"]
+        """Quality settings for the cut, from the ONE registry in config.py.
+
+        These used to be bare presets with no rate control, which handed the
+        encoder ffmpeg's ~2 Mbps default and threw away the ring segment's
+        detail on the way out (see config.py for the measurement). The cut must
+        be transparent w.r.t. its source: the segment holds all the detail a
+        clip can ever contain."""
+        opts = video_quality_args(self._codec, "offline", CLIP_MAXRATE)
         if self._codec == "h264_nvenc":
-            return ["-preset", "p5", "-bf", "0"]
-        return []
+            opts += ["-bf", "0"]  # keep the cut's pts contract frame-0 aligned
+        return opts

@@ -49,6 +49,7 @@ from pathlib import Path
 
 import numpy as np
 
+from sm64_events.replay.config import RING_MAXRATE, video_quality_args
 from sm64_events.replay.ring import SegmentInfo
 
 log = logging.getLogger("sm64.replay")
@@ -285,9 +286,16 @@ class FfmpegAvSink:
             "-use_wallclock_as_timestamps", "1", "-thread_queue_size", "1024",
             "-f", "s16le", "-ar", str(rate), "-ac", "2", "-i", self._pipe_name,
             "-map", "0:v:0", "-map", "1:a:0",
-            # video: NVENC, CFR locked to the wall clock
-            "-c:v", "h264_nvenc", "-preset", "p1", "-tune", "ull", "-bf", "0",
-            "-b:v", "12M", "-g", str(int(fps * seg_s)), "-forced-idr", "1",
+            # video: NVENC, CFR locked to the wall clock. QUALITY comes from the
+            # one registry in config.py — the ring is the ceiling on every clip
+            # ever cut from it, so it targets a picture quality (cq), not a
+            # bitrate that over/undershoots with scene difficulty.
+            "-c:v", "h264_nvenc",
+            *video_quality_args("h264_nvenc", "realtime", RING_MAXRATE),
+            # bf=0: B-frames shift a segment's start_time off frame 0, breaking
+            # the pts contract the extractor cuts against.
+            "-bf", "0",
+            "-g", str(int(fps * seg_s)), "-forced-idr", "1",
             "-fps_mode", "cfr", "-r", str(fps),
             # audio: AAC, async-resampled to LOCK to the master (kills drift)
             "-c:a", "aac", "-b:a", "160k", "-ar", str(rate),

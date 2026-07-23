@@ -147,6 +147,29 @@ def test_clamps_and_flags_truncation(tmp_path):
     assert abs(res.duration_s - 2.0) < 0.2
 
 
+def test_cut_command_pins_a_quality_target(tmp_path, monkeypatch):
+    """THE blurry-recording regression (2026-07-23): the cut shipped with bare
+    presets and no rate control, so ffmpeg's ~2 Mbps default decided the
+    quality of every saved clip — a 12.5 Mbps ring segment came out at
+    2.1 Mbps (PSNR 38 dB vs its own source). The re-encode exists only to move
+    the keyframes; it must be transparent w.r.t. the segment it cuts."""
+    ring = build_av_buffer(tmp_path, seconds=8)   # real ffmpeg: build first,
+    captured = {}                                 # the stub below is global
+
+    def fake_run(args, **kwargs):
+        captured["args"] = args
+        return subprocess.CompletedProcess(args, 0, b"", b"")
+
+    monkeypatch.setattr("sm64_events.replay.extract.subprocess.run", fake_run)
+    for codec, flag in (("libx264", "-crf"), ("h264_nvenc", "-cq")):
+        ClipExtractor(cfg=CFG, codec=codec).extract(
+            ring, T0, T0 + timedelta(seconds=4), tmp_path / "clip.mp4")
+        args = captured["args"]
+        assert flag in args, f"{codec} cut has no quality target"
+        # audio is a stream copy: re-encoding it would be pure loss
+        assert args[args.index("-c:a") + 1] == "copy"
+
+
 def test_hole_truncates_to_contiguous_run_and_stays_synced(tmp_path):
     """A span crossing an idle-discard hole is clamped to the contiguous run
     containing the start, marked truncated, and the result stays A/V-synced —

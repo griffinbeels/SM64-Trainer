@@ -35,6 +35,62 @@ class ReplayConfig:
     settings_path: Path = field(default_factory=replay_settings_path)
 
 
+# -- video encode QUALITY (ONE authoritative place: ring sink + clip extract) -
+#
+# Both encoders must pin OUTPUT QUALITY, never a bare bitrate — the ring sink
+# is the ceiling on every clip, and the clip extractor must not throw that
+# ceiling away on the way out.
+#
+# Evidence (live measurement 2026-07-23, 1600x1224@60 capture; scratch ladder
+# in the bug's commit message): the extractor shipped with NO rate control at
+# all, so every saved clip fell back to ffmpeg's ~2 Mbps default REGARDLESS of
+# how good its source was — a 12.5 Mbps ring segment and a 26 Mbps one both
+# re-encoded to 2.1 Mbps, PSNR 38.1 dB against their own source. That is the
+# user-visible "the recording is blurry" bug; it read as low resolution because
+# H.264 starved of bits smears exactly the hard edges a 2x-upscaled N64 image
+# is made of. At cq 20 the same cut costs ~20 Mbps and measures 52.7 dB =
+# visually transparent.
+#
+# Why constant-quality (`-cq`) instead of a bigger `-b:v`: a bitrate target
+# over- and under-shoots with scene difficulty (a paused menu was measured at
+# 2.5 Mbps of a 12 Mbps budget while gameplay pinned the ceiling), and it would
+# have to be re-tuned by hand if the capture resolution ever changes. cq holds
+# the picture quality and lets the bitrate follow the content.
+#
+# Measured knobs, on 1600x1224@60 game content (SSIM/PSNR vs a lossless source):
+#   profile high vs main   -8 % bitrate at equal/better SSIM  -> ON
+#   -tune hq vs ull        equal quality at a fixed budget, and hq is what
+#                          makes cq mode behave; 8x realtime on this GPU -> ON
+#   -spatial-aq 1          +21 % bitrate for +0.0003 SSIM               -> OFF
+VIDEO_CQ = 20              # NVENC constant-quality target (lower = better)
+VIDEO_CRF = 18             # libx264 equivalent (machines without NVENC)
+RING_MAXRATE = "30M"       # ring: bounded so the disk cap stays predictable
+CLIP_MAXRATE = "60M"       # saved clip: one file on disk, quality wins
+
+# Encoder speed per stage. The ring runs REALTIME (must beat 1/fps per frame,
+# measured ~8x headroom at p4); clip extraction is offline, so it can afford a
+# slower preset for the same quality target.
+_NVENC_PRESET = {"realtime": "p4", "offline": "p6"}
+_X264_PRESET = {"realtime": "ultrafast", "offline": "veryfast"}
+
+
+def video_quality_args(codec: str, stage: str, maxrate: str) -> list[str]:
+    """ffmpeg args pinning OUTPUT QUALITY for `codec` at a speed `stage`
+    ('realtime' = ring sink, 'offline' = clip extract). Callers add their own
+    structural flags (GOP, IDR, CFR) — this owns quality only, so the two
+    encoders can never drift apart again. Pure — unit-tested."""
+    if codec == "h264_nvenc":
+        return ["-preset", _NVENC_PRESET[stage], "-tune", "hq",
+                "-profile:v", "high",
+                # -b:v 0 is REQUIRED: with a bitrate set, NVENC treats cq as a
+                # cap-with-target and the average bitrate wins instead.
+                "-rc", "vbr", "-cq", str(VIDEO_CQ), "-b:v", "0",
+                "-maxrate", maxrate, "-bufsize", maxrate]
+    if codec == "libx264":
+        return ["-preset", _X264_PRESET[stage], "-crf", str(VIDEO_CRF)]
+    return []
+
+
 # -- user-adjustable storage limits (UI: recording-dot panel) -----------------
 
 SETTINGS_LIMITS = {
