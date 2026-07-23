@@ -30,6 +30,11 @@ export function StratModal({ entity, existing, onSaved, onClose }) {
     if ((existing || []).includes(strat)) {
       setError(`"${strat}" already exists here.`); return;
     }
+    // Dropdown sentinels ("+ new strat…" option values) — a strat with this
+    // literal name could never be selected, only re-open the modal.
+    if (strat === "__new" || strat === "__new__") {
+      setError(`"${strat}" is a reserved name.`); return;
+    }
     setSaving(true); setError(null);
     try {
       await send("POST", `/api/ranks/standards/${enc(entity)}`, { strategy: strat });
