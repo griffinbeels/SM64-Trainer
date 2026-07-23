@@ -58,7 +58,7 @@ exe's single-instance takeover would otherwise fight a dev server on :8064).
 | WS fan-out, seq numbers | `server/broadcaster.py` |
 | HTTP/WS endpoints | `server/app.py` |
 | REST API + error taxonomy | `server/api.py` — docstring has the LookupError/ValueError/RuntimeError→HTTP mapping |
-| Attempt state machine / projection | `tracking/projection.py` — docstrings carry the two-pass clearing, reset-race row, clear-by-anchor-id invariant, active-star retirement (segment-arm / different-course → target None; caveat 12); auto-ignores out-of-range successes (DEFAULT_MIN_FRAMES 0.5s + star `time_filters` KV / segment time guards → cleared with `auto:` reason; journaled clear/restore wins via touched_ids); tracks last star grabbed/attempted for the last_star_* guards (game_reset clears) |
+| Attempt state machine / projection | `tracking/projection.py` — docstrings carry the two-pass clearing, reset-race row, clear-by-anchor-id invariant, active-star retirement (segment-arm / different-course → target None) + segment-target retirement (level_changed outside the def's start levels, `segments.start_level_set`; caveat 12); auto-ignores out-of-range successes (DEFAULT_MIN_FRAMES 0.5s + star `time_filters` KV / segment time guards → cleared with `auto:` reason; journaled clear/restore wins via touched_ids); tracks last star grabbed/attempted for the last_star_* guards (game_reset clears) |
 | Event pipeline + commands (journal→project→broadcast) | `tracking/service.py` |
 | Session view payload | `tracking/views.py` |
 | SQLite journal + derived tables | `storage/db.py` |

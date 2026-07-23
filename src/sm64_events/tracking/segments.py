@@ -379,6 +379,38 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
 ]}
 
 
+def arm_level(trig: dict) -> int | None:
+    """Level Mario stands in the moment this START trigger arms, or None
+    when the trigger carries no (or an unknowable) arm location — reads the
+    same param NAMES as the registry rows above, decoupled from the match
+    lambdas. Shared by views.py's quick-select banner helpers and the
+    projector's segment-target retirement (2026-07-23)."""
+    kind = trig.get("type")
+    if kind in ("area_enter", "attempt_anchor", "spawned"):
+        return trig.get("level")
+    if kind in ("level_enter", "level_exit"):
+        return trig.get("to")   # level_exit: Mario ends up at the DESTINATION
+    return None
+
+
+def start_level_set(start_triggers: list) -> set[int] | None:
+    """Levels this segment can START from, or None when that is unknowable —
+    any location-free start trigger (star_grabbed / key_grabbed without a
+    level / reset_game / ...) means "can start anywhere". The projector
+    retires a segment target on entering a level outside this set (a
+    level-bound segment cannot possibly be the active practice focus from a
+    level it can't start in — user report 2026-07-23); None never retires."""
+    if not start_triggers:
+        return None
+    levels = set()
+    for trig in start_triggers:
+        level = arm_level(trig)
+        if level is None:
+            return None
+        levels.add(level)
+    return levels
+
+
 @dataclass(frozen=True)
 class GuardType:
     key: str

@@ -56,6 +56,20 @@ def test_vocab_lists_triggers_guards_and_level_enum():
                                                "last_star_attempted"}
 
 
+def test_start_level_set_classifies_level_bound_defs():
+    # Segment-target retirement (projection.py) needs "which levels can this
+    # segment START from": a set when EVERY start trigger pins a level, None
+    # when any trigger is location-free (can start anywhere -> never retire).
+    from sm64_events.tracking.segments import start_level_set
+    assert start_level_set([{"type": "level_enter", "to": 30},
+                            {"type": "attempt_anchor", "level": 30}]) == {30}
+    assert start_level_set([{"type": "level_enter", "to": 6},
+                            {"type": "star_grabbed"}]) is None
+    assert start_level_set([{"type": "level_exit", "from": 8}]) is None  # dest unknown
+    assert start_level_set([{"type": "level_exit", "from": 8, "to": 6}]) == {6}
+    assert start_level_set([]) is None
+
+
 def test_string_clause_raises_value_error_not_500():
     with pytest.raises(ValueError, match="must be a dict"):
         validate_definition({"name": "x", "start_triggers": ["level_enter"],

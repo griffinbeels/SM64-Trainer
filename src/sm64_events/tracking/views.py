@@ -33,7 +33,7 @@ from sm64_events.stats.registry import (DEFAULT_STAT_MENU, REGISTRY,
                                         selection_order)
 from sm64_events.tracking.projection import DEFAULT_MIN_FRAMES, journal_id
 from sm64_events.tracking.routes import route_stats
-from sm64_events.tracking.segments import time_bounds
+from sm64_events.tracking.segments import arm_level, time_bounds
 
 # Timeline markers (per-section event graph): outcomes that plot as points.
 # Adding a marker kind is one row here (+ a style row in ui timeline.js).
@@ -362,13 +362,7 @@ def _segment_start_areas(start_triggers: list) -> list:
 def _segment_start_levels(start_triggers: list) -> list:
     out: list = []
     for trig in start_triggers:
-        kind = trig.get("type")
-        if kind in ("area_enter", "attempt_anchor", "spawned"):
-            level = trig.get("level")
-        elif kind in ("level_enter", "level_exit"):
-            level = trig.get("to")
-        else:
-            continue
+        level = arm_level(trig)   # shared reader (tracking/segments.py)
         if level is not None and level not in out:
             out.append(level)
     return out

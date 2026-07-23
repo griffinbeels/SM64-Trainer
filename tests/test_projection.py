@@ -1023,12 +1023,63 @@ def test_exit_to_hub_keeps_active_star_until_another_stage():
 
 
 def test_different_course_entry_keeps_segment_target():
-    # Only a STAR target is course-bound; a segment target survives any level
-    # change (segments span/define their own geography).
+    # A segment target whose def the projector doesn't know (deleted def,
+    # history-only) has no start-level evidence, so it conservatively
+    # survives level changes — level-bound retirement needs the def.
     p = Projector()
     p.feed(jev(1, "target_set", 0, {"kind": "segment", "segment_id": 4}))
     p.feed(jev(2, "level_changed", 1000, {"from": 8, "to": 23}))
     assert p.target == ("segment", 4)
+
+
+# -- segment-target retirement on leaving the start levels (2026-07-23) ---------
+
+def _bowser1_fight():
+    from sm64_events.tracking.segments import SegmentDef
+    return SegmentDef(id=9, name="Bowser 1", enabled=True,
+                      start_triggers=[{"type": "level_enter", "to": 30},
+                                      {"type": "attempt_anchor", "level": 30}],
+                      end_triggers=[{"type": "key_grabbed", "level": 30}],
+                      guards=[])
+
+
+def test_leaving_the_start_levels_retires_a_segment_target():
+    # User report 2026-07-23: after completing the Bowser 1 fight (the target
+    # auto-follows the success) a Usamune warp to WF left "ACTIVE SEGMENT:
+    # Bowser 1" pinned. Every start trigger of the fight def is level-bound to
+    # the arena (level 30), so the segment cannot possibly START from WF —
+    # a level_changed to a level outside the start set retires the target.
+    p = Projector(segments=[_bowser1_fight()])
+    p.feed(jev(1, "level_changed", 500, {"from": 17, "to": 30}))   # enter arena: arms
+    closed = p.feed(jev(2, "key_grabbed", 900, {"level": 30, "igt_frames": 830}))
+    assert any(a.segment_id == 9 and a.outcome == "success" for a in closed)
+    assert p.target == ("segment", 9)        # auto-follow: still in the arena
+    p.feed(jev(3, "level_changed", 1200, {"from": 30, "to": 24}))  # warp to WF
+    assert p.target is None                  # can't start Bowser 1 from WF
+
+
+def test_level_events_within_the_start_set_keep_the_segment_target():
+    # Establishing/corrective level_changed (from == to) and re-entries into a
+    # start level are not "leaving" — the target stays put.
+    p = Projector(segments=[_bowser1_fight()])
+    p.feed(jev(1, "level_changed", 500, {"from": 17, "to": 30}))
+    p.feed(jev(2, "target_set", 600, {"kind": "segment", "segment_id": 9}))
+    p.feed(jev(3, "level_changed", 700, {"from": 30, "to": 30}))   # establishing
+    assert p.target == ("segment", 9)
+
+
+def test_segment_with_a_location_free_start_trigger_keeps_its_target():
+    # A def with ANY non-level-bound start trigger (here star_grabbed) can
+    # start anywhere, so no level change can prove it inactive — the target
+    # conservatively survives.
+    from sm64_events.tracking.segments import SegmentDef
+    d = SegmentDef(id=11, name="post-star", enabled=True,
+                   start_triggers=[{"type": "star_grabbed"}],
+                   end_triggers=[{"type": "level_enter", "to": 6}], guards=[])
+    p = Projector(segments=[d])
+    p.feed(jev(1, "target_set", 0, {"kind": "segment", "segment_id": 11}))
+    p.feed(jev(2, "level_changed", 1000, {"from": 8, "to": 23}))
+    assert p.target == ("segment", 11)
 
 
 def test_grab_closing_star_and_segment_orders_star_first_and_target_follows_segment():

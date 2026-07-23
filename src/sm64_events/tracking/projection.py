@@ -93,7 +93,14 @@ Caveats (hard-won — keep these current):
     another stage). course_for_level (addresses.py) bridges the level-id ->
     course-id gap; hub levels / Bowser arenas have NO course, so passing
     through them keeps the target and the retry loop is uninterrupted. SEGMENT
-    targets are never course-bound — only star targets retire. A segment that
+    targets retire by START LEVEL instead (user report 2026-07-23: Bowser 1
+    stayed "ACTIVE SEGMENT" after a warp to WF): when EVERY start trigger of
+    the def is level-bound (segments.start_level_set), a level_changed to a
+    level outside that set retires the target — the segment cannot possibly
+    start from there. A location-free start trigger (star_grabbed, reset_game,
+    ...) or a deleted def keeps the target (None = can start anywhere). No
+    resume stash for segments: the matcher re-arms on return (armed pins the
+    UI) and the arena/stage banner re-targets on entry. A segment that
     SUCCEEDS by entering a star stage (its closing event is a level_changed
     into a course-bearing level — MIPS ends in DDD, LBLJ in BITDW) does NOT
     auto-follow onto the segment either: it lands us in a fresh stage with no
@@ -148,7 +155,8 @@ from sm64_events.memory.addresses import CASTLE_LEVELS, course_for_level
 # module-level import cannot cycle (see SegmentEngine.feed).
 from sm64_events.tracking.runs import RunTracker
 from sm64_events.tracking.segments import (
-    SEGMENT_ATTEMPT_OFFSET, MatchContext, SegmentEngine, time_bounds)
+    SEGMENT_ATTEMPT_OFFSET, MatchContext, SegmentEngine, start_level_set,
+    time_bounds)
 
 
 @dataclass(frozen=True)
@@ -246,6 +254,10 @@ class Projector:
         self._touched = touched if touched is not None else set()
         self._seg_bounds = {d.id: time_bounds(d.guards)
                             for d in (segments or [])}
+        # def id -> levels the segment can START from (None = anywhere);
+        # drives segment-target retirement on level_changed (caveat 12).
+        self._seg_start_levels = {d.id: start_level_set(d.start_triggers)
+                                  for d in (segments or [])}
         self.segment_notices: list[dict] = []  # live-broadcast queue, drained by service
         self._runs = RunTracker()
         self.run_notices: list[dict] = []   # live-broadcast queue, drained by service
@@ -387,6 +399,21 @@ class Projector:
             # an exit that lands straight INTO a segment is retired by the
             # arm-clear in feed() instead. Close FIRST (above) so the abandoned
             # run still attributes to the star we were on.
+            # A SEGMENT target whose every start trigger is level-bound
+            # cannot possibly START outside those levels, so entering any
+            # other level retires it (user report 2026-07-23: Bowser 1 stayed
+            # "ACTIVE SEGMENT" after a Usamune warp to WF). Defs with a
+            # location-free start trigger — or unknown to this projector
+            # (deleted def) — get None here and keep their target. Runs in
+            # _dispatch, BEFORE feed()'s close/auto-follow, so a success
+            # closed BY this very level_changed still follows onto the
+            # segment; the NEXT level move retires it. No resume stash: the
+            # matcher re-arms on return (armed pins the UI) and the arena
+            # banner re-targets on entry, so nothing is lost.
+            if self.target and self.target[0] == "segment":
+                seg_starts = self._seg_start_levels.get(self.target[1])
+                if seg_starts is not None and to_level not in seg_starts:
+                    self.target = None
             to_course = course_for_level(to_level)
             if self.target and self.target[0] == "star":
                 if to_course is not None and to_course != self.target[1]:
