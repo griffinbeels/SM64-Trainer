@@ -79,3 +79,34 @@ def band(ladder_cs: dict, time_cs: int) -> dict:
     fill = (ladder_cs[rank] - time_cs) / span if span > 0 else 1.0
     return {"rank": rank, "next": nxt, "gap_cs": gap,
             "fill": max(0.0, min(1.0, fill))}
+
+
+# Rank-mode registry (average rank mode spec): HOW an entity-level rank
+# display picks the time it grades. order None = the saved per-strategy PB
+# row (no averaging); "recent" = the last `window` valid runs; "top" = the
+# `window` fastest ever; window None = every valid run. Adding a mode is one
+# row here (ui/components/ranks.js RANK_MODE_OPTIONS mirrors the labels).
+RANK_MODES = {
+    "pb":       {"label": "PB",       "window": None, "order": None},
+    "avg10":    {"label": "Avg 10",   "window": 10,   "order": "recent"},
+    "avg50":    {"label": "Avg 50",   "window": 50,   "order": "recent"},
+    "best10":   {"label": "Best 10",  "window": 10,   "order": "top"},
+    "best50":   {"label": "Best 50",  "window": 50,   "order": "top"},
+    "lifetime": {"label": "Lifetime", "window": None, "order": "recent"},
+}
+DEFAULT_RANK_MODE = "pb"
+
+
+def average_frames(frames_list: list[int], window: int | None,
+                   order: str) -> tuple[int, int] | None:
+    """(mean_frames, count_used) over the selected slice of `frames_list`
+    (chronological), or None when empty. order "recent" keeps the last
+    `window` entries, "top" the fastest `window`; window None takes all.
+    Fewer than `window` entries -> mean of what exists (count tells)."""
+    if not frames_list:
+        return None
+    if order == "top":
+        chosen = sorted(frames_list)[:window] if window else sorted(frames_list)
+    else:
+        chosen = frames_list[-window:] if window else list(frames_list)
+    return round(sum(chosen) / len(chosen)), len(chosen)

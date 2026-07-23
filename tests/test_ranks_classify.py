@@ -64,3 +64,48 @@ def test_resolve_cutoff_videos_override_wins_and_adds_a_tier():
 def test_resolve_cutoff_videos_empty():
     assert resolve_cutoff_videos(NUTS, []) == {}
     assert resolve_cutoff_videos({}, [[1290, "x"]]) == {}  # no ladder -> no ranks
+
+
+# -- rank modes (average rank mode spec) ---------------------------------------
+
+def test_rank_modes_registry_complete():
+    from sm64_events.ranks.classify import DEFAULT_RANK_MODE, RANK_MODES
+    assert DEFAULT_RANK_MODE == "pb" and "pb" in RANK_MODES
+    assert list(RANK_MODES) == ["pb", "avg10", "avg50", "best10", "best50",
+                                "lifetime"]
+    for mode_def in RANK_MODES.values():
+        assert set(mode_def) == {"label", "window", "order"}
+    assert RANK_MODES["pb"]["order"] is None
+    assert RANK_MODES["avg10"] == {"label": "Avg 10", "window": 10,
+                                   "order": "recent"}
+    assert RANK_MODES["best50"] == {"label": "Best 50", "window": 50,
+                                    "order": "top"}
+    assert RANK_MODES["lifetime"] == {"label": "Lifetime", "window": None,
+                                      "order": "recent"}
+
+
+def test_average_frames_recent_takes_the_last_window():
+    from sm64_events.ranks.classify import average_frames
+    # last 2 of [300, 310, 320, 330] are 320+330 -> mean 325
+    assert average_frames([300, 310, 320, 330], 2, "recent") == (325, 2)
+
+
+def test_average_frames_top_takes_the_fastest_window():
+    from sm64_events.ranks.classify import average_frames
+    # fastest 2 are 300+310 -> mean 305, regardless of position
+    assert average_frames([330, 300, 320, 310], 2, "top") == (305, 2)
+
+
+def test_average_frames_under_window_and_lifetime():
+    from sm64_events.ranks.classify import average_frames
+    # fewer than window -> mean of what exists (count reports actual)
+    assert average_frames([300, 310], 10, "recent") == (305, 2)
+    assert average_frames([300, 310], 10, "top") == (305, 2)
+    # window None -> every entry (Lifetime)
+    assert average_frames([300, 301, 302], None, "recent") == (301, 3)
+
+
+def test_average_frames_empty_is_none():
+    from sm64_events.ranks.classify import average_frames
+    assert average_frames([], 10, "recent") is None
+    assert average_frames([], None, "recent") is None

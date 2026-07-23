@@ -27,6 +27,10 @@ class VideoBody(BaseModel):
     url: str
 
 
+class ModeBody(BaseModel):
+    mode: str
+
+
 def create_ranks_router(service) -> APIRouter:
     router = APIRouter(prefix="/api")
 
@@ -47,6 +51,14 @@ def create_ranks_router(service) -> APIRouter:
     async def put_threshold(entity: str, strategy: str, rank: str, body: ThresholdBody):
         try:
             await service.set_rank_threshold(entity, strategy, rank, body.seconds)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True}
+
+    @router.put("/ranks/mode")
+    async def put_mode(body: ModeBody):
+        try:
+            await service.set_rank_mode(body.mode)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True}

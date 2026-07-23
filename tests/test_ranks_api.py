@@ -115,3 +115,35 @@ def test_put_video_bad_rank_is_409(tmp_path):
     with client:
         r = client.put("/api/ranks/standards/star:8:2/Nuts/Iron/video", json={"url": "x"})
         assert r.status_code == 409
+
+
+# -- rank mode (average rank mode spec) ----------------------------------------
+
+def test_put_rank_mode_persists_and_validates(tmp_path):
+    client, svc = make_client(tmp_path)
+    with client:
+        r = client.put("/api/ranks/mode", json={"mode": "avg10"})
+        assert r.status_code == 200 and r.json() == {"ok": True}
+        assert svc.db.get_state("rank_mode", "pb") == "avg10"
+        # every registry key round-trips
+        for mode in ["pb", "avg50", "best10", "best50", "lifetime"]:
+            assert client.put("/api/ranks/mode",
+                              json={"mode": mode}).status_code == 200
+        # junk -> 409, stored value untouched
+        r = client.put("/api/ranks/mode", json={"mode": "bogus"})
+        assert r.status_code == 409
+        assert svc.db.get_state("rank_mode", "pb") == "lifetime"
+
+
+def test_set_rank_mode_broadcasts_rank_mode_changed(tmp_path):
+    import asyncio
+    client, svc = make_client(tmp_path)
+    seen = []
+
+    async def capture(event):
+        seen.append(event)
+
+    svc.broadcaster.publish = capture
+    asyncio.run(svc.set_rank_mode("best10"))
+    assert [e.type for e in seen] == ["rank_mode_changed"]
+    assert seen[0].payload == {"mode": "best10"}
