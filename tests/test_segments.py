@@ -56,6 +56,27 @@ def test_vocab_lists_triggers_guards_and_level_enum():
                                                "last_star_attempted"}
 
 
+def test_vocab_ships_connections_and_flow_annotations():
+    # The builder constrains the level_enter/level_exit dropdowns to world-
+    # possible moves (2026-07-23): vocab carries the topology successor map
+    # plus per-param `flow` annotations telling the UI which sibling param
+    # constrains which ("dest" filters by the source's successors, "source"
+    # by the destination's predecessors). UI-only — validation stays
+    # permissive (the Usamune warp menu can fabricate any edge).
+    v = vocab()
+    assert v["connections"]["22"] == [[6, 3]]
+    level_enter = next(t for t in v["triggers"] if t["key"] == "level_enter")
+    assert level_enter["params"]["to"]["flow"] == {
+        "role": "dest", "peer": "from", "peer_subarea": "from_subarea"}
+    assert level_enter["params"]["from"]["flow"] == {
+        "role": "source", "peer": "to", "peer_subarea": "to_subarea"}
+    assert level_enter["params"]["to_subarea"]["flow"]["role"] == "dest"
+    level_exit = next(t for t in v["triggers"] if t["key"] == "level_exit")
+    assert level_exit["params"]["from"]["flow"]["role"] == "source"
+    assert level_exit["params"]["to"]["flow"]["role"] == "dest"
+    assert level_exit["params"]["from_subarea"]["flow"]["role"] == "source"
+
+
 def test_start_level_set_classifies_level_bound_defs():
     # Segment-target retirement (projection.py) needs "which levels can this
     # segment START from": a set when EVERY start trigger pins a level, None

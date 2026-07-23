@@ -366,6 +366,92 @@ CASTLE_AREA_NAMES = {1: "Lobby", 2: "Upstairs", 3: "Basement"}  # live-verified 
 CASTLE_REGION_LEVELS = (LEVEL_CASTLE_INSIDE, LEVEL_CASTLE_GROUNDS,
                         LEVEL_CASTLE_COURTYARD)  # = (6, 16, 26)
 
+AREA_LOBBY, AREA_UPSTAIRS, AREA_BASEMENT = 1, 2, 3  # CASTLE_AREA_NAMES ids
+
+# --- World topology (segment-builder dropdown constraints, 2026-07-23) -----
+# Directed reachability between world NODES — (level, subarea) inside the
+# castle, a bare level id everywhere else — under NORMAL movement: doors,
+# paintings, pipes, course exits and deaths. The Usamune warp menu can
+# fabricate ANY level edge, so this table drives UI option FILTERING only
+# (tracking/segments.py vocab -> ui/components/segments.js); definition
+# validation and the matcher stay permissive, and a stored def whose edge
+# isn't listed here still renders, matches, and saves.
+# Layout source: the castle's world design (user spec 2026-07-23 + common
+# SM64 knowledge). The basement <-> grounds link is the drained-moat door;
+# fight-exit landing nodes follow each Bowser course's entry region.
+# Wrong or missing edge? Fix ONE row here — vocab and the builder rederive.
+_LOBBY = (LEVEL_CASTLE_INSIDE, AREA_LOBBY)
+_UPSTAIRS = (LEVEL_CASTLE_INSIDE, AREA_UPSTAIRS)
+_BASEMENT = (LEVEL_CASTLE_INSIDE, AREA_BASEMENT)
+
+# Two-way edges: walking/painting entries whose exit returns where you came
+# from (course exits, deaths, and save-quit all land at the entry region).
+WORLD_EDGES_TWO_WAY = (
+    # lobby (1F): its paintings + secret levels, the front door, the
+    # courtyard doors, the BitDW star door, and the interior stairs
+    (_LOBBY, 9), (_LOBBY, 24), (_LOBBY, 12), (_LOBBY, 5),   # BoB WF JRB CCM
+    (_LOBBY, 27), (_LOBBY, 20), (_LOBBY, 29),               # PSS SA TotWC
+    (_LOBBY, 17),                                           # BitDW
+    (_LOBBY, 16), (_LOBBY, 26),                             # grounds, courtyard
+    (_LOBBY, _UPSTAIRS), (_LOBBY, _BASEMENT),               # interior stairs/doors
+    # basement: its paintings, BitFS (user spec 2026-07-23: the basement
+    # region owns BitFS), and the drained-moat door to the grounds
+    (_BASEMENT, 7), (_BASEMENT, 22), (_BASEMENT, 8),        # HMC LLL SSL
+    (_BASEMENT, 23),                                        # DDD
+    (_BASEMENT, 19),                                        # BitFS
+    (_BASEMENT, 16),                                        # drained-moat door
+    # upstairs (2F+3F = area 2): its paintings, WMOTR, and BitS
+    (_UPSTAIRS, 10), (_UPSTAIRS, 11), (_UPSTAIRS, 36),      # SL WDW TTM
+    (_UPSTAIRS, 13), (_UPSTAIRS, 14), (_UPSTAIRS, 15),      # THI TTC RR
+    (_UPSTAIRS, 31),                                        # WMOTR
+    (_UPSTAIRS, 21),                                        # BitS
+    # single-area hubs and in-course entrances
+    (26, 4),                                                # courtyard <-> BBH
+    (16, 18),                                               # grounds <-> VCUtM (moat)
+    (7, 28),                                                # HMC pool <-> CotMC
+)
+
+# One-way edges: moves with a DIFFERENT return path. Arena pipes only run
+# course -> arena; fight exits (key grab / death) dump Mario at the course's
+# castle region, never back into the course; DDD's vanishing sub is the only
+# natural way INTO BitFS while its exits land in the basement (two-way row
+# above).
+WORLD_EDGES_ONE_WAY = (
+    (17, 30), (19, 33), (21, 34),                 # Bowser course pipe -> arena
+    (30, _LOBBY), (33, _BASEMENT), (34, _UPSTAIRS),  # fight exit -> castle
+    (23, 19),                                     # DDD sub bay -> BitFS
+)
+
+
+def _world_node(spec) -> tuple:
+    """Registry shorthand: a bare level id means (level, no subarea)."""
+    return spec if isinstance(spec, tuple) else (spec, None)
+
+
+def world_connections() -> dict:
+    """Successor map serialized for the segment-builder vocab: node key
+    ("6:1" castle subarea / "22" whole level) -> sorted [level, area|None]
+    destination pairs. JSON-shaped here so vocab() ships it untouched."""
+    successors: dict[str, list] = {}
+
+    def add_edge(from_spec, to_spec):
+        from_level, from_area = _world_node(from_spec)
+        to_level, to_area = _world_node(to_spec)
+        key = (f"{from_level}:{from_area}" if from_area is not None
+               else str(from_level))
+        destination = [to_level, to_area]
+        bucket = successors.setdefault(key, [])
+        if destination not in bucket:
+            bucket.append(destination)
+
+    for node_a, node_b in WORLD_EDGES_TWO_WAY:
+        add_edge(node_a, node_b)
+        add_edge(node_b, node_a)
+    for from_spec, to_spec in WORLD_EDGES_ONE_WAY:
+        add_edge(from_spec, to_spec)
+    return {key: sorted(dests, key=lambda d: (d[0], d[1] or 0))
+            for key, dests in successors.items()}
+
 # ---------------------------------------------------------------------------
 # Name tables (display-only; IDs are the authoritative identity).
 # ---------------------------------------------------------------------------

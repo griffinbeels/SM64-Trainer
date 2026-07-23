@@ -10,6 +10,53 @@ import { getJSON, send } from "../api.js";
 
 const html = htm.bind(h);
 
+// --- world-topology option filtering (vocab.connections + param `flow`) ----
+// level_enter/level_exit params carry a `flow` annotation ({role, peer,
+// peer_subarea} — tracking/segments.py): once the OTHER side of the move is
+// picked, this side's dropdown only offers world-possible options
+// (addresses.WORLD_EDGES_*). "dest" params filter by the source's
+// SUCCESSORS, "source" params by the destination's PREDECESSORS. UI-only —
+// a stored value the topology disagrees with stays selectable (ParamInput
+// keeps the current value in the list) so legacy defs never blank out.
+
+const nodeKey = ([level, area]) => (area == null ? String(level) : `${level}:${area}`);
+
+function nodesFor(level, subarea, conn) {
+  // A level with no subarea picked means "any of its subarea nodes" (only
+  // Castle Inside has them — derived from the map itself, not hardcoded).
+  if (subarea != null) return [`${level}:${subarea}`];
+  const subKeys = Object.keys(conn).filter((k) => k.startsWith(`${level}:`));
+  return subKeys.length ? subKeys : [String(level)];
+}
+
+export function allowedIds(schema, clause, conn) {
+  // Set of permitted ids for a flow-annotated level/subarea param, or null
+  // when unconstrained (no flow, no topology, peer side unpicked).
+  const flow = schema.flow;
+  if (!flow || !conn) return null;
+  const peerLevel = clause[flow.peer];
+  if (peerLevel == null) return null;
+  const peerNodes = nodesFor(peerLevel, clause[flow.peer_subarea], conn);
+  let pairs; // [level, area|null] nodes reachable on THIS param's side
+  if (flow.role === "dest") {
+    pairs = peerNodes.flatMap((k) => conn[k] || []);
+  } else {
+    const peerSet = new Set(peerNodes);
+    pairs = Object.entries(conn)
+      .filter(([, dests]) => dests.some((d) => peerSet.has(nodeKey(d))))
+      .map(([k]) => (k.includes(":")
+        ? k.split(":").map(Number) : [Number(k), null]));
+  }
+  if (schema.kind === "level")
+    // a level_changed edge never stays inside one level, so the peer's own
+    // level is excluded (no "Castle Inside -> Castle Inside")
+    return new Set(pairs.map(([lvl]) => lvl).filter((lvl) => lvl !== peerLevel));
+  // subarea param: its owning level is the only_when controller's value
+  const ownLevel = clause[schema.only_when.param];
+  return new Set(pairs.filter(([lvl, area]) => lvl === ownLevel && area != null)
+    .map(([, area]) => area));
+}
+
 export function ParamInput({ schema, name, value, vocab, clause, onChange }) {
   // "" MUST become null, never Number("")===0 — 0 is a real area/level id,
   // so a bare Number() silently scoped cleared optional params to area 0.
@@ -19,18 +66,25 @@ export function ParamInput({ schema, name, value, vocab, clause, onChange }) {
     <option value="">${schema.required ? pickLabel : anyLabel}</option>
     ${entries.map(([id, n]) => html`<option value=${id}>${n}</option>`)}
   </select>`;
+  // world-topology filter (see allowedIds above); the CURRENT value always
+  // stays listed so an out-of-topology stored def renders and saves intact
+  const allowed = allowedIds(schema, clause, vocab.connections);
+  const permitted = ([id]) => !allowed || allowed.has(Number(id))
+    || Number(id) === value;
   if (schema.kind === "level") {
     // schema.enum restricts the choices (area_enter offers only the castle
     // hubs); absent enum = the full level list.
     const entries = Object.entries(vocab.levels).filter(
-      ([id]) => !schema.enum || schema.enum.includes(Number(id)));
+      ([id]) => (!schema.enum || schema.enum.includes(Number(id)))
+        && permitted([id]));
     return dropdown(entries, "(any level)", "— pick level —");
   }
   if (schema.kind === "subarea")
     // Castle interior areas (lobby/upstairs/basement). Always optional — the
     // empty option is the explicit "Any" (matches any interior area). Shown
     // only when the companion level is Castle Inside (ClauseRow only_when).
-    return dropdown(Object.entries(vocab.castle_areas), "Any", "— pick subarea —");
+    return dropdown(Object.entries(vocab.castle_areas).filter(permitted),
+                    "Any", "— pick subarea —");
   if (schema.kind === "course")
     return dropdown(Object.entries(vocab.courses), "(any course)", "— pick course —");
   if (schema.kind === "star") {
@@ -78,11 +132,22 @@ export function ClauseRow({ clause, types, vocab, tint, onChange, onRemove }) {
     const next = { ...clause, [pname]: v };
     // a star id is meaningless outside its course — clear it on course change
     if (pname === "course" && "star" in spec.params) next.star = null;
-    // changing a controlling level away from the gate clears its now-hidden
-    // subarea, so a stale "Basement" can't cling to "Castle Grounds".
-    for (const [p, meta] of Object.entries(spec.params))
-      if (meta.only_when && meta.only_when.param === pname
-          && v !== meta.only_when.equals) next[p] = null;
+    // Consistency sweep, two passes (clearing a level param can invalidate
+    // its subarea): (a) a hidden param holds nothing — a stale "Basement"
+    // can't cling to "Castle Grounds"; (b) a sibling value the world
+    // topology now rules out is cleared (picking "to LLL" drops a "from WF"
+    // that can no longer reach it). The just-typed value itself is exempt
+    // from (b) — the user's pick wins and the siblings adjust around it.
+    for (let pass = 0; pass < 2; pass++)
+      for (const [p, meta] of Object.entries(spec.params)) {
+        if (meta.only_when
+            && next[meta.only_when.param] !== meta.only_when.equals)
+          next[p] = null;
+        if (p !== pname && next[p] != null) {
+          const allowed = allowedIds(meta, next, vocab.connections);
+          if (allowed && !allowed.has(next[p])) next[p] = null;
+        }
+      }
     onChange(next);
   };
   const param = (pname) => html`<${ParamInput} schema=${spec.params[pname]}

@@ -173,7 +173,8 @@ from typing import Callable
 from sm64_events.memory.addresses import (CASTLE_AREA_NAMES,
                                           CASTLE_REGION_LEVELS, COURSE_NAMES,
                                           DOOR_ACTIONS, LEVEL_CASTLE_INSIDE,
-                                          LEVEL_NAMES, star_count, star_name)
+                                          LEVEL_NAMES, star_count, star_name,
+                                          world_connections)
 
 _ANCHOR_TYPES = ("practice_reset", "state_loaded")  # attempt-anchor events
 
@@ -254,6 +255,18 @@ def _only_castle(param: str) -> dict:
     return {"param": param, "equals": LEVEL_CASTLE_INSIDE}
 
 
+# `flow` annotations on the level_enter/level_exit params: the builder
+# (ui/components/segments.js) constrains each side's dropdown to world-
+# possible moves (addresses.WORLD_EDGES_*, shipped as vocab "connections").
+# A "dest"-role param filters by the source side's SUCCESSORS, a "source"
+# param by the destination's PREDECESSORS; peer/peer_subarea name the sibling
+# params carrying the other side. UI-only — validation and the matcher never
+# read flow (the Usamune warp menu can fabricate any edge, and stored defs
+# must keep working regardless of the topology table).
+_DEST_FLOW = {"role": "dest", "peer": "from", "peer_subarea": "from_subarea"}
+_SOURCE_FLOW = {"role": "source", "peer": "to", "peer_subarea": "to_subarea"}
+
+
 # NB: views._segment_start_areas (the castle quick-select banner) reads the
 # `to_subarea`/`area` PARAM NAMES off these trigger dicts STATICALLY to decide
 # which segments a subarea offers — it depends on those names, NOT the match
@@ -271,12 +284,16 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
     # matches (SegmentEngine._pending). to_subarea is therefore honoured only on
     # START triggers; on an END trigger the destination subarea is ignored.
     TriggerType("level_enter", "You enter level",
-                {"to": {"kind": "level", "required": True},
+                {"to": {"kind": "level", "required": True,
+                        "flow": _DEST_FLOW},
                  "to_subarea": {"kind": "subarea", "required": False,
-                                "only_when": _only_castle("to")},
-                 "from": {"kind": "level", "required": False},
+                                "only_when": _only_castle("to"),
+                                "flow": _DEST_FLOW},
+                 "from": {"kind": "level", "required": False,
+                          "flow": _SOURCE_FLOW},
                  "from_subarea": {"kind": "subarea", "required": False,
-                                  "only_when": _only_castle("from")}},
+                                  "only_when": _only_castle("from"),
+                                  "flow": _SOURCE_FLOW}},
                 "{to} {to_subarea} coming from {from} {from_subarea}",
                 lambda p, ev, ctx: ev.type == "level_changed" and _real_edge(ev)
                 and ev.payload["to"] == p["to"]
@@ -284,12 +301,16 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 and (p.get("from_subarea") is None
                      or ev.payload.get("from_area") == p["from_subarea"])),
     TriggerType("level_exit", "You exit level",
-                {"from": {"kind": "level", "required": True},
+                {"from": {"kind": "level", "required": True,
+                          "flow": _SOURCE_FLOW},
                  "from_subarea": {"kind": "subarea", "required": False,
-                                  "only_when": _only_castle("from")},
-                 "to": {"kind": "level", "required": False},
+                                  "only_when": _only_castle("from"),
+                                  "flow": _SOURCE_FLOW},
+                 "to": {"kind": "level", "required": False,
+                        "flow": _DEST_FLOW},
                  "to_subarea": {"kind": "subarea", "required": False,
-                                "only_when": _only_castle("to")}},
+                                "only_when": _only_castle("to"),
+                                "flow": _DEST_FLOW}},
                 "{from} {from_subarea} going to {to} {to_subarea}",
                 lambda p, ev, ctx: ev.type == "level_changed" and _real_edge(ev)
                 and ev.payload["from"] == p["from"]
@@ -577,6 +598,10 @@ def vocab() -> dict:
         "stars": {str(cid): [star_name(cid, s)
                              for s in range(star_count(cid))]
                   for cid in COURSE_NAMES},
+        # world-topology successor map ("6:1"/"22" node -> [level, area|None]
+        # destinations) — the builder filters flow-annotated level/subarea
+        # dropdowns to world-possible moves (addresses.WORLD_EDGES_*)
+        "connections": world_connections(),
     }
 
 

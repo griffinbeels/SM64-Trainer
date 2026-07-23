@@ -61,3 +61,52 @@ def test_course_for_level_returns_none_for_hubs_and_unknown():
     # Every main course (1-15) is reachable from exactly one level.
     mapped = set(A.COURSE_BY_LEVEL.values())
     assert set(range(1, 16)) <= mapped
+
+
+# -- world topology (segment-builder dropdown constraints, 2026-07-23) ---------
+
+def test_world_connections_reference_only_registered_levels_and_areas():
+    conn = A.world_connections()
+    for node_key, destinations in conn.items():
+        level_str, _, area_str = node_key.partition(":")
+        assert int(level_str) in A.LEVEL_NAMES, node_key
+        if area_str:
+            assert int(level_str) == A.LEVEL_CASTLE_INSIDE, node_key
+            assert int(area_str) in A.CASTLE_AREA_NAMES, node_key
+        for dest_level, dest_area in destinations:
+            assert dest_level in A.LEVEL_NAMES, (node_key, dest_level)
+            if dest_area is not None:
+                assert dest_level == A.LEVEL_CASTLE_INSIDE
+                assert dest_area in A.CASTLE_AREA_NAMES
+
+
+def test_world_connections_match_the_user_topology_spec():
+    # The 2026-07-23 spec, verbatim: exiting a basement course can ONLY land
+    # in the castle basement; each hub region reaches exactly its own stars
+    # plus its stated hub/Bowser exits.
+    conn = A.world_connections()
+    assert conn["22"] == [[6, 3]]          # LLL exits to the basement, nowhere else
+    basement = {tuple(d) for d in conn["6:3"]}
+    assert {(7, None), (22, None), (8, None), (23, None),    # HMC LLL SSL DDD
+            (19, None), (16, None)} <= basement              # BitFS + grounds
+    assert not any(lvl in (9, 24, 12, 5, 17, 21) for lvl, _ in basement)
+    upstairs = {tuple(d) for d in conn["6:2"]}
+    assert {(10, None), (11, None), (36, None), (13, None),  # SL WDW TTM THI
+            (14, None), (15, None), (21, None)} <= upstairs  # TTC RR + BitS
+    assert not any(lvl in (16, 17, 19, 26) for lvl, _ in upstairs)
+    lobby = {tuple(d) for d in conn["6:1"]}
+    assert {(9, None), (24, None), (12, None), (5, None),    # BoB WF JRB CCM
+            (17, None), (16, None), (26, None)} <= lobby     # BitDW grounds courtyard
+    assert not any(lvl in (19, 21) for lvl, _ in lobby)      # other Bowsers unreachable
+
+
+def test_world_connections_arena_edges_are_directed():
+    # Arenas are entered ONLY through their course's pipe; their exits dump
+    # Mario back at the course's castle region. The reverse moves don't exist.
+    conn = A.world_connections()
+    assert [30, None] in conn["17"]                        # BitDW pipe -> B1 arena
+    assert [6, 1] in conn["30"]                            # fight exit -> lobby
+    assert not any(lvl == 30 for lvl, _ in conn["6:1"])    # lobby can't enter the arena
+    assert not any(lvl == 17 for lvl, _ in conn["30"])     # arena never exits into BitDW
+    assert [19, None] in conn["23"]                        # DDD sub bay -> BitFS
+    assert not any(lvl == 23 for lvl, _ in conn["19"])     # BitFS never exits into DDD
