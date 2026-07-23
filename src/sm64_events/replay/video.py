@@ -222,6 +222,16 @@ class DwmSurfaceVideoSource:
         redirection surface (window-local logical coords)."""
         import time as _time
         user32 = ctypes.windll.user32
+        # UNAWARE, matching PJ64 1.6: its surface IS its logical client size, so
+        # capture resolution == the pixels the emulator actually renders. Live
+        # 2026-07-23: client 1600x1224 logical / 2400x1836 physical at 150 %
+        # display scaling, surface 1606x1273 -> the on-screen extra pixels are a
+        # DWM upscale, not detail. CAVEAT: if PJ64 is ever made DPI-AWARE (the
+        # exe's "Override high DPI scaling behaviour: Application" compat flag —
+        # a real 2.25x detail win), its surface becomes physical-size while
+        # these unaware queries still return logical, and the crop below would
+        # silently keep only the top-left 2/3 of the window. Pick the geometry
+        # off the SURFACE size before flipping that switch.
         user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-1))  # UNAWARE
         hwnd = wt.HWND(self._win.hwnd)
 
