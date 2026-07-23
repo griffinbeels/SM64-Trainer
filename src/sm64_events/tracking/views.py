@@ -193,46 +193,92 @@ def _attempt_rank(a, frames, ranks) -> str | None:
     return classify.rank_for(ranks.ladder_cs(ek, a.strat_tag), classify.display_cs(frames))
 
 
-def _strat_rank(ranks, ek, strat, pb) -> str | None:
-    """Rank NAME for an entity graded under `strat` at its PB time, or None
-    when ungradeable (no ranks loaded, no active strat, no PB, or the strat has
-    no ladder). THE single grading path shared by route candidates and the
-    stage quick-select star grid (view's rank_by_star) — keep it one place so a
-    medal never disagrees with the section banner / attempt medals."""
-    if ranks is None or not strat or pb is None:
+def _valid_frames(history, strat, clock) -> list[int]:
+    """Chronological times (frames) of the runs that count toward an average
+    (average rank mode spec): successful, not cleared (manual purge or
+    auto-ignore), achieved WITH `strat`, with a real time on `clock` —
+    excluding the rta==0 reset-race junk rows (projection.py docstring).
+    `history` is journal-id ordered, so the list is chronological."""
+    out = []
+    for a in history:
+        if a.outcome != "success" or a.cleared or a.strat_tag != strat:
+            continue
+        frames = a.igt_frames if clock == "igt" else a.rta_frames
+        if frames is None or (clock == "rta" and frames == 0):
+            continue
+        out.append(frames)
+    return out
+
+
+def _grading_basis(mode, pb, history, strat, clock) -> dict | None:
+    """THE one 'which time does this rank grade?' resolver. Returns
+    {"frames", "count", "window"} or None when nothing is gradeable.
+    'pb' mode wraps the saved per-strategy PB row (count 1) — byte-for-byte
+    today's grading; avg modes grade attempt history via classify.average_frames,
+    so a run never saved as PB still counts."""
+    mode_def = classify.RANK_MODES.get(mode) or classify.RANK_MODES["pb"]
+    if mode_def["order"] is None:
+        return ({"frames": pb["frames"], "count": 1, "window": None}
+                if pb else None)
+    averaged = classify.average_frames(_valid_frames(history, strat, clock),
+                                       mode_def["window"], mode_def["order"])
+    if averaged is None:
+        return None
+    mean_frames, count = averaged
+    return {"frames": mean_frames, "count": count,
+            "window": mode_def["window"]}
+
+
+def _strat_rank(ranks, ek, strat, basis) -> str | None:
+    """Rank NAME for an entity graded under `strat` at its grading basis
+    (_grading_basis output: PB row in pb mode, mean of valid runs in avg
+    modes), or None when ungradeable (no ranks loaded, no active strat, no
+    basis, or the strat has no ladder). THE single grading path shared by
+    route candidates and the stage quick-select star grid (view's
+    rank_by_star) — keep it one place so a medal never disagrees with the
+    section banner / attempt medals."""
+    if ranks is None or not strat or basis is None:
         return None
     ladder = ranks.ladder_cs(ek, strat)
     if not ladder:
         return None
-    return classify.rank_for(ladder, classify.display_cs(pb["frames"]))
+    return classify.rank_for(ladder, classify.display_cs(basis["frames"]))
 
 
-def _section_banner(ranks, ek, strat, pb) -> dict | None:
-    """Rank banner for a section: the time graded under the ACTIVE strat. The
-    caller passes the PB achieved WITH `strat` (per-strategy ranking) — never
-    the strategy-blind overall PB.
+def _section_banner(ranks, ek, strat, basis, mode) -> dict | None:
+    """Rank banner for a section: the grading basis (PB in pb mode, mean of
+    valid runs in avg modes — _grading_basis) graded under the ACTIVE strat.
 
     Returns None when the entity has NO standards (RankBanner not rendered).
     Otherwise the entity HAS standards; a {"rank": None, "reason": ...}
     sentinel says why it can't be graded so the UI can word it correctly:
       - "no_strat"  : no active strategy selected.
       - "no_ladder" : the active strategy has no rank thresholds defined.
-      - "unranked"  : the strategy has a ladder but the user has NO time on it
-                      yet — they are UNRANKED for this strategy (a PB on a
-                      DIFFERENT strategy does not count)."""
+      - "unranked"  : the strategy has a ladder but nothing gradeable — no
+                      saved PB (pb mode) / no valid runs (avg modes) on THIS
+                      strategy (another strategy's times never count).
+    Every payload carries "mode"; non-pb modes with a gradeable basis also
+    carry "basis" {frames, display, count, window} — what the rank is based
+    on (drives the banner's 'avg of N' line)."""
     if ranks is None:
         return None
     has_standards = bool(ranks.ladders(ek))
     if not has_standards:
         return None
     if not strat:
-        return {"rank": None, "reason": "no_strat"}
+        return {"rank": None, "reason": "no_strat", "mode": mode}
     ladder = ranks.ladder_cs(ek, strat)
     if not ladder:
-        return {"rank": None, "reason": "no_ladder"}
-    if pb is None:
-        return {"rank": None, "reason": "unranked"}
-    return classify.band(ladder, classify.display_cs(pb["frames"]))
+        return {"rank": None, "reason": "no_ladder", "mode": mode}
+    if basis is None:
+        return {"rank": None, "reason": "unranked", "mode": mode}
+    out = classify.band(ladder, classify.display_cs(basis["frames"]))
+    out["mode"] = mode
+    if mode != "pb":
+        out["basis"] = {"frames": basis["frames"],
+                        "display": format_igt(basis["frames"]),
+                        "count": basis["count"], "window": basis["window"]}
+    return out
 
 
 def _markers_for(markers_state: dict, course_id, star_id) -> dict:
@@ -385,6 +431,9 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     registered = db.get_state("strategies", {})
     markers_state = db.get_state("timeline_markers", {})
     time_filters_state = db.get_state("time_filters", {})
+    rank_mode = db.get_state("rank_mode", classify.DEFAULT_RANK_MODE)
+    if rank_mode not in classify.RANK_MODES:   # forward-safe: junk reads as pb
+        rank_mode = classify.DEFAULT_RANK_MODE
 
     sections, unassigned = [], []
     seen: dict[tuple[int, int], None] = {}
@@ -460,7 +509,11 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "rank": _section_banner(
                 service.ranks, entity_key(course_id, star_id),
                 (star_strat := service.strat_by_star.get((course_id, star_id))),
-                pbs_by_strat.get((course_id, star_id, clock, star_strat))),
+                _grading_basis(
+                    rank_mode,
+                    pbs_by_strat.get((course_id, star_id, clock, star_strat)),
+                    history, star_strat, clock),
+                rank_mode),
         })
     sections.sort(key=lambda s: last_id.get((s["course_id"], s["star_id"]), -1),
                   reverse=True)
@@ -506,7 +559,11 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "rank": _section_banner(
                 service.ranks, entity_key(None, None, seg_id),
                 (seg_strat := service.strat_by_segment.get(seg_id)),
-                pbs_by_strat.get(("segment", seg_id, "rta", seg_strat))),
+                _grading_basis(
+                    rank_mode,
+                    pbs_by_strat.get(("segment", seg_id, "rta", seg_strat)),
+                    history, seg_strat, "rta"),
+                rank_mode),
         })
     seg_sections.sort(
         key=lambda s: last_id.get(("segment", s["segment_id"]), -1),
@@ -545,8 +602,14 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         "rank_by_star": {
             f"{c}:{s}": rank
             for (c, s), strat in service.strat_by_star.items()
-            if (rank := _strat_rank(service.ranks, entity_key(c, s), strat,
-                                    pbs_by_strat.get((c, s, "igt", strat))))},
+            if (rank := _strat_rank(
+                service.ranks, entity_key(c, s), strat,
+                _grading_basis(
+                    rank_mode, pbs_by_strat.get((c, s, "igt", strat)),
+                    [a for a in all_attempts
+                     if a.course_id == c and a.star_id == s],
+                    strat, "igt")))},
+        "rank_mode": rank_mode,
         "stage": service.current_stage,
         # Segments that start in a known subarea OR level, for the quick-select
         # banner (filtered client-side by the current subarea/level). `enabled`
@@ -663,23 +726,28 @@ def build_run_history(db, route_id: int | None = None) -> dict:
             "pb": {"total_ms": pb["total_ms"]} if pb else None}
 
 
-def _candidate_rank(db, service, c) -> str | None:
-    """Rank for one route candidate under its active strat, graded ONLY by a
-    PB achieved WITH that strat (per-strategy ranking — the strat_tag filter on
-    current_pb; a faster PB on another strat must not rank this candidate)."""
+def _candidate_rank(db, service, c, mode, attempts) -> str | None:
+    """Rank for one route candidate under its active strat, graded by the
+    rank-mode basis (per-strategy: another strat's times never count)."""
     if service.ranks is None:
-        return None  # skip the PB lookup entirely when nothing can be graded
+        return None  # skip the lookups entirely when nothing can be graded
     if c["type"] == "segment":
         ek = entity_key(None, None, c["segment_id"])
         strat = service.strat_by_segment.get(c["segment_id"])
+        clock = "rta"
+        history = [a for a in attempts if a.segment_id == c["segment_id"]]
         pb = (db.current_pb(None, None, "rta", segment_id=c["segment_id"],
                             strat_tag=strat) if strat else None)
     else:
         ek = entity_key(c["course"], c["star"])
         strat = service.strat_by_star.get((c["course"], c["star"]))
+        clock = "igt"
+        history = [a for a in attempts
+                   if a.course_id == c["course"] and a.star_id == c["star"]]
         pb = (db.current_pb(c["course"], c["star"], "igt", strat_tag=strat)
               if strat else None)
-    return _strat_rank(service.ranks, ek, strat, pb)
+    return _strat_rank(service.ranks, ek, strat,
+                       _grading_basis(mode, pb, history, strat, clock))
 
 
 def build_route_view(db, service, route_id: int) -> dict:
@@ -692,6 +760,9 @@ def build_route_view(db, service, route_id: int) -> dict:
     if route is None:
         raise LookupError(f"route {route_id} not found")
     attempts = db.attempts()
+    rank_mode = db.get_state("rank_mode", classify.DEFAULT_RANK_MODE)
+    if rank_mode not in classify.RANK_MODES:   # forward-safe: junk reads as pb
+        rank_mode = classify.DEFAULT_RANK_MODE
     seg_names = {d["id"]: d["name"] for d in db.segment_defs()}
     stats = route_stats(route["steps"], attempts)
     steps = []
@@ -710,7 +781,8 @@ def build_route_view(db, service, route_id: int) -> dict:
                               "star": c["star"],
                               "display": star_name(c["course"], c["star"]),
                               "course_name": course_name(c["course"])})
-        ranks_here = [_candidate_rank(db, service, c) for c in step["candidates"]]
+        ranks_here = [_candidate_rank(db, service, c, rank_mode, attempts)
+                      for c in step["candidates"]]
         best = max((r for r in ranks_here if r),
                    key=lambda r: classify.RANK_SCORE[r], default=None)
         steps.append({"label": step.get("label"), "need": step["need"],

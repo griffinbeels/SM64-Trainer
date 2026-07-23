@@ -1014,21 +1014,24 @@ def test_section_banner_sentinel_when_standards_but_no_strat(tmp_path):
             "fast": {"Mario": 11.0, "Diamond": 12.0}}}}}))
     ranks = RankStandards(p); ranks.load()
     # entity HAS standards, no active strat → "pick a strat" sentinel
-    result = _section_banner(ranks, "star:2:2", strat=None, pb=None)
-    assert result == {"rank": None, "reason": "no_strat"}
+    result = _section_banner(ranks, "star:2:2", strat=None, basis=None, mode="pb")
+    assert result == {"rank": None, "reason": "no_strat", "mode": "pb"}
     # entity HAS standards, active strat with a ladder but NO time on it yet →
     # UNRANKED (a PB on another strat must not be borrowed here)
-    result2 = _section_banner(ranks, "star:2:2", strat="fast", pb=None)
-    assert result2 == {"rank": None, "reason": "unranked"}
+    result2 = _section_banner(ranks, "star:2:2", strat="fast", basis=None, mode="pb")
+    assert result2 == {"rank": None, "reason": "unranked", "mode": "pb"}
     # entity HAS standards, active strat has no ladder → no_ladder sentinel
-    # (even though a pb is supplied — that strat simply has no thresholds)
-    result3 = _section_banner(ranks, "star:2:2", strat="unknown_strat", pb={"frames": 343})
-    assert result3 == {"rank": None, "reason": "no_ladder"}
+    result3 = _section_banner(ranks, "star:2:2", strat="unknown_strat",
+                              basis={"frames": 343, "count": 1, "window": None},
+                              mode="pb")
+    assert result3 == {"rank": None, "reason": "no_ladder", "mode": "pb"}
     # entity has NO standards → None (don't render banner at all)
-    result4 = _section_banner(ranks, "star:8:1", strat=None, pb=None)
+    result4 = _section_banner(ranks, "star:8:1", strat=None, basis=None, mode="pb")
     assert result4 is None
     # ranks is None → None
-    result5 = _section_banner(None, "star:2:2", strat="fast", pb={"frames": 343})
+    result5 = _section_banner(None, "star:2:2", strat="fast",
+                              basis={"frames": 343, "count": 1, "window": None},
+                              mode="pb")
     assert result5 is None
 
 
@@ -1115,7 +1118,7 @@ def test_rank_uses_only_that_strategys_pb_not_the_overall_best(tmp_path):
     # Switch active strat to B: no time on B yet → UNRANKED (NOT A's Diamond).
     asyncio.run(svc.set_strat(2, 2, "B"))
     sec = build_session_view(db, svc, clock="igt")["stars"][0]
-    assert sec["rank"] == {"rank": None, "reason": "unranked"}
+    assert sec["rank"] == {"rank": None, "reason": "unranked", "mode": "pb"}
     assert sec["pb"]["igt"]["frames"] == 343         # overall best PB unchanged
 
     # Record a time on B (the slower 350f) and save it → B graded by its OWN
@@ -1204,3 +1207,133 @@ def test_segment_section_time_filter_reads_def_guards(tmp_path):
     sec = next(s for s in view["segments"] if s["segment_id"] == sid)
     assert sec["time_filter"] == {"min_frames": 180, "max_frames": 600,
                                   "is_default": False}
+
+
+# -- rank modes (average rank mode spec) ---------------------------------------
+
+def _mode_ranks(tmp_path):
+    """Ladder where the seeded PB (343f = 11.43s displayed) is Mario but the
+    seeded mean (343+350 -> 346f = 11.53s) is Diamond; 'slow' has a ladder
+    but will have no valid runs (attempts are tagged 'fast')."""
+    import json
+    from sm64_events.ranks.standards import RankStandards
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "star:2:2": {"clock": "igt", "strategies": {
+            "fast": {"Mario": 11.44, "Diamond": 12.0, "Silver": 13.0},
+            "slow": {"Mario": 11.44, "Diamond": 12.0, "Silver": 13.0}}}}}))
+    s = RankStandards(p); s.load(); return s
+
+
+def _seed_fast_with_pb(db, svc, tmp_path):
+    seed(svc)
+    svc.ranks = _mode_ranks(tmp_path)
+    asyncio.run(svc.set_strat(2, 2, "fast"))
+    # per-strategy ranking: attempts + the PB row must carry 'fast'
+    db._conn.execute("UPDATE attempts SET strat_tag='fast' WHERE course_id=2")
+    db._conn.commit()
+    best_aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    asyncio.run(svc.save_pb(best_aid, "igt"))
+    return best_aid
+
+
+def test_rank_mode_average_grades_the_mean_not_the_pb(tmp_path):
+    """pb mode grades the saved PB (343f -> Mario); avg modes grade the MEAN
+    of valid runs (343+350 -> 346f -> Diamond) and ship the basis."""
+    db, svc = make(tmp_path)
+    _seed_fast_with_pb(db, svc, tmp_path)
+
+    view = build_session_view(db, svc, clock="igt")     # default mode: pb
+    [sec] = view["stars"]
+    assert view["rank_mode"] == "pb"
+    assert sec["rank"]["rank"] == "Mario" and sec["rank"]["mode"] == "pb"
+    assert "basis" not in sec["rank"]
+    assert view["rank_by_star"]["2:2"] == "Mario"
+
+    db.set_state("rank_mode", "avg10")
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    assert view["rank_mode"] == "avg10"
+    assert sec["rank"]["rank"] == "Diamond" and sec["rank"]["mode"] == "avg10"
+    assert sec["rank"]["basis"] == {"frames": 346, "display": "0'11\"53",
+                                    "count": 2, "window": 10}
+    assert view["rank_by_star"]["2:2"] == "Diamond"
+    # per-attempt medals stay per-run: the 343f attempt still reads Mario
+    assert [a["rank"] for a in sec["attempts"]
+            if a["outcome"] == "success"][0] == "Mario"
+
+
+def test_rank_mode_average_excludes_cleared_runs(tmp_path):
+    """Clearing the 350f run shrinks the average to just 343f -> Mario,
+    count 1 (valid = successful AND not purged)."""
+    db, svc = make(tmp_path)
+    _seed_fast_with_pb(db, svc, tmp_path)
+    db.set_state("rank_mode", "avg10")
+    slow_aid = next(a.id for a in db.attempts() if a.igt_frames == 350)
+    asyncio.run(svc.clear_attempt(slow_aid, reason="test purge"))
+    # clear_attempt re-projects, rebuilding attempts from the journal — the
+    # seeded events precede the strat_set entry, so replay wipes the direct-SQL
+    # 'fast' tags. Re-tag so the surviving run still counts toward the average;
+    # the cleared flag itself survives reprojection (journaled clear wins).
+    db._conn.execute("UPDATE attempts SET strat_tag='fast' WHERE course_id=2")
+    db._conn.commit()
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    assert sec["rank"]["rank"] == "Mario"
+    assert sec["rank"]["basis"]["count"] == 1
+    assert sec["rank"]["basis"]["frames"] == 343
+
+
+def test_rank_mode_unranked_when_strat_has_no_valid_runs(tmp_path):
+    """avg mode + a strategy with a ladder but zero valid runs (all attempts
+    are tagged 'fast', active strat is 'slow') -> unranked sentinel carrying
+    the mode (the UI words it 'no valid runs on this strategy yet')."""
+    db, svc = make(tmp_path)
+    _seed_fast_with_pb(db, svc, tmp_path)
+    db.set_state("rank_mode", "avg10")
+    asyncio.run(svc.set_strat(2, 2, "slow"))
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    assert sec["rank"] == {"rank": None, "reason": "unranked", "mode": "avg10"}
+
+
+def test_rank_mode_unknown_stored_value_falls_back_to_pb(tmp_path):
+    db, svc = make(tmp_path)
+    _seed_fast_with_pb(db, svc, tmp_path)
+    db.set_state("rank_mode", "bogus")
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    assert view["rank_mode"] == "pb"
+    assert sec["rank"]["rank"] == "Mario" and sec["rank"]["mode"] == "pb"
+
+
+def test_rank_mode_best_order_grades_the_fastest_runs(tmp_path):
+    """best10 takes the FASTEST runs ever: after adding a slow 380f success,
+    avg10 (mean of all 3 = 358f -> Diamond) differs from pb (Mario); best10
+    with window 10 still averages all 3 here, so distinguish orders at the
+    pure level (test_ranks_classify) and verify best10 plumbs through with
+    the top-order basis."""
+    db, svc = make(tmp_path)
+    _seed_fast_with_pb(db, svc, tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 3000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(3500, igt=380)))
+    db._conn.execute("UPDATE attempts SET strat_tag='fast' WHERE course_id=2")
+    db._conn.commit()
+    db.set_state("rank_mode", "best10")
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    # mean of [343, 350, 380] = 357.67 -> 358f = 11.93s displayed -> Diamond
+    assert sec["rank"]["rank"] == "Diamond"
+    assert sec["rank"]["basis"]["count"] == 3
+    assert sec["rank"]["basis"]["window"] == 10
+
+
+def test_route_candidate_rank_follows_rank_mode(tmp_path):
+    from sm64_events.tracking.views import build_route_view
+    db, svc = make(tmp_path)
+    _seed_fast_with_pb(db, svc, tmp_path)
+    rid = asyncio.run(svc.create_route({"name": "V", "steps": [
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 2}]}]}))
+    assert build_route_view(db, svc, rid)["steps"][0]["rank"] == "Mario"
+    db.set_state("rank_mode", "avg10")
+    assert build_route_view(db, svc, rid)["steps"][0]["rank"] == "Diamond"
