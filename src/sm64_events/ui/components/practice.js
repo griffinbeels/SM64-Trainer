@@ -10,6 +10,7 @@ import { Progress } from "./progress.js";
 import { StageBanner } from "./stagebanner.js";
 import { Medal, RankBanner } from "./ranks.js";
 import { StandardsPanel } from "./standards.js";
+import { StratModal } from "./stratmodal.js";
 
 const html = htm.bind(h);
 
@@ -349,6 +350,7 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
   // showing a phantom pick while the border stays red, then revert on the next
   // unrelated remount. Bumping the key snaps it back to the server's truth.
   const [stratNonce, setStratNonce] = useState(0);
+  const [showStratModal, setShowStratModal] = useState(false);
   const pb = sec.pb[t.clock];
   const base = showHidden ? sec.attempts
     : sec.attempts.filter((a) => !a.cleared && a.outcome !== "abandoned");
@@ -362,10 +364,7 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
   const { focus, pick, clearFocus } = useGraphPick(rows, visible, setVisible);
 
   async function setStrat(v) {
-    if (v === "__new") {
-      v = (window.prompt("New strategy name:") || "").trim();
-      if (!v) { setStratNonce((n) => n + 1); return; }   // cancelled: snap back
-    }
+    if (v === "__new") { setShowStratModal(true); return; }
     try {
       await send("POST", "/api/strat", {
         course_id: sec.course_id, star_id: sec.star_id,
@@ -417,6 +416,10 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
           ? "wipe this star's data (all sessions)"
           : "wipe this star's data (current session)"}>clear data</button>
     </div>
+    ${showStratModal ? html`<${StratModal}
+        entity=${`star:${sec.course_id}:${sec.star_id}`} existing=${sec.strategies}
+        onSaved=${(stratName) => { setShowStratModal(false); setStrat(stratName); }}
+        onClose=${() => { setShowStratModal(false); setStratNonce((n) => n + 1); }} />` : null}
     ${sec.rank ? html`<${RankBanner} banner=${sec.rank} />` : null}
     <${Timeline} tl=${sec.timeline} sec=${sec} t=${t} />
     <${Progress} prog=${sec.progress} clock=${t.clock} onPick=${pick} />
