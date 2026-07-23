@@ -16,7 +16,10 @@ Contract (the UI builds against ALL of this):
   (segments have no IGT): pb / attempts / stats / timeline / progress all
   read rta_frames whatever the view clock. Marker keys: 'seg:<id>:<strat>'.
 - `target` is kind-aware: service.target_payload() identity + display
-  names, every key present for both kinds (shape stability)."""
+  names, every key present for both kinds (shape stability).
+- Every star AND segment section carries `time_filter: {min_frames,
+  max_frames, is_default}` — effective validity bounds after the implicit
+  0.5 s default is filled in; drives the header's `⏱` chip."""
 from sm64_events.core.timefmt import format_igt
 from sm64_events.links import star_links
 from sm64_events.memory.addresses import (COURSE_NAMES, course_name,
