@@ -83,10 +83,10 @@ That's it — no Python, nothing else to set up.
 **Updates are automatic and small.** On launch the app checks GitHub for a
 newer release; if one exists you get an in-app popup with the patch notes,
 a link, and the exact download size. Updates download **only the files that
-changed** (typically a few MB, not the whole app — every file SHA-256
-verified, with automatic rollback if anything is interrupted), then the app
-restarts — your history and PBs are untouched, and your Desktop shortcut
-keeps working forever. **Skip this version** silences that one release (a
+changed** (typically ~25 MB, sometimes just kilobytes — never the full
+app; every file SHA-256 verified, with automatic rollback if anything is
+interrupted), then the app restarts — your history and PBs are untouched,
+and your Desktop shortcut keeps working forever. **Skip this version** silences that one release (a
 newer one will still notify); **Later** dismisses until next launch.
 (In-app updates don't trigger SmartScreen — only the first manual download
 does. One caveat for **portable-zip** copies: the very first update

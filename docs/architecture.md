@@ -577,9 +577,24 @@ inside the PYZ hashes differently each build and the "changed files" set
 balloons. The zip is deterministic too (sorted entries, fixed 1980
 timestamps).
 
-**Measured volatile set:** _to be filled at the live gate_ — build at two
-adjacent commits, diff manifests, record which files changed and the typical
-delta download size here.
+**Measured volatile set (2026-07-23, live-gate build machine):**
+- Two `--mode app` builds at the SAME commit: 2,878 files / 553 MB —
+  **0 changed bytes** (byte-identical). The `PYTHONHASHSEED=1` +
+  `SOURCE_DATE_EPOCH` re-exec fully works. One first-build-only artifact:
+  PyInstaller's analysis of build 1 generated `comtypes/gen/__init__.py`
+  into site-packages, which build 2+ then collects (sub-KB, stable after
+  the first build on a machine).
+- The onedir `SM64Trainer.exe` is 24.8 MB raw / **23.4 MB deflated** and
+  embeds the PYZ (ALL our Python code) — so any Python change costs
+  ~23.4 MB of download. Data files (`_internal/sm64_events/ui/*.js`, seeds,
+  ffmpeg) are separate files: a UI-only release deltas in KILOBYTES, and
+  the ~200 MB dependency bulk moves only when `uv.lock` bumps a package.
+- Real-CDN Range probe: GitHub release assets answer
+  `Range: bytes=0-99` with 302→302→**206 Partial Content**, exactly 100
+  bytes — the incremental premise holds against production infrastructure.
+- Bootstrap installer builds at **11.2 MB** (vs the ~25 MB estimate).
+- Net: typical update ≈ **23-25 MB** (was 220 MB); best case KBs; worst
+  case (dependency bump) proportional to the bumped packages only.
 
 ## Compare (side-by-side, v1.3.0)
 
