@@ -1,14 +1,24 @@
 # tools/build_exe.py
-"""One-command build: `uv run python tools/build_exe.py` -> dist/SM64Trainer.exe
+"""One-command build: `uv run python tools/build_exe.py` ->
+dist/SM64Trainer/ (onedir app) + dist/SM64TrainerSetup.exe (bootstrap).
 
-Bundles Python + all native deps + the UI folder + the Ukiki icon into a
-single onefile exe. ffmpeg is bundled automatically: --ffmpeg PATH wins,
-else the ffmpeg on PATH is used (so end users never install it themselves).
-Only if neither is found does the exe fall back to the in-process PyAV
-encoder. Releases MUST bundle ffmpeg — keep an ffmpeg on PATH when building."""
+The app is ONEDIR (spec 2026-07-23-incremental-updates): the updater
+replaces individual files under the install root, so the build must produce
+a folder, not a fused exe. The bootstrap is a tiny stdlib-only ONEFILE
+installer, uploaded to releases under the load-bearing asset name
+SM64Trainer.exe (old shipped updaters can only install that name).
+
+Reproducibility: PYTHONHASHSEED randomizes compiled bytecode, which would
+make every .pyc/PYZ hash differently per build and bloat update deltas.
+main() re-execs itself with PYTHONHASHSEED=1 + SOURCE_DATE_EPOCH=<HEAD
+commit time> so unchanged sources produce identical bytes across releases.
+
+ffmpeg is bundled automatically: --ffmpeg PATH wins, else the ffmpeg on
+PATH. Releases MUST bundle ffmpeg."""
 import argparse
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -20,18 +30,24 @@ COLLECT = ["av", "windows_capture", "pyaudiowpatch", "pycaw", "comtypes",
            "pymem", "webview", "pystray", "numpy", "yt_dlp"]
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--ffmpeg",
-                    help="ffmpeg.exe to bundle (default: the one on PATH)")
-    args = ap.parse_args()
+def needs_reexec(environ) -> bool:
+    return environ.get("PYTHONHASHSEED") != "1"
 
-    import PyInstaller.__main__ as pyi
 
+def _source_date_epoch() -> str:
+    try:
+        out = subprocess.run(["git", "log", "-1", "--format=%ct"], cwd=REPO,
+                             capture_output=True, text=True, check=True)
+        return out.stdout.strip() or "315532800"
+    except Exception:
+        return "315532800"    # 1980-01-01, matches the zip timestamp floor
+
+
+def app_args(ffmpeg: "str | None") -> list[str]:
     argv = [
         str(REPO / "gui_entry.py"),
         "--name", "SM64Trainer",
-        "--onefile", "--windowed", "--clean", "--noconfirm",
+        "--windowed", "--clean", "--noconfirm",     # onedir: no --onefile
         "--paths", str(REPO / "src"),
         "--icon", str(REPO / "assets" / "ukiki.ico"),
         "--runtime-hook", str(REPO / "tools" / "rthook_comtypes.py"),
@@ -52,24 +68,53 @@ def main() -> int:
     ]
     for pkg in COLLECT:
         argv += ["--collect-all", pkg]
-    # ffmpeg: explicit flag wins, else auto-discover on PATH so the plain
-    # one-command build still bundles it (the released exe must be
-    # self-contained — end users never install ffmpeg).
-    ffmpeg = args.ffmpeg or shutil.which("ffmpeg")
     if ffmpeg:
-        ff = Path(ffmpeg)
-        if not ff.exists():
-            print(f"ffmpeg not found: {ff}", file=sys.stderr)
-            return 2
-        argv += ["--add-binary", f"{ff}{SEP}."]
-        print(f"bundling ffmpeg: {ff}")
-    else:
-        print("WARNING: no ffmpeg found on PATH and --ffmpeg not given — "
-              "building WITHOUT it; replay will use the in-process encoder. "
-              "Install ffmpeg (or pass --ffmpeg PATH) for a proper release.")
+        argv += ["--add-binary", f"{ffmpeg}{SEP}."]
+    return argv
 
-    pyi.run(argv)
-    print("\nBuilt:", REPO / "dist" / "SM64Trainer.exe")
+
+def bootstrap_args() -> list[str]:
+    return [
+        str(REPO / "bootstrap_entry.py"),
+        "--name", "SM64TrainerSetup",
+        "--onefile", "--windowed", "--clean", "--noconfirm",
+        "--paths", str(REPO / "src"),
+        "--icon", str(REPO / "assets" / "ukiki.ico"),
+    ]
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--mode", choices=["app", "bootstrap", "all"],
+                    default="all")
+    ap.add_argument("--ffmpeg",
+                    help="ffmpeg.exe to bundle (default: the one on PATH)")
+    args = ap.parse_args()
+
+    if needs_reexec(os.environ):
+        env = {**os.environ, "PYTHONHASHSEED": "1",
+               "SOURCE_DATE_EPOCH": _source_date_epoch()}
+        return subprocess.run([sys.executable, __file__, *sys.argv[1:]],
+                              env=env).returncode
+
+    import PyInstaller.__main__ as pyi
+
+    if args.mode in ("app", "all"):
+        ffmpeg = args.ffmpeg or shutil.which("ffmpeg")
+        if ffmpeg and not Path(ffmpeg).exists():
+            print(f"ffmpeg not found: {ffmpeg}", file=sys.stderr)
+            return 2
+        if not ffmpeg:
+            print("WARNING: no ffmpeg found on PATH and --ffmpeg not given — "
+                  "building WITHOUT it; replay will use the in-process "
+                  "encoder. Install ffmpeg for a proper release.")
+        else:
+            print(f"bundling ffmpeg: {ffmpeg}")
+        pyi.run(app_args(ffmpeg))
+        print("\nBuilt:", REPO / "dist" / "SM64Trainer")
+    if args.mode in ("bootstrap", "all"):
+        pyi.run(bootstrap_args())
+        print("\nBuilt:", REPO / "dist" / "SM64TrainerSetup.exe")
     return 0
 
 
