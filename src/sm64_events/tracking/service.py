@@ -401,7 +401,16 @@ class TrackerService:
         folded in by projection.strat_overrides, never written into the
         derived attempts row. Editing history does NOT touch the live
         per-target strategy memory — the two are deliberately independent.
-        Re-picking the previous strategy is the undo."""
+        Re-picking the previous strategy is the undo.
+
+        Note the asymmetry with set_strat_segment, which raises LookupError
+        once a segment definition is deleted: this command checks only that
+        the ATTEMPT exists, so a deleted segment's history stays
+        reclassifiable (past attempts keep their recorded times — the same
+        rule purge_strategy follows). That is why the attempt-row strat
+        dropdown in ui/components/practice.js is NOT gated on `sec.broken`
+        the way the segment card's own header picker has to be; do not
+        "fix" that asymmetry by adding the gate."""
         db = self._require_db()
         attempt = next((a for a in db.attempts() if a.id == attempt_id), None)
         if attempt is None:

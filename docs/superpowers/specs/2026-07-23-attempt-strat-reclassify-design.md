@@ -127,9 +127,10 @@ No new UI refresh wiring: `_reproject()` already broadcasts
 POST /api/attempts/{attempt_id}/strat   { "strat_tag": "Cannonless" | null }
 ```
 
-Same error taxonomy as its neighbours (`LookupError`→404, `ValueError`→400,
-`RuntimeError`→409). Sits next to `/clear` and `/restore`, which is where a
-reader looking for per-attempt mutations will already be.
+Same error taxonomy as its neighbours, via the shared `_http` helper —
+`LookupError`→404, `ValueError`→409, `RuntimeError`→503 (degraded mode).
+Sits next to `/clear` and `/restore`, which is where a reader looking for
+per-attempt mutations will already be.
 
 ### UI
 
