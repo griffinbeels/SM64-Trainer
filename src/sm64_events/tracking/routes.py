@@ -107,8 +107,8 @@ def export_route(name: str, steps: list, segment_defs: dict,
                  start_condition: dict | None = None) -> dict:
     """Self-contained export. Segment candidates embed their full definition
     (resolved from segment_defs: id -> {name, start_triggers, end_triggers,
-    guards}); star candidates are portable as-is. Raises ValueError if a step
-    references a segment id not in segment_defs."""
+    waypoints, guards}); star candidates are portable as-is. Raises ValueError
+    if a step references a segment id not in segment_defs."""
     out_steps = []
     for step in steps:
         cands = []
@@ -120,7 +120,9 @@ def export_route(name: str, steps: list, segment_defs: dict,
                         f"route references missing segment {c['segment_id']}")
                 cands.append({"type": "segment", "segment": {
                     "name": d["name"], "start_triggers": d["start_triggers"],
-                    "end_triggers": d["end_triggers"], "guards": d["guards"]}})
+                    "end_triggers": d["end_triggers"],
+                    "waypoints": d.get("waypoints", []),
+                    "guards": d["guards"]}})
             else:
                 cands.append(dict(c))
         out_step = {"need": step["need"], "candidates": cands}
@@ -136,6 +138,7 @@ def _segment_matches(emb: dict, existing: dict) -> bool:
     return (existing["name"] == emb["name"]
             and existing["start_triggers"] == emb["start_triggers"]
             and existing["end_triggers"] == emb["end_triggers"]
+            and existing.get("waypoints", []) == emb.get("waypoints", [])
             and existing.get("guards", []) == emb.get("guards", []))
 
 
@@ -176,6 +179,7 @@ def resolve_import(payload: dict, existing_defs: list) -> dict:
                 emb_def = {"name": emb["name"],
                            "start_triggers": emb.get("start_triggers", []),
                            "end_triggers": emb.get("end_triggers", []),
+                           "waypoints": emb.get("waypoints", []),
                            "guards": emb.get("guards", [])}
                 match = next((e for e in existing_defs
                               if _segment_matches(emb_def, e)), None)
