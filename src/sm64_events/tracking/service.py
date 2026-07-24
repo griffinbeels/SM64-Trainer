@@ -477,7 +477,9 @@ class TrackerService:
         sid = db.insert_segment_def(d["name"], d["start_triggers"],
                                     d["end_triggers"], d.get("guards", []),
                                     _iso(_now()),
-                                    enabled=d.get("enabled", True))
+                                    enabled=d.get("enabled", True),
+                                    waypoints=d.get("waypoints", []),
+                                    category=d.get("category"))
         await self._segments_changed()
         return sid
 
@@ -492,7 +494,8 @@ class TrackerService:
         validate_definition({**current, **d})
         db.update_segment_def(segment_id, **{
             k: d[k] for k in ("name", "enabled", "start_triggers",
-                              "end_triggers", "guards") if k in d})
+                              "end_triggers", "waypoints", "guards",
+                              "category") if k in d})
         await self._segments_changed()
 
     async def delete_segment(self, segment_id: int) -> None:
@@ -535,7 +538,8 @@ class TrackerService:
         route_logic.validate_route(d)          # structural, BEFORE insert
         self._check_segment_refs(db, d["steps"])
         rid = db.insert_route(d["name"], d["steps"], _iso(_now()),
-                              start_condition=d.get("start_condition"))
+                              start_condition=d.get("start_condition"),
+                              category=d.get("category"))
         await self._routes_changed()
         return rid
 
@@ -548,7 +552,8 @@ class TrackerService:
         route_logic.validate_route(merged)
         self._check_segment_refs(db, merged["steps"])
         db.update_route(route_id, updated_utc=_iso(_now()),
-                        **{k: d[k] for k in ("name", "steps", "start_condition") if k in d})
+                        **{k: d[k] for k in ("name", "steps", "start_condition",
+                                             "category") if k in d})
         await self._routes_changed()
         if (("steps" in d or "start_condition" in d)
                 and self._projector.armed_route_id() == route_id):

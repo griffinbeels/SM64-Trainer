@@ -611,6 +611,34 @@ def test_update_segment_validates_merged_definition(tmp_path):
         asyncio.run(svc.update_segment(999, {"enabled": False}))
 
 
+def test_segment_category_persists(tmp_path):
+    db, svc, sent = make_rec(tmp_path)
+    sid = asyncio.run(svc.create_segment({
+        "name": "s", "start_triggers": [{"type": "spawned", "level": 16}],
+        "end_triggers": [{"type": "level_enter", "to": 6}],
+        "category": "Tricks"}))
+    d = next(d for d in db.segment_defs() if d["id"] == sid)
+    assert d["category"] == "Tricks"
+
+
+def test_segment_waypoints_persist_via_create(tmp_path):
+    db, svc, sent = make_rec(tmp_path)
+    sid = asyncio.run(svc.create_segment({
+        "name": "w", "start_triggers": [{"type": "level_exit", "from": 10}],
+        "end_triggers": [{"type": "level_enter", "to": 7}],
+        "waypoints": [[{"type": "level_enter", "to": 10}]]}))
+    d = next(d for d in db.segment_defs() if d["id"] == sid)
+    assert d["waypoints"] == [[{"type": "level_enter", "to": 10}]]
+
+
+def test_update_segment_category_persists(tmp_path):
+    db, svc, sent = make_rec(tmp_path)
+    lblj = seed_id(db, "LBLJ")
+    asyncio.run(svc.update_segment(lblj, {"category": "Main Categories"}))
+    d = next(d for d in db.segment_defs() if d["id"] == lblj)
+    assert d["category"] == "Main Categories"
+
+
 def test_delete_segment_removes_def_and_reprojects(tmp_path):
     db, svc, sent = make_rec(tmp_path)
     lblj = seed_id(db, "LBLJ")
@@ -823,6 +851,22 @@ def test_create_route_persists_and_broadcasts(tmp_path):
             {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}))
     assert any(r["id"] == rid and r["name"] == "Test Route" for r in db.routes())
     assert any(e.type == "routes_changed" for e in sent)
+
+
+def test_route_category_persists(tmp_path):
+    db, svc = make(tmp_path)
+    rid = asyncio.run(svc.create_route({"name": "r", "steps": [],
+                                        "category": "Main Categories"}))
+    d = next(r for r in db.routes() if r["id"] == rid)
+    assert d["category"] == "Main Categories"
+
+
+def test_update_route_category_persists(tmp_path):
+    db, svc = make(tmp_path)
+    rid = asyncio.run(svc.create_route({"name": "r", "steps": []}))
+    asyncio.run(svc.update_route(rid, {"category": "Bowser"}))
+    d = next(r for r in db.routes() if r["id"] == rid)
+    assert d["category"] == "Bowser"
 
 
 def test_create_route_rejects_missing_segment(tmp_path):

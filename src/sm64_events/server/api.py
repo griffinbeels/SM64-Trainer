@@ -103,6 +103,8 @@ class SegmentBody(BaseModel):
     end_triggers: list[dict]
     guards: list[dict] = []
     enabled: bool = True
+    waypoints: list = []
+    category: str | None = None
 
 
 class SegmentPatch(BaseModel):
@@ -113,6 +115,13 @@ class SegmentPatch(BaseModel):
     end_triggers: list[dict] | None = None
     guards: list[dict] | None = None
     enabled: bool | None = None
+    # None = untouched (excluded from the patch below); [] is a valid EXPLICIT
+    # clear and must round-trip distinctly from "field omitted" — mirrors
+    # guards/start_triggers above. A `list = []` default here would make
+    # model_dump() always include waypoints, wiping it on every unrelated
+    # PATCH (e.g. just flipping `enabled`).
+    waypoints: list | None = None
+    category: str | None = None
 
 
 class TimeFilterBody(BaseModel):
@@ -128,6 +137,7 @@ class RouteBody(BaseModel):
     name: str
     steps: list[dict]
     start_condition: dict | None = None
+    category: str | None = None
 
 
 class RoutePatch(BaseModel):
@@ -136,6 +146,7 @@ class RoutePatch(BaseModel):
     name: str | None = None
     steps: list[dict] | None = None
     start_condition: dict | None = None
+    category: str | None = None
 
 
 class ImportBody(BaseModel):
