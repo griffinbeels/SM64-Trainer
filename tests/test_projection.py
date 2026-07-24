@@ -1083,6 +1083,34 @@ def test_segment_with_a_location_free_start_trigger_keeps_its_target():
     assert p.target == ("segment", 11)
 
 
+def _sl_hmc_waypoint_segment():
+    from sm64_events.tracking.segments import SegmentDef
+    return SegmentDef(id=20, name="SL->HMC", enabled=True,
+                      start_triggers=[{"type": "level_exit", "from": 10, "to": 16}],
+                      end_triggers=[{"type": "level_enter", "to": 24}],
+                      guards=[],
+                      waypoints=[[{"type": "level_enter", "to": 10}],
+                                 [{"type": "level_exit", "from": 10, "to": 16}]])
+
+
+def test_waypoint_level_keeps_a_multi_level_segment_target():
+    # Fix (whole-branch review 2026-07-24): start_level_set only considered
+    # a def's START triggers, so a multi-level waypoint segment's re-entry
+    # level (SL->HMC starts on level_exit 10->16, then waypoints re-enter
+    # SL at level 10) fell OUTSIDE that set and the practice target was
+    # wrongly retired mid-sequence. This test FAILS before the segments.py
+    # fix (target goes None on the waypoint level_changed) and passes after.
+    p = Projector(segments=[_sl_hmc_waypoint_segment()])
+    p.feed(jev(1, "level_changed", 500, {"from": 10, "to": 16}))   # arms via start trigger
+    p.feed(jev(2, "target_set", 600, {"kind": "segment", "segment_id": 20}))
+    p.feed(jev(3, "level_changed", 700, {"from": 16, "to": 10}))   # waypoint 0: re-enter SL
+    assert p.target == ("segment", 20)                            # RED today: wrongly None
+    p.feed(jev(4, "level_changed", 900, {"from": 10, "to": 16}))   # waypoint 1: exit again
+    assert p.target == ("segment", 20)
+    p.feed(jev(5, "level_changed", 1100, {"from": 16, "to": 8}))   # unrelated level: retires
+    assert p.target is None
+
+
 def test_grab_closing_star_and_segment_orders_star_first_and_target_follows_segment():
     from sm64_events.tracking.segments import SegmentDef
     b3 = SegmentDef(id=10, name="Bowser 3", enabled=True,
@@ -1190,6 +1218,42 @@ def test_game_reset_resets_star_count_knowledge_for_guards():
     # num_stars unknown after hard reset -> guard conservatively fails ->
     # the def never armed -> no segment attempt anywhere
     assert all(a.segment_id != 2 for a in closed)
+
+
+# -- route-scoped arming (spec 2026-07-23-default-routes-foundation) -----------
+
+def test_route_selected_threads_into_matchcontext():
+    # A guarded segment does NOT arm on its trigger before any route_selected
+    # has fired; the SAME arming event, replayed after route_selected names
+    # this def's id, arms it. Proves the Projector actually threads
+    # self._route_segments into the MatchContext it builds for the engine.
+    from sm64_events.tracking.segments import SegmentDef
+    guarded = SegmentDef(id=42, name="CCM->BitDW", enabled=True,
+                        start_triggers=[{"type": "level_exit", "from": 5}],
+                        end_triggers=[{"type": "level_enter", "to": 17}],
+                        guards=[{"type": "in_active_route"}])
+    p = Projector(segments=[guarded])
+    p.feed(jev(1, "level_changed", 1000, {"from": 5, "to": 16}))
+    assert 42 not in p.armed_segment_ids()
+    p.feed(jev(2, "route_selected", 0, {"route_id": 1, "segment_ids": [42]}))
+    p.feed(jev(3, "level_changed", 2000, {"from": 5, "to": 16}))
+    assert 42 in p.armed_segment_ids()
+
+
+def test_segment_target_satisfies_in_active_route_without_a_route_selected():
+    # Practicing a guarded segment directly (target_set) also satisfies
+    # in_active_route with no route_selected ever fired: the Projector
+    # derives target_segment from the live target, not from
+    # self._route_segments. Proves that half of the ctx-build wiring too.
+    from sm64_events.tracking.segments import SegmentDef
+    guarded = SegmentDef(id=42, name="g", enabled=True,
+                        start_triggers=[{"type": "level_exit", "from": 5}],
+                        end_triggers=[{"type": "level_enter", "to": 17}],
+                        guards=[{"type": "in_active_route"}])
+    p = Projector(segments=[guarded])
+    p.feed(jev(1, "target_set", 0, {"kind": "segment", "segment_id": 42}))
+    p.feed(jev(2, "level_changed", 1000, {"from": 5, "to": 16}))
+    assert 42 in p.armed_segment_ids()
 
 
 def test_run_starts_on_configured_level_enter(tmp_path):

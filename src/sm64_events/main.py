@@ -1,5 +1,6 @@
 # src/sm64_events/main.py
 """Composition root: registry -> memory -> poller -> detectors -> tracking -> app."""
+import json
 import logging
 import shutil
 import sys
@@ -98,6 +99,26 @@ def build():
     from sm64_events.core.paths import rank_standards_path, bundled_rank_standards
     ranks = RankStandards(rank_standards_path(), bundled_rank_standards())
     ranks.load()
+    if db is not None:
+        # Editable-defaults reconcile (spec 2026-07-23-default-routes-
+        # foundation): refreshes untouched (seed_dirty=0) seeded routes/
+        # segments from the bundled corpus, inserts anything missing, and
+        # never touches user-edited or user-created rows. Best-effort — a
+        # missing/corrupt seed must never block startup. KeyError/TypeError
+        # are caught too (not just OSError/ValueError): a structurally-valid
+        # -JSON-but-wrong-shape seed makes reconcile_defaults raise one of
+        # those instead, and a bad seed must never block boot either way
+        # (final-review hardening 2026-07-24).
+        from sm64_events.tracking.defaults import reconcile_defaults
+        from sm64_events.core.paths import bundled_defaults_seed
+        try:
+            seed_path = bundled_defaults_seed()
+            if seed_path is not None:
+                seed = json.loads(seed_path.read_text())
+                reconcile_defaults(db, seed)
+        except (OSError, ValueError, KeyError, TypeError):
+            logging.getLogger("sm64.tracker").warning(
+                "defaults seed unavailable", exc_info=True)
     service = TrackerService(db, broadcaster, ranks=ranks)
     # User-set storage limits (UI panel) overlay the code defaults.
     replay_cfg = apply_settings_file(ReplayConfig())

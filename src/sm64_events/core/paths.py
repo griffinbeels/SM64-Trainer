@@ -139,6 +139,17 @@ def bundled_rank_standards() -> Path | None:
     return cand if cand.exists() else None
 
 
+def bundled_defaults_seed() -> Path | None:
+    """The editable-defaults seed (routes/segments corpus) shipped beside a
+    frozen exe (PyInstaller _MEIPASS), else the in-repo seed when running
+    from source. Mirrors bundled_rank_standards() exactly."""
+    if is_frozen():
+        cand = Path(getattr(sys, "_MEIPASS", "")) / "defaults.seed.json"
+        return cand if cand.exists() else None
+    cand = Path(__file__).resolve().parent.parent / "data" / "defaults.seed.json"
+    return cand if cand.exists() else None
+
+
 def install_root() -> Path:
     """Directory containing the running executable — the onedir install root
     when frozen (SM64Trainer.exe + _internal\\ live here). The updater and the

@@ -15,15 +15,18 @@ retroactive. With db=None the service degrades to broadcast-only.
 Tracking failures are isolated inside publish() so the poll loop never
 dies (spec §9)."""
 import dataclasses
+import json
 import logging
 from datetime import datetime, timezone
 
 from sm64_events.core.events import Event
+from sm64_events.core.paths import bundled_defaults_seed
 from sm64_events.core.timefmt import format_igt
 from sm64_events.memory.addresses import course_name, star_name
 from sm64_events.ranks.classify import RANK_MODES
 from sm64_events.ranks.standards import entity_key
 from sm64_events.storage.db import Database, EventRow
+from sm64_events.tracking.defaults import _resolve_steps
 from sm64_events.tracking.projection import Projector, replay, wipe_matches
 from sm64_events.tracking.segments import SegmentDef, validate_definition
 from sm64_events.tracking import routes as route_logic
@@ -477,7 +480,9 @@ class TrackerService:
         sid = db.insert_segment_def(d["name"], d["start_triggers"],
                                     d["end_triggers"], d.get("guards", []),
                                     _iso(_now()),
-                                    enabled=d.get("enabled", True))
+                                    enabled=d.get("enabled", True),
+                                    waypoints=d.get("waypoints", []),
+                                    category=d.get("category"))
         await self._segments_changed()
         return sid
 
@@ -492,12 +497,56 @@ class TrackerService:
         validate_definition({**current, **d})
         db.update_segment_def(segment_id, **{
             k: d[k] for k in ("name", "enabled", "start_triggers",
-                              "end_triggers", "guards") if k in d})
+                              "end_triggers", "waypoints", "guards",
+                              "category") if k in d})
+        if current.get("seed_key"):
+            # a user edit to a seeded row protects it from reconcile's
+            # refresh (tracking/defaults.py) until reset_segment clears the
+            # flag again; reconcile itself calls db.update_segment_def
+            # directly and never reaches this line, so it can't self-flip.
+            db.set_seed_dirty("segment_defs", segment_id, 1)
         await self._segments_changed()
 
     async def delete_segment(self, segment_id: int) -> None:
         db = self._require_db()
         db.delete_segment_def(segment_id)
+        await self._segments_changed()
+
+    def _defaults_seed(self) -> dict:
+        """The bundled routes/segments seed corpus, for reset-to-default.
+        Missing/corrupt seed degrades to an empty corpus (mirrors main.py's
+        reconcile_defaults guard) so reset just raises "not a default"
+        instead of crashing."""
+        seed_path = bundled_defaults_seed()
+        if seed_path is None:
+            return {"segments": [], "routes": []}
+        try:
+            return json.loads(seed_path.read_text())
+        except (OSError, ValueError):
+            return {"segments": [], "routes": []}
+
+    async def reset_segment(self, segment_id: int) -> None:
+        """Restore a seeded segment definition to its bundled defaults and
+        clear seed_dirty. LookupError (-> 404) for a user-created segment
+        (no seed_key) or one whose seed_key has no matching row in the
+        current bundled seed (renamed/removed upstream)."""
+        db = self._require_db()
+        row = next((s for s in db.segment_defs() if s["id"] == segment_id), None)
+        if row is None:
+            raise LookupError(f"segment {segment_id} not found")
+        if not row.get("seed_key"):
+            raise LookupError(f"segment {segment_id} is not a default")
+        srow = next((s for s in self._defaults_seed().get("segments", [])
+                     if s["seed_key"] == row["seed_key"]), None)
+        if srow is None:
+            raise LookupError(f"no seed for {row['seed_key']}")
+        db.update_segment_def(segment_id, name=srow["name"],
+            enabled=srow.get("enabled", True),
+            start_triggers=srow["start_triggers"],
+            end_triggers=srow["end_triggers"],
+            waypoints=srow.get("waypoints", []),
+            guards=srow.get("guards", []), category=srow.get("category"))
+        db.set_seed_dirty("segment_defs", segment_id, 0)
         await self._segments_changed()
 
     async def _segments_changed(self) -> None:
@@ -516,12 +565,27 @@ class TrackerService:
                 if c["type"] == "segment" and c["segment_id"] not in ids:
                     raise LookupError(f"segment {c['segment_id']} not found")
 
+    def _route_member_segments(self, db: Database, route_id: int) -> list[int]:
+        """Ordered, de-duplicated segment ids referenced by a route's steps
+        (LookupError -> 404 if the route doesn't exist). Snapshotted into
+        route_selected so replay never re-reads the mutable routes table."""
+        route = next((r for r in db.routes() if r["id"] == route_id), None)
+        if route is None:
+            raise LookupError(f"route {route_id} not found")
+        ids: list[int] = []
+        for step in route["steps"]:
+            for c in step["candidates"]:
+                if c.get("type") == "segment" and c["segment_id"] not in ids:
+                    ids.append(c["segment_id"])
+        return ids
+
     async def create_route(self, d: dict) -> int:
         db = self._require_db()
         route_logic.validate_route(d)          # structural, BEFORE insert
         self._check_segment_refs(db, d["steps"])
         rid = db.insert_route(d["name"], d["steps"], _iso(_now()),
-                              start_condition=d.get("start_condition"))
+                              start_condition=d.get("start_condition"),
+                              category=d.get("category"))
         await self._routes_changed()
         return rid
 
@@ -534,15 +598,57 @@ class TrackerService:
         route_logic.validate_route(merged)
         self._check_segment_refs(db, merged["steps"])
         db.update_route(route_id, updated_utc=_iso(_now()),
-                        **{k: d[k] for k in ("name", "steps", "start_condition") if k in d})
+                        **{k: d[k] for k in ("name", "steps", "start_condition",
+                                             "category") if k in d})
+        if current.get("seed_key"):
+            # same user-edit signal as update_segment; reconcile itself
+            # writes via db.update_route directly and never reaches here.
+            db.set_seed_dirty("routes", route_id, 1)
         await self._routes_changed()
         if (("steps" in d or "start_condition" in d)
                 and self._projector.armed_route_id() == route_id):
             await self._arm_run(route_id, void_active=True)  # re-arm: void any in-flight run, fresh snapshot
+        if "steps" in d and self._projector.active_route_id() == route_id:
+            await self.select_route(route_id)   # refresh the active route's member snapshot
 
     async def delete_route(self, route_id: int) -> None:
         db = self._require_db()
+        was_active = self._projector.active_route_id() == route_id
         db.delete_route(route_id)
+        await self._routes_changed()
+        if was_active:
+            # The active route no longer exists: clear arming (journals a
+            # clearing route_selected {None, []}) so its segments don't stay
+            # armed under in_active_route with no route to point back at.
+            await self.select_route(None)
+
+    async def reset_route(self, route_id: int) -> None:
+        """Segment sibling: restores a seeded route's name/steps/
+        start_condition/category from the bundled seed and clears
+        seed_dirty. LookupError (-> 404) for a user-created route (no
+        seed_key) or one whose seed_key has no matching bundled row. Step
+        candidates are re-resolved seed_key -> local segment_id via the
+        CURRENT segment_defs table (defaults.py's _resolve_steps, the same
+        helper reconcile uses), so a segment that was itself reset/re-seeded
+        under a different id still binds correctly."""
+        db = self._require_db()
+        row = next((r for r in db.routes() if r["id"] == route_id), None)
+        if row is None:
+            raise LookupError(f"route {route_id} not found")
+        if not row.get("seed_key"):
+            raise LookupError(f"route {route_id} is not a default")
+        rrow = next((r for r in self._defaults_seed().get("routes", [])
+                     if r["seed_key"] == row["seed_key"]), None)
+        if rrow is None:
+            raise LookupError(f"no seed for {row['seed_key']}")
+        key_to_id = {s["seed_key"]: s["id"] for s in db.segment_defs()
+                     if s.get("seed_key")}
+        db.update_route(route_id, updated_utc=_iso(_now()), name=rrow["name"],
+                        steps=_resolve_steps(rrow["steps"], key_to_id),
+                        start_condition=rrow.get("start_condition",
+                                                 {"type": "reset_game"}),
+                        category=rrow.get("category"))
+        db.set_seed_dirty("routes", route_id, 0)
         await self._routes_changed()
 
     async def _routes_changed(self) -> None:
@@ -550,6 +656,47 @@ class TrackerService:
         journaled. The UI refetches the route list on this event."""
         await self.broadcaster.publish(Event(type="routes_changed", frame=0,
                                               timestamp_utc=_now(), payload={}))
+
+    async def select_route(self, route_id: int | None) -> None:
+        """Journal the active-route arm scope (spec 2026-07-23-default-routes-
+        foundation §5.1). Snapshots member segment ids so replay reconstructs
+        which route was active at each historical event WITHOUT reading the
+        mutable routes table — the same self-containment trick _arm_run uses
+        for run_started. None clears the scope: only a standalone segment
+        target (MatchContext.target_segment) can still arm in_active_route
+        defs. LookupError -> 404 if route_id is given but doesn't exist.
+
+        The active route id itself is NOT stored on the service (no second
+        source of truth) — self._projector.active_route_id() derives it from
+        the journaled route_selected via feed(), exactly like
+        armed_route_id() derives the run-armed route. This is what makes the
+        active route restart-safe: replay() rebuilds it from the journal
+        before this service ever calls select_route() again."""
+        db = self._require_db()
+        seg_ids = self._route_member_segments(db, route_id) if route_id is not None else []
+        await self.publish(Event(type="route_selected", frame=0,
+                                 timestamp_utc=_now(),
+                                 payload={"route_id": route_id,
+                                          "segment_ids": seg_ids}))
+
+    def active_route(self) -> dict | None:
+        """Current active route for the session view ({id, name,
+        segment_ids} or None). The id comes from the projector's
+        journal-derived active_route_id() — same rule as select_route's
+        docstring: no second `_active_route` field on the service, so this
+        can never drift from what replay reconstructs. Robust to a route
+        deleted out from under the arm: delete_route journals a clearing
+        route_selected first (so active_route_id() is already None by the
+        time this runs), but the `route is None` guard covers any other
+        path that might leave a stale id pointing at nothing."""
+        rid = self._projector.active_route_id()
+        if rid is None or self.db is None:
+            return None
+        route = next((r for r in self.db.routes() if r["id"] == rid), None)
+        if route is None:
+            return None
+        return {"id": route["id"], "name": route["name"],
+                "segment_ids": self._route_member_segments(self.db, route["id"])}
 
     # -- rank standards commands -----------------------------------------------
     async def _rank_standards_changed(self) -> None:
@@ -742,7 +889,9 @@ class TrackerService:
             validate_definition({**emb, "enabled": True})
             new_ids.append(db.insert_segment_def(
                 emb["name"], emb["start_triggers"], emb["end_triggers"],
-                emb["guards"], _iso(_now())))
+                emb["guards"], _iso(_now()),
+                waypoints=emb.get("waypoints", []),
+                category=emb.get("category")))
         steps = self._finalize_import_steps(resolved["steps"], new_ids)
         rid = db.insert_route(resolved["name"], steps, _iso(_now()),
                               start_condition=resolved.get("start_condition"))

@@ -900,6 +900,72 @@ def test_build_route_view_unknown_route_raises(tmp_path):
         build_route_view(db, svc, 999)
 
 
+def test_build_route_view_carries_seeded_and_category(tmp_path):
+    from sm64_events.tracking.views import build_route_view
+    db, svc = make(tmp_path)
+    rid = asyncio.run(svc.create_route({"name": "V", "category": "Any%", "steps": [
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}))
+    view = build_route_view(db, svc, rid)
+    # user-created route: no seed_key -> seeded False; category passes through
+    assert view["seeded"] is False
+    assert view["category"] == "Any%"
+
+
+# -- active_route + segment category/seeded (Task 9) ---------------------------
+
+def test_session_view_active_route_is_none_with_no_route_selected(tmp_path):
+    db, svc = make(tmp_path)
+    view = build_session_view(db, svc, clock="igt")
+    assert view["active_route"] is None
+
+
+def test_session_view_carries_active_route_after_select_route(tmp_path):
+    db, svc = make(tmp_path)
+    lblj = next(d["id"] for d in db.segment_defs() if d["name"] == "LBLJ")
+    rid = asyncio.run(svc.create_route({"name": "R", "steps": [
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]}]}))
+    asyncio.run(svc.select_route(rid))
+    view = build_session_view(db, svc, clock="igt")
+    assert view["active_route"]["id"] == rid
+    assert view["active_route"]["name"] == "R"
+    assert isinstance(view["active_route"]["segment_ids"], list)
+    assert view["active_route"]["segment_ids"] == [lblj]
+
+
+def test_session_view_active_route_none_after_deselect(tmp_path):
+    db, svc = make(tmp_path)
+    rid = asyncio.run(svc.create_route({"name": "R", "steps": [
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}))
+    asyncio.run(svc.select_route(rid))
+    asyncio.run(svc.select_route(None))
+    view = build_session_view(db, svc, clock="igt")
+    assert view["active_route"] is None
+
+
+def test_seeded_segment_section_carries_category_and_seeded_true(tmp_path):
+    db, svc = make(tmp_path)
+    lblj = next(d["id"] for d in db.segment_defs() if d["name"] == "LBLJ")
+    # pin the section without needing a recorded attempt (same trick the
+    # armed-segment sections use — targeting makes it "active now")
+    asyncio.run(svc.set_target_segment(lblj))
+    view = build_session_view(db, svc, clock="igt")
+    seg = next(s for s in view["segments"] if s["segment_id"] == lblj)
+    assert seg["seeded"] is True
+    assert "category" in seg
+
+
+def test_user_created_segment_section_seeded_false(tmp_path):
+    db, svc = make(tmp_path)
+    sid = asyncio.run(svc.create_segment({
+        "name": "Custom", "start_triggers": [{"type": "spawned"}],
+        "end_triggers": [{"type": "level_enter", "to": 6}], "guards": []}))
+    asyncio.run(svc.set_target_segment(sid))
+    view = build_session_view(db, svc, clock="igt")
+    seg = next(s for s in view["segments"] if s["segment_id"] == sid)
+    assert seg["seeded"] is False
+    assert seg["category"] is None
+
+
 # -- run view + history (Task 7 Phase D) ----------------------------------------
 
 def test_build_run_view_active_with_pb_and_gold(tmp_path):

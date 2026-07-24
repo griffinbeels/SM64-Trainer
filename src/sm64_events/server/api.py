@@ -103,6 +103,8 @@ class SegmentBody(BaseModel):
     end_triggers: list[dict]
     guards: list[dict] = []
     enabled: bool = True
+    waypoints: list = []
+    category: str | None = None
 
 
 class SegmentPatch(BaseModel):
@@ -113,6 +115,13 @@ class SegmentPatch(BaseModel):
     end_triggers: list[dict] | None = None
     guards: list[dict] | None = None
     enabled: bool | None = None
+    # None = untouched (excluded from the patch below); [] is a valid EXPLICIT
+    # clear and must round-trip distinctly from "field omitted" — mirrors
+    # guards/start_triggers above. A `list = []` default here would make
+    # model_dump() always include waypoints, wiping it on every unrelated
+    # PATCH (e.g. just flipping `enabled`).
+    waypoints: list | None = None
+    category: str | None = None
 
 
 class TimeFilterBody(BaseModel):
@@ -128,6 +137,7 @@ class RouteBody(BaseModel):
     name: str
     steps: list[dict]
     start_condition: dict | None = None
+    category: str | None = None
 
 
 class RoutePatch(BaseModel):
@@ -136,6 +146,7 @@ class RoutePatch(BaseModel):
     name: str | None = None
     steps: list[dict] | None = None
     start_condition: dict | None = None
+    category: str | None = None
 
 
 class ImportBody(BaseModel):
@@ -147,6 +158,10 @@ class RunStartBody(BaseModel):
 
 class RunSettingsBody(BaseModel):
     start_offset_ms: int
+
+
+class RouteSelectBody(BaseModel):
+    route_id: int | None = None
 
 
 def _http(e: Exception) -> HTTPException:
@@ -258,6 +273,19 @@ def create_api_router(service) -> APIRouter:
             raise _http(e)
         return {"ok": True}
 
+    @router.post("/segments/{segment_id}/reset")
+    async def reset_segment(segment_id: int):
+        """Restore a seeded definition to its bundled defaults and clear
+        seed_dirty. 404 for a user-created segment or one whose seed_key
+        no longer has a matching bundled row. Distinct path segment from
+        the literal '/segments/vocab' and from a bare int id, so no
+        declaration-order collision (fastapi-patterns)."""
+        try:
+            await service.reset_segment(segment_id)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True}
+
     # routes — literal '/routes/import' declared before '/routes/{route_id}'
     # so the path segment is never parsed as an id (declaration order wins —
     # fastapi-patterns; mirrors /segments/vocab).
@@ -313,6 +341,29 @@ def create_api_router(service) -> APIRouter:
     async def delete_route(route_id: int):
         try:
             await service.delete_route(route_id)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True}
+
+    @router.post("/routes/{route_id}/reset")
+    async def reset_route(route_id: int):
+        """Segment sibling: restore a seeded route to its bundled defaults
+        and clear seed_dirty. 404 for a user-created route or one whose
+        seed_key no longer has a matching bundled row."""
+        try:
+            await service.reset_route(route_id)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True}
+
+    @router.post("/route/select")
+    async def route_select(body: RouteSelectBody):
+        """Set (or clear, route_id=null) the practice-wide active route —
+        the arm scope for `in_active_route`-guarded segments (spec
+        2026-07-23-default-routes-foundation §5). Distinct from
+        POST /run/start, which arms a route for the full-game timer."""
+        try:
+            await service.select_route(body.route_id)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True}

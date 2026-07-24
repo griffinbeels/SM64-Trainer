@@ -743,3 +743,105 @@ live session, the human must: run a known star and verify the displayed badge
 tier matches the xcams standard for that time + strategy; run a known segment and
 verify the same. Record the outcome here once confirmed. Until this is done,
 treat badge tiers as "best-effort" against the scraper data.
+
+## Default routes foundation (2026-07-23, spec #1)
+
+Ships the engine + storage mechanism for the standard Usamune route corpus
+(the corpus itself is spec #2). Full spec:
+`docs/superpowers/specs/2026-07-23-default-routes-foundation-design.md`; plan:
+`docs/superpowers/plans/2026-07-23-default-routes-foundation.md`. Consumer
+detail (fields, functions) is in the CLAUDE.md module map — this section
+records the two pieces of cross-cutting rationale.
+
+**The segment matcher generalizes from a 2-state chain to an N-state ordered
+automaton.** `SegmentEngine` already ran a two-state instance of an
+ordered-event automaton (arm → end), the same shape as a gesture recognizer or
+a log-sequence matcher: advance on the expected next token, cancel on an
+unexpected significant one, ignore noise. Spec #1 generalizes it to length-N
+via `SegmentDef.waypoints` (an ordered list of any-of clause-sets) without
+touching the existing chain at all — **empty `waypoints` is the degenerate
+2-step case**, byte-for-byte identical to pre-spec behavior, which is what
+made it safe to change the shared `MatchContext`/`SegmentDef` contracts
+underneath every existing definition (LBLJ, the pipe entries, the Bowser
+fights — all untouched). A waypoint-bearing def instead runs
+`SegmentEngine._feed_waypoint`, whose precedence is: **end** (only once every
+waypoint is consumed — the end trigger cannot fire early) > **death/
+game_reset** (hard fail, row) > **session_started** (silent disarm, no row —
+an armed sequence must not survive a session boundary) > **echo anchor**
+(invisible, reuses the exact `_anchor_echo` shape taxonomy the plain chain
+uses, so the two paths can never drift on what counts as an involuntary
+load) > **real anchor** (rewinds `progress` to 0 and re-arms IN PLACE at the
+anchor frame — the practice-retry loop continuation, but unlike the plain
+chain's reset-row-then-rearm, a mid-sequence retry records **no row**: the
+player never finished or failed a variant, they restarted the attempt) >
+**next waypoint** (the event matches `waypoints[progress]` → advance the
+pointer, no row, no re-arm) > **major action** (`star_collected`,
+`key_grabbed`, or a real-edge `level_changed` that ISN'T the awaited
+waypoint — decision 5, session 2026-07-23: this is a **silent abandon**, no
+row, consistent with the engine's existing silent disarm on a foreign level
+change and the AFK/no-op discards) > **transparent** (`area_changed`/
+`warp_entered`/`spawned` mid-sequence change nothing — walking through a
+castle subarea on the way to the next waypoint must not trip the matcher).
+
+**Authoring caveat (docstring, not a code defect).** The major-action cancel
+pops the def from `_armed`; the SAME event is then re-evaluated by `feed()`'s
+ordinary arm/re-arm phase against `d.start_triggers` — the existing
+"re-firing a start trigger while armed re-arms" convention. If a route's
+start trigger is looser than (or equal to) a waypoint clause it could
+collide with, the cancelling event can satisfy the start trigger and
+re-arm in the same tick (a disarm+arm notice pair) instead of a clean
+abandon. Spec #2's corpus authors must write each def's start trigger at
+least as specific as every waypoint clause it could be confused with.
+
+**LIVE-GATE VERIFY (deferred, per Task 3).** The real-anchor rewind-in-place
+behavior for a waypoint mid-sequence assumes the same "L-reset respawns at
+the last entrance = the segment's start position" fact the plain chain relies
+on (verified 2026-06-12 for 2-step defs); it has not yet been live-verified
+for a MULTI-step movement specifically (does a retry mid-waypoint always
+rewind cleanly, or can a savestate load relocate Mario somewhere the rewind
+doesn't cover?). Rewind-in-place is the conservative default until a human
+session confirms it against the seeded corpus (spec #2).
+
+**Editable defaults use the same seed/reconcile pattern as rank standards —
+deliberately, not independently invented.** The repo already had one working
+instance of "ship community-curated content that stays user-editable and
+self-heals on update": `ranks/standards.py` over
+`rank_standards.seed.json` with a `SEED_VERSION` and a reconcile that
+refreshes untouched rows while preserving user edits (see the Ranks section
+above). Spec #1 reuses that exact shape for routes/segments
+(`tracking/defaults.py::reconcile_defaults` over `data/defaults.seed.json`)
+instead of the inline-SQL path in `storage/db.py::MIGRATIONS`, which the
+module map itself flags as unmaintainable and had already forced two
+hand-written repair migrations (v5 LBLJ, v6 Bowser 3) — a symptom of storing
+one-time community content as irreversible schema mutations rather than data.
+Each row carries a stable `seed_key` slug (`seg:ccm->bitdw`,
+`route:16-star-lblj`) that reconcile matches on, independent of the
+autoincrement id, plus a `seed_dirty` flag: **untouched (`seed_dirty=0`)**
+rows refresh from a newer seed (ship a fix, everyone gets it); **user-edited
+(`seed_dirty=1`)** and **user-created (`seed_key IS NULL`)** rows are never
+touched; a seed row missing from the db is inserted. `seed_dirty` flips to 1
+only on a user-facing write path (`update_segment`/`update_route` in
+`tracking/service.py`) — reconcile itself writes through the db layer
+directly and can never self-flip the flag it's supposed to respect. **Reset
+to default** (`POST /api/segments/{id}/reset`, `/api/routes/{id}/reset`)
+re-copies the row from the current bundled seed by `seed_key` and clears
+`seed_dirty` — the escape hatch for a user who edited a default and wants it
+back, without losing every other customization.
+
+One wrinkle unique to routes: a seeded route's step candidates reference
+segments by `seed_key`, not the local autoincrement `segment_id` (the seed
+file can't know a fresh install's ids). `reconcile_defaults` therefore
+resolves the `segments` block FIRST, building a `seed_key → segment_id` map,
+then rewrites each route step's candidates through that map
+(`tracking/defaults.py::_resolve_steps`) before writing the `routes` row — an
+unresolved key writes `segment_id=-1`, which renders as the same `broken`
+step the UI already shows for a manually-deleted segment, rather than
+crashing reconcile. `reset_route` re-resolves through the SAME helper against
+the CURRENT `segment_defs` table, so a segment that was itself reset/re-seeded
+under a different id still binds correctly.
+
+**Why this matters for spec #2:** the ~45-segment, ~13-route corpus lands as
+**pure seed JSON**, never hand-written SQL or one-off migrations — the
+reconcile mechanism is what makes "ship the whole Usamune route corpus, keep
+it editable, let a future correction reach existing installs automatically"
+possible at all.

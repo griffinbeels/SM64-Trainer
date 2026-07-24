@@ -98,8 +98,12 @@ Caveats (hard-won — keep these current):
     the def is level-bound (segments.start_level_set), a level_changed to a
     level outside that set retires the target — the segment cannot possibly
     start from there. A location-free start trigger (star_grabbed, reset_game,
-    ...) or a deleted def keeps the target (None = can start anywhere). No
-    resume stash for segments: the matcher re-arms on return (armed pins the
+    ...) or a deleted def keeps the target (None = can start anywhere).
+    start_level_set is fed the def's WAYPOINTS too (fix 2026-07-24): a
+    multi-level segment's sequence can re-enter a level outside its start
+    set (e.g. SL->HMC re-enters SL mid-sequence), so waypoint levels are
+    unioned in — without this a waypoint landing pulled the target early.
+    No resume stash for segments: the matcher re-arms on return (armed pins the
     UI) and the arena/stage banner re-targets on entry. A segment that
     SUCCEEDS by entering a star stage (its closing event is a level_changed
     into a course-bearing level — MIPS ends in DDD, LBLJ in BITDW) does NOT
@@ -290,9 +294,12 @@ class Projector:
         self._touched = touched if touched is not None else set()
         self._seg_bounds = {d.id: time_bounds(d.guards)
                             for d in (segments or [])}
-        # def id -> levels the segment can START from (None = anywhere);
-        # drives segment-target retirement on level_changed (caveat 12).
-        self._seg_start_levels = {d.id: start_level_set(d.start_triggers)
+        # def id -> levels the segment can occupy — start triggers UNION
+        # waypoints, so a multi-level segment's re-entry level counts too
+        # (None = anywhere); drives segment-target retirement on
+        # level_changed (caveat 12; waypoint fix 2026-07-24).
+        self._seg_start_levels = {d.id: start_level_set(d.start_triggers,
+                                                        d.waypoints)
                                   for d in (segments or [])}
         self.segment_notices: list[dict] = []  # live-broadcast queue, drained by service
         self._runs = RunTracker()
@@ -306,6 +313,16 @@ class Projector:
         # attempt happened physically, validity is a separate judgment.
         self._last_star_grabbed: tuple[int, int] | None = None
         self._last_star_attempted: tuple[int, int] | None = None
+        # Active route's member segment ids (spec
+        # 2026-07-23-default-routes-foundation), set by a journaled
+        # route_selected event and fed into MatchContext for the
+        # in_active_route arm guard. None = no active route.
+        self._route_segments: frozenset | None = None
+        # The route_id half of the same route_selected event — replay-derived
+        # like armed_route_id(), so a service restart never loses track of
+        # which route is active (there is no second, in-memory source of
+        # truth for this; see active_route_id()).
+        self._active_route_id: int | None = None
         self._open = None  # EventRow of the open attempt's anchor
         self._open_acted = False  # mario_acted seen since the last anchor; only meaningful while _open is set
         self._level: int | None = None   # gCurrLevelNum per level_changed; None = unknown (legacy journals)
@@ -341,6 +358,11 @@ class Projector:
     def armed_route_id(self):
         return self._runs.armed_route_id()
 
+    def active_route_id(self):
+        """The route_id of the most recent route_selected — replay-derived,
+        restart-safe (mirrors armed_route_id()). None = no active route."""
+        return self._active_route_id
+
     def finished_runs(self):
         return self._runs.finished_runs()
 
@@ -361,10 +383,28 @@ class Projector:
             self._num_stars = None  # file can change at the title screen: unknown until the next grab
             self._last_star_grabbed = None
             self._last_star_attempted = None
+        if ev.type == "route_selected":
+            # Journaled route activation (spec 2026-07-23-default-routes-
+            # foundation): the route's member segment ids scope the
+            # in_active_route arm guard. Empty list -> None, same "no active
+            # route" sentinel as a fresh Projector. Closes no attempt — falls
+            # through _dispatch's default no-op.
+            ids = ev.payload.get("segment_ids") or []
+            self._route_segments = frozenset(ids) if ids else None
+            self._active_route_id = ev.payload.get("route_id")
+        # A segment target (set via target_set or a segment success) is ALSO
+        # in-route by definition — practicing a segment directly must arm it
+        # even when no route_selected has fired (or a different route is
+        # active), same as the last_star_* guards read _dispatch's just-moved
+        # target.
+        target_seg = (self.target[1] if self.target
+                      and self.target[0] == "segment" else None)
         ctx = MatchContext(level=self._level, prev_level=prev_level,
                            num_stars=self._num_stars, area=self._area,
                            last_star_grabbed=self._last_star_grabbed,
-                           last_star_attempted=self._last_star_attempted)
+                           last_star_attempted=self._last_star_attempted,
+                           route_segments=self._route_segments,
+                           target_segment=target_seg)
         seg_closed, self.segment_notices = self._segments.feed(ev, ctx)
         for a in seg_closed:
             # same first-event-id cleared keying as _build (caveat 2/11)

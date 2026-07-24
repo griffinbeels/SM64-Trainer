@@ -185,6 +185,36 @@ MIGRATIONS = [
       last_used_utc TEXT NOT NULL
     );
     """,
+    # v11 — sequence segments + shared category + seed provenance
+    # (spec 2026-07-23-default-routes-foundation). waypoints = ordered middle
+    # steps (empty = today's start/end pair). category groups routes AND
+    # segments. seed_key/seed_dirty back the editable-defaults reconcile:
+    # seed_key is the stable identity a bundled default is matched on;
+    # seed_dirty=1 means the user edited a seeded row, so reconcile leaves it.
+    """
+    ALTER TABLE segment_defs ADD COLUMN waypoints TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE segment_defs ADD COLUMN category TEXT;
+    ALTER TABLE segment_defs ADD COLUMN seed_key TEXT;
+    ALTER TABLE segment_defs ADD COLUMN seed_dirty INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE routes ADD COLUMN category TEXT;
+    ALTER TABLE routes ADD COLUMN seed_key TEXT;
+    ALTER TABLE routes ADD COLUMN seed_dirty INTEGER NOT NULL DEFAULT 0;
+    """,
+    # v12 — adopt the 10 pre-seed segments into the reconcile by name, so a
+    # newer bundled seed can refresh them (they predate seed_key). Guarded on
+    # seed_key IS NULL so a re-run never clobbers a user rename.
+    """
+    UPDATE segment_defs SET seed_key='seg:lblj'         WHERE name='LBLJ'            AND seed_key IS NULL;
+    UPDATE segment_defs SET seed_key='seg:mips-clip'     WHERE name='MIPS Clip'       AND seed_key IS NULL;
+    UPDATE segment_defs SET seed_key='seg:lakitu-skip'   WHERE name='Lakitu Skip'     AND seed_key IS NULL;
+    UPDATE segment_defs SET seed_key='seg:bits-entry'    WHERE name='BitS Entry'      AND seed_key IS NULL;
+    UPDATE segment_defs SET seed_key='seg:bitdw-pipe'    WHERE name='BitDW Pipe Entry' AND seed_key IS NULL;
+    UPDATE segment_defs SET seed_key='seg:bitfs-pipe'    WHERE name='BitFS Pipe Entry' AND seed_key IS NULL;
+    UPDATE segment_defs SET seed_key='seg:bits-pipe'     WHERE name='BitS Pipe Entry'  AND seed_key IS NULL;
+    UPDATE segment_defs SET seed_key='seg:bowser-1'      WHERE name='Bowser 1'        AND seed_key IS NULL;
+    UPDATE segment_defs SET seed_key='seg:bowser-2'      WHERE name='Bowser 2'        AND seed_key IS NULL;
+    UPDATE segment_defs SET seed_key='seg:bowser-3'      WHERE name='Bowser 3'        AND seed_key IS NULL;
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
@@ -350,25 +380,35 @@ class Database:
                  "enabled": bool(r["enabled"]),
                  "start_triggers": json.loads(r["start_triggers"]),
                  "end_triggers": json.loads(r["end_triggers"]),
+                 "waypoints": json.loads(r["waypoints"]),
                  "guards": json.loads(r["guards"]),
+                 "category": r["category"],
+                 "seed_key": r["seed_key"], "seed_dirty": r["seed_dirty"],
                  "created_utc": r["created_utc"]} for r in rows]
 
     def insert_segment_def(self, name: str, start_triggers: list,
                            end_triggers: list, guards: list,
-                           created_utc: str, enabled: bool = True) -> int:
+                           created_utc: str, enabled: bool = True,
+                           waypoints: list | None = None,
+                           category: str | None = None,
+                           seed_key: str | None = None) -> int:
         with self._lock:
             cur = self._conn.execute(
                 "INSERT INTO segment_defs (name, enabled, start_triggers,"
-                " end_triggers, guards, created_utc) VALUES (?,?,?,?,?,?)",
+                " end_triggers, waypoints, guards, category, seed_key,"
+                " created_utc) VALUES (?,?,?,?,?,?,?,?,?)",
                 (name, int(enabled), json.dumps(start_triggers),
-                 json.dumps(end_triggers), json.dumps(guards), created_utc))
+                 json.dumps(end_triggers), json.dumps(waypoints or []),
+                 json.dumps(guards), category, seed_key, created_utc))
             self._conn.commit()
             return cur.lastrowid
 
     def update_segment_def(self, def_id: int, **fields) -> None:
         cols = {"name": lambda v: v, "enabled": int,
                 "start_triggers": json.dumps, "end_triggers": json.dumps,
-                "guards": json.dumps}
+                "waypoints": json.dumps, "guards": json.dumps,
+                "category": lambda v: v, "seed_key": lambda v: v,
+                "seed_dirty": int}
         if set(fields) - set(cols):
             raise ValueError(f"unknown fields {sorted(set(fields) - set(cols))}")
         sets, vals = [], []
@@ -405,23 +445,29 @@ class Database:
         return [{"id": r["id"], "name": r["name"],
                  "steps": json.loads(r["steps"]),
                  "start_condition": json.loads(r["start_condition"]),
+                 "category": r["category"],
+                 "seed_key": r["seed_key"], "seed_dirty": r["seed_dirty"],
                  "created_utc": r["created_utc"],
                  "updated_utc": r["updated_utc"]} for r in rows]
 
     def insert_route(self, name: str, steps: list, created_utc: str,
-                     start_condition: dict | None = None) -> int:
+                     start_condition: dict | None = None,
+                     category: str | None = None,
+                     seed_key: str | None = None) -> int:
         sc = start_condition if start_condition is not None else {"type": "reset_game"}
         with self._lock:
             cur = self._conn.execute(
-                "INSERT INTO routes (name, steps, start_condition, created_utc, updated_utc)"
-                " VALUES (?,?,?,?,?)",
-                (name, json.dumps(steps), json.dumps(sc), created_utc, created_utc))
+                "INSERT INTO routes (name, steps, start_condition, category,"
+                " seed_key, created_utc, updated_utc) VALUES (?,?,?,?,?,?,?)",
+                (name, json.dumps(steps), json.dumps(sc), category, seed_key,
+                 created_utc, created_utc))
             self._conn.commit()
             return cur.lastrowid
 
     def update_route(self, route_id: int, **fields) -> None:
         cols = {"name": lambda v: v, "steps": json.dumps,
-                "start_condition": json.dumps,
+                "start_condition": json.dumps, "category": lambda v: v,
+                "seed_key": lambda v: v, "seed_dirty": int,
                 "updated_utc": lambda v: v}
         if set(fields) - set(cols):
             raise ValueError(f"unknown fields {sorted(set(fields) - set(cols))}")
@@ -438,6 +484,16 @@ class Database:
             self._conn.commit()
         if cur.rowcount == 0:
             raise LookupError(f"route {route_id} not found")
+
+    def set_seed_dirty(self, table: str, row_id: int, dirty: int) -> None:
+        """Flip the seed_dirty flag (1 = user-edited, protected from reconcile;
+        0 = pristine/reset). `table` is 'segment_defs' or 'routes'."""
+        if table not in ("segment_defs", "routes"):
+            raise ValueError(f"bad table {table!r}")
+        with self._lock:
+            self._conn.execute(f"UPDATE {table} SET seed_dirty=? WHERE id=?",
+                               (dirty, row_id))
+            self._conn.commit()
 
     def delete_route(self, route_id: int) -> None:
         with self._lock:

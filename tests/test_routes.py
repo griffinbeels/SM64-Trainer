@@ -132,7 +132,8 @@ def test_export_route_embeds_segment_defs_and_keeps_stars():
     seg = out["steps"][0]["candidates"][0]
     assert seg == {"type": "segment", "segment": {
         "name": "LBLJ", "start_triggers": [{"type": "spawned"}],
-        "end_triggers": [{"type": "level_enter", "to": 6}], "guards": []}}
+        "end_triggers": [{"type": "level_enter", "to": 6}],
+        "waypoints": [], "guards": []}}
     assert out["steps"][1]["label"] == "star step"
     assert out["steps"][1]["candidates"][0] == {"type": "star", "course": 2, "star": 0}
 
@@ -210,6 +211,59 @@ def test_export_import_roundtrips_start_condition():
     assert out["start_condition"] == {"type": "level_enter", "to": 9}
     res = resolve_import(out, [])
     assert res["start_condition"] == {"type": "level_enter", "to": 9}
+
+
+def test_export_import_round_trips_waypoints():
+    defs = {7: {"name": "SL->HMC",
+        "start_triggers": [{"type": "level_exit", "from": 10}],
+        "end_triggers": [{"type": "level_enter", "to": 7}],
+        "waypoints": [[{"type": "level_enter", "to": 10}]], "guards": []}}
+    steps = [{"need": 1, "candidates": [{"type": "segment", "segment_id": 7}]}]
+    payload = export_route("R", steps, defs)
+    emb = payload["steps"][0]["candidates"][0]["segment"]
+    assert emb["waypoints"] == [[{"type": "level_enter", "to": 10}]]
+    # exact local match (same waypoints) is reused, not recreated
+    local = [{"id": 5, "name": "SL->HMC",
+        "start_triggers": [{"type": "level_exit", "from": 10}],
+        "end_triggers": [{"type": "level_enter", "to": 7}],
+        "waypoints": [[{"type": "level_enter", "to": 10}]], "guards": []}]
+    resolved = resolve_import(payload, local)
+    assert resolved["steps"][0]["candidates"][0] == {"type": "segment", "segment_id": 5}
+    assert resolved["to_create"] == []
+
+
+def test_export_import_waypoints_only_difference_forces_create():
+    # same name/start/end/guards but DIFFERENT waypoints -> not an exact match,
+    # so import must NOT reuse the local def (waypoints is part of identity)
+    defs = {7: {"name": "SL->HMC",
+        "start_triggers": [{"type": "level_exit", "from": 10}],
+        "end_triggers": [{"type": "level_enter", "to": 7}],
+        "waypoints": [[{"type": "level_enter", "to": 10}]], "guards": []}}
+    steps = [{"need": 1, "candidates": [{"type": "segment", "segment_id": 7}]}]
+    payload = export_route("R", steps, defs)
+    local = [{"id": 5, "name": "SL->HMC",
+        "start_triggers": [{"type": "level_exit", "from": 10}],
+        "end_triggers": [{"type": "level_enter", "to": 7}],
+        "waypoints": [], "guards": []}]
+    resolved = resolve_import(payload, local)
+    assert resolved["steps"][0]["candidates"][0] == {"type": "segment", "create_index": 0}
+    assert len(resolved["to_create"]) == 1
+    assert resolved["to_create"][0]["waypoints"] == [[{"type": "level_enter", "to": 10}]]
+
+
+def test_resolve_import_old_export_without_waypoints_matches_empty_local():
+    # an OLD export predates the waypoints key; it must still import cleanly
+    # and reuse a local def whose waypoints is the default []
+    payload = _payload(
+        [{"type": "segment", "segment": {
+            "name": "LBLJ", "start_triggers": [{"type": "spawned"}],
+            "end_triggers": [{"type": "level_enter", "to": 6}], "guards": []}}])
+    local = [{"id": 7, "name": "LBLJ", "start_triggers": [{"type": "spawned"}],
+              "end_triggers": [{"type": "level_enter", "to": 6}],
+              "waypoints": [], "guards": []}]
+    res = resolve_import(payload, local)
+    assert res["steps"][0]["candidates"][0] == {"type": "segment", "segment_id": 7}
+    assert res["to_create"] == []
 
 
 def test_route_view_has_step_ranks_and_average(tmp_path):

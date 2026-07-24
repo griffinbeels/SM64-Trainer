@@ -611,6 +611,83 @@ def test_update_segment_validates_merged_definition(tmp_path):
         asyncio.run(svc.update_segment(999, {"enabled": False}))
 
 
+def test_segment_category_persists(tmp_path):
+    db, svc, sent = make_rec(tmp_path)
+    sid = asyncio.run(svc.create_segment({
+        "name": "s", "start_triggers": [{"type": "spawned", "level": 16}],
+        "end_triggers": [{"type": "level_enter", "to": 6}],
+        "category": "Tricks"}))
+    d = next(d for d in db.segment_defs() if d["id"] == sid)
+    assert d["category"] == "Tricks"
+
+
+def test_segment_waypoints_persist_via_create(tmp_path):
+    db, svc, sent = make_rec(tmp_path)
+    sid = asyncio.run(svc.create_segment({
+        "name": "w", "start_triggers": [{"type": "level_exit", "from": 10}],
+        "end_triggers": [{"type": "level_enter", "to": 7}],
+        "waypoints": [[{"type": "level_enter", "to": 10}]]}))
+    d = next(d for d in db.segment_defs() if d["id"] == sid)
+    assert d["waypoints"] == [[{"type": "level_enter", "to": 10}]]
+
+
+def test_update_segment_category_persists(tmp_path):
+    db, svc, sent = make_rec(tmp_path)
+    lblj = seed_id(db, "LBLJ")
+    asyncio.run(svc.update_segment(lblj, {"category": "Main Categories"}))
+    d = next(d for d in db.segment_defs() if d["id"] == lblj)
+    assert d["category"] == "Main Categories"
+
+
+def test_update_segment_marks_seed_dirty(tmp_path):
+    """Editing a seeded segment flips seed_dirty so a future reconcile
+    (tracking/defaults.py) never overwrites the user's change."""
+    db, svc = make(tmp_path)
+    lblj = seed_id(db, "LBLJ")
+    assert next(d for d in db.segment_defs() if d["id"] == lblj)["seed_dirty"] == 0
+    asyncio.run(svc.update_segment(lblj, {"name": "My LBLJ"}))
+    assert next(d for d in db.segment_defs() if d["id"] == lblj)["seed_dirty"] == 1
+
+
+def test_update_segment_does_not_dirty_a_user_created_segment(tmp_path):
+    """No seed_key => nothing to protect; set_seed_dirty must not fire."""
+    db, svc = make(tmp_path)
+    sid = asyncio.run(svc.create_segment({
+        "name": "U", "start_triggers": [{"type": "spawned", "level": 16}],
+        "end_triggers": [{"type": "level_enter", "to": 6}]}))
+    asyncio.run(svc.update_segment(sid, {"name": "U2"}))
+    assert next(d for d in db.segment_defs() if d["id"] == sid)["seed_dirty"] == 0
+
+
+def test_reset_segment_restores_seed_and_clears_dirty(tmp_path):
+    db, svc = make(tmp_path)
+    lblj = seed_id(db, "LBLJ")
+    asyncio.run(svc.update_segment(lblj, {"name": "My LBLJ", "enabled": False}))
+    assert next(d for d in db.segment_defs() if d["id"] == lblj)["seed_dirty"] == 1
+    asyncio.run(svc.reset_segment(lblj))
+    row = next(d for d in db.segment_defs() if d["id"] == lblj)
+    assert row["name"] == "LBLJ" and row["seed_dirty"] == 0 and row["enabled"] is True
+    assert row["start_triggers"] == [
+        {"type": "level_enter", "to": 6, "from": 16},
+        {"type": "attempt_anchor", "level": 6, "area": 1}]
+    assert row["end_triggers"] == [{"type": "level_enter", "to": 17}]
+
+
+def test_reset_user_created_segment_raises(tmp_path):
+    db, svc = make(tmp_path)
+    sid = asyncio.run(svc.create_segment({
+        "name": "U", "start_triggers": [{"type": "spawned", "level": 16}],
+        "end_triggers": [{"type": "level_enter", "to": 6}]}))
+    with pytest.raises(LookupError):
+        asyncio.run(svc.reset_segment(sid))
+
+
+def test_reset_segment_unknown_id_raises(tmp_path):
+    db, svc = make(tmp_path)
+    with pytest.raises(LookupError):
+        asyncio.run(svc.reset_segment(999))
+
+
 def test_delete_segment_removes_def_and_reprojects(tmp_path):
     db, svc, sent = make_rec(tmp_path)
     lblj = seed_id(db, "LBLJ")
@@ -825,6 +902,81 @@ def test_create_route_persists_and_broadcasts(tmp_path):
     assert any(e.type == "routes_changed" for e in sent)
 
 
+def test_route_category_persists(tmp_path):
+    db, svc = make(tmp_path)
+    rid = asyncio.run(svc.create_route({"name": "r", "steps": [],
+                                        "category": "Main Categories"}))
+    d = next(r for r in db.routes() if r["id"] == rid)
+    assert d["category"] == "Main Categories"
+
+
+def test_update_route_category_persists(tmp_path):
+    db, svc = make(tmp_path)
+    rid = asyncio.run(svc.create_route({"name": "r", "steps": []}))
+    asyncio.run(svc.update_route(rid, {"category": "Bowser"}))
+    d = next(r for r in db.routes() if r["id"] == rid)
+    assert d["category"] == "Bowser"
+
+
+def test_update_route_does_not_dirty_a_user_created_route(tmp_path):
+    """No seed_key => nothing to protect; set_seed_dirty must not fire."""
+    db, svc = make(tmp_path)
+    rid = asyncio.run(svc.create_route({"name": "r", "steps": []}))
+    asyncio.run(svc.update_route(rid, {"name": "r2"}))
+    assert next(r for r in db.routes() if r["id"] == rid)["seed_dirty"] == 0
+
+
+def test_update_route_marks_seed_dirty(tmp_path):
+    """A route carrying a seed_key (as a bundled route would) flips
+    seed_dirty on edit, mirroring update_segment."""
+    db, svc = make(tmp_path)
+    rid = db.insert_route("Seeded Route", [], "2026-07-01T00:00:00Z",
+                          seed_key="route:test")
+    asyncio.run(svc.update_route(rid, {"name": "Renamed"}))
+    assert next(r for r in db.routes() if r["id"] == rid)["seed_dirty"] == 1
+
+
+def test_reset_route_restores_seed_and_clears_dirty(tmp_path, monkeypatch):
+    """End-to-end reset_route: seed_key candidates resolve to the CURRENT
+    segment_defs table (defaults.py's _resolve_steps), exactly as reconcile
+    does. The shipped defaults.seed.json ships routes: [] (no seeded route
+    yet), so the seed corpus is injected here rather than depending on that
+    file's contents."""
+    db, svc = make(tmp_path)
+    lblj = seed_id(db, "LBLJ")
+    rid = db.insert_route("Custom Name", [
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]}],
+        "2026-07-01T00:00:00Z", seed_key="route:test")
+    asyncio.run(svc.update_route(rid, {"name": "Custom Name"}))  # marks dirty
+    assert next(r for r in db.routes() if r["id"] == rid)["seed_dirty"] == 1
+
+    seed = {"segments": [], "routes": [{
+        "seed_key": "route:test", "name": "Seed Name",
+        "steps": [{"need": 1,
+                   "candidates": [{"type": "segment", "seed_key": "seg:lblj"}]}],
+        "start_condition": {"type": "reset_game"}, "category": "Main"}]}
+    monkeypatch.setattr(svc, "_defaults_seed", lambda: seed)
+    asyncio.run(svc.reset_route(rid))
+    row = next(r for r in db.routes() if r["id"] == rid)
+    assert row["name"] == "Seed Name" and row["seed_dirty"] == 0
+    assert row["category"] == "Main"
+    assert row["steps"] == [
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]}]
+
+
+def test_reset_user_created_route_raises(tmp_path):
+    db, svc = make(tmp_path)
+    rid = asyncio.run(svc.create_route({"name": "r", "steps": []}))
+    with pytest.raises(LookupError):
+        asyncio.run(svc.reset_route(rid))
+
+
+def test_reset_route_unknown_id_raises(tmp_path):
+    db, svc = make(tmp_path)
+    with pytest.raises(LookupError):
+        asyncio.run(svc.reset_route(999))
+
+
 def test_create_route_rejects_missing_segment(tmp_path):
     db, svc = make(tmp_path)
     with pytest.raises(LookupError):
@@ -887,6 +1039,22 @@ def test_import_creates_missing_segment(tmp_path):
     assert imported["steps"][0]["candidates"][0]["segment_id"] == new["id"]
 
 
+def test_import_creates_missing_segment_carries_waypoints(tmp_path):
+    # regression: resolve_import's embedded def carries waypoints (Task 10),
+    # but the create-path here must actually forward it to insert_segment_def
+    # or a fresh-install import silently strips them.
+    db, svc = make(tmp_path)
+    payload = {"kind": "sm64-route", "version": 1, "name": "Imp", "steps": [
+        {"need": 1, "candidates": [{"type": "segment", "segment": {
+            "name": "Waypointed Seg", "start_triggers": [{"type": "spawned"}],
+            "end_triggers": [{"type": "level_enter", "to": 6}],
+            "waypoints": [[{"type": "level_enter", "to": 10}]],
+            "guards": []}}]}]}
+    asyncio.run(svc.import_route(payload))
+    new = next(d for d in db.segment_defs() if d["name"] == "Waypointed Seg")
+    assert new["waypoints"] == [[{"type": "level_enter", "to": 10}]]
+
+
 def test_export_unknown_route_raises(tmp_path):
     db, svc = make(tmp_path)
     with pytest.raises(LookupError):
@@ -898,6 +1066,148 @@ def test_import_rejects_bad_envelope(tmp_path):
     with pytest.raises(ValueError):
         asyncio.run(svc.import_route({"kind": "nope", "version": 1, "name": "x",
                                       "steps": [{"need": 1, "candidates": []}]}))
+
+
+# -- select_route (Default Routes — foundation, Task 5) ------------------------
+
+def test_select_route_journals_member_segment_ids(tmp_path):
+    db, svc = make(tmp_path)
+    lblj = seed_id(db, "LBLJ")
+    rid = asyncio.run(svc.create_route({"name": "Sel", "steps": [
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}))
+    asyncio.run(svc.select_route(rid))
+    ev = db.events()[-1]
+    assert ev.type == "route_selected"
+    assert ev.payload == {"route_id": rid, "segment_ids": [lblj]}
+
+
+def test_select_route_dedupes_repeated_segment_across_steps(tmp_path):
+    db, svc = make(tmp_path)
+    lblj = seed_id(db, "LBLJ")
+    rid = asyncio.run(svc.create_route({"name": "Dup", "steps": [
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]},
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]}]}))
+    asyncio.run(svc.select_route(rid))
+    ev = db.events()[-1]
+    assert ev.payload["segment_ids"] == [lblj]      # one entry, not two
+
+
+def test_select_none_clears_active_route(tmp_path):
+    db, svc = make(tmp_path)
+    rid = asyncio.run(svc.create_route({"name": "R", "steps": [
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}))
+    asyncio.run(svc.select_route(rid))
+    asyncio.run(svc.select_route(None))
+    ev = db.events()[-1]
+    assert ev.type == "route_selected"
+    assert ev.payload == {"route_id": None, "segment_ids": []}
+
+
+def test_select_route_unknown_id_raises(tmp_path):
+    db, svc = make(tmp_path)
+    with pytest.raises(LookupError):
+        asyncio.run(svc.select_route(999))
+
+
+def test_update_active_route_reemits_select_route_with_fresh_members(tmp_path):
+    db, svc = make(tmp_path)
+    lblj = seed_id(db, "LBLJ")
+    rid = asyncio.run(svc.create_route({"name": "R", "steps": [
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]}]}))
+    asyncio.run(svc.select_route(rid))
+    mips = seed_id(db, "MIPS Clip")
+    asyncio.run(svc.update_route(rid, {"steps": [
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]},
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": mips}]}]}))
+    reselects = [e for e in db.events() if e.type == "route_selected"]
+    assert len(reselects) == 2                      # initial select + re-emit on edit
+    assert set(reselects[-1].payload["segment_ids"]) == {lblj, mips}
+
+
+def test_update_route_that_is_not_active_does_not_reemit_select_route(tmp_path):
+    db, svc = make(tmp_path)
+    rid = asyncio.run(svc.create_route({"name": "R", "steps": [
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}))
+    # never selected via svc.select_route
+    asyncio.run(svc.update_route(rid, {"name": "R2"}))
+    assert not any(e.type == "route_selected" for e in db.events())
+
+
+def test_name_only_edit_of_active_route_does_not_reemit_select_route(tmp_path):
+    # FIX 3 (review, Low): isolate the re-emit guard's two clauses — a
+    # name-only patch of the ACTIVE route must not re-emit route_selected
+    # (only a `steps` change refreshes the member snapshot).
+    db, svc = make(tmp_path)
+    rid = asyncio.run(svc.create_route({"name": "R", "steps": [
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}))
+    asyncio.run(svc.select_route(rid))
+    asyncio.run(svc.update_route(rid, {"name": "R renamed"}))
+    reselects = [e for e in db.events() if e.type == "route_selected"]
+    assert len(reselects) == 1                      # only the initial select_route
+
+
+def test_deleting_the_active_route_clears_arming(tmp_path):
+    # FIX 2 (review, Medium): deleting the currently-active route must clear
+    # arming (a clearing route_selected {None, []}) so its segments don't
+    # stay armed under in_active_route forever with no route to point at.
+    db, svc = make(tmp_path)
+    rid = asyncio.run(svc.create_route({"name": "R", "steps": [
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}))
+    asyncio.run(svc.select_route(rid))
+    asyncio.run(svc.delete_route(rid))
+    assert svc._projector.active_route_id() is None
+    ev = db.events()[-1]
+    assert ev.type == "route_selected"
+    assert ev.payload == {"route_id": None, "segment_ids": []}
+
+
+def test_deleting_a_non_active_route_does_not_touch_arming(tmp_path):
+    db, svc = make(tmp_path)
+    lblj = seed_id(db, "LBLJ")
+    active_rid = asyncio.run(svc.create_route({"name": "Active", "steps": [
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]}]}))
+    other_rid = asyncio.run(svc.create_route({"name": "Other", "steps": [
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}))
+    asyncio.run(svc.select_route(active_rid))
+    asyncio.run(svc.delete_route(other_rid))
+    assert svc._projector.active_route_id() == active_rid
+    assert not any(e.type == "route_selected" and e.payload["route_id"] is None
+                  for e in db.events())
+
+
+def test_active_route_survives_restart_and_reemits_on_edit(tmp_path):
+    # FIX 1 (review, High): _active_route was in-memory only, so a service
+    # restart lost track of which route was active even though the
+    # projector correctly rebuilds route_segments from the journal on
+    # replay. This proves the active-route id ALSO survives a restart (it
+    # is now read from the projector, not a second field) and that editing
+    # the still-active route's steps re-emits route_selected on the NEW
+    # service instance.
+    db_path = tmp_path / "t.db"
+    db1 = Database(db_path)
+    svc1 = TrackerService(db1, Broadcaster())
+    asyncio.run(svc1.start())
+    lblj = seed_id(db1, "LBLJ")
+    rid = asyncio.run(svc1.create_route({"name": "R", "steps": [
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]}]}))
+    asyncio.run(svc1.select_route(rid))
+    db1.close()
+
+    # "Restart": a fresh service against the SAME db file replays the
+    # journal, including the route_selected we just wrote.
+    db2 = Database(db_path)
+    svc2 = TrackerService(db2, Broadcaster())
+    asyncio.run(svc2.start())
+    assert svc2._projector.active_route_id() == rid
+
+    mips = seed_id(db2, "MIPS Clip")
+    asyncio.run(svc2.update_route(rid, {"steps": [
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]},
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": mips}]}]}))
+    reselects = [e for e in db2.events() if e.type == "route_selected"]
+    assert len(reselects) == 2                      # original select + restart-safe re-emit
+    assert set(reselects[-1].payload["segment_ids"]) == {lblj, mips}
 
 
 # -- runs (Phase D) -----------------------------------------------------------

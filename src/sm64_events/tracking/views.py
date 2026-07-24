@@ -21,7 +21,15 @@ Contract (the UI builds against ALL of this):
   names, every key present for both kinds (shape stability).
 - Every star AND segment section carries `time_filter: {min_frames,
   max_frames, is_default}` — effective validity bounds after the implicit
-  0.5 s default is filled in; drives the header's `⏱` chip."""
+  0.5 s default is filled in; drives the header's `⏱` chip.
+- Segment sections also carry `category` (a route/segment grouping label,
+  or None) and `seeded` (bool — a bundled default, editable via reset-to-
+  default; see tracking/defaults.py). Star sections omit both: stars are
+  neither seeded nor categorized. `build_route_view`'s payload carries the
+  same two keys for the route itself.
+- `active_route` ({id, name, segment_ids} or None) mirrors the route-scoped
+  arm from service.active_route() — the projector's journal-derived
+  active_route_id(), never a service-only field (see select_route)."""
 from sm64_events.core.timefmt import format_igt
 from sm64_events.links import star_links
 from sm64_events.memory.addresses import (COURSE_NAMES, course_name,
@@ -554,11 +562,16 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     # whatever the view clock. "armed" reads the LIVE projector so a plain
     # view refresh self-heals the UI's armed badge after missed notices.
     seg_defs = {d.id: d for d in service.segment_defs}
+    # db rows carry category/seed_key (SegmentDef, the dataclass seg_defs
+    # holds, does not) — a separate lookup keyed the same as seg_defs so
+    # each section can stamp its category/seeded without a second db read.
+    seg_meta = {r["id"]: r for r in db.segment_defs()}
     rta_of = lambda a: a.rta_frames
     seg_sections = []
     for seg_id in seen_segs:
         seg_ek = entity_key(None, None, seg_id)
         d = seg_defs.get(seg_id)
+        meta = seg_meta.get(seg_id, {})
         history = attempts_by_seg.get(seg_id, [])
         in_section = [a for a in history if a in scoped_set]
         pb_row = pbs.get(("segment", seg_id, "rta"))
@@ -568,6 +581,8 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "name": d.name if d else f"segment {seg_id} (deleted)",
             "broken": d is None,
             "armed": seg_id in armed,
+            "category": meta.get("category"),
+            "seeded": meta.get("seed_key") is not None,
             # igt present-as-None: same shape-stability rule as the target
             # payload — UI code reading sec.pb.igt gets null, not undefined.
             "pb": {"igt": None,
@@ -625,6 +640,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         "catalog": _CATALOG,
         "stars": sections,
         "segments": seg_sections,
+        "active_route": service.active_route(),
         "unassigned": unassigned,
         "strategies": registered,
         "last_strat_by_star": {f"{c}:{s}": masked(v, entity_key(c, s))
@@ -858,7 +874,9 @@ def build_route_view(db, service, route_id: int) -> dict:
         weakest_step = min(ranked, key=lambda t: t[1])[0]
     return {"id": route["id"], "name": route["name"],
             "start_condition": route["start_condition"], "steps": steps,
-            "avg_rank": avg_rank, "weakest_step": weakest_step}
+            "avg_rank": avg_rank, "weakest_step": weakest_step,
+            "category": route["category"],
+            "seeded": route["seed_key"] is not None}
 
 
 def build_compare_view(db, ranks, entity: str, strat: str | None) -> dict:

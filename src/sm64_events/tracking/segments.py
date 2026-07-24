@@ -59,6 +59,15 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
   rule — echo invisibility)
 - level_changed matching neither start nor end disarms silently (no row);
   area_changed and session_started never record rows
+- WAYPOINT-BEARING defs (SegmentDef.waypoints non-empty, spec
+  2026-07-23-default-routes-foundation) replace this whole armed-branch chain
+  with an ordered-sequence matcher (SegmentEngine._feed_waypoint — see its
+  docstring for the full precedence): the def's own start-trigger refire is
+  suppressed while armed (progress owns re-arming, not the generic re-arm
+  path); a real anchor mid-sequence REWINDS progress to 0 and re-arms in
+  place (no row, unlike this chain's reset row); an off-sequence star/key
+  grab or wrong-destination level crossing silently cancels (disarm, no
+  row) instead of the plain silent level_changed disarm above
 - failure rows only on practice_reset/state_loaded (reset), death,
   game_reset (hard_reset); AFK closures (paused >= 150 frames) discard, and
   so do no-op closures (acted_tracking true, mario_acted false — warp/reset
@@ -167,7 +176,7 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
   negative-rta self-heal covers the time-jump consequences.  Acceptable: door
   echoes are constant, this edge is rare.
 """
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Callable
 
 from sm64_events.memory.addresses import (CASTLE_AREA_NAMES,
@@ -219,6 +228,12 @@ class MatchContext:
     # last_star_* guards conservatively FAIL on None (spec 2026-07-23).
     last_star_grabbed: tuple | None = None
     last_star_attempted: tuple | None = None
+    # Active-route scoping (spec 2026-07-23-default-routes-foundation): the
+    # journaled route_selected member set, and the standalone segment target.
+    # An in_active_route-guarded def arms only if its id is in one of these.
+    # None/empty = no active route.
+    route_segments: frozenset | None = None
+    target_segment: int | None = None
 
 
 @dataclass(frozen=True)
@@ -229,6 +244,15 @@ class SegmentDef:
     start_triggers: list
     end_triggers: list
     guards: list
+    # Ordered middle steps; [] = plain start/end pair. Defaulted (deviation
+    # from the brief's non-default positional field, spec 2026-07-23): a
+    # non-default field here would TypeError every existing SegmentDef(...)
+    # construction that omits it, AND contradicts the brief's own
+    # test_segmentdef_defaults_empty_waypoints, which constructs one without
+    # passing waypoints and asserts it defaults to []. default_factory=list
+    # keeps that test meaningful while `_load_segment_defs` still works
+    # unchanged (the db row always supplies the key — Task 1).
+    waypoints: list = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -414,13 +438,25 @@ def arm_level(trig: dict) -> int | None:
     return None
 
 
-def start_level_set(start_triggers: list) -> set[int] | None:
-    """Levels this segment can START from, or None when that is unknowable —
-    any location-free start trigger (star_grabbed / key_grabbed without a
-    level / reset_game / ...) means "can start anywhere". The projector
-    retires a segment target on entering a level outside this set (a
-    level-bound segment cannot possibly be the active practice focus from a
-    level it can't start in — user report 2026-07-23); None never retires."""
+def start_level_set(start_triggers: list,
+                     waypoints: list | None = None) -> set[int] | None:
+    """Levels this segment can plausibly occupy while it's the active
+    practice target — its start triggers UNION every waypoint step's
+    clauses — or None when that is unknowable — any location-free clause
+    (star_grabbed / key_grabbed without a level / reset_game / ...) means
+    "can be anywhere". The projector retires a segment target on entering a
+    level outside this set (a level-bound segment cannot possibly be the
+    active practice focus from a level it can't occupy — user report
+    2026-07-23); None never retires.
+
+    Waypoints matter for MULTI-LEVEL segments (spec
+    2026-07-23-default-routes-foundation, fix 2026-07-24): a segment whose
+    sequence re-enters an earlier level (e.g. SL->HMC starts on `level_exit
+    from=10 to=16` but waypoints re-enter SL at level 10) would otherwise
+    have its target wrongly retired the instant a waypoint lands back in a
+    level outside the START set alone — the bug this function's waypoints
+    parameter fixes. Defs with no waypoints (today, all ten seeded defs)
+    reproduce the pre-fix result exactly."""
     if not start_triggers:
         return None
     levels = set()
@@ -429,6 +465,12 @@ def start_level_set(start_triggers: list) -> set[int] | None:
         if level is None:
             return None
         levels.add(level)
+    for step in (waypoints or []):
+        for clause in step:
+            level = arm_level(clause)
+            if level is None:
+                return None
+            levels.add(level)
     return levels
 
 
@@ -506,6 +548,15 @@ GUARDS: dict[str, GuardType] = {g.key: g for g in [
               and ctx.last_star_attempted[0] == p["course"]
               and (p.get("star") is None
                    or ctx.last_star_attempted[1] == p["star"])),
+    # Arm-gate scoping (spec 2026-07-23-default-routes-foundation): a stub-check
+    # guard READ DECLARATIVELY by the engine's arm gate (see the module-level
+    # _route_allows), exactly as min_time/max_time are read declaratively by
+    # projection — the standard check() never gates arming (it can't see the
+    # def id). A def carrying this arms only inside the
+    # active route or as the standalone segment target. Opt-in: the 10 existing
+    # defs omit it and are unaffected.
+    GuardType("in_active_route", "Only in the active route",
+              {}, "", lambda p, ctx: True, phase="arm"),
 ]}
 
 
@@ -559,6 +610,17 @@ def time_bounds(guards: list) -> tuple[int | None, int | None]:
     return lo, hi
 
 
+def _route_allows(d, ctx) -> bool:
+    """in_active_route gate, read declaratively by the arm phase (the
+    standard guard check() can't see the def id — see the guard's own
+    comment). Unguarded defs always pass; a guarded def arms only inside the
+    active route's member set or as the standalone segment target."""
+    if not any(g.get("type") == "in_active_route" for g in d.guards):
+        return True
+    return (d.id in (ctx.route_segments or frozenset())
+            or d.id == ctx.target_segment)
+
+
 def validate_definition(d: dict) -> None:
     """Raises ValueError listing the first problem (API maps it to 409)."""
     if not str(d.get("name", "")).strip():
@@ -571,6 +633,14 @@ def validate_definition(d: dict) -> None:
             raise ValueError(f"{side} needs at least one trigger")
         for c in clauses:
             _check_clause(c, TRIGGERS, side)
+    waypoints = d.get("waypoints") or []
+    if not isinstance(waypoints, list):
+        raise ValueError("waypoints must be a list")
+    for step in waypoints:
+        if not isinstance(step, list) or not step:
+            raise ValueError("each waypoint must be a non-empty list of triggers")
+        for clause in step:
+            _check_clause(clause, TRIGGERS, "waypoints")
     guards = d.get("guards") or []
     if not isinstance(guards, list):
         raise ValueError("guards must be a list")
@@ -634,6 +704,11 @@ class _Arm:
     # co-frame area_changed; it arms iff area == required_area once the frame
     # advances. Always None on a live _armed entry (cleared when it resolves).
     required_area: int | None = None
+    # Waypoint sequence position (spec 2026-07-23-default-routes-foundation):
+    # index of the next d.waypoints[] step to match; == len(d.waypoints) means
+    # every waypoint is consumed and the def is awaiting its end trigger. 0 for
+    # every non-waypoint def (empty d.waypoints never reads this field).
+    progress: int = 0
 
 
 def _at_arm_position(arm: _Arm, ctx: MatchContext) -> bool:
@@ -642,6 +717,19 @@ def _at_arm_position(arm: _Arm, ctx: MatchContext) -> bool:
     level/area events) keep the unconditional continuation behavior."""
     return ((arm.level is None or ctx.level is None or ctx.level == arm.level)
             and (arm.area is None or ctx.area is None or ctx.area == arm.area))
+
+
+_MAJOR_EVENT_TYPES = ("star_collected", "key_grabbed")
+
+
+def _is_major_action(ev) -> bool:
+    """Off-sequence events that CANCEL a waypoint segment (spec
+    2026-07-23-default-routes-foundation): a task switch (grabbing a star or
+    key) or a misroute (a real level crossing that isn't the next waypoint).
+    A minor event (area_changed, warp_entered, spawned) stays transparent —
+    only these two shapes are treated as "the player left the route"."""
+    return (ev.type in _MAJOR_EVENT_TYPES
+            or (ev.type == "level_changed" and _real_edge(ev)))
 
 
 class SegmentEngine:
@@ -728,54 +816,27 @@ class SegmentEngine:
                 elif p.area != p.required_area and live is not None \
                         and live.start_frame == p.start_frame:
                     self._disarm(self._def_by_id[did], ev, notices)
-        # Event-level echo classification — shapes (2a)/(2b)/(3) depend only
-        # on the event payload + _last_transition_frame, never on a per-def
-        # arm, so classify ONCE before the loop.  An echo anchor is
+        # Event-level echo classification — shapes (2a)/(2b)/(3)/(4)/(5) depend
+        # only on the event payload + _last_transition_frame, never on a
+        # per-def arm, so classify ONCE before the loop.  An echo anchor is
         # involuntary — it must be INVISIBLE to the engine entirely: no
         # closure, no continuation re-arm, no arm-phase arm/re-arm, for
         # every def (live regression 2026-06-12: the lobby door's section
         # reset matched LBLJ's attempt_anchor start trigger in the ARM phase
-        # and rebased start_frame to the door).  Boolean OR — door evidence
-        # and the pause-gated co-frame shape are independent, so order is
-        # irrelevant here; the docstring taxonomy keys each shape.
-        anchor_is_echo = ev.type in _ANCHOR_TYPES and (
-            # (2a) intra-area door echo: prev_action authoritative when
-            # present (door anim ran on the previous tick); fallback to
-            # action for events journaled before prev_action existed.
-            ev.payload.get("prev_action",
-                           ev.payload.get("action")) in DOOR_ACTIONS
-            # (2b) non-warp door recency echo: IGT reset lands 1-5 frames
-            # after the door action ends; frames_since_door bridges the gap.
-            or (ev.payload.get("frames_since_door") is not None
-                and 0 <= ev.payload["frames_since_door"]
-                <= _DOOR_ECHO_WINDOW)
-            # (3) transition co-frame echo, pause-gated: menu warps are
-            # co-frame too but carry paused_frames_before 13-890 (live
-            # logs) — they fail the gate and stay REAL attempt boundaries.
-            or (ev.frame == self._last_transition_frame
-                and ev.payload.get("paused_frames_before", 0)
-                <= _MENU_PAUSE_FRAMES)
-            # (4) save-prompt echo: the post-star "SAVE & CONTINUE?" course-
-            # complete screen reloads on confirm, resetting Usamune's IGT.
-            # save_pending means the anchor detector saw the save menu this
-            # period — an involuntary reload, not a player reset.  Like the
-            # door shapes it feeds echo_invisible too (an attempt_anchor-armed
-            # segment must not rebase its start_frame onto the save reload).
-            or ev.payload.get("save_pending", False)
-            # (5) dialogue/cutscene echo: a textbox/intro-cutscene time-stop
-            # re-initialises Usamune's IGT a frame or two after control is
-            # regained — an involuntary reset that closed the just-armed Lakitu
-            # Skip segment (live journal 2026-06-14).  frames_since_dialog
-            # bridges the gap exactly as frames_since_door does (2b); we never
-            # split timing on a textbox in any level (user rule 2026-06-14).
-            or (ev.payload.get("frames_since_dialog") is not None
-                and 0 <= ev.payload["frames_since_dialog"]
-                <= _DIALOG_ECHO_WINDOW))
+        # and rebased start_frame to the door).  Extracted to _anchor_echo
+        # (spec 2026-07-23-default-routes-foundation) so the waypoint matcher
+        # (_feed_waypoint) reuses the SAME echo definition instead of a
+        # second copy drifting out of sync; full shape taxonomy in the
+        # module docstring and the method's own docstring.
+        anchor_is_echo = self._anchor_echo(ev)
         for d in self._defs:
             arm = self._armed.get(d.id)
             start_clause = self._first_match(d.start_triggers, ev, ctx)
             starts = start_clause is not None
-            if arm is not None:
+            if arm is not None and d.waypoints:
+                closed.extend(
+                    self._feed_waypoint(Attempt, d, arm, ev, ctx, notices))
+            elif arm is not None:
                 if self._matches(d.end_triggers, ev, ctx):
                     a = self._close(Attempt, d, arm, ev, "success", None)
                     if a:
@@ -901,7 +962,17 @@ class SegmentEngine:
             relocation_arm = (ev.type in _ANCHOR_TYPES
                               and ev.frame == self._last_area_edge_frame
                               and d.id not in self._armed)
+            # A waypoint-bearing def that is STILL ARMED owns its own
+            # progression via _feed_waypoint's `progress` counter (spec
+            # 2026-07-23-default-routes-foundation) — a start-clause refire
+            # (e.g. the "exit SL" waypoint doubling as SL->HMC's own start
+            # trigger) must not fall through to this generic re-arm and reset
+            # progress back to 0. Only gates while armed: once _feed_waypoint
+            # has disarmed the def (major-action cancel), a fresh start-clause
+            # match here re-arms normally, same as any other def.
             if starts and (not echo_invisible or relocation_arm) \
+                    and not (d.waypoints and d.id in self._armed) \
+                    and _route_allows(d, ctx) \
                     and all(GUARDS[g["type"]].check(g, ctx)
                             for g in d.guards
                             if GUARDS[g["type"]].phase == "arm"):
@@ -942,6 +1013,130 @@ class SegmentEngine:
             if TRIGGERS[t["type"]].match(t, ev, ctx):
                 return t
         return None
+
+    def _anchor_echo(self, ev) -> bool:
+        """True when a practice_reset/state_loaded is an INVOLUNTARY IGT-reset
+        echo — a door crossing, the post-star save prompt, a textbox/cutscene
+        time-stop, or a paused-briefly transition co-frame — rather than a
+        real player reset. Moved verbatim out of `feed`'s per-event
+        `anchor_is_echo` local (spec 2026-07-23-default-routes-foundation) so
+        the waypoint matcher (`_feed_waypoint`) shares the SAME echo
+        definition instead of a second copy that could drift; the full
+        shape-by-shape rationale lives in the module docstring's "load-echo
+        rule" section. Shapes (2a)/(2b)/(3)/(4)/(5) depend only on the event
+        payload + `_last_transition_frame` (an instance attribute), never on
+        a per-def arm — shape (1), the arm-frame echo, is checked separately
+        per def by its callers (`ev.frame == arm.start_frame`)."""
+        return ev.type in _ANCHOR_TYPES and (
+            # (2a) intra-area door echo: prev_action authoritative when
+            # present (door anim ran on the previous tick); fallback to
+            # action for events journaled before prev_action existed.
+            ev.payload.get("prev_action",
+                           ev.payload.get("action")) in DOOR_ACTIONS
+            # (2b) non-warp door recency echo: IGT reset lands 1-5 frames
+            # after the door action ends; frames_since_door bridges the gap.
+            or (ev.payload.get("frames_since_door") is not None
+                and 0 <= ev.payload["frames_since_door"]
+                <= _DOOR_ECHO_WINDOW)
+            # (3) transition co-frame echo, pause-gated: menu warps are
+            # co-frame too but carry paused_frames_before 13-890 (live
+            # logs) — they fail the gate and stay REAL attempt boundaries.
+            or (ev.frame == self._last_transition_frame
+                and ev.payload.get("paused_frames_before", 0)
+                <= _MENU_PAUSE_FRAMES)
+            # (4) save-prompt echo: the post-star "SAVE & CONTINUE?" course-
+            # complete screen reloads on confirm, resetting Usamune's IGT.
+            # save_pending means the anchor detector saw the save menu this
+            # period — an involuntary reload, not a player reset.  Like the
+            # door shapes it feeds echo_invisible too (an attempt_anchor-armed
+            # segment must not rebase its start_frame onto the save reload).
+            or ev.payload.get("save_pending", False)
+            # (5) dialogue/cutscene echo: a textbox/intro-cutscene time-stop
+            # re-initialises Usamune's IGT a frame or two after control is
+            # regained — an involuntary reset that closed the just-armed Lakitu
+            # Skip segment (live journal 2026-06-14).  frames_since_dialog
+            # bridges the gap exactly as frames_since_door does (2b); we never
+            # split timing on a textbox in any level (user rule 2026-06-14).
+            or (ev.payload.get("frames_since_dialog") is not None
+                and 0 <= ev.payload["frames_since_dialog"]
+                <= _DIALOG_ECHO_WINDOW))
+
+    def _feed_waypoint(self, Attempt, d, arm: _Arm, ev, ctx, notices) -> list:
+        """Ordered-sequence matcher for a waypoint-bearing def (spec
+        2026-07-23-default-routes-foundation) — the armed-branch counterpart
+        to the plain success/relocation/anchor/death chain above, taken for
+        any def carrying d.waypoints instead. Precedence (first match wins):
+        end (only once every waypoint is consumed) > death/game_reset >
+        session_started (mirrors the plain chain: a session boundary disarms
+        silently, no row, regardless of progress — an armed segment must not
+        survive across sessions) > echo (invisible, exactly like the plain
+        chain) > real anchor (rewinds the sequence to its first waypoint and
+        re-arms IN PLACE at the anchor — the practice-retry loop; no row,
+        unlike the plain chain's reset row — precise relocation-vs-
+        continuation nuance is a live-gate VERIFY item, rewind-in-place is
+        the conservative default) > next waypoint (advance `progress`) >
+        major action (a star/key grab or a real level crossing that ISN'T
+        the next waypoint — the player switched tasks or misrouted — silent
+        cancel, no row, mirrors the plain chain's silent level_changed
+        disarm) > transparent (anything else changes nothing, e.g.
+        area_changed/warp_entered/spawned mid-sequence).
+
+        AUTHORING CAVEAT (route design, not a code defect): the major-action
+        cancel above pops this def from self._armed; the SAME event is then
+        re-evaluated by feed()'s arm/re-arm phase against d.start_triggers.
+        If a def's start trigger is LOOSER than (or equal to) a waypoint
+        clause it could collide with — e.g. a start trigger that doesn't
+        pin a destination while a waypoint does — the cancelling event can
+        satisfy the start trigger and re-arm in the same tick (a
+        segment_disarmed+segment_armed notice pair instead of a clean
+        abandon), exactly as an ordinary re-arm-on-start-trigger-refire
+        would. This is the existing "re-firing a start trigger while armed
+        re-arms" convention (module docstring), not new behavior — but a
+        route's start trigger should be written at least as specific as
+        every waypoint clause it could be confused with, or a misroute can
+        silently resume instead of truly cancelling."""
+        closed = []
+        complete = arm.progress >= len(d.waypoints)
+        if complete and self._matches(d.end_triggers, ev, ctx):
+            a = self._close(Attempt, d, arm, ev, "success", None)
+            if a:
+                closed.append(a)
+            self._disarm(d, ev, notices)
+            return closed
+        if ev.type == "death":
+            a = self._close(Attempt, d, arm, ev, "death", ev.payload.get("cause"))
+            if a:
+                closed.append(a)
+            self._disarm(d, ev, notices)
+            return closed
+        if ev.type == "game_reset":
+            a = self._close(Attempt, d, arm, ev, "hard_reset", None)
+            if a:
+                closed.append(a)
+            self._disarm(d, ev, notices)
+            return closed
+        if ev.type == "session_started":
+            self._disarm(d, ev, notices)   # silent: no row (session boundary)
+            return closed
+        if ev.type in _ANCHOR_TYPES:
+            # echo (arm-frame or event-level) is invisible; a real anchor
+            # rewinds the sequence and re-arms in place (retry loop).
+            if ev.frame == arm.start_frame or self._anchor_echo(ev):
+                return closed
+            self._armed[d.id] = replace(
+                arm, progress=0, start_frame=ev.frame,
+                started_utc=ev.wall_time_utc, jid=ev.id,
+                anchor_type=ev.type, session_id=ev.session_id,
+                level=ctx.level if ctx.level is not None else arm.level,
+                area=ctx.area if ctx.area is not None else arm.area)
+            return closed
+        if not complete and self._matches(d.waypoints[arm.progress], ev, ctx):
+            self._armed[d.id] = replace(arm, progress=arm.progress + 1)
+            return closed
+        if _is_major_action(ev):
+            self._disarm(d, ev, notices)   # silent cancel, no row
+            return closed
+        return closed   # transparent
 
     def _disarm(self, d, ev, notices) -> None:
         if self._armed.pop(d.id, None) is not None:
