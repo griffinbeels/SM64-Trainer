@@ -76,8 +76,15 @@ MOVEMENTS = [
              grab_star(0, 4), enter_level(18), via=[enter_level(16)]),
     movement("seg:vcutm->ccm", "VCUtM → CCM",
              exit_level(18), enter_level(5), via=[enter_level(6)]),
+    # Starts on the star that OPENS the sub, not on leaving DDD. Entering
+    # BitFS through the sub is a DIRECT level change (23 -> 19, the one-way
+    # edge), so `level_exit from=23` and `level_enter to=19` are the SAME
+    # event — and closures are processed before arming, so such a def arms on
+    # the event that should close it and then hangs armed forever. Live report
+    # 2026-07-24: warping DDD -> SSL left "DDD → BitFS (sub)" showing as
+    # running in Shifting Sand Land.
     movement("seg:ddd->bitfs", "DDD → BitFS (sub)",
-             exit_level(23), enter_level(19)),
+             grab_star(9, 0), enter_level(19)),
     movement("seg:ddd->wdw", "DDD → WDW (BitFS re-entry, pause exit)",
              exit_level(23), enter_level(11),
              via=[enter_level(19), exit_level(19)]),

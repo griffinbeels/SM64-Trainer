@@ -59,12 +59,24 @@ def test_a_waypoint_movement_never_repeats_its_start_clause_first():
             assert row["via"][0] != row["start"], row["seed_key"]
 
 
-def test_star_started_movements_use_castle_secret_stars_only():
-    """Only Toad/MIPS grabs (course 0) start a movement — a course star grab
-    means you are still inside a stage."""
+def test_star_started_movements_are_castle_secret_stars_or_a_named_exception():
+    """A movement normally starts on a castle-secret grab (Toad/MIPS), because
+    a COURSE star grab means you are still inside a stage.
+
+    The one sanctioned exception is a star that physically opens the way out:
+    Board Bowser's Sub is what makes DDD's sub enterable, and starting there is
+    what keeps `level_exit from=23` from colliding with `level_enter to=19` —
+    they are the same event (see test_defaults_corpus's same-event test).
+    Listing the exception rather than dropping the rule keeps a careless new
+    course-star start from slipping in."""
+    allowed = {"seg:ddd->bitfs": (9, 0)}     # DDD — Board Bowser's Sub
     for row in MOVEMENTS:
-        if row["start"]["type"] == "star_grabbed":
-            assert row["start"]["course"] == 0, row["seed_key"]
+        if row["start"]["type"] != "star_grabbed":
+            continue
+        course, star_id = row["start"]["course"], row["start"]["star"]
+        if course == 0:
+            continue
+        assert allowed.get(row["seed_key"]) == (course, star_id), row["seed_key"]
 
 
 def test_a_waypoint_movement_never_spans_a_star_grab_by_construction():

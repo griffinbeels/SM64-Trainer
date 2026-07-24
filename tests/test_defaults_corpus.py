@@ -267,6 +267,33 @@ def test_every_movement_completes_exactly_once_on_its_own_walk():
         assert outcomes == ["success"], (row["seed_key"], outcomes)
 
 
+def test_no_movement_starts_and_ends_on_the_SAME_event():
+    """A start and end that one event satisfies makes a def UNFIREABLE.
+
+    SegmentEngine processes closures only for an ALREADY-armed def, so if the
+    arming event is also the closing event the def arms and then hangs armed
+    until something unrelated disarms it — no attempt is ever recorded. It
+    happens when the world has a DIRECT edge from the source level to the
+    destination: `level_exit from=A` and `level_enter to=B` are then the same
+    level_changed. Live report 2026-07-24: DDD -> BitFS via the sub (the 23 ->
+    19 one-way edge) armed on a warp out of DDD and showed as running in a
+    completely different course.
+
+    The walk-based simulation cannot catch this on its own — it always exits a
+    course to its castle landing node, so it produced two events where the real
+    sub hop produces one."""
+    for row in MOVEMENTS:
+        start, end = row["start_triggers"][0], row["end_triggers"][0]
+        if start["type"] != "level_exit" or end["type"] != "level_enter":
+            continue
+        direct = [dst for dst in GRAPH.get((start["from"], None), [])
+                  if dst[0] == end["to"]]
+        assert not direct, (
+            row["seed_key"],
+            f"level_exit from={start['from']} and level_enter to={end['to']} "
+            "are one event — the world has a direct edge; start it earlier")
+
+
 def test_a_movement_only_fires_on_a_walk_that_reaches_its_endpoint():
     """Negative pass over all 55x54 pairs. A movement may legitimately
     complete on another's walk when it is a PREFIX of it — walking BBH -> DDD
