@@ -17,9 +17,13 @@
 // EVERY mode renders through the shared PracticeCell (art + rank medal + name
 // + sub-line, identical active/dim/glow/bob styling) — segment rows only wire
 // segment data into it (spec 2026-07-24-segment-icon-cells, pinned by
-// tests/test_star_icons.py). Cell art resolves user override (view's
-// icon_overrides, either mode) > course-mode split-icon > generic gold star;
-// the hover ✎ on any cell opens the IconPicker to set/clear the override.
+// tests/test_star_icons.py). A RUNNING segment must never be invisible (spec
+// addendum): every row appends armedExtraCells for armed segments its own
+// filter didn't include, and with no row at all an ArmedOnlyRow replaces the
+// placeholder while anything is armed. Cell art resolves user override
+// (view's icon_overrides, either mode — incl. uploaded `user:` icons) >
+// course-mode split-icon > generic gold star; the hover ✎ on any cell opens
+// the IconPicker to set/clear the override.
 // Selection POSTs /api/target (and PUTs /api/segments/{id} for the Bowser
 // enable/disable) -- the same endpoints the rest of the UI uses, so the normal
 // target_changed flow updates the header, the pinned section, and this.
@@ -28,7 +32,7 @@ import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
 import { Medal } from "./ranks.js";
-import { IconPicker } from "./iconpicker.js";
+import { IconPicker, iconSrcFromStem } from "./iconpicker.js";
 
 const html = htm.bind(h);
 
@@ -37,14 +41,18 @@ const CASTLE_AREA_NAMES = { 1: "Lobby", 2: "Upstairs", 3: "Basement" };
 export function StageBanner({ t }) {
   const v = t.view;
   const stage = t.stage;
-  if (!v || !stage) return html`<${StagePlaceholder} />`;
+  if (!v) return html`<${StagePlaceholder} />`;
   let row = null;
-  switch (stage.mode) {
+  switch (stage && stage.mode) {
     case "stars":         row = html`<${StarRow} t=${t} v=${v} stage=${stage} />`; break;
     case "bowser_course": row = html`<${BowserCourseRow} t=${t} v=${v} stage=${stage} />`; break;
     case "arena":         row = html`<${ArenaRow} t=${t} v=${v} stage=${stage} />`; break;
     case "castle":        row = html`<${SegmentRow} t=${t} v=${v} stage=${stage} />`; break;
   }
+  // No banner for this place (hub, unknown stage) but a timer is live:
+  // show the running segments instead of the empty placeholder.
+  if (!row && armedSegments(t, v).length)
+    row = html`<${ArmedOnlyRow} t=${t} v=${v} />`;
   return row || html`<${StagePlaceholder} />`;
 }
 
@@ -61,6 +69,9 @@ function StagePlaceholder() {
 // the Bowser banner shows them so its "no reds" click can enable them.
 const segsForLevel = (v, level) =>
   (v.segment_targets || []).filter((s) => (s.start_levels || []).includes(level));
+
+const armedSegments = (t, v) =>
+  (v.segment_targets || []).filter((s) => t.armedSegs.has(s.segment_id));
 
 // Look flags — flip during the human-audit playtest to taste. Kept as
 // constants (not props) so the cell below stays a single readable line.
@@ -87,6 +98,9 @@ const LEVEL_ICONS = { 17: "bitdw", 19: "bitfs", 21: "bits",
 
 const genericStarSrc = (slot) =>
   `/ui/assets/star_${Math.min(slot + 1, STAR_IMG_COUNT)}.png`;
+// generic gold-star art vs "real" art (bundled split icon OR uploaded user
+// icon) — the latter gets the opaque-square `courseicon` treatment
+const isGenericArt = (src) => /\/assets\/star_\d+\.png$/.test(src);
 
 // Cell art: user override (either mode — an explicit pick always wins) >
 // course-mode art > the generic gold star.
@@ -94,7 +108,7 @@ function resolveIcon(t, ek, courseStem, slot) {
   const override = ((t.view || {}).icon_overrides || {})[ek];
   const stem = override
     || (t.starIcons === "course" ? courseStem : null);
-  return stem ? `/ui/assets/star_icons/${stem}.png` : genericStarSrc(slot);
+  return stem ? iconSrcFromStem(stem) : genericStarSrc(slot);
 }
 
 const segCourseStem = (s) =>
@@ -106,7 +120,7 @@ const segIconSrc = (t, s) =>
 // dropping `courseicon` also removes the opaque-square styling.
 function fallbackToGenericStar(event, slot) {
   const img = event.target;
-  if (img.src.includes("/star_icons/")) {
+  if (!isGenericArt(img.src)) {
     img.classList.remove("courseicon");
     img.src = genericStarSrc(slot);
   }
@@ -138,7 +152,7 @@ function PracticeCell({ active, armed, iconSrc, fallbackSlot = 0,
       class="starcell ${active ? "active-star" : ""} ${armed ? "armed" : ""}"
       title=${title || name} onclick=${onPick}>
     <span class="starholder">
-      <img class="starimg ${iconSrc.includes("/star_icons/") ? "courseicon" : ""} ${STAR_DIM_IDLE && !active ? "dim" : ""}"
+      <img class="starimg ${isGenericArt(iconSrc) ? "" : "courseicon"} ${STAR_DIM_IDLE && !active ? "dim" : ""}"
            src=${iconSrc}
            onerror=${(e) => fallbackToGenericStar(e, fallbackSlot)}
            alt="" draggable="false" />
@@ -159,6 +173,38 @@ function PracticeCell({ active, armed, iconSrc, fallbackSlot = 0,
 const runningChip = html`<span class="chip good">⏱ running</span>`;
 const stratSub = (strat) =>
   html`<span class="strat ${strat ? "" : "none"}">${strat || "—"}</span>`;
+
+// The standard segment cell (castle/arena rows, armed extras): name, strat
+// sub (running chip while armed), rank medal, resolved icon; click targets
+// it (enabling first if needed — a no-op for already-enabled segments).
+function StandardSegmentCell({ t, s, setPicking }) {
+  const tgt = ((t.view || {}).target) || {};
+  const armed = t.armedSegs.has(s.segment_id);
+  async function pick() {
+    if (!s.enabled)
+      await send("PUT", `/api/segments/${s.segment_id}`, { enabled: true });
+    await send("POST", "/api/target", { kind: "segment", segment_id: s.segment_id });
+    t.refresh();
+  }
+  return html`<${PracticeCell}
+    active=${tgt.kind === "segment" && tgt.segment_id === s.segment_id}
+    armed=${armed}
+    iconSrc=${segIconSrc(t, s)}
+    rank=${s.rank} name=${s.name}
+    sub=${armed ? runningChip : stratSub(s.strat)}
+    onPick=${pick}
+    onEdit=${() => setPicking({ kind: "segment", segment_id: s.segment_id,
+                                ek: `segment:${s.segment_id}` })} />`;
+}
+
+// A RUNNING segment must never be invisible (spec addendum 2026-07-24):
+// cells for every armed segment a row's own filter did not already show.
+// Pinned into every row by tests/test_star_icons.py.
+const armedExtraCells = (t, v, shownIds, setPicking) =>
+  armedSegments(t, v)
+    .filter((s) => !shownIds.has(s.segment_id))
+    .map((s) => html`<${StandardSegmentCell} key=${`seg:${s.segment_id}`}
+      t=${t} s=${s} setPicking=${setPicking} />`);
 
 function StarRow({ t, v, stage }) {
   // hooks first — the early return below must never change the hook count
@@ -198,6 +244,7 @@ function StarRow({ t, v, stage }) {
         onPick=${() => pick(i)}
         onEdit=${() => setPicking({ course_id: stage.course_id, star_id: i,
                                     ek: `star:${stage.course_id}:${i}` })} />`)}
+      ${armedExtraCells(t, v, new Set(), setPicking)}
     </div>
     ${pickerModal}
   </section>`;
@@ -285,6 +332,8 @@ function BowserCourseRow({ t, v, stage }) {
         onPick=${() => pickNoReds(s)}
         onEdit=${() => setPicking({ kind: "segment", segment_id: s.segment_id,
                                     ek: `segment:${s.segment_id}` })} />`)}
+      ${armedExtraCells(t, v, new Set(pipes.map((s) => s.segment_id)),
+                        setPicking)}
     </div>
     ${pickerModal}
   </section>`;
@@ -292,8 +341,8 @@ function BowserCourseRow({ t, v, stage }) {
 
 // Bowser 1/2/3 arena: the single fight segment, auto-selected on entry.
 function ArenaRow({ t, v, stage }) {
-  const tgt = v.target || {};
   const [setPicking, pickerModal] = useIconPicking(t);
+  const tgt = v.target || {};
   const fights = segsForLevel(v, stage.level);
   const only = fights.length === 1 ? fights[0] : null;
 
@@ -312,59 +361,53 @@ function ArenaRow({ t, v, stage }) {
     })();
   }, [stage.level, only && only.segment_id]);
 
-  if (!fights.length) return html`<${StagePlaceholder} />`;
-
-  async function pick(s) {
-    if (!s.enabled)
-      await send("PUT", `/api/segments/${s.segment_id}`, { enabled: true });
-    await send("POST", "/api/target", { kind: "segment", segment_id: s.segment_id });
-    t.refresh();
-  }
+  const extras = armedExtraCells(
+    t, v, new Set(fights.map((s) => s.segment_id)), setPicking);
+  if (!fights.length && !extras.length) return html`<${StagePlaceholder} />`;
 
   return html`<section class="practice-card selector-card stagebanner">
     <div class="shead"><b>▸ Bowser Fight</b>
       <span class="meta">auto-selected — tap to re-arm</span></div>
     <div class="starrow segcells">
-      ${fights.map((s) => html`<${PracticeCell} key=${`seg:${s.segment_id}`}
-        active=${tgt.kind === "segment" && tgt.segment_id === s.segment_id}
-        armed=${t.armedSegs.has(s.segment_id)}
-        iconSrc=${segIconSrc(t, s)}
-        rank=${s.rank} name=${s.name}
-        sub=${t.armedSegs.has(s.segment_id) ? runningChip : stratSub(s.strat)}
-        onPick=${() => pick(s)}
-        onEdit=${() => setPicking({ kind: "segment", segment_id: s.segment_id,
-                                    ek: `segment:${s.segment_id}` })} />`)}
+      ${fights.map((s) => html`<${StandardSegmentCell}
+        key=${`seg:${s.segment_id}`} t=${t} s=${s} setPicking=${setPicking} />`)}
+      ${extras}
     </div>
     ${pickerModal}
   </section>`;
 }
 
 function SegmentRow({ t, v, stage }) {
-  const tgt = v.target || {};
   const [setPicking, pickerModal] = useIconPicking(t);
   const segs = (v.segment_targets || []).filter((s) =>
     s.enabled &&
     s.start_areas.some((a) => a[0] === stage.level && a[1] === stage.area));
-  if (!segs.length) return html`<${StagePlaceholder} />`;
-
-  async function pick(segId) {
-    await send("POST", "/api/target", { kind: "segment", segment_id: segId });
-    t.refresh();
-  }
+  const extras = armedExtraCells(
+    t, v, new Set(segs.map((s) => s.segment_id)), setPicking);
+  if (!segs.length && !extras.length) return html`<${StagePlaceholder} />`;
 
   return html`<section class="practice-card selector-card stagebanner">
     <div class="shead"><b>▸ Castle ${CASTLE_AREA_NAMES[stage.area]}</b>
       <span class="meta">tap a segment to practice</span></div>
     <div class="starrow segcells">
-      ${segs.map((s) => html`<${PracticeCell} key=${`seg:${s.segment_id}`}
-        active=${tgt.kind === "segment" && tgt.segment_id === s.segment_id}
-        armed=${t.armedSegs.has(s.segment_id)}
-        iconSrc=${segIconSrc(t, s)}
-        rank=${s.rank} name=${s.name}
-        sub=${t.armedSegs.has(s.segment_id) ? runningChip : stratSub(s.strat)}
-        onPick=${() => pick(s.segment_id)}
-        onEdit=${() => setPicking({ kind: "segment", segment_id: s.segment_id,
-                                    ek: `segment:${s.segment_id}` })} />`)}
+      ${segs.map((s) => html`<${StandardSegmentCell}
+        key=${`seg:${s.segment_id}`} t=${t} s=${s} setPicking=${setPicking} />`)}
+      ${extras}
+    </div>
+    ${pickerModal}
+  </section>`;
+}
+
+// No stage-specific banner (hub level, unknown mode) but a segment timer is
+// live: keep it visible here instead of the placeholder.
+function ArmedOnlyRow({ t, v }) {
+  const [setPicking, pickerModal] = useIconPicking(t);
+  return html`<section class="practice-card selector-card stagebanner">
+    <div class="shead"><b>▸ Running</b>
+      <span class="meta">a segment timer is live</span></div>
+    <div class="starrow segcells">
+      ${armedSegments(t, v).map((s) => html`<${StandardSegmentCell}
+        key=${`seg:${s.segment_id}`} t=${t} s=${s} setPicking=${setPicking} />`)}
     </div>
     ${pickerModal}
   </section>`;

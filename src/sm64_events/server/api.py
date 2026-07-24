@@ -6,11 +6,14 @@ LookupError -> 404 (no such attempt), ValueError -> 409 (exists but not
 saveable: bad mode, non-success, cleared, missing clock, or — for pb/undo —
 not the current PB), RuntimeError -> 503 (database unavailable / degraded
 mode)."""
+import re
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from sm64_events.core.paths import user_icons_dir
 from sm64_events.links import star_links
 from sm64_events.ranks.standards import entity_key
 from sm64_events.stats.registry import (registry_meta, selection_id,
@@ -91,6 +94,41 @@ def _icon_stems() -> list[str]:
         return sorted(p.stem for p in _ICON_DIR.glob("*.png"))
     except OSError:
         return []
+
+
+# User-uploaded icons (spec addendum 2026-07-24): any image file, stored in
+# the DATA dir (core/paths.user_icons_dir — survives app updates), referenced
+# in overrides as "user:<filename>" so they can never collide with bundled
+# stems. No server-side resize (stdlib-only) — the picker states the
+# preferred shape (square ~100x100) and the UI's object-fit covers the rest.
+_USER_ICON_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+_USER_ICON_MAX_BYTES = 2_000_000
+
+
+def _user_icon_names() -> list[str]:
+    try:
+        return sorted(f"user:{p.name}" for p in user_icons_dir().iterdir()
+                      if p.suffix.lower() in _USER_ICON_EXTS)
+    except OSError:
+        return []
+
+
+def _safe_user_icon_file(name: str) -> Path:
+    """Resolve a user-icon filename, refusing traversal and odd extensions.
+    The name is later interpolated into img srcs and joined onto the data
+    dir, so this is the single choke point for both."""
+    if name != Path(name).name or name.startswith("."):
+        raise HTTPException(400, "bad icon filename")
+    if Path(name).suffix.lower() not in _USER_ICON_EXTS:
+        raise HTTPException(400, "unsupported icon file type "
+                                 f"(use one of {sorted(_USER_ICON_EXTS)})")
+    return user_icons_dir() / name
+
+
+def _icon_exists(stem: str) -> bool:
+    if stem.startswith("user:"):
+        return stem in _user_icon_names()
+    return stem in _icon_stems()
 
 
 class StatSelection(BaseModel):
@@ -510,18 +548,47 @@ def create_api_router(service) -> APIRouter:
 
     @router.get("/icons")
     async def icons():
-        """Stems of the bundled selector-icon set — the icon picker's grid."""
-        return {"icons": _icon_stems()}
+        """The icon picker's grid: bundled stems + uploaded user icons."""
+        return {"icons": _icon_stems(), "user_icons": _user_icon_names()}
+
+    @router.post("/icons/upload")
+    async def icon_upload(name: str, request: Request):
+        """Upload a custom icon image (raw request body, like
+        /api/compare/upload — no python-multipart). The filename is slugged
+        and kept (re-uploading the same name replaces it); returns the
+        `user:<file>` stem to pass to POST /api/icon."""
+        raw = await request.body()
+        if not raw:
+            raise HTTPException(400, "empty upload")
+        if len(raw) > _USER_ICON_MAX_BYTES:
+            raise HTTPException(413, "icon file too large (2 MB max)")
+        source = Path(name)
+        slug = re.sub(r"[^a-z0-9_-]+", "-", source.stem.lower()).strip("-")
+        if not slug:
+            raise HTTPException(400, "bad icon filename")
+        target = _safe_user_icon_file(f"{slug}{source.suffix.lower()}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(raw)
+        return {"icon": f"user:{target.name}"}
+
+    @router.get("/icons/file/{name}")
+    async def icon_file(name: str):
+        """Serve one uploaded user icon (the `user:` stems' img src)."""
+        path = _safe_user_icon_file(name)
+        if not path.is_file():
+            raise HTTPException(404, f"no user icon {name}")
+        return FileResponse(path)
 
     @router.post("/icon")
     async def icon(body: IconBody):
         """Set/clear an entity's selector-icon override.
 
-        Kind-dispatched exactly like /strat. `icon` must be a stem from
-        /api/icons (400 otherwise — also the path-injection guard, the stem
-        is later interpolated into an img src); null resets to default art.
+        Kind-dispatched exactly like /strat. `icon` must be a bundled stem
+        from /api/icons or an uploaded `user:<file>` (400 otherwise — also
+        the path-injection guard, the stem is later interpolated into an
+        img src); null resets to default art.
         """
-        if body.icon is not None and body.icon not in _icon_stems():
+        if body.icon is not None and not _icon_exists(body.icon):
             raise HTTPException(400, f"unknown icon: {body.icon}")
         try:
             if body.kind == "segment":

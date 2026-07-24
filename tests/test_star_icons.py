@@ -63,15 +63,36 @@ def test_course_icons_are_the_default_mode():
 
 
 def test_every_banner_row_renders_the_shared_cell():
-    """All four banner modes must render through PracticeCell — the segment
-    rows shipped as bare text buttons and diverged from the approved star
-    look (user report 2026-07-24, spec 2026-07-24-segment-icon-cells)."""
+    """All banner modes must render through PracticeCell — the segment rows
+    shipped as bare text buttons and diverged from the approved star look
+    (user report 2026-07-24, spec 2026-07-24-segment-icon-cells). Rows may
+    go through StandardSegmentCell, which itself must wrap PracticeCell."""
+    source = (UI / "components" / "stagebanner.js").read_text(encoding="utf-8")
+    std = re.search(r"^function StandardSegmentCell\(.*?^}", source,
+                    re.S | re.M)
+    assert std and "<${PracticeCell}" in std.group(0), \
+        "StandardSegmentCell no longer wraps PracticeCell"
+    for row in ("StarRow", "SegmentRow", "ArenaRow", "BowserCourseRow",
+                "ArmedOnlyRow"):
+        match = re.search(rf"^function {row}\(.*?^}}", source, re.S | re.M)
+        assert match, f"{row} not found in stagebanner.js"
+        body = match.group(0)
+        assert "<${PracticeCell}" in body \
+            or "<${StandardSegmentCell}" in body, \
+            f"{row} stopped rendering the shared cell"
+
+
+def test_every_row_surfaces_armed_segments():
+    """A RUNNING segment must never be invisible (user rule 2026-07-24):
+    every banner row appends armedExtraCells for armed segments its own
+    filter missed, and StageBanner falls back to ArmedOnlyRow (not the
+    empty placeholder) while anything is armed."""
     source = (UI / "components" / "stagebanner.js").read_text(encoding="utf-8")
     for row in ("StarRow", "SegmentRow", "ArenaRow", "BowserCourseRow"):
         match = re.search(rf"^function {row}\(.*?^}}", source, re.S | re.M)
-        assert match, f"{row} not found in stagebanner.js"
-        assert "<${PracticeCell}" in match.group(0), \
-            f"{row} stopped rendering the shared PracticeCell"
+        assert match and "armedExtraCells(" in match.group(0), \
+            f"{row} no longer unions in armed segments"
+    assert "ArmedOnlyRow" in source, "the armed-only fallback row is gone"
 
 
 def test_icon_picker_is_wired_into_banner_and_editor():
