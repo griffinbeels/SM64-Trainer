@@ -1529,3 +1529,33 @@ def test_reclassified_attempt_regrades_its_medal(tmp_path):
     asyncio.run(svc.set_attempt_strat(aid, "Slide Kick"))
     after = build_session_view(db, svc, clock="igt")["stars"][0]["attempts"][0]
     assert after["strat_tag"] == "Slide Kick" and after["rank"] == "Mario"
+
+
+def test_the_seeded_corpus_does_not_bloat_the_session_view(tmp_path):
+    """65 seeded segments must NOT become 65 practice cards.
+
+    Segment sections are scoped to segments with activity (plus the target and
+    anything armed), so shipping the route corpus leaves a fresh install's
+    practice page empty. This was implicit while only 10 segments existed;
+    with 55 route-scoped movements added it is load-bearing, and iterating
+    service.segment_defs here instead would flood the page for every user.
+    """
+    import json
+
+    from sm64_events.core.paths import bundled_defaults_seed
+    from sm64_events.tracking.defaults import reconcile_defaults
+
+    db, svc = make(tmp_path)
+    seed_data = json.loads(bundled_defaults_seed().read_bytes().decode("utf-8"))
+    assert reconcile_defaults(db, seed_data) == []
+    assert len(db.segment_defs()) == 65
+
+    view = build_session_view(db, svc, clock="igt")
+    assert view["segments"] == []
+
+    # ...and the quick-select banner stays sane too: a movement is offered
+    # only if it declares a start subarea or level, which the corpus's
+    # level_exit / star_grabbed starts deliberately do not.
+    offered = {t["name"] for t in view["segment_targets"]}
+    assert "SSL → LLL" not in offered
+    assert "MIPS (1st) → SSL" not in offered

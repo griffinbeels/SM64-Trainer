@@ -26,7 +26,7 @@ from sm64_events.memory.addresses import course_name, star_name
 from sm64_events.ranks.classify import RANK_MODES
 from sm64_events.ranks.standards import entity_key
 from sm64_events.storage.db import Database, EventRow
-from sm64_events.tracking.defaults import _resolve_steps
+from sm64_events.tracking.defaults import resolve_steps
 from sm64_events.tracking.projection import Projector, replay, wipe_matches
 from sm64_events.tracking.segments import SegmentDef, validate_definition
 from sm64_events.tracking import routes as route_logic
@@ -656,7 +656,7 @@ class TrackerService:
         seed_dirty. LookupError (-> 404) for a user-created route (no
         seed_key) or one whose seed_key has no matching bundled row. Step
         candidates are re-resolved seed_key -> local segment_id via the
-        CURRENT segment_defs table (defaults.py's _resolve_steps, the same
+        CURRENT segment_defs table (defaults.py's resolve_steps, the same
         helper reconcile uses), so a segment that was itself reset/re-seeded
         under a different id still binds correctly."""
         db = self._require_db()
@@ -672,7 +672,7 @@ class TrackerService:
         key_to_id = {s["seed_key"]: s["id"] for s in db.segment_defs()
                      if s.get("seed_key")}
         db.update_route(route_id, updated_utc=_iso(_now()), name=rrow["name"],
-                        steps=_resolve_steps(rrow["steps"], key_to_id),
+                        steps=resolve_steps(rrow["steps"], key_to_id),
                         start_condition=rrow.get("start_condition",
                                                  {"type": "reset_game"}),
                         category=rrow.get("category"))

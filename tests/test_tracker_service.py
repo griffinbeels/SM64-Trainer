@@ -938,7 +938,7 @@ def test_update_route_marks_seed_dirty(tmp_path):
 
 def test_reset_route_restores_seed_and_clears_dirty(tmp_path, monkeypatch):
     """End-to-end reset_route: seed_key candidates resolve to the CURRENT
-    segment_defs table (defaults.py's _resolve_steps), exactly as reconcile
+    segment_defs table (defaults.py's resolve_steps), exactly as reconcile
     does. The shipped defaults.seed.json ships routes: [] (no seeded route
     yet), so the seed corpus is injected here rather than depending on that
     file's contents."""

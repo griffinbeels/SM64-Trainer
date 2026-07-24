@@ -986,8 +986,30 @@
   .route-list-item > .ui-icon { transform: rotate(-90deg); color: var(--muted); }
   .route-list-item.on { border-color: #6287aa; background: rgba(61,101,143,.25); }
   .route-list-item.on > .ui-icon { color: #9cc9f2; }
+  /* Category groups (2026-07-24): the seeded corpus ships ~48 routes, so the
+     library is grouped and collapsible. Rows keep their own .4rem gap; the
+     group supplies a slightly larger gap above each header so the sections
+     read as sections without a divider line. */
+  .route-cat { display: grid; align-content: start; gap: .4rem; }
+  .route-cat + .route-cat { margin-top: .5rem; }
+  .route-cat-header {
+    width: 100%; min-width: 0; display: grid;
+    grid-template-columns: auto minmax(0,1fr) auto;
+    align-items: center; gap: .4rem;
+    justify-content: initial; text-align: left;
+    padding: .3rem .5rem; background: transparent;
+    border-color: transparent; color: var(--muted);
+    font-size: .72rem; letter-spacing: .04em; text-transform: uppercase;
+  }
+  .route-cat-header:hover { color: var(--text); background: rgba(8,20,34,.5); }
+  .route-cat-header b {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: .74rem; letter-spacing: inherit;
+  }
+  .route-cat-header > .ui-icon { transition: transform .12s ease; }
+  .route-cat-header.shut > .ui-icon { transform: rotate(-90deg); }
   .library-actions {
-    display: grid; grid-template-columns: 1fr 1fr; gap: .4rem;
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: .4rem;
     margin-top: auto; padding-top: .65rem; border-top: 1px solid var(--border-soft);
   }
   .route-workspace { min-width: 0; display: grid; gap: 12px; }

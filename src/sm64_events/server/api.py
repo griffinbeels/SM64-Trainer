@@ -285,9 +285,12 @@ def create_api_router(service) -> APIRouter:
     @router.put("/segments/{segment_id}")
     async def update_segment(segment_id: int, body: SegmentPatch):
         try:
-            # exclude None (unset fields), but keep False/[] (explicit sets)
-            patch = {k: v for k, v in body.model_dump().items()
-                     if v is not None}
+            # Only the fields the client actually SENT (exclude_unset), so
+            # False/[]/null all round-trip as explicit sets. Dropping every
+            # None instead made `category: null` — "move this out of its
+            # group" — a silent no-op, since null is a meaningful value there
+            # (2026-07-24); an omitted field is still untouched either way.
+            patch = body.model_dump(exclude_unset=True)
             await service.update_segment(segment_id, patch)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
@@ -359,7 +362,7 @@ def create_api_router(service) -> APIRouter:
     @router.put("/routes/{route_id}")
     async def update_route(route_id: int, body: RoutePatch):
         try:
-            patch = {k: v for k, v in body.model_dump().items() if v is not None}
+            patch = body.model_dump(exclude_unset=True)   # see update_segment
             await service.update_route(route_id, patch)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)

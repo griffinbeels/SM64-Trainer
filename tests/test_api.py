@@ -886,3 +886,32 @@ def test_segment_editor_save_body_roundtrips_a_get_row(tmp_path):
                  if k not in ("id", "created_utc")}
         assert client.put(f"/api/segments/{row['id']}",
                           json=stale).status_code == 422
+
+def test_patching_a_route_category_to_null_clears_it(tmp_path):
+    """`category: null` means "move this route out of its group" — a real
+    value, not an omitted field. The patch used to drop every None, so the
+    Library's Category action would have silently done nothing."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        rid = client.post("/api/routes", json={
+            "name": "R", "steps": [], "category": "Main Categories"}).json()["id"]
+        assert client.put(f"/api/routes/{rid}",
+                          json={"category": None}).status_code == 200
+        row = next(r for r in client.get("/api/routes").json() if r["id"] == rid)
+        assert row["category"] is None
+        assert row["name"] == "R"          # an omitted field stays untouched
+
+
+def test_patching_a_segment_category_to_null_clears_it(tmp_path):
+    """Star<->segment parity: the same action on the Library's other panel."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        sid = client.post("/api/segments", json={
+            "name": "S", "start_triggers": [{"type": "spawned", "level": 16}],
+            "end_triggers": [{"type": "level_enter", "to": 6}],
+            "guards": [], "category": "Tricks"}).json()["id"]
+        assert client.put(f"/api/segments/{sid}",
+                          json={"category": None}).status_code == 200
+        row = next(s for s in db.segment_defs() if s["id"] == sid)
+        assert row["category"] is None
+        assert row["name"] == "S"

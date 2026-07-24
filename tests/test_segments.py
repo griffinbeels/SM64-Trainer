@@ -138,9 +138,12 @@ def test_all_db_seeds_pass_validate_definition(tmp_path):
     defs = db.segment_defs()
     assert len(defs) == 10
     for d in defs:
+        # `waypoints` is projected too (fold-in 2026-07-24): without it a
+        # malformed seeded waypoint list was invisible to the only gate that
+        # checks seeds against the vocabulary.
         validate_definition({k: d[k] for k in
                              ("name", "start_triggers", "end_triggers",
-                              "guards")})
+                              "waypoints", "guards")})
 
 
 # ---------------------------------------------------------------------------
@@ -1583,7 +1586,12 @@ def test_vocab_course_and_star_enums():
     assert v["stars"]["1"][6] == "100 Coins"    # main courses: 100-coin star at star_id 6
     assert len(v["stars"]["1"]) == 7
     assert v["stars"]["16"] == ["8 Red Coins"]  # Bowser course: one star
-    assert v["stars"]["0"] == []                # Castle Secret: no named stars
+    # Castle Secret stars are selectable in the builder (spec 2026-07-24): the
+    # route corpus references the Toad/MIPS stars as ordinary star candidates,
+    # so a trigger can be scoped to one too.
+    assert v["stars"]["0"] == ["Toad Star (Basement)", "Toad Star (Upstairs)",
+                               "Toad Star (Tippy)", "MIPS 1st Star",
+                               "MIPS 2nd Star"]
 
 
 # ---------------------------------------------------------------------------
