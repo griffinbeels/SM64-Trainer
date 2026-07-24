@@ -1559,3 +1559,48 @@ def test_the_seeded_corpus_does_not_bloat_the_session_view(tmp_path):
     offered = {t["name"] for t in view["segment_targets"]}
     assert "SSL → LLL" not in offered
     assert "MIPS (1st) → SSL" not in offered
+
+
+def test_active_route_carries_its_star_keys_for_route_focus(tmp_path):
+    """Route focus (user request 2026-07-24): the star selector shows only the
+    stars the active route collects, so the view has to say which those are.
+    Keys use the same "<course>:<star>" shape as last_strat_by_star, so the UI
+    tests membership with one Set lookup instead of a second convention."""
+    db, svc = make(tmp_path)
+    rid = asyncio.run(svc.create_route({"name": "R", "steps": [
+        {"need": 3, "candidates": [
+            {"type": "star", "course": 2, "star": 5},
+            {"type": "star", "course": 2, "star": 2},
+            {"type": "star", "course": 2, "star": 4}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 4, "star": 5}]},
+    ]}))
+    asyncio.run(svc.select_route(rid))
+    view = build_session_view(db, svc, clock="igt")
+    assert view["active_route"]["id"] == rid
+    assert view["active_route"]["star_keys"] == ["2:5", "2:2", "2:4", "4:5"]
+    # the four WF stars this route never collects are absent
+    for absent in ("2:0", "2:1", "2:3", "2:6"):
+        assert absent not in view["active_route"]["star_keys"]
+
+
+def test_active_route_star_keys_dedupe_and_ignore_segments(tmp_path):
+    db, svc = make(tmp_path)
+    seg = db.insert_segment_def("S", [{"type": "spawned", "level": 16}],
+                                [{"type": "level_enter", "to": 6}], [],
+                                "2026-07-24T00:00:00Z")
+    rid = asyncio.run(svc.create_route({"name": "R", "steps": [
+        {"need": 1, "candidates": [{"type": "star", "course": 1, "star": 5}]},
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": seg}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 1, "star": 5}]},
+    ]}))
+    asyncio.run(svc.select_route(rid))
+    active = build_session_view(db, svc, clock="igt")["active_route"]
+    assert active["star_keys"] == ["1:5"]          # de-duplicated
+    assert active["segment_ids"] == [seg]
+
+
+def test_no_active_route_means_no_star_filter(tmp_path):
+    """None must stay None — the UI reads "no active route" as "show every
+    star", so a stray empty list here would silently blank the selector."""
+    db, svc = make(tmp_path)
+    assert build_session_view(db, svc, clock="igt")["active_route"] is None

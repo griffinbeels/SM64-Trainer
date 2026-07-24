@@ -55,6 +55,22 @@ def _strategies_key(ek: str) -> str:
     return ek[len("star:"):]
 
 
+def _route_member_stars(route: dict) -> list[str]:
+    """"<course>:<star>" keys for every star a route's steps reference, in
+    route order, de-duplicated. Deliberately the SAME key shape as the session
+    view's last_strat_by_star / rank_by_star maps so the UI tests membership
+    with one Set lookup instead of a second convention."""
+    keys: list[str] = []
+    for step in route.get("steps") or []:
+        for cand in step.get("candidates") or []:
+            if cand.get("type") != "star":
+                continue
+            key = f"{cand['course']}:{cand['star']}"
+            if key not in keys:
+                keys.append(key)
+    return keys
+
+
 class TrackerService:
     def __init__(self, db: Database | None, broadcaster, ranks=None):
         self.db = db
@@ -724,7 +740,14 @@ class TrackerService:
         if route is None:
             return None
         return {"id": route["id"], "name": route["name"],
-                "segment_ids": self._route_member_segments(self.db, route["id"])}
+                "segment_ids": self._route_member_segments(self.db, route["id"]),
+                # "<course>:<star>" keys, same shape as the view's
+                # last_strat_by_star / rank_by_star maps so the UI can test
+                # membership with one Set lookup. Drives route-focus filtering:
+                # with a route active the star selector offers ONLY its stars
+                # (user request 2026-07-24 — practising 16 Star should not
+                # present the four Whomp's Fortress stars it never collects).
+                "star_keys": _route_member_stars(route)}
 
     # -- rank standards commands -----------------------------------------------
     async def _rank_standards_changed(self) -> None:

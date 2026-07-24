@@ -811,6 +811,16 @@ export function Practice({ t, openCompare }) {
     if (id == null) localStorage.removeItem("sm64.activeRoute");
     else localStorage.setItem("sm64.activeRoute", String(id));
     setActiveRouteId(id);
+    // Tell the SERVER too (spec 2026-07-23 §5: localStorage is an optimistic
+    // mirror, the journaled route_selected is the source of truth). Without
+    // this the active route was never journaled, so every seeded castle-
+    // movement segment — all 55 carry the in_active_route guard — could only
+    // ever arm as a standalone target, i.e. the route corpus was inert. It
+    // also feeds active_route.star_keys, which is what lets the selector show
+    // only the route's stars.
+    send("POST", "/api/route/select", { route_id: id })
+      .then(() => t.refresh())      // pull the new active_route.star_keys
+      .catch(() => {});   // selection still works locally if the write fails
   };
   const v = t.view;
   if (!v) return html`<${PageState} kind=${t.connected ? "loading" : "offline"}

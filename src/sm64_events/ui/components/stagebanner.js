@@ -64,6 +64,24 @@ function StagePlaceholder() {
   </section>`;
 }
 
+// --- route focus ------------------------------------------------------------
+// With a route active the selectors narrow to that route's members. Returns
+// null when there is nothing to narrow BY — no active route, or the route
+// doesn't touch this course/these segments — and null means "show everything",
+// so an unrelated detour never leaves the player staring at an empty banner.
+
+function routeStarFilter(v, courseId) {
+  const keys = v.active_route && v.active_route.star_keys;
+  if (!keys || !keys.length) return null;
+  const mine = keys.filter((k) => k.startsWith(`${courseId}:`));
+  return mine.length ? new Set(mine) : null;
+}
+
+function routeSegmentFilter(v) {
+  const ids = v.active_route && v.active_route.segment_ids;
+  return ids && ids.length ? new Set(ids) : null;
+}
+
 // segments offered for the current whole level (Bowser banners) — the pipe-entry
 // segments (course levels) or fight segments (arenas). Disabled ones are kept;
 // the Bowser banner shows them so its "no reds" click can enable them.
@@ -229,11 +247,25 @@ function StarRow({ t, v, stage }) {
     t.refresh();
   }
 
+  // Route focus (user request 2026-07-24): with a route active the selector
+  // offers ONLY the stars that route collects — practising 16 Star should not
+  // present the four Whomp's Fortress stars it never touches. Keys match
+  // active_route.star_keys ("<course>:<star>"). No active route, or a route
+  // that never visits this course, falls through to the full list rather than
+  // an empty row: an empty selector reads as "broken", and standing somewhere
+  // your route skips is a normal thing to do.
+  const routeStars = routeStarFilter(v, stage.course_id);
+  const shown = course.stars
+    .map((name, i) => ({ name, i }))
+    .filter(({ i }) => !routeStars || routeStars.has(`${stage.course_id}:${i}`));
+
   return html`<section class="practice-card selector-card stagebanner">
     <div class="shead"><b>▸ ${course.name}</b>
-      <span class="meta">tap a star to practice</span></div>
+      <span class="meta">${routeStars
+        ? html`showing this route's stars · tap to practice`
+        : "tap a star to practice"}</span></div>
     <div class="starrow">
-      ${course.stars.map((name, i) => html`<${PracticeCell}
+      ${shown.map(({ name, i }) => html`<${PracticeCell}
         key=${`${stage.course_id}:${i}`}
         active=${tgt.kind !== "segment"
           && tgt.course_id === stage.course_id && tgt.star_id === i}
@@ -379,9 +411,17 @@ function ArenaRow({ t, v, stage }) {
 
 function SegmentRow({ t, v, stage }) {
   const [setPicking, pickerModal] = useIconPicking(t);
-  const segs = (v.segment_targets || []).filter((s) =>
+  // Route focus narrows the castle's segment offer the same way it narrows the
+  // star selector. Deliberately NOT applied to the Bowser/arena rows above:
+  // those are two-option toggles whose mutual exclusion (reds vs no-reds)
+  // needs to see the pipe segment whether or not the route uses it.
+  const routeSegs = routeSegmentFilter(v);
+  const here = (v.segment_targets || []).filter((s) =>
     s.enabled &&
     s.start_areas.some((a) => a[0] === stage.level && a[1] === stage.area));
+  const inRoute = routeSegs
+    ? here.filter((s) => routeSegs.has(s.segment_id)) : here;
+  const segs = inRoute.length ? inRoute : here;   // never empty the row
   const extras = armedExtraCells(
     t, v, new Set(segs.map((s) => s.segment_id)), setPicking);
   if (!segs.length && !extras.length) return html`<${StagePlaceholder} />`;
