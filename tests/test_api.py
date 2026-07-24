@@ -886,3 +886,55 @@ def test_segment_editor_save_body_roundtrips_a_get_row(tmp_path):
                  if k not in ("id", "created_utc")}
         assert client.put(f"/api/segments/{row['id']}",
                           json=stale).status_code == 422
+
+
+def test_icon_upload_roundtrip_and_validation(tmp_path, monkeypatch):
+    """Custom icon files (spec addendum 2026-07-24): raw-body upload into
+    user_icons_dir, listed as user_icons, assignable as `user:<name>`
+    overrides, served back by /api/icons/file/{name}."""
+    from sm64_events.core import paths
+    monkeypatch.setattr(paths, "data_root", lambda: tmp_path)
+    client, service, db = make_client(tmp_path)
+    png = b"\x89PNG\r\n\x1a\n" + b"x" * 64
+    with client:
+        r = client.post("/api/icons/upload?name=My Face!.PNG", content=png)
+        assert r.status_code == 200
+        stem = r.json()["icon"]
+        assert stem.startswith("user:") and stem.endswith(".png")
+        assert stem in client.get("/api/icons").json()["user_icons"]
+        served = client.get(f"/api/icons/file/{stem[len('user:'):]}")
+        assert served.status_code == 200 and served.content == png
+        # usable as an override like any bundled stem
+        assert client.post("/api/icon", json={
+            "kind": "segment", "segment_id": 1, "icon": stem}).status_code == 200
+        assert client.get("/api/session").json()["icon_overrides"] == {
+            "segment:1": stem}
+        # validation: bad extension, empty name, traversal, unknown user stem
+        assert client.post("/api/icons/upload?name=notes.txt",
+                           content=b"x").status_code == 400
+        assert client.post("/api/icons/upload?name=..png",
+                           content=png).status_code == 400
+        assert client.get("/api/icons/file/..%2F..%2Ftracker.db").status_code \
+            in (400, 404)
+        assert client.post("/api/icon", json={
+            "kind": "segment", "segment_id": 1,
+            "icon": "user:ghost.png"}).status_code == 400
+        # size cap
+        assert client.post("/api/icons/upload?name=big.png",
+                           content=b"\x89" * (2_000_001)).status_code == 413
+
+
+def test_segment_targets_include_locationless_defs(tmp_path):
+    """Armed visibility (spec addendum): every definition must be reachable
+    by the banner's armed-segment union, so segment_targets includes defs
+    whose start triggers carry no location (empty start_areas/levels)."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.post("/api/segments", json={
+            "name": "Anywhere", "start_triggers": [{"type": "reset_game"}],
+            "end_triggers": [{"type": "star_grabbed"}]})
+        assert r.status_code == 200
+        sid = r.json()["id"]
+        target = next(s for s in client.get("/api/session").json()
+                      ["segment_targets"] if s["segment_id"] == sid)
+        assert target["start_areas"] == [] and target["start_levels"] == []

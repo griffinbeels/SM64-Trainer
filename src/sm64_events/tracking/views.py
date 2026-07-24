@@ -686,10 +686,15 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                      rank_mode,
                      pbs_by_strat.get(("segment", d.id, "rta", seg_strat)),
                      attempts_by_seg.get(d.id, []), seg_strat, "rta"))}
+            # EVERY def is included — a fully location-less start (e.g.
+            # reset_game) gets empty start_areas/start_levels, which the
+            # banner's area/level filters treat as no match, but the
+            # armed-segment union (stagebanner.js armedExtraCells) can still
+            # surface it: a RUNNING segment must never be invisible (spec
+            # addendum 2026-07-24).
             for d in service.segment_defs
-            if (areas := _segment_start_areas(d.start_triggers)) is not None
-            and (levels := _segment_start_levels(d.start_triggers)) is not None
-            and (areas or levels)],
+            for areas, levels in ((_segment_start_areas(d.start_triggers),
+                                   _segment_start_levels(d.start_triggers)),)],
         # user-picked selector icons: entity_key -> icon stem (ui_state KV,
         # written by POST /api/icon; ui/components/stagebanner.js resolves
         # override > mode art > generic star)

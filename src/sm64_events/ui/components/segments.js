@@ -8,7 +8,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { Icon } from "./icons.js";
-import { IconPicker } from "./iconpicker.js";
+import { IconPicker, iconSrcFromStem } from "./iconpicker.js";
 import { PageState } from "./states.js";
 
 const html = htm.bind(h);
@@ -283,9 +283,8 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t }) {
     ${initial && initial.id != null && html`<div class="builder-icon">
       <span class="field-label">Icon</span>
       <img class="builder-icon-preview" alt="" draggable="false"
-           src=${iconOverride
-             ? `/ui/assets/star_icons/${iconOverride}.png`
-             : "/ui/assets/star_1.png"} />
+           src=${iconOverride ? iconSrcFromStem(iconOverride)
+                              : "/ui/assets/star_1.png"} />
       <button type="button" onclick=${() => setPickingIcon(true)}>
         Choose icon…</button>
       <span class="meta">${iconOverride || "default"} · shown on the course

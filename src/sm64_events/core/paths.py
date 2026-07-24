@@ -103,6 +103,13 @@ def replays_root() -> Path:
     return data_root() / "replays"
 
 
+def user_icons_dir() -> Path:
+    # User-uploaded selector icons (server/api.py /api/icons/upload). In the
+    # DATA dir — never under the install's ui/assets, which is read-only when
+    # frozen and replaced wholesale by updates.
+    return data_root() / "data" / "icons"
+
+
 def compilations_dir() -> Path:
     # Generated failure compilations. Lives UNDER replays_root() (== the
     # ReplayService save_root) on purpose: the existing /api/replay/reveal

@@ -72,5 +72,32 @@ all four banner modes, then human playtest.
 ## Out of scope
 
 Icons anywhere but the banner (practice cards/routes/run views stay
-text-first); uploading custom image FILES (the picker chooses from the
-bundled set — revisit if the set proves insufficient).
+text-first).
+
+## Addendum — same-day follow-ups (user requests 2026-07-24)
+
+**Armed visibility.** A RUNNING segment must never be invisible ("never
+silently running" rule): every banner mode appends a `StandardSegmentCell`
+for any armed segment its own filter didn't already include
+(`armedExtraCells` in stagebanner.js — the castle/arena rows render their
+own lists through the same cell), and a mode with no row of its own (unknown
+stage, hub placeholder) renders a "Running" row instead of the placeholder
+while anything is armed. To make every armed segment reachable, views.py's
+`segment_targets` now includes EVERY definition (a fully location-less start
+gets empty `start_areas`/`start_levels` — existing `.some`/`.includes`
+filters treat that as no match, so nothing else changes). Disabling the
+segment (Hide) remains the way to stop it arming AND showing.
+
+**Custom icon files.** The picker's first tile is a dashed "+" that uploads
+any image file: raw-body `POST /api/icons/upload?name=` (compare-upload
+precedent, no python-multipart; 2 MB cap, extension whitelist, slugged
+filename, overwrite-on-same-name = replace) saves into
+`core/paths.user_icons_dir()` (`data/icons/` — the DATA dir, so user icons
+survive app updates and stay out of the read-only install), served back via
+`GET /api/icons/file/{name}`. Overrides store `user:<filename>`;
+`GET /api/icons` gains a `user_icons` list so uploads are reusable across
+entities; `/api/icon` validates against bundled stems ∪ user icons.
+`iconSrcFromStem` (iconpicker.js) is THE stem→URL rule (banner + editor
+preview). No server-side resize (stdlib-only): the modal states the
+preferred shape — square, ~100×100, like the bundled set — and CSS
+`object-fit: cover` handles the rest.
