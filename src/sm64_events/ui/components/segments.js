@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { Icon } from "./icons.js";
+import { IconPicker } from "./iconpicker.js";
 import { PageState } from "./states.js";
 
 const html = htm.bind(h);
@@ -192,11 +193,19 @@ export function ClauseRow({ clause, types, vocab, tint, onChange, onRemove }) {
   </div>`;
 }
 
-function Builder({ vocab, initial, onSaved, onCancel, apiRef }) {
+function Builder({ vocab, initial, onSaved, onCancel, apiRef, t }) {
   const blank = { name: "", enabled: true,
     start_triggers: [{ type: "level_enter" }],
     end_triggers: [{ type: "level_enter" }], guards: [] };
   const [d, setD] = useState(initial || blank);
+  // Icon override (existing segments only — the override is keyed by id, so
+  // a not-yet-saved segment has nowhere to hang one). Read live from the
+  // session view so a pick from the banner's ✎ shows here too.
+  const [pickingIcon, setPickingIcon] = useState(false);
+  const iconOverride = initial && initial.id != null
+    ? ((((t || {}).view || {}).icon_overrides || {})[`segment:${initial.id}`]
+       || null)
+    : null;
   const [err, setErr] = useState(null);
   const edit = (k, i, clause) => setD({ ...d,
     [k]: d[k].map((c, j) => (j === i ? clause : c)) });
@@ -258,6 +267,21 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef }) {
       <input placeholder="e.g. Lobby to BitDW" value=${d.name}
           oninput=${(e) => setD({ ...d, name: e.target.value })} />
     </label>
+    ${initial && initial.id != null && html`<div class="builder-icon">
+      <span class="field-label">Icon</span>
+      <img class="builder-icon-preview" alt="" draggable="false"
+           src=${iconOverride
+             ? `/ui/assets/star_icons/${iconOverride}.png`
+             : "/ui/assets/star_1.png"} />
+      <button type="button" onclick=${() => setPickingIcon(true)}>
+        Choose icon…</button>
+      <span class="meta">${iconOverride || "default"} · shown on the course
+        quick-select</span>
+    </div>`}
+    ${pickingIcon && html`<${IconPicker}
+        identity=${{ kind: "segment", segment_id: initial.id }}
+        current=${iconOverride}
+        onDone=${() => { setPickingIcon(false); if (t) t.refresh(); }} />`}
     <label class="builder-enabled">
       <input type="checkbox" checked=${d.enabled}
           onchange=${(e) => setD({ ...d, enabled: e.target.checked })} />
@@ -393,7 +417,7 @@ export function Segments({ t }) {
       <main class="practice-card workshop-card segment-editor">
         ${editing
           ? html`<${Builder} key=${editing === "new" ? "new" : editing.id}
-              vocab=${vocabData} apiRef=${editorRef}
+              vocab=${vocabData} apiRef=${editorRef} t=${t}
               initial=${editing === "new" ? null : editing}
               onSaved=${() => { setEditing(null); load(); t.refresh(); }}
               onCancel=${() => setEditing(null)} />`

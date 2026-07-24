@@ -55,6 +55,34 @@ def test_setting_is_wired_through_store_header_and_banner():
     assert "t.starIcons" in banner, "StarRow no longer reads the icon mode"
 
 
+def test_course_icons_are_the_default_mode():
+    """User request 2026-07-24: the split-icon art is the default look."""
+    store = (UI / "store.js").read_text(encoding="utf-8")
+    assert 'localStorage.getItem("sm64.starIcons") || "course"' in store, \
+        "sm64.starIcons no longer defaults to course icons"
+
+
+def test_every_banner_row_renders_the_shared_cell():
+    """All four banner modes must render through PracticeCell — the segment
+    rows shipped as bare text buttons and diverged from the approved star
+    look (user report 2026-07-24, spec 2026-07-24-segment-icon-cells)."""
+    source = (UI / "components" / "stagebanner.js").read_text(encoding="utf-8")
+    for row in ("StarRow", "SegmentRow", "ArenaRow", "BowserCourseRow"):
+        match = re.search(rf"^function {row}\(.*?^}}", source, re.S | re.M)
+        assert match, f"{row} not found in stagebanner.js"
+        assert "<${PracticeCell}" in match.group(0), \
+            f"{row} stopped rendering the shared PracticeCell"
+
+
+def test_icon_picker_is_wired_into_banner_and_editor():
+    banner = (UI / "components" / "stagebanner.js").read_text(encoding="utf-8")
+    editor = (UI / "components" / "segments.js").read_text(encoding="utf-8")
+    picker = (UI / "components" / "iconpicker.js").read_text(encoding="utf-8")
+    assert "IconPicker" in banner, "banner cells lost their icon picker"
+    assert "IconPicker" in editor, "segment editor lost its icon picker"
+    assert "/api/icon" in picker and "/api/icons" in picker
+
+
 def test_star_row_cannot_scroll_horizontally():
     css = (UI / "index.html").read_text(encoding="utf-8")
     row_rules = re.findall(r"\.starrow\s*\{[^}]*\}", css)

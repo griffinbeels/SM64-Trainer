@@ -809,6 +809,61 @@ def test_attempt_strat_endpoint_reclassifies_and_404s_on_unknown(tmp_path):
                            json={"strat_tag": "X"}).status_code == 404
 
 
+def test_icon_endpoints_set_clear_and_validate(tmp_path):
+    """Per-entity icon overrides (spec 2026-07-24-segment-icon-cells): the
+    kind-dispatched write mirrors /api/strat, the stem is validated against
+    the bundled set, and the session view carries the override map."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        listing = client.get("/api/icons")
+        assert listing.status_code == 200
+        names = listing.json()["icons"]
+        assert "wf1" in names and "bitdw" in names
+        assert client.post("/api/icon", json={
+            "course_id": 2, "star_id": 4, "icon": "wf5"}).status_code == 200
+        assert client.post("/api/icon", json={
+            "kind": "segment", "segment_id": 1,
+            "icon": "bitdw"}).status_code == 200
+        view = client.get("/api/session").json()
+        # the map is wholly owned by this feature, so whole-dict is safe
+        assert view["icon_overrides"] == {"star:2:4": "wf5",
+                                          "segment:1": "bitdw"}
+        # null clears one entity's override
+        assert client.post("/api/icon", json={
+            "course_id": 2, "star_id": 4, "icon": None}).status_code == 200
+        assert client.get("/api/session").json()["icon_overrides"] == {
+            "segment:1": "bitdw"}
+        # unknown stem -> 400 (path-injection guard), unknown segment -> 404
+        assert client.post("/api/icon", json={
+            "course_id": 2, "star_id": 4, "icon": "nope"}).status_code == 400
+        assert client.post("/api/icon", json={
+            "kind": "segment", "segment_id": 9999,
+            "icon": "bitdw"}).status_code == 404
+
+
+def test_icon_endpoint_degraded_503(tmp_path):
+    broadcaster = Broadcaster()
+    service = TrackerService(None, broadcaster)
+    poller = Poller(OfflineMemory(), [], service)
+    app = create_app(poller, broadcaster, service=service)
+    with TestClient(app) as client:
+        assert client.post("/api/icon", json={
+            "course_id": 2, "star_id": 2, "icon": "wf1"}).status_code == 503
+
+
+def test_segment_targets_carry_strat_and_rank(tmp_path):
+    """The quick-select banner's segment cells show the active strat and a
+    rank medal like star cells do — the view must carry both per target."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        client.post("/api/strat", json={"kind": "segment", "segment_id": 1,
+                                        "strat_tag": "no bljs"})
+        view = client.get("/api/session").json()
+        target = next(s for s in view["segment_targets"]
+                      if s["segment_id"] == 1)
+        assert target["strat"] == "no bljs"
+        assert "rank" in target   # None until a ladder exists for the strat
+
 def test_patching_a_route_category_to_null_clears_it(tmp_path):
     """`category: null` means "move this route out of its group" — a real
     value, not an omitted field. The patch used to drop every None, so the

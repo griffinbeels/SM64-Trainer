@@ -798,6 +798,29 @@ class TrackerService:
         self._require_ranks().clear_video(ek, strat, rank)
         await self._rank_standards_changed()
 
+    async def set_icon(self, ek: str, icon: str | None) -> None:
+        """Set (or clear, icon=None) an entity's selector-icon override —
+        the banner cell art the user hand-picked for a star or segment
+        (spec 2026-07-24-segment-icon-cells). ui_state KV `icon_overrides`
+        maps entity_key -> icon stem; broadcast-only like set_rank_mode (a
+        display preference, never journaled). Stem validity is the API
+        layer's job (server/api.py owns the bundled icon set)."""
+        if self.db is None:
+            raise RuntimeError("tracking database unavailable")
+        if ek.startswith("segment:"):
+            segment_id = int(ek.split(":")[1])
+            if all(d.id != segment_id for d in self._segment_defs):
+                raise LookupError(f"segment {segment_id} not found")
+        overrides = self.db.get_state("icon_overrides", {})
+        if icon is None:
+            overrides.pop(ek, None)
+        else:
+            overrides[ek] = icon
+        self.db.set_state("icon_overrides", overrides)
+        await self.broadcaster.publish(Event(
+            type="icons_changed", frame=0, timestamp_utc=_now(),
+            payload={"entity": ek, "icon": icon}))
+
     async def set_rank_mode(self, mode: str) -> None:
         """Persist the global rank-grading mode (average rank mode spec) to
         the ui_state KV and notify. Broadcast-only like the other rank

@@ -6,10 +6,13 @@ LookupError -> 404 (no such attempt), ValueError -> 409 (exists but not
 saveable: bad mode, non-success, cleared, missing clock, or — for pb/undo —
 not the current PB), RuntimeError -> 503 (database unavailable / degraded
 mode)."""
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from sm64_events.links import star_links
+from sm64_events.ranks.standards import entity_key
 from sm64_events.stats.registry import (registry_meta, selection_id,
                                         selection_order)
 from sm64_events.tracking.segments import vocab
@@ -63,6 +66,31 @@ class StratBody(BaseModel):
 class AttemptStratBody(BaseModel):
     # null is meaningful, not missing: it unlabels the attempt
     strat_tag: str | None = None
+
+
+class IconBody(BaseModel):
+    # kind-dispatched like StratBody; icon = a star_icons stem ("wf5"),
+    # null resets the entity to its default art
+    kind: str = "star"
+    course_id: int | None = Field(default=None, ge=0)
+    star_id: int | None = Field(default=None, ge=0)
+    segment_id: int | None = None
+    icon: str | None = None
+
+
+# The bundled selector-icon set (ui/assets/star_icons), resolved relative to
+# the package so it works from source AND frozen (build_exe's --add-data
+# keeps the ui/ tree at the same relative spot). Globbed per call: the set
+# only changes with the install, but a fresh listing keeps a dev's newly
+# dropped icon visible without a restart (index.html is served the same way).
+_ICON_DIR = Path(__file__).resolve().parents[1] / "ui" / "assets" / "star_icons"
+
+
+def _icon_stems() -> list[str]:
+    try:
+        return sorted(p.stem for p in _ICON_DIR.glob("*.png"))
+    except OSError:
+        return []
 
 
 class StatSelection(BaseModel):
@@ -476,6 +504,35 @@ def create_api_router(service) -> APIRouter:
                     raise ValueError("star strat needs course_id and star_id")
                 await service.set_strat(body.course_id, body.star_id,
                                         body.strat_tag)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True}
+
+    @router.get("/icons")
+    async def icons():
+        """Stems of the bundled selector-icon set — the icon picker's grid."""
+        return {"icons": _icon_stems()}
+
+    @router.post("/icon")
+    async def icon(body: IconBody):
+        """Set/clear an entity's selector-icon override.
+
+        Kind-dispatched exactly like /strat. `icon` must be a stem from
+        /api/icons (400 otherwise — also the path-injection guard, the stem
+        is later interpolated into an img src); null resets to default art.
+        """
+        if body.icon is not None and body.icon not in _icon_stems():
+            raise HTTPException(400, f"unknown icon: {body.icon}")
+        try:
+            if body.kind == "segment":
+                if body.segment_id is None:
+                    raise ValueError("segment icon needs segment_id")
+                ek = entity_key(None, None, body.segment_id)
+            else:
+                if body.course_id is None or body.star_id is None:
+                    raise ValueError("star icon needs course_id and star_id")
+                ek = entity_key(body.course_id, body.star_id)
+            await service.set_icon(ek, body.icon)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True}

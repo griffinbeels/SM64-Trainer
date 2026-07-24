@@ -30,27 +30,19 @@
   .starsec { border: 1px solid #2c3140; border-radius: 8px; padding: .6rem .8rem; margin: 0 0 .8rem 0; }
   .active-star { border-color: #e0c36a; }
   .stagebanner { border-color: #2f6d8c; }
-  .stagebanner-row { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .4rem; }
-  .stagebtn { display: flex; flex-direction: column; align-items: flex-start;
-              gap: .15rem; min-width: 7rem; padding: .35rem .55rem;
-              text-align: left; cursor: pointer; }
-  .stagebtn-name { font-weight: 600; line-height: 1.2; }
-  .stagebtn-sub { font-size: .8em; display: flex; align-items: center; gap: .3rem; }
-  .stagebtn.active-star { border-color: #e0c36a; }
-  /* a segment whose start condition is met — the timer is running NOW */
-  .stagebtn.armed { border-color: #3f8a5f; background: #16241c; }
   @keyframes armedpulse { from { box-shadow: 0 0 2px #3f8a5f; }
                           to { box-shadow: 0 0 9px #3f8a5f; } }
   .armedchip { animation: armedpulse 1.1s ease-in-out infinite alternate; }
   .armedchip b, .armedchip .armedword { color: inherit; }
   .armedword { opacity: .7; font-size: .85em; }
-  /* SM64 star-select row (StarRow only) — a single line of gold stars that
-     shrinks with the pane but NEVER wraps and NEVER scrolls: cells are
-     shrinkable (flex 1 1 0 / min-width 0) and their art + type clamp on cqw
-     against the .practice-page container, so all 7 stars always fit on
-     screen (spec 2026-07-24, pinned by tests/test_star_icons.py).
-     Namespaced away from .stagebtn, which the other banner modes
-     (bowser/arena/castle) still use unchanged. */
+  /* SM64 star-select row (EVERY banner mode — stars, bowser, arena, castle
+     all render PracticeCell) — a single line of cells that shrinks with the
+     pane but NEVER wraps and NEVER scrolls: cells are shrinkable (flex 1 1 0
+     / min-width 0) and their art + type clamp on cqw against the
+     .practice-page container, so all 7 stars always fit on screen (spec
+     2026-07-24, pinned by tests/test_star_icons.py). Segment rows carry
+     .segcells: fewer cells, pinned to the SAME per-cell width the 7-star
+     row would give them. */
   .starrow { display: flex; flex-wrap: nowrap; gap: .3rem; align-items: flex-start;
              margin-top: .4rem; padding: 4px 0; }
              /* padding: vertical breathing room so the active star's
@@ -59,10 +51,23 @@
               align-items: center; gap: .28rem; padding: .5rem .25rem .45rem;
               border: 1px solid transparent; border-radius: 10px; cursor: pointer;
               text-align: center; background: none; color: inherit; font: inherit;
+              position: relative;
               transition: background .12s, border-color .12s; }
   .starcell:hover { background: #20242b; }
   .starcell:focus-visible { outline: 2px solid #6fa8ff; outline-offset: 2px; }
   .starcell.active-star { border-color: #e0c36a; background: #211f14; }
+  /* a segment cell whose start condition is met — the timer is running NOW */
+  .starcell.armed { border-color: #3f8a5f; background: #16241c; }
+  /* hover ✎ -> icon picker; revealed on cell hover or keyboard focus */
+  .starcell .editicon { position: absolute; top: 3px; right: 3px;
+              width: 20px; height: 20px; display: flex; align-items: center;
+              justify-content: center; border-radius: 6px; font-size: .72rem;
+              color: var(--muted); background: rgba(10,23,38,.88);
+              border: 1px solid var(--border-soft);
+              opacity: 0; transition: opacity .12s; }
+  .starcell:hover .editicon, .starcell:focus-within .editicon,
+  .starcell .editicon:focus-visible { opacity: 1; }
+  .starcell .editicon:hover { color: var(--text); border-color: #3e607f; }
   /* rank medal (or "–" when unranked) sitting between the star and its name;
      nudged up (negative margin) to sit centered in the gap — the star art has
      transparent bottom margin below its legs. Bobs with the active star. */
@@ -93,7 +98,12 @@
               overflow: hidden; }
   .starcell.active-star .starname { color: #ffd75f; }
   .starsub { display: flex; align-items: center; gap: .28rem; justify-content: center;
-             max-width: 100%; }
+             max-width: 100%; overflow: hidden; }
+  /* the armed "running" chip rides the same sub row as the strat text —
+     slimmed so it can't push past the cell's fixed height (it clipped at
+     mid widths, harness 2026-07-24) */
+  .starcell .chip { font-size: .66rem; line-height: 1.35; padding: .05rem .45rem;
+                    white-space: nowrap; }
   .starsub .strat { color: #6c7686; font-size: clamp(.55rem, 1.21cqw, .74rem);
                     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   /* Below ~600px of pane the strat sub-line is unreadable — drop it, keep
@@ -101,6 +111,26 @@
   @container (max-width: 600px) {
     .selector-card .starsub { display: none; }
   }
+  /* icon-picker modal grid (ui/components/iconpicker.js) */
+  .icongrid { display: grid; gap: 8px; max-height: 55vh; overflow-y: auto;
+              grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+              padding: 2px; }
+  .icontile { display: flex; flex-direction: column; align-items: center;
+              gap: 4px; padding: 6px 4px; cursor: pointer;
+              border: 1px solid var(--border-soft); border-radius: 8px;
+              background: none; color: var(--muted); font-size: .68rem; }
+  .icontile img, .icontile-default { width: 48px; height: 48px;
+              border-radius: 8px; object-fit: cover; }
+  .icontile-default { display: flex; align-items: center; justify-content: center;
+              font-size: 1.4rem; border: 1px dashed var(--border-soft); }
+  .icontile:hover { background: #20242b; color: var(--text); }
+  .icontile.on { border-color: var(--gold); color: var(--gold-soft); }
+  /* segment editor's Icon row (ui/components/segments.js Builder) */
+  .builder-icon { display: flex; align-items: center; gap: .6rem;
+                  margin: .5rem 0; }
+  .builder-icon .field-label { margin: 0; }
+  .builder-icon-preview { width: 34px; height: 34px; border-radius: 8px;
+                          object-fit: cover; }
   .starsub .strat.none { opacity: .6; }
   @media (prefers-reduced-motion: no-preference) {
     .starcell.active-star .starholder { animation: starbob 2.4s ease-in-out infinite; }
@@ -361,7 +391,7 @@
        ONLY — every banner mode (stars/bowser/arena/castle) gets the same
        height at a given pane width, so live mode swaps never move layout
        (OBS stability). */
-    --selector-height: clamp(150px, calc(95px + 13.8cqw), 230px);
+    --selector-height: clamp(152px, calc(98px + 13.8cqw), 230px);
     --radius: 9px;
   }
   * { box-sizing: border-box; }
@@ -577,9 +607,13 @@
     justify-content: flex-start; padding: .35rem .15rem .4rem;
   }
   .selector-card .starholder { width: min(82px, 8.4cqw); }
-  .selector-card .stagebanner-row {
-    height: calc(var(--selector-height) - 64px); align-content: center;
-    overflow: auto; padding-bottom: .5rem;
+  /* segment rows (bowser/arena/castle): 1-3 cells, each pinned to the width
+     a 7-cell star row would give it (100cqw card - 32px card padding - 6
+     gaps ~ 48px), so the two row kinds have identical cell geometry at
+     every pane width instead of a lone cell stretching across the card */
+  .selector-card .starrow.segcells { justify-content: flex-start; }
+  .selector-card .starrow.segcells .starcell {
+    flex: 0 1 auto; width: calc((100cqw - 80px) / 7);
   }
   .selector-empty {
     display: flex; flex-direction: column; align-items: center; justify-content: center;
