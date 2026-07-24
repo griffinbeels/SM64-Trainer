@@ -451,6 +451,17 @@ GUARDS: dict[str, GuardType] = {g.key: g for g in [
               {"level": {"kind": "level", "required": True}},
               "{level}",
               lambda p, ctx: ctx.prev_level == p["level"]),
+    # Negated companion (user request 2026-07-23): "arm here, but NOT when the
+    # player just came from level X" — an LBLJ anchor in the castle lobby must
+    # not arm on the practice_reset that follows a Bowser-in-the-Dark-World
+    # exit.  Unknown history (prev_level None) PASSES: this guard exists to
+    # block a KNOWN source, and failing closed would kill the first arm of
+    # every session.  Deliberately the opposite of prev_level / last_star_*,
+    # which assert something POSITIVE about history and so must fail closed.
+    GuardType("prev_level_not", "Previous level was NOT",
+              {"level": {"kind": "level", "required": True}},
+              "{level}",
+              lambda p, ctx: ctx.prev_level != p["level"]),
     GuardType("star_count_min", "Star count at least",
               {"n": {"kind": "int", "required": True}},
               "{n}",
