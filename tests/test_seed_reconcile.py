@@ -70,6 +70,47 @@ def test_reconcile_leaves_dirty_route_alone(tmp_path):
     assert next(r for r in db.routes() if r["id"] == route["id"])["name"] == "My Route"
 
 
+def test_reconcile_skips_a_malformed_row_and_keeps_the_good_ones(tmp_path):
+    """One bad seed row must not cost the whole corpus refresh (spec #2 §10)."""
+    db = Database(tmp_path / "t.db")
+    seed = json.loads(json.dumps(SEED_V1))
+    seed["segments"].insert(0, {"seed_key": "seg:bad", "name": "Bad",
+                                "start_triggers": [{"type": "nope"}],
+                                "end_triggers": [], "waypoints": [],
+                                "guards": [], "category": "Tricks"})
+    problems = reconcile_defaults(db, seed)
+    assert len(problems) == 1 and "seg:bad" in problems[0]
+    assert not any(s["seed_key"] == "seg:bad" for s in db.segment_defs())
+    assert any(s["seed_key"] == "seg:demo" for s in db.segment_defs())
+
+
+def test_reconcile_skips_a_row_with_no_seed_key(tmp_path):
+    db = Database(tmp_path / "t.db")
+    seed = json.loads(json.dumps(SEED_V1))
+    seed["routes"].append({"name": "Keyless", "steps": []})
+    problems = reconcile_defaults(db, seed)
+    assert len(problems) == 1 and "seed_key" in problems[0]
+    assert len(db.routes()) == 1
+
+
+def test_reconcile_skips_a_structurally_wrong_row_shape(tmp_path):
+    """A JSON-valid but wrong-shaped seed used to raise KeyError/TypeError out
+    of reconcile; it must now be a skipped row, not an aborted refresh."""
+    db = Database(tmp_path / "t.db")
+    seed = json.loads(json.dumps(SEED_V1))
+    seed["segments"].insert(0, "not a dict")
+    problems = reconcile_defaults(db, seed)
+    assert len(problems) == 1
+    assert any(s["seed_key"] == "seg:demo" for s in db.segment_defs())
+
+
+def test_reconcile_returns_no_problems_for_the_real_bundled_seed(tmp_path):
+    """The shipped corpus must be clean by its own validator."""
+    db = Database(tmp_path / "t.db")
+    seed = json.loads(bundled_defaults_seed().read_bytes().decode("utf-8"))
+    assert reconcile_defaults(db, seed) == []
+
+
 def test_resolve_steps_unresolved_key_becomes_negative_one(tmp_path):
     db = Database(tmp_path / "t.db")
     seed = json.loads(json.dumps(SEED_V1))
