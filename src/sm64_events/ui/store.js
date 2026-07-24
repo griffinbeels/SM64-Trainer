@@ -13,6 +13,16 @@ export function useTracker() {
   const [view, setView] = useState(null);
   const [clock, setClock] = useState(localStorage.getItem("clock") || "igt");
   const [scope, setScope] = useState(localStorage.getItem("scope") || "session");
+  // Star-selector art: "classic" = the generic gold star, "course" = each
+  // star's split-icon (ui/assets/star_icons/). Client display preference,
+  // so localStorage like clock/scope — not server state.
+  const [starIcons, setStarIcons] = useState(
+    localStorage.getItem("sm64.starIcons") || "classic");
+  // Dust-trick visibility: the rollout/jump counts on attempt rows plus the
+  // dust stats in the stat menu and chip row. Default OFF while detection is
+  // being tuned (2026-07-24). Client display preference like starIcons.
+  const [showDust, setShowDust] = useState(
+    localStorage.getItem("sm64.showDust") === "1");
   const [feed, setFeed] = useState([]);
   const [connected, setConnected] = useState(false);
   // armedOrder: live armed membership (drives the honest "armed" chip) —
@@ -234,8 +244,13 @@ export function useTracker() {
 
   const pickClock = (c) => { localStorage.setItem("clock", c); setClock(c); };
   const pickScope = (s) => { localStorage.setItem("scope", s); setScope(s); };
+  const pickStarIcons = (mode) => {
+    localStorage.setItem("sm64.starIcons", mode); setStarIcons(mode); };
+  const pickShowDust = (on) => {
+    localStorage.setItem("sm64.showDust", on ? "1" : "0"); setShowDust(on); };
   const armedSegs = new Set(armedOrder);
   return { view, clock, pickClock, scope, pickScope, feed, connected,
+           starIcons, pickStarIcons, showDust, pickShowDust,
            refresh, paused: pauseState.paused,
            pauseReason: pauseState.reason, togglePause,
            armedSegs, armedOrder, armedNames, lastPinnedSeg, stage,

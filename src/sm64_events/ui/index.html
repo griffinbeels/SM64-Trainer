@@ -45,13 +45,16 @@
   .armedchip b, .armedchip .armedword { color: inherit; }
   .armedword { opacity: .7; font-size: .85em; }
   /* SM64 star-select row (StarRow only) — a single line of gold stars that
-     shrinks with the pane but NEVER wraps. Namespaced away from .stagebtn,
-     which the other banner modes (bowser/arena/castle) still use unchanged. */
+     shrinks with the pane but NEVER wraps and NEVER scrolls: cells are
+     shrinkable (flex 1 1 0 / min-width 0) and their art + type clamp on cqw
+     against the .practice-page container, so all 7 stars always fit on
+     screen (spec 2026-07-24, pinned by tests/test_star_icons.py).
+     Namespaced away from .stagebtn, which the other banner modes
+     (bowser/arena/castle) still use unchanged. */
   .starrow { display: flex; flex-wrap: nowrap; gap: .3rem; align-items: flex-start;
-             overflow-x: auto; margin-top: .4rem; padding: 4px 0; }
-             /* padding: overflow-x:auto forces overflow-y:auto (per the CSS
-                overflow spec), so without vertical breathing room the active
-                star's drop-shadow glow + scale/bob would clip at the row edge. */
+             margin-top: .4rem; padding: 4px 0; }
+             /* padding: vertical breathing room so the active star's
+                drop-shadow glow + scale/bob clear the card's overflow clip. */
   .starcell { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column;
               align-items: center; gap: .28rem; padding: .5rem .25rem .45rem;
               border: 1px solid transparent; border-radius: 10px; cursor: pointer;
@@ -74,17 +77,30 @@
      sits centered at its natural size. active = gold glow; idle = dimmed. */
   .starimg { display: block; width: 100%; height: 100%; object-fit: contain;
              -webkit-user-select: none; user-select: none; }
+  /* Course split-icon mode (t.starIcons === "course"): opaque full-bleed
+     100x100 screenshots, so round the corners (the drop-shadow glow follows
+     the rounded clip) and inset slightly to match the generic star art's
+     baked-in transparent margin. All state styling (dim / glow / bob) is
+     shared with the generic art — same classes, same animations. */
+  .starimg.courseicon { width: 92%; height: 92%; margin: 4%;
+                        border-radius: 16%; object-fit: cover; }
   .starcell.active-star .starimg {
     filter: drop-shadow(0 0 6px rgba(255,215,95,.85)) drop-shadow(0 0 2px rgba(255,215,95,.9)); }
   .starimg.dim { opacity: .72; filter: saturate(.85); }
-  .starname { font-size: .8rem; font-weight: 600; line-height: 1.12; min-height: 2.1em;
+  .starname { font-size: clamp(.55rem, 1.31cqw, .8rem); font-weight: 600;
+              line-height: 1.12; min-height: 2.1em;
               display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
               overflow: hidden; }
   .starcell.active-star .starname { color: #ffd75f; }
   .starsub { display: flex; align-items: center; gap: .28rem; justify-content: center;
              max-width: 100%; }
-  .starsub .strat { color: #6c7686; font-size: .74rem; white-space: nowrap;
-                    overflow: hidden; text-overflow: ellipsis; }
+  .starsub .strat { color: #6c7686; font-size: clamp(.55rem, 1.21cqw, .74rem);
+                    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* Below ~600px of pane the strat sub-line is unreadable — drop it, keep
+     the star + medal + name (never the stars themselves: all 7 stay). */
+  @container (max-width: 600px) {
+    .selector-card .starsub { display: none; }
+  }
   .starsub .strat.none { opacity: .6; }
   @media (prefers-reduced-motion: no-preference) {
     .starcell.active-star .starholder { animation: starbob 2.4s ease-in-out infinite; }
@@ -338,7 +354,14 @@
     --coral: #ff7b73;
     --sidebar-wide: 206px;
     --sidebar-rail: 76px;
-    --selector-height: 230px;
+    /* Selector-card slot height. cqw resolves against .practice-page
+       (container-type: inline-size) AT USE TIME, so the card shrinks with
+       the pane: 230px while all 7 full-size star cells fit (pane >= ~980px),
+       then tracking the cqw-scaled cell content below that. Width-driven
+       ONLY — every banner mode (stars/bowser/arena/castle) gets the same
+       height at a given pane width, so live mode swaps never move layout
+       (OBS stability). */
+    --selector-height: clamp(150px, calc(95px + 13.8cqw), 230px);
     --radius: 9px;
   }
   * { box-sizing: border-box; }
@@ -377,6 +400,11 @@
     border-color: #344b64; background: #0d1928; color: var(--text);
     min-height: 34px; padding: .32rem .5rem;
   }
+  /* Native <select> popup lists: Chromium derives the popup colors from the
+     select itself, and several of ours are transparent — that produced a
+     white popup with inherited LIGHT text (unreadable, e.g. the sort menu).
+     Style the options explicitly so every dropdown list is dark + readable. */
+  option { background-color: #0d1928; color: var(--text); }
   a { color: #79bafc; }
   h2, h3, h4, p { margin-top: 0; }
   h2 { font-size: 1.2rem; margin-bottom: 0; }
@@ -408,7 +436,10 @@
   }
   .app-brand img { width: 67px; height: 58px; object-fit: contain; }
   .app-brand span { font-weight: 750; line-height: 1.15; }
-  .sidebar-nav { min-height: 0; overflow-y: auto; padding-right: 2px; }
+  /* The nav never scrolls internally (a scrollbar beside a 7-item list read
+     as broken, 2026-07-24) — it takes its natural height, and short windows
+     compress spacing instead (see the max-height media query below). */
+  .sidebar-nav { flex: 0 0 auto; }
   .nav-group { padding: .62rem 0; border-bottom: 1px solid rgba(77,105,134,.34); }
   .nav-group:last-child { border-bottom: 0; }
   .nav-group-label {
@@ -480,7 +511,10 @@
   }
   .view-pane, .practice-page { min-width: 0; max-width: 100%; }
   .mobile-appbar, .mobile-nav, .mobile-more-backdrop { display: none; }
-  .practice-page { display: grid; gap: 12px; }
+  /* THE size container all selector cqw units + @container rules resolve
+     against — the pane the star row must fit inside. inline-size only, so
+     normal height flow is untouched. */
+  .practice-page { display: grid; gap: 12px; container-type: inline-size; }
   .practice-card {
     min-width: 0; max-width: 100%; margin: 0; padding: 14px 16px;
     border: 1px solid var(--border); border-radius: var(--radius);
@@ -488,6 +522,7 @@
     box-shadow: 0 8px 24px rgba(0,0,0,.08);
   }
   .practice-toolbar {
+    position: relative; /* anchors the stats popover */
     min-height: 58px; display: flex; align-items: center; gap: .75rem;
     padding-block: 9px;
   }
@@ -499,13 +534,17 @@
     min-width: 0; flex: 1; color: var(--muted); font-size: .78rem;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .stats-popover { position: relative; z-index: 8; }
+  /* Out of flow, anchored under the toolbar's Stats button: as a grid child
+     of .practice-page it added a row and shifted every card 12px on open. */
+  .stats-popover {
+    position: absolute; top: calc(100% + 6px); right: 12px; z-index: 30;
+  }
   /* Stats menu: the only popover still on the legacy grey .popover base —
      pull it onto the same navy language as the replay-settings popover so the
      stat picker matches the rest of the shell (statmenu.js renders a bare
      .popover, so this is scoped CSS only, no component change). */
   .stats-popover > .popover {
-    right: 0; min-width: 208px; padding: .45rem;
+    position: static; min-width: 208px; padding: .45rem;
     border-color: #42617e; background: #0b1929;
     box-shadow: 0 18px 50px rgba(0,0,0,.5);
   }
@@ -531,15 +570,13 @@
   .selector-card .shead b { color: var(--text); font-size: 1.06rem; }
   .selector-card .starrow {
     height: calc(var(--selector-height) - 56px); align-items: stretch;
-    gap: 8px; margin: 0; padding: 4px 1px 8px; overflow-x: auto; overflow-y: hidden;
-    scrollbar-width: thin; scrollbar-color: #3e607f transparent;
-    scroll-snap-type: x proximity;
+    gap: clamp(3px, .82cqw, 8px); margin: 0; padding: 4px 1px 8px;
   }
   .selector-card .starcell {
-    flex: 1 0 128px; min-width: 128px; height: 100%; scroll-snap-align: center;
-    justify-content: flex-start; padding: .35rem .25rem .4rem;
+    flex: 1 1 0; min-width: 0; height: 100%;
+    justify-content: flex-start; padding: .35rem .15rem .4rem;
   }
-  .selector-card .starholder { width: min(82px, 64%); }
+  .selector-card .starholder { width: min(82px, 8.4cqw); }
   .selector-card .stagebanner-row {
     height: calc(var(--selector-height) - 64px); align-content: center;
     overflow: auto; padding-bottom: .5rem;
@@ -582,14 +619,36 @@
     min-width: 0; display: grid; grid-template-columns: minmax(260px,1fr) 120px minmax(155px,auto);
     gap: 14px; align-items: center; border-top: 1px solid var(--border-soft);
     margin-top: .62rem; padding-top: .55rem;
+    position: relative; z-index: 0; /* stacking context for the rank wash */
+  }
+  /* Rank wash: the current rank's color sweeping the full card width, fading
+     left→right into the card. --rank-glow is set inline by practice.js from
+     rankColor(); unset (no rank) mixes to transparent = no wash. Negative
+     insets reach the card's padding so the gradient touches its edges. */
+  .objective-metrics::before {
+    content: ""; position: absolute; z-index: -1; pointer-events: none;
+    left: -16px; right: -16px; top: 0; bottom: -12px;
+    border-radius: 0 0 8px 8px;
+    background: linear-gradient(90deg,
+      color-mix(in srgb, var(--rank-glow, transparent) 34%, transparent),
+      transparent 88%);
   }
   .rank-slot { min-width: 0; overflow: hidden; }
-  .rank-slot > div {
-    min-width: 0; border: 0 !important; background: transparent !important;
-    padding: 0 !important;
-  }
-  .rank-slot > div > div { min-width: 0; }
   .rank-slot .meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rank-banner { min-width: 0; display: grid; gap: .34rem; }
+  .rank-banner-row {
+    min-width: 0; display: flex; align-items: center; gap: .55rem;
+    white-space: nowrap; overflow: hidden;
+  }
+  .rank-banner-name { font-weight: 800; letter-spacing: .4px; }
+  .rank-banner-next { overflow: hidden; text-overflow: ellipsis; }
+  /* Progress toward the next rank: full slot width, never a fixed px bar —
+     a 200px bar used to bleed past the card edge (2026-07-24). */
+  .rank-progress-track {
+    height: 5px; overflow: hidden; border-radius: 3px;
+    background: rgba(4,13,23,.72);
+  }
+  .rank-progress-track i { display: block; height: 100%; border-radius: inherit; }
   .objective-live-state {
     min-width: 0; min-height: 32px; display: flex; align-items: center; justify-content: center;
     gap: .4rem; color: var(--muted); border-inline: 1px solid var(--border-soft);
@@ -610,21 +669,48 @@
   }
   .card-heading h3 { margin-top: 1px; }
   .analysis-block { min-height: 0; }
+  /* ⓘ hints: an instant styled tooltip on hover/keyboard focus. The native
+     title= delay read as "this button does nothing" (2026-07-24). */
+  .hint { position: relative; display: inline-flex; cursor: help; color: var(--muted); }
+  .hint::after {
+    content: attr(data-tip); position: absolute; z-index: 40;
+    left: 50%; top: calc(100% + 6px); transform: translateX(-50%);
+    width: max-content; max-width: 250px; padding: .4rem .55rem;
+    border: 1px solid #42617e; border-radius: 6px;
+    background: #0b1929; color: var(--text);
+    font-size: .72rem; font-weight: 400; line-height: 1.4; text-align: left;
+    white-space: normal; box-shadow: 0 12px 34px rgba(0,0,0,.5);
+    opacity: 0; visibility: hidden; transition: opacity .12s;
+    pointer-events: none;
+  }
+  .hint:hover::after, .hint:focus-visible::after { opacity: 1; visibility: visible; }
   .timeline-block { flex: 0 0 112px; }
   .trend-block { flex: 1 1 auto; min-height: 190px; overflow: hidden; }
   .trend-block svg { max-height: 210px; }
-  .analysis-toolbar {
-    min-height: 48px; display: flex; align-items: center; gap: .55rem;
-    border-top: 1px solid var(--border-soft); padding-top: .65rem;
+  /* Practice-log controls, in the card they act on: sort in the heading,
+     reset visibility in the footer (the old analysis toolbar is gone). */
+  .attempts-tools { display: flex; align-items: center; gap: .7rem; }
+  .sort-control {
+    min-height: 34px; display: inline-flex; align-items: center; gap: .3rem;
+    padding: .2rem .3rem .2rem .5rem; border: 1px solid #344b64;
+    border-radius: 6px; background: #101f31; color: var(--muted);
   }
-  .analysis-toolbar > label, .analysis-toolbar > button {
-    min-width: 0; min-height: 38px; display: inline-flex; align-items: center; gap: .4rem;
-    border: 1px solid #344b64; border-radius: 6px; padding: .35rem .6rem;
-    background: #101f31; color: var(--text);
+  .sort-control select {
+    min-height: 26px; max-width: 130px; border: 0; background: transparent;
+    padding-block: 0; color: var(--text);
   }
-  .analysis-toolbar select {
-    min-width: 0; max-width: 145px; border: 0; background: transparent; padding-left: 0;
+  /* Focus ring wraps the WHOLE control (icon included), not just the inner
+     select — the half-highlighted control read as broken (2026-07-24). */
+  .sort-control:focus-within { outline: 2px solid #78b9ff; outline-offset: 2px; }
+  .sort-control select:focus-visible { outline: none; }
+  .attempt-footer-tools { display: flex; align-items: center; gap: .4rem; }
+  .reset-toggle {
+    min-height: 30px; display: inline-flex; align-items: center; gap: .4rem;
+    padding: .2rem .45rem; border: 0; border-radius: 6px;
+    background: transparent; color: var(--muted); cursor: pointer;
+    font-size: .82rem;
   }
+  .reset-toggle:hover { color: var(--text); }
   .reset-toggle input { position: absolute; opacity: 0; pointer-events: none; }
   .reset-toggle:has(input:checked) { color: var(--gold-soft); border-color: #8e7330; }
   .attempts-card { display: flex; flex-direction: column; }
@@ -633,6 +719,7 @@
   .attempt-table tr { height: 40px; }
   .attempt-table td { padding: .3rem .36rem; border-bottom: 1px solid var(--border-soft); }
   .attempt-index { width: 38px; }
+  .attempt-medal { width: 34px; text-align: center; }
   .attempt-result { min-width: 0; }
   .attempt-delta { width: 72px; white-space: nowrap; font-weight: 700; }
   .attempt-strategy { width: 150px; white-space: nowrap; }
@@ -657,9 +744,29 @@
   .detail-drawer[open] summary { margin-bottom: .75rem; }
   .detail-tools { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
   .danger-text { color: var(--coral); background: transparent; border-color: #61404a; }
-  .failcomp { margin-top: .5rem; }
-  .failcomp-result { margin-top: .4rem; }
-  .failcomp-path { color: var(--muted); font-size: .85em; word-break: break-all; }
+  /* Compilation drawer (failcomp.js) — inner content; shell reuses .stdpanel/
+     .disc.standards-toggle/.stdbody from the Rank-standards drawer. */
+  .compilation-body { display: flex; flex-direction: column; gap: .7rem; }
+  .compilation-lead { margin: 0; color: var(--muted); font-size: .8rem; line-height: 1.45; max-width: 46ch; }
+  .compilation-settings { display: flex; flex-direction: column; gap: .35rem; }
+  .compilation-fields { display: flex; flex-wrap: wrap; gap: .5rem; }
+  .compilation-field { display: inline-flex; align-items: center; gap: .4rem; color: #cdd3da; font-size: .82rem; }
+  .compilation-field input { width: 4.25rem; text-align: right; }
+  .compilation-field .unit { color: var(--muted); }
+  .compilation-settings small { font-size: .74rem; }
+  .compilation-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
+  .compilation-msg { font-size: .82rem; }
+  .compilation-result {
+    display: flex; flex-direction: column; gap: .4rem;
+    padding-top: .6rem; border-top: 1px solid var(--border-soft);
+  }
+  .compilation-summary { display: flex; align-items: center; gap: .4rem; color: #a3e0a3; font-size: .82rem; }
+  .compilation-path {
+    color: var(--muted); font-size: .76rem; word-break: break-all;
+    background: rgba(0,0,0,.28); border: 1px solid var(--border-soft);
+    border-radius: 5px; padding: .35rem .5rem;
+  }
+  .compilation-reveal { align-self: flex-start; font-size: .8rem; }
   .stable-empty {
     min-height: 80px; display: flex; align-items: center; justify-content: center;
     color: var(--muted); text-align: center;
@@ -721,10 +828,19 @@
     grid-template-columns: minmax(300px,360px) minmax(0,1fr);
     align-items: start; gap: 12px;
   }
-  .segment-library, .segment-editor { min-height: 620px; }
-  .segment-library { display: flex; flex-direction: column; }
+  .segment-editor { min-height: 620px; }
+  /* Library panel: viewport-bounded, the LIST is the scroll container. The
+     old cap sat on the list (100vh - 230px) and ignored the card's own
+     offset from the viewport top, so the card bottom ran off-screen (user
+     report 2026-07-24). 205px ≈ context bar + hero + gaps at page top;
+     sticky keeps the panel fully in view while a long editor scrolls. */
+  .segment-library, .route-library {
+    display: flex; flex-direction: column;
+    position: sticky; top: 88px;
+    min-height: 0; max-height: calc(100vh - 205px);
+  }
   .segment-list {
-    min-height: 0; max-height: calc(100vh - 230px);
+    min-height: 0; flex: 1 1 auto;
     overflow: auto; display: grid; align-content: start; gap: .55rem;
     padding-right: 2px; scrollbar-width: thin;
   }
@@ -815,9 +931,10 @@
     grid-template-columns: minmax(240px,300px) minmax(0,1fr);
     align-items: start; gap: 12px;
   }
-  .route-library { min-height: 520px; display: flex; flex-direction: column; }
+  /* .route-library shares the segment-library viewport-bound rule above;
+     .library-actions (margin-top:auto) stays pinned inside the card. */
   .route-list {
-    min-height: 0; max-height: calc(100vh - 285px); overflow: auto;
+    min-height: 0; flex: 1 1 auto; overflow: auto;
     display: grid; align-content: start; gap: .4rem;
     padding-right: 2px; scrollbar-width: thin;
   }
@@ -1062,13 +1179,13 @@
   .cf-row b { min-width: 0; color: var(--green); font-variant-numeric: tabular-nums; }
   .cf-load-icon { color: var(--muted); }
   .cf-empty { min-height: 98px; display: flex; align-items: center; justify-content: center; }
+  /* Bare playback controls, centered under the video pair — no heading copy
+     (user request 2026-07-24). */
   .compare-transport-card {
     min-height: 66px; display: flex; align-items: center;
-    justify-content: space-between; gap: 1rem; padding-block: .65rem;
+    justify-content: center; gap: 1rem; padding-block: .65rem;
   }
-  .transport-copy { display: grid; gap: .12rem; }
-  .transport-copy > span:last-child { color: var(--muted); font-size: .7rem; }
-  .compare-transport { flex-direction: row; flex-wrap: wrap; justify-content: flex-end; gap: .4rem; }
+  .compare-transport { flex-direction: row; flex-wrap: wrap; justify-content: center; gap: .4rem; }
   .compare-transport button { min-width: 0; }
   .compare-transport .primary-transport {
     min-width: 92px; color: #171407; background: var(--gold); border-color: var(--gold-soft); font-weight: 750;
@@ -1462,7 +1579,15 @@
   .settings-head h2 { margin: 0; }
   .settings-section { padding: 1rem 0; border-top: 1px solid var(--border-soft); }
   .settings-section h3 { margin-bottom: .3rem; }
+  .settings-field { display: flex; align-items: center; justify-content: space-between;
+                    gap: .6rem; margin: .35rem 0 .2rem; font-size: .85rem; }
+  .settings-field select { min-width: 0; max-width: 60%; }
   .settings-section p, .settings-note { color: var(--muted); font-size: .8rem; margin: .2rem 0 .65rem; }
+  .settings-field {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: .7rem; margin-bottom: .4rem;
+  }
+  .settings-field input[type="checkbox"] { min-height: 0; accent-color: var(--blue); }
   .settings-actions { display: grid; grid-template-columns: 1fr 1fr; gap: .55rem; }
   .settings-actions button { justify-content: flex-start; }
   .session-list { display: grid; gap: .45rem; }
@@ -1529,6 +1654,7 @@
     .segment-editor { order: 1; }
     .segment-library { order: 2; }
     .segment-library, .segment-editor, .route-library, .route-empty-card { min-height: 0; }
+    .segment-library, .route-library { position: static; max-height: none; }
     .segment-list, .route-list { max-height: 340px; }
     .runbar { grid-template-columns: minmax(0,1fr) auto; align-items: end; }
     .run-pb-slot { grid-column: 1 / -1; grid-row: 2; justify-items: start; }
@@ -1539,7 +1665,6 @@
   }
 
   @media (max-width: 760px) {
-    :root { --selector-height: 314px; }
     .app-shell { display: block; }
     .app-sidebar { display: none; }
     .mobile-appbar {
@@ -1615,7 +1740,6 @@
     .compare-transport button {
       min-width: 0; padding-inline: .28rem; font-size: .7rem;
     }
-    .transport-copy { display: none; }
     .cf-head { align-items: end; }
     .cf-head select { min-width: 0; max-width: 48%; }
     .cf-row {
@@ -1678,18 +1802,13 @@
     .mobile-nav .nav-item span { display: inline; }
     .mobile-nav .nav-item.on { box-shadow: inset 0 -2px 0 #76b5f5; }
     .mobile-more-backdrop { display: flex; }
-    .practice-toolbar { min-height: 56px; padding: 8px 10px; overflow: hidden; }
+    .practice-toolbar { min-height: 56px; padding: 8px 10px; }
     .route-focus-control { min-width: 0; flex: 1; }
     .route-focus-control .field-label, .toolbar-note { display: none; }
     .route-focus-control select { width: 100%; min-width: 0; }
     .practice-card { padding: 12px; }
     .selector-card { padding: 12px; }
-    .selector-card .starrow {
-      height: calc(var(--selector-height) - 54px); gap: 7px;
-      margin-inline: -4px; padding-inline: 4px;
-    }
-    .selector-card .starcell { flex-basis: 142px; min-width: 142px; }
-    .selector-card .starholder { width: 90px; }
+    .selector-card .starrow { height: calc(var(--selector-height) - 54px); }
     .objective-card { height: 258px; min-height: 258px; overflow: hidden; }
     .objective-heading {
       grid-template-columns: 26px 1fr; align-items: start;
@@ -1712,27 +1831,24 @@
     .objective-card .pbtag { grid-column: 2; grid-row: 1 / span 2; align-self: center; white-space: normal; }
     .analysis-card { height: 520px; min-height: 520px; }
     .attempts-card { height: 560px; min-height: 560px; }
-    .analysis-toolbar { display: grid; grid-template-columns: .8fr 1.15fr 1fr; }
-    .analysis-toolbar > label, .analysis-toolbar > button {
-      justify-content: center; padding-inline: .35rem; font-size: .75rem;
-    }
-    .analysis-toolbar select { max-width: 94px; font-size: .72rem; }
+    .sort-control select { max-width: 108px; font-size: .75rem; }
+    /* One line per attempt even in the narrow layout (2026-07-24) — the old
+       two-line grid doubled every entry's height. Long result text ellipses
+       instead of wrapping. */
     .attempt-table, .attempt-table tbody { display: block; width: 100%; }
     .attempt-table tr:not(.replay-row) {
-      height: auto; min-height: 76px; display: grid;
-      grid-template-columns: 38px minmax(0,1fr) auto;
-      grid-template-areas:
-        "idx result delta"
-        "idx strategy actions";
-      align-items: center; padding: .3rem 0; border-bottom: 1px solid var(--border-soft);
+      height: auto; min-height: 44px; display: grid;
+      grid-template-columns: 30px 26px minmax(0,1fr) max-content
+                             minmax(0,max-content) max-content;
+      align-items: center; gap: 0 .18rem;
+      padding: .14rem 0; border-bottom: 1px solid var(--border-soft);
     }
-    .attempt-table td { display: block; width: auto; border: 0; padding: .18rem .28rem; }
-    .attempt-index { grid-area: idx; align-self: start; padding-top: .35rem !important; }
-    .attempt-result { grid-area: result; }
-    .attempt-delta { grid-area: delta; text-align: right; }
-    .attempt-strategy { grid-area: strategy; min-width: 0; }
-    .attempt-actions { grid-area: actions; display: flex; justify-content: flex-end; }
-    .attempt-strategy select { max-width: 112px; }
+    .attempt-table td { display: block; width: auto; border: 0; padding: .12rem .2rem; }
+    .attempt-result { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .attempt-delta { text-align: right; }
+    .attempt-strategy { min-width: 0; }
+    .attempt-actions { display: flex; justify-content: flex-end; }
+    .attempt-strategy select { max-width: 104px; }
     .save-pb-wide { display: none; }
     .save-pb-narrow { display: inline; }
     .replay-row, .replay-row td { display: block; height: auto; width: 100%; }
@@ -1750,13 +1866,23 @@
     .mobile-status .status-main { display: none; }
     .mobile-status .recording-status .dot { max-width: none; }
     .context-control > .ui-icon { display: none; }
-    .selector-card .starcell { flex-basis: 136px; min-width: 136px; }
     .objective-metrics { grid-template-columns: 1fr 118px; }
-    .analysis-toolbar { gap: .3rem; }
     .reset-toggle span { display: none; }
     .attempt-actions button { padding-inline: .32rem; }
+    .save-pb-narrow { display: none; } /* icon-only Save on phones */
     .replay-setting-row { grid-template-columns: 1fr; gap: .35rem; }
     .replay-setting-controls { width: 100%; }
+  }
+
+  /* Short windows: the sidebar compresses instead of growing a scrollbar
+     (pairs with the non-scrolling .sidebar-nav above). */
+  @media (max-height: 760px) {
+    .app-brand { min-height: 52px; }
+    .app-brand img { width: 52px; height: 46px; }
+    .nav-item { min-height: 36px; padding-block: .32rem; }
+    .nav-group { padding-block: .4rem; }
+    .sidebar-footer { gap: .4rem; }
+    .sidebar-status { padding: .5rem .6rem; gap: .4rem; }
   }
 
   @media (prefers-reduced-motion: reduce) {

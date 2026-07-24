@@ -508,10 +508,10 @@ def test_resumed_session_points_join_their_original_segment(tmp_path):
     assert [p["igt_frames"] for p in prog["sessions"][0]["points"]] == [343, 330]
 
 
-def test_target_section_under_session_scope_keeps_lifetime_context(tmp_path):
-    # the pinned-block state right after "new session": empty attempt list,
-    # but lifetime timeline/stats still render. A second star with session
-    # activity also pins "fresh targets sort last".
+def test_target_section_under_session_scope_keeps_lifetime_stats(tmp_path):
+    # the pinned-block state right after "new session": empty attempt list
+    # and an empty (scoped) timeline, but lifetime STATS still render. A
+    # second star with session activity also pins "fresh targets sort last".
     db, svc = make(tmp_path)
     asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
     asyncio.run(svc.publish(star(1350, igt=343)))          # target -> (2,2)
@@ -524,9 +524,24 @@ def test_target_section_under_session_scope_keeps_lifetime_context(tmp_path):
         == [(8, 1), (2, 2)]                                # fresh target last
     tgt = view["stars"][1]
     assert tgt["attempts"] == []                           # nothing this session
-    assert tgt["timeline"] is not None                     # lifetime history
+    assert tgt["timeline"] is None                         # timeline is scoped
     stats = {s["key"]: s["value"] for s in tgt["stats"]}
     assert stats.get("best") == 343                        # lifetime best
+
+
+def test_timeline_follows_scope(tmp_path):
+    # Session scope plots only that session's attempts (user request
+    # 2026-07-24); lifetime keeps the full history.
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350, igt=343)))
+    asyncio.run(svc.new_session())
+    asyncio.run(svc.publish(ev("practice_reset", 5000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(5400, igt=330)))
+    [sec] = build_session_view(db, svc, clock="igt", scope="session")["stars"]
+    assert [p["frames"] for p in sec["timeline"]["points"]] == [330]
+    [sec] = build_session_view(db, svc, clock="igt", scope="lifetime")["stars"]
+    assert [p["frames"] for p in sec["timeline"]["points"]] == [343, 330]
 
 
 def test_view_survives_out_of_range_target(tmp_path):

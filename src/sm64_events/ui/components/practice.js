@@ -4,11 +4,11 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { ReplayPlayer } from "./replay.js";
-import { StatMenu } from "./statmenu.js";
+import { StatMenu, DUST_STAT_KEYS } from "./statmenu.js";
 import { Timeline } from "./timeline.js";
 import { Progress } from "./progress.js";
 import { StageBanner } from "./stagebanner.js";
-import { Medal, RankBanner } from "./ranks.js";
+import { Medal, RankBanner, rankColor } from "./ranks.js";
 import { StandardsPanel } from "./standards.js";
 import { StratPicker } from "./stratpicker.js";
 import { FailureCompilation } from "./failcomp.js";
@@ -141,22 +141,23 @@ function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, sec }) {
   const row = html`<tr ref=${(el) => { rowRef.current = el; }}
       class="${a.cleared ? "cleared" : ""} ${flash ? "row-flash" : ""} ${isNew ? "row-new" : ""}">
     <td class="meta attempt-index">#${idx + 1}</td>
+    <td class="attempt-medal">${a.rank
+      ? html`<${Medal} rank=${a.rank} size=${22} />` : ""}</td>
     <td class="attempt-result ${a.outcome === "success" ? "good" : "badx"}">
       ${OUTCOME_LABEL[a.outcome] || a.outcome}
       ${a.outcome === "death" && a.outcome_detail
         ? html` <span class="meta">(${a.outcome_detail})</span>` : ""}
       ${a.outcome === "success" && time ? html` <b>${time}</b>` : ""}
       ${a.outcome !== "success" && inTime ? html` <span class="meta">${inTime} in</span>` : ""}
-      ${a.rollouts_total > 0
+      ${t.showDust && a.rollouts_total > 0
         ? html` <span class="meta">· ${a.rollouts_dustless}/${a.rollouts_total} dustless rollouts</span>` : ""}
-      ${a.jumps_total > 0
+      ${t.showDust && a.jumps_total > 0
         ? html` <span class="meta">· ${a.jumps_dustless}/${a.jumps_total} dustless jumps</span>` : ""}
       ${a.cleared && a.cleared_reason
         ? html` <span class="meta">(${a.cleared_reason})</span>` : ""}
     </td>
     <td class="attempt-delta">${a.outcome === "success" ? delta(a.pb_delta_frames) : ""}</td>
     <td class="meta attempt-strategy">
-      ${a.rank ? html`<${Medal} rank=${a.rank} size=${14} /> ` : ""}
       ${sec
         ? html`<${StratPicker} entity=${entity} strategies=${sec.strategies}
             active=${a.strat_tag} blankLabel="— no strategy —"
@@ -189,7 +190,7 @@ function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, sec }) {
     ? () => openCompare({ attemptId: a.id, entity, strat })
     : null;
   const expandedRow = showReplay
-    ? html`<tr class="replay-row"><td colspan="5"><${ReplayPlayer} attemptId=${a.id} onCompare=${onCompare} /></td></tr>`
+    ? html`<tr class="replay-row"><td colspan="6"><${ReplayPlayer} attemptId=${a.id} onCompare=${onCompare} /></td></tr>`
     : null;
   return [row, expandedRow];
 }
@@ -406,7 +407,8 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
               onChanged=${t.refresh} />
         </div>
       </div>
-      <div class="objective-metrics">
+      <div class="objective-metrics" style=${sec.rank && sec.rank.rank
+          ? `--rank-glow:${rankColor(sec.rank.rank)}` : ""}>
         <div class="rank-slot"><${RankBanner} banner=${sec.rank} /></div>
         <div class="objective-live-state" aria-label="Practice state">
           <span class="live-state-icon">○</span><span>Ready</span>
@@ -420,20 +422,24 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
         <div><span class="eyebrow">Analysis</span><h3>Attempt history</h3></div>
       </div>
       <div class="analysis-block timeline-block">
-        <h4>Attempt timeline <span title="Attempts positioned by completion or reset time">ⓘ</span></h4>
+        <h4>Attempt timeline <span class="hint" tabindex="0"
+          data-tip="Every attempt in the selected scope, positioned by its completion or reset time">ⓘ</span></h4>
         <${Timeline} tl=${sec.timeline} sec=${sec} t=${t} />
       </div>
       <div class="analysis-block trend-block">
-        <h4>Performance trend <span title="Successful attempts over time">ⓘ</span></h4>
+        <h4>Performance trend <span class="hint" tabindex="0"
+          data-tip="Successful attempts over time — gold dots are saved PBs; click a dot to jump to its row">ⓘ</span></h4>
         <${Progress} prog=${sec.progress} clock=${t.clock} onPick=${pick} />
       </div>
-      <${ControlBar} ui=${ui} />
     </section>
 
     <section class="practice-card attempts-card">
       <div class="card-heading attempts-heading">
         <div><span class="eyebrow">Practice log</span><h3>Recent attempts</h3></div>
-        <span class="meta">${rows.length} shown</span>
+        <div class="attempts-tools">
+          <span class="meta">${rows.length} shown</span>
+          <${SortControl} ui=${ui} />
+        </div>
       </div>
       <div class="attempt-scroll">
         <${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t}
@@ -441,18 +447,21 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
           openCompare=${openCompare} sec=${sec} />
       </div>
       <div class="attempt-footer">
-        ${(rows.length > visible || visible > 10) && html`<div>
+        <div class="attempt-pagination">
           ${rows.length > visible && html`<button class="quiet-button"
               onclick=${() => setVisible(visible + 10)}>Show 10 more</button>`}
           ${visible > 10 && html`<button class="quiet-button"
               onclick=${() => setVisible(Math.max(10, visible - 10))}>Show fewer</button>`}
-        </div>`}
-        <${HideToggle} hidden=${hidden} showHidden=${showHidden}
-            setShowHidden=${setShowHidden} />
+        </div>
+        <div class="attempt-footer-tools">
+          <${ResetFilterToggle} ui=${ui} />
+          <${HideToggle} hidden=${hidden} showHidden=${showHidden}
+              setShowHidden=${setShowHidden} />
+        </div>
       </div>
     </section>
 
-    <details class="practice-card detail-drawer">
+    <details class="practice-card detail-drawer" open>
       <summary>Stats, standards, and practice options</summary>
       <div class="detail-tools">
         <a href=${sec.links.ukikipedia} target="_blank">RTA Guide ↗</a>
@@ -463,14 +472,16 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
             ? "Wipe this star's data across all sessions"
             : "Wipe this star's data in the current session"}>Clear data</button>
       </div>
-      <${FailureCompilation} identity=${{ course_id: sec.course_id, star_id: sec.star_id }} />
       <div class="chips">
-        ${sec.stats.map((s) => html`
+        ${sec.stats.filter((s) => t.showDust || !DUST_STAT_KEYS.has(s.key))
+          .map((s) => html`
           <span class="chip" title=${s.key}>${s.label} ${s.display ?? "–"}</span>`)}
       </div>
       <${StandardsPanel} entity=${`star:${sec.course_id}:${sec.star_id}`}
           activeStrat=${sec.last_strat} strategies=${sec.strategies}
-          onChanged=${t.refresh} />
+          onChanged=${t.refresh} defaultOpen=${true} />
+      <${FailureCompilation} identity=${{ course_id: sec.course_id, star_id: sec.star_id }}
+          defaultOpen=${true} />
     </details>
   </div>`;
 }
@@ -538,7 +549,8 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare }) {
             : html`<span class="meta">Definition deleted</span>`}
         </div>
       </div>
-      <div class="objective-metrics">
+      <div class="objective-metrics" style=${sec.rank && sec.rank.rank
+          ? `--rank-glow:${rankColor(sec.rank.rank)}` : ""}>
         <div class="rank-slot"><${RankBanner} banner=${sec.rank} /></div>
         <div class="objective-live-state ${armed ? "running" : ""}"
             aria-label=${`Segment state: ${pinTag}`}>
@@ -553,22 +565,26 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare }) {
         <div><span class="eyebrow">Analysis</span><h3>Attempt history</h3></div>
       </div>
       <div class="analysis-block timeline-block">
-        <h4>Attempt timeline <span title="Attempts positioned by completion or reset time">ⓘ</span></h4>
+        <h4>Attempt timeline <span class="hint" tabindex="0"
+          data-tip="Every attempt in the selected scope, positioned by its completion or reset time">ⓘ</span></h4>
         ${!sec.broken
           ? html`<${Timeline} tl=${sec.timeline} sec=${sec} t=${t} />`
           : html`<div class="stable-empty compact">Timeline unavailable for a deleted definition.</div>`}
       </div>
       <div class="analysis-block trend-block">
-        <h4>Performance trend <span title="Successful attempts over time">ⓘ</span></h4>
+        <h4>Performance trend <span class="hint" tabindex="0"
+          data-tip="Successful attempts over time — gold dots are saved PBs; click a dot to jump to its row">ⓘ</span></h4>
         <${Progress} prog=${sec.progress} clock="rta" onPick=${pick} />
       </div>
-      <${ControlBar} ui=${ui} />
     </section>
 
     <section class="practice-card attempts-card">
       <div class="card-heading attempts-heading">
         <div><span class="eyebrow">Practice log</span><h3>Recent attempts</h3></div>
-        <span class="meta">${rows.length} shown</span>
+        <div class="attempts-tools">
+          <span class="meta">${rows.length} shown</span>
+          <${SortControl} ui=${ui} />
+        </div>
       </div>
       <div class="attempt-scroll">
         <${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t}
@@ -576,18 +592,21 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare }) {
           openCompare=${openCompare} sec=${sec} />
       </div>
       <div class="attempt-footer">
-        ${(rows.length > visible || visible > 10) && html`<div>
+        <div class="attempt-pagination">
           ${rows.length > visible && html`<button class="quiet-button"
               onclick=${() => setVisible(visible + 10)}>Show 10 more</button>`}
           ${visible > 10 && html`<button class="quiet-button"
               onclick=${() => setVisible(Math.max(10, visible - 10))}>Show fewer</button>`}
-        </div>`}
-        <${HideToggle} hidden=${hidden} showHidden=${showHidden}
-            setShowHidden=${setShowHidden} />
+        </div>
+        <div class="attempt-footer-tools">
+          <${ResetFilterToggle} ui=${ui} />
+          <${HideToggle} hidden=${hidden} showHidden=${showHidden}
+              setShowHidden=${setShowHidden} />
+        </div>
       </div>
     </section>
 
-    <details class="practice-card detail-drawer">
+    <details class="practice-card detail-drawer" open>
       <summary>Stats, standards, and practice options</summary>
       <div class="detail-tools">
         ${!sec.broken && html`<${TimeFilterChip} sec=${sec} t=${t} />`}
@@ -596,14 +615,16 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare }) {
             ? "Wipe this segment's data across all sessions"
             : "Wipe this segment's data in the current session"}>Clear data</button>
       </div>
-      <${FailureCompilation} identity=${{ segment_id: sec.segment_id }} />
       <div class="chips">
-        ${sec.stats.map((s) => html`
+        ${sec.stats.filter((s) => t.showDust || !DUST_STAT_KEYS.has(s.key))
+          .map((s) => html`
           <span class="chip" title=${s.key}>${s.label} ${s.display ?? "–"}</span>`)}
       </div>
       <${StandardsPanel} entity=${`segment:${sec.segment_id}`}
           activeStrat=${sec.last_strat} strategies=${sec.strategies}
-          onChanged=${t.refresh} />
+          onChanged=${t.refresh} defaultOpen=${true} />
+      <${FailureCompilation} identity=${{ segment_id: sec.segment_id }}
+          defaultOpen=${true} />
     </details>
   </div>`;
 }
@@ -672,21 +693,24 @@ function RouteFocus({ rv, t, ui, freshIds, openCompare }) {
   </div>`;
 }
 
-function ControlBar({ ui }) {
-  return html`<div class="analysis-toolbar">
-    <button type="button" title="Open practice statistics" onclick=${ui.openStats}>
-      <${Icon} name="feed" size=${17} />Stats
-    </button>
-    <label><${Icon} name="sort" size=${17} /><span class="sr-only">Sort attempts</span>
-      <select value=${ui.sort} onchange=${(e) => ui.setSort(e.target.value)}>
-        ${SORT_OPTIONS.map(([k, label]) => html`<option value=${k}>${label}</option>`)}
-      </select></label>
-    <label class="reset-toggle">
-      <${Icon} name="eyeOff" size=${17} />
-      <input type="checkbox" checked=${ui.hideResets}
-             onchange=${(e) => ui.setHideResets(e.target.checked)} />
-      <span>Hide resets</span></label>
-  </div>`;
+// Practice-log controls live IN the log card they act on (2026-07-24 UX
+// pass): sort in the card heading, reset visibility in the footer. They used
+// to sit in an "analysis toolbar" under the charts, which read as controls
+// for the graphs.
+function SortControl({ ui }) {
+  return html`<label class="sort-control" title="Order the practice log">
+    <${Icon} name="sort" size=${16} /><span class="sr-only">Sort attempts</span>
+    <select value=${ui.sort} onchange=${(e) => ui.setSort(e.target.value)}>
+      ${SORT_OPTIONS.map(([k, label]) => html`<option value=${k}>${label}</option>`)}
+    </select></label>`;
+}
+
+function ResetFilterToggle({ ui }) {
+  return html`<label class="reset-toggle" title="Hide reset attempts from the log">
+    <${Icon} name="eyeOff" size=${16} />
+    <input type="checkbox" checked=${ui.hideResets}
+           onchange=${(e) => ui.setHideResets(e.target.checked)} />
+    <span>Hide resets</span></label>`;
 }
 
 function EmptyPractice({ v, t, ui, unassignedRows, freshIds, openCompare,
@@ -716,12 +740,14 @@ function EmptyPractice({ v, t, ui, unassignedRows, freshIds, openCompare,
         <b>Choose a star or segment to see its trend</b>
         <span>Your session keeps recording while this view is idle.</span>
       </div>
-      <${ControlBar} ui=${ui} />
     </section>
     <section class="practice-card attempts-card">
       <div class="card-heading attempts-heading">
         <div><span class="eyebrow">Practice log</span><h3>Unassigned attempts</h3></div>
-        <span class="meta">${unassignedRows.length} shown</span>
+        <div class="attempts-tools">
+          <span class="meta">${unassignedRows.length} shown</span>
+          <${SortControl} ui=${ui} />
+        </div>
       </div>
       <div class="attempt-scroll">
         ${unassignedRows.length
@@ -730,8 +756,12 @@ function EmptyPractice({ v, t, ui, unassignedRows, freshIds, openCompare,
           : html`<div class="stable-empty">No attempts are waiting for a target.</div>`}
       </div>
       <div class="attempt-footer">
-        <${HideToggle} hidden=${hidden} showHidden=${showHidden}
-            setShowHidden=${setShowHidden} />
+        <div class="attempt-pagination"></div>
+        <div class="attempt-footer-tools">
+          <${ResetFilterToggle} ui=${ui} />
+          <${HideToggle} hidden=${hidden} showHidden=${showHidden}
+              setShowHidden=${setShowHidden} />
+        </div>
       </div>
     </section>
   </div>`;
@@ -747,7 +777,6 @@ export function Practice({ t, openCompare }) {
     localStorage.getItem("sm64.hideResets") === "1");
   const ui = {
     sort, hideResets,
-    openStats: () => setMenuOpen(true),
     setSort: (v) => { localStorage.setItem("sm64.sort", v); setSortState(v); },
     setHideResets: (v) => {
       localStorage.setItem("sm64.hideResets", v ? "1" : "0");
@@ -829,7 +858,13 @@ export function Practice({ t, openCompare }) {
     (a) => !a.cleared && a.outcome !== "abandoned");
   const unassignedHidden = v.unassigned.filter(
     (a) => a.cleared || a.outcome === "abandoned");
-  const unassignedRows = showUnassignedHidden ? v.unassigned : unassignedVisible;
+  // The unassigned log honors the same sort/reset controls as the section
+  // logs — they render in its card too.
+  const unassignedRows = (showUnassignedHidden ? v.unassigned : unassignedVisible)
+    .filter((a) => !(hideResets
+      && (a.outcome === "reset" || a.outcome === "hard_reset")))
+    .slice()
+    .sort(comparator(sort, t.clock));
 
   return html`<div class="practice-page">
     <section class="practice-toolbar practice-card">
@@ -848,10 +883,12 @@ export function Practice({ t, openCompare }) {
       <button type="button" onclick=${() => setMenuOpen(!menuOpen)}>
         <${Icon} name="feed" size=${17} />Stats
       </button>
+      ${/* Anchored INSIDE the toolbar: as a sibling grid item it added a
+           practice-page grid row, shifting every card 12px on open. */""}
+      ${menuOpen && html`<div class="stats-popover">
+        <${StatMenu} t=${t} close=${() => setMenuOpen(false)} />
+      </div>`}
     </section>
-    ${menuOpen && html`<div class="stats-popover">
-      <${StatMenu} t=${t} close=${() => setMenuOpen(false)} />
-    </div>`}
 
     <${StageBanner} t=${t} />
 

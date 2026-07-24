@@ -6,7 +6,7 @@
 // adds a ▶ button per cell to paste/clear an override, and the section links out
 // to the xcams Daily Star page for browsing every example.
 import { h } from "preact";
-import { useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { RANK_NAMES, rankColor } from "./ranks.js";
@@ -16,13 +16,17 @@ import { Icon } from "./icons.js";
 const html = htm.bind(h);
 const enc = encodeURIComponent;
 
-export function StandardsPanel({ entity, activeStrat, strategies, onChanged }) {
-  const [open, setOpen] = useState(false);
+export function StandardsPanel({ entity, activeStrat, strategies, onChanged, defaultOpen = false }) {
+  const [open, setOpen] = useState(defaultOpen);
   const [data, setData] = useState(null);
   const [editing, setEditing] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [videoEdit, setVideoEdit] = useState(null);
   async function load() { setData(await getJSON(`/api/ranks/standards?entity=${enc(entity)}`)); }
+  // When opened by default (or when the card remounts for a new entity while
+  // open), fetch on mount — toggle() only loads on a user click, so an
+  // open-by-default panel would otherwise sit on "Loading standards…" forever.
+  useEffect(() => { if (open) load(); }, [entity]);
   // Reload on EVERY open, not just the first: a strat created from the
   // practice dropdown or header picker while this panel sat cached would
   // otherwise show empty cells forever (its data is fetched out-of-band,

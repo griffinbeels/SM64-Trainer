@@ -3,7 +3,9 @@
 Contract (the UI builds against ALL of this):
 - `scope` selects which attempts drive sections/attempt lists/unassigned:
   "session" (default) = the active session, "lifetime" = everything.
-  Stat chips and the timeline ALWAYS compute over lifetime history (spec §8).
+  Stat chips ALWAYS compute over lifetime history (spec §8). The timeline
+  FOLLOWS scope (session view plots only that session's attempts — user
+  request 2026-07-24; it originally stayed lifetime per spec §8).
 - Star sections are ordered newest-activity-first (max scoped journal
   recency via projection.journal_id; fresh targets sort last); segment
   sections order among themselves the same way. Every section ALSO carries
@@ -538,7 +540,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "strategies": _strategies_for(registered, all_attempts, course_id, star_id,
                                          service.ranks, deleted_strats.get(ek, [])),
             "last_strat": masked(service.strat_by_star.get((course_id, star_id)), ek),
-            "timeline": _timeline(history, igt_of),
+            "timeline": _timeline(in_section, igt_of),
             "markers_by_strat": _markers_for(markers_state, course_id, star_id),
             "time_filter": _time_filter_json(
                 time_filters_state.get(f"{course_id}:{star_id}")),
@@ -597,7 +599,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                                           service.ranks,
                                           deleted_strats.get(seg_ek, [])),
             "last_strat": masked(service.strat_by_segment.get(seg_id), seg_ek),
-            "timeline": _timeline(history, rta_of),
+            "timeline": _timeline(in_section, rta_of),
             "markers_by_strat": _markers_for(markers_state, "seg", seg_id),
             "time_filter": _time_filter_json(
                 None, seg_guards=d.guards if d else []),

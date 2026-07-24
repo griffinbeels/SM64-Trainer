@@ -1475,7 +1475,24 @@ def test_set_attempt_strat_reclassifies_and_registers(tmp_path):
     assert "attempt_strat_set" in [e.type for e in db.events()]
     # the name is registered, so it survives in the section dropdown
     assert "Slide Kick" in db.get_state("strategies", {})["2:2"]
-    # the live target's strategy is untouched — this edits history only
+    # this is the entity's NEWEST attempt, so the active strategy follows
+    # (user request 2026-07-24) — older rows stay history-only, see below
+    assert svc.strat_by_star[(2, 2)] == "Slide Kick"
+
+
+def test_set_attempt_strat_on_older_attempt_keeps_active_strat(tmp_path):
+    """Only the NEWEST row moves the live picker; editing deeper history is
+    a pure correction and leaves the active strategy alone."""
+    db, svc = make(tmp_path)
+    asyncio.run(svc.set_target(2, 2, strat_tag="Cannonless"))
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350)))
+    asyncio.run(svc.publish(ev("practice_reset", 2000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(2350)))
+    older_id = min(row.id for row in db.attempts())
+    asyncio.run(svc.set_attempt_strat(older_id, "Slide Kick"))
+    assert next(row.strat_tag for row in db.attempts()
+                if row.id == older_id) == "Slide Kick"
     assert svc.strat_by_star[(2, 2)] == "Cannonless"
 
 
@@ -1488,6 +1505,9 @@ def test_set_attempt_strat_null_unlabels_and_is_reversible(tmp_path):
     aid = db.attempts()[0].id
     asyncio.run(svc.set_attempt_strat(aid, None))
     assert db.attempts()[0].strat_tag is None
+    # un-labeling the newest row is not a strategy switch: None never
+    # propagates to the active strategy
+    assert svc.strat_by_star[(2, 2)] == "Cannonless"
     asyncio.run(svc.set_attempt_strat(aid, "Cannonless"))
     assert db.attempts()[0].strat_tag == "Cannonless"
 
@@ -1541,3 +1561,6 @@ def test_set_attempt_strat_reclassifies_segment_attempt_and_registers(tmp_path):
     reclassified = next(a for a in db.attempts() if a.id == seg_aid)
     assert reclassified.strat_tag == "no bljs"
     assert "no bljs" in db.get_state("strategies", {})[f"seg:{lblj}"]
+    # newest segment attempt -> the segment's active strategy follows too
+    # (star<->segment parity for the newest-attempt rule)
+    assert svc.strat_by_segment[lblj] == "no bljs"

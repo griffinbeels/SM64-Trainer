@@ -46,6 +46,12 @@ function sentinelMsg(banner) {
   return RANK_SENTINEL[banner.reason] || RANK_SENTINEL.no_strat;
 }
 
+// Rendered inside the objective card's rank slot. The rank-colored wash
+// across the card is painted by CSS (.objective-metrics::before, keyed off
+// the --rank-glow var practice.js sets from rankColor); this component lays
+// out the medal, labels, and a full-width next-rank progress track. Nothing
+// here may exceed the slot — the old fixed 200px bar in a bordered box bled
+// past the card edge (user report 2026-07-24).
 export function RankBanner({ banner }) {
   if (!banner || !banner.rank) {
     return html`<span class="meta">${sentinelMsg(banner)}</span>`;
@@ -53,19 +59,19 @@ export function RankBanner({ banner }) {
   const c = rankColor(banner.rank);
   const gap = banner.gap_cs != null ? (banner.gap_cs / 100).toFixed(2) : null;
   const basis = banner.basis;
-  return html`<div style=${`display:flex;align-items:center;gap:12px;border:1px solid ${c}55;border-radius:8px;padding:8px 12px;background:linear-gradient(90deg, ${c}33, transparent)`}>
-    <${Medal} rank=${banner.rank} size=${30} />
-    <div>
-      <div style="font-weight:800;letter-spacing:.4px">${banner.rank.toUpperCase()}
-        ${basis && html` <span class="meta" style="font-weight:400">
-          ${MODE_LABEL[banner.mode] || banner.mode} · avg of ${basis.count}${basis.window ? `/${basis.window}` : ""} · ${basis.display}</span>`}
-      </div>
-      ${banner.next
-        ? html`<div class="meta">next: <b>${banner.next}</b> −${gap}s
-            <div style="height:6px;width:200px;background:#0d1117;border-radius:3px;margin-top:4px;overflow:hidden">
-              <i style=${`display:block;height:100%;width:${Math.round((banner.fill || 0) * 100)}%;background:${c}`}></i>
-            </div></div>`
-        : html`<div class="meta">top rank</div>`}
+  const fillPct = banner.next ? Math.round((banner.fill || 0) * 100) : 100;
+  return html`<div class="rank-banner">
+    <div class="rank-banner-row">
+      <${Medal} rank=${banner.rank} size=${26} />
+      <b class="rank-banner-name">${banner.rank.toUpperCase()}</b>
+      ${basis && html`<span class="meta rank-banner-basis">
+        ${MODE_LABEL[banner.mode] || banner.mode} · avg of ${basis.count}${basis.window ? `/${basis.window}` : ""} · ${basis.display}</span>`}
+      <span class="meta rank-banner-next">${banner.next
+        ? html`next: <b>${banner.next}</b> −${gap}s` : "top rank"}</span>
+    </div>
+    <div class="rank-progress-track"
+        title=${banner.next ? `${fillPct}% of the way to ${banner.next}` : "top rank"}>
+      <i style=${`width:${fillPct}%;background:${c}`}></i>
     </div>
   </div>`;
 }
