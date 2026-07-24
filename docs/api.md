@@ -211,6 +211,8 @@ PJ64 must run windowed (exclusive fullscreen cannot be captured).
 - `GET  /api/replay/clips/{name}` — the MP4 (supports HTTP Range; scrubs smoothly)
 - `GET  /api/replay/saved/{attempt_id}` — a SAVED attempt's MP4 (same Range support); 404 when that attempt has no saved file
 - `POST /api/attempts/{id}/replay/save` — copy to `replays/<YYYY-MM-DD>/session_<N>/<slug>.mp4` plus a `.json` metadata sidecar → `{path, truncated}`. Idempotent: an already-saved attempt returns its existing file (delete it in Explorer first to re-save with new padding)
+- `POST /api/compilation` — start a failure compilation for a star (`{"star":{"course_id":C,"star_id":S}}`) or segment (`{"segment_id":N}`), with `x_before`/`y_after` seconds around each failure. Returns `{job_id}`.
+- `GET /api/compilation/{job_id}` — poll job `{state, progress, message, result}`; `result` on done: `{path, clip_count, skipped, no_finale, finale_time}`. Output MP4 lives under the replays `compilations/` dir; open it via `POST /api/replay/reveal`.
 
 Errors follow the API taxonomy: 404 unknown attempt/clip, 409 no footage /
 span too short, 503 db unavailable. Clips span the whole attempt plus
