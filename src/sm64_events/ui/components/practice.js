@@ -11,6 +11,7 @@ import { StageBanner } from "./stagebanner.js";
 import { Medal, RankBanner } from "./ranks.js";
 import { StandardsPanel } from "./standards.js";
 import { StratPicker } from "./stratpicker.js";
+import { FailureCompilation } from "./failcomp.js";
 import { Icon } from "./icons.js";
 import { PageState } from "./states.js";
 
@@ -462,6 +463,7 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
             ? "Wipe this star's data across all sessions"
             : "Wipe this star's data in the current session"}>Clear data</button>
       </div>
+      <${FailureCompilation} identity=${{ course_id: sec.course_id, star_id: sec.star_id }} />
       <div class="chips">
         ${sec.stats.map((s) => html`
           <span class="chip" title=${s.key}>${s.label} ${s.display ?? "–"}</span>`)}
@@ -594,6 +596,7 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare }) {
             ? "Wipe this segment's data across all sessions"
             : "Wipe this segment's data in the current session"}>Clear data</button>
       </div>
+      <${FailureCompilation} identity=${{ segment_id: sec.segment_id }} />
       <div class="chips">
         ${sec.stats.map((s) => html`
           <span class="chip" title=${s.key}>${s.label} ${s.display ?? "–"}</span>`)}

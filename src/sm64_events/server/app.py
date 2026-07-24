@@ -246,7 +246,7 @@ def _quiet_connection_resets(loop, context) -> None:
 
 def create_app(poller: Poller, broadcaster: Broadcaster,
                service=None, replay=None, updater=None, compare=None,
-               db_retry=None, debug_hooks: bool = False) -> FastAPI:
+               compilation=None, db_retry=None, debug_hooks: bool = False) -> FastAPI:
     # Observability for long-running sessions: samples self + CHILD (ffmpeg)
     # memory, handle/GDI/USER counts, system pressure, and a per-type heap
     # histogram on a cadence — logs an expanded line, fires one-shot per-class
@@ -366,6 +366,10 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     if compare is not None:
         from sm64_events.server.compare_api import create_compare_router
         app.include_router(create_compare_router(compare))
+
+    if compilation is not None:
+        from sm64_events.server.compilation_api import create_compilation_router
+        app.include_router(create_compilation_router(compilation))
 
     if updater is not None:
         from sm64_events.server.update_api import create_update_router

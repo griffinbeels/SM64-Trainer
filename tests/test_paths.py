@@ -119,3 +119,10 @@ def test_compare_cache_dir_under_data_root():
 
 def test_install_root_is_exe_parent():
     assert paths.install_root() == Path(sys.executable).resolve().parent
+
+
+def test_compilations_dir_is_under_replays_root():
+    from sm64_events.core.paths import compilations_dir, replays_root
+    d = compilations_dir()
+    assert d.name == "compilations"
+    assert d.parent == replays_root()

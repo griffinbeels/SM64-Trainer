@@ -422,25 +422,32 @@ class FakeExtractor:
         return None
 
 
-def _builder(extractor, runner):
-    b = comp.CompilationBuilder(extractor, codec="libx264", fps=60,
-                                ffmpeg="ffmpeg")
-    b._run = runner            # override the raw subprocess call (see impl)
-    return b
+def _builder(extractor):
+    return comp.CompilationBuilder(extractor, codec="libx264", fps=60,
+                                   ffmpeg="ffmpeg")
+
+
+def _install(monkeypatch, fake_run):
+    # Both _probe_dims and _concat_normalize call subprocess.run directly
+    # (like extract.py); stub it so no real ffmpeg runs. The extractor is
+    # injected separately (FakeExtractor). fake_run dispatches on whether
+    # "-filter_complex" is in args (concat) vs a probe (-i, no output).
+    monkeypatch.setattr(comp.subprocess, "run", fake_run)
 
 
 def test_multi_clip_runs_concat_with_all_inputs(tmp_path, monkeypatch):
     calls = {}
 
-    def fake_run(args):
+    def fake_run(args, **kw):
         if "-filter_complex" in args:
             calls["concat"] = args
             Path(args[-1]).write_bytes(b"out")
-        else:                                   # probe
+        else:                                    # probe
             calls["probe"] = args
         return subprocess.CompletedProcess(args, 0, b"", b"Video: h264, 1280x960")
 
-    b = _builder(FakeExtractor(), fake_run)
+    _install(monkeypatch, fake_run)
+    b = _builder(FakeExtractor())
     out = tmp_path / "c.mp4"
     res = b.build([_spec(1), _spec(2, kind="finale")], ring=None,
                   tmp_dir=tmp_path / "t", out_path=out,
@@ -452,11 +459,12 @@ def test_multi_clip_runs_concat_with_all_inputs(tmp_path, monkeypatch):
     assert out.exists()
 
 
-def test_single_clip_is_copied_not_concatenated(tmp_path):
-    def fake_run(args):
+def test_single_clip_is_copied_not_concatenated(tmp_path, monkeypatch):
+    def fake_run(args, **kw):
         raise AssertionError("ffmpeg should not run for a single clip")
 
-    b = _builder(FakeExtractor(), fake_run)
+    _install(monkeypatch, fake_run)
+    b = _builder(FakeExtractor())
     out = tmp_path / "c.mp4"
     res = b.build([_spec(1)], ring=None, tmp_dir=tmp_path / "t", out_path=out,
                   resolve_saved=lambda i: None, progress_cb=lambda f, m: None)
@@ -464,12 +472,14 @@ def test_single_clip_is_copied_not_concatenated(tmp_path):
     assert out.read_bytes() == b"stub"
 
 
-def test_runtime_extract_failure_is_skipped(tmp_path):
-    def fake_run(args):
-        Path(args[-1]).write_bytes(b"out")
+def test_runtime_extract_failure_is_skipped(tmp_path, monkeypatch):
+    def fake_run(args, **kw):
+        if "-filter_complex" in args:
+            Path(args[-1]).write_bytes(b"out")
         return subprocess.CompletedProcess(args, 0, b"", b"Video: 1280x960")
 
-    b = _builder(FakeExtractor(fail_ids={0}), fake_run)   # first spec fails
+    _install(monkeypatch, fake_run)
+    b = _builder(FakeExtractor(fail_ids={0}))    # first spec fails to extract
     out = tmp_path / "c.mp4"
     res = b.build([_spec(1), _spec(2), _spec(3, kind="finale")], ring=None,
                   tmp_dir=tmp_path / "t", out_path=out,
@@ -478,15 +488,17 @@ def test_runtime_extract_failure_is_skipped(tmp_path):
     assert res.clip_count == 2
 
 
-def test_saved_finale_uses_resolved_path(tmp_path):
+def test_saved_finale_uses_resolved_path(tmp_path, monkeypatch):
     saved = tmp_path / "pb.mp4"
     saved.write_bytes(b"pb")
 
-    def fake_run(args):
-        Path(args[-1]).write_bytes(b"out")
+    def fake_run(args, **kw):
+        if "-filter_complex" in args:
+            Path(args[-1]).write_bytes(b"out")
         return subprocess.CompletedProcess(args, 0, b"", b"Video: 1280x960")
 
-    b = _builder(FakeExtractor(), fake_run)
+    _install(monkeypatch, fake_run)
+    b = _builder(FakeExtractor())
     out = tmp_path / "c.mp4"
     res = b.build([_spec(1), _spec(9, kind="finale", source="saved")],
                   ring=None, tmp_dir=tmp_path / "t", out_path=out,
@@ -495,15 +507,16 @@ def test_saved_finale_uses_resolved_path(tmp_path):
     assert res.clip_count == 2
 
 
-def test_concat_failure_unlinks_output(tmp_path):
+def test_concat_failure_unlinks_output(tmp_path, monkeypatch):
     out = tmp_path / "c.mp4"
 
-    def fake_run(args):
+    def fake_run(args, **kw):
         if "-filter_complex" in args:
             raise subprocess.CalledProcessError(1, args, b"", b"boom")
         return subprocess.CompletedProcess(args, 0, b"", b"Video: 1280x960")
 
-    b = _builder(FakeExtractor(), fake_run)
+    _install(monkeypatch, fake_run)
+    b = _builder(FakeExtractor())
     with pytest.raises(RuntimeError):
         b.build([_spec(1), _spec(2)], ring=None, tmp_dir=tmp_path / "t",
                 out_path=out, resolve_saved=lambda i: None,
@@ -511,11 +524,12 @@ def test_concat_failure_unlinks_output(tmp_path):
     assert not out.exists()
 
 
-def test_empty_after_all_skipped_raises(tmp_path):
-    def fake_run(args):
+def test_empty_after_all_skipped_raises(tmp_path, monkeypatch):
+    def fake_run(args, **kw):
         return subprocess.CompletedProcess(args, 0, b"", b"")
 
-    b = _builder(FakeExtractor(fail_ids={0}), fake_run)
+    _install(monkeypatch, fake_run)
+    b = _builder(FakeExtractor(fail_ids={0}))
     with pytest.raises(ValueError):
         b.build([_spec(1)], ring=None, tmp_dir=tmp_path / "t",
                 out_path=tmp_path / "c.mp4", resolve_saved=lambda i: None,
@@ -586,13 +600,6 @@ class CompilationBuilder:
         self._codec = codec
         self._fps = fps
         self._ffmpeg = ffmpeg or bundled_ffmpeg() or shutil.which("ffmpeg")
-
-    def _run(self, args) -> subprocess.CompletedProcess:
-        """The one raw subprocess call — a seam so tests stub ffmpeg. Raises
-        CalledProcessError on non-zero (callers that must fail-hard pass check
-        semantics by inspecting returncode; concat relies on this)."""
-        return subprocess.run(args, check=True, capture_output=True,
-                              creationflags=_NO_WINDOW)
 
     def build(self, specs, ring, tmp_dir: Path, out_path: Path,
               resolve_saved, progress_cb) -> CompilationResult:
@@ -665,7 +672,8 @@ class CompilationBuilder:
                 "-c:a", "aac", "-ar", "48000",
                 "-movflags", "+faststart", "-y", str(out_path)]
         try:
-            self._run(args)
+            subprocess.run(args, check=True, capture_output=True,
+                           creationflags=_NO_WINDOW)
         except subprocess.CalledProcessError as exc:
             out_path.unlink(missing_ok=True)
             raise RuntimeError(
@@ -673,7 +681,7 @@ class CompilationBuilder:
                 + exc.stderr.decode("utf-8", "replace")[-500:]) from exc
 ```
 
-> Note: tests override `builder._run` with a fake and pre-empt `_probe_dims` via the fake's stderr. `_concat_normalize` calls `self._run(args)`; `_probe_dims` calls `subprocess.run` directly (a probe, not the failure-critical path) — the fake in `test_multi_clip...` records it but the builder tolerates any/None result.
+> Note: both `_probe_dims` and `_concat_normalize` call `subprocess.run` directly (matching `extract.py`'s style); the extractor is injected. Tests therefore drive the builder with a **FakeExtractor** (injected) AND `monkeypatch.setattr(comp.subprocess, "run", fake_run)` so no real ffmpeg runs — the fake dispatches on whether `-filter_complex` is in the args (concat) or not (probe → returns stderr `"Video: … 1280x960"`).
 
 - [ ] **Step 4: Run builder tests to verify they pass**
 
@@ -736,12 +744,12 @@ class FakeBuilder:
                                       skipped_runtime=0)
 
 
-def _service(tmp_path, plan):
+def _service(tmp_path, plan, monkeypatch):
     svc = comp.CompilationService(FakeReplay(), FakeTracker(), FakeBuilder(),
                                   out_dir=tmp_path)
-    # deterministic plan (no real attempts needed)
-    import sm64_events.replay.compilation as mod
-    mod.plan_compilation = lambda *a, **k: plan
+    # deterministic plan (no real attempts needed); monkeypatch auto-restores
+    # the real plan_compilation after the test so it can't leak across files.
+    monkeypatch.setattr(comp, "plan_compilation", lambda *a, **k: plan)
     return svc
 
 
@@ -758,15 +766,15 @@ def _spec(aid):
     return ClipSpec(aid, "failure", "ring", now, now)
 
 
-def test_start_rejects_negative_window(tmp_path):
-    svc = _service(tmp_path, _plan([_spec(1)]))
+def test_start_rejects_negative_window(tmp_path, monkeypatch):
+    svc = _service(tmp_path, _plan([_spec(1)]), monkeypatch)
     with pytest.raises(ValueError):
         svc.start(EntityRef(course_id=1, star_id=0), -1, 3)
 
 
-def test_run_job_produces_result(tmp_path):
+def test_run_job_produces_result(tmp_path, monkeypatch):
     svc = _service(tmp_path, _plan([_spec(1)], finale_frames=600,
-                                   no_finale=False))
+                                   no_finale=False), monkeypatch)
     svc._jobs["j"] = {"state": "running", "progress": 0.0,
                       "message": "planning", "result": None}
     svc._run_job("j", EntityRef(course_id=1, star_id=0), 5.0, 3.0)
@@ -777,16 +785,16 @@ def test_run_job_produces_result(tmp_path):
     assert Path(job["result"]["path"]).exists()
 
 
-def test_run_job_errors_on_empty_plan(tmp_path):
-    svc = _service(tmp_path, _plan([]))
+def test_run_job_errors_on_empty_plan(tmp_path, monkeypatch):
+    svc = _service(tmp_path, _plan([]), monkeypatch)
     svc._jobs["j"] = {"state": "running", "progress": 0.0,
                       "message": "planning", "result": None}
     svc._run_job("j", EntityRef(course_id=1, star_id=0), 5.0, 3.0)
     assert svc._jobs["j"]["state"] == "error"
 
 
-def test_status_unknown_job_raises(tmp_path):
-    svc = _service(tmp_path, _plan([_spec(1)]))
+def test_status_unknown_job_raises(tmp_path, monkeypatch):
+    svc = _service(tmp_path, _plan([_spec(1)]), monkeypatch)
     with pytest.raises(LookupError):
         svc.status("nope")
 ```

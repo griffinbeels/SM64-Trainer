@@ -6,7 +6,8 @@ import shutil
 import sys
 
 from sm64_events.core.logging_setup import configure_logging
-from sm64_events.core.paths import (bundled_ffmpeg, compare_cache_dir, db_path,
+from sm64_events.core.paths import (bundled_ffmpeg, compare_cache_dir,
+                                    compilations_dir, db_path,
                                     instance_lock_path, migrate_legacy_data_dir,
                                     server_port)
 from sm64_events.compare.importer import VideoImporter
@@ -30,6 +31,7 @@ from sm64_events.replay.config import ReplayConfig, apply_settings_file
 from sm64_events.replay.extract import ClipExtractor
 from sm64_events.replay.recorder import ReplayRecorder
 from sm64_events.replay.service import ReplayService
+from sm64_events.replay.compilation import CompilationBuilder, CompilationService
 from sm64_events.replay.video import DwmSurfaceVideoSource
 from sm64_events.replay.window import find_window
 from sm64_events.server.app import create_app
@@ -177,6 +179,15 @@ def build():
         importer = VideoImporter(compare_cache_dir(), _ffmpeg_bin)
         compare = CompareService(importer, service, broadcaster,
                                  compare_cache_dir())
+    # Failure compilations reuse the replay ring + extractor; only built when
+    # replay AND the db are available (needs attempts + footage).
+    compilation = None
+    if replay is not None and db is not None:
+        compilation = CompilationService(
+            replay=replay, tracker=service,
+            builder=CompilationBuilder(extractor=replay.extractor, codec=codec,
+                                       fps=replay_cfg.fps),
+            out_dir=compilations_dir())
     # Order is load-bearing for attempt state: level changes abandon stale
     # attempts BEFORE the same tick's igt-reset anchor opens the next one;
     # resets before grabs (see projection.py docstring on the same-tick race);
@@ -201,7 +212,8 @@ def build():
     updater = UpdateService(current_version=__version__)
     updater.startup_maintenance(bootstrap_path=_bootstrap_cleanup_arg())
     return create_app(poller, broadcaster, service=service, replay=replay,
-                      updater=updater, compare=compare, db_retry=db_retry)
+                      updater=updater, compare=compare, compilation=compilation,
+                      db_retry=db_retry)
 
 
 _app = None
