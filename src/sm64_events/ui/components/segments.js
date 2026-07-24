@@ -193,6 +193,12 @@ export function ClauseRow({ clause, types, vocab, tint, onChange, onRemove }) {
   </div>`;
 }
 
+// The fields the Builder's save sends — must stay a SUBSET of the server's
+// SegmentBody/SegmentPatch fields (cross-checked by tests/
+// test_segments_editor_ui.py against the pydantic model).
+const SAVE_FIELDS = ["name", "enabled", "start_triggers", "end_triggers",
+                     "guards"];
+
 function Builder({ vocab, initial, onSaved, onCancel, apiRef, t }) {
   const blank = { name: "", enabled: true,
     start_triggers: [{ type: "level_enter" }],
@@ -215,9 +221,16 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t }) {
   async function save() {
     try {
       setErr(null);
-      // Strip server-only fields: edit rows come from GET /api/segments and
-      // carry id/created_utc, which SegmentPatch (extra="forbid") rejects.
-      const { id: _id, created_utc: _c, ...body } = d;
+      // ALLOWLIST of what this editor edits — never spread the GET row back:
+      // rows are raw db rows and grow server-only columns over time
+      // (id, created_utc, then seed_key/seed_dirty in migration v11), which
+      // the strict SegmentPatch (extra="forbid") rejects — a denylist here
+      // 422'd every save of a seeded segment (regression 2026-07-24, pinned
+      // by tests/test_segments_editor_ui.py). waypoints/category are
+      // deliberately absent: this editor doesn't author them, and an
+      // omitted PATCH field stays untouched server-side.
+      const body = Object.fromEntries(
+        SAVE_FIELDS.map((field) => [field, d[field]]));
       if (initial && initial.id != null) {
         await send("PUT", `/api/segments/${initial.id}`, body);
       } else {
