@@ -28,12 +28,24 @@ trigger or guard types.
 
 ## 2. Decisions (user, 2026-07-24)
 
-1. **Star-level steps everywhere.** Every star is its own route step, movements
-   interleaved, step labels prefixed with the stage. A 120★ route is ~160 steps.
-   Rationale: Practice RouteFocus walking you star-by-star through a full run is
-   the point of the feature; the run view's Focus / click-to-hide already tames
-   the split count. (Rejected: stage-level `need=N` steps for 70★/120★ — fewer
-   splits, but within-stage order would exist only in the Stage RTA routes.)
+1. **One step per course VISIT** (revised 2026-07-24 after the first build —
+   the original decision was star-level steps everywhere). A route never
+   dictates the order stars are grabbed *within* a stage visit: you enter
+   Whomp's Fortress and leave with six stars, and which came first is the
+   player's business. Only the sequence of visits is the route. So each run of
+   consecutive same-course star steps collapses into one `need=N` group
+   (`corpus_vocab.group_visits`), applied to **every** seeded route; a lone
+   star keeps its own step. 120★ goes from ~160 steps to 67.
+
+   Consequences: two visits to one course stay separate (the movement between
+   them breaks the run); a documented either/or survives as `need < len` —
+   "any 4 of these 5" — which is what it means; and a **Stage RTA route becomes
+   a single step**, which is the honest shape for "practise this stage". That
+   last one made WDW's and RR's "Beginner"/"Expert" 120 variants identical to
+   their standard routes (they differed only in which star carried the 100
+   coins, i.e. only in order), so the corpus ships 35 Stage RTA routes rather
+   than the wiki's 37 documented lists. Both orderings remain in the sources
+   companion.
 2. **Castle-secret stars are real stars.** `addresses.STAR_NAMES` gains a course-0
    row so MIPS ×2 and Toad ×3 are nameable, pickable, and usable as route
    candidates. (Rejected: omitting them — the routes would be missing real steps;

@@ -140,3 +140,36 @@ def test_movements_sharing_a_start_within_one_route_have_different_ends():
         for start, ends in by_start.items():
             assert len(set(ends.values())) == len(ends), (
                 route["seed_key"], "indistinguishable movements", sorted(ends))
+
+
+def test_no_two_adjacent_steps_are_the_same_course_visit():
+    """The grouping rule (user decision 2026-07-24): a route never dictates
+    the order of stars WITHIN a stage visit, so a visit is exactly one step.
+    Two adjacent all-star steps of the same course means a visit got split and
+    the route is enforcing an order it has no business enforcing.
+
+    Two visits to the SAME course stay separate because the movement between
+    them breaks the run — that is why this checks adjacency, not the whole
+    route."""
+    for route in ROUTES:
+        previous = None
+        for step in route["steps"]:
+            courses = {c["course"] for c in step["candidates"]
+                       if c["type"] == "star"}
+            current = courses.pop() if len(courses) == 1 and all(
+                c["type"] == "star" for c in step["candidates"]) else None
+            assert current is None or current != previous, (
+                route["seed_key"], "split visit", step.get("label"))
+            previous = current
+
+
+def test_a_multi_star_visit_is_one_step_not_several():
+    """Concretely: 16 Star LBLJ's Whomp's Fortress leg is ONE step wanting
+    three stars, not three steps in a fixed order."""
+    lblj = BY_KEY["route:16-lblj"]
+    wf = [s for s in lblj["steps"]
+          if all(c["type"] == "star" and c["course"] == 2
+                 for c in s["candidates"])]
+    assert len(wf) == 1
+    assert wf[0]["need"] == 3 and len(wf[0]["candidates"]) == 3
+    assert wf[0]["label"] == "WF — 3 stars"

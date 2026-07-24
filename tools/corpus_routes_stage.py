@@ -40,9 +40,11 @@ STAGES = [
     ("sl-120", "SL — 120", 10, 10, [0, 5, (4, 6), 2, 3, 1]),
     ("sl-70-ttc100", "SL — 70 (HMC Late + TTC100)", 10, 10, [0, 2, 3, 1]),
     ("sl-70", "SL — 70 (HMC Early or no TTC100)", 10, 10, [0, 2, 4, 3, 1]),
+    # The wiki's WDW "120 (Beginner)" differs from the standard 120 route ONLY
+    # in which star carries the 100 coins — i.e. only in ORDER. Once a visit is
+    # unordered (group_visits) both are "all seven WDW stars", so they are one
+    # route here; the two orderings live on in the sources companion.
     ("wdw-120", "WDW — 120", 11, 11, [5, (4, 6), 3, 1, 2, 0]),
-    ("wdw-120-beginner", "WDW — 120 (Beginner)", 11, 11,
-     [5, (2, 6), 3, 1, 4, 0]),
     ("wdw-70", "WDW — 70", 11, 11, [(2, 6), 3, 1, 0]),
     ("ttm-120", "TTM — 120", 12, 36, [0, 1, 4, 5, (2, 6), 3]),
     ("ttm-70", "TTM — 70", 12, 36, [0, 4, 5, 2, 3]),
@@ -51,28 +53,35 @@ STAGES = [
     ("thi-70-reds", "THI — 70 (with THI Reds)", 13, 13, [3, 1, 4, 0]),
     ("ttc-120-70", "TTC — 120 / 70", 14, 14, [(3, 6), 0, 1, 2, 4, 5]),
     ("ttc-70-no-100", "TTC — 70 (no TTC100)", 14, 14, [0, 1, 2, 3, 4, 5]),
-    ("rr-120-beginner", "RR — 120 (Beginner)", 15, 15, [0, (1, 6), 5, 4, 2, 3]),
-    ("rr-120-expert", "RR — 120 (Expert)", 15, 15, [0, (5, 6), 1, 4, 2, 3]),
+    # Same story as WDW: RR's Beginner and Expert 120 routes differ only in
+    # which star carries the 100 coins, so unordered they are one route.
+    ("rr-120", "RR — 120", 15, 15, [0, (1, 6), 5, 4, 2, 3]),
     ("rr-70", "RR — 70", 15, 15, [0, 4, 2, 3]),
 ]
 
 
-def _step(course, entry):
+def _step(abbrev, course, entry):
     """int -> one star; tuple -> collect BOTH; set -> pick EITHER.
 
-    Labels come from star_name, so a star rename can never leave a stale
-    label behind in the seed."""
+    Labels come from star_name, so a star rename can never leave a stale label
+    behind in the seed, and each carries the stage abbreviation so
+    corpus_vocab.group_visits can merge the visit into "<stage> — N stars"
+    rather than concatenating seven star names."""
     if isinstance(entry, tuple):
         label = " + ".join(star_name(course, s) for s in entry)
-        return stars(course, list(entry), label)
+        return stars(course, list(entry), f"{abbrev} — {label}")
     if isinstance(entry, set):
         ids = sorted(entry)
         label = " or ".join(star_name(course, s) for s in ids)
-        return stars(course, ids, label, need=1)
-    return stars(course, [entry], star_name(course, entry))
+        return stars(course, ids, f"{abbrev} — {label}", need=1)
+    return stars(course, [entry], f"{abbrev} — {star_name(course, entry)}")
 
 
+# A stage route is one course visit, so group_visits collapses it to a single
+# "collect these N stars" step. That is the point — the order was never
+# enforceable and the route's content is the star SET plus the clock starting
+# on the painting.
 ROUTES = [route(f"route:stage-{slug}", name, STAGE_RTA,
-                [_step(course, entry) for entry in order],
+                [_step(name.split(" — ")[0], course, entry) for entry in order],
                 start_condition={"type": "level_enter", "to": level})
           for slug, name, course, level, order in STAGES]

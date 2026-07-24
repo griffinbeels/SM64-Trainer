@@ -92,10 +92,66 @@ def segment(seed_key, label):
             "candidates": [{"type": "segment", "seed_key": seed_key}]}
 
 
+def _merge_label(labels, need):
+    """"WF — Blast Away the Wall" + five siblings -> "WF — 6 stars".
+
+    Constituent labels are "<stage> — <star>"; when they all agree on the
+    stage, the group takes that stage and a count. Anything else (the castle-
+    secret stars, which carry no stage prefix) joins its labels."""
+    heads = {label.split(" — ")[0] for label in labels if " — " in label}
+    if len(heads) == 1 and all(" — " in label for label in labels):
+        return f"{heads.pop()} — {need} stars"
+    return " + ".join(labels)
+
+
+def group_visits(steps):
+    """Collapse each run of consecutive star steps from ONE course into a
+    single "collect all of these" group (user decision 2026-07-24).
+
+    A route never dictates the order stars are grabbed WITHIN a stage visit —
+    you enter Whomp's Fortress and leave with six stars, and which came first
+    is the player's business. Only the sequence of visits is the route. So a
+    course visit is one step with need = every star it wants, and the K-of-N
+    machinery already in RunTracker does the rest, in any order.
+
+    Two visits to the same course stay two steps: they are separated by the
+    movement step between them, which breaks the run. A documented either/or
+    inside a visit survives as need < len(candidates) — "any 4 of these 5" —
+    which is exactly what it means. A lone star keeps its own step."""
+    out, run, run_course = [], [], None
+
+    def flush():
+        nonlocal run, run_course
+        if len(run) == 1:
+            out.append(run[0])
+        elif run:
+            candidates = [c for step in run for c in step["candidates"]]
+            need = sum(step["need"] for step in run)
+            out.append({"label": _merge_label([s["label"] for s in run], need),
+                        "need": need, "candidates": candidates})
+        run, run_course = [], None
+
+    for step in steps:
+        courses = {c["course"] for c in step["candidates"]
+                   if c["type"] == "star"}
+        if len(courses) == 1 and len(courses) == len(
+                {c["type"] for c in step["candidates"]}):
+            course = courses.pop()
+            if run and course != run_course:
+                flush()
+            run, run_course = run + [step], course
+        else:
+            flush()
+            out.append(step)
+    flush()
+    return out
+
+
 def route(seed_key, name, category, steps, start_condition=None):
+    """Every seeded route is grouped by visit — see group_visits."""
     return {"seed_key": seed_key, "name": name, "category": category,
             "start_condition": start_condition or {"type": "reset_game"},
-            "steps": steps}
+            "steps": group_visits(steps)}
 
 
 def movement(seed_key, name, start, end, via=()):

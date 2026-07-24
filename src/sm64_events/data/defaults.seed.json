@@ -1735,53 +1735,29 @@
           ]
         },
         {
-          "label": "WF — Blast Away the Wall (Cannonless)",
-          "need": 1,
+          "label": "WF — 5 stars",
+          "need": 5,
           "candidates": [
             {
               "type": "star",
               "course": 2,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "WF — Shoot into the Wild Blue",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "WF — Chip off Whomp's Block",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "WF — To the Top of the Fortress",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "WF — Fall onto the Caged Island (Owl Star)",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
@@ -1800,20 +1776,14 @@
           ]
         },
         {
-          "label": "CCM — Wall Kicks Will Work",
-          "need": 1,
+          "label": "CCM — 2 stars",
+          "need": 2,
           "candidates": [
             {
               "type": "star",
               "course": 4,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "CCM — Li'l Penguin Lost",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
@@ -1873,20 +1843,14 @@
           ]
         },
         {
-          "label": "SSL — In the Talons of the Big Bird",
-          "need": 1,
+          "label": "SSL — 2 stars",
+          "need": 2,
           "candidates": [
             {
               "type": "star",
               "course": 8,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "SSL — Shining Atop the Pyramid",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
@@ -1937,20 +1901,14 @@
           ]
         },
         {
-          "label": "HMC — A-Maze-Ing Emergency Exit",
-          "need": 1,
+          "label": "HMC — 2 stars",
+          "need": 2,
           "candidates": [
             {
               "type": "star",
               "course": 6,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "HMC — Watch for Rolling Rocks",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
@@ -2101,53 +2059,29 @@
           ]
         },
         {
-          "label": "WF — Blast Away the Wall (Cannonless)",
-          "need": 1,
+          "label": "WF — 5 stars",
+          "need": 5,
           "candidates": [
             {
               "type": "star",
               "course": 2,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "WF — Shoot into the Wild Blue",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "WF — Chip off Whomp's Block",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "WF — To the Top of the Fortress",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "WF — Fall onto the Caged Island (Owl Star)",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
@@ -2166,20 +2100,14 @@
           ]
         },
         {
-          "label": "CCM — Wall Kicks Will Work",
-          "need": 1,
+          "label": "CCM — 2 stars",
+          "need": 2,
           "candidates": [
             {
               "type": "star",
               "course": 4,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "CCM — Li'l Penguin Lost",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
@@ -2228,20 +2156,14 @@
           ]
         },
         {
-          "label": "SSL — In the Talons of the Big Bird",
-          "need": 1,
+          "label": "SSL — 2 stars",
+          "need": 2,
           "candidates": [
             {
               "type": "star",
               "course": 8,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "SSL — Shining Atop the Pyramid",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
@@ -2303,20 +2225,14 @@
           ]
         },
         {
-          "label": "HMC — Swimming Beast in the Cavern",
-          "need": 1,
+          "label": "HMC — 2 stars",
+          "need": 2,
           "candidates": [
             {
               "type": "star",
               "course": 6,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "HMC — Watch for Rolling Rocks",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
@@ -2467,31 +2383,19 @@
           ]
         },
         {
-          "label": "WF — Blast Away the Wall (Cannonless)",
-          "need": 1,
+          "label": "WF — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 2,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "WF — Fall onto the Caged Island (Owl Star)",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "WF — Red Coins on the Floating Isle + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
@@ -2501,35 +2405,17 @@
               "type": "star",
               "course": 2,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "WF — Shoot into the Wild Blue",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "WF — Chip off Whomp's Block",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "WF — To the Top of the Fortress",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
@@ -2589,20 +2475,14 @@
           ]
         },
         {
-          "label": "SSL — In the Talons of the Big Bird",
-          "need": 1,
+          "label": "SSL — 2 stars",
+          "need": 2,
           "candidates": [
             {
               "type": "star",
               "course": 8,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "SSL — Shining Atop the Pyramid",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
@@ -2653,20 +2533,14 @@
           ]
         },
         {
-          "label": "HMC — A-Maze-Ing Emergency Exit",
-          "need": 1,
+          "label": "HMC — 2 stars",
+          "need": 2,
           "candidates": [
             {
               "type": "star",
               "course": 6,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "HMC — Watch for Rolling Rocks",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
@@ -2837,31 +2711,19 @@
           ]
         },
         {
-          "label": "WF — Blast Away the Wall (Cannonless)",
-          "need": 1,
+          "label": "WF — 3 stars",
+          "need": 3,
           "candidates": [
             {
               "type": "star",
               "course": 2,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "WF — Fall onto the Caged Island (Owlless)",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "WF — Shoot into the Wild Blue",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
@@ -2880,31 +2742,19 @@
           ]
         },
         {
-          "label": "SSL — Inside the Ancient Pyramid (Pillarless)",
-          "need": 1,
+          "label": "SSL — 3 stars",
+          "need": 3,
           "candidates": [
             {
               "type": "star",
               "course": 8,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "SSL — In the Talons of the Big Bird",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "SSL — Shining Atop the Pyramid",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
@@ -2923,42 +2773,24 @@
           ]
         },
         {
-          "label": "LLL — 8-Coin Puzzle with 15 Pieces",
-          "need": 1,
+          "label": "LLL — 4 stars",
+          "need": 4,
           "candidates": [
             {
               "type": "star",
               "course": 7,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "LLL — Red-Hot Log Rolling (Sidehop)",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "LLL — Boil the Big Bully",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "LLL — Hot-Foot-It into the Volcano or Elevator Tour",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
@@ -3004,20 +2836,14 @@
           ]
         },
         {
-          "label": "HMC — Watch for Rolling Rocks",
-          "need": 1,
+          "label": "HMC — 2 stars",
+          "need": 2,
           "candidates": [
             {
               "type": "star",
               "course": 6,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "HMC — Swimming Beast in the Cavern",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
@@ -3189,31 +3015,19 @@
           ]
         },
         {
-          "label": "WF — Blast Away the Wall (Cannonless)",
-          "need": 1,
+          "label": "WF — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 2,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "WF — Fall onto the Caged Island (Owl Star)",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "WF — Red Coins on the Floating Isle + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
@@ -3223,35 +3037,17 @@
               "type": "star",
               "course": 2,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "WF — Shoot into the Wild Blue",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "WF — Chip off Whomp's Block",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "WF — To the Top of the Fortress",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
@@ -3374,42 +3170,24 @@
           ]
         },
         {
-          "label": "CCM — Wall Kicks Will Work",
-          "need": 1,
+          "label": "CCM — 5 stars",
+          "need": 5,
           "candidates": [
             {
               "type": "star",
               "course": 4,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "CCM — Li'l Penguin Lost",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "CCM — Slip Slidin' Away",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "CCM — Big Penguin Race + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
@@ -3433,20 +3211,14 @@
           ]
         },
         {
-          "label": "BBH — Big Boo's Balcony",
-          "need": 1,
+          "label": "BBH — 2 stars",
+          "need": 2,
           "candidates": [
             {
               "type": "star",
               "course": 5,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "BBH — Secret of the Haunted Books",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 5,
@@ -3486,31 +3258,19 @@
           ]
         },
         {
-          "label": "SSL — Inside the Ancient Pyramid (Pillarless)",
-          "need": 1,
+          "label": "SSL — 3 stars",
+          "need": 3,
           "candidates": [
             {
               "type": "star",
               "course": 8,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "SSL — In the Talons of the Big Bird",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "SSL — Shining Atop the Pyramid",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
@@ -3529,64 +3289,34 @@
           ]
         },
         {
-          "label": "LLL — Red-Hot Log Rolling",
-          "need": 1,
+          "label": "LLL — 6 stars",
+          "need": 6,
           "candidates": [
             {
               "type": "star",
               "course": 7,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "LLL — 8-Coin Puzzle with 15 Pieces",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "LLL — Boil the Big Bully",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "LLL — Bully the Bullies",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "LLL — Hot-Foot-It into the Volcano",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "LLL — Elevator Tour in the Volcano",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
@@ -3605,31 +3335,19 @@
           ]
         },
         {
-          "label": "DDD — Chests in the Current",
-          "need": 1,
+          "label": "DDD — 3 stars",
+          "need": 3,
           "candidates": [
             {
               "type": "star",
               "course": 9,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "DDD — Board Bowser's Sub",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 9,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "DDD — The Manta Ray's Reward",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 9,
@@ -3689,8 +3407,8 @@
           ]
         },
         {
-          "label": "WDW — Secrets in the Shallows & Sky + 100 Coins",
-          "need": 2,
+          "label": "WDW — 5 stars",
+          "need": 5,
           "candidates": [
             {
               "type": "star",
@@ -3701,35 +3419,17 @@
               "type": "star",
               "course": 11,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "WDW — Express Elevator--Hurry Up!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "WDW — Top o' the Town",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "WDW — Shocking Arrow Lifts!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
@@ -3748,31 +3448,19 @@
           ]
         },
         {
-          "label": "THI — Five Itty Bitty Secrets",
-          "need": 1,
+          "label": "THI — 3 stars",
+          "need": 3,
           "candidates": [
             {
               "type": "star",
               "course": 13,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "THI — The Tip Top of the Huge Island",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 13,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "THI — Pluck the Piranha Flower",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 13,
@@ -3802,53 +3490,29 @@
           ]
         },
         {
-          "label": "TTM — Scale the Mountain",
-          "need": 1,
+          "label": "TTM — 5 stars",
+          "need": 5,
           "candidates": [
             {
               "type": "star",
               "course": 12,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "TTM — Breathtaking View from Bridge",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "TTM — Blast to the Lonely Mushroom",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "TTM — Scary 'Shrooms, Red Coins",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "TTM — Mysterious Mountainside",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
@@ -3867,53 +3531,29 @@
           ]
         },
         {
-          "label": "SL — Snowman's Big Head",
-          "need": 1,
+          "label": "SL — 5 stars",
+          "need": 5,
           "candidates": [
             {
               "type": "star",
               "course": 10,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "SL — In the Deep Freeze",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "SL — Shell Shreddin' for Red Coins",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "SL — Whirl from the Freezing Pond",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "SL — Chill with the Bully",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
@@ -3932,20 +3572,14 @@
           ]
         },
         {
-          "label": "MIPS (2nd star)",
-          "need": 1,
+          "label": "MIPS (2nd star) + HMC Toad",
+          "need": 2,
           "candidates": [
             {
               "type": "star",
               "course": 0,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "HMC Toad",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 0,
@@ -3964,42 +3598,24 @@
           ]
         },
         {
-          "label": "HMC — Swimming Beast in the Cavern",
-          "need": 1,
+          "label": "HMC — 4 stars",
+          "need": 4,
           "candidates": [
             {
               "type": "star",
               "course": 6,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "HMC — Metal-Head Mario Can Move!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "HMC — A-Maze-Ing Emergency Exit",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "HMC — Watch for Rolling Rocks",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
@@ -4018,42 +3634,24 @@
           ]
         },
         {
-          "label": "RR — Cruiser Crossing the Rainbow",
-          "need": 1,
+          "label": "RR — 4 stars",
+          "need": 4,
           "candidates": [
             {
               "type": "star",
               "course": 15,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "RR — Tricky Triangles!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "RR — Coins Amassed in a Maze",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "RR — Swingin' in the Breeze",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,
@@ -4083,64 +3681,34 @@
           ]
         },
         {
-          "label": "TTC — Roll into the Cage",
-          "need": 1,
+          "label": "TTC — 6 stars",
+          "need": 6,
           "candidates": [
             {
               "type": "star",
               "course": 14,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "TTC — The Pit and the Pendulums",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "TTC — Get a Hand",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "TTC — Stomp on the Thwomp",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "TTC — Timed Jumps on Moving Bars",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "TTC — Stop Time for Red Coins",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
@@ -4251,31 +3819,19 @@
           ]
         },
         {
-          "label": "WF — Blast Away the Wall (Cannonless)",
-          "need": 1,
+          "label": "WF — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 2,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "WF — Fall onto the Caged Island (Owl Star)",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "WF — Red Coins on the Floating Isle + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
@@ -4285,35 +3841,17 @@
               "type": "star",
               "course": 2,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "WF — Shoot into the Wild Blue",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "WF — Chip off Whomp's Block",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "WF — To the Top of the Fortress",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
@@ -4436,42 +3974,24 @@
           ]
         },
         {
-          "label": "CCM — Wall Kicks Will Work",
-          "need": 1,
+          "label": "CCM — 5 stars",
+          "need": 5,
           "candidates": [
             {
               "type": "star",
               "course": 4,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "CCM — Li'l Penguin Lost",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "CCM — Slip Slidin' Away",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "CCM — Big Penguin Race + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
@@ -4495,20 +4015,14 @@
           ]
         },
         {
-          "label": "BBH — Big Boo's Balcony",
-          "need": 1,
+          "label": "BBH — 2 stars",
+          "need": 2,
           "candidates": [
             {
               "type": "star",
               "course": 5,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "BBH — Secret of the Haunted Books",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 5,
@@ -4548,31 +4062,19 @@
           ]
         },
         {
-          "label": "SSL — Inside the Ancient Pyramid (Pillarless)",
-          "need": 1,
+          "label": "SSL — 3 stars",
+          "need": 3,
           "candidates": [
             {
               "type": "star",
               "course": 8,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "SSL — In the Talons of the Big Bird",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "SSL — Shining Atop the Pyramid",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
@@ -4591,64 +4093,34 @@
           ]
         },
         {
-          "label": "LLL — Red-Hot Log Rolling",
-          "need": 1,
+          "label": "LLL — 6 stars",
+          "need": 6,
           "candidates": [
             {
               "type": "star",
               "course": 7,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "LLL — 8-Coin Puzzle with 15 Pieces",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "LLL — Boil the Big Bully",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "LLL — Bully the Bullies",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "LLL — Hot-Foot-It into the Volcano",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "LLL — Elevator Tour in the Volcano",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
@@ -4667,31 +4139,19 @@
           ]
         },
         {
-          "label": "DDD — Chests in the Current",
-          "need": 1,
+          "label": "DDD — 3 stars",
+          "need": 3,
           "candidates": [
             {
               "type": "star",
               "course": 9,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "DDD — Board Bowser's Sub",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 9,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "DDD — The Manta Ray's Reward",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 9,
@@ -4751,8 +4211,8 @@
           ]
         },
         {
-          "label": "WDW — Secrets in the Shallows & Sky + 100 Coins",
-          "need": 2,
+          "label": "WDW — 5 stars",
+          "need": 5,
           "candidates": [
             {
               "type": "star",
@@ -4763,35 +4223,17 @@
               "type": "star",
               "course": 11,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "WDW — Express Elevator--Hurry Up!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "WDW — Top o' the Town",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "WDW — Shocking Arrow Lifts!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
@@ -4810,31 +4252,19 @@
           ]
         },
         {
-          "label": "THI — Five Itty Bitty Secrets",
-          "need": 1,
+          "label": "THI — 3 stars",
+          "need": 3,
           "candidates": [
             {
               "type": "star",
               "course": 13,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "THI — The Tip Top of the Huge Island",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 13,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "THI — Pluck the Piranha Flower",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 13,
@@ -4864,53 +4294,29 @@
           ]
         },
         {
-          "label": "TTM — Scale the Mountain",
-          "need": 1,
+          "label": "TTM — 5 stars",
+          "need": 5,
           "candidates": [
             {
               "type": "star",
               "course": 12,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "TTM — Breathtaking View from Bridge",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "TTM — Blast to the Lonely Mushroom",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "TTM — Scary 'Shrooms, Red Coins",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "TTM — Mysterious Mountainside",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
@@ -4929,42 +4335,24 @@
           ]
         },
         {
-          "label": "SL — Snowman's Big Head",
-          "need": 1,
+          "label": "SL — 4 stars",
+          "need": 4,
           "candidates": [
             {
               "type": "star",
               "course": 10,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "SL — In the Deep Freeze",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "SL — Whirl from the Freezing Pond",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "SL — Chill with the Bully",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
@@ -4983,20 +4371,14 @@
           ]
         },
         {
-          "label": "MIPS (2nd star)",
-          "need": 1,
+          "label": "MIPS (2nd star) + HMC Toad",
+          "need": 2,
           "candidates": [
             {
               "type": "star",
               "course": 0,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "HMC Toad",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 0,
@@ -5015,42 +4397,24 @@
           ]
         },
         {
-          "label": "HMC — Swimming Beast in the Cavern",
-          "need": 1,
+          "label": "HMC — 4 stars",
+          "need": 4,
           "candidates": [
             {
               "type": "star",
               "course": 6,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "HMC — Metal-Head Mario Can Move!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "HMC — A-Maze-Ing Emergency Exit",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "HMC — Watch for Rolling Rocks",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
@@ -5069,42 +4433,24 @@
           ]
         },
         {
-          "label": "RR — Cruiser Crossing the Rainbow",
-          "need": 1,
+          "label": "RR — 4 stars",
+          "need": 4,
           "candidates": [
             {
               "type": "star",
               "course": 15,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "RR — Tricky Triangles!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "RR — Coins Amassed in a Maze",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "RR — Swingin' in the Breeze",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,
@@ -5134,8 +4480,8 @@
           ]
         },
         {
-          "label": "TTC — Stomp on the Thwomp + 100 Coins",
-          "need": 2,
+          "label": "TTC — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
@@ -5146,57 +4492,27 @@
               "type": "star",
               "course": 14,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "TTC — Roll into the Cage",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "TTC — The Pit and the Pendulums",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "TTC — Get a Hand",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "TTC — Timed Jumps on Moving Bars",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "TTC — Stop Time for Red Coins",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
@@ -5307,31 +4623,19 @@
           ]
         },
         {
-          "label": "WF — Blast Away the Wall (Cannonless)",
-          "need": 1,
+          "label": "WF — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 2,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "WF — Fall onto the Caged Island (Owl Star)",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "WF — Red Coins on the Floating Isle + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
@@ -5341,35 +4645,17 @@
               "type": "star",
               "course": 2,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "WF — Shoot into the Wild Blue",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "WF — Chip off Whomp's Block",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "WF — To the Top of the Fortress",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
@@ -5492,31 +4778,19 @@
           ]
         },
         {
-          "label": "CCM — Wall Kicks Will Work",
-          "need": 1,
+          "label": "CCM — 4 stars",
+          "need": 4,
           "candidates": [
             {
               "type": "star",
               "course": 4,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "CCM — Li'l Penguin Lost",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "CCM — Slip Slidin' Away + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
@@ -5540,20 +4814,14 @@
           ]
         },
         {
-          "label": "BBH — Big Boo's Balcony",
-          "need": 1,
+          "label": "BBH — 2 stars",
+          "need": 2,
           "candidates": [
             {
               "type": "star",
               "course": 5,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "BBH — Secret of the Haunted Books",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 5,
@@ -5593,42 +4861,24 @@
           ]
         },
         {
-          "label": "SSL — Pyramid Puzzle",
-          "need": 1,
+          "label": "SSL — 4 stars",
+          "need": 4,
           "candidates": [
             {
               "type": "star",
               "course": 8,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "SSL — Inside the Ancient Pyramid (Pillarless)",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "SSL — In the Talons of the Big Bird",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "SSL — Shining Atop the Pyramid",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
@@ -5647,64 +4897,34 @@
           ]
         },
         {
-          "label": "LLL — Red-Hot Log Rolling",
-          "need": 1,
+          "label": "LLL — 6 stars",
+          "need": 6,
           "candidates": [
             {
               "type": "star",
               "course": 7,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "LLL — 8-Coin Puzzle with 15 Pieces",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "LLL — Boil the Big Bully",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "LLL — Bully the Bullies",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "LLL — Hot-Foot-It into the Volcano",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "LLL — Elevator Tour in the Volcano",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
@@ -5723,31 +4943,19 @@
           ]
         },
         {
-          "label": "DDD — Chests in the Current",
-          "need": 1,
+          "label": "DDD — 3 stars",
+          "need": 3,
           "candidates": [
             {
               "type": "star",
               "course": 9,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "DDD — Board Bowser's Sub",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 9,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "DDD — The Manta Ray's Reward",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 9,
@@ -5807,8 +5015,8 @@
           ]
         },
         {
-          "label": "WDW — Secrets in the Shallows & Sky + 100 Coins",
-          "need": 2,
+          "label": "WDW — 5 stars",
+          "need": 5,
           "candidates": [
             {
               "type": "star",
@@ -5819,35 +5027,17 @@
               "type": "star",
               "course": 11,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "WDW — Express Elevator--Hurry Up!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "WDW — Top o' the Town",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "WDW — Shocking Arrow Lifts!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
@@ -5866,31 +5056,19 @@
           ]
         },
         {
-          "label": "THI — Five Itty Bitty Secrets",
-          "need": 1,
+          "label": "THI — 3 stars",
+          "need": 3,
           "candidates": [
             {
               "type": "star",
               "course": 13,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "THI — The Tip Top of the Huge Island",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 13,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "THI — Pluck the Piranha Flower",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 13,
@@ -5920,53 +5098,29 @@
           ]
         },
         {
-          "label": "TTM — Scale the Mountain",
-          "need": 1,
+          "label": "TTM — 5 stars",
+          "need": 5,
           "candidates": [
             {
               "type": "star",
               "course": 12,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "TTM — Breathtaking View from Bridge",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "TTM — Blast to the Lonely Mushroom",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "TTM — Scary 'Shrooms, Red Coins",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "TTM — Mysterious Mountainside",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
@@ -5985,42 +5139,24 @@
           ]
         },
         {
-          "label": "SL — Snowman's Big Head",
-          "need": 1,
+          "label": "SL — 4 stars",
+          "need": 4,
           "candidates": [
             {
               "type": "star",
               "course": 10,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "SL — In the Deep Freeze",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "SL — Whirl from the Freezing Pond",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "SL — Chill with the Bully",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
@@ -6039,20 +5175,14 @@
           ]
         },
         {
-          "label": "MIPS (2nd star)",
-          "need": 1,
+          "label": "MIPS (2nd star) + HMC Toad",
+          "need": 2,
           "candidates": [
             {
               "type": "star",
               "course": 0,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "HMC Toad",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 0,
@@ -6071,42 +5201,24 @@
           ]
         },
         {
-          "label": "HMC — Swimming Beast in the Cavern",
-          "need": 1,
+          "label": "HMC — 4 stars",
+          "need": 4,
           "candidates": [
             {
               "type": "star",
               "course": 6,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "HMC — Metal-Head Mario Can Move!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "HMC — A-Maze-Ing Emergency Exit",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "HMC — Watch for Rolling Rocks",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
@@ -6125,42 +5237,24 @@
           ]
         },
         {
-          "label": "RR — Cruiser Crossing the Rainbow",
-          "need": 1,
+          "label": "RR — 4 stars",
+          "need": 4,
           "candidates": [
             {
               "type": "star",
               "course": 15,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "RR — Tricky Triangles!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "RR — Coins Amassed in a Maze",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "RR — Swingin' in the Breeze",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,
@@ -6190,8 +5284,8 @@
           ]
         },
         {
-          "label": "TTC — Stomp on the Thwomp + 100 Coins",
-          "need": 2,
+          "label": "TTC — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
@@ -6202,57 +5296,27 @@
               "type": "star",
               "course": 14,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "TTC — Roll into the Cage",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "TTC — The Pit and the Pendulums",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "TTC — Get a Hand",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "TTC — Timed Jumps on Moving Bars",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "TTC — Stop Time for Red Coins",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
@@ -6321,20 +5385,14 @@
           ]
         },
         {
-          "label": "BoB — Shoot to the Island in the Sky (Island Hop)",
-          "need": 1,
+          "label": "BoB — 2 stars",
+          "need": 2,
           "candidates": [
             {
               "type": "star",
               "course": 1,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "BoB — Behind Chain Chomp's Gate",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 1,
@@ -6374,31 +5432,19 @@
           ]
         },
         {
-          "label": "WF — Blast Away the Wall (Cannonless)",
-          "need": 1,
+          "label": "WF — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 2,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "WF — Fall onto the Caged Island (Owl Star)",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "WF — Red Coins on the Floating Isle + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
@@ -6408,35 +5454,17 @@
               "type": "star",
               "course": 2,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "WF — Shoot into the Wild Blue",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "WF — Chip off Whomp's Block",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "WF — To the Top of the Fortress",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
@@ -6538,31 +5566,19 @@
           ]
         },
         {
-          "label": "CCM — Wall Kicks Will Work",
-          "need": 1,
+          "label": "CCM — 4 stars",
+          "need": 4,
           "candidates": [
             {
               "type": "star",
               "course": 4,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "CCM — Li'l Penguin Lost",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "CCM — Slip Slidin' Away + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
@@ -6586,20 +5602,14 @@
           ]
         },
         {
-          "label": "BBH — Big Boo's Balcony",
-          "need": 1,
+          "label": "BBH — 2 stars",
+          "need": 2,
           "candidates": [
             {
               "type": "star",
               "course": 5,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "BBH — Secret of the Haunted Books",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 5,
@@ -6639,42 +5649,24 @@
           ]
         },
         {
-          "label": "SSL — Pyramid Puzzle",
-          "need": 1,
+          "label": "SSL — 4 stars",
+          "need": 4,
           "candidates": [
             {
               "type": "star",
               "course": 8,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "SSL — Inside the Ancient Pyramid (Pillarless)",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "SSL — In the Talons of the Big Bird",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "SSL — Shining Atop the Pyramid",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
@@ -6693,64 +5685,34 @@
           ]
         },
         {
-          "label": "LLL — Red-Hot Log Rolling",
-          "need": 1,
+          "label": "LLL — 6 stars",
+          "need": 6,
           "candidates": [
             {
               "type": "star",
               "course": 7,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "LLL — 8-Coin Puzzle with 15 Pieces",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "LLL — Boil the Big Bully",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "LLL — Bully the Bullies",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "LLL — Hot-Foot-It into the Volcano",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "LLL — Elevator Tour in the Volcano",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
@@ -6769,31 +5731,19 @@
           ]
         },
         {
-          "label": "DDD — Chests in the Current",
-          "need": 1,
+          "label": "DDD — 3 stars",
+          "need": 3,
           "candidates": [
             {
               "type": "star",
               "course": 9,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "DDD — Board Bowser's Sub",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 9,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "DDD — The Manta Ray's Reward",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 9,
@@ -6853,8 +5803,8 @@
           ]
         },
         {
-          "label": "WDW — Secrets in the Shallows & Sky + 100 Coins",
-          "need": 2,
+          "label": "WDW — 5 stars",
+          "need": 5,
           "candidates": [
             {
               "type": "star",
@@ -6865,35 +5815,17 @@
               "type": "star",
               "course": 11,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "WDW — Express Elevator--Hurry Up!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "WDW — Top o' the Town",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "WDW — Shocking Arrow Lifts!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
@@ -6912,31 +5844,19 @@
           ]
         },
         {
-          "label": "THI — Five Itty Bitty Secrets",
-          "need": 1,
+          "label": "THI — 3 stars",
+          "need": 3,
           "candidates": [
             {
               "type": "star",
               "course": 13,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "THI — The Tip Top of the Huge Island",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 13,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "THI — Pluck the Piranha Flower",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 13,
@@ -6966,53 +5886,29 @@
           ]
         },
         {
-          "label": "TTM — Scale the Mountain",
-          "need": 1,
+          "label": "TTM — 5 stars",
+          "need": 5,
           "candidates": [
             {
               "type": "star",
               "course": 12,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "TTM — Breathtaking View from Bridge",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "TTM — Blast to the Lonely Mushroom",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "TTM — Scary 'Shrooms, Red Coins",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "TTM — Mysterious Mountainside",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
@@ -7031,42 +5927,24 @@
           ]
         },
         {
-          "label": "SL — Snowman's Big Head",
-          "need": 1,
+          "label": "SL — 4 stars",
+          "need": 4,
           "candidates": [
             {
               "type": "star",
               "course": 10,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "SL — In the Deep Freeze",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "SL — Whirl from the Freezing Pond",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "SL — Chill with the Bully",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
@@ -7085,20 +5963,14 @@
           ]
         },
         {
-          "label": "MIPS (2nd star)",
-          "need": 1,
+          "label": "MIPS (2nd star) + HMC Toad",
+          "need": 2,
           "candidates": [
             {
               "type": "star",
               "course": 0,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "HMC Toad",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 0,
@@ -7117,42 +5989,24 @@
           ]
         },
         {
-          "label": "HMC — Swimming Beast in the Cavern",
-          "need": 1,
+          "label": "HMC — 4 stars",
+          "need": 4,
           "candidates": [
             {
               "type": "star",
               "course": 6,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "HMC — Metal-Head Mario Can Move!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "HMC — A-Maze-Ing Emergency Exit",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "HMC — Watch for Rolling Rocks",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
@@ -7171,42 +6025,24 @@
           ]
         },
         {
-          "label": "RR — Cruiser Crossing the Rainbow",
-          "need": 1,
+          "label": "RR — 4 stars",
+          "need": 4,
           "candidates": [
             {
               "type": "star",
               "course": 15,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "RR — Tricky Triangles!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "RR — Coins Amassed in a Maze",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "RR — Swingin' in the Breeze",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,
@@ -7236,8 +6072,8 @@
           ]
         },
         {
-          "label": "TTC — Stomp on the Thwomp + 100 Coins",
-          "need": 2,
+          "label": "TTC — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
@@ -7248,57 +6084,27 @@
               "type": "star",
               "course": 14,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "TTC — Roll into the Cage",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "TTC — The Pit and the Pendulums",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "TTC — Get a Hand",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "TTC — Timed Jumps on Moving Bars",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "TTC — Stop Time for Red Coins",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
@@ -7409,31 +6215,19 @@
           ]
         },
         {
-          "label": "WF — Blast Away the Wall (Cannonless)",
-          "need": 1,
+          "label": "WF — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 2,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "WF — Fall onto the Caged Island (Owl Star)",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "WF — Red Coins on the Floating Isle + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
@@ -7443,35 +6237,17 @@
               "type": "star",
               "course": 2,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "WF — Shoot into the Wild Blue",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "WF — Chip off Whomp's Block",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "WF — To the Top of the Fortress",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
@@ -7594,42 +6370,24 @@
           ]
         },
         {
-          "label": "CCM — Wall Kicks Will Work",
-          "need": 1,
+          "label": "CCM — 5 stars",
+          "need": 5,
           "candidates": [
             {
               "type": "star",
               "course": 4,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "CCM — Li'l Penguin Lost",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "CCM — Slip Slidin' Away",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "CCM — Big Penguin Race + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
@@ -7653,20 +6411,14 @@
           ]
         },
         {
-          "label": "BBH — Big Boo's Balcony",
-          "need": 1,
+          "label": "BBH — 2 stars",
+          "need": 2,
           "candidates": [
             {
               "type": "star",
               "course": 5,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "BBH — Secret of the Haunted Books",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 5,
@@ -7706,31 +6458,19 @@
           ]
         },
         {
-          "label": "SSL — Inside the Ancient Pyramid (Pillarless)",
-          "need": 1,
+          "label": "SSL — 3 stars",
+          "need": 3,
           "candidates": [
             {
               "type": "star",
               "course": 8,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "SSL — In the Talons of the Big Bird",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "SSL — Shining Atop the Pyramid",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
@@ -7749,64 +6489,34 @@
           ]
         },
         {
-          "label": "LLL — Red-Hot Log Rolling",
-          "need": 1,
+          "label": "LLL — 6 stars",
+          "need": 6,
           "candidates": [
             {
               "type": "star",
               "course": 7,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "LLL — 8-Coin Puzzle with 15 Pieces",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "LLL — Boil the Big Bully",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "LLL — Bully the Bullies",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "LLL — Hot-Foot-It into the Volcano",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "LLL — Elevator Tour in the Volcano",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
@@ -7825,42 +6535,24 @@
           ]
         },
         {
-          "label": "HMC — Swimming Beast in the Cavern",
-          "need": 1,
+          "label": "HMC — 4 stars",
+          "need": 4,
           "candidates": [
             {
               "type": "star",
               "course": 6,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "HMC — Metal-Head Mario Can Move!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "HMC — A-Maze-Ing Emergency Exit",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "HMC — Watch for Rolling Rocks",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
@@ -7890,31 +6582,19 @@
           ]
         },
         {
-          "label": "DDD — Chests in the Current",
-          "need": 1,
+          "label": "DDD — 3 stars",
+          "need": 3,
           "candidates": [
             {
               "type": "star",
               "course": 9,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "DDD — Board Bowser's Sub",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 9,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "DDD — The Manta Ray's Reward",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 9,
@@ -7974,8 +6654,8 @@
           ]
         },
         {
-          "label": "WDW — Secrets in the Shallows & Sky + 100 Coins",
-          "need": 2,
+          "label": "WDW — 5 stars",
+          "need": 5,
           "candidates": [
             {
               "type": "star",
@@ -7986,35 +6666,17 @@
               "type": "star",
               "course": 11,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "WDW — Express Elevator--Hurry Up!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "WDW — Top o' the Town",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "WDW — Shocking Arrow Lifts!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
@@ -8033,31 +6695,19 @@
           ]
         },
         {
-          "label": "THI — Five Itty Bitty Secrets",
-          "need": 1,
+          "label": "THI — 3 stars",
+          "need": 3,
           "candidates": [
             {
               "type": "star",
               "course": 13,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "THI — The Tip Top of the Huge Island",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 13,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "THI — Pluck the Piranha Flower",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 13,
@@ -8087,53 +6737,29 @@
           ]
         },
         {
-          "label": "TTM — Scale the Mountain",
-          "need": 1,
+          "label": "TTM — 5 stars",
+          "need": 5,
           "candidates": [
             {
               "type": "star",
               "course": 12,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "TTM — Breathtaking View from Bridge",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "TTM — Blast to the Lonely Mushroom",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "TTM — Scary 'Shrooms, Red Coins",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "TTM — Mysterious Mountainside",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
@@ -8152,53 +6778,29 @@
           ]
         },
         {
-          "label": "SL — Snowman's Big Head",
-          "need": 1,
+          "label": "SL — 5 stars",
+          "need": 5,
           "candidates": [
             {
               "type": "star",
               "course": 10,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "SL — In the Deep Freeze",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "SL — Shell Shreddin' for Red Coins",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "SL — Whirl from the Freezing Pond",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "SL — Chill with the Bully",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
@@ -8217,42 +6819,24 @@
           ]
         },
         {
-          "label": "RR — Cruiser Crossing the Rainbow",
-          "need": 1,
+          "label": "RR — 4 stars",
+          "need": 4,
           "candidates": [
             {
               "type": "star",
               "course": 15,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "RR — Tricky Triangles!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "RR — Coins Amassed in a Maze",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "RR — Swingin' in the Breeze",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,
@@ -8282,8 +6866,8 @@
           ]
         },
         {
-          "label": "TTC — Stomp on the Thwomp + 100 Coins",
-          "need": 2,
+          "label": "TTC — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
@@ -8294,57 +6878,27 @@
               "type": "star",
               "course": 14,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "TTC — Roll into the Cage",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "TTC — The Pit and the Pendulums",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "TTC — Get a Hand",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "TTC — Timed Jumps on Moving Bars",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "TTC — Stop Time for Red Coins",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
@@ -8434,31 +6988,19 @@
           ]
         },
         {
-          "label": "WF — Blast Away the Wall (Cannonless)",
-          "need": 1,
+          "label": "WF — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 2,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "WF — Fall onto the Caged Island (Owl Star)",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "WF — Red Coins on the Floating Isle + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
@@ -8468,35 +7010,17 @@
               "type": "star",
               "course": 2,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "WF — Shoot into the Wild Blue",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "WF — Chip off Whomp's Block",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "WF — To the Top of the Fortress",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
@@ -8536,31 +7060,19 @@
           ]
         },
         {
-          "label": "JRB — Plunder in the Sunken Ship",
-          "need": 1,
+          "label": "JRB — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 3,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "JRB — Through the Jet Stream",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 3,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "JRB — Red Coins on the Ship Afloat + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 3,
@@ -8570,35 +7082,17 @@
               "type": "star",
               "course": 3,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "JRB — Blast to the Stone Pillar",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 3,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "JRB — Treasure of the Ocean Cave",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 3,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "JRB — Can the Eel Come Out to Play?",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 3,
@@ -8721,31 +7215,19 @@
           ]
         },
         {
-          "label": "BoB — Big Bob-omb on the Summit",
-          "need": 1,
+          "label": "BoB — 6 stars",
+          "need": 6,
           "candidates": [
             {
               "type": "star",
               "course": 1,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "BoB — Footrace with Koopa the Quick",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 1,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "BoB — Find the 8 Red Coins + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 1,
@@ -8755,24 +7237,12 @@
               "type": "star",
               "course": 1,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "BoB — Shoot to the Island in the Sky",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 1,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "BoB — Mario Wings to the Sky",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 1,
@@ -8812,53 +7282,29 @@
           ]
         },
         {
-          "label": "SSL — Inside the Ancient Pyramid (Pillarless)",
-          "need": 1,
+          "label": "SSL — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 8,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "SSL — Stand Tall on the Four Pillars",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "SSL — In the Talons of the Big Bird",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "SSL — Free Flying for 8 Red Coins",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "SSL — Pyramid Puzzle + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
@@ -8868,13 +7314,7 @@
               "type": "star",
               "course": 8,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "SSL — Shining Atop the Pyramid",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
@@ -8920,53 +7360,29 @@
           ]
         },
         {
-          "label": "HMC — Swimming Beast in the Cavern",
-          "need": 1,
+          "label": "HMC — 5 stars",
+          "need": 5,
           "candidates": [
             {
               "type": "star",
               "course": 6,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "HMC — Navigating the Toxic Maze",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "HMC — Metal-Head Mario Can Move!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "HMC — A-Maze-Ing Emergency Exit",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "HMC — Watch for Rolling Rocks",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
@@ -8996,53 +7412,29 @@
           ]
         },
         {
-          "label": "LLL — Red-Hot Log Rolling",
-          "need": 1,
+          "label": "LLL — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 7,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "LLL — 8-Coin Puzzle with 15 Pieces",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "LLL — Boil the Big Bully",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "LLL — Bully the Bullies",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "LLL — Hot-Foot-It into the Volcano + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
@@ -9052,13 +7444,7 @@
               "type": "star",
               "course": 7,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "LLL — Elevator Tour in the Volcano",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
@@ -9109,53 +7495,29 @@
           ]
         },
         {
-          "label": "CCM — Wall Kicks Will Work",
-          "need": 1,
+          "label": "CCM — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 4,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "CCM — Frosty Slide for 8 Red Coins",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "CCM — Li'l Penguin Lost",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "CCM — Slip Slidin' Away",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "CCM — Big Penguin Race + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
@@ -9165,13 +7527,7 @@
               "type": "star",
               "course": 4,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "CCM — Snowman's Lost His Head",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
@@ -9190,20 +7546,14 @@
           ]
         },
         {
-          "label": "BBH — Go on a Ghost Hunt",
-          "need": 1,
+          "label": "BBH — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 5,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "BBH — Seek the 8 Red Coins + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 5,
@@ -9213,46 +7563,22 @@
               "type": "star",
               "course": 5,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "BBH — Eye to Eye in the Secret Room",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 5,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "BBH — Ride Big Boo's Merry-Go-Round",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 5,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "BBH — Big Boo's Balcony",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 5,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "BBH — Secret of the Haunted Books",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 5,
@@ -9271,8 +7597,8 @@
           ]
         },
         {
-          "label": "DDD — Pole-Jumping for Red Coins + 100 Coins",
-          "need": 2,
+          "label": "DDD — 4 stars",
+          "need": 4,
           "candidates": [
             {
               "type": "star",
@@ -9283,24 +7609,12 @@
               "type": "star",
               "course": 9,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "DDD — Chests in the Current",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 9,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "DDD — Board Bowser's Sub",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 9,
@@ -9360,31 +7674,19 @@
           ]
         },
         {
-          "label": "DDD — The Manta Ray's Reward",
-          "need": 1,
+          "label": "DDD — 3 stars",
+          "need": 3,
           "candidates": [
             {
               "type": "star",
               "course": 9,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "DDD — Through the Jet Stream",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 9,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "DDD — Collect the Caps...",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 9,
@@ -9403,20 +7705,14 @@
           ]
         },
         {
-          "label": "WDW — Quick Race Through Downtown!",
-          "need": 1,
+          "label": "WDW — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 11,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "WDW — Go to Town for Red Coins + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
@@ -9426,46 +7722,22 @@
               "type": "star",
               "course": 11,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "WDW — Express Elevator--Hurry Up!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "WDW — Top o' the Town",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "WDW — Secrets in the Shallows & Sky",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "WDW — Shocking Arrow Lifts!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
@@ -9484,31 +7756,19 @@
           ]
         },
         {
-          "label": "THI — Make Wiggler Squirm",
-          "need": 1,
+          "label": "THI — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 13,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "THI — Five Itty Bitty Secrets",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 13,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "THI — Wiggler's Red Coins + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 13,
@@ -9518,35 +7778,17 @@
               "type": "star",
               "course": 13,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "THI — Pluck the Piranha Flower",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 13,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "THI — The Tip Top of the Huge Island",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 13,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "THI — Rematch with Koopa the Quick",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 13,
@@ -9576,53 +7818,29 @@
           ]
         },
         {
-          "label": "TTM — Scale the Mountain",
-          "need": 1,
+          "label": "TTM — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 12,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "TTM — Mystery of the Monkey Cage",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "TTM — Breathtaking View from Bridge",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "TTM — Blast to the Lonely Mushroom",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "TTM — Scary 'Shrooms, Red Coins + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
@@ -9632,13 +7850,7 @@
               "type": "star",
               "course": 12,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "TTM — Mysterious Mountainside",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
@@ -9657,31 +7869,19 @@
           ]
         },
         {
-          "label": "SL — Snowman's Big Head",
-          "need": 1,
+          "label": "SL — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 10,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "SL — Into the Igloo",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "SL — Shell Shreddin' for Red Coins + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
@@ -9691,35 +7891,17 @@
               "type": "star",
               "course": 10,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "SL — In the Deep Freeze",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "SL — Whirl from the Freezing Pond",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "SL — Chill with the Bully",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
@@ -9759,8 +7941,8 @@
           ]
         },
         {
-          "label": "TTC — Stomp on the Thwomp + 100 Coins",
-          "need": 2,
+          "label": "TTC — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
@@ -9771,57 +7953,27 @@
               "type": "star",
               "course": 14,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "TTC — Roll into the Cage",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "TTC — The Pit and the Pendulums",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "TTC — Get a Hand",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "TTC — Timed Jumps on Moving Bars",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "TTC — Stop Time for Red Coins",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
@@ -9851,20 +8003,14 @@
           ]
         },
         {
-          "label": "RR — Cruiser Crossing the Rainbow",
-          "need": 1,
+          "label": "RR — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 15,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "RR — The Big House in the Sky + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,
@@ -9874,46 +8020,22 @@
               "type": "star",
               "course": 15,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "RR — Somewhere Over the Rainbow",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "RR — Tricky Triangles!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "RR — Coins Amassed in a Maze",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "RR — Swingin' in the Breeze",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,
@@ -10034,31 +8156,19 @@
           ]
         },
         {
-          "label": "WF — Blast Away the Wall (Cannonless)",
-          "need": 1,
+          "label": "WF — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 2,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "WF — Fall onto the Caged Island (Owl Star)",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "WF — Red Coins on the Floating Isle + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
@@ -10068,35 +8178,17 @@
               "type": "star",
               "course": 2,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "WF — Shoot into the Wild Blue",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "WF — Chip off Whomp's Block",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "WF — To the Top of the Fortress",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
@@ -10136,31 +8228,19 @@
           ]
         },
         {
-          "label": "JRB — Plunder in the Sunken Ship",
-          "need": 1,
+          "label": "JRB — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 3,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "JRB — Through the Jet Stream",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 3,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "JRB — Red Coins on the Ship Afloat + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 3,
@@ -10170,35 +8250,17 @@
               "type": "star",
               "course": 3,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "JRB — Blast to the Stone Pillar",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 3,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "JRB — Treasure of the Ocean Cave",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 3,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "JRB — Can the Eel Come Out to Play?",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 3,
@@ -10280,42 +8342,24 @@
           ]
         },
         {
-          "label": "BoB — Behind Chain Chomp's Gate (Bomb Clip)",
-          "need": 1,
+          "label": "BoB — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 1,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "BoB — Big Bob-omb on the Summit",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 1,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "BoB — Footrace with Koopa the Quick",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 1,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "BoB — Find the 8 Red Coins + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 1,
@@ -10325,24 +8369,12 @@
               "type": "star",
               "course": 1,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "BoB — Shoot to the Island in the Sky",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 1,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "BoB — Mario Wings to the Sky",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 1,
@@ -10382,53 +8414,29 @@
           ]
         },
         {
-          "label": "SSL — Inside the Ancient Pyramid (Pillarless)",
-          "need": 1,
+          "label": "SSL — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 8,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "SSL — Stand Tall on the Four Pillars",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "SSL — In the Talons of the Big Bird",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "SSL — Free Flying for 8 Red Coins",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "SSL — Pyramid Puzzle + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
@@ -10438,13 +8446,7 @@
               "type": "star",
               "course": 8,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "SSL — Shining Atop the Pyramid",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
@@ -10490,53 +8492,29 @@
           ]
         },
         {
-          "label": "HMC — Swimming Beast in the Cavern",
-          "need": 1,
+          "label": "HMC — 5 stars",
+          "need": 5,
           "candidates": [
             {
               "type": "star",
               "course": 6,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "HMC — Navigating the Toxic Maze",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "HMC — Metal-Head Mario Can Move!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "HMC — A-Maze-Ing Emergency Exit",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "HMC — Watch for Rolling Rocks",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
@@ -10566,53 +8544,29 @@
           ]
         },
         {
-          "label": "LLL — Red-Hot Log Rolling",
-          "need": 1,
+          "label": "LLL — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 7,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "LLL — 8-Coin Puzzle with 15 Pieces",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "LLL — Boil the Big Bully",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "LLL — Bully the Bullies",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "LLL — Hot-Foot-It into the Volcano + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
@@ -10622,13 +8576,7 @@
               "type": "star",
               "course": 7,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "LLL — Elevator Tour in the Volcano",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
@@ -10679,53 +8627,29 @@
           ]
         },
         {
-          "label": "CCM — Wall Kicks Will Work",
-          "need": 1,
+          "label": "CCM — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 4,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "CCM — Frosty Slide for 8 Red Coins",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "CCM — Li'l Penguin Lost",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "CCM — Slip Slidin' Away",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "CCM — Big Penguin Race + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
@@ -10735,13 +8659,7 @@
               "type": "star",
               "course": 4,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "CCM — Snowman's Lost His Head",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
@@ -10760,20 +8678,14 @@
           ]
         },
         {
-          "label": "BBH — Go on a Ghost Hunt",
-          "need": 1,
+          "label": "BBH — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 5,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "BBH — Seek the 8 Red Coins + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 5,
@@ -10783,46 +8695,22 @@
               "type": "star",
               "course": 5,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "BBH — Eye to Eye in the Secret Room",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 5,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "BBH — Ride Big Boo's Merry-Go-Round",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 5,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "BBH — Big Boo's Balcony",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 5,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "BBH — Secret of the Haunted Books",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 5,
@@ -10841,8 +8729,8 @@
           ]
         },
         {
-          "label": "DDD — Pole-Jumping for Red Coins + 100 Coins",
-          "need": 2,
+          "label": "DDD — 4 stars",
+          "need": 4,
           "candidates": [
             {
               "type": "star",
@@ -10853,24 +8741,12 @@
               "type": "star",
               "course": 9,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "DDD — Chests in the Current",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 9,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "DDD — Board Bowser's Sub",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 9,
@@ -10930,31 +8806,19 @@
           ]
         },
         {
-          "label": "DDD — The Manta Ray's Reward",
-          "need": 1,
+          "label": "DDD — 3 stars",
+          "need": 3,
           "candidates": [
             {
               "type": "star",
               "course": 9,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "DDD — Through the Jet Stream",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 9,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "DDD — Collect the Caps...",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 9,
@@ -10973,20 +8837,14 @@
           ]
         },
         {
-          "label": "WDW — Quick Race Through Downtown!",
-          "need": 1,
+          "label": "WDW — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 11,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "WDW — Go to Town for Red Coins + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
@@ -10996,46 +8854,22 @@
               "type": "star",
               "course": 11,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "WDW — Express Elevator--Hurry Up!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "WDW — Top o' the Town",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "WDW — Secrets in the Shallows & Sky",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "WDW — Shocking Arrow Lifts!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
@@ -11054,31 +8888,19 @@
           ]
         },
         {
-          "label": "THI — Make Wiggler Squirm",
-          "need": 1,
+          "label": "THI — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 13,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "THI — Five Itty Bitty Secrets",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 13,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "THI — Wiggler's Red Coins + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 13,
@@ -11088,35 +8910,17 @@
               "type": "star",
               "course": 13,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "THI — Pluck the Piranha Flower",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 13,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "THI — The Tip Top of the Huge Island",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 13,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "THI — Rematch with Koopa the Quick",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 13,
@@ -11146,53 +8950,29 @@
           ]
         },
         {
-          "label": "TTM — Scale the Mountain",
-          "need": 1,
+          "label": "TTM — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 12,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "TTM — Mystery of the Monkey Cage",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "TTM — Breathtaking View from Bridge",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "TTM — Blast to the Lonely Mushroom",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "TTM — Scary 'Shrooms, Red Coins + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
@@ -11202,13 +8982,7 @@
               "type": "star",
               "course": 12,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "TTM — Mysterious Mountainside",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
@@ -11227,31 +9001,19 @@
           ]
         },
         {
-          "label": "SL — Snowman's Big Head",
-          "need": 1,
+          "label": "SL — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 10,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "SL — Into the Igloo",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "SL — Shell Shreddin' for Red Coins + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
@@ -11261,35 +9023,17 @@
               "type": "star",
               "course": 10,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "SL — In the Deep Freeze",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "SL — Whirl from the Freezing Pond",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "SL — Chill with the Bully",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
@@ -11329,8 +9073,8 @@
           ]
         },
         {
-          "label": "TTC — Stomp on the Thwomp + 100 Coins",
-          "need": 2,
+          "label": "TTC — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
@@ -11341,57 +9085,27 @@
               "type": "star",
               "course": 14,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "TTC — Roll into the Cage",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "TTC — The Pit and the Pendulums",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "TTC — Get a Hand",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "TTC — Timed Jumps on Moving Bars",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "TTC — Stop Time for Red Coins",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
@@ -11421,20 +9135,14 @@
           ]
         },
         {
-          "label": "RR — Cruiser Crossing the Rainbow",
-          "need": 1,
+          "label": "RR — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 15,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "RR — The Big House in the Sky + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,
@@ -11444,46 +9152,22 @@
               "type": "star",
               "course": 15,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "RR — Somewhere Over the Rainbow",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "RR — Tricky Triangles!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "RR — Coins Amassed in a Maze",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "RR — Swingin' in the Breeze",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,
@@ -11805,42 +9489,24 @@
       },
       "steps": [
         {
-          "label": "Behind Chain Chomp's Gate",
-          "need": 1,
+          "label": "BoB — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 1,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "Big Bob-omb on the Summit",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 1,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "Footrace with Koopa the Quick",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 1,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "Find the 8 Red Coins + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 1,
@@ -11850,24 +9516,12 @@
               "type": "star",
               "course": 1,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "Mario Wings to the Sky",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 1,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "Shoot to the Island in the Sky",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 1,
@@ -11887,20 +9541,14 @@
       },
       "steps": [
         {
-          "label": "Behind Chain Chomp's Gate",
-          "need": 1,
+          "label": "BoB — 2 stars",
+          "need": 2,
           "candidates": [
             {
               "type": "star",
               "course": 1,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "Shoot to the Island in the Sky",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 1,
@@ -11920,31 +9568,19 @@
       },
       "steps": [
         {
-          "label": "Blast Away the Wall",
-          "need": 1,
+          "label": "WF — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 2,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "Fall onto the Caged Island",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "Red Coins on the Floating Isle + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
@@ -11954,35 +9590,17 @@
               "type": "star",
               "course": 2,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "Shoot into the Wild Blue",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "Chip off Whomp's Block",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "To the Top of the Fortress",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 2,
@@ -12002,31 +9620,19 @@
       },
       "steps": [
         {
-          "label": "Plunder in the Sunken Ship",
-          "need": 1,
+          "label": "JRB — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 3,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "Through the Jet Stream",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 3,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "Red Coins on the Ship Afloat + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 3,
@@ -12036,35 +9642,17 @@
               "type": "star",
               "course": 3,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "Blast to the Stone Pillar",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 3,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "Treasure of the Ocean Cave",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 3,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "Can the Eel Come Out to Play?",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 3,
@@ -12084,53 +9672,29 @@
       },
       "steps": [
         {
-          "label": "Wall Kicks Will Work",
-          "need": 1,
+          "label": "CCM — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 4,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "Frosty Slide for 8 Red Coins",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "Li'l Penguin Lost",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "Slip Slidin' Away",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "Big Penguin Race + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
@@ -12140,13 +9704,7 @@
               "type": "star",
               "course": 4,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "Snowman's Lost His Head",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
@@ -12166,31 +9724,19 @@
       },
       "steps": [
         {
-          "label": "Wall Kicks Will Work",
-          "need": 1,
+          "label": "CCM — 4 stars",
+          "need": 4,
           "candidates": [
             {
               "type": "star",
               "course": 4,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "Li'l Penguin Lost",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "Slip Slidin' Away + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
@@ -12215,42 +9761,24 @@
       },
       "steps": [
         {
-          "label": "Wall Kicks Will Work",
-          "need": 1,
+          "label": "CCM — 5 stars",
+          "need": 5,
           "candidates": [
             {
               "type": "star",
               "course": 4,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "Li'l Penguin Lost",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "Slip Slidin' Away",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "Big Penguin Race + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
@@ -12275,20 +9803,14 @@
       },
       "steps": [
         {
-          "label": "Wall Kicks Will Work",
-          "need": 1,
+          "label": "CCM — 2 stars",
+          "need": 2,
           "candidates": [
             {
               "type": "star",
               "course": 4,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "Li'l Penguin Lost",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 4,
@@ -12308,20 +9830,14 @@
       },
       "steps": [
         {
-          "label": "Go on a Ghost Hunt",
-          "need": 1,
+          "label": "BBH — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 5,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "Seek the 8 Red Coins + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 5,
@@ -12331,46 +9847,22 @@
               "type": "star",
               "course": 5,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "Eye to Eye in the Secret Room",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 5,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "Ride Big Boo's Merry-Go-Round",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 5,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "Big Boo's Balcony",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 5,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "Secret of the Haunted Books",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 5,
@@ -12390,20 +9882,14 @@
       },
       "steps": [
         {
-          "label": "Big Boo's Balcony",
-          "need": 1,
+          "label": "BBH — 2 stars",
+          "need": 2,
           "candidates": [
             {
               "type": "star",
               "course": 5,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "Secret of the Haunted Books",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 5,
@@ -12423,8 +9909,8 @@
       },
       "steps": [
         {
-          "label": "Elevate for 8 Red Coins + 100 Coins",
-          "need": 2,
+          "label": "HMC — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
@@ -12435,57 +9921,27 @@
               "type": "star",
               "course": 6,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "Swimming Beast in the Cavern",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "Navigating the Toxic Maze",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "Metal-Head Mario Can Move!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "A-Maze-Ing Emergency Exit",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "Watch for Rolling Rocks",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
@@ -12505,42 +9961,24 @@
       },
       "steps": [
         {
-          "label": "Swimming Beast in the Cavern",
-          "need": 1,
+          "label": "HMC — 4 stars",
+          "need": 4,
           "candidates": [
             {
               "type": "star",
               "course": 6,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "Metal-Head Mario Can Move!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "A-Maze-Ing Emergency Exit",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "Watch for Rolling Rocks",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
@@ -12560,31 +9998,19 @@
       },
       "steps": [
         {
-          "label": "Swimming Beast in the Cavern",
-          "need": 1,
+          "label": "HMC — 3 stars",
+          "need": 3,
           "candidates": [
             {
               "type": "star",
               "course": 6,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "A-Maze-Ing Emergency Exit",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "Watch for Rolling Rocks",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 6,
@@ -12604,53 +10030,29 @@
       },
       "steps": [
         {
-          "label": "Red-Hot Log Rolling",
-          "need": 1,
+          "label": "LLL — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 7,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "8-Coin Puzzle with 15 Pieces",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "Boil the Big Bully",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "Bully the Bullies",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "Hot-Foot-It into the Volcano + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
@@ -12660,13 +10062,7 @@
               "type": "star",
               "course": 7,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "Elevator Tour in the Volcano",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
@@ -12686,64 +10082,34 @@
       },
       "steps": [
         {
-          "label": "Red-Hot Log Rolling",
-          "need": 1,
+          "label": "LLL — 6 stars",
+          "need": 6,
           "candidates": [
             {
               "type": "star",
               "course": 7,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "8-Coin Puzzle with 15 Pieces",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "Boil the Big Bully",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "Bully the Bullies",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "Hot-Foot-It into the Volcano",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "Elevator Tour in the Volcano",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
@@ -12763,42 +10129,24 @@
       },
       "steps": [
         {
-          "label": "Red-Hot Log Rolling",
-          "need": 1,
+          "label": "LLL — 4 stars",
+          "need": 4,
           "candidates": [
             {
               "type": "star",
               "course": 7,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "8-Coin Puzzle with 15 Pieces",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "Boil the Big Bully",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "Hot-Foot-It into the Volcano or Elevator Tour in the Volcano",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 7,
@@ -12823,53 +10171,29 @@
       },
       "steps": [
         {
-          "label": "Inside the Ancient Pyramid",
-          "need": 1,
+          "label": "SSL — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 8,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "Stand Tall on the Four Pillars",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "In the Talons of the Big Bird",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "Free Flying for 8 Red Coins",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "Pyramid Puzzle + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
@@ -12879,13 +10203,7 @@
               "type": "star",
               "course": 8,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "Shining Atop the Pyramid",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
@@ -12905,31 +10223,19 @@
       },
       "steps": [
         {
-          "label": "Inside the Ancient Pyramid",
-          "need": 1,
+          "label": "SSL — 3 stars",
+          "need": 3,
           "candidates": [
             {
               "type": "star",
               "course": 8,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "In the Talons of the Big Bird",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "Shining Atop the Pyramid",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 8,
@@ -12949,8 +10255,8 @@
       },
       "steps": [
         {
-          "label": "Pole-Jumping for Red Coins + 100 Coins",
-          "need": 2,
+          "label": "DDD — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
@@ -12961,57 +10267,27 @@
               "type": "star",
               "course": 9,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "Chests in the Current",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 9,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "Board Bowser's Sub",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 9,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "The Manta Ray's Reward",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 9,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "Through the Jet Stream",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 9,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "Collect the Caps...",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 9,
@@ -13031,31 +10307,19 @@
       },
       "steps": [
         {
-          "label": "Chests in the Current",
-          "need": 1,
+          "label": "DDD — 3 stars",
+          "need": 3,
           "candidates": [
             {
               "type": "star",
               "course": 9,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "Board Bowser's Sub",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 9,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "The Manta Ray's Reward",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 9,
@@ -13075,7 +10339,7 @@
       },
       "steps": [
         {
-          "label": "Board Bowser's Sub",
+          "label": "DDD — Board Bowser's Sub",
           "need": 1,
           "candidates": [
             {
@@ -13097,31 +10361,19 @@
       },
       "steps": [
         {
-          "label": "Snowman's Big Head",
-          "need": 1,
+          "label": "SL — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 10,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "Into the Igloo",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "Shell Shreddin' for Red Coins + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
@@ -13131,35 +10383,17 @@
               "type": "star",
               "course": 10,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "In the Deep Freeze",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "Whirl from the Freezing Pond",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "Chill with the Bully",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
@@ -13179,42 +10413,24 @@
       },
       "steps": [
         {
-          "label": "Snowman's Big Head",
-          "need": 1,
+          "label": "SL — 4 stars",
+          "need": 4,
           "candidates": [
             {
               "type": "star",
               "course": 10,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "In the Deep Freeze",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "Whirl from the Freezing Pond",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "Chill with the Bully",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
@@ -13234,53 +10450,29 @@
       },
       "steps": [
         {
-          "label": "Snowman's Big Head",
-          "need": 1,
+          "label": "SL — 5 stars",
+          "need": 5,
           "candidates": [
             {
               "type": "star",
               "course": 10,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "In the Deep Freeze",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "Shell Shreddin' for Red Coins",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "Whirl from the Freezing Pond",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "Chill with the Bully",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 10,
@@ -13300,20 +10492,14 @@
       },
       "steps": [
         {
-          "label": "Quick Race Through Downtown!",
-          "need": 1,
+          "label": "WDW — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 11,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "Go to Town for Red Coins + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
@@ -13323,128 +10509,22 @@
               "type": "star",
               "course": 11,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "Express Elevator--Hurry Up!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "Top o' the Town",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "Secrets in the Shallows & Sky",
-          "need": 1,
-          "candidates": [
-            {
-              "type": "star",
-              "course": 11,
-              "star": 2
-            }
-          ]
-        },
-        {
-          "label": "Shocking Arrow Lifts!",
-          "need": 1,
-          "candidates": [
-            {
-              "type": "star",
-              "course": 11,
-              "star": 0
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "seed_key": "route:stage-wdw-120-beginner",
-      "name": "WDW — 120 (Beginner)",
-      "category": "Stage RTA",
-      "start_condition": {
-        "type": "level_enter",
-        "to": 11
-      },
-      "steps": [
-        {
-          "label": "Quick Race Through Downtown!",
-          "need": 1,
-          "candidates": [
-            {
-              "type": "star",
-              "course": 11,
-              "star": 5
-            }
-          ]
-        },
-        {
-          "label": "Secrets in the Shallows & Sky + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
               "star": 2
             },
-            {
-              "type": "star",
-              "course": 11,
-              "star": 6
-            }
-          ]
-        },
-        {
-          "label": "Express Elevator--Hurry Up!",
-          "need": 1,
-          "candidates": [
-            {
-              "type": "star",
-              "course": 11,
-              "star": 3
-            }
-          ]
-        },
-        {
-          "label": "Top o' the Town",
-          "need": 1,
-          "candidates": [
-            {
-              "type": "star",
-              "course": 11,
-              "star": 1
-            }
-          ]
-        },
-        {
-          "label": "Go to Town for Red Coins",
-          "need": 1,
-          "candidates": [
-            {
-              "type": "star",
-              "course": 11,
-              "star": 4
-            }
-          ]
-        },
-        {
-          "label": "Shocking Arrow Lifts!",
-          "need": 1,
-          "candidates": [
             {
               "type": "star",
               "course": 11,
@@ -13464,8 +10544,8 @@
       },
       "steps": [
         {
-          "label": "Secrets in the Shallows & Sky + 100 Coins",
-          "need": 2,
+          "label": "WDW — 5 stars",
+          "need": 5,
           "candidates": [
             {
               "type": "star",
@@ -13476,35 +10556,17 @@
               "type": "star",
               "course": 11,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "Express Elevator--Hurry Up!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "Top o' the Town",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "Shocking Arrow Lifts!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 11,
@@ -13524,53 +10586,29 @@
       },
       "steps": [
         {
-          "label": "Scale the Mountain",
-          "need": 1,
+          "label": "TTM — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 12,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "Mystery of the Monkey Cage",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "Breathtaking View from Bridge",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "Blast to the Lonely Mushroom",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "Scary 'Shrooms, Red Coins + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
@@ -13580,13 +10618,7 @@
               "type": "star",
               "course": 12,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "Mysterious Mountainside",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
@@ -13606,53 +10638,29 @@
       },
       "steps": [
         {
-          "label": "Scale the Mountain",
-          "need": 1,
+          "label": "TTM — 5 stars",
+          "need": 5,
           "candidates": [
             {
               "type": "star",
               "course": 12,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "Breathtaking View from Bridge",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "Blast to the Lonely Mushroom",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "Scary 'Shrooms, Red Coins",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "Mysterious Mountainside",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 12,
@@ -13672,31 +10680,19 @@
       },
       "steps": [
         {
-          "label": "Make Wiggler Squirm",
-          "need": 1,
+          "label": "THI — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 13,
               "star": 5
-            }
-          ]
-        },
-        {
-          "label": "Five Itty Bitty Secrets",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 13,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "Wiggler's Red Coins + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 13,
@@ -13706,35 +10702,17 @@
               "type": "star",
               "course": 13,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "Pluck the Piranha Flower",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 13,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "The Tip Top of the Huge Island",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 13,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "Rematch with Koopa the Quick",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 13,
@@ -13754,31 +10732,19 @@
       },
       "steps": [
         {
-          "label": "Five Itty Bitty Secrets",
-          "need": 1,
+          "label": "THI — 3 stars",
+          "need": 3,
           "candidates": [
             {
               "type": "star",
               "course": 13,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "The Tip Top of the Huge Island",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 13,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "Pluck the Piranha Flower",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 13,
@@ -13798,42 +10764,24 @@
       },
       "steps": [
         {
-          "label": "Five Itty Bitty Secrets",
-          "need": 1,
+          "label": "THI — 4 stars",
+          "need": 4,
           "candidates": [
             {
               "type": "star",
               "course": 13,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "The Tip Top of the Huge Island",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 13,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "Wiggler's Red Coins",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 13,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "Pluck the Piranha Flower",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 13,
@@ -13853,8 +10801,8 @@
       },
       "steps": [
         {
-          "label": "Stomp on the Thwomp + 100 Coins",
-          "need": 2,
+          "label": "TTC — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
@@ -13865,57 +10813,27 @@
               "type": "star",
               "course": 14,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "Roll into the Cage",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "The Pit and the Pendulums",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "Get a Hand",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "Timed Jumps on Moving Bars",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "Stop Time for Red Coins",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
@@ -13935,64 +10853,34 @@
       },
       "steps": [
         {
-          "label": "Roll into the Cage",
-          "need": 1,
+          "label": "TTC — 6 stars",
+          "need": 6,
           "candidates": [
             {
               "type": "star",
               "course": 14,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "The Pit and the Pendulums",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 1
-            }
-          ]
-        },
-        {
-          "label": "Get a Hand",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "Stomp on the Thwomp",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 3
-            }
-          ]
-        },
-        {
-          "label": "Timed Jumps on Moving Bars",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "Stop Time for Red Coins",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 14,
@@ -14003,8 +10891,8 @@
       ]
     },
     {
-      "seed_key": "route:stage-rr-120-beginner",
-      "name": "RR — 120 (Beginner)",
+      "seed_key": "route:stage-rr-120",
+      "name": "RR — 120",
       "category": "Stage RTA",
       "start_condition": {
         "type": "level_enter",
@@ -14012,20 +10900,14 @@
       },
       "steps": [
         {
-          "label": "Cruiser Crossing the Rainbow",
-          "need": 1,
+          "label": "RR — 7 stars",
+          "need": 7,
           "candidates": [
             {
               "type": "star",
               "course": 15,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "The Big House in the Sky + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,
@@ -14035,79 +10917,7 @@
               "type": "star",
               "course": 15,
               "star": 6
-            }
-          ]
-        },
-        {
-          "label": "Somewhere Over the Rainbow",
-          "need": 1,
-          "candidates": [
-            {
-              "type": "star",
-              "course": 15,
-              "star": 5
-            }
-          ]
-        },
-        {
-          "label": "Tricky Triangles!",
-          "need": 1,
-          "candidates": [
-            {
-              "type": "star",
-              "course": 15,
-              "star": 4
-            }
-          ]
-        },
-        {
-          "label": "Coins Amassed in a Maze",
-          "need": 1,
-          "candidates": [
-            {
-              "type": "star",
-              "course": 15,
-              "star": 2
-            }
-          ]
-        },
-        {
-          "label": "Swingin' in the Breeze",
-          "need": 1,
-          "candidates": [
-            {
-              "type": "star",
-              "course": 15,
-              "star": 3
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "seed_key": "route:stage-rr-120-expert",
-      "name": "RR — 120 (Expert)",
-      "category": "Stage RTA",
-      "start_condition": {
-        "type": "level_enter",
-        "to": 15
-      },
-      "steps": [
-        {
-          "label": "Cruiser Crossing the Rainbow",
-          "need": 1,
-          "candidates": [
-            {
-              "type": "star",
-              "course": 15,
-              "star": 0
-            }
-          ]
-        },
-        {
-          "label": "Somewhere Over the Rainbow + 100 Coins",
-          "need": 2,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,
@@ -14116,47 +10926,13 @@
             {
               "type": "star",
               "course": 15,
-              "star": 6
-            }
-          ]
-        },
-        {
-          "label": "The Big House in the Sky",
-          "need": 1,
-          "candidates": [
-            {
-              "type": "star",
-              "course": 15,
-              "star": 1
-            }
-          ]
-        },
-        {
-          "label": "Tricky Triangles!",
-          "need": 1,
-          "candidates": [
-            {
-              "type": "star",
-              "course": 15,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "Coins Amassed in a Maze",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "Swingin' in the Breeze",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,
@@ -14176,42 +10952,24 @@
       },
       "steps": [
         {
-          "label": "Cruiser Crossing the Rainbow",
-          "need": 1,
+          "label": "RR — 4 stars",
+          "need": 4,
           "candidates": [
             {
               "type": "star",
               "course": 15,
               "star": 0
-            }
-          ]
-        },
-        {
-          "label": "Tricky Triangles!",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,
               "star": 4
-            }
-          ]
-        },
-        {
-          "label": "Coins Amassed in a Maze",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,
               "star": 2
-            }
-          ]
-        },
-        {
-          "label": "Swingin' in the Breeze",
-          "need": 1,
-          "candidates": [
+            },
             {
               "type": "star",
               "course": 15,

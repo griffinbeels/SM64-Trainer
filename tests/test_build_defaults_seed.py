@@ -52,9 +52,9 @@ def test_shipped_seed_has_the_whole_corpus():
     seed = json.loads(build_seed.OUT.read_bytes().decode("utf-8"))
     assert seed["seed_version"] == 2
     assert len(seed["segments"]) == 65          # 10 legacy + 55 movements
-    assert len(seed["routes"]) == 50            # 13 main + 37 stage
+    assert len(seed["routes"]) == 48            # 13 main + 35 stage
     assert len({s["seed_key"] for s in seed["segments"]}) == 65
-    assert len({r["seed_key"] for r in seed["routes"]}) == 50
+    assert len({r["seed_key"] for r in seed["routes"]}) == 48
 
 
 def test_shipped_seed_reconciles_into_a_fresh_db_cleanly(tmp_path):
@@ -67,7 +67,7 @@ def test_shipped_seed_reconciles_into_a_fresh_db_cleanly(tmp_path):
     assert reconcile_defaults(db, seed) == []
     assert len(db.segment_defs()) == 65
     routes = db.routes()
-    assert len(routes) == 50
+    assert len(routes) == 48
     broken = [(r["name"], c) for r in routes for s in r["steps"]
               for c in s["candidates"]
               if c["type"] == "segment" and c["segment_id"] == -1]
