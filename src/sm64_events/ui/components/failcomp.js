@@ -19,8 +19,8 @@ function stored(key, fallback) {
   return Number.isFinite(v) ? v : fallback;
 }
 
-export function FailureCompilation({ identity }) {
-  const [open, setOpen] = useState(false);
+export function FailureCompilation({ identity, defaultOpen = false }) {
+  const [open, setOpen] = useState(defaultOpen);
   const [xBefore, setXBefore] = useState(() => stored("sm64.failcomp.xBefore", 5));
   const [yAfter, setYAfter] = useState(() => stored("sm64.failcomp.yAfter", 3));
   const [job, setJob] = useState(null);   // {state, progress, message, result}
