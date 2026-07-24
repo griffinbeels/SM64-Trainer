@@ -69,6 +69,11 @@ def test_build_wires_replay_endpoints(monkeypatch, tmp_path):
     # must answer segment_defs(). It also now reads the time_filters KV
     # (via _time_filters()) up front, so the stub must answer get_state()
     # too — mirroring Database.get_state's default-passthrough contract.
+    # build() also runs the editable-defaults seed reconcile (spec
+    # 2026-07-23-default-routes-foundation) before constructing the service,
+    # so the stub must answer routes() (reconcile reads it unconditionally)
+    # and insert_segment_def() (every bundled segment reads as "missing"
+    # against an empty segment_defs() stub, so reconcile inserts all of them).
     import importlib
     import sm64_events.main as main_mod
     importlib.reload(main_mod)
@@ -79,6 +84,12 @@ def test_build_wires_replay_endpoints(monkeypatch, tmp_path):
 
         def get_state(self, key, default):
             return default
+
+        def routes(self):
+            return []
+
+        def insert_segment_def(self, *args, **kwargs):
+            return 1
 
     monkeypatch.setattr(main_mod, "Database", lambda path: _DbStub())
     app = main_mod.build()

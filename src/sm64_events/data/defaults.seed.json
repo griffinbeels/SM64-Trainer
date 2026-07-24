@@ -1,0 +1,238 @@
+{
+  "seed_version": 1,
+  "segments": [
+    {
+      "seed_key": "seg:lblj",
+      "name": "LBLJ",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "level_enter",
+          "to": 6,
+          "from": 16
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 6,
+          "area": 1
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "level_enter",
+          "to": 17
+        }
+      ],
+      "waypoints": [],
+      "guards": [],
+      "category": "Tricks"
+    },
+    {
+      "seed_key": "seg:mips-clip",
+      "name": "MIPS Clip",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "level_exit",
+          "from": 7,
+          "to": 6
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "level_enter",
+          "to": 23
+        }
+      ],
+      "waypoints": [],
+      "guards": [],
+      "category": "Tricks"
+    },
+    {
+      "seed_key": "seg:lakitu-skip",
+      "name": "Lakitu Skip",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "spawned",
+          "level": 16
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "level_enter",
+          "to": 6
+        }
+      ],
+      "waypoints": [],
+      "guards": [],
+      "category": "Tricks"
+    },
+    {
+      "seed_key": "seg:bits-entry",
+      "name": "BitS Entry",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "area_enter",
+          "level": 6,
+          "area": 2
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "level_enter",
+          "to": 21
+        }
+      ],
+      "waypoints": [],
+      "guards": [],
+      "category": "Castle Movement"
+    },
+    {
+      "seed_key": "seg:bitdw-pipe",
+      "name": "BitDW Pipe Entry",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "level_enter",
+          "to": 17
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 17
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "warp_entered",
+          "level": 17
+        }
+      ],
+      "waypoints": [],
+      "guards": [],
+      "category": "Castle Movement"
+    },
+    {
+      "seed_key": "seg:bitfs-pipe",
+      "name": "BitFS Pipe Entry",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "level_enter",
+          "to": 19
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 19
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "warp_entered",
+          "level": 19
+        }
+      ],
+      "waypoints": [],
+      "guards": [],
+      "category": "Castle Movement"
+    },
+    {
+      "seed_key": "seg:bits-pipe",
+      "name": "BitS Pipe Entry",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "level_enter",
+          "to": 21
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 21
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "warp_entered",
+          "level": 21
+        }
+      ],
+      "waypoints": [],
+      "guards": [],
+      "category": "Castle Movement"
+    },
+    {
+      "seed_key": "seg:bowser-1",
+      "name": "Bowser 1",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "level_enter",
+          "to": 30
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 30
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "key_grabbed",
+          "level": 30
+        }
+      ],
+      "waypoints": [],
+      "guards": [],
+      "category": "Bowser Fights"
+    },
+    {
+      "seed_key": "seg:bowser-2",
+      "name": "Bowser 2",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "level_enter",
+          "to": 33
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 33
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "key_grabbed",
+          "level": 33
+        }
+      ],
+      "waypoints": [],
+      "guards": [],
+      "category": "Bowser Fights"
+    },
+    {
+      "seed_key": "seg:bowser-3",
+      "name": "Bowser 3",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "level_enter",
+          "to": 34
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 34
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "key_grabbed",
+          "level": 34
+        }
+      ],
+      "waypoints": [],
+      "guards": [],
+      "category": "Bowser Fights"
+    }
+  ],
+  "routes": []
+}
