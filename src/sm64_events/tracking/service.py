@@ -679,6 +679,25 @@ class TrackerService:
                                  payload={"route_id": route_id,
                                           "segment_ids": seg_ids}))
 
+    def active_route(self) -> dict | None:
+        """Current active route for the session view ({id, name,
+        segment_ids} or None). The id comes from the projector's
+        journal-derived active_route_id() — same rule as select_route's
+        docstring: no second `_active_route` field on the service, so this
+        can never drift from what replay reconstructs. Robust to a route
+        deleted out from under the arm: delete_route journals a clearing
+        route_selected first (so active_route_id() is already None by the
+        time this runs), but the `route is None` guard covers any other
+        path that might leave a stale id pointing at nothing."""
+        rid = self._projector.active_route_id()
+        if rid is None or self.db is None:
+            return None
+        route = next((r for r in self.db.routes() if r["id"] == rid), None)
+        if route is None:
+            return None
+        return {"id": route["id"], "name": route["name"],
+                "segment_ids": self._route_member_segments(self.db, route["id"])}
+
     # -- rank standards commands -----------------------------------------------
     async def _rank_standards_changed(self) -> None:
         """Broadcast-only: rank standards are config, never journaled."""
