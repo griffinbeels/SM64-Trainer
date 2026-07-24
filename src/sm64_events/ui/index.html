@@ -669,6 +669,21 @@
   }
   .card-heading h3 { margin-top: 1px; }
   .analysis-block { min-height: 0; }
+  /* ⓘ hints: an instant styled tooltip on hover/keyboard focus. The native
+     title= delay read as "this button does nothing" (2026-07-24). */
+  .hint { position: relative; display: inline-flex; cursor: help; color: var(--muted); }
+  .hint::after {
+    content: attr(data-tip); position: absolute; z-index: 40;
+    left: 50%; top: calc(100% + 6px); transform: translateX(-50%);
+    width: max-content; max-width: 250px; padding: .4rem .55rem;
+    border: 1px solid #42617e; border-radius: 6px;
+    background: #0b1929; color: var(--text);
+    font-size: .72rem; font-weight: 400; line-height: 1.4; text-align: left;
+    white-space: normal; box-shadow: 0 12px 34px rgba(0,0,0,.5);
+    opacity: 0; visibility: hidden; transition: opacity .12s;
+    pointer-events: none;
+  }
+  .hint:hover::after, .hint:focus-visible::after { opacity: 1; visibility: visible; }
   .timeline-block { flex: 0 0 112px; }
   .trend-block { flex: 1 1 auto; min-height: 190px; overflow: hidden; }
   .trend-block svg { max-height: 210px; }

@@ -422,11 +422,13 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
         <div><span class="eyebrow">Analysis</span><h3>Attempt history</h3></div>
       </div>
       <div class="analysis-block timeline-block">
-        <h4>Attempt timeline <span title="Attempts positioned by completion or reset time">ⓘ</span></h4>
+        <h4>Attempt timeline <span class="hint" tabindex="0"
+          data-tip="Every attempt in the selected scope, positioned by its completion or reset time">ⓘ</span></h4>
         <${Timeline} tl=${sec.timeline} sec=${sec} t=${t} />
       </div>
       <div class="analysis-block trend-block">
-        <h4>Performance trend <span title="Successful attempts over time">ⓘ</span></h4>
+        <h4>Performance trend <span class="hint" tabindex="0"
+          data-tip="Successful attempts over time — gold dots are saved PBs; click a dot to jump to its row">ⓘ</span></h4>
         <${Progress} prog=${sec.progress} clock=${t.clock} onPick=${pick} />
       </div>
     </section>
@@ -563,13 +565,15 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare }) {
         <div><span class="eyebrow">Analysis</span><h3>Attempt history</h3></div>
       </div>
       <div class="analysis-block timeline-block">
-        <h4>Attempt timeline <span title="Attempts positioned by completion or reset time">ⓘ</span></h4>
+        <h4>Attempt timeline <span class="hint" tabindex="0"
+          data-tip="Every attempt in the selected scope, positioned by its completion or reset time">ⓘ</span></h4>
         ${!sec.broken
           ? html`<${Timeline} tl=${sec.timeline} sec=${sec} t=${t} />`
           : html`<div class="stable-empty compact">Timeline unavailable for a deleted definition.</div>`}
       </div>
       <div class="analysis-block trend-block">
-        <h4>Performance trend <span title="Successful attempts over time">ⓘ</span></h4>
+        <h4>Performance trend <span class="hint" tabindex="0"
+          data-tip="Successful attempts over time — gold dots are saved PBs; click a dot to jump to its row">ⓘ</span></h4>
         <${Progress} prog=${sec.progress} clock="rta" onPick=${pick} />
       </div>
     </section>
