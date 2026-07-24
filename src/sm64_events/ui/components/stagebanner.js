@@ -62,11 +62,34 @@ const segsForLevel = (v, level) =>
 const STAR_IMG_COUNT = 6;    // star_1.png .. star_6.png in ui/assets/
 const STAR_DIM_IDLE = true;  // false = every star equally bright
 
+// Course split-icon art (t.starIcons === "course", the settings-drawer
+// "Star icons" preference): ui/assets/star_icons/{prefix}{slot+1}.png, one
+// per main-course star INCLUDING the 100-coin 7th slot. Index = course_id-1
+// (catalog order, pinned against the assets by tests/test_star_icons.py).
+const COURSE_ICON_PREFIXES = ["bob", "wf", "jrb", "ccm", "bbh", "hmc", "lll",
+                              "ssl", "ddd", "sl", "wdw", "ttm", "thi", "ttc",
+                              "rr"];
+
+const genericStarSrc = (slot) =>
+  `/ui/assets/star_${Math.min(slot + 1, STAR_IMG_COUNT)}.png`;
+
+// A load failure (missing/corrupt icon) degrades to the generic star art;
+// dropping `courseicon` also removes the opaque-square styling.
+function fallbackToGenericStar(event, slot) {
+  const img = event.target;
+  if (img.src.includes("/star_icons/")) {
+    img.classList.remove("courseicon");
+    img.src = genericStarSrc(slot);
+  }
+}
+
 function StarRow({ t, v, stage }) {
   const course = v.catalog.courses.find((c) => c.id === stage.course_id);
   if (!course) return html`<${StagePlaceholder} />`;
 
   const tgt = v.target || {};
+  const iconPrefix = t.starIcons === "course"
+    ? COURSE_ICON_PREFIXES[stage.course_id - 1] : null;
   const lastStratFor = (i) =>
     v.last_strat_by_star[`${stage.course_id}:${i}`] || "";
   // Rank under that star's ACTIVE strat (server-graded). Changing the strat
@@ -95,8 +118,11 @@ function StarRow({ t, v, stage }) {
                             class="starcell ${active ? "active-star" : ""}"
                             title=${name} onclick=${() => pick(i)}>
           <span class="starholder">
-            <img class="starimg ${STAR_DIM_IDLE && !active ? "dim" : ""}"
-                 src=${`/ui/assets/star_${Math.min(i + 1, STAR_IMG_COUNT)}.png`}
+            <img class="starimg ${iconPrefix ? "courseicon" : ""} ${STAR_DIM_IDLE && !active ? "dim" : ""}"
+                 src=${iconPrefix
+                   ? `/ui/assets/star_icons/${iconPrefix}${i + 1}.png`
+                   : genericStarSrc(i)}
+                 onerror=${(e) => fallbackToGenericStar(e, i)}
                  alt="" draggable="false" />
           </span>
           <span class="starrank">

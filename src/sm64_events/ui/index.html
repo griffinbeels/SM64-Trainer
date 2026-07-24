@@ -45,13 +45,16 @@
   .armedchip b, .armedchip .armedword { color: inherit; }
   .armedword { opacity: .7; font-size: .85em; }
   /* SM64 star-select row (StarRow only) — a single line of gold stars that
-     shrinks with the pane but NEVER wraps. Namespaced away from .stagebtn,
-     which the other banner modes (bowser/arena/castle) still use unchanged. */
+     shrinks with the pane but NEVER wraps and NEVER scrolls: cells are
+     shrinkable (flex 1 1 0 / min-width 0) and their art + type clamp on cqw
+     against the .practice-page container, so all 7 stars always fit on
+     screen (spec 2026-07-24, pinned by tests/test_star_icons.py).
+     Namespaced away from .stagebtn, which the other banner modes
+     (bowser/arena/castle) still use unchanged. */
   .starrow { display: flex; flex-wrap: nowrap; gap: .3rem; align-items: flex-start;
-             overflow-x: auto; margin-top: .4rem; padding: 4px 0; }
-             /* padding: overflow-x:auto forces overflow-y:auto (per the CSS
-                overflow spec), so without vertical breathing room the active
-                star's drop-shadow glow + scale/bob would clip at the row edge. */
+             margin-top: .4rem; padding: 4px 0; }
+             /* padding: vertical breathing room so the active star's
+                drop-shadow glow + scale/bob clear the card's overflow clip. */
   .starcell { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column;
               align-items: center; gap: .28rem; padding: .5rem .25rem .45rem;
               border: 1px solid transparent; border-radius: 10px; cursor: pointer;
@@ -74,17 +77,30 @@
      sits centered at its natural size. active = gold glow; idle = dimmed. */
   .starimg { display: block; width: 100%; height: 100%; object-fit: contain;
              -webkit-user-select: none; user-select: none; }
+  /* Course split-icon mode (t.starIcons === "course"): opaque full-bleed
+     100x100 screenshots, so round the corners (the drop-shadow glow follows
+     the rounded clip) and inset slightly to match the generic star art's
+     baked-in transparent margin. All state styling (dim / glow / bob) is
+     shared with the generic art — same classes, same animations. */
+  .starimg.courseicon { width: 92%; height: 92%; margin: 4%;
+                        border-radius: 16%; object-fit: cover; }
   .starcell.active-star .starimg {
     filter: drop-shadow(0 0 6px rgba(255,215,95,.85)) drop-shadow(0 0 2px rgba(255,215,95,.9)); }
   .starimg.dim { opacity: .72; filter: saturate(.85); }
-  .starname { font-size: .8rem; font-weight: 600; line-height: 1.12; min-height: 2.1em;
+  .starname { font-size: clamp(.55rem, 1.31cqw, .8rem); font-weight: 600;
+              line-height: 1.12; min-height: 2.1em;
               display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
               overflow: hidden; }
   .starcell.active-star .starname { color: #ffd75f; }
   .starsub { display: flex; align-items: center; gap: .28rem; justify-content: center;
              max-width: 100%; }
-  .starsub .strat { color: #6c7686; font-size: .74rem; white-space: nowrap;
-                    overflow: hidden; text-overflow: ellipsis; }
+  .starsub .strat { color: #6c7686; font-size: clamp(.55rem, 1.21cqw, .74rem);
+                    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* Below ~600px of pane the strat sub-line is unreadable — drop it, keep
+     the star + medal + name (never the stars themselves: all 7 stay). */
+  @container (max-width: 600px) {
+    .selector-card .starsub { display: none; }
+  }
   .starsub .strat.none { opacity: .6; }
   @media (prefers-reduced-motion: no-preference) {
     .starcell.active-star .starholder { animation: starbob 2.4s ease-in-out infinite; }
@@ -338,7 +354,14 @@
     --coral: #ff7b73;
     --sidebar-wide: 206px;
     --sidebar-rail: 76px;
-    --selector-height: 230px;
+    /* Selector-card slot height. cqw resolves against .practice-page
+       (container-type: inline-size) AT USE TIME, so the card shrinks with
+       the pane: 230px while all 7 full-size star cells fit (pane >= ~980px),
+       then tracking the cqw-scaled cell content below that. Width-driven
+       ONLY — every banner mode (stars/bowser/arena/castle) gets the same
+       height at a given pane width, so live mode swaps never move layout
+       (OBS stability). */
+    --selector-height: clamp(150px, calc(95px + 13.8cqw), 230px);
     --radius: 9px;
   }
   * { box-sizing: border-box; }
@@ -480,7 +503,10 @@
   }
   .view-pane, .practice-page { min-width: 0; max-width: 100%; }
   .mobile-appbar, .mobile-nav, .mobile-more-backdrop { display: none; }
-  .practice-page { display: grid; gap: 12px; }
+  /* THE size container all selector cqw units + @container rules resolve
+     against — the pane the star row must fit inside. inline-size only, so
+     normal height flow is untouched. */
+  .practice-page { display: grid; gap: 12px; container-type: inline-size; }
   .practice-card {
     min-width: 0; max-width: 100%; margin: 0; padding: 14px 16px;
     border: 1px solid var(--border); border-radius: var(--radius);
@@ -531,15 +557,13 @@
   .selector-card .shead b { color: var(--text); font-size: 1.06rem; }
   .selector-card .starrow {
     height: calc(var(--selector-height) - 56px); align-items: stretch;
-    gap: 8px; margin: 0; padding: 4px 1px 8px; overflow-x: auto; overflow-y: hidden;
-    scrollbar-width: thin; scrollbar-color: #3e607f transparent;
-    scroll-snap-type: x proximity;
+    gap: clamp(3px, .82cqw, 8px); margin: 0; padding: 4px 1px 8px;
   }
   .selector-card .starcell {
-    flex: 1 0 128px; min-width: 128px; height: 100%; scroll-snap-align: center;
-    justify-content: flex-start; padding: .35rem .25rem .4rem;
+    flex: 1 1 0; min-width: 0; height: 100%;
+    justify-content: flex-start; padding: .35rem .15rem .4rem;
   }
-  .selector-card .starholder { width: min(82px, 64%); }
+  .selector-card .starholder { width: min(82px, 8.4cqw); }
   .selector-card .stagebanner-row {
     height: calc(var(--selector-height) - 64px); align-content: center;
     overflow: auto; padding-bottom: .5rem;
@@ -1482,6 +1506,9 @@
   .settings-head h2 { margin: 0; }
   .settings-section { padding: 1rem 0; border-top: 1px solid var(--border-soft); }
   .settings-section h3 { margin-bottom: .3rem; }
+  .settings-field { display: flex; align-items: center; justify-content: space-between;
+                    gap: .6rem; margin: .35rem 0 .2rem; font-size: .85rem; }
+  .settings-field select { min-width: 0; max-width: 60%; }
   .settings-section p, .settings-note { color: var(--muted); font-size: .8rem; margin: .2rem 0 .65rem; }
   .settings-actions { display: grid; grid-template-columns: 1fr 1fr; gap: .55rem; }
   .settings-actions button { justify-content: flex-start; }
@@ -1559,7 +1586,6 @@
   }
 
   @media (max-width: 760px) {
-    :root { --selector-height: 314px; }
     .app-shell { display: block; }
     .app-sidebar { display: none; }
     .mobile-appbar {
@@ -1704,12 +1730,7 @@
     .route-focus-control select { width: 100%; min-width: 0; }
     .practice-card { padding: 12px; }
     .selector-card { padding: 12px; }
-    .selector-card .starrow {
-      height: calc(var(--selector-height) - 54px); gap: 7px;
-      margin-inline: -4px; padding-inline: 4px;
-    }
-    .selector-card .starcell { flex-basis: 142px; min-width: 142px; }
-    .selector-card .starholder { width: 90px; }
+    .selector-card .starrow { height: calc(var(--selector-height) - 54px); }
     .objective-card { height: 258px; min-height: 258px; overflow: hidden; }
     .objective-heading {
       grid-template-columns: 26px 1fr; align-items: start;
@@ -1770,7 +1791,6 @@
     .mobile-status .status-main { display: none; }
     .mobile-status .recording-status .dot { max-width: none; }
     .context-control > .ui-icon { display: none; }
-    .selector-card .starcell { flex-basis: 136px; min-width: 136px; }
     .objective-metrics { grid-template-columns: 1fr 118px; }
     .analysis-toolbar { gap: .3rem; }
     .reset-toggle span { display: none; }
