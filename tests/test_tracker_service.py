@@ -1039,6 +1039,22 @@ def test_import_creates_missing_segment(tmp_path):
     assert imported["steps"][0]["candidates"][0]["segment_id"] == new["id"]
 
 
+def test_import_creates_missing_segment_carries_waypoints(tmp_path):
+    # regression: resolve_import's embedded def carries waypoints (Task 10),
+    # but the create-path here must actually forward it to insert_segment_def
+    # or a fresh-install import silently strips them.
+    db, svc = make(tmp_path)
+    payload = {"kind": "sm64-route", "version": 1, "name": "Imp", "steps": [
+        {"need": 1, "candidates": [{"type": "segment", "segment": {
+            "name": "Waypointed Seg", "start_triggers": [{"type": "spawned"}],
+            "end_triggers": [{"type": "level_enter", "to": 6}],
+            "waypoints": [[{"type": "level_enter", "to": 10}]],
+            "guards": []}}]}]}
+    asyncio.run(svc.import_route(payload))
+    new = next(d for d in db.segment_defs() if d["name"] == "Waypointed Seg")
+    assert new["waypoints"] == [[{"type": "level_enter", "to": 10}]]
+
+
 def test_export_unknown_route_raises(tmp_path):
     db, svc = make(tmp_path)
     with pytest.raises(LookupError):

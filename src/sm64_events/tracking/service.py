@@ -889,7 +889,9 @@ class TrackerService:
             validate_definition({**emb, "enabled": True})
             new_ids.append(db.insert_segment_def(
                 emb["name"], emb["start_triggers"], emb["end_triggers"],
-                emb["guards"], _iso(_now())))
+                emb["guards"], _iso(_now()),
+                waypoints=emb.get("waypoints", []),
+                category=emb.get("category")))
         steps = self._finalize_import_steps(resolved["steps"], new_ids)
         rid = db.insert_route(resolved["name"], steps, _iso(_now()),
                               start_condition=resolved.get("start_condition"))
