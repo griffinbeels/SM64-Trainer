@@ -863,3 +863,26 @@ def test_segment_targets_carry_strat_and_rank(tmp_path):
                       if s["segment_id"] == 1)
         assert target["strat"] == "no bljs"
         assert "rank" in target   # None until a ladder exists for the strat
+
+
+def test_segment_editor_save_body_roundtrips_a_get_row(tmp_path):
+    """The segment editor builds its PUT from a GET /api/segments row via an
+    ALLOWLIST of the fields it edits. Regression 2026-07-24: it used a
+    DENYLIST (strip id/created_utc), so when migration v11 grew the rows
+    (seed_key/seed_dirty) those leaked into the strict SegmentPatch
+    (extra=forbid) and EVERY save of a seeded segment 422'd."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        rows = client.get("/api/segments").json()
+        row = next(r for r in rows if r.get("seed_key"))
+        assert "seed_dirty" in row     # the trap: GET rows carry db columns
+        editable = {k: row[k] for k in ("name", "enabled", "start_triggers",
+                                        "end_triggers", "guards")}
+        r = client.put(f"/api/segments/{row['id']}", json=editable)
+        assert r.status_code == 200
+        # the raw row minus id/created_utc (the old denylist) must FAIL —
+        # extra=forbid is the typo guard, the UI owns the allowlist
+        stale = {k: v for k, v in row.items()
+                 if k not in ("id", "created_utc")}
+        assert client.put(f"/api/segments/{row['id']}",
+                          json=stale).status_code == 422
