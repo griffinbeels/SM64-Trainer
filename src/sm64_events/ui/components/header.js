@@ -183,6 +183,14 @@ export function Header({ t, settingsOpen, closeSettings }) {
           </label>
           <p class="settings-note">Per-star icons show each star's
             split-icon artwork in the course selector row.</p>
+          <label class="settings-field">
+            <span>Dust-trick counts</span>
+            <input type="checkbox" checked=${t.showDust}
+                onchange=${(e) => t.pickShowDust(e.target.checked)} />
+          </label>
+          <p class="settings-note">Show dustless rollout/jump counts on
+            attempt rows and in the stats menu. Off by default while the
+            detection is being tuned.</p>
         </section>
 
         <section class="settings-section">

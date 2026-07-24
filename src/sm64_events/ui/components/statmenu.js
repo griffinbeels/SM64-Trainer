@@ -13,6 +13,13 @@ const html = htm.bind(h);
 const keyOf = (s) =>
   s.key === "avg_last_n" ? `${s.key}:${(s.params || {}).n}` : s.key;
 
+// Dust-trick stats (stats/registry.py `_dust_rate` family). Hidden from the
+// menu, and their chips from the practice cards, unless the Settings
+// "Dust-trick counts" toggle (t.showDust) is on — detection is still being
+// tuned (2026-07-24). Stored selections are untouched; they reappear when
+// the toggle comes back on.
+export const DUST_STAT_KEYS = new Set(["dustless_rate", "dustless_jump_rate"]);
+
 export function StatMenu({ t, close }) {
   const [registry, setRegistry] = useState([]);
   const [selected, setSelected] = useState(t.view.stat_menu);
@@ -30,11 +37,13 @@ export function StatMenu({ t, close }) {
   }
 
   // offer avg_last_n at a few useful Ns plus every parameterless stat
-  const offers = registry.flatMap((d) => d.key === "avg_last_n"
+  const offers = registry
+    .filter((d) => t.showDust || !DUST_STAT_KEYS.has(d.key))
+    .flatMap((d) => d.key === "avg_last_n"
     ? [10, 25, 50, 100].map((n) => ({ key: d.key, params: { n }, label: `Avg last ${n}` }))
     : [{ key: d.key, params: d.params, label: d.label }]);
 
-  return html`<div class="popover" style="right:1rem">
+  return html`<div class="popover">
     ${offers.map((o) => html`<label style="display:block">
       <input type="checkbox"
              checked=${selected.some((s) => keyOf(s) === keyOf(o))}
