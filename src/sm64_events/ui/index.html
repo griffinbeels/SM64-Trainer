@@ -657,9 +657,29 @@
   .detail-drawer[open] summary { margin-bottom: .75rem; }
   .detail-tools { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
   .danger-text { color: var(--coral); background: transparent; border-color: #61404a; }
-  .failcomp { margin-top: .5rem; }
-  .failcomp-result { margin-top: .4rem; }
-  .failcomp-path { color: var(--muted); font-size: .85em; word-break: break-all; }
+  /* Compilation drawer (failcomp.js) — inner content; shell reuses .stdpanel/
+     .disc.standards-toggle/.stdbody from the Rank-standards drawer. */
+  .compilation-body { display: flex; flex-direction: column; gap: .7rem; }
+  .compilation-lead { margin: 0; color: var(--muted); font-size: .8rem; line-height: 1.45; max-width: 46ch; }
+  .compilation-settings { display: flex; flex-direction: column; gap: .35rem; }
+  .compilation-fields { display: flex; flex-wrap: wrap; gap: .5rem; }
+  .compilation-field { display: inline-flex; align-items: center; gap: .4rem; color: #cdd3da; font-size: .82rem; }
+  .compilation-field input { width: 4.25rem; text-align: right; }
+  .compilation-field .unit { color: var(--muted); }
+  .compilation-settings small { font-size: .74rem; }
+  .compilation-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
+  .compilation-msg { font-size: .82rem; }
+  .compilation-result {
+    display: flex; flex-direction: column; gap: .4rem;
+    padding-top: .6rem; border-top: 1px solid var(--border-soft);
+  }
+  .compilation-summary { display: flex; align-items: center; gap: .4rem; color: #a3e0a3; font-size: .82rem; }
+  .compilation-path {
+    color: var(--muted); font-size: .76rem; word-break: break-all;
+    background: rgba(0,0,0,.28); border: 1px solid var(--border-soft);
+    border-radius: 5px; padding: .35rem .5rem;
+  }
+  .compilation-reveal { align-self: flex-start; font-size: .8rem; }
   .stable-empty {
     min-height: 80px; display: flex; align-items: center; justify-content: center;
     color: var(--muted); text-align: center;

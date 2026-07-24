@@ -463,11 +463,11 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
             ? "Wipe this star's data across all sessions"
             : "Wipe this star's data in the current session"}>Clear data</button>
       </div>
-      <${FailureCompilation} identity=${{ course_id: sec.course_id, star_id: sec.star_id }} />
       <div class="chips">
         ${sec.stats.map((s) => html`
           <span class="chip" title=${s.key}>${s.label} ${s.display ?? "–"}</span>`)}
       </div>
+      <${FailureCompilation} identity=${{ course_id: sec.course_id, star_id: sec.star_id }} />
       <${StandardsPanel} entity=${`star:${sec.course_id}:${sec.star_id}`}
           activeStrat=${sec.last_strat} strategies=${sec.strategies}
           onChanged=${t.refresh} />
@@ -596,11 +596,11 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare }) {
             ? "Wipe this segment's data across all sessions"
             : "Wipe this segment's data in the current session"}>Clear data</button>
       </div>
-      <${FailureCompilation} identity=${{ segment_id: sec.segment_id }} />
       <div class="chips">
         ${sec.stats.map((s) => html`
           <span class="chip" title=${s.key}>${s.label} ${s.display ?? "–"}</span>`)}
       </div>
+      <${FailureCompilation} identity=${{ segment_id: sec.segment_id }} />
       <${StandardsPanel} entity=${`segment:${sec.segment_id}`}
           activeStrat=${sec.last_strat} strategies=${sec.strategies}
           onChanged=${t.refresh} />
