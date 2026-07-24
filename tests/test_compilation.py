@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime
 from types import SimpleNamespace
 
 from sm64_events.tracking.compilation import (EntityRef, plan_compilation)
@@ -54,9 +54,10 @@ def test_only_failure_outcomes_and_uncleared_included():
     abandoned = att(id=3, outcome="abandoned")
     cleared = att(id=4, outcome="death", cleared=True)
     success = att(id=5, outcome="success", igt_frames=600)
-    p = plan([death, reset, abandoned, cleared, success])
+    hard_reset = att(id=6, outcome="hard_reset")
+    p = plan([death, reset, abandoned, cleared, success, hard_reset])
     fails = [s.attempt_id for s in p.specs if s.kind == "failure"]
-    assert set(fails) == {1, 2, 3}
+    assert set(fails) == {1, 2, 3, 6}
 
 
 def test_entity_filtering_star_vs_segment():
@@ -92,7 +93,7 @@ def test_finale_is_fastest_available_success_in_full():
 
 
 def test_finale_falls_back_to_saved_when_ring_missing():
-    # fast run out of coverage but saved; slow run in coverage
+    # fast run is out of coverage but saved -> finale uses the saved clip
     fast = att(id=2, outcome="success", igt_frames=600,
                started_utc="2025-01-01T00:00:00Z",
                ended_utc="2025-01-01T00:00:20Z")
@@ -125,3 +126,33 @@ def test_segment_finale_uses_rta_frames():
               ended_utc="2026-07-23T00:10:15Z")
     p = plan([run], identity=seg)
     assert p.finale_frames == 450
+
+
+def test_finale_prefers_ring_when_success_is_also_saved():
+    # success is BOTH ring-covered (within WIDE) AND in saved_ids -> ring wins
+    run = att(id=2, outcome="success", igt_frames=600,
+              started_utc="2026-07-23T00:50:00Z",
+              ended_utc="2026-07-23T00:50:20Z")
+    p = plan([run], saved={2})
+    assert p.specs[-1].source == "ring"
+
+
+def test_coverage_none_ages_out_failures_and_uses_saved_finale():
+    fail = att(id=1, outcome="death")
+    win = att(id=2, outcome="success", igt_frames=600,
+              started_utc="2026-07-23T00:50:00Z",
+              ended_utc="2026-07-23T00:50:20Z")
+    p = plan([fail, win], coverage=None, saved={2})
+    assert p.aged_out == 1
+    assert p.failure_count == 0
+    assert p.specs[-1].source == "saved"
+    assert p.specs[-1].attempt_id == 2
+
+
+def test_failure_window_exactly_on_coverage_boundary_is_included():
+    a = att(id=1, started_utc="2026-07-23T00:10:00Z",
+            ended_utc="2026-07-23T00:10:05Z")   # window [00:10:00, 00:10:08]
+    exact = (_utc("2026-07-23T00:10:00Z"), _utc("2026-07-23T00:10:08Z"))
+    p = plan([a], coverage=exact)
+    assert [s.attempt_id for s in p.specs if s.kind == "failure"] == [1]
+    assert p.aged_out == 0
