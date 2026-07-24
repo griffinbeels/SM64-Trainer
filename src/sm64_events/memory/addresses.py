@@ -485,6 +485,21 @@ COURSE_NAMES = {
 }
 
 STAR_NAMES = {
+    # Castle secret stars (COURSE_NONE / gCurrCourseNum 0) — the Toad and MIPS
+    # stars, which belong to no course. Ids are the save-file star-flag bit
+    # order from the decomp: include/save_file.h defines
+    # SAVE_FLAG_COLLECTED_TOAD_STAR_1..3 as (1 << 24..26) and _MIPS_STAR_1/2 as
+    # (1 << 27..28), and SAVE_FLAG_TO_STAR_FLAG(x) = (x >> 24) & 0x7F, so the
+    # star indices are Toad 0/1/2 and MIPS 3/4. Cross-checked independently:
+    # behaviors/mips.inc.c spawns STAR_INDEX_ACT_4 + oBhvParams2ndByte, i.e.
+    # 3 + {0, 1} — the same two ids. (Both files quoted from n64decomp/sm64
+    # master, fetched 2026-07-24.)
+    # VERIFY (live gate): WHICH Toad carries which index. The binding below
+    # follows the flag order together with the 12/25/35-star spawn thresholds
+    # (the basement Toad spawns first). A live grab of any Toad star settles
+    # it — the journal held zero course-0 grabs when this shipped.
+    0: ("Toad Star (Basement)", "Toad Star (Upstairs)", "Toad Star (Tippy)",
+        "MIPS 1st Star", "MIPS 2nd Star"),
     1: ("Big Bob-omb on the Summit", "Footrace with Koopa the Quick",
         "Shoot to the Island in the Sky", "Find the 8 Red Coins",
         "Mario Wings to the Sky", "Behind Chain Chomp's Gate"),

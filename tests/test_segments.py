@@ -1583,7 +1583,12 @@ def test_vocab_course_and_star_enums():
     assert v["stars"]["1"][6] == "100 Coins"    # main courses: 100-coin star at star_id 6
     assert len(v["stars"]["1"]) == 7
     assert v["stars"]["16"] == ["8 Red Coins"]  # Bowser course: one star
-    assert v["stars"]["0"] == []                # Castle Secret: no named stars
+    # Castle Secret stars are selectable in the builder (spec 2026-07-24): the
+    # route corpus references the Toad/MIPS stars as ordinary star candidates,
+    # so a trigger can be scoped to one too.
+    assert v["stars"]["0"] == ["Toad Star (Basement)", "Toad Star (Upstairs)",
+                               "Toad Star (Tippy)", "MIPS 1st Star",
+                               "MIPS 2nd Star"]
 
 
 # ---------------------------------------------------------------------------

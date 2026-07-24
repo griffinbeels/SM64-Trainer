@@ -30,7 +30,20 @@ def test_star_count_owns_the_seven_star_rule():
     assert A.star_count(15) == 7
     assert A.star_count(16) == 1   # Bowser course
     assert A.star_count(19) == 2   # Princess's Secret Slide
-    assert A.star_count(0) == 0    # Castle Secret: no named stars
+    assert A.star_count(0) == 5    # Castle Secret: 3 Toad + 2 MIPS, no 100-coin
+
+
+def test_castle_secret_star_names_match_the_decomp_flag_order():
+    """Ids come from include/save_file.h's SAVE_FLAG_COLLECTED_TOAD_STAR_1..
+    _MIPS_STAR_2 under SAVE_FLAG_TO_STAR_FLAG's >>24, cross-checked against
+    behaviors/mips.inc.c spawning STAR_INDEX_ACT_4 + oBhvParams2ndByte."""
+    assert A.star_name(0, 0) == "Toad Star (Basement)"
+    assert A.star_name(0, 1) == "Toad Star (Upstairs)"
+    assert A.star_name(0, 2) == "Toad Star (Tippy)"
+    assert A.star_name(0, 3) == "MIPS 1st Star"
+    assert A.star_name(0, 4) == "MIPS 2nd Star"
+    # course 0 has no 100-coin star: the 7-star rule is main-courses-only
+    assert A.star_name(0, 6) == "Star 7"
 
 
 def test_mario_offsets_derive_from_struct_base():
