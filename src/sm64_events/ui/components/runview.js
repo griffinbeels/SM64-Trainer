@@ -13,6 +13,8 @@ import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
+import { Icon } from "./icons.js";
+import { PageState } from "./states.js";
 
 const html = htm.bind(h);
 
@@ -61,37 +63,48 @@ function RunGraph({ runs }) {
 
 function RunHistory({ t, hist, openRun, setOpenRun }) {
   const [finishedOnly, setFinishedOnly] = useState(true);
-  if (!hist) return html`<div class="runhistory meta">no run history yet</div>`;
+  if (!hist) return html`<div class="runhistory workshop-empty compact">No run history yet.</div>`;
   const finished = hist.runs.filter((r) => r.status === "finished" && r.total_ms != null);
   const pbRun = finished.length
     ? finished.reduce((a, b) => (a.total_ms <= b.total_ms ? a : b)) : null;
   const list = [...hist.runs].reverse();
   const shown = finishedOnly ? list.filter((r) => r.status === "finished") : list;
   return html`<div class="runhistory">
-    <div class="shead"><b>Run history</b>
-      <label class="meta"><input type="checkbox" checked=${finishedOnly}
-          onchange=${(e) => setFinishedOnly(e.target.checked)} /> finished only</label>
-      ${pbRun ? html`<span class="pbtag">PB ${pbRun.display_total}</span>` : null}</div>
-    <${RunGraph} runs=${hist.runs} />
-    ${shown.length === 0 ? html`<p class="meta">no runs yet</p>` : html`<table><tbody>
-      ${shown.map((r) => [
-        html`<tr style="cursor:pointer"
-            onclick=${() => setOpenRun(openRun === r.id ? null : r.id)}>
-          <td class="meta">${fmtDate(r.started_utc)}</td>
-          <td>${r.status === "finished"
-              ? html`<b>${r.display_total}</b>${r.is_pb ? html` <span class="rungold">★</span>` : ""}`
-              : html`<span class="meta">aborted · reached step ${r.reached_step}</span>`}
-            <span class="meta"> ${openRun === r.id ? "▾" : "▸"}</span></td>
-        </tr>`,
-        openRun === r.id ? html`<tr><td colspan="2"><table class="runsplits"><tbody>
-          ${r.splits.map((s) => html`<tr>
-            <td class="meta">${s.step_index + 1}</td><td>${s.display}</td>
-            <td style="text-align:right">${s.duration_display}
-              <span class="meta">${s.fails ? ` · ${s.fails} fail${s.fails > 1 ? "s" : ""}` : ""}</span></td>
-          </tr>`)}
-        </tbody></table></td></tr>` : null,
-      ])}
-    </tbody></table>`}
+    <div class="run-history-toolbar">
+      <label class="reset-toggle">
+        <input type="checkbox" checked=${finishedOnly}
+            onchange=${(e) => setFinishedOnly(e.target.checked)} />
+        <${Icon} name="check" size=${15} /> Finished only
+      </label>
+      ${pbRun ? html`<span class="pbtag">PB ${pbRun.display_total}</span>` : null}
+    </div>
+    <div class="run-history-graph">
+      <${RunGraph} runs=${hist.runs} />
+    </div>
+    <div class="run-history-list">
+      ${shown.length === 0 ? html`<div class="workshop-empty compact">No matching runs yet.</div>`
+        : shown.map((r) => html`<div class=${`run-history-entry ${openRun === r.id ? "open" : ""}`}>
+          <button class="run-history-row"
+              aria-expanded=${openRun === r.id}
+              onclick=${() => setOpenRun(openRun === r.id ? null : r.id)}>
+            <span class="run-history-date">${fmtDate(r.started_utc)}</span>
+            <span class="run-history-result">${r.status === "finished"
+                ? html`<b>${r.display_total}</b>${r.is_pb
+                  ? html` <span class="rungold">★ PB</span>` : null}`
+                : html`<span class="meta">Aborted · reached step ${r.reached_step}</span>`}</span>
+            <${Icon} name="chevron" size=${16} className="history-chevron" />
+          </button>
+          ${openRun === r.id ? html`<div class="run-history-splits">
+            ${r.splits.map((s) => html`<div class="run-history-split">
+              <span class="routenum">${s.step_index + 1}</span>
+              <span>${s.display}</span>
+              <span class="run-history-duration">${s.duration_display}
+                ${s.fails ? html`<small>${s.fails} fail${s.fails > 1 ? "s" : ""}</small>` : null}
+              </span>
+            </div>`)}
+          </div>` : null}
+        </div>`)}
+    </div>
   </div>`;
 }
 
@@ -127,9 +140,12 @@ export function Run({ t }) {
   const toggleHide = (key) => setHidden((prev) => {
     const next = new Set(prev); next.has(key) ? next.delete(key) : next.add(key);
     localStorage.setItem("sm64.runHidden", JSON.stringify([...next])); return next; });
-  const Timer = ({ k, children, cls }) => html`<span class="runhide ${cls || ""}"
-      title="click to hide/show" onclick=${() => toggleHide(k)}>${
-      hidden.has(k) ? "- - - -" : children}</span>`;
+  const Timer = ({ k, children, cls }) => html`<button
+      class=${`runhide run-time-button ${cls || ""}`}
+      aria-label=${hidden.has(k) ? "Show hidden timer" : "Hide timer"}
+      title=${hidden.has(k) ? "Show this timer" : "Hide this timer"}
+      onclick=${() => toggleHide(k)}>${
+      hidden.has(k) ? "– – – –" : children}</button>`;
 
   // Selecting a route ARMS it (no Start button). "none" disarms.
   async function pickRoute(id) {
@@ -147,7 +163,8 @@ export function Run({ t }) {
   async function pauseRun() { try { await send("POST", active.paused ? "/api/run/resume" : "/api/run/pause"); t.refreshRun(); } catch (e) { setErr(String(e)); } }
   async function resetRun() { try { await send("POST", "/api/run/reset"); t.refreshRun(); } catch (e) { setErr(String(e)); } }
 
-  if (!run) return html`<p class="meta">loading…</p>`;
+  if (!run) return html`<${PageState} kind=${t.connected ? "loading" : "offline"}
+      title="Preparing the run timer" />`;
 
   // Frozen post-run display: ONLY when the MOST RECENT run finished. After a
   // Reset / F1-abort the newest run is "aborted", so we fall through to the idle
@@ -182,35 +199,99 @@ export function Run({ t }) {
     ? (routeView.start_condition.type === "reset_game" ? "starts on game reset (F1)"
        : `starts on: ${routeView.start_condition.type}`) : "";
 
-  return html`<div class=${focus ? "runfocus" : ""}>
-    <div class="runbar">
-      <select value=${effRouteId ?? ""} disabled=${!!active}
-          onchange=${(e) => pickRoute(e.target.value ? Number(e.target.value) : null)}>
-        <option value="">— pick a route —</option>
-        ${routes.map((r) => html`<option value=${r.id}>${r.name}</option>`)}
-      </select>
-      <button onclick=${toggleFocus}>${focus ? "Focus ✓" : "Focus"}</button>
-      ${active ? html`<button onclick=${pauseRun}>${active.paused ? "Resume" : "Pause"}</button>` : null}
-      ${active ? html`<button onclick=${resetRun}>Reset</button>` : null}
-      <span style="flex:1"></span>
-      ${run.pb ? html`<span class="meta">PB ${run.pb.display}</span>` : null}
-    </div>
-    ${err ? html`<div class="badx">${err}</div>` : null}
-    ${effRouteId == null
-      ? html`<p class="meta">Pick a route to arm a run. The clock starts on the route's start condition (default F1).</p>`
-      : html`<div>
-        <div class="runclock"><${Timer} k="total">${fmtMs(clockMs)}<//>${" "}
-          ${active && active.paused ? html`<span class="meta">PAUSED</span>` : ""}
-          ${active ? "" : html`<span class="meta">${lastFinished ? "(finished)" : startLabel}</span>`}</div>
-        <table class="runsplits"><tbody>
-          ${rows.map((r) => html`<tr class=${r.current ? "runstep-cur" : (r.cumMs != null ? "rundone" : "runupcoming")}>
-            <td class="meta">${r.key + 1}</td>
-            <td>${r.group ? html`<span class="chip">${r.need} of</span> ` : ""}${r.display}
-              ${r.group && r.doneN != null ? html` <span class="meta">(${r.doneN}/${r.need})</span>` : ""}</td>
-            <td style="text-align:right"><${Timer} k=${`step:${r.key}`}>${fmtMs(r.cumMs)}<//></td>
-          </tr>`)}
-        </tbody></table>
-      </div>`}
-    <${RunHistory} t=${t} hist=${hist} openRun=${openRun} setOpenRun=${setOpenRun} />
+  const runState = active ? (active.paused ? "Paused" : "Running")
+    : (lastFinished ? "Finished" : (effRouteId != null ? "Armed" : "Not armed"));
+  return html`<div class=${`workshop-page run-page ${focus ? "runfocus" : ""}`}>
+    <header class="practice-card workshop-hero">
+      <div class="workshop-title">
+        <span class="workshop-title-icon"><${Icon} name="run" size=${22} /></span>
+        <div>
+          <span class="eyebrow">Play</span>
+          <h2>Run</h2>
+          <p>Arm a route, follow each split, and keep the clock readable while you play.</p>
+        </div>
+      </div>
+      <span class=${`run-state ${active && !active.paused ? "is-live" : ""}`}>
+        <span class="status-light"></span>${runState}
+      </span>
+    </header>
+
+    <section class="practice-card run-console-card">
+      <div class="runbar">
+        <label class="run-route-picker">
+          <span class="field-label">Route</span>
+          <select value=${effRouteId ?? ""} disabled=${!!active}
+              onchange=${(e) => pickRoute(e.target.value ? Number(e.target.value) : null)}>
+            <option value="">— pick a route to arm —</option>
+            ${routes.map((r) => html`<option value=${r.id}>${r.name}</option>`)}
+          </select>
+        </label>
+        <div class="run-actions">
+          <button class=${focus ? "is-selected" : ""} onclick=${toggleFocus}
+              title="Remove performance colors">
+            <${Icon} name="eyeOff" size=${16} /> Focus ${focus ? "on" : ""}
+          </button>
+          ${active ? html`<button onclick=${pauseRun}>
+            <${Icon} name=${active.paused ? "play" : "pause"} size=${16} />
+            ${active.paused ? "Resume" : "Pause"}
+          </button>` : null}
+          ${active ? html`<button class="danger-text" onclick=${resetRun}>
+            <${Icon} name="restart" size=${16} /> Reset
+          </button>` : null}
+        </div>
+        <div class="run-pb-slot">
+          <span class="field-label">Personal best</span>
+          <b>${run.pb ? run.pb.display : "—"}</b>
+        </div>
+      </div>
+      ${err ? html`<div class="run-error badx">${err}</div>` : null}
+      <div class="run-live-slot">
+        ${effRouteId == null
+          ? html`<div class="workshop-empty run-empty">
+              <span class="workshop-empty-icon"><${Icon} name="routes" size=${32} /></span>
+              <h3>Pick a route to arm the timer</h3>
+              <p>Selecting a route prepares it immediately. The clock begins on that route's start condition—usually an F1 reset.</p>
+            </div>`
+          : html`<div class="run-live-content">
+            <div class="run-clock-row">
+              <div>
+                <span class="eyebrow">${runState}</span>
+                <div class="runclock"><${Timer} k="total">${fmtMs(clockMs)}<//></div>
+              </div>
+              <div class="run-clock-note">
+                ${active && active.paused
+                  ? html`<b>Timer paused</b><span>Resume when you are ready.</span>`
+                  : active
+                    ? html`<b>Route in progress</b><span>Complete the highlighted step.</span>`
+                    : html`<b>${lastFinished ? "Latest run finished" : "Ready to begin"}</b>
+                        <span>${lastFinished ? "The final time stays frozen until the next run." : startLabel}</span>`}
+                <small>Click any time to hide or reveal it.</small>
+              </div>
+            </div>
+            <div class="run-split-scroll">
+              <table class="runsplits"><tbody>
+                ${rows.map((r) => html`<tr class=${r.current
+                    ? "runstep-cur" : (r.cumMs != null ? "rundone" : "runupcoming")}>
+                  <td class="run-split-index"><span class="routenum">${r.key + 1}</span></td>
+                  <td class="run-split-name">
+                    ${r.group ? html`<span class="chip">${r.need} of</span> ` : ""}${r.display}
+                    ${r.group && r.doneN != null
+                      ? html` <span class="meta">(${r.doneN}/${r.need})</span>` : ""}
+                  </td>
+                  <td class="run-split-time"><${Timer} k=${`step:${r.key}`}>${fmtMs(r.cumMs)}<//></td>
+                </tr>`)}
+              </tbody></table>
+            </div>
+          </div>`}
+      </div>
+    </section>
+
+    <section class="practice-card run-history-card">
+      <div class="workshop-card-heading">
+        <div><span class="eyebrow">Progress</span><h3>Run history</h3></div>
+        <span class="count-badge">${hist ? hist.runs.length : 0}</span>
+      </div>
+      <${RunHistory} t=${t} hist=${hist} openRun=${openRun} setOpenRun=${setOpenRun} />
+    </section>
   </div>`;
 }

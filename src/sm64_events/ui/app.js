@@ -1,6 +1,6 @@
-// src/sm64_events/ui/app.js — root: header + tabs
+// src/sm64_events/ui/app.js — responsive application shell + mounted views
 import { h, render } from "preact";
-import { useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { useTracker } from "./store.js";
 import { Header } from "./components/header.js";
@@ -11,39 +11,175 @@ import { Routes } from "./components/routes.js";
 import { Run } from "./components/runview.js";
 import { Compare } from "./components/compare.js";
 import { UpdatePopup } from "./components/update.js";
+import { RecordingDot } from "./components/replay.js";
+import { Icon } from "./components/icons.js";
 
 const html = htm.bind(h);
-const TABS = ["Practice", "Segments", "Routes", "Run", "Compare", "Live feed"];
+
+const NAV_GROUPS = [
+  ["Play", [
+    ["Practice", "practice"],
+    ["Run", "run"],
+    ["Compare", "compare"],
+  ]],
+  ["Build", [
+    ["Routes", "routes"],
+    ["Segments", "segments"],
+  ]],
+  ["Library", [
+    ["Sessions", "sessions"],
+    ["Live feed", "feed"],
+  ]],
+];
+
+function NavItem({ name, icon, tab, setTab, onSessions, compact = false }) {
+  const active = tab === name;
+  const choose = () => name === "Sessions" ? onSessions() : setTab(name);
+  return html`<button type="button" class="nav-item ${active ? "on" : ""}"
+      aria-current=${active ? "page" : null} title=${name}
+      onclick=${choose}>
+    <${Icon} name=${icon} size=${20} />
+    <span>${name}</span>
+  </button>`;
+}
+
+function ConnectionStatus({ t, mobile = false }) {
+  const label = !t.connected ? "Offline"
+    : t.paused ? (t.pauseReason === "afk" ? "Paused · AFK" : "Paused")
+    : "Live";
+  return html`<div class=${mobile ? "mobile-status" : "sidebar-status"}>
+    <div class="connection-line ${t.connected && !t.paused ? "is-live" : "is-warn"}">
+      <span class="status-light" aria-hidden="true"></span>
+      <span class="status-main">${label}</span>
+      ${!mobile && html`<span class="status-sub">${t.connected ? "Server connected" : "Reconnecting…"}</span>`}
+    </div>
+    <div class="recording-status"><${RecordingDot} /></div>
+  </div>`;
+}
+
+function Sidebar({ t, tab, setTab, openSettings }) {
+  return html`<aside class="app-sidebar" aria-label="Primary navigation">
+    <div class="app-brand">
+      <img src="/ui/assets/sm64_tracker.png" alt="" />
+      <span>SM64 Trainer</span>
+    </div>
+    <div class="sidebar-nav">
+      ${NAV_GROUPS.map(([label, items]) => html`<div class="nav-group">
+        <div class="nav-group-label">${label}</div>
+        ${items.map(([name, icon]) => html`<${NavItem}
+          name=${name} icon=${icon} tab=${tab} setTab=${setTab}
+          onSessions=${openSettings} />`)}
+      </div>`)}
+    </div>
+    <div class="sidebar-footer">
+      <button type="button" class="nav-item settings-link" onclick=${openSettings}>
+        <${Icon} name="settings" size=${21} /><span>Settings</span>
+      </button>
+      <${ConnectionStatus} t=${t} />
+    </div>
+  </aside>`;
+}
+
+function MobileTop({ t, openSettings }) {
+  return html`<header class="mobile-appbar">
+    <div class="mobile-brand">
+      <img src="/ui/assets/sm64_tracker.png" alt="" />
+      <span>SM64 Trainer</span>
+    </div>
+    <${ConnectionStatus} t=${t} mobile=${true} />
+    <button type="button" class="icon-button" aria-label="Open settings"
+        onclick=${openSettings}><${Icon} name="settings" size=${20} /></button>
+  </header>`;
+}
+
+function MobileNav({ tab, setTab, openMore }) {
+  const items = [
+    ["Practice", "practice"], ["Run", "run"], ["Compare", "compare"],
+  ];
+  return html`<nav class="mobile-nav" aria-label="Primary navigation">
+    ${items.map(([name, icon]) => html`<${NavItem}
+      name=${name} icon=${icon} tab=${tab} setTab=${setTab}
+      onSessions=${() => {}} compact=${true} />`)}
+    <button type="button" class="nav-item" onclick=${openMore}>
+      <${Icon} name="more" size=${20} /><span>More</span>
+    </button>
+  </nav>`;
+}
+
+function MobileMore({ open, close, tab, setTab, openSettings }) {
+  if (!open) return null;
+  const pick = (name) => { setTab(name); close(); };
+  return html`<div class="mobile-more-backdrop" onclick=${close}>
+    <section class="mobile-more-sheet" role="dialog" aria-modal="true"
+        aria-label="More navigation"
+        onclick=${(e) => e.stopPropagation()}>
+      <div class="sheet-head">
+        <div><b>More</b><span>Build, review, and configure</span></div>
+        <button type="button" class="icon-button" aria-label="Close menu" onclick=${close}>
+          <${Icon} name="close" /></button>
+      </div>
+      <div class="mobile-more-grid">
+        ${[["Routes", "routes"], ["Segments", "segments"],
+           ["Live feed", "feed"]].map(([name, icon]) => html`
+          <button type="button" class=${tab === name ? "on" : ""}
+              onclick=${() => pick(name)}>
+            <${Icon} name=${icon} size=${21} /><span>${name}</span>
+          </button>`)}
+        <button type="button" onclick=${() => { close(); openSettings(); }}>
+          <${Icon} name="sessions" size=${21} /><span>Sessions</span>
+        </button>
+        <button type="button" onclick=${() => { close(); openSettings(); }}>
+          <${Icon} name="settings" size=${21} /><span>Settings</span>
+        </button>
+      </div>
+    </section>
+  </div>`;
+}
 
 function App() {
   const t = useTracker();
-  const [tab, setTab] = useState("Practice");
+  const [tab, setTabState] = useState("Practice");
   const [compareIntent, setCompareIntent] = useState(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  useEffect(() => {
+    if (!moreOpen) return;
+    const onKey = (event) => event.key === "Escape" && setMoreOpen(false);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [moreOpen]);
+  const setTab = (name) => { setTabState(name); setMoreOpen(false); };
   const openCompare = (intent) => { setCompareIntent(intent); setTab("Compare"); };
-  return html`
-    <h1>SM64 Trainer</h1>
-    <${Header} t=${t} />
-    <div class="tabs">
-      ${TABS.map((name) => html`
-        <div class="tab ${tab === name ? "on" : ""}"
-             onclick=${() => setTab(name)}>${name}</div>`)}
-    </div>
-    <div class="pane">
-      ${/* Compare stays MOUNTED across tab switches (hidden when inactive) so
-           the loaded videos + sync survive leaving and returning; `active`
-           drives its feed/availability refresh. */""}
-      <div style=${tab === "Compare" ? "" : "display:none"}>
-        <${Compare} t=${t} intent=${compareIntent}
-          clearIntent=${() => setCompareIntent(null)} active=${tab === "Compare"} />
+
+  return html`<div class="app-shell">
+    <${Sidebar} t=${t} tab=${tab} setTab=${setTab}
+      openSettings=${() => setSettingsOpen(true)} />
+    <${MobileTop} t=${t} openSettings=${() => setSettingsOpen(true)} />
+    <main class="app-main">
+      <${Header} t=${t} settingsOpen=${settingsOpen}
+        closeSettings=${() => setSettingsOpen(false)} />
+      <div class="workspace ${tab === "Practice" ? "practice-workspace" : ""}">
+        ${/* Compare stays mounted across tab switches so loaded media and sync
+             survive leaving and returning. */""}
+        <div class="view-pane" style=${tab === "Compare" ? "" : "display:none"}>
+          <${Compare} t=${t} intent=${compareIntent}
+            clearIntent=${() => setCompareIntent(null)} active=${tab === "Compare"} />
+        </div>
+        ${tab === "Practice" ? html`<div class="view-pane"><${Practice} t=${t}
+            openCompare=${openCompare} /></div>`
+          : tab === "Segments" ? html`<div class="view-pane"><${Segments} t=${t} /></div>`
+          : tab === "Routes" ? html`<div class="view-pane"><${Routes} t=${t} /></div>`
+          : tab === "Run" ? html`<div class="view-pane"><${Run} t=${t} /></div>`
+          : tab === "Live feed" ? html`<div class="view-pane"><${Feed} t=${t} /></div>`
+          : null}
       </div>
-      ${tab === "Practice" ? html`<${Practice} t=${t} openCompare=${openCompare} />`
-        : tab === "Segments" ? html`<${Segments} t=${t} />`
-        : tab === "Routes" ? html`<${Routes} t=${t} />`
-        : tab === "Run" ? html`<${Run} t=${t} />`
-        : tab === "Live feed" ? html`<${Feed} t=${t} />`
-        : null}
-    </div>
-    <${UpdatePopup} t=${t} />`;
+    </main>
+    <${MobileNav} tab=${tab} setTab=${setTab}
+      openMore=${() => setMoreOpen(true)} />
+    <${MobileMore} open=${moreOpen} close=${() => setMoreOpen(false)}
+      tab=${tab} setTab=${setTab} openSettings=${() => setSettingsOpen(true)} />
+    <${UpdatePopup} t=${t} />
+  </div>`;
 }
 
 render(html`<${App} />`, document.getElementById("app"));

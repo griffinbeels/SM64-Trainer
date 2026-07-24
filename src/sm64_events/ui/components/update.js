@@ -7,6 +7,7 @@ import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { Modal } from "./modal.js";
+import { Icon } from "./icons.js";
 
 const html = htm.bind(h);
 
@@ -106,33 +107,49 @@ export function UpdatePopup({ t }) {
     ? (st.state === "error" ? onClose : undefined)
     : onLater;
 
-  return html`<${Modal} title=${`Update available — v${st.latest}`}
-      onClose=${onBackdropDismiss}>
-    <div class="meta">You're on v${st.current}.${
-      missed > 1 ? ` ${missed} versions of changes.` : ""}</div>
+  return html`<${Modal} title=${`Update available · v${st.latest}`}
+      description="See what changed, then update when it is convenient."
+      icon="updates" size="large" onClose=${onBackdropDismiss}>
+    <div class="update-summary">
+      <span><small>Installed</small><b>v${st.current}</b></span>
+      <${Icon} name="arrowDown" size=${17} />
+      <span><small>Available</small><b>v${st.latest}</b></span>
+      ${missed > 1 ? html`<em>${missed} versions</em>` : null}
+    </div>
     <${NotesStack} releases=${st.releases} fallback=${st.notes} />
-    <p><a href=${st.html_url} target="_blank">View this release on GitHub →</a></p>
+    <p class="update-release-link"><a href=${st.html_url} target="_blank">
+      View release details on GitHub ↗</a></p>
     ${applying
       ? (st.state === "error"
         ? html`
-          <div class="meta">Update failed — your current version is unchanged.</div>
+          <div class="update-error">
+            <${Icon} name="close" size=${18} />
+            <span><b>Update failed</b>Your current version is unchanged.</span>
+          </div>
           <div class="modal-actions">
             <button onclick=${onClose}>Close</button>
             <a class="btnlink" href=${st.html_url}
                target="_blank">Download from GitHub</a>
           </div>`
         : html`
-          <div class="meta">Installing… the app will restart automatically.</div>
-          <div class="progress"><div class="progress-bar"
+          <div class="update-installing">
+            <b>Installing update…</b>
+            <span>The app will restart automatically when it is ready.</span>
+          </div>
+          <div class="progress" role="progressbar" aria-label="Update progress"
+              aria-valuemin="0" aria-valuemax="100" aria-valuenow=${pct}>
+            <div class="progress-bar"
                style=${{ width: pct + "%" }}></div></div>`)
       : html`
         ${st.download_bytes != null
-          ? html`<div class="meta">Download size: ${
-              (st.download_bytes / 1048576).toFixed(1)} MB</div>`
+          ? html`<div class="update-size"><${Icon} name="download" size=${15} />
+              ${(st.download_bytes / 1048576).toFixed(1)} MB download</div>`
           : ""}
         <div class="modal-actions">
           ${st.writable
-            ? html`<button onclick=${() => t.applyUpdate()}>Update now</button>`
+            ? html`<button class="primary-button" onclick=${() => t.applyUpdate()}>
+                <${Icon} name="updates" size=${16} /> Update now
+              </button>`
             : html`<a class="btnlink" href=${st.html_url}
                       target="_blank">Download from GitHub</a>`}
           <button onclick=${onSkip}>Skip this version</button>

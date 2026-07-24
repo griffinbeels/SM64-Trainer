@@ -8,6 +8,8 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { useSyncController, VideoStage, WorkArea } from "./videosync.js";
+import { Icon } from "./icons.js";
+import { PageState } from "./states.js";
 
 const html = htm.bind(h);
 
@@ -55,15 +57,20 @@ function buildFeed(view, available) {
 function StageFeed({ view, available, attemptId, onPick }) {
   const [stage, setStage] = useState("all");
   if (available == null)
-    return html`<div class="compare-feed"><div class="meta cf-empty">checking replayable runs…</div></div>`;
+    return html`<section class="compare-feed practice-card">
+      <div class="workshop-empty compact">Checking replayable runs…</div>
+    </section>`;
   const feed = buildFeed(view, available);
   const stages = [];
   for (const e of feed)
     if (!stages.find((s) => s.id === e.stageId)) stages.push({ id: e.stageId, name: e.stageName });
   const rows = stage === "all" ? feed : feed.filter((e) => e.stageId === stage);
-  return html`<div class="compare-feed">
+  return html`<section class="compare-feed practice-card">
     <div class="cf-head">
-      <span class="listhead" style="margin:0">My runs — newest first</span>
+      <div>
+        <span class="eyebrow">Source footage</span>
+        <h3>My replayable runs</h3>
+      </div>
       <select value=${stage} onchange=${(e) => setStage(e.target.value)}>
         <option value="all">All stages</option>
         ${stages.map((s) => html`<option value=${s.id}>${s.name}</option>`)}
@@ -73,16 +80,17 @@ function StageFeed({ view, available, attemptId, onPick }) {
       ? html`<div class="meta cf-empty">No replayable runs${stage === "all" ? "" : " for this stage"} yet
           — a run must be saved to disk or still in the replay buffer.</div>`
       : html`<div class="cf-list">
-        ${rows.map((e) => html`<div class="cf-row ${e.attemptId === attemptId ? "on" : ""}"
-            onclick=${() => onPick(e.entity, e.strat, e.attemptId)} title="load as My Run">
+        ${rows.map((e) => html`<button class=${`cf-row ${e.attemptId === attemptId ? "on" : ""}`}
+            onclick=${() => onPick(e.entity, e.strat, e.attemptId)} title="Load as My Run">
           <b>${e.time}</b>
           <span class="cf-stage">${e.stageName}</span>
           <span class="cf-item">${e.itemName}</span>
           ${e.strat ? html`<span class="chip">${e.strat}</span>`
             : html`<span class="meta">— no strat —</span>`}
-        </div>`)}
+          <${Icon} name="play" size=${14} className="cf-load-icon" />
+        </button>`)}
       </div>`}
-  </div>`;
+  </section>`;
 }
 
 // ---- left: my run (video + work-area) --------------------------------------
@@ -155,12 +163,16 @@ function ComparisonStage({ comp, controller, onEdit, onDelete }) {
       caption=${caption} />
     <${WorkArea} videoEl=${videoEl} inFrame=${comp.in_frame} outFrame=${comp.out_frame}
       controller=${controller} onCommit=${(i, o) => onEdit(comp.id, { in_frame: i, out_frame: o })}
-      extra=${html`<button class="meta" onclick=${() => onDelete(comp.id)}
-        title="remove this comparison">×</button>`} />
+      extra=${html`<button class="icon-button danger-icon" onclick=${() => onDelete(comp.id)}
+        title="Close this comparison" aria-label="Close this comparison">
+        <${Icon} name="close" size=${15} />
+      </button>`} />
     <div class="cmp-save">
       <input value=${name} oninput=${(e) => setName(e.target.value)}
         placeholder="name this comparison" />
-      <button onclick=${() => onEdit(comp.id, { name })} title="save this name">Save</button>
+      <button onclick=${() => onEdit(comp.id, { name })} title="Save this name">
+        <${Icon} name="save" size=${15} /> Save
+      </button>
     </div>
   </div>`;
 }
@@ -224,11 +236,13 @@ function AddComparison({ entity, strat, strategies, suggestion, onAdded, hasVide
       : html`<div class="cd-inner">
           <div class="cd-strat meta">Strategy:
             <${StrategySelect} strategies=${strategies} value=${addStrat} onChange=${setAddStrat} /></div>
-          <div class="cd-icon">⬆</div>
+          <div class="cd-icon"><${Icon} name="upload" size=${28} /></div>
           <div>Drag & drop ${hasVideos ? "another" : "a"} video here</div>
           <div class="meta">or</div>
           <div class="cd-actions">
-            <button onclick=${() => fileRef.current && fileRef.current.click()}>Browse files</button>
+            <button onclick=${() => fileRef.current && fileRef.current.click()}>
+              <${Icon} name="upload" size=${15} /> Browse files
+            </button>
             ${suggestion && html`<button onclick=${() =>
               startImport(suggestion.source_kind, suggestion.source_ref, suggestion.name, suggestion.strat)}>
               ▸ Load ${suggestion.name}</button>`}
@@ -257,12 +271,20 @@ function AddComparison({ entity, strat, strategies, suggestion, onAdded, hasVide
 // ---- transport -------------------------------------------------------------
 function Transport({ controller }) {
   return html`<div class="compare-transport">
-    <button onclick=${() => controller.toStart()} title="jump to beginning">⏮ start</button>
-    <button onclick=${() => controller.step(-1)} title="back one frame">⏴ frame</button>
+    <button onclick=${() => controller.toStart()} title="Jump to beginning">
+      <${Icon} name="restart" size=${16} /> Start
+    </button>
+    <button onclick=${() => controller.step(-1)} title="Back one frame">
+      <${Icon} name="stepBack" size=${16} /> Back 1
+    </button>
     <button onclick=${() => controller.playing ? controller.pause() : controller.play()}
-      style="min-width:5.5rem">${controller.playing ? "❚❚ pause" : "▶ play"}</button>
-    <button onclick=${() => controller.step(1)} title="forward one frame">frame ⏵</button>
-    <div class="meta">1 frame = 1/30 s (game frame)</div>
+      class="primary-transport">
+      <${Icon} name=${controller.playing ? "pause" : "play"} size=${17} />
+      ${controller.playing ? "Pause" : "Play"}
+    </button>
+    <button onclick=${() => controller.step(1)} title="Forward one frame">
+      <${Icon} name="stepForward" size=${16} /> Forward 1
+    </button>
   </div>`;
 }
 
@@ -421,7 +443,8 @@ export function Compare({ t, intent, clearIntent, active }) {
     setAttemptId(aid == null ? null : aid);
   }
 
-  if (!view) return html`<p class="meta">loading…</p>`;
+  if (!view) return html`<${PageState} kind=${t.connected ? "loading" : "offline"}
+      title="Preparing your comparison workspace" />`;
   const suggestion = cmp.suggestion || null;
   const shown = cmp.saved.filter((c) => openSet.has(c.id));         // only the OPEN set
   // "load existing": your saved comparisons that aren't currently open — this
@@ -437,19 +460,38 @@ export function Compare({ t, intent, clearIntent, active }) {
     .find((s) => entityOf(s) === entity);
   const entityStrategies = (curSec && curSec.strategies) || [];
 
-  return html`<div class="compare">
+  return html`<div class="workshop-page compare-page">
+    <header class="practice-card workshop-hero">
+      <div class="workshop-title">
+        <span class="workshop-title-icon"><${Icon} name="compare" size=${22} /></span>
+        <div>
+          <span class="eyebrow">Review</span>
+          <h2>Compare</h2>
+          <p>Line up your attempt with a reference and inspect both on the same game frame.</p>
+        </div>
+      </div>
+      <span class="compare-sync-note"><${Icon} name="clock" size=${16} /> 30 game frames / second</span>
+    </header>
     <${StageFeed} view=${view} available=${availSet} attemptId=${attemptId} onPick=${pickRun} />
+    <section class="practice-card compare-transport-card">
+      <div class="transport-copy">
+        <span class="eyebrow">Synchronized transport</span>
+        <span>Every control moves both videos together.</span>
+      </div>
+      <${Transport} controller=${controller} />
+    </section>
     <div class="compare-grid">
-      <div class="compare-col">
-        <div class="meta listhead">My run</div>
+      <section class="practice-card compare-col compare-stage-card">
+        <div class="compare-stage-heading">
+          <div><span class="eyebrow">Left video</span><h3>My run</h3></div>
+          ${attemptId != null ? html`<span class="count-badge">#${attemptId}</span>` : null}
+        </div>
         <${MyRun} attemptId=${attemptId} controller=${controller}
           inFrame=${myIn} outFrame=${myOut} onSync=${saveMyRunSync} />
-      </div>
-      <div class="compare-center">
-        <${Transport} controller=${controller} />
-      </div>
-      <div class="compare-col">
-        <div class="meta listhead cmp-head">Comparison
+      </section>
+      <section class="practice-card compare-col compare-stage-card">
+        <div class="compare-stage-heading cmp-head">
+          <div><span class="eyebrow">Right video</span><h3>Comparison</h3></div>
           <${StrategySelect} strategies=${entityStrategies} value=${strat || ""}
             onChange=${(s) => setStrat(s || null)} />
         </div>
@@ -459,7 +501,7 @@ export function Compare({ t, intent, clearIntent, active }) {
           suggestion=${suggestion} hasVideos=${shown.length > 0}
           onAdded=${(id) => { if (id != null) openComp(id); reloadCmp(); }}
           existing=${existing} onExisting=${onExisting} />
-      </div>
+      </section>
     </div>
   </div>`;
 }

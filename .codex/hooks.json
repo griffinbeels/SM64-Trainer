@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python 'C:\\Users\\griff\\Desktop\\code\\sm64_tracker\\.codex\\hooks\\git-staging-guard.py'"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python 'C:\\Users\\griff\\Desktop\\code\\sm64_tracker\\.codex\\hooks\\jscheck.py'"
+          }
+        ]
+      }
+    ]
+  }
+}

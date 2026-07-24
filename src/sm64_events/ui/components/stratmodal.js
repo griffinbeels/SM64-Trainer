@@ -11,6 +11,7 @@ import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { Modal } from "./modal.js";
 import { RANK_NAMES, rankColor } from "./ranks.js";
+import { Icon } from "./icons.js";
 
 const html = htm.bind(h);
 const enc = encodeURIComponent;
@@ -81,29 +82,49 @@ export function StratModal({ entity, existing, onSaved, onClose }) {
     }
   }
 
-  return html`<${Modal} title="New strategy" onClose=${saving ? null : onClose}
+  return html`<${Modal} title="New strategy" icon="practice" size="large"
+      description="Name the approach, then add any rank times or example videos you already know."
+      onClose=${saving ? null : onClose}
       footer=${html`
-        <button onclick=${save} disabled=${saving}>${saving ? "Saving…" : "Save"}</button>
-        <button onclick=${onClose} disabled=${saving}>Cancel</button>`}>
-    <input class="stratname" placeholder="strategy name" value=${name} ref=${nameRef}
-           oninput=${(inputEvent) => setName(inputEvent.target.value)} />
-    <div class="meta" style="margin:.4rem 0 .2rem">
-      Rank standards — optional; leave blank and no rank is awarded until times are entered.
+        <button onclick=${onClose} disabled=${saving}>Cancel</button>
+        <button class="primary-button" onclick=${save} disabled=${saving}>
+          <${Icon} name="save" size=${16} /> ${saving ? "Saving…" : "Save strategy"}
+        </button>`}>
+    <label class="modal-field strategy-name-field">
+      <span class="field-label">Strategy name</span>
+      <input class="stratname" placeholder="e.g. Texture setup" value=${name}
+          ref=${nameRef} autofocus
+          oninput=${(inputEvent) => setName(inputEvent.target.value)} />
+    </label>
+    <div class="strategy-ladder-heading">
+      <div>
+        <span class="eyebrow">Optional</span>
+        <h3>Rank ladder</h3>
+      </div>
+      <span>Blank ranks can be filled in later.</span>
     </div>
-    <table class="stdtable">
-      <thead><tr><th>Rank</th><th>Time (s)</th><th>Example video (optional)</th></tr></thead>
-      <tbody>
-      ${LADDER_RANKS.map((rank) => html`<tr>
-        <td style=${`background:${rankColor(rank)};color:#111;font-weight:700`}>${rank}</td>
-        <td><input class="stdinp" placeholder="—" value=${times[rank] || ""}
+    <div class="strategy-ladder">
+      <div class="strategy-ladder-labels">
+        <span>Rank</span><span>Time (seconds)</span><span>Example video</span>
+      </div>
+      ${LADDER_RANKS.map((rank) => html`<div class="strategy-rank-row">
+        <span class="strategy-rank-name"
+            style=${`--rank-color:${rankColor(rank)}`}>${rank}</span>
+        <label>
+          <span class="sr-only">${rank} time in seconds</span>
+          <input type="number" min="0" step="0.01" placeholder="—"
+              value=${times[rank] || ""}
               oninput=${(inputEvent) =>
-                setTimes({ ...times, [rank]: inputEvent.target.value })} /></td>
-        <td><input class="stdvid" placeholder="https://…" value=${videos[rank] || ""}
+                setTimes({ ...times, [rank]: inputEvent.target.value })} />
+        </label>
+        <label>
+          <span class="sr-only">${rank} example video URL</span>
+          <input type="url" placeholder="https://…" value=${videos[rank] || ""}
               oninput=${(inputEvent) =>
-                setVideos({ ...videos, [rank]: inputEvent.target.value })} /></td>
-      </tr>`)}
-      </tbody>
-    </table>
+                setVideos({ ...videos, [rank]: inputEvent.target.value })} />
+        </label>
+      </div>`)}
+    </div>
     ${error ? html`<div class="modal-error">${error}</div>` : null}
   <//>`;
 }

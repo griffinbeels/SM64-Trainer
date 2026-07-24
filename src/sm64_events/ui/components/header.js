@@ -1,20 +1,29 @@
-// src/sm64_events/ui/components/header.js
 import { h } from "preact";
-import { useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
-import { RecordingDot } from "./replay.js";
 import { RANK_MODE_OPTIONS } from "./ranks.js";
 import { StratModal } from "./stratmodal.js";
+import { Icon } from "./icons.js";
 
 const html = htm.bind(h);
 
-export function Header({ t }) {
+export function Header({ t, settingsOpen, closeSettings }) {
   const v = t.view;
   const tgt = v && v.target;
   const [editing, setEditing] = useState(false);
-  const [managing, setManaging] = useState(false);
   const [restarting, setRestarting] = useState(false);
+
+  useEffect(() => {
+    if (!settingsOpen && !editing) return;
+    const onKey = (event) => {
+      if (event.key !== "Escape") return;
+      if (editing) setEditing(false);
+      else closeSettings();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [settingsOpen, editing, closeSettings]);
 
   async function restartServer() {
     if (restarting) return;
@@ -22,9 +31,8 @@ export function Header({ t }) {
     try {
       await send("POST", "/api/admin/restart");
     } catch (e) {
-      console.error(e);   // endpoint may drop the connection as it restarts
+      console.error(e); // the request may drop as the server restarts
     }
-    // The WS drops and auto-reconnects (store.js); clear the flag after a beat.
     setTimeout(() => setRestarting(false), 8000);
   }
 
@@ -62,84 +70,137 @@ export function Header({ t }) {
         + "(the session stays open).\nThis cannot be undone.";
     if (!window.confirm(msg)) return;
     await send("POST", "/api/wipe", { kind: "all", scope: t.scope });
-    setManaging(false);
+    closeSettings();
     t.refresh();
   }
 
-  return html`<div class="bar">
-    <span class="dot ${t.connected ? (t.paused ? "bad" : "ok") : "bad"}">
-      ${t.connected
-        ? (t.paused ? (t.pauseReason === "afk" ? "paused (afk)" : "paused")
-                    : "live")
-        : "offline"}</span>
-    <button onclick=${t.togglePause}
-            title=${t.pauseReason === "manual"
-                     ? "resume event + replay processing"
-                     : "manual pause: stops ALL processing; movement will NOT unpause"}>
-      ${t.pauseReason === "manual" ? "▶ resume" : "⏸ pause"}</button>
-    <button onclick=${restartServer} disabled=${restarting}
-            title="Relaunch the underlying server to pick up backend changes">
-      ${restarting ? "↻ restarting…" : "↻ restart server"}</button>
-    <button onclick=${t.checkUpdates}
-            title="Check GitHub for a newer version of the app">⟳ updates</button>
-    ${t.updateMsg && html`<span class="meta">${t.updateMsg}</span>`}
-    <${RecordingDot} />
-    ${v && html`<select id="session-select" name="session"
-                        value=${t.scope === "lifetime" ? "lifetime" : String(active)}
-                        onchange=${pickSession}>
-      <option value="lifetime">Lifetime</option>
-      ${v.sessions.map((s) => html`<option value=${String(s.id)}>
-        Session ${s.id}${s.id === active ? " ●" : ""} · ${s.attempts}</option>`)}
-    </select>`}
-    ${v && html`<button onclick=${() => setManaging(!managing)} title="manage sessions">…</button>`}
-    <button onclick=${newSession} disabled=${!v}>New session</button>
-    <span>Target:
-      ${tgt && tgt.kind === "segment"
-        ? html` <b>⏱ ${tgt.segment_name}</b>`
-        : tgt && tgt.course_id !== null
-          ? html` <b>${tgt.course_name} · ${tgt.star_name}</b>`
-          : html` <span class="meta">none (grab a star or set one)</span>`}
-      ${tgt && tgt.strat_tag ? html` <span class="meta">«${tgt.strat_tag}»</span>` : ""}
-      <button onclick=${() => setEditing(!editing)} disabled=${!v}>▾</button>
-    </span>
-    ${/* Live armed indicator — visible on EVERY tab, unlike the practice-list
-         pin. Arming retires a star target (projection.py caveat 12), so
-         without this the header actively read "Target: none" while a segment
-         was being timed (live report 2026-07-23: SSL -> LLL armed + recorded
-         a full run with no visible indication anywhere the user was looking).
-         armedOrder appends on arm — reversed, the newest armed shows first. */""}
-    ${t.armedOrder.length > 0 && html`<span class="chip good armedchip"
-        title="start condition met — the segment timer is running">
-      ⏱ ${[...t.armedOrder].reverse()
-            .map((id) => t.armedNames[id] || `segment ${id}`).join(" · ")}${" "}
-      <span class="armedword">running</span></span>`}
-    <span style="margin-left:auto">Clock:
-      <select id="clock-select" name="clock" value=${t.clock} onchange=${(e) => t.pickClock(e.target.value)}>
-        <option value="igt">Usamune IGT</option>
-        <option value="rta">anchor → grab</option>
-      </select>
-    </span>
-    ${v && html`<span>Rank:
-      <select id="rankmode-select" name="rank_mode" value=${v.rank_mode}
-              title="What rank medals grade: your saved PB, or the average of your last/best N valid runs"
-              onchange=${(e) => send("PUT", "/api/ranks/mode", { mode: e.target.value }).then(() => t.refresh())}>
-        ${RANK_MODE_OPTIONS.map(([k, label]) => html`<option value=${k}>${label}</option>`)}
-      </select>
-    </span>`}
-    ${managing && v && html`<div class="popover">
-      ${v.sessions.map((s) => html`<div style="display:flex;gap:.5rem;align-items:center">
-        <span>Session ${s.id} · ${s.attempts} attempts · ${(s.started_utc || "").slice(0, 10)}</span>
-        ${s.id !== active && html`<button onclick=${() => removeSession(s.id)}>×</button>`}
-        ${s.id === active && html`<span class="meta">active</span>`}
-      </div>`)}
-      <div style="margin-top:.4rem;display:flex;gap:.5rem">
-        <button onclick=${wipeAll} title="wipe the current scope's data">
-          ${t.scope === "lifetime" ? "Clear ALL data" : `Clear session ${active} data`}</button>
-        <button onclick=${() => setManaging(false)}>Close</button>
-      </div>
+  const targetName = tgt && tgt.kind === "segment"
+    ? tgt.segment_name
+    : tgt && tgt.course_id !== null
+      ? `${tgt.course_name} · ${tgt.star_name}`
+      : "Choose a practice target";
+  const running = [...t.armedOrder].reverse()
+    .map((id) => t.armedNames[id] || `segment ${id}`).join(" · ");
+
+  return html`<header class="context-shell">
+    <div class="context-bar" aria-label="Practice context">
+      <label class="context-control">
+        <${Icon} name="sessions" size=${19} />
+        <span class="context-control-copy">
+          <span class="context-label">Session</span>
+          ${v ? html`<select id="session-select" name="session"
+              value=${t.scope === "lifetime" ? "lifetime" : String(active)}
+              onchange=${pickSession}>
+            <option value="lifetime">Lifetime</option>
+            ${v.sessions.map((s) => html`<option value=${String(s.id)}>
+              Session ${s.id}${s.id === active ? " ●" : ""} · ${s.attempts}</option>`)}
+          </select>` : html`<span>Loading…</span>`}
+        </span>
+      </label>
+
+      <button type="button" class="context-control target-context"
+          disabled=${!v} onclick=${() => setEditing(!editing)}
+          title="Choose a star, segment, or strategy">
+        <${Icon} name="target" size=${19} />
+        <span class="context-control-copy">
+          <span class="context-label">${running ? "Running" : "Practice target"}</span>
+          <span class="context-value">${running || targetName}</span>
+        </span>
+        <${Icon} name="chevron" size=${16} />
+      </button>
+
+      <label class="context-control">
+        <${Icon} name="clock" size=${19} />
+        <span class="context-control-copy">
+          <span class="context-label">Clock</span>
+          <select id="clock-select" name="clock" value=${t.clock}
+              onchange=${(e) => t.pickClock(e.target.value)}>
+            <option value="igt">Usamune IGT</option>
+            <option value="rta">Anchor → grab</option>
+          </select>
+        </span>
+      </label>
+
+      <label class="context-control">
+        <${Icon} name="rank" size=${19} />
+        <span class="context-control-copy">
+          <span class="context-label">Rank</span>
+          ${v ? html`<select id="rankmode-select" name="rank_mode"
+              value=${v.rank_mode}
+              title="Grade medals by saved PB or by a recent/best average"
+              onchange=${(e) => send("PUT", "/api/ranks/mode",
+                { mode: e.target.value }).then(() => t.refresh())}>
+            ${RANK_MODE_OPTIONS.map(([k, label]) => html`<option value=${k}>${label}</option>`)}
+          </select>` : html`<span>—</span>`}
+        </span>
+      </label>
+    </div>
+
+    ${editing && v && html`<div class="context-editor">
+      <${TargetEditor} t=${t} close=${() => setEditing(false)} />
     </div>`}
-    ${editing && v && html`<${TargetEditor} t=${t} close=${() => setEditing(false)} />`}
-  </div>`;
+
+    ${settingsOpen && html`<div class="settings-backdrop" onclick=${closeSettings}>
+      <aside class="settings-drawer" role="dialog" aria-modal="true"
+          aria-label="Settings"
+          onclick=${(e) => e.stopPropagation()}>
+        <div class="settings-head">
+          <div><span class="eyebrow">System</span><h2>Settings</h2></div>
+          <button type="button" class="icon-button" aria-label="Close settings"
+              onclick=${closeSettings}><${Icon} name="close" /></button>
+        </div>
+
+        <section class="settings-section">
+          <h3>Trainer</h3>
+          <div class="settings-actions">
+            <button type="button" onclick=${t.togglePause}
+                title=${t.pauseReason === "manual"
+                  ? "Resume event and replay processing"
+                  : "Pause all event and replay processing"}>
+              <${Icon} name=${t.pauseReason === "manual" ? "play" : "pause"} />
+              ${t.pauseReason === "manual" ? "Resume trainer" : "Pause trainer"}
+            </button>
+            <button type="button" onclick=${restartServer} disabled=${restarting}>
+              <${Icon} name="restart" />
+              ${restarting ? "Restarting…" : "Restart server"}
+            </button>
+            <button type="button" onclick=${t.checkUpdates}>
+              <${Icon} name="updates" />Check for updates
+            </button>
+          </div>
+          ${t.updateMsg && html`<p class="settings-note">${t.updateMsg}</p>`}
+        </section>
+
+        <section class="settings-section">
+          <div class="settings-section-head">
+            <div><h3>Sessions</h3><p>Switch, start, or remove practice sessions.</p></div>
+            <button type="button" onclick=${newSession} disabled=${!v}>
+              <${Icon} name="plus" />New session
+            </button>
+          </div>
+          ${v ? html`<div class="session-list">
+            ${v.sessions.map((s) => html`<div class="session-row">
+              <button type="button" class="session-pick"
+                  onclick=${() => pickSession({ target: { value: String(s.id) } })}>
+                <span>Session ${s.id}${s.id === active ? " · Active" : ""}</span>
+                <span>${s.attempts} attempts · ${(s.started_utc || "").slice(0, 10)}</span>
+              </button>
+              ${s.id !== active && html`<button type="button" class="danger-icon"
+                  aria-label=${`Delete session ${s.id}`} onclick=${() => removeSession(s.id)}>×</button>`}
+            </div>`)}
+          </div>` : html`<p class="settings-note">Session data is loading.</p>`}
+        </section>
+
+        <section class="settings-section danger-zone">
+          <h3>Data</h3>
+          <p>Replay storage limits are available by selecting the REC status.</p>
+          <button type="button" class="danger-button" onclick=${wipeAll} disabled=${!v}>
+            Clear ${t.scope === "lifetime" ? "all practice data" : `session ${active} data`}
+          </button>
+        </section>
+      </aside>
+    </div>`}
+  </header>`;
 }
 
 function TargetEditor({ t, close }) {
@@ -151,21 +212,18 @@ function TargetEditor({ t, close }) {
   const stratsFor = (c, s) => v.strategies[`${Number(c)}:${Number(s)}`] || [];
   const [strat, setStrat] = useState(lastStratFor(course, star));
   const [showStratModal, setShowStratModal] = useState(false);
-  // Remounts the select after a cancelled "+ new strategy…" pick — same
-  // phantom-value pathology and fix as practice.js's stratNonce.
   const [stratNonce, setStratNonce] = useState(0);
 
   function pickStar(c, s) {
     setCourse(c); setStar(s);
-    setStrat(lastStratFor(c, s));   // load the star's own remembered strat
+    setStrat(lastStratFor(c, s));
     setShowStratModal(false);
   }
 
   async function apply() {
-    const chosen = strat;
     await send("POST", "/api/target", {
       course_id: Number(course), star_id: Number(star),
-      strat_tag: chosen || null,
+      strat_tag: strat || null,
     });
     close(); t.refresh();
   }
@@ -174,26 +232,33 @@ function TargetEditor({ t, close }) {
   const stars = (courses.find((c) => c.id === Number(course)) || { stars: [] }).stars;
   const options = stratsFor(course, star);
 
-  return html`<div class="popover">
-    <div>
-      <select value=${course} onchange=${(e) => pickStar(e.target.value, 0)}>
-        ${courses.map((c) => html`<option value=${c.id}>${c.name}</option>`)}
-      </select>
-      <select value=${star} onchange=${(e) => pickStar(course, e.target.value)}>
-        ${stars.map((name, i) => html`<option value=${i}>${name}</option>`)}
-      </select>
+  return html`<div class="target-editor-card" role="dialog" aria-modal="true"
+      aria-label="Choose a practice target">
+    <div class="target-editor-head">
+      <div><span class="eyebrow">Practice target</span><b>Choose a star</b></div>
+      <button type="button" class="icon-button" aria-label="Close target editor"
+          onclick=${close}><${Icon} name="close" /></button>
     </div>
-    <div style="margin-top:.4rem">
-      <select key=${`hstrat-${stratNonce}`} value=${strat}
-              onchange=${(changeEvent) => changeEvent.target.value === "__new__"
-                ? setShowStratModal(true) : setStrat(changeEvent.target.value)}>
-        <option value="">(no strategy)</option>
+    <div class="target-editor-fields">
+      <label>Course<select value=${course} onchange=${(e) => pickStar(e.target.value, 0)}>
+        ${courses.map((c) => html`<option value=${c.id}>${c.name}</option>`)}
+      </select></label>
+      <label>Star<select value=${star} onchange=${(e) => pickStar(course, e.target.value)}>
+        ${stars.map((name, i) => html`<option value=${i}>${name}</option>`)}
+      </select></label>
+      <label>Strategy<select key=${`hstrat-${stratNonce}`} value=${strat}
+          onchange=${(changeEvent) => changeEvent.target.value === "__new__"
+            ? setShowStratModal(true) : setStrat(changeEvent.target.value)}>
+        <option value="">No strategy</option>
         ${options.map((s) => html`<option value=${s}>${s}</option>`)}
         ${strat && !options.includes(strat)
           ? html`<option value=${strat}>${strat}</option>` : null}
-        <option value="__new__">+ new strategy…</option>
-      </select>
-      <button onclick=${apply}>Set target</button>
+        <option value="__new__">+ New strategy…</option>
+      </select></label>
+    </div>
+    <div class="target-editor-actions">
+      <button type="button" onclick=${close}>Cancel</button>
+      <button type="button" class="primary-button" onclick=${apply}>Set target</button>
     </div>
     ${showStratModal ? html`<${StratModal}
         entity=${`star:${Number(course)}:${Number(star)}`} existing=${options}

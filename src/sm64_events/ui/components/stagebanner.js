@@ -30,14 +30,23 @@ const CASTLE_AREA_NAMES = { 1: "Lobby", 2: "Upstairs", 3: "Basement" };
 export function StageBanner({ t }) {
   const v = t.view;
   const stage = t.stage;
-  if (!v || !stage) return null;
+  if (!v || !stage) return html`<${StagePlaceholder} />`;
+  let row = null;
   switch (stage.mode) {
-    case "stars":         return html`<${StarRow} t=${t} v=${v} stage=${stage} />`;
-    case "bowser_course": return html`<${BowserCourseRow} t=${t} v=${v} stage=${stage} />`;
-    case "arena":         return html`<${ArenaRow} t=${t} v=${v} stage=${stage} />`;
-    case "castle":        return html`<${SegmentRow} t=${t} v=${v} stage=${stage} />`;
-    default:              return null;
+    case "stars":         row = html`<${StarRow} t=${t} v=${v} stage=${stage} />`; break;
+    case "bowser_course": row = html`<${BowserCourseRow} t=${t} v=${v} stage=${stage} />`; break;
+    case "arena":         row = html`<${ArenaRow} t=${t} v=${v} stage=${stage} />`; break;
+    case "castle":        row = html`<${SegmentRow} t=${t} v=${v} stage=${stage} />`; break;
   }
+  return row || html`<${StagePlaceholder} />`;
+}
+
+function StagePlaceholder() {
+  return html`<section class="practice-card selector-card stagebanner selector-empty">
+    <div class="selector-empty-symbol" aria-hidden="true">☆</div>
+    <div><b>No course target available</b>
+      <span class="meta">Move into a course or choose a target above.</span></div>
+  </section>`;
 }
 
 // segments offered for the current whole level (Bowser banners) — the pipe-entry
@@ -55,7 +64,7 @@ const STAR_DIM_IDLE = true;  // false = every star equally bright
 
 function StarRow({ t, v, stage }) {
   const course = v.catalog.courses.find((c) => c.id === stage.course_id);
-  if (!course) return null;
+  if (!course) return html`<${StagePlaceholder} />`;
 
   const tgt = v.target || {};
   const lastStratFor = (i) =>
@@ -73,7 +82,7 @@ function StarRow({ t, v, stage }) {
     t.refresh();
   }
 
-  return html`<div class="starsec stagebanner">
+  return html`<section class="practice-card selector-card stagebanner">
     <div class="shead"><b>▸ ${course.name}</b>
       <span class="meta">tap a star to practice</span></div>
     <div class="starrow">
@@ -99,14 +108,14 @@ function StarRow({ t, v, stage }) {
         </button>`;
       })}
     </div>
-  </div>`;
+  </section>`;
 }
 
 // BitDW/BitFS/BitS: the "reds" 8-coin star + the level's "no reds" pipe-entry
 // segment(s). Picking flips the pipe segment's enabled flag (mutual exclusion).
 function BowserCourseRow({ t, v, stage }) {
   const course = v.catalog.courses.find((c) => c.id === stage.course_id);
-  if (!course) return null;
+  if (!course) return html`<${StagePlaceholder} />`;
   const tgt = v.target || {};
   const pipes = segsForLevel(v, stage.level);
   const redsActive = tgt.kind !== "segment"
@@ -157,7 +166,7 @@ function BowserCourseRow({ t, v, stage }) {
     }
   }, [stage.level, enabledPipe && enabledPipe.segment_id]);
 
-  return html`<div class="starsec stagebanner">
+  return html`<section class="practice-card selector-card stagebanner">
     <div class="shead"><b>▸ ${course.name}</b>
       <span class="meta">reds (8-coin star) · or the pipe-entry skip (no reds)</span></div>
     <div class="stagebanner-row">
@@ -178,7 +187,7 @@ function BowserCourseRow({ t, v, stage }) {
         </button>`;
       })}
     </div>
-  </div>`;
+  </section>`;
 }
 
 // Bowser 1/2/3 arena: the single fight segment, auto-selected on entry.
@@ -202,7 +211,7 @@ function ArenaRow({ t, v, stage }) {
     })();
   }, [stage.level, only && only.segment_id]);
 
-  if (!fights.length) return null;   // no fight segment defined -> nothing to offer
+  if (!fights.length) return html`<${StagePlaceholder} />`;
 
   async function pick(s) {
     if (!s.enabled)
@@ -211,7 +220,7 @@ function ArenaRow({ t, v, stage }) {
     t.refresh();
   }
 
-  return html`<div class="starsec stagebanner">
+  return html`<section class="practice-card selector-card stagebanner">
     <div class="shead"><b>▸ Bowser Fight</b>
       <span class="meta">auto-selected — tap to re-arm</span></div>
     <div class="stagebanner-row">
@@ -226,7 +235,7 @@ function ArenaRow({ t, v, stage }) {
         </button>`;
       })}
     </div>
-  </div>`;
+  </section>`;
 }
 
 function SegmentRow({ t, v, stage }) {
@@ -234,14 +243,14 @@ function SegmentRow({ t, v, stage }) {
   const segs = (v.segment_targets || []).filter((s) =>
     s.enabled &&
     s.start_areas.some((a) => a[0] === stage.level && a[1] === stage.area));
-  if (!segs.length) return null;   // no segments start here -> nothing to offer
+  if (!segs.length) return html`<${StagePlaceholder} />`;
 
   async function pick(segId) {
     await send("POST", "/api/target", { kind: "segment", segment_id: segId });
     t.refresh();
   }
 
-  return html`<div class="starsec stagebanner">
+  return html`<section class="practice-card selector-card stagebanner">
     <div class="shead"><b>▸ Castle ${CASTLE_AREA_NAMES[stage.area]}</b>
       <span class="meta">tap a segment to practice</span></div>
     <div class="stagebanner-row">
@@ -256,5 +265,5 @@ function SegmentRow({ t, v, stage }) {
         </button>`;
       })}
     </div>
-  </div>`;
+  </section>`;
 }

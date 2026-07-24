@@ -11,6 +11,8 @@ import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { ClauseRow } from "./segments.js";
 import { Medal } from "./ranks.js";
+import { Icon } from "./icons.js";
+import { PageState } from "./states.js";
 
 const html = htm.bind(h);
 const pct = (r) => `${Math.round((r ?? 0) * 100)}%`;
@@ -25,10 +27,10 @@ function ItemPicker({ catalog, segs, onPick, label }) {
   const pick = () => onPick(mode === "star"
     ? { type: "star", course, star }
     : { type: "segment", segment_id: segId });
-  return html`<span class="routepick">
+  return html`<div class="routepick">
     <select value=${mode} onchange=${(e) => setMode(e.target.value)}>
-      <option value="star">star</option>
-      <option value="segment">segment</option>
+      <option value="star">Star</option>
+      <option value="segment">Segment</option>
     </select>
     ${mode === "star"
       ? html`<select value=${course}
@@ -46,9 +48,9 @@ function ItemPicker({ catalog, segs, onPick, label }) {
           ${segs.map((s) => html`<option value=${s.id}>${s.name}</option>`)}
         </select>`}
     <button disabled=${mode === "segment" && segs.length === 0} onclick=${pick}>
-      ${label || "add"}
+      <${Icon} name="plus" size=${15} /> ${label || "Add"}
     </button>
-  </span>`;
+  </div>`;
 }
 
 // One step row. step = raw {label?, need, candidates[]}; view = resolved
@@ -65,17 +67,28 @@ function StepRow({ step, view, idx, total, catalog, segs, onChange, onMove, onRe
   const group = step.candidates.length > 1;
   return html`<div class="routestep ${view.broken ? "routebroken" : ""}">
     <div class="routestep-head">
-      <span class="routenum">${idx + 1}.</span>
+      <span class="routenum">${idx + 1}</span>
       ${group ? html`<span class="chip">${step.need} of ${step.candidates.length}</span>` : null}
       ${step.label ? html`<b>${step.label}</b>` : null}
       ${view.rank ? html`<${Medal} rank=${view.rank} size=${16} />` : null}
       ${weakest ? html`<span class="weakflag">weakest</span>` : null}
-      <span class="routerate">step ${pct(view.step_rate)}</span>
-      <span class="routecum">cum ${pct(view.cumulative)}</span>
       <span style="flex:1"></span>
-      <button disabled=${idx === 0} onclick=${() => onMove(-1)}>↑</button>
-      <button disabled=${idx === total - 1} onclick=${() => onMove(1)}>↓</button>
-      <button onclick=${onRemove}>✕</button>
+      <span class="route-stat"><small>Step</small><b>${pct(view.step_rate)}</b></span>
+      <span class="route-stat cumulative"><small>Through here</small><b>${pct(view.cumulative)}</b></span>
+      <div class="routestep-actions">
+        <button class="icon-button" disabled=${idx === 0} title="Move step up"
+            aria-label="Move step up" onclick=${() => onMove(-1)}>
+          <${Icon} name="arrowUp" size=${15} />
+        </button>
+        <button class="icon-button" disabled=${idx === total - 1} title="Move step down"
+            aria-label="Move step down" onclick=${() => onMove(1)}>
+          <${Icon} name="arrowDown" size=${15} />
+        </button>
+        <button class="icon-button danger-icon" title="Remove step"
+            aria-label="Remove step" onclick=${onRemove}>
+          <${Icon} name="trash" size=${15} />
+        </button>
+      </div>
     </div>
     <div class="routecands">
       ${step.candidates.map((c, i) => html`<span class="chip">
@@ -89,7 +102,7 @@ function StepRow({ step, view, idx, total, catalog, segs, onChange, onMove, onRe
         <select value=${step.need} onchange=${(e) => setNeed(Number(e.target.value))}>
           ${step.candidates.map((_, i) => html`<option value=${i + 1}>${i + 1}</option>`)}
         </select></label>` : null}
-      <${ItemPicker} catalog=${catalog} segs=${segs} label="+ option" onPick=${addCand} />
+      <${ItemPicker} catalog=${catalog} segs=${segs} label="Add option" onPick=${addCand} />
     </div>
   </div>`;
 }
@@ -121,10 +134,10 @@ function ImportExport({ routeId, onImported }) {
 
   return html`<div class="routeio">
     ${routeId != null ? html`<div>
-      <button onclick=${doExport}>Export this route</button>
+      <button onclick=${doExport}><${Icon} name="download" size=${16} /> Export this route</button>
       ${exp != null ? html`<div>
         <textarea class="routejson" readonly>${exp}</textarea>
-        <div><button onclick=${copy}>Copy</button></div>
+        <div><button onclick=${copy}>Copy JSON</button></div>
       </div>` : null}
     </div>` : null}
     <div>
@@ -133,7 +146,9 @@ function ImportExport({ routeId, onImported }) {
           oninput=${(e) => setImp(e.target.value)}></textarea>
       <div>
         <button onclick=${doPreview} disabled=${!imp.trim()}>Preview</button>
-        <button onclick=${doImport} disabled=${!imp.trim()}>Import</button>
+        <button onclick=${doImport} disabled=${!imp.trim()}>
+          <${Icon} name="upload" size=${16} /> Import
+        </button>
       </div>
       ${preview ? html`<div class="meta">Will reuse: ${preview.reused.join(", ") || "none"}
         · create: ${preview.created.join(", ") || "none"}</div>` : null}
@@ -174,7 +189,9 @@ export function Routes({ t }) {
     setStartCond(view ? (view.start_condition || { type: "reset_game" }) : null);
   }, [view]);
 
-  if (routes === null) return html`<div class="meta">loading…</div>`;
+  if (routes === null) return html`<${PageState}
+      kind=${t.connected ? "loading" : "offline"}
+      title="Preparing the route workshop" />`;
   const selected = routes.find((r) => r.id === selId) || null;
 
   async function saveSteps(steps) {
@@ -221,48 +238,137 @@ export function Routes({ t }) {
     catch (e) { setErr(String(e)); }
   }
 
-  return html`<div>
-    <div class="bar">
-      <select value=${selId ?? ""}
-          onchange=${(e) => setSelId(e.target.value ? Number(e.target.value) : null)}>
-        <option value="">— pick a route —</option>
-        ${routes.map((r) => html`<option value=${r.id}>${r.name}</option>`)}
-      </select>
-      <button onclick=${createRoute}>+ New route</button>
-      ${selected ? html`<button onclick=${renameRoute}>Rename</button>` : null}
-      ${selected ? html`<button onclick=${deleteRoute}>Delete</button>` : null}
-    </div>
-    ${err ? html`<div class="badx">${err}</div>` : null}
-    ${selected && view ? html`<div class="routebuilder">
-      ${vocab ? html`<div class="routestart">
-        <span class="meta">Run starts when:</span>
-        <${ClauseRow} clause=${startCond || view.start_condition || { type: "reset_game" }}
-          types=${vocab.triggers} vocab=${vocab}
-          onChange=${(c) => saveStartCondition(c)} onRemove=${() => {}} />
-      </div>` : null}
-      ${view.avg_rank ? html`<div class="routeavg"><span class="meta">Route avg:</span> <${Medal} rank=${view.avg_rank.tier} size=${18} /> ${view.avg_rank.tier} · ${view.avg_rank.score}/9</div>` : null}
-      ${selected.steps.length === 0
-        ? html`<div class="meta">No steps yet — add one below.</div>` : null}
-      ${selected.steps.map((step, i) => {
-        // Render from the RAW steps (structural source of truth); pull the
-        // resolved %s by index with a safe fallback. saveSteps reloads routes
-        // and the view separately, so on a removal they are transiently
-        // different lengths — indexing the view here (not mapping it) avoids a
-        // step=undefined render crash (live smoke 2026-06-14).
-        const vs = (view.steps && view.steps[i])
-          || { candidates: [], step_rate: 0, cumulative: 0, broken: false };
-        return html`<${StepRow} key=${i} step=${step} view=${vs} idx=${i}
-            total=${selected.steps.length} catalog=${catalog} segs=${segs}
-            weakest=${i === view.weakest_step}
-            onChange=${(s) => editStep(i, s)} onMove=${(dir) => moveStep(i, dir)}
-            onRemove=${() => removeStep(i)} />`;
-      })}
-      <div class="routeadd">
-        <span class="meta">Add step:</span>
-        <${ItemPicker} catalog=${catalog} segs=${segs} label="+ add step" onPick=${addStep} />
+  return html`<div class="workshop-page routes-page">
+    <header class="practice-card workshop-hero">
+      <div class="workshop-title">
+        <span class="workshop-title-icon"><${Icon} name="routes" size=${22} /></span>
+        <div>
+          <span class="eyebrow">Build</span>
+          <h2>Routes</h2>
+          <p>Arrange stars and segments into a clear practice plan or complete run.</p>
+        </div>
       </div>
-    </div>` : null}
-    <${ImportExport} routeId=${selId}
-        onImported=${(id) => loadRoutes().then(() => setSelId(id))} />
+      <button class="primary-button" onclick=${createRoute}>
+        <${Icon} name="plus" size=${17} /> New route
+      </button>
+    </header>
+
+    ${err ? html`<div class="practice-card workshop-error badx">${err}</div>` : null}
+
+    <div class="routes-workshop">
+      <aside class="practice-card workshop-card route-library">
+        <div class="workshop-card-heading">
+          <div>
+            <span class="eyebrow">Library</span>
+            <h3>Your routes</h3>
+          </div>
+          <span class="count-badge">${routes.length}</span>
+        </div>
+        <div class="route-list" role="list">
+          ${routes.length === 0 ? html`<div class="workshop-empty compact">
+            No routes yet. Build one from stars, segments, or groups.
+          </div>` : routes.map((r) => html`<button role="listitem"
+              class=${`route-list-item ${r.id === selId ? "on" : ""}`}
+              onclick=${() => setSelId(r.id)}>
+            <span>
+              <b>${r.name}</b>
+              <small>${r.steps.length} ${r.steps.length === 1 ? "step" : "steps"}</small>
+            </span>
+            <${Icon} name="chevron" size=${16} />
+          </button>`)}
+        </div>
+        ${selected ? html`<div class="library-actions">
+          <button onclick=${renameRoute}><${Icon} name="edit" size=${15} /> Rename</button>
+          <button class="danger-text" onclick=${deleteRoute}>
+            <${Icon} name="trash" size=${15} /> Delete
+          </button>
+        </div>` : null}
+      </aside>
+
+      <main class="route-workspace">
+        ${selected && view ? html`
+          <section class="practice-card workshop-card route-setup-card">
+            <div class="workshop-card-heading route-identity">
+              <div>
+                <span class="eyebrow">Route setup</span>
+                <h2>${selected.name}</h2>
+              </div>
+              ${view.avg_rank ? html`<div class="routeavg">
+                <span class="meta">Average</span>
+                <${Medal} rank=${view.avg_rank.tier} size=${18} />
+                <b>${view.avg_rank.tier}</b>
+                <span class="meta">${view.avg_rank.score}/9</span>
+              </div>` : null}
+            </div>
+            ${vocab ? html`<div class="routestart">
+              <div class="setting-copy">
+                <b>Run starts when</b>
+                <span>Choose the event that begins the route clock.</span>
+              </div>
+              <${ClauseRow} clause=${startCond || view.start_condition || { type: "reset_game" }}
+                types=${vocab.triggers} vocab=${vocab}
+                onChange=${(c) => saveStartCondition(c)} />
+            </div>` : null}
+          </section>
+
+          <section class="practice-card workshop-card route-plan-card">
+            <div class="workshop-card-heading">
+              <div>
+                <span class="eyebrow">Practice plan</span>
+                <h3>Route steps</h3>
+              </div>
+              <span class="count-badge">${selected.steps.length}</span>
+            </div>
+            <div class="route-step-list">
+              ${selected.steps.length === 0
+                ? html`<div class="workshop-empty compact">
+                    Start with a star or segment. You can add alternatives to any step later.
+                  </div>` : null}
+              ${selected.steps.map((step, i) => {
+                // Render from the RAW steps (structural source of truth); pull the
+                // resolved %s by index with a safe fallback. saveSteps reloads routes
+                // and the view separately, so on a removal they are transiently
+                // different lengths — indexing the view here avoids a render crash.
+                const vs = (view.steps && view.steps[i])
+                  || { candidates: [], step_rate: 0, cumulative: 0, broken: false };
+                return html`<${StepRow} key=${i} step=${step} view=${vs} idx=${i}
+                    total=${selected.steps.length} catalog=${catalog} segs=${segs}
+                    weakest=${i === view.weakest_step}
+                    onChange=${(s) => editStep(i, s)}
+                    onMove=${(dir) => moveStep(i, dir)}
+                    onRemove=${() => removeStep(i)} />`;
+              })}
+            </div>
+            <div class="routeadd">
+              <div class="setting-copy">
+                <b>Add a step</b>
+                <span>Pick one star or segment to append to the route.</span>
+              </div>
+              <${ItemPicker} catalog=${catalog} segs=${segs}
+                  label="Add step" onPick=${addStep} />
+            </div>
+          </section>
+        ` : html`<section class="practice-card workshop-card route-empty-card">
+          <div class="workshop-empty">
+            <span class="workshop-empty-icon"><${Icon} name="routes" size=${34} /></span>
+            <h3>Choose a route to begin</h3>
+            <p>Every step, option, and success rate will be visible in one ordered plan.</p>
+            <button class="primary-button" onclick=${createRoute}>
+              <${Icon} name="plus" size=${16} /> Create a route
+            </button>
+          </div>
+        </section>`}
+
+        <details class="practice-card workshop-card route-share-card">
+          <summary>
+            <span><${Icon} name="download" size=${17} /></span>
+            <span><b>Import or export</b><small>Share route JSON or bring in someone else's plan.</small></span>
+            <${Icon} name="chevron" size=${16} className="detail-chevron" />
+          </summary>
+          <${ImportExport} routeId=${selId}
+              onImported=${(id) => loadRoutes().then(() => setSelId(id))} />
+        </details>
+      </main>
+    </div>
   </div>`;
 }

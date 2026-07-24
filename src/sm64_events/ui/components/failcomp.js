@@ -23,10 +23,14 @@ export function FailureCompilation({ identity }) {
   const pollRef = useRef(null);
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
-  function setX(v) { setXBefore(v); localStorage.setItem("sm64.failcomp.xBefore", v); }
-  function setY(v) { setYAfter(v); localStorage.setItem("sm64.failcomp.yAfter", v); }
+  // A blank/invalid number input parses to NaN — ignore it and keep the last
+  // good value rather than storing NaN (which would silently break the next
+  // POST /api/compilation body).
+  function setX(v) { if (!Number.isFinite(v)) return; setXBefore(v); localStorage.setItem("sm64.failcomp.xBefore", v); }
+  function setY(v) { if (!Number.isFinite(v)) return; setYAfter(v); localStorage.setItem("sm64.failcomp.yAfter", v); }
 
   async function generate() {
+    if (job && job.state === "running") return; // re-entrancy guard: one job at a time
     setJob({ state: "running", progress: 0, message: "starting" });
     const target = identity.segment_id != null
       ? { segment_id: identity.segment_id }
@@ -57,8 +61,15 @@ export function FailureCompilation({ identity }) {
 
   const running = job && job.state === "running";
   const res = job && job.state === "done" && job.result;
+  // Layout rides the observatory's own detail-tools row convention (the same
+  // flex/wrap/gap used for the RTA-guide/time-filter/clear-data row just above
+  // this in the drawer) rather than inventing a bespoke grid; quiet-button is
+  // that drawer's established secondary-action class (see standards.js's
+  // "Community defaults" reset), and badx is the shared error-text class
+  // (compare.js's job-error line) — danger-text is reserved for destructive
+  // BUTTONS (Clear data, delete route) elsewhere in this codebase.
   return html`<div class="failcomp">
-    <div class="failcomp-row">
+    <div class="detail-tools">
       <label>Before <input type="number" min="0" step="0.5" value=${xBefore}
         onchange=${(e) => setX(parseFloat(e.target.value))} /> s</label>
       <label>After <input type="number" min="0" step="0.5" value=${yAfter}
@@ -68,12 +79,12 @@ export function FailureCompilation({ identity }) {
     </div>
     ${running && html`<div class="meta">${job.message || "working…"}</div>`}
     ${job && job.state === "error"
-      && html`<div class="danger-text">${job.message}</div>`}
-    ${res && html`<div class="failcomp-result">
-      <div class="meta">${res.clip_count} clips${res.finale_time
+      && html`<div class="badx">${job.message}</div>`}
+    ${res && html`<div class="detail-tools failcomp-result">
+      <span class="meta">${res.clip_count} clips${res.finale_time
         ? ` · fastest run ${res.finale_time}` : ""}${res.skipped
         ? ` · ${res.skipped} skipped (aged out)` : ""}${res.no_finale
-        ? " · no successful run in buffer" : ""}</div>
+        ? " · no successful run in buffer" : ""}</span>
       <code class="failcomp-path">${res.path}</code>
       <button class="quiet-button" onclick=${() => reveal(res.path)}>
         Reveal in Explorer</button>
