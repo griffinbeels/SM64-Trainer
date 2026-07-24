@@ -510,3 +510,24 @@ def test_route_insert_with_explicit_start_condition(tmp_path):
     assert row["start_condition"] == {"type": "level_enter", "to": 9}
     db.update_route(rid, start_condition={"type": "reset_game"}, updated_utc="t2")
     assert db.routes()[0]["start_condition"] == {"type": "reset_game"}
+
+
+def test_retag_pbs_for_attempt_moves_the_row_to_the_new_strategy(tmp_path):
+    """A pbs row snapshots strat_tag at save time and is NOT rebuilt from the
+    journal, so reclassifying an attempt must carry its PB across — otherwise
+    the old strategy keeps a PB that was never achieved with it."""
+    db = make_db(tmp_path)
+    db.insert_pb(course_id=2, star_id=2, strat_tag="Cannonless",
+                 timer_mode="igt", frames=343, attempt_id=10,
+                 saved_utc="2026-06-10T12:01:00Z")
+    db.insert_pb(course_id=2, star_id=2, strat_tag="Cannonless",
+                 timer_mode="igt", frames=350, attempt_id=11,
+                 saved_utc="2026-06-10T12:02:00Z")
+    db.retag_pbs_for_attempt(10, "Slide Kick")
+    assert db.current_pb(2, 2, "igt", strat_tag="Slide Kick")["frames"] == 343
+    assert db.current_pb(2, 2, "igt", strat_tag="Cannonless")["frames"] == 350
+    # unlabeling is expressible too, and an attempt with no pb row is a no-op
+    db.retag_pbs_for_attempt(10, None)
+    assert db.current_pb(2, 2, "igt", strat_tag="Slide Kick") is None
+    db.retag_pbs_for_attempt(999, "Whatever")
+    assert len(db.pbs()) == 2
