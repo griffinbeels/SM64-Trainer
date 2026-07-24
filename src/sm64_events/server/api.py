@@ -60,6 +60,11 @@ class StratBody(BaseModel):
     strat_tag: str | None = None
 
 
+class AttemptStratBody(BaseModel):
+    # null is meaningful, not missing: it unlabels the attempt
+    strat_tag: str | None = None
+
+
 class StatSelection(BaseModel):
     key: str
     params: dict = {}
@@ -433,6 +438,18 @@ def create_api_router(service) -> APIRouter:
     async def restore(attempt_id: int):
         try:
             await service.restore_attempt(attempt_id)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True}
+
+    @router.post("/attempts/{attempt_id}/strat")
+    async def attempt_strat(attempt_id: int, body: AttemptStratBody):
+        """Reclassify ONE recorded attempt (null strat_tag = no strategy).
+
+        Distinct from POST /strat, which sets what to practice NEXT — this
+        one edits history and triggers a re-projection."""
+        try:
+            await service.set_attempt_strat(attempt_id, body.strat_tag)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True}

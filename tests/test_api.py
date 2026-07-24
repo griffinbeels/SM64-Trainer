@@ -723,3 +723,22 @@ def test_time_filter_rejects_bad_bounds(tmp_path):
         r = client.put("/api/stars/2/2/time-filter",
                        json={"min_frames": -1, "max_frames": None})
         assert r.status_code == 422                     # pydantic ge=0
+
+
+# -- Task 4: POST /api/attempts/{id}/strat endpoint -----------------------------
+
+def test_attempt_strat_endpoint_reclassifies_and_404s_on_unknown(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)
+        aid = db.attempts()[0].id
+        r = client.post(f"/api/attempts/{aid}/strat",
+                        json={"strat_tag": "Slide Kick"})
+        assert r.status_code == 200
+        assert db.attempts()[0].strat_tag == "Slide Kick"
+        # null is a first-class value: it unlabels the attempt
+        assert client.post(f"/api/attempts/{aid}/strat",
+                           json={"strat_tag": None}).status_code == 200
+        assert db.attempts()[0].strat_tag is None
+        assert client.post("/api/attempts/999/strat",
+                           json={"strat_tag": "X"}).status_code == 404
