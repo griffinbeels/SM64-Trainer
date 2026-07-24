@@ -5,8 +5,15 @@
 async function httpError(url, r) {
   let detail = null;
   try { detail = (await r.json()).detail; } catch { /* non-JSON body */ }
-  if (detail == null) return new Error(`${url}: ${r.status}`);
-  return new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+  const err = detail == null
+    ? new Error(`${url}: ${r.status}`)
+    : new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+  // Callers need to tell "this row is gone" (404) from "the server blinked"
+  // (network drop, restart) — the first should forget a stale id, the second
+  // must NOT throw away the user's selection. The message alone can't
+  // distinguish them, so carry the status.
+  err.status = r.status;
+  return err;
 }
 export async function getJSON(url) {
   const r = await fetch(url);

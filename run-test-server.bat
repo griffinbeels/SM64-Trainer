@@ -29,13 +29,25 @@ if errorlevel 1 (
 )
 
 REM --- update to the latest committed main (non-fatal) ---
+REM  Name the branch in the warning: this checkout is sometimes parked on a
+REM  feature branch by a parallel session, and the old wording ("could not
+REM  fast-forward") read like a git problem while the real message is "you
+REM  are NOT testing main" — which silently cost a live test run (2026-07-24).
+for /f "delims=" %%B in ('git rev-parse --abbrev-ref HEAD') do set "SM64_BRANCH=%%B"
 echo Fetching the latest committed main...
 git pull --ff-only
 if errorlevel 1 (
   echo.
-  echo WARNING: could not fast-forward ^(uncommitted local changes or a
-  echo          diverged branch^). Running the CURRENT checkout instead of
-  echo          the very latest main.
+  if /i not "%SM64_BRANCH%"=="main" (
+    echo WARNING: this checkout is on branch '%SM64_BRANCH%', NOT main.
+    echo          The test server below runs THAT branch's code — anything
+    echo          merged to main since is not included. Switch with
+    echo          'git checkout main' if you meant to test main.
+  ) else (
+    echo WARNING: could not fast-forward ^(uncommitted local changes or a
+    echo          diverged branch^). Running the CURRENT checkout instead of
+    echo          the very latest main.
+  )
   echo.
 )
 

@@ -796,7 +796,16 @@ export function Practice({ t, openCompare }) {
   // (route deleted) clears it → the tab falls back to normal practice.
   useEffect(() => {
     if (activeRouteId == null) { setRouteView(null); return; }
-    getJSON(`/api/routes/${activeRouteId}`).then(setRouteView).catch(() => setRouteView(null));
+    getJSON(`/api/routes/${activeRouteId}`).then(setRouteView).catch((e) => {
+      setRouteView(null);
+      // A 404 means the remembered route is GONE, so forget it. Clearing only
+      // the local view left the stale id in localStorage, and this effect
+      // re-runs on every session-view update — so a deleted route re-fetched
+      // and 404'd on every event, forever, across reloads (live log
+      // 2026-07-24). Any other failure (server restart, network blip) keeps
+      // the selection: losing it would be worse than one empty render.
+      if (e && e.status === 404) pickRoute(null);
+    });
   }, [activeRouteId, t.view]);
   const pickRoute = (id) => {
     if (id == null) localStorage.removeItem("sm64.activeRoute");
