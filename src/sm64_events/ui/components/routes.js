@@ -17,6 +17,44 @@ import { PageState } from "./states.js";
 const html = htm.bind(h);
 const pct = (r) => `${Math.round((r ?? 0) * 100)}%`;
 
+// Library grouping (2026-07-24). `category` is free text on the route row, so
+// the UI only decides ORDER: the two seeded groups lead, user-made groups
+// follow alphabetically, and anything uncategorised sinks to the bottom.
+const MAIN_CATEGORY = "Main Categories";
+const STAGE_CATEGORY = "Stage RTA";
+const UNCATEGORISED = "Uncategorized";
+const LEAD_CATEGORIES = [MAIN_CATEGORY, STAGE_CATEGORY];
+const COLLAPSED_KEY = "sm64.routeCatsCollapsed";
+
+const categoryOf = (r) => r.category || UNCATEGORISED;
+
+function categoryNames(routes) {
+  return [...new Set(routes.map(categoryOf))].filter((c) => c !== UNCATEGORISED);
+}
+
+function groupByCategory(routes) {
+  const groups = new Map();
+  for (const r of routes) {
+    const key = categoryOf(r);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(r);
+  }
+  const rank = (name) => {
+    const lead = LEAD_CATEGORIES.indexOf(name);
+    if (lead !== -1) return [0, lead, ""];
+    return name === UNCATEGORISED ? [2, 0, ""] : [1, 0, name.toLowerCase()];
+  };
+  return [...groups.entries()].sort(([a], [b]) => {
+    const [ga, la, na] = rank(a); const [gb, lb, nb] = rank(b);
+    return ga - gb || la - lb || na.localeCompare(nb);
+  });
+}
+
+function loadCollapsed() {
+  try { return new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY)) || []); }
+  catch { return new Set(); }
+}
+
 // Star/segment picker shared by "add step" and "add option to a group".
 function ItemPicker({ catalog, segs, onPick, label }) {
   const [mode, setMode] = useState("star");
@@ -165,6 +203,17 @@ export function Routes({ t }) {
   const [segs, setSegs] = useState([]);
   const [vocab, setVocab] = useState(null);
   const [err, setErr] = useState(null);
+  const [collapsed, setCollapsed] = useState(loadCollapsed);
+
+  function toggleCategory(category) {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(category)) next.add(category);
+      try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next])); }
+      catch { /* private mode: collapse still works for this session */ }
+      return next;
+    });
+  }
   const catalog = (t.view && t.view.catalog) || { courses: [] };
 
   const loadRoutes = async () => { const rs = await getJSON("/api/routes"); setRoutes(rs); return rs; };
@@ -208,10 +257,26 @@ export function Routes({ t }) {
   const removeStep = (i) => saveSteps(selected.steps.filter((_, j) => j !== i));
   const addStep = (c) => saveSteps([...selected.steps, { need: 1, candidates: [c] }]);
 
+  // Category is free text on the route row; the library groups by it. Asking
+  // with the existing categories listed is what keeps them from fragmenting
+  // into "Main Categories" / "main categories" / "Main" over time.
+  function askCategory(current) {
+    const known = categoryNames(routes || []);
+    const answer = window.prompt(
+      `Category? Existing: ${known.join(", ") || "(none yet)"}\n`
+      + "Type a new name to create a group, or leave blank for Uncategorized.",
+      current || known[0] || MAIN_CATEGORY);
+    if (answer === null) return undefined;      // cancelled
+    return answer.trim() || null;
+  }
+
   async function createRoute() {
     const name = window.prompt("New route name:");
     if (!name) return;
-    try { const out = await send("POST", "/api/routes", { name, steps: [] });
+    const category = askCategory(null);
+    if (category === undefined) return;
+    try { const out = await send("POST", "/api/routes",
+                                 { name, steps: [], category });
       await loadRoutes(); setSelId(out.id); }
     catch (e) { setErr(String(e)); }
   }
@@ -219,6 +284,12 @@ export function Routes({ t }) {
     const name = window.prompt("Rename route:", selected.name);
     if (!name || name === selected.name) return;
     try { await send("PUT", `/api/routes/${selId}`, { name }); await loadRoutes(); }
+    catch (e) { setErr(String(e)); }
+  }
+  async function recategoriseRoute() {
+    const category = askCategory(selected.category);
+    if (category === undefined || category === (selected.category || null)) return;
+    try { await send("PUT", `/api/routes/${selId}`, { category }); await loadRoutes(); }
     catch (e) { setErr(String(e)); }
   }
   async function deleteRoute() {
@@ -267,18 +338,33 @@ export function Routes({ t }) {
         <div class="route-list" role="list">
           ${routes.length === 0 ? html`<div class="workshop-empty compact">
             No routes yet. Build one from stars, segments, or groups.
-          </div>` : routes.map((r) => html`<button role="listitem"
-              class=${`route-list-item ${r.id === selId ? "on" : ""}`}
-              onclick=${() => setSelId(r.id)}>
-            <span>
-              <b>${r.name}</b>
-              <small>${r.steps.length} ${r.steps.length === 1 ? "step" : "steps"}</small>
-            </span>
-            <${Icon} name="chevron" size=${16} />
-          </button>`)}
+          </div>` : groupByCategory(routes).map(([category, inGroup]) => {
+            const shut = collapsed.has(category);
+            return html`<div class="route-cat">
+              <button class=${`route-cat-header ${shut ? "shut" : ""}`}
+                  aria-expanded=${!shut}
+                  onclick=${() => toggleCategory(category)}>
+                <${Icon} name="chevron" size=${15} />
+                <b>${category}</b>
+                <span class="count-badge">${inGroup.length}</span>
+              </button>
+              ${shut ? null : inGroup.map((r) => html`<button role="listitem"
+                  class=${`route-list-item ${r.id === selId ? "on" : ""}`}
+                  onclick=${() => setSelId(r.id)}>
+                <span>
+                  <b>${r.name}</b>
+                  <small>${r.steps.length} ${r.steps.length === 1 ? "step" : "steps"}</small>
+                </span>
+                <${Icon} name="chevron" size=${16} />
+              </button>`)}
+            </div>`;
+          })}
         </div>
         ${selected ? html`<div class="library-actions">
           <button onclick=${renameRoute}><${Icon} name="edit" size=${15} /> Rename</button>
+          <button onclick=${recategoriseRoute}>
+            <${Icon} name="routes" size=${15} /> Category
+          </button>
           <button class="danger-text" onclick=${deleteRoute}>
             <${Icon} name="trash" size=${15} /> Delete
           </button>
