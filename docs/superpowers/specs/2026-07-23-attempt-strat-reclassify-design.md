@@ -158,8 +158,12 @@ snap-back stay identical everywhere — the structural-parity rule (domain rule
 - `onChanged` → `t.refresh()`
 
 `AttemptTable` is already shared by `StarSection`, `SegmentSection` and the
-unassigned block, so star ↔ segment parity is structural — no second
-implementation, and `tests/test_ui_section_parity.py` keeps it that way.
+unassigned block, so star ↔ segment parity for the row dropdown is
+structural — one shared component, not a second implementation to drift.
+`tests/test_ui_section_parity.py` does NOT reach into that row: it compares
+the top-level components `StarSection`/`SegmentSection` each render, so it
+covers the section cards' own pickers, not `AttemptRow`'s. The row's parity
+guarantee comes from the shared component, not from a test.
 
 **Unassigned attempts** (no course/star/segment, so no entity and no
 strategy list) keep static text reading `— no strategy —`. A dropdown there

@@ -36,7 +36,16 @@ export function StratPicker({ entity, identity, strategies, active, onChanged,
   // remount. Bumping the key snaps it back to the server's truth.
   const [nonce, setNonce] = useState(0);
   const [showModal, setShowModal] = useState(false);
-  const options = strategies || [];
+  // `strategies` is the server's CURRENT list — a purged/tombstoned name is
+  // filtered out of it — but `active` on a historical attempt row can still
+  // carry a now-purged name. A <select> whose `value` matches no <option>
+  // renders with selectedIndex -1, i.e. BLANK, which is indistinguishable
+  // from the "— no strat —" sentinel and is exactly the "unlabeled looks
+  // like a rendering gap" bug this component exists to fix. So the current
+  // value always stays listed, same rule as segments.js's dropdowns.
+  const options = active && !(strategies || []).includes(active)
+    ? [...(strategies || []), active]
+    : (strategies || []);
 
   async function setStrat(value) {
     if (value === "__new") { setShowModal(true); return; }

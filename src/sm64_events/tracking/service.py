@@ -404,13 +404,21 @@ class TrackerService:
         Re-picking the previous strategy is the undo.
 
         Note the asymmetry with set_strat_segment, which raises LookupError
-        once a segment definition is deleted: this command checks only that
-        the ATTEMPT exists, so a deleted segment's history stays
-        reclassifiable (past attempts keep their recorded times — the same
-        rule purge_strategy follows). That is why the attempt-row strat
-        dropdown in ui/components/practice.js is NOT gated on `sec.broken`
-        the way the segment card's own header picker has to be; do not
-        "fix" that asymmetry by adding the gate."""
+        once a segment definition is deleted: this command deliberately
+        checks only that the ATTEMPT exists, not that its segment definition
+        is still enabled. In practice that difference never fires, because
+        SegmentEngine keeps only enabled defs (segments.py `_defs = [d for d
+        in defs if d.enabled]`) and _reproject() rebuilds from the DB-loaded
+        defs via replay() + db.replace_attempts() — so deleting OR disabling
+        a definition removes ALL of its attempt rows on the very next
+        reprojection. A "broken" segment therefore has no attempts left to
+        reclassify at all; calling this on one of its old ids hits
+        `attempt is None` above and raises LookupError, same as any other
+        unknown id. That is why the attempt-row strat dropdown in
+        ui/components/practice.js is NOT gated on `sec.broken` the way the
+        segment card's own header picker has to be — not because deleted
+        history stays editable (it doesn't), but because there is no row
+        left to gate. Do not "fix" that non-issue by adding the gate."""
         db = self._require_db()
         attempt = next((a for a in db.attempts() if a.id == attempt_id), None)
         if attempt is None:
@@ -928,7 +936,15 @@ class TrackerService:
         """Hard-delete a past session's data and re-derive everything.
         Caveat: clear/restore command events recorded IN the deleted
         session vanish with it, so attempts they affected in OTHER
-        sessions revert on re-projection."""
+        sessions revert on re-projection. attempt_strat_set joins that same
+        class, with a twist: db.retag_pbs_for_attempt already wrote the new
+        strat_tag into the attempt's saved `pbs` row (not derived, so it
+        does not follow reprojection on its own — see set_attempt_strat).
+        Deleting the session that held the attempt_strat_set event makes the
+        attempt's tag revert on reprojection while its `pbs` row keeps the
+        reclassified tag, so the two disagree PERMANENTLY (no further
+        reprojection re-syncs them). Out of scope for this merge; the real
+        fix is re-deriving pbs tags during _reproject."""
         db = self._require_db()
         if session_id == self.session_id:
             raise ValueError("cannot delete the active session")

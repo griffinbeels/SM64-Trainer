@@ -247,7 +247,14 @@ def strat_overrides(events) -> dict[int, str | None]:
     out: dict[int, str | None] = {}
     for ev in events:
         if ev.type == "attempt_strat_set":
-            out[int(ev.payload["attempt_id"])] = ev.payload["strat_tag"]
+            # attempt_id stays a strict [] read — an override with no target
+            # attempt is meaningless and should surface loudly. strat_tag
+            # uses .get(), like cleared_ids()'s "reason": replay() runs at
+            # server boot (TrackerService.start), so a KeyError here on a
+            # malformed journal row would block startup instead of just
+            # degrading that one row to "unlabeled" (None is already a valid
+            # strat_tag value, so .get()'s default reads the same either way).
+            out[int(ev.payload["attempt_id"])] = ev.payload.get("strat_tag")
     return out
 
 

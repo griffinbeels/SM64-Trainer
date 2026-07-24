@@ -1213,3 +1213,21 @@ def test_set_attempt_strat_skips_registration_when_attempt_has_no_entity(tmp_pat
     asyncio.run(svc.set_attempt_strat(aid, "Slide Kick"))
     assert db.attempts()[0].strat_tag == "Slide Kick"
     assert db.get_state("strategies", {}) == {}
+
+
+def test_set_attempt_strat_reclassifies_segment_attempt_and_registers(tmp_path):
+    # Every other set_attempt_strat test above seeds a STAR attempt, leaving
+    # the segment branch (entity_key(None, None, segment_id) -> "seg:<id>")
+    # untraced — the exact asymmetry CLAUDE.md domain rule 11 (star<->segment
+    # parity) warns against. Mirrors test_undo_pb_segment_is_kind_aware's
+    # setup: seed the "LBLJ" segment def, then walk its level_changed trigger
+    # (16->6->17) to close a real segment attempt.
+    db, svc = make(tmp_path)
+    lblj = seed_id(db, "LBLJ")
+    asyncio.run(svc.publish(ev("level_changed", 1000, {"from": 16, "to": 6})))
+    asyncio.run(svc.publish(ev("level_changed", 1085, {"from": 6, "to": 17})))
+    seg_aid = next(a.id for a in db.attempts() if a.segment_id == lblj)
+    asyncio.run(svc.set_attempt_strat(seg_aid, "no bljs"))
+    reclassified = next(a for a in db.attempts() if a.id == seg_aid)
+    assert reclassified.strat_tag == "no bljs"
+    assert "no bljs" in db.get_state("strategies", {})[f"seg:{lblj}"]

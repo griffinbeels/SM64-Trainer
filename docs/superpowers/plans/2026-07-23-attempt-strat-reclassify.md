@@ -807,7 +807,7 @@ The `sec` fallback is the **unassigned** attempt block, which renders `AttemptTa
 - [ ] **Step 3: Verify the parity test still passes**
 
 Run: `uv run pytest tests/test_ui_section_parity.py -q`
-Expected: PASS. `AttemptRow` is shared by `StarSection`, `SegmentSection` and the unassigned block, so both cards gain the feature together — that is why no second implementation exists.
+Expected: PASS. `AttemptRow` is shared by `StarSection`, `SegmentSection` and the unassigned block, so both cards gain the feature together through that ONE shared component — that is why no second implementation exists. The parity test itself only compares the top-level components each section renders, so it covers the section cards' own pickers, not this row-level detail; the guarantee for the row is structural (shared code), not test-enforced.
 
 - [ ] **Step 4: Run the full suite**
 
