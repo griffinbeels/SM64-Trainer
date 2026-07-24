@@ -9,9 +9,9 @@ Pure helpers (check_for_update, exe_dir_writable) take an injected HTTP
 opener and operate on explicit paths so tests never touch the network or a
 real install. Version comparison, the shared request builder, and patch-notes
 extraction live one layer down in core/release_feed.py. The stateful
-UpdateService orchestrates
-them, caches the check (manifest + plan included), tracks download progress,
-and persists the 'skipped' version. Everything is guarded on is_frozen():
+UpdateService orchestrates them, caches the check (manifest + plan included),
+tracks download progress, and persists the 'skipped' version. Everything is
+guarded on is_frozen():
 from source it is inert (update_available is always False) so a dev tree is
 never swapped.
 
@@ -35,11 +35,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from sm64_events.core.paths import is_frozen, update_state_path
+from sm64_events.core.release_feed import (ReleaseNotes, http_get, is_newer,
+                                           missed_releases, notes_from_release,
+                                           parse_version)
 from sm64_events.core.update_apply import STAGING_DIR, apply_plan, sweep_backup
 from sm64_events.core.update_fetch import (RangeUnsupported, fetch_full_zip,
                                            fetch_plan, free_disk_ok)
-from sm64_events.core.release_feed import (ReleaseNotes, http_get, is_newer,
-                                           missed_releases, notes_from_release)
 from sm64_events.core.update_plan import (INSTALLED_MANIFEST, MANIFEST_ASSET,
                                           ZIP_ASSET, Manifest, build_plan,
                                           parse_manifest)
@@ -54,14 +55,17 @@ _CHECK_TTL_S = 3600.0
 @dataclass
 class UpdateInfo:
     version: str
-    notes: str          # the offered release alone (= releases[0].notes)
+    notes: str          # the offered release alone; == releases[0].notes,
+                         # enforced by construction (see check_for_update)
     html_url: str
     zip_url: str
     zip_sha_url: str
     manifest_url: str
     manifest_sha_url: str
     # Every version between the installed one and `version`, newest first.
-    # A tuple, not a list, so the default needs no field(default_factory=…).
+    # releases[0] is ALWAYS the offered release itself (see check_for_update)
+    # — never a feed row, so it can never disagree with `notes`. A tuple, not
+    # a list, so the default needs no field(default_factory=…).
     releases: tuple[ReleaseNotes, ...] = ()
 
 
@@ -90,14 +94,21 @@ def check_for_update(current: str, *, http=urllib.request.urlopen,
         # only, and legacy bodies title themselves — release_feed.notes_from_release
         # (via strip_body) is THE rule for both shapes.
         offered = notes_from_release(rel)
-        # Everything the user skipped, newest first. Clamped to the offered
-        # tag: GitHub's 'latest' is the most RECENT publish, so a backport
-        # published afterwards could otherwise stack notes for a version this
-        # update does not install. Empty (history unavailable, or a lone
-        # release) -> the offered release alone, exactly as before.
+        # Everything ELSE the user skipped, newest first. Clamped to the
+        # offered tag: GitHub's 'latest' is the most RECENT publish, so a
+        # backport published afterwards could otherwise stack notes for a
+        # version this update does not install. The feed's own row for the
+        # offered tag is dropped too (compared by parsed version, so 'v2.0'
+        # and 'v2.0.0' collapse the same way) — `offered` always takes that
+        # slot instead, via the unconditional prepend below. `/releases/latest`
+        # and `/releases` are cached separately by GitHub, so right after a
+        # publish the list can lag and omit the tag /latest already serves;
+        # without this the popup could offer a version whose notes are
+        # missing from the stack entirely.
         history = [row for row in missed_releases(current, http=http,
                                                   repo=repo, api_base=api_base)
-                   if not is_newer(row.version, tag)]
+                   if not is_newer(row.version, tag)
+                   and parse_version(row.version) != parse_version(offered.version)]
         return UpdateInfo(
             version=tag.lstrip("vV"),
             notes=offered.notes,
@@ -106,7 +117,9 @@ def check_for_update(current: str, *, http=urllib.request.urlopen,
             zip_sha_url=assets[ZIP_ASSET + ".sha256"],
             manifest_url=assets[MANIFEST_ASSET],
             manifest_sha_url=assets[MANIFEST_ASSET + ".sha256"],
-            releases=tuple(history) if history else (offered,))
+            # `offered` always heads the stack, so releases[0] and `notes`
+            # cannot disagree — even when the history fetch is empty/stale.
+            releases=(offered, *history))
     except Exception:
         log.info("update check failed", exc_info=True)
         return None

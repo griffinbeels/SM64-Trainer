@@ -176,6 +176,25 @@ def test_check_ignores_history_newer_than_the_offered_release(tmp_path):
     assert [row.version for row in info.releases] == ["2.0.0"]
 
 
+def test_check_offered_release_always_heads_the_stack(tmp_path):
+    """/releases/latest and /releases are cached separately by GitHub; right
+    after a publish the list page can still lag and omit the tag /latest
+    already serves. releases[0] must be the OFFERED release regardless —
+    never a stale/missing feed row — so notes and releases[0].notes can
+    never disagree."""
+    routes = _fake_release(tmp_path, "v2.0.0", {"SM64Trainer.exe": b"X"})
+    rel = _json.loads(routes[LATEST])
+    rel["body"] = "brand new notes"
+    routes[LATEST] = _json.dumps(rel).encode()
+    routes[RELEASES] = _json.dumps([   # omits v2.0.0 entirely
+        {"tag_name": "v1.5.0", "body": "older notes",
+         "published_at": "2026-07-10T00:00:00Z"},
+    ]).encode()
+    info = check_for_update("1.0.0", http=_fake_http(routes))
+    assert info.releases[0].version == info.version
+    assert info.releases[0].notes == info.notes
+
+
 def test_check_none_when_missing_manifest_assets():
     partial = {k: v for k, v in FULL_ASSETS.items() if k != MANIFEST_ASSET}
     http = _fake_http({LATEST: _release_json("v2.0.0", partial)})
@@ -245,6 +264,13 @@ def test_status_reports_available_with_download_bytes(tmp_path):
 
 def test_status_carries_the_release_stack(tmp_path):
     routes = _fake_release(tmp_path, "v2.0.0", {"SM64Trainer.exe": b"NEW"})
+    # offered (from /releases/latest) always heads the stack (check_for_update),
+    # so give it the same body/date a real GitHub response would carry —
+    # _fake_release's default LATEST fixture omits published_at entirely.
+    rel = _json.loads(routes[LATEST])
+    rel["body"] = "newest notes"
+    rel["published_at"] = "2026-07-23T00:00:00Z"
+    routes[LATEST] = _json.dumps(rel).encode()
     routes[RELEASES] = _json.dumps([
         {"tag_name": "v2.0.0", "body": "newest notes",
          "published_at": "2026-07-23T00:00:00Z"},
