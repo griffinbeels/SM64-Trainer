@@ -4,6 +4,7 @@ nothing else in the system would ever notice. It independently reproduces the
 community's CCM17/CCM18 names — 13 stars precede CCM, so you leave with 17 or
 18 depending on the option — which is what makes it trustworthy."""
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -110,3 +111,32 @@ def test_no_movement_is_left_unreferenced():
             for c in s["candidates"] if c["type"] == "segment"}
     for row in build_seed.corpus_movements.MOVEMENTS:
         assert row["seed_key"] in used, row["seed_key"]
+
+
+def test_movements_sharing_a_start_within_one_route_have_different_ends():
+    """A route that visits a stage twice (70 Star's two BoB trips, 120 Star's
+    two DDD trips) contains movements with the SAME start clause, so exiting
+    that stage arms both. That is benign only because their ENDS differ: the
+    twin is silently disarmed by the level change into the other destination
+    and records no row (verified against the simulation harness).
+
+    Two movements sharing BOTH a start and an end inside one route would be
+    genuinely indistinguishable — same attempts, same PB, and the run would
+    credit whichever the engine closed first. Keep them distinguishable.
+    """
+    segments = {s["seed_key"]: s for s in build_seed.build()["segments"]}
+    for route in ROUTES:
+        by_start = {}
+        for step in route["steps"]:
+            for cand in step["candidates"]:
+                if cand["type"] != "segment":
+                    continue
+                seg = segments[cand["seed_key"]]
+                if not seg["guards"]:
+                    continue          # legacy defs arm route-independently
+                key = json.dumps(seg["start_triggers"], sort_keys=True)
+                by_start.setdefault(key, {})[cand["seed_key"]] = \
+                    json.dumps(seg["end_triggers"], sort_keys=True)
+        for start, ends in by_start.items():
+            assert len(set(ends.values())) == len(ends), (
+                route["seed_key"], "indistinguishable movements", sorted(ends))

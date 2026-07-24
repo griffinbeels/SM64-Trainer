@@ -913,6 +913,20 @@ observed behaviour, so the gates are behavioural:
   CCM17/CCM18 names — 13 stars precede CCM, so you leave with 17 or 18
   depending on the option — which is what makes the transcription trustworthy.
 
+### Shared start clauses are expected, and benign
+
+A route that visits a stage twice (70★'s two BoB trips, 120★'s two DDD trips)
+necessarily contains movements with the **same start clause** — exiting BoB
+arms both `seg:bob->pss` and `seg:bob->ccm`. This is harmless *because their
+ends differ*: the twin is silently disarmed by the level change into the other
+destination and records no row. The visible symptom is a transient armed chip
+naming the wrong movement, which self-corrects on the next level change.
+
+Two movements sharing **both** a start and an end inside one route would be
+genuinely indistinguishable — same attempts, same PB, and the run crediting
+whichever closed first. `tests/test_corpus_routes_main.py` pins that this never
+happens.
+
 ### Castle-secret stars (course 0)
 
 The Toad and MIPS stars belong to no course, so `star_grab.py` reports them as
