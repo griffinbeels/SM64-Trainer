@@ -11,8 +11,8 @@ import { Modal } from "./modal.js";
 const html = htm.bind(h);
 
 function esc(s) {
-  return (s || "").replace(/[&<>"]/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  return (s || "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 function inline(s) {
   return s
