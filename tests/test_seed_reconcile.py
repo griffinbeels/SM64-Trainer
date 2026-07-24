@@ -136,10 +136,14 @@ def test_real_bundled_seed_does_not_alter_existing_segment_defs(tmp_path):
     assert seed_path is not None, "defaults.seed.json must be bundled"
     seed = json.loads(seed_path.read_text())
 
-    reconcile_defaults(db, seed)
+    assert reconcile_defaults(db, seed) == []
 
     after = {s["seed_key"]: s for s in db.segment_defs() if s.get("seed_key")}
-    assert set(after) == set(before)
+    # SUPERSET, not equality (2026-07-24): the seed legitimately INSERTS the
+    # corpus's movement segments now, so "no new seeded rows" is no longer the
+    # claim. What must still hold — and is the whole point of this gate — is
+    # that the ten already-migrated rows come out the other side untouched.
+    assert set(before) <= set(after)
     for key, before_row in before.items():
         after_row = after[key]
         assert after_row["name"] == before_row["name"]
@@ -153,4 +157,5 @@ def test_real_bundled_seed_does_not_alter_existing_segment_defs(tmp_path):
         assert before_row["category"] is None
         assert after_row["category"] is not None
         validate_definition({k: after_row[k] for k in
-                             ("name", "start_triggers", "end_triggers", "guards")})
+                             ("name", "start_triggers", "end_triggers",
+                              "waypoints", "guards")})
