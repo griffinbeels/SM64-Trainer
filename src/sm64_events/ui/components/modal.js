@@ -2,8 +2,9 @@
 // panel), extracted from the update popup so every modal keeps one look and
 // one dismissal contract. Stateless: callers own visibility (render it or
 // don't) and pass onClose for dismissal. onClose is OPTIONAL — when absent,
-// Esc/backdrop-click do nothing (the update popup must not be dismissable
-// that way). Clicks inside the panel never dismiss (stopPropagation).
+// Esc/backdrop-click do nothing (a caller mid-flow with no safe dismissal,
+// e.g. an active install, omits it deliberately). Clicks inside the panel
+// never dismiss (stopPropagation).
 import { h } from "preact";
 import { useEffect } from "preact/hooks";
 import htm from "htm";

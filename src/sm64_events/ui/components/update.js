@@ -58,6 +58,26 @@ function renderNotes(md) {
   return out;
 }
 
+// One block per missed version, newest first. `releases` comes from
+// status(); the `fallback` single-body path covers a status payload without
+// it (older server mid-update, or a hand-rolled response).
+function NotesStack({ releases, fallback }) {
+  const rows = (releases && releases.length)
+    ? releases
+    : [{ version: "", date: "", notes: fallback }];
+  return html`<div class="update-notes">
+    ${rows.map((r, i) => html`
+      <div class=${i ? "update-rel sep" : "update-rel"}>
+        ${r.version
+          ? html`<div class="update-ver">v${r.version}${
+              r.date ? html`<span class="update-date">${r.date}</span>` : ""}
+            </div>`
+          : ""}
+        <div dangerouslySetInnerHTML=${{ __html: renderNotes(r.notes || "") }}></div>
+      </div>`)}
+  </div>`;
+}
+
 export function UpdatePopup({ t }) {
   const st = t.update;
   const applying = t.updateApplying;
@@ -73,11 +93,20 @@ export function UpdatePopup({ t }) {
   const onLater = () => { setDismissed(true); t.setUpdateForced(false); };
   const onClose = () => { t.setUpdateApplying(false); setDismissed(true); };
   const pct = Math.round((st.progress || 0) * 100);
+  const missed = (st.releases || []).length;
+  // Backdrop click / Esc mirror whichever dismiss action is visible: "Later"
+  // on the normal offer, "Close" on a failed install, and NOTHING while an
+  // install is actively in flight (no button is shown there either — closing
+  // mid-install would hide a restart about to happen under the user).
+  const onBackdropDismiss = applying
+    ? (st.state === "error" ? onClose : undefined)
+    : onLater;
 
-  return html`<${Modal} title=${`Update available — v${st.latest}`}>
-    <div class="meta">You're on v${st.current}.</div>
-    <div class="update-notes"
-         dangerouslySetInnerHTML=${{ __html: renderNotes(st.notes) }}></div>
+  return html`<${Modal} title=${`Update available — v${st.latest}`}
+      onClose=${onBackdropDismiss}>
+    <div class="meta">You're on v${st.current}.${
+      missed > 1 ? ` ${missed} versions of changes.` : ""}</div>
+    <${NotesStack} releases=${st.releases} fallback=${st.notes} />
     <p><a href=${st.html_url} target="_blank">View this release on GitHub →</a></p>
     ${applying
       ? (st.state === "error"

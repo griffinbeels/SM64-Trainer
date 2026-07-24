@@ -196,9 +196,17 @@
     padding: 1rem 1.2rem; max-width: 540px; width: 90%; max-height: 80vh;
     overflow: auto; }
   .modal h2 { font-size: 1.05rem; margin: 0 0 .3rem; color: #ffd75f; }
+  /* max-height is load-bearing, not cosmetic: .modal already scrolls at
+     80vh, so without an inner scroll a 10-version backlog pushes
+     Update/Skip/Later below the fold. */
   .update-notes { background: #14161a; border: 1px solid #2c3140;
     border-radius: 6px; padding: .5rem .7rem; margin: .6rem 0; font-size: .9em;
-    line-height: 1.5; }
+    line-height: 1.5; max-height: 46vh; overflow: auto; }
+  .update-rel.sep { border-top: 1px solid #2c3140; margin-top: .7rem;
+    padding-top: .6rem; }
+  .update-ver { color: #ffd75f; font-weight: 600; margin-bottom: .2em; }
+  .update-date { color: #8a93a5; font-weight: 400; font-size: .85em;
+    margin-left: .4em; }
   .update-notes ul { padding-left: 1.1rem; margin: .4em 0; } .update-notes li { list-style: disc; }
   .update-notes p { margin: .5em 0; } .update-notes p:first-child { margin-top: 0; }
   .update-notes code { background: #2c3140; border-radius: 3px; padding: 0 .25em; }

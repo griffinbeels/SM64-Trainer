@@ -87,8 +87,8 @@ def check_for_update(current: str, *, http=urllib.request.urlopen,
             log.info("release %s is missing update assets; not offering", tag)
             return None
         # The body's leading first-time-setup section is for the GitHub page
-        # only, and legacy bodies title themselves — release_feed.strip_body
-        # is THE rule for both shapes.
+        # only, and legacy bodies title themselves — release_feed.notes_from_release
+        # (via strip_body) is THE rule for both shapes.
         offered = notes_from_release(rel)
         # Everything the user skipped, newest first. Clamped to the offered
         # tag: GitHub's 'latest' is the most RECENT publish, so a backport
