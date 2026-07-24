@@ -107,7 +107,7 @@ function MyRun({ attemptId, controller, inFrame, outFrame, onSync }) {
     return () => { alive = false; };
   }, [attemptId]);
   if (st.phase === "idle")
-    return html`<div class="compare-empty meta">Pick one of your runs above to load it here.</div>`;
+    return html`<div class="compare-empty meta">Pick one of your runs from the list below to load it here.</div>`;
   if (st.phase === "loading")
     return html`<div class="compare-empty meta">extracting replay…</div>`;
   if (st.phase === "error")
@@ -225,7 +225,7 @@ function AddComparison({ entity, strat, strategies, suggestion, onAdded, hasVide
   }
 
   if (!entity)
-    return html`<div class="compare-empty meta">Pick a run above to add comparison videos.</div>`;
+    return html`<div class="compare-empty meta">Pick a run from the list below to add comparison videos.</div>`;
   const busy = job && job.state === "running";
   return html`<div class="compare-drop ${over ? "over" : ""}"
       ondragover=${(e) => { e.preventDefault(); setOver(true); }}
@@ -472,14 +472,8 @@ export function Compare({ t, intent, clearIntent, active }) {
       </div>
       <span class="compare-sync-note"><${Icon} name="clock" size=${16} /> 30 game frames / second</span>
     </header>
-    <${StageFeed} view=${view} available=${availSet} attemptId=${attemptId} onPick=${pickRun} />
-    <section class="practice-card compare-transport-card">
-      <div class="transport-copy">
-        <span class="eyebrow">Synchronized transport</span>
-        <span>Every control moves both videos together.</span>
-      </div>
-      <${Transport} controller=${controller} />
-    </section>
+    ${/* Order (user request 2026-07-24): videos first so they're never cut
+         off, bare playback controls right under them, run feed last. */""}
     <div class="compare-grid">
       <section class="practice-card compare-col compare-stage-card">
         <div class="compare-stage-heading">
@@ -503,5 +497,9 @@ export function Compare({ t, intent, clearIntent, active }) {
           existing=${existing} onExisting=${onExisting} />
       </section>
     </div>
+    <section class="practice-card compare-transport-card" aria-label="Playback controls">
+      <${Transport} controller=${controller} />
+    </section>
+    <${StageFeed} view=${view} available=${availSet} attemptId=${attemptId} onPick=${pickRun} />
   </div>`;
 }

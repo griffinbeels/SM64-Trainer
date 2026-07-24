@@ -1169,13 +1169,13 @@
   .cf-row b { min-width: 0; color: var(--green); font-variant-numeric: tabular-nums; }
   .cf-load-icon { color: var(--muted); }
   .cf-empty { min-height: 98px; display: flex; align-items: center; justify-content: center; }
+  /* Bare playback controls, centered under the video pair — no heading copy
+     (user request 2026-07-24). */
   .compare-transport-card {
     min-height: 66px; display: flex; align-items: center;
-    justify-content: space-between; gap: 1rem; padding-block: .65rem;
+    justify-content: center; gap: 1rem; padding-block: .65rem;
   }
-  .transport-copy { display: grid; gap: .12rem; }
-  .transport-copy > span:last-child { color: var(--muted); font-size: .7rem; }
-  .compare-transport { flex-direction: row; flex-wrap: wrap; justify-content: flex-end; gap: .4rem; }
+  .compare-transport { flex-direction: row; flex-wrap: wrap; justify-content: center; gap: .4rem; }
   .compare-transport button { min-width: 0; }
   .compare-transport .primary-transport {
     min-width: 92px; color: #171407; background: var(--gold); border-color: var(--gold-soft); font-weight: 750;
@@ -1729,7 +1729,6 @@
     .compare-transport button {
       min-width: 0; padding-inline: .28rem; font-size: .7rem;
     }
-    .transport-copy { display: none; }
     .cf-head { align-items: end; }
     .cf-head select { min-width: 0; max-width: 48%; }
     .cf-row {
