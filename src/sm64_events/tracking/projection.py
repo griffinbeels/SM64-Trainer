@@ -311,6 +311,11 @@ class Projector:
         # route_selected event and fed into MatchContext for the
         # in_active_route arm guard. None = no active route.
         self._route_segments: frozenset | None = None
+        # The route_id half of the same route_selected event — replay-derived
+        # like armed_route_id(), so a service restart never loses track of
+        # which route is active (there is no second, in-memory source of
+        # truth for this; see active_route_id()).
+        self._active_route_id: int | None = None
         self._open = None  # EventRow of the open attempt's anchor
         self._open_acted = False  # mario_acted seen since the last anchor; only meaningful while _open is set
         self._level: int | None = None   # gCurrLevelNum per level_changed; None = unknown (legacy journals)
@@ -346,6 +351,11 @@ class Projector:
     def armed_route_id(self):
         return self._runs.armed_route_id()
 
+    def active_route_id(self):
+        """The route_id of the most recent route_selected — replay-derived,
+        restart-safe (mirrors armed_route_id()). None = no active route."""
+        return self._active_route_id
+
     def finished_runs(self):
         return self._runs.finished_runs()
 
@@ -374,6 +384,7 @@ class Projector:
             # through _dispatch's default no-op.
             ids = ev.payload.get("segment_ids") or []
             self._route_segments = frozenset(ids) if ids else None
+            self._active_route_id = ev.payload.get("route_id")
         # A segment target (set via target_set or a segment success) is ALSO
         # in-route by definition — practicing a segment directly must arm it
         # even when no route_selected has fired (or a different route is

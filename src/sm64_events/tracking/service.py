@@ -64,7 +64,6 @@ class TrackerService:
         self._current_stage = {"course_id": None, "level": None,
                                "area": None, "mode": None}
         self._persisted_runs: list[int] = []
-        self._active_route: int | None = None
 
     def _load_segment_defs(self) -> list[SegmentDef]:
         # inclusion list (the dataclass's own fields), NOT exclusion of
@@ -554,13 +553,19 @@ class TrackerService:
         if (("steps" in d or "start_condition" in d)
                 and self._projector.armed_route_id() == route_id):
             await self._arm_run(route_id, void_active=True)  # re-arm: void any in-flight run, fresh snapshot
-        if "steps" in d and self._active_route == route_id:
+        if "steps" in d and self._projector.active_route_id() == route_id:
             await self.select_route(route_id)   # refresh the active route's member snapshot
 
     async def delete_route(self, route_id: int) -> None:
         db = self._require_db()
+        was_active = self._projector.active_route_id() == route_id
         db.delete_route(route_id)
         await self._routes_changed()
+        if was_active:
+            # The active route no longer exists: clear arming (journals a
+            # clearing route_selected {None, []}) so its segments don't stay
+            # armed under in_active_route with no route to point back at.
+            await self.select_route(None)
 
     async def _routes_changed(self) -> None:
         """Broadcast-only (like segment notices): routes are config, never
@@ -575,10 +580,16 @@ class TrackerService:
         mutable routes table — the same self-containment trick _arm_run uses
         for run_started. None clears the scope: only a standalone segment
         target (MatchContext.target_segment) can still arm in_active_route
-        defs. LookupError -> 404 if route_id is given but doesn't exist."""
+        defs. LookupError -> 404 if route_id is given but doesn't exist.
+
+        The active route id itself is NOT stored on the service (no second
+        source of truth) — self._projector.active_route_id() derives it from
+        the journaled route_selected via feed(), exactly like
+        armed_route_id() derives the run-armed route. This is what makes the
+        active route restart-safe: replay() rebuilds it from the journal
+        before this service ever calls select_route() again."""
         db = self._require_db()
         seg_ids = self._route_member_segments(db, route_id) if route_id is not None else []
-        self._active_route = route_id
         await self.publish(Event(type="route_selected", frame=0,
                                  timestamp_utc=_now(),
                                  payload={"route_id": route_id,

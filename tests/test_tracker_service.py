@@ -966,6 +966,82 @@ def test_update_route_that_is_not_active_does_not_reemit_select_route(tmp_path):
     assert not any(e.type == "route_selected" for e in db.events())
 
 
+def test_name_only_edit_of_active_route_does_not_reemit_select_route(tmp_path):
+    # FIX 3 (review, Low): isolate the re-emit guard's two clauses — a
+    # name-only patch of the ACTIVE route must not re-emit route_selected
+    # (only a `steps` change refreshes the member snapshot).
+    db, svc = make(tmp_path)
+    rid = asyncio.run(svc.create_route({"name": "R", "steps": [
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}))
+    asyncio.run(svc.select_route(rid))
+    asyncio.run(svc.update_route(rid, {"name": "R renamed"}))
+    reselects = [e for e in db.events() if e.type == "route_selected"]
+    assert len(reselects) == 1                      # only the initial select_route
+
+
+def test_deleting_the_active_route_clears_arming(tmp_path):
+    # FIX 2 (review, Medium): deleting the currently-active route must clear
+    # arming (a clearing route_selected {None, []}) so its segments don't
+    # stay armed under in_active_route forever with no route to point at.
+    db, svc = make(tmp_path)
+    rid = asyncio.run(svc.create_route({"name": "R", "steps": [
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}))
+    asyncio.run(svc.select_route(rid))
+    asyncio.run(svc.delete_route(rid))
+    assert svc._projector.active_route_id() is None
+    ev = db.events()[-1]
+    assert ev.type == "route_selected"
+    assert ev.payload == {"route_id": None, "segment_ids": []}
+
+
+def test_deleting_a_non_active_route_does_not_touch_arming(tmp_path):
+    db, svc = make(tmp_path)
+    lblj = seed_id(db, "LBLJ")
+    active_rid = asyncio.run(svc.create_route({"name": "Active", "steps": [
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]}]}))
+    other_rid = asyncio.run(svc.create_route({"name": "Other", "steps": [
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}))
+    asyncio.run(svc.select_route(active_rid))
+    asyncio.run(svc.delete_route(other_rid))
+    assert svc._projector.active_route_id() == active_rid
+    assert not any(e.type == "route_selected" and e.payload["route_id"] is None
+                  for e in db.events())
+
+
+def test_active_route_survives_restart_and_reemits_on_edit(tmp_path):
+    # FIX 1 (review, High): _active_route was in-memory only, so a service
+    # restart lost track of which route was active even though the
+    # projector correctly rebuilds route_segments from the journal on
+    # replay. This proves the active-route id ALSO survives a restart (it
+    # is now read from the projector, not a second field) and that editing
+    # the still-active route's steps re-emits route_selected on the NEW
+    # service instance.
+    db_path = tmp_path / "t.db"
+    db1 = Database(db_path)
+    svc1 = TrackerService(db1, Broadcaster())
+    asyncio.run(svc1.start())
+    lblj = seed_id(db1, "LBLJ")
+    rid = asyncio.run(svc1.create_route({"name": "R", "steps": [
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]}]}))
+    asyncio.run(svc1.select_route(rid))
+    db1.close()
+
+    # "Restart": a fresh service against the SAME db file replays the
+    # journal, including the route_selected we just wrote.
+    db2 = Database(db_path)
+    svc2 = TrackerService(db2, Broadcaster())
+    asyncio.run(svc2.start())
+    assert svc2._projector.active_route_id() == rid
+
+    mips = seed_id(db2, "MIPS Clip")
+    asyncio.run(svc2.update_route(rid, {"steps": [
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]},
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": mips}]}]}))
+    reselects = [e for e in db2.events() if e.type == "route_selected"]
+    assert len(reselects) == 2                      # original select + restart-safe re-emit
+    assert set(reselects[-1].payload["segment_ids"]) == {lblj, mips}
+
+
 # -- runs (Phase D) -----------------------------------------------------------
 
 def _route_with(db, svc):
