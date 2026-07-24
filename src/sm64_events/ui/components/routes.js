@@ -25,7 +25,11 @@ const MAIN_CATEGORY = "Main Categories";
 const STAGE_CATEGORY = "Stage RTA";
 const UNCATEGORISED = "Uncategorized";
 const LEAD_CATEGORIES = [MAIN_CATEGORY, STAGE_CATEGORY];
-const COLLAPSED_KEY = "sm64.routeCatsCollapsed";
+// Which groups are OPEN, not which are shut — so the default (nothing stored)
+// is everything collapsed, which is what a 48-route library wants (user
+// request 2026-07-24). New key name: inverting the meaning under the old one
+// would have flipped every existing user's library open.
+const OPEN_KEY = "sm64.routeCatsOpen";
 
 // A category is a PATH: "Main Categories/16 Star". One free-text field still
 // holds it (no migration, no second column, any depth), and the library nests
@@ -138,9 +142,9 @@ function CategoryModal({ routes, current, onCancel, onSave }) {
   <//>`;
 }
 
-function loadCollapsed() {
-  try { return new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY)) || []); }
-  catch { return new Set(); }
+function loadOpenGroups() {
+  try { return new Set(JSON.parse(localStorage.getItem(OPEN_KEY)) || []); }
+  catch { return new Set(); }   // private mode: everything starts collapsed
 }
 
 // Star/segment picker shared by "add step" and "add option to a group".
@@ -291,13 +295,13 @@ export function Routes({ t }) {
   const [segs, setSegs] = useState([]);
   const [vocab, setVocab] = useState(null);
   const [err, setErr] = useState(null);
-  const [collapsed, setCollapsed] = useState(loadCollapsed);
+  const [openGroups, setOpenGroups] = useState(loadOpenGroups);
 
   function toggleCategory(category) {
-    setCollapsed((prev) => {
+    setOpenGroups((prev) => {
       const next = new Set(prev);
       if (!next.delete(category)) next.add(category);
-      try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next])); }
+      try { localStorage.setItem(OPEN_KEY, JSON.stringify([...next])); }
       catch { /* private mode: collapse still works for this session */ }
       return next;
     });
@@ -430,7 +434,7 @@ export function Routes({ t }) {
           ${routes.length === 0 ? html`<div class="workshop-empty compact">
             No routes yet. Build one from stars, segments, or groups.
           </div>` : groupByCategory(routes).map(([category, subs]) => {
-            const shut = collapsed.has(category);
+            const shut = !openGroups.has(category);
             const routeRow = (r) => html`<button role="listitem"
                 key=${r.id}
                 class=${`route-list-item ${r.id === selId ? "on" : ""}`}
@@ -452,7 +456,7 @@ export function Routes({ t }) {
               ${shut ? null : subs.map(([sub, inGroup]) => {
                 if (sub === null) return inGroup.map(routeRow);
                 const path = `${category}${CATEGORY_SEP}${sub}`;
-                const subShut = collapsed.has(path);
+                const subShut = !openGroups.has(path);
                 return html`<div class="route-subcat" key=${path}>
                   <button class=${`route-cat-header sub ${subShut ? "shut" : ""}`}
                       aria-expanded=${!subShut}

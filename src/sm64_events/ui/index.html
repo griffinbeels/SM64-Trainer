@@ -981,10 +981,13 @@
   /* .route-library shares the segment-library viewport-bound rule above;
      .library-actions (margin-top:auto) stays pinned inside the card. */
   .route-list {
-    min-height: 0; flex: 1 1 auto; overflow: auto;
-    display: grid; align-content: start; gap: .4rem;
+    min-height: 0; flex: 1 1 auto;
+    overflow-y: auto; overflow-x: hidden;
+    display: grid; grid-template-columns: minmax(0,1fr);
+    align-content: start; gap: .4rem;
     padding-right: 2px; scrollbar-width: thin;
   }
+  .route-cat { min-width: 0; grid-template-columns: minmax(0,1fr); }
   .route-list-item {
     width: 100%; min-width: 0; min-height: 54px;
     display: grid; grid-template-columns: minmax(0,1fr) auto;
@@ -1021,15 +1024,26 @@
   }
   .route-cat-header > .ui-icon { transition: transform .12s ease; }
   .route-cat-header.shut > .ui-icon { transform: rotate(-90deg); }
-  /* Sub-category: one nesting level in, lighter than its parent so the
-     hierarchy reads at a glance without a second border. */
-  .route-subcat { display: grid; align-content: start; gap: .4rem; }
+  /* Sub-category: indented and hung off a guide line, so a route reads as
+     belonging to the group above it. */
+  .route-subcat {
+    min-width: 0; display: grid; grid-template-columns: minmax(0,1fr);
+    align-content: start; gap: .4rem;
+    margin-left: .5rem; padding-left: .45rem;
+    border-left: 1px solid var(--border-soft);
+  }
   .route-cat-header.sub {
-    padding-left: 1.1rem; font-size: .68rem;
+    padding-left: .3rem; font-size: .68rem;
     text-transform: none; letter-spacing: .02em;
   }
   .route-cat-header.sub b { font-size: .72rem; font-weight: 600; }
-  .route-subcat .route-list-item { margin-left: .55rem; }
+  /* Indent the ROW with a margin and let it stretch — `width: 100%` (the base
+     .route-list-item rule) plus a margin is wider than the column, which both
+     broke the indent and gave the library a horizontal scrollbar (live report
+     2026-07-24). A vertical list never scrolls sideways: names ellipsise. */
+  .route-cat .route-list-item { width: auto; }
+  .route-cat > .route-list-item { margin-left: .6rem; }
+  .route-subcat > .route-list-item { margin-left: .5rem; }
   /* Two columns, not three: the library column is 240-300px, and three
      icon+label buttons overflowed the card (live report 2026-07-24 — "Delete"
      hung past the edge). The third wraps to its own row. min-width:0 on the
