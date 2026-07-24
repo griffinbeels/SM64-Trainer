@@ -167,7 +167,7 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
   negative-rta self-heal covers the time-jump consequences.  Acceptable: door
   echoes are constant, this edge is rare.
 """
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Callable
 
 from sm64_events.memory.addresses import (CASTLE_AREA_NAMES,
@@ -219,6 +219,12 @@ class MatchContext:
     # last_star_* guards conservatively FAIL on None (spec 2026-07-23).
     last_star_grabbed: tuple | None = None
     last_star_attempted: tuple | None = None
+    # Active-route scoping (spec 2026-07-23-default-routes-foundation): the
+    # journaled route_selected member set, and the standalone segment target.
+    # An in_active_route-guarded def arms only if its id is in one of these.
+    # None/empty = no active route.
+    route_segments: frozenset | None = None
+    target_segment: int | None = None
 
 
 @dataclass(frozen=True)
@@ -229,6 +235,15 @@ class SegmentDef:
     start_triggers: list
     end_triggers: list
     guards: list
+    # Ordered middle steps; [] = plain start/end pair. Defaulted (deviation
+    # from the brief's non-default positional field, spec 2026-07-23): a
+    # non-default field here would TypeError every existing SegmentDef(...)
+    # construction that omits it, AND contradicts the brief's own
+    # test_segmentdef_defaults_empty_waypoints, which constructs one without
+    # passing waypoints and asserts it defaults to []. default_factory=list
+    # keeps that test meaningful while `_load_segment_defs` still works
+    # unchanged (the db row always supplies the key — Task 1).
+    waypoints: list = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -506,6 +521,15 @@ GUARDS: dict[str, GuardType] = {g.key: g for g in [
               and ctx.last_star_attempted[0] == p["course"]
               and (p.get("star") is None
                    or ctx.last_star_attempted[1] == p["star"])),
+    # Arm-gate scoping (spec 2026-07-23-default-routes-foundation): a stub-check
+    # guard READ DECLARATIVELY by the engine's arm gate (see
+    # SegmentEngine._route_allows), exactly as min_time/max_time are read
+    # declaratively by projection — the standard check() never gates arming
+    # (it can't see the def id). A def carrying this arms only inside the
+    # active route or as the standalone segment target. Opt-in: the 10 existing
+    # defs omit it and are unaffected.
+    GuardType("in_active_route", "Only in the active route",
+              {}, "", lambda p, ctx: True, phase="arm"),
 ]}
 
 
@@ -571,6 +595,14 @@ def validate_definition(d: dict) -> None:
             raise ValueError(f"{side} needs at least one trigger")
         for c in clauses:
             _check_clause(c, TRIGGERS, side)
+    waypoints = d.get("waypoints") or []
+    if not isinstance(waypoints, list):
+        raise ValueError("waypoints must be a list")
+    for step in waypoints:
+        if not isinstance(step, list) or not step:
+            raise ValueError("each waypoint must be a non-empty list of triggers")
+        for clause in step:
+            _check_clause(clause, TRIGGERS, "waypoints")
     guards = d.get("guards") or []
     if not isinstance(guards, list):
         raise ValueError("guards must be a list")

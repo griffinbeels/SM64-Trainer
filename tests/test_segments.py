@@ -53,7 +53,8 @@ def test_vocab_lists_triggers_guards_and_level_enum():
                                                "star_count_max",
                                                "min_time", "max_time",
                                                "last_star_grabbed",
-                                               "last_star_attempted"}
+                                               "last_star_attempted",
+                                               "in_active_route"}
 
 
 def test_vocab_ships_connections_and_flow_annotations():
@@ -125,12 +126,13 @@ def test_all_db_seeds_pass_validate_definition(tmp_path):
 
 LBLJ = SegmentDef(id=1, name="LBLJ", enabled=True,
                   start_triggers=[{"type": "level_enter", "to": 6, "from": 16}],
-                  end_triggers=[{"type": "level_enter", "to": 17}], guards=[])
+                  end_triggers=[{"type": "level_enter", "to": 17}], waypoints=[],
+                  guards=[])
 PIPE = SegmentDef(id=5, name="BitDW Pipe Entry", enabled=True,
                   start_triggers=[{"type": "level_enter", "to": 17},
                                   {"type": "attempt_anchor", "level": 17}],
                   end_triggers=[{"type": "warp_entered", "level": 17}],
-                  guards=[])
+                  waypoints=[], guards=[])
 
 
 def ctx(level=None, prev_level=None, num_stars=None, area=None):
@@ -159,7 +161,8 @@ def test_arm_then_end_is_a_success_with_rta_delta():
 B3 = SegmentDef(id=10, name="Bowser 3", enabled=True,
                 start_triggers=[{"type": "level_enter", "to": 34},
                                 {"type": "attempt_anchor", "level": 34}],
-                end_triggers=[{"type": "key_grabbed", "level": 34}], guards=[])
+                end_triggers=[{"type": "key_grabbed", "level": 34}],
+                waypoints=[], guards=[])
 
 
 def test_grab_close_records_usamune_igt_not_wall_frame_delta():
@@ -264,6 +267,7 @@ def test_guards_reevaluate_on_every_arm():
     guarded = SegmentDef(id=2, name="g", enabled=True,
                          start_triggers=[{"type": "level_enter", "to": 6}],
                          end_triggers=[{"type": "level_enter", "to": 17}],
+                         waypoints=[],
                          guards=[{"type": "prev_level", "level": 16}])
     e = SegmentEngine([guarded])
     e.feed(jev(10, "level_changed", 1000, {"from": 26, "to": 6}),
@@ -294,6 +298,7 @@ def test_prev_level_not_guard_gates_arming():
     guarded = SegmentDef(id=2, name="g", enabled=True,
                          start_triggers=[{"type": "attempt_anchor", "level": 6}],
                          end_triggers=[{"type": "level_enter", "to": 17}],
+                         waypoints=[],
                          guards=[{"type": "prev_level_not", "level": 17}])
     e = SegmentEngine([guarded])
     e.feed(jev(10, "practice_reset", 1000, {"level": 6, "mario_acted": True}),
@@ -370,7 +375,7 @@ def test_two_defs_armed_by_same_event_get_disjoint_ids():
                         start_triggers=[{"type": "level_enter", "to": 6,
                                          "from": 16}],
                         end_triggers=[{"type": "level_enter", "to": 17}],
-                        guards=[])
+                        waypoints=[], guards=[])
     e = SegmentEngine([LBLJ, second])
     _, notices = lblj_arm(e)
     assert e.armed_ids() == {1, 2}
@@ -404,6 +409,7 @@ def test_guard_failing_refire_keeps_original_arm():
     guarded = SegmentDef(id=3, name="g", enabled=True,
                          start_triggers=[{"type": "star_grabbed"}],
                          end_triggers=[{"type": "level_enter", "to": 17}],
+                         waypoints=[],
                          guards=[{"type": "star_count_max", "n": 5}])
     e = SegmentEngine([guarded])
     e.feed(jev(30, "star_collected", 3000, {"course_id": 1, "star_id": 1}),
@@ -513,7 +519,7 @@ def test_save_prompt_anchor_is_echo_segment_stays_armed():
                       start_triggers=[{"type": "level_exit",
                                        "from": 7, "to": 6}],
                       end_triggers=[{"type": "level_enter", "to": 23}],
-                      guards=[])
+                      waypoints=[], guards=[])
     e = SegmentEngine([mips])
     # arm on the HMC exit (basement, area 3)
     e.feed(jev(10, "level_changed", 762510, {"from": 7, "to": 6}),
@@ -548,7 +554,7 @@ def test_reset_without_save_pending_still_closes():
                       start_triggers=[{"type": "level_exit",
                                        "from": 7, "to": 6}],
                       end_triggers=[{"type": "level_enter", "to": 23}],
-                      guards=[])
+                      waypoints=[], guards=[])
     e = SegmentEngine([mips])
     e.feed(jev(10, "level_changed", 762510, {"from": 7, "to": 6}),
            ctx(level=6, prev_level=7, area=3))
@@ -616,10 +622,12 @@ def test_cross_area_warp_swaps_segments_no_double_arm():
     LBLJ arms in the lobby (area 1), BitS Entry upstairs (area 2)."""
     lblj = SegmentDef(id=1, name="LBLJ", enabled=True,
         start_triggers=[{"type": "attempt_anchor", "level": 6, "area": 1}],
-        end_triggers=[{"type": "level_enter", "to": 17}], guards=[])
+        end_triggers=[{"type": "level_enter", "to": 17}], waypoints=[],
+        guards=[])
     bits = SegmentDef(id=2, name="BitS", enabled=True,
         start_triggers=[{"type": "area_enter", "level": 6, "area": 2}],
-        end_triggers=[{"type": "level_enter", "to": 21}], guards=[])
+        end_triggers=[{"type": "level_enter", "to": 21}], waypoints=[],
+        guards=[])
     e = SegmentEngine([lblj, bits])
     # in the lobby, a reset arms LBLJ
     e.feed(jev(10, "practice_reset", 1000, {"action": 0x0C400201}),
@@ -650,7 +658,8 @@ def test_cross_area_warp_into_door_spawn_arms_idle_segment():
     because every landing reset was door-echo-suppressed)."""
     lblj = SegmentDef(id=1, name="LBLJ", enabled=True,
         start_triggers=[{"type": "attempt_anchor", "level": 6, "area": 1}],
-        end_triggers=[{"type": "level_enter", "to": 17}], guards=[])
+        end_triggers=[{"type": "level_enter", "to": 17}], waypoints=[],
+        guards=[])
     e = SegmentEngine([lblj])
     # warp upstairs -> lobby: area edge 2->1, then a door-spawn landing reset
     e.feed(jev(10, "area_changed", 2000, {"level": 6, "from": 2, "to": 1}),
@@ -670,7 +679,8 @@ def test_intra_area_door_spawn_echo_does_not_arm_idle_segment():
     or a cross-area relocation does)."""
     lblj = SegmentDef(id=1, name="LBLJ", enabled=True,
         start_triggers=[{"type": "attempt_anchor", "level": 6, "area": 1}],
-        end_triggers=[{"type": "level_enter", "to": 17}], guards=[])
+        end_triggers=[{"type": "level_enter", "to": 17}], waypoints=[],
+        guards=[])
     e = SegmentEngine([lblj])
     e.feed(jev(10, "practice_reset", 2000,
                {"action": 0x1322, "prev_action": 0x1322,
@@ -903,7 +913,8 @@ def test_star_door_echo_with_prev_action_stays_echo(door_action):
 
 LAKITU = SegmentDef(id=3, name="Lakitu Skip", enabled=True,
                     start_triggers=[{"type": "spawned", "level": 16}],
-                    end_triggers=[{"type": "level_enter", "to": 6}], guards=[])
+                    end_triggers=[{"type": "level_enter", "to": 6}],
+                    waypoints=[], guards=[])
 
 
 def test_lakitu_skip_intro_reset_is_echo_segment_stays_armed():
@@ -1069,7 +1080,7 @@ LBLJ_V5 = SegmentDef(
     id=1, name="LBLJ", enabled=True,
     start_triggers=[{"type": "level_enter", "to": 6, "from": 16},
                     {"type": "attempt_anchor", "level": 6, "area": 1}],
-    end_triggers=[{"type": "level_enter", "to": 17}], guards=[])
+    end_triggers=[{"type": "level_enter", "to": 17}], waypoints=[], guards=[])
 
 
 def test_area_scoped_anchor_arms_when_tracked_area_matches():
@@ -1332,7 +1343,7 @@ def test_menu_warp_still_rebases_with_anchor_trigger():
 BITS_ENTRY = SegmentDef(
     id=2, name="BITS Entry", enabled=True,
     start_triggers=[{"type": "attempt_anchor", "level": 6, "area": 2}],
-    end_triggers=[{"type": "level_enter", "to": 31}], guards=[])
+    end_triggers=[{"type": "level_enter", "to": 31}], waypoints=[], guards=[])
 
 
 def test_menu_warp_to_other_area_swaps_armed_segments():
@@ -1433,7 +1444,7 @@ def test_afk_length_menu_warp_relocation_also_disarms():
 BITS_AREA = SegmentDef(
     id=3, name="BitS Entry (area-armed)", enabled=True,
     start_triggers=[{"type": "area_enter", "level": 6, "area": 2}],
-    end_triggers=[{"type": "level_enter", "to": 21}], guards=[])
+    end_triggers=[{"type": "level_enter", "to": 21}], waypoints=[], guards=[])
 
 
 def test_unacted_same_position_anchor_discards_the_row():
@@ -1513,10 +1524,13 @@ def test_warp_ping_pong_never_double_arms():
 # ---------------------------------------------------------------------------
 
 def test_every_trigger_and_guard_template_matches_its_params():
-    """A template typo must fail CI, not render a broken builder row."""
+    """A template typo must fail CI, not render a broken builder row. A
+    zero-param entry (e.g. in_active_route) has nothing to interpolate, so
+    only params-bearing entries are held to the non-empty rule."""
     for reg in (TRIGGERS, GUARDS):
         for t in reg.values():
-            assert t.template.strip(), f"{t.key}: empty template"
+            if t.params:
+                assert t.template.strip(), f"{t.key}: empty template"
             found = re.findall(r"\{(\w+)\}", t.template)
             assert len(found) == len(set(found)), (
                 f"{t.key}: duplicated placeholder in template")
@@ -1567,8 +1581,8 @@ def test_vocab_course_and_star_enums():
 
 def _seg(**triggers):
     return SegmentDef(id=1, name="x", enabled=True,
-                      end_triggers=[{"type": "spawned"}], guards=[],
-                      **triggers)
+                      end_triggers=[{"type": "spawned"}], waypoints=[],
+                      guards=[], **triggers)
 
 
 def test_level_exit_to_subarea_arms_when_destination_area_settles():
@@ -1670,7 +1684,8 @@ def test_deferred_destination_subarea_segment_completes_with_entry_start():
         id=1, name="MIPS Clip", enabled=True,
         start_triggers=[{"type": "level_exit", "from": 7, "to": 6,
                          "to_subarea": 3}],
-        end_triggers=[{"type": "level_enter", "to": 23}], guards=[])])
+        end_triggers=[{"type": "level_enter", "to": 23}], waypoints=[],
+        guards=[])])
     e.feed(jev(10, "level_changed", 1000, {"from": 7, "to": 6, "from_area": 1}),
            ctx(level=6))
     e.feed(jev(11, "area_changed", 1000, {"level": 6, "from": 1, "to": 1}),
@@ -1895,6 +1910,7 @@ def test_close_phase_guards_do_not_gate_arming():
         id=1, name="s", enabled=True,
         start_triggers=[{"type": "spawned"}],
         end_triggers=[{"type": "warp_entered", "level": 16}],
+        waypoints=[],
         guards=[{"type": "min_time", "frames": 180}])])
     eng.feed(jev(1, "spawned", 1000, {"level": 16}),
              MatchContext(level=16, prev_level=None, num_stars=None))
@@ -1948,3 +1964,33 @@ def test_last_star_guards_validate_and_appear_in_vocab():
     by_key = {g["key"]: g for g in vocab()["guards"]}
     assert by_key["last_star_grabbed"]["params"]["course"]["kind"] == "course"
     assert by_key["last_star_grabbed"]["params"]["star"]["required"] is False
+
+
+# ---------------------------------------------------------------------------
+# Task 2: SegmentDef.waypoints, MatchContext scope fields, in_active_route
+# guard (spec 2026-07-23-default-routes-foundation)
+# ---------------------------------------------------------------------------
+
+def test_segmentdef_defaults_empty_waypoints():
+    d = SegmentDef(id=1, name="x", enabled=True,
+                   start_triggers=[{"type": "spawned", "level": 16}],
+                   end_triggers=[{"type": "level_enter", "to": 6}], guards=[])
+    assert d.waypoints == []
+
+
+def test_matchcontext_defaults_route_fields_none():
+    ctx = MatchContext(level=6, prev_level=16, num_stars=0)
+    assert ctx.route_segments is None and ctx.target_segment is None
+
+
+def test_in_active_route_guard_registered_and_validates():
+    assert "in_active_route" in GUARDS
+    validate_definition({"name": "m",
+        "start_triggers": [{"type": "level_exit", "from": 10}],
+        "end_triggers": [{"type": "level_enter", "to": 7}],
+        "waypoints": [[{"type": "level_enter", "to": 10}]],
+        "guards": [{"type": "in_active_route"}]})   # must not raise
+
+
+def test_vocab_exposes_in_active_route():
+    assert any(g["key"] == "in_active_route" for g in vocab()["guards"])
