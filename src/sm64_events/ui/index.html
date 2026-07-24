@@ -828,10 +828,19 @@
     grid-template-columns: minmax(300px,360px) minmax(0,1fr);
     align-items: start; gap: 12px;
   }
-  .segment-library, .segment-editor { min-height: 620px; }
-  .segment-library { display: flex; flex-direction: column; }
+  .segment-editor { min-height: 620px; }
+  /* Library panel: viewport-bounded, the LIST is the scroll container. The
+     old cap sat on the list (100vh - 230px) and ignored the card's own
+     offset from the viewport top, so the card bottom ran off-screen (user
+     report 2026-07-24). 205px ≈ context bar + hero + gaps at page top;
+     sticky keeps the panel fully in view while a long editor scrolls. */
+  .segment-library, .route-library {
+    display: flex; flex-direction: column;
+    position: sticky; top: 88px;
+    min-height: 0; max-height: calc(100vh - 205px);
+  }
   .segment-list {
-    min-height: 0; max-height: calc(100vh - 230px);
+    min-height: 0; flex: 1 1 auto;
     overflow: auto; display: grid; align-content: start; gap: .55rem;
     padding-right: 2px; scrollbar-width: thin;
   }
@@ -922,9 +931,10 @@
     grid-template-columns: minmax(240px,300px) minmax(0,1fr);
     align-items: start; gap: 12px;
   }
-  .route-library { min-height: 520px; display: flex; flex-direction: column; }
+  /* .route-library shares the segment-library viewport-bound rule above;
+     .library-actions (margin-top:auto) stays pinned inside the card. */
   .route-list {
-    min-height: 0; max-height: calc(100vh - 285px); overflow: auto;
+    min-height: 0; flex: 1 1 auto; overflow: auto;
     display: grid; align-content: start; gap: .4rem;
     padding-right: 2px; scrollbar-width: thin;
   }
@@ -1644,6 +1654,7 @@
     .segment-editor { order: 1; }
     .segment-library { order: 2; }
     .segment-library, .segment-editor, .route-library, .route-empty-card { min-height: 0; }
+    .segment-library, .route-library { position: static; max-height: none; }
     .segment-list, .route-list { max-height: 340px; }
     .runbar { grid-template-columns: minmax(0,1fr) auto; align-items: end; }
     .run-pb-slot { grid-column: 1 / -1; grid-row: 2; justify-items: start; }
