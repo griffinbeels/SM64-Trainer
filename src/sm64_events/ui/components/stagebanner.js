@@ -218,11 +218,23 @@ function StandardSegmentCell({ t, s, setPicking }) {
 // A RUNNING segment must never be invisible (spec addendum 2026-07-24):
 // cells for every armed segment a row's own filter did not already show.
 // Pinned into every row by tests/test_star_icons.py.
-const armedExtraCells = (t, v, shownIds, setPicking) =>
+const armedExtraCells = (t, v, shownIds, setPicking, keep = () => true) =>
   armedSegments(t, v)
-    .filter((s) => !shownIds.has(s.segment_id))
+    .filter((s) => !shownIds.has(s.segment_id) && keep(s))
     .map((s) => html`<${StandardSegmentCell} key=${`seg:${s.segment_id}`}
       t=${t} s=${s} setPicking=${setPicking} />`);
+
+// A course's star-select screen shows that course and nothing else — never a
+// castle-movement segment (user request 2026-07-24, after warping DDD -> SSL
+// left "DDD → BitFS (sub)" sitting in the Shifting Sand Land row). A segment
+// belongs here only if its start trigger names THIS level; movements start on
+// a level_exit or a star grab, so they carry no start level and drop out.
+//
+// This narrows "a RUNNING segment must never be invisible" rather than
+// breaking it: the header's tab-independent "Running: …" chip still names
+// every armed segment, and the castle rows still offer them. Invisible in one
+// course row is not invisible.
+const startsInLevel = (level) => (s) => (s.start_levels || []).includes(level);
 
 function StarRow({ t, v, stage }) {
   // hooks first — the early return below must never change the hook count
@@ -276,7 +288,8 @@ function StarRow({ t, v, stage }) {
         onPick=${() => pick(i)}
         onEdit=${() => setPicking({ course_id: stage.course_id, star_id: i,
                                     ek: `star:${stage.course_id}:${i}` })} />`)}
-      ${armedExtraCells(t, v, new Set(), setPicking)}
+      ${armedExtraCells(t, v, new Set(), setPicking,
+                        startsInLevel(stage.level))}
     </div>
     ${pickerModal}
   </section>`;

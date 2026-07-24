@@ -873,6 +873,19 @@
     position: sticky; top: 88px;
     min-height: 0; max-height: calc(100vh - 205px);
   }
+  /* Library filter box — sits between the heading and the scrolling list, so
+     it stays put while results scroll under it (flex: 0 0 auto against the
+     list's flex: 1 1 auto). */
+  .library-search {
+    flex: 0 0 auto; width: 100%; margin: 0 0 .55rem;
+    padding: .42rem .6rem; font-size: .82rem;
+    color: var(--text); background: rgba(8,20,34,.58);
+    border: 1px solid var(--border-soft); border-radius: 8px;
+  }
+  .library-search::placeholder { color: var(--muted); }
+  .library-search:focus {
+    outline: none; border-color: #6287aa; background: rgba(8,20,34,.85);
+  }
   .segment-list {
     min-height: 0; flex: 1 1 auto;
     overflow: auto; display: grid; align-content: start; gap: .55rem;

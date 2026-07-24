@@ -320,6 +320,7 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t }) {
 
 export function Segments({ t }) {
   const [defs, setDefs] = useState(null);
+  const [query, setQuery] = useState("");
   const [vocabData, setVocabData] = useState(null);
   const [editing, setEditing] = useState(null);   // null | "new" | def object
   const editorRef = useRef(null);   // the open Builder's {save, dirty} handle
@@ -331,6 +332,16 @@ export function Segments({ t }) {
       title="Preparing the segment workshop" />`;
 
   const tgt = (t.view && t.view.target) || {};
+  // Case-insensitive substring match on the name, applied per keystroke. The
+  // seeded corpus pushes this library past 60 entries, where scrolling for
+  // "BitFS Pipe Entry" is slower than typing "pipe" (user request
+  // 2026-07-24). Matching the CATEGORY too means "castle" finds every
+  // movement without anyone having to name them consistently.
+  const needle = query.trim().toLowerCase();
+  const shown = needle
+    ? defs.filter((d) => `${d.name} ${d.category || ""}`
+                           .toLowerCase().includes(needle))
+    : defs;
   // armedSegs is the single live source: WS notices keep it instant,
   // every view fetch reconciles it so it never stays stale (store.js).
   const isArmed = (id) => t.armedSegs.has(id);
@@ -388,12 +399,18 @@ export function Segments({ t }) {
             <span class="eyebrow">Library</span>
             <h3>Your segments</h3>
           </div>
-          <span class="count-badge">${defs.length}</span>
+          <span class="count-badge">${shown.length}${
+            shown.length === defs.length ? "" : ` / ${defs.length}`}</span>
         </div>
+        <input class="library-search" type="search" value=${query}
+          placeholder="Search segments…" aria-label="Search segments"
+          oninput=${(e) => setQuery(e.target.value)} />
         <div class="segment-list">
           ${defs.length === 0 ? html`<div class="workshop-empty compact">
             No segments yet. Create one to time a repeatable section of the game.
-          </div>` : defs.map((d) => {
+          </div>` : shown.length === 0 ? html`<div class="workshop-empty compact">
+            No segment matches “${query}”.
+          </div>` : shown.map((d) => {
             const targeted = tgt.kind === "segment" && tgt.segment_id === d.id;
             return html`<article class=${`segrow ${editing !== "new" && editing?.id === d.id ? "on" : ""}`}>
               <button class="segment-row-main" onclick=${() => tryEdit(d)}>
