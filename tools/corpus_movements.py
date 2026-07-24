@@ -8,7 +8,7 @@ before editing ANY row:
   * a movement may START on a star_grabbed clause but must NEVER end on one
     (run-ordering trap — spec §5.2).
 """
-from corpus_vocab import (BASEMENT, UPSTAIRS, enter_area, enter_level,
+from corpus_vocab import (BASEMENT, LOBBY, UPSTAIRS, enter_area, enter_level,
                           exit_level, grab_star, movement)
 
 MOVEMENTS = [
@@ -86,8 +86,15 @@ MOVEMENTS = [
              exit_level(33), enter_level(23)),
     movement("seg:bowser2->wdw", "Bowser 2 → WDW",
              exit_level(33), enter_level(11), via=[enter_area(UPSTAIRS)]),
+    # The lobby waypoint is load-bearing, not decoration: the castle interior
+    # is a LINE (basement <-> lobby <-> upstairs), so this movement crosses TWO
+    # area edges. A plain def would be disarmed by the first one before its
+    # `area_enter upstairs` end could ever match — caught by
+    # tests/test_defaults_corpus.py's simulation, which is the whole reason
+    # that layer exists.
     movement("seg:bowser2->upstairs", "Bowser 2 → Upstairs",
-             exit_level(33), enter_area(UPSTAIRS)),
+             exit_level(33), enter_area(UPSTAIRS),
+             via=[enter_area(LOBBY)]),
     # --- upstairs ---------------------------------------------------------
     movement("seg:wdw->thi", "WDW → THI", exit_level(11), enter_level(13)),
     movement("seg:thi->ttm", "THI → TTM", exit_level(13), enter_level(36)),

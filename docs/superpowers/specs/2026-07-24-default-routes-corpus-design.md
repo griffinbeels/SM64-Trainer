@@ -183,7 +183,7 @@ current triggers and stay unguarded (unchanged behaviour).
 | `seg:ddd->wdw` — BitFS re-entry, pause-exit | `exit 23` | `enter 19`, `exit 19` | `enter 11` |
 | `seg:bowser2->ddd` | `exit 33` | — | `enter 23` |
 | `seg:bowser2->wdw` | `exit 33` | `area 2` | `enter 11` |
-| `seg:bowser2->upstairs` — up for the BLJ | `exit 33` | — | `area 2` |
+| `seg:bowser2->upstairs` — up for the BLJ | `exit 33` | `area 1` | `area 2` |
 | `seg:wdw->thi` | `exit 11` | — | `enter 13` |
 | `seg:thi->ttm` | `exit 13` | — | `enter 36` |
 | `seg:ttm->sl` | `exit 36` | — | `enter 10` |
@@ -199,9 +199,13 @@ current triggers and stay unguarded (unchanged behaviour).
 Three rows deserve their reasoning spelled out, because each is the *only*
 instance of its pattern:
 
-- `seg:bowser2->upstairs` is plain even though it crosses basement → upstairs,
-  because its end **is** that region crossing — the end check runs before the
-  relocation disarm.
+- `seg:bowser2->upstairs` carries a lobby waypoint because the castle interior
+  is a **line** (basement ↔ lobby ↔ upstairs), so it crosses **two** area
+  edges; the first would disarm a plain def long before its `area 2` end could
+  match. *(Corrected 2026-07-24: this row was originally specced as plain on
+  the reasoning that "its end IS the region crossing", which holds only for
+  ADJACENT regions. The simulation layer of §9 caught it — it is the one
+  definition of the 55 that the behavioural gate disproved.)*
 - `seg:sl->basement` and `seg:bbh->basement` end at a region rather than at a
   course because a castle-secret star (MIPS 2nd, MIPS 1st) is grabbed there next,
   and §4.2 forbids ending on a star grab.
