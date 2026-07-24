@@ -46,7 +46,7 @@ class FakeBuilder:
         Path(out_path).write_bytes(b"x")
         self.built = specs
         return comp.CompilationResult(path=Path(out_path), clip_count=len(specs),
-                                      skipped_runtime=0)
+                                      skipped_runtime=0, finale_included=True)
 
 
 def _service(tmp_path, plan, monkeypatch):
@@ -102,6 +102,28 @@ def test_status_unknown_job_raises(tmp_path, monkeypatch):
     svc = _service(tmp_path, _plan([_spec(1)]), monkeypatch)
     with pytest.raises(LookupError):
         svc.status("nope")
+
+
+def test_finale_dropped_at_build_is_reported_as_no_finale(tmp_path, monkeypatch):
+    class NoFinaleBuilder:
+        def build(self, specs, ring, tmp_dir, out_path, resolve_saved, progress_cb):
+            Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(out_path).write_bytes(b"x")
+            return comp.CompilationResult(path=Path(out_path), clip_count=1,
+                                          skipped_runtime=1, finale_included=False)
+
+    svc = comp.CompilationService(FakeReplay(), FakeTracker(), NoFinaleBuilder(),
+                                  out_dir=tmp_path)
+    # plan THOUGHT there was a finale (finale_frames set, no_finale False)
+    monkeypatch.setattr(comp, "plan_compilation",
+                        lambda *a, **k: _plan([_spec(1)], finale_frames=600,
+                                              no_finale=False))
+    svc._jobs["j"] = {"state": "running", "progress": 0.0,
+                      "message": "planning", "result": None}
+    svc._run_job("j", EntityRef(course_id=1, star_id=0), 5.0, 3.0)
+    r = svc._jobs["j"]["result"]
+    assert r["no_finale"] is True          # build dropped it -> honest
+    assert r["finale_time"] is None
 
 
 def test_run_job_removes_tmp_dir_when_build_fails(tmp_path, monkeypatch):

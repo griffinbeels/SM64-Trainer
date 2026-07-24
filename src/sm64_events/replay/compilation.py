@@ -41,6 +41,7 @@ class CompilationResult:
     path: Path
     clip_count: int
     skipped_runtime: int
+    finale_included: bool = False
 
 
 class CompilationBuilder:
@@ -93,7 +94,8 @@ class CompilationBuilder:
             canvas = canvas or (1280, 960)
             self._concat_normalize(clips, canvas, out_path)
         return CompilationResult(path=out_path, clip_count=len(clips),
-                                 skipped_runtime=skipped)
+                                 skipped_runtime=skipped,
+                                 finale_included=finale_clip is not None)
 
     def _probe_dims(self, path: Path):
         """(w, h) via ffmpeg's own probe (no ffprobe dependency): `-i` with no
@@ -195,7 +197,7 @@ class CompilationService:
                     "available successful run")
             slug = _entity_slug(self.tracker, identity)
             stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-            out_path = self.out_dir / f"compilation_{slug}_{stamp}.mp4"
+            out_path = self.out_dir / f"compilation_{slug}_{stamp}_{job_id[:8]}.mp4"
             tmp_dir = self.out_dir / f".build_{job_id}"
             try:
                 res = self.builder.build(plan.specs, ring, tmp_dir, out_path,
@@ -206,9 +208,10 @@ class CompilationService:
                 "path": str(out_path),
                 "clip_count": res.clip_count,
                 "skipped": plan.aged_out + res.skipped_runtime,
-                "no_finale": plan.no_finale,
+                "no_finale": plan.no_finale or not res.finale_included,
                 "finale_time": (format_igt(plan.finale_frames)
-                                if plan.finale_frames is not None else None)}
+                                if plan.finale_frames is not None
+                                and res.finale_included else None)}
             job["progress"] = 1.0
             job["message"] = "done"
             job["state"] = "done"

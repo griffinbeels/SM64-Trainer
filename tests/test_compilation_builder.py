@@ -117,6 +117,23 @@ def test_saved_finale_uses_resolved_path(tmp_path, monkeypatch):
     assert str(saved) in calls["concat"]   # saved clip actually fed to ffmpeg
 
 
+def test_finale_included_false_when_saved_finale_missing(tmp_path, monkeypatch):
+    def fake_run(args, **kw):
+        if "-filter_complex" in args:
+            Path(args[-1]).write_bytes(b"out")
+        return subprocess.CompletedProcess(args, 0, b"", b"Video: 1280x960")
+
+    _install(monkeypatch, fake_run)
+    b = _builder(FakeExtractor())
+    out = tmp_path / "c.mp4"
+    res = b.build([_spec(1), _spec(9, kind="finale", source="saved")],
+                  ring=None, tmp_dir=tmp_path / "t", out_path=out,
+                  resolve_saved=lambda i: None,      # saved finale file is gone
+                  progress_cb=lambda f, m: None)
+    assert res.finale_included is False
+    assert res.clip_count == 1                       # only the failure survived
+
+
 def test_concat_failure_unlinks_output(tmp_path, monkeypatch):
     out = tmp_path / "c.mp4"
 
