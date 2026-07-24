@@ -8,6 +8,17 @@ params + the sentence template the builder renders).
 Matcher invariants (spec §Matcher semantics — tests are the contract):
 - closures (success/failure) process BEFORE arming; one event may close an
   attempt AND re-arm the next (practice_reset in an attempt_anchor segment)
+- COROLLARY — a def whose START and END can be satisfied by the SAME event is
+  UNFIREABLE.  Closures run only for an ALREADY-ARMED def, so such a def arms
+  on the very event that should close it and then hangs armed until something
+  unrelated disarms it; it can never record an attempt.  The trap is a
+  `level_exit from=A` / `level_enter to=B` pair where the world has a DIRECT
+  A->B edge (one level_changed satisfies both) — e.g. DDD -> BitFS through the
+  sub (23 -> 19), which shipped broken and surfaced as a segment stuck
+  "running" in an unrelated course (live report 2026-07-24).  Start such a
+  segment on an EARLIER event instead (the star that opens the way, an area
+  crossing).  Guarded for the seeded corpus by
+  tests/test_defaults_corpus.py::test_no_movement_starts_and_ends_on_the_SAME_event
 - anchor closures are POSITION-GATED (segment swap, live report 2026-06-12).
   Each _Arm remembers the MatchContext (level, area) where it armed — the
   segment's start position; a co-frame establishing area_changed pins the

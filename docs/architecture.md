@@ -937,3 +937,57 @@ course 0. `STAR_NAMES[0]` names them; ids are decomp-derived twice over —
 independently agree on MIPS = 3 and 4. **VERIFY (live gate):** which Toad
 carries index 0/1/2 — the binding follows the flag order plus the 12/25/35-star
 spawn thresholds, and the journal held zero course-0 grabs when this shipped.
+
+### Corpus refinements (2026-07-24, post-merge)
+
+**One step per course VISIT, not per star.** A route dictates which stages you
+visit in what order — never which star to grab first inside one.
+`tools/corpus_vocab.group_visits` collapses each run of consecutive same-course
+star steps into a single `need=N` group, applied to every seeded route (120★:
+~160 steps → 67). Two visits to one course stay separate because the movement
+step between them breaks the run; a documented either/or survives as
+`need < len` ("any 4 of these 5"); a lone star keeps its own step and its own
+name. A Stage RTA route is one visit, so it is a single step — which is why the
+corpus ships 35 stage routes to the wiki's 37 lists: WDW's and RR's
+"Beginner"/"Expert" 120 variants differed **only** in which star carried the
+100 coins, i.e. only in order, so unordered they are the same route.
+
+**A def whose start and end share one event is unfireable.** The full statement
+and its evidence live in `tracking/segments.py`'s module docstring (the
+corollary under "closures process BEFORE arming"). Shipped in the corpus once —
+DDD → BitFS via the sub, where the 23 → 19 one-way edge makes `level_exit
+from=23` and `level_enter to=19` the same `level_changed`. The walk-based
+simulation could not catch it, because it always exits a course to its castle
+landing node and so produced two events where the real hop produces one; the
+guard is structural instead (a direct world edge from source to destination
+means the pair is unfireable, whatever a walk does).
+
+**Route focus.** With a route active the star selector offers only that route's
+stars and the castle segment row only its segments. `service.active_route()`
+carries `star_keys` (`"<course>:<star>"`, the same shape as the view's
+`last_strat_by_star`) so the UI tests membership with one Set lookup. Two
+deliberate non-filters: a route that never visits the course you are standing
+in shows every star rather than an empty banner, and the Bowser/arena rows are
+untouched because their reds-vs-no-reds toggle must see a pipe segment the
+route may not list.
+
+**Picking a route now tells the SERVER.** Until 2026-07-24 nothing in the UI
+called `POST /api/route/select`, so the journaled active route was permanently
+None — and since all 55 seeded movements carry the `in_active_route` guard,
+they could only ever arm as a standalone target. The corpus was inert in normal
+practice. `practice.js::pickRoute` writes the selection through; localStorage
+stays the optimistic mirror it was specced as.
+
+**A course's star row shows that course only.** A segment earns a cell there
+only if its start trigger names that level, so castle movements (which start on
+a `level_exit` or a star grab, carrying no start level) never appear — a warp
+out of DDD used to leave "DDD → BitFS (sub)" sitting in Shifting Sand Land.
+This narrows the "a RUNNING segment must never be invisible" rule rather than
+breaking it: the header's tab-independent "Running: …" chip still names every
+armed segment, and the castle rows still offer them.
+
+**Known residual:** warping out of a course can leave other movements armed
+until the next level change, because `level_exit from=X` legitimately matches
+leaving X for anywhere. They no longer appear in course rows and the header
+chip is honest about them. The real fix is engine-side — treating a menu warp
+as a relocation that disarms — and is deliberately not folded in here.
