@@ -1,0 +1,26 @@
+---
+paths:
+  - "src/sm64_events/server/**"
+  - "src/sm64_events/main.py"
+  - "src/sm64_events/core/logging_setup.py"
+  - "src/sm64_events/core/paths.py"
+---
+
+# Server layer & wiring — where to change what
+
+| To change... | Edit |
+|---|---|
+| Poll loop, attach retry, layout sanity, session pause | `server/poller.py` — also SYNTHESIZES `game_reset` on reattach: an F1 console reset makes RDRAM briefly implausible → detach nulls `_prev` → the backward-into-boot jump is lost, so on reattach it keeps `_last_timer` across the gap and emits `game_reset` when the timer dropped from ≥ BOOT_TIMER_MAX into it (live gate 2026-06-15; test_poller.py) |
+| WS fan-out, seq numbers | `server/broadcaster.py` |
+| HTTP/WS endpoints | `server/app.py` — also `POST /api/admin/shutdown` + `/api/admin/restart` + pidfile in the lifespan (GUI takeover + restart; dispatched off-thread), and `_db_reattach_loop` (db-less boot self-heal; `session_started` broadcast un-sticks the UI) |
+| REST API + error taxonomy | `server/api.py` — docstring has the LookupError/ValueError/RuntimeError→HTTP mapping. Route REST surface: `/api/routes` CRUD, `/api/routes/{id}/export`, `/api/routes/import?dry_run=`, `POST /api/route/select` (body `{route_id}`, null clears), `POST /api/routes/{id}/reset`, `POST /api/segments/{id}/reset` |
+| Update REST surface | `server/update_api.py` — `GET /api/update/status`, `POST /api/update/apply`, `POST /api/update/skip`; apply fires the SAME restart path as `/api/admin/restart`. Wired into `create_app(..., updater=)` + built in `main.py` (which also runs `startup_maintenance()`) |
+| Replay REST surface (status/extract/save/serve) | `server/replay_api.py` — FileResponse for Range/206; same error taxonomy as api.py |
+| Compare REST surface | `server/compare_api.py` — `/api/compare/view`, `import` (JSON, youtube/file-path) + poll `import/{job}`, `upload` (raw request body, no python-multipart), `videos/{id}` PUT/DELETE, `cache/{name}` (Range/206) |
+| Failure compilation REST | `server/compilation_api.py` — `POST /api/compilation` (kind-dispatched `{star}`/`{segment_id}` + `x_before`/`y_after`) → `{job_id}`; `GET /api/compilation/{job_id}` polled. Reveal reuses `/api/replay/reveal`. Wired via `create_app(..., compilation=)` in `main.py` |
+| Rank REST surface | `server/ranks_api.py` — CRUD; GET adds `cutoff_videos`/`user_videos`/`xcams_url`/`seeded`; PUT/DELETE `…/{rank}/video` (manual override); `DELETE /api/ranks/standards/{entity}/{strategy}?purge=true` full-deletes a CUSTOM strategy (`tracking/service.py::purge_strategy` — `deleted_strats` tombstone KV hides the name from unions/dropdowns/active-strat reads until re-created = undo); without `purge`, DELETE on a seeded strategy just clears its standards; service commands broadcast `rank_standards_changed`; `PUT /api/ranks/mode` (global rank mode → ui_state KV, broadcast-only `rank_mode_changed`; unknown stored value reads back as pb) |
+| Wiring / startup / logging | `main.py` (composition root), `core/logging_setup.py` |
+| Runtime data locations (db, replays, settings, lock, pidfile, window state, logs, user icons) | `core/paths.py` — THE path resolver; cwd-relative from source (identical to historical layout), `%LOCALAPPDATA%\SM64Trainer` when frozen (legacy `sm64_tracker` auto-migrated by `migrate_legacy_data_dir()`); also `bundled_ffmpeg()` + `update_state_path()` (the skipped-update overlay) + `APP_DISPLAY_NAME` ("SM64 Trainer") + `compilations_dir()` (save_root/compilations) + `server_port()` — the single port source: `SM64_PORT` env override, else **8064 frozen (exe), 8065 from source (dev)**, enforced so a dev server and a built exe never collide |
+| Resource observability PROBES (self + child + OS) | `core/procmem.py` — pure-ctypes samplers: self RSS + private/commit bytes, kernel-handle + GDI/USER object counts, system-wide memory, CHILD-process memory (ffmpeg, via Toolhelp32 by parent pid), per-type heap histogram; plus pure alarm/growth helpers (`assess_growth`, `top_type_growth`, `resource_alarms`). Degrades to 0/{} off-Windows. THE leak-ATTRIBUTION surface |
+| Periodic perf sampler + JSONL time-series | `core/perfmon.py` — `PerfMonitor` samples every 60 s, logs `mem:` + top-growers, fires one-shot per-class leak alarms, PERSISTS to `data/perf_log.jsonl` (size-capped, rotates to .prev on startup). Backs `/health.memory`; wired in `server/app.py` with poller tick-latency + replay ring gauges. Path resolves LAZILY so tests never clobber the real log |
+| Memory-hunting diagnostics | `tools/analyze_perf_log.py` ranks `data/perf_log.jsonl` growth and NAMES the dominant climber — run after a long session to localize a leak. Playbook: docs/architecture.md |

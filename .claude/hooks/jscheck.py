@@ -15,6 +15,16 @@ happened; this signals the model to correct before moving on).
 FAILS OPEN (exit 0) on anything unexpected — no node on PATH, unparseable
 payload, non-.js path, vendored lib, or check-runner error — so the guard can
 never brick the Write/Edit tool. Worst case = the status quo without the hook.
+
+ESM GOTCHA (the bug that made this guard blind for its whole life, found
+2026-07-24): `node --check <file>.js` silently exits 0 for ANY file containing
+`import`/`export` — ESM syntax makes node skip the check for .js files (only
+.mjs gets checked as a module). Every one of the 28 UI files is ESM, so the
+guard passed corrupted files. Fix: feed the file on stdin with an explicit
+`--input-type=module`, which checks ESM properly (and still catches syntax
+errors in CJS-style code — `module.exports` is a runtime name, not syntax).
+Error lines are reported as `[stdin]`; we print the real path ourselves.
+Pinned by tests/test_jscheck_hook.py.
 """
 import json
 import shutil
@@ -37,10 +47,12 @@ def main() -> int:
     if not node:
         return 0  # fail open: no node available
     try:
-        r = subprocess.run([node, "--check", path],
-                           capture_output=True, text=True, timeout=15)
+        with open(path, "rb") as src:
+            r = subprocess.run([node, "--check", "--input-type=module"],
+                               stdin=src, capture_output=True, text=True,
+                               timeout=15)
     except Exception:
-        return 0  # fail open: runner error
+        return 0  # fail open: runner error / unreadable file
     if r.returncode != 0:
         sys.stderr.write(
             f"node --check FAILED on {path}:\n{r.stderr.strip()}\n\n"
