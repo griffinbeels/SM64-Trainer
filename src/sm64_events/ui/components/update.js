@@ -28,7 +28,7 @@ function inline(s) {
 // renderer broke continuation lines out of their bullet and added stray <br>s.
 function renderNotes(md) {
   const lines = esc(md).split(/\r?\n/);
-  let out = "", inList = false, buf = null;   // buf: {type:'li'|'p'|'h', text}
+  let out = "", inList = false, buf = null;   // buf: {type:'li'|'p'|'h'|'hr', text}
   const flush = () => {
     if (!buf) return;
     if (buf.type === "li") {
@@ -36,8 +36,8 @@ function renderNotes(md) {
       out += "<li>" + inline(buf.text) + "</li>";
     } else {
       if (inList) { out += "</ul>"; inList = false; }
-      out += buf.type === "h"
-        ? "<b>" + inline(buf.text) + "</b>"
+      out += buf.type === "hr" ? "<hr>"
+        : buf.type === "h" ? "<b>" + inline(buf.text) + "</b>"
         : "<p>" + inline(buf.text) + "</p>";
     }
     buf = null;
@@ -45,9 +45,13 @@ function renderNotes(md) {
   for (const raw of lines) {
     const ln = raw.replace(/\s+$/, "");
     if (ln.trim() === "") { flush(); continue; }            // blank line ends a block
+    // Checked before `li`: '***' is ambiguous with a bullet and '---' must
+    // not be mistaken for one.
+    const hr = ln.match(/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/);
     const li = ln.match(/^\s*[-*]\s+(.*)$/);
     const hd = ln.match(/^\s*#{1,6}\s+(.*)$/);
-    if (li) { flush(); buf = { type: "li", text: li[1] }; }
+    if (hr) { flush(); buf = { type: "hr" }; }
+    else if (li) { flush(); buf = { type: "li", text: li[1] }; }
     else if (hd) { flush(); buf = { type: "h", text: hd[1] }; }
     else if (buf && (buf.type === "li" || buf.type === "p")) {
       buf.text += " " + ln.trim();                          // soft-wrap continuation
