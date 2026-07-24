@@ -23,7 +23,10 @@ segment files needs no moov and preserves A/V sync across boundaries.
 Coverage holes (idle-discarded footage) are honoured: the extractor uses only
 the maximal contiguous run of segments containing the span start and marks the
 clip truncated if a hole clips it — concatenating across a hole would silently
-collapse wall-clock time and shear the result.
+collapse wall-clock time and shear the result. A FRAME-SIZE change (the player
+resized the emulator window, so the encoder restarted) breaks a run the same
+way, for the same reason: ffmpeg would rescale the whole clip to the first
+segment's size and squash it if the aspect changed.
 """
 import shutil
 import subprocess
@@ -49,18 +52,34 @@ class ClipResult:
     truncated: bool
 
 
-def contiguous_run(segments, s: datetime):
-    """The maximal run of time-contiguous segments that contains `s`.
+def _joinable(prev, seg) -> bool:
+    """Can `seg` be concatenated onto `prev`? Two ways it cannot:
 
-    Segments arrive sorted by utc_start. A join wider than _GAP_TOLERANCE_S is
-    a coverage hole (idle-discarded footage); the run cannot cross it without
-    collapsing wall-clock time, so we keep only the run covering the span
+    TIME — a join wider than _GAP_TOLERANCE_S is a coverage hole (idle-
+    discarded footage); crossing it would collapse wall-clock time.
+
+    SIZE — the player resized the emulator window, so the encoder restarted at
+    a new frame size. ffmpeg would happily concatenate those and rescale
+    everything to the FIRST segment's size (measured: a clip spanning a
+    640x480 -> 1280x960 resize came out entirely 640x480), squashing the
+    picture outright if the aspect changed. Unknown dims (audio chunks, the
+    in-process fallback writer) never force a break."""
+    if (seg.utc_start - prev.utc_end).total_seconds() > _GAP_TOLERANCE_S:
+        return False
+    return not (prev.dims and seg.dims and prev.dims != seg.dims)
+
+
+def contiguous_run(segments, s: datetime):
+    """The maximal run of JOINABLE segments that contains `s` (see _joinable:
+    time-contiguous AND one frame size).
+
+    Segments arrive sorted by utc_start; we keep only the run covering the span
     start. Returns (run, hole_before, hole_after): the segment list plus
-    whether a hole bounds it on either side (→ the clip is truncated). Pure —
+    whether a break bounds it on either side (→ the clip is truncated). Pure —
     unit-tested."""
     runs, cur = [], []
     for seg in segments:
-        if cur and (seg.utc_start - cur[-1].utc_end).total_seconds() > _GAP_TOLERANCE_S:
+        if cur and not _joinable(cur[-1], seg):
             runs.append(cur)
             cur = []
         cur.append(seg)

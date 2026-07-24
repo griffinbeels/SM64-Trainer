@@ -166,6 +166,7 @@ class DwmSurfaceVideoSource:
         # published by the geometry thread (tuple swap = atomic in CPython)
         self._geom = None    # (off_x, off_y, cw, ch) in surface coords
         self._handle = None  # DWM shared-surface handle (changes on resize)
+        self._resync = None  # grab loop -> geometry thread: re-read NOW
         self._alive = True
         self._idle_check = lambda: False  # recorder injects via set_idle_check
 
@@ -202,6 +203,7 @@ class DwmSurfaceVideoSource:
         import queue
         import threading
         self._stop = threading.Event()
+        self._resync = threading.Event()
         self._queue = queue.Queue(maxsize=24)
         self._geom_thread = threading.Thread(
             target=self._geom_loop, args=(on_stopped,),
@@ -263,7 +265,12 @@ class DwmSurfaceVideoSource:
                 # measured ~120 ms grab gaps traced to it
                 from sm64_events.replay._dwm import DwmSurfaceReader
                 self._handle = DwmSurfaceReader.query_handle(self._win.hwnd)
-            self._stop.wait(1.0)
+            # 1 Hz normally (these calls can block on PJ64's UI lock), but the
+            # grab loop wakes us the moment the surface goes stale — that is a
+            # RESIZE, and the player should not lose a second of footage to a
+            # poll interval. stop() sets this too, so teardown stays prompt.
+            self._resync.wait(1.0)
+            self._resync.clear()
 
     def _loop(self, reader, on_stopped) -> None:
         from sm64_events.replay.clock import qpc_100ns
@@ -297,6 +304,7 @@ class DwmSurfaceVideoSource:
                 geom = self._geom
                 handle = self._handle
                 if geom is None or handle is None:
+                    self._resync.set()      # window resized/restored: re-read now
                     _time.sleep(0.1)
                     next_t = _time.perf_counter()
                     continue
@@ -307,7 +315,9 @@ class DwmSurfaceVideoSource:
                 prev_t = t1
                 full = reader.read(handle)
                 if full is None:
+                    # stale handle — the window was resized out from under us
                     misses += 1
+                    self._resync.set()
                     _time.sleep(0.05)
                     continue
                 ox, oy, cw, ch = geom
@@ -363,6 +373,7 @@ class DwmSurfaceVideoSource:
             return
         if self._thread is not None:
             self._stop.set()
+            self._resync.set()   # geometry thread waits on this, not on _stop
             self._thread.join(timeout=5)
             self._thread = None
         if self._geom_thread is not None:

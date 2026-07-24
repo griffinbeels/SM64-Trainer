@@ -275,7 +275,7 @@ class SegmentWriter:
         end = start + timedelta(seconds=seg_frames / fps)
         self._on_segment(SegmentInfo(
             path=path, kind="video", utc_start=start, utc_end=end,
-            size_bytes=path.stat().st_size))
+            size_bytes=path.stat().st_size, dims=self._dims))
 
     # -- audio ---------------------------------------------------------------
     def start_audio(self, t0_utc) -> None:

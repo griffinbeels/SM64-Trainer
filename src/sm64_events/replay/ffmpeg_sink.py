@@ -176,7 +176,8 @@ class AudioPacer:
 
 
 def parse_segment_csv(line: str, anchor_utc: datetime, origin_s: float,
-                      scratch: Path) -> SegmentInfo | None:
+                      scratch: Path,
+                      dims: tuple[int, int] | None = None) -> SegmentInfo | None:
     """One line of ffmpeg's -segment_list_type csv: 'file,start,end' (seconds).
     UTC is anchored once (anchor_utc = wall time of the first fed frame) and the
     segment offset is RELATIVE to the first segment's start (origin_s) — correct
@@ -198,7 +199,7 @@ def parse_segment_csv(line: str, anchor_utc: datetime, origin_s: float,
         path=path, kind="video",
         utc_start=anchor_utc + timedelta(seconds=start - origin_s),
         utc_end=anchor_utc + timedelta(seconds=end - origin_s),
-        size_bytes=size)
+        size_bytes=size, dims=dims)
 
 
 class FfmpegAvSink:
@@ -320,9 +321,13 @@ class FfmpegAvSink:
         self._audio_thread = threading.Thread(
             target=self._audio_writer_loop, name="ffmpeg-audio", daemon=True)
         self._audio_thread.start()
-        for target, name in ((self._segment_list_loop, "ffmpeg-segments"),
-                             (self._stderr_loop, "ffmpeg-stderr")):
-            t = threading.Thread(target=target, args=(self._proc,),
+        # Each reader belongs to ONE child, so it stamps THAT child's frame
+        # size onto its segments — a later resize respawns ffmpeg and its
+        # reader with the new size, and the extractor can tell the two apart.
+        for target, name, extra in (
+                (self._segment_list_loop, "ffmpeg-segments", ((w, h),)),
+                (self._stderr_loop, "ffmpeg-stderr", ())):
+            t = threading.Thread(target=target, args=(self._proc, *extra),
                                  name=name, daemon=True)
             t.start()
             self._readers.append(t)
@@ -495,7 +500,7 @@ class FfmpegAvSink:
             if htimer:
                 kernel32.CloseHandle(htimer)
 
-    def _segment_list_loop(self, proc) -> None:
+    def _segment_list_loop(self, proc, dims=None) -> None:
         origin = None  # this run's first segment start (pts origin to subtract)
         for raw in iter(proc.stdout.readline, b""):
             anchor = self._anchor_utc
@@ -510,7 +515,7 @@ class FfmpegAvSink:
                 except ValueError:
                     pass
             seg = parse_segment_csv(line, anchor, origin or 0.0,
-                                    self._cfg.scratch_dir)
+                                    self._cfg.scratch_dir, dims)
             if seg is not None:
                 self._on_segment(seg)
 
