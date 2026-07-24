@@ -11,6 +11,12 @@
 // `identity` is the POST /api/strat body identity: {course_id, star_id} for a
 // star, {kind:"segment", segment_id} for a segment. `entity` is the rank
 // entity_key the creation modal writes standards under.
+//
+// `submit(tag)` overrides where the pick is written (default: POST /api/strat
+// with `identity`). The attempt rows in practice.js pass a submit that hits
+// POST /api/attempts/{id}/strat, so reclassifying a recorded run reuses this
+// exact dropdown — including the "+ new strat…" modal and the dropped-write
+// recovery — instead of a second, drifting copy.
 import { h } from "preact";
 import { useState } from "preact/hooks";
 import htm from "htm";
@@ -19,7 +25,9 @@ import { StratModal } from "./stratmodal.js";
 
 const html = htm.bind(h);
 
-export function StratPicker({ entity, identity, strategies, active, onChanged }) {
+export function StratPicker({ entity, identity, strategies, active, onChanged,
+                              submit, blankLabel = "— no strat —",
+                              highlightUnset = true }) {
   // Bumped to force the <select> to remount and re-read `active`. A native
   // <select> change updates the DOM immediately, but if the write is dropped
   // (or cancelled) `active` stays null, so its `value` prop never changes and
@@ -32,8 +40,14 @@ export function StratPicker({ entity, identity, strategies, active, onChanged })
 
   async function setStrat(value) {
     if (value === "__new") { setShowModal(true); return; }
+    const tag = value || null;
     try {
-      await send("POST", "/api/strat", { ...identity, strat_tag: value || null });
+      // `submit` lets a caller redirect the write without forking the
+      // component: the practice cards set the ACTIVE strategy, an attempt row
+      // reclassifies one recorded attempt. One dropdown, so the modal, the
+      // dropped-write recovery, and the styling can't drift apart.
+      if (submit) await submit(tag);
+      else await send("POST", "/api/strat", { ...identity, strat_tag: tag });
     } catch (e) {
       // A dropped write (tracker reconnecting, or a second copy running) must
       // NOT silently leave a phantom selection that later reverts. Tell the
@@ -46,9 +60,10 @@ export function StratPicker({ entity, identity, strategies, active, onChanged })
   }
 
   return html`<select key=${`strat-${nonce}`}
-      class="meta ${active ? "" : "needs-strat"}" value=${active || ""}
+      class="meta ${!active && highlightUnset ? "needs-strat" : ""}"
+      value=${active || ""}
       onchange=${(changeEvent) => setStrat(changeEvent.target.value)}>
-    <option value="">— no strat —</option>
+    <option value="">${blankLabel}</option>
     ${options.map((s) => html`<option value=${s}>${s}</option>`)}
     <option value="__new">+ new strat…</option>
   </select>
