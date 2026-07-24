@@ -65,6 +65,12 @@ def app_args(ffmpeg: "str | None") -> list[str]:
         # ranks feature has no data in the released exe.
         "--add-data",
         f"{REPO / 'src' / 'sm64_events' / 'data' / 'rank_standards.seed.json'}{SEP}.",
+        # The default routes/segments seed (bundled_defaults_seed() in
+        # core/paths.py) is read from sys._MEIPASS when frozen; without this
+        # entry a released exe never seeds the default segments/routes
+        # (reconcile_defaults safely no-ops on a missing seed).
+        "--add-data",
+        f"{REPO / 'src' / 'sm64_events' / 'data' / 'defaults.seed.json'}{SEP}.",
     ]
     for pkg in COLLECT:
         argv += ["--collect-all", pkg]
