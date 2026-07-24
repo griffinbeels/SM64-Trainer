@@ -147,6 +147,14 @@ Caveats (hard-won — keep these current):
     guard evaluated on the closing event sees the fresh value; game_reset
     clears both to unknown (file can change), and unknown conservatively
     fails the last_star_* guards.
+
+16. Strat reclassification: an attempt's strat_tag is the strategy remembered
+    at CLOSE time (caveat 6) unless a journaled attempt_strat_set overrides
+    it — strat_overrides() is the pre-pass (sibling of cleared_ids), keyed by
+    the attempt's first-event id like clearing is (caveat 2), and applied at
+    both stamping sites (_build for stars, the segment stamp in feed()).
+    Last write wins, so re-picking the previous strategy is the undo. The
+    event itself is inert in _dispatch: it opens and closes nothing.
 """
 from dataclasses import dataclass, replace
 
@@ -227,14 +235,35 @@ def touched_ids(events) -> set[int]:
     return out
 
 
+def strat_overrides(events) -> dict[int, str | None]:
+    """attempt_id -> reclassified strat_tag (None = deliberately unlabeled).
+
+    The compensating-event sibling of cleared_ids(). A strategy is declared
+    BEFORE a run and is therefore often wrong after it ("I said Cannonless,
+    then did something else"); the journal is append-only, so the correction
+    is appended and folded in here rather than written into the derived
+    attempts row. Last write wins, which makes re-picking the previous
+    strategy the undo — no restore event needed."""
+    out: dict[int, str | None] = {}
+    for ev in events:
+        if ev.type == "attempt_strat_set":
+            out[int(ev.payload["attempt_id"])] = ev.payload["strat_tag"]
+    return out
+
+
 class Projector:
     """Sequential pass; feed() returns attempts CLOSED by that event."""
 
     def __init__(self, cleared: dict[int, str | None] | None = None,
                  segments: list | None = None,
                  time_filters: dict | None = None,
-                 touched: set[int] | None = None):
+                 touched: set[int] | None = None,
+                 strat_overrides: dict[int, str | None] | None = None):
         self._cleared = cleared if cleared is not None else {}
+        # attempt_id -> reclassified strat (caveat 16); shadows the strat
+        # remembered at close time.
+        self._strat_overrides = (strat_overrides
+                                 if strat_overrides is not None else {})
         # ("star", course_id, star_id) | ("segment", segment_id) | None
         self.target: tuple | None = None
         # (course_id, star_id) of the active star most recently retired BY
@@ -333,7 +362,8 @@ class Projector:
         for a in seg_closed:
             # same first-event-id cleared keying as _build (caveat 2/11)
             a = replace(a,
-                        strat_tag=self.strat_by_segment.get(a.segment_id),
+                        strat_tag=self._strat_overrides.get(
+                            a.id, self.strat_by_segment.get(a.segment_id)),
                         cleared=a.id in self._cleared,
                         cleared_reason=self._cleared.get(a.id))
             a = self._auto_ignored(a)
@@ -585,7 +615,8 @@ class Projector:
                if is_anchored and close.frame >= first.frame else None)
         return self._auto_ignored(Attempt(
             id=first.id, session_id=first.session_id,
-            course_id=course_id, star_id=star_id, strat_tag=strat,
+            course_id=course_id, star_id=star_id,
+            strat_tag=self._strat_overrides.get(first.id, strat),
             anchor_type=first.type if is_anchored else "none",
             anchor_frame=first.frame if is_anchored else None,
             outcome=outcome,
@@ -646,7 +677,8 @@ def wipe_matches(a: Attempt, p: dict) -> bool:
 
 def replay(events, segments=None, time_filters=None) -> tuple[list[Attempt], Projector]:
     proj = Projector(cleared_ids(events), segments=segments,
-                     time_filters=time_filters, touched=touched_ids(events))
+                     time_filters=time_filters, touched=touched_ids(events),
+                     strat_overrides=strat_overrides(events))
     attempts: list[Attempt] = []
     for ev in events:
         if ev.type == "data_wiped":
