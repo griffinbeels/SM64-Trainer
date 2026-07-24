@@ -103,6 +103,15 @@ def replays_root() -> Path:
     return data_root() / "replays"
 
 
+def compilations_dir() -> Path:
+    # Generated failure compilations. Lives UNDER replays_root() (== the
+    # ReplayService save_root) on purpose: the existing /api/replay/reveal
+    # path-check only opens files inside save_root, so this dir is revealable
+    # with no new endpoint. Filenames start with "compilation_" so the saved-
+    # clip glob (attempt_*.mp4) never mistakes one for a saved attempt clip.
+    return replays_root() / "compilations"
+
+
 def replay_settings_path() -> Path:
     return data_root() / "data" / "replay_settings.json"
 
