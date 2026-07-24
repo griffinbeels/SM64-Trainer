@@ -1036,17 +1036,35 @@ class SegmentEngine:
         2026-07-23-default-routes-foundation) — the armed-branch counterpart
         to the plain success/relocation/anchor/death chain above, taken for
         any def carrying d.waypoints instead. Precedence (first match wins):
-        end (only once every waypoint is consumed) > death/game_reset > echo
-        (invisible, exactly like the plain chain) > real anchor (rewinds the
-        sequence to its first waypoint and re-arms IN PLACE at the anchor —
-        the practice-retry loop; no row, unlike the plain chain's reset row —
-        precise relocation-vs-continuation nuance is a live-gate VERIFY item,
-        rewind-in-place is the conservative default) > next waypoint (advance
-        `progress`) > major action (a star/key grab or a real level crossing
-        that ISN'T the next waypoint — the player switched tasks or misrouted
-        — silent cancel, no row, mirrors the plain chain's silent
-        level_changed disarm) > transparent (anything else changes nothing,
-        e.g. area_changed/warp_entered/spawned mid-sequence)."""
+        end (only once every waypoint is consumed) > death/game_reset >
+        session_started (mirrors the plain chain: a session boundary disarms
+        silently, no row, regardless of progress — an armed segment must not
+        survive across sessions) > echo (invisible, exactly like the plain
+        chain) > real anchor (rewinds the sequence to its first waypoint and
+        re-arms IN PLACE at the anchor — the practice-retry loop; no row,
+        unlike the plain chain's reset row — precise relocation-vs-
+        continuation nuance is a live-gate VERIFY item, rewind-in-place is
+        the conservative default) > next waypoint (advance `progress`) >
+        major action (a star/key grab or a real level crossing that ISN'T
+        the next waypoint — the player switched tasks or misrouted — silent
+        cancel, no row, mirrors the plain chain's silent level_changed
+        disarm) > transparent (anything else changes nothing, e.g.
+        area_changed/warp_entered/spawned mid-sequence).
+
+        AUTHORING CAVEAT (route design, not a code defect): the major-action
+        cancel above pops this def from self._armed; the SAME event is then
+        re-evaluated by feed()'s arm/re-arm phase against d.start_triggers.
+        If a def's start trigger is LOOSER than (or equal to) a waypoint
+        clause it could collide with — e.g. a start trigger that doesn't
+        pin a destination while a waypoint does — the cancelling event can
+        satisfy the start trigger and re-arm in the same tick (a
+        segment_disarmed+segment_armed notice pair instead of a clean
+        abandon), exactly as an ordinary re-arm-on-start-trigger-refire
+        would. This is the existing "re-firing a start trigger while armed
+        re-arms" convention (module docstring), not new behavior — but a
+        route's start trigger should be written at least as specific as
+        every waypoint clause it could be confused with, or a misroute can
+        silently resume instead of truly cancelling."""
         closed = []
         complete = arm.progress >= len(d.waypoints)
         if complete and self._matches(d.end_triggers, ev, ctx):
@@ -1066,6 +1084,9 @@ class SegmentEngine:
             if a:
                 closed.append(a)
             self._disarm(d, ev, notices)
+            return closed
+        if ev.type == "session_started":
+            self._disarm(d, ev, notices)   # silent: no row (session boundary)
             return closed
         if ev.type in _ANCHOR_TYPES:
             # echo (arm-frame or event-level) is invisible; a real anchor

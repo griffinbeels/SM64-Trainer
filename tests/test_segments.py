@@ -2102,12 +2102,31 @@ def test_waypoint_anchor_rewinds_progress_and_rearms():
     assert e._armed[99].progress == 0
     assert e._armed[99].start_frame == 1300
     # replay the sequence from the rewound anchor
-    e.feed(jev(12, "level_changed", 1400, {"from": 16, "to": 10}),
-           ctx(level=10, prev_level=16))                        # waypoint 1
-    e.feed(jev(13, "level_changed", 1500, {"from": 10, "to": 16}),
-           ctx(level=16, prev_level=10))                        # waypoint 2
+    closed, _ = e.feed(jev(12, "level_changed", 1400, {"from": 16, "to": 10}),
+                       ctx(level=10, prev_level=16))             # waypoint 1
+    assert closed == []
+    closed, _ = e.feed(jev(13, "level_changed", 1500, {"from": 10, "to": 16}),
+                       ctx(level=16, prev_level=10))             # waypoint 2
+    assert closed == []
     closed, _ = e.feed(jev(14, "level_changed", 1600, {"from": 16, "to": 7}),
                        ctx(level=7, prev_level=16))              # end
     assert len(closed) == 1
     assert closed[0].outcome == "success"
     assert closed[0].rta_frames == 300, "timed from the rewind, not the arm"
+
+
+def test_waypoint_session_started_disarms_silently():
+    """A session boundary (session_started) disarms an armed waypoint
+    segment mid-sequence, exactly like the plain chain's session_started
+    handling: no attempt row, but a segment_disarmed notice IS emitted."""
+    e = SegmentEngine([_sl_hmc_def()])
+    e.feed(jev(10, "level_changed", 1000, {"from": 10, "to": 16}),
+           ctx(level=16, prev_level=10))                        # arm
+    e.feed(jev(11, "level_changed", 1100, {"from": 16, "to": 10}),
+           ctx(level=10, prev_level=16))                        # waypoint 1
+    assert e.armed_ids() == {99}
+    closed, notices = e.feed(jev(12, "session_started", 0, {}), ctx())
+    assert closed == []
+    assert e.armed_ids() == set()
+    assert notices == [{"event": "segment_disarmed", "segment_id": 99,
+                        "name": "SL->HMC", "frame": 0}]
