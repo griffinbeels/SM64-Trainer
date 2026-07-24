@@ -129,6 +129,12 @@ function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, sec }) {
   const pbBeat = a.outcome === "success" && !a.cleared
     && frames != null && frames > 0
     && (a.pb_delta_frames === null || a.pb_delta_frames < 0);
+  // Star rows don't carry course/star on the attempt itself (_attempt_json
+  // omits them) — derive the entity from the section for stars, from the
+  // attempt for segments.
+  const entity = a.segment_id != null ? `segment:${a.segment_id}`
+    : (sec ? `star:${sec.course_id}:${sec.star_id}` : null);
+  const strat = a.strat_tag || (sec && sec.last_strat) || null;
   const row = html`<tr ref=${(el) => { rowRef.current = el; }}
       class="${a.cleared ? "cleared" : ""} ${flash ? "row-flash" : ""} ${isNew ? "row-new" : ""}">
     <td class="meta">#${idx + 1}</td>
@@ -146,7 +152,17 @@ function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, sec }) {
         ? html` <span class="meta">(${a.cleared_reason})</span>` : ""}
     </td>
     <td>${a.outcome === "success" ? delta(a.pb_delta_frames) : ""}</td>
-    <td class="meta">${a.rank ? html`<${Medal} rank=${a.rank} size=${14} /> ` : ""}${a.strat_tag || ""}</td>
+    <td class="meta">
+      ${a.rank ? html`<${Medal} rank=${a.rank} size=${14} /> ` : ""}
+      ${sec
+        ? html`<${StratPicker} entity=${entity} strategies=${sec.strategies}
+            active=${a.strat_tag} blankLabel="— no strategy —"
+            highlightUnset=${false}
+            submit=${(tag) => send("POST", `/api/attempts/${a.id}/strat`,
+                                   { strat_tag: tag })}
+            onChanged=${t.refresh} />`
+        : html`<span>${a.strat_tag || "— no strategy —"}</span>`}
+    </td>
     <td style="text-align:right">
       <button onclick=${() => setShowReplay(!showReplay)} title="view replay">${showReplay ? "▾" : "▶"}</button>
       ${a.outcome === "success" && !a.cleared
@@ -160,12 +176,6 @@ function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, sec }) {
         : html` <button onclick=${clear} title="clear (mistake)">×</button>`}
     </td>
   </tr>`;
-  // Star rows don't carry course/star on the attempt itself (_attempt_json
-  // omits them) — derive the entity from the section for stars, from the
-  // attempt for segments.
-  const entity = a.segment_id != null ? `segment:${a.segment_id}`
-    : (sec ? `star:${sec.course_id}:${sec.star_id}` : null);
-  const strat = a.strat_tag || (sec && sec.last_strat) || null;
   const onCompare = (openCompare && entity)
     ? () => openCompare({ attemptId: a.id, entity, strat })
     : null;
