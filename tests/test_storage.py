@@ -21,7 +21,7 @@ def test_migrations_set_user_version_and_create_tables(tmp_path):
         "SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"events", "sessions", "attempts", "pbs", "ui_state", "routes", "runs",
             "comparisons"} <= names
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 10
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 12
 
 
 def test_reopening_existing_db_is_idempotent(tmp_path):
@@ -29,7 +29,7 @@ def test_reopening_existing_db_is_idempotent(tmp_path):
     sid = first.insert_session("2026-06-10T12:00:00Z")
     first.close()
     db = make_db(tmp_path)  # second open: migrations must not re-run/crash
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 10
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 12
     row = db._conn.execute("SELECT * FROM sessions WHERE id=?", (sid,)).fetchone()
     assert row is not None and row["started_utc"] == "2026-06-10T12:00:00Z"
 
@@ -165,7 +165,7 @@ def test_v1_database_upgrades_in_place(tmp_path):
     conn.commit()
     conn.close()
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 10
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 12
     assert db.attempts()[0].rollouts_total == 0   # backfilled default
     assert db.attempts()[0].jumps_total == 0
 
@@ -286,7 +286,7 @@ def test_v3_database_pb_rows_survive_v4_rebuild(tmp_path):
     conn.commit()
     conn.close()
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 10
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 12
     [row] = db.pbs()
     assert row["id"] == 7 and row["frames"] == 500
     assert row["course_id"] == 2 and row["star_id"] == 3
@@ -313,7 +313,7 @@ def test_v5_updates_existing_v4_lblj_row_with_area_anchor(tmp_path):
     conn.commit()
     conn.close()
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 10
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 12
     lblj = next(d for d in db.segment_defs() if d["name"] == "LBLJ")
     assert lblj["start_triggers"] == [
         {"type": "level_enter", "to": 6, "from": 16},
@@ -343,7 +343,7 @@ def test_v6_repairs_existing_bowser3_end_trigger(tmp_path):
     conn.commit()
     conn.close()
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 10
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 12
     b3 = next(d for d in db.segment_defs() if d["name"] == "Bowser 3")
     assert b3["end_triggers"] == [{"type": "key_grabbed", "level": 34}]
 
@@ -428,7 +428,7 @@ def test_failed_migration_rolls_back_schema_and_version(tmp_path, monkeypatch):
         Database(path)
     check = sqlite3.connect(str(path))
     # (a) version reflects only the successful prefix
-    assert check.execute("PRAGMA user_version").fetchone()[0] == 10
+    assert check.execute("PRAGMA user_version").fetchone()[0] == 12
     # partial application rolled back: first statement did NOT stick
     names = {r[0] for r in check.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
@@ -438,7 +438,7 @@ def test_failed_migration_rolls_back_schema_and_version(tmp_path, monkeypatch):
     fixed = "CREATE TABLE extra (id INTEGER);"
     monkeypatch.setattr(db_mod, "MIGRATIONS", db_mod.MIGRATIONS[:-1] + [fixed])
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 11
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 13
     db.close()
 
 
@@ -510,6 +510,34 @@ def test_route_insert_with_explicit_start_condition(tmp_path):
     assert row["start_condition"] == {"type": "level_enter", "to": 9}
     db.update_route(rid, start_condition={"type": "reset_game"}, updated_utc="t2")
     assert db.routes()[0]["start_condition"] == {"type": "reset_game"}
+
+
+# -- migrations v11/v12: waypoints/category/seed columns (default routes) ----
+
+def test_segment_def_round_trips_waypoints_category_seed(tmp_path):
+    db = make_db(tmp_path)
+    sid = db.insert_segment_def(
+        "SL->HMC", [{"type": "level_exit", "from": 10}],
+        [{"type": "level_enter", "to": 7}], [], "2026-07-23T00:00:00Z",
+        waypoints=[[{"type": "level_enter", "to": 10}]],
+        category="Castle Movement", seed_key="seg:sl->hmc")
+    row = next(r for r in db.segment_defs() if r["id"] == sid)
+    assert row["waypoints"] == [[{"type": "level_enter", "to": 10}]]
+    assert row["category"] == "Castle Movement"
+    assert row["seed_key"] == "seg:sl->hmc"
+    assert row["seed_dirty"] == 0
+    db.set_seed_dirty("segment_defs", sid, 1)
+    assert next(r for r in db.segment_defs() if r["id"] == sid)["seed_dirty"] == 1
+
+
+def test_route_round_trips_category_seed(tmp_path):
+    db = make_db(tmp_path)
+    rid = db.insert_route("16 LBLJ", [], "2026-07-23T00:00:00Z",
+                          category="Main Categories", seed_key="route:16-lblj")
+    row = next(r for r in db.routes() if r["id"] == rid)
+    assert row["category"] == "Main Categories"
+    assert row["seed_key"] == "route:16-lblj"
+    assert row["seed_dirty"] == 0
 
 
 def test_retag_pbs_for_attempt_moves_the_row_to_the_new_strategy(tmp_path):
