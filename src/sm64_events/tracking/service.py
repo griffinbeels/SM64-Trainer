@@ -402,9 +402,14 @@ class TrackerService:
         A strategy is declared before a run, so it is routinely wrong after
         it. Journal-first like clear/restore: the correction is appended and
         folded in by projection.strat_overrides, never written into the
-        derived attempts row. Editing history does NOT touch the live
-        per-target strategy memory — the two are deliberately independent.
-        Re-picking the previous strategy is the undo.
+        derived attempts row. Editing an OLDER row does not touch the live
+        per-target strategy memory. Reclassifying the entity's NEWEST
+        non-cleared attempt is the exception (user request 2026-07-24): "my
+        last run was actually strat X" means X is what's being practiced
+        NOW, so the active strategy follows via set_strat/set_strat_segment
+        (journaled strat_set, so replay agrees). A None tag never propagates
+        — un-labeling the newest row is not a switch. Re-picking the
+        previous strategy is the undo.
 
         Note the asymmetry with set_strat_segment, which raises LookupError
         once a segment definition is deleted: this command deliberately
@@ -447,7 +452,30 @@ class TrackerService:
             self._register_strategy(
                 db, entity_key(attempt.course_id, attempt.star_id,
                                attempt.segment_id), strat_tag)
+        # Newest-attempt exception (docstring above): the active strategy
+        # follows a reclassified top-of-log row.
+        if (strat_tag and has_entity
+                and attempt.id == self._newest_attempt_id(db, attempt)):
+            if attempt.segment_id is not None:
+                await self.set_strat_segment(attempt.segment_id, strat_tag)
+            else:
+                await self.set_strat(attempt.course_id, attempt.star_id,
+                                     strat_tag)
         await self._reproject()
+
+    @staticmethod
+    def _newest_attempt_id(db, attempt) -> int | None:
+        """Max-id non-cleared attempt of `attempt`'s entity — the top row of
+        that section's practice log (cleared rows are hidden from it, so a
+        hidden newer row never counts)."""
+        def same_entity(row):
+            if attempt.segment_id is not None:
+                return row.segment_id == attempt.segment_id
+            return (row.segment_id is None
+                    and row.course_id == attempt.course_id
+                    and row.star_id == attempt.star_id)
+        return max((row.id for row in db.attempts()
+                    if same_entity(row) and not row.cleared), default=None)
 
     async def set_time_filter(self, course_id: int, star_id: int,
                               min_frames: int, max_frames: int | None) -> None:
