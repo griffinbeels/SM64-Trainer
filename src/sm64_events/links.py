@@ -28,6 +28,10 @@ OVERRIDES: dict[tuple[int, int], dict] = {}
 XCAMS_HISTORY = "https://sm64-xcams.netlify.app/home/history"
 XCAMS_SECRET = {19: "pss", 20: "mc", 21: "wc", 22: "vc", 23: "wmotr", 24: "aqua"}
 XCAMS_BOWSER = {5: "1n", 6: "2n", 7: "3n", 8: "1x", 9: "2x", 10: "3x"}
+# The Bowser courses' 8-red-coin star (star 0) — xcams files it under the same
+# bow_ family as the No Reds / Battle pages, keyed "<n>r" (human-confirmed
+# 2026-07-23). Inverse of the scraper's _BOWSER_REDS.
+XCAMS_BOWSER_REDS = {16: "1r", 17: "2r", 18: "3r"}
 
 
 def _xcams_star_key(course_id: int, star_id: int) -> str | None:
@@ -35,6 +39,8 @@ def _xcams_star_key(course_id: int, star_id: int) -> str | None:
         return f"{COURSE_ABBREV[course_id].lower()}_{star_id + 1}"
     if course_id in XCAMS_SECRET:                       # Castle Secret Stars (VERIFY prefix)
         return XCAMS_SECRET[course_id]
+    if course_id in XCAMS_BOWSER_REDS and star_id == 0:  # Bowser reds
+        return f"bow_{XCAMS_BOWSER_REDS[course_id]}"
     return None
 
 

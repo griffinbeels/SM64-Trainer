@@ -10,6 +10,13 @@ def test_xcams_url_main_course_star():
     assert xcams_url("star:7:3") == f"{_HIST}?star=lll_4"
 
 
+def test_xcams_url_bowser_reds_star():
+    # the Bowser courses' 8-red-coin star — the banner's "Reds" target
+    assert xcams_url("star:16:0") == f"{_HIST}?star=bow_1r"   # BitDW Reds
+    assert xcams_url("star:17:0") == f"{_HIST}?star=bow_2r"   # BitFS Reds
+    assert xcams_url("star:18:0") == f"{_HIST}?star=bow_3r"   # BitS Reds
+
+
 def test_xcams_url_bowser_segment():
     assert xcams_url("segment:5") == f"{_HIST}?star=bow_1n"   # BitDW No Reds
 

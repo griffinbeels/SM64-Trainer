@@ -29,12 +29,71 @@ def test_key_to_entity():
     assert scrape.key_to_entity("15_pss") == "star:19:0"  # Princess's Secret Slide
     assert scrape.key_to_entity("16_1n") == "segment:5"   # BitDW pipe entry (No Reds)
     assert scrape.key_to_entity("16_2x") == "segment:9"   # Bowser 2 battle
-    assert scrape.key_to_entity("16_3r") is None          # Reds: no trainer segment
+    # Reds IS a trainer entity — the Bowser course's 8-red-coin star (the
+    # thing the stage banner targets as "Reds"). Mapping it to None dropped
+    # every Bowser reds ladder from the seed (user-reported 2026-07-23).
+    assert scrape.key_to_entity("16_1r") == "star:16:0"   # BitDW 8 Red Coins
+    assert scrape.key_to_entity("16_2r") == "star:17:0"   # BitFS 8 Red Coins
+    assert scrape.key_to_entity("16_3r") == "star:18:0"   # BitS 8 Red Coins
+
+BUNDLED_SEED = (Path(__file__).resolve().parent.parent / "src" / "sm64_events"
+                / "data" / "rank_standards.seed.json")
+
+def test_bundled_seed_covers_every_bowser_practice_target():
+    """All NINE Bowser targets ship with rank standards.
+
+    The seed is generated, so a hole in key_to_entity is invisible in the
+    mapping tests above — only a check on the OUTPUT catches it. Reds was
+    missing for months exactly that way (user-reported 2026-07-23: "every
+    bowser level is missing them"). Strat names and times change every
+    xcams season; "has a ladder with a Mario cutoff" does not."""
+    entities = json.loads(BUNDLED_SEED.read_text(encoding="utf-8"))["entities"]
+    expected = {"star:16:0": "BitDW Reds", "star:17:0": "BitFS Reds",
+                "star:18:0": "BitS Reds",
+                "segment:5": "BitDW No Reds", "segment:6": "BitFS No Reds",
+                "segment:7": "BitS No Reds",
+                "segment:8": "BitDW Battle", "segment:9": "BitFS Battle",
+                "segment:10": "BitS Battle"}
+    missing = {label for ek, label in expected.items()
+               if not (entities.get(ek) or {}).get("strategies")}
+    assert not missing, f"Bowser targets with no rank standards: {sorted(missing)}"
+    for ek, label in expected.items():
+        for strat, ladder in entities[ek]["strategies"].items():
+            assert "Mario" in ladder, f"{label} / {strat}: no Mario cutoff"
+
+def test_apply_fixups_rewrites_only_the_exact_published_value():
+    """The published value is part of the key so the fixup disarms itself
+    once xcams edits that cell (seed-fix discipline: guard on the broken
+    value, never blind-overwrite)."""
+    key, strat = "16_2r", "No Early Ellies (Star)"
+    parsed = {key: {strat: {"Mario": 10.0, "Grandmaster": 10.03,
+                            "Diamond": 70.76}}}
+    fixed = scrape.apply_fixups(parsed)
+    assert fixed[key][strat]["Mario"] == 70.0          # dropped minute restored
+    assert fixed[key][strat]["Diamond"] == 70.76       # untouched
+    assert parsed[key][strat]["Mario"] == 10.0         # input not mutated
+    moved = {key: {strat: {"Mario": 11.5}}}            # upstream changed it
+    assert scrape.apply_fixups(moved)[key][strat]["Mario"] == 11.5
+
+def test_suspect_dropped_minute_flags_the_60s_step():
+    """Monotonicity can't see this: 10.00 sorts fine before 1:10.76."""
+    parsed = {"16_2r": {"NEE": {"Master": 10.06, "Diamond": 70.76,
+                                "Platinum": 72.13}}}
+    assert scrape.suspect_dropped_minute(parsed) == [("16_2r", "NEE", "Master")]
+    ok = {"7_3": {"Nuts Pless": {"Mario": 12.93, "Grandmaster": 13.03}}}
+    assert scrape.suspect_dropped_minute(ok) == []
+
+def test_bundled_seed_has_no_dropped_minute_cells():
+    """Every shipped ladder is free of the unreachable-top-tier bug — the
+    next season's scrape must report a NEW one, not ship it silently."""
+    entities = json.loads(BUNDLED_SEED.read_text(encoding="utf-8"))["entities"]
+    as_parsed = {ek: ent.get("strategies", {}) for ek, ent in entities.items()}
+    assert scrape.suspect_dropped_minute(as_parsed) == []
 
 def test_build_seed_maps_and_adds_segment_defaults():
     parsed = {"7_3": {"Nuts Pless": {"Mario": 12.93}}, "0_100c4": {"x": {"Mario": 1.0}}}
     seed = scrape.build_seed(parsed)
-    assert seed["version"] == 3
+    assert seed["version"] == 4
     assert seed["entities"]["star:8:2"]["clock"] == "igt"
     assert seed["entities"]["star:8:2"]["strategies"]["Nuts Pless"]["Mario"] == 12.93
     assert "star:1:6" not in seed["entities"]               # 100-coin skipped

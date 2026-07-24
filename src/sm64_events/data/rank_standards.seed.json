@@ -1,5 +1,5 @@
 {
- "version": 3,
+ "version": 4,
  "entities": {
   "star:1:0": {
    "clock": "igt",
@@ -5640,6 +5640,198 @@
     ]
    }
   },
+  "star:16:0": {
+   "clock": "igt",
+   "strategies": {
+    "Shig (Star)": {
+     "Mario": 47.23,
+     "Grandmaster": 47.53,
+     "Master": 47.93,
+     "Diamond": 48.56,
+     "Platinum": 49.0,
+     "Gold": 50.23,
+     "Silver": 52.96,
+     "Bronze": 57.66
+    },
+    "Shig (Pipe)": {
+     "Mario": 52.26,
+     "Grandmaster": 52.56,
+     "Master": 52.96,
+     "Diamond": 53.6,
+     "Platinum": 54.03,
+     "Gold": 55.26,
+     "Silver": 58.0,
+     "Bronze": 62.7
+    },
+    "Xiah (Star)": {
+     "Mario": 45.66,
+     "Grandmaster": 45.93,
+     "Master": 46.36,
+     "Diamond": 47.43,
+     "Platinum": 48.73,
+     "Gold": 49.8,
+     "Silver": 50.86,
+     "Bronze": 54.56
+    },
+    "Xiah (Pipe)": {
+     "Mario": 50.7,
+     "Grandmaster": 50.96,
+     "Master": 51.4,
+     "Diamond": 52.46,
+     "Platinum": 53.76,
+     "Gold": 54.83,
+     "Silver": 55.9,
+     "Bronze": 59.6
+    },
+    "Tsuki (Star)": {
+     "Mario": 43.56,
+     "Grandmaster": 43.86,
+     "Master": 44.1,
+     "Diamond": 44.43,
+     "Platinum": 44.8,
+     "Gold": 45.26
+    },
+    "Tsuki (Pipe)": {
+     "Mario": 48.53,
+     "Grandmaster": 48.83,
+     "Master": 49.06,
+     "Diamond": 49.4,
+     "Platinum": 49.76,
+     "Gold": 50.23
+    },
+    "Salt Flip (Star)": {
+     "Mario": 42.7,
+     "Grandmaster": 43.0,
+     "Master": 43.23,
+     "Diamond": 43.56,
+     "Platinum": 43.93
+    },
+    "Salt Flip (Pipe)": {
+     "Mario": 47.7,
+     "Grandmaster": 48.0,
+     "Master": 48.23,
+     "Diamond": 48.56,
+     "Platinum": 48.93
+    }
+   },
+   "jp_strategies": {
+    "Shig (Pipe)": {
+     "Mario": 52.33,
+     "Grandmaster": 52.63,
+     "Master": 53.03,
+     "Diamond": 53.66,
+     "Platinum": 54.1,
+     "Gold": 55.33,
+     "Silver": 58.06,
+     "Bronze": 62.76
+    },
+    "Xiah (Pipe)": {
+     "Mario": 50.76,
+     "Grandmaster": 51.03,
+     "Master": 51.46,
+     "Diamond": 52.53,
+     "Platinum": 53.83,
+     "Gold": 54.9,
+     "Silver": 55.96,
+     "Bronze": 59.66
+    },
+    "Tsuki (Pipe)": {
+     "Mario": 48.6,
+     "Grandmaster": 48.9,
+     "Master": 49.13,
+     "Diamond": 49.46,
+     "Platinum": 49.83,
+     "Gold": 50.3
+    },
+    "Salt Flip (Pipe)": {
+     "Mario": 47.76,
+     "Grandmaster": 48.06,
+     "Master": 48.3,
+     "Diamond": 48.63,
+     "Platinum": 49.0
+    }
+   },
+   "videos": {
+    "Shig (Pipe)": "https://www.youtube.com/watch?v=Ox9ygwmcJE0",
+    "Shig (Star)": "https://youtu.be/tAjTa_Pllo0",
+    "Xiah (Pipe)": "https://youtu.be/fk0mmpnKl6s",
+    "Xiah (Star)": "https://youtu.be/ac2B2tuL_pE",
+    "Tsuki (Pipe)": "https://youtu.be/P1P66ll6l7s?si=wuqP6zAF_8QSnTBn",
+    "Tsuki (Star)": "https://youtu.be/P1P66ll6l7s?si=wuqP6zAF_8QSnTBn",
+    "Salt Flip (Pipe)": "https://youtu.be/2RVq6D0JgKA?si=1kgitWrZ4zAseRea",
+    "Salt Flip (Star)": "https://youtu.be/DercZg1GFYk?si=b00zzjvFTOv21Mz9"
+   },
+   "clips": {
+    "Shig (Pipe)": [
+     [
+      5160,
+      "https://www.youtube.com/watch?v=Ox9ygwmcJE0"
+     ],
+     [
+      5173,
+      "https://youtu.be/-CANMKKqCVA"
+     ]
+    ],
+    "Shig (Star)": [
+     [
+      4650,
+      "https://youtu.be/tAjTa_Pllo0"
+     ],
+     [
+      4786,
+      "https://youtu.be/Z5kM_BLtDg0"
+     ]
+    ],
+    "Xiah (Pipe)": [
+     [
+      5016,
+      "https://youtu.be/fk0mmpnKl6s"
+     ],
+     [
+      5023,
+      "https://www.youtube.com/watch?v=U42IDMKO180"
+     ]
+    ],
+    "Xiah (Star)": [
+     [
+      4506,
+      "https://youtu.be/ac2B2tuL_pE"
+     ]
+    ],
+    "Tsuki (Pipe)": [
+     [
+      4810,
+      "https://youtu.be/P1P66ll6l7s?si=wuqP6zAF_8QSnTBn"
+     ],
+     [
+      4823,
+      "https://www.youtube.com/watch?v=McK-k6Lqu9c"
+     ]
+    ],
+    "Tsuki (Star)": [
+     [
+      4316,
+      "https://youtu.be/P1P66ll6l7s?si=wuqP6zAF_8QSnTBn"
+     ]
+    ],
+    "Salt Flip (Pipe)": [
+     [
+      4733,
+      "https://youtu.be/2RVq6D0JgKA?si=1kgitWrZ4zAseRea"
+     ],
+     [
+      4740,
+      "https://www.youtube.com/watch?v=WgB7rWWNOiA"
+     ]
+    ],
+    "Salt Flip (Star)": [
+     [
+      4233,
+      "https://youtu.be/DercZg1GFYk?si=b00zzjvFTOv21Mz9"
+     ]
+    ]
+   }
+  },
   "segment:8": {
    "clock": "rta",
    "strategies": {
@@ -5793,6 +5985,95 @@
     ]
    }
   },
+  "star:17:0": {
+   "clock": "igt",
+   "strategies": {
+    "Lavaboost (Star)": {
+     "Mario": 52.0,
+     "Grandmaster": 52.23,
+     "Master": 52.56,
+     "Diamond": 52.86,
+     "Platinum": 53.93,
+     "Gold": 58.1,
+     "Silver": 62.53,
+     "Bronze": 67.5
+    },
+    "Lavaboost (Pipe)": {
+     "Mario": 60.5,
+     "Grandmaster": 60.73,
+     "Master": 61.06,
+     "Diamond": 61.36,
+     "Platinum": 62.43,
+     "Gold": 66.6,
+     "Silver": 71.03,
+     "Bronze": 76.0
+    },
+    "No Early Ellies (Star)": {
+     "Mario": 70.0,
+     "Grandmaster": 70.03,
+     "Master": 70.06,
+     "Diamond": 70.76,
+     "Platinum": 72.13,
+     "Gold": 76.3,
+     "Silver": 79.73,
+     "Bronze": 91.7
+    },
+    "No Early Ellies (Pipe)": {
+     "Mario": 78.3,
+     "Grandmaster": 78.33,
+     "Master": 78.36,
+     "Diamond": 79.06,
+     "Platinum": 80.43,
+     "Gold": 84.6,
+     "Silver": 88.03,
+     "Bronze": 100.0
+    }
+   },
+   "jp_strategies": {
+    "Lavaboost (Pipe)": {
+     "Mario": 60.56,
+     "Grandmaster": 60.8,
+     "Master": 61.13,
+     "Diamond": 61.43,
+     "Platinum": 62.5,
+     "Gold": 66.66,
+     "Silver": 71.1,
+     "Bronze": 76.06
+    },
+    "No Early Ellies (Pipe)": {
+     "Mario": 18.36,
+     "Grandmaster": 18.4,
+     "Master": 18.43,
+     "Diamond": 79.13,
+     "Platinum": 80.5,
+     "Gold": 84.66,
+     "Silver": 88.1,
+     "Bronze": 100.06
+    }
+   },
+   "videos": {
+    "Lavaboost (Pipe)": "https://www.youtube.com/watch?v=KOk8xL8UmBM",
+    "Lavaboost (Star)": "https://youtu.be/m7IJvnxoXZE"
+   },
+   "clips": {
+    "Lavaboost (Pipe)": [
+     [
+      6016,
+      "https://www.youtube.com/watch?v=KOk8xL8UmBM"
+     ],
+     [
+      6026,
+      "https://youtu.be/PzgobhGwADA"
+     ]
+    ],
+    "Lavaboost (Star)": [
+     [
+      5166,
+      "https://youtu.be/m7IJvnxoXZE"
+     ]
+    ]
+   }
+  },
   "segment:9": {
    "clock": "rta",
    "strategies": {
@@ -5921,6 +6202,131 @@
      [
       3710,
       "https://youtu.be/XA5a2BkiEeI"
+     ]
+    ]
+   }
+  },
+  "star:18:0": {
+   "clock": "igt",
+   "strategies": {
+    "Early Cycle (Star)": {
+     "Mario": 64.36,
+     "Grandmaster": 64.7,
+     "Master": 65.16,
+     "Diamond": 66.0,
+     "Platinum": 67.7,
+     "Gold": 68.73
+    },
+    "Early Cycle (Pipe)": {
+     "Mario": 69.73,
+     "Grandmaster": 70.06,
+     "Master": 70.53,
+     "Diamond": 71.36,
+     "Platinum": 73.06,
+     "Gold": 74.06
+    },
+    "Ultimate Cycle (Star)": {
+     "Mario": 63.06,
+     "Grandmaster": 63.4,
+     "Master": 63.8,
+     "Diamond": 64.56,
+     "Platinum": 66.16
+    },
+    "Ultimate Cycle (Pipe)": {
+     "Mario": 68.53,
+     "Grandmaster": 68.86,
+     "Master": 69.26,
+     "Diamond": 70.0,
+     "Platinum": 71.56
+    },
+    "Standard (Star)": {
+     "Mario": 65.66,
+     "Grandmaster": 67.06,
+     "Master": 68.93,
+     "Diamond": 72.5,
+     "Platinum": 79.73,
+     "Gold": 83.96,
+     "Silver": 88.2,
+     "Bronze": 102.96
+    },
+    "Standard (Pipe)": {
+     "Mario": 71.03,
+     "Grandmaster": 72.43,
+     "Master": 74.3,
+     "Diamond": 77.86,
+     "Platinum": 85.1,
+     "Gold": 89.33,
+     "Silver": 93.56,
+     "Bronze": 108.33
+    }
+   },
+   "jp_strategies": {
+    "Early Cycle (Pipe)": {
+     "Mario": 69.8,
+     "Grandmaster": 70.13,
+     "Master": 70.6,
+     "Diamond": 71.43,
+     "Platinum": 73.13,
+     "Gold": 74.13
+    },
+    "Ultimate Cycle (Pipe)": {
+     "Mario": 68.6,
+     "Grandmaster": 68.93,
+     "Master": 69.33,
+     "Diamond": 70.06,
+     "Platinum": 71.63
+    },
+    "Standard (Pipe)": {
+     "Mario": 71.1,
+     "Grandmaster": 72.5,
+     "Master": 74.36,
+     "Diamond": 77.93,
+     "Platinum": 85.16,
+     "Gold": 89.4,
+     "Silver": 93.63,
+     "Bronze": 108.4
+    }
+   },
+   "videos": {
+    "Standard (Pipe)": "https://youtu.be/RLzk1OSAAY8?si=fQ-PdK2Do9ZU1s8M",
+    "Standard (Star)": "https://youtu.be/RLzk1OSAAY8?si=fQ-PdK2Do9ZU1s8M",
+    "Early Cycle (Pipe)": "https://twitter.com/GreenSuigi/status/1708647888060891598",
+    "Early Cycle (Star)": "https://twitter.com/GreenSuigi/status/1708647888060891598",
+    "Ultimate Cycle (Star)": "https://www.youtube.com/watch?v=A9jesv4I_Ak"
+   },
+   "clips": {
+    "Standard (Pipe)": [
+     [
+      7036,
+      "https://youtu.be/RLzk1OSAAY8?si=fQ-PdK2Do9ZU1s8M"
+     ],
+     [
+      7053,
+      "https://www.youtube.com/watch?v=8jPAEVA6oao"
+     ]
+    ],
+    "Standard (Star)": [
+     [
+      6500,
+      "https://youtu.be/RLzk1OSAAY8?si=fQ-PdK2Do9ZU1s8M"
+     ]
+    ],
+    "Early Cycle (Pipe)": [
+     [
+      6913,
+      "https://twitter.com/GreenSuigi/status/1708647888060891598"
+     ]
+    ],
+    "Early Cycle (Star)": [
+     [
+      6370,
+      "https://twitter.com/GreenSuigi/status/1708647888060891598"
+     ]
+    ],
+    "Ultimate Cycle (Star)": [
+     [
+      6240,
+      "https://www.youtube.com/watch?v=A9jesv4I_Ak"
      ]
     ]
    }
