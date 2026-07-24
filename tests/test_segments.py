@@ -1994,3 +1994,120 @@ def test_in_active_route_guard_registered_and_validates():
 
 def test_vocab_exposes_in_active_route():
     assert any(g["key"] == "in_active_route" for g in vocab()["guards"])
+
+
+# ---------------------------------------------------------------------------
+# Task 3: waypoint sequence matcher (spec 2026-07-23-default-routes-foundation)
+# A waypoint-bearing def (SegmentDef.waypoints non-empty) is an ORDERED
+# sequence of middle steps between its start and end triggers — e.g. an SL
+# clip that exits to Castle Grounds, walks back into SL, exits again, then
+# finally enters HMC. Levels: 10 = Snowman's Land, 16 = Castle Grounds,
+# 7 = Hazy Maze Cave, 8 = Shifting Sand Land (addresses.py LEVEL_NAMES).
+#
+# The start trigger AND the def's own second waypoint are both "exit SL to
+# Castle Grounds" (from=10, to=16) — a deliberately realistic shape, since a
+# route often re-visits its own start condition mid-sequence. The `to`
+# constraint on both is load-bearing: without it, a wrong-destination exit
+# (e.g. to SSL) would ALSO satisfy the start clause and re-arm instead of
+# cancelling (see test_waypoint_cancel_on_wrong_level).
+# ---------------------------------------------------------------------------
+
+def _sl_hmc_def():
+    return SegmentDef(
+        id=99, name="SL->HMC", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 10, "to": 16}],
+        end_triggers=[{"type": "level_enter", "to": 7}],
+        guards=[],
+        waypoints=[[{"type": "level_enter", "to": 10}],
+                   [{"type": "level_exit", "from": 10, "to": 16}]])
+
+
+def test_waypoint_sequence_spans_reentry_single_success():
+    """exit SL -> enter SL -> exit SL -> enter HMC == ONE success row, no
+    reset/cancel rows anywhere along the way."""
+    e = SegmentEngine([_sl_hmc_def()])
+    e.feed(jev(10, "level_changed", 1000, {"from": 10, "to": 16}),
+           ctx(level=16, prev_level=10))                        # arm: exit SL
+    assert e.armed_ids() == {99}
+    closed1, _ = e.feed(jev(11, "level_changed", 1100, {"from": 16, "to": 10}),
+                       ctx(level=10, prev_level=16))            # waypoint 1
+    closed2, _ = e.feed(jev(12, "level_changed", 1200, {"from": 10, "to": 16}),
+                       ctx(level=16, prev_level=10))            # waypoint 2
+    closed3, _ = e.feed(jev(13, "level_changed", 1300, {"from": 16, "to": 7}),
+                       ctx(level=7, prev_level=16))             # end: enter HMC
+    assert closed1 == [] and closed2 == []
+    assert len(closed3) == 1
+    assert closed3[0].outcome == "success" and closed3[0].segment_id == 99
+    assert closed3[0].rta_frames == 300
+
+
+def test_waypoint_cancel_on_midsequence_star_is_silent():
+    """A star grab mid-sequence is a task switch, not a route step — silent
+    cancel: no row, and the def is no longer armed."""
+    e = SegmentEngine([_sl_hmc_def()])
+    e.feed(jev(10, "level_changed", 1000, {"from": 10, "to": 16}),
+           ctx(level=16, prev_level=10))                        # arm
+    e.feed(jev(11, "level_changed", 1100, {"from": 16, "to": 10}),
+           ctx(level=10, prev_level=16))                        # waypoint 1
+    assert e.armed_ids() == {99}
+    closed, _ = e.feed(jev(12, "star_collected", 1150,
+                           {"course_id": 10, "star_id": 0, "num_stars": 1}),
+                       ctx(level=10, num_stars=1))
+    assert closed == []                       # silent abandon: no row
+    assert 99 not in e.armed_ids()            # disarmed
+
+
+def test_waypoint_cancel_on_wrong_level():
+    """Exiting SL to the wrong level (SSL, not Castle Grounds) is a misroute:
+    it doesn't match the next waypoint, so it falls through to the major-
+    action cancel — no row, disarmed (not a re-arm, even though a looser
+    start-trigger match would otherwise re-fire here)."""
+    e = SegmentEngine([_sl_hmc_def()])
+    e.feed(jev(10, "level_changed", 1000, {"from": 10, "to": 16}),
+           ctx(level=16, prev_level=10))                        # arm
+    e.feed(jev(11, "level_changed", 1100, {"from": 16, "to": 10}),
+           ctx(level=10, prev_level=16))                        # waypoint 1
+    assert e.armed_ids() == {99}
+    closed, _ = e.feed(jev(12, "level_changed", 1200, {"from": 10, "to": 8}),
+                       ctx(level=8, prev_level=10))   # exit to SSL, not HMC
+    assert closed == []
+    assert 99 not in e.armed_ids()
+
+
+def test_waypoint_death_still_fatal():
+    """Death always closes the attempt, regardless of how far the waypoint
+    sequence has progressed."""
+    e = SegmentEngine([_sl_hmc_def()])
+    e.feed(jev(10, "level_changed", 1000, {"from": 10, "to": 16}),
+           ctx(level=16, prev_level=10))                        # arm
+    closed, _ = e.feed(jev(11, "death", 1050, {"cause": "quicksand"}),
+                       ctx(level=16))
+    assert len(closed) == 1 and closed[0].outcome == "death"
+
+
+def test_waypoint_anchor_rewinds_progress_and_rearms():
+    """A real anchor (not an echo) mid-attempt rewinds `progress` to 0 and
+    re-arms IN PLACE at the anchor frame — the practice-retry loop. No row
+    is recorded for the rewind itself; the eventual completion times from
+    the anchor, not the original arm."""
+    e = SegmentEngine([_sl_hmc_def()])
+    e.feed(jev(10, "level_changed", 1000, {"from": 10, "to": 16}),
+           ctx(level=16, prev_level=10))                        # arm
+    assert e.armed_ids() == {99}
+    closed, _ = e.feed(
+        jev(11, "practice_reset", 1300, {"action": 0x0C400201}),
+        ctx(level=16))
+    assert closed == [], "waypoint rewind records no row"
+    assert e.armed_ids() == {99}
+    assert e._armed[99].progress == 0
+    assert e._armed[99].start_frame == 1300
+    # replay the sequence from the rewound anchor
+    e.feed(jev(12, "level_changed", 1400, {"from": 16, "to": 10}),
+           ctx(level=10, prev_level=16))                        # waypoint 1
+    e.feed(jev(13, "level_changed", 1500, {"from": 10, "to": 16}),
+           ctx(level=16, prev_level=10))                        # waypoint 2
+    closed, _ = e.feed(jev(14, "level_changed", 1600, {"from": 16, "to": 7}),
+                       ctx(level=7, prev_level=16))              # end
+    assert len(closed) == 1
+    assert closed[0].outcome == "success"
+    assert closed[0].rta_frames == 300, "timed from the rewind, not the arm"
