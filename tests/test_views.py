@@ -1418,3 +1418,33 @@ def test_segment_section_banner_masks_deleted_active_strat(tmp_path):
     assert sec["last_strat"] is None                               # already masked (Task 9)
     assert sec["rank"]["rank"] is None
     assert sec["rank"]["reason"] == "no_strat"                      # banner masked too
+
+
+def test_reclassified_attempt_regrades_its_medal(tmp_path):
+    """End-to-end payoff: an attempt reclassified onto a different strategy
+    is graded against THAT strategy's ladder, not the one it was recorded
+    under — a mislabeled run otherwise reports a rank it never earned.
+
+    Ladder times are SECONDS in the standards file (see _ranks above); the
+    seeded grab is 343 frames = 11.43 s displayed, so it is slower than the
+    Cannonless Mario cutoff (5 s → Iron) and faster than the Slide Kick one
+    (20 s → Mario)."""
+    import json
+    from sm64_events.ranks.standards import RankStandards
+    db, svc = make(tmp_path)
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "star:2:2": {"clock": "igt", "strategies": {
+            "Cannonless": {"Mario": 5.0},
+            "Slide Kick": {"Mario": 20.0}}}}}))
+    svc.ranks = RankStandards(p); svc.ranks.load()
+    asyncio.run(svc.set_target(2, 2, strat_tag="Cannonless"))
+    asyncio.run(svc.publish(ev("practice_reset", 1000,
+                               {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350)))          # igt 343 frames
+    aid = db.attempts()[0].id
+    before = build_session_view(db, svc, clock="igt")["stars"][0]["attempts"][0]
+    assert before["strat_tag"] == "Cannonless" and before["rank"] == "Iron"
+    asyncio.run(svc.set_attempt_strat(aid, "Slide Kick"))
+    after = build_session_view(db, svc, clock="igt")["stars"][0]["attempts"][0]
+    assert after["strat_tag"] == "Slide Kick" and after["rank"] == "Mario"

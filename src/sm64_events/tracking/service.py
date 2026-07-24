@@ -392,6 +392,40 @@ class TrackerService:
                                  payload={"attempt_id": attempt_id}))
         await self._reproject()
 
+    async def set_attempt_strat(self, attempt_id: int,
+                                strat_tag: str | None) -> None:
+        """Reclassify ONE recorded attempt's strategy (None = unlabeled).
+
+        A strategy is declared before a run, so it is routinely wrong after
+        it. Journal-first like clear/restore: the correction is appended and
+        folded in by projection.strat_overrides, never written into the
+        derived attempts row. Editing history does NOT touch the live
+        per-target strategy memory — the two are deliberately independent.
+        Re-picking the previous strategy is the undo."""
+        db = self._require_db()
+        attempt = next((a for a in db.attempts() if a.id == attempt_id), None)
+        if attempt is None:
+            raise LookupError(f"no attempt {attempt_id}")
+        await self.publish(Event(type="attempt_strat_set", frame=0,
+                                 timestamp_utc=_now(),
+                                 payload={"attempt_id": attempt_id,
+                                          "strat_tag": strat_tag}))
+        has_entity = (attempt.segment_id is not None
+                      or attempt.course_id is not None)
+        if strat_tag and has_entity:
+            # The name would already resurface via the observed-strats union
+            # once the reprojected attempt carries it; registering matters
+            # because it ALSO clears the strategy's tombstone — assigning a
+            # purged name to a run puts it back in use (the same un-delete
+            # rule as re-creating it).
+            self._register_strategy(
+                db, entity_key(attempt.course_id, attempt.star_id,
+                               attempt.segment_id), strat_tag)
+        # A pbs row snapshots strat_tag at save time and is not derived, so
+        # it cannot follow the reprojection on its own.
+        db.retag_pbs_for_attempt(attempt_id, strat_tag)
+        await self._reproject()
+
     async def set_time_filter(self, course_id: int, star_id: int,
                               min_frames: int, max_frames: int | None) -> None:
         """Override one star's validity bounds (frames; min 0 = no floor,
