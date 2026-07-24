@@ -11,8 +11,8 @@ import { Modal } from "./modal.js";
 const html = htm.bind(h);
 
 function esc(s) {
-  return (s || "").replace(/[&<>"]/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  return (s || "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 function inline(s) {
   return s
@@ -28,7 +28,7 @@ function inline(s) {
 // renderer broke continuation lines out of their bullet and added stray <br>s.
 function renderNotes(md) {
   const lines = esc(md).split(/\r?\n/);
-  let out = "", inList = false, buf = null;   // buf: {type:'li'|'p'|'h', text}
+  let out = "", inList = false, buf = null;   // buf: {type:'li'|'p'|'h'|'hr', text}
   const flush = () => {
     if (!buf) return;
     if (buf.type === "li") {
@@ -36,8 +36,8 @@ function renderNotes(md) {
       out += "<li>" + inline(buf.text) + "</li>";
     } else {
       if (inList) { out += "</ul>"; inList = false; }
-      out += buf.type === "h"
-        ? "<b>" + inline(buf.text) + "</b>"
+      out += buf.type === "hr" ? "<hr>"
+        : buf.type === "h" ? "<b>" + inline(buf.text) + "</b>"
         : "<p>" + inline(buf.text) + "</p>";
     }
     buf = null;
@@ -45,9 +45,13 @@ function renderNotes(md) {
   for (const raw of lines) {
     const ln = raw.replace(/\s+$/, "");
     if (ln.trim() === "") { flush(); continue; }            // blank line ends a block
+    // Checked before `li`: '***' is ambiguous with a bullet and '---' must
+    // not be mistaken for one.
+    const hr = ln.match(/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/);
     const li = ln.match(/^\s*[-*]\s+(.*)$/);
     const hd = ln.match(/^\s*#{1,6}\s+(.*)$/);
-    if (li) { flush(); buf = { type: "li", text: li[1] }; }
+    if (hr) { flush(); buf = { type: "hr" }; }
+    else if (li) { flush(); buf = { type: "li", text: li[1] }; }
     else if (hd) { flush(); buf = { type: "h", text: hd[1] }; }
     else if (buf && (buf.type === "li" || buf.type === "p")) {
       buf.text += " " + ln.trim();                          // soft-wrap continuation
@@ -56,6 +60,26 @@ function renderNotes(md) {
   flush();
   if (inList) out += "</ul>";
   return out;
+}
+
+// One block per missed version, newest first. `releases` comes from
+// status(); the `fallback` single-body path covers a status payload without
+// it (older server mid-update, or a hand-rolled response).
+function NotesStack({ releases, fallback }) {
+  const rows = (releases && releases.length)
+    ? releases
+    : [{ version: "", date: "", notes: fallback }];
+  return html`<div class="update-notes">
+    ${rows.map((r, i) => html`
+      <div class=${i ? "update-rel sep" : "update-rel"}>
+        ${r.version
+          ? html`<div class="update-ver">v${r.version}${
+              r.date ? html`<span class="update-date">${r.date}</span>` : ""}
+            </div>`
+          : ""}
+        <div dangerouslySetInnerHTML=${{ __html: renderNotes(r.notes || "") }}></div>
+      </div>`)}
+  </div>`;
 }
 
 export function UpdatePopup({ t }) {
@@ -73,11 +97,20 @@ export function UpdatePopup({ t }) {
   const onLater = () => { setDismissed(true); t.setUpdateForced(false); };
   const onClose = () => { t.setUpdateApplying(false); setDismissed(true); };
   const pct = Math.round((st.progress || 0) * 100);
+  const missed = (st.releases || []).length;
+  // Backdrop click / Esc mirror whichever dismiss action is visible: "Later"
+  // on the normal offer, "Close" on a failed install, and NOTHING while an
+  // install is actively in flight (no button is shown there either — closing
+  // mid-install would hide a restart about to happen under the user).
+  const onBackdropDismiss = applying
+    ? (st.state === "error" ? onClose : undefined)
+    : onLater;
 
-  return html`<${Modal} title=${`Update available — v${st.latest}`}>
-    <div class="meta">You're on v${st.current}.</div>
-    <div class="update-notes"
-         dangerouslySetInnerHTML=${{ __html: renderNotes(st.notes) }}></div>
+  return html`<${Modal} title=${`Update available — v${st.latest}`}
+      onClose=${onBackdropDismiss}>
+    <div class="meta">You're on v${st.current}.${
+      missed > 1 ? ` ${missed} versions of changes.` : ""}</div>
+    <${NotesStack} releases=${st.releases} fallback=${st.notes} />
     <p><a href=${st.html_url} target="_blank">View this release on GitHub →</a></p>
     ${applying
       ? (st.state === "error"

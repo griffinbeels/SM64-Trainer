@@ -94,7 +94,7 @@ def release_assets(dist: Path) -> list[Path]:
 def compose_release_body(setup_header: str, patch_notes: str) -> str:
     """GitHub release body = first-time-setup header (for new users landing
     on the page) + PATCH_NOTES_MARKER + the patch notes. The in-app popup
-    strips through the marker (core/updater.check_for_update), so recurring
+    strips through the marker (core/release_feed.strip_body), so recurring
     users see only the patch notes."""
     return (setup_header.rstrip() + "\n\n" + PATCH_NOTES_MARKER + "\n\n"
             + patch_notes.lstrip())

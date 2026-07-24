@@ -7,25 +7,6 @@ def test_version_is_semver():
     assert re.fullmatch(r"\d+\.\d+\.\d+", __version__), __version__
 
 
-from sm64_events.core.updater import is_newer, parse_version
-
-
-def test_parse_version_strips_v_and_splits():
-    assert parse_version("v1.2.3") == (1, 2, 3)
-    assert parse_version("1.2.3") == (1, 2, 3)
-
-
-def test_parse_version_stops_at_non_numeric_suffix():
-    assert parse_version("1.2.3-beta") == (1, 2, 3)
-
-
-def test_is_newer_compares_numerically():
-    assert is_newer("1.2.10", "1.2.9") is True   # not lexicographic
-    assert is_newer("1.0.0", "0.9.9") is True
-    assert is_newer("1.0.0", "1.0.0") is False
-    assert is_newer("0.9.9", "1.0.0") is False
-
-
 # --- new-format release fixtures (real zip + manifest, network-free) ---
 
 import hashlib as _hashlib
@@ -70,6 +51,8 @@ def _fake_http(routes: dict):
 
 
 LATEST = "https://api.github.com/repos/griffinbeels/SM64-Trainer/releases/latest"
+RELEASES = ("https://api.github.com/repos/griffinbeels/SM64-Trainer"
+            "/releases?per_page=100")
 
 FULL_ASSETS = {
     ZIP_ASSET: "https://dl/full.zip",
@@ -145,6 +128,73 @@ def test_check_keeps_notes_without_marker(tmp_path):
     assert info.notes == "notes here"      # marker-less body passes verbatim
 
 
+def test_check_aggregates_every_missed_version_newest_first(tmp_path):
+    """A user several releases behind must see EVERY skipped version's
+    notes, not just the newest release's."""
+    routes = _fake_release(tmp_path, "v2.0.0", {"SM64Trainer.exe": b"X"})
+    rel = _json.loads(routes[LATEST])
+    rel["body"] = "newest notes"
+    rel["published_at"] = "2026-07-23T00:00:00Z"
+    routes[LATEST] = _json.dumps(rel).encode()
+    routes[RELEASES] = _json.dumps([
+        {"tag_name": "v2.0.0", "body": "newest notes",
+         "published_at": "2026-07-23T00:00:00Z"},
+        {"tag_name": "v1.5.0", "body": "middle notes",
+         "published_at": "2026-07-10T00:00:00Z"},
+        {"tag_name": "v1.0.0", "body": "already installed",
+         "published_at": "2026-06-01T00:00:00Z"},
+    ]).encode()
+    info = check_for_update("1.0.0", http=_fake_http(routes))
+    assert [(row.version, row.notes) for row in info.releases] == [
+        ("2.0.0", "newest notes"), ("1.5.0", "middle notes")]
+    assert info.releases[0].date == "2026-07-23"
+    assert info.notes == "newest notes"     # single-version field unchanged
+
+
+def test_check_still_offers_when_release_history_is_unavailable(tmp_path):
+    """The list endpoint is best-effort — losing it must not lose the OFFER.
+    _fake_http raises for any unmapped url, so RELEASES is already dead."""
+    routes = _fake_release(tmp_path, "v2.0.0", {"SM64Trainer.exe": b"X"})
+    info = check_for_update("1.0.0", http=_fake_http(routes))
+    assert info is not None
+    assert [row.version for row in info.releases] == ["2.0.0"]
+    assert info.notes == "notes here"
+
+
+def test_check_ignores_history_newer_than_the_offered_release(tmp_path):
+    """GitHub's 'latest' is the most RECENT publish, not the highest version.
+    A backport published last would otherwise stack notes for a version this
+    update does not install."""
+    routes = _fake_release(tmp_path, "v2.0.0", {"SM64Trainer.exe": b"X"})
+    routes[RELEASES] = _json.dumps([
+        {"tag_name": "v3.0.0", "body": "not installed by this update",
+         "published_at": "2026-07-25T00:00:00Z"},
+        {"tag_name": "v2.0.0", "body": "newest notes",
+         "published_at": "2026-07-23T00:00:00Z"},
+    ]).encode()
+    info = check_for_update("1.0.0", http=_fake_http(routes))
+    assert [row.version for row in info.releases] == ["2.0.0"]
+
+
+def test_check_offered_release_always_heads_the_stack(tmp_path):
+    """/releases/latest and /releases are cached separately by GitHub; right
+    after a publish the list page can still lag and omit the tag /latest
+    already serves. releases[0] must be the OFFERED release regardless —
+    never a stale/missing feed row — so notes and releases[0].notes can
+    never disagree."""
+    routes = _fake_release(tmp_path, "v2.0.0", {"SM64Trainer.exe": b"X"})
+    rel = _json.loads(routes[LATEST])
+    rel["body"] = "brand new notes"
+    routes[LATEST] = _json.dumps(rel).encode()
+    routes[RELEASES] = _json.dumps([   # omits v2.0.0 entirely
+        {"tag_name": "v1.5.0", "body": "older notes",
+         "published_at": "2026-07-10T00:00:00Z"},
+    ]).encode()
+    info = check_for_update("1.0.0", http=_fake_http(routes))
+    assert info.releases[0].version == info.version
+    assert info.releases[0].notes == info.notes
+
+
 def test_check_none_when_missing_manifest_assets():
     partial = {k: v for k, v in FULL_ASSETS.items() if k != MANIFEST_ASSET}
     http = _fake_http({LATEST: _release_json("v2.0.0", partial)})
@@ -210,6 +260,30 @@ def test_status_reports_available_with_download_bytes(tmp_path):
     assert st["latest"] == "2.0.0"
     assert st["download_bytes"] > 0
     assert st["writable"] is True          # tmp dir is writable
+
+
+def test_status_carries_the_release_stack(tmp_path):
+    routes = _fake_release(tmp_path, "v2.0.0", {"SM64Trainer.exe": b"NEW"})
+    # offered (from /releases/latest) always heads the stack (check_for_update),
+    # so give it the same body/date a real GitHub response would carry —
+    # _fake_release's default LATEST fixture omits published_at entirely.
+    rel = _json.loads(routes[LATEST])
+    rel["body"] = "newest notes"
+    rel["published_at"] = "2026-07-23T00:00:00Z"
+    routes[LATEST] = _json.dumps(rel).encode()
+    routes[RELEASES] = _json.dumps([
+        {"tag_name": "v2.0.0", "body": "newest notes",
+         "published_at": "2026-07-23T00:00:00Z"},
+        {"tag_name": "v1.5.0", "body": "middle notes",
+         "published_at": "2026-07-10T00:00:00Z"},
+    ]).encode()
+    st = _svc(tmp_path, _fake_http(routes)).status()
+    # Pin only the keys this feature owns; the rest of the payload is other
+    # features' and must stay unpinned.
+    assert [row["version"] for row in st["releases"]] == ["2.0.0", "1.5.0"]
+    assert st["releases"][0]["date"] == "2026-07-23"
+    assert st["releases"][1]["notes"] == "middle notes"
+    assert st["releases"][1]["date"] == "2026-07-10"
 
 
 def test_status_manifest_tamper_means_no_update(tmp_path):

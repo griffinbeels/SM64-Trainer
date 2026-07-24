@@ -5,13 +5,14 @@ ONLY what changed (core/update_fetch, HTTP Range into the release zip), and
 swap files crash-safely (core/update_apply journaled rename dance). The
 restart rides core/relaunch.spawn_replacement, same as always.
 
-Pure helpers (parse_version, is_newer, check_for_update, exe_dir_writable)
-take an injected HTTP opener and operate on explicit paths so tests never
-touch the network or a real install. The stateful UpdateService orchestrates
-them, caches the check (manifest + plan included), tracks download progress,
-and persists the 'skipped' version. Everything is guarded on is_frozen():
-from source it is inert (update_available is always False) so a dev tree is
-never swapped.
+Pure helpers (check_for_update, exe_dir_writable) take an injected HTTP
+opener and operate on explicit paths so tests never touch the network or a
+real install. Version comparison, the shared request builder, and patch-notes
+extraction live one layer down in core/release_feed.py. The stateful
+UpdateService orchestrates them, caches the check (manifest + plan included),
+tracks download progress, and persists the 'skipped' version. Everything is
+guarded on is_frozen(): from source it is inert (update_available is always
+False) so a dev tree is never swapped.
 
 A release is only ever offered when ALL FOUR update assets are present
 (SM64Trainer-full.zip + manifest.json + both .sha256 companions) and the
@@ -33,59 +34,38 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from sm64_events.core.paths import is_frozen, update_state_path
+from sm64_events.core.release_feed import (ReleaseNotes, http_get, is_newer,
+                                           missed_releases, notes_from_release,
+                                           parse_version)
 from sm64_events.core.update_apply import STAGING_DIR, apply_plan, sweep_backup
 from sm64_events.core.update_fetch import (RangeUnsupported, fetch_full_zip,
                                            fetch_plan, free_disk_ok)
 from sm64_events.core.update_plan import (INSTALLED_MANIFEST, MANIFEST_ASSET,
-                                          PATCH_NOTES_MARKER, ZIP_ASSET,
-                                          Manifest, build_plan,
+                                          ZIP_ASSET, Manifest, build_plan,
                                           parse_manifest)
 
 log = logging.getLogger("sm64.updater")
 
 DEFAULT_REPO = "griffinbeels/SM64-Trainer"
 GITHUB_API = "https://api.github.com"
-_UA = "SM64Trainer-updater"
 _CHECK_TTL_S = 3600.0
-
-
-def parse_version(tag: str) -> tuple[int, ...]:
-    """'v1.2.3' / '1.2.3' -> (1, 2, 3). A non-numeric piece stops the parse, so
-    '1.2.3-beta' compares as (1, 2, 3)."""
-    out: list[int] = []
-    for part in tag.lstrip("vV").split("."):
-        num = ""
-        for ch in part:
-            if ch.isdigit():
-                num += ch
-            else:
-                break
-        if num == "":
-            break
-        out.append(int(num))
-    return tuple(out)
-
-
-def is_newer(candidate: str, current: str) -> bool:
-    return parse_version(candidate) > parse_version(current)
 
 
 @dataclass
 class UpdateInfo:
     version: str
-    notes: str
+    notes: str          # the offered release alone; == releases[0].notes,
+                        # enforced by construction (see check_for_update)
     html_url: str
     zip_url: str
     zip_sha_url: str
     manifest_url: str
     manifest_sha_url: str
-
-
-def _get(http, url: str, *, accept: str | None = None):
-    req = urllib.request.Request(url, headers={"User-Agent": _UA})
-    if accept:
-        req.add_header("Accept", accept)
-    return http(req)
+    # Every version between the installed one and `version`, newest first.
+    # releases[0] is ALWAYS the offered release itself (see check_for_update)
+    # — never a feed row, so it can never disagree with `notes`. A tuple, not
+    # a list, so the default needs no field(default_factory=…).
+    releases: tuple[ReleaseNotes, ...] = ()
 
 
 def check_for_update(current: str, *, http=urllib.request.urlopen,
@@ -97,7 +77,7 @@ def check_for_update(current: str, *, http=urllib.request.urlopen,
     None (no popup)."""
     try:
         url = f"{api_base}/repos/{repo}/releases/latest"
-        with _get(http, url, accept="application/vnd.github+json") as r:
+        with http_get(http, url, accept="application/vnd.github+json") as r:
             rel = json.loads(r.read().decode("utf-8"))
         tag = rel.get("tag_name") or ""
         if not is_newer(tag, current):
@@ -109,19 +89,36 @@ def check_for_update(current: str, *, http=urllib.request.urlopen,
         if not all(assets.get(name) for name in needed):
             log.info("release %s is missing update assets; not offering", tag)
             return None
-        notes = rel.get("body") or ""
-        if PATCH_NOTES_MARKER in notes:
-            # The body's leading first-time-setup section is for the GitHub
-            # page only — the popup shows just the patch notes.
-            notes = notes.split(PATCH_NOTES_MARKER, 1)[1].lstrip()
+        # The body's leading first-time-setup section is for the GitHub page
+        # only, and legacy bodies title themselves — release_feed.notes_from_release
+        # (via strip_body) is THE rule for both shapes.
+        offered = notes_from_release(rel)
+        # Everything ELSE the user skipped, newest first. Clamped to the
+        # offered tag: GitHub's 'latest' is the most RECENT publish, so a
+        # backport published afterwards could otherwise stack notes for a
+        # version this update does not install. The feed's own row for the
+        # offered tag is dropped too (compared by parsed version, so 'v2.0'
+        # and 'v2.0.0' collapse the same way) — `offered` always takes that
+        # slot instead, via the unconditional prepend below. `/releases/latest`
+        # and `/releases` are cached separately by GitHub, so right after a
+        # publish the list can lag and omit the tag /latest already serves;
+        # without this the popup could offer a version whose notes are
+        # missing from the stack entirely.
+        history = [row for row in missed_releases(current, http=http,
+                                                  repo=repo, api_base=api_base)
+                   if not is_newer(row.version, tag)
+                   and parse_version(row.version) != parse_version(offered.version)]
         return UpdateInfo(
             version=tag.lstrip("vV"),
-            notes=notes,
+            notes=offered.notes,
             html_url=rel.get("html_url") or "",
             zip_url=assets[ZIP_ASSET],
             zip_sha_url=assets[ZIP_ASSET + ".sha256"],
             manifest_url=assets[MANIFEST_ASSET],
-            manifest_sha_url=assets[MANIFEST_ASSET + ".sha256"])
+            manifest_sha_url=assets[MANIFEST_ASSET + ".sha256"],
+            # `offered` always heads the stack, so releases[0] and `notes`
+            # cannot disagree — even when the history fetch is empty/stale.
+            releases=(offered, *history))
     except Exception:
         log.info("update check failed", exc_info=True)
         return None
@@ -182,20 +179,37 @@ class UpdateService:
     def _fake(self) -> "UpdateInfo | None":
         if not os.environ.get("SM64_UPDATE_FAKE"):
             return None
+        # THREE releases so SM64_UPDATE_FAKE=1 renders the stacked layout —
+        # version headers, dividers, and the inner scroll — without cutting
+        # a real release.
+        rows = (
+            ReleaseNotes(
+                "9.9.9", "2026-07-23",
+                "## Demo release\n"
+                "- **New:** a sample bullet whose text is long enough to wrap\n"
+                "  onto a second source line, exercising the soft-wrap join.\n"
+                "- A second bullet that mentions the `.old` backup as code.\n"
+                "\n"
+                "A trailing paragraph after a blank line, also wrapping across\n"
+                "two source lines, to confirm paragraphs join too."),
+            ReleaseNotes(
+                "9.9.8", "2026-07-20",
+                "- **Fix:** the middle version of the stack, here so the\n"
+                "  version headers and dividers can be eyeballed in dev."),
+            ReleaseNotes(
+                "9.9.7", "2026-07-18",
+                "- **New:** the oldest missed version, proving the popup\n"
+                "  stacks every skipped release rather than just the newest."),
+        )
         return UpdateInfo(
             version="9.9.9",
-            notes="## Demo release\n"
-                  "- **New:** a sample bullet whose text is long enough to wrap\n"
-                  "  onto a second source line, exercising the soft-wrap join.\n"
-                  "- A second bullet that mentions the `.old` backup as code.\n"
-                  "\n"
-                  "A trailing paragraph after a blank line, also wrapping across\n"
-                  "two source lines, to confirm paragraphs join too.",
+            notes=rows[0].notes,
             html_url=f"https://github.com/{self.repo}/releases",
-            zip_url="", zip_sha_url="", manifest_url="", manifest_sha_url="")
+            zip_url="", zip_sha_url="", manifest_url="", manifest_sha_url="",
+            releases=rows)
 
     def _fetch_text(self, url: str) -> str:
-        with _get(self._http, url) as r:
+        with http_get(self._http, url) as r:
             return r.read().decode("utf-8")
 
     def _read_installed(self) -> "Manifest | None":
@@ -257,6 +271,9 @@ class UpdateService:
             "state": self._state,
             "progress": self._progress,
             "download_bytes": self._plan.download_bytes if self._plan else None,
+            "releases": [{"version": row.version, "date": row.date,
+                          "notes": row.notes}
+                         for row in info.releases] if info else [],
         }
 
     # --- apply (off-thread; UI polls status for progress) ---
