@@ -66,7 +66,8 @@ def reconcile_defaults(db, seed: dict) -> list[str]:
                     srow.get("guards", []), _now_iso(),
                     enabled=srow.get("enabled", True),
                     waypoints=srow.get("waypoints", []),
-                    category=srow.get("category"), seed_key=key)
+                    category=srow.get("category"), seed_key=key,
+                    default_strat=srow.get("default_strat"))
             else:
                 key_to_id[key] = existing["id"]
                 if not existing["seed_dirty"]:
@@ -77,7 +78,8 @@ def reconcile_defaults(db, seed: dict) -> list[str]:
                         end_triggers=srow["end_triggers"],
                         waypoints=srow.get("waypoints", []),
                         guards=srow.get("guards", []),
-                        category=srow.get("category"))
+                        category=srow.get("category"),
+                        default_strat=srow.get("default_strat"))
         except _SEED_ERRORS as exc:
             problems.append(f"segment {key}: {exc}")
     route_by_key = {r["seed_key"]: r for r in db.routes() if r.get("seed_key")}

@@ -159,6 +159,19 @@ Caveats (hard-won — keep these current):
     both stamping sites (_build for stars, the segment stamp in feed()).
     Last write wins, so re-picking the previous strategy is the undo. The
     event itself is inert in _dispatch: it opens and closes nothing.
+
+17. Segment strategy DEFAULTS (spec 2026-07-24-segment-default-strat): a
+    definition may carry a default_strat, and strat_by_segment starts out
+    pre-seeded from the defs rather than empty. Caveat 6's rule is otherwise
+    unchanged — the attempt still gets the strategy remembered at close time;
+    the default just makes "remembered" non-empty from the first run, with
+    nothing journaled on the user's behalf. Two consequences worth knowing:
+    a journaled strat_set with a FALSY tag falls back to the default instead
+    of clearing (no-strategy is not a legitimate state for a defaulted
+    segment), and because the seed comes from the defs the whole thing
+    re-derives on every replay. Stars have no equivalent: a default needs a
+    seeded definition row and stars have none (CLAUDE.md rule 11 asymmetry,
+    recorded in the spec).
 """
 from dataclasses import dataclass, replace
 
@@ -285,7 +298,17 @@ class Projector:
         # success). See caveat 13.
         self._suspended_star: tuple[int, int] | None = None
         self.strat_by_star: dict[tuple[int, int], str | None] = {}
-        self.strat_by_segment: dict[int, str | None] = {}
+        # Pre-seeded from the definitions' own default_strat (caveat 17), so
+        # every consumer of this dict — attempt stamping below, the strat_tag
+        # property, the view's section banner / segment_targets / target
+        # payload — gets the default without a call-site of its own. A
+        # journaled strat_set overwrites the entry; nothing is ever written to
+        # the journal on the user's behalf, so this re-derives identically on
+        # every replay.
+        self._seg_default_strat: dict[int, str] = {
+            d.id: d.default_strat for d in (segments or []) if d.default_strat}
+        self.strat_by_segment: dict[int, str | None] = dict(
+            self._seg_default_strat)
         self._segments = SegmentEngine(segments or [])
         # Validity bounds (spec 2026-07-23). Stars: "<course>:<star>" ->
         # {min_frames, max_frames} from the time_filters ui_state KV.
@@ -529,8 +552,16 @@ class Projector:
             # per-target strategy memory write WITHOUT moving the target
             # (target_set is the only other writer); explicit null clears.
             if ev.payload.get("kind") == "segment":
-                self.strat_by_segment[ev.payload["segment_id"]] = \
+                # A FALSY pick falls back to the definition's default instead
+                # of clearing (caveat 17): "no strategy" is not a legitimate
+                # choice for a defaulted segment, and that rule belongs in the
+                # data — the picker merely hides the blank option, and old
+                # journals can still carry a null. Undefaulted segments clear
+                # to None exactly as before.
+                seg_id = ev.payload["segment_id"]
+                self.strat_by_segment[seg_id] = (
                     ev.payload.get("strat_tag")
+                    or self._seg_default_strat.get(seg_id))
             else:
                 self.strat_by_star[(ev.payload["course_id"],
                                     ev.payload["star_id"])] \

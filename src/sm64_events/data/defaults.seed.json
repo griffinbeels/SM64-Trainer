@@ -256,7 +256,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:bob->wf",
@@ -280,7 +281,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:bob->pss",
@@ -304,7 +306,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:bob->ccm",
@@ -328,7 +331,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:bob->basement",
@@ -353,7 +357,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:pss->wf",
@@ -377,7 +382,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:wf->pss",
@@ -401,7 +407,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:wf->ccm",
@@ -425,7 +432,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:wf->sa",
@@ -449,7 +457,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:wf->bitdw",
@@ -473,7 +482,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:wf->ssl",
@@ -505,7 +515,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:sa->jrb",
@@ -529,7 +540,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:jrb->pss",
@@ -553,7 +565,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:pss->totwc",
@@ -577,7 +590,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:totwc->pss",
@@ -601,7 +615,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:totwc->bitdw",
@@ -625,7 +640,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:pss->bitdw",
@@ -649,7 +665,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:pss->bob",
@@ -673,7 +690,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:ccm->bitdw",
@@ -697,7 +715,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:ccm->bbh",
@@ -728,7 +747,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:bowser1->bob",
@@ -752,7 +772,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:bowser1->wf",
@@ -776,7 +797,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:bowser1->ccm",
@@ -800,7 +822,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:bowser1->ssl",
@@ -832,7 +855,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:bowser1->ddd",
@@ -864,7 +888,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:bowser1->bitfs",
@@ -896,7 +921,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:bbh->basement",
@@ -928,7 +954,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:bbh->ddd",
@@ -959,7 +986,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:mips1->ssl",
@@ -984,7 +1012,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:ssl->lll",
@@ -1008,7 +1037,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:ssl->hmc",
@@ -1032,7 +1062,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:lll->hmc",
@@ -1056,7 +1087,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:lll->ddd",
@@ -1080,7 +1112,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:hmc->lll",
@@ -1104,7 +1137,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:hmc->ddd",
@@ -1128,7 +1162,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:hmc->rr",
@@ -1165,7 +1200,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:mips2->hmc",
@@ -1190,7 +1226,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:mips2->vcutm",
@@ -1222,7 +1259,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:vcutm->ccm",
@@ -1253,7 +1291,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:ddd->bitfs",
@@ -1278,7 +1317,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:ddd->wdw",
@@ -1315,7 +1355,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:bowser2->ddd",
@@ -1339,7 +1380,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:bowser2->wdw",
@@ -1371,7 +1413,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:bowser2->upstairs",
@@ -1404,7 +1447,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:wdw->thi",
@@ -1428,7 +1472,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:thi->ttm",
@@ -1452,7 +1497,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:ttm->sl",
@@ -1476,7 +1522,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:sl->basement",
@@ -1514,7 +1561,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:sl->rr",
@@ -1538,7 +1586,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:sl->wmotr",
@@ -1562,7 +1611,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:wmotr->ttc",
@@ -1586,7 +1636,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:rr->ttc",
@@ -1610,7 +1661,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:ttc->rr",
@@ -1634,7 +1686,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:rr->bits",
@@ -1658,7 +1711,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:ttc->bits",
@@ -1682,7 +1736,8 @@
           "type": "in_active_route"
         }
       ],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     }
   ],
   "routes": [

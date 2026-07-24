@@ -189,13 +189,21 @@ def _strategies_for(registered: dict, attempts, course_id: int, star_id: int,
 
 
 def _seg_strategies(registered: dict, history, seg_id: int, ranks=None,
-                    deleted=()) -> list:
-    """Segment sibling of _strategies_for: registered strats (ui_state, keyed
-    "seg:{id}" — see service._strategies_key) then observed-on-attempts
-    (sorted) then rank-standard strats. Registration is what keeps a
-    just-picked strategy in the dropdown before any attempt exists under it.
-    `deleted` filters the segment's tombstoned names, same as _strategies_for."""
-    out = list(registered.get(f"seg:{seg_id}", []))
+                    deleted=(), default_strat=None) -> list:
+    """Segment sibling of _strategies_for: the definition's own default_strat
+    first, then registered strats (ui_state, keyed "seg:{id}" — see
+    service._strategies_key), then observed-on-attempts (sorted), then
+    rank-standard strats. Registration is what keeps a just-picked strategy in
+    the dropdown before any attempt exists under it; the default is here for
+    the same reason, one step earlier — it is never journaled, so nothing else
+    would put it in the list on a segment that has never been run.
+    `deleted` filters the segment's tombstoned names, same as _strategies_for;
+    a default can never be among them — service.purge_strategy refuses to
+    delete one, the same protection community strats get."""
+    out = [default_strat] if default_strat else []
+    for strat in registered.get(f"seg:{seg_id}", []):
+        if strat not in out:
+            out.append(strat)
     for strat in sorted({a.strat_tag for a in history if a.strat_tag}):
         if strat not in out:
             out.append(strat)
@@ -585,6 +593,12 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "armed": seg_id in armed,
             "category": meta.get("category"),
             "seeded": meta.get("seed_key") is not None,
+            # The definition's own strategy, or None. The card reads this to
+            # drop the "— no strat —" option: where a default exists, having
+            # no strategy is not a state the user may choose (spec
+            # 2026-07-24-segment-default-strat). Stars carry no such key —
+            # the documented rule 11 asymmetry.
+            "default_strat": meta.get("default_strat"),
             # igt present-as-None: same shape-stability rule as the target
             # payload — UI code reading sec.pb.igt gets null, not undefined.
             "pb": {"igt": None,
@@ -597,7 +611,8 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             # registered ∪ observed-on-attempts ∪ rank-standard strategies
             "strategies": _seg_strategies(registered, history, seg_id,
                                           service.ranks,
-                                          deleted_strats.get(seg_ek, [])),
+                                          deleted_strats.get(seg_ek, []),
+                                          meta.get("default_strat")),
             "last_strat": masked(service.strat_by_segment.get(seg_id), seg_ek),
             "timeline": _timeline(in_section, rta_of),
             "markers_by_strat": _markers_for(markers_state, "seg", seg_id),

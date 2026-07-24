@@ -161,7 +161,7 @@ function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, sec }) {
       ${sec
         ? html`<${StratPicker} entity=${entity} strategies=${sec.strategies}
             active=${a.strat_tag} blankLabel="— no strategy —"
-            highlightUnset=${false}
+            highlightUnset=${false} allowBlank=${!sec.default_strat}
             submit=${(tag) => send("POST", `/api/attempts/${a.id}/strat`,
                                    { strat_tag: tag })}
             onChanged=${t.refresh} />`
@@ -545,6 +545,7 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare }) {
             ? html`<${StratPicker} entity=${`segment:${sec.segment_id}`}
                 identity=${{ kind: "segment", segment_id: sec.segment_id }}
                 strategies=${sec.strategies} active=${sec.last_strat}
+                allowBlank=${!sec.default_strat}
                 onChanged=${t.refresh} />`
             : html`<span class="meta">Definition deleted</span>`}
         </div>

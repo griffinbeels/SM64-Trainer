@@ -1564,3 +1564,25 @@ def test_set_attempt_strat_reclassifies_segment_attempt_and_registers(tmp_path):
     # newest segment attempt -> the segment's active strategy follows too
     # (star<->segment parity for the newest-attempt rule)
     assert svc.strat_by_segment[lblj] == "no bljs"
+
+
+def test_purge_refuses_a_segments_default_strategy(tmp_path):
+    """Same protection a community-seeded strat gets, one layer down: the card
+    for a defaulted segment hides its "no strategy" option, so tombstoning the
+    default would leave the picker offering nothing pickable."""
+    seed_path = tmp_path / "seed.json"
+    seed_path.write_text(json.dumps({"version": 1, "entities": {}}))
+    ranks = RankStandards(tmp_path / "rs.json", seed_path=seed_path)
+    ranks.load()
+    db = Database(tmp_path / "t.db")
+    db.update_segment_def(1, default_strat="Standard")   # before the defs load
+    svc = TrackerService(db, Broadcaster(), ranks=ranks)
+    asyncio.run(svc.start())
+    with pytest.raises(ValueError, match="default strategy"):
+        asyncio.run(svc.purge_strategy("segment:1", "Standard"))
+    assert db.get_state("deleted_strats", {}) == {}
+    # another strategy on the same segment is still purgeable
+    asyncio.run(svc.set_strat_segment(1, "Blindfolded"))
+    asyncio.run(svc.purge_strategy("segment:1", "Blindfolded"))
+    assert "Blindfolded" in db.get_state("deleted_strats", {})["segment:1"]
+    assert svc.strat_by_segment.get(1) == "Standard"   # falls back, not cleared

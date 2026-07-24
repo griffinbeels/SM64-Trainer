@@ -1555,3 +1555,57 @@ def test_attempt_strat_set_is_not_an_attempt_boundary():
     assert len(attempts) == 1
     assert attempts[0].id == 1 and attempts[0].rta_frames == 350
     assert attempts[0].strat_tag == "X"
+
+
+# -- a definition's default strategy (spec 2026-07-24-segment-default-strat) ---
+
+def _defaulted_move(default="Standard"):
+    from sm64_events.tracking.segments import SegmentDef
+    return SegmentDef(id=42, name="MIPS", enabled=True,
+                      start_triggers=[{"type": "level_enter", "to": 6}],
+                      end_triggers=[{"type": "level_enter", "to": 23}],
+                      guards=[], default_strat=default)
+
+
+def _run_move(p):
+    """Arm in the castle, complete by entering DDD; returns the attempt."""
+    p.feed(jev(1, "level_changed", 500, {"from": 16, "to": 6}))
+    closed = p.feed(jev(9, "level_changed", 5000, {"from": 6, "to": 23}))
+    return next(a for a in closed if a.segment_id == 42)
+
+
+def test_segment_attempt_is_tagged_with_the_definitions_default_strat():
+    """Nothing is journaled on the user's behalf — the default is pre-seeded
+    into strat_by_segment, the one dict every consumer already reads."""
+    p = Projector(segments=[_defaulted_move()])
+    assert p.strat_by_segment == {42: "Standard"}
+    assert _run_move(p).strat_tag == "Standard"
+
+
+def test_a_definition_without_a_default_is_unchanged():
+    p = Projector(segments=[_defaulted_move(default=None)])
+    assert p.strat_by_segment == {}
+    assert _run_move(p).strat_tag is None
+
+
+def test_an_explicit_pick_overrides_the_default():
+    p = Projector(segments=[_defaulted_move()])
+    p.feed(jev(0, "strat_set", 0, {"kind": "segment", "segment_id": 42,
+                                   "strat_tag": "Blindfolded"}))
+    assert _run_move(p).strat_tag == "Blindfolded"
+
+
+def test_a_null_pick_falls_back_to_the_default_instead_of_unsetting():
+    """"No strategy" is not a legitimate choice for a defaulted segment, and
+    that rule lives in the data — not only in the dropdown, which merely hides
+    the blank option. Old journals can still carry a null pick."""
+    p = Projector(segments=[_defaulted_move()])
+    p.feed(jev(0, "strat_set", 0, {"kind": "segment", "segment_id": 42,
+                                   "strat_tag": None}))
+    assert p.strat_by_segment[42] == "Standard"
+    assert _run_move(p).strat_tag == "Standard"
+    # a def with no default still clears to None
+    q = Projector(segments=[_defaulted_move(default=None)])
+    q.feed(jev(0, "strat_set", 0, {"kind": "segment", "segment_id": 42,
+                                   "strat_tag": None}))
+    assert q.strat_by_segment[42] is None

@@ -264,6 +264,14 @@ class SegmentDef:
     # keeps that test meaningful while `_load_segment_defs` still works
     # unchanged (the db row always supplies the key — Task 1).
     waypoints: list = field(default_factory=list)
+    # The strategy this segment is practiced with unless the user picks another
+    # (spec 2026-07-24-segment-default-strat). None = no default, which is what
+    # every user-created segment and the ten legacy trick defs carry; the 55
+    # castle movements carry "Standard", because there is basically one way to
+    # do a movement. Applied by Projector (it pre-seeds strat_by_segment), NOT
+    # here — the matcher is strategy-blind and stays that way. Defaulted for
+    # the same reason waypoints is.
+    default_strat: str | None = None
 
 
 @dataclass(frozen=True)
@@ -652,6 +660,13 @@ def validate_definition(d: dict) -> None:
             raise ValueError("each waypoint must be a non-empty list of triggers")
         for clause in step:
             _check_clause(clause, TRIGGERS, "waypoints")
+    default_strat = d.get("default_strat")
+    if default_strat is not None and (not isinstance(default_strat, str)
+                                      or not default_strat.strip()):
+        # An empty/blank default is worse than none: it would read as "no
+        # strategy" everywhere while still suppressing the blank option in
+        # the picker, leaving no way to express either.
+        raise ValueError("default_strat must be a non-empty string or absent")
     guards = d.get("guards") or []
     if not isinstance(guards, list):
         raise ValueError("guards must be a list")

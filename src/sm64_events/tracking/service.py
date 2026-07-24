@@ -785,6 +785,14 @@ class TrackerService:
         db = self._require_db()
         if strat in ranks.seeded_strategies(ek):
             raise ValueError(f"{strat!r} is a community default and can't be deleted")
+        # Same protection, one layer down: a segment definition's own
+        # default_strat isn't the user's to delete either. Without this, the
+        # tombstone would mask the segment's only pickable strategy while the
+        # card still hides its "no strategy" option (spec 2026-07-24).
+        if any(d.default_strat == strat for d in self._segment_defs
+               if f"segment:{d.id}" == ek):
+            raise ValueError(f"{strat!r} is this segment's default strategy "
+                             "and can't be deleted")
         ranks.delete_strategy(ek, strat)
         strategies = db.get_state("strategies", {})
         key = _strategies_key(ek)

@@ -21,7 +21,7 @@ def test_migrations_set_user_version_and_create_tables(tmp_path):
         "SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"events", "sessions", "attempts", "pbs", "ui_state", "routes", "runs",
             "comparisons"} <= names
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 12
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 13
 
 
 def test_reopening_existing_db_is_idempotent(tmp_path):
@@ -29,7 +29,7 @@ def test_reopening_existing_db_is_idempotent(tmp_path):
     sid = first.insert_session("2026-06-10T12:00:00Z")
     first.close()
     db = make_db(tmp_path)  # second open: migrations must not re-run/crash
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 12
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 13
     row = db._conn.execute("SELECT * FROM sessions WHERE id=?", (sid,)).fetchone()
     assert row is not None and row["started_utc"] == "2026-06-10T12:00:00Z"
 
@@ -165,7 +165,7 @@ def test_v1_database_upgrades_in_place(tmp_path):
     conn.commit()
     conn.close()
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 12
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 13
     assert db.attempts()[0].rollouts_total == 0   # backfilled default
     assert db.attempts()[0].jumps_total == 0
 
@@ -286,7 +286,7 @@ def test_v3_database_pb_rows_survive_v4_rebuild(tmp_path):
     conn.commit()
     conn.close()
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 12
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 13
     [row] = db.pbs()
     assert row["id"] == 7 and row["frames"] == 500
     assert row["course_id"] == 2 and row["star_id"] == 3
@@ -313,7 +313,7 @@ def test_v5_updates_existing_v4_lblj_row_with_area_anchor(tmp_path):
     conn.commit()
     conn.close()
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 12
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 13
     lblj = next(d for d in db.segment_defs() if d["name"] == "LBLJ")
     assert lblj["start_triggers"] == [
         {"type": "level_enter", "to": 6, "from": 16},
@@ -343,7 +343,7 @@ def test_v6_repairs_existing_bowser3_end_trigger(tmp_path):
     conn.commit()
     conn.close()
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 12
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 13
     b3 = next(d for d in db.segment_defs() if d["name"] == "Bowser 3")
     assert b3["end_triggers"] == [{"type": "key_grabbed", "level": 34}]
 
@@ -428,7 +428,7 @@ def test_failed_migration_rolls_back_schema_and_version(tmp_path, monkeypatch):
         Database(path)
     check = sqlite3.connect(str(path))
     # (a) version reflects only the successful prefix
-    assert check.execute("PRAGMA user_version").fetchone()[0] == 12
+    assert check.execute("PRAGMA user_version").fetchone()[0] == 13
     # partial application rolled back: first statement did NOT stick
     names = {r[0] for r in check.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
@@ -438,7 +438,7 @@ def test_failed_migration_rolls_back_schema_and_version(tmp_path, monkeypatch):
     fixed = "CREATE TABLE extra (id INTEGER);"
     monkeypatch.setattr(db_mod, "MIGRATIONS", db_mod.MIGRATIONS[:-1] + [fixed])
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 13
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 14
     db.close()
 
 
@@ -559,3 +559,24 @@ def test_retag_pbs_for_attempt_moves_the_row_to_the_new_strategy(tmp_path):
     assert db.current_pb(2, 2, "igt", strat_tag="Slide Kick") is None
     db.retag_pbs_for_attempt(999, "Whatever")
     assert len(db.pbs()) == 2
+
+
+# -- migration v13: default_strat on a segment definition --------------------
+
+def test_segment_def_round_trips_default_strat(tmp_path):
+    """The seeded movements' "Standard" has to survive the db, and a def
+    without one must read None rather than blowing up an older row."""
+    db = make_db(tmp_path)
+    sid = db.insert_segment_def(
+        "BoB -> WF", [{"type": "level_exit", "from": 9}],
+        [{"type": "level_enter", "to": 24}], [], "2026-07-24T00:00:00Z",
+        default_strat="Standard")
+    plain = db.insert_segment_def(
+        "Mine", [{"type": "spawned"}], [{"type": "level_enter", "to": 6}],
+        [], "2026-07-24T00:00:00Z")
+    rows = {r["id"]: r for r in db.segment_defs()}
+    assert rows[sid]["default_strat"] == "Standard"
+    assert rows[plain]["default_strat"] is None
+    db.update_segment_def(sid, default_strat="Blindfolded")
+    assert next(r for r in db.segment_defs()
+                if r["id"] == sid)["default_strat"] == "Blindfolded"

@@ -25,9 +25,16 @@ import { StratModal } from "./stratmodal.js";
 
 const html = htm.bind(h);
 
+// `allowBlank=false` drops the "no strategy" sentinel entirely. Segments whose
+// DEFINITION carries a default_strat pass it: there is basically one way to do
+// a castle movement, so "no strategy" is not a state the user may choose (spec
+// 2026-07-24-segment-default-strat). The server enforces the same rule — a
+// falsy strat_set on a defaulted segment falls back to the default rather than
+// clearing (projection.py caveat 17) — so this only hides an option that could
+// not stick anyway.
 export function StratPicker({ entity, identity, strategies, active, onChanged,
                               submit, blankLabel = "— no strat —",
-                              highlightUnset = true }) {
+                              highlightUnset = true, allowBlank = true }) {
   // Bumped to force the <select> to remount and re-read `active`. A native
   // <select> change updates the DOM immediately, but if the write is dropped
   // (or cancelled) `active` stays null, so its `value` prop never changes and
@@ -72,7 +79,7 @@ export function StratPicker({ entity, identity, strategies, active, onChanged,
       class="meta ${!active && highlightUnset ? "needs-strat" : ""}"
       value=${active || ""}
       onchange=${(changeEvent) => setStrat(changeEvent.target.value)}>
-    <option value="">${blankLabel}</option>
+    ${allowBlank ? html`<option value="">${blankLabel}</option>` : null}
     ${options.map((s) => html`<option value=${s}>${s}</option>`)}
     <option value="__new">+ new strat…</option>
   </select>

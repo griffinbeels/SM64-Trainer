@@ -1604,3 +1604,38 @@ def test_no_active_route_means_no_star_filter(tmp_path):
     star", so a stray empty list here would silently blank the selector."""
     db, svc = make(tmp_path)
     assert build_session_view(db, svc, clock="igt")["active_route"] is None
+
+
+def test_segment_section_reports_and_preselects_its_default_strategy(tmp_path):
+    """A defaulted segment must (a) report the default so the card can drop the
+    "— no strat —" option, (b) list it so the dropdown can show it before any
+    attempt or registration exists, and (c) already have it as last_strat."""
+    db = Database(tmp_path / "t.db")
+    db.update_segment_def(1, default_strat="Standard")
+    svc = TrackerService(db, Broadcaster())
+    asyncio.run(svc.start())
+    lblj_success(svc)
+    view = build_session_view(db, svc, clock="igt")
+    sec = seg_section(view, 1)
+    assert sec["default_strat"] == "Standard"
+    assert sec["last_strat"] == "Standard"
+    assert sec["strategies"] == ["Standard"]
+    assert sec["attempts"][0]["strat_tag"] == "Standard"
+
+
+def test_undefaulted_segment_section_reports_no_default(tmp_path):
+    db, svc = make(tmp_path)
+    lblj_success(svc)
+    sec = seg_section(build_session_view(db, svc, clock="igt"), 1)
+    assert sec["default_strat"] is None
+    assert sec["last_strat"] is None and sec["strategies"] == []
+
+
+def test_star_sections_carry_no_default_strategy(tmp_path):
+    """Deliberate star/segment asymmetry (CLAUDE.md rule 11, spec 2026-07-24):
+    a default hangs off a seeded DEFINITION row and stars have none. Pinned so
+    the omission stays a decision rather than an oversight."""
+    db, svc = make(tmp_path)
+    seed(svc)
+    view = build_session_view(db, svc, clock="igt")
+    assert "default_strat" not in view["stars"][0]

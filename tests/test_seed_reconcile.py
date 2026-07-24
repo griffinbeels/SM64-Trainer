@@ -159,3 +159,27 @@ def test_real_bundled_seed_does_not_alter_existing_segment_defs(tmp_path):
         validate_definition({k: after_row[k] for k in
                              ("name", "start_triggers", "end_triggers",
                               "waypoints", "guards")})
+
+
+def test_reconcile_carries_default_strat_on_insert_and_refresh(tmp_path):
+    """The 55 movements gain "Standard" purely through the reconcile — they are
+    seeded and untouched, so no repair migration is needed (spec §5)."""
+    db = Database(tmp_path / "t.db")
+    seeded = json.loads(json.dumps(SEED_V1))
+    seeded["segments"][0]["default_strat"] = "Standard"
+    reconcile_defaults(db, seeded)
+    seg = next(s for s in db.segment_defs() if s["seed_key"] == "seg:demo")
+    assert seg["default_strat"] == "Standard"
+    # a later seed can change it on an untouched row...
+    seed2 = json.loads(json.dumps(seeded)); seed2["seed_version"] = 2
+    seed2["segments"][0]["default_strat"] = "Blindfolded"
+    reconcile_defaults(db, seed2)
+    assert next(s for s in db.segment_defs()
+                if s["id"] == seg["id"])["default_strat"] == "Blindfolded"
+    # ...but a dirtied row keeps its own, the known gap in spec §5
+    db.set_seed_dirty("segment_defs", seg["id"], 1)
+    seed3 = json.loads(json.dumps(seeded)); seed3["seed_version"] = 3
+    seed3["segments"][0]["default_strat"] = "Standard"
+    reconcile_defaults(db, seed3)
+    assert next(s for s in db.segment_defs()
+                if s["id"] == seg["id"])["default_strat"] == "Blindfolded"

@@ -31,6 +31,15 @@ BOWSER_FIGHTS = "Bowser Fights"
 
 ROUTE_SCOPED = [{"type": "in_active_route"}]
 
+# There is basically one way to do a castle movement, so every movement ships
+# with this already picked rather than with the picker in its red "you forgot"
+# state — and, because untagged PBs are skipped by the per-strategy ranking, a
+# movement can now actually be ranked. "Standard" is already the corpus-wide
+# name for the ordinary way to do something (48 of the 102 rank-standard
+# entities use it). Legacy trick defs deliberately get none: several have real
+# competing strategies. Spec 2026-07-24-segment-default-strat-design.md.
+STANDARD_STRAT = "Standard"
+
 
 # --- trigger clauses -------------------------------------------------------
 

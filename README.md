@@ -44,7 +44,7 @@ tools/scrape_ranks.py`). REST/WS surface:
 | `PUT` | `/api/ranks/standards/{entity}/{strategy}/{rank}/video` | `{"url": "..."}` | Hand-attach an example video to one cutoff (survives seed bumps). |
 | `DELETE` | `/api/ranks/standards/{entity}/{strategy}/{rank}/video` | — | Remove a hand-attached cutoff video. |
 | `POST` | `/api/ranks/standards/{entity}` | `{"strategy": "..."}` | Create a new strategy for an entity. |
-| `DELETE` | `/api/ranks/standards/{entity}/{strategy}` | `?purge=true` (optional) | Without `purge`: clear the strategy's standards (its column persists while the strat is registered or on past attempts). With `purge=true`: fully DELETE a CUSTOM strategy — standards + registration removed, a tombstone hides it from every dropdown; past attempts keep their times, and re-creating the same name restores them (undo). `409` on community-seeded strategies. |
+| `DELETE` | `/api/ranks/standards/{entity}/{strategy}` | `?purge=true` (optional) | Without `purge`: clear the strategy's standards (its column persists while the strat is registered or on past attempts). With `purge=true`: fully DELETE a CUSTOM strategy — standards + registration removed, a tombstone hides it from every dropdown; past attempts keep their times, and re-creating the same name restores them (undo). `409` on community-seeded strategies and on a segment's own default strategy (the seeded castle movements' "Standard" — purging it would leave a card whose picker offers nothing). |
 | `POST` | `/api/ranks/standards/{entity}/reset` | — | Restore entity to seed defaults. |
 | `PUT` | `/api/ranks/mode` | `{"mode": "pb"\|"avg10"\|"avg50"\|"best10"\|"best50"\|"lifetime"}` | Set the global rank mode (409 on unknown). Broadcasts `rank_mode_changed`. |
 

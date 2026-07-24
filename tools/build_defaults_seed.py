@@ -24,7 +24,8 @@ import corpus_legacy        # noqa: E402
 import corpus_movements     # noqa: E402
 import corpus_routes_main   # noqa: E402
 import corpus_routes_stage  # noqa: E402
-from corpus_vocab import CASTLE_MOVEMENT, ROUTE_SCOPED  # noqa: E402
+from corpus_vocab import (CASTLE_MOVEMENT, ROUTE_SCOPED,  # noqa: E402
+                          STANDARD_STRAT)
 
 SEED_VERSION = 2
 OUT = (Path(__file__).resolve().parent.parent
@@ -33,13 +34,15 @@ OUT = (Path(__file__).resolve().parent.parent
 
 def _movement_row(row: dict) -> dict:
     """Expand a compact movement into a seed segment. Every movement is
-    route-scoped and Castle Movement by construction — that uniformity is the
-    whole reason this table is generated rather than hand-written."""
+    route-scoped, Castle Movement, and practiced "Standard" by construction —
+    that uniformity is the whole reason this table is generated rather than
+    hand-written."""
     return {"seed_key": row["seed_key"], "name": row["name"], "enabled": True,
             "start_triggers": [row["start"]],
             "end_triggers": [row["end"]],
             "waypoints": [[clause] for clause in row["via"]],
-            "guards": ROUTE_SCOPED, "category": CASTLE_MOVEMENT}
+            "guards": ROUTE_SCOPED, "category": CASTLE_MOVEMENT,
+            "default_strat": STANDARD_STRAT}
 
 
 def build() -> dict:

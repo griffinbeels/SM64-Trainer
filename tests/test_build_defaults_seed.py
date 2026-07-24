@@ -72,3 +72,19 @@ def test_shipped_seed_reconciles_into_a_fresh_db_cleanly(tmp_path):
               for c in s["candidates"]
               if c["type"] == "segment" and c["segment_id"] == -1]
     assert broken == []
+
+
+def test_every_movement_defaults_to_the_standard_strategy():
+    """There is basically one way to do a castle movement, so every movement
+    ships with "Standard" already picked (spec 2026-07-24-segment-default-strat).
+    Stamped in _movement_row, so the 55 rows cannot disagree with each other.
+
+    The ten hand-written legacy rows deliberately carry NO default: several of
+    them (the Bowser fights, LBLJ) have real competing strategies in the rank
+    standards, and forcing one would be a lie."""
+    seed = build_seed.build()
+    movements = [s for s in seed["segments"] if s["guards"]]
+    legacy = [s for s in seed["segments"] if not s["guards"]]
+    assert len(movements) == 55 and len(legacy) == 10
+    assert {s["default_strat"] for s in movements} == {"Standard"}
+    assert [s["seed_key"] for s in legacy if s.get("default_strat")] == []

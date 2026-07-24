@@ -215,6 +215,16 @@ MIGRATIONS = [
     UPDATE segment_defs SET seed_key='seg:bowser-2'      WHERE name='Bowser 2'        AND seed_key IS NULL;
     UPDATE segment_defs SET seed_key='seg:bowser-3'      WHERE name='Bowser 3'        AND seed_key IS NULL;
     """,
+    # v13 — a definition's own strategy (spec 2026-07-24-segment-default-strat).
+    # NULL = no default, today's behaviour. The 55 castle movements get
+    # 'Standard' through the bundled seed, not from here: they are seeded rows
+    # with seed_dirty=0, so reconcile_defaults refreshes them at startup. No
+    # repair UPDATE, deliberately — writing through a dirtied row is the one
+    # thing the seed_dirty contract exists to prevent, and Reset to default is
+    # the escape hatch for a movement the user has edited.
+    """
+    ALTER TABLE segment_defs ADD COLUMN default_strat TEXT;
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
@@ -384,6 +394,7 @@ class Database:
                  "guards": json.loads(r["guards"]),
                  "category": r["category"],
                  "seed_key": r["seed_key"], "seed_dirty": r["seed_dirty"],
+                 "default_strat": r["default_strat"],
                  "created_utc": r["created_utc"]} for r in rows]
 
     def insert_segment_def(self, name: str, start_triggers: list,
@@ -391,15 +402,17 @@ class Database:
                            created_utc: str, enabled: bool = True,
                            waypoints: list | None = None,
                            category: str | None = None,
-                           seed_key: str | None = None) -> int:
+                           seed_key: str | None = None,
+                           default_strat: str | None = None) -> int:
         with self._lock:
             cur = self._conn.execute(
                 "INSERT INTO segment_defs (name, enabled, start_triggers,"
                 " end_triggers, waypoints, guards, category, seed_key,"
-                " created_utc) VALUES (?,?,?,?,?,?,?,?,?)",
+                " default_strat, created_utc) VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (name, int(enabled), json.dumps(start_triggers),
                  json.dumps(end_triggers), json.dumps(waypoints or []),
-                 json.dumps(guards), category, seed_key, created_utc))
+                 json.dumps(guards), category, seed_key, default_strat,
+                 created_utc))
             self._conn.commit()
             return cur.lastrowid
 
@@ -408,7 +421,7 @@ class Database:
                 "start_triggers": json.dumps, "end_triggers": json.dumps,
                 "waypoints": json.dumps, "guards": json.dumps,
                 "category": lambda v: v, "seed_key": lambda v: v,
-                "seed_dirty": int}
+                "default_strat": lambda v: v, "seed_dirty": int}
         if set(fields) - set(cols):
             raise ValueError(f"unknown fields {sorted(set(fields) - set(cols))}")
         sets, vals = [], []

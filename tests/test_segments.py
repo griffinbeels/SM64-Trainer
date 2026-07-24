@@ -2204,3 +2204,28 @@ def test_unguarded_def_ignores_route_state():
     e.feed(jev(10, "level_changed", 1000, {"from": 5, "to": 16}),
            ctx(level=16, prev_level=5, route_segments=None))
     assert 42 in e.armed_ids()
+
+
+# -- default_strat: the definition's own strategy (spec 2026-07-24) ----------
+
+def test_segment_def_default_strat_defaults_to_none():
+    """Defaulted for the same reason waypoints is: a non-default field would
+    TypeError every existing SegmentDef(...) construction."""
+    assert LBLJ.default_strat is None
+
+
+def test_validate_accepts_a_default_strat():
+    validate_definition({
+        "name": "BoB -> WF",
+        "start_triggers": [{"type": "level_exit", "from": 9}],
+        "end_triggers": [{"type": "level_enter", "to": 24}],
+        "guards": [], "default_strat": "Standard"})  # no raise
+
+
+def test_validate_rejects_a_non_string_default_strat():
+    for bad in (7, "", "   ", []):
+        with pytest.raises(ValueError, match="default_strat"):
+            validate_definition({
+                "name": "x", "start_triggers": [{"type": "spawned"}],
+                "end_triggers": [{"type": "level_enter", "to": 6}],
+                "guards": [], "default_strat": bad})
