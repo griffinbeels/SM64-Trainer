@@ -62,3 +62,11 @@ def test_both_cards_offer_a_strategy_picker():
     for name in ("StarSection", "SegmentSection"):
         assert "StratPicker" in _components(_body(source, name)), \
             f"{name} lost its strategy picker"
+
+
+def test_both_cards_offer_a_failure_compilation():
+    """Failure compilation must ship on stars AND segments (spec 2026-07-23)."""
+    source = PRACTICE_JS.read_text(encoding="utf-8")
+    for name in ("StarSection", "SegmentSection"):
+        assert "FailureCompilation" in _components(_body(source, name)), \
+            f"{name} is missing the failure-compilation control"

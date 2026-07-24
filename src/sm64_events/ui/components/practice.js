@@ -11,6 +11,7 @@ import { StageBanner } from "./stagebanner.js";
 import { Medal, RankBanner } from "./ranks.js";
 import { StandardsPanel } from "./standards.js";
 import { StratPicker } from "./stratpicker.js";
+import { FailureCompilation } from "./failcomp.js";
 
 const html = htm.bind(h);
 
@@ -416,6 +417,8 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
       </button>`}
     </div>`}
     <${HideToggle} hidden=${hidden} showHidden=${showHidden} setShowHidden=${setShowHidden} />
+    <${FailureCompilation}
+        identity=${{ course_id: sec.course_id, star_id: sec.star_id }} />
     <div class="chips">
       ${sec.stats.map((s) => html`
         <span class="chip" title=${s.key}>${s.label} ${s.display ?? "–"}</span>`)}
@@ -510,6 +513,7 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare }) {
       </button>`}
     </div>`}
     <${HideToggle} hidden=${hidden} showHidden=${showHidden} setShowHidden=${setShowHidden} />
+    <${FailureCompilation} identity=${{ segment_id: sec.segment_id }} />
     <div class="chips">
       ${sec.stats.map((s) => html`
         <span class="chip" title=${s.key}>${s.label} ${s.display ?? "–"}</span>`)}
