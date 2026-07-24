@@ -438,13 +438,25 @@ def arm_level(trig: dict) -> int | None:
     return None
 
 
-def start_level_set(start_triggers: list) -> set[int] | None:
-    """Levels this segment can START from, or None when that is unknowable —
-    any location-free start trigger (star_grabbed / key_grabbed without a
-    level / reset_game / ...) means "can start anywhere". The projector
-    retires a segment target on entering a level outside this set (a
-    level-bound segment cannot possibly be the active practice focus from a
-    level it can't start in — user report 2026-07-23); None never retires."""
+def start_level_set(start_triggers: list,
+                     waypoints: list | None = None) -> set[int] | None:
+    """Levels this segment can plausibly occupy while it's the active
+    practice target — its start triggers UNION every waypoint step's
+    clauses — or None when that is unknowable — any location-free clause
+    (star_grabbed / key_grabbed without a level / reset_game / ...) means
+    "can be anywhere". The projector retires a segment target on entering a
+    level outside this set (a level-bound segment cannot possibly be the
+    active practice focus from a level it can't occupy — user report
+    2026-07-23); None never retires.
+
+    Waypoints matter for MULTI-LEVEL segments (spec
+    2026-07-23-default-routes-foundation, fix 2026-07-24): a segment whose
+    sequence re-enters an earlier level (e.g. SL->HMC starts on `level_exit
+    from=10 to=16` but waypoints re-enter SL at level 10) would otherwise
+    have its target wrongly retired the instant a waypoint lands back in a
+    level outside the START set alone — the bug this function's waypoints
+    parameter fixes. Defs with no waypoints (today, all ten seeded defs)
+    reproduce the pre-fix result exactly."""
     if not start_triggers:
         return None
     levels = set()
@@ -453,6 +465,12 @@ def start_level_set(start_triggers: list) -> set[int] | None:
         if level is None:
             return None
         levels.add(level)
+    for step in (waypoints or []):
+        for clause in step:
+            level = arm_level(clause)
+            if level is None:
+                return None
+            levels.add(level)
     return levels
 
 

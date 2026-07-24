@@ -98,8 +98,12 @@ Caveats (hard-won — keep these current):
     the def is level-bound (segments.start_level_set), a level_changed to a
     level outside that set retires the target — the segment cannot possibly
     start from there. A location-free start trigger (star_grabbed, reset_game,
-    ...) or a deleted def keeps the target (None = can start anywhere). No
-    resume stash for segments: the matcher re-arms on return (armed pins the
+    ...) or a deleted def keeps the target (None = can start anywhere).
+    start_level_set is fed the def's WAYPOINTS too (fix 2026-07-24): a
+    multi-level segment's sequence can re-enter a level outside its start
+    set (e.g. SL->HMC re-enters SL mid-sequence), so waypoint levels are
+    unioned in — without this a waypoint landing pulled the target early.
+    No resume stash for segments: the matcher re-arms on return (armed pins the
     UI) and the arena/stage banner re-targets on entry. A segment that
     SUCCEEDS by entering a star stage (its closing event is a level_changed
     into a course-bearing level — MIPS ends in DDD, LBLJ in BITDW) does NOT
@@ -290,9 +294,12 @@ class Projector:
         self._touched = touched if touched is not None else set()
         self._seg_bounds = {d.id: time_bounds(d.guards)
                             for d in (segments or [])}
-        # def id -> levels the segment can START from (None = anywhere);
-        # drives segment-target retirement on level_changed (caveat 12).
-        self._seg_start_levels = {d.id: start_level_set(d.start_triggers)
+        # def id -> levels the segment can occupy — start triggers UNION
+        # waypoints, so a multi-level segment's re-entry level counts too
+        # (None = anywhere); drives segment-target retirement on
+        # level_changed (caveat 12; waypoint fix 2026-07-24).
+        self._seg_start_levels = {d.id: start_level_set(d.start_triggers,
+                                                        d.waypoints)
                                   for d in (segments or [])}
         self.segment_notices: list[dict] = []  # live-broadcast queue, drained by service
         self._runs = RunTracker()

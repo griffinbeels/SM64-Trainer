@@ -1083,6 +1083,34 @@ def test_segment_with_a_location_free_start_trigger_keeps_its_target():
     assert p.target == ("segment", 11)
 
 
+def _sl_hmc_waypoint_segment():
+    from sm64_events.tracking.segments import SegmentDef
+    return SegmentDef(id=20, name="SL->HMC", enabled=True,
+                      start_triggers=[{"type": "level_exit", "from": 10, "to": 16}],
+                      end_triggers=[{"type": "level_enter", "to": 24}],
+                      guards=[],
+                      waypoints=[[{"type": "level_enter", "to": 10}],
+                                 [{"type": "level_exit", "from": 10, "to": 16}]])
+
+
+def test_waypoint_level_keeps_a_multi_level_segment_target():
+    # Fix (whole-branch review 2026-07-24): start_level_set only considered
+    # a def's START triggers, so a multi-level waypoint segment's re-entry
+    # level (SL->HMC starts on level_exit 10->16, then waypoints re-enter
+    # SL at level 10) fell OUTSIDE that set and the practice target was
+    # wrongly retired mid-sequence. This test FAILS before the segments.py
+    # fix (target goes None on the waypoint level_changed) and passes after.
+    p = Projector(segments=[_sl_hmc_waypoint_segment()])
+    p.feed(jev(1, "level_changed", 500, {"from": 10, "to": 16}))   # arms via start trigger
+    p.feed(jev(2, "target_set", 600, {"kind": "segment", "segment_id": 20}))
+    p.feed(jev(3, "level_changed", 700, {"from": 16, "to": 10}))   # waypoint 0: re-enter SL
+    assert p.target == ("segment", 20)                            # RED today: wrongly None
+    p.feed(jev(4, "level_changed", 900, {"from": 10, "to": 16}))   # waypoint 1: exit again
+    assert p.target == ("segment", 20)
+    p.feed(jev(5, "level_changed", 1100, {"from": 16, "to": 8}))   # unrelated level: retires
+    assert p.target is None
+
+
 def test_grab_closing_star_and_segment_orders_star_first_and_target_follows_segment():
     from sm64_events.tracking.segments import SegmentDef
     b3 = SegmentDef(id=10, name="Bowser 3", enabled=True,

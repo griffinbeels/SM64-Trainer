@@ -104,7 +104,11 @@ def build():
         # foundation): refreshes untouched (seed_dirty=0) seeded routes/
         # segments from the bundled corpus, inserts anything missing, and
         # never touches user-edited or user-created rows. Best-effort — a
-        # missing/corrupt seed must never block startup.
+        # missing/corrupt seed must never block startup. KeyError/TypeError
+        # are caught too (not just OSError/ValueError): a structurally-valid
+        # -JSON-but-wrong-shape seed makes reconcile_defaults raise one of
+        # those instead, and a bad seed must never block boot either way
+        # (final-review hardening 2026-07-24).
         from sm64_events.tracking.defaults import reconcile_defaults
         from sm64_events.core.paths import bundled_defaults_seed
         try:
@@ -112,7 +116,7 @@ def build():
             if seed_path is not None:
                 seed = json.loads(seed_path.read_text())
                 reconcile_defaults(db, seed)
-        except (OSError, ValueError):
+        except (OSError, ValueError, KeyError, TypeError):
             logging.getLogger("sm64.tracker").warning(
                 "defaults seed unavailable", exc_info=True)
     service = TrackerService(db, broadcaster, ranks=ranks)

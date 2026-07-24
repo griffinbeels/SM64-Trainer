@@ -93,6 +93,28 @@ def test_start_level_set_classifies_level_bound_defs():
     assert start_level_set([]) is None
 
 
+def test_start_level_set_unions_waypoint_levels():
+    # Fix (whole-branch review 2026-07-24): a multi-level segment's waypoint
+    # steps must count toward "levels this segment can occupy", not just its
+    # start triggers — otherwise a waypoint re-entering an earlier level (SL
+    # -> HMC re-enters SL at 10) reads as "outside the segment" and the
+    # projector wrongly retires the practice target mid-sequence.
+    from sm64_events.tracking.segments import start_level_set
+    assert start_level_set(
+        [{"type": "level_exit", "from": 10, "to": 16}],
+        [[{"type": "level_enter", "to": 10}],
+         [{"type": "level_exit", "from": 10, "to": 16}]]) == {16, 10}
+    # A waypoint clause with an unknowable arm level (level_exit with no
+    # `to`) makes the whole set unknowable, same as a start trigger would.
+    assert start_level_set(
+        [{"type": "level_exit", "from": 10, "to": 16}],
+        [[{"type": "level_exit", "from": 10}]]) is None
+    # Omitting the waypoints argument entirely reproduces today's result —
+    # existing callers (and this def's own defaults) are unaffected.
+    assert start_level_set(
+        [{"type": "level_exit", "from": 10, "to": 16}]) == {16}
+
+
 def test_string_clause_raises_value_error_not_500():
     with pytest.raises(ValueError, match="must be a dict"):
         validate_definition({"name": "x", "start_triggers": ["level_enter"],
