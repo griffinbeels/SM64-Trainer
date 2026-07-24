@@ -64,6 +64,7 @@ class TrackerService:
         self._current_stage = {"course_id": None, "level": None,
                                "area": None, "mode": None}
         self._persisted_runs: list[int] = []
+        self._active_route: int | None = None
 
     def _load_segment_defs(self) -> list[SegmentDef]:
         # inclusion list (the dataclass's own fields), NOT exclusion of
@@ -516,6 +517,20 @@ class TrackerService:
                 if c["type"] == "segment" and c["segment_id"] not in ids:
                     raise LookupError(f"segment {c['segment_id']} not found")
 
+    def _route_member_segments(self, db: Database, route_id: int) -> list[int]:
+        """Ordered, de-duplicated segment ids referenced by a route's steps
+        (LookupError -> 404 if the route doesn't exist). Snapshotted into
+        route_selected so replay never re-reads the mutable routes table."""
+        route = next((r for r in db.routes() if r["id"] == route_id), None)
+        if route is None:
+            raise LookupError(f"route {route_id} not found")
+        ids: list[int] = []
+        for step in route["steps"]:
+            for c in step["candidates"]:
+                if c.get("type") == "segment" and c["segment_id"] not in ids:
+                    ids.append(c["segment_id"])
+        return ids
+
     async def create_route(self, d: dict) -> int:
         db = self._require_db()
         route_logic.validate_route(d)          # structural, BEFORE insert
@@ -539,6 +554,8 @@ class TrackerService:
         if (("steps" in d or "start_condition" in d)
                 and self._projector.armed_route_id() == route_id):
             await self._arm_run(route_id, void_active=True)  # re-arm: void any in-flight run, fresh snapshot
+        if "steps" in d and self._active_route == route_id:
+            await self.select_route(route_id)   # refresh the active route's member snapshot
 
     async def delete_route(self, route_id: int) -> None:
         db = self._require_db()
@@ -550,6 +567,22 @@ class TrackerService:
         journaled. The UI refetches the route list on this event."""
         await self.broadcaster.publish(Event(type="routes_changed", frame=0,
                                               timestamp_utc=_now(), payload={}))
+
+    async def select_route(self, route_id: int | None) -> None:
+        """Journal the active-route arm scope (spec 2026-07-23-default-routes-
+        foundation §5.1). Snapshots member segment ids so replay reconstructs
+        which route was active at each historical event WITHOUT reading the
+        mutable routes table — the same self-containment trick _arm_run uses
+        for run_started. None clears the scope: only a standalone segment
+        target (MatchContext.target_segment) can still arm in_active_route
+        defs. LookupError -> 404 if route_id is given but doesn't exist."""
+        db = self._require_db()
+        seg_ids = self._route_member_segments(db, route_id) if route_id is not None else []
+        self._active_route = route_id
+        await self.publish(Event(type="route_selected", frame=0,
+                                 timestamp_utc=_now(),
+                                 payload={"route_id": route_id,
+                                          "segment_ids": seg_ids}))
 
     # -- rank standards commands -----------------------------------------------
     async def _rank_standards_changed(self) -> None:

@@ -900,6 +900,72 @@ def test_import_rejects_bad_envelope(tmp_path):
                                       "steps": [{"need": 1, "candidates": []}]}))
 
 
+# -- select_route (Default Routes — foundation, Task 5) ------------------------
+
+def test_select_route_journals_member_segment_ids(tmp_path):
+    db, svc = make(tmp_path)
+    lblj = seed_id(db, "LBLJ")
+    rid = asyncio.run(svc.create_route({"name": "Sel", "steps": [
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}))
+    asyncio.run(svc.select_route(rid))
+    ev = db.events()[-1]
+    assert ev.type == "route_selected"
+    assert ev.payload == {"route_id": rid, "segment_ids": [lblj]}
+
+
+def test_select_route_dedupes_repeated_segment_across_steps(tmp_path):
+    db, svc = make(tmp_path)
+    lblj = seed_id(db, "LBLJ")
+    rid = asyncio.run(svc.create_route({"name": "Dup", "steps": [
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]},
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]}]}))
+    asyncio.run(svc.select_route(rid))
+    ev = db.events()[-1]
+    assert ev.payload["segment_ids"] == [lblj]      # one entry, not two
+
+
+def test_select_none_clears_active_route(tmp_path):
+    db, svc = make(tmp_path)
+    rid = asyncio.run(svc.create_route({"name": "R", "steps": [
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}))
+    asyncio.run(svc.select_route(rid))
+    asyncio.run(svc.select_route(None))
+    ev = db.events()[-1]
+    assert ev.type == "route_selected"
+    assert ev.payload == {"route_id": None, "segment_ids": []}
+
+
+def test_select_route_unknown_id_raises(tmp_path):
+    db, svc = make(tmp_path)
+    with pytest.raises(LookupError):
+        asyncio.run(svc.select_route(999))
+
+
+def test_update_active_route_reemits_select_route_with_fresh_members(tmp_path):
+    db, svc = make(tmp_path)
+    lblj = seed_id(db, "LBLJ")
+    rid = asyncio.run(svc.create_route({"name": "R", "steps": [
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]}]}))
+    asyncio.run(svc.select_route(rid))
+    mips = seed_id(db, "MIPS Clip")
+    asyncio.run(svc.update_route(rid, {"steps": [
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]},
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": mips}]}]}))
+    reselects = [e for e in db.events() if e.type == "route_selected"]
+    assert len(reselects) == 2                      # initial select + re-emit on edit
+    assert set(reselects[-1].payload["segment_ids"]) == {lblj, mips}
+
+
+def test_update_route_that_is_not_active_does_not_reemit_select_route(tmp_path):
+    db, svc = make(tmp_path)
+    rid = asyncio.run(svc.create_route({"name": "R", "steps": [
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}))
+    # never selected via svc.select_route
+    asyncio.run(svc.update_route(rid, {"name": "R2"}))
+    assert not any(e.type == "route_selected" for e in db.events())
+
+
 # -- runs (Phase D) -----------------------------------------------------------
 
 def _route_with(db, svc):

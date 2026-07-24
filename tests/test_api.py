@@ -621,6 +621,38 @@ def test_create_route_invalid_is_409(tmp_path):
         assert r.status_code == 409
 
 
+def test_route_select_endpoint(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        lblj = _lblj(db)
+        rid = client.post("/api/routes", json={"name": "R", "steps": [
+            {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]}]}).json()["id"]
+        r = client.post("/api/route/select", json={"route_id": rid})
+        assert r.status_code == 200 and r.json()["ok"] is True
+        ev = db.events()[-1]
+        assert ev.type == "route_selected"
+        assert ev.payload == {"route_id": rid, "segment_ids": [lblj]}
+
+
+def test_route_select_none_clears(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        rid = client.post("/api/routes", json={"name": "R", "steps": [
+            {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}]}).json()["id"]
+        client.post("/api/route/select", json={"route_id": rid})
+        r = client.post("/api/route/select", json={"route_id": None})
+        assert r.status_code == 200
+        ev = db.events()[-1]
+        assert ev.payload == {"route_id": None, "segment_ids": []}
+
+
+def test_route_select_unknown_id_is_404(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.post("/api/route/select", json={"route_id": 9999})
+        assert r.status_code == 404
+
+
 def test_route_export_import_endpoints(tmp_path):
     client, service, db = make_client(tmp_path)
     with client:

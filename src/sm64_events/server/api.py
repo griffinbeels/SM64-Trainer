@@ -149,6 +149,10 @@ class RunSettingsBody(BaseModel):
     start_offset_ms: int
 
 
+class RouteSelectBody(BaseModel):
+    route_id: int | None = None
+
+
 def _http(e: Exception) -> HTTPException:
     if isinstance(e, LookupError):
         return HTTPException(404, str(e))
@@ -313,6 +317,18 @@ def create_api_router(service) -> APIRouter:
     async def delete_route(route_id: int):
         try:
             await service.delete_route(route_id)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True}
+
+    @router.post("/route/select")
+    async def route_select(body: RouteSelectBody):
+        """Set (or clear, route_id=null) the practice-wide active route —
+        the arm scope for `in_active_route`-guarded segments (spec
+        2026-07-23-default-routes-foundation §5). Distinct from
+        POST /run/start, which arms a route for the full-game timer."""
+        try:
+            await service.select_route(body.route_id)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True}

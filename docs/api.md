@@ -146,6 +146,7 @@ route focuses the Practice tab on that route's stars/segments, in route order.
 | `DELETE /api/routes/{route_id}` | Delete a route |
 | `GET /api/routes/{route_id}/export` | The route as portable JSON — embeds the definitions of every segment it references, so it survives an import into a db that lacks them |
 | `POST /api/routes/import?dry_run=true\|false` | Import an exported route. `dry_run=true` previews the resolution (which embedded segments match existing definitions and which would be created) without writing |
+| `POST /api/route/select` `{route_id}` | Set (or clear, `route_id: null`) the practice-wide **active route** — journals `route_selected {route_id, segment_ids}`, snapshotting the route's member segment ids so replay can reconstruct which route was active at any past event. This is the arm scope for segments carrying the `in_active_route` guard; it is distinct from `POST /api/run/start`, which arms a route for the full-game timer. Editing the active route's `steps` re-emits `route_selected` with a fresh member snapshot |
 
 **Runs (full-game timer):** a run is armed by selecting a route (there is no
 Start button) and its clock starts when the route's `start_condition` trigger
