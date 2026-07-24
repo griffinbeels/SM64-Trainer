@@ -131,6 +131,32 @@ function BowserCourseRow({ t, v, stage }) {
     t.refresh();
   }
 
+  // Restore the LEVEL'S last selection on entry — walking into BitDW while you
+  // were practicing reds there means you are practicing reds, so don't make the
+  // player re-pick (request 2026-07-23).
+  //
+  // The memory is DERIVED, not stored: the mutual exclusion above already
+  // records the pick in the pipe segment's `enabled` flag (reds disables it,
+  // no reds enables it), and that lives in the db per definition — so the
+  // memory is automatically per level, survives restarts, and can never
+  // disagree with what the segment is actually tracking. Any pipe enabled ->
+  // "no reds"; none (or none defined) -> "reds".
+  //
+  // Same shape as ArenaRow: it re-applies the SAME functions the buttons call
+  // (one behavior, one implementation), no-ops when that choice is already the
+  // target, and is keyed on the level so a manual pick mid-level sticks until
+  // you leave and come back. The enabled-pipe key makes it converge when the
+  // flag is flipped elsewhere (the Segments tab).
+  const enabledPipe = pipes.find((s) => s.enabled) || null;
+  useEffect(() => {
+    if (enabledPipe) {
+      if (!(tgt.kind === "segment" && tgt.segment_id === enabledPipe.segment_id))
+        pickNoReds(enabledPipe);
+    } else if (!redsActive) {
+      pickReds();
+    }
+  }, [stage.level, enabledPipe && enabledPipe.segment_id]);
+
   return html`<div class="starsec stagebanner">
     <div class="shead"><b>▸ ${course.name}</b>
       <span class="meta">reds (8-coin star) · or the pipe-entry skip (no reds)</span></div>

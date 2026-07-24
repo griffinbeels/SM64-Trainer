@@ -1123,3 +1123,93 @@ def test_purge_segment_strategy_tombstones(tmp_path):
     asyncio.run(svc.purge_strategy("segment:3", "fast"))
     assert "fast" not in svc.ranks.strategies("segment:3")
     assert "fast" in db.get_state("deleted_strats", {}).get("segment:3", [])
+
+
+# -- segment strategies (star parity: set_strat / registration / purge) -------
+
+def test_set_strat_segment_registers_and_activates(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.set_strat_segment(1, "no bljs"))
+    assert svc.strat_by_segment.get(1) == "no bljs"
+    assert db.get_state("strategies", {}).get("seg:1") == ["no bljs"]
+    asyncio.run(svc.set_strat_segment(1, None))       # explicit clear
+    assert svc.strat_by_segment.get(1) is None
+    assert db.get_state("strategies", {}).get("seg:1") == ["no bljs"]
+
+
+def test_set_strat_segment_unknown_id_raises(tmp_path):
+    db, svc = make(tmp_path)
+    with pytest.raises(LookupError):
+        asyncio.run(svc.set_strat_segment(9999, "x"))
+
+
+def test_purge_segment_strategy_clears_active_and_registration(tmp_path):
+    db, svc = make_with_ranks(tmp_path)
+    asyncio.run(svc.set_strat_segment(1, "fast"))
+    asyncio.run(svc.create_rank_strategy("segment:1", "fast"))
+    asyncio.run(svc.purge_strategy("segment:1", "fast"))
+    assert svc.strat_by_segment.get(1) is None         # strat_set null published
+    assert "fast" not in db.get_state("strategies", {}).get("seg:1", [])
+
+
+def test_set_attempt_strat_reclassifies_and_registers(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.set_target(2, 2, strat_tag="Cannonless"))
+    asyncio.run(svc.publish(ev("practice_reset", 1000,
+                               {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350)))
+    aid = db.attempts()[0].id
+    assert db.attempts()[0].strat_tag == "Cannonless"
+    asyncio.run(svc.set_attempt_strat(aid, "Slide Kick"))
+    assert db.attempts()[0].strat_tag == "Slide Kick"
+    assert "attempt_strat_set" in [e.type for e in db.events()]
+    # the name is registered, so it survives in the section dropdown
+    assert "Slide Kick" in db.get_state("strategies", {})["2:2"]
+    # the live target's strategy is untouched — this edits history only
+    assert svc.strat_by_star[(2, 2)] == "Cannonless"
+
+
+def test_set_attempt_strat_null_unlabels_and_is_reversible(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.set_target(2, 2, strat_tag="Cannonless"))
+    asyncio.run(svc.publish(ev("practice_reset", 1000,
+                               {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350)))
+    aid = db.attempts()[0].id
+    asyncio.run(svc.set_attempt_strat(aid, None))
+    assert db.attempts()[0].strat_tag is None
+    asyncio.run(svc.set_attempt_strat(aid, "Cannonless"))
+    assert db.attempts()[0].strat_tag == "Cannonless"
+
+
+def test_set_attempt_strat_moves_the_saved_pb(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.set_target(2, 2, strat_tag="Cannonless"))
+    asyncio.run(svc.publish(ev("practice_reset", 1000,
+                               {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350)))
+    aid = db.attempts()[0].id
+    asyncio.run(svc.save_pb(aid, "igt"))
+    asyncio.run(svc.set_attempt_strat(aid, "Slide Kick"))
+    assert db.current_pb(2, 2, "igt", strat_tag="Slide Kick")["frames"] == 343
+    assert db.current_pb(2, 2, "igt", strat_tag="Cannonless") is None
+
+
+def test_set_attempt_strat_unknown_attempt_raises_lookup_error(tmp_path):
+    db, svc = make(tmp_path)
+    with pytest.raises(LookupError):
+        asyncio.run(svc.set_attempt_strat(999, "Slide Kick"))
+
+
+def test_set_attempt_strat_skips_registration_when_attempt_has_no_entity(tmp_path):
+    """An attempt recorded with no star/segment target has no entity key to
+    register a strategy name against, so reclassifying it must still retag
+    the attempt without writing anything into the strategies dropdown state."""
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(ev("practice_reset", 1500, {"igt_frames_before": 480})))
+    aid = db.attempts()[0].id
+    assert db.attempts()[0].course_id is None                # unassigned attempt
+    asyncio.run(svc.set_attempt_strat(aid, "Slide Kick"))
+    assert db.attempts()[0].strat_tag == "Slide Kick"
+    assert db.get_state("strategies", {}) == {}

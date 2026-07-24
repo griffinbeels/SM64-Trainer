@@ -10,7 +10,7 @@ import { Progress } from "./progress.js";
 import { StageBanner } from "./stagebanner.js";
 import { Medal, RankBanner } from "./ranks.js";
 import { StandardsPanel } from "./standards.js";
-import { StratModal } from "./stratmodal.js";
+import { StratPicker } from "./stratpicker.js";
 
 const html = htm.bind(h);
 
@@ -343,14 +343,6 @@ function TimeFilterChip({ sec, t }) {
 function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
   const [showHidden, setShowHidden] = useState(false);
   const [visible, setVisible] = useState(10);
-  // Bumped to force the strat <select> to remount and re-read sec.last_strat.
-  // A native <select> change updates the DOM immediately, but if the write is
-  // dropped (or cancelled) last_strat stays null, so its `value` prop never
-  // changes and Preact won't reset the element — the dropdown would keep
-  // showing a phantom pick while the border stays red, then revert on the next
-  // unrelated remount. Bumping the key snaps it back to the server's truth.
-  const [stratNonce, setStratNonce] = useState(0);
-  const [showStratModal, setShowStratModal] = useState(false);
   const pb = sec.pb[t.clock];
   const base = showHidden ? sec.attempts
     : sec.attempts.filter((a) => !a.cleared && a.outcome !== "abandoned");
@@ -362,24 +354,6 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
     .sort(comparator(ui.sort, t.clock));
   const shown = rows.slice(0, visible);
   const { focus, pick, clearFocus } = useGraphPick(rows, visible, setVisible);
-
-  async function setStrat(v) {
-    if (v === "__new") { setShowStratModal(true); return; }
-    try {
-      await send("POST", "/api/strat", {
-        course_id: sec.course_id, star_id: sec.star_id,
-        strat_tag: v || null,
-      });
-    } catch (e) {
-      // A dropped write (tracker reconnecting, or a second copy running) must
-      // NOT silently leave a phantom selection that later reverts. Tell the
-      // user and force the dropdown back to the real, still-unset value.
-      window.alert("Couldn't save the strategy — the tracker may be reconnecting "
-        + "or a second copy of it is running. Please try again.");
-      setStratNonce((n) => n + 1);
-    }
-    t.refresh();   // resync the dropdown to the server's truth either way
-  }
 
   async function wipeData() {
     const name = `${sec.course_name} · ${sec.star_name}`;
@@ -402,13 +376,10 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
       <b>${sec.course_name} · ${sec.star_name}</b>
       <a href=${sec.links.ukikipedia} target="_blank">RTA Guide</a>
       ${sec.links.example && html`<a href=${sec.links.example} target="_blank">Example</a>`}
-      <select key=${`strat-${stratNonce}`}
-              class="meta ${sec.last_strat ? "" : "needs-strat"}" value=${sec.last_strat || ""}
-              onchange=${(e) => setStrat(e.target.value)}>
-        <option value="">— no strat —</option>
-        ${sec.strategies.map((s) => html`<option value=${s}>${s}</option>`)}
-        <option value="__new">+ new strat…</option>
-      </select>
+      <${StratPicker} entity=${`star:${sec.course_id}:${sec.star_id}`}
+          identity=${{ course_id: sec.course_id, star_id: sec.star_id }}
+          strategies=${sec.strategies} active=${sec.last_strat}
+          onChanged=${t.refresh} />
       <${PbTag} pb=${pb} mode=${t.clock} rows=${rows} pick=${pick} t=${t} />
       <${TimeFilterChip} sec=${sec} t=${t} />
       <button class="meta" onclick=${wipeData}
@@ -416,10 +387,6 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
           ? "wipe this star's data (all sessions)"
           : "wipe this star's data (current session)"}>clear data</button>
     </div>
-    ${showStratModal ? html`<${StratModal}
-        entity=${`star:${sec.course_id}:${sec.star_id}`} existing=${sec.strategies}
-        onSaved=${(stratName) => { setShowStratModal(false); setStrat(stratName); }}
-        onClose=${() => { setShowStratModal(false); setStratNonce((n) => n + 1); }} />` : null}
     ${sec.rank ? html`<${RankBanner} banner=${sec.rank} />` : null}
     <${Timeline} tl=${sec.timeline} sec=${sec} t=${t} />
     <${Progress} prog=${sec.progress} clock=${t.clock} onPick=${pick} />
@@ -449,11 +416,14 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
 }
 
 // Segment sibling of StarSection — deliberately NOT a generalization:
-// segments are RTA-only (igt is null everywhere), have no links, and no
-// strat selector in v1 (POST /api/strat is star-shaped: course_id+star_id
-// required, no kind — sec.strategies stays display-only until it grows one).
+// segments are RTA-only (igt is null everywhere) and have no links.
+// Everything else must stay at feature parity with the star card; the shared
+// pieces are components (StratPicker, PbTag, TimeFilterChip, …) so a feature
+// can't land on one card and miss the other, and
+// tests/test_ui_section_parity.py fails when it does.
 // Broken sections (definition deleted, history remains) render but drop the
-// timeline/marker editor — markers key off the deleted definition.
+// timeline/marker editor and the strat picker — both key off the deleted
+// definition (POST /api/strat 404s for a segment that no longer exists).
 function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare }) {
   const [showHidden, setShowHidden] = useState(false);
   const [visible, setVisible] = useState(10);
@@ -500,6 +470,10 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare }) {
       <b>⏱ ${sec.name}</b>
       ${armed && html`<span class="chip good">⏱ active</span>`}
       ${sec.broken && html`<span class="meta">definition deleted — history only</span>`}
+      ${!sec.broken && html`<${StratPicker} entity=${`segment:${sec.segment_id}`}
+          identity=${{ kind: "segment", segment_id: sec.segment_id }}
+          strategies=${sec.strategies} active=${sec.last_strat}
+          onChanged=${t.refresh} />`}
       <${PbTag} pb=${sec.pb.rta} mode="rta" rows=${rows} pick=${pick} t=${t} />
       ${!sec.broken && html`<${TimeFilterChip} sec=${sec} t=${t} />`}
       <button class="meta" onclick=${wipeData}

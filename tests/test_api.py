@@ -382,6 +382,32 @@ def test_strat_endpoint_sets_without_moving_target(tmp_path):
         assert "owlless" in view["strategies"]["2:2"]
 
 
+def test_strat_endpoint_accepts_segment_kind(tmp_path):
+    """Segment sibling of the star strat write — the practice card's strat
+    picker is shared by both kinds, so the endpoint must be too."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        client.post("/api/target", json={"kind": "segment", "segment_id": 1})
+        r = client.post("/api/strat", json={"kind": "segment", "segment_id": 1,
+                                            "strat_tag": "no bljs"})
+        assert r.status_code == 200
+        assert service.target == ("segment", 1)          # unmoved
+        assert service.strat_by_segment[1] == "no bljs"
+        # registered, so the picker lists the pick even before any attempt
+        sec = next(s for s in client.get("/api/session").json()["segments"]
+                   if s["segment_id"] == 1)
+        assert sec["last_strat"] == "no bljs"
+        assert "no bljs" in sec["strategies"]
+        # explicit null clears it (same journaled shape as stars)
+        assert client.post("/api/strat", json={
+            "kind": "segment", "segment_id": 1,
+            "strat_tag": None}).status_code == 200
+        assert service.strat_by_segment[1] is None
+        assert client.post("/api/strat", json={
+            "kind": "segment", "segment_id": 9999,
+            "strat_tag": "x"}).status_code == 404
+
+
 def test_strat_endpoint_degraded_503(tmp_path):
     broadcaster = Broadcaster()
     service = TrackerService(None, broadcaster)
@@ -697,3 +723,22 @@ def test_time_filter_rejects_bad_bounds(tmp_path):
         r = client.put("/api/stars/2/2/time-filter",
                        json={"min_frames": -1, "max_frames": None})
         assert r.status_code == 422                     # pydantic ge=0
+
+
+# -- Task 4: POST /api/attempts/{id}/strat endpoint -----------------------------
+
+def test_attempt_strat_endpoint_reclassifies_and_404s_on_unknown(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)
+        aid = db.attempts()[0].id
+        r = client.post(f"/api/attempts/{aid}/strat",
+                        json={"strat_tag": "Slide Kick"})
+        assert r.status_code == 200
+        assert db.attempts()[0].strat_tag == "Slide Kick"
+        # null is a first-class value: it unlabels the attempt
+        assert client.post(f"/api/attempts/{aid}/strat",
+                           json={"strat_tag": None}).status_code == 200
+        assert db.attempts()[0].strat_tag is None
+        assert client.post("/api/attempts/999/strat",
+                           json={"strat_tag": "X"}).status_code == 404

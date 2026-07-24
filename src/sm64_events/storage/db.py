@@ -625,6 +625,20 @@ class Database:
                                    [(i,) for i in attempt_ids])
             self._conn.commit()
 
+    def retag_pbs_for_attempt(self, attempt_id: int,
+                              strat_tag: str | None) -> None:
+        """Follow an attempt's reclassification into the PBs it saved.
+
+        A pbs row snapshots strat_tag at save time and is not derived from
+        the journal, so it cannot self-heal on reproject the way the attempt
+        does — without this the star's PB for the OLD strategy stays a time
+        that was not achieved with it. Keyed on attempt_id, so re-picking the
+        original strategy retags the row back."""
+        with self._lock:
+            self._conn.execute("UPDATE pbs SET strat_tag=? WHERE attempt_id=?",
+                               (strat_tag, attempt_id))
+            self._conn.commit()
+
     def delete_pbs_for_star(self, course_id: int, star_id: int) -> None:
         with self._lock:
             self._conn.execute(

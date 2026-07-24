@@ -48,7 +48,7 @@ def test_vocab_lists_triggers_guards_and_level_enum():
             "key_grabbed", "star_grabbed", "spawned",
             "attempt_anchor"} <= keys
     assert v["levels"]["17"] == "Bowser in the Dark World"
-    assert {g["key"] for g in v["guards"]} == {"prev_level",
+    assert {g["key"] for g in v["guards"]} == {"prev_level", "prev_level_not",
                                                "star_count_min",
                                                "star_count_max",
                                                "min_time", "max_time",
@@ -272,6 +272,44 @@ def test_guards_reevaluate_on_every_arm():
     e.feed(jev(11, "level_changed", 1100, {"from": 16, "to": 6}),
            ctx(level=6, prev_level=16))
     assert e.armed_ids() == {2}
+
+
+def test_prev_level_not_guard_blocks_only_the_named_source():
+    # Negated companion of prev_level (user request 2026-07-23): "reset for
+    # LBLJ, but NOT when I just came out of Bowser in the Dark World".
+    g = GUARDS["prev_level_not"]
+    assert g.phase == "arm"
+    assert g.check({"type": "prev_level_not", "level": 17},
+                   ctx(level=6, prev_level=17)) is False
+    assert g.check({"type": "prev_level_not", "level": 17},
+                   ctx(level=6, prev_level=16)) is True
+    # Unknown history PASSES — the guard's job is to block a KNOWN source,
+    # and failing closed would leave every session's first arm dead
+    # (opposite of prev_level / last_star_*, which fail closed on None).
+    assert g.check({"type": "prev_level_not", "level": 17},
+                   ctx(level=6, prev_level=None)) is True
+
+
+def test_prev_level_not_guard_gates_arming():
+    guarded = SegmentDef(id=2, name="g", enabled=True,
+                         start_triggers=[{"type": "attempt_anchor", "level": 6}],
+                         end_triggers=[{"type": "level_enter", "to": 17}],
+                         guards=[{"type": "prev_level_not", "level": 17}])
+    e = SegmentEngine([guarded])
+    e.feed(jev(10, "practice_reset", 1000, {"level": 6, "mario_acted": True}),
+           ctx(level=6, prev_level=17))          # came from BitDW: no arm
+    assert e.armed_ids() == set()
+    e.feed(jev(11, "practice_reset", 1100, {"level": 6, "mario_acted": True}),
+           ctx(level=6, prev_level=16))
+    assert e.armed_ids() == {2}
+
+
+def test_validate_accepts_prev_level_not():
+    validate_definition({
+        "name": "LBLJ",
+        "start_triggers": [{"type": "attempt_anchor", "level": 6}],
+        "end_triggers": [{"type": "level_enter", "to": 17}],
+        "guards": [{"type": "prev_level_not", "level": 17}]})  # no raise
 
 
 def test_negative_rta_discards_and_disarms():

@@ -74,6 +74,11 @@ def test_spawn_args_pin_av_single_mux_contract(tmp_path, monkeypatch):
     # video pipe is stdin; audio input is a windows named pipe
     assert "pipe:0" in a
     assert any(str(x).startswith(r"\\.\pipe") for x in a)
+    # The ring is the quality CEILING for every clip cut from it: it must
+    # target a picture quality, not a bitrate that undershoots on easy scenes
+    # and clips detail on hard ones (blurry-recording bug, 2026-07-23).
+    assert after("-cq").isdigit()
+    assert after("-b:v") == "0"     # a bitrate target would override -cq
 
 
 def test_parse_segment_csv_relative_to_origin(tmp_path):

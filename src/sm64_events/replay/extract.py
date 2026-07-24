@@ -10,6 +10,10 @@ stream-copy the already-synced audio. No PCM assembly, no per-frame interleave,
 no timestamp reconstruction — those (and the whole two-clock drift class they
 caused) are gone with the PCM-sidecar design.
 
+The re-encode exists ONLY to move the keyframes, so it runs at a constant-
+quality target (`config.py::video_quality_args`): a saved clip must never look
+softer than the ring segments it was cut from.
+
 Why re-encode video but copy audio: `-c copy` can only cut on keyframes (our
 2 s segment boundaries), so frame-accurate edges need a video re-encode; audio
 copies losslessly and the cut lands on the nearest AAC frame (<~21 ms, a fixed
@@ -19,7 +23,10 @@ segment files needs no moov and preserves A/V sync across boundaries.
 Coverage holes (idle-discarded footage) are honoured: the extractor uses only
 the maximal contiguous run of segments containing the span start and marks the
 clip truncated if a hole clips it — concatenating across a hole would silently
-collapse wall-clock time and shear the result.
+collapse wall-clock time and shear the result. A FRAME-SIZE change (the player
+resized the emulator window, so the encoder restarted) breaks a run the same
+way, for the same reason: ffmpeg would rescale the whole clip to the first
+segment's size and squash it if the aspect changed.
 """
 import shutil
 import subprocess
@@ -29,7 +36,8 @@ from datetime import datetime
 from pathlib import Path
 
 from sm64_events.core.paths import bundled_ffmpeg
-from sm64_events.replay.config import ReplayConfig
+from sm64_events.replay.config import (CLIP_MAXRATE, ReplayConfig,
+                                       video_quality_args)
 from sm64_events.replay.ring import SegmentRing
 
 _EDGE_TOLERANCE_S = 0.5   # clamping beyond this marks the clip truncated
@@ -44,18 +52,34 @@ class ClipResult:
     truncated: bool
 
 
-def contiguous_run(segments, s: datetime):
-    """The maximal run of time-contiguous segments that contains `s`.
+def _joinable(prev, seg) -> bool:
+    """Can `seg` be concatenated onto `prev`? Two ways it cannot:
 
-    Segments arrive sorted by utc_start. A join wider than _GAP_TOLERANCE_S is
-    a coverage hole (idle-discarded footage); the run cannot cross it without
-    collapsing wall-clock time, so we keep only the run covering the span
+    TIME — a join wider than _GAP_TOLERANCE_S is a coverage hole (idle-
+    discarded footage); crossing it would collapse wall-clock time.
+
+    SIZE — the player resized the emulator window, so the encoder restarted at
+    a new frame size. ffmpeg would happily concatenate those and rescale
+    everything to the FIRST segment's size (measured: a clip spanning a
+    640x480 -> 1280x960 resize came out entirely 640x480), squashing the
+    picture outright if the aspect changed. Unknown dims (audio chunks, the
+    in-process fallback writer) never force a break."""
+    if (seg.utc_start - prev.utc_end).total_seconds() > _GAP_TOLERANCE_S:
+        return False
+    return not (prev.dims and seg.dims and prev.dims != seg.dims)
+
+
+def contiguous_run(segments, s: datetime):
+    """The maximal run of JOINABLE segments that contains `s` (see _joinable:
+    time-contiguous AND one frame size).
+
+    Segments arrive sorted by utc_start; we keep only the run covering the span
     start. Returns (run, hole_before, hole_after): the segment list plus
-    whether a hole bounds it on either side (→ the clip is truncated). Pure —
+    whether a break bounds it on either side (→ the clip is truncated). Pure —
     unit-tested."""
     runs, cur = [], []
     for seg in segments:
-        if cur and (seg.utc_start - cur[-1].utc_end).total_seconds() > _GAP_TOLERANCE_S:
+        if cur and not _joinable(cur[-1], seg):
             runs.append(cur)
             cur = []
         cur.append(seg)
@@ -146,8 +170,14 @@ class ClipExtractor:
         return ClipResult(path=out_path, duration_s=dur, truncated=truncated)
 
     def _codec_opts(self) -> list[str]:
-        if self._codec == "libx264":
-            return ["-preset", "ultrafast"]
+        """Quality settings for the cut, from the ONE registry in config.py.
+
+        These used to be bare presets with no rate control, which handed the
+        encoder ffmpeg's ~2 Mbps default and threw away the ring segment's
+        detail on the way out (see config.py for the measurement). The cut must
+        be transparent w.r.t. its source: the segment holds all the detail a
+        clip can ever contain."""
+        opts = video_quality_args(self._codec, "offline", CLIP_MAXRATE)
         if self._codec == "h264_nvenc":
-            return ["-preset", "p5", "-bf", "0"]
-        return []
+            opts += ["-bf", "0"]  # keep the cut's pts contract frame-0 aligned
+        return opts

@@ -38,6 +38,13 @@ class SegmentInfo:
     utc_start: datetime
     utc_end: datetime
     size_bytes: int
+    # Encoded frame size. The player is free to resize the emulator window
+    # mid-session, which restarts the encoder at the new size — segments on
+    # either side of that cannot be concatenated (the extractor would silently
+    # rescale, and squash the picture if the aspect changed), so the extractor
+    # treats a dims change like a coverage hole. None = unknown (audio chunks,
+    # the in-process fallback writer): never forces a break.
+    dims: tuple[int, int] | None = None
 
 
 class SegmentRing:

@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from sm64_events.ranks.standards import entity_key  # noqa: E402
 
-SEED_VERSION = 3  # bump whenever the bundled seed should push to existing installs
+SEED_VERSION = 4  # bump whenever the bundled seed should push to existing installs
 
 # Closed vocabulary — update if xcams adds tiers (order = fastest to slowest).
 _RANKS = ["Mario", "Grandmaster", "Master", "Diamond", "Platinum",
@@ -25,6 +25,11 @@ _RANKS = ["Mario", "Grandmaster", "Master", "Diamond", "Platinum",
 
 _SECRET = {"wc": 21, "vc": 22, "mc": 20, "aqua": 24, "wmotr": 23, "pss": 19}
 _BOWSER = {"1n": 5, "2n": 6, "3n": 7, "1x": 8, "2x": 9, "3x": 10}  # No Reds=pipe, Battle=Bowser
+# Reds is NOT a segment — it is the Bowser course's 8-red-coin star (star 0 of
+# courses 16/17/18), the target the stage banner sets for "Reds". Leaving these
+# keys unmapped silently dropped every Bowser reds ladder from the seed
+# (user-reported 2026-07-23); tests pin the bundled seed's Bowser coverage.
+_BOWSER_REDS = {"1r": 16, "2r": 17, "3r": 18}
 
 # Movement segments with no xcams source -> hand-authored RTA defaults (seconds).
 DEFAULT_SEGMENT_LADDERS = {
@@ -100,6 +105,68 @@ def parse_jp_deltas(raw: dict) -> dict:
     return out
 
 
+# Known upstream data bugs, corrected at scrape time: key -> strat -> rank ->
+# (value as published, corrected value), both in seconds. The published value
+# is part of the key so the fixup DISARMS ITSELF the moment xcams edits that
+# cell — we never silently overwrite a number they have since changed.
+#
+# This lives here, not in the user's standards file, because a hand edit to a
+# SEEDED cutoff is overwritten by the next seed reconcile (ranks/standards.py
+# _reconcile: the bundled seed wins for community data).
+_TIME_FIXUPS = {
+    # bow_2r "No Early Ellies": the top three cutoffs are stored with the
+    # minute dropped (1000/1003/1006 cs instead of 7000/7003/7006). Evidence:
+    # the ladder continues Diamond 1:10.76 with 0.03 spacing above it, and the
+    # (Pipe) variant sits a constant +8.30 s from (Star) at every OTHER tier —
+    # which only holds if these three are 1:10.0x / 1:18.3x. xcams renders the
+    # same broken values on its own page (human-confirmed 2026-07-23), so this
+    # is their data, not our parse.
+    "16_2r": {
+        "No Early Ellies (Star)": {"Mario": (10.00, 70.00),
+                                   "Grandmaster": (10.03, 70.03),
+                                   "Master": (10.06, 70.06)},
+        "No Early Ellies (Pipe)": {"Mario": (18.30, 78.30),
+                                   "Grandmaster": (18.33, 78.33),
+                                   "Master": (18.36, 78.36)},
+    },
+}
+
+
+def apply_fixups(parsed: dict) -> dict:
+    """Apply _TIME_FIXUPS to a parsed-standards dict (new dict, inputs intact).
+    A cell is rewritten only when it still holds the exact published value."""
+    out = {key: {strat: dict(ladder) for strat, ladder in strats.items()}
+           for key, strats in parsed.items()}
+    for key, strats in _TIME_FIXUPS.items():
+        for strat, cells in strats.items():
+            ladder = out.get(key, {}).get(strat)
+            if ladder is None:
+                continue                       # upstream renamed or dropped it
+            for rank, (published, corrected) in cells.items():
+                if ladder.get(rank) == published:
+                    ladder[rank] = corrected
+    return out
+
+
+def suspect_dropped_minute(parsed: dict) -> list[tuple[str, str, str]]:
+    """(key, strat, rank) cells that look like a missing minute: the next
+    SLOWER tier is roughly 60 s slower than this one.
+
+    Monotonicity does NOT catch this class — "10.00" sorts happily before
+    "1:10.76" — so the ladder looks fine while its top tiers are unreachable.
+    main() prints these; the tests pin the bundled seed's list empty (post
+    fixup), so the next season's scrape reports a new one instead of shipping
+    it silently."""
+    out = []
+    for key, strats in parsed.items():
+        for strat, ladder in strats.items():
+            present = [(r, ladder[r]) for r in _RANKS if r in ladder]
+            for (rank, fast), (_, slow) in zip(present, present[1:]):
+                if slow - fast > 50 and abs((fast + 60) - slow) < 10:
+                    out.append((key, strat, rank))
+    return out
+
+
 def key_to_entity(key: str) -> str | None:
     stage, _, star = key.partition("_")
     if not stage.isdigit():
@@ -111,6 +178,9 @@ def key_to_entity(key: str) -> str | None:
         c = _SECRET.get(star)
         return entity_key(c, 0) if c else None
     if s == 16:
+        course = _BOWSER_REDS.get(star)
+        if course:
+            return entity_key(course, 0)
         seg = _BOWSER.get(star)
         return entity_key(None, None, seg) if seg else None
     return None
@@ -257,6 +327,7 @@ def strat_clips(catalog_star: dict, cam_blobs: list) -> dict:
 
 
 def build_seed(parsed: dict, catalog=None, cams=None, jp_deltas=None) -> dict:
+    parsed = apply_fixups(parsed)
     cat_by_stage = {i: {s["id"]: s for s in (st or {}).get("starList", [])}
                     for i, st in enumerate(catalog or [])}
     entities = {}
@@ -298,8 +369,12 @@ def fetch_all() -> tuple:
 
 def main() -> None:
     standards, catalog, cams = fetch_all()
-    seed = build_seed(parse_standards(standards), catalog, cams,
+    parsed = parse_standards(standards)
+    seed = build_seed(parsed, catalog, cams,
                       jp_deltas=parse_jp_deltas(standards))
+    for key, strat, rank in suspect_dropped_minute(apply_fixups(parsed)):
+        print(f"WARNING: {key} / {strat} / {rank} looks like a dropped minute "
+              f"(next tier ~60 s slower) — add a _TIME_FIXUPS entry if so")
     out = (Path(__file__).resolve().parent.parent / "src" / "sm64_events"
            / "data" / "rank_standards.seed.json")
     out.parent.mkdir(parents=True, exist_ok=True)

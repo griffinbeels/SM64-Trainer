@@ -1,5 +1,6 @@
 from sm64_events.storage.db import EventRow
-from sm64_events.tracking.projection import Projector, cleared_ids, project, replay
+from sm64_events.tracking.projection import (
+    Projector, cleared_ids, project, replay, strat_overrides)
 
 W = "2026-06-10T12:00:00Z"
 
@@ -1422,3 +1423,71 @@ def test_last_star_guard_star_param_narrows():
         jev(2, "spawned", 1000, {"level": 16}),
     ], segments=[d])
     assert proj.armed_segment_ids() == {1}
+
+
+# -- attempt strat reclassification (spec 2026-07-23) --------------------------
+
+def test_attempt_strat_set_reclassifies_a_star_attempt():
+    events = [
+        jev(1, "target_set", 0, {"course_id": 2, "star_id": 2,
+                                 "strat_tag": "Cannonless"}),
+        jev(2, "practice_reset", 1000, {"igt_frames_before": 0}),
+        star(3, 1350),
+    ]
+    [before] = project(events)
+    # the attempt is keyed by its FIRST event — the anchor, not the grab
+    assert before.id == 2 and before.strat_tag == "Cannonless"
+    [after] = project(events + [
+        jev(4, "attempt_strat_set", 0, {"attempt_id": 2,
+                                        "strat_tag": "Slide Kick"})])
+    assert after.strat_tag == "Slide Kick"
+    assert after.outcome == "success"      # nothing else moved
+
+
+def test_attempt_strat_set_null_unlabels_an_attempt():
+    [a] = project([
+        jev(1, "target_set", 0, {"course_id": 2, "star_id": 2,
+                                 "strat_tag": "Cannonless"}),
+        jev(2, "practice_reset", 1000, {"igt_frames_before": 0}),
+        star(3, 1350),
+        jev(4, "attempt_strat_set", 0, {"attempt_id": 2, "strat_tag": None}),
+    ])
+    assert a.strat_tag is None
+
+
+def test_strat_overrides_last_write_wins():
+    assert strat_overrides([
+        jev(1, "attempt_strat_set", 0, {"attempt_id": 7, "strat_tag": "A"}),
+        jev(2, "attempt_strat_set", 0, {"attempt_id": 7, "strat_tag": "B"}),
+        jev(3, "attempt_strat_set", 0, {"attempt_id": 9, "strat_tag": None}),
+    ]) == {7: "B", 9: None}
+
+
+def test_attempt_strat_set_reclassifies_a_segment_attempt():
+    events = [
+        jev(1, "strat_set", 0, {"kind": "segment", "segment_id": 1,
+                                "strat_tag": "old route"}),
+        jev(2, "level_changed", 900, {"from": 16, "to": 16}),
+        jev(3, "level_changed", 1000, {"from": 16, "to": 6}),    # arms LBLJ
+        jev(4, "level_changed", 1085, {"from": 6, "to": 17}),    # ends it
+    ]
+    [before] = project(events, segments=seg_defs())
+    assert before.segment_id == 1 and before.strat_tag == "old route"
+    [after] = project(events + [
+        jev(5, "attempt_strat_set", 0, {"attempt_id": before.id,
+                                        "strat_tag": "new route"})],
+        segments=seg_defs())
+    assert after.strat_tag == "new route"
+
+
+def test_attempt_strat_set_is_not_an_attempt_boundary():
+    """It must not open, close, or discard anything — it is a pure
+    annotation folded in by the pre-pass."""
+    attempts = project([
+        jev(1, "practice_reset", 1000, {"igt_frames_before": 0}),
+        jev(2, "attempt_strat_set", 0, {"attempt_id": 1, "strat_tag": "X"}),
+        star(3, 1350),
+    ])
+    assert len(attempts) == 1
+    assert attempts[0].id == 1 and attempts[0].rta_frames == 350
+    assert attempts[0].strat_tag == "X"

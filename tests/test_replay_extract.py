@@ -10,13 +10,14 @@ a clear reason when it is absent (the production app always bundles it).
 import shutil
 import subprocess
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import av
 import pytest
 
 from sm64_events.core.paths import bundled_ffmpeg
 from sm64_events.replay.config import ReplayConfig
-from sm64_events.replay.extract import ClipExtractor
+from sm64_events.replay.extract import ClipExtractor, contiguous_run
 from sm64_events.replay.ring import SegmentInfo, SegmentRing
 
 T0 = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
@@ -31,17 +32,21 @@ def _ffmpeg() -> str:
     return ff
 
 
-def build_av_buffer(tmp_path, seconds=8, t0=T0, hole_at=None, hole_s=0.0):
+def build_av_buffer(tmp_path, seconds=8, t0=T0, hole_at=None, hole_s=0.0,
+                    size=(320, 240), name="buf", ring=None):
     """Real combined A+V segments via the ffmpeg binary. Returns a SegmentRing
     of kind='video' segments (audio lives INSIDE each .ts). hole_at (a segment
     index) shifts that segment and all later ones `hole_s` seconds later,
-    simulating an idle-discard coverage hole in the ring."""
+    simulating an idle-discard coverage hole in the ring. `size` + `ring` build
+    a second batch at a different frame size into an existing ring — what a
+    mid-session window resize leaves behind."""
     ff = _ffmpeg()
-    buf = tmp_path / "buf"
+    buf = tmp_path / name
     buf.mkdir(parents=True, exist_ok=True)
     subprocess.run([
         ff, "-hide_banner", "-loglevel", "error",
-        "-f", "lavfi", "-i", f"testsrc=size=320x240:rate=60:duration={seconds}",
+        "-f", "lavfi",
+        "-i", f"testsrc=size={size[0]}x{size[1]}:rate=60:duration={seconds}",
         "-f", "lavfi", "-i", f"sine=frequency=440:sample_rate=48000:duration={seconds}",
         "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
         "-g", "120", "-force_key_frames", "expr:gte(t,n_forced*2)",
@@ -50,13 +55,13 @@ def build_av_buffer(tmp_path, seconds=8, t0=T0, hole_at=None, hole_s=0.0):
         "-reset_timestamps", "1",
         str(buf / "seg_%04d.ts"),
     ], check=True, capture_output=True)
-    ring = SegmentRing(retention_s=None, max_bytes=10**9)
+    ring = ring or SegmentRing(retention_s=None, max_bytes=10**9)
     for i, p in enumerate(sorted(buf.glob("seg_*.ts"))):
         shift = hole_s if (hole_at is not None and i >= hole_at) else 0.0
         start = t0 + timedelta(seconds=i * SEG_S + shift)
         ring.add(SegmentInfo(path=p, kind="video", utc_start=start,
                              utc_end=start + timedelta(seconds=SEG_S),
-                             size_bytes=p.stat().st_size))
+                             size_bytes=p.stat().st_size, dims=size))
     return ring
 
 
@@ -145,6 +150,71 @@ def test_clamps_and_flags_truncation(tmp_path):
     res = ex.extract(ring, T0 - timedelta(seconds=10), T0 + timedelta(seconds=2), out)
     assert res.truncated is True
     assert abs(res.duration_s - 2.0) < 0.2
+
+
+def test_window_resize_breaks_the_run_like_a_hole():
+    """The player may resize PJ64 mid-session; the encoder restarts at the new
+    frame size. ffmpeg would concatenate the two happily and rescale the WHOLE
+    clip to the first segment's size (measured: a cut spanning 640x480 ->
+    1280x960 came out entirely 640x480, and a changed aspect would squash it),
+    so a size change ends a run exactly like a coverage hole does."""
+    def seg(i, dims):
+        start = T0 + timedelta(seconds=i * SEG_S)
+        return SegmentInfo(path=Path(f"s{i}.ts"), kind="video", utc_start=start,
+                           utc_end=start + timedelta(seconds=SEG_S),
+                           size_bytes=1, dims=dims)
+
+    small, big = (640, 480), (1280, 960)
+    segs = [seg(0, small), seg(1, small), seg(2, big), seg(3, big)]
+
+    run, before, after = contiguous_run(segs, T0 + timedelta(seconds=1))
+    assert [s.dims for s in run] == [small, small] and after and not before
+
+    run, before, after = contiguous_run(segs, T0 + timedelta(seconds=5))
+    assert [s.dims for s in run] == [big, big] and before and not after
+
+    # unknown dims (audio chunks, the in-process fallback writer) never split
+    unknown = [seg(0, None), seg(1, None)]
+    assert len(contiguous_run(unknown, T0)[0]) == 2
+
+
+def test_extract_across_a_resize_keeps_one_frame_size(tmp_path):
+    """End-to-end: a clip whose span straddles a resize is clamped to the run
+    containing its start and flagged truncated — never a silently rescaled
+    (or squashed) mix of both sizes."""
+    ring = build_av_buffer(tmp_path, seconds=4, size=(320, 240), name="a")
+    build_av_buffer(tmp_path, seconds=4, t0=T0 + timedelta(seconds=4),
+                    size=(640, 480), name="b", ring=ring)
+    out = tmp_path / "clip.mp4"
+    res = ClipExtractor(cfg=CFG, codec="libx264").extract(
+        ring, T0 + timedelta(seconds=2), T0 + timedelta(seconds=6), out)
+    assert res.truncated is True
+    with av.open(str(out)) as c:
+        stream = c.streams.video[0]
+        assert (stream.width, stream.height) == (320, 240)
+
+
+def test_cut_command_pins_a_quality_target(tmp_path, monkeypatch):
+    """THE blurry-recording regression (2026-07-23): the cut shipped with bare
+    presets and no rate control, so ffmpeg's ~2 Mbps default decided the
+    quality of every saved clip — a 12.5 Mbps ring segment came out at
+    2.1 Mbps (PSNR 38 dB vs its own source). The re-encode exists only to move
+    the keyframes; it must be transparent w.r.t. the segment it cuts."""
+    ring = build_av_buffer(tmp_path, seconds=8)   # real ffmpeg: build first,
+    captured = {}                                 # the stub below is global
+
+    def fake_run(args, **kwargs):
+        captured["args"] = args
+        return subprocess.CompletedProcess(args, 0, b"", b"")
+
+    monkeypatch.setattr("sm64_events.replay.extract.subprocess.run", fake_run)
+    for codec, flag in (("libx264", "-crf"), ("h264_nvenc", "-cq")):
+        ClipExtractor(cfg=CFG, codec=codec).extract(
+            ring, T0, T0 + timedelta(seconds=4), tmp_path / "clip.mp4")
+        args = captured["args"]
+        assert flag in args, f"{codec} cut has no quality target"
+        # audio is a stream copy: re-encoding it would be pure loss
+        assert args[args.index("-c:a") + 1] == "copy"
 
 
 def test_hole_truncates_to_contiguous_run_and_stays_synced(tmp_path):
