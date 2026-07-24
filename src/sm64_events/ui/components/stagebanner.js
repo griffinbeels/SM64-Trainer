@@ -14,14 +14,21 @@
 //   "castle"        : a Castle Inside subarea (lobby/upstairs/basement) -> the
 //                     enabled segments whose start triggers begin in that
 //                     subarea (v.segment_targets, filtered by level+area).
+// EVERY mode renders through the shared PracticeCell (art + rank medal + name
+// + sub-line, identical active/dim/glow/bob styling) — segment rows only wire
+// segment data into it (spec 2026-07-24-segment-icon-cells, pinned by
+// tests/test_star_icons.py). Cell art resolves user override (view's
+// icon_overrides, either mode) > course-mode split-icon > generic gold star;
+// the hover ✎ on any cell opens the IconPicker to set/clear the override.
 // Selection POSTs /api/target (and PUTs /api/segments/{id} for the Bowser
 // enable/disable) -- the same endpoints the rest of the UI uses, so the normal
 // target_changed flow updates the header, the pinned section, and this.
 import { h } from "preact";
-import { useEffect } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
 import { Medal } from "./ranks.js";
+import { IconPicker } from "./iconpicker.js";
 
 const html = htm.bind(h);
 
@@ -55,23 +62,45 @@ function StagePlaceholder() {
 const segsForLevel = (v, level) =>
   (v.segment_targets || []).filter((s) => (s.start_levels || []).includes(level));
 
-// StarRow look flags — flip during the human-audit playtest to taste. Kept as
-// constants (not props) so the call site below stays a single readable line.
-// Each star slot shows PNG art `ui/assets/star_{n}.png`; the slot index is
-// clamped to STAR_IMG_COUNT, so the 100-coin/7th slot reuses star_6.
+// Look flags — flip during the human-audit playtest to taste. Kept as
+// constants (not props) so the cell below stays a single readable line.
+// Generic art is `ui/assets/star_{n}.png`; the slot index is clamped to
+// STAR_IMG_COUNT, so the 100-coin/7th slot reuses star_6.
 const STAR_IMG_COUNT = 6;    // star_1.png .. star_6.png in ui/assets/
 const STAR_DIM_IDLE = true;  // false = every star equally bright
 
 // Course split-icon art (t.starIcons === "course", the settings-drawer
-// "Star icons" preference): ui/assets/star_icons/{prefix}{slot+1}.png, one
-// per main-course star INCLUDING the 100-coin 7th slot. Index = course_id-1
-// (catalog order, pinned against the assets by tests/test_star_icons.py).
+// "Star icons" preference, the DEFAULT): ui/assets/star_icons/
+// {prefix}{slot+1}.png, one per main-course star INCLUDING the 100-coin 7th
+// slot. Index = course_id-1 (catalog order, pinned against the assets by
+// tests/test_star_icons.py).
 const COURSE_ICON_PREFIXES = ["bob", "wf", "jrb", "ccm", "bbh", "hmc", "lll",
                               "ssl", "ddd", "sl", "wdw", "ttm", "thi", "ttc",
                               "rr"];
 
+// Course-mode fallback art for a SEGMENT, by start level: the icon set has
+// real art for the Bowser stages — keyed by both the course level (pipe-entry
+// segments) and its fight arena. Everything else (castle segments) defaults
+// to the generic star unless the user overrides it.
+const LEVEL_ICONS = { 17: "bitdw", 19: "bitfs", 21: "bits",
+                      30: "bitdw", 33: "bitfs", 34: "bits" };
+
 const genericStarSrc = (slot) =>
   `/ui/assets/star_${Math.min(slot + 1, STAR_IMG_COUNT)}.png`;
+
+// Cell art: user override (either mode — an explicit pick always wins) >
+// course-mode art > the generic gold star.
+function resolveIcon(t, ek, courseStem, slot) {
+  const override = ((t.view || {}).icon_overrides || {})[ek];
+  const stem = override
+    || (t.starIcons === "course" ? courseStem : null);
+  return stem ? `/ui/assets/star_icons/${stem}.png` : genericStarSrc(slot);
+}
+
+const segCourseStem = (s) =>
+  (s.start_levels || []).map((lvl) => LEVEL_ICONS[lvl]).find(Boolean) || null;
+const segIconSrc = (t, s) =>
+  resolveIcon(t, `segment:${s.segment_id}`, segCourseStem(s), 0);
 
 // A load failure (missing/corrupt icon) degrades to the generic star art;
 // dropping `courseicon` also removes the opaque-square styling.
@@ -83,13 +112,62 @@ function fallbackToGenericStar(event, slot) {
   }
 }
 
+// Row-level icon-picking state: the ✎ on any cell opens ONE picker per row,
+// hoisted OUT of the cells so clicks inside the modal can never bubble into
+// a cell's target-setting onclick. identity = the /api/icon body + its ek.
+function useIconPicking(t) {
+  const [picking, setPicking] = useState(null);
+  const modal = picking && html`<${IconPicker} identity=${picking}
+      current=${(((t.view || {}).icon_overrides) || {})[picking.ek] || null}
+      onDone=${() => { setPicking(null); t.refresh(); }} />`;
+  return [setPicking, modal];
+}
+
+// THE banner cell — every row mode renders through this, so the approved
+// star-cell anatomy (art / medal slot / name / sub-line) and its
+// active/dim/glow/bob styling stay identical for stars and segments. The ✎
+// is a span-with-role INSIDE the button (stopPropagation keeps it off the
+// cell's pick action); the picker modal itself lives at row level.
+function PracticeCell({ active, armed, iconSrc, fallbackSlot = 0,
+                        rank, name, sub, title, onPick, onEdit }) {
+  const editKey = (keyEvent) => {
+    if (keyEvent.key !== "Enter" && keyEvent.key !== " ") return;
+    keyEvent.preventDefault(); keyEvent.stopPropagation(); onEdit();
+  };
+  return html`<button
+      class="starcell ${active ? "active-star" : ""} ${armed ? "armed" : ""}"
+      title=${title || name} onclick=${onPick}>
+    <span class="starholder">
+      <img class="starimg ${iconSrc.includes("/star_icons/") ? "courseicon" : ""} ${STAR_DIM_IDLE && !active ? "dim" : ""}"
+           src=${iconSrc}
+           onerror=${(e) => fallbackToGenericStar(e, fallbackSlot)}
+           alt="" draggable="false" />
+    </span>
+    <span class="starrank">
+      ${rank ? html`<${Medal} rank=${rank} size=${16} />` : "–"}</span>
+    <span class="starname">${name}</span>
+    <span class="starsub">${sub}</span>
+    <span class="editicon" role="button" tabindex="0" title="Choose icon…"
+          aria-label="Choose icon"
+          onclick=${(e) => { e.stopPropagation(); onEdit(); }}
+          onkeydown=${editKey}>✎</span>
+  </button>`;
+}
+
+// The armed sub-line: the running chip replaces the strat while the
+// segment's start condition is met (timer live NOW).
+const runningChip = html`<span class="chip good">⏱ running</span>`;
+const stratSub = (strat) =>
+  html`<span class="strat ${strat ? "" : "none"}">${strat || "—"}</span>`;
+
 function StarRow({ t, v, stage }) {
+  // hooks first — the early return below must never change the hook count
+  const [setPicking, pickerModal] = useIconPicking(t);
   const course = v.catalog.courses.find((c) => c.id === stage.course_id);
   if (!course) return html`<${StagePlaceholder} />`;
 
   const tgt = v.target || {};
-  const iconPrefix = t.starIcons === "course"
-    ? COURSE_ICON_PREFIXES[stage.course_id - 1] : null;
+  const prefix = COURSE_ICON_PREFIXES[stage.course_id - 1] || null;
   const lastStratFor = (i) =>
     v.last_strat_by_star[`${stage.course_id}:${i}`] || "";
   // Rank under that star's ACTIVE strat (server-graded). Changing the strat
@@ -109,39 +187,29 @@ function StarRow({ t, v, stage }) {
     <div class="shead"><b>▸ ${course.name}</b>
       <span class="meta">tap a star to practice</span></div>
     <div class="starrow">
-      ${course.stars.map((name, i) => {
-        const active = tgt.kind !== "segment"
-          && tgt.course_id === stage.course_id && tgt.star_id === i;
-        const strat = lastStratFor(i);
-        const rank = rankFor(i);
-        return html`<button key=${`${stage.course_id}:${i}`}
-                            class="starcell ${active ? "active-star" : ""}"
-                            title=${name} onclick=${() => pick(i)}>
-          <span class="starholder">
-            <img class="starimg ${iconPrefix ? "courseicon" : ""} ${STAR_DIM_IDLE && !active ? "dim" : ""}"
-                 src=${iconPrefix
-                   ? `/ui/assets/star_icons/${iconPrefix}${i + 1}.png`
-                   : genericStarSrc(i)}
-                 onerror=${(e) => fallbackToGenericStar(e, i)}
-                 alt="" draggable="false" />
-          </span>
-          <span class="starrank">
-            ${rank ? html`<${Medal} rank=${rank} size=${16} />` : "–"}</span>
-          <span class="starname">${name}</span>
-          <span class="starsub">
-            <span class="strat ${strat ? "" : "none"}">${strat || "—"}</span>
-          </span>
-        </button>`;
-      })}
+      ${course.stars.map((name, i) => html`<${PracticeCell}
+        key=${`${stage.course_id}:${i}`}
+        active=${tgt.kind !== "segment"
+          && tgt.course_id === stage.course_id && tgt.star_id === i}
+        iconSrc=${resolveIcon(t, `star:${stage.course_id}:${i}`,
+                              prefix ? `${prefix}${i + 1}` : null, i)}
+        fallbackSlot=${i} rank=${rankFor(i)} name=${name}
+        sub=${stratSub(lastStratFor(i))}
+        onPick=${() => pick(i)}
+        onEdit=${() => setPicking({ course_id: stage.course_id, star_id: i,
+                                    ek: `star:${stage.course_id}:${i}` })} />`)}
     </div>
+    ${pickerModal}
   </section>`;
 }
 
 // BitDW/BitFS/BitS: the "reds" 8-coin star + the level's "no reds" pipe-entry
 // segment(s). Picking flips the pipe segment's enabled flag (mutual exclusion).
 function BowserCourseRow({ t, v, stage }) {
+  // hooks first (useIconPicking + the restore useEffect below) — the early
+  // return must never change the hook count between renders
+  const [setPicking, pickerModal] = useIconPicking(t);
   const course = v.catalog.courses.find((c) => c.id === stage.course_id);
-  if (!course) return html`<${StagePlaceholder} />`;
   const tgt = v.target || {};
   const pipes = segsForLevel(v, stage.level);
   const redsActive = tgt.kind !== "segment"
@@ -192,33 +260,40 @@ function BowserCourseRow({ t, v, stage }) {
     }
   }, [stage.level, enabledPipe && enabledPipe.segment_id]);
 
+  if (!course) return html`<${StagePlaceholder} />`;
+
   return html`<section class="practice-card selector-card stagebanner">
     <div class="shead"><b>▸ ${course.name}</b>
       <span class="meta">reds (8-coin star) · or the pipe-entry skip (no reds)</span></div>
-    <div class="stagebanner-row">
-      <button class="stagebtn ${redsActive ? "active-star" : ""}"
-              onclick=${pickReds}>
-        <span class="stagebtn-name">Reds</span>
-        <span class="stagebtn-sub meta">${course.stars[0] || "8 Red Coins"}</span>
-      </button>
-      ${pipes.map((s) => {
-        const active = tgt.kind === "segment" && tgt.segment_id === s.segment_id;
-        const armed = t.armedSegs.has(s.segment_id);
-        return html`<button key=${`seg:${s.segment_id}`}
-                            class="stagebtn ${active ? "active-star" : ""} ${armed ? "armed" : ""}"
-                            onclick=${() => pickNoReds(s)}>
-          <span class="stagebtn-name">No reds</span>
-          <span class="stagebtn-sub meta">${s.name}</span>
-          ${armed && html`<span class="stagebtn-sub chip good">⏱ running</span>`}
-        </button>`;
-      })}
+    <div class="starrow segcells">
+      <${PracticeCell}
+        active=${redsActive}
+        iconSrc=${resolveIcon(t, `star:${stage.course_id}:0`, null, 0)}
+        rank=${(v.rank_by_star || {})[`${stage.course_id}:0`]}
+        name="Reds" title=${course.stars[0] || "8 Red Coins"}
+        sub=${html`<span class="strat">${course.stars[0] || "8 Red Coins"}</span>`}
+        onPick=${pickReds}
+        onEdit=${() => setPicking({ course_id: stage.course_id, star_id: 0,
+                                    ek: `star:${stage.course_id}:0` })} />
+      ${pipes.map((s) => html`<${PracticeCell} key=${`seg:${s.segment_id}`}
+        active=${tgt.kind === "segment" && tgt.segment_id === s.segment_id}
+        armed=${t.armedSegs.has(s.segment_id)}
+        iconSrc=${segIconSrc(t, s)}
+        rank=${s.rank} name="No reds" title=${s.name}
+        sub=${t.armedSegs.has(s.segment_id) ? runningChip
+          : html`<span class="strat">${s.name}</span>`}
+        onPick=${() => pickNoReds(s)}
+        onEdit=${() => setPicking({ kind: "segment", segment_id: s.segment_id,
+                                    ek: `segment:${s.segment_id}` })} />`)}
     </div>
+    ${pickerModal}
   </section>`;
 }
 
 // Bowser 1/2/3 arena: the single fight segment, auto-selected on entry.
 function ArenaRow({ t, v, stage }) {
   const tgt = v.target || {};
+  const [setPicking, pickerModal] = useIconPicking(t);
   const fights = segsForLevel(v, stage.level);
   const only = fights.length === 1 ? fights[0] : null;
 
@@ -249,23 +324,24 @@ function ArenaRow({ t, v, stage }) {
   return html`<section class="practice-card selector-card stagebanner">
     <div class="shead"><b>▸ Bowser Fight</b>
       <span class="meta">auto-selected — tap to re-arm</span></div>
-    <div class="stagebanner-row">
-      ${fights.map((s) => {
-        const active = tgt.kind === "segment" && tgt.segment_id === s.segment_id;
-        const armed = t.armedSegs.has(s.segment_id);
-        return html`<button key=${`seg:${s.segment_id}`}
-                            class="stagebtn ${active ? "active-star" : ""} ${armed ? "armed" : ""}"
-                            onclick=${() => pick(s)}>
-          <span class="stagebtn-name">${s.name}</span>
-          ${armed && html`<span class="stagebtn-sub chip good">⏱ running</span>`}
-        </button>`;
-      })}
+    <div class="starrow segcells">
+      ${fights.map((s) => html`<${PracticeCell} key=${`seg:${s.segment_id}`}
+        active=${tgt.kind === "segment" && tgt.segment_id === s.segment_id}
+        armed=${t.armedSegs.has(s.segment_id)}
+        iconSrc=${segIconSrc(t, s)}
+        rank=${s.rank} name=${s.name}
+        sub=${t.armedSegs.has(s.segment_id) ? runningChip : stratSub(s.strat)}
+        onPick=${() => pick(s)}
+        onEdit=${() => setPicking({ kind: "segment", segment_id: s.segment_id,
+                                    ek: `segment:${s.segment_id}` })} />`)}
     </div>
+    ${pickerModal}
   </section>`;
 }
 
 function SegmentRow({ t, v, stage }) {
   const tgt = v.target || {};
+  const [setPicking, pickerModal] = useIconPicking(t);
   const segs = (v.segment_targets || []).filter((s) =>
     s.enabled &&
     s.start_areas.some((a) => a[0] === stage.level && a[1] === stage.area));
@@ -279,17 +355,17 @@ function SegmentRow({ t, v, stage }) {
   return html`<section class="practice-card selector-card stagebanner">
     <div class="shead"><b>▸ Castle ${CASTLE_AREA_NAMES[stage.area]}</b>
       <span class="meta">tap a segment to practice</span></div>
-    <div class="stagebanner-row">
-      ${segs.map((s) => {
-        const active = tgt.kind === "segment" && tgt.segment_id === s.segment_id;
-        const armed = t.armedSegs.has(s.segment_id);
-        return html`<button key=${`seg:${s.segment_id}`}
-                            class="stagebtn ${active ? "active-star" : ""} ${armed ? "armed" : ""}"
-                            onclick=${() => pick(s.segment_id)}>
-          <span class="stagebtn-name">${s.name}</span>
-          ${armed && html`<span class="stagebtn-sub chip good">⏱ running</span>`}
-        </button>`;
-      })}
+    <div class="starrow segcells">
+      ${segs.map((s) => html`<${PracticeCell} key=${`seg:${s.segment_id}`}
+        active=${tgt.kind === "segment" && tgt.segment_id === s.segment_id}
+        armed=${t.armedSegs.has(s.segment_id)}
+        iconSrc=${segIconSrc(t, s)}
+        rank=${s.rank} name=${s.name}
+        sub=${t.armedSegs.has(s.segment_id) ? runningChip : stratSub(s.strat)}
+        onPick=${() => pick(s.segment_id)}
+        onEdit=${() => setPicking({ kind: "segment", segment_id: s.segment_id,
+                                    ek: `segment:${s.segment_id}` })} />`)}
     </div>
+    ${pickerModal}
   </section>`;
 }

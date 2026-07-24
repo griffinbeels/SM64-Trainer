@@ -672,11 +672,28 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         # its "no reds" option enables it — the mutual-exclusion with "reds").
         "segment_targets": [
             {"segment_id": d.id, "name": d.name, "enabled": d.enabled,
-             "start_areas": areas, "start_levels": levels}
+             "start_areas": areas, "start_levels": levels,
+             # active strat + its medal for the banner cell, graded by THE
+             # shared path (_strat_rank/_grading_basis, same as rank_by_star
+             # and the route medals) so a cell can never disagree with the
+             # section banner for the same strat.
+             "strat": (seg_strat := masked(
+                 service.strat_by_segment.get(d.id),
+                 (seg_ek := entity_key(None, None, d.id)))),
+             "rank": _strat_rank(
+                 service.ranks, seg_ek, seg_strat,
+                 _grading_basis(
+                     rank_mode,
+                     pbs_by_strat.get(("segment", d.id, "rta", seg_strat)),
+                     attempts_by_seg.get(d.id, []), seg_strat, "rta"))}
             for d in service.segment_defs
             if (areas := _segment_start_areas(d.start_triggers)) is not None
             and (levels := _segment_start_levels(d.start_triggers)) is not None
             and (areas or levels)],
+        # user-picked selector icons: entity_key -> icon stem (ui_state KV,
+        # written by POST /api/icon; ui/components/stagebanner.js resolves
+        # override > mode art > generic star)
+        "icon_overrides": db.get_state("icon_overrides", {}),
     }
 
 

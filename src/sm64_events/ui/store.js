@@ -5,7 +5,7 @@ import { getJSON, send } from "./api.js";
 const REFRESH_ON = new Set(["attempt_completed", "attempts_invalidated",
   "pb_saved", "pb_undone", "session_started", "target_changed",
   "star_collected", "strat_set", "rank_standards_changed",
-  "rank_mode_changed"]);
+  "rank_mode_changed", "icons_changed"]);
 const RUN_REFRESH_ON = new Set(["run_started", "run_progress",
   "run_finished", "run_aborted", "game_reset"]);
 
@@ -13,11 +13,13 @@ export function useTracker() {
   const [view, setView] = useState(null);
   const [clock, setClock] = useState(localStorage.getItem("clock") || "igt");
   const [scope, setScope] = useState(localStorage.getItem("scope") || "session");
-  // Star-selector art: "classic" = the generic gold star, "course" = each
-  // star's split-icon (ui/assets/star_icons/). Client display preference,
-  // so localStorage like clock/scope — not server state.
+  // Star-selector art: "course" (default) = each star's split-icon
+  // (ui/assets/star_icons/), "classic" = the generic gold star. Client
+  // display preference, so localStorage like clock/scope — not server
+  // state. Per-entity icon OVERRIDES are server state (view's
+  // icon_overrides) and win in either mode.
   const [starIcons, setStarIcons] = useState(
-    localStorage.getItem("sm64.starIcons") || "classic");
+    localStorage.getItem("sm64.starIcons") || "course");
   // Dust-trick visibility: the rollout/jump counts on attempt rows plus the
   // dust stats in the stat menu and chip row. Default OFF while detection is
   // being tuned (2026-07-24). Client display preference like starIcons.
