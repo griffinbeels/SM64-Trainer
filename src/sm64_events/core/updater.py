@@ -56,7 +56,7 @@ _CHECK_TTL_S = 3600.0
 class UpdateInfo:
     version: str
     notes: str          # the offered release alone; == releases[0].notes,
-                         # enforced by construction (see check_for_update)
+                        # enforced by construction (see check_for_update)
     html_url: str
     zip_url: str
     zip_sha_url: str
