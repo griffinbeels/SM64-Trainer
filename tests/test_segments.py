@@ -1,4 +1,5 @@
 import re
+from dataclasses import replace
 
 import pytest
 
@@ -135,9 +136,12 @@ PIPE = SegmentDef(id=5, name="BitDW Pipe Entry", enabled=True,
                   waypoints=[], guards=[])
 
 
-def ctx(level=None, prev_level=None, num_stars=None, area=None):
+def ctx(level=None, prev_level=None, num_stars=None, area=None,
+        route_segments=None, target_segment=None):
     return MatchContext(level=level, prev_level=prev_level,
-                        num_stars=num_stars, area=area)
+                        num_stars=num_stars, area=area,
+                        route_segments=route_segments,
+                        target_segment=target_segment)
 
 
 def lblj_arm(engine, jid=10, frame=1000):
@@ -2130,3 +2134,43 @@ def test_waypoint_session_started_disarms_silently():
     assert e.armed_ids() == set()
     assert notices == [{"event": "segment_disarmed", "segment_id": 99,
                         "name": "SL->HMC", "frame": 0}]
+
+
+# ---------------------------------------------------------------------------
+# Task 4 (spec 2026-07-23-default-routes-foundation): route-scoped arming
+# ---------------------------------------------------------------------------
+
+def _guarded_move():
+    return SegmentDef(id=42, name="CCM->BitDW", enabled=True,
+                      start_triggers=[{"type": "level_exit", "from": 5}],
+                      end_triggers=[{"type": "level_enter", "to": 17}],
+                      waypoints=[], guards=[{"type": "in_active_route"}])
+
+
+def test_guarded_def_does_not_arm_without_route():
+    e = SegmentEngine([_guarded_move()])
+    e.feed(jev(10, "level_changed", 1000, {"from": 5, "to": 16}),  # exit CCM
+           ctx(level=16, prev_level=5, route_segments=None))
+    assert 42 not in e.armed_ids()
+
+
+def test_guarded_def_arms_when_in_active_route():
+    e = SegmentEngine([_guarded_move()])
+    e.feed(jev(10, "level_changed", 1000, {"from": 5, "to": 16}),
+           ctx(level=16, prev_level=5, route_segments=frozenset({42})))
+    assert 42 in e.armed_ids()
+
+
+def test_guarded_def_arms_as_target_segment():
+    e = SegmentEngine([_guarded_move()])
+    e.feed(jev(10, "level_changed", 1000, {"from": 5, "to": 16}),
+           ctx(level=16, prev_level=5, route_segments=None, target_segment=42))
+    assert 42 in e.armed_ids()
+
+
+def test_unguarded_def_ignores_route_state():
+    d = replace(_guarded_move(), guards=[])
+    e = SegmentEngine([d])
+    e.feed(jev(10, "level_changed", 1000, {"from": 5, "to": 16}),
+           ctx(level=16, prev_level=5, route_segments=None))
+    assert 42 in e.armed_ids()

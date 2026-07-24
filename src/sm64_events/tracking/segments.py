@@ -531,10 +531,10 @@ GUARDS: dict[str, GuardType] = {g.key: g for g in [
               and (p.get("star") is None
                    or ctx.last_star_attempted[1] == p["star"])),
     # Arm-gate scoping (spec 2026-07-23-default-routes-foundation): a stub-check
-    # guard READ DECLARATIVELY by the engine's arm gate (see
-    # SegmentEngine._route_allows), exactly as min_time/max_time are read
-    # declaratively by projection — the standard check() never gates arming
-    # (it can't see the def id). A def carrying this arms only inside the
+    # guard READ DECLARATIVELY by the engine's arm gate (see the module-level
+    # _route_allows), exactly as min_time/max_time are read declaratively by
+    # projection — the standard check() never gates arming (it can't see the
+    # def id). A def carrying this arms only inside the
     # active route or as the standalone segment target. Opt-in: the 10 existing
     # defs omit it and are unaffected.
     GuardType("in_active_route", "Only in the active route",
@@ -590,6 +590,17 @@ def time_bounds(guards: list) -> tuple[int | None, int | None]:
         elif g.get("type") == "max_time":
             hi = g["frames"]
     return lo, hi
+
+
+def _route_allows(d, ctx) -> bool:
+    """in_active_route gate, read declaratively by the arm phase (the
+    standard guard check() can't see the def id — see the guard's own
+    comment). Unguarded defs always pass; a guarded def arms only inside the
+    active route's member set or as the standalone segment target."""
+    if not any(g.get("type") == "in_active_route" for g in d.guards):
+        return True
+    return (d.id in (ctx.route_segments or frozenset())
+            or d.id == ctx.target_segment)
 
 
 def validate_definition(d: dict) -> None:
@@ -943,6 +954,7 @@ class SegmentEngine:
             # match here re-arms normally, same as any other def.
             if starts and (not echo_invisible or relocation_arm) \
                     and not (d.waypoints and d.id in self._armed) \
+                    and _route_allows(d, ctx) \
                     and all(GUARDS[g["type"]].check(g, ctx)
                             for g in d.guards
                             if GUARDS[g["type"]].phase == "arm"):

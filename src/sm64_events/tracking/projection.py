@@ -306,6 +306,11 @@ class Projector:
         # attempt happened physically, validity is a separate judgment.
         self._last_star_grabbed: tuple[int, int] | None = None
         self._last_star_attempted: tuple[int, int] | None = None
+        # Active route's member segment ids (spec
+        # 2026-07-23-default-routes-foundation), set by a journaled
+        # route_selected event and fed into MatchContext for the
+        # in_active_route arm guard. None = no active route.
+        self._route_segments: frozenset | None = None
         self._open = None  # EventRow of the open attempt's anchor
         self._open_acted = False  # mario_acted seen since the last anchor; only meaningful while _open is set
         self._level: int | None = None   # gCurrLevelNum per level_changed; None = unknown (legacy journals)
@@ -361,10 +366,27 @@ class Projector:
             self._num_stars = None  # file can change at the title screen: unknown until the next grab
             self._last_star_grabbed = None
             self._last_star_attempted = None
+        if ev.type == "route_selected":
+            # Journaled route activation (spec 2026-07-23-default-routes-
+            # foundation): the route's member segment ids scope the
+            # in_active_route arm guard. Empty list -> None, same "no active
+            # route" sentinel as a fresh Projector. Closes no attempt — falls
+            # through _dispatch's default no-op.
+            ids = ev.payload.get("segment_ids") or []
+            self._route_segments = frozenset(ids) if ids else None
+        # A segment target (set via target_set or a segment success) is ALSO
+        # in-route by definition — practicing a segment directly must arm it
+        # even when no route_selected has fired (or a different route is
+        # active), same as the last_star_* guards read _dispatch's just-moved
+        # target.
+        target_seg = (self.target[1] if self.target
+                      and self.target[0] == "segment" else None)
         ctx = MatchContext(level=self._level, prev_level=prev_level,
                            num_stars=self._num_stars, area=self._area,
                            last_star_grabbed=self._last_star_grabbed,
-                           last_star_attempted=self._last_star_attempted)
+                           last_star_attempted=self._last_star_attempted,
+                           route_segments=self._route_segments,
+                           target_segment=target_seg)
         seg_closed, self.segment_notices = self._segments.feed(ev, ctx)
         for a in seg_closed:
             # same first-event-id cleared keying as _build (caveat 2/11)

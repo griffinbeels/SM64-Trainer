@@ -1192,6 +1192,42 @@ def test_game_reset_resets_star_count_knowledge_for_guards():
     assert all(a.segment_id != 2 for a in closed)
 
 
+# -- route-scoped arming (spec 2026-07-23-default-routes-foundation) -----------
+
+def test_route_selected_threads_into_matchcontext():
+    # A guarded segment does NOT arm on its trigger before any route_selected
+    # has fired; the SAME arming event, replayed after route_selected names
+    # this def's id, arms it. Proves the Projector actually threads
+    # self._route_segments into the MatchContext it builds for the engine.
+    from sm64_events.tracking.segments import SegmentDef
+    guarded = SegmentDef(id=42, name="CCM->BitDW", enabled=True,
+                        start_triggers=[{"type": "level_exit", "from": 5}],
+                        end_triggers=[{"type": "level_enter", "to": 17}],
+                        guards=[{"type": "in_active_route"}])
+    p = Projector(segments=[guarded])
+    p.feed(jev(1, "level_changed", 1000, {"from": 5, "to": 16}))
+    assert 42 not in p.armed_segment_ids()
+    p.feed(jev(2, "route_selected", 0, {"route_id": 1, "segment_ids": [42]}))
+    p.feed(jev(3, "level_changed", 2000, {"from": 5, "to": 16}))
+    assert 42 in p.armed_segment_ids()
+
+
+def test_segment_target_satisfies_in_active_route_without_a_route_selected():
+    # Practicing a guarded segment directly (target_set) also satisfies
+    # in_active_route with no route_selected ever fired: the Projector
+    # derives target_segment from the live target, not from
+    # self._route_segments. Proves that half of the ctx-build wiring too.
+    from sm64_events.tracking.segments import SegmentDef
+    guarded = SegmentDef(id=42, name="g", enabled=True,
+                        start_triggers=[{"type": "level_exit", "from": 5}],
+                        end_triggers=[{"type": "level_enter", "to": 17}],
+                        guards=[{"type": "in_active_route"}])
+    p = Projector(segments=[guarded])
+    p.feed(jev(1, "target_set", 0, {"kind": "segment", "segment_id": 42}))
+    p.feed(jev(2, "level_changed", 1000, {"from": 5, "to": 16}))
+    assert 42 in p.armed_segment_ids()
+
+
 def test_run_starts_on_configured_level_enter(tmp_path):
     from sm64_events.tracking.projection import replay
     from sm64_events.storage.db import Database
