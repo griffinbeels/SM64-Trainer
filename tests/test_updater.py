@@ -283,6 +283,7 @@ def test_status_carries_the_release_stack(tmp_path):
     assert [row["version"] for row in st["releases"]] == ["2.0.0", "1.5.0"]
     assert st["releases"][0]["date"] == "2026-07-23"
     assert st["releases"][1]["notes"] == "middle notes"
+    assert st["releases"][1]["date"] == "2026-07-10"
 
 
 def test_status_manifest_tamper_means_no_update(tmp_path):

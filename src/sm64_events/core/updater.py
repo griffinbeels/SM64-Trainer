@@ -11,9 +11,8 @@ real install. Version comparison, the shared request builder, and patch-notes
 extraction live one layer down in core/release_feed.py. The stateful
 UpdateService orchestrates them, caches the check (manifest + plan included),
 tracks download progress, and persists the 'skipped' version. Everything is
-guarded on is_frozen():
-from source it is inert (update_available is always False) so a dev tree is
-never swapped.
+guarded on is_frozen(): from source it is inert (update_available is always
+False) so a dev tree is never swapped.
 
 A release is only ever offered when ALL FOUR update assets are present
 (SM64Trainer-full.zip + manifest.json + both .sha256 companions) and the
