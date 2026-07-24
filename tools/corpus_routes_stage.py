@@ -7,9 +7,9 @@ Content is transcribed from
 docs/superpowers/specs/2026-07-24-default-routes-corpus-sources.md
 §"Per-course ordered star lists".
 """
-from sm64_events.memory.addresses import star_name
+from sm64_events.memory.addresses import course_name, star_name
 
-from corpus_vocab import STAGE_RTA, route, stars
+from corpus_vocab import STAGE_RTA, route, stars, sub
 
 # (slug, display name, course_id, level_id, [star ids])
 # An int is one star; a TUPLE is one step collecting BOTH (the "+ 100 Coins"
@@ -81,7 +81,10 @@ def _step(abbrev, course, entry):
 # "collect these N stars" step. That is the point — the order was never
 # enforceable and the route's content is the star SET plus the clock starting
 # on the painting.
-ROUTES = [route(f"route:stage-{slug}", name, STAGE_RTA,
+# Sub-category per COURSE, so the Stage RTA group nests one dropdown per
+# stage rather than listing 35 routes flat. The name comes from
+# addresses.COURSE_NAMES, so a course rename can never leave a stale group.
+ROUTES = [route(f"route:stage-{slug}", name, sub(STAGE_RTA, course_name(course)),
                 [_step(name.split(" — ")[0], course, entry) for entry in order],
                 start_condition={"type": "level_enter", "to": level})
           for slug, name, course, level, order in STAGES]

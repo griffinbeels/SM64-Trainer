@@ -1021,9 +1021,25 @@
   }
   .route-cat-header > .ui-icon { transition: transform .12s ease; }
   .route-cat-header.shut > .ui-icon { transform: rotate(-90deg); }
+  /* Sub-category: one nesting level in, lighter than its parent so the
+     hierarchy reads at a glance without a second border. */
+  .route-subcat { display: grid; align-content: start; gap: .4rem; }
+  .route-cat-header.sub {
+    padding-left: 1.1rem; font-size: .68rem;
+    text-transform: none; letter-spacing: .02em;
+  }
+  .route-cat-header.sub b { font-size: .72rem; font-weight: 600; }
+  .route-subcat .route-list-item { margin-left: .55rem; }
+  /* Two columns, not three: the library column is 240-300px, and three
+     icon+label buttons overflowed the card (live report 2026-07-24 — "Delete"
+     hung past the edge). The third wraps to its own row. min-width:0 on the
+     buttons is the belt — a long label truncates instead of escaping. */
   .library-actions {
-    display: grid; grid-template-columns: repeat(3, 1fr); gap: .4rem;
+    display: grid; grid-template-columns: 1fr 1fr; gap: .4rem;
     margin-top: auto; padding-top: .65rem; border-top: 1px solid var(--border-soft);
+  }
+  .library-actions > button {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .route-workspace { min-width: 0; display: grid; gap: 12px; }
   .route-empty-card { min-height: 520px; }

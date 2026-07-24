@@ -13,6 +13,7 @@ import { ClauseRow } from "./segments.js";
 import { Medal } from "./ranks.js";
 import { Icon } from "./icons.js";
 import { PageState } from "./states.js";
+import { Modal } from "./modal.js";
 
 const html = htm.bind(h);
 const pct = (r) => `${Math.round((r ?? 0) * 100)}%`;
@@ -26,28 +27,115 @@ const UNCATEGORISED = "Uncategorized";
 const LEAD_CATEGORIES = [MAIN_CATEGORY, STAGE_CATEGORY];
 const COLLAPSED_KEY = "sm64.routeCatsCollapsed";
 
-const categoryOf = (r) => r.category || UNCATEGORISED;
+// A category is a PATH: "Main Categories/16 Star". One free-text field still
+// holds it (no migration, no second column, any depth), and the library nests
+// a collapsible group per level. A route with no separator is simply
+// top-level. A category containing "/" would be ambiguous — don't make one.
+const CATEGORY_SEP = "/";
+const splitCategory = (c) => (c || UNCATEGORISED).split(CATEGORY_SEP)
+  .map((part) => part.trim()).filter(Boolean);
+const categoryOf = (r) => splitCategory(r.category)[0] || UNCATEGORISED;
+const subCategoryOf = (r) => splitCategory(r.category)[1] || null;
 
-function categoryNames(routes) {
-  return [...new Set(routes.map(categoryOf))].filter((c) => c !== UNCATEGORISED);
+const categoryNames = (routes) =>
+  [...new Set(routes.map(categoryOf))].filter((c) => c !== UNCATEGORISED).sort();
+
+const subCategoryNames = (routes, top) =>
+  [...new Set(routes.filter((r) => categoryOf(r) === top)
+    .map(subCategoryOf).filter(Boolean))].sort();
+
+// Numeric-aware so "0 Star" < "1 Star" < "16 Star" < "70 Star" < "120 Star"
+// rather than the lexicographic 0, 1, 120, 16, 70.
+const byName = (a, b) =>
+  a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+
+function rankTop(name) {
+  const lead = LEAD_CATEGORIES.indexOf(name);
+  if (lead !== -1) return [0, lead];
+  return name === UNCATEGORISED ? [2, 0] : [1, 0];
 }
 
+/** [[top, [[sub|null, routes]]]] — ordered, seeded groups first. */
 function groupByCategory(routes) {
-  const groups = new Map();
+  const tops = new Map();
   for (const r of routes) {
-    const key = categoryOf(r);
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(r);
+    const top = categoryOf(r);
+    if (!tops.has(top)) tops.set(top, new Map());
+    const sub = subCategoryOf(r);
+    const subs = tops.get(top);
+    if (!subs.has(sub)) subs.set(sub, []);
+    subs.get(sub).push(r);
   }
-  const rank = (name) => {
-    const lead = LEAD_CATEGORIES.indexOf(name);
-    if (lead !== -1) return [0, lead, ""];
-    return name === UNCATEGORISED ? [2, 0, ""] : [1, 0, name.toLowerCase()];
-  };
-  return [...groups.entries()].sort(([a], [b]) => {
-    const [ga, la, na] = rank(a); const [gb, lb, nb] = rank(b);
-    return ga - gb || la - lb || na.localeCompare(nb);
-  });
+  return [...tops.entries()]
+    .sort(([a], [b]) => {
+      const [ga, la] = rankTop(a); const [gb, lb] = rankTop(b);
+      return ga - gb || la - lb || byName(a, b);
+    })
+    .map(([top, subs]) => [top, [...subs.entries()].sort(([a], [b]) =>
+      // ungrouped routes sit above the sub-groups
+      a === null ? -1 : b === null ? 1 : byName(a, b))]);
+}
+
+const routeCount = (subs) => subs.reduce((n, [, rs]) => n + rs.length, 0);
+
+const NEW_OPTION = "__new__";   // can't collide with a real category name
+
+/** Category + sub-category picker. Each level offers the existing names plus
+ *  "New…", so a user can file a route under an existing group or invent one
+ *  without leaving the dialog. Resolves to a path string, or "" for none. */
+function CategoryModal({ routes, current, onCancel, onSave }) {
+  const parts = current ? splitCategory(current) : [];
+  const tops = categoryNames(routes);
+  const [top, setTop] = useState(parts[0] || tops[0] || "");
+  const [topNew, setTopNew] = useState("");
+  const [sub, setSub] = useState(parts[1] || "");
+  const [subNew, setSubNew] = useState("");
+
+  const creatingTop = top === NEW_OPTION;
+  const creatingSub = sub === NEW_OPTION;
+  const resolvedTop = (creatingTop ? topNew : top).trim();
+  const resolvedSub = (creatingSub ? subNew : sub).trim();
+  const path = !resolvedTop ? ""
+    : resolvedSub ? `${resolvedTop}${CATEGORY_SEP}${resolvedSub}` : resolvedTop;
+  const subs = subCategoryNames(routes, resolvedTop);
+
+  return html`<${Modal} title="Choose a category" onClose=${onCancel}
+    footer=${html`<div class="modal-actions">
+      <button onclick=${onCancel}>Cancel</button>
+      <button class="primary-button" onclick=${() => onSave(path)}>Save</button>
+    </div>`}>
+    <label class="field">
+      <span>Category</span>
+      <select value=${top} onchange=${(e) => { setTop(e.target.value);
+                                               setSub(""); }}>
+        <option value="">— none —</option>
+        ${tops.map((c) => html`<option value=${c}>${c}</option>`)}
+        <option value=${NEW_OPTION}>New category…</option>
+      </select>
+    </label>
+    ${creatingTop ? html`<label class="field">
+      <span>New category name</span>
+      <input value=${topNew} autofocus placeholder="e.g. Practice drills"
+        oninput=${(e) => setTopNew(e.target.value)} />
+    </label>` : null}
+
+    <label class="field">
+      <span>Sub-category <small class="meta">optional</small></span>
+      <select value=${sub} disabled=${!resolvedTop}
+        onchange=${(e) => setSub(e.target.value)}>
+        <option value="">— none —</option>
+        ${subs.map((c) => html`<option value=${c}>${c}</option>`)}
+        <option value=${NEW_OPTION}>New sub-category…</option>
+      </select>
+    </label>
+    ${creatingSub ? html`<label class="field">
+      <span>New sub-category name</span>
+      <input value=${subNew} placeholder="e.g. 16 Star"
+        oninput=${(e) => setSubNew(e.target.value)} />
+    </label>` : null}
+
+    <p class="meta">Filed under <b>${path || "Uncategorized"}</b></p>
+  <//>`;
 }
 
 function loadCollapsed() {
@@ -257,28 +345,32 @@ export function Routes({ t }) {
   const removeStep = (i) => saveSteps(selected.steps.filter((_, j) => j !== i));
   const addStep = (c) => saveSteps([...selected.steps, { need: 1, candidates: [c] }]);
 
-  // Category is free text on the route row; the library groups by it. Asking
-  // with the existing categories listed is what keeps them from fragmenting
-  // into "Main Categories" / "main categories" / "Main" over time.
-  function askCategory(current) {
-    const known = categoryNames(routes || []);
-    const answer = window.prompt(
-      `Category? Existing: ${known.join(", ") || "(none yet)"}\n`
-      + "Type a new name to create a group, or leave blank for Uncategorized.",
-      current || known[0] || MAIN_CATEGORY);
-    if (answer === null) return undefined;      // cancelled
-    return answer.trim() || null;
-  }
+  // Category is a free-text PATH on the route row; the library nests groups by
+  // it. The modal offers the existing names at each level, which is what keeps
+  // them from fragmenting into "Main Categories"/"main categories"/"Main".
+  // `pendingName` non-null = we're mid-create and the modal's Save also
+  // creates the route; otherwise Save re-files the selected route.
+  const [catFor, setCatFor] = useState(null);   // null | {name?, current}
 
   async function createRoute() {
     const name = window.prompt("New route name:");
     if (!name) return;
-    const category = askCategory(null);
-    if (category === undefined) return;
-    try { const out = await send("POST", "/api/routes",
-                                 { name, steps: [], category });
-      await loadRoutes(); setSelId(out.id); }
-    catch (e) { setErr(String(e)); }
+    setCatFor({ name, current: null });
+  }
+  async function saveCategory(path) {
+    const pending = catFor;
+    setCatFor(null);
+    const category = path || null;
+    try {
+      if (pending.name) {
+        const out = await send("POST", "/api/routes",
+                               { name: pending.name, steps: [], category });
+        await loadRoutes(); setSelId(out.id);
+      } else {
+        await send("PUT", `/api/routes/${selId}`, { category });
+        await loadRoutes();
+      }
+    } catch (e) { setErr(String(e)); }
   }
   async function renameRoute() {
     const name = window.prompt("Rename route:", selected.name);
@@ -286,12 +378,8 @@ export function Routes({ t }) {
     try { await send("PUT", `/api/routes/${selId}`, { name }); await loadRoutes(); }
     catch (e) { setErr(String(e)); }
   }
-  async function recategoriseRoute() {
-    const category = askCategory(selected.category);
-    if (category === undefined || category === (selected.category || null)) return;
-    try { await send("PUT", `/api/routes/${selId}`, { category }); await loadRoutes(); }
-    catch (e) { setErr(String(e)); }
-  }
+  const recategoriseRoute = () =>
+    setCatFor({ name: null, current: selected.category });
   async function deleteRoute() {
     if (!window.confirm(`Delete route "${selected.name}"?`)) return;
     try { await send("DELETE", `/api/routes/${selId}`); setSelId(null); await loadRoutes(); }
@@ -310,6 +398,9 @@ export function Routes({ t }) {
   }
 
   return html`<div class="workshop-page routes-page">
+    ${catFor ? html`<${CategoryModal} routes=${routes}
+        current=${catFor.current} onCancel=${() => setCatFor(null)}
+        onSave=${saveCategory} />` : null}
     <header class="practice-card workshop-hero">
       <div class="workshop-title">
         <span class="workshop-title-icon"><${Icon} name="routes" size=${22} /></span>
@@ -338,25 +429,41 @@ export function Routes({ t }) {
         <div class="route-list" role="list">
           ${routes.length === 0 ? html`<div class="workshop-empty compact">
             No routes yet. Build one from stars, segments, or groups.
-          </div>` : groupByCategory(routes).map(([category, inGroup]) => {
+          </div>` : groupByCategory(routes).map(([category, subs]) => {
             const shut = collapsed.has(category);
+            const routeRow = (r) => html`<button role="listitem"
+                key=${r.id}
+                class=${`route-list-item ${r.id === selId ? "on" : ""}`}
+                onclick=${() => setSelId(r.id)}>
+              <span>
+                <b>${r.name}</b>
+                <small>${r.steps.length} ${r.steps.length === 1 ? "step" : "steps"}</small>
+              </span>
+              <${Icon} name="chevron" size=${16} />
+            </button>`;
             return html`<div class="route-cat">
               <button class=${`route-cat-header ${shut ? "shut" : ""}`}
                   aria-expanded=${!shut}
                   onclick=${() => toggleCategory(category)}>
                 <${Icon} name="chevron" size=${15} />
                 <b>${category}</b>
-                <span class="count-badge">${inGroup.length}</span>
+                <span class="count-badge">${routeCount(subs)}</span>
               </button>
-              ${shut ? null : inGroup.map((r) => html`<button role="listitem"
-                  class=${`route-list-item ${r.id === selId ? "on" : ""}`}
-                  onclick=${() => setSelId(r.id)}>
-                <span>
-                  <b>${r.name}</b>
-                  <small>${r.steps.length} ${r.steps.length === 1 ? "step" : "steps"}</small>
-                </span>
-                <${Icon} name="chevron" size=${16} />
-              </button>`)}
+              ${shut ? null : subs.map(([sub, inGroup]) => {
+                if (sub === null) return inGroup.map(routeRow);
+                const path = `${category}${CATEGORY_SEP}${sub}`;
+                const subShut = collapsed.has(path);
+                return html`<div class="route-subcat" key=${path}>
+                  <button class=${`route-cat-header sub ${subShut ? "shut" : ""}`}
+                      aria-expanded=${!subShut}
+                      onclick=${() => toggleCategory(path)}>
+                    <${Icon} name="chevron" size=${14} />
+                    <b>${sub}</b>
+                    <span class="count-badge">${inGroup.length}</span>
+                  </button>
+                  ${subShut ? null : inGroup.map(routeRow)}
+                </div>`;
+              })}
             </div>`;
           })}
         </div>

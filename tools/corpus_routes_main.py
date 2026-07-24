@@ -15,7 +15,7 @@ docs/superpowers/specs/2026-07-24-default-routes-corpus-sources.md; the
 community nicknames (Cannonless, Pless, Owlless, ...) are resolved by that
 file's alias glossary.
 """
-from corpus_vocab import MAIN, route, segment, star, stars
+from corpus_vocab import MAIN, route, segment, star, stars, sub
 
 # Star blocks reused across variants. Course-page order (see sources §"Per-
 # course ordered star lists"); each helper returns a list of steps.
@@ -217,7 +217,7 @@ _16_TAIL = [
 ]
 
 ROUTES.append(route(
-    "route:16-no-lblj-standard", "16 Star — No LBLJ (Standard)", MAIN, [
+    "route:16-no-lblj-standard", "16 Star — No LBLJ (Standard)", sub(MAIN, "16 Star"), [
         segment("seg:lakitu-skip", "Lakitu Skip"),
         segment("seg:castle-entry->bob", "→ BoB"),
         star(1, 5, "BoB — Behind Chain Chomp's Gate"),
@@ -250,7 +250,7 @@ ROUTES.append(route(
 
 ROUTES.append(route(
     "route:16-no-lblj-beginner", "16 Star — No LBLJ (Beginner, no DW Reds)",
-    MAIN, [
+    sub(MAIN, "16 Star"), [
         segment("seg:lakitu-skip", "Lakitu Skip"),
         segment("seg:castle-entry->bob", "→ BoB"),
         star(1, 5, "BoB — Behind Chain Chomp's Gate"),
@@ -283,7 +283,7 @@ ROUTES.append(route(
 
 ROUTES.append(route(
     "route:16-no-lblj-wf100c", "16 Star — No LBLJ + WF 100c (CCM Skip)",
-    MAIN, [
+    sub(MAIN, "16 Star"), [
         segment("seg:lakitu-skip", "Lakitu Skip"),
         segment("seg:castle-entry->bob", "→ BoB"),
         star(1, 5, "BoB — Behind Chain Chomp's Gate"),
@@ -308,7 +308,7 @@ ROUTES.append(route(
     ]))
 
 ROUTES.append(route(
-    "route:16-lblj", "16 Star — LBLJ (Standard)", MAIN, [
+    "route:16-lblj", "16 Star — LBLJ (Standard)", sub(MAIN, "16 Star"), [
         segment("seg:lakitu-skip", "Lakitu Skip"),
         segment("seg:lblj", "LBLJ"),
         star(16, 0, "BitDW — 8 Red Coins"),
@@ -433,7 +433,8 @@ def _seventy(seed_key, name, *, ccm, ssl, sl, ttc, island_hop=False,
         segment("seg:ttc->bits", "→ BitS"),
         *BOWSER_3,
     ]
-    return route(seed_key, name, MAIN, lobby + basement + upstairs + tippy)
+    return route(seed_key, name, sub(MAIN, "70 Star"),
+                 lobby + basement + upstairs + tippy)
 
 
 CCM_18 = [
@@ -546,7 +547,7 @@ _120_CASTLE_STARS = [
 ]
 
 ROUTES.append(route(
-    "route:120-non-lblj", "120 Star — Non-LBLJ", MAIN, [
+    "route:120-non-lblj", "120 Star — Non-LBLJ", sub(MAIN, "120 Star"), [
         segment("seg:lakitu-skip", "Lakitu Skip"),
         segment("seg:castle-entry->bob", "→ BoB"),
         star(1, 5, "BoB — Behind Chain Chomp's Gate"),
@@ -562,7 +563,7 @@ ROUTES.append(route(
     ]))
 
 ROUTES.append(route(
-    "route:120-lblj", "120 Star — LBLJ", MAIN, [
+    "route:120-lblj", "120 Star — LBLJ", sub(MAIN, "120 Star"), [
         segment("seg:lakitu-skip", "Lakitu Skip"),
         segment("seg:lblj", "LBLJ"),
         star(16, 0, "BitDW — 8 Red Coins"),
@@ -588,7 +589,7 @@ _LOW_STAR_TAIL = [
 ]
 
 ROUTES.append(route(
-    "route:1-star", "1 Star", MAIN, [
+    "route:1-star", "1 Star", sub(MAIN, "1 Star"), [
         segment("seg:lakitu-skip", "Lakitu Skip"),
         segment("seg:lblj", "LBLJ"),
         *BOWSER_1,
@@ -599,7 +600,7 @@ ROUTES.append(route(
     ]))
 
 ROUTES.append(route(
-    "route:0-star", "0 Star", MAIN, [
+    "route:0-star", "0 Star", sub(MAIN, "0 Star"), [
         segment("seg:lakitu-skip", "Lakitu Skip"),
         segment("seg:lblj", "LBLJ"),
         *BOWSER_1,

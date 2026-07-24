@@ -13,6 +13,18 @@ LOBBY, UPSTAIRS, BASEMENT = 1, 2, 3  # CASTLE_AREA_NAMES ids
 
 MAIN = "Main Categories"
 STAGE_RTA = "Stage RTA"
+
+# Sub-categories are a PATH inside the existing free-text `category` field
+# (user request 2026-07-24) — "Main Categories/16 Star", "Stage RTA/Wet-Dry
+# World". No migration, no API change, no second column, and it generalises to
+# any depth; the UI splits on the separator and nests the collapsible groups.
+# A category name containing "/" would be ambiguous — don't use one.
+CATEGORY_SEP = "/"
+
+
+def sub(top: str, name: str) -> str:
+    """"Main Categories" + "16 Star" -> "Main Categories/16 Star"."""
+    return f"{top}{CATEGORY_SEP}{name}"
 CASTLE_MOVEMENT = "Castle Movement"
 TRICKS = "Tricks"
 BOWSER_FIGHTS = "Bowser Fights"

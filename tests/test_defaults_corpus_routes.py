@@ -17,7 +17,8 @@ from test_defaults_corpus import Ev
 SEED = json.loads(bundled_defaults_seed().read_bytes().decode("utf-8"))
 SEG_BY_KEY = {s["seed_key"]: s for s in SEED["segments"]}
 SEG_IDS = {key: index + 1 for index, key in enumerate(SEG_BY_KEY)}
-MAIN_ROUTES = [r for r in SEED["routes"] if r["category"] == "Main Categories"]
+MAIN_ROUTES = [r for r in SEED["routes"]
+               if r["category"].startswith("Main Categories")]
 CTX = MatchContext(level=None, prev_level=None, num_stars=0)
 
 

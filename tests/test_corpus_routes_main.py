@@ -93,7 +93,9 @@ def test_every_segment_reference_resolves_to_a_seeded_segment():
 
 def test_every_route_is_categorised_and_starts_on_reset():
     for r in ROUTES:
-        assert r["category"] == "Main Categories", r["seed_key"]
+        # category is a PATH now: "Main Categories/16 Star" (sub-categories,
+        # user request 2026-07-24). The top level is what the library groups by.
+        assert r["category"].startswith("Main Categories/"), r["seed_key"]
         assert r["start_condition"] == {"type": "reset_game"}, r["seed_key"]
 
 
@@ -173,3 +175,20 @@ def test_a_multi_star_visit_is_one_step_not_several():
     assert len(wf) == 1
     assert wf[0]["need"] == 3 and len(wf[0]["candidates"]) == 3
     assert wf[0]["label"] == "WF — 3 stars"
+
+
+def test_categories_are_two_level_paths():
+    """Sub-categories are a PATH inside the one free-text category field —
+    no migration, no second column, any depth. The library nests a collapsible
+    group per level, so a flat value here would collapse 13 routes into one
+    undifferentiated list."""
+    wanted = {"route:16-no-lblj-standard": "Main Categories/16 Star",
+              "route:70-hmc-early": "Main Categories/70 Star",
+              "route:120-lblj": "Main Categories/120 Star",
+              "route:1-star": "Main Categories/1 Star",
+              "route:0-star": "Main Categories/0 Star"}
+    for key, category in wanted.items():
+        assert BY_KEY[key]["category"] == category, key
+    tops = {r["category"].split("/")[0] for r in ROUTES}
+    assert tops == {"Main Categories"}
+    assert all(len(r["category"].split("/")) == 2 for r in ROUTES)

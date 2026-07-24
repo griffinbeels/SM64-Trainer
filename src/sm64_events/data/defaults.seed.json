@@ -1689,7 +1689,7 @@
     {
       "seed_key": "route:16-no-lblj-standard",
       "name": "16 Star — No LBLJ (Standard)",
-      "category": "Main Categories",
+      "category": "Main Categories/16 Star",
       "start_condition": {
         "type": "reset_game"
       },
@@ -2013,7 +2013,7 @@
     {
       "seed_key": "route:16-no-lblj-beginner",
       "name": "16 Star — No LBLJ (Beginner, no DW Reds)",
-      "category": "Main Categories",
+      "category": "Main Categories/16 Star",
       "start_condition": {
         "type": "reset_game"
       },
@@ -2337,7 +2337,7 @@
     {
       "seed_key": "route:16-no-lblj-wf100c",
       "name": "16 Star — No LBLJ + WF 100c (CCM Skip)",
-      "category": "Main Categories",
+      "category": "Main Categories/16 Star",
       "start_condition": {
         "type": "reset_game"
       },
@@ -2645,7 +2645,7 @@
     {
       "seed_key": "route:16-lblj",
       "name": "16 Star — LBLJ (Standard)",
-      "category": "Main Categories",
+      "category": "Main Categories/16 Star",
       "start_condition": {
         "type": "reset_game"
       },
@@ -2948,7 +2948,7 @@
     {
       "seed_key": "route:70-hmc-late-beginner",
       "name": "70 Star — HMC Late (Beginner)",
-      "category": "Main Categories",
+      "category": "Main Categories/70 Star",
       "start_condition": {
         "type": "reset_game"
       },
@@ -3752,7 +3752,7 @@
     {
       "seed_key": "route:70-hmc-late-intermediate",
       "name": "70 Star — HMC Late (Intermediate, TTC100)",
-      "category": "Main Categories",
+      "category": "Main Categories/70 Star",
       "start_condition": {
         "type": "reset_game"
       },
@@ -4556,7 +4556,7 @@
     {
       "seed_key": "route:70-hmc-late-advanced",
       "name": "70 Star — HMC Late (Advanced, CCM17)",
-      "category": "Main Categories",
+      "category": "Main Categories/70 Star",
       "start_condition": {
         "type": "reset_game"
       },
@@ -5360,7 +5360,7 @@
     {
       "seed_key": "route:70-hmc-late-expert",
       "name": "70 Star — HMC Late (Expert, Island Hop)",
-      "category": "Main Categories",
+      "category": "Main Categories/70 Star",
       "start_condition": {
         "type": "reset_game"
       },
@@ -6148,7 +6148,7 @@
     {
       "seed_key": "route:70-hmc-early",
       "name": "70 Star — HMC Early",
-      "category": "Main Categories",
+      "category": "Main Categories/70 Star",
       "start_condition": {
         "type": "reset_game"
       },
@@ -6942,7 +6942,7 @@
     {
       "seed_key": "route:120-non-lblj",
       "name": "120 Star — Non-LBLJ",
-      "category": "Main Categories",
+      "category": "Main Categories/120 Star",
       "start_condition": {
         "type": "reset_game"
       },
@@ -8090,7 +8090,7 @@
     {
       "seed_key": "route:120-lblj",
       "name": "120 Star — LBLJ",
-      "category": "Main Categories",
+      "category": "Main Categories/120 Star",
       "start_condition": {
         "type": "reset_game"
       },
@@ -9222,7 +9222,7 @@
     {
       "seed_key": "route:1-star",
       "name": "1 Star",
-      "category": "Main Categories",
+      "category": "Main Categories/1 Star",
       "start_condition": {
         "type": "reset_game"
       },
@@ -9363,7 +9363,7 @@
     {
       "seed_key": "route:0-star",
       "name": "0 Star",
-      "category": "Main Categories",
+      "category": "Main Categories/0 Star",
       "start_condition": {
         "type": "reset_game"
       },
@@ -9483,7 +9483,7 @@
     {
       "seed_key": "route:stage-bob-120",
       "name": "BoB — 120",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Bob-omb Battlefield",
       "start_condition": {
         "type": "level_enter",
         "to": 9
@@ -9535,7 +9535,7 @@
     {
       "seed_key": "route:stage-bob-70",
       "name": "BoB — 70",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Bob-omb Battlefield",
       "start_condition": {
         "type": "level_enter",
         "to": 9
@@ -9562,7 +9562,7 @@
     {
       "seed_key": "route:stage-wf-120-70",
       "name": "WF — 120 / 70",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Whomp's Fortress",
       "start_condition": {
         "type": "level_enter",
         "to": 24
@@ -9614,7 +9614,7 @@
     {
       "seed_key": "route:stage-jrb-120",
       "name": "JRB — 120",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Jolly Roger Bay",
       "start_condition": {
         "type": "level_enter",
         "to": 12
@@ -9666,7 +9666,7 @@
     {
       "seed_key": "route:stage-ccm-120",
       "name": "CCM — 120",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Cool, Cool Mountain",
       "start_condition": {
         "type": "level_enter",
         "to": 5
@@ -9718,7 +9718,7 @@
     {
       "seed_key": "route:stage-ccm-70-ccm17",
       "name": "CCM — 70 (CCM17)",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Cool, Cool Mountain",
       "start_condition": {
         "type": "level_enter",
         "to": 5
@@ -9755,7 +9755,7 @@
     {
       "seed_key": "route:stage-ccm-70-ccm18",
       "name": "CCM — 70 (CCM18)",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Cool, Cool Mountain",
       "start_condition": {
         "type": "level_enter",
         "to": 5
@@ -9797,7 +9797,7 @@
     {
       "seed_key": "route:stage-ccm-16",
       "name": "CCM — 16",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Cool, Cool Mountain",
       "start_condition": {
         "type": "level_enter",
         "to": 5
@@ -9824,7 +9824,7 @@
     {
       "seed_key": "route:stage-bbh-120",
       "name": "BBH — 120",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Big Boo's Haunt",
       "start_condition": {
         "type": "level_enter",
         "to": 4
@@ -9876,7 +9876,7 @@
     {
       "seed_key": "route:stage-bbh-70",
       "name": "BBH — 70",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Big Boo's Haunt",
       "start_condition": {
         "type": "level_enter",
         "to": 4
@@ -9903,7 +9903,7 @@
     {
       "seed_key": "route:stage-hmc-120",
       "name": "HMC — 120",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Hazy Maze Cave",
       "start_condition": {
         "type": "level_enter",
         "to": 7
@@ -9955,7 +9955,7 @@
     {
       "seed_key": "route:stage-hmc-70",
       "name": "HMC — 70",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Hazy Maze Cave",
       "start_condition": {
         "type": "level_enter",
         "to": 7
@@ -9992,7 +9992,7 @@
     {
       "seed_key": "route:stage-hmc-16",
       "name": "HMC — 16",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Hazy Maze Cave",
       "start_condition": {
         "type": "level_enter",
         "to": 7
@@ -10024,7 +10024,7 @@
     {
       "seed_key": "route:stage-lll-120",
       "name": "LLL — 120",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Lethal Lava Land",
       "start_condition": {
         "type": "level_enter",
         "to": 22
@@ -10076,7 +10076,7 @@
     {
       "seed_key": "route:stage-lll-70",
       "name": "LLL — 70",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Lethal Lava Land",
       "start_condition": {
         "type": "level_enter",
         "to": 22
@@ -10123,7 +10123,7 @@
     {
       "seed_key": "route:stage-lll-16",
       "name": "LLL — 16",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Lethal Lava Land",
       "start_condition": {
         "type": "level_enter",
         "to": 22
@@ -10165,7 +10165,7 @@
     {
       "seed_key": "route:stage-ssl-120",
       "name": "SSL — 120",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Shifting Sand Land",
       "start_condition": {
         "type": "level_enter",
         "to": 8
@@ -10217,7 +10217,7 @@
     {
       "seed_key": "route:stage-ssl-70-16",
       "name": "SSL — 70 / 16",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Shifting Sand Land",
       "start_condition": {
         "type": "level_enter",
         "to": 8
@@ -10249,7 +10249,7 @@
     {
       "seed_key": "route:stage-ddd-120",
       "name": "DDD — 120",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Dire, Dire Docks",
       "start_condition": {
         "type": "level_enter",
         "to": 23
@@ -10301,7 +10301,7 @@
     {
       "seed_key": "route:stage-ddd-70",
       "name": "DDD — 70",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Dire, Dire Docks",
       "start_condition": {
         "type": "level_enter",
         "to": 23
@@ -10333,7 +10333,7 @@
     {
       "seed_key": "route:stage-ddd-16",
       "name": "DDD — 16",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Dire, Dire Docks",
       "start_condition": {
         "type": "level_enter",
         "to": 23
@@ -10355,7 +10355,7 @@
     {
       "seed_key": "route:stage-sl-120",
       "name": "SL — 120",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Snowman's Land",
       "start_condition": {
         "type": "level_enter",
         "to": 10
@@ -10407,7 +10407,7 @@
     {
       "seed_key": "route:stage-sl-70-ttc100",
       "name": "SL — 70 (HMC Late + TTC100)",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Snowman's Land",
       "start_condition": {
         "type": "level_enter",
         "to": 10
@@ -10444,7 +10444,7 @@
     {
       "seed_key": "route:stage-sl-70",
       "name": "SL — 70 (HMC Early or no TTC100)",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Snowman's Land",
       "start_condition": {
         "type": "level_enter",
         "to": 10
@@ -10486,7 +10486,7 @@
     {
       "seed_key": "route:stage-wdw-120",
       "name": "WDW — 120",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Wet-Dry World",
       "start_condition": {
         "type": "level_enter",
         "to": 11
@@ -10538,7 +10538,7 @@
     {
       "seed_key": "route:stage-wdw-70",
       "name": "WDW — 70",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Wet-Dry World",
       "start_condition": {
         "type": "level_enter",
         "to": 11
@@ -10580,7 +10580,7 @@
     {
       "seed_key": "route:stage-ttm-120",
       "name": "TTM — 120",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Tall, Tall Mountain",
       "start_condition": {
         "type": "level_enter",
         "to": 36
@@ -10632,7 +10632,7 @@
     {
       "seed_key": "route:stage-ttm-70",
       "name": "TTM — 70",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Tall, Tall Mountain",
       "start_condition": {
         "type": "level_enter",
         "to": 36
@@ -10674,7 +10674,7 @@
     {
       "seed_key": "route:stage-thi-120",
       "name": "THI — 120",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Tiny-Huge Island",
       "start_condition": {
         "type": "level_enter",
         "to": 13
@@ -10726,7 +10726,7 @@
     {
       "seed_key": "route:stage-thi-70",
       "name": "THI — 70",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Tiny-Huge Island",
       "start_condition": {
         "type": "level_enter",
         "to": 13
@@ -10758,7 +10758,7 @@
     {
       "seed_key": "route:stage-thi-70-reds",
       "name": "THI — 70 (with THI Reds)",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Tiny-Huge Island",
       "start_condition": {
         "type": "level_enter",
         "to": 13
@@ -10795,7 +10795,7 @@
     {
       "seed_key": "route:stage-ttc-120-70",
       "name": "TTC — 120 / 70",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Tick Tock Clock",
       "start_condition": {
         "type": "level_enter",
         "to": 14
@@ -10847,7 +10847,7 @@
     {
       "seed_key": "route:stage-ttc-70-no-100",
       "name": "TTC — 70 (no TTC100)",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Tick Tock Clock",
       "start_condition": {
         "type": "level_enter",
         "to": 14
@@ -10894,7 +10894,7 @@
     {
       "seed_key": "route:stage-rr-120",
       "name": "RR — 120",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Rainbow Ride",
       "start_condition": {
         "type": "level_enter",
         "to": 15
@@ -10946,7 +10946,7 @@
     {
       "seed_key": "route:stage-rr-70",
       "name": "RR — 70",
-      "category": "Stage RTA",
+      "category": "Stage RTA/Rainbow Ride",
       "start_condition": {
         "type": "level_enter",
         "to": 15

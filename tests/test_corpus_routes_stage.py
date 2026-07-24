@@ -72,7 +72,8 @@ def test_every_stage_route_is_valid_and_categorised():
     for r in ROUTES:
         validate_route({"name": r["name"], "steps": r["steps"],
                         "start_condition": r["start_condition"]})
-        assert r["category"] == "Stage RTA", r["seed_key"]
+        # "Stage RTA/<course>" — one sub-group per course.
+        assert r["category"].startswith("Stage RTA/"), r["seed_key"]
         assert all(s.get("label") for s in r["steps"]), r["seed_key"]
 
 
@@ -98,3 +99,14 @@ def test_labels_are_derived_from_the_stage_and_the_name_table():
         else:
             assert step["label"] == f"{abbrev} — {step['need']} stars", \
                 r["seed_key"]
+
+
+def test_each_stage_route_is_filed_under_its_course():
+    """"Stage RTA/<course>" — one sub-group per course, named from
+    COURSE_NAMES so a course rename can never strand a group."""
+    from sm64_events.memory.addresses import course_name
+    for r in ROUTES:
+        course = next(iter({c["course"] for c in _candidates(r)}))
+        assert r["category"] == f"Stage RTA/{course_name(course)}", r["seed_key"]
+    subs = {r["category"].split("/", 1)[1] for r in ROUTES}
+    assert len(subs) == 15          # one per main course
