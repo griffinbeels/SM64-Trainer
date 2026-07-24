@@ -410,6 +410,12 @@ class TrackerService:
                                  timestamp_utc=_now(),
                                  payload={"attempt_id": attempt_id,
                                           "strat_tag": strat_tag}))
+        # A pbs row snapshots strat_tag at save time and is not derived, so
+        # it cannot follow the reprojection on its own. It runs FIRST of the
+        # side effects because it is the only one with no self-heal path: a
+        # failure between the journal write and this line would strand the PB
+        # under the old strategy permanently.
+        db.retag_pbs_for_attempt(attempt_id, strat_tag)
         has_entity = (attempt.segment_id is not None
                       or attempt.course_id is not None)
         if strat_tag and has_entity:
@@ -421,9 +427,6 @@ class TrackerService:
             self._register_strategy(
                 db, entity_key(attempt.course_id, attempt.star_id,
                                attempt.segment_id), strat_tag)
-        # A pbs row snapshots strat_tag at save time and is not derived, so
-        # it cannot follow the reprojection on its own.
-        db.retag_pbs_for_attempt(attempt_id, strat_tag)
         await self._reproject()
 
     async def set_time_filter(self, course_id: int, star_id: int,

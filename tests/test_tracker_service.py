@@ -1149,6 +1149,7 @@ def test_purge_segment_strategy_clears_active_and_registration(tmp_path):
     asyncio.run(svc.create_rank_strategy("segment:1", "fast"))
     asyncio.run(svc.purge_strategy("segment:1", "fast"))
     assert svc.strat_by_segment.get(1) is None         # strat_set null published
+    assert "fast" not in db.get_state("strategies", {}).get("seg:1", [])
 
 
 def test_set_attempt_strat_reclassifies_and_registers(tmp_path):
@@ -1198,4 +1199,17 @@ def test_set_attempt_strat_unknown_attempt_raises_lookup_error(tmp_path):
     db, svc = make(tmp_path)
     with pytest.raises(LookupError):
         asyncio.run(svc.set_attempt_strat(999, "Slide Kick"))
-    assert "fast" not in db.get_state("strategies", {}).get("seg:1", [])
+
+
+def test_set_attempt_strat_skips_registration_when_attempt_has_no_entity(tmp_path):
+    """An attempt recorded with no star/segment target has no entity key to
+    register a strategy name against, so reclassifying it must still retag
+    the attempt without writing anything into the strategies dropdown state."""
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(ev("practice_reset", 1500, {"igt_frames_before": 480})))
+    aid = db.attempts()[0].id
+    assert db.attempts()[0].course_id is None                # unassigned attempt
+    asyncio.run(svc.set_attempt_strat(aid, "Slide Kick"))
+    assert db.attempts()[0].strat_tag == "Slide Kick"
+    assert db.get_state("strategies", {}) == {}
