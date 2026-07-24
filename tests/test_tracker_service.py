@@ -639,6 +639,55 @@ def test_update_segment_category_persists(tmp_path):
     assert d["category"] == "Main Categories"
 
 
+def test_update_segment_marks_seed_dirty(tmp_path):
+    """Editing a seeded segment flips seed_dirty so a future reconcile
+    (tracking/defaults.py) never overwrites the user's change."""
+    db, svc = make(tmp_path)
+    lblj = seed_id(db, "LBLJ")
+    assert next(d for d in db.segment_defs() if d["id"] == lblj)["seed_dirty"] == 0
+    asyncio.run(svc.update_segment(lblj, {"name": "My LBLJ"}))
+    assert next(d for d in db.segment_defs() if d["id"] == lblj)["seed_dirty"] == 1
+
+
+def test_update_segment_does_not_dirty_a_user_created_segment(tmp_path):
+    """No seed_key => nothing to protect; set_seed_dirty must not fire."""
+    db, svc = make(tmp_path)
+    sid = asyncio.run(svc.create_segment({
+        "name": "U", "start_triggers": [{"type": "spawned", "level": 16}],
+        "end_triggers": [{"type": "level_enter", "to": 6}]}))
+    asyncio.run(svc.update_segment(sid, {"name": "U2"}))
+    assert next(d for d in db.segment_defs() if d["id"] == sid)["seed_dirty"] == 0
+
+
+def test_reset_segment_restores_seed_and_clears_dirty(tmp_path):
+    db, svc = make(tmp_path)
+    lblj = seed_id(db, "LBLJ")
+    asyncio.run(svc.update_segment(lblj, {"name": "My LBLJ", "enabled": False}))
+    assert next(d for d in db.segment_defs() if d["id"] == lblj)["seed_dirty"] == 1
+    asyncio.run(svc.reset_segment(lblj))
+    row = next(d for d in db.segment_defs() if d["id"] == lblj)
+    assert row["name"] == "LBLJ" and row["seed_dirty"] == 0 and row["enabled"] is True
+    assert row["start_triggers"] == [
+        {"type": "level_enter", "to": 6, "from": 16},
+        {"type": "attempt_anchor", "level": 6, "area": 1}]
+    assert row["end_triggers"] == [{"type": "level_enter", "to": 17}]
+
+
+def test_reset_user_created_segment_raises(tmp_path):
+    db, svc = make(tmp_path)
+    sid = asyncio.run(svc.create_segment({
+        "name": "U", "start_triggers": [{"type": "spawned", "level": 16}],
+        "end_triggers": [{"type": "level_enter", "to": 6}]}))
+    with pytest.raises(LookupError):
+        asyncio.run(svc.reset_segment(sid))
+
+
+def test_reset_segment_unknown_id_raises(tmp_path):
+    db, svc = make(tmp_path)
+    with pytest.raises(LookupError):
+        asyncio.run(svc.reset_segment(999))
+
+
 def test_delete_segment_removes_def_and_reprojects(tmp_path):
     db, svc, sent = make_rec(tmp_path)
     lblj = seed_id(db, "LBLJ")
@@ -867,6 +916,65 @@ def test_update_route_category_persists(tmp_path):
     asyncio.run(svc.update_route(rid, {"category": "Bowser"}))
     d = next(r for r in db.routes() if r["id"] == rid)
     assert d["category"] == "Bowser"
+
+
+def test_update_route_does_not_dirty_a_user_created_route(tmp_path):
+    """No seed_key => nothing to protect; set_seed_dirty must not fire."""
+    db, svc = make(tmp_path)
+    rid = asyncio.run(svc.create_route({"name": "r", "steps": []}))
+    asyncio.run(svc.update_route(rid, {"name": "r2"}))
+    assert next(r for r in db.routes() if r["id"] == rid)["seed_dirty"] == 0
+
+
+def test_update_route_marks_seed_dirty(tmp_path):
+    """A route carrying a seed_key (as a bundled route would) flips
+    seed_dirty on edit, mirroring update_segment."""
+    db, svc = make(tmp_path)
+    rid = db.insert_route("Seeded Route", [], "2026-07-01T00:00:00Z",
+                          seed_key="route:test")
+    asyncio.run(svc.update_route(rid, {"name": "Renamed"}))
+    assert next(r for r in db.routes() if r["id"] == rid)["seed_dirty"] == 1
+
+
+def test_reset_route_restores_seed_and_clears_dirty(tmp_path, monkeypatch):
+    """End-to-end reset_route: seed_key candidates resolve to the CURRENT
+    segment_defs table (defaults.py's _resolve_steps), exactly as reconcile
+    does. The shipped defaults.seed.json ships routes: [] (no seeded route
+    yet), so the seed corpus is injected here rather than depending on that
+    file's contents."""
+    db, svc = make(tmp_path)
+    lblj = seed_id(db, "LBLJ")
+    rid = db.insert_route("Custom Name", [
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]}],
+        "2026-07-01T00:00:00Z", seed_key="route:test")
+    asyncio.run(svc.update_route(rid, {"name": "Custom Name"}))  # marks dirty
+    assert next(r for r in db.routes() if r["id"] == rid)["seed_dirty"] == 1
+
+    seed = {"segments": [], "routes": [{
+        "seed_key": "route:test", "name": "Seed Name",
+        "steps": [{"need": 1,
+                   "candidates": [{"type": "segment", "seed_key": "seg:lblj"}]}],
+        "start_condition": {"type": "reset_game"}, "category": "Main"}]}
+    monkeypatch.setattr(svc, "_defaults_seed", lambda: seed)
+    asyncio.run(svc.reset_route(rid))
+    row = next(r for r in db.routes() if r["id"] == rid)
+    assert row["name"] == "Seed Name" and row["seed_dirty"] == 0
+    assert row["category"] == "Main"
+    assert row["steps"] == [
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": lblj}]}]
+
+
+def test_reset_user_created_route_raises(tmp_path):
+    db, svc = make(tmp_path)
+    rid = asyncio.run(svc.create_route({"name": "r", "steps": []}))
+    with pytest.raises(LookupError):
+        asyncio.run(svc.reset_route(rid))
+
+
+def test_reset_route_unknown_id_raises(tmp_path):
+    db, svc = make(tmp_path)
+    with pytest.raises(LookupError):
+        asyncio.run(svc.reset_route(999))
 
 
 def test_create_route_rejects_missing_segment(tmp_path):

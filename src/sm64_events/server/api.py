@@ -273,6 +273,19 @@ def create_api_router(service) -> APIRouter:
             raise _http(e)
         return {"ok": True}
 
+    @router.post("/segments/{segment_id}/reset")
+    async def reset_segment(segment_id: int):
+        """Restore a seeded definition to its bundled defaults and clear
+        seed_dirty. 404 for a user-created segment or one whose seed_key
+        no longer has a matching bundled row. Distinct path segment from
+        the literal '/segments/vocab' and from a bare int id, so no
+        declaration-order collision (fastapi-patterns)."""
+        try:
+            await service.reset_segment(segment_id)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True}
+
     # routes — literal '/routes/import' declared before '/routes/{route_id}'
     # so the path segment is never parsed as an id (declaration order wins —
     # fastapi-patterns; mirrors /segments/vocab).
@@ -328,6 +341,17 @@ def create_api_router(service) -> APIRouter:
     async def delete_route(route_id: int):
         try:
             await service.delete_route(route_id)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True}
+
+    @router.post("/routes/{route_id}/reset")
+    async def reset_route(route_id: int):
+        """Segment sibling: restore a seeded route to its bundled defaults
+        and clear seed_dirty. 404 for a user-created route or one whose
+        seed_key no longer has a matching bundled row."""
+        try:
+            await service.reset_route(route_id)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True}

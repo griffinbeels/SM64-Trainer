@@ -15,15 +15,18 @@ retroactive. With db=None the service degrades to broadcast-only.
 Tracking failures are isolated inside publish() so the poll loop never
 dies (spec §9)."""
 import dataclasses
+import json
 import logging
 from datetime import datetime, timezone
 
 from sm64_events.core.events import Event
+from sm64_events.core.paths import bundled_defaults_seed
 from sm64_events.core.timefmt import format_igt
 from sm64_events.memory.addresses import course_name, star_name
 from sm64_events.ranks.classify import RANK_MODES
 from sm64_events.ranks.standards import entity_key
 from sm64_events.storage.db import Database, EventRow
+from sm64_events.tracking.defaults import _resolve_steps
 from sm64_events.tracking.projection import Projector, replay, wipe_matches
 from sm64_events.tracking.segments import SegmentDef, validate_definition
 from sm64_events.tracking import routes as route_logic
@@ -496,11 +499,54 @@ class TrackerService:
             k: d[k] for k in ("name", "enabled", "start_triggers",
                               "end_triggers", "waypoints", "guards",
                               "category") if k in d})
+        if current.get("seed_key"):
+            # a user edit to a seeded row protects it from reconcile's
+            # refresh (tracking/defaults.py) until reset_segment clears the
+            # flag again; reconcile itself calls db.update_segment_def
+            # directly and never reaches this line, so it can't self-flip.
+            db.set_seed_dirty("segment_defs", segment_id, 1)
         await self._segments_changed()
 
     async def delete_segment(self, segment_id: int) -> None:
         db = self._require_db()
         db.delete_segment_def(segment_id)
+        await self._segments_changed()
+
+    def _defaults_seed(self) -> dict:
+        """The bundled routes/segments seed corpus, for reset-to-default.
+        Missing/corrupt seed degrades to an empty corpus (mirrors main.py's
+        reconcile_defaults guard) so reset just raises "not a default"
+        instead of crashing."""
+        seed_path = bundled_defaults_seed()
+        if seed_path is None:
+            return {"segments": [], "routes": []}
+        try:
+            return json.loads(seed_path.read_text())
+        except (OSError, ValueError):
+            return {"segments": [], "routes": []}
+
+    async def reset_segment(self, segment_id: int) -> None:
+        """Restore a seeded segment definition to its bundled defaults and
+        clear seed_dirty. LookupError (-> 404) for a user-created segment
+        (no seed_key) or one whose seed_key has no matching row in the
+        current bundled seed (renamed/removed upstream)."""
+        db = self._require_db()
+        row = next((s for s in db.segment_defs() if s["id"] == segment_id), None)
+        if row is None:
+            raise LookupError(f"segment {segment_id} not found")
+        if not row.get("seed_key"):
+            raise LookupError(f"segment {segment_id} is not a default")
+        srow = next((s for s in self._defaults_seed().get("segments", [])
+                     if s["seed_key"] == row["seed_key"]), None)
+        if srow is None:
+            raise LookupError(f"no seed for {row['seed_key']}")
+        db.update_segment_def(segment_id, name=srow["name"],
+            enabled=srow.get("enabled", True),
+            start_triggers=srow["start_triggers"],
+            end_triggers=srow["end_triggers"],
+            waypoints=srow.get("waypoints", []),
+            guards=srow.get("guards", []), category=srow.get("category"))
+        db.set_seed_dirty("segment_defs", segment_id, 0)
         await self._segments_changed()
 
     async def _segments_changed(self) -> None:
@@ -554,6 +600,10 @@ class TrackerService:
         db.update_route(route_id, updated_utc=_iso(_now()),
                         **{k: d[k] for k in ("name", "steps", "start_condition",
                                              "category") if k in d})
+        if current.get("seed_key"):
+            # same user-edit signal as update_segment; reconcile itself
+            # writes via db.update_route directly and never reaches here.
+            db.set_seed_dirty("routes", route_id, 1)
         await self._routes_changed()
         if (("steps" in d or "start_condition" in d)
                 and self._projector.armed_route_id() == route_id):
@@ -571,6 +621,35 @@ class TrackerService:
             # clearing route_selected {None, []}) so its segments don't stay
             # armed under in_active_route with no route to point back at.
             await self.select_route(None)
+
+    async def reset_route(self, route_id: int) -> None:
+        """Segment sibling: restores a seeded route's name/steps/
+        start_condition/category from the bundled seed and clears
+        seed_dirty. LookupError (-> 404) for a user-created route (no
+        seed_key) or one whose seed_key has no matching bundled row. Step
+        candidates are re-resolved seed_key -> local segment_id via the
+        CURRENT segment_defs table (defaults.py's _resolve_steps, the same
+        helper reconcile uses), so a segment that was itself reset/re-seeded
+        under a different id still binds correctly."""
+        db = self._require_db()
+        row = next((r for r in db.routes() if r["id"] == route_id), None)
+        if row is None:
+            raise LookupError(f"route {route_id} not found")
+        if not row.get("seed_key"):
+            raise LookupError(f"route {route_id} is not a default")
+        rrow = next((r for r in self._defaults_seed().get("routes", [])
+                     if r["seed_key"] == row["seed_key"]), None)
+        if rrow is None:
+            raise LookupError(f"no seed for {row['seed_key']}")
+        key_to_id = {s["seed_key"]: s["id"] for s in db.segment_defs()
+                     if s.get("seed_key")}
+        db.update_route(route_id, updated_utc=_iso(_now()), name=rrow["name"],
+                        steps=_resolve_steps(rrow["steps"], key_to_id),
+                        start_condition=rrow.get("start_condition",
+                                                 {"type": "reset_game"}),
+                        category=rrow.get("category"))
+        db.set_seed_dirty("routes", route_id, 0)
+        await self._routes_changed()
 
     async def _routes_changed(self) -> None:
         """Broadcast-only (like segment notices): routes are config, never

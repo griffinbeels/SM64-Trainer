@@ -507,6 +507,39 @@ def test_segment_crud_roundtrip(tmp_path):
         assert client.delete(f"/api/segments/{sid}").status_code == 404
 
 
+def test_reset_segment_endpoint_restores_seeded_definition(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        seg = next(s for s in client.get("/api/segments").json()
+                   if s["name"] == "LBLJ")
+        assert client.put(f"/api/segments/{seg['id']}",
+                          json={"name": "My LBLJ"}).status_code == 200
+        assert next(s for s in db.segment_defs()
+                    if s["id"] == seg["id"])["seed_dirty"] == 1
+        r = client.post(f"/api/segments/{seg['id']}/reset")
+        assert r.status_code == 200
+        row = next(s for s in db.segment_defs() if s["id"] == seg["id"])
+        assert row["name"] == "LBLJ" and row["seed_dirty"] == 0
+
+
+def test_reset_segment_endpoint_404_on_user_created(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.post("/api/segments", json={
+            "name": "Custom", "start_triggers": [{"type": "spawned"}],
+            "end_triggers": [{"type": "level_enter", "to": 6}]})
+        sid = r.json()["id"]
+        assert client.post(f"/api/segments/{sid}/reset").status_code == 404
+
+
+def test_reset_route_endpoint_404_on_user_created(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.post("/api/routes", json={"name": "R", "steps": []})
+        rid = r.json()["id"]
+        assert client.post(f"/api/routes/{rid}/reset").status_code == 404
+
+
 def test_target_accepts_segment_kind(tmp_path):
     client, service, db = make_client(tmp_path)
     with client:
