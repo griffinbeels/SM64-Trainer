@@ -845,3 +845,81 @@ under a different id still binds correctly.
 reconcile mechanism is what makes "ship the whole Usamune route corpus, keep
 it editable, let a future correction reach existing installs automatically"
 possible at all.
+
+## Default routes corpus (2026-07-24, spec #2)
+
+Spec #1 shipped the mechanism; this is the content — 55 shared castle-movement
+segments, 13 main-category routes (16★ ×4, 70★ ×5, 120★ ×2, 0★, 1★) and 37
+Stage RTA routes, generated from `tools/corpus_*.py` into
+`data/defaults.seed.json`. Two facts below are invisible in the data they
+govern, which is why they are written here rather than left to be rediscovered.
+
+### The movement grammar is forced, not chosen
+
+`tracking/segments.py` disarms an armed def in two ways that decide the shape
+of every movement:
+
+- A **plain** (waypoint-less) def is disarmed, with no row, by any
+  `area_changed` away from its arm position (the `_at_arm_position`
+  relocation rule) and by any `level_changed` matching neither its start nor
+  its end.
+- A **waypoint-bearing** def is silently **cancelled** by any major action —
+  `star_collected`, `key_grabbed`, or a real-edge `level_changed` that is not
+  the next waypoint (`_is_major_action` / `_feed_waypoint`) — while
+  `area_changed`, `warp_entered` and `spawned` stay transparent.
+
+So: a movement crossing a castle region, or a hub level (courtyard 26,
+grounds 16), needs a waypoint. **The castle interior is a line**
+(basement ↔ lobby ↔ upstairs), so basement→upstairs is *two* area edges and
+needs one too — `seg:bowser2->upstairs` was specced as plain on the reasoning
+that "its end IS the region crossing", which holds only for *adjacent*
+regions, and the simulation gate caught it. Conversely a movement that spans a
+Toad/MIPS grab must stay plain (star grabs are transparent there), or end at
+the region boundary while the next movement *starts* on `star_grabbed` —
+which is why `seg:sl->basement` ends on `area_enter` and `seg:mips2->hmc`
+starts on a grab.
+
+### Route steps must be in completion-event order
+
+`RunTracker._apply` only ever considers `steps[current]`; an attempt matching
+no candidate of that step is discarded. A step listed out of order therefore
+stalls a run **permanently**, and nothing — validation, the seed, the UI —
+reports it.
+
+Within a single event, `Projector._dispatch` builds `closed` as **star
+attempts first, then segment attempts**. That ordering is the reason a
+movement may *start* on a star grab but must never *end* on one: on the grab
+event the star attempt is offered first, so a movement ending there would
+complete the movement step and leave the star's own step with its completing
+attempt already consumed.
+
+### Verifying data nobody can eyeball
+
+~700 route steps and 55 definitions were authored against sources, not
+observed behaviour, so the gates are behavioural:
+
+- `tests/test_defaults_corpus.py` builds each movement's event stream from an
+  **independent** world model — BFS over `addresses.WORLD_EDGES_*`, with the
+  definition contributing only its checkpoints — and asserts exactly one
+  success plus silence across all 54 other walks. The walker emits a level
+  entry and its establishing `area_changed` on **one frame**, as the real
+  detectors do; a frame apart, every arm records `area=None`, the relocation
+  rule can never fire, and the whole file passes vacuously.
+- `tests/test_defaults_corpus_routes.py` replays all 13 main routes through
+  `RunTracker` and asserts each finishes, with a misordered-route negative
+  control so a green result means something.
+- `tests/test_corpus_routes_main.py` asserts each route's star total equals its
+  category (16/70/120/1/0). This independently reproduces the community's
+  CCM17/CCM18 names — 13 stars precede CCM, so you leave with 17 or 18
+  depending on the option — which is what makes the transcription trustworthy.
+
+### Castle-secret stars (course 0)
+
+The Toad and MIPS stars belong to no course, so `star_grab.py` reports them as
+course 0. `STAR_NAMES[0]` names them; ids are decomp-derived twice over —
+`include/save_file.h`'s flag order (`TOAD_STAR_1..3` = bits 0–2,
+`MIPS_STAR_1/2` = bits 3–4 under `SAVE_FLAG_TO_STAR_FLAG`'s `>>24`) and
+`behaviors/mips.inc.c` spawning `STAR_INDEX_ACT_4 + oBhvParams2ndByte`
+independently agree on MIPS = 3 and 4. **VERIFY (live gate):** which Toad
+carries index 0/1/2 — the binding follows the flag order plus the 12/25/35-star
+spawn thresholds, and the journal held zero course-0 grabs when this shipped.
