@@ -102,3 +102,21 @@ def test_status_unknown_job_raises(tmp_path, monkeypatch):
     svc = _service(tmp_path, _plan([_spec(1)]), monkeypatch)
     with pytest.raises(LookupError):
         svc.status("nope")
+
+
+def test_run_job_removes_tmp_dir_when_build_fails(tmp_path, monkeypatch):
+    class BoomBuilder:
+        def build(self, specs, ring, tmp_dir, out_path, resolve_saved, progress_cb):
+            Path(tmp_dir).mkdir(parents=True, exist_ok=True)
+            (Path(tmp_dir) / "part_000.mp4").write_bytes(b"x")
+            raise RuntimeError("ffmpeg boom")
+
+    svc = comp.CompilationService(FakeReplay(), FakeTracker(), BoomBuilder(),
+                                  out_dir=tmp_path)
+    monkeypatch.setattr(comp, "plan_compilation",
+                        lambda *a, **k: _plan([_spec(1)], no_finale=False))
+    svc._jobs["j"] = {"state": "running", "progress": 0.0,
+                      "message": "planning", "result": None}
+    svc._run_job("j", EntityRef(course_id=1, star_id=0), 5.0, 3.0)
+    assert svc._jobs["j"]["state"] == "error"
+    assert list(tmp_path.glob(".build_*")) == []   # scratch cleaned on failure

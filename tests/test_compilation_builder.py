@@ -98,9 +98,11 @@ def test_runtime_extract_failure_is_skipped(tmp_path, monkeypatch):
 def test_saved_finale_uses_resolved_path(tmp_path, monkeypatch):
     saved = tmp_path / "pb.mp4"
     saved.write_bytes(b"pb")
+    calls = {}
 
     def fake_run(args, **kw):
         if "-filter_complex" in args:
+            calls["concat"] = args
             Path(args[-1]).write_bytes(b"out")
         return subprocess.CompletedProcess(args, 0, b"", b"Video: 1280x960")
 
@@ -112,6 +114,7 @@ def test_saved_finale_uses_resolved_path(tmp_path, monkeypatch):
                   resolve_saved=lambda i: saved if i == 9 else None,
                   progress_cb=lambda f, m: None)
     assert res.clip_count == 2
+    assert str(saved) in calls["concat"]   # saved clip actually fed to ffmpeg
 
 
 def test_concat_failure_unlinks_output(tmp_path, monkeypatch):

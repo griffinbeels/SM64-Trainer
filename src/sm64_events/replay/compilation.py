@@ -87,7 +87,10 @@ class CompilationBuilder:
         if len(clips) == 1:
             shutil.copy2(clips[0], out_path)     # single clip: no concat needed
         else:
-            canvas = self._probe_dims(finale_clip or clips[0]) or (1280, 960)
+            canvas = (self._probe_dims(finale_clip) if finale_clip else None)
+            if canvas is None:
+                canvas = self._probe_dims(clips[0])
+            canvas = canvas or (1280, 960)
             self._concat_normalize(clips, canvas, out_path)
         return CompilationResult(path=out_path, clip_count=len(clips),
                                  skipped_runtime=skipped)
@@ -194,9 +197,11 @@ class CompilationService:
             stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
             out_path = self.out_dir / f"compilation_{slug}_{stamp}.mp4"
             tmp_dir = self.out_dir / f".build_{job_id}"
-            res = self.builder.build(plan.specs, ring, tmp_dir, out_path,
-                                     self.replay.find_saved, progress)
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+            try:
+                res = self.builder.build(plan.specs, ring, tmp_dir, out_path,
+                                         self.replay.find_saved, progress)
+            finally:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
             job["result"] = {
                 "path": str(out_path),
                 "clip_count": res.clip_count,
