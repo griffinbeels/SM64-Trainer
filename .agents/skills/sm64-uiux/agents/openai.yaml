@@ -1,0 +1,4 @@
+interface:
+  display_name: "SM64 UI/UX"
+  short_description: "Design joyful, usable SM64 Trainer interfaces"
+  default_prompt: "Use $sm64-uiux to redesign this SM64 Trainer interface while preserving every workflow."
