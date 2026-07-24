@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { stepGameFrame, jumpToStart } from "../frame.js";
+import { Icon } from "./icons.js";
+import { InlineState } from "./states.js";
 
 const html = htm.bind(h);
 
@@ -94,18 +96,24 @@ export function ReplayPlayer({ attemptId, onCompare }) {
   }
 
   if (state.phase === "loading")
-    return html`<span class="meta">extracting replay…</span>`;
+    return html`<div class="replay-state"><${InlineState}>Extracting replay…<//></div>`;
   if (state.phase === "error")
-    return html`<span class="badx">replay unavailable</span>
-      <span class="meta"> ${state.message}</span>`;
+    return html`<div class="replay-state"><${InlineState} kind="error">
+      Replay unavailable · ${state.message}<//></div>`;
   function revealSaved(e) {
     e.preventDefault();
     send("POST", "/api/replay/reveal", { path: savedPath });
   }
 
   return html`<div class="replay-player">
-    ${state.truncated && html`<div class="meta">⚠ starts mid-attempt (buffer didn't cover the full span)</div>`}
-    ${state.source === "saved" && html`<div class="meta">▣ playing the saved replay file (this attempt is no longer in the buffer)</div>`}
+    <div class="replay-status-row">
+      ${state.truncated && html`<span class="replay-notice warning">
+        <${Icon} name="clock" size=${14} /> Starts mid-attempt
+      </span>`}
+      ${state.source === "saved" && html`<span class="replay-notice">
+        <${Icon} name="save" size=${14} /> Playing saved replay
+      </span>`}
+    </div>
     <video controls preload="auto" src=${state.clip_url}
            onplay=${() => setPlaying(true)}
            onpause=${() => setPlaying(false)}
@@ -121,21 +129,32 @@ export function ReplayPlayer({ attemptId, onCompare }) {
                el.play().catch(() => {});
              }
            }}></video>
-    <div style="display:flex;gap:.3rem;margin:.3rem 0;align-items:center">
-      <button onclick=${toStart} title="jump to the beginning">⏮ start</button>
-      <button onclick=${() => step(-1)} title="pause + back one frame">⏴ frame</button>
-      <button onclick=${togglePlay} style="min-width:5.5rem"
-              title="play / pause">${playing ? "❚❚ pause" : "▶ play"}</button>
-      <button onclick=${() => step(1)} title="pause + forward one frame">frame ⏵</button>
-      <span class="meta">1 frame = 1/${state.game_fps || 30} s (game frame)</span>
+    <div class="replay-transport">
+      <button onclick=${toStart} title="Jump to the beginning">
+        <${Icon} name="restart" size=${15} /> Start
+      </button>
+      <button onclick=${() => step(-1)} title="Pause and move back one game frame">
+        <${Icon} name="stepBack" size=${15} /> Back 1
+      </button>
+      <button class="primary-transport" onclick=${togglePlay} title="Play or pause">
+        <${Icon} name=${playing ? "pause" : "play"} size=${16} />
+        ${playing ? "Pause" : "Play"}
+      </button>
+      <button onclick=${() => step(1)} title="Pause and move forward one game frame">
+        <${Icon} name="stepForward" size=${15} /> Forward 1
+      </button>
+      <span class="replay-frame-note">1 frame = 1/${state.game_fps || 30} s</span>
     </div>
-    <div>
+    <div class="replay-actions">
       <button onclick=${saveReplay} disabled=${savedPath !== null}>
-        ${savedPath ? "Saved" : "Save Replay"}</button>
-      ${savedPath && html` <a href="#" class="meta replay-path" title="show in Explorer"
-            onclick=${revealSaved}>→ ${savedPath}</a>`}
-      ${onCompare && html` <button onclick=${onCompare}
-          title="open this run in the Compare tab">⇆ Compare</button>`}
+        <${Icon} name=${savedPath ? "check" : "save"} size=${15} />
+        ${savedPath ? "Saved" : "Save replay"}</button>
+      ${savedPath && html`<a href="#" class="replay-path" title="Show in Explorer"
+            onclick=${revealSaved}><${Icon} name="sessions" size=${14} /> Show file</a>`}
+      ${onCompare && html`<button onclick=${onCompare}
+          title="Open this run in the Compare tab">
+        <${Icon} name="compare" size=${15} /> Compare
+      </button>`}
     </div>
   </div>`;
 }
@@ -174,10 +193,12 @@ export function RecordingDot() {
   const label = st.recording
     ? `rec${st.idle ? " (idle)" : ""} · ${fmtSpan(st)} · ${fmtGB(st.disk_bytes)}/${fmtGB(st.max_buffer_bytes)} GB`
     : "no capture";
-  return html`<span style="position:relative">
-    <span class="dot ${cls}" style="cursor:pointer"
+  return html`<span class="recording-control">
+    <button class=${`dot recording-button ${cls}`}
           title="replay buffer (${st.encoder} · audio ${st.audio_mode}) — click for storage limits"
-          onclick=${() => setOpen(!open)}>● ${label}</span>
+          aria-expanded=${open} onclick=${() => setOpen(!open)}>
+      <span class="recording-light"></span>${label}
+    </button>
     ${open && html`<${BufferSettings} st=${st}
         refresh=${() => setTick((t) => t + 1)}
         close=${() => setOpen(false)} />`}
@@ -226,48 +247,77 @@ function BufferSettings({ st, refresh, close }) {
   const idleCutoff = Math.max(3, (Number(preS) || 0) + (Number(postS) || 0));
 
   const pct = Math.min(100, (st.disk_bytes / st.max_buffer_bytes) * 100);
-  return html`<div class="popover" style="min-width:360px">
-    <div><b>Replay buffer storage</b>
-      <span class="meta"> — oldest footage is evicted past either limit</span></div>
-    <div style="margin:.4rem 0">
-      <div class="meta">${fmtGB(st.disk_bytes)} GB of ${fmtGB(st.max_buffer_bytes)} GB cap
-        · covering ${fmtSpan(st)}</div>
-      <div style="height:6px;background:#2a2f3a;border-radius:3px;margin-top:2px">
-        <div style="height:6px;border-radius:3px;width:${pct}%;background:${pct > 85 ? "#e0a3a3" : "#7aa2f7"}"></div>
+  return html`<div class="popover replay-settings-popover">
+    <div class="popover-heading">
+      <div><span class="eyebrow">Replay</span><b>Buffer storage</b></div>
+      <button class="icon-button" title="Close" aria-label="Close replay settings"
+          onclick=${close}><${Icon} name="close" size=${16} /></button>
+    </div>
+    <p class="popover-note">Oldest footage is evicted after either limit is reached.</p>
+    <div class="buffer-usage">
+      <div><b>${fmtGB(st.disk_bytes)} GB</b>
+        <span>of ${fmtGB(st.max_buffer_bytes)} GB · ${fmtSpan(st)} covered</span></div>
+      <div class="buffer-meter">
+        <div style=${`width:${pct}%;--meter-color:${pct > 85 ? "#e0a3a3" : "#7aa2f7"}`}></div>
       </div>
     </div>
-    <div>Keep:
-      <label><input type="radio" name="replay-retention" checked=${mode === "session"}
-        onchange=${() => setMode("session")} /> whole session</label>
-      <label style="margin-left:.5rem"><input type="radio" name="replay-retention"
-        checked=${mode === "minutes"} onchange=${() => setMode("minutes")} /> last</label>
-      <input id="replay-retention-min" name="replay_retention_min" type="number"
-        min="1" max="1440" style="width:4.5rem" value=${mins}
-        disabled=${mode !== "minutes"} oninput=${(e) => setMins(e.target.value)} /> min
+    <div class="replay-setting-grid">
+      <div class="replay-setting-row">
+        <span><b>Keep footage</b><small>Whole session or a rolling window.</small></span>
+        <div class="replay-setting-controls retention-options">
+          <div class="retention-mode">
+            <label><input type="radio" name="replay-retention" checked=${mode === "session"}
+              onchange=${() => setMode("session")} /> Session</label>
+            <label><input type="radio" name="replay-retention"
+              checked=${mode === "minutes"} onchange=${() => setMode("minutes")} /> Last</label>
+          </div>
+          <label class="replay-number-field">
+            <input id="replay-retention-min" name="replay_retention_min" type="number"
+              min="1" max="1440" value=${mins} aria-label="Minutes to retain"
+              disabled=${mode !== "minutes"} oninput=${(e) => setMins(e.target.value)} />
+            <span>min</span>
+          </label>
+        </div>
+      </div>
+      <label class="replay-setting-row">
+        <span><b>Disk cap</b><small>Hard maximum for the rolling buffer.</small></span>
+        <span class="replay-setting-controls">
+          <span class="replay-number-field">
+            <input id="replay-cap-gb" name="replay_cap_gb"
+              type="number" min="1" max="1024" value=${capGb}
+              oninput=${(e) => setCapGb(e.target.value)} />
+            <span>GB</span>
+          </span>
+        </span>
+      </label>
+      ${preS !== null && html`<div class="replay-setting-row">
+        <span><b>Clip padding</b><small>${idleCutoff}s idle gaps are not retained.</small></span>
+        <div class="replay-setting-controls padding-inputs">
+          <label class="replay-number-field">
+            <input id="replay-pre-pad" name="replay_pre_pad" type="number"
+              min="0" max="10" step="0.5" value=${preS}
+              oninput=${(e) => setPreS(e.target.value)} />
+            <span>s before</span>
+          </label>
+          <label class="replay-number-field">
+            <input id="replay-post-pad" name="replay_post_pad" type="number"
+              min="0" max="10" step="0.5" value=${postS}
+              oninput=${(e) => setPostS(e.target.value)} />
+            <span>s after</span>
+          </label>
+        </div>
+      </div>`}
     </div>
-    <div style="margin-top:.3rem">Disk cap:
-      <input id="replay-cap-gb" name="replay_cap_gb" type="number" min="1" max="1024"
-        style="width:4.5rem" value=${capGb}
-        oninput=${(e) => setCapGb(e.target.value)} /> GB
-    </div>
-    ${preS !== null && html`<div style="margin-top:.3rem">Clip padding:
-      <input id="replay-pre-pad" name="replay_pre_pad" type="number"
-        min="0" max="10" step="0.5" style="width:4rem" value=${preS}
-        oninput=${(e) => setPreS(e.target.value)} /> s before ·
-      <input id="replay-post-pad" name="replay_post_pad" type="number"
-        min="0" max="10" step="0.5" style="width:4rem" value=${postS}
-        oninput=${(e) => setPostS(e.target.value)} /> s after
-      <div class="meta">clips clamp to available footage; idle gaps
-        (${idleCutoff} s without input) aren't kept — recording resumes
-        instantly on input, reset, or level entry</div>
+    ${info && html`<div class="saved-replay-note">
+      <${Icon} name="save" size=${15} />
+      <span>Saved replays are permanent · ${fmtGB(info.saved_bytes)} GB</span>
     </div>`}
-    ${info && html`<div class="meta" style="margin-top:.3rem">
-      saved replays (kept forever, not part of the buffer):
-      ${fmtGB(info.saved_bytes)} GB in ${info.save_root}\\</div>`}
-    <div style="margin-top:.4rem">
-      <button onclick=${apply}>Apply</button>
+    <div class="popover-actions">
+      ${msg && html`<span class="meta">${msg}</span>`}
       <button onclick=${close}>Close</button>
-      ${msg && html` <span class="meta">${msg}</span>`}
+      <button class="primary-button" onclick=${apply}>
+        <${Icon} name="save" size=${15} /> Apply
+      </button>
     </div>
   </div>`;
 }

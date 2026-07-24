@@ -7,6 +7,8 @@ import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
+import { Icon } from "./icons.js";
+import { PageState } from "./states.js";
 
 const html = htm.bind(h);
 
@@ -183,7 +185,10 @@ export function ClauseRow({ clause, types, vocab, tint, onChange, onRemove }) {
     </select>
     ${rendered}
     ${extras.map(param)}
-    <button onclick=${onRemove}>✕</button>
+    ${onRemove ? html`<button class="icon-button clause-remove" title="Remove condition"
+        aria-label="Remove condition" onclick=${onRemove}>
+      <${Icon} name="close" size=${16} />
+    </button>` : null}
   </div>`;
 }
 
@@ -226,24 +231,53 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef }) {
   // One bordered group per side; each alternative clause inside gets its
   // own tinted card (cycling) so "new color = new alternative" reads at a
   // glance even when a wrapped row spans two lines.
-  const section = (label, k, types, cls) => html`<div class="segsection ${cls}">
-    <div class="seghead">${label}</div>
+  const section = (label, hint, icon, k, types, cls) => html`<section class="segsection ${cls}">
+    <div class="seghead">
+      <span class="seghead-icon"><${Icon} name=${icon} size=${17} /></span>
+      <span><b>${label}</b><small>${hint}</small></span>
+    </div>
     ${d[k].map((c, i) => html`<${ClauseRow} clause=${c} types=${types}
         tint=${i % 4} vocab=${vocab} onChange=${(cl) => edit(k, i, cl)}
         onRemove=${() => drop(k, i)} />`)}
-    <button class="meta" onclick=${() => add(k, types)}>+ alternate trigger</button>
-  </div>`;
+    <button class="quiet-button segment-add-condition" onclick=${() => add(k, types)}>
+      <${Icon} name="plus" size=${15} /> Add another condition
+    </button>
+  </section>`;
 
   return html`<div class="segbuilder">
-    <div><input placeholder="Segment name" value=${d.name}
-        oninput=${(e) => setD({ ...d, name: e.target.value })} /></div>
-    ${section("Starts when any of", "start_triggers", vocab.triggers, "seg-start")}
-    ${section("Ends when any of", "end_triggers", vocab.triggers, "seg-end")}
-    ${section("Guards (optional)", "guards", vocab.guards, "seg-guard")}
+    <div class="builder-heading">
+      <div>
+        <span class="eyebrow">${initial ? "Edit segment" : "New segment"}</span>
+        <h2>${initial ? initial.name : "Create a practice segment"}</h2>
+      </div>
+      <button class="icon-button" title="Close editor" aria-label="Close editor"
+          onclick=${onCancel}><${Icon} name="close" /></button>
+    </div>
+    <label class="builder-name">
+      <span class="field-label">Segment name</span>
+      <input placeholder="e.g. Lobby to BitDW" value=${d.name}
+          oninput=${(e) => setD({ ...d, name: e.target.value })} />
+    </label>
+    <label class="builder-enabled">
+      <input type="checkbox" checked=${d.enabled}
+          onchange=${(e) => setD({ ...d, enabled: e.target.checked })} />
+      <span><b>Available for practice</b><small>Show this segment in target pickers.</small></span>
+    </label>
+    <div class="segment-definition-grid">
+      ${section("Start", "Arm when any one of these happens.", "play",
+        "start_triggers", vocab.triggers, "seg-start")}
+      ${section("Finish", "Complete when any one of these happens.", "target",
+        "end_triggers", vocab.triggers, "seg-end")}
+      ${section("Rules", "Optional checks that keep attempts valid.", "shield",
+        "guards", vocab.guards, "seg-guard")}
+    </div>
     ${err && html`<div class="badx">${err}</div>`}
-    <div>
-      <button onclick=${save}>Save — history recomputes automatically</button>
+    <div class="builder-actions">
+      <span class="meta">Saving automatically recalculates this segment's history.</span>
       <button onclick=${onCancel}>Cancel</button>
+      <button class="primary-button" onclick=${save}>
+        <${Icon} name="save" size=${16} /> Save segment
+      </button>
     </div>
   </div>`;
 }
@@ -256,7 +290,9 @@ export function Segments({ t }) {
   const load = async () => setDefs(await getJSON("/api/segments"));
   useEffect(() => { load();
     getJSON("/api/segments/vocab").then(setVocabData); }, []);
-  if (!defs || !vocabData) return html`<div class="meta">loading…</div>`;
+  if (!defs || !vocabData) return html`<${PageState}
+      kind=${t.connected ? "loading" : "offline"}
+      title="Preparing the segment workshop" />`;
 
   const tgt = (t.view && t.view.target) || {};
   // armedSegs is the single live source: WS notices keep it instant,
@@ -294,24 +330,82 @@ export function Segments({ t }) {
     setEditing(d);
   }
 
-  return html`<div>
-    ${defs.map((d) => html`<div class="segrow">
-      <b>${d.name}</b>
-      ${isArmed(d.id) && html`<span class="chip good">⏱ active</span>`}
-      ${tgt.kind === "segment" && tgt.segment_id === d.id
-        && html`<span class="chip">★ target</span>`}
-      <span style="flex:1"></span>
-      <button onclick=${() => setTarget(d)}>set target</button>
-      <button onclick=${() => toggle(d)}>${d.enabled ? "disable" : "enable"}</button>
-      <button onclick=${() => tryEdit(d)}>edit</button>
-      <button onclick=${() => remove(d)}>delete</button>
-    </div>`)}
-    ${editing
-      ? html`<${Builder} key=${editing === "new" ? "new" : editing.id}
-          vocab=${vocabData} apiRef=${editorRef}
-          initial=${editing === "new" ? null : editing}
-          onSaved=${() => { setEditing(null); load(); t.refresh(); }}
-          onCancel=${() => setEditing(null)} />`
-      : html`<button onclick=${() => setEditing("new")}>+ New segment</button>`}
+  return html`<div class="workshop-page segments-page">
+    <header class="practice-card workshop-hero">
+      <div class="workshop-title">
+        <span class="workshop-title-icon"><${Icon} name="segments" size=${22} /></span>
+        <div>
+          <span class="eyebrow">Build</span>
+          <h2>Segments</h2>
+          <p>Define repeatable sections once, then practice and rank them like stars.</p>
+        </div>
+      </div>
+      <button class="primary-button" onclick=${() => setEditing("new")}>
+        <${Icon} name="plus" size=${17} /> New segment
+      </button>
+    </header>
+
+    <div class="segments-workshop">
+      <aside class="practice-card workshop-card segment-library">
+        <div class="workshop-card-heading">
+          <div>
+            <span class="eyebrow">Library</span>
+            <h3>Your segments</h3>
+          </div>
+          <span class="count-badge">${defs.length}</span>
+        </div>
+        <div class="segment-list">
+          ${defs.length === 0 ? html`<div class="workshop-empty compact">
+            No segments yet. Create one to time a repeatable section of the game.
+          </div>` : defs.map((d) => {
+            const targeted = tgt.kind === "segment" && tgt.segment_id === d.id;
+            return html`<article class=${`segrow ${editing !== "new" && editing?.id === d.id ? "on" : ""}`}>
+              <button class="segment-row-main" onclick=${() => tryEdit(d)}>
+                <span class="segment-row-name">${d.name}</span>
+                <span class="segment-row-state">
+                  ${isArmed(d.id) && html`<span class="chip good">● Running</span>`}
+                  ${targeted && html`<span class="chip target-chip">◎ Target</span>`}
+                  ${!d.enabled && html`<span class="chip muted-chip">Hidden</span>`}
+                </span>
+              </button>
+              <div class="segment-row-actions">
+                <button class=${targeted ? "is-selected" : ""} onclick=${() => setTarget(d)}
+                    title="Set as practice target">
+                  <${Icon} name="target" size=${15} /> Target
+                </button>
+                <button onclick=${() => toggle(d)} title=${d.enabled ? "Hide from practice" : "Show in practice"}>
+                  <${Icon} name=${d.enabled ? "eyeOff" : "check"} size=${15} />
+                  ${d.enabled ? "Hide" : "Show"}
+                </button>
+                <button onclick=${() => tryEdit(d)} title="Edit segment">
+                  <${Icon} name="edit" size=${15} /> Edit
+                </button>
+                <button class="icon-button danger-icon" onclick=${() => remove(d)}
+                    title="Delete segment" aria-label=${`Delete ${d.name}`}>
+                  <${Icon} name="trash" size=${15} />
+                </button>
+              </div>
+            </article>`;
+          })}
+        </div>
+      </aside>
+
+      <main class="practice-card workshop-card segment-editor">
+        ${editing
+          ? html`<${Builder} key=${editing === "new" ? "new" : editing.id}
+              vocab=${vocabData} apiRef=${editorRef}
+              initial=${editing === "new" ? null : editing}
+              onSaved=${() => { setEditing(null); load(); t.refresh(); }}
+              onCancel=${() => setEditing(null)} />`
+          : html`<div class="workshop-empty">
+              <span class="workshop-empty-icon"><${Icon} name="segments" size=${34} /></span>
+              <h3>Choose a segment to edit</h3>
+              <p>Its start, finish, and rules will stay organized in separate cards.</p>
+              <button class="primary-button" onclick=${() => setEditing("new")}>
+                <${Icon} name="plus" size=${16} /> Create a segment
+              </button>
+            </div>`}
+      </main>
+    </div>
   </div>`;
 }

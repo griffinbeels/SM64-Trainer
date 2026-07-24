@@ -11,6 +11,8 @@ import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { RANK_NAMES, rankColor } from "./ranks.js";
 import { StratModal } from "./stratmodal.js";
+import { Modal } from "./modal.js";
+import { Icon } from "./icons.js";
 const html = htm.bind(h);
 const enc = encodeURIComponent;
 
@@ -19,6 +21,7 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged }) {
   const [data, setData] = useState(null);
   const [editing, setEditing] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
+  const [videoEdit, setVideoEdit] = useState(null);
   async function load() { setData(await getJSON(`/api/ranks/standards?entity=${enc(entity)}`)); }
   // Reload on EVERY open, not just the first: a strat created from the
   // practice dropdown or header picker while this panel sat cached would
@@ -43,14 +46,20 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged }) {
     await send("DELETE", `/api/ranks/standards/${enc(entity)}/${enc(s)}${qs}`);
     await load(); onChanged && onChanged();
   }
-  async function editVideo(strat, rank) {
-    const cur = userVid(strat, rank) || "";
-    const next = window.prompt(`Example video URL — ${rank} (${strat})\nblank to clear:`, cur);
-    if (next === null) return;                                  // cancelled
-    const url = next.trim();
+  function editVideo(strat, rank) {
+    setVideoEdit({ strat, rank, url: userVid(strat, rank) || "", saving: false, error: null });
+  }
+  async function saveVideo(nextUrl = videoEdit.url) {
+    const { strat, rank } = videoEdit;
+    const url = nextUrl.trim();
     const path = `/api/ranks/standards/${enc(entity)}/${enc(strat)}/${enc(rank)}/video`;
+    setVideoEdit({ ...videoEdit, saving: true, error: null });
+    try {
     await send(url ? "PUT" : "DELETE", path, url ? { url } : undefined);
-    await load(); onChanged && onChanged();
+      await load(); onChanged && onChanged(); setVideoEdit(null);
+    } catch (e) {
+      setVideoEdit({ ...videoEdit, saving: false, error: String(e) });
+    }
   }
   async function reset() {
     if (!window.confirm("Reset this entity to community defaults?")) return;
@@ -76,16 +85,26 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged }) {
        ...(strategies || []).filter((s) => !Object.hasOwn(data.strategies, s))]
     : [];
   return html`<div class="stdpanel">
-    <div class="disc" onclick=${toggle} style="cursor:pointer">
-      <span>${open ? "▾" : "▸"}</span> Rank standards
+    <button class="disc standards-toggle" onclick=${toggle} aria-expanded=${open}>
+      <${Icon} name="rank" size=${16} />
+      <span>Rank standards</span>
       ${activeStrat ? html`<span class="meta"> · active: ${activeStrat}</span>` : null}
-    </div>
-    ${open && !data ? html`<div class="stdbody"><span class="meta">Loading…</span></div>` : null}
+      <${Icon} name="chevron" size=${16} className="standards-chevron" />
+    </button>
+    ${open && !data ? html`<div class="stdbody"><div class="inline-state loading">
+      <${Icon} name="updates" size=${16} /> Loading standards…
+    </div></div>` : null}
     ${open && data ? html`<div class="stdbody">
       <div class="stdtools">
-        <button class="meta" onclick=${() => setEditing(!editing)}>${editing ? "Done" : "Edit"}</button>
-        ${editing ? html`<button class="meta" onclick=${() => setShowAdd(true)}>+ Strategy</button>` : null}
-        <button class="meta" onclick=${reset}>Reset to community defaults</button>
+        <button class=${editing ? "is-selected" : ""} onclick=${() => setEditing(!editing)}>
+          <${Icon} name=${editing ? "check" : "edit"} size=${15} /> ${editing ? "Done editing" : "Edit"}
+        </button>
+        ${editing ? html`<button onclick=${() => setShowAdd(true)}>
+          <${Icon} name="plus" size=${15} /> Strategy
+        </button>` : null}
+        <button class="quiet-button" onclick=${reset}>
+          <${Icon} name="restart" size=${15} /> Community defaults
+        </button>
         ${data.xcams_url ? html`<a class="meta" href=${data.xcams_url} target="_blank" rel="noopener"
             title="browse every example run for this star on the xcams Daily Star page">Examples on xcams ↗</a>` : null}
       </div>
@@ -115,5 +134,28 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged }) {
     ${showAdd ? html`<${StratModal} entity=${entity} existing=${strats}
         onSaved=${async () => { setShowAdd(false); await load(); onChanged && onChanged(); }}
         onClose=${() => setShowAdd(false)} />` : null}
+    ${videoEdit ? html`<${Modal} title="Example video" icon="play"
+        description=${`${videoEdit.rank} rank · ${videoEdit.strat}`}
+        onClose=${videoEdit.saving ? null : () => setVideoEdit(null)}
+        footer=${html`
+          <button onclick=${() => setVideoEdit(null)} disabled=${videoEdit.saving}>Cancel</button>
+          ${videoEdit.url ? html`<button class="danger-text"
+              onclick=${() => saveVideo("")} disabled=${videoEdit.saving}>
+            <${Icon} name="trash" size=${15} /> Clear video
+          </button>` : null}
+          <button class="primary-button" onclick=${() => saveVideo()}
+              disabled=${videoEdit.saving || !videoEdit.url.trim()}>
+            <${Icon} name="save" size=${15} />
+            ${videoEdit.saving ? "Saving…" : "Save video"}
+          </button>`}>
+      <label class="modal-field">
+        <span class="field-label">Video URL</span>
+        <input type="url" autofocus placeholder="https://…"
+            value=${videoEdit.url}
+            oninput=${(e) => setVideoEdit({ ...videoEdit, url: e.target.value })} />
+        <small>Use a direct video or YouTube URL for this rank example.</small>
+      </label>
+      ${videoEdit.error ? html`<div class="modal-error">${videoEdit.error}</div>` : null}
+    <//>` : null}
   </div>`;
 }

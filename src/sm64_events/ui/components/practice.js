@@ -11,6 +11,8 @@ import { StageBanner } from "./stagebanner.js";
 import { Medal, RankBanner } from "./ranks.js";
 import { StandardsPanel } from "./standards.js";
 import { StratPicker } from "./stratpicker.js";
+import { Icon } from "./icons.js";
+import { PageState } from "./states.js";
 
 const html = htm.bind(h);
 
@@ -137,8 +139,8 @@ function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, sec }) {
   const strat = a.strat_tag || (sec && sec.last_strat) || null;
   const row = html`<tr ref=${(el) => { rowRef.current = el; }}
       class="${a.cleared ? "cleared" : ""} ${flash ? "row-flash" : ""} ${isNew ? "row-new" : ""}">
-    <td class="meta">#${idx + 1}</td>
-    <td class=${a.outcome === "success" ? "good" : "badx"}>
+    <td class="meta attempt-index">#${idx + 1}</td>
+    <td class="attempt-result ${a.outcome === "success" ? "good" : "badx"}">
       ${OUTCOME_LABEL[a.outcome] || a.outcome}
       ${a.outcome === "death" && a.outcome_detail
         ? html` <span class="meta">(${a.outcome_detail})</span>` : ""}
@@ -151,8 +153,8 @@ function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, sec }) {
       ${a.cleared && a.cleared_reason
         ? html` <span class="meta">(${a.cleared_reason})</span>` : ""}
     </td>
-    <td>${a.outcome === "success" ? delta(a.pb_delta_frames) : ""}</td>
-    <td class="meta">
+    <td class="attempt-delta">${a.outcome === "success" ? delta(a.pb_delta_frames) : ""}</td>
+    <td class="meta attempt-strategy">
       ${a.rank ? html`<${Medal} rank=${a.rank} size=${14} /> ` : ""}
       ${sec
         ? html`<${StratPicker} entity=${entity} strategies=${sec.strategies}
@@ -163,17 +165,23 @@ function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, sec }) {
             onChanged=${t.refresh} />`
         : html`<span>${a.strat_tag || "— no strategy —"}</span>`}
     </td>
-    <td style="text-align:right">
-      <button onclick=${() => setShowReplay(!showReplay)} title="view replay">${showReplay ? "▾" : "▶"}</button>
+    <td class="attempt-actions">
+      <button class="icon-button" onclick=${() => setShowReplay(!showReplay)}
+          title="View replay" aria-label="View replay">
+        <${Icon} name=${showReplay ? "chevron" : "play"} size=${16} /></button>
       ${a.outcome === "success" && !a.cleared
         ? (a.is_current_pb
           ? html` <button onclick=${undoPb}
               title="delete this save — the previous PB becomes current again">Undo PB</button>`
-          : html` <button class=${pbBeat ? "pb-glow" : ""} onclick=${savePb}>Save as PB</button>`)
+          : html` <button class=${pbBeat ? "pb-glow" : ""} onclick=${savePb}>
+              <${Icon} name="bookmark" size=${14} />
+              <span class="save-pb-wide">Save as PB</span>
+              <span class="save-pb-narrow">Save PB</span></button>`)
         : ""}
       ${a.cleared
         ? html` <button onclick=${restore}>undo</button>`
-        : html` <button onclick=${clear} title="clear (mistake)">×</button>`}
+        : html` <button class="icon-button" onclick=${clear}
+            title="Clear this attempt as a mistake" aria-label="Clear attempt">×</button>`}
     </td>
   </tr>`;
   const onCompare = (openCompare && entity)
@@ -189,7 +197,7 @@ function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, sec }) {
 // attempts: the full ordered list for stable numbering;
 // rows: the filtered/sorted subset to actually render.
 function AttemptTable({ attempts, rows, t, focus, clearFocus, freshIds, openCompare, sec }) {
-  return html`<table>
+  return html`<table class="attempt-table">
     ${rows.map((a) => {
       const idx = attempts.indexOf(a);
       return html`<${AttemptRow} key=${a.id} a=${a} t=${t} idx=${idx}
@@ -380,48 +388,88 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
     t.refresh();
   }
 
-  return html`<div class="starsec ${pinned ? "active-star" : ""}">
-    ${pinned && html`<div class="active-tag">★ ACTIVE STAR</div>`}
-    <div class="shead">
-      <b>${sec.course_name} · ${sec.star_name}</b>
-      <a href=${sec.links.ukikipedia} target="_blank">RTA Guide</a>
-      ${sec.links.example && html`<a href=${sec.links.example} target="_blank">Example</a>`}
-      <${StratPicker} entity=${`star:${sec.course_id}:${sec.star_id}`}
-          identity=${{ course_id: sec.course_id, star_id: sec.star_id }}
-          strategies=${sec.strategies} active=${sec.last_strat}
+  return html`<div class="practice-detail-grid ${pinned ? "is-primary" : ""}">
+    <section class="practice-card objective-card ${pinned ? "active-star" : ""}">
+      <div class="objective-heading">
+        <span class="objective-symbol"><${Icon} name="target" size=${20} /></span>
+        <span class="eyebrow">${pinned ? "Active target" : "Star practice"}</span>
+        <div class="objective-name" title=${`${sec.course_name} · ${sec.star_name}`}>
+          <span class="objective-context">${sec.course_name}</span>
+          <h2>${sec.star_name}</h2>
+        </div>
+        <div class="objective-strategy">
+          <span class="field-label">Strategy</span>
+          <${StratPicker} entity=${`star:${sec.course_id}:${sec.star_id}`}
+              identity=${{ course_id: sec.course_id, star_id: sec.star_id }}
+              strategies=${sec.strategies} active=${sec.last_strat}
+              onChanged=${t.refresh} />
+        </div>
+      </div>
+      <div class="objective-metrics">
+        <div class="rank-slot"><${RankBanner} banner=${sec.rank} /></div>
+        <div class="objective-live-state" aria-label="Practice state">
+          <span class="live-state-icon">○</span><span>Ready</span>
+        </div>
+        <${PbTag} pb=${pb} mode=${t.clock} rows=${rows} pick=${pick} t=${t} />
+      </div>
+    </section>
+
+    <section class="practice-card analysis-card">
+      <div class="card-heading">
+        <div><span class="eyebrow">Analysis</span><h3>Attempt history</h3></div>
+      </div>
+      <div class="analysis-block timeline-block">
+        <h4>Attempt timeline <span title="Attempts positioned by completion or reset time">ⓘ</span></h4>
+        <${Timeline} tl=${sec.timeline} sec=${sec} t=${t} />
+      </div>
+      <div class="analysis-block trend-block">
+        <h4>Performance trend <span title="Successful attempts over time">ⓘ</span></h4>
+        <${Progress} prog=${sec.progress} clock=${t.clock} onPick=${pick} />
+      </div>
+      <${ControlBar} ui=${ui} />
+    </section>
+
+    <section class="practice-card attempts-card">
+      <div class="card-heading attempts-heading">
+        <div><span class="eyebrow">Practice log</span><h3>Recent attempts</h3></div>
+        <span class="meta">${rows.length} shown</span>
+      </div>
+      <div class="attempt-scroll">
+        <${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t}
+          focus=${focus} clearFocus=${clearFocus} freshIds=${freshIds}
+          openCompare=${openCompare} sec=${sec} />
+      </div>
+      <div class="attempt-footer">
+        ${(rows.length > visible || visible > 10) && html`<div>
+          ${rows.length > visible && html`<button class="quiet-button"
+              onclick=${() => setVisible(visible + 10)}>Show 10 more</button>`}
+          ${visible > 10 && html`<button class="quiet-button"
+              onclick=${() => setVisible(Math.max(10, visible - 10))}>Show fewer</button>`}
+        </div>`}
+        <${HideToggle} hidden=${hidden} showHidden=${showHidden}
+            setShowHidden=${setShowHidden} />
+      </div>
+    </section>
+
+    <details class="practice-card detail-drawer">
+      <summary>Stats, standards, and practice options</summary>
+      <div class="detail-tools">
+        <a href=${sec.links.ukikipedia} target="_blank">RTA Guide ↗</a>
+        ${sec.links.example && html`<a href=${sec.links.example} target="_blank">Example ↗</a>`}
+        <${TimeFilterChip} sec=${sec} t=${t} />
+        <button class="danger-text" onclick=${wipeData}
+          title=${t.scope === "lifetime"
+            ? "Wipe this star's data across all sessions"
+            : "Wipe this star's data in the current session"}>Clear data</button>
+      </div>
+      <div class="chips">
+        ${sec.stats.map((s) => html`
+          <span class="chip" title=${s.key}>${s.label} ${s.display ?? "–"}</span>`)}
+      </div>
+      <${StandardsPanel} entity=${`star:${sec.course_id}:${sec.star_id}`}
+          activeStrat=${sec.last_strat} strategies=${sec.strategies}
           onChanged=${t.refresh} />
-      <${PbTag} pb=${pb} mode=${t.clock} rows=${rows} pick=${pick} t=${t} />
-      <${TimeFilterChip} sec=${sec} t=${t} />
-      <button class="meta" onclick=${wipeData}
-        title=${t.scope === "lifetime"
-          ? "wipe this star's data (all sessions)"
-          : "wipe this star's data (current session)"}>clear data</button>
-    </div>
-    ${sec.rank ? html`<${RankBanner} banner=${sec.rank} />` : null}
-    <${Timeline} tl=${sec.timeline} sec=${sec} t=${t} />
-    <${Progress} prog=${sec.progress} clock=${t.clock} onPick=${pick} />
-    <${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t}
-      focus=${focus} clearFocus=${clearFocus} freshIds=${freshIds}
-      openCompare=${openCompare} sec=${sec} />
-    ${(rows.length > visible || visible > 10) && html`<div>
-      ${rows.length > visible && html`<button class="meta"
-          style="background:none;border:none;cursor:pointer"
-          onclick=${() => setVisible(visible + 10)}>
-        Show 10 more
-      </button>`}
-      ${visible > 10 && html`<button class="meta"
-          style="background:none;border:none;cursor:pointer"
-          onclick=${() => setVisible(Math.max(10, visible - 10))}>
-        Hide last 10
-      </button>`}
-    </div>`}
-    <${HideToggle} hidden=${hidden} showHidden=${showHidden} setShowHidden=${setShowHidden} />
-    <div class="chips">
-      ${sec.stats.map((s) => html`
-        <span class="chip" title=${s.key}>${s.label} ${s.display ?? "–"}</span>`)}
-    </div>
-    <${StandardsPanel} entity=${`star:${sec.course_id}:${sec.star_id}`}
-        activeStrat=${sec.last_strat} strategies=${sec.strategies} onChanged=${t.refresh} />
+    </details>
   </div>`;
 }
 
@@ -468,54 +516,92 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare }) {
     t.refresh();
   }
 
-  // Pinned tag, two-state — same vocabulary as stars (★ ACTIVE STAR):
-  // a segment being practiced NOW is ACTIVE, whether it's the set target OR
-  // currently running (the live `armed` flag); the sticky just-ran pin reads
-  // RECENT. No "armed" wording — active/recent/inactive is unified across
-  // stars and segments (inactive = untagged row in the list, like stars).
-  const pinTag = (isTarget || armed) ? "★ ACTIVE SEGMENT" : "⏱ RECENT SEGMENT";
-  return html`<div class="starsec ${pinned ? "active-star" : ""}">
-    ${pinned && html`<div class="active-tag">${pinTag}</div>`}
-    <div class="shead">
-      <b>⏱ ${sec.name}</b>
-      ${armed && html`<span class="chip good">⏱ active</span>`}
-      ${sec.broken && html`<span class="meta">definition deleted — history only</span>`}
-      ${!sec.broken && html`<${StratPicker} entity=${`segment:${sec.segment_id}`}
-          identity=${{ kind: "segment", segment_id: sec.segment_id }}
-          strategies=${sec.strategies} active=${sec.last_strat}
-          onChanged=${t.refresh} />`}
-      <${PbTag} pb=${sec.pb.rta} mode="rta" rows=${rows} pick=${pick} t=${t} />
-      ${!sec.broken && html`<${TimeFilterChip} sec=${sec} t=${t} />`}
-      <button class="meta" onclick=${wipeData}
-        title=${t.scope === "lifetime"
-          ? "wipe this segment's data (all sessions)"
-          : "wipe this segment's data (current session)"}>clear data</button>
-    </div>
-    ${sec.rank ? html`<${RankBanner} banner=${sec.rank} />` : null}
-    ${!sec.broken && html`<${Timeline} tl=${sec.timeline} sec=${sec} t=${t} />`}
-    <${Progress} prog=${sec.progress} clock="rta" onPick=${pick} />
-    <${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t}
-      focus=${focus} clearFocus=${clearFocus} freshIds=${freshIds}
-      openCompare=${openCompare} sec=${sec} />
-    ${(rows.length > visible || visible > 10) && html`<div>
-      ${rows.length > visible && html`<button class="meta"
-          style="background:none;border:none;cursor:pointer"
-          onclick=${() => setVisible(visible + 10)}>
-        Show 10 more
-      </button>`}
-      ${visible > 10 && html`<button class="meta"
-          style="background:none;border:none;cursor:pointer"
-          onclick=${() => setVisible(Math.max(10, visible - 10))}>
-        Hide last 10
-      </button>`}
-    </div>`}
-    <${HideToggle} hidden=${hidden} showHidden=${showHidden} setShowHidden=${setShowHidden} />
-    <div class="chips">
-      ${sec.stats.map((s) => html`
-        <span class="chip" title=${s.key}>${s.label} ${s.display ?? "–"}</span>`)}
-    </div>
-    <${StandardsPanel} entity=${`segment:${sec.segment_id}`}
-        activeStrat=${sec.last_strat} strategies=${sec.strategies} onChanged=${t.refresh} />
+  const pinTag = armed ? "Running" : isTarget ? "Ready" : "Recent";
+  return html`<div class="practice-detail-grid ${pinned ? "is-primary" : ""}">
+    <section class="practice-card objective-card ${pinned ? "active-star" : ""}">
+      <div class="objective-heading">
+        <span class="objective-symbol"><${Icon} name="segments" size=${20} /></span>
+        <span class="eyebrow">${pinned ? "Active segment" : "Segment practice"}</span>
+        <div class="objective-name" title=${sec.name}>
+          <span class="objective-context">${sec.broken ? "History only" : "Segment"}</span>
+          <h2>${sec.name}</h2>
+        </div>
+        <div class="objective-strategy">
+          <span class="field-label">Strategy</span>
+          ${!sec.broken
+            ? html`<${StratPicker} entity=${`segment:${sec.segment_id}`}
+                identity=${{ kind: "segment", segment_id: sec.segment_id }}
+                strategies=${sec.strategies} active=${sec.last_strat}
+                onChanged=${t.refresh} />`
+            : html`<span class="meta">Definition deleted</span>`}
+        </div>
+      </div>
+      <div class="objective-metrics">
+        <div class="rank-slot"><${RankBanner} banner=${sec.rank} /></div>
+        <div class="objective-live-state ${armed ? "running" : ""}"
+            aria-label=${`Segment state: ${pinTag}`}>
+          <${Icon} name="clock" size=${17} /><span>${pinTag}</span>
+        </div>
+        <${PbTag} pb=${sec.pb.rta} mode="rta" rows=${rows} pick=${pick} t=${t} />
+      </div>
+    </section>
+
+    <section class="practice-card analysis-card">
+      <div class="card-heading">
+        <div><span class="eyebrow">Analysis</span><h3>Attempt history</h3></div>
+      </div>
+      <div class="analysis-block timeline-block">
+        <h4>Attempt timeline <span title="Attempts positioned by completion or reset time">ⓘ</span></h4>
+        ${!sec.broken
+          ? html`<${Timeline} tl=${sec.timeline} sec=${sec} t=${t} />`
+          : html`<div class="stable-empty compact">Timeline unavailable for a deleted definition.</div>`}
+      </div>
+      <div class="analysis-block trend-block">
+        <h4>Performance trend <span title="Successful attempts over time">ⓘ</span></h4>
+        <${Progress} prog=${sec.progress} clock="rta" onPick=${pick} />
+      </div>
+      <${ControlBar} ui=${ui} />
+    </section>
+
+    <section class="practice-card attempts-card">
+      <div class="card-heading attempts-heading">
+        <div><span class="eyebrow">Practice log</span><h3>Recent attempts</h3></div>
+        <span class="meta">${rows.length} shown</span>
+      </div>
+      <div class="attempt-scroll">
+        <${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t}
+          focus=${focus} clearFocus=${clearFocus} freshIds=${freshIds}
+          openCompare=${openCompare} sec=${sec} />
+      </div>
+      <div class="attempt-footer">
+        ${(rows.length > visible || visible > 10) && html`<div>
+          ${rows.length > visible && html`<button class="quiet-button"
+              onclick=${() => setVisible(visible + 10)}>Show 10 more</button>`}
+          ${visible > 10 && html`<button class="quiet-button"
+              onclick=${() => setVisible(Math.max(10, visible - 10))}>Show fewer</button>`}
+        </div>`}
+        <${HideToggle} hidden=${hidden} showHidden=${showHidden}
+            setShowHidden=${setShowHidden} />
+      </div>
+    </section>
+
+    <details class="practice-card detail-drawer">
+      <summary>Stats, standards, and practice options</summary>
+      <div class="detail-tools">
+        ${!sec.broken && html`<${TimeFilterChip} sec=${sec} t=${t} />`}
+        <button class="danger-text" onclick=${wipeData}
+          title=${t.scope === "lifetime"
+            ? "Wipe this segment's data across all sessions"
+            : "Wipe this segment's data in the current session"}>Clear data</button>
+      </div>
+      <div class="chips">
+        ${sec.stats.map((s) => html`
+          <span class="chip" title=${s.key}>${s.label} ${s.display ?? "–"}</span>`)}
+      </div>
+      <${StandardsPanel} entity=${`segment:${sec.segment_id}`}
+          activeStrat=${sec.last_strat} strategies=${sec.strategies}
+          onChanged=${t.refresh} />
+    </details>
   </div>`;
 }
 
@@ -552,10 +638,6 @@ function RouteFocus({ rv, t, ui, freshIds, openCompare }) {
     s.candidates.some((c) => candIsTarget(c, tgt)));
   if (currentIdx === -1) currentIdx = 0;
 
-  const sectionFor = (c) => c.kind === "segment"
-    ? (v.segments || []).find((s) => s.segment_id === c.segment_id)
-    : v.stars.find((s) => s.course_id === c.course && s.star_id === c.star);
-
   return html`<div>
     <div class="meta listhead">route — ${rv.name}</div>
     ${rv.steps.length === 0
@@ -582,32 +664,73 @@ function RouteFocus({ rv, t, ui, freshIds, openCompare }) {
           <span class="routerate">step ${fpct(s.step_rate)}</span>
           <span class="routecum">cum ${fpct(s.cumulative)}</span>
         </div>
-        ${isCurrent ? s.candidates.map((c) => {
-          const sec = sectionFor(c);
-          if (!sec) return null;   // not the target yet / no history — compact only
-          return c.kind === "segment"
-            ? html`<${SegmentSection} key=${`seg:${sec.segment_id}`}
-                sec=${sec} t=${t} ui=${ui} pinned=${false} freshIds=${freshIds}
-                openCompare=${openCompare} />`
-            : html`<${StarSection} key=${`${sec.course_id}:${sec.star_id}`}
-                sec=${sec} t=${t} ui=${ui} pinned=${false} freshIds=${freshIds}
-                openCompare=${openCompare} />`;
-        }) : null}
       </div>`;
     })}
   </div>`;
 }
 
 function ControlBar({ ui }) {
-  return html`<div class="bar">
-    <label class="meta">sort${" "}
+  return html`<div class="analysis-toolbar">
+    <button type="button" title="Open practice statistics" onclick=${ui.openStats}>
+      <${Icon} name="feed" size=${17} />Stats
+    </button>
+    <label><${Icon} name="sort" size=${17} /><span class="sr-only">Sort attempts</span>
       <select value=${ui.sort} onchange=${(e) => ui.setSort(e.target.value)}>
         ${SORT_OPTIONS.map(([k, label]) => html`<option value=${k}>${label}</option>`)}
       </select></label>
-    <label class="meta" style="cursor:pointer">
+    <label class="reset-toggle">
+      <${Icon} name="eyeOff" size=${17} />
       <input type="checkbox" checked=${ui.hideResets}
              onchange=${(e) => ui.setHideResets(e.target.checked)} />
-      ${" "}hide resets <span class="meta">(stats unaffected)</span></label>
+      <span>Hide resets</span></label>
+  </div>`;
+}
+
+function EmptyPractice({ v, t, ui, unassignedRows, freshIds, openCompare,
+                         hidden, showHidden, setShowHidden }) {
+  return html`<div class="practice-detail-grid is-primary">
+    <section class="practice-card objective-card objective-empty">
+      <div class="objective-heading">
+        <span class="objective-symbol"><${Icon} name="target" size=${20} /></span>
+        <span class="eyebrow">Active objective</span>
+        <div class="objective-name">
+          <span class="objective-context">Waiting for a target</span>
+          <h2>No active objective</h2>
+        </div>
+      </div>
+      <div class="objective-metrics">
+        <div class="rank-slot stable-empty compact">Rank —</div>
+        <div class="objective-live-state"><span class="live-state-icon">○</span><span>Idle</span></div>
+        <span class="pbtag">PB —</span>
+      </div>
+    </section>
+    <section class="practice-card analysis-card">
+      <div class="card-heading">
+        <div><span class="eyebrow">Analysis</span><h3>Attempt history</h3></div>
+      </div>
+      <div class="stable-chart-placeholder">
+        <${Icon} name="feed" size=${24} />
+        <b>Choose a star or segment to see its trend</b>
+        <span>Your session keeps recording while this view is idle.</span>
+      </div>
+      <${ControlBar} ui=${ui} />
+    </section>
+    <section class="practice-card attempts-card">
+      <div class="card-heading attempts-heading">
+        <div><span class="eyebrow">Practice log</span><h3>Unassigned attempts</h3></div>
+        <span class="meta">${unassignedRows.length} shown</span>
+      </div>
+      <div class="attempt-scroll">
+        ${unassignedRows.length
+          ? html`<${AttemptTable} attempts=${v.unassigned} rows=${unassignedRows}
+              t=${t} freshIds=${freshIds} openCompare=${openCompare} />`
+          : html`<div class="stable-empty">No attempts are waiting for a target.</div>`}
+      </div>
+      <div class="attempt-footer">
+        <${HideToggle} hidden=${hidden} showHidden=${showHidden}
+            setShowHidden=${setShowHidden} />
+      </div>
+    </section>
   </div>`;
 }
 
@@ -621,6 +744,7 @@ export function Practice({ t, openCompare }) {
     localStorage.getItem("sm64.hideResets") === "1");
   const ui = {
     sort, hideResets,
+    openStats: () => setMenuOpen(true),
     setSort: (v) => { localStorage.setItem("sm64.sort", v); setSortState(v); },
     setHideResets: (v) => {
       localStorage.setItem("sm64.hideResets", v ? "1" : "0");
@@ -648,7 +772,11 @@ export function Practice({ t, openCompare }) {
     setActiveRouteId(id);
   };
   const v = t.view;
-  if (!v) return html`<p class="meta">loading… (server unreachable? check /health)</p>`;
+  if (!v) return html`<${PageState} kind=${t.connected ? "loading" : "offline"}
+      title=${t.connected ? "Preparing your practice view" : "Waiting for the trainer"}
+      message=${t.connected
+        ? "Loading your target, attempts, and current stage…"
+        : "The app will reconnect automatically when the local server is available."} />`;
 
   const tgt = v.target || {};
   const segs = v.segments || [];
@@ -683,14 +811,16 @@ export function Practice({ t, openCompare }) {
   const pinnedSegs = starActive ? []
     : armedPins.length ? armedPins
     : stickyPin ? [stickyPin] : activeSeg ? [activeSeg] : [];
+  // Only one detail surface owns the fixed Objective / Analysis / Attempts
+  // tracks. Additional armed segments remain reachable in the stable index
+  // below instead of inserting more full cards above the crop.
+  const primarySeg = pinnedSegs[0];
   const restStars = v.stars.filter((sec) => sec !== activeStar);
-  const restSegs = segs.filter((sec) => !pinnedSegs.includes(sec));
-  // ONE list, stars and segments interleaved by recency — the server ships
-  // last_activity (journal recency, comparable ACROSS kinds; -1 = fresh)
-  // precisely so this merge works; raw attempt ids would not (segment ids
-  // carry a namespace offset). Stable sort keeps ties deterministic.
-  const restSections = [...restSegs, ...restStars]
-    .sort((a, b) => (b.last_activity ?? -1) - (a.last_activity ?? -1));
+  const restSegs = segs.filter((sec) => sec !== primarySeg);
+  // Deliberately stable at a fixed view: live attempts must not reshuffle this
+  // index underneath an OBS crop or a player's pointer. The active objective
+  // above carries recency; this list follows the server's catalog order.
+  const restSections = [...restStars, ...restSegs];
 
   const unassignedVisible = v.unassigned.filter(
     (a) => !a.cleared && a.outcome !== "abandoned");
@@ -698,41 +828,73 @@ export function Practice({ t, openCompare }) {
     (a) => a.cleared || a.outcome === "abandoned");
   const unassignedRows = showUnassignedHidden ? v.unassigned : unassignedVisible;
 
-  return html`
-    <div style="display:flex;justify-content:flex-end">
-      <button onclick=${() => setMenuOpen(!menuOpen)}>⚙ stats</button>
-    </div>
-    ${menuOpen && html`<${StatMenu} t=${t} close=${() => setMenuOpen(false)} />`}
-    <${ControlBar} ui=${ui} />
-    <div class="bar">
-      <label class="meta">Focus route${" "}
+  return html`<div class="practice-page">
+    <section class="practice-toolbar practice-card">
+      <label class="route-focus-control">
+        <${Icon} name="routes" size=${18} />
+        <span class="field-label">Practice plan</span>
         <select value=${activeRouteId ?? ""}
             onchange=${(e) => pickRoute(e.target.value ? Number(e.target.value) : null)}>
-          <option value="">— none (all practice) —</option>
+          <option value="">All practice</option>
           ${routes.map((r) => html`<option value=${r.id}>${r.name}</option>`)}
-        </select></label>
-      ${routeView ? html`<span class="meta">focused — non-route stars/segments hidden;
-        history still records</span>` : null}
-    </div>
+        </select>
+      </label>
+      <span class="toolbar-note">${routeView
+        ? "Route focus is on · history still records"
+        : "Choose from the current course or your practice index"}</span>
+      <button type="button" onclick=${() => setMenuOpen(!menuOpen)}>
+        <${Icon} name="feed" size=${17} />Stats
+      </button>
+    </section>
+    ${menuOpen && html`<div class="stats-popover">
+      <${StatMenu} t=${t} close=${() => setMenuOpen(false)} />
+    </div>`}
+
+    <${StageBanner} t=${t} />
+
+    ${activeStar
+      ? html`<${StarSection} key=${`${activeStar.course_id}:${activeStar.star_id}`}
+          sec=${activeStar} t=${t} ui=${ui} pinned=${true}
+          freshIds=${freshIds} openCompare=${openCompare} />`
+      : primarySeg
+        ? html`<${SegmentSection} key=${`seg:${primarySeg.segment_id}`}
+            sec=${primarySeg} t=${t} ui=${ui} pinned=${true}
+            freshIds=${freshIds} openCompare=${openCompare} />`
+        : html`<${EmptyPractice} v=${v} t=${t} ui=${ui}
+            unassignedRows=${unassignedRows} freshIds=${freshIds}
+            openCompare=${openCompare} hidden=${unassignedHidden}
+            showHidden=${showUnassignedHidden}
+            setShowHidden=${setShowUnassignedHidden} />`}
+
     ${routeView
-      ? html`<${RouteFocus} rv=${routeView} t=${t} ui=${ui} freshIds=${freshIds} openCompare=${openCompare} />`
-      : html`<div>
-        <${StageBanner} t=${t} />
-        ${pinnedSegs.map((sec) => html`<${SegmentSection} key=${`seg:${sec.segment_id}`} sec=${sec} t=${t} ui=${ui} pinned=${true} freshIds=${freshIds} openCompare=${openCompare} />`)}
-        ${activeStar && html`<${StarSection} key=${`${activeStar.course_id}:${activeStar.star_id}`} sec=${activeStar} t=${t} ui=${ui} pinned=${true} freshIds=${freshIds} openCompare=${openCompare} />`}
-        ${v.stars.length === 0 && segs.length === 0 && v.unassigned.length === 0
-          ? html`<p class="meta">No attempts this session yet — grab a star.</p>` : ""}
-        ${restSections.length > 0 && html`<div class="meta listhead">recent activity first</div>`}
-        ${restSections.map((sec) => sec.kind === "segment"
-          ? html`<${SegmentSection} key=${`seg:${sec.segment_id}`} sec=${sec} t=${t} ui=${ui} pinned=${false} freshIds=${freshIds} openCompare=${openCompare} />`
-          : html`<${StarSection} key=${`${sec.course_id}:${sec.star_id}`} sec=${sec} t=${t} ui=${ui} pinned=${false} freshIds=${freshIds} openCompare=${openCompare} />`)}
-        ${v.unassigned.length > 0 && html`<div class="starsec">
-          <div class="shead"><b>No target</b>
-            <span class="meta">failures before any star was grabbed or set</span></div>
-          <${AttemptTable} attempts=${v.unassigned} rows=${unassignedRows} t=${t} freshIds=${freshIds} openCompare=${openCompare} />
-          <${HideToggle} hidden=${unassignedHidden}
-                         showHidden=${showUnassignedHidden}
-                         setShowHidden=${setShowUnassignedHidden} />
-        </div>`}
-      </div>`}`;
+      ? html`<section class="practice-card route-focus-card">
+          <${RouteFocus} rv=${routeView} t=${t} ui=${ui}
+            freshIds=${freshIds} openCompare=${openCompare} />
+        </section>`
+      : restSections.length > 0 && html`<section class="practice-index">
+          <div class="index-heading">
+            <div><span class="eyebrow">Practice index</span><h3>Stars and segments</h3></div>
+            <span class="meta">Stable catalog order · open any item for its history</span>
+          </div>
+          <div class="practice-index-list">
+            ${restSections.map((sec) => html`<details class="practice-index-item">
+              <summary>
+                <span class="index-icon"><${Icon}
+                  name=${sec.kind === "segment" ? "segments" : "practice"} size=${18} /></span>
+                <span class="index-name">${sec.kind === "segment"
+                  ? sec.name : `${sec.course_name} · ${sec.star_name}`}</span>
+                <span class="meta">${sec.attempts.length} attempts</span>
+                <span class="index-chevron"><${Icon} name="chevron" size=${16} /></span>
+              </summary>
+              ${sec.kind === "segment"
+                ? html`<${SegmentSection} key=${`seg:${sec.segment_id}`}
+                    sec=${sec} t=${t} ui=${ui} pinned=${false}
+                    freshIds=${freshIds} openCompare=${openCompare} />`
+                : html`<${StarSection} key=${`${sec.course_id}:${sec.star_id}`}
+                    sec=${sec} t=${t} ui=${ui} pinned=${false}
+                    freshIds=${freshIds} openCompare=${openCompare} />`}
+            </details>`)}
+          </div>
+        </section>`}
+  </div>`;
 }
