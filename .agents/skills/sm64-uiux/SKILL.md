@@ -68,6 +68,21 @@ Define tokens and rules before broad edits:
 Follow the existing zero-build Preact/HTM architecture. Add no framework or runtime
 dependency unless the user explicitly approves it.
 
+**Hierarchy is shown by indentation — every level, no exceptions** (user rule
+2026-07-25, from a live audit). Any time one element is a child of another —
+nested collapsible groups, a sub-menu, child rows under a parent row, dependent
+dropdowns — the child indents ONE level past its parent, and that indent
+compounds with depth. A child flush with its parent reads as a sibling, which is
+a lie about the data. Prefer one rule on the nesting container so depth is
+supplied by the DOM (`.lib-group` in `index.html` is the reference
+implementation) rather than a per-level selector someone must extend.
+
+**Never show a state you are about to correct** (same audit). If options depend
+on data that arrives in more than one payload, render nothing until every input
+has settled — rendering the unfiltered set and pruning it afterwards makes the
+user watch the app change its mind. Derive filtered lists DURING render, never
+in an effect that runs after the first paint.
+
 ### 4. Implement in vertical slices
 
 Prefer this order:

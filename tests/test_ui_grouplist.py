@@ -19,14 +19,20 @@ def test_renderer_recurses_so_depth_is_not_capped_at_two():
     assert "depth=${depth + 1}" in GROUPLIST
 
 
-def test_css_indents_by_nesting_and_never_scrolls_sideways():
+def test_css_indents_every_level_and_never_scrolls_sideways():
     # There is no --depth custom property (review I4: it was dead — nothing
-    # read it). Indent comes from the DOM nesting itself: a depth-0 group has
-    # no guide line, a NESTED one does, via a more specific selector.
+    # read it). Indent comes from the DOM nesting itself, and EVERY level
+    # indents so a child always sits one step right of its parent (user rule
+    # 2026-07-25). One .lib-group rule carries margin + padding + the guide
+    # line; nesting compounds it.
     assert "--depth" not in INDEX
-    assert ".lib-cat > .lib-group { margin-left: 0; padding-left: 0; border-left: none; }" in INDEX
-    assert ".lib-cat .lib-cat > .lib-group" in INDEX
-    assert "border-left: 1px solid var(--border-soft);" in INDEX
+    group_rule = INDEX.split(".lib-group {", 1)[1].split("}", 1)[0]
+    for indent_property in ("margin-left:", "padding-left:",
+                            "border-left: 1px solid var(--border-soft)"):
+        assert indent_property in group_rule, indent_property
+    # No depth-specific exception may cancel the indent — that is exactly what
+    # left sub-group HEADERS flush with their parent (live audit 2026-07-25).
+    assert "border-left: none" not in INDEX
     # the row-stretch rule that stopped the horizontal scrollbar
     assert "width: auto" in INDEX
 

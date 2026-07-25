@@ -240,12 +240,17 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load }) {
       // omitted PATCH field stays untouched server-side.
       const body = Object.fromEntries(
         SAVE_FIELDS.map((field) => [field, d[field]]));
+      // Report WHICH segment was saved, so the parent can keep it open rather
+      // than dropping the user back to "Choose a segment to edit" (live audit
+      // 2026-07-25). A create only learns its id from the response.
+      let savedId;
       if (initial && initial.id != null) {
         await send("PUT", `/api/segments/${initial.id}`, body);
+        savedId = initial.id;
       } else {
-        await send("POST", "/api/segments", body);
+        savedId = (await send("POST", "/api/segments", body)).id;
       }
-      onSaved();
+      onSaved(savedId);
       return true;
     } catch (e) { setErr(String(e)); return false; }
   }
@@ -397,7 +402,14 @@ export function Segments({ t }) {
   const [editing, setEditing] = useState(null);   // null | "new" | def object
   const editorRef = useRef(null);   // the open Builder's {save, dirty} handle
   const [openGroups, toggleGroup] = useOpenGroups("sm64.segOriginsOpen");
-  const load = async () => setDefs(await getJSON("/api/segments"));
+  // Returns the rows as well as storing them — saving re-selects the row it
+  // just wrote, which needs the FRESH copy (its origin stamp and seed_dirty
+  // may both have changed server-side).
+  const load = async () => {
+    const rows = await getJSON("/api/segments");
+    setDefs(rows);
+    return rows;
+  };
   useEffect(() => { load();
     getJSON("/api/segments/vocab").then(setVocabData); }, []);
   if (!defs || !vocabData) return html`<${PageState}
@@ -526,7 +538,16 @@ export function Segments({ t }) {
           ? html`<${Builder} key=${editing === "new" ? "new" : editing.id}
               vocab=${vocabData} apiRef=${editorRef} t=${t} load=${load}
               initial=${editing === "new" ? null : editing}
-              onSaved=${() => { setEditing(null); load(); t.refresh(); }}
+              onSaved=${async (savedId) => {
+                // Stay on what you just saved (live audit 2026-07-25): closing
+                // the editor threw the user back to the empty state, and after
+                // creating a segment there was no way back to it but hunting
+                // the library. Re-select from the RELOADED rows so the editor
+                // shows the server's version, not the form's.
+                const rows = await load();
+                setEditing(rows.find((row) => row.id === savedId) || null);
+                t.refresh();
+              }}
               onCancel=${() => setEditing(null)} />`
           : html`<div class="workshop-empty">
               <span class="workshop-empty-icon"><${Icon} name="segments" size=${34} /></span>
