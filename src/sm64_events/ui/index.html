@@ -1064,12 +1064,16 @@
   .scope-chip.is-selected { border-color: var(--gold); background: rgba(240, 189, 50, .14); }
   .scope-chip-text { display: flex; flex-direction: column; line-height: 1.15; }
   .scope-chip-text b { font-size: 12px; font-weight: 600; }
-  /* Top-N strip (task D.2) — op.gg's "recent form" row: small, tier-tinted
-     icon tiles, never a table. Fixed tile size + flex-wrap keeps rows even
-     at any width instead of the row wrapping raggedly. */
-  .rank-topn-card h3 { margin: 0 0 8px; }
-  .topn-strip { display: flex; flex-wrap: wrap; gap: 8px; }
-  .topn-tile {
+  /* One tier-tinted icon tile per rankable entity — the Coverage strip.
+     (These names were `.topn-*` until round 9: they were introduced for a
+     "Best in scope" top-12 card that Coverage made redundant, and the card
+     was removed rather than left as a second row of the same tiles.)
+     `flex: 0 0 auto` is load-bearing: without it a full route's worth of
+     tiles SHRINK to fit their row while the height stays put, which is what
+     made the art look squished (live report 2026-07-25). */
+  .entity-strip { display: flex; flex-wrap: wrap; gap: 8px; }
+  .entity-tile {
+    flex: 0 0 auto;
     display: inline-flex; align-items: center; justify-content: center;
     width: var(--tile-size, 42px); height: var(--tile-size, 42px);
     border-radius: 8px; overflow: hidden;
@@ -1078,56 +1082,57 @@
   }
   /* Coverage's unpracticed entries: the art stays (you have to recognise
      WHICH star you haven't touched), the tier ring and the colour go. */
-  .topn-tile.is-unpracticed { opacity: .38; filter: grayscale(.75); }
-  .topn-tile.is-unpracticed:hover { opacity: .7; }
-  /* Coverage's own strip: tighter than Best-in-scope because it shows the
-     WHOLE scope — 24 entries for a 16 Star route, 120+ for a full run. The
-     cap plus scroll is what stops a long route pushing the chart and the
-     breakdown off the screen; five rows fit before it engages. */
-  .rank-coverage-strip { gap: 5px; max-height: 200px; overflow-y: auto; }
+  .entity-tile.is-unpracticed { opacity: .38; filter: grayscale(.75); }
+  .entity-tile.is-unpracticed:hover { opacity: .7; }
+  /* The whole scope in one strip — 24 entries for a 16 Star route, 120+ for
+     a full run. The cap plus scroll is what stops a long route pushing the
+     chart and the breakdown off the screen; four rows fit before it engages. */
+  .rank-coverage-strip { max-height: 216px; overflow-y: auto; }
   .rank-coverage { margin: 4px 0 3px; }
-  .topn-icon { width: 100%; height: 100%; object-fit: contain; }
-  .topn-icon.courseicon { width: 90%; height: 90%; }
+  .entity-tile-icon { width: 100%; height: 100%; object-fit: contain; }
+  .entity-tile-icon.courseicon { width: 90%; height: 90%; }
   /* The tiles are buttons (round 7: "I could click on it and get an overview
      of my history for that star"), so they need the padding/appearance reset
      every icon button in this design system takes. */
-  .topn-tile { padding: 0; cursor: pointer; }
-  .topn-tile.is-open { box-shadow: 0 0 0 2px rgba(240,189,50,.55); }
-  .topn-detail {
+  .entity-tile { padding: 0; cursor: pointer; }
+  .entity-tile.is-open { box-shadow: 0 0 0 2px rgba(240,189,50,.55); }
+  .entity-detail {
     margin-top: 10px; padding-top: 10px;
     border-top: 1px solid var(--border-soft);
   }
-  .topn-detail-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .topn-detail-head h4 { margin: 0; font-size: 15px; }
-  .topn-detail-head .meta { margin: 0; }
-  .topn-detail-spacer { flex: 1 1 auto; }
+  .entity-detail-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .entity-detail-head h4 { margin: 0; font-size: 15px; }
+  .entity-detail-head .meta { margin: 0; }
+  .entity-detail-spacer { flex: 1 1 auto; }
   /* Its own scroller with a fixed cap, not a growing list: this card sits
      above the chart and the breakdown, and a ten-row expansion that pushed
      both down the page would move the thing the user was reading. */
-  .topn-attempts {
+  .entity-attempts {
     max-height: 208px; overflow-y: auto; margin-top: 8px;
   }
-  .topn-attempts table { width: 100%; border-collapse: collapse; }
-  .topn-attempts td {
+  .entity-attempts table { width: 100%; border-collapse: collapse; }
+  .entity-attempts td {
     padding: 4px 8px; border-bottom: 1px solid var(--border-soft);
     font-size: 12px; white-space: nowrap;
   }
-  .topn-attempts td:first-child { width: 22px; }
-  .topn-attempts .topn-attempt-strat {
+  .entity-attempts td:first-child { width: 22px; }
+  .entity-attempts .entity-attempt-strat {
     width: 100%; white-space: nowrap; overflow: hidden;
     text-overflow: ellipsis; color: var(--muted);
   }
-  .topn-attempts tr.is-pb td { color: var(--gold); }
+  .entity-attempts tr.is-pb td { color: var(--gold); }
   .rank-card-main { display: flex; align-items: center; gap: 16px; margin: 10px 0; }
   .rank-card-main h2 { margin: 0; font-size: 24px; }
   /* Task C.5: names the MARELO-vs-saved-PB distinction so it reads as
      intentional, not as the two banners disagreeing by accident. */
   .rank-card-note { margin: 0 0 10px; font-style: italic; }
-  .rank-factors label { display: block; margin: 6px 0; font-size: 12px; color: var(--muted); }
-  .rank-factors i {
-    display: block; height: 8px; border-radius: 4px; background: var(--gold);
-    margin: 3px 0; max-width: 100%;
-  }
+  /* `.rank-factor` rows are DIVs — see the note in rankpage.js: as <label>s
+     they forwarded hover and click to the first coverage tile inside them,
+     so hovering the caption lit up an unrelated star. */
+  .rank-factor { display: block; margin: 6px 0; font-size: 12px; color: var(--muted); }
+  /* (The plain gold `.rank-factors i` bar that used to live here is gone:
+     Mastery became the ladder below and Coverage became a row of entity
+     tiles, so nothing in this block is a plain fill any more.) */
   /* Mastery as the LADDER it actually is (live request 2026-07-25 round 7 —
      "it's not very clear what mastery means here. Out of what?"). Mastery is
      a mean 0-100 SCORE, so the same anchors the chart's gridlines use apply
@@ -1163,12 +1168,21 @@
   }
   .rank-ladder-bands { right: 0; opacity: .26; }
   .rank-ladder-fill { opacity: 1; }
-  .rank-ladder-tick, .rank-ladder-pip {
-    position: absolute; transform: translateX(-50%); pointer-events: none;
+  /* One element per division line, drawing its own 1px pip (2px and
+     full-height where the line opens a new tier). The BOX is 9px wide and
+     transparent because every line carries a tooltip naming what reaching
+     it makes you (round 9) — a 1px element is not something a mouse can
+     find. `pointer-events` therefore stays default; only the decorative
+     ::after is inert. */
+  .rank-ladder-step {
+    position: absolute; top: 0; bottom: 0; width: 9px;
+    transform: translateX(-50%); display: flex; justify-content: center;
   }
-  .rank-ladder-tick { top: 0; bottom: 0; width: 2px; background: rgba(6,16,28,.9); }
-  .rank-ladder-pip {
-    top: 5px; height: 6px; width: 1px; background: rgba(255,255,255,.28);
+  .rank-ladder-step::after {
+    content: ""; width: 1px; margin: 5px 0; background: rgba(255,255,255,.28);
+  }
+  .rank-ladder-step.is-tier::after {
+    width: 2px; margin: 0; background: rgba(6,16,28,.9);
   }
   /* The reached-this-far marker: a bright edge on the fill, so the exact
      value is readable against a banded track that has plenty of edges of

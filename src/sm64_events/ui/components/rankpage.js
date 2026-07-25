@@ -95,6 +95,10 @@ function autoZoomDomain(scores) {
 // tests/test_ui_rank_chart.py, because this is the one place the UI draws
 // division geometry rather than reading it off the server.
 const DIVISIONS_PER_TIER = 5;
+// ...and its numerals, bottom of the tier first, mirroring the same file's
+// DIVISION_NUMERALS. Used only to LABEL the ladder's division lines on
+// hover; the division a SCORE lands in still comes from the server.
+const DIVISION_NUMERALS = ["V", "IV", "III", "II", "I"];
 
 // [{tier, from, to}] over the whole 0-100 score axis: Mario's band runs to
 // the ceiling, every other tier's to the next anchor up.
@@ -107,13 +111,6 @@ const BAND_GRADIENT = "linear-gradient(90deg, "
   + TIER_BANDS.map((band) => `${rankColor(band.tier)} ${band.from}% ${band.to}%`).join(", ")
   + ")";
 
-// The Mastery bar (round 7): a mean 0-100 score drawn on the ladder it is
-// scored against, instead of a gold bar filling toward an unstated maximum.
-// Tick per tier threshold, pip per division inside it, every stretch in its
-// own tier's colour. The value is a SCORE, never a rating — this component
-// deliberately renders no tier NAME for it, because naming one would mean
-// re-deriving `division_for` in JS, which is the server's job and the one
-// rule this file's chart follows everywhere else.
 // Which tier BAND a 0-100 score sits in. Tier only, never division: an
 // AGGREGATE has no ladder, so the server grades it against the full anchor
 // table too (`scoring.division_for` with `defined=None`), which is exactly
@@ -124,40 +121,62 @@ function bandForScore(score) {
     || TIER_BANDS[0];
 }
 
+// Every division line on the 0-100 axis: where it starts, and what reaching
+// it makes you. The tier's own floor is its BOTTOM division (V), so a tier
+// boundary is just the division line that happens to open a new tier.
+const LADDER_STEPS = TIER_BANDS.flatMap((band) => {
+  const width = (band.to - band.from) / DIVISIONS_PER_TIER;
+  return DIVISION_NUMERALS.map((numeral, index) => ({
+    at: band.from + width * index, tier: band.tier, division: numeral,
+    opensTier: index === 0,
+  }));
+});
+
+// The Mastery bar (round 7): a mean 0-100 score drawn on the ladder it is
+// scored against, instead of a gold bar filling toward an unstated maximum.
+// A line per division, a heavier one per tier, every stretch in its own
+// tier's colour. The value is a SCORE, never a rating — the tier NAME under
+// the YOU medal is the band it falls in (bandForScore, full-table like the
+// server's own aggregate path), and the division numeral, which would need
+// a ladder, is still never computed here.
 function LadderBar({ value }) {
   const filled = Math.max(0, Math.min(SCORE_CEILING, value || 0));
   const here = bandForScore(filled);
-  const pips = TIER_BANDS.flatMap((band) => {
-    const step = (band.to - band.from) / DIVISIONS_PER_TIER;
-    return Array.from({ length: DIVISIONS_PER_TIER - 1 },
-      (_, index) => band.from + step * (index + 1));
-  });
   return html`<div>
     <!-- Which band is which, named by the same medal every other rank
          surface uses, centred over its own stretch of the track (live
          request 2026-07-25 round 8 — "so that it's very clear what each one
-         is"). The band the value is currently in gets a bigger medal, sits
-         raised above the row and wears a YOU tag: the one thing this bar is
-         actually being read for is "where am I", and colour alone was not
-         answering it. -->
+         is"). The CURRENT rank's medal is bigger, raised, tagged YOU, and
+         sits over the value's ACTUAL position rather than its band's centre
+         (round 9: "our active rank should be above the ACTUAL position in
+         the bar — like that big white line"), so it travels along the track
+         as divisions are climbed instead of jumping a whole tier at a time.
+         Its band's small medal is dropped while it stands in for it — two
+         medals of the same rank on one row would read as a duplicate. -->
     <div class="rank-ladder-scale">
-      ${TIER_BANDS.map((band) => html`<span
-          class="rank-ladder-mark ${band.tier === here.tier ? "is-you" : ""}"
-          style=${`left:${(band.from + band.to) / 2}%`}
+      ${TIER_BANDS.filter((band) => band.tier !== here.tier).map((band) => html`<span
+          class="rank-ladder-mark" style=${`left:${(band.from + band.to) / 2}%`}
           title=${`${band.tier} — ${toPoints(band.from)} to ${toPoints(band.to)} pts`}>
-        ${band.tier === here.tier && html`<b class="rank-ladder-you">YOU</b>`}
-        <${Medal} rank=${band.tier} size=${band.tier === here.tier ? 22 : 13} />
+        <${Medal} rank=${band.tier} size=${13} />
       </span>`)}
+      <span class="rank-ladder-mark is-you" style=${`left:${filled}%`}
+          title=${`You are here — ${toPoints(filled)} pts`}>
+        <b class="rank-ladder-you">YOU</b>
+        <${Medal} rank=${here.tier} size=${22} />
+      </span>
     </div>
     <div class="rank-ladder">
     <span class="rank-ladder-bands" style=${`background-image:${BAND_GRADIENT}`}></span>
     ${filled > 0 && html`<span class="rank-ladder-fill" style=${
       `width:${filled}%;background-image:${BAND_GRADIENT};`
       + `background-size:${(100 / filled) * 100}% 100%`}></span>`}
-    ${pips.map((at) => html`<span class="rank-ladder-pip" style=${`left:${at}%`}></span>`)}
-    ${TIER_BANDS.filter((band) => band.from > 0).map((band) => html`<span
-      class="rank-ladder-tick" style=${`left:${band.from}%`}
-      title=${`${band.tier} starts at ${toPoints(band.from)} pts`}></span>`)}
+    <!-- Every line is hoverable and says what reaching it makes you (round
+         9). The element is a 9px transparent box drawing its own 1-2px line,
+         because a 1px pip is not a hit target. -->
+    ${LADDER_STEPS.filter((step) => step.at > 0).map((step) => html`<span
+      class="rank-ladder-step ${step.opensTier ? "is-tier" : ""}"
+      style=${`left:${step.at}%`}
+      title=${`${step.tier} ${step.division} — MARELO ${toPoints(step.at)} pts`}></span>`)}
     ${filled > 0 && html`<span class="rank-ladder-head" style=${`left:${filled}%`}></span>`}
     </div>
   </div>`;
@@ -516,14 +535,14 @@ function EntityTile({ t, entity, size = 42, open, onToggle }) {
     courseStemForEntityKey(entity.key), fallbackSlot);
   const practiced = entity.score != null;
   return html`<button type="button"
-      class="topn-tile ${open ? "is-open" : ""} ${practiced ? "" : "is-unpracticed"}"
+      class="entity-tile ${open ? "is-open" : ""} ${practiced ? "" : "is-unpracticed"}"
       style=${`--tile-size:${size}px;`
         + (practiced ? `--tier-tint:${rankColor(entity.tier)}` : "")}
       onclick=${onToggle} aria-expanded=${open ? "true" : "false"}
       title=${practiced
         ? `${entity.label} — ${entity.tier} ${entity.division} · ${fmtPoints(entity.score)} pts`
         : `${entity.label} — not practiced yet`}>
-    <img class="topn-icon ${isGenericArt(iconSrc) ? "" : "courseicon"}" src=${iconSrc}
+    <img class="entity-tile-icon ${isGenericArt(iconSrc) ? "" : "courseicon"}" src=${iconSrc}
          onerror=${(event) => fallbackToGenericStar(event, fallbackSlot)}
          alt="" draggable="false" />
   </button>`;
@@ -562,7 +581,7 @@ const TOP_N_ATTEMPTS = 10;
 // the store already has — deliberately a SUMMARY, not a second practice
 // card: the timeline, trend graph, replays and per-attempt tools stay one
 // click away behind "Practice this", which is the surface built for them.
-function TopEntityDetail({ t, entity, onClose }) {
+function EntityDetail({ t, entity, onClose }) {
   const section = sectionForKey(t.view, entity.key);
   // Segments are RTA-only whatever the view clock is — the same rule
   // views.py applies when it builds their sections.
@@ -574,13 +593,13 @@ function TopEntityDetail({ t, entity, onClose }) {
         .sort((left, right) => right.id - left.id)
         .slice(0, TOP_N_ATTEMPTS)
     : [];
-  return html`<div class="topn-detail">
-    <div class="topn-detail-head">
+  return html`<div class="entity-detail">
+    <div class="entity-detail-head">
       <${Crest} tier=${entity.tier} division=${entity.division} size=${28} />
       <h4>${entity.label}</h4>
       <span class="meta">${fmtPoints(entity.score)} pts${
         pb ? ` · PB ${pb.display} (${clock})` : " · no saved PB"}</span>
-      <span class="topn-detail-spacer"></span>
+      <span class="entity-detail-spacer"></span>
       <button type="button" class="chip"
         onclick=${() => practiceEntity(entity.key, t)}>Practice this</button>
       <button type="button" class="chip" onclick=${onClose}>Close</button>
@@ -590,52 +609,29 @@ function TopEntityDetail({ t, entity, onClose }) {
           header's scope to Lifetime, or open it with "Practice this".</p>`
       : !rows.length
         ? html`<p class="meta">No successful attempts in this scope yet.</p>`
-        : html`<div class="topn-attempts"><table><tbody>
+        : html`<div class="entity-attempts"><table><tbody>
           ${rows.map((attempt) => html`<tr key=${attempt.id}
               class=${attempt.is_current_pb ? "is-pb" : ""}>
             <td>${attempt.rank ? html`<${Medal} rank=${attempt.rank} size=${14} />` : ""}</td>
             <td><b>${attempt[clock] || "—"}</b></td>
-            <td class="topn-attempt-strat">${attempt.strat_tag || "—"}</td>
+            <td class="entity-attempt-strat">${attempt.strat_tag || "—"}</td>
             <td>${attempt.is_current_pb ? "PB" : ""}</td>
           </tr>`)}
         </tbody></table></div>`}
   </div>`;
 }
 
-const TOP_N_STRIP_SIZE = 12;
+// The "Best in scope" card that used to live here (task D.2, an op.gg-style
+// top-12 row) was REMOVED in round 9, 2026-07-25: once Coverage became every
+// entity as a tile — tier-ringed when practiced, dim when not — a second row
+// of the same tiles showing a subset of the same entities was, in the user's
+// words, "redundant". "What am I best at" is still answerable, by the
+// breakdown's Sort: biggest gain, on the same page.
 
-// Task D.2: the CURRENT scope's best-scoring entities, modelled on op.gg's
-// "Recent Games" row -- a scannable answer to "what am I actually good at"
-// that a breakdown table can't give at a glance. Sourced from `data.entities`
-// (the SAME breakdown payload the table below already fetched) -- no new
-// endpoint. An unpracticed entity (score null, which also covers excluded
-// rows -- they carry the same null score) never appears: there is nothing to
-// be good at yet.
-function TopStrip({ t, entities }) {
-  const [openKey, setOpenKey] = useState(null);
-  const top = [...entities]
-    .filter((entity) => entity.score != null)
-    .sort((entityA, entityB) => entityB.score - entityA.score)
-    .slice(0, TOP_N_STRIP_SIZE);
-  if (!top.length) return null;
-  // Resolved from THIS render's list, never from the state alone: a scope
-  // switch or a rank change re-sorts the strip, and an entity that dropped
-  // out of the top 12 must not leave its panel open under a strip that no
-  // longer contains it.
-  const open = top.find((entity) => entity.key === openKey) || null;
-  return html`<div class="practice-card rank-topn-card">
-    <h3>Best in scope</h3>
-    <div class="topn-strip">
-      ${top.map((entity) => html`<${EntityTile} key=${entity.key} t=${t}
-        entity=${entity} open=${entity.key === openKey}
-        onToggle=${() => setOpenKey(entity.key === openKey ? null : entity.key)} />`)}
-    </div>
-    ${open && html`<${TopEntityDetail} t=${t} entity=${open}
-      onClose=${() => setOpenKey(null)} />`}
-  </div>`;
-}
-
-const COVERAGE_TILE_PX = 30;
+// Same size as the removed Best-in-scope tiles: this strip is now the only
+// place the art appears on this tab, and 30px was sized for a card that had
+// a bigger sibling above it.
+const COVERAGE_TILE_PX = 42;
 
 // Coverage as the THING it counts, not a bar (live request 2026-07-25 round
 // 8): every rated entry in the scope, in the scope's own order — route order
@@ -658,13 +654,13 @@ function CoverageStrip({ t, data, caption }) {
   // detail panel rendered inside the label would otherwise sit between the
   // tiles and the sentence explaining them.
   return html`<div class="rank-coverage">
-    <div class="topn-strip rank-coverage-strip">
+    <div class="entity-strip rank-coverage-strip">
       ${rated.map((entity) => html`<${EntityTile} key=${entity.key} t=${t}
         entity=${entity} size=${COVERAGE_TILE_PX} open=${entity.key === openKey}
         onToggle=${() => setOpenKey(entity.key === openKey ? null : entity.key)} />`)}
     </div>
     <span class="meta">${caption}</span>
-    ${open && html`<${TopEntityDetail} t=${t} entity=${open}
+    ${open && html`<${EntityDetail} t=${t} entity=${open}
       onClose=${() => setOpenKey(null)} />`}
   </div>`;
 }
@@ -773,27 +769,38 @@ export function RankPage({ t }) {
                  behavior was a deliberate choice, not a bug to quietly fix. -->
             <p class="meta rank-card-note">MARELO grades every attempt automatically —
               it doesn't wait for a saved PB the way the practice card's rank banner does.</p>
+            <!-- rank-factor is a DIV, not the label it started as: a label
+                 forwards hover and click to its first labelable descendant,
+                 and once these rows grew buttons (the coverage tiles) that
+                 meant hovering anywhere in the row — the caption, the empty
+                 space beside it — lit up the first tile, and clicking it
+                 would have opened that entity (live report 2026-07-25 round
+                 9). Nothing here labels a single control any more, so
+                 nothing should behave as though it does.
+                 (No backticks in a comment inside an htm template: the first
+                 one ENDS the template literal and the rest of the comment is
+                 parsed as JS. This exact comment did that, twice.) -->
             <div class="rank-factors">
               <!-- Mastery stays 0-100 (task C.4): it's a MEAN SCORE, not a
                    rating on the tier ladder (marelo = mastery x coverage),
                    so running it through toPoints would imply a fourth scale
                    that doesn't exist. fmtScore on purpose, not fmtPoints. -->
-              <label>Mastery <${LadderBar} value=${tweenedMastery} />
+              <div class="rank-factor">Mastery <${LadderBar} value=${tweenedMastery} />
                 <span class="meta">${`${fmtScore(tweenedMastery)} / 100 — the average `
                   + `rank score of the ${data.practiced} `
                   + `${data.practiced === 1 ? "entry" : "entries"} you have practiced, `
-                  + "on the same ladder the chart below draws"}</span></label>
-              <label>Coverage <${CoverageStrip} t=${t} data=${data}
+                  + "on the same ladder the chart below draws"}</span></div>
+              <div class="rank-factor">Coverage <${CoverageStrip} t=${t} data=${data}
                 caption=${`${data.practiced} of ${data.n} rated `
                   + `${data.n === 1 ? "entry" : "entries"} practiced — dim tiles are `
                   + "the ones you have not run yet. MARELO is mastery × coverage, so "
                   + "an unpractised entry costs rating even when the ones you do "
-                  + "practise are strong"} /></label>
+                  + "practise are strong"} /></div>
             </div>
             ${data.n < 5 && html`<p class="meta">Small scope — ${data.n} rated ${
               data.n === 1 ? "entry" : "entries"}.</p>`}`}
     </div>
-    ${data && !dataErr && html`<${TopStrip} t=${t} entities=${data.entities} />
+    ${data && !dataErr && html`
       <div class="practice-card">
         <h3>Progress</h3>
         <${HistoryChart} points=${points} />
