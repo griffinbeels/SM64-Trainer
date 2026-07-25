@@ -190,23 +190,9 @@ rows, with the route library's rules carried over deliberately:
 - Group headers carry a count badge; the existing `.count-badge` header count
   keeps showing `shown / total` while filtering.
 
-**Shared renderer.** The nested group chrome is extracted from `routes.js` into
-`ui/components/grouplist.js`:
-
-```js
-GroupedList({ groups, openKey, renderRow })
-// groups: [[topLabel, [[subLabel | null, items]]]]  — the shape routes.js's
-// groupByCategory already returns
-```
-
-Both libraries feed it a pre-grouped tree; each keeps its own grouping
-function (free-text path for routes, derived origin for segments) and its own
-row renderer. CSS classes are renamed `.route-cat*` → `.lib-cat*` in the one
-index.html block, with a grep sweep for stragglers. Rationale: copying ~80
-lines of collapse/indent logic that took two commits to get right is how the
-next bug lands in only one of the two copies — and spec B's picker is a third
-consumer. Because this touches route code that landed the same day, it is its
-own task with a headless render check on **both** tabs.
+**Shared renderer** — see §9. The library feeds `GroupedList` a tree built by
+`buildTree`; the collapse chrome, indent rules and localStorage handling live
+in one place for both libraries and for spec B's picker.
 
 ## 6. Testing
 
@@ -249,7 +235,62 @@ and `world_regions()`. That spec owns the UI/UX research: prior art on
 categorized entity pickers, keyboard and search behaviour, and how it degrades
 on a narrow OBS pane.
 
-## 9. Risks
+## 9. Extensibility contract
+
+This feature is the second consumer of a pattern that will have a third (the
+picker modal) and probably more. Three things are therefore built as reusable
+contracts rather than as segment-library code — each justified by consumers
+that exist or are already specced, not by speculation:
+
+**(a) `ui/group.js` — `buildTree(items, levels)`.** Pure, no Preact. `levels`
+is an ordered list of `{of, label, order}` functions: `of(item)` returns that
+level's key (or `null` to place the item directly at the parent), `label(key)`
+its display name, `order(key)` its sort key. Routes pass two levels that split
+the free-text category path; segments pass region then place; the picker will
+pass course then star. Returns the node tree below. One grouping engine, three
+grouping *policies*.
+
+**(b) `ui/components/grouplist.js` — `GroupedList({nodes, openKey, renderRow})`.**
+Renders a node tree of **any depth**, recursively:
+
+```js
+// node: { key, label, count, items?, children? }   // key is path-unique
+```
+
+Depth is a CSS custom property (`--depth`) on one `.lib-cat` class, not a
+`.route-cat` / `.route-subcat` pair — so a third level costs nothing and the
+indent rule exists once. Open state is an open-set in localStorage under
+`openKey`, keyed by node path (the inversion from the route work is preserved:
+nothing stored = everything collapsed). `renderRow` is the caller's; the
+component owns only chrome. Consumers today: routes (`sm64.routeCatsOpen`),
+segments (`sm64.segOriginsOpen`).
+
+**(c) One taxonomy JSON shape, served from one place.** `vocab().origins` uses
+the shape the picker will reuse for courses/stars/levels:
+
+```json
+{"key": "6:1", "label": "Lobby",
+ "children": [{"key": "17", "label": "Bowser in the Dark World"}]}
+```
+
+Nothing about it is origin-specific. A future taxonomy adds a sibling key to
+`vocab()`, and `buildTree`/`GroupedList` render it with no new UI code.
+
+**(d) Derivation stays a table, not a branch chain.** `start_origin`'s
+per-trigger rule is a module-level dict —
+`{"level_exit": ("from", "from_subarea"), "level_enter": ("to", "to_subarea"),
+…}` — sitting beside `arm_level`'s own reader. Adding a trigger type to
+`TRIGGERS` means adding one row here, in the same file, or accepting `None`
+(→ "Anywhere") by default. The registry-driven discipline the rest of
+`segments.py` already follows.
+
+The CSS rename `.route-cat*` → `.lib-cat*` happens in the one index.html
+block with a grep sweep for stragglers. Because (a) and (b) touch route code
+that landed the same day, the extraction is its own task, behaviour-preserving,
+with a headless render check on **both** tabs before anything segment-specific
+is built on top.
+
+## 10. Risks
 
 - **A wrong `WORLD_EDGES_*` row now mis-files segments**, not just a dropdown
   option. Mitigated by the coverage test and by the fact that both consumers
