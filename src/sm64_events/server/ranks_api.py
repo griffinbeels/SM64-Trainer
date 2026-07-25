@@ -59,20 +59,62 @@ def _rank_mode(service) -> str:
     return mode if mode in classify.RANK_MODES else classify.DEFAULT_RANK_MODE
 
 
-def _groups(service, scope_id: str):
+def _groups(service, scope_id: str, excluded: set[str] | None = None):
     """Resolve a scope or 404. Segment->course comes from each definition's
-    start levels, the same source the stage banner uses."""
+    start levels, the same source the stage banner uses.
+
+    `excluded` is the set actually applied to `rankable_entities`; the
+    default (None) uses the user's real exclusion set
+    (service.rank_excluded()). Passing an EMPTY set resolves scope membership
+    WITHOUT the exclusion filter -- the second resolution
+    `_append_excluded_rows` uses to recover excluded rows for display without
+    letting them back into the aggregate."""
     if service.ranks is None or service.db is None:
         raise HTTPException(503, "rank standards unavailable")
     ladders = {key: service.ranks.ladders(key)
                for key in service.ranks.to_json()["entities"]}
-    rankable = scopes.rankable_entities(ladders, service.rank_excluded())
+    rankable = scopes.rankable_entities(
+        ladders, service.rank_excluded() if excluded is None else excluded)
     groups = scopes.entity_groups(
         scope_id, rankable=rankable, routes=service.db.routes(),
         segment_courses=segment_courses(service.db))
     if groups is None:
         raise HTTPException(404, f"unknown scope {scope_id!r}")
     return groups
+
+
+def _append_excluded_rows(service, scope_id: str, groups: list[dict],
+                          excluded: set[str], out: dict) -> None:
+    """Exclusion must be reversible from the UI, not just a raw db edit.
+    scores.aggregate() never sees an excluded entity -- it left the rankable
+    set before `groups` was even built -- so without this, an excluded row
+    could never be found again in the response to flip `excluded` back off
+    (the `entity["excluded"]` field on aggregate's own rows was consequently
+    always False; dead code). Resolve the scope's membership a SECOND time
+    with NO exclusion filter and append the difference as inert rows: no
+    score/tier/division, gain 0.0 (an excluded entity earns the scope
+    nothing while it stays out).
+
+    Appended, not interleaved: an excluded entity holds no K-of-N slot (only
+    aggregate() assigns those, and it never saw this entity), so there is no
+    live position to interleave it into. Within the appended block, order
+    follows the SAME group/step order aggregate() would have used, so a
+    route-ordered UI still reads sensibly for the excluded tail; a
+    gain-ordered UI trails them regardless, since gain=0.0 is the floor."""
+    if not excluded:
+        return
+    all_groups = _groups(service, scope_id, excluded=set())
+    present_keys = {key for group in groups for key in group["candidates"]}
+    seen: set[str] = set()
+    for group in all_groups:
+        for key in group["candidates"]:
+            if key in present_keys or key in seen:
+                continue
+            seen.add(key)
+            out["entities"].append({
+                "key": key, "score": None, "gain": 0.0,
+                "label": entity_label(service.db, key),
+                "excluded": True, "tier": None, "division": None})
 
 
 def _build_marelo(service, scope_id: str) -> dict:
@@ -84,12 +126,17 @@ def _build_marelo(service, scope_id: str) -> dict:
     excluded = service.rank_excluded()
     for entity in out["entities"]:
         entity["label"] = entity_label(service.db, entity["key"])
+        # Always False here: `groups` above was already built from the
+        # NON-excluded rankable set, so nothing excluded ever reaches
+        # aggregate's numerator/denominator. The excluded rows themselves
+        # are appended below, outside the scored block.
         entity["excluded"] = entity["key"] in excluded
         if entity["score"] is None:
             entity["tier"] = entity["division"] = None
         else:
             entity["tier"], entity["division"] = scoring.division_for(
                 entity["score"])
+    _append_excluded_rows(service, scope_id, groups, excluded, out)
     out["scope_id"] = scope_id
     out["label"] = _scope_label(service, scope_id)
     out["celebration"] = None
