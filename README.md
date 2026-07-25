@@ -62,8 +62,8 @@ rating.
 | Method | Path | Body / Query | Effect |
 |---|---|---|---|
 | `GET` | `/api/marelo/scopes` | — | Every pickable scope (`overall` first, then routes, then courses) + `active` (the current default scope id). |
-| `GET` | `/api/marelo` | `?scope=<id>` (optional) | `{scope_id, label, marelo, mastery, coverage, tier, division, next_division_at, n, practiced, entities:[{key,label,score,tier,division,gain,excluded}], celebration}` for one scope (defaults to the active route, else Overall). `404` for an unknown scope. |
-| `GET` | `/api/marelo/history` | `?scope=<id>` (optional) | `{scope_id, points:[{utc,marelo,tier,division}]}` — the scope's MARELO recomputed chronologically from the practice journal against CURRENT standards (a seed bump reshapes the past). |
+| `GET` | `/api/marelo` | `?scope=<id>` (optional) | `{scope_id, label, marelo, mastery, coverage, tier, division, next_division_at, division_progress, n, practiced, entities:[{key,label,score,tier,division,gain,excluded}], celebration}` for one scope (defaults to the active route, else Overall). `404` for an unknown scope. |
+| `GET` | `/api/marelo/history` | `?scope=<id>` (optional) | `{scope_id, points:[{utc,marelo,tier,division,practiced}]}` — the scope's MARELO recomputed chronologically from the practice journal against CURRENT standards (a seed bump reshapes the past). |
 | `POST` | `/api/marelo/exclude` | `{"entity": "<key>", "excluded": true\|false}` | Opt an entity out of (or back into) every scope's numerator AND denominator. |
 | `POST` | `/api/marelo/ack` | `{"scope": "<id>", "key": N}` | Raise the scope's celebration watermark once the UI has actually shown a rank-up (never on fetch — see the `marelo` payload's `celebration` field). |
 
