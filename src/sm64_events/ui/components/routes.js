@@ -144,16 +144,25 @@ function ItemPicker({ catalog, segs, vocab, t, onPick, label }) {
   const segGroups = segmentOptions(segs, (vocab || {}).origins);
   const [segId, setSegId] = useState(segs[0] ? String(segs[0].id) : null);
   // Icon context assembled HERE, not inside the picker: the picker resolves
-  // no domain art of its own. segmentLevels comes from `segs` (each carries
-  // start_levels), so a segment row shows the same art the practice banner
-  // gives that segment.
+  // no domain art of its own. segmentLevels comes from each row's ORIGIN — the
+  // canonical arm location the server already derives — NOT from start_levels,
+  // which /api/segments does not carry (that field is on the session view's
+  // segment_targets). Assuming it did made every segment row fall back to a
+  // plain star, found by a live render check 2026-07-25.
   const iconContext = {
     courseIcons: (t && t.courseIcons) || {},
     starIconsMode: (t && t.starIcons) || "course",
     iconOverrides: ((t && t.view) || {}).icon_overrides || {},
     segmentLevels: Object.fromEntries(
-      (segs || []).map((segment) => [String(segment.id),
-                                     segment.start_levels || []])),
+      (segs || []).map((segment) => {
+        // origin.key is a world-node key: "30" (a level) or "6:1" (a castle
+        // subarea). Either way the level is the part before the colon.
+        const originKey = (segment.origin || {}).key;
+        const level = originKey == null
+          ? null : Number(String(originKey).split(":")[0]);
+        return [String(segment.id),
+                level == null || Number.isNaN(level) ? [] : [level]];
+      })),
   };
   const pick = () => {
     // Neither branch has anything to post before its picker resolves a first

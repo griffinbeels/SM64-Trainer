@@ -115,3 +115,15 @@ def test_segment_rows_carry_the_art_the_banner_uses():
     # segmentLevels feeds optionIcon's segment branch, which reuses the
     # banner's override -> level-fallback chain.
     assert "segmentLevels" in ROUTES
+
+
+def test_segment_art_comes_from_the_origin_not_start_levels():
+    # /api/segments rows carry `origin`, NOT `start_levels` — that field is on
+    # the session view's segment_targets. Assuming otherwise made every segment
+    # row in the route editor fall back to a plain gold star (live render
+    # check, 2026-07-25). The origin key is the canonical arm location anyway.
+    assert "segment.origin || {}" in ROUTES
+    # The wrong EXPRESSION, not the bare word — the comment above the fix
+    # mentions start_levels to explain the bug, and a guard that a comment can
+    # trip is not a guard (this file has caught that shape twice already).
+    assert "segment.start_levels" not in ROUTES
