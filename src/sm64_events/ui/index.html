@@ -666,7 +666,7 @@
   .objective-card.active-star { border-color: rgba(240,189,50,.72); }
   .objective-heading {
     min-width: 0; display: grid;
-    grid-template-columns: 28px auto minmax(220px,1fr) minmax(150px,220px);
+    grid-template-columns: 28px auto minmax(180px,1fr) minmax(150px,380px);
     gap: .65rem; align-items: center;
   }
   .objective-symbol {
@@ -680,11 +680,23 @@
   .objective-name h2 {
     overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
   }
-  .objective-strategy { min-width: 0; display: grid; grid-template-columns: auto 1fr; gap: .4rem; align-items: center; }
+  /* Third column (auto) added 2026-07-25 round 4 for StrategyFastestHint --
+     the fastest-known-strategy name moved HERE from the rank banner (it and
+     the banner's next: target were clipping mid-word competing for one
+     line). This row is wider and carries only text, no medal/bar, so it has
+     the room the banner didn't. */
+  .objective-strategy {
+    min-width: 0; display: grid; grid-template-columns: auto minmax(70px,1fr) auto;
+    gap: .4rem; align-items: center;
+  }
   .objective-strategy select { width: 100%; min-width: 0; }
+  .objective-strategy-fastest {
+    color: var(--muted); white-space: nowrap; font-size: .82rem;
+    overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+  }
   .objective-metrics {
-    min-width: 0; display: grid; grid-template-columns: minmax(380px,2.4fr) 92px minmax(130px,auto);
-    gap: 14px; align-items: center; border-top: 1px solid var(--border-soft);
+    min-width: 0; display: grid; grid-template-columns: minmax(420px,2.6fr) 78px minmax(112px,auto);
+    gap: 12px; align-items: center; border-top: 1px solid var(--border-soft);
     margin-top: .62rem; padding-top: .55rem;
     position: relative; z-index: 0; /* stacking context for the rank wash */
   }
@@ -733,18 +745,8 @@
     flex: 0 0 auto; color: var(--muted); text-transform: uppercase;
     letter-spacing: .06em; font-size: .62rem; font-weight: 650;
   }
-  /* fastest_strat (views.py::entity_rank, Overall Rank banner only) -- why
-     this rank reads lower than the Strategy Rank beside it. Same line as
-     the tier/division, own ellipsis so a long strategy name clips instead
-     of wrapping. flex-shrink:3 (vs rank-banner-next's default 1) makes it
-     give up its space FIRST under pressure -- "next:" is the number a run
-     is actually chasing and stays legible; "fastest here" is the softer,
-     explanatory extra (full name still lives in the title attribute). */
-  .rank-banner-fastest {
-    max-width: 64px; flex-shrink: 4; overflow: hidden; text-overflow: ellipsis;
-  }
   .rank-banner-row {
-    min-width: 0; display: flex; align-items: center; gap: .5rem;
+    min-width: 0; display: flex; align-items: center; gap: .38rem;
     white-space: nowrap; overflow: hidden;
   }
   .rank-banner-name { font-weight: 800; letter-spacing: .4px; }
@@ -2142,11 +2144,13 @@
        258px card height (below) has the vertical room this budget never
        had at 122px. */
     .rank-slot { min-height: 45px; flex-direction: column; align-items: stretch; gap: .35rem; }
-    /* Narrow cards still have the least horizontal room; the
-       fastest-strategy fact is the first thing to give up its slice of the
-       line (the tooltip still carries it) so the kicker + tier/division
-       stay legible. */
-    .rank-banner-fastest { display: none; }
+    /* The strategy header reverts to 2 columns here (above); the
+       fastest-strategy hint would otherwise drop to its own row (a 3rd
+       grid child with only 2 explicit columns) rather than sit inline, so
+       it's dropped at this width instead -- same "least load-bearing text
+       gives way first" rule as round 3's banner crowding fix, just applied
+       one level up now that the fastest name lives in the header. */
+    .objective-strategy-fastest { display: none; }
     .objective-live-state { grid-column: 1; grid-row: 2; border: 0; justify-content: flex-start; }
     .objective-card .pbtag { grid-column: 2; grid-row: 1 / span 2; align-self: center; white-space: normal; }
     .analysis-card { height: 520px; min-height: 520px; }

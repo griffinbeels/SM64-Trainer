@@ -78,15 +78,16 @@ function sentinelMsg(banner) {
 // so a good run visibly moves the bar instead of barely denting a
 // whole-tier span, and the number to chase is right there next to it.
 //
-// `fastest_strat` only ever appears on the Overall banner's data (entity_rank
-// carries it; _section_banner never does) — reading it directly off `banner`
-// needs no per-caller special-casing, the empty-on-the-other-banner case is
-// just `undefined` and the line omits itself. `note` is an override for that
-// same slot — practice.js uses it for the one case fastest_strat can't speak
-// to itself: the active strategy already IS the star's fastest known one, so
-// rendering a second, numerically-identical banner would look like a glitch
-// rather than confirm anything (spec 2026-07-25 round 3, "your call").
-export function RankBanner({ label, banner, note }) {
+// The Overall banner's `fastest_strat` does NOT render here (round 4,
+// 2026-07-25): on the live-report card it and the `next:` target both got
+// clipped mid-word competing for the same line — a tooltip on truncated
+// visible text still reads as a layout fault. It moved to the card's
+// strategy header instead (practice.js, next to the strategy picker, where
+// the two strategy NAMES sit next to each other and the comparison is the
+// point) — a wider, quieter region than this banner has room for. This
+// component's job shrank back to what always fit: rank / division / bar /
+// next, none of which can be abbreviated.
+export function RankBanner({ label, banner }) {
   if (!banner || !banner.rank) {
     return html`<div class="rank-banner rank-banner-empty">
       <span class="rank-banner-kicker">${label}</span>
@@ -95,21 +96,27 @@ export function RankBanner({ label, banner, note }) {
   }
   const c = rankColor(banner.rank);
   const basis = banner.basis;
-  const extra = note || (banner.fastest_strat && `· ${banner.fastest_strat}`);
-  const extraTitle = note || (banner.fastest_strat && `fastest strategy here: ${banner.fastest_strat}`);
   const nextLabel = banner.next_tier ? `${banner.next_tier} ${banner.next_division}` : null;
   const gap = banner.next_gap_cs != null ? (banner.next_gap_cs / 100).toFixed(2) : null;
   const fillPct = banner.next_tier ? Math.round((banner.fill || 0) * 100) : 100;
+  // The mode name (e.g. "Avg 10") is dropped from the VISIBLE basis text —
+  // round 4, 2026-07-25: it's global app state already shown in the
+  // header's Rank Mode picker, not something this row needs to repeat, and
+  // dropping it (plus "avg of") was the difference between fitting and
+  // overflowing on the avg-mode fixture. Still in the title for anyone who
+  // wants it. This is wording around the rank data, not the rank data
+  // itself — the tier/division/count/time stay exactly as graded.
+  const basisText = basis && `${basis.count}${basis.window ? `/${basis.window}` : ""} · ${basis.display}`;
+  const basisTitle = basis && `${MODE_LABEL[banner.mode] || banner.mode} — `
+    + `avg of ${basis.count}${basis.window ? `/${basis.window}` : ""} valid runs`;
   return html`<div class="rank-banner">
     <div class="rank-banner-row">
       <span class="rank-banner-kicker">${label}</span>
       <${Medal} rank=${banner.rank} size=${26} />
       <b class="rank-banner-name">${banner.rank.toUpperCase()}${banner.division ? ` ${banner.division}` : ""}</b>
-      ${basis && html`<span class="meta rank-banner-basis">
-        ${MODE_LABEL[banner.mode] || banner.mode} · avg of ${basis.count}${basis.window ? `/${basis.window}` : ""} · ${basis.display}</span>`}
-      ${extra && html`<span class="meta rank-banner-fastest" title=${extraTitle}>${extra}</span>`}
+      ${basis && html`<span class="meta rank-banner-basis" title=${basisTitle}>${basisText}</span>`}
       <span class="meta rank-banner-next">${nextLabel
-        ? html`next: <b>${nextLabel}</b>${gap ? ` −${gap}s` : ""}` : "top rank"}</span>
+        ? html`→ <b>${nextLabel}</b>${gap ? ` −${gap}s` : ""}` : "top rank"}</span>
     </div>
     <div class="rank-progress-track"
         title=${nextLabel ? `${fillPct}% of the way to ${nextLabel}` : "top rank"}>

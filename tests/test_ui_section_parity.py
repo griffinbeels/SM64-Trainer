@@ -78,20 +78,22 @@ def test_two_rank_banners_are_rendered_for_both_kinds():
     """Rule 11: a feature built for one kind ships for both in the same
     change. Round 2 of the rank-legibility fix (2026-07-25) merged the old
     RankBanner + EntityRankTag pair into ONE component, rendered TWICE with
-    different data ("Strategy Rank" graded on the active strategy, "Overall
-    Rank" graded on the entity's best-possible ladder) -- deliberately never
-    two components that happen to look similar, since a labelled banner next
-    to a bare unlabelled chip is exactly the bug this fixed (live report
-    2026-07-25). A raw `_components()` set can't tell "one usage" from "two"
-    apart (it dedupes by name), so this counts RankBanner occurrences in each
-    section's own body instead, the same way the strategy-picker and
-    failure-compilation tests above do."""
+    different data ("Strategy" graded on the active strategy, "Overall"
+    graded on the entity's best-possible ladder -- shortened from "Strategy
+    Rank"/"Overall Rank" in round 4 to help both banners fit without
+    ellipsis) -- deliberately never two components that happen to look
+    similar, since a labelled banner next to a bare unlabelled chip is
+    exactly the bug this fixed (live report 2026-07-25). A raw
+    `_components()` set can't tell "one usage" from "two" apart (it dedupes
+    by name), so this counts RankBanner occurrences in each section's own
+    body instead, the same way the strategy-picker and failure-compilation
+    tests above do."""
     source = PRACTICE_JS.read_text(encoding="utf-8")
     for name in ("StarSection", "SegmentSection"):
         body = _body(source, name)
         assert body.count("<${RankBanner}") >= 2, \
-            f"{name} does not render both the Strategy Rank and Overall Rank banners"
-        assert "Strategy Rank" in body and "Overall Rank" in body, \
+            f"{name} does not render both the Strategy and Overall rank banners"
+        assert 'label="Strategy"' in body and 'label="Overall"' in body, \
             f"{name} is missing one of the two rank banner labels"
 
 

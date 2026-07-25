@@ -360,17 +360,31 @@ function TimeFilterChip({ sec, t }) {
   </span>`;
 }
 
-// The active strategy IS the star/segment's own fastest known one
+// True when the active strategy IS the star/segment's own fastest known one
 // (entity_rank.fastest_strat === the currently active strategy) -- both
 // RankBanners would show the numerically IDENTICAL rank, so rendering
 // Overall Rank a second time would read as a rendering glitch, not a
-// confirmation. Folding a short note into the Strategy banner instead says
-// WHY there's only one (spec 2026-07-25 round 3, judgment call: hide vs.
-// explain -- explaining wins, since a card randomly missing its second
-// banner with no reason given is itself confusing).
-function soleStrategyNote(sec) {
-  return sec.entity_rank && sec.entity_rank.fastest_strat === sec.last_strat
-    ? "also the star's fastest" : null;
+// confirmation (spec 2026-07-25 round 3). StrategyFastestHint (below) says
+// nothing in this same case, for the same reason -- no point naming the
+// fastest strategy when it's the one already running (round 4 direction).
+function activeStrategyIsFastest(sec) {
+  return !!(sec.entity_rank && sec.entity_rank.fastest_strat === sec.last_strat);
+}
+
+// Names the star/segment's fastest known strategy, next to the strategy
+// picker -- NOT inside the rank banner (round 4, 2026-07-25): on the
+// live-report card, "· fastest here: Sign Clip" and the next: target both
+// got clipped mid-word competing for the same line, and a tooltip on
+// truncated visible text still reads as a layout fault. This header area
+// puts the two strategy NAMES next to each other, which is the actual
+// comparison being made, in a wider row that isn't also carrying a medal,
+// a division, and a progress bar. Renders nothing when there's no fastest
+// strategy to name, or when it's the one already active (activeStrategyIsFastest).
+function StrategyFastestHint({ sec }) {
+  const fastest = sec.entity_rank && sec.entity_rank.fastest_strat;
+  if (!fastest || fastest === sec.last_strat) return null;
+  return html`<span class="objective-strategy-fastest"
+      title=${`fastest strategy here: ${fastest}`}>· fastest: ${fastest}</span>`;
 }
 
 function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
@@ -418,13 +432,14 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
               identity=${{ course_id: sec.course_id, star_id: sec.star_id }}
               strategies=${sec.strategies} active=${sec.last_strat}
               onChanged=${t.refresh} />
+          <${StrategyFastestHint} sec=${sec} />
         </div>
       </div>
       <div class="objective-metrics" style=${sec.rank && sec.rank.rank
           ? `--rank-glow:${rankColor(sec.rank.rank)}` : ""}>
         <div class="rank-slot">
-          <${RankBanner} label="Strategy Rank" banner=${sec.rank} note=${soleStrategyNote(sec)} />
-          ${sec.entity_rank && !soleStrategyNote(sec) && html`<${RankBanner} label="Overall Rank" banner=${sec.entity_rank} />`}
+          <${RankBanner} label="Strategy" banner=${sec.rank} />
+          ${sec.entity_rank && !activeStrategyIsFastest(sec) && html`<${RankBanner} label="Overall" banner=${sec.entity_rank} />`}
         </div>
         <div class="objective-live-state" aria-label="Practice state">
           <span class="live-state-icon">○</span><span>Ready</span>
@@ -565,13 +580,14 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare }) {
                 allowBlank=${!sec.default_strat}
                 onChanged=${t.refresh} />`
             : html`<span class="meta">Definition deleted</span>`}
+          <${StrategyFastestHint} sec=${sec} />
         </div>
       </div>
       <div class="objective-metrics" style=${sec.rank && sec.rank.rank
           ? `--rank-glow:${rankColor(sec.rank.rank)}` : ""}>
         <div class="rank-slot">
-          <${RankBanner} label="Strategy Rank" banner=${sec.rank} note=${soleStrategyNote(sec)} />
-          ${sec.entity_rank && !soleStrategyNote(sec) && html`<${RankBanner} label="Overall Rank" banner=${sec.entity_rank} />`}
+          <${RankBanner} label="Strategy" banner=${sec.rank} />
+          ${sec.entity_rank && !activeStrategyIsFastest(sec) && html`<${RankBanner} label="Overall" banner=${sec.entity_rank} />`}
         </div>
         <div class="objective-live-state ${armed ? "running" : ""}"
             aria-label=${`Segment state: ${pinTag}`}>
