@@ -48,7 +48,9 @@ def test_strategies_are_averaged_separately_and_the_best_one_wins():
 
 def test_points_carry_tier_and_division():
     series = history_series([s("t1", "a", 100)], GROUPS, scorer, "pb")
-    assert series[0]["tier"] and series[0]["division"]
+    # a scored 60.0, b absent -> marelo 30.0 (Silver spans 25-45, band IV is
+    # 29-33) -- pinned independently by test_ranks_scoring.py's division_for.
+    assert series[0]["tier"] == "Silver" and series[0]["division"] == "IV"
 
 
 def test_successes_outside_the_scope_are_ignored():
@@ -59,7 +61,7 @@ def test_successes_outside_the_scope_are_ignored():
 def test_long_histories_are_decimated_but_keep_the_last_point():
     runs = [s(f"t{i}", "a", 100 + i) for i in range(1000)]
     series = history_series(runs, GROUPS, scorer, "pb", max_points=50)
-    assert len(series) <= 50
+    assert len(series) == 50            # _decimate returns exactly max_points
     assert series[-1]["utc"] == "t999"
 
 
