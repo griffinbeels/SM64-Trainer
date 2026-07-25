@@ -32,16 +32,16 @@ TOP_SCORE = 100.0
 DIVISIONS_PER_TIER = 5
 DIVISION_NUMERALS = ["V", "IV", "III", "II", "I"]   # index 0 = bottom of the tier
 
-_TIERS = [r for r in RANK_NAMES if r != "Iron"]      # hardest -> easiest
+_TIERS = [tier for tier in RANK_NAMES if tier != "Iron"]      # hardest -> easiest
 
 
-def defined_tiers(ladder_cs: dict) -> list[str]:
+def defined_tiers(ladder_cs: dict[str, int]) -> list[str]:
     """The ladder's tiers, hardest first, Iron excluded. Same order classify
     iterates, so the invariant's two sides walk the ladder identically."""
-    return [r for r in _TIERS if r in ladder_cs]
+    return [tier for tier in _TIERS if tier in ladder_cs]
 
 
-def best_ladder(ladders: dict) -> dict:
+def best_ladder(ladders: dict[str, dict[str, float]]) -> dict[str, int]:
     """{strat: {rank: SECONDS}} -> {rank: CENTISECONDS}, pointwise minimum.
 
     'The best time achievable at this tier by any known strategy' -- which is
@@ -57,7 +57,7 @@ def best_ladder(ladders: dict) -> dict:
     return out
 
 
-def score_for(ladder_cs: dict, time_cs: int) -> float | None:
+def score_for(ladder_cs: dict[str, int], time_cs: int) -> float | None:
     """0..100 for a displayed time against one ladder; None if empty.
 
     Piecewise linear in TIME through the anchors, so equal time savings inside
@@ -65,7 +65,7 @@ def score_for(ladder_cs: dict, time_cs: int) -> float | None:
     tier's slope (capped at 100); slower than the easiest decays asymptotically
     so a bad run trends toward 0 without ever being a zero -- score 0 is
     reserved for 'no time at all', which is the coverage penalty."""
-    points = [(ladder_cs[r], SCORE_ANCHORS[r]) for r in defined_tiers(ladder_cs)]
+    points = [(ladder_cs[tier], SCORE_ANCHORS[tier]) for tier in defined_tiers(ladder_cs)]
     if not points:
         return None
     hardest_cs, hardest_score = points[0]
@@ -97,8 +97,8 @@ def tier_from_score(score: float, defined: list[str] | None = None) -> str:
 def tier_band(tier: str, defined: list[str] | None = None) -> tuple[float, float]:
     """(low, high) score range the tier occupies. The top defined tier runs to
     100; Iron runs from 0 up to the easiest defined anchor."""
-    present = [r for r in (defined if defined is not None else _TIERS)
-               if r in SCORE_ANCHORS]
+    present = [tier_name for tier_name in (defined if defined is not None else _TIERS)
+               if tier_name in SCORE_ANCHORS]
     if tier == "Iron" or not present:
         return 0.0, (SCORE_ANCHORS[present[-1]] if present else TOP_SCORE)
     index = present.index(tier)
