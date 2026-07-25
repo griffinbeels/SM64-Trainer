@@ -1,6 +1,6 @@
 from sm64_events.ranks.classify import (
-    RANK_NAMES, RANK_SCORE, display_cs, rank_for, next_tier, band,
-    resolve_cutoff_videos)
+    RANK_NAMES, RANK_SCORE, IRON_SPAN_MULT, display_cs, rank_for, next_tier,
+    band, resolve_cutoff_videos)
 
 NUTS = {"Mario": 1293, "Grandmaster": 1303, "Master": 1316, "Diamond": 1336,
         "Platinum": 1416, "Gold": 1566, "Silver": 1676}  # centiseconds
@@ -34,10 +34,29 @@ def test_band_top_tier_has_no_bar():
     b = band(NUTS, 1290)
     assert b["rank"] == "Mario" and b["next"] is None and b["fill"] is None
 
-def test_band_floor_empty_bar():
-    b = band(NUTS, 1700)
+def test_band_iron_scales_from_notional_start():
+    # Iron owns no cutoff, so its bar starts at IRON_SPAN_MULT x the easiest
+    # defined tier: a time barely slower than that tier reads nearly full.
+    b = band(NUTS, 1700)                        # 0.24s slower than Silver 1676
     assert b["rank"] == "Iron" and b["next"] == "Silver"
-    assert b["fill"] == 0.0 and b["gap_cs"] == 1700 - 1676
+    assert b["gap_cs"] == 1700 - 1676
+    start = IRON_SPAN_MULT * 1676
+    assert abs(b["fill"] - (start - 1700) / (start - 1676)) < 1e-9
+    assert b["fill"] > 0.99
+
+def test_band_iron_live_report_reads_near_full():
+    # user report 2026-07-25: a 7"53 PB against a 7.43s Bronze showed a flat 0%
+    b = band({"Bronze": 743}, 753)
+    assert b["rank"] == "Iron" and b["next"] == "Bronze"
+    assert round(b["fill"] * 100) == 99
+
+def test_band_iron_slower_than_notional_start_is_zero():
+    b = band(NUTS, IRON_SPAN_MULT * 1676 + 1)   # genuinely that slow
+    assert b["rank"] == "Iron" and b["fill"] == 0.0
+
+def test_band_iron_degenerate_ladder_is_zero():
+    # a zero cutoff leaves the notional start no span -> no progress to show
+    assert band({"Bronze": 0}, 500)["fill"] == 0.0
 
 def test_band_empty_ladder():
     assert band({}, 1326) == {"rank": None, "next": None, "gap_cs": None, "fill": None}
