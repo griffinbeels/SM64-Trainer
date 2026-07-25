@@ -12,10 +12,10 @@ marked complete is DONE — do not re-dispatch it.
 | 1 | T1 `components/picker.js` (`GroupedPicker`, `visibleGroups`) | **complete** | `f38bdbd`, 4 tests, node ran |
 | 1 | T2 `ui/entities.js` (pure group builders) | **complete** | `bf0cee2` |
 | 1 | T3 `views.py` `catalog.course_groups` | **complete** | `ba455cd`, 2 tests |
-| 2 | T4 segments.js clause params (needs T1, T2) | pending | |
-| 2 | T5 header.js target modal (needs T1, T2, T3) | pending | |
-| 2 | T6 routes.js step editor (needs T1, T2, T3) | pending | |
-| 3 | T7 parity test + rules row | pending | |
+| 2 | T4 segments.js clause params | **complete** | `700e536`, render-verified, groupedDropdown deleted |
+| 2 | T5 header.js target modal | **complete** | `b86b7a7`, one star control, POST still numeric |
+| 2 | T6 routes.js step editor | **complete** | `6851806`, segments grouped by region |
+| 3 | T7 parity test + rules row + the id/name fold-in | dispatched | agent `p7-parity` |
 | — | Whole-branch review (Opus 5) | pending | NON-OPTIONAL |
 | — | Human audit (the ~120-option star list) | pending | only a human can judge type-ahead over it |
 
@@ -48,4 +48,11 @@ marked complete is DONE — do not re-dispatch it.
   another agent was mid-write reported 4 failures in that agent's file; the
   same command passed once the checkout settled. Re-run before believing a
   failure in a file you do not own.
-- Baseline before this branch: **1515 passed**; after T2+T3: **1526 passed**.
+- Baseline before this branch: **1515 passed**; after wave 2: **1536 passed**.
+- **Controller-approved fold-in for T7 (not scope creep):** `GroupedPicker`'s
+  `<select>` sets no `id`/`name`, so Chrome logs a form-field advisory at every
+  call site now (found by T5's render check). The fix belongs in the shared
+  component, not in any one caller.
+- **Reported, deliberately NOT fixed here:** `ItemPicker`'s `segId` seeds from
+  `segs[0]` at mount and never re-seeds when segments arrive (T6). Pre-existing,
+  and item E of the render-glitch diagnosis — it belongs to that branch.
