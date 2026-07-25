@@ -1318,6 +1318,22 @@ Add the import at the top of `views.py`, next to the existing `from sm64_events.
 from sm64_events.ranks import scoring
 ```
 
+- [ ] **Step 4b: Add the strategy-level score to the section banner**
+
+`_section_banner` already resolves the active strategy's ladder and the grading basis, so it is the only place that can hand the UI a score for the column the standards table is actually showing. Without it, `ui/components/standards.js` has to re-implement the whole curve in JavaScript — which it currently does (Task 12), including the asymptotic Iron tail we changed on 2026-07-25. Two copies of that algorithm WILL drift.
+
+In `_section_banner`, after `out = classify.band(...)`, add:
+
+```python
+    # The score for the ACTIVE strategy's own ladder — the column the
+    # standards table renders. Sent so the UI never re-derives the curve:
+    # a JS copy of score_for would silently disagree the next time the
+    # Python side changes (the Iron tail moved on 2026-07-25).
+    out["score"] = scoring.score_for(ladder, classify.display_cs(basis["frames"]))
+```
+
+Add a test asserting the banner carries a `score` that matches `scoring.score_for` for the same ladder and basis.
+
 - [ ] **Step 5: Wire it into both section builders**
 
 Today both section builders call `grading_basis(...)` inline inside the `"rank"` value. Hoist that call to a local **before** the dict literal and pass the local to both keys, so the basis is computed once per section.
@@ -2389,6 +2405,18 @@ export function EntityRankTag({ entityRank }) {
 - [ ] **Step 2: Render it in both cards**
 
 In `practice.js`, in **both** the star section header and the segment section header, render `<${EntityRankTag} entityRank=${sec.entity_rank} />` immediately after the existing `RankBanner`. Both call sites are required — rule 11 (star↔segment parity).
+
+- [ ] **Step 2b: Wire the standards marker's props (Task 12 depends on this)**
+
+Task 12 added `sectionRank` / `sectionPb` props to `StandardsPanel`, but they default to `null` and **nothing passes them yet — so the "you are here" marker does not render in the live app at all.** This is the invisible-feature failure this repo has a rule about; it is not optional polish.
+
+At **both** `StandardsPanel` call sites in `practice.js` (star ≈ line 480, segment ≈ line 624) add:
+
+```javascript
+        sectionRank=${sec.rank} sectionPb=${sec.pb}
+```
+
+Then verify by rendering (see Step 4) that the marker actually appears on a card whose entity has standards and a time — not merely that the props are passed.
 
 - [ ] **Step 3: Extend the parity test**
 
