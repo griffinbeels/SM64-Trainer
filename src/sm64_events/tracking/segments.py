@@ -647,6 +647,72 @@ def origin_taxonomy() -> list[dict]:
     return taxonomy
 
 
+OTHER_GROUP_LABEL = "Other"
+
+
+def level_groups() -> list[dict]:
+    """Levels grouped by castle region, in the taxonomy's order — so the
+    builder's level dropdown reads like the library reads (user request
+    2026-07-25: a filtered dropdown should still be categorized).
+
+    Every level appears EXACTLY ONCE. The castle interior has a node in three
+    regions (`6:1`/`6:2`/`6:3`), so it takes the first in gameflow order — the
+    lobby, which is the same answer `region_for_node` gives a bare `"6"`.
+    Anything the topology does not place lands in a trailing Other group rather
+    than vanishing from the picker.
+    """
+    seen: set[int] = set()
+    groups: list[dict] = []
+    for region in origin_taxonomy():
+        if region["key"] is None:
+            continue
+        levels = []
+        for place in region["children"]:
+            level = int(place["key"].partition(":")[0])
+            if level in seen:
+                continue
+            seen.add(level)
+            levels.append(level)
+        if levels:
+            groups.append({"key": region["key"], "label": region["label"],
+                           "levels": levels})
+    leftovers = [level for level in sorted(LEVEL_NAMES) if level not in seen]
+    if leftovers:
+        groups.append({"key": None, "label": OTHER_GROUP_LABEL,
+                       "levels": leftovers})
+    return groups
+
+
+def course_groups() -> list[dict]:
+    """The same grouping projected onto COURSE ids, for the course dropdown.
+
+    A course is grouped by the region of its level. Course 0 (the castle
+    secret stars) has no level of its own, so it lands in Other — the same
+    honesty the "Anywhere" origin group shows.
+    """
+    groups: list[dict] = []
+    grouped: set[int] = set()
+    for group in level_groups():
+        if group["key"] is None:
+            continue
+        courses = []
+        for level in group["levels"]:
+            course = COURSE_BY_LEVEL.get(level)
+            if course is None or course in grouped:
+                continue
+            grouped.add(course)
+            courses.append(course)
+        if courses:
+            groups.append({"key": group["key"], "label": group["label"],
+                           "courses": courses})
+    leftovers = [course for course in sorted(COURSE_NAMES)
+                 if course not in grouped]
+    if leftovers:
+        groups.append({"key": None, "label": OTHER_GROUP_LABEL,
+                       "courses": leftovers})
+    return groups
+
+
 @dataclass(frozen=True)
 class GuardType:
     key: str
@@ -867,6 +933,12 @@ def vocab() -> dict:
         # the editor's origin override (spec 2026-07-24-segment-origin-
         # categories). Domain-free shape: {key, label, children:[...]}.
         "origins": origin_taxonomy(),
+        # The SAME grouping, projected onto the id spaces the builder's
+        # dropdowns actually select from, so a level or course picker reads
+        # like the library reads (user request 2026-07-25). Shipped rather than
+        # derived in JS: the taxonomy has one home.
+        "level_groups": level_groups(),
+        "course_groups": course_groups(),
     }
 
 

@@ -3,8 +3,10 @@ from dataclasses import replace
 
 import pytest
 
+from sm64_events.memory.addresses import COURSE_NAMES, LEVEL_NAMES
 from sm64_events.storage.db import EventRow
 from sm64_events.tracking.segments import (SEGMENT_ATTEMPT_OFFSET,
+                                           course_groups, level_groups,
                                            GUARDS, TRIGGERS, MatchContext,
                                            SegmentDef, SegmentEngine,
                                            origin_taxonomy, origin_view,
@@ -2316,3 +2318,37 @@ def test_origin_taxonomy_is_ordered_by_gameflow_then_class():
 
 def test_vocab_ships_the_origin_taxonomy():
     assert vocab()["origins"] == origin_taxonomy()
+
+
+def test_level_groups_cover_every_level_exactly_once():
+    groups = level_groups()
+    seen = [level for group in groups for level in group["levels"]]
+    assert sorted(seen) == sorted(LEVEL_NAMES), "a level vanished from the picker"
+    assert len(seen) == len(set(seen)), "a level is offered twice"
+
+
+def test_level_groups_read_in_the_librarys_order():
+    groups = level_groups()
+    assert [group["label"] for group in groups][:5] == [
+        "Castle Grounds", "Lobby", "Basement", "Castle Courtyard", "Upstairs"]
+    lobby = next(group for group in groups if group["label"] == "Lobby")
+    # the castle interior has a node in three regions and takes the first —
+    # the same answer region_for_node gives a bare "6"
+    assert lobby["levels"][0] == 6
+    assert all(6 not in group["levels"] for group in groups
+               if group["label"] != "Lobby")
+
+
+def test_course_groups_put_the_castle_secret_stars_in_other():
+    groups = course_groups()
+    other = next(group for group in groups if group["label"] == "Other")
+    assert 0 in other["courses"]        # course 0 has no level of its own
+    seen = [course for group in groups for course in group["courses"]]
+    assert sorted(seen) == sorted(COURSE_NAMES)
+    assert len(seen) == len(set(seen))
+
+
+def test_vocab_ships_both_grouped_pickers():
+    shipped = vocab()
+    assert shipped["level_groups"] == level_groups()
+    assert shipped["course_groups"] == course_groups()

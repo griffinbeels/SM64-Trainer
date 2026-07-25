@@ -72,6 +72,26 @@ export function ParamInput({ schema, name, value, vocab, clause, onChange }) {
     <option value="">${schema.required ? pickLabel : anyLabel}</option>
     ${entries.map(([id, n]) => html`<option value=${id}>${n}</option>`)}
   </select>`;
+  // Same shape, but split into the castle regions the library groups by (user
+  // request 2026-07-25 — a level picker should read like the library reads,
+  // and stay categorised even when the topology filter leaves two options).
+  // `groups` comes from vocab (level_groups / course_groups): the taxonomy has
+  // ONE home, server-side. A group with nothing left after filtering is
+  // dropped, so an empty heading never appears.
+  const groupedDropdown = (groups, idsOf, names, anyLabel, pickLabel) => {
+    const shown = groups
+      .map((group) => [group, idsOf(group).filter((id) => names[String(id)] !== undefined
+        && permitted([id]))])
+      .filter(([, ids]) => ids.length > 0);
+    return html`<select value=${value ?? ""}
+        onchange=${(e) => onChange(numOrNull(e.target.value))}>
+      <option value="">${schema.required ? pickLabel : anyLabel}</option>
+      ${shown.map(([group, ids]) => html`<optgroup key=${group.label}
+          label=${group.label}>
+        ${ids.map((id) => html`<option value=${id}>${names[String(id)]}</option>`)}
+      </optgroup>`)}
+    </select>`;
+  };
   // world-topology filter (see allowedIds above); the CURRENT value always
   // stays listed so an out-of-topology stored def renders and saves intact
   const allowed = allowedIds(schema, clause, vocab.connections);
@@ -80,10 +100,16 @@ export function ParamInput({ schema, name, value, vocab, clause, onChange }) {
   if (schema.kind === "level") {
     // schema.enum restricts the choices (area_enter offers only the castle
     // hubs); absent enum = the full level list.
-    const entries = Object.entries(vocab.levels).filter(
-      ([id]) => (!schema.enum || schema.enum.includes(Number(id)))
-        && permitted([id]));
-    return dropdown(entries, "(any level)", "— pick level —");
+    const inEnum = (id) => !schema.enum || schema.enum.includes(Number(id));
+    if (vocab.level_groups) {
+      const groups = vocab.level_groups.map((group) => ({
+        ...group, levels: group.levels.filter(inEnum) }));
+      return groupedDropdown(groups, (group) => group.levels, vocab.levels,
+                             "(any level)", "— pick level —");
+    }
+    return dropdown(Object.entries(vocab.levels)   // pre-groups vocab fallback
+      .filter(([id]) => inEnum(id) && permitted([id])),
+      "(any level)", "— pick level —");
   }
   if (schema.kind === "subarea")
     // Castle interior areas (lobby/upstairs/basement). Always optional — the
@@ -92,7 +118,11 @@ export function ParamInput({ schema, name, value, vocab, clause, onChange }) {
     return dropdown(Object.entries(vocab.castle_areas).filter(permitted),
                     "Any", "— pick subarea —");
   if (schema.kind === "course")
-    return dropdown(Object.entries(vocab.courses), "(any course)", "— pick course —");
+    // Grouped the same way, so a course picker and a level picker read alike.
+    return vocab.course_groups
+      ? groupedDropdown(vocab.course_groups, (group) => group.courses,
+                        vocab.courses, "(any course)", "— pick course —")
+      : dropdown(Object.entries(vocab.courses), "(any course)", "— pick course —");
   if (schema.kind === "star") {
     // dependent on the sibling course param: no course (or "any course")
     // implies any star, so the selector is disabled until a course is picked
