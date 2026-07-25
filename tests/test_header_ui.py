@@ -1,7 +1,41 @@
+import re
 from pathlib import Path
 
-HEADER_JS = (Path(__file__).resolve().parent.parent / "src" / "sm64_events"
-             / "ui" / "components" / "header.js").read_text(encoding="utf-8")
+from source_scan import strip_comments
+
+UI = Path(__file__).resolve().parent.parent / "src" / "sm64_events" / "ui"
+HEADER_JS = (UI / "components" / "header.js").read_text(encoding="utf-8")
+INDEX_HTML = (UI / "index.html").read_text(encoding="utf-8")
+
+
+def context_select_rule(css: str) -> str:
+    """The declarations that stretch a context card's <select> over the card."""
+    found = re.search(r"\.context-select\s*>\s*select\s*\{([^}]*)\}",
+                      strip_comments(css))
+    return found.group(1) if found else ""
+
+
+def test_every_context_card_is_one_hit_target():
+    # A click ANYWHERE on a context card opens it, and the card highlights as
+    # a unit — the practice-target card did this for free by being a <button>,
+    # the three select cards only reacted on the select itself, and the
+    # mismatch read as a bug (user, 2026-07-25). The fix lives half in JS (the
+    # shared ContextSelect renders the value + chevron and tags the card) and
+    # half in CSS (that select is absolutely stretched over the card). Either
+    # half alone silently restores the small hit target, so pin both.
+    # Three cards today: session, clock, rank. A fourth raises the count
+    # deliberately — it must not appear by growing a hand-rolled one.
+    assert strip_comments(HEADER_JS).count("<${ContextSelect}") == 3
+    rule = context_select_rule(INDEX_HTML)
+    assert "position: absolute" in rule and "inset: 0" in rule, rule
+
+
+def test_the_hit_target_guard_can_still_fail():
+    # Probed in both directions (tests/source_scan.py): a comment naming the
+    # rule must not satisfy it, and the real rule must.
+    assert context_select_rule("/* .context-select > select { inset: 0 } */") == ""
+    assert "inset: 0" in context_select_rule(
+        ".context-select > select { position: absolute; inset: 0; }")
 
 
 def test_target_modal_still_posts_course_and_star_as_numbers():

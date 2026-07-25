@@ -619,15 +619,34 @@
     gap: 10px; width: calc(100% - 28px); max-width: 1472px; margin: 0 auto;
   }
   .context-control {
+    position: relative;
     min-width: 0; min-height: 54px; display: flex; align-items: center; gap: .65rem;
     padding: .42rem .75rem; border: 1px solid var(--border);
     border-radius: 7px; background: rgba(11,25,41,.92); color: var(--text);
   }
   button.context-control { justify-content: flex-start; text-align: left; }
   .context-control-copy { min-width: 0; flex: 1; display: grid; gap: 1px; }
-  .context-control select {
-    width: 100%; min-width: 0; min-height: 24px; padding: 0 1.4rem 0 0;
-    border: 0; background-color: transparent; font-weight: 650;
+  /* THE whole card is the control. The practice-target card highlighted and
+     opened from anywhere because it IS a <button>; the select cards only
+     reacted on the select itself, and the mismatch read as a bug (user,
+     2026-07-25). Fix: stretch the native <select> over the entire card and
+     paint it transparent — the dropdown is still the browser's, anchored to
+     the card, and the value + chevron under it are drawn by header.js. The
+     <option> list keeps the global `option` colors, so an invisible select
+     does not mean an invisible popup. */
+  .context-select > select {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    margin: 0; padding: 0; min-height: 0; border: 0; cursor: pointer;
+    appearance: none; background: transparent; color: transparent;
+  }
+  .context-select, button.context-control:not(:disabled) { cursor: pointer; }
+  .context-select:hover, button.context-control:not(:disabled):hover {
+    background: #1a2d45; border-color: #496784;
+  }
+  /* A card that cannot be opened must not offer the hover of one that can
+     (the base button:hover would otherwise still fire while v is loading). */
+  button.context-control:disabled:hover {
+    background: rgba(11,25,41,.92); border-color: var(--border);
   }
   .context-value {
     display: block; overflow: hidden; text-overflow: ellipsis;
@@ -2401,7 +2420,7 @@
       padding: .32rem .55rem; gap: .45rem;
     }
     .context-label { font-size: .6rem; }
-    .context-control select, .context-value { font-size: .78rem; }
+    .context-value { font-size: .78rem; }
     .workspace { padding: 4px 10px 94px; }
     .workshop-hero { min-height: 76px; padding: 11px 12px; }
     .workshop-title-icon { width: 36px; height: 36px; }

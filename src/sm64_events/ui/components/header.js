@@ -13,6 +13,38 @@ import { courseUnionGroups, optionIcon, parseSegmentId, parseStarId,
 
 const html = htm.bind(h);
 
+const CLOCK_OPTIONS = [["igt", "Usamune IGT"], ["rta", "Anchor → grab"]];
+
+// One context card = one hit target. The practice-target card already
+// highlighted and opened as a whole because it IS a <button>; the three
+// <select> cards only reacted on the select itself, which read as an
+// inconsistency (user, 2026-07-25). Here the native <select> is stretched
+// over the entire card and painted transparent (see .context-select in
+// index.html), so a click anywhere opens the real dropdown — which means the
+// closed-state value and the chevron are drawn by us. Both the value and the
+// <option>s come from the SAME `options` list, so they cannot disagree.
+function ContextSelect({ icon, label, options, value, onChange, id, name,
+                        title, empty }) {
+  const picked = options.find(([optionValue]) => optionValue === value);
+  return html`<div
+      class=${`context-control${options.length ? " context-select" : ""}`}>
+    <${Icon} name=${icon} size=${19} />
+    <span class="context-control-copy">
+      <span class="context-label">${label}</span>
+      <span class="context-value">${picked ? picked[1] : empty}</span>
+    </span>
+    ${options.length ? html`<${Icon} name="chevron" size=${16} />` : null}
+    ${/* title rides the SELECT, not the card: it covers the card anyway, so
+          the tooltip still answers a hover anywhere — and this way it also
+          reaches a screen reader as the combobox's description. */
+      options.length ? html`<select id=${id} name=${name} aria-label=${label}
+        title=${title} value=${value} onchange=${onChange}>
+      ${options.map(([optionValue, optionLabel]) =>
+        html`<option value=${optionValue}>${optionLabel}</option>`)}
+    </select>` : null}
+  </div>`;
+}
+
 export function Header({ t, settingsOpen, closeSettings, setTab }) {
   const v = t.view;
   const tgt = v && v.target;
@@ -93,21 +125,17 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
   const running = [...t.armedOrder].reverse()
     .map((id) => t.armedNames[id] || `segment ${id}`).join(" · ");
 
+  const sessionOptions = v ? [["lifetime", "Lifetime"], ...v.sessions.map(
+    (s) => [String(s.id),
+            `Session ${s.id}${s.id === active ? " ●" : ""} · ${s.attempts}`],
+  )] : [];
+
   return html`<header class="context-shell">
     <div class="context-bar" aria-label="Practice context">
-      <label class="context-control">
-        <${Icon} name="sessions" size=${19} />
-        <span class="context-control-copy">
-          <span class="context-label">Session</span>
-          ${v ? html`<select id="session-select" name="session"
-              value=${t.scope === "lifetime" ? "lifetime" : String(active)}
-              onchange=${pickSession}>
-            <option value="lifetime">Lifetime</option>
-            ${v.sessions.map((s) => html`<option value=${String(s.id)}>
-              Session ${s.id}${s.id === active ? " ●" : ""} · ${s.attempts}</option>`)}
-          </select>` : html`<span>Loading…</span>`}
-        </span>
-      </label>
+      <${ContextSelect} icon="sessions" label="Session" id="session-select"
+        name="session" options=${sessionOptions} onChange=${pickSession}
+        value=${t.scope === "lifetime" ? "lifetime" : String(active)}
+        empty="Loading…" />
 
       <button type="button" class="context-control target-context"
           disabled=${!v} onclick=${() => setEditing(!editing)}
@@ -120,31 +148,16 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
         <${Icon} name="chevron" size=${16} />
       </button>
 
-      <label class="context-control">
-        <${Icon} name="clock" size=${19} />
-        <span class="context-control-copy">
-          <span class="context-label">Clock</span>
-          <select id="clock-select" name="clock" value=${t.clock}
-              onchange=${(e) => t.pickClock(e.target.value)}>
-            <option value="igt">Usamune IGT</option>
-            <option value="rta">Anchor → grab</option>
-          </select>
-        </span>
-      </label>
+      <${ContextSelect} icon="clock" label="Clock" id="clock-select"
+        name="clock" options=${CLOCK_OPTIONS} value=${t.clock}
+        onChange=${(e) => t.pickClock(e.target.value)} empty="—" />
 
-      <label class="context-control">
-        <${Icon} name="rank" size=${19} />
-        <span class="context-control-copy">
-          <span class="context-label">Rank</span>
-          ${v ? html`<select id="rankmode-select" name="rank_mode"
-              value=${v.rank_mode}
-              title="Grade medals by saved PB or by a recent/best average"
-              onchange=${(e) => send("PUT", "/api/ranks/mode",
-                { mode: e.target.value }).then(() => t.refresh())}>
-            ${RANK_MODE_OPTIONS.map(([k, label]) => html`<option value=${k}>${label}</option>`)}
-          </select>` : html`<span>—</span>`}
-        </span>
-      </label>
+      <${ContextSelect} icon="rank" label="Rank" id="rankmode-select"
+        name="rank_mode" options=${v ? RANK_MODE_OPTIONS : []}
+        value=${v ? v.rank_mode : null}
+        title="Grade medals by saved PB or by a recent/best average"
+        onChange=${(e) => send("PUT", "/api/ranks/mode",
+          { mode: e.target.value }).then(() => t.refresh())} empty="—" />
     </div>
 
     <div class="marelo-row">
