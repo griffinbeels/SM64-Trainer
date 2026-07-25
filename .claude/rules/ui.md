@@ -2,8 +2,9 @@
 paths:
   - "src/sm64_events/ui/**"
   - "src/sm64_events/links.py"
-  - "tests/test_ui_section_parity.py"
+  - "tests/test_ui_*.py"
   - "tests/test_star_icons.py"
+  - "tests/source_scan.py"
 ---
 
 # UI layer — where to change what
@@ -57,7 +58,13 @@ fixed-height slots); design contract/anti-slop rules in `.agents/skills/sm64-uiu
 - **A harness must mount inside the real ancestors, or it measures a layout
   that does not exist** (rank-banner ellipsis, 2026-07-25 — measured wrong
   three times, twice by eye and once by a harness). Two clauses, both
-  load-bearing:
+  load-bearing (three, counting the CSS itself):
+  0. Wearing the real **stylesheet**, fetched out of `ui/index.html` — the
+     design system is one `<style>` block in that file, so a harness that
+     imports the components and nothing else measures unstyled blocks. It
+     reported a 1547px panel and 25 rows for a grid that renders 9 across
+     (2026-07-25, picker redesign), i.e. it "found" the scrolling the change
+     had already removed.
   1. Inside the real **app shell**. `.app-shell` is
      `grid-template-columns: var(--sidebar-wide) minmax(0,1fr)` — 206px,
      dropping to `--sidebar-rail` 76px at 1180px and `display:none` under
@@ -79,6 +86,15 @@ fixed-height slots); design contract/anti-slop rules in `.agents/skills/sm64-uiu
   (a 1181px window gives a card a 947px pane; a 1180px window gives it
   1076px). Gate card-internal layout on `@container` against
   `.practice-page`, the way the star row's `cqw` sizing already does.
+- **A test that reads source text asserts on `strip_comments(source)`**
+  (`tests/source_scan.py`) and is probed in both directions. A raw substring
+  cannot tell code from prose: `assert "Escape" in MODAL` stayed green with the
+  handler deleted (the header comment names it), and five `not in` guards were
+  rewritten in one session because a comment explaining the absent code tripped
+  them (`WORLD_EDGES`, `--depth`, `.route-cat`, `start_levels`, `role="grid"`).
+  Express the check as a function of source text so a probe test can feed it a
+  comment-only sample and a real-code sample — `test_the_guards_can_still_fail`
+  in `tests/test_ui_picker_parity.py` is the pattern.
 - When a `@container`/media rule `display:none`s an element, its own `title`
   is not a fallback — a hidden element cannot be hovered. Move the text onto
   an element that is always rendered (the rank banner folds its basis line
