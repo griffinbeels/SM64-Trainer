@@ -112,8 +112,9 @@ def aggregate(scores: dict[str, float], groups: list[dict]) -> dict:
             entities.append({"key": candidate_key, "score": score})
     if slots == 0:
         return {"marelo": None, "mastery": None, "coverage": None,
-                "tier": None, "division": None, "n": 0, "practiced": 0,
-                "entities": []}
+                "tier": None, "division": None,
+                "next_division_at": None, "division_progress": None,
+                "n": 0, "practiced": 0, "entities": []}
     marelo = total / slots
     tier, division = scoring.division_for(marelo)
     for entity in entities:

@@ -124,6 +124,11 @@ def test_aggregate_best_k_prefers_a_scored_zero_over_an_absent_candidate():
 def test_aggregate_of_an_empty_scope_is_none_not_zero():
     out = aggregate({}, [])
     assert out["marelo"] is None and out["n"] == 0 and out["entities"] == []
+    # The README documents next_division_at/division_progress as always
+    # present in the /api/marelo payload -- an empty scope must not omit
+    # them, only null them, or a consumer keying off the field's PRESENCE
+    # (not its value) would see a shape that differs from every other scope.
+    assert out["next_division_at"] is None and out["division_progress"] is None
 
 
 def test_aggregate_reports_tier_and_division():
