@@ -37,7 +37,7 @@
 | `src/sm64_events/ui/components/routes.js` | migrate onto `buildTree`/`GroupedList`, behaviour-preserving | Task 6 |
 | `tests/test_defaults_corpus_origins.py` (new) | every seeded segment resolves to a region except the documented set | Task 7 |
 | `src/sm64_events/ui/components/segments.js` | grouped library (Task 8), then the editor's origin control (Task 9) | Tasks 8, 9 |
-| `.claude/rules/*.md`, `README.md` | change-map rows + the new API surface | Task 10 |
+| `.claude/rules/*.md` | change-map rows (the API surface is `docs/api.md`, written by Task 5 — a suite test enforces it) | Task 10 |
 
 ## Waves (for parallel execution)
 
@@ -1772,7 +1772,8 @@ MSG
 ### Task 10: Documentation
 
 **Files:**
-- Modify: `.claude/rules/ui.md`, `.claude/rules/tracking-storage.md`, `.claude/rules/memory-detectors.md`, `README.md`
+- Modify: `.claude/rules/ui.md`, `.claude/rules/tracking-storage.md`, `.claude/rules/memory-detectors.md`
+- Verify only (Task 5 already wrote them): `docs/api.md`
 
 **Interfaces:** none.
 
@@ -1807,9 +1808,9 @@ In `.claude/rules/memory-detectors.md`, append to the addresses row:
 ; `world_regions()` BFSes those same edges from `CASTLE_REGION_NODES` (gameflow order) to answer "which castle region owns this place" for the segment-origin taxonomy — BBH→courtyard, VCUtM→grounds, CotMC→basement, each arena→its exit's region; `region_for_node` adds the one case the BFS can't answer (subarea-less castle interior → lobby, the transient-lobby rule). `CASTLE_SECRET_STAR_AREAS` is MIPS-only ON PURPOSE
 ```
 
-- [ ] **Step 4: Update the README API surface**
+- [ ] **Step 4: Check the API surface doc — already done, verify only**
 
-Add `POST /api/segments/{id}/origin` and the `origin` field on `GET /api/segments` to the README's REST section, matching the surrounding style.
+The REST surface lives in `docs/api.md`, NOT the README (the plan said README; that was wrong). `tests/test_docs_cover_api.py` fails the suite for any undocumented `/api` route, so Task 5 necessarily landed both entries in `7537c5a`. Read them and confirm they still match the shipped behaviour; do not duplicate them into the README.
 
 - [ ] **Step 5: Verify and commit**
 
@@ -1817,7 +1818,7 @@ Run: `uv run pytest -q`
 Expected: PASS
 
 ```bash
-git add .claude/rules/ui.md .claude/rules/tracking-storage.md .claude/rules/memory-detectors.md README.md
+git add .claude/rules/ui.md .claude/rules/tracking-storage.md .claude/rules/memory-detectors.md
 git commit -F- <<'MSG'
 docs: record the origin taxonomy and the shared grouping primitives
 

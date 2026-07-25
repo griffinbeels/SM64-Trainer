@@ -12,10 +12,10 @@ marked complete is DONE — do not re-dispatch it.
 | 2 | T2 `ui/group.js` `buildTree` | **complete** | `5a4b734`, 3 node-driven tests (ran, not skipped) |
 | 2 | T3 `start_origin` + taxonomy (needs T1) | **complete** | `9947b73`, 16 new tests |
 | 2 | T4 `GroupedList` + `.lib-cat` CSS (needs T2) | **complete** | `dd678de`, 4 tests, node check exit 0 |
-| 3 | T5 API stamp + override (needs T3) | dispatched | agent `t5-api` |
-| 3 | T6 routes.js migration (needs T2, T4) | dispatched | agent `t6-routes` |
-| 3 | T7 corpus origin coverage test (needs T3) | dispatched | agent `t7-corpus` |
-| 4 | T8 segment library grouping (needs T4, T5) | pending | |
+| 3 | T5 API stamp + override (needs T3) | **complete** | `7537c5a`, +docs/api.md (required — see watch items) |
+| 3 | T6 routes.js migration (needs T2, T4) | **complete** | `63b9152`, net -35 lines, render-verified |
+| 3 | T7 corpus origin coverage test (needs T3) | **complete** | `821b810`, all 65 seeded segments resolve |
+| 4 | T8 segment library grouping (needs T4, T5) | dispatched | agent `t8-seglib` |
 | 5 | T9 editor origin override (needs T8) | pending | serialized after T8 — same file |
 | 6 | T10 docs (rules + README) | pending | |
 | — | Final whole-branch review (Opus 5) | pending | NON-OPTIONAL |
@@ -35,7 +35,11 @@ marked complete is DONE — do not re-dispatch it.
   no `ui/vendor/preact.js`; components import bare specifiers through
   index.html's importmap (`preact`, `preact/hooks`, `htm`). Plan corrected +
   added to Global Constraints so Tasks 6/8/9 cannot repeat it.
-- **Suite baseline is now 1491 passed** (was 1475 before wave 1).
+- **Suite baseline is now 1503 passed** (1475 before wave 1).
+- **The REST surface doc is `docs/api.md`, not the README** — the plan said
+  README, which was wrong, and `tests/test_docs_cover_api.py` fails the suite
+  for any undocumented `/api` route. T5 correctly wrote both entries itself
+  rather than deferring to T10; T10 now only verifies them.
 - **T8's `originLevels` keys the region level on `String(origin.region)`**, so
   a null region becomes `"null"` and matches the taxonomy's trailing
   `{key: null}` entry. Intended; change both sides or neither.
