@@ -10,8 +10,8 @@ marked complete is DONE — do not re-dispatch it.
 | Wave | Task | State | Commits / notes |
 |---|---|---|---|
 | 1 | T1 `components/picker.js` (`GroupedPicker`, `visibleGroups`) | dispatched | agent `p1-picker` |
-| 1 | T2 `ui/entities.js` (pure group builders) | dispatched | agent `p2-entities` |
-| 1 | T3 `views.py` `catalog.course_groups` | dispatched | agent `p3-catalog` |
+| 1 | T2 `ui/entities.js` (pure group builders) | **complete** | `bf0cee2` |
+| 1 | T3 `views.py` `catalog.course_groups` | **complete** | `ba455cd`, 2 tests |
 | 2 | T4 segments.js clause params (needs T1, T2) | pending | |
 | 2 | T5 header.js target modal (needs T1, T2, T3) | pending | |
 | 2 | T6 routes.js step editor (needs T1, T2, T3) | pending | |
@@ -34,4 +34,13 @@ marked complete is DONE — do not re-dispatch it.
   fetches `/api/segments/vocab` after first paint, so the first render has none.
 - **`_CATALOG` is built at import.** `course_groups()` is pure; it must never
   grow a database dependency.
-- Baseline before this branch: **1515 passed**.
+- **PLAN DEFECT, corrected mid-wave:** the plan put the pure `visibleGroups`
+  inside `components/picker.js` and told its test to import it through node.
+  Impossible — `picker.js` imports `preact`/`htm` as BARE specifiers, resolved
+  only by index.html's importmap; node has no node_modules and no importmap, so
+  it can never load that file. `group.js`/`entities.js` are node-testable
+  precisely because they import nothing. `visibleGroups` therefore lives in
+  `ui/entities.js`, and `picker.js` imports it. **Do not "tidy" it back into
+  the component** — that silently deletes the only test of the
+  keep-the-current-value invariant.
+- Baseline before this branch: **1515 passed**; after T2+T3: **1526 passed**.
