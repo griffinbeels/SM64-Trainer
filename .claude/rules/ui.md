@@ -63,12 +63,27 @@ fixed-height slots); design contract/anti-slop rules in `.agents/skills/sm64-uiu
 
 - After any UI change, verify with a headless render or the chrome-devtools
   MCP — unit tests + `node --check` alone shipped an invisible feature once.
-  Harness-page technique + headless-Chrome fallback: see auto-memory
-  `verify-ui-effects-with-harness-page`.
-- Kill any `python -m http.server` you start, in the same session.
-- **A harness must mount inside the real ancestors, or it measures a layout
-  that does not exist** (rank-banner ellipsis, 2026-07-25 — measured wrong
-  three times, twice by eye and once by a harness). Two clauses, both
+  Fixture-server recipe, harness-page technique + headless-Chrome fallback:
+  see auto-memory `verify-ui-effects-with-harness-page`.
+- **Prefer serving the REAL `index.html`/`app.js` against captured API
+  fixtures over hand-building a harness page.** `GET /api/session?clock=&scope=`
+  (plus marelo/segments/vocab/routes/pause/run) off a running instance is a
+  perfectly-shaped fixture; a ~120-line static server that returns those and
+  serves `/ui/*` from disk gives the real shell, CSS, container queries and
+  component tree by construction — which is the entire ancestors problem
+  below, solved rather than re-litigated. Mutating the captured JSON is also
+  how you reach states live data does not currently hold (no target, all
+  attempts filtered, a segment card): the empty-state pass verified five
+  scenarios that way, and caught a real bug (two Ukikis side by side) that no
+  unit test would have. Reads off the live server are GETs and safe while the
+  user plays; never START `python -m sm64_events.main` for this. Working
+  example: `fixture_server.py` in that session's scratchpad, described in the
+  memory above.
+- Kill any `python -m http.server` (or fixture server) you start, in the same
+  session.
+- **A hand-built harness must mount inside the real ancestors, or it measures
+  a layout that does not exist** (rank-banner ellipsis, 2026-07-25 — measured
+  wrong three times, twice by eye and once by a harness). Two clauses, both
   load-bearing (three, counting the CSS itself):
   0. Wearing the real **stylesheet**, fetched out of `ui/index.html` — the
      design system is one `<style>` block in that file, so a harness that
