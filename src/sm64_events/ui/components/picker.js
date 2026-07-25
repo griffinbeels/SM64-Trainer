@@ -10,15 +10,11 @@ const html = htm.bind(h);
 // world topology or routes — callers supply the groups (ui/entities.js builds
 // them) and their own filter.
 //
-// It owns exactly three behaviours, each of which has been implemented
-// separately, and wrongly, somewhere in this codebase before:
-//   1. render one <optgroup> per group, in the caller's order;
-//   2. drop a group the filter emptied, so no heading sits over nothing;
-//   3. KEEP THE CURRENT VALUE listed even when the filter rejects it.
-// (3) is the important one: a stored or legacy value fed to a filtered
-// dropdown otherwise renders blank and reads as unset — fixed once in
-// stratpicker.js (purged strategies) and again in the segment builder
-// (out-of-topology stored defs) before this component existed.
+// It renders what entities.js's visibleGroups computes: one <optgroup> per
+// group, in the caller's order, with emptied groups dropped and the current
+// value kept listed. That last one is the important behaviour — see
+// entities.js above visibleGroups for why (it's been fixed wrong twice
+// before, elsewhere, and the reasoning lives with the function, not here).
 //
 // Ids are STRINGS, so a composite id ("8:2" = course 8, star 2) is as valid as
 // a level id. The caller encodes and decodes; this file only passes them on.

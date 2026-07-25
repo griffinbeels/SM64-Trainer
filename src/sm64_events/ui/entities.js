@@ -122,8 +122,14 @@ export function segmentOptions(defs, taxonomy) {
 // unit-testable. picker.js imports preact through the browser importmap, which
 // node cannot resolve.
 
-/** Groups with the filter applied: emptied groups removed, current value kept.
- *  Pure — returns new objects, never mutates the caller's array. */
+// Scope (review M1): this only rescues a value `allow` rejects. A caller that
+// narrows `groups` itself BEFORE handing them to the picker — segments.js
+// filters by schema.enum, and narrows the star groups to one course — is
+// still responsible for its own value; visibleGroups never sees what got
+// dropped, so it cannot inject it back.
+/** Groups with the filter applied: emptied groups removed, current value kept
+ *  when `allow` rejects it. Pure — returns new objects, never mutates the
+ *  caller's array. */
 export function visibleGroups(groups, allow, value) {
   const keep = (option) => !allow || allow(option.id) || option.id === value;
   return (groups || [])

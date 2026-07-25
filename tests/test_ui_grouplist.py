@@ -1,6 +1,7 @@
 """The shared collapsible group renderer. These are SOURCE contracts — the
 behavioural check is the headless render in Tasks 6 and 8 (a UI feature has
 shipped invisible here before on unit tests alone)."""
+import re
 from pathlib import Path
 
 UI = Path(__file__).resolve().parent.parent / "src" / "sm64_events" / "ui"
@@ -91,4 +92,14 @@ def test_route_item_picker_uses_the_shared_picker():
 
 def test_route_segment_picker_groups_like_the_library():
     # The segment list beside it groups by origin region; this one did not.
-    assert "segmentOptions(segs" in ROUTES
+    # Pin the BEHAVIOUR — segmentOptions is called with a taxonomy (`.origins`)
+    # argument — not the `segs` variable name, which a rename or a useMemo
+    # wrap would change without touching the grouping at all. The sibling
+    # test_route_item_picker_uses_the_shared_picker already covers the import.
+    call = re.search(r"segmentOptions\(", ROUTES)
+    assert call, "no segmentOptions( call found in routes.js"
+    # window past the opening paren, not a balanced-paren parse: the argument
+    # itself contains parens (`(vocab || {}).origins`), which a naive
+    # "stop at the first )" match would cut off before reaching .origins
+    window = ROUTES[call.end():call.end() + 40]
+    assert ".origins" in window

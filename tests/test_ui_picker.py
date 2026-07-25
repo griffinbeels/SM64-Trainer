@@ -1,13 +1,9 @@
 """visibleGroups (ui/entities.js) driven through node.
 
-It is the whole reason the shared picker exists: dropping emptied groups and
-KEEPING THE CURRENT VALUE listed are behaviours that have been implemented —
-and got wrong — separately in stratpicker.js and the segment builder.
-
-visibleGroups lives in entities.js, not components/picker.js, because that
-module imports nothing (picker.js imports preact through the browser's
-importmap, which a bare node process cannot resolve) — see entities.js's
-comment above the function for the full reasoning.
+Why this behaviour matters and why it's been wrong before: see entities.js's
+comment above the function. It lives in entities.js, not components/picker.js,
+because that module imports nothing (picker.js imports preact through the
+browser's importmap, which a bare node process cannot resolve).
 """
 import json
 import shutil

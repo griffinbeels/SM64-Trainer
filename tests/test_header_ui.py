@@ -12,6 +12,10 @@ def test_target_modal_picks_a_star_with_one_control():
     assert "parseStarId" in HEADER_JS
 
 
-def test_target_modal_still_posts_course_and_star_separately():
-    # The API contract is unchanged — only the control collapsed.
-    assert "course_id:" in HEADER_JS and "star_id:" in HEADER_JS
+def test_target_modal_still_posts_course_and_star_as_numbers():
+    # The API contract is unchanged — only the control collapsed. This must
+    # catch the string/number boundary the refactor introduced (a picked id
+    # is a STRING; the endpoint needs integers) — `"course_id:" in HEADER_JS`
+    # alone would pass even if a raw string reached the API (review M6).
+    assert "course_id: Number(course)" in HEADER_JS
+    assert "star_id: Number(star)" in HEADER_JS
