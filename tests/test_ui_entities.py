@@ -119,3 +119,248 @@ console.log(JSON.stringify(segmentOptions(defs, taxonomy)));
                                                     "Anywhere"]
     assert groups[0]["options"] == [{"id": "7", "name": "Lakitu Skip"}]
     assert groups[2]["options"] == [{"id": "9", "name": "Reset split"}]
+
+
+CONTEXT = """
+const context = {
+  courseIcons: { bob: "bob.webp", rr: "rr.png" },   // hmc/ssl/ddd/sl absent
+  starIconsMode: "course",
+  iconOverrides: { "segment:7": "bitfs" },
+  courseByLevel: { "9": 1, "22": 7, "17": 16 },
+  segmentLevels: { "7": [19], "9": [6] },
+};
+"""
+
+
+def test_course_icon_prefers_the_portrait():
+    src = run_node("optionIcon", CONTEXT
+                   + 'console.log(JSON.stringify(optionIcon("course", "1", context)));')
+    assert src == "/ui/assets/course_icons/bob.webp"
+
+
+def test_the_four_painting_less_courses_use_their_hand_picked_icons():
+    # HMC(6), SSL(8), DDD(9), SL(10) are not entered through a painting, so the
+    # game has no portrait. These substitutes are the user's picks (2026-07-25)
+    # — the art that reads as that course — not a positional star-1 default.
+    for course, expected in ((6, "hmc6"), (8, "ssl2"), (9, "ddd1"), (10, "sl6")):
+        src = run_node("optionIcon", CONTEXT
+                       + f'console.log(JSON.stringify(optionIcon("course", "{course}", context)));')
+        assert src == f"/ui/assets/star_icons/{expected}.png", course
+
+
+def test_star_one_is_still_the_fallback_behind_the_substitutes():
+    # A course with neither a portrait nor a curated substitute (none today —
+    # this guards the chain's last rung, not a live case).
+    src = run_node("optionIcon", CONTEXT
+                   + 'console.log(JSON.stringify(optionIcon("course", "7", context)));')
+    assert src == "/ui/assets/star_icons/lll1.png"
+
+
+def test_star_icon_follows_the_user_preference():
+    per_star = run_node("optionIcon", CONTEXT
+                        + 'console.log(JSON.stringify(optionIcon("star", "1:2", context)));')
+    assert per_star == "/ui/assets/star_icons/bob3.png"
+    classic = run_node("optionIcon", CONTEXT + """
+const classicContext = { ...context, starIconsMode: "classic" };
+console.log(JSON.stringify(optionIcon("star", "1:2", classicContext)));
+""")
+    assert classic.startswith("/ui/assets/star_"), classic
+    assert "star_icons" not in classic
+
+
+def test_level_icon_routes_through_its_course():
+    src = run_node("optionIcon", CONTEXT
+                   + 'console.log(JSON.stringify(optionIcon("level", "9", context)));')
+    assert src == "/ui/assets/course_icons/bob.webp"
+
+
+def test_bowser_levels_use_their_own_art():
+    src = run_node("optionIcon", CONTEXT
+                   + 'console.log(JSON.stringify(optionIcon("level", "17", context)));')
+    assert src == "/ui/assets/star_icons/bitdw.png"
+
+
+def test_segment_icon_uses_the_override_the_banner_uses():
+    src = run_node("optionIcon", CONTEXT
+                   + 'console.log(JSON.stringify(optionIcon("segment", "7", context)));')
+    assert src == "/ui/assets/star_icons/bitfs.png"
+
+
+def test_every_kind_returns_art_never_null():
+    # A picker row with no icon would collapse its layout; the chain always
+    # ends at the generic star.
+    for call in ('optionIcon("course", "99", context)',
+                 'optionIcon("level", "26", context)',
+                 'optionIcon("segment", "9", context)',
+                 'optionIcon("nonsense", "x", context)'):
+        src = run_node("optionIcon", CONTEXT
+                       + f'console.log(JSON.stringify({call}));')
+        assert src.startswith("/ui/assets/"), (call, src)
+
+# --- visibleGroups -------------------------------------------------------
+# Moved here from tests/test_ui_picker.py when components/picker.js was
+# deleted (the icon modal replaced it). The function never lived in that
+# component — it is in entities.js precisely because this module imports
+# nothing and can therefore be executed by node — so the tests follow the
+# code rather than the control that used to render it.
+GROUPS = """
+const groups = [
+  { key: "a", label: "Lobby", options: [{ id: "9", name: "BoB" }, { id: "24", name: "WF" }] },
+  { key: "b", label: "Basement", options: [{ id: "8", name: "SSL" }] },
+];
+"""
+
+
+def test_without_a_filter_every_group_survives():
+    tree = run_node("visibleGroups", GROUPS + 'console.log(JSON.stringify(visibleGroups(groups, null, null)));')
+    assert [group["label"] for group in tree] == ["Lobby", "Basement"]
+    assert [option["id"] for option in tree[0]["options"]] == ["9", "24"]
+
+
+def test_a_group_emptied_by_the_filter_is_dropped():
+    tree = run_node("visibleGroups", GROUPS + 'console.log(JSON.stringify('
+                    'visibleGroups(groups, (id) => id === "9", null)));')
+    assert [group["label"] for group in tree] == ["Lobby"]
+    assert [option["id"] for option in tree[0]["options"]] == ["9"]
+
+
+def test_the_current_value_survives_a_filter_that_rejects_it():
+    # A stored/legacy value fed to a filtered dropdown must never vanish — it
+    # renders BLANK and reads as unset. Fixed twice before; pinned here.
+    tree = run_node("visibleGroups", GROUPS + 'console.log(JSON.stringify('
+                    'visibleGroups(groups, (id) => id === "9", "8")));')
+    assert [group["label"] for group in tree] == ["Lobby", "Basement"]
+    assert [option["id"] for option in tree[1]["options"]] == ["8"]
+
+
+def test_filtering_does_not_mutate_the_caller_s_groups():
+    tree = run_node("visibleGroups", GROUPS
+                    + 'visibleGroups(groups, () => false, null);\n'
+                    + 'console.log(JSON.stringify(groups.map((g) => g.options.length)));')
+    assert tree == [2, 1]
+
+
+def test_special_stages_use_their_own_art_not_a_plain_star():
+    # Courses 16-24 sit past the end of COURSE_ICON_PREFIXES, so before this
+    # map they fell through to the generic gold star — caught by a live render
+    # check (2026-07-25), not by a unit test, which is why this one exists.
+    for course, expected in ((16, "bitdw"), (18, "bits"), (20, "metal"),
+                             (22, "vanish"), (24, "aqua")):
+        src = run_node("optionIcon", CONTEXT
+                       + f'console.log(JSON.stringify(optionIcon("course", "{course}", context)));')
+        assert src == f"/ui/assets/star_icons/{expected}.png", course
+
+
+def test_a_special_stage_with_a_real_portrait_prefers_it():
+    # PSS is the one special stage the game DOES give a painting.
+    src = run_node("optionIcon", "const context = { courseIcons: "
+                   '{ princess_secret: "princess_secret.webp" } };\n'
+                   'console.log(JSON.stringify(optionIcon("course", "19", context)));')
+    assert src == "/ui/assets/course_icons/princess_secret.webp"
+
+
+def test_stars_inside_a_special_stage_wear_the_stage_art():
+    # A special stage has ONE icon, not seven, so `${prefix}${slot+1}` would
+    # request a vanish1.png that does not exist. Every star in it uses the
+    # stage's own art.
+    src = run_node("optionIcon", CONTEXT
+                   + 'console.log(JSON.stringify(optionIcon("star", "22:1", context)));')
+    assert src == "/ui/assets/star_icons/vanish.png"
+
+
+CATALOG_UNION = """
+const catalog = { courses: [
+  { id: 1, name: "Bob-omb Battlefield", stars: ["Big Bob-omb", "Footrace"] },
+  { id: 6, name: "Hazy Maze Cave", stars: ["Swimming Beast"] },
+] };
+const segments = [
+  { id: 3, name: "HMC to LLL", origin: { key: "7" } },        // level 7 = HMC
+  { id: 9, name: "LBLJ", origin: { key: "6:1" } },           // castle, no course
+];
+const courseByLevel = { "7": 6, "9": 1 };
+"""
+
+
+def test_layer_two_unions_a_courses_stars_and_its_segments():
+    groups = run_node("courseUnionGroups", CATALOG_UNION
+                      + "console.log(JSON.stringify(courseUnionGroups("
+                      + "catalog, segments, courseByLevel)));")
+    hmc = next(group for group in groups if group["label"] == "Hazy Maze Cave")
+    assert [option["name"] for option in hmc["options"]] == [
+        "Swimming Beast", "HMC to LLL"]
+    assert hmc["options"][1]["id"] == "segment:3"
+
+
+def test_a_castle_segment_is_filed_under_castle_not_a_course():
+    # LBLJ starts in the lobby, which is not a course. It must not be filed
+    # under one — but it must still be REACHABLE, which is why it lands in a
+    # trailing "Castle" group (review I2 corrected the original behaviour of
+    # dropping it entirely).
+    groups = run_node("courseUnionGroups", CATALOG_UNION
+                      + "console.log(JSON.stringify(courseUnionGroups("
+                      + "catalog, segments, courseByLevel)));")
+    course_groups = [group for group in groups if group["label"] != "Castle"]
+    course_names = [option["name"] for group in course_groups
+                    for option in group["options"]]
+    assert "LBLJ" not in course_names
+    castle = next(group for group in groups if group["label"] == "Castle")
+    assert [option["name"] for option in castle["options"]] == ["LBLJ"]
+
+
+def test_grid_order_is_main_courses_then_specials_then_castle_secret():
+    # The catalog's own order leads with course 0, which put "Castle Secret"
+    # where Bob-omb Battlefield belongs (live check 2026-07-25).
+    groups = run_node("courseUnionGroups", """
+const catalog = { courses: [
+  { id: 0, name: "Castle Secret", stars: ["Toad"] },
+  { id: 16, name: "BitDW", stars: ["Key"] },
+  { id: 19, name: "PSS", stars: ["Slide"] },
+  { id: 1, name: "Bob-omb Battlefield", stars: ["Big Bob-omb"] },
+] };
+console.log(JSON.stringify(courseUnionGroups(catalog, [], {})));
+""")
+    assert [group["label"] for group in groups] == [
+        "Bob-omb Battlefield", "BitDW", "PSS", "Castle Secret"]
+
+
+def test_courses_keep_game_order():
+    groups = run_node("courseUnionGroups", CATALOG_UNION
+                      + "console.log(JSON.stringify(courseUnionGroups("
+                      + "catalog, segments, courseByLevel)));")
+    # Castle trails the courses — it is the home for segments that belong to
+    # none of them, not a course itself.
+    assert [group["label"] for group in groups] == [
+        "Bob-omb Battlefield", "Hazy Maze Cave", "Castle"]
+
+
+def test_segment_ids_are_distinguishable_from_star_ids():
+    parsed = run_node("parseSegmentId",
+                      'console.log(JSON.stringify(['
+                      'parseSegmentId("segment:12"), parseSegmentId("8:1")]));')
+    assert parsed == [12, None]
+
+
+def test_castle_segments_get_their_own_group_rather_than_vanishing():
+    # A segment starting in the castle belongs to no course. Dropping it made
+    # the union read as complete while there was no way to target it at all
+    # (whole-branch review I2, 2026-07-25).
+    groups = run_node("courseUnionGroups", """
+const catalog = { courses: [{ id: 1, name: "BoB", stars: ["Big Bob-omb"] }] };
+const segments = [{ id: 9, name: "LBLJ", origin: { key: "6:1" } }];
+console.log(JSON.stringify(courseUnionGroups(catalog, segments, { "9": 1 })));
+""")
+    assert [group["label"] for group in groups] == ["BoB", "Castle"]
+    assert groups[1]["options"] == [
+        {"id": "segment:9", "name": "LBLJ", "sub": "segment"}]
+
+
+def test_segment_levels_come_from_the_origin_in_one_place():
+    # Two call sites need this derivation; a second copy is where the header's
+    # missing segment art came from.
+    levels = run_node("segmentLevelsOf", """
+const segments = [{ id: 3, origin: { key: "30" } },
+                  { id: 4, origin: { key: "6:1" } },
+                  { id: 5, origin: { key: null } }];
+console.log(JSON.stringify(segmentLevelsOf(segments)));
+""")
+    assert levels == {"3": [30], "4": [6], "5": []}

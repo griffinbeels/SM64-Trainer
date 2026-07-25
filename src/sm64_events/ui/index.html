@@ -135,6 +135,72 @@
                     margin: .5rem 0; }
   .builder-origin .field-label { margin: 0; }
   .builder-origin select { min-width: 0; max-width: 16rem; }
+  /* Entity picker (spec 2026-07-25-entity-picker-icons). The trigger reads
+     like the select it replaced; the dialog rows carry art. */
+  .entity-trigger {
+    display: inline-flex; align-items: center; gap: .45rem;
+    min-height: 34px; min-width: 0; max-width: 100%;
+    padding: .3rem .5rem; text-align: left;
+  }
+  .entity-trigger-label {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* Fixed box: art loads asynchronously and some rows fall back to different
+     art entirely, so the row must not reflow when an image resolves. */
+  .entity-row-icon {
+    width: 22px; height: 22px; flex: 0 0 22px;
+    object-fit: contain; border-radius: 4px;
+  }
+  /* Grid picker (spec 2026-07-25-picker-grid-navigation). Cells are the
+     practice banner's, so their internals are already styled by .starcell —
+     only the LAYOUT belongs here. auto-fill + minmax keeps 25 courses on one
+     screen without a scrollbar, which is the entire point of the redesign. */
+  .entity-grid {
+    display: grid; gap: .5rem;
+    grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+    align-content: start;
+  }
+  .entity-grid .starcell { width: auto; min-width: 0; padding-block: .35rem; }
+  /* No rank slot in the picker: nothing grades a cell here, so it rendered a
+     column of "–" that cost a line per ROW — 4 rows of it was most of the 94px
+     that made the grid scroll on a 900px-tall window (live audit 2026-07-25).
+     The banner still shows medals; this is grid-only. */
+  .entity-grid .starrank { display: none; }
+  /* The clear cell ("(any level)" etc.) emits null, restoring what the native
+     <select>'s placeholder option did. Muted, so it reads as an escape hatch
+     rather than a choice. */
+  /* Its own cell, not a .starcell — it is not a star, and borrowing that
+     class also dragged a domain word into a component the parity gate keeps
+     domain-free. */
+  .entity-clear {
+    display: grid; align-content: center; justify-items: center; gap: .3rem;
+    min-height: 92px; padding: .5rem .35rem; opacity: .72;
+    background: rgba(8,20,34,.4); border: 1px dashed var(--border-soft);
+    border-radius: 8px; color: var(--muted);
+  }
+  .entity-clear:hover { opacity: 1; color: var(--text); }
+  .entity-clear-mark { font-size: 1.5rem; line-height: 1; }
+  .entity-clear-label { font-size: .72rem; text-align: center; }
+  /* .starname's font-size is a cqw clamp tuned for the banner's 7-across row;
+     the modal has no container-type ancestor, so it would track the WINDOW
+     while these cells stay a fixed width (review M6). Pin it. */
+  .entity-grid .starname { font-size: .74rem; }
+  /* The sub-line is a count on layer 1 and "segment" on layer 2 — useful, but
+     it should not be as loud as the name. */
+  .entity-grid .starsub { font-size: .68rem; opacity: .75; }
+  .entity-section + .entity-section { margin-top: .8rem; }
+  .entity-section-head {
+    padding: .2rem .1rem .35rem; color: var(--muted);
+    font-size: .72rem; letter-spacing: .04em; text-transform: uppercase;
+  }
+  .entity-back {
+    display: inline-flex; align-items: center; gap: .3rem;
+    margin-bottom: .6rem; padding: .25rem .5rem;
+    background: transparent; border-color: var(--border-soft);
+    color: var(--muted); font-size: .78rem;
+  }
+  .entity-back > .ui-icon { transform: rotate(90deg); }
+  .entity-back:hover { color: var(--text); }
   .starsub .strat.none { opacity: .6; }
   @media (prefers-reduced-motion: no-preference) {
     .starcell.active-star .starholder { animation: starbob 2.4s ease-in-out infinite; }
@@ -1778,6 +1844,11 @@
     background: #0b1929; box-shadow: 0 26px 90px rgba(0,0,0,.55);
   }
   .modal-large { width: min(100%,780px); }
+  /* The picker grid is WIDE, not tall: 25 course cells at the default 600px
+     came out 5 columns x 5 rows and scrolled, which is the thing the grid
+     replaced a scrolling list to avoid (live audit 2026-07-25). At ~1100px the
+     same cells lay out 8-9 across and fit in three rows with room to spare. */
+  .modal-grid { width: min(96vw, 1100px); }
   .modal-header {
     flex: 0 0 auto; min-height: 78px; display: grid;
     grid-template-columns: 42px minmax(0,1fr) 36px;

@@ -7,8 +7,9 @@ import { StratModal } from "./stratmodal.js";
 import { Icon } from "./icons.js";
 import { MareloBar } from "./marelo.js";
 import { celebrationsEnabled, setCelebrationsEnabled } from "./celebrate.js";
-import { GroupedPicker } from "./picker.js";
-import { parseStarId, starId, starOptionsFromCatalog } from "../entities.js";
+import { EntityPicker } from "./entitymodal.js";
+import { courseUnionGroups, optionIcon, parseSegmentId, parseStarId,
+         segmentLevelsOf, starId } from "../entities.js";
 
 const html = htm.bind(h);
 
@@ -277,6 +278,39 @@ function TargetEditor({ t, close }) {
 
   const options = stratsFor(course, star);
 
+  // segmentLevels + iconOverrides are NOT optional here: without them every
+  // segment cell falls through optionIcon's chain to a plain gold star, while
+  // the banner and the route editor show its real art — and a user's explicit
+  // per-segment icon override is ignored (whole-branch review I1, 2026-07-25).
+  const iconContext = {
+    courseIcons: t.courseIcons || {},
+    starIconsMode: t.starIcons || "course",
+    iconOverrides: (v || {}).icon_overrides || {},
+    segmentLevels: segmentLevelsOf(t.segments),
+  };
+  // Layer 1 is a grid of COURSES carrying their portraits; layer 2 is that
+  // course's stars AND the segments that begin in it, because both are things
+  // you practice and /api/target already takes either (user, 2026-07-25).
+  const courseGroups = courseUnionGroups(
+    v.catalog, t.segments || [], (t.vocab || {}).course_by_level || {}
+  ).map((group) => ({
+    ...group,
+    icon: optionIcon("course", group.key.replace("course-", ""), iconContext),
+  }));
+
+  // A picked id is either "8:2" (a star) or "segment:12". The target endpoint
+  // is kind-dispatched, so one control feeds both shapes.
+  async function pickTarget(id) {
+    const segmentId = parseSegmentId(id);
+    if (segmentId != null) {
+      await send("POST", "/api/target", { kind: "segment", segment_id: segmentId });
+      close(); t.refresh();
+      return;
+    }
+    const picked = parseStarId(id);
+    pickStar(picked.course, picked.star);
+  }
+
   return html`<div class="target-editor-card" role="dialog" aria-modal="true"
       aria-label="Choose a practice target">
     <div class="target-editor-head">
@@ -285,16 +319,13 @@ function TargetEditor({ t, close }) {
           onclick=${close}><${Icon} name="close" /></button>
     </div>
     <div class="target-editor-fields">
-      <label>Star<${GroupedPicker}
-        groups=${starOptionsFromCatalog(v.catalog)}
+      <label>Star<${EntityPicker} groups=${courseGroups} depth=${2}
         value=${starId(Number(course), Number(star))}
-        placeholder=${null}
-        onChange=${(id) => {
-          // One control, still two fields on the wire: unpack and reuse the
-          // existing pickStar so the strategy list re-resolves for the new star.
-          const picked = parseStarId(id);
-          pickStar(picked.course, picked.star);
-        }} /></label>
+        title="Choose a course"
+        iconFor=${(id) => optionIcon(
+          parseSegmentId(id) == null ? "star" : "segment",
+          parseSegmentId(id) == null ? id : parseSegmentId(id), iconContext)}
+        onChange=${pickTarget} /></label>
       <label>Strategy<select key=${`hstrat-${stratNonce}`} value=${strat}
           onchange=${(changeEvent) => changeEvent.target.value === "__new__"
             ? setShowStratModal(true) : setStrat(changeEvent.target.value)}>

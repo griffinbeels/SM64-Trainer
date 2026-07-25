@@ -106,16 +106,23 @@ def test_origin_override_is_offered_only_for_saved_segments():
 
 
 # --- shared entity picker (spec 2026-07-25-shared-entity-picker) -----------
+# Superseded by the icon modal (spec 2026-07-25-entity-picker-icons): the
+# select-based GroupedPicker this section originally pinned is gone, replaced
+# by EntityPicker below. levelOptions and the topology filter are unchanged
+# by the control swap.
 
-def test_clause_params_render_through_the_shared_picker():
-    assert "GroupedPicker" in SEGMENTS_JS_SOURCE
-    assert "levelOptions" in SEGMENTS_JS_SOURCE
-    # the file-local first draft is gone, not merely unused
-    assert "groupedDropdown" not in SEGMENTS_JS_SOURCE
+def test_clause_params_use_the_modal_picker():
+    assert "EntityPicker" in SEGMENTS_JS_SOURCE
+    assert "GroupedPicker" not in SEGMENTS_JS_SOURCE   # the select is gone
 
 
-def test_the_topology_filter_stays_at_this_call_site():
-    # Domain rules never move into the picker: allowedIds is computed here and
-    # handed over as `allow`.
+def test_the_topology_filter_still_lives_here():
+    # Unchanged by the control swap: the picker never learns about world edges.
     assert "allowedIds" in SEGMENTS_JS_SOURCE
     assert "allow=${" in SEGMENTS_JS_SOURCE
+
+
+def test_icons_are_resolved_by_the_call_site():
+    # iconFor is the caller's, so the picker stays domain-free.
+    assert "iconFor=${" in SEGMENTS_JS_SOURCE
+    assert "optionIcon" in SEGMENTS_JS_SOURCE

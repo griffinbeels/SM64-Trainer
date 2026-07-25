@@ -13,8 +13,8 @@ import { PageState } from "./states.js";
 import { buildTree } from "../group.js";
 import { usePaneCap } from "../viewport.js";
 import { GroupedList, useOpenGroups } from "./grouplist.js";
-import { GroupedPicker } from "./picker.js";
-import { courseOptions, levelOptions, parseStarId, starId,
+import { EntityPicker } from "./entitymodal.js";
+import { courseOptions, levelOptions, optionIcon, parseStarId, starId,
          starOptionsFromVocab } from "../entities.js";
 
 const html = htm.bind(h);
@@ -66,7 +66,7 @@ export function allowedIds(schema, clause, conn) {
     .map(([, area]) => area));
 }
 
-export function ParamInput({ schema, name, value, vocab, clause, onChange }) {
+export function ParamInput({ schema, name, value, vocab, clause, onChange, t }) {
   // "" MUST become null, never Number("")===0 — 0 is a real area/level id,
   // so a bare Number() silently scoped cleared optional params to area 0.
   const numOrNull = (s) => (s === "" ? null : Number(s));
@@ -78,11 +78,18 @@ export function ParamInput({ schema, name, value, vocab, clause, onChange }) {
   // world-topology filter (see allowedIds above); the CURRENT value always
   // stays listed so an out-of-topology stored def renders and saves intact.
   // This filter is THIS call site's rule — it is computed here and handed to
-  // the picker as `allow`; GroupedPicker never learns about world edges.
+  // the picker as `allow`; EntityPicker never learns about world edges.
   const allowed = allowedIds(schema, clause, vocab.connections);
   const permitted = ([id]) => !allowed || allowed.has(Number(id))
     || Number(id) === value;
   const permittedId = (id) => permitted([id]);
+  // Icon context assembled HERE, not inside the picker: the picker resolves
+  // no domain art of its own.
+  const iconContext = {
+    courseIcons: (t && t.courseIcons) || {},
+    starIconsMode: (t && t.starIcons) || "course",
+    courseByLevel: vocab.course_by_level || {},
+  };
   if (schema.kind === "level") {
     // schema.enum restricts the choices (area_enter offers only the castle
     // hubs); absent enum = every level. Split into the castle regions the
@@ -94,9 +101,11 @@ export function ParamInput({ schema, name, value, vocab, clause, onChange }) {
       options: group.options.filter((option) =>
         !schema.enum || schema.enum.includes(Number(option.id))),
     })).filter((group) => group.options.length > 0);
-    return html`<${GroupedPicker} groups=${groups} allow=${permittedId}
+    return html`<${EntityPicker} groups=${groups} allow=${permittedId}
       value=${value == null ? null : String(value)}
+      title="Choose a level"
       placeholder=${schema.required ? "— pick level —" : "(any level)"}
+      iconFor=${(id) => optionIcon("level", id, iconContext)}
       onChange=${(id) => onChange(id == null ? null : Number(id))} />`;
   }
   if (schema.kind === "subarea")
@@ -108,9 +117,11 @@ export function ParamInput({ schema, name, value, vocab, clause, onChange }) {
                     "Any", "— pick subarea —");
   if (schema.kind === "course")
     // Grouped the same way, so a course picker and a level picker read alike.
-    return html`<${GroupedPicker} groups=${courseOptions(vocab)}
+    return html`<${EntityPicker} groups=${courseOptions(vocab)}
       value=${value == null ? null : String(value)}
+      title="Choose a course"
       placeholder=${schema.required ? "— pick course —" : "(any course)"}
+      iconFor=${(id) => optionIcon("course", id, iconContext)}
       onChange=${(id) => onChange(id == null ? null : Number(id))} />`;
   if (schema.kind === "star") {
     // Dependent on the sibling course param: with no course picked, any star
@@ -120,10 +131,12 @@ export function ParamInput({ schema, name, value, vocab, clause, onChange }) {
     // control edits ONE param, so it must not set the course too.
     const groups = starOptionsFromVocab(vocab)
       .filter((group) => group.key === `course-${clause.course}`);
-    return html`<${GroupedPicker} groups=${groups}
+    return html`<${EntityPicker} groups=${groups}
       disabled=${clause.course == null}
       value=${value == null ? null : starId(clause.course, value)}
+      title="Choose a star"
       placeholder=${schema.required ? "— pick star —" : "(any star)"}
+      iconFor=${(id) => optionIcon("star", id, iconContext)}
       onChange=${(id) => onChange(id == null ? null : parseStarId(id).star)} />`;
   }
   if (schema.kind === "seconds") {
@@ -149,7 +162,7 @@ export function ParamInput({ schema, name, value, vocab, clause, onChange }) {
       oninput=${(e) => onChange(numOrNull(e.target.value))} />`;
 }
 
-export function ClauseRow({ clause, types, vocab, tint, onChange, onRemove }) {
+export function ClauseRow({ clause, types, vocab, tint, onChange, onRemove, t }) {
   const spec = types.find((t) => t.key === clause.type) || types[0];
   // A param with only_when shows only while its controlling param equals the
   // gate value (subarea selectors appear only for Castle Inside).
@@ -181,7 +194,7 @@ export function ClauseRow({ clause, types, vocab, tint, onChange, onRemove }) {
   };
   const param = (pname) => html`<${ParamInput} schema=${spec.params[pname]}
       name=${pname} vocab=${vocab} clause=${clause} value=${clause[pname]}
-      onChange=${(v) => setParam(pname, v)} />`;
+      t=${t} onChange=${(v) => setParam(pname, v)} />`;
   // "{to} coming from {from}" → inputs interleaved with muted words.
   // Params a template forgets to mention render appended — the registry
   // test makes that unreachable; this keeps a bad vocab usable, not blank.
@@ -310,7 +323,7 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load }) {
       <span><b>${label}</b><small>${hint}</small></span>
     </div>
     ${d[k].map((c, i) => html`<${ClauseRow} clause=${c} types=${types}
-        tint=${i % 4} vocab=${vocab} onChange=${(cl) => edit(k, i, cl)}
+        tint=${i % 4} vocab=${vocab} t=${t} onChange=${(cl) => edit(k, i, cl)}
         onRemove=${() => drop(k, i)} />`)}
     <button class="quiet-button segment-add-condition" onclick=${() => add(k, types)}>
       <${Icon} name="plus" size=${15} /> Add another condition

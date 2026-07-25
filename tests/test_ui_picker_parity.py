@@ -34,8 +34,11 @@ ALLOWED_HAND_ROLLED_SELECTS = {
     # The `subarea` branch renders a 3-item castle_areas list — nothing to
     # group (see ParamInput's comment in segments.js).
     "components/segments.js",
-    # picker.js IS the shared <option> renderer every other file defers to.
-    "components/picker.js",
+    # entitymodal.js IS the shared cell renderer every other file defers to.
+    # It renders PracticeCell buttons and contains no <option> at all today, so
+    # it would not trip the scan — listed anyway so a future markup change
+    # cannot silently make the shared component itself the violation.
+    "components/entitymodal.js",
 }
 
 
@@ -54,7 +57,7 @@ def test_no_hand_rolled_entity_select_outside_the_allowlist():
         for marker in DOMAIN_VOCAB_MARKERS:
             assert marker not in source, (
                 f"{relative}: renders <option> and references {marker!r} — "
-                "route it through GroupedPicker/entities.js, or add it to "
+                "route it through EntityPicker/entities.js, or add it to "
                 "ALLOWED_HAND_ROLLED_SELECTS with a reason")
 
 
@@ -64,11 +67,14 @@ def _strip_comments(source: str) -> str:
 
 
 def test_the_picker_owns_no_domain_vocabulary():
+    # Retargeted 2026-07-25 from components/picker.js to components/
+    # entitymodal.js: the native <select> was replaced by the icon modal, and
+    # the guard follows the shared component rather than a filename.
     # The inverse guard: domain rules must not migrate INTO the picker. Strip
     # BOTH comment styles before checking — the old `split("//")[0]` only
     # inspected the header's import block (127 of 2472 chars) and would not
     # have caught a domain word added to the component body.
-    picker_source = (UI / "components" / "picker.js").read_text(encoding="utf-8")
+    picker_source = (UI / "components" / "entitymodal.js").read_text(encoding="utf-8")
     residue = _strip_comments(picker_source).lower()
     for domain_word in ("course", "star", "level", "segment", "topology",
                         "route"):

@@ -102,6 +102,12 @@ def _icon_stems() -> list[str]:
         return []
 
 
+# Course portrait art (ui/assets/course_icons), resolved like _ICON_DIR above
+# and globbed per call for the same reason: a dropped file shows up without a
+# restart.
+_COURSE_ICON_DIR = Path(__file__).resolve().parents[1] / "ui" / "assets" / "course_icons"
+
+
 # User-uploaded icons (spec addendum 2026-07-24): any image file, stored in
 # the DATA dir (core/paths.user_icons_dir — survives app updates), referenced
 # in overrides as "user:<filename>" so they can never collide with bundled
@@ -580,6 +586,26 @@ def create_api_router(service) -> APIRouter:
     async def icons():
         """The icon picker's grid: bundled stems + uploaded user icons."""
         return {"icons": _icon_stems(), "user_icons": _user_icon_names()}
+
+    @router.get("/icons/courses")
+    async def course_icons():
+        """Course portrait art: stem -> actual filename.
+
+        The set is MIXED-extension (.webp and .png), so the client cannot
+        build a URL from a stem alone — it asks for the listing, exactly as
+        /api/icons does for star_icons. Consequence, and the reason for the
+        endpoint: re-art or a higher-resolution rip appears by dropping the
+        file in the folder, with no code change.
+
+        Four main courses are absent on purpose — HMC, SSL, DDD and SL are not
+        entered through a painting, so the game has no portrait for them. The
+        UI falls back to their star-1 icon (ui/entities.js optionIcon).
+        """
+        if not _COURSE_ICON_DIR.is_dir():
+            return {"courses": {}}
+        return {"courses": {path.stem: path.name
+                            for path in sorted(_COURSE_ICON_DIR.iterdir())
+                            if path.is_file()}}
 
     @router.post("/icons/upload")
     async def icon_upload(name: str, request: Request):

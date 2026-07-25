@@ -12,37 +12,17 @@
 // entity resolves to in the first place.
 import { iconSrcFromStem } from "./iconpicker.js";
 
-// Course split-icon art (t.starIcons === "course", the settings-drawer
-// "Star icons" preference, the DEFAULT): ui/assets/star_icons/
-// {prefix}{slot+1}.png, one per main-course star INCLUDING the 100-coin 7th
-// slot. Index = course_id-1 (catalog order, pinned against the assets by
-// tests/test_star_icons.py).
-export const COURSE_ICON_PREFIXES = ["bob", "wf", "jrb", "ccm", "bbh", "hmc", "lll",
-                                     "ssl", "ddd", "sl", "wdw", "ttm", "thi", "ttc",
-                                     "rr"];
+// The PURE registries live in ../entities.js — that module imports nothing,
+// so node can unit-test the picker's icon chain (entities.js::optionIcon)
+// against the same table this file resolves with. Re-exported here so a
+// component never has to know which of the two layers it wants (merge
+// resolution 2026-07-25: two branches extracted these registries on the same
+// day, one for the Rank tab's Top-N strip and one for the picker grid).
+export { COURSE_ICON_PREFIXES, LEVEL_ICONS, genericStarSrc,
+         isGenericArt } from "../entities.js";
+import { COURSE_ICON_PREFIXES, LEVEL_ICONS, genericStarSrc,
+         isGenericArt } from "../entities.js";
 
-// Course-mode fallback art for a SEGMENT, by start level: the icon set has
-// real art for the Bowser stages — keyed by both the course level (pipe-entry
-// segments) and its fight arena. Everything else (castle segments) defaults
-// to the generic star unless the user overrides it.
-export const LEVEL_ICONS = { 17: "bitdw", 19: "bitfs", 21: "bits",
-                             30: "bitdw", 33: "bitfs", 34: "bits" };
-
-// Generic art is `ui/assets/star_{n}.png`; the slot index is clamped to
-// STAR_IMG_COUNT, so the 100-coin/7th slot reuses star_6.
-const STAR_IMG_COUNT = 6;    // star_1.png .. star_6.png in ui/assets/
-
-export const genericStarSrc = (slot) =>
-  `/ui/assets/star_${Math.min(slot + 1, STAR_IMG_COUNT)}.png`;
-// generic gold-star art vs "real" art (bundled split icon OR uploaded user
-// icon) — the latter gets the opaque-square `courseicon` treatment
-export const isGenericArt = (src) => /\/assets\/star_\d+\.png$/.test(src);
-
-// Cell art: user override (either mode — an explicit pick always wins) >
-// course-mode art (only when the settings-drawer preference asks for it) >
-// the generic gold star. `entityKey` is the same "star:course:star" /
-// "segment:id" identity used everywhere else (icon_overrides, MARELO
-// entities, /api/target) — the one string both callers already have on hand.
 export function resolveIcon(t, entityKey, courseStem, slot) {
   const override = ((t.view || {}).icon_overrides || {})[entityKey];
   const stem = override || (t.starIcons === "course" ? courseStem : null);

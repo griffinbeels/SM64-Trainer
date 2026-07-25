@@ -36,13 +36,14 @@ def test_every_main_course_star_icon_exists():
 
 
 def test_prefix_registry_matches_course_order():
-    """COURSE_ICON_PREFIXES moved to entityicons.js (task D,
-    2026-07-25-marelo-legibility) once the Rank tab's Top-N strip needed the
-    same table stagebanner.js's star selector already had — one registry,
-    two consumers, still pinned against the catalog order here."""
-    source = (UI / "components" / "entityicons.js").read_text(encoding="utf-8")
+    """COURSE_ICON_PREFIXES is owned by entities.js — the import-free module,
+    so node can unit-test the picker's icon chain against it — and re-exported
+    by components/entityicons.js, which the banner and the Rank tab's Top-N
+    strip both read. One registry, three consumers, still pinned against the
+    catalog order here."""
+    source = (UI / "entities.js").read_text(encoding="utf-8")
     match = re.search(r"COURSE_ICON_PREFIXES\s*=\s*\[([^\]]*)\]", source)
-    assert match, "entityicons.js lost its COURSE_ICON_PREFIXES registry"
+    assert match, "entities.js lost its COURSE_ICON_PREFIXES registry"
     listed = re.findall(r'"(\w+)"', match.group(1))
     assert listed == PREFIXES, (
         "COURSE_ICON_PREFIXES disagrees with the course catalog order: "
@@ -52,6 +53,13 @@ def test_prefix_registry_matches_course_order():
         "stagebanner.js should import COURSE_ICON_PREFIXES, not redeclare it"
     assert 'from "./entityicons.js"' in banner, \
         "stagebanner.js no longer imports the shared icon resolver"
+    # And the layering itself: the pure module must NOT reach up into a
+    # component, or node can no longer execute it (merge resolution
+    # 2026-07-25 — two branches extracted this registry the same day, one
+    # downward into entities.js and one sideways into entityicons.js).
+    entities_imports = re.findall(r'^import .*$', source, re.MULTILINE)
+    assert not entities_imports, (
+        f"entities.js must import nothing to stay node-testable: {entities_imports}")
 
 
 def test_setting_is_wired_through_store_header_and_banner():
@@ -130,3 +138,33 @@ def test_star_row_cannot_scroll_horizontally():
             f"fit instead (spec 2026-07-24): {rule[:120]}")
     assert "container-type: inline-size" in css, (
         "the scale-to-fit container queries need a container ancestor")
+
+
+def _stems_from(registry_name: str) -> list[str]:
+    """Values of a {key: "stem"} registry in entities.js."""
+    source = (UI / "entities.js").read_text(encoding="utf-8")
+    block = re.search(registry_name + r"\s*=\s*\{([^}]*)\}", source)
+    assert block, f"entities.js lost {registry_name}"
+    return re.findall(r':\s*"([\w-]+)"', block.group(1))
+
+
+def test_special_and_substitute_stems_all_have_a_real_file():
+    """The nine special-stage stems and the four painting-less substitutes
+    resolve to files that EXIST.
+
+    tests/test_ui_entities.py asserts on the returned URL string and never
+    touches the filesystem, so renaming vanish.png would quietly revert nine
+    stages to a plain gold star with a green suite — exactly the bug 6fe0379
+    was written to fix (whole-branch review I4, 2026-07-25). The JS onerror
+    fallback hides a missing file in playtests; only this test sees it.
+    """
+    star_icons = UI / "assets" / "star_icons"
+    course_icons = UI / "assets" / "course_icons"
+    missing = []
+    for stem in _stems_from("SPECIAL_COURSE_ICONS") + _stems_from("COURSE_SUBSTITUTE_ICONS"):
+        if (star_icons / f"{stem}.png").exists():
+            continue
+        if list(course_icons.glob(f"{stem}.*")):
+            continue
+        missing.append(stem)
+    assert not missing, f"no art file for {missing}"

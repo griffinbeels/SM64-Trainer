@@ -2352,3 +2352,12 @@ def test_vocab_ships_both_grouped_pickers():
     shipped = vocab()
     assert shipped["level_groups"] == level_groups()
     assert shipped["course_groups"] == course_groups()
+
+
+def test_vocab_ships_course_by_level():
+    # The JS icon chain maps a level to its course; the mapping is domain data
+    # and stays server-side rather than being duplicated in the UI.
+    shipped = vocab()["course_by_level"]
+    assert shipped["9"] == 1        # BoB
+    assert shipped["24"] == 2       # WF
+    assert all(isinstance(key, str) for key in shipped)   # JSON object keys
