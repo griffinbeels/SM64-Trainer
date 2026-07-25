@@ -7,7 +7,8 @@ A NEW corpus row that resolves nowhere fails here rather than in the UI.
 import json
 from pathlib import Path
 
-from sm64_events.tracking.segments import origin_view, start_origin
+from sm64_events.tracking.segments import (origin_taxonomy, origin_view,
+                                            start_origin)
 
 SEED = json.loads((Path(__file__).resolve().parent.parent / "src"
                    / "sm64_events" / "data" / "defaults.seed.json")
@@ -40,3 +41,14 @@ def test_a_movement_files_under_the_stage_it_leaves():
     origin = origin_view(start_origin(ssl_to_lll["start_triggers"]))
     assert origin["label"] == "Shifting Sand Land"
     assert origin["region_label"] == "Basement"
+
+
+def test_every_seeded_origin_has_a_place_in_the_taxonomy():
+    # A node can have a REGION (region_for_node) without having a PLACE in
+    # origin_taxonomy — that's exactly what let node "6" render as a group
+    # header literally labelled "6" (review I1). This is the regression test.
+    known = {place["key"] for group in origin_taxonomy() if group["key"] is not None
+             for place in group["children"]}
+    for segment in SEED["segments"]:
+        node = start_origin(segment["start_triggers"])
+        assert node is None or node in known, segment["name"]

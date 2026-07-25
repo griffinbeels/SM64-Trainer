@@ -201,7 +201,7 @@ export function ClauseRow({ clause, types, vocab, tint, onChange, onRemove }) {
 const SAVE_FIELDS = ["name", "enabled", "start_triggers", "end_triggers",
                      "guards"];
 
-function Builder({ vocab, initial, onSaved, onCancel, apiRef, t }) {
+function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load }) {
   const blank = { name: "", enabled: true,
     start_triggers: [{ type: "level_enter" }],
     end_triggers: [{ type: "level_enter" }], guards: [] };
@@ -255,7 +255,11 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t }) {
     try {
       await send("POST", `/api/segments/${initial.id}/origin`,
                  { origin: nextKey || null });
-      t.refresh();
+      // Like toggle/remove below: the library's grouping reads `defs`, which
+      // only `load()` refreshes — `t.refresh()` alone updates the session
+      // view (no `origin` field), so the row silently stayed in its old
+      // group until the tab was re-entered (review I2).
+      load(); t.refresh();
     } catch (e) { setErr(String(e)); }
   }
 
@@ -370,7 +374,12 @@ function originLevels(taxonomy) {
   const placeLabels = new Map(taxonomy.flatMap((r) =>
     r.children.map((place) => [place.key, place.label])));
   return [
-    { of: (segment) => String(originOf(segment).region),
+    // ?? null, not || {} alone: a row with no `origin` stamp at all makes
+    // originOf return {}, and String(undefined) is the literal string
+    // "undefined" — which matches no taxonomy entry and renders its own
+    // group header (review M4). String(null) correctly routes into
+    // "Anywhere" (the {key: null} taxonomy entry).
+    { of: (segment) => String(originOf(segment).region ?? null),
       label: (key) => regionLabels.get(key) || key,
       // an unknown region (a stored override we no longer offer) sorts last
       // rather than vanishing
@@ -515,7 +524,7 @@ export function Segments({ t }) {
       <main class="practice-card workshop-card segment-editor">
         ${editing
           ? html`<${Builder} key=${editing === "new" ? "new" : editing.id}
-              vocab=${vocabData} apiRef=${editorRef} t=${t}
+              vocab=${vocabData} apiRef=${editorRef} t=${t} load=${load}
               initial=${editing === "new" ? null : editing}
               onSaved=${() => { setEditing(null); load(); t.refresh(); }}
               onCancel=${() => setEditing(null)} />`

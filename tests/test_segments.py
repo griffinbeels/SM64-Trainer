@@ -2286,7 +2286,17 @@ def test_origin_view_carries_the_region_and_its_labels():
 
 
 def test_origin_view_puts_a_subarea_less_castle_start_in_the_lobby():
+    # start_origin never emits a bare "6" anymore (see the test below), but a
+    # STORED value (an old override, a foreign payload) can still be one —
+    # origin_view must keep resolving its region rather than rendering a raw
+    # key as a group header (review I1).
     assert origin_view("6")["region"] == "6:1"
+
+
+def test_a_subarea_less_castle_start_normalizes_to_the_lobby():
+    # Not just "has the lobby as its region" — it must BE a lobby place, or it
+    # renders as a group header labelled "6" (review I1).
+    assert start_origin([{"type": "level_enter", "to": 6}]) == "6:1"
 
 
 def test_origin_taxonomy_is_ordered_by_gameflow_then_class():

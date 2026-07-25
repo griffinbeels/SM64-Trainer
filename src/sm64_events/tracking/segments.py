@@ -190,7 +190,7 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
 from dataclasses import dataclass, field, replace
 from typing import Callable
 
-from sm64_events.memory.addresses import (BOWSER_STAGE_LEVELS,
+from sm64_events.memory.addresses import (AREA_LOBBY, BOWSER_STAGE_LEVELS,
                                           CASTLE_AREA_NAMES,
                                           CASTLE_REGION_LEVELS,
                                           CASTLE_REGION_NODES,
@@ -576,6 +576,14 @@ def start_origin(start_triggers: list) -> str | None:
             continue
         if origin is None or _refines(origin, candidate):
             origin = candidate
+    # A subarea-less castle interior ("6", from `level_enter to=6` with no
+    # to_subarea) is the LOBBY: every castle entry lands there before settling
+    # elsewhere — the transient-lobby behaviour detectors/level.py journals and
+    # area_changed's `from_transient` flags. Normalized HERE rather than at the
+    # region lookup, because a node with a region but no PLACE in
+    # origin_taxonomy renders its raw key as a group header (review I1).
+    if origin == node_key(LEVEL_CASTLE_INSIDE):
+        return node_key(LEVEL_CASTLE_INSIDE, AREA_LOBBY)
     return origin
 
 
