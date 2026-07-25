@@ -543,6 +543,19 @@ def test_aggregate_reports_tier_and_division():
     assert out["tier"] == "Gold" and out["division"] == "III"
 
 
+def test_aggregate_reports_progress_through_the_current_division():
+    """The header track needs depth into the CURRENT division, and only the
+    server knows the band edges -- duplicating the math in JS would let the
+    two drift."""
+    # Gold spans 45-60, so division III is 51-54: 52.5 is halfway through it.
+    out = aggregate({"a": 52.5}, [{"need": 1, "candidates": ["a"]}])
+    assert out["next_division_at"] == 54.0
+    assert out["division_progress"] == 0.5
+    # bottom of a division reads 0, not 1
+    assert aggregate({"a": 51.0}, [{"need": 1, "candidates": ["a"]}])[
+        "division_progress"] == 0.0
+
+
 def test_gain_is_the_marelo_the_next_tier_on_this_entity_is_worth():
     assert gain_for(50.0, 10) == (60.0 - 50.0) / 10   # Gold -> Platinum
     assert gain_for(None, 10) == 45.0 / 10            # unpracticed -> reach Gold
@@ -672,21 +685,29 @@ def aggregate(scores: dict, groups) -> dict:
     tier, division = scoring.division_for(marelo)
     for entity in entities:
         entity["gain"] = gain_for(entity["score"], slots)
+    next_at, progress = _division_progress(marelo)
     return {"marelo": marelo,
             "mastery": (total / practiced) if practiced else 0.0,
             "coverage": practiced / slots,
             "tier": tier, "division": division,
-            "next_division_at": _next_division_at(marelo),
+            "next_division_at": next_at, "division_progress": progress,
             "n": slots, "practiced": practiced, "entities": entities}
 
 
-def _next_division_at(marelo: float) -> float:
-    """The score the next division up begins at (100 at the very top)."""
+def _division_progress(marelo: float) -> tuple[float, float]:
+    """(score the next division begins at, 0..1 depth through the current one).
+
+    Computed here, not in the UI: only this side knows the band edges, and a
+    second copy of the arithmetic in JS is a drift waiting to happen."""
     tier, _ = scoring.division_for(marelo)
     low, high = scoring.tier_band(tier)
     width = (high - low) / scoring.DIVISIONS_PER_TIER
-    step = int((marelo - low) / width) + 1
-    return min(scoring.TOP_SCORE, low + step * width)
+    if width <= 0:
+        return scoring.TOP_SCORE, 1.0
+    step = int((marelo - low) / width)
+    division_low = low + step * width
+    return (min(scoring.TOP_SCORE, division_low + width),
+            max(0.0, min(1.0, (marelo - division_low) / width)))
 
 
 def gain_for(score, n: int) -> float:
@@ -1291,17 +1312,24 @@ from sm64_events.ranks import scoring
 
 - [ ] **Step 5: Wire it into both section builders**
 
-In `build_session_view`, the star section dict (near line 557, alongside `"rank": _section_banner(...)`) gains:
+Today both section builders call `grading_basis(...)` inline inside the `"rank"` value. Hoist that call to a local **before** the dict literal and pass the local to both keys, so the basis is computed once per section.
+
+Star section (near line 557):
 
 ```python
-            "entity_rank": entity_rank(
-                service.ranks, ek,
-                (basis := grading_basis(
-                    rank_mode, pbs_by_strat.get((c, s, clock, live_strat)),
-                    in_section, live_strat, clock)) and basis["frames"]),
+        star_basis = grading_basis(
+            rank_mode, pbs_by_strat.get((c, s, clock, live_strat)),
+            in_section, live_strat, clock)
+        ...
+            "rank": _section_banner(service.ranks, ek, live_strat,
+                                    star_basis, rank_mode),
+            "entity_rank": entity_rank(service.ranks, ek,
+                                       star_basis and star_basis["frames"]),
 ```
 
-and the segment section dict (near line 623) gains the same shape with `seg_ek`, `"rta"`, and the segment's strat/history. **Do not duplicate the walrus** — assign `star_basis` / `seg_basis` to a local before both the `"rank"` and `"entity_rank"` keys and pass it to each, so the basis is computed once.
+Segment section (near line 623): identical shape with `seg_basis`, `seg_ek`, the segment's active strat, its history, and `"rta"` as the clock.
+
+Both keys are required — rule 11 (star↔segment parity), pinned by T13's parity test.
 
 - [ ] **Step 6: Run the tests**
 
@@ -1394,6 +1422,20 @@ def test_sync_never_raises_a_watermark(service):
     service.sync_watermark("overall", 9)
     service.sync_watermark("overall", 30)
     assert service.marelo_watermarks()["overall"] == 9
+
+
+def test_sync_on_an_unknown_scope_does_nothing(service):
+    service.sync_watermark("route:7", 12)
+    assert "route:7" not in service.marelo_watermarks()
+
+
+def test_seed_writes_a_first_watermark_but_never_overwrites(service):
+    """A scope's FIRST rank is not a rank-up: seeding it silently is what
+    stops the whole backlog celebrating at once the first time it is viewed."""
+    service.seed_watermark("route:7", 12)
+    assert service.marelo_watermarks()["route:7"] == 12
+    service.seed_watermark("route:7", 30)
+    assert service.marelo_watermarks()["route:7"] == 12
 ```
 
 Add a `service` fixture to `tests/conftest.py` **only if one does not already exist** — check first with `grep -n "def service" tests/conftest.py`. If absent, copy the construction used at the top of `tests/test_service.py`.
@@ -1445,11 +1487,23 @@ Add to `TrackerService` in `src/sm64_events/tracking/service.py`:
 
     def sync_watermark(self, scope_id: str, key: int) -> None:
         """Follow a rank DOWN silently, so re-climbing celebrates again. Never
-        raises -- only ack_celebration does that."""
+        raises, and never creates a watermark -- only ack_celebration raises,
+        only seed_watermark creates."""
         if self.db is None:
             return
         marks = self.marelo_watermarks()
         if scope_id in marks and key < marks[scope_id]:
+            marks[scope_id] = int(key)
+            self.db.set_state("marelo_watermarks", json.dumps(marks))
+
+    def seed_watermark(self, scope_id: str, key: int) -> None:
+        """Record a scope's FIRST observed rank without celebrating it. A
+        first rank is not a rank-UP; without this, the first view of any scope
+        would fire a celebration for every tier the user ever earned."""
+        if self.db is None:
+            return
+        marks = self.marelo_watermarks()
+        if scope_id not in marks:
             marks[scope_id] = int(key)
             self.db.set_state("marelo_watermarks", json.dumps(marks))
 ```
@@ -1675,16 +1729,14 @@ def _build_marelo(service, scope_id: str) -> dict:
     out["celebration"] = None
     if out["tier"]:
         key = scoring.progression_key(out["tier"], out["division"])
-        service.sync_watermark(scope_id, key)
+        service.sync_watermark(scope_id, key)          # follow a drop down
         out["celebration"] = scopes.celebration_delta(
             out["tier"], out["division"],
             service.marelo_watermarks().get(scope_id))
-        if out["celebration"] is None and \
-                scope_id not in service.marelo_watermarks():
-            # first ever rank: seed the watermark silently so the NEXT rise
-            # celebrates instead of the whole backlog landing at once
-            service.sync_watermark(scope_id, key)
-            service.marelo_watermarks().setdefault(scope_id, key)
+        # A scope's FIRST rank is not a rank-up. Seeding it silently is what
+        # stops the first view of a scope celebrating the user's whole
+        # history at once. seed_watermark is a no-op once the key exists.
+        service.seed_watermark(scope_id, key)
     return out
 
 
@@ -1815,11 +1867,10 @@ export function MareloBar({ marelo, onOpen }) {
   if (!marelo) return null;
   const { tier, division, label, mastery, coverage, n, practiced } = marelo;
   const score = marelo.marelo;
-  // Endowed progress (spec section 2.4): the track always shows how far into
-  // the CURRENT division you are, so there is a near goal even at Iron V.
-  const at = marelo.next_division_at;
-  const fill = score == null || at == null ? 0
-    : Math.max(0, Math.min(100, 100 - (at - score) / (at / 100 || 1) * 100));
+  // Endowed progress (spec section 2.4): the track shows how far into the
+  // CURRENT division you are, so there is a near goal even at Iron V. The
+  // server computes it (it owns the band edges) -- do not re-derive it here.
+  const fill = Math.round((marelo.division_progress || 0) * 100);
   return html`<button type="button" class="marelo-bar" onclick=${onOpen}
       title=${`${label}: mastery ${fmtScore(mastery)} x coverage ${practiced}/${n}`}>
     <${Crest} tier=${tier} division=${division} />
