@@ -1,0 +1,42 @@
+"""Every seeded segment must land in a real castle region — otherwise it hides
+in "Anywhere" where nobody browsing the library will find it.
+
+The four exceptions are the star-grab starts documented in the design spec.
+A NEW corpus row that resolves nowhere fails here rather than in the UI.
+"""
+import json
+from pathlib import Path
+
+from sm64_events.tracking.segments import origin_view, start_origin
+
+SEED = json.loads((Path(__file__).resolve().parent.parent / "src"
+                   / "sm64_events" / "data" / "defaults.seed.json")
+                  .read_text(encoding="utf-8"))
+
+# Course-0 (castle secret) star starts we cannot place: only the MIPS catches
+# are known, and the Toad stars deliberately have no table row.
+EXPECTED_UNPLACED: set[str] = set()
+
+
+def test_every_seeded_segment_resolves_to_a_region():
+    unplaced = {segment["name"] for segment in SEED["segments"]
+                if origin_view(start_origin(segment["start_triggers"]))["region"]
+                is None}
+    assert unplaced == EXPECTED_UNPLACED
+
+
+def test_the_mips_movements_land_in_the_basement():
+    mips = [segment for segment in SEED["segments"]
+            if segment["name"].startswith("MIPS (")]
+    assert mips, "corpus lost its MIPS movements"
+    for segment in mips:
+        assert origin_view(start_origin(segment["start_triggers"]))["region"] \
+            == "6:3", segment["name"]
+
+
+def test_a_movement_files_under_the_stage_it_leaves():
+    ssl_to_lll = next(segment for segment in SEED["segments"]
+                      if segment["name"] == "SSL → LLL")
+    origin = origin_view(start_origin(ssl_to_lll["start_triggers"]))
+    assert origin["label"] == "Shifting Sand Land"
+    assert origin["region_label"] == "Basement"
