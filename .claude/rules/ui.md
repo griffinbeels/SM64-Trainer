@@ -51,3 +51,32 @@ fixed-height slots); design contract/anti-slop rules in `.agents/skills/sm64-uiu
   Harness-page technique + headless-Chrome fallback: see auto-memory
   `verify-ui-effects-with-harness-page`.
 - Kill any `python -m http.server` you start, in the same session.
+- **A harness must mount inside the real ancestors, or it measures a layout
+  that does not exist** (rank-banner ellipsis, 2026-07-25 — measured wrong
+  three times, twice by eye and once by a harness). Two clauses, both
+  load-bearing:
+  1. Inside the real **app shell**. `.app-shell` is
+     `grid-template-columns: var(--sidebar-wide) minmax(0,1fr)` — 206px,
+     dropping to `--sidebar-rail` 76px at 1180px and `display:none` under
+     760px. A harness rendering into bare `<body>` hands every card ~206px
+     it never gets, and reported ZERO overflow at 1400px when the real
+     answer was eight.
+  2. Inside the real **`.practice-page`**, which is what declares
+     `container-type: inline-size`. Without it every `@container` rule
+     silently never matches, so the harness cannot show a container-based
+     fix working and reports it as ineffective when it is correct — a worse
+     failure than the width error, because it looks like a verdict.
+  - Sanity check before trusting any number from a harness: compare its
+    rendered card width against a real screenshot of the app.
+- **Sweep the width continuum, not three sample points.** For the rank
+  banners, 1400/900/700 all passed while every window from ~1101px to
+  ~1500px was broken — 900px passes only because the layout stacks there.
+- **Viewport width is often the wrong signal in this app**: the sidebar step
+  at 1180px means the pane a card lives in is NOT monotonic in window width
+  (a 1181px window gives a card a 947px pane; a 1180px window gives it
+  1076px). Gate card-internal layout on `@container` against
+  `.practice-page`, the way the star row's `cqw` sizing already does.
+- When a `@container`/media rule `display:none`s an element, its own `title`
+  is not a fallback — a hidden element cannot be hovered. Move the text onto
+  an element that is always rendered (the rank banner folds its basis line
+  into the progress track's tooltip).

@@ -109,12 +109,22 @@ export function RankBanner({ label, banner }) {
   // round 4, 2026-07-25: it's global app state already shown in the
   // header's Rank Mode picker, not something this row needs to repeat, and
   // dropping it (plus "avg of") was the difference between fitting and
-  // overflowing on the avg-mode fixture. Still in the title for anyone who
-  // wants it. This is wording around the rank data, not the rank data
-  // itself — the tier/division/count/time stay exactly as graded.
+  // overflowing on the avg-mode fixture. This is wording around the rank
+  // data, not the rank data itself — the tier/division/count/time stay
+  // exactly as graded.
   const basisText = basis && `${basis.count}${basis.window ? `/${basis.window}` : ""}·${basis.display}`;
   const basisTitle = basis && `${MODE_LABEL[banner.mode] || banner.mode} — `
-    + `avg of ${basis.count}${basis.window ? `/${basis.window}` : ""} valid runs`;
+    + `avg of ${basis.count}${basis.window ? `/${basis.window}` : ""} valid runs`
+    + ` — ${basis.display}`;
+  // The basis line is `display:none` below a 1250px pane (index.html's
+  // @container rules), and a hidden element cannot be hovered — so its own
+  // `title` is NOT a fallback at exactly the widths where it disappears.
+  // The progress track is the one element that is always rendered and spans
+  // the banner's full width, so the basis rides ITS tooltip too. That keeps
+  // "what time is this rank graded on" recoverable at every width, which is
+  // the premise the whole hide-the-basis decision rests on.
+  const trackTitle = [nextLabel ? `${fillPct}% of the way to ${nextLabel}` : "top rank",
+    basisTitle].filter(Boolean).join(" · ");
   return html`<div class="rank-banner">
     <div class="rank-banner-row">
       <span class="rank-banner-kicker">${label}</span>
@@ -124,8 +134,7 @@ export function RankBanner({ label, banner }) {
       <span class="meta rank-banner-next">${nextLabel
         ? html`→ <b>${nextLabel}</b>${gap ? ` −${gap}s` : ""}` : "top rank"}</span>
     </div>
-    <div class="rank-progress-track"
-        title=${nextLabel ? `${fillPct}% of the way to ${nextLabel}` : "top rank"}>
+    <div class="rank-progress-track" title=${trackTitle}>
       <i style=${`width:${fillPct}%;background:${c}`}></i>
     </div>
   </div>`;
