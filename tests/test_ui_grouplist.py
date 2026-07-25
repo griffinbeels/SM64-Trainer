@@ -81,3 +81,14 @@ def test_routes_library_uses_the_shared_primitives():
 def test_routes_keeps_its_existing_open_state_key():
     # A new key here would silently reset every user's open groups.
     assert '"sm64.routeCatsOpen"' in ROUTES
+
+
+def test_route_item_picker_uses_the_shared_picker():
+    assert "GroupedPicker" in ROUTES
+    assert "starOptionsFromCatalog" in ROUTES
+    assert "segmentOptions" in ROUTES
+
+
+def test_route_segment_picker_groups_like_the_library():
+    # The segment list beside it groups by origin region; this one did not.
+    assert "segmentOptions(segs" in ROUTES
