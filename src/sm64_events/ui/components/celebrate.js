@@ -38,7 +38,7 @@ export function RankUpOverlay({ celebration, scopeId, onDone }) {
     }
     const nextStepTimer = setTimeout(() => setStep((previousStep) => previousStep + 1), STEP_MS);
     return () => clearTimeout(nextStepTimer);
-  }, [celebration, step]);
+  }, [celebration && celebration.key, step]);
 
   async function finish() {
     try { await send("POST", "/api/marelo/ack", { scope: scopeId, key: celebration.key }); }
