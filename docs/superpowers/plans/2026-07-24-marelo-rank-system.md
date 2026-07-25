@@ -127,7 +127,10 @@ def test_tier_from_score_only_names_tiers_the_ladder_defines():
     defined = defined_tiers(sparse)
     # a time between the two cutoffs interpolates through the 80-90 range;
     # a full-table lookup would wrongly call that "Master".
-    score = score_for(sparse, 1320)
+    # 1310, not 1320: the interpolation crosses the Master anchor (80.0) at
+    # exactly 1319.5cs, so a probe just past it lands in Diamond on BOTH
+    # lookups and proves nothing. This one sits mid-Master (85.76).
+    score = score_for(sparse, 1310)
     assert 70.0 < score < 90.0
     assert tier_from_score(score, defined) == "Diamond"
     assert tier_from_score(score) == "Master"           # full table, for aggregates
