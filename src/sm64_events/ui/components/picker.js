@@ -29,11 +29,15 @@ const html = htm.bind(h);
  * onChange    (id | null) => void
  * allow       optional (id) => boolean — the CALLER's domain filter
  * placeholder optional leading option's label; omit for no placeholder
+ * id, name    optional — forwarded to the <select> so a caller that needs a
+ *             form-field identity (label `for`, form submission) can supply
+ *             one; the picker itself has no opinion on either
  */
 export function GroupedPicker({ groups, value, onChange, allow, placeholder,
-                               disabled = false }) {
+                               disabled = false, id, name }) {
   const shown = visibleGroups(groups, allow, value);
-  return html`<select value=${value ?? ""} disabled=${disabled}
+  return html`<select id=${id} name=${name} value=${value ?? ""}
+      disabled=${disabled}
       onchange=${(event) => onChange(event.target.value === ""
         ? null : event.target.value)}>
     ${placeholder == null ? null
