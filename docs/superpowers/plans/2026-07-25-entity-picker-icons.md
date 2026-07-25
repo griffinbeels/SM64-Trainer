@@ -18,7 +18,7 @@
 - **Node cannot execute a module that imports `preact`/`htm`.** Pure logic that needs a node test lives in an import-free module (`ui/group.js`, `ui/entities.js`). Syntax-check components with `node --input-type=module --check < file.js`; verify behaviour by rendering.
 - Don't start `python -m sm64_events.main` — the user may be playing and it takes the recorder lock. UI verification uses a static harness on port **8137** (never 8064/8065/8066), deleted and killed in the same task.
 - Run verification through the **Bash tool** — PowerShell mangles native exit codes.
-- **HMC, SSL, DDD and SL have no course portrait and never will** — those courses aren't entered through a painting. Their fallback to star-1 art is the final answer; do not add a TODO or go looking for the files.
+- **HMC, SSL, DDD and SL have no course portrait and never will** — those courses aren't entered through a painting. They use HAND-PICKED substitutes (`hmc6`, `ssl2`, `ddd1`, `sl6` — user's choice, verified present in `star_icons/`). That is the final answer; do not add a TODO or go looking for portrait files.
 - No single-letter variables, including JS callbacks. Match each file's comment density.
 - Commit messages explain WHY.
 
@@ -250,9 +250,19 @@ def test_course_icon_prefers_the_portrait():
     assert src == "/ui/assets/course_icons/bob.webp"
 
 
-def test_a_course_with_no_painting_falls_back_to_its_star_one_icon():
-    # LLL is course 7; the game has no LLL portrait, so this is the FINAL
-    # answer for it, not a placeholder awaiting art.
+def test_the_four_painting_less_courses_use_their_hand_picked_icons():
+    # HMC(6), SSL(8), DDD(9), SL(10) are not entered through a painting, so the
+    # game has no portrait. These substitutes are the user's picks (2026-07-25)
+    # — the art that reads as that course — not a positional star-1 default.
+    for course, expected in ((6, "hmc6"), (8, "ssl2"), (9, "ddd1"), (10, "sl6")):
+        src = run_node("optionIcon", CONTEXT
+                       + f'console.log(JSON.stringify(optionIcon("course", "{course}", context)));')
+        assert src == f"/ui/assets/star_icons/{expected}.png", course
+
+
+def test_star_one_is_still_the_fallback_behind_the_substitutes():
+    # A course with neither a portrait nor a curated substitute (none today —
+    # this guards the chain's last rung, not a live case).
     src = run_node("optionIcon", CONTEXT
                    + 'console.log(JSON.stringify(optionIcon("course", "7", context)));')
     assert src == "/ui/assets/star_icons/lll1.png"
@@ -328,6 +338,14 @@ export const COURSE_ICON_PREFIXES = ["bob", "wf", "jrb", "ccm", "bbh", "hmc",
 export const LEVEL_ICONS = { 17: "bitdw", 19: "bitfs", 21: "bits",
                              30: "bitdw", 33: "bitfs", 34: "bits" };
 
+// Four main courses are not entered through a painting, so the game has NO
+// portrait for them. These are hand-picked stand-ins (user, 2026-07-25) — the
+// star art that reads as that course — rather than a positional star-1
+// default, which would have given Hazy Maze Cave its first star's icon.
+// This is the final answer for these four; there is no art to wait for.
+export const COURSE_SUBSTITUTE_ICONS = { hmc: "hmc6", ssl: "ssl2",
+                                         ddd: "ddd1", sl: "sl6" };
+
 const GENERIC_STAR_SLOTS = 6;   // ui/assets/star_1.png … star_6.png
 const genericStar = (slot = 0) =>
   `/ui/assets/star_${Math.min(slot + 1, GENERIC_STAR_SLOTS)}.png`;
@@ -357,7 +375,9 @@ export function optionIcon(kind, id, context = {}) {
     const prefix = prefixFor(course);
     if (!prefix) return genericStar();
     if (courseIcons[prefix]) return `/ui/assets/course_icons/${courseIcons[prefix]}`;
-    return starIconSrc(`${prefix}1`);     // no painting in the game — final
+    if (COURSE_SUBSTITUTE_ICONS[prefix])
+      return starIconSrc(COURSE_SUBSTITUTE_ICONS[prefix]);
+    return starIconSrc(`${prefix}1`);
   };
 
   if (kind === "course") return courseArt(id);

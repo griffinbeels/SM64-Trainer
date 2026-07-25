@@ -89,7 +89,7 @@ builders that produce the options:
 
 | Kind | Chain |
 |---|---|
-| course | course portrait → that course's star-1 icon → generic star |
+| course | course portrait → its CURATED substitute (`COURSE_SUBSTITUTE_ICONS`) → that course's star-1 icon → generic star |
 | star | **preference-driven**: `starIcons === "course"` → that star's split icon (`{prefix}{slot+1}.png`); `"classic"` → the generic gold star art. Mirrors `stagebanner.js` exactly. |
 | level | `COURSE_BY_LEVEL` → the course chain; Bowser stages use the existing `bitdw`/`bitfs`/`bits` art; castle levels (6/16/26) have no art and fall through to generic |
 | segment | the banner's existing chain: per-entity icon override → `LEVEL_ICONS` start-level match → generic |
@@ -98,10 +98,19 @@ The star row therefore shows the same art the practice banner shows for that
 star, under the same setting, and the segment picker shows the same art the
 banner shows for that segment. No second source of truth for entity art.
 
-**The four courses without a portrait (HMC, SSL, DDD, SL) resolve to their
-star-1 icon** — real art, so they read as intentional, which they are: those
-courses are not entered through a painting, so the portrait does not exist to
-ship (§Decisions 5). The fallback is the final state for them.
+**The four courses without a portrait (HMC, SSL, DDD, SL) resolve to a HAND-PICKED
+star icon**, not a mechanical star-1:
+
+```
+hmc -> hmc6    ssl -> ssl2    ddd -> ddd1    sl -> sl6
+```
+
+chosen by the user (2026-07-25) as the art that best reads as that course. A
+positional default would have given HMC its first star's icon, which is not
+what a runner pictures when they think "Hazy Maze Cave". The registry lives
+beside `COURSE_ICON_PREFIXES` in `entities.js`; star-1 remains the fallback
+behind it for any course that gains neither. This is the final state for those
+four — the game has no painting for them (§Decisions 5).
 
 ## 3. Keyboard and focus — specified, not left to taste
 
