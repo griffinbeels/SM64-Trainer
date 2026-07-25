@@ -1,18 +1,43 @@
 import { h } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useCallback, useEffect, useState } from "preact/hooks";
 import htm from "htm";
-import { send } from "../api.js";
+import { getJSON, send } from "../api.js";
 import { RANK_MODE_OPTIONS } from "./ranks.js";
 import { StratModal } from "./stratmodal.js";
 import { Icon } from "./icons.js";
+import { MareloBar } from "./marelo.js";
 
 const html = htm.bind(h);
+
+// Events after which the header's MARELO figure can have moved: a fresh
+// score (marelo_changed), a new attempt scored into it, a grading-mode
+// switch, or a route focus change (the focus route IS the scope --
+// ranks_api.py _active_scope -- so switching routes switches what /api/marelo
+// answers for).
+const MARELO_REFRESH_EVENTS = new Set(["marelo_changed", "attempt_completed",
+  "rank_mode_changed", "route_selected"]);
 
 export function Header({ t, settingsOpen, closeSettings }) {
   const v = t.view;
   const tgt = v && v.target;
   const [editing, setEditing] = useState(false);
   const [restarting, setRestarting] = useState(false);
+  const [marelo, setMarelo] = useState(null);
+
+  const fetchMarelo = useCallback(async () => {
+    try { setMarelo(await getJSON("/api/marelo")); } catch (e) { console.error(e); }
+  }, []);
+  useEffect(() => { fetchMarelo(); }, [fetchMarelo]);
+  // t.feed is prepended on every WS message (store.js), so its head is the
+  // latest event; re-fetch only when it's one MARELO can move on, not on
+  // every unrelated feed entry.
+  const latestEvent = t.feed.length > 0 ? t.feed[0] : null;
+  useEffect(() => {
+    if (latestEvent && MARELO_REFRESH_EVENTS.has(latestEvent.type)) fetchMarelo();
+  }, [latestEvent, fetchMarelo]);
+  // setTab is threaded in by T14; a no-op until then so the bar still
+  // renders (and looks clickable) without a working Rank tab jump yet.
+  const openMarelo = () => {};
 
   useEffect(() => {
     if (!settingsOpen && !editing) return;
@@ -134,6 +159,10 @@ export function Header({ t, settingsOpen, closeSettings }) {
           </select>` : html`<span>—</span>`}
         </span>
       </label>
+    </div>
+
+    <div class="marelo-row">
+      <${MareloBar} marelo=${marelo} onOpen=${openMarelo} />
     </div>
 
     ${editing && v && html`<div class="context-editor">
