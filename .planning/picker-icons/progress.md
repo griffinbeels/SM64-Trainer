@@ -9,8 +9,8 @@ marked complete is DONE — do not re-dispatch it.
 
 | Wave | Task | State | Commits / notes |
 |---|---|---|---|
-| 1 | T1 serve portraits + `course_by_level` | dispatched | agent `i1-assets` |
-| 1 | T2 `optionIcon` + move the two registries | dispatched | agent `i2-icons` |
+| 1 | T1 serve portraits + `course_by_level` | **complete** | `16baf1c`, 13 assets, +docs/api.md (forced by the docs gate) |
+| 1 | T2 `optionIcon` + move the two registries | **complete** | `e644bec`, 14 tests, node ran |
 | 1 | T3 `EntityPicker` + CSS + store manifest | dispatched | agent `i3-modal` |
 | 2 | T4 segments.js clause params | pending | |
 | 2 | T5 header.js target modal | pending | |
@@ -36,4 +36,13 @@ marked complete is DONE — do not re-dispatch it.
   boundary (`Number(id)` / `parseStarId(id)`).
 - **`optionIcon` must never return null** — a row with no art collapses its own
   layout. Every branch ends at the generic star.
-- Baseline before this branch: **1539 passed**.
+- **Untracked files do NOT propagate into a new worktree.** `assets/course_icons/`
+  existed only as untracked files in the main checkout, so T1 found the plan's
+  "move the assets" step impossible until it copied them across first. Any
+  future plan that starts by moving untracked assets must say so.
+- **Red-first was inferred, then PROVEN.** T1 wrote tests and implementation in
+  one pass and said so plainly rather than claiming TDD. I probed it directly:
+  disabling the route and dropping the vocab key turns all three new tests red;
+  restoring makes them green. Worth the 30 seconds — this session has twice
+  shipped tests that could not fail.
+- Baseline before this branch: **1539 passed**; after T1+T2: **1555 passed**.
