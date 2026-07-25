@@ -51,6 +51,24 @@ tools/scrape_ranks.py`). REST/WS surface:
 `rank_standards_changed` and `rank_mode_changed` are broadcast-only (no
 journal entry).
 
+**MARELO** rolls every rankable entity's score into one 0-100 rating per
+*scope* — Overall, a course, or any route in the library. The practice
+target's active route IS the scope: `GET /api/marelo` with no `scope` answers
+for whatever you're currently practicing, so there is no second control to
+keep in sync. An unknown scope `404`s rather than silently falling back to
+Overall — a stale route id in a client must read as gone, not as a different
+rating.
+
+| Method | Path | Body / Query | Effect |
+|---|---|---|---|
+| `GET` | `/api/marelo/scopes` | — | Every pickable scope (`overall` first, then routes, then courses) + `active` (the current default scope id). |
+| `GET` | `/api/marelo` | `?scope=<id>` (optional) | `{scope_id, label, marelo, mastery, coverage, tier, division, next_division_at, n, practiced, entities:[{key,label,score,tier,division,gain,excluded}], celebration}` for one scope (defaults to the active route, else Overall). `404` for an unknown scope. |
+| `GET` | `/api/marelo/history` | `?scope=<id>` (optional) | `{scope_id, points:[{utc,marelo,tier,division}]}` — the scope's MARELO recomputed chronologically from the practice journal against CURRENT standards (a seed bump reshapes the past). |
+| `POST` | `/api/marelo/exclude` | `{"entity": "<key>", "excluded": true\|false}` | Opt an entity out of (or back into) every scope's numerator AND denominator. |
+| `POST` | `/api/marelo/ack` | `{"scope": "<id>", "key": N}` | Raise the scope's celebration watermark once the UI has actually shown a rank-up (never on fetch — see the `marelo` payload's `celebration` field). |
+
+`marelo_changed` is broadcast-only (no journal entry).
+
 **Compare** puts your run side-by-side with a reference video: the left
 stage plays a past attempt by id through the same replay pipeline as the
 Replay tab, the right stage plays an imported comparison video — pulled

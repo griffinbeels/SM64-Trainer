@@ -493,6 +493,43 @@ def stamp_origins(rows: list[dict], overrides: dict) -> list[dict]:
     return stamped
 
 
+def segment_courses(db) -> dict:
+    """{segment_id: course_id} from each definition's start levels -- the same
+    resolution the stage quick-select banner uses, so a segment lands in the
+    course scope the user practices it from. A castle-interior segment (LBLJ,
+    MIPS clip) maps to no course and is simply absent: it belongs to `overall`
+    and to routes, never to a course scope (spec section 3.3)."""
+    from sm64_events.memory.addresses import COURSE_BY_LEVEL
+    out = {}
+    for d in db.segment_defs():
+        for level in _segment_start_levels(d["start_triggers"]):
+            course = COURSE_BY_LEVEL.get(level)
+            if course is not None:
+                out[d["id"]] = course
+                break
+    return out
+
+
+def entity_label(db, ek: str) -> str:
+    """Human name for an entity key, for the MARELO breakdown list.
+
+    Star names route through the canonical `course_name`/`star_name` pair
+    (addresses.py) rather than indexing COURSE_NAMES/STAR_NAMES directly:
+    STAR_NAMES[course_id] is a TUPLE positioned by star_id, not a {star_id:
+    name} dict (brief's "verified shape" was wrong -- confirmed live), and
+    star_name also owns the 1-15/star_id==6 -> "100 Coins" special case that a
+    raw lookup here would silently miss."""
+    from sm64_events.memory.addresses import course_name, star_name
+    kind, _, rest = ek.partition(":")
+    if kind == "segment":
+        name = next((d["name"] for d in db.segment_defs()
+                     if str(d["id"]) == rest), None)
+        return name or f"segment {rest}"
+    course, _, star = rest.partition(":")
+    cid, sid = int(course), int(star)
+    return f"{course_name(cid)} — {star_name(cid, sid)}"
+
+
 def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     all_attempts = db.attempts()
     session_attempts = [a for a in all_attempts
