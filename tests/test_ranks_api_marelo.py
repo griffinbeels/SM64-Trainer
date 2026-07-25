@@ -103,6 +103,18 @@ def test_reincluding_restores_the_denominator_and_the_normal_row(client):
     assert matching[0]["excluded"] is False
 
 
+def test_exclusions_endpoint_reports_the_raw_set(client):
+    """The strategy modal's "include in ranking" tick reads this: it opens on
+    ONE entity, possibly one with no standards yet and therefore in no scope
+    at all, so it can't get the answer from /api/marelo's per-entity
+    `excluded` flag (spec 2026-07-25 round 7)."""
+    assert client.get("/api/marelo/exclusions").json()["excluded"] == []
+    client.post("/api/marelo/exclude", json={"entity": "star:9:2", "excluded": True})
+    assert client.get("/api/marelo/exclusions").json()["excluded"] == ["star:9:2"]
+    client.post("/api/marelo/exclude", json={"entity": "star:9:2", "excluded": False})
+    assert client.get("/api/marelo/exclusions").json()["excluded"] == []
+
+
 def test_history_returns_points_for_a_valid_scope(client):
     body = client.get("/api/marelo/history?scope=overall").json()
     assert body["scope_id"] == "overall"

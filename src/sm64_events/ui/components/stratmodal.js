@@ -24,8 +24,28 @@ export function StratModal({ entity, existing, onSaved, onClose }) {
   const [videos, setVideos] = useState({});   // rank -> raw input string
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
+  // "Include in ranking" (live request 2026-07-25 round 7): the same
+  // exclusion the Rank tab's breakdown toggles, offered where standards are
+  // CREATED, because that is the moment you know whether this is something
+  // you want rated. Reads !excluded rather than "has standards" — after this
+  // save it will have standards, so an exclusion is the only thing that can
+  // still keep it out of a rating.
+  const [included, setIncluded] = useState(true);
+  // Written only if the user actually touches it. Saving the state back
+  // unconditionally would let a failed/absent fetch (the checkbox falling
+  // back to its default) silently rewrite an exclusion the user set
+  // elsewhere.
+  const [includeTouched, setIncludeTouched] = useState(false);
   const nameRef = useRef(null);
   useEffect(() => { nameRef.current && nameRef.current.focus(); }, []);
+  useEffect(() => {
+    let alive = true;
+    getJSON("/api/marelo/exclusions")
+      .then((response) => alive
+        && setIncluded(!(response.excluded || []).includes(entity)))
+      .catch(() => { /* leave the box at its default; save writes nothing */ });
+    return () => { alive = false; };
+  }, [entity]);
 
   async function save() {
     const strat = name.trim();
@@ -72,6 +92,11 @@ export function StratModal({ entity, existing, onSaved, onClose }) {
             { url });
         }
       }
+      // Last, so a failure here can never strand the ladder itself: the
+      // standards are the point of this modal, the ranking flag is a
+      // preference the breakdown can still toggle.
+      if (includeTouched)
+        await send("POST", "/api/marelo/exclude", { entity, excluded: !included });
       onSaved(strat);
     } catch (requestError) {
       // Keep the modal open: the strat may exist with partial data — re-Save
@@ -95,6 +120,17 @@ export function StratModal({ entity, existing, onSaved, onClose }) {
       <input class="stratname" placeholder="e.g. Texture setup" value=${name}
           ref=${nameRef} autofocus
           oninput=${(inputEvent) => setName(inputEvent.target.value)} />
+    </label>
+    <label class="strategy-include-field">
+      <input type="checkbox" checked=${included} onchange=${(changeEvent) => {
+        setIncluded(changeEvent.target.checked); setIncludeTouched(true);
+      }} />
+      <span>
+        <b>Include in ranking</b>
+        <span class="meta">Anything with no rank standards is never rated;
+          unticking keeps this one out of MARELO and every route rating even
+          once it has them.</span>
+      </span>
     </label>
     <div class="strategy-ladder-heading">
       <div>

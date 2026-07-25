@@ -1036,6 +1036,36 @@
   }
   .topn-icon { width: 100%; height: 100%; object-fit: contain; }
   .topn-icon.courseicon { width: 90%; height: 90%; }
+  /* The tiles are buttons (round 7: "I could click on it and get an overview
+     of my history for that star"), so they need the padding/appearance reset
+     every icon button in this design system takes. */
+  .topn-tile { padding: 0; cursor: pointer; }
+  .topn-tile.is-open { box-shadow: 0 0 0 2px rgba(240,189,50,.55); }
+  .topn-detail {
+    margin-top: 10px; padding-top: 10px;
+    border-top: 1px solid var(--border-soft);
+  }
+  .topn-detail-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .topn-detail-head h4 { margin: 0; font-size: 15px; }
+  .topn-detail-head .meta { margin: 0; }
+  .topn-detail-spacer { flex: 1 1 auto; }
+  /* Its own scroller with a fixed cap, not a growing list: this card sits
+     above the chart and the breakdown, and a ten-row expansion that pushed
+     both down the page would move the thing the user was reading. */
+  .topn-attempts {
+    max-height: 208px; overflow-y: auto; margin-top: 8px;
+  }
+  .topn-attempts table { width: 100%; border-collapse: collapse; }
+  .topn-attempts td {
+    padding: 4px 8px; border-bottom: 1px solid var(--border-soft);
+    font-size: 12px; white-space: nowrap;
+  }
+  .topn-attempts td:first-child { width: 22px; }
+  .topn-attempts .topn-attempt-strat {
+    width: 100%; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; color: var(--muted);
+  }
+  .topn-attempts tr.is-pb td { color: var(--gold); }
   .rank-card-main { display: flex; align-items: center; gap: 16px; margin: 10px 0; }
   .rank-card-main h2 { margin: 0; font-size: 24px; }
   /* Task C.5: names the MARELO-vs-saved-PB distinction so it reads as
@@ -1045,6 +1075,42 @@
   .rank-factors i {
     display: block; height: 8px; border-radius: 4px; background: var(--gold);
     margin: 3px 0; max-width: 100%;
+  }
+  /* Mastery as the LADDER it actually is (live request 2026-07-25 round 7 —
+     "it's not very clear what mastery means here. Out of what?"). Mastery is
+     a mean 0-100 SCORE, so the same anchors the chart's gridlines use apply
+     to it: the track is banded in each tier's own colour, a full-height tick
+     marks every tier threshold and a short pip every division inside it. The
+     bands are one gradient with hard stops, drawn TWICE — dim underneath,
+     full-strength in the fill — so "how far along the ladder" and "which
+     ranks those stretches are" are the same picture instead of a gold bar
+     that answers neither. The fill's background-size is set inline
+     (rankpage.js) because a percentage background resolves against the
+     FILL's box, not the track's; without it the whole ladder would be
+     squeezed into however much is filled. */
+  .rank-ladder {
+    position: relative; height: 16px; margin: 4px 0 3px;
+    border-radius: 8px; background: rgba(4,13,23,.72); overflow: hidden;
+  }
+  .rank-ladder-bands, .rank-ladder-fill {
+    position: absolute; left: 0; top: 0; bottom: 0;
+    background-repeat: no-repeat; background-size: 100% 100%;
+  }
+  .rank-ladder-bands { right: 0; opacity: .26; }
+  .rank-ladder-fill { opacity: 1; }
+  .rank-ladder-tick, .rank-ladder-pip {
+    position: absolute; transform: translateX(-50%); pointer-events: none;
+  }
+  .rank-ladder-tick { top: 0; bottom: 0; width: 2px; background: rgba(6,16,28,.9); }
+  .rank-ladder-pip {
+    top: 5px; height: 6px; width: 1px; background: rgba(255,255,255,.28);
+  }
+  /* The reached-this-far marker: a bright edge on the fill, so the exact
+     value is readable against a banded track that has plenty of edges of
+     its own. */
+  .rank-ladder-head {
+    position: absolute; top: -1px; bottom: -1px; width: 2px;
+    background: var(--text); transform: translateX(-1px);
   }
   /* Fixed pixel height, not `height:auto` — HistoryChart measures its own
      rendered width via ResizeObserver and redraws the viewBox to match, so
@@ -1888,6 +1954,22 @@
 
   .strategy-name-field { margin-bottom: 1rem; }
   .stratname { margin: 0; }
+  /* "Include in ranking" — a checkbox ROW, and deliberately NOT a
+     `.modal-field`: that class stretches its input to `width: 100%`, which
+     turned the tick into a 36px square and pushed its label out of the
+     modal. Sized explicitly here, with the same `min-height: 0` +
+     accent-color every other checkbox in this design system takes.
+     `align-items: start` keeps the box on the first line as the
+     explanation wraps. */
+  .strategy-include-field {
+    display: flex; align-items: start; gap: .5rem; margin-bottom: 1rem;
+  }
+  .strategy-include-field input[type="checkbox"] {
+    width: 15px; height: 15px; min-height: 0; margin: .15rem 0 0;
+    flex: 0 0 auto; accent-color: var(--blue);
+  }
+  .strategy-include-field > span { display: grid; gap: .12rem; }
+  .strategy-include-field .meta { font-size: .69rem; }
   .strategy-ladder-heading {
     display: flex; align-items: end; justify-content: space-between;
     gap: 1rem; margin-bottom: .5rem;

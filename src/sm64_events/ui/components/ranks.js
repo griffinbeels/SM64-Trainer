@@ -10,9 +10,13 @@ export const RANK_NAMES = ["Mario", "Grandmaster", "Master", "Diamond",
 export const RANK_COLORS = {
   Mario: "#e23b3b", Grandmaster: "#8b1a1a", Master: "#7b3f9e",
   Diamond: "#3f86d6", Platinum: "#5cb85c", Gold: "#e0b520",
-  Silver: "#c2c2c2", Bronze: "#c0894a", Iron: "#8a8a8a" };
+  // Iron is rusty, not grey — see the note on ranks/standards.RANK_COLORS,
+  // which this mirrors. Its FG flipped to light with it: dark text on a dark
+  // rust disc is the one combination that would have made the medal worse
+  // than the grey it replaced.
+  Silver: "#c2c2c2", Bronze: "#c0894a", Iron: "#7c5347" };
 const FG = { Mario: "#fff", Grandmaster: "#fff", Master: "#fff", Diamond: "#fff",
-  Platinum: "#10300f", Gold: "#3a2c00", Silver: "#2a2a2a", Bronze: "#2e1c08", Iron: "#1c1c1c" };
+  Platinum: "#10300f", Gold: "#3a2c00", Silver: "#2a2a2a", Bronze: "#2e1c08", Iron: "#f6ece7" };
 
 export const rankColor = (n) => RANK_COLORS[n] || "#3a4250";
 

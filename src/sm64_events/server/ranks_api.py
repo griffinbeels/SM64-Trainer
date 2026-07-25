@@ -404,6 +404,16 @@ def create_ranks_router(service) -> APIRouter:
         return {"scope_id": scope_id,
                 "points": history.history_series(feed, groups, scorer, mode)}
 
+    @router.get("/marelo/exclusions")
+    def marelo_exclusions():
+        """The raw exclusion set, for surfaces that need one entity's state
+        without scoring a whole scope — the strategy modal's "include in
+        ranking" tick (spec round 7). `/api/marelo` carries `excluded` per
+        entity already, but it costs a full scope aggregation and only
+        covers entities inside that scope; a modal opened on a star with no
+        standards yet is in no scope at all."""
+        return {"excluded": sorted(service.rank_excluded())}
+
     @router.post("/marelo/exclude")
     async def marelo_exclude(body: ExcludeBody):
         try:

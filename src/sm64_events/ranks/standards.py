@@ -11,7 +11,14 @@ from sm64_events.ranks.classify import RANK_NAMES, resolve_cutoff_videos
 RANK_COLORS = {
     "Mario": "#e23b3b", "Grandmaster": "#8b1a1a", "Master": "#7b3f9e",
     "Diamond": "#3f86d6", "Platinum": "#5cb85c", "Gold": "#e0b520",
-    "Silver": "#c2c2c2", "Bronze": "#c0894a", "Iron": "#8a8a8a"}
+    # Iron is RUSTY, not grey: at #8a8a8a it read as a dim Silver, and a
+    # Silver strategy medal beside an Iron star medal on the same card was
+    # indistinguishable at 24px (live report 2026-07-25 — "it looks way too
+    # similar to silver"). Every rank surface — medals, crests, chart
+    # gridlines, rank-up dots, ladder bands, the card wash — takes its colour
+    # from this one registry (the UI mirrors it in ui/components/ranks.js),
+    # so changing it here changes all of them.
+    "Silver": "#c2c2c2", "Bronze": "#c0894a", "Iron": "#7c5347"}
 
 _log = logging.getLogger("sm64.ranks")
 

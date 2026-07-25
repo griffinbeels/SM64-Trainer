@@ -66,6 +66,7 @@ rating.
 | `GET` | `/api/marelo/summary` | — | `{chips:[{scope_id,label,tier,division,marelo,n,practiced}]}` — one lean aggregate per scope (`overall`, then every route whose `category` starts with `Main Categories`, then the active scope if not already present; capped at 6), for an always-visible chip row. Same scoring path as `/api/marelo` but never touches a celebration watermark (scope OR entity), so opening it can't seed or silently swallow a rank-up. |
 | `GET` | `/api/marelo/history` | `?scope=<id>` (optional) | `{scope_id, points:[{utc,marelo,tier,division,practiced}]}` — the scope's MARELO recomputed chronologically from the practice journal against CURRENT standards (a seed bump reshapes the past). |
 | `POST` | `/api/marelo/exclude` | `{"entity": "<key>", "excluded": true\|false}` | Opt an entity out of (or back into) every scope's numerator AND denominator. |
+| `GET` | `/api/marelo/exclusions` | — | `{excluded:[<key>…]}` — the raw exclusion set, for a surface that needs ONE entity's state without scoring a scope (the strategy modal's "include in ranking" tick, which can open on an entity that is in no scope yet). |
 | `POST` | `/api/marelo/ack` | `{"scope": "<id>", "key": N}` **or** `{"entity": "<key>", "key": N}` | Raise the scope's or the entity's celebration watermark once the UI has actually shown a rank-up (never on fetch — see the `marelo` payload's `celebration`/`entity_celebrations` fields). Exactly one of `scope`/`entity` — both or neither is `400`. |
 
 `marelo_changed` is broadcast-only (no journal entry).
