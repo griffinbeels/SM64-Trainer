@@ -136,3 +136,86 @@ export function visibleGroups(groups, allow, value) {
     .map((group) => ({ ...group, options: group.options.filter(keep) }))
     .filter((group) => group.options.length > 0);
 }
+
+// --- Entity art -----------------------------------------------------------
+// ONE chain, shared by the practice banner and the picker, so the same star
+// never wears different art in two places. It lives here because this module
+// imports nothing and is therefore node-testable; components/stagebanner.js
+// imports these two registries rather than keeping its own copies.
+
+// ui/assets/star_icons/{prefix}{slot+1}.png, one per main-course star
+// INCLUDING the 100-coin 7th slot. Index = course_id - 1 (catalog order,
+// pinned against the assets by tests/test_star_icons.py).
+export const COURSE_ICON_PREFIXES = ["bob", "wf", "jrb", "ccm", "bbh", "hmc",
+                                     "lll", "ssl", "ddd", "sl", "wdw", "ttm",
+                                     "thi", "ttc", "rr"];
+
+// The icon set has real art for the Bowser stages, keyed by both the course
+// level (pipe-entry segments) and its fight arena.
+export const LEVEL_ICONS = { 17: "bitdw", 19: "bitfs", 21: "bits",
+                             30: "bitdw", 33: "bitfs", 34: "bits" };
+
+// Four main courses are not entered through a painting, so the game has NO
+// portrait for them. These are hand-picked stand-ins (user, 2026-07-25) — the
+// star art that reads as that course — rather than a positional star-1
+// default, which would have given Hazy Maze Cave its first star's icon.
+// This is the final answer for these four; there is no art to wait for.
+export const COURSE_SUBSTITUTE_ICONS = { hmc: "hmc6", ssl: "ssl2",
+                                         ddd: "ddd1", sl: "sl6" };
+
+const GENERIC_STAR_SLOTS = 6;   // ui/assets/star_1.png … star_6.png
+const genericStar = (slot = 0) =>
+  `/ui/assets/star_${Math.min(slot + 1, GENERIC_STAR_SLOTS)}.png`;
+const starIconSrc = (stem) => `/ui/assets/star_icons/${stem}.png`;
+
+/**
+ * Art for one picker row. ALWAYS returns a URL — a row with no icon would
+ * collapse its own layout, so every branch ends at the generic star.
+ *
+ * kind    "course" | "star" | "level" | "segment"
+ * id      the option id (a star's is composite, "8:2")
+ * context { courseIcons     stem -> filename, from GET /api/icons/courses
+ *           starIconsMode   "course" | "classic", the user's setting
+ *           iconOverrides   view.icon_overrides, per-entity user picks
+ *           courseByLevel   vocab.course_by_level
+ *           segmentLevels   segment id -> its start levels }
+ *
+ * Four main courses (HMC, SSL, DDD, SL) have no portrait because the game has
+ * no painting for them; they resolve to their star-1 icon, which is the final
+ * answer, not a placeholder.
+ */
+export function optionIcon(kind, id, context = {}) {
+  const { courseIcons = {}, starIconsMode = "course", iconOverrides = {},
+          courseByLevel = {}, segmentLevels = {} } = context;
+  const prefixFor = (course) => COURSE_ICON_PREFIXES[Number(course) - 1] || null;
+  const courseArt = (course) => {
+    const prefix = prefixFor(course);
+    if (!prefix) return genericStar();
+    if (courseIcons[prefix]) return `/ui/assets/course_icons/${courseIcons[prefix]}`;
+    if (COURSE_SUBSTITUTE_ICONS[prefix])
+      return starIconSrc(COURSE_SUBSTITUTE_ICONS[prefix]);
+    return starIconSrc(`${prefix}1`);
+  };
+
+  if (kind === "course") return courseArt(id);
+  if (kind === "star") {
+    const { course, star } = parseStarId(id);
+    if (starIconsMode !== "course") return genericStar(star);
+    const prefix = prefixFor(course);
+    return prefix ? starIconSrc(`${prefix}${star + 1}`) : genericStar(star);
+  }
+  if (kind === "level") {
+    const level = Number(id);
+    if (LEVEL_ICONS[level]) return starIconSrc(LEVEL_ICONS[level]);
+    const course = courseByLevel[String(level)];
+    return course ? courseArt(course) : genericStar();
+  }
+  if (kind === "segment") {
+    const override = iconOverrides[`segment:${id}`];
+    if (override) return starIconSrc(override);
+    const stem = (segmentLevels[String(id)] || [])
+      .map((level) => LEVEL_ICONS[level]).find(Boolean);
+    return stem ? starIconSrc(stem) : genericStar();
+  }
+  return genericStar();
+}

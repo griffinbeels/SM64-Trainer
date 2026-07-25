@@ -119,3 +119,80 @@ console.log(JSON.stringify(segmentOptions(defs, taxonomy)));
                                                     "Anywhere"]
     assert groups[0]["options"] == [{"id": "7", "name": "Lakitu Skip"}]
     assert groups[2]["options"] == [{"id": "9", "name": "Reset split"}]
+
+
+CONTEXT = """
+const context = {
+  courseIcons: { bob: "bob.webp", rr: "rr.png" },   // hmc/ssl/ddd/sl absent
+  starIconsMode: "course",
+  iconOverrides: { "segment:7": "bitfs" },
+  courseByLevel: { "9": 1, "22": 7, "17": 16 },
+  segmentLevels: { "7": [19], "9": [6] },
+};
+"""
+
+
+def test_course_icon_prefers_the_portrait():
+    src = run_node("optionIcon", CONTEXT
+                   + 'console.log(JSON.stringify(optionIcon("course", "1", context)));')
+    assert src == "/ui/assets/course_icons/bob.webp"
+
+
+def test_the_four_painting_less_courses_use_their_hand_picked_icons():
+    # HMC(6), SSL(8), DDD(9), SL(10) are not entered through a painting, so the
+    # game has no portrait. These substitutes are the user's picks (2026-07-25)
+    # — the art that reads as that course — not a positional star-1 default.
+    for course, expected in ((6, "hmc6"), (8, "ssl2"), (9, "ddd1"), (10, "sl6")):
+        src = run_node("optionIcon", CONTEXT
+                       + f'console.log(JSON.stringify(optionIcon("course", "{course}", context)));')
+        assert src == f"/ui/assets/star_icons/{expected}.png", course
+
+
+def test_star_one_is_still_the_fallback_behind_the_substitutes():
+    # A course with neither a portrait nor a curated substitute (none today —
+    # this guards the chain's last rung, not a live case).
+    src = run_node("optionIcon", CONTEXT
+                   + 'console.log(JSON.stringify(optionIcon("course", "7", context)));')
+    assert src == "/ui/assets/star_icons/lll1.png"
+
+
+def test_star_icon_follows_the_user_preference():
+    per_star = run_node("optionIcon", CONTEXT
+                        + 'console.log(JSON.stringify(optionIcon("star", "1:2", context)));')
+    assert per_star == "/ui/assets/star_icons/bob3.png"
+    classic = run_node("optionIcon", CONTEXT + """
+const classicContext = { ...context, starIconsMode: "classic" };
+console.log(JSON.stringify(optionIcon("star", "1:2", classicContext)));
+""")
+    assert classic.startswith("/ui/assets/star_"), classic
+    assert "star_icons" not in classic
+
+
+def test_level_icon_routes_through_its_course():
+    src = run_node("optionIcon", CONTEXT
+                   + 'console.log(JSON.stringify(optionIcon("level", "9", context)));')
+    assert src == "/ui/assets/course_icons/bob.webp"
+
+
+def test_bowser_levels_use_their_own_art():
+    src = run_node("optionIcon", CONTEXT
+                   + 'console.log(JSON.stringify(optionIcon("level", "17", context)));')
+    assert src == "/ui/assets/star_icons/bitdw.png"
+
+
+def test_segment_icon_uses_the_override_the_banner_uses():
+    src = run_node("optionIcon", CONTEXT
+                   + 'console.log(JSON.stringify(optionIcon("segment", "7", context)));')
+    assert src == "/ui/assets/star_icons/bitfs.png"
+
+
+def test_every_kind_returns_art_never_null():
+    # A picker row with no icon would collapse its layout; the chain always
+    # ends at the generic star.
+    for call in ('optionIcon("course", "99", context)',
+                 'optionIcon("level", "26", context)',
+                 'optionIcon("segment", "9", context)',
+                 'optionIcon("nonsense", "x", context)'):
+        src = run_node("optionIcon", CONTEXT
+                       + f'console.log(JSON.stringify({call}));')
+        assert src.startswith("/ui/assets/"), (call, src)

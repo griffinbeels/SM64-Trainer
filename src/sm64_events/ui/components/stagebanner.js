@@ -33,6 +33,7 @@ import htm from "htm";
 import { send } from "../api.js";
 import { Medal } from "./ranks.js";
 import { IconPicker, iconSrcFromStem } from "./iconpicker.js";
+import { COURSE_ICON_PREFIXES, LEVEL_ICONS } from "../entities.js";
 
 const html = htm.bind(h);
 
@@ -103,16 +104,14 @@ const STAR_DIM_IDLE = true;  // false = every star equally bright
 // {prefix}{slot+1}.png, one per main-course star INCLUDING the 100-coin 7th
 // slot. Index = course_id-1 (catalog order, pinned against the assets by
 // tests/test_star_icons.py).
-const COURSE_ICON_PREFIXES = ["bob", "wf", "jrb", "ccm", "bbh", "hmc", "lll",
-                              "ssl", "ddd", "sl", "wdw", "ttm", "thi", "ttc",
-                              "rr"];
-
+//
 // Course-mode fallback art for a SEGMENT, by start level: the icon set has
 // real art for the Bowser stages — keyed by both the course level (pipe-entry
 // segments) and its fight arena. Everything else (castle segments) defaults
 // to the generic star unless the user overrides it.
-const LEVEL_ICONS = { 17: "bitdw", 19: "bitfs", 21: "bits",
-                      30: "bitdw", 33: "bitfs", 34: "bits" };
+//
+// Both registries live in entities.js (imported above) — the picker's icon
+// chain (optionIcon) needs them too, and that module is the one node can test.
 
 const genericStarSrc = (slot) =>
   `/ui/assets/star_${Math.min(slot + 1, STAR_IMG_COUNT)}.png`;

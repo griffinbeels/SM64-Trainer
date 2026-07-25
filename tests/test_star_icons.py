@@ -36,13 +36,20 @@ def test_every_main_course_star_icon_exists():
 
 
 def test_stagebanner_prefix_registry_matches_course_order():
-    source = (UI / "components" / "stagebanner.js").read_text(encoding="utf-8")
-    match = re.search(r"COURSE_ICON_PREFIXES\s*=\s*\[([^\]]*)\]", source)
-    assert match, "stagebanner.js lost its COURSE_ICON_PREFIXES registry"
+    # The registry lives in entities.js (2026-07-25: shared with the entity
+    # picker's icon chain, entities.js::optionIcon) — stagebanner.js imports
+    # it rather than owning a copy.
+    entities_source = (UI / "entities.js").read_text(encoding="utf-8")
+    match = re.search(r"COURSE_ICON_PREFIXES\s*=\s*\[([^\]]*)\]", entities_source)
+    assert match, "entities.js lost its COURSE_ICON_PREFIXES registry"
     listed = re.findall(r'"(\w+)"', match.group(1))
     assert listed == PREFIXES, (
         "COURSE_ICON_PREFIXES disagrees with the course catalog order: "
         f"{listed}")
+
+    banner_source = (UI / "components" / "stagebanner.js").read_text(encoding="utf-8")
+    assert 'COURSE_ICON_PREFIXES' in banner_source and '"../entities.js"' in banner_source, (
+        "stagebanner.js no longer imports COURSE_ICON_PREFIXES from entities.js")
 
 
 def test_setting_is_wired_through_store_header_and_banner():
