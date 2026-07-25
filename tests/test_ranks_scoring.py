@@ -1,7 +1,8 @@
 from sm64_events.ranks.classify import rank_for
 from sm64_events.ranks.scoring import (
     SCORE_ANCHORS, best_ladder, defined_tiers, division_for, division_progress,
-    next_tier_target, progression_key, score_for, tier_band, tier_from_score)
+    next_tier_target, progression_key, score_for, tier_band, tier_from_score,
+    time_for_score)
 
 # centiseconds, hardest -> easiest (the SSL "Nuts Pless" ladder)
 NUTS = {"Mario": 1293, "Grandmaster": 1303, "Master": 1316, "Diamond": 1336,
@@ -100,6 +101,7 @@ def test_division_progress_mid_division_targets_the_next_division_up():
     assert progress["tier"] == "Gold" and progress["division"] == "IV"
     assert abs(progress["fill"] - 2 / 3) < 1e-9
     assert progress["next_tier"] == "Gold" and progress["next_division"] == "III"
+    assert progress["next_at"] == 51.0        # the score division III begins at
 
 
 def test_division_progress_at_division_i_targets_the_next_tier_at_v():
@@ -108,12 +110,13 @@ def test_division_progress_at_division_i_targets_the_next_tier_at_v():
     progress = division_progress(59.9)
     assert progress["tier"] == "Gold" and progress["division"] == "I"
     assert progress["next_tier"] == "Platinum" and progress["next_division"] == "V"
+    assert progress["next_at"] == 60.0        # Platinum's own anchor
 
 
 def test_division_progress_is_maxed_at_the_top_of_the_full_table():
     progress = division_progress(100.0)
     assert progress == {"tier": "Mario", "division": "I", "fill": 1.0,
-                        "next_tier": None, "next_division": None}
+                        "next_tier": None, "next_division": None, "next_at": None}
 
 
 def test_division_progress_is_maxed_at_the_top_of_a_ragged_ladder():
@@ -134,3 +137,38 @@ def test_division_progress_respects_a_ragged_ladders_band_edges():
     assert progress["tier"] == "Diamond" and progress["division"] == "II"
     assert progress["fill"] == 0.75
     assert progress["next_tier"] == "Diamond" and progress["next_division"] == "I"
+
+
+def test_time_for_score_is_exact_at_every_ladder_anchor():
+    for tier, cs in NUTS.items():
+        assert time_for_score(NUTS, SCORE_ANCHORS[tier]) == cs
+
+
+def test_time_for_score_round_trips_through_score_for():
+    """THE invariant this function exists for: score_for(L, time_for_score(L,
+    s)) == s, for any score score_for could actually produce (round to the
+    nearest centisecond, since time_for_score returns an int). Starts at
+    1284, not 1200: score_for CAPS at 100.0 for anything faster than 1283cs
+    on this ladder (test_faster_than_the_hardest_tier_extrapolates_and_caps_
+    at_100 above), so times in the capped region are a many-to-one mapping
+    with no single correct inverse -- outside what this test can check."""
+    for time_cs in range(1284, 2400, 11):
+        score = score_for(NUTS, time_cs)
+        recovered_time = time_for_score(NUTS, score)
+        assert abs(recovered_time - time_cs) <= 1     # rounding slack
+        assert abs(score_for(NUTS, recovered_time) - score) < 0.05
+
+
+def test_time_for_score_inverts_the_extrapolation_above_the_hardest_tier():
+    faster_score = score_for(NUTS, 1283)               # 0.10s under Mario
+    assert time_for_score(NUTS, faster_score) == 1283
+
+
+def test_time_for_score_inverts_the_iron_tail():
+    slow_score = score_for(NUTS, 5000)
+    assert time_for_score(NUTS, slow_score) == 5000
+
+
+def test_time_for_score_is_none_for_an_empty_ladder_or_a_zero_score():
+    assert time_for_score({}, 50.0) is None
+    assert time_for_score(NUTS, 0.0) is None

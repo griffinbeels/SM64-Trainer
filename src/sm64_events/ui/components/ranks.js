@@ -67,19 +67,26 @@ function sentinelMsg(banner) {
 // here must fit on ONE line; a stacked layout would silently bleed the card
 // into the one below it (desktop) or clip (mobile).
 //
-// `division`/`fill`/`next_tier`/`next_division` all ride the server's
-// scoring.division_progress — this component must never compute that curve
-// itself (user report 2026-07-24, reaffirmed round 2). The bar fills within
-// the CURRENT DIVISION (not the whole tier) and "next" names the next STEP,
-// whichever it is — one division up within this tier, or (already at the
-// top division) the next harder tier's bottom one — so a good run visibly
-// moves the bar instead of barely denting a whole-tier span.
+// `division`/`fill`/`next_tier`/`next_division`/`next_gap_cs` all ride the
+// server's scoring.division_progress / time_for_score (views.py's
+// `_graded_progress`, the ONE place both banners' data is built) — this
+// component must never compute that curve itself (user report 2026-07-24,
+// reaffirmed rounds 2 and 3). The bar fills within the CURRENT DIVISION (not
+// the whole tier) and "next" names the next STEP, whichever it is — one
+// division up within this tier, or (already at the top division) the next
+// harder tier's bottom one — with the exact time still needed to reach it,
+// so a good run visibly moves the bar instead of barely denting a
+// whole-tier span, and the number to chase is right there next to it.
 //
 // `fastest_strat` only ever appears on the Overall banner's data (entity_rank
 // carries it; _section_banner never does) — reading it directly off `banner`
 // needs no per-caller special-casing, the empty-on-the-other-banner case is
-// just `undefined` and the line omits itself.
-export function RankBanner({ label, banner }) {
+// just `undefined` and the line omits itself. `note` is an override for that
+// same slot — practice.js uses it for the one case fastest_strat can't speak
+// to itself: the active strategy already IS the star's fastest known one, so
+// rendering a second, numerically-identical banner would look like a glitch
+// rather than confirm anything (spec 2026-07-25 round 3, "your call").
+export function RankBanner({ label, banner, note }) {
   if (!banner || !banner.rank) {
     return html`<div class="rank-banner rank-banner-empty">
       <span class="rank-banner-kicker">${label}</span>
@@ -88,8 +95,10 @@ export function RankBanner({ label, banner }) {
   }
   const c = rankColor(banner.rank);
   const basis = banner.basis;
-  const fastest = banner.fastest_strat;
+  const extra = note || (banner.fastest_strat && `· ${banner.fastest_strat}`);
+  const extraTitle = note || (banner.fastest_strat && `fastest strategy here: ${banner.fastest_strat}`);
   const nextLabel = banner.next_tier ? `${banner.next_tier} ${banner.next_division}` : null;
+  const gap = banner.next_gap_cs != null ? (banner.next_gap_cs / 100).toFixed(2) : null;
   const fillPct = banner.next_tier ? Math.round((banner.fill || 0) * 100) : 100;
   return html`<div class="rank-banner">
     <div class="rank-banner-row">
@@ -98,9 +107,9 @@ export function RankBanner({ label, banner }) {
       <b class="rank-banner-name">${banner.rank.toUpperCase()}${banner.division ? ` ${banner.division}` : ""}</b>
       ${basis && html`<span class="meta rank-banner-basis">
         ${MODE_LABEL[banner.mode] || banner.mode} · avg of ${basis.count}${basis.window ? `/${basis.window}` : ""} · ${basis.display}</span>`}
-      ${fastest && html`<span class="meta rank-banner-fastest" title=${`fastest strategy here: ${fastest}`}>· ${fastest}</span>`}
+      ${extra && html`<span class="meta rank-banner-fastest" title=${extraTitle}>${extra}</span>`}
       <span class="meta rank-banner-next">${nextLabel
-        ? html`next: <b>${nextLabel}</b>` : "top rank"}</span>
+        ? html`next: <b>${nextLabel}</b>${gap ? ` −${gap}s` : ""}` : "top rank"}</span>
     </div>
     <div class="rank-progress-track"
         title=${nextLabel ? `${fillPct}% of the way to ${nextLabel}` : "top rank"}>

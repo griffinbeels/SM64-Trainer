@@ -284,6 +284,35 @@ def _strat_rank(ranks, ek, strat, basis) -> str | None:
     return classify.rank_for(ladder, classify.display_cs(basis["frames"]))
 
 
+def _graded_progress(ladder: dict, time_cs: int) -> dict:
+    """THE one place a section banner or entity rank turns a ladder + a
+    graded time into 'what tier/division, how close within it, what's the
+    next step, and how many centiseconds that costs' — chains
+    score_for -> scoring.division_progress -> scoring.time_for_score so
+    both callers compute this identically and neither touches the curve
+    directly. `ladder` is already in centiseconds (ranks.ladder_cs's /
+    scoring.best_ladder's shape); never called with an empty one (both
+    callers guard first, so score_for here always returns a real float).
+
+    `next_gap_cs` is the division-aware sibling of the OLD whole-tier
+    `gap_cs` classify.band used to carry (spec 2026-07-25 round 3: the user
+    asked for the time delta back once the bar itself became
+    division-scoped) — None exactly when `next_tier` is None (maxed, no
+    step to chase)."""
+    score = scoring.score_for(ladder, time_cs)
+    progress = scoring.division_progress(score, scoring.defined_tiers(ladder))
+    next_gap_cs = None
+    if progress["next_at"] is not None:
+        target_cs = scoring.time_for_score(ladder, progress["next_at"])
+        if target_cs is not None:
+            next_gap_cs = time_cs - target_cs
+    return {"score": score, "rank": progress["tier"],
+            "division": progress["division"], "fill": progress["fill"],
+            "next_tier": progress["next_tier"],
+            "next_division": progress["next_division"],
+            "next_gap_cs": next_gap_cs}
+
+
 def _fastest_strategy(ranks, ek, best_ladder_cs: dict) -> str | None:
     """Which strategy OWNS the entity's best-possible ladder (best_ladder_cs
     -- the pointwise minimum entity_rank already computed): the answer to
@@ -322,30 +351,25 @@ def entity_rank(ranks, ek, frames) -> dict | None:
     sentinel one, was a deliberate choice on 2026-07-25 round 2 rather than
     inventing wording nobody asked for).
 
-    Shape deliberately mirrors `_section_banner`'s graded output ("rank"/
-    "division"/"score"/"fill"/"next_tier"/"next_division") — spec 2026-07-25
-    round 2: a labelled, gradient banner next to a bare, unlabelled chip read
-    as a rendering fault to the user, not two deliberate measures, so both
-    are now rendered through the SAME ui/components/ranks.js RankBanner,
-    twice, with different data — never two components that happen to look
-    similar (those drift). Also carries `fastest_strat` (_fastest_strategy)
-    — the strategy that actually sets this best-possible ladder — so the UI
-    can explain a low entity rank next to a high strategy rank ("Iron I ·
-    fastest here is Sign Clip") instead of leaving the two numbers to look
-    like a contradiction (live user report 2026-07-25)."""
+    Shape deliberately mirrors `_section_banner`'s graded output — SAME
+    fields (`_graded_progress`), so the UI renders both through the SAME
+    ui/components/ranks.js RankBanner, side by side, with different data.
+    Spec 2026-07-25 round 3: the user asked for the two banners to be
+    genuinely interchangeable — same gradient, same bar, same `next:` line
+    with its time delta — after round 2 still left this one looking like a
+    lesser chip beside a full banner ("it feels like it's just a visual
+    error"). Also carries `fastest_strat` (_fastest_strategy) — the strategy
+    that actually sets this best-possible ladder — so the UI can explain a
+    low entity rank next to a high strategy rank ("Iron I · fastest here is
+    Sign Clip") instead of leaving the two numbers to look like a
+    contradiction (live user report 2026-07-25)."""
     if ranks is None or frames is None:
         return None
     ladder = scoring.best_ladder(ranks.ladders(ek))
     if not ladder:
         return None
-    score = scoring.score_for(ladder, classify.display_cs(frames))
-    if score is None:
-        return None
-    progress = scoring.division_progress(score, scoring.defined_tiers(ladder))
-    return {"score": round(score, 1), "rank": progress["tier"],
-            "division": progress["division"], "fill": progress["fill"],
-            "next_tier": progress["next_tier"],
-            "next_division": progress["next_division"],
+    progress = _graded_progress(ladder, classify.display_cs(frames))
+    return {**progress, "score": round(progress["score"], 1),
             "fastest_strat": _fastest_strategy(ranks, ek, ladder)}
 
 
@@ -365,20 +389,21 @@ def _section_banner(ranks, ek, strat, basis, mode) -> dict | None:
     carry "basis" {frames, display, count, window} — what the rank is based
     on (drives the banner's 'avg of N' line).
 
-    The graded shape also carries "score", "division", "fill", "next_tier"
-    and "next_division" (scoring.division_progress over the score computed
-    here — the UI must never compute this curve itself, user report
-    2026-07-25). "next_tier"/"next_division" name the next STEP, whichever
-    it is — one division up within this tier, or (already at the top
-    division) the next harder tier's bottom one — and "fill" measures
-    progress WITHIN that current division, not the whole tier: a whole-tier
-    bar barely moves after one good run (spec 2026-07-25 round 2, "the LP
-    model" the user kept pointing at). `classify.band` still supplies "rank"
-    itself unchanged (its own semantics and its other consumers — its unit
-    tests — are untouched); this is the only call site that ALSO read its
-    "next"/"gap_cs"/"fill" keys, and those are deliberately not forwarded
-    here anymore — the new division-aware fields replace them at the one
-    place that rendered them (ranks.js's RankBanner)."""
+    The graded shape carries "score", "division", "fill", "next_tier",
+    "next_division", "next_gap_cs" (`_graded_progress` — the UI must never
+    compute this curve itself, user report 2026-07-25). "next_tier"/
+    "next_division" name the next STEP, whichever it is — one division up
+    within this tier, or (already at the top division) the next harder
+    tier's bottom one; "fill" measures progress WITHIN that current
+    division, not the whole tier (a whole-tier bar barely moves after one
+    good run); "next_gap_cs" is the TIME still needed to reach it (round
+    2026-07-25 the user asked for the bar to go division-scoped, round
+    2026-07-25 again asked the time delta back once it had). "rank" itself
+    is `_graded_progress`'s own tier — provably identical to
+    `classify.band`'s (the score/medal invariant, pinned by
+    tests/test_ranks_scoring_seed.py), so `classify.band` is no longer
+    called here; its own semantics, tests, and any other consumer are
+    untouched, this call site just stopped needing it."""
     if ranks is None:
         return None
     has_standards = bool(ranks.ladders(ek))
@@ -391,17 +416,8 @@ def _section_banner(ranks, ek, strat, basis, mode) -> dict | None:
         return {"rank": None, "reason": "no_ladder", "mode": mode}
     if basis is None:
         return {"rank": None, "reason": "unranked", "mode": mode}
-    band = classify.band(ladder, classify.display_cs(basis["frames"]))
-    # The score for the ACTIVE strategy's own ladder — the column the
-    # standards table renders. Sent so the UI never re-derives the curve:
-    # a JS copy of score_for would silently disagree the next time the
-    # Python side changes (the Iron tail moved on 2026-07-25).
-    score = scoring.score_for(ladder, classify.display_cs(basis["frames"]))
-    progress = scoring.division_progress(score, scoring.defined_tiers(ladder))
-    out = {"rank": band["rank"], "score": score,
-           "division": progress["division"], "fill": progress["fill"],
-           "next_tier": progress["next_tier"],
-           "next_division": progress["next_division"], "mode": mode}
+    out = {**_graded_progress(ladder, classify.display_cs(basis["frames"])),
+           "mode": mode}
     if mode != "pb":
         out["basis"] = {"frames": basis["frames"],
                         "display": format_igt(basis["frames"]),

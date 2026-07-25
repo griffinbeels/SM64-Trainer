@@ -20,7 +20,7 @@ from sm64_events.ranks.classify import RANK_NAMES
 __all__ = ["RANK_NAMES", "SCORE_ANCHORS", "TOP_SCORE", "DIVISIONS_PER_TIER",
            "DIVISION_NUMERALS", "defined_tiers", "best_ladder", "score_for",
            "tier_from_score", "tier_band", "division_for", "progression_key",
-           "next_tier_target", "division_progress"]
+           "next_tier_target", "division_progress", "time_for_score"]
 
 # hardest -> easiest; Iron is the implicit floor and carries NO anchor, exactly
 # as it carries no threshold in classify.
@@ -150,10 +150,15 @@ def division_progress(score: float, defined: list[str] | None = None) -> dict:
     already documents.
 
     Returns {"tier", "division", "fill" (0..1, position inside the current
-    division), "next_tier", "next_division"}. next_* are None exactly when
-    there is no next step -- the hardest tier this ladder defines, division
-    I -- detected by recomputing where the division's own ceiling score
-    lands: if that's still "here", there's nowhere higher to go."""
+    division), "next_tier", "next_division", "next_at" (the SCORE the next
+    step begins at)}. next_* are None exactly when there is no next step --
+    the hardest tier this ladder defines, division I -- detected by
+    recomputing where the division's own ceiling score lands: if that's
+    still "here", there's nowhere higher to go. `next_at` lets a caller with
+    the raw ladder (this function only sees `defined`, the tier NAMES, never
+    the ladder itself) convert the remaining score gap into a TIME gap via
+    `time_for_score` -- see views.py's `_graded_progress`, the one place
+    that wiring happens."""
     tier, division = division_for(score, defined)
     low, high = tier_band(tier, defined)
     width = (high - low) / DIVISIONS_PER_TIER
@@ -168,4 +173,44 @@ def division_progress(score: float, defined: list[str] | None = None) -> dict:
     maxed = next_tier == tier and next_division == division
     return {"tier": tier, "division": division, "fill": 1.0 if maxed else fill,
             "next_tier": None if maxed else next_tier,
-            "next_division": None if maxed else next_division}
+            "next_division": None if maxed else next_division,
+            "next_at": None if maxed else next_at}
+
+
+def time_for_score(ladder_cs: dict[str, int], target_score: float) -> int | None:
+    """The algebraic inverse of `score_for`: the time (centiseconds) that
+    earns exactly `target_score` on this ladder, or None if the ladder is
+    empty. Mirrors `score_for`'s three regimes exactly -- extrapolation
+    faster than the hardest tier, linear interpolation between two adjacent
+    anchors, the Iron tail's asymptotic decay -- each solved for time instead
+    of score, so a computed time delta can never disagree with the
+    tier/division the same time would produce through `score_for` itself:
+
+        score_for(L, time_for_score(L, s)) == s   (up to centisecond rounding)
+
+    Needed because `division_progress` only ever deals in SCORE (it has no
+    ladder to convert with) -- this is what turns its `next_at` into an
+    actual "-1.60s" a runner can chase, without a JS copy of the curve."""
+    points = [(ladder_cs[tier], SCORE_ANCHORS[tier]) for tier in defined_tiers(ladder_cs)]
+    if not points:
+        return None
+    hardest_cs, hardest_score = points[0]
+    if target_score >= hardest_score:
+        if len(points) == 1:
+            return hardest_cs
+        next_cs, next_score = points[1]
+        slope = (next_score - hardest_score) / (next_cs - hardest_cs)
+        if slope == 0:
+            return hardest_cs
+        return round(hardest_cs + (target_score - hardest_score) / slope)
+    for (faster_cs, faster_score), (slower_cs, slower_score) in zip(points, points[1:]):
+        if target_score >= slower_score:
+            span = slower_cs - faster_cs
+            if span <= 0:
+                return slower_cs
+            frac = (target_score - faster_score) / (slower_score - faster_score)
+            return round(faster_cs + frac * span)
+    easiest_cs, easiest_score = points[-1]
+    if target_score <= 0:
+        return None
+    return round(easiest_score * easiest_cs / target_score)

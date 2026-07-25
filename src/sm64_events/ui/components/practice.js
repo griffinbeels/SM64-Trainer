@@ -360,6 +360,19 @@ function TimeFilterChip({ sec, t }) {
   </span>`;
 }
 
+// The active strategy IS the star/segment's own fastest known one
+// (entity_rank.fastest_strat === the currently active strategy) -- both
+// RankBanners would show the numerically IDENTICAL rank, so rendering
+// Overall Rank a second time would read as a rendering glitch, not a
+// confirmation. Folding a short note into the Strategy banner instead says
+// WHY there's only one (spec 2026-07-25 round 3, judgment call: hide vs.
+// explain -- explaining wins, since a card randomly missing its second
+// banner with no reason given is itself confusing).
+function soleStrategyNote(sec) {
+  return sec.entity_rank && sec.entity_rank.fastest_strat === sec.last_strat
+    ? "also the star's fastest" : null;
+}
+
 function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
   const [showHidden, setShowHidden] = useState(false);
   const [visible, setVisible] = useState(10);
@@ -410,8 +423,8 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
       <div class="objective-metrics" style=${sec.rank && sec.rank.rank
           ? `--rank-glow:${rankColor(sec.rank.rank)}` : ""}>
         <div class="rank-slot">
-          <${RankBanner} label="Strategy Rank" banner=${sec.rank} />
-          ${sec.entity_rank && html`<${RankBanner} label="Overall Rank" banner=${sec.entity_rank} />`}
+          <${RankBanner} label="Strategy Rank" banner=${sec.rank} note=${soleStrategyNote(sec)} />
+          ${sec.entity_rank && !soleStrategyNote(sec) && html`<${RankBanner} label="Overall Rank" banner=${sec.entity_rank} />`}
         </div>
         <div class="objective-live-state" aria-label="Practice state">
           <span class="live-state-icon">○</span><span>Ready</span>
@@ -557,8 +570,8 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare }) {
       <div class="objective-metrics" style=${sec.rank && sec.rank.rank
           ? `--rank-glow:${rankColor(sec.rank.rank)}` : ""}>
         <div class="rank-slot">
-          <${RankBanner} label="Strategy Rank" banner=${sec.rank} />
-          ${sec.entity_rank && html`<${RankBanner} label="Overall Rank" banner=${sec.entity_rank} />`}
+          <${RankBanner} label="Strategy Rank" banner=${sec.rank} note=${soleStrategyNote(sec)} />
+          ${sec.entity_rank && !soleStrategyNote(sec) && html`<${RankBanner} label="Overall Rank" banner=${sec.entity_rank} />`}
         </div>
         <div class="objective-live-state ${armed ? "running" : ""}"
             aria-label=${`Segment state: ${pinTag}`}>

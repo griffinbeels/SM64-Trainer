@@ -142,6 +142,42 @@ def test_section_banner_next_step_is_division_aware():
     assert out["next_tier"] == out["rank"]
 
 
+def test_section_banner_next_gap_cs_is_the_time_to_the_division_boundary():
+    """next_gap_cs (spec 2026-07-25 round 3) is the TIME still needed to
+    reach next_tier/next_division -- the exact inverse (scoring.
+    time_for_score) of the score that division boundary begins at, so it can
+    never disagree with the tier/division the same time would grade to."""
+    ladder_cs = RANKS.ladder_cs("star:1:0", "Fast")           # Mario 4500, Gold 6000
+    basis = {"frames": 1500, "count": 1, "window": None}      # 50.00s -> 5000cs
+    out = views._section_banner(RANKS, "star:1:0", "Fast", basis, "pb")
+    progress = scoring.division_progress(
+        scoring.score_for(ladder_cs, 5000), scoring.defined_tiers(ladder_cs))
+    target_cs = scoring.time_for_score(ladder_cs, progress["next_at"])
+    assert out["next_gap_cs"] == 5000 - target_cs
+    assert out["next_gap_cs"] > 0     # still behind the next division's own cutoff
+
+
+def test_section_banner_next_gap_cs_is_none_when_maxed():
+    """A time AT the ladder's hardest cutoff is division V of that tier (the
+    bottom of its band), not maxed -- pick a time comfortably past it so
+    there really is nowhere higher to go."""
+    basis = {"frames": 1000, "count": 1, "window": None}      # 33.33s, faster than Mario's 45.00s cutoff
+    out = views._section_banner(RANKS, "star:1:0", "Fast", basis, "pb")
+    assert out["next_tier"] is None
+    assert out["next_gap_cs"] is None
+
+
+def test_entity_rank_carries_next_gap_cs_too():
+    """The Overall Rank banner needs the SAME time-delta field as the
+    Strategy banner -- both render through the identical RankBanner."""
+    ladder = scoring.best_ladder(RANKS.ladders("star:1:0"))
+    out = views.entity_rank(RANKS, "star:1:0", 1500)          # 50.00s
+    progress = scoring.division_progress(
+        scoring.score_for(ladder, 5000), scoring.defined_tiers(ladder))
+    target_cs = scoring.time_for_score(ladder, progress["next_at"])
+    assert out["next_gap_cs"] == 5000 - target_cs
+
+
 def test_section_banner_old_tier_wide_next_fields_are_not_forwarded():
     """classify.band's own next/gap_cs keys (whole-tier) must not leak
     through -- the division-aware next_tier/next_division replace them at
