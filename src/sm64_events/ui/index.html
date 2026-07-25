@@ -677,9 +677,21 @@
       color-mix(in srgb, var(--rank-glow, transparent) 34%, transparent),
       transparent 88%);
   }
-  .rank-slot { min-width: 0; overflow: hidden; }
-  .rank-slot .meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .rank-banner { min-width: 0; display: grid; gap: .34rem; }
+  /* Flex row, not block stacking: the entity medal (EntityRankTag) sits
+     BESIDE the strategy medal (RankBanner), not below it -- "two questions,
+     two numbers" reads as one line. RankBanner grows/shrinks with the
+     available width (its own children already ellipsis); the entity tag is
+     short and fixed so it never gets squeezed off. */
+  .rank-slot { min-width: 0; overflow: hidden; display: flex; align-items: center; gap: .6rem; }
+  .rank-slot .meta { min-width: 0; flex: 1 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rank-banner { min-width: 0; flex: 1 1 auto; display: grid; gap: .34rem; }
+  /* EntityRankTag: compact, never shrinks, separated from the strat medal by
+     a hairline so the two numbers read as distinct answers. */
+  .entity-rank {
+    flex: 0 0 auto; display: inline-flex; align-items: center; gap: .4rem;
+    white-space: nowrap; padding-left: .6rem; border-left: 1px solid var(--border-soft);
+  }
+  .entity-rank b { font-weight: 800; letter-spacing: .3px; font-size: .82rem; }
   .rank-banner-row {
     min-width: 0; display: flex; align-items: center; gap: .55rem;
     white-space: nowrap; overflow: hidden;

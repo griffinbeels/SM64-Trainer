@@ -20,6 +20,8 @@ from pathlib import Path
 
 PRACTICE_JS = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
                / "ui" / "components" / "practice.js")
+VIEWS_PY = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
+            / "tracking" / "views.py")
 
 # Deliberate, reviewed differences. Empty means "the cards are at parity".
 # Adding an entry is a decision: write WHY the other card doesn't want it.
@@ -70,3 +72,14 @@ def test_both_cards_offer_a_failure_compilation():
     for name in ("StarSection", "SegmentSection"):
         assert "FailureCompilation" in _components(_body(source, name)), \
             f"{name} is missing the failure-compilation control"
+
+
+def test_entity_rank_tag_is_rendered_for_both_kinds():
+    """Rule 11: a feature built for one kind ships for both in the same change."""
+    source = PRACTICE_JS.read_text(encoding="utf-8")
+    assert source.count("EntityRankTag") >= 2
+
+
+def test_both_section_builders_emit_entity_rank():
+    source = VIEWS_PY.read_text(encoding="utf-8")
+    assert source.count('"entity_rank"') >= 2
