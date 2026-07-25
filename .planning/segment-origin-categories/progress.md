@@ -15,9 +15,9 @@ marked complete is DONE — do not re-dispatch it.
 | 3 | T5 API stamp + override (needs T3) | **complete** | `7537c5a`, +docs/api.md (required — see watch items) |
 | 3 | T6 routes.js migration (needs T2, T4) | **complete** | `63b9152`, net -35 lines, render-verified |
 | 3 | T7 corpus origin coverage test (needs T3) | **complete** | `821b810`, all 65 seeded segments resolve |
-| 4 | T8 segment library grouping (needs T4, T5) | dispatched | agent `t8-seglib` |
-| 5 | T9 editor origin override (needs T8) | pending | serialized after T8 — same file |
-| 6 | T10 docs (rules + README) | pending | |
+| 4 | T8 segment library grouping (needs T4, T5) | **complete** | `c5c7c09` + controller fix `1ab2b66`, render-verified |
+| 5 | T9 editor origin override (needs T8) | **complete** | `98e1d6e`, render-verified against REAL API fixtures |
+| 6 | T10 docs (rule change maps) | dispatched | agent `t10-docs` |
 | — | Final whole-branch review (Opus 5) | pending | NON-OPTIONAL |
 
 ## Watch items (predicted breakage + the sanctioned remedy)
@@ -35,11 +35,16 @@ marked complete is DONE — do not re-dispatch it.
   no `ui/vendor/preact.js`; components import bare specifiers through
   index.html's importmap (`preact`, `preact/hooks`, `htm`). Plan corrected +
   added to Global Constraints so Tasks 6/8/9 cannot repeat it.
-- **Suite baseline is now 1503 passed** (1475 before wave 1).
+- **Suite baseline is now 1508 passed** (1475 before wave 1); 16 commits on the branch.
 - **The REST surface doc is `docs/api.md`, not the README** — the plan said
   README, which was wrong, and `tests/test_docs_cover_api.py` fails the suite
   for any undocumented `/api` route. T5 correctly wrote both entries itself
   rather than deferring to T10; T10 now only verifies them.
+- **A test that cannot tell code from prose gets "fixed" by editing the prose.**
+  My T8 assertion (`"WORLD_EDGES" not in segments.js`) forced an agent to reword
+  an accurate, greppable comment citing `addresses.WORLD_EDGES_*`. Reverted in
+  `1ab2b66`; the assertion now names the derivation symbols themselves. Watch
+  for this shape in the final review.
 - **T8's `originLevels` keys the region level on `String(origin.region)`**, so
   a null region becomes `"null"` and matches the taxonomy's trailing
   `{key: null}` entry. Intended; change both sides or neither.
