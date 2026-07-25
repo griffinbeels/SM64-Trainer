@@ -30,6 +30,38 @@ import re
 import sys
 
 
+_GIT_ADD = re.compile(r"\bgit\s+add\b")
+_GIT_COMMIT = re.compile(r"\bgit\s+commit\b")
+
+
+def unguarded_commit(bare: str) -> bool:
+    """True when a `git commit` follows a `git add` that cannot stop it.
+
+    `;` and a newline do not propagate exit status. A `git add` that fails —
+    most often a pathspec that no longer matches, e.g. a file `git rm` already
+    staged — leaves the following commit to capture whatever WAS staged. That
+    shipped a commit deleting rr.png with no replacement art (2026-07-25); the
+    add had errored three lines earlier and nothing noticed. `&&` makes the
+    failure fatal, which is the whole fix, so only same-segment pairs count.
+    """
+    for segment in bare.split("&&"):
+        staged = False
+        for part in re.split(r"[;\n]", segment):
+            if _GIT_ADD.search(part):
+                staged = True
+            elif staged and _GIT_COMMIT.search(part):
+                sys.stderr.write(
+                    "BLOCKED: `git add` and `git commit` chained with `;` or a "
+                    "newline.\n"
+                    "  Neither propagates exit status, so a failed add (a "
+                    "pathspec that no longer matches is the common one) still "
+                    "lets the commit run — capturing a partial change.\n"
+                    "  Join them with `&&`, or run the commit as its own call "
+                    "after checking `git diff --cached --name-only`.\n")
+                return True
+    return False
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -40,9 +72,15 @@ def main() -> int:
     if "git" not in cmd:
         return 0  # fast path: not a git command at all
 
+    # Strip heredoc BODIES first — commit messages are written that way here,
+    # and one that talks about `git add` would otherwise look like a command.
+    bare = re.sub(r"<<-?\s*'?(\w+)'?.*?^\1$", "", cmd, flags=re.S | re.M)
     # Strip quoted substrings so flags mentioned INSIDE a commit message
     # (e.g. git commit -m "fix: handle the -a flag") cannot false-trigger.
-    bare = re.sub(r"\"[^\"]*\"|'[^']*'", "", cmd)
+    bare = re.sub(r"\"[^\"]*\"|'[^']*'", "", bare)
+
+    if unguarded_commit(bare):
+        return 2
 
     # Over-broad STAGING: -A / --all / -a / a bare "." path argument.
     add = re.compile(r"\bgit\s+add\b[^\n|&;]*?(\s-A\b|\s--all\b|\s-a\b|\s\.(?:\s|$))")
