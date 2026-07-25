@@ -13,6 +13,7 @@ import { StandardsPanel } from "./standards.js";
 import { StratPicker } from "./stratpicker.js";
 import { FailureCompilation } from "./failcomp.js";
 import { Icon } from "./icons.js";
+import { EntityCelebration, entityCelebrationFor } from "./celebrate.js";
 import { PageState } from "./states.js";
 
 const html = htm.bind(h);
@@ -360,6 +361,33 @@ function TimeFilterChip({ sec, t }) {
   </span>`;
 }
 
+// True when the active strategy IS the star/segment's own fastest known one
+// (entity_rank.fastest_strat === the currently active strategy) -- both
+// RankBanners would show the numerically IDENTICAL rank, so rendering the
+// entity's banner a second time would read as a rendering glitch, not a
+// confirmation (spec 2026-07-25 round 3). StrategyFastestHint (below) says
+// nothing in this same case, for the same reason -- no point naming the
+// fastest strategy when it's the one already running (round 4 direction).
+function activeStrategyIsFastest(sec) {
+  return !!(sec.entity_rank && sec.entity_rank.fastest_strat === sec.last_strat);
+}
+
+// Names the star/segment's fastest known strategy, next to the strategy
+// picker -- NOT inside the rank banner (round 4, 2026-07-25): on the
+// live-report card, "· fastest here: Sign Clip" and the next: target both
+// got clipped mid-word competing for the same line, and a tooltip on
+// truncated visible text still reads as a layout fault. This header area
+// puts the two strategy NAMES next to each other, which is the actual
+// comparison being made, in a wider row that isn't also carrying a medal,
+// a division, and a progress bar. Renders nothing when there's no fastest
+// strategy to name, or when it's the one already active (activeStrategyIsFastest).
+function StrategyFastestHint({ sec }) {
+  const fastest = sec.entity_rank && sec.entity_rank.fastest_strat;
+  if (!fastest || fastest === sec.last_strat) return null;
+  return html`<span class="objective-strategy-fastest"
+      title=${`fastest strategy here: ${fastest}`}>· fastest: ${fastest}</span>`;
+}
+
 function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
   const [showHidden, setShowHidden] = useState(false);
   const [visible, setVisible] = useState(10);
@@ -405,11 +433,20 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
               identity=${{ course_id: sec.course_id, star_id: sec.star_id }}
               strategies=${sec.strategies} active=${sec.last_strat}
               onChanged=${t.refresh} />
+          <${StrategyFastestHint} sec=${sec} />
         </div>
       </div>
       <div class="objective-metrics" style=${sec.rank && sec.rank.rank
           ? `--rank-glow:${rankColor(sec.rank.rank)}` : ""}>
-        <div class="rank-slot"><${RankBanner} banner=${sec.rank} /></div>
+        <${EntityCelebration}
+            celebration=${pinned ? entityCelebrationFor(t.marelo, `star:${sec.course_id}:${sec.star_id}`) : null}
+            entityKey=${`star:${sec.course_id}:${sec.star_id}`}
+            onDone=${() => t.clearEntityCelebration(`star:${sec.course_id}:${sec.star_id}`)}>
+          <div class="rank-slot">
+            <${RankBanner} label="Strategy" banner=${sec.rank} />
+            ${sec.entity_rank && !activeStrategyIsFastest(sec) && html`<${RankBanner} label="Star" banner=${sec.entity_rank} />`}
+          </div>
+        <//>
         <div class="objective-live-state" aria-label="Practice state">
           <span class="live-state-icon">○</span><span>Ready</span>
         </div>
@@ -479,6 +516,7 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
       </div>
       <${StandardsPanel} entity=${`star:${sec.course_id}:${sec.star_id}`}
           activeStrat=${sec.last_strat} strategies=${sec.strategies}
+          sectionRank=${sec.rank} sectionPb=${sec.pb}
           onChanged=${t.refresh} defaultOpen=${true} />
       <${FailureCompilation} identity=${{ course_id: sec.course_id, star_id: sec.star_id }}
           defaultOpen=${true} />
@@ -548,11 +586,20 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare }) {
                 allowBlank=${!sec.default_strat}
                 onChanged=${t.refresh} />`
             : html`<span class="meta">Definition deleted</span>`}
+          <${StrategyFastestHint} sec=${sec} />
         </div>
       </div>
       <div class="objective-metrics" style=${sec.rank && sec.rank.rank
           ? `--rank-glow:${rankColor(sec.rank.rank)}` : ""}>
-        <div class="rank-slot"><${RankBanner} banner=${sec.rank} /></div>
+        <${EntityCelebration}
+            celebration=${pinned ? entityCelebrationFor(t.marelo, `segment:${sec.segment_id}`) : null}
+            entityKey=${`segment:${sec.segment_id}`}
+            onDone=${() => t.clearEntityCelebration(`segment:${sec.segment_id}`)}>
+          <div class="rank-slot">
+            <${RankBanner} label="Strategy" banner=${sec.rank} />
+            ${sec.entity_rank && !activeStrategyIsFastest(sec) && html`<${RankBanner} label="Segment" banner=${sec.entity_rank} />`}
+          </div>
+        <//>
         <div class="objective-live-state ${armed ? "running" : ""}"
             aria-label=${`Segment state: ${pinTag}`}>
           <${Icon} name="clock" size=${17} /><span>${pinTag}</span>
@@ -623,6 +670,7 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare }) {
       </div>
       <${StandardsPanel} entity=${`segment:${sec.segment_id}`}
           activeStrat=${sec.last_strat} strategies=${sec.strategies}
+          sectionRank=${sec.rank} sectionPb=${sec.pb}
           onChanged=${t.refresh} defaultOpen=${true} />
       <${FailureCompilation} identity=${{ segment_id: sec.segment_id }}
           defaultOpen=${true} />

@@ -20,6 +20,8 @@ from pathlib import Path
 
 PRACTICE_JS = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
                / "ui" / "components" / "practice.js")
+VIEWS_PY = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
+            / "tracking" / "views.py")
 
 # Deliberate, reviewed differences. Empty means "the cards are at parity".
 # Adding an entry is a decision: write WHY the other card doesn't want it.
@@ -70,3 +72,43 @@ def test_both_cards_offer_a_failure_compilation():
     for name in ("StarSection", "SegmentSection"):
         assert "FailureCompilation" in _components(_body(source, name)), \
             f"{name} is missing the failure-compilation control"
+
+
+def test_two_rank_banners_are_rendered_for_both_kinds():
+    """Rule 11: a feature built for one kind ships for both in the same
+    change. Round 2 of the rank-legibility fix (2026-07-25) merged the old
+    RankBanner + EntityRankTag pair into ONE component, rendered TWICE with
+    different data ("Strategy" graded on the active strategy, the ENTITY's
+    own label graded on its best-possible ladder) -- deliberately never two
+    components that happen to look similar, since a labelled banner next to
+    a bare unlabelled chip is exactly the bug this fixed (live report
+    2026-07-25). A raw `_components()` set can't tell "one usage" from "two"
+    apart (it dedupes by name), so this counts RankBanner occurrences in
+    each section's own body instead, the same way the strategy-picker and
+    failure-compilation tests above do.
+
+    The entity kicker is per-kind ("Star" / "Segment"), not one shared word,
+    and that is what the second assertion pins: `RankBanner` renders on BOTH
+    kinds, so a hardcoded "Star" would be a lie on a segment card. Round 4
+    (2026-07-25) also dropped the trailing "Rank" from both kickers -- 13
+    characters of label did not fit a ~390px banner row, which is what left
+    every fixture ellipsized mid-word. Asserting the exact kicker each
+    section passes is what stops a future edit from quietly reintroducing
+    either fault."""
+    source = PRACTICE_JS.read_text(encoding="utf-8")
+    entity_label = {"StarSection": "Star", "SegmentSection": "Segment"}
+    for name in ("StarSection", "SegmentSection"):
+        body = _body(source, name)
+        assert body.count("<${RankBanner}") >= 2, \
+            f"{name} does not render both the strategy and entity rank banners"
+        assert 'label="Strategy"' in body, \
+            f"{name} is missing the strategy rank banner's kicker"
+        assert f'label="{entity_label[name]}"' in body, \
+            (f"{name}'s entity rank banner must be labelled "
+             f"\"{entity_label[name]}\" -- the kicker names the entity this "
+             "half grades, and RankBanner renders on both kinds")
+
+
+def test_both_section_builders_emit_entity_rank():
+    source = VIEWS_PY.read_text(encoding="utf-8")
+    assert source.count('"entity_rank"') >= 2

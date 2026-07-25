@@ -32,9 +32,10 @@ import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
 import { Medal } from "./ranks.js";
-import { PracticeCell, genericStarSrc } from "./practicecell.js";
-import { IconPicker, iconSrcFromStem } from "./iconpicker.js";
-import { COURSE_ICON_PREFIXES, LEVEL_ICONS } from "../entities.js";
+import { PracticeCell } from "./practicecell.js";
+import { IconPicker } from "./iconpicker.js";
+import { COURSE_ICON_PREFIXES, LEVEL_ICONS, genericStarSrc,
+         resolveIcon } from "./entityicons.js";
 
 const html = htm.bind(h);
 
@@ -95,40 +96,24 @@ const armedSegments = (t, v) =>
 
 // Look flags — flip during the human-audit playtest to taste. Kept as
 // constants (not props) so the cell below stays a single readable line.
-// Generic art is `ui/assets/star_{n}.png`; the slot index is clamped to
-// STAR_IMG_COUNT, so the 100-coin/7th slot reuses star_6.
-const STAR_IMG_COUNT = 6;    // star_1.png .. star_6.png in ui/assets/
 const STAR_DIM_IDLE = true;  // false = every star equally bright
 
-// Course split-icon art (t.starIcons === "course", the settings-drawer
-// "Star icons" preference, the DEFAULT): ui/assets/star_icons/
-// {prefix}{slot+1}.png, one per main-course star INCLUDING the 100-coin 7th
-// slot. Index = course_id-1 (catalog order, pinned against the assets by
-// tests/test_star_icons.py).
+// COURSE_ICON_PREFIXES, LEVEL_ICONS, resolveIcon, isGenericArt and
+// fallbackToGenericStar live in entityicons.js (task D,
+// 2026-07-25-marelo-legibility) — the Rank tab's Top-N strip needed the SAME
+// table this row already had. The PURE data behind them (the prefix list, the
+// level map, the substitutes) sits one layer further down in ../entities.js,
+// which imports nothing and can therefore be node-tested; entityicons.js
+// re-exports it so a component never has to know which of the two it wants.
 //
-// Course-mode fallback art for a SEGMENT, by start level: the icon set has
-// real art for the Bowser stages — keyed by both the course level (pipe-entry
-// segments) and its fight arena. Everything else (castle segments) defaults
-// to the generic star unless the user overrides it.
-//
-// Both registries live in entities.js (imported above) — the picker's icon
-// chain (optionIcon) needs them too, and that module is the one node can test.
-
-
-// Cell art: user override (either mode — an explicit pick always wins) >
-// course-mode art > the generic gold star.
-function resolveIcon(t, ek, courseStem, slot) {
-  const override = ((t.view || {}).icon_overrides || {})[ek];
-  const stem = override
-    || (t.starIcons === "course" ? courseStem : null);
-  return stem ? iconSrcFromStem(stem) : genericStarSrc(slot);
-}
+// The cell itself is components/practicecell.js, shared with the entity
+// picker's grid (2026-07-25) so a star looks the same where you pick it and
+// where you practice it.
 
 const segCourseStem = (s) =>
   (s.start_levels || []).map((lvl) => LEVEL_ICONS[lvl]).find(Boolean) || null;
 const segIconSrc = (t, s) =>
   resolveIcon(t, `segment:${s.segment_id}`, segCourseStem(s), 0);
-
 
 // Row-level icon-picking state: the ✎ on any cell opens ONE picker per row,
 // hoisted OUT of the cells so clicks inside the modal can never bubble into

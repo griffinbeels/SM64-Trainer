@@ -1,6 +1,7 @@
 import { h } from "preact";
 import htm from "htm";
 import { Medal } from "./ranks.js";
+import { fallbackToGenericStar, isGenericArt } from "./entityicons.js";
 
 const html = htm.bind(h);
 
@@ -13,24 +14,9 @@ const html = htm.bind(h);
 // Consumers: components/stagebanner.js (every banner row mode) and
 // components/entitymodal.js (the picker grid).
 
-const STAR_IMG_COUNT = 6;    // star_1.png .. star_6.png in ui/assets/
-export const genericStarSrc = (slot = 0) =>
-  `/ui/assets/star_${Math.min(slot + 1, STAR_IMG_COUNT)}.png`;
-
-// generic gold-star art vs "real" art (bundled split icon OR uploaded user
-// icon) — the latter gets the opaque-square `courseicon` treatment
-export const isGenericArt = (src) => /\/assets\/star_\d+\.png$/.test(src);
-
-// A load failure (missing/corrupt icon) degrades to the generic star art;
-// dropping `courseicon` also removes the opaque-square styling.
-export function fallbackToGenericStar(event, slot = 0) {
-  const img = event.target;
-  if (!isGenericArt(img.src)) {
-    img.classList.remove("courseicon");
-    img.src = genericStarSrc(slot);
-  }
-}
-
+// The art helpers live one layer down: entityicons.js resolves an entity to a
+// stem and owns the shared onerror; entities.js owns the pure tables both it
+// and the picker's icon chain read. This file only renders.
 /**
  * active     this is the current target (glow + bob)
  * armed      a segment whose timer is running now

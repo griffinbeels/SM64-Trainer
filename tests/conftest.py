@@ -1,7 +1,12 @@
 """Session-wide test guards."""
+import asyncio
+
 import pytest
 
 from sm64_events.core import perfmon, recorder_lock
+from sm64_events.server.broadcaster import Broadcaster
+from sm64_events.storage.db import Database
+from sm64_events.tracking.service import TrackerService
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -34,3 +39,15 @@ def _isolate_rank_standards(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "rank_standards_path",
                         lambda: tmp_path / "rank_standards.json")
     monkeypatch.setattr(paths, "bundled_rank_standards", lambda: None)
+
+
+@pytest.fixture
+def service(tmp_path):
+    """A fully-started TrackerService over a fresh throwaway db -- same
+    construction as tests/test_tracker_service.py::make, shared here for
+    tests that only exercise the command surface (KV round-trips,
+    broadcasts) and don't need session/journal internals of their own."""
+    db = Database(tmp_path / "t.db")
+    svc = TrackerService(db, Broadcaster())
+    asyncio.run(svc.start())
+    return svc

@@ -37,6 +37,7 @@ from sm64_events.links import star_links
 from sm64_events.memory.addresses import (COURSE_NAMES, course_name,
                                           star_count, star_name)
 from sm64_events.ranks import classify
+from sm64_events.ranks import scoring
 from sm64_events.ranks.standards import entity_key
 from sm64_events.stats.registry import (DEFAULT_STAT_MENU, REGISTRY,
                                         compute_stat, selection_id,
@@ -228,7 +229,7 @@ def _attempt_rank(a, frames, ranks) -> str | None:
     return classify.rank_for(ranks.ladder_cs(ek, a.strat_tag), classify.display_cs(frames))
 
 
-def _valid_frames(history, strat, clock) -> list[int]:
+def valid_frames(history, strat, clock) -> list[int]:
     """Chronological times (frames) of the runs that count toward an average
     (average rank mode spec): successful, not cleared (manual purge or
     auto-ignore), achieved WITH `strat`, with a real time on `clock` —
@@ -245,17 +246,20 @@ def _valid_frames(history, strat, clock) -> list[int]:
     return out
 
 
-def _grading_basis(mode, pb, history, strat, clock) -> dict | None:
+def grading_basis(mode, pb, history, strat, clock) -> dict | None:
     """THE one 'which time does this rank grade?' resolver. Returns
     {"frames", "count", "window"} or None when nothing is gradeable.
     'pb' mode wraps the saved per-strategy PB row (count 1) — byte-for-byte
     today's grading; avg modes grade attempt history via classify.average_frames,
-    so a run never saved as PB still counts."""
+    so a run never saved as PB still counts.
+
+    Public because MARELO grades the same basis (tracking/marelo.py): there is
+    exactly ONE answer to "which of my times counts", and it lives here."""
     mode_def = classify.RANK_MODES.get(mode) or classify.RANK_MODES["pb"]
     if mode_def["order"] is None:
         return ({"frames": pb["frames"], "count": 1, "window": None}
                 if pb else None)
-    averaged = classify.average_frames(_valid_frames(history, strat, clock),
+    averaged = classify.average_frames(valid_frames(history, strat, clock),
                                        mode_def["window"], mode_def["order"])
     if averaged is None:
         return None
@@ -266,7 +270,7 @@ def _grading_basis(mode, pb, history, strat, clock) -> dict | None:
 
 def _strat_rank(ranks, ek, strat, basis) -> str | None:
     """Rank NAME for an entity graded under `strat` at its grading basis
-    (_grading_basis output: PB row in pb mode, mean of valid runs in avg
+    (grading_basis output: PB row in pb mode, mean of valid runs in avg
     modes), or None when ungradeable (no ranks loaded, no active strat, no
     basis, or the strat has no ladder). THE single grading path shared by
     route candidates and the stage quick-select star grid (view's
@@ -280,9 +284,98 @@ def _strat_rank(ranks, ek, strat, basis) -> str | None:
     return classify.rank_for(ladder, classify.display_cs(basis["frames"]))
 
 
+def _graded_progress(ladder: dict, time_cs: int) -> dict:
+    """THE one place a section banner or entity rank turns a ladder + a
+    graded time into 'what tier/division, how close within it, what's the
+    next step, and how many centiseconds that costs' — chains
+    score_for -> scoring.division_progress -> scoring.time_for_score so
+    both callers compute this identically and neither touches the curve
+    directly. `ladder` is already in centiseconds (ranks.ladder_cs's /
+    scoring.best_ladder's shape); never called with an empty one (both
+    callers guard first, so score_for here always returns a real float).
+
+    `next_gap_cs` is the division-aware sibling of the OLD whole-tier
+    `gap_cs` classify.band used to carry (spec 2026-07-25 round 3: the user
+    asked for the time delta back once the bar itself became
+    division-scoped) — None exactly when `next_tier` is None (maxed, no
+    step to chase)."""
+    score = scoring.score_for(ladder, time_cs)
+    progress = scoring.division_progress(score, scoring.defined_tiers(ladder))
+    next_gap_cs = None
+    if progress["next_at"] is not None:
+        target_cs = scoring.time_for_score(ladder, progress["next_at"])
+        if target_cs is not None:
+            next_gap_cs = time_cs - target_cs
+    return {"score": score, "rank": progress["tier"],
+            "division": progress["division"], "fill": progress["fill"],
+            "next_tier": progress["next_tier"],
+            "next_division": progress["next_division"],
+            "next_gap_cs": next_gap_cs}
+
+
+def _fastest_strategy(ranks, ek, best_ladder_cs: dict) -> str | None:
+    """Which strategy OWNS the entity's best-possible ladder (best_ladder_cs
+    -- the pointwise minimum entity_rank already computed): the answer to
+    'why is my star's rank lower than my strategy's rank'.
+
+    Walks the ladder's own tiers hardest-first; at each tier, narrows the
+    candidate strategies to the ones whose OWN ladder matches the pointwise
+    minimum there -- the strategies that actually SET that entry. This stays
+    well-defined on ragged ladders (a strategy missing a tier just can't win
+    at it) and self-resolves ties by moving to the next-hardest tier both
+    still define. A strategy tied at every shared tier is broken
+    alphabetically -- arbitrary, but deterministic rather than dict-order
+    luck."""
+    candidates = ranks.strategies(ek)
+    for tier in scoring.defined_tiers(best_ladder_cs):
+        matching = [strat for strat in candidates
+                   if ranks.ladder_cs(ek, strat).get(tier) == best_ladder_cs[tier]]
+        if matching:
+            candidates = matching
+        if len(candidates) == 1:
+            return candidates[0]
+    return min(candidates, key=str) if candidates else None
+
+
+def entity_rank(ranks, ek, frames) -> dict | None:
+    """The star/segment's OWN rank: the time graded against the entity's
+    best-possible ladder (pointwise best across every strategy) rather than
+    the active strategy's. THE number MARELO aggregates.
+
+    This is why a mastered slow strategy reads Mario on one banner and
+    honestly less on the other: the strategy banner asks 'how well do I run
+    THIS strat', this one asks 'how close is this to the fastest this star
+    can be'. None when the entity has no standards or there is no time to
+    grade (the banner is simply not rendered — no sentinel wording, unlike
+    `_section_banner`; keeping this a plain None/dict contract, not a
+    sentinel one, was a deliberate choice on 2026-07-25 round 2 rather than
+    inventing wording nobody asked for).
+
+    Shape deliberately mirrors `_section_banner`'s graded output — SAME
+    fields (`_graded_progress`), so the UI renders both through the SAME
+    ui/components/ranks.js RankBanner, side by side, with different data.
+    Spec 2026-07-25 round 3: the user asked for the two banners to be
+    genuinely interchangeable — same gradient, same bar, same `next:` line
+    with its time delta — after round 2 still left this one looking like a
+    lesser chip beside a full banner ("it feels like it's just a visual
+    error"). Also carries `fastest_strat` (_fastest_strategy) — the strategy
+    that actually sets this best-possible ladder — so the UI can explain a
+    low entity rank next to a high strategy rank ("Iron I · fastest here is
+    Sign Clip") instead of leaving the two numbers to look like a
+    contradiction (live user report 2026-07-25)."""
+    if ranks is None or frames is None:
+        return None
+    ladder = scoring.best_ladder(ranks.ladders(ek))
+    if not ladder:
+        return None
+    progress = _graded_progress(ladder, classify.display_cs(frames))
+    return {**progress, "score": round(progress["score"], 1),
+            "fastest_strat": _fastest_strategy(ranks, ek, ladder)}
+
+
 def _section_banner(ranks, ek, strat, basis, mode) -> dict | None:
     """Rank banner for a section: the grading basis (PB in pb mode, mean of
-    valid runs in avg modes — _grading_basis) graded under the ACTIVE strat.
+    valid runs in avg modes — grading_basis) graded under the ACTIVE strat.
 
     Returns None when the entity has NO standards (RankBanner not rendered).
     Otherwise the entity HAS standards; a {"rank": None, "reason": ...}
@@ -294,7 +387,23 @@ def _section_banner(ranks, ek, strat, basis, mode) -> dict | None:
                       strategy (another strategy's times never count).
     Every payload carries "mode"; non-pb modes with a gradeable basis also
     carry "basis" {frames, display, count, window} — what the rank is based
-    on (drives the banner's 'avg of N' line)."""
+    on (drives the banner's 'avg of N' line).
+
+    The graded shape carries "score", "division", "fill", "next_tier",
+    "next_division", "next_gap_cs" (`_graded_progress` — the UI must never
+    compute this curve itself, user report 2026-07-25). "next_tier"/
+    "next_division" name the next STEP, whichever it is — one division up
+    within this tier, or (already at the top division) the next harder
+    tier's bottom one; "fill" measures progress WITHIN that current
+    division, not the whole tier (a whole-tier bar barely moves after one
+    good run); "next_gap_cs" is the TIME still needed to reach it (round
+    2026-07-25 the user asked for the bar to go division-scoped, round
+    2026-07-25 again asked the time delta back once it had). "rank" itself
+    is `_graded_progress`'s own tier — provably identical to
+    `classify.band`'s (the score/medal invariant, pinned by
+    tests/test_ranks_scoring_seed.py), so `classify.band` is no longer
+    called here; its own semantics, tests, and any other consumer are
+    untouched, this call site just stopped needing it."""
     if ranks is None:
         return None
     has_standards = bool(ranks.ladders(ek))
@@ -307,8 +416,8 @@ def _section_banner(ranks, ek, strat, basis, mode) -> dict | None:
         return {"rank": None, "reason": "no_ladder", "mode": mode}
     if basis is None:
         return {"rank": None, "reason": "unranked", "mode": mode}
-    out = classify.band(ladder, classify.display_cs(basis["frames"]))
-    out["mode"] = mode
+    out = {**_graded_progress(ladder, classify.display_cs(basis["frames"])),
+           "mode": mode}
     if mode != "pb":
         out["basis"] = {"frames": basis["frames"],
                         "display": format_igt(basis["frames"]),
@@ -468,6 +577,43 @@ def stamp_origins(rows: list[dict], overrides: dict) -> list[dict]:
     return stamped
 
 
+def segment_courses(db) -> dict:
+    """{segment_id: course_id} from each definition's start levels -- the same
+    resolution the stage quick-select banner uses, so a segment lands in the
+    course scope the user practices it from. A castle-interior segment (LBLJ,
+    MIPS clip) maps to no course and is simply absent: it belongs to `overall`
+    and to routes, never to a course scope (spec section 3.3)."""
+    from sm64_events.memory.addresses import COURSE_BY_LEVEL
+    out = {}
+    for d in db.segment_defs():
+        for level in _segment_start_levels(d["start_triggers"]):
+            course = COURSE_BY_LEVEL.get(level)
+            if course is not None:
+                out[d["id"]] = course
+                break
+    return out
+
+
+def entity_label(db, ek: str) -> str:
+    """Human name for an entity key, for the MARELO breakdown list.
+
+    Star names route through the canonical `course_name`/`star_name` pair
+    (addresses.py) rather than indexing COURSE_NAMES/STAR_NAMES directly:
+    STAR_NAMES[course_id] is a TUPLE positioned by star_id, not a {star_id:
+    name} dict (brief's "verified shape" was wrong -- confirmed live), and
+    star_name also owns the 1-15/star_id==6 -> "100 Coins" special case that a
+    raw lookup here would silently miss."""
+    from sm64_events.memory.addresses import course_name, star_name
+    kind, _, rest = ek.partition(":")
+    if kind == "segment":
+        name = next((d["name"] for d in db.segment_defs()
+                     if str(d["id"]) == rest), None)
+        return name or f"segment {rest}"
+    course, _, star = rest.partition(":")
+    cid, sid = int(course), int(star)
+    return f"{course_name(cid)} — {star_name(cid, sid)}"
+
+
 def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     all_attempts = db.attempts()
     session_attempts = [a for a in all_attempts
@@ -558,6 +704,13 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                               "display": format_igt(row["frames"]),
                               "attempt_id": row["attempt_id"]}
                              if row else None)
+        # Basis computed ONCE per section and shared by both rank numbers
+        # below: the strat rank grades it against the ACTIVE strategy's
+        # ladder, the entity rank against the entity's best-possible one.
+        star_strat = masked(service.strat_by_star.get((course_id, star_id)), ek)
+        star_basis = grading_basis(
+            rank_mode, pbs_by_strat.get((course_id, star_id, clock, star_strat)),
+            history, star_strat, clock)
         # Note: star sections intentionally omit "kind". The UI branches on
         # sec.kind being undefined for stars (SegmentSection vs StarSection),
         # so adding kind="star" here would silently break that check. Do not
@@ -581,14 +734,9 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "progress": _progress(in_section, pb_ids, session_meta, igt_of,
                                   service.ranks, clock),
             "rank": _section_banner(
-                service.ranks, ek,
-                (star_strat := masked(
-                    service.strat_by_star.get((course_id, star_id)), ek)),
-                _grading_basis(
-                    rank_mode,
-                    pbs_by_strat.get((course_id, star_id, clock, star_strat)),
-                    history, star_strat, clock),
-                rank_mode),
+                service.ranks, ek, star_strat, star_basis, rank_mode),
+            "entity_rank": entity_rank(
+                service.ranks, ek, star_basis and star_basis["frames"]),
         })
     sections.sort(key=lambda s: last_id.get((s["course_id"], s["star_id"]), -1),
                   reverse=True)
@@ -611,6 +759,12 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         history = attempts_by_seg.get(seg_id, [])
         in_section = [a for a in history if a in scoped_set]
         pb_row = pbs.get(("segment", seg_id, "rta"))
+        # Basis computed ONCE per section, same reasoning as the star loop
+        # above: shared by the strat rank and the entity rank.
+        seg_strat = masked(service.strat_by_segment.get(seg_id), seg_ek)
+        seg_basis = grading_basis(
+            rank_mode, pbs_by_strat.get(("segment", seg_id, "rta", seg_strat)),
+            history, seg_strat, "rta")
         seg_sections.append({
             "kind": "segment", "segment_id": seg_id,
             "last_activity": last_id.get(("segment", seg_id), -1),
@@ -647,14 +801,9 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "progress": _progress(in_section, pb_ids, session_meta, rta_of,
                                   service.ranks, "rta"),
             "rank": _section_banner(
-                service.ranks, seg_ek,
-                (seg_strat := masked(
-                    service.strat_by_segment.get(seg_id), seg_ek)),
-                _grading_basis(
-                    rank_mode,
-                    pbs_by_strat.get(("segment", seg_id, "rta", seg_strat)),
-                    history, seg_strat, "rta"),
-                rank_mode),
+                service.ranks, seg_ek, seg_strat, seg_basis, rank_mode),
+            "entity_rank": entity_rank(
+                service.ranks, seg_ek, seg_basis and seg_basis["frames"]),
         })
     seg_sections.sort(
         key=lambda s: last_id.get(("segment", s["segment_id"]), -1),
@@ -701,7 +850,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             if (live_strat := masked(strat, entity_key(c, s)))
             and (rank := _strat_rank(
                 service.ranks, entity_key(c, s), live_strat,
-                _grading_basis(
+                grading_basis(
                     rank_mode, pbs_by_strat.get((c, s, "igt", live_strat)),
                     attempts_by_star.get((c, s), []), live_strat, "igt")))},
         "rank_mode": rank_mode,
@@ -715,7 +864,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             {"segment_id": d.id, "name": d.name, "enabled": d.enabled,
              "start_areas": areas, "start_levels": levels,
              # active strat + its medal for the banner cell, graded by THE
-             # shared path (_strat_rank/_grading_basis, same as rank_by_star
+             # shared path (_strat_rank/grading_basis, same as rank_by_star
              # and the route medals) so a cell can never disagree with the
              # section banner for the same strat.
              "strat": (seg_strat := masked(
@@ -723,7 +872,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                  (seg_ek := entity_key(None, None, d.id)))),
              "rank": _strat_rank(
                  service.ranks, seg_ek, seg_strat,
-                 _grading_basis(
+                 grading_basis(
                      rank_mode,
                      pbs_by_strat.get(("segment", d.id, "rta", seg_strat)),
                      attempts_by_seg.get(d.id, []), seg_strat, "rta"))}
@@ -874,7 +1023,7 @@ def _candidate_rank(db, service, c, mode, by_star, by_seg,
         pb = (db.current_pb(c["course"], c["star"], "igt", strat_tag=strat)
               if strat else None)
     return _strat_rank(service.ranks, ek, strat,
-                       _grading_basis(mode, pb, history, strat, clock))
+                       grading_basis(mode, pb, history, strat, clock))
 
 
 def build_route_view(db, service, route_id: int) -> dict:

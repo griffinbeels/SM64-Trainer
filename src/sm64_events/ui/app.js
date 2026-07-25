@@ -13,6 +13,8 @@ import { Compare } from "./components/compare.js";
 import { UpdatePopup } from "./components/update.js";
 import { RecordingDot } from "./components/replay.js";
 import { Icon } from "./components/icons.js";
+import { RankPage } from "./components/rankpage.js";
+import { RankUpOverlay } from "./components/celebrate.js";
 
 const html = htm.bind(h);
 
@@ -20,6 +22,7 @@ const NAV_GROUPS = [
   ["Play", [
     ["Practice", "practice"],
     ["Run", "run"],
+    ["Rank", "rank"],
     ["Compare", "compare"],
   ]],
   ["Build", [
@@ -157,7 +160,7 @@ function App() {
     <${MobileTop} t=${t} openSettings=${() => setSettingsOpen(true)} />
     <main class="app-main">
       <${Header} t=${t} settingsOpen=${settingsOpen}
-        closeSettings=${() => setSettingsOpen(false)} />
+        closeSettings=${() => setSettingsOpen(false)} setTab=${setTab} />
       <div class="workspace ${tab === "Practice" ? "practice-workspace" : ""}">
         ${/* Compare stays mounted across tab switches so loaded media and sync
              survive leaving and returning. */""}
@@ -170,6 +173,7 @@ function App() {
           : tab === "Segments" ? html`<div class="view-pane"><${Segments} t=${t} /></div>`
           : tab === "Routes" ? html`<div class="view-pane"><${Routes} t=${t} /></div>`
           : tab === "Run" ? html`<div class="view-pane"><${Run} t=${t} /></div>`
+          : tab === "Rank" ? html`<div class="view-pane"><${RankPage} t=${t} /></div>`
           : tab === "Live feed" ? html`<div class="view-pane"><${Feed} t=${t} /></div>`
           : null}
       </div>
@@ -179,6 +183,12 @@ function App() {
     <${MobileMore} open=${moreOpen} close=${() => setMoreOpen(false)}
       tab=${tab} setTab=${setTab} openSettings=${() => setSettingsOpen(true)} />
     <${UpdatePopup} t=${t} />
+    ${/* Mounted at root, not inside the Rank tab: a rank-up earned while on
+         the Practice page must still celebrate, and rule 10 (browser<->GUI
+         parity) means the desktop window and the browser tab agree on this
+         without desktop/ adding a second copy. */""}
+    <${RankUpOverlay} celebration=${t.marelo && t.marelo.celebration}
+      scopeId=${t.marelo && t.marelo.scope_id} onDone=${t.clearMareloCelebration} />
   </div>`;
 }
 

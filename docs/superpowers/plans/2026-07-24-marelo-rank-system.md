@@ -1321,6 +1321,22 @@ Add the import at the top of `views.py`, next to the existing `from sm64_events.
 from sm64_events.ranks import scoring
 ```
 
+- [ ] **Step 4b: Add the strategy-level score to the section banner**
+
+`_section_banner` already resolves the active strategy's ladder and the grading basis, so it is the only place that can hand the UI a score for the column the standards table is actually showing. Without it, `ui/components/standards.js` has to re-implement the whole curve in JavaScript — which it currently does (Task 12), including the asymptotic Iron tail we changed on 2026-07-25. Two copies of that algorithm WILL drift.
+
+In `_section_banner`, after `out = classify.band(...)`, add:
+
+```python
+    # The score for the ACTIVE strategy's own ladder — the column the
+    # standards table renders. Sent so the UI never re-derives the curve:
+    # a JS copy of score_for would silently disagree the next time the
+    # Python side changes (the Iron tail moved on 2026-07-25).
+    out["score"] = scoring.score_for(ladder, classify.display_cs(basis["frames"]))
+```
+
+Add a test asserting the banner carries a `score` that matches `scoring.score_for` for the same ladder and basis.
+
 - [ ] **Step 5: Wire it into both section builders**
 
 Today both section builders call `grading_basis(...)` inline inside the `"rank"` value. Hoist that call to a local **before** the dict literal and pass the local to both keys, so the basis is computed once per section.
@@ -1799,7 +1815,13 @@ def entity_label(db, ek: str) -> str:
     course, _, star = rest.partition(":")
     cid, sid = int(course), int(star)
     return f"{COURSE_NAMES.get(cid, cid)} — " \
-           f"{STAR_NAMES.get(cid, {}).get(sid) or f'star {sid + 1}'}"
+           f"{(STAR_NAMES.get(cid) or ())[sid] if sid < len(STAR_NAMES.get(cid) or ()) else f'star {sid + 1}'}"
+    # CORRECTED 2026-07-25: STAR_NAMES is {course: TUPLE positioned by star id},
+    # NOT a nested dict -- `.get(sid)` on it raises AttributeError. This line
+    # sat under a "verified shapes, do not guess" heading and was wrong anyway;
+    # the Task 8 implementer caught it live and routed through the existing
+    # course/star name helpers instead. Left visible rather than silently
+    # rewritten so the failure mode stays legible.
 ```
 
 **Verified shapes** (probe again if anything fails):
@@ -2393,6 +2415,18 @@ export function EntityRankTag({ entityRank }) {
 
 In `practice.js`, in **both** the star section header and the segment section header, render `<${EntityRankTag} entityRank=${sec.entity_rank} />` immediately after the existing `RankBanner`. Both call sites are required — rule 11 (star↔segment parity).
 
+- [ ] **Step 2b: Wire the standards marker's props (Task 12 depends on this)**
+
+Task 12 added `sectionRank` / `sectionPb` props to `StandardsPanel`, but they default to `null` and **nothing passes them yet — so the "you are here" marker does not render in the live app at all.** This is the invisible-feature failure this repo has a rule about; it is not optional polish.
+
+At **both** `StandardsPanel` call sites in `practice.js` (star ≈ line 480, segment ≈ line 624) add:
+
+```javascript
+        sectionRank=${sec.rank} sectionPb=${sec.pb}
+```
+
+Then verify by rendering (see Step 4) that the marker actually appears on a card whose entity has standards and a time — not merely that the props are passed.
+
 - [ ] **Step 3: Extend the parity test**
 
 In `tests/test_ui_section_parity.py`, add:
@@ -2452,6 +2486,14 @@ If `ui/components/icons.js` has no `rank` icon, add one (a simple chevron-up-in-
 Browser↔GUI parity (rule 10) means the overlay mounts in `app.js`, not inside a tab. Hold `marelo` in `store.js` (refetched on the `REFRESH_ON` events plus `marelo_changed` and `route_selected`), pass `marelo.celebration` into `RankUpOverlay`, and clear it locally on `onDone`.
 
 Add `"marelo_changed"` and `"route_selected"` to `REFRESH_ON` in `store.js`.
+
+- [ ] **Step 2b: Keep the Rank tab live (found during Task 10)**
+
+`RankPage` fetches on mount and on scope change only, so it goes **stale while open during play** — finish a run and the rating, chart and breakdown keep showing pre-run numbers with nothing to indicate they are old. Since the whole point of the feature is watching the number move, that is a real defect, not polish.
+
+Give `RankPage` a refresh trigger from the same WS events the header bar uses (`attempt_completed`, `marelo_changed`, `rank_mode_changed`, `route_selected`). Simplest shape that fits the existing store: expose a monotonically-increasing counter (e.g. `marelo Rev`) bumped in the WS handler, and include it in `RankPage`'s effect dependencies so all three fetches re-run.
+
+Verify by rendering: with the page mounted, dispatch the store's WS handler for `attempt_completed` with a changed stub payload and confirm from a screenshot that the card, chart and breakdown all update — not merely that a fetch fired.
 
 - [ ] **Step 3: Verify**
 

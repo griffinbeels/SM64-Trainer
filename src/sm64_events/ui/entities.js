@@ -180,8 +180,12 @@ export const SPECIAL_COURSE_ICONS = {
 };
 
 const GENERIC_STAR_SLOTS = 6;   // ui/assets/star_1.png … star_6.png
-const genericStar = (slot = 0) =>
+export const genericStarSrc = (slot = 0) =>
   `/ui/assets/star_${Math.min(slot + 1, GENERIC_STAR_SLOTS)}.png`;
+const genericStar = genericStarSrc;
+// generic gold-star art vs "real" art (a bundled split icon or an uploaded
+// user icon) — the latter gets the opaque-square `courseicon` treatment
+export const isGenericArt = (src) => /\/assets\/star_\d+\.png$/.test(src);
 const starIconSrc = (stem) => `/ui/assets/star_icons/${stem}.png`;
 
 /**
