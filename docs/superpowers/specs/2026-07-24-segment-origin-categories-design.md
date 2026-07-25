@@ -109,10 +109,28 @@ BitFS / BitS and the Bowser 1/2/3 arenas → Lobby / Basement / Upstairs. A wron
 or missing edge is still fixed in exactly one row of `WORLD_EDGES_*`, and the
 taxonomy re-derives — the same promise the builder's dropdown filtering makes.
 
-**Display order.** Regions in rough run order: Castle Grounds, Lobby, Basement,
-Courtyard, Upstairs, then "Anywhere" last. Inside a region: the region's own
-node first (labelled `"<Region> (in-area starts)"`), then places by course id
-ascending (≈ progression order), then remaining levels by level id.
+**Level 6 with no subarea → Lobby.** `level_enter to=6` without a `to_subarea`
+("Castle Entrance → BoB") yields the node `"6"`, which no region claims —
+regions are keyed on the three subareas. It resolves to the Lobby, because
+every castle entry lands there before settling elsewhere (the transient-lobby
+behaviour `detectors/level.py` and `area_changed`'s `from_transient` already
+document). Written down because it is the one origin the BFS cannot answer.
+
+**Display order.** Regions in gameflow order: Castle Grounds, Lobby, Basement,
+Courtyard, Upstairs, then "Anywhere" last — the order the castle opens up
+(8 stars → basement, 12 → courtyard, 30 → upstairs).
+
+Inside a region, places are ordered by **class first, then id** (user decision:
+Bowser and secret stages pinned to the top of their region rather than split
+into top-level groups of their own — regions stay the only top level, so
+"everything I can start from the basement half of the run" keeps working):
+
+| Order | Class | Members | Sort within |
+|---|---|---|---|
+| 1 | the region itself | `"6:1"`/`"6:2"`/`"6:3"`/`"16"`/`"26"`, labelled `"<Region> (in-area starts)"` | — |
+| 2 | Bowser stages | courses 16–18 (BitDW/BitFS/BitS) + `BOWSER_{1,2,3}_ARENA` (30/33/34, which have no course id) | level id — puts each course above its arena (17 < 30, 19 < 33, 21 < 34), and a region holds at most one pair |
+| 3 | Secret stages | courses 19–24 (PSS, CotMC, TotWC, VCUtM, WMOTR, Secret Aquarium) | course id |
+| 4 | Main courses | courses 1–15 | course id — which is gameflow order (BoB 1 … RR 15) |
 
 **Labels.** Castle subareas use `CASTLE_AREA_NAMES` ("Lobby"/"Upstairs"/
 "Basement"), everything else `LEVEL_NAMES`. Display only — the node key is the
@@ -202,6 +220,11 @@ own task with a headless render check on **both** tabs.
 - `tests/test_defaults_corpus.py` (or a sibling) — every seeded segment
   resolves to a region except the documented "Anywhere" set, so a future
   corpus row that lands nowhere is caught at test time rather than in the UI.
+- `tests/test_segments.py` — the taxonomy's ORDER, since it is a user
+  decision and nothing else would catch a regression: regions in gameflow
+  order, and inside the Lobby the sequence `Lobby (in-area starts)`, BitDW,
+  Bowser 1 Arena, PSS, TotWC, Secret Aquarium, BoB, WF, … Also that node `"6"`
+  (no subarea) resolves to the Lobby.
 - API tests — the `origin` stamp; an override wins over the derived value and
   reports `source: "override"`; clearing restores `derived`.
 - **Headless render** of the Segments and Routes tabs (per `.claude/rules/ui.md`
