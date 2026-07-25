@@ -160,7 +160,15 @@
     grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
     align-content: start;
   }
-  .entity-grid .starcell { width: auto; min-width: 0; }
+  .entity-grid .starcell { width: auto; min-width: 0; padding-block: .35rem; }
+  /* No rank slot in the picker: nothing grades a cell here, so it rendered a
+     column of "–" that cost a line per ROW — 4 rows of it was most of the 94px
+     that made the grid scroll on a 900px-tall window (live audit 2026-07-25).
+     The banner still shows medals; this is grid-only. */
+  .entity-grid .starrank { display: none; }
+  /* The sub-line is a count on layer 1 and "segment" on layer 2 — useful, but
+     it should not be as loud as the name. */
+  .entity-grid .starsub { font-size: .68rem; opacity: .75; }
   .entity-section + .entity-section { margin-top: .8rem; }
   .entity-section-head {
     padding: .2rem .1rem .35rem; color: var(--muted);
@@ -1527,6 +1535,11 @@
     background: #0b1929; box-shadow: 0 26px 90px rgba(0,0,0,.55);
   }
   .modal-large { width: min(100%,780px); }
+  /* The picker grid is WIDE, not tall: 25 course cells at the default 600px
+     came out 5 columns x 5 rows and scrolled, which is the thing the grid
+     replaced a scrolling list to avoid (live audit 2026-07-25). At ~1100px the
+     same cells lay out 8-9 across and fit in three rows with room to spare. */
+  .modal-grid { width: min(96vw, 1100px); }
   .modal-header {
     flex: 0 0 auto; min-height: 78px; display: grid;
     grid-template-columns: 42px minmax(0,1fr) 36px;

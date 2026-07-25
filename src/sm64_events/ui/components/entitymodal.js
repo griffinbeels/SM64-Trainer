@@ -81,7 +81,7 @@ function PickerDialog({ groups, value, allow, title, iconFor, depth,
   }, [openGroup]);
 
   if (depth > 1 && !openGroup)
-    return html`<${Modal} title=${title} icon="target" onClose=${onClose}>
+    return html`<${Modal} title=${title} icon="target" size="grid" onClose=${onClose}>
       <div class="entity-grid">
         ${shown.map((group) => html`<${PracticeCell} key=${group.key}
           iconSrc=${group.icon || iconFor(group.options[0].id)}
@@ -93,7 +93,7 @@ function PickerDialog({ groups, value, allow, title, iconFor, depth,
     <//>`;
 
   if (depth > 1)
-    return html`<${Modal} title=${openGroup.label} icon="target"
+    return html`<${Modal} title=${openGroup.label} icon="target" size="grid"
         onClose=${onClose}>
       <button type="button" class="entity-back"
           onclick=${() => setOpenGroupKey(null)}>
@@ -103,7 +103,7 @@ function PickerDialog({ groups, value, allow, title, iconFor, depth,
         iconFor=${iconFor} onPick=${onPick} />
     <//>`;
 
-  return html`<${Modal} title=${title} icon="target" onClose=${onClose}>
+  return html`<${Modal} title=${title} icon="target" size="grid" onClose=${onClose}>
     ${shown.map((group) => html`<div class="entity-section" key=${group.key}>
       ${shown.length > 1
         ? html`<div class="entity-section-head"><b>${group.label}</b></div>`

@@ -59,3 +59,18 @@ def test_the_component_owns_no_domain_vocabulary():
 
 def test_row_art_has_a_fixed_box_so_a_missing_image_cannot_reflow_the_list():
     assert ".entity-row-icon" in INDEX
+
+
+def test_the_grid_opens_the_WIDE_modal_shell():
+    # 25 course cells in the default 600px shell came out 5 columns x 5 rows
+    # and scrolled — the exact thing a grid replaced a scrolling list to avoid
+    # (live audit 2026-07-25). At ~1100px they lay out 9 across in 3 rows.
+    assert 'size="grid"' in _strip_comments(MODAL)
+    assert ".modal-grid" in INDEX
+
+
+def test_the_grid_hides_the_rank_slot_it_never_fills():
+    # Nothing grades a cell in the picker, so the slot rendered a column of "–"
+    # costing a line per ROW — most of the overflow that made it scroll.
+    grid_rules = INDEX[INDEX.index(".entity-grid"):]
+    assert ".entity-grid .starrank { display: none; }" in grid_rules
