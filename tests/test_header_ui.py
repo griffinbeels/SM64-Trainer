@@ -28,6 +28,10 @@ def test_every_context_card_is_one_hit_target():
     assert strip_comments(HEADER_JS).count("<${ContextSelect}") == 3
     rule = context_select_rule(INDEX_HTML)
     assert "position: absolute" in rule and "inset: 0" in rule, rule
+    # Hidden by OPACITY, never by transparent colours: Chromium themes a
+    # select's popup off its computed background, so a transparent one gets a
+    # white list (tests/test_ui_dropdown_theming.py owns that rule).
+    assert "opacity: 0" in rule, rule
 
 
 def test_the_hit_target_guard_can_still_fail():
