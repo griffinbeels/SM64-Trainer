@@ -266,3 +266,67 @@ def test_stars_inside_a_special_stage_wear_the_stage_art():
     src = run_node("optionIcon", CONTEXT
                    + 'console.log(JSON.stringify(optionIcon("star", "22:1", context)));')
     assert src == "/ui/assets/star_icons/vanish.png"
+
+
+CATALOG_UNION = """
+const catalog = { courses: [
+  { id: 1, name: "Bob-omb Battlefield", stars: ["Big Bob-omb", "Footrace"] },
+  { id: 6, name: "Hazy Maze Cave", stars: ["Swimming Beast"] },
+] };
+const segments = [
+  { id: 3, name: "HMC to LLL", origin: { key: "7" } },        // level 7 = HMC
+  { id: 9, name: "LBLJ", origin: { key: "6:1" } },           // castle, no course
+];
+const courseByLevel = { "7": 6, "9": 1 };
+"""
+
+
+def test_layer_two_unions_a_courses_stars_and_its_segments():
+    groups = run_node("courseUnionGroups", CATALOG_UNION
+                      + "console.log(JSON.stringify(courseUnionGroups("
+                      + "catalog, segments, courseByLevel)));")
+    hmc = next(group for group in groups if group["label"] == "Hazy Maze Cave")
+    assert [option["name"] for option in hmc["options"]] == [
+        "Swimming Beast", "HMC to LLL"]
+    assert hmc["options"][1]["id"] == "segment:3"
+
+
+def test_a_castle_segment_belongs_to_no_course():
+    # LBLJ starts in the lobby, which is not a course — it must not be filed
+    # under one. The route editor groups those by region instead.
+    groups = run_node("courseUnionGroups", CATALOG_UNION
+                      + "console.log(JSON.stringify(courseUnionGroups("
+                      + "catalog, segments, courseByLevel)));")
+    every_name = [option["name"] for group in groups for option in group["options"]]
+    assert "LBLJ" not in every_name
+
+
+def test_grid_order_is_main_courses_then_specials_then_castle_secret():
+    # The catalog's own order leads with course 0, which put "Castle Secret"
+    # where Bob-omb Battlefield belongs (live check 2026-07-25).
+    groups = run_node("courseUnionGroups", """
+const catalog = { courses: [
+  { id: 0, name: "Castle Secret", stars: ["Toad"] },
+  { id: 16, name: "BitDW", stars: ["Key"] },
+  { id: 19, name: "PSS", stars: ["Slide"] },
+  { id: 1, name: "Bob-omb Battlefield", stars: ["Big Bob-omb"] },
+] };
+console.log(JSON.stringify(courseUnionGroups(catalog, [], {})));
+""")
+    assert [group["label"] for group in groups] == [
+        "Bob-omb Battlefield", "BitDW", "PSS", "Castle Secret"]
+
+
+def test_courses_keep_game_order():
+    groups = run_node("courseUnionGroups", CATALOG_UNION
+                      + "console.log(JSON.stringify(courseUnionGroups("
+                      + "catalog, segments, courseByLevel)));")
+    assert [group["label"] for group in groups] == [
+        "Bob-omb Battlefield", "Hazy Maze Cave"]
+
+
+def test_segment_ids_are_distinguishable_from_star_ids():
+    parsed = run_node("parseSegmentId",
+                      'console.log(JSON.stringify(['
+                      'parseSegmentId("segment:12"), parseSegmentId("8:1")]));')
+    assert parsed == [12, None]

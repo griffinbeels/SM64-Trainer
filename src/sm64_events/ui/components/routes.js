@@ -187,13 +187,13 @@ function ItemPicker({ catalog, segs, vocab, t, onPick, label }) {
       <option value="segment">Segment</option>
     </select>
     ${mode === "star"
-      ? html`<${EntityPicker} groups=${starGroups} value=${star}
+      ? html`<${EntityPicker} groups=${starGroups} value=${star} depth=${2}
           title="Choose a star"
           iconFor=${(id) => optionIcon("star", id, iconContext)}
           onChange=${(id) => setStar(id)} />`
       : segs.length === 0
         ? html`<span class="meta">no segments defined</span>`
-        : html`<${EntityPicker} groups=${segGroups} value=${segId}
+        : html`<${EntityPicker} groups=${segGroups} value=${segId} depth=${2}
             title="Choose a segment"
             iconFor=${(id) => optionIcon("segment", id, iconContext)}
             onChange=${(id) => setSegId(id)} />`}

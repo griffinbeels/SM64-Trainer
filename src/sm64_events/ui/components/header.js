@@ -6,7 +6,8 @@ import { RANK_MODE_OPTIONS } from "./ranks.js";
 import { StratModal } from "./stratmodal.js";
 import { Icon } from "./icons.js";
 import { EntityPicker } from "./entitymodal.js";
-import { optionIcon, parseStarId, starId, starOptionsFromCatalog } from "../entities.js";
+import { courseUnionGroups, optionIcon, parseSegmentId, parseStarId,
+         starId } from "../entities.js";
 
 const html = htm.bind(h);
 
@@ -258,13 +259,28 @@ function TargetEditor({ t, close }) {
     courseIcons: t.courseIcons || {},
     starIconsMode: t.starIcons || "course",
   };
-  // The group IS a course, so its heading carries the portrait — once per
-  // course rather than repeated on all seven star rows (spec decision 3).
-  const starGroups = starOptionsFromCatalog(v.catalog).map((group) => ({
+  // Layer 1 is a grid of COURSES carrying their portraits; layer 2 is that
+  // course's stars AND the segments that begin in it, because both are things
+  // you practice and /api/target already takes either (user, 2026-07-25).
+  const courseGroups = courseUnionGroups(
+    v.catalog, t.segments || [], (t.vocab || {}).course_by_level || {}
+  ).map((group) => ({
     ...group,
-    icon: optionIcon("course", String(parseStarId(group.options[0].id).course),
-                     iconContext),
+    icon: optionIcon("course", group.key.replace("course-", ""), iconContext),
   }));
+
+  // A picked id is either "8:2" (a star) or "segment:12". The target endpoint
+  // is kind-dispatched, so one control feeds both shapes.
+  async function pickTarget(id) {
+    const segmentId = parseSegmentId(id);
+    if (segmentId != null) {
+      await send("POST", "/api/target", { kind: "segment", segment_id: segmentId });
+      close(); t.refresh();
+      return;
+    }
+    const picked = parseStarId(id);
+    pickStar(picked.course, picked.star);
+  }
 
   return html`<div class="target-editor-card" role="dialog" aria-modal="true"
       aria-label="Choose a practice target">
@@ -274,16 +290,13 @@ function TargetEditor({ t, close }) {
           onclick=${close}><${Icon} name="close" /></button>
     </div>
     <div class="target-editor-fields">
-      <label>Star<${EntityPicker} groups=${starGroups}
+      <label>Star<${EntityPicker} groups=${courseGroups} depth=${2}
         value=${starId(Number(course), Number(star))}
-        title="Choose a star"
-        iconFor=${(id) => optionIcon("star", id, iconContext)}
-        onChange=${(id) => {
-          // One control, still two fields on the wire: unpack and reuse the
-          // existing pickStar so the strategy list re-resolves for the new star.
-          const picked = parseStarId(id);
-          pickStar(picked.course, picked.star);
-        }} /></label>
+        title="Choose a course"
+        iconFor=${(id) => optionIcon(
+          parseSegmentId(id) == null ? "star" : "segment",
+          parseSegmentId(id) == null ? id : parseSegmentId(id), iconContext)}
+        onChange=${pickTarget} /></label>
       <label>Strategy<select key=${`hstrat-${stratNonce}`} value=${strat}
           onchange=${(changeEvent) => changeEvent.target.value === "__new__"
             ? setShowStratModal(true) : setStrat(changeEvent.target.value)}>

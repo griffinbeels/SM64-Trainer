@@ -32,6 +32,7 @@ import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
 import { Medal } from "./ranks.js";
+import { PracticeCell, genericStarSrc } from "./practicecell.js";
 import { IconPicker, iconSrcFromStem } from "./iconpicker.js";
 import { COURSE_ICON_PREFIXES, LEVEL_ICONS } from "../entities.js";
 
@@ -113,11 +114,6 @@ const STAR_DIM_IDLE = true;  // false = every star equally bright
 // Both registries live in entities.js (imported above) — the picker's icon
 // chain (optionIcon) needs them too, and that module is the one node can test.
 
-const genericStarSrc = (slot) =>
-  `/ui/assets/star_${Math.min(slot + 1, STAR_IMG_COUNT)}.png`;
-// generic gold-star art vs "real" art (bundled split icon OR uploaded user
-// icon) — the latter gets the opaque-square `courseicon` treatment
-const isGenericArt = (src) => /\/assets\/star_\d+\.png$/.test(src);
 
 // Cell art: user override (either mode — an explicit pick always wins) >
 // course-mode art > the generic gold star.
@@ -133,15 +129,6 @@ const segCourseStem = (s) =>
 const segIconSrc = (t, s) =>
   resolveIcon(t, `segment:${s.segment_id}`, segCourseStem(s), 0);
 
-// A load failure (missing/corrupt icon) degrades to the generic star art;
-// dropping `courseicon` also removes the opaque-square styling.
-function fallbackToGenericStar(event, slot) {
-  const img = event.target;
-  if (!isGenericArt(img.src)) {
-    img.classList.remove("courseicon");
-    img.src = genericStarSrc(slot);
-  }
-}
 
 // Row-level icon-picking state: the ✎ on any cell opens ONE picker per row,
 // hoisted OUT of the cells so clicks inside the modal can never bubble into
@@ -154,36 +141,10 @@ function useIconPicking(t) {
   return [setPicking, modal];
 }
 
-// THE banner cell — every row mode renders through this, so the approved
-// star-cell anatomy (art / medal slot / name / sub-line) and its
-// active/dim/glow/bob styling stay identical for stars and segments. The ✎
-// is a span-with-role INSIDE the button (stopPropagation keeps it off the
-// cell's pick action); the picker modal itself lives at row level.
-function PracticeCell({ active, armed, iconSrc, fallbackSlot = 0,
-                        rank, name, sub, title, onPick, onEdit }) {
-  const editKey = (keyEvent) => {
-    if (keyEvent.key !== "Enter" && keyEvent.key !== " ") return;
-    keyEvent.preventDefault(); keyEvent.stopPropagation(); onEdit();
-  };
-  return html`<button
-      class="starcell ${active ? "active-star" : ""} ${armed ? "armed" : ""}"
-      title=${title || name} onclick=${onPick}>
-    <span class="starholder">
-      <img class="starimg ${isGenericArt(iconSrc) ? "" : "courseicon"} ${STAR_DIM_IDLE && !active ? "dim" : ""}"
-           src=${iconSrc}
-           onerror=${(e) => fallbackToGenericStar(e, fallbackSlot)}
-           alt="" draggable="false" />
-    </span>
-    <span class="starrank">
-      ${rank ? html`<${Medal} rank=${rank} size=${16} />` : "–"}</span>
-    <span class="starname">${name}</span>
-    <span class="starsub">${sub}</span>
-    <span class="editicon" role="button" tabindex="0" title="Choose icon…"
-          aria-label="Choose icon"
-          onclick=${(e) => { e.stopPropagation(); onEdit(); }}
-          onkeydown=${editKey}>✎</span>
-  </button>`;
-}
+// The banner cell is components/practicecell.js — shared with the entity
+// picker's grid so a star looks the same where you pick it and where you
+// practice it. The banner passes dimIdle (its own look) and onEdit (the ✎
+// icon override, which only exists here).
 
 // The armed sub-line: the running chip replaces the strat while the
 // segment's start condition is met (timer live NOW).
@@ -203,7 +164,7 @@ function StandardSegmentCell({ t, s, setPicking }) {
     await send("POST", "/api/target", { kind: "segment", segment_id: s.segment_id });
     t.refresh();
   }
-  return html`<${PracticeCell}
+  return html`<${PracticeCell} dimIdle=${STAR_DIM_IDLE}
     active=${tgt.kind === "segment" && tgt.segment_id === s.segment_id}
     armed=${armed}
     iconSrc=${segIconSrc(t, s)}
@@ -276,7 +237,7 @@ function StarRow({ t, v, stage }) {
         ? html`showing this route's stars · tap to practice`
         : "tap a star to practice"}</span></div>
     <div class="starrow">
-      ${shown.map(({ name, i }) => html`<${PracticeCell}
+      ${shown.map(({ name, i }) => html`<${PracticeCell} dimIdle=${STAR_DIM_IDLE}
         key=${`${stage.course_id}:${i}`}
         active=${tgt.kind !== "segment"
           && tgt.course_id === stage.course_id && tgt.star_id === i}
@@ -357,7 +318,7 @@ function BowserCourseRow({ t, v, stage }) {
     <div class="shead"><b>▸ ${course.name}</b>
       <span class="meta">reds (8-coin star) · or the pipe-entry skip (no reds)</span></div>
     <div class="starrow segcells">
-      <${PracticeCell}
+      <${PracticeCell} dimIdle=${STAR_DIM_IDLE}
         active=${redsActive}
         iconSrc=${resolveIcon(t, `star:${stage.course_id}:0`, null, 0)}
         rank=${(v.rank_by_star || {})[`${stage.course_id}:0`]}
@@ -366,7 +327,7 @@ function BowserCourseRow({ t, v, stage }) {
         onPick=${pickReds}
         onEdit=${() => setPicking({ course_id: stage.course_id, star_id: 0,
                                     ek: `star:${stage.course_id}:0` })} />
-      ${pipes.map((s) => html`<${PracticeCell} key=${`seg:${s.segment_id}`}
+      ${pipes.map((s) => html`<${PracticeCell} dimIdle=${STAR_DIM_IDLE} key=${`seg:${s.segment_id}`}
         active=${tgt.kind === "segment" && tgt.segment_id === s.segment_id}
         armed=${t.armedSegs.has(s.segment_id)}
         iconSrc=${segIconSrc(t, s)}

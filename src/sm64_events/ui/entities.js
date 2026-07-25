@@ -248,3 +248,76 @@ export function optionIcon(kind, id, context = {}) {
   }
   return genericStar();
 }
+
+// --- Grid picker layers ---------------------------------------------------
+// The target picker's layer 2 is a UNION: a course's stars AND the segments
+// that begin in it (user, 2026-07-25 — "just a union between the valid
+// segments / stars for that course"). Both are practiceable things and
+// /api/target is already kind-dispatched, so picking either is one click.
+//
+// A segment belongs to a course when its ORIGIN's level maps to one. Segments
+// that start in the castle itself (a lobby BLJ, a basement movement) have no
+// course, so they appear in no course's layer 2 — the route editor groups
+// those by region instead.
+
+/** Course id a segment belongs to, or null. `courseByLevel` is vocab's. */
+export function segmentCourse(segment, courseByLevel) {
+  const originKey = (segment.origin || {}).key;
+  if (originKey == null) return null;
+  const level = Number(String(originKey).split(":")[0]);
+  if (Number.isNaN(level)) return null;
+  const course = (courseByLevel || {})[String(level)];
+  return course == null ? null : Number(course);
+}
+
+/**
+ * Layer-1 course cells with layer-2 options = that course's stars followed by
+ * its segments. Courses keep the catalog's order, which is game order.
+ *   catalog       session view catalog ({courses:[{id,name,stars:[]}]})
+ *   segments      GET /api/segments rows (each carrying `origin`)
+ *   courseByLevel vocab.course_by_level
+ */
+export function courseUnionGroups(catalog, segments, courseByLevel) {
+  const byCourse = new Map();
+  for (const segment of segments || []) {
+    const course = segmentCourse(segment, courseByLevel);
+    if (course == null) continue;
+    if (!byCourse.has(course)) byCourse.set(course, []);
+    byCourse.get(course).push(segment);
+  }
+  // Grid ORDER (user, 2026-07-25: "a grid of the courses, in order. At the end,
+  // it also shows the bowser levels / secret stars"): the 15 main courses in
+  // game order, then the Bowser levels, then the secret stages, and the castle
+  // secret stars last. The catalog's own order puts course 0 FIRST, which put
+  // "Castle Secret" where Bob-omb Battlefield belongs (live check 2026-07-25).
+  const gridRank = (courseId) => {
+    if (courseId >= 1 && courseId <= 15) return [0, courseId];   // main courses
+    if (courseId >= 16 && courseId <= 18) return [1, courseId];  // Bowser levels
+    if (courseId >= 19) return [2, courseId];                    // secret stages
+    return [3, courseId];                                        // course 0
+  };
+  const inGridOrder = [...(catalog.courses || [])].sort((left, right) => {
+    const [leftBand, leftId] = gridRank(left.id);
+    const [rightBand, rightId] = gridRank(right.id);
+    return leftBand - rightBand || leftId - rightId;
+  });
+  return inGridOrder.map((course) => ({
+    key: `course-${course.id}`,
+    label: course.name,
+    options: [
+      ...(course.stars || []).map((name, slot) => ({
+        id: starId(course.id, slot), name,
+      })),
+      ...(byCourse.get(course.id) || []).map((segment) => ({
+        id: `segment:${segment.id}`, name: segment.name, sub: "segment",
+      })),
+    ],
+  })).filter((group) => group.options.length > 0);
+}
+
+/** "segment:12" -> 12, or null for a star id. The target picker's two kinds
+ *  share one control, so the id says which endpoint shape to post. */
+export function parseSegmentId(id) {
+  const text = String(id);
+  return text.startsWith("segment:") ? Number(text.slice(8)) : null;
+}

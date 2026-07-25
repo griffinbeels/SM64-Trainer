@@ -36,6 +36,18 @@ export function useTracker() {
       .then((payload) => setCourseIcons(payload.courses || {}))
       .catch(() => {});      // no portraits is a survivable state
   }, []);
+  // Segment definitions + the builder vocabulary, for the pickers. Segments
+  // are refetched when the server says they changed (a new definition should
+  // appear in the target picker without a reload); vocab is static per
+  // install, so it is fetched once.
+  const [segments, setSegments] = useState([]);
+  const [vocab, setVocab] = useState({});
+  const loadSegments = () => getJSON("/api/segments")
+    .then(setSegments).catch(() => {});   // degraded mode: no segments listed
+  useEffect(() => {
+    loadSegments();
+    getJSON("/api/segments/vocab").then(setVocab).catch(() => {});
+  }, []);
   const [feed, setFeed] = useState([]);
   const [connected, setConnected] = useState(false);
   // armedOrder: live armed membership (drives the honest "armed" chip) —
@@ -178,6 +190,11 @@ export function useTracker() {
           // fires and target_changed never arrives — see projection.py.
           setLastPinnedSeg((prev) =>
             prev === ev.payload.segment_id ? null : prev);
+        } else if (ev.type === "segments_changed"
+                   || ev.type === "origins_changed") {
+          // A new or edited definition must show up in the target picker
+          // without a reload — the picker reads t.segments.
+          loadSegments();
         } else if (ev.type === "stage_changed") {
           setStage(ev.payload);
         }
@@ -264,6 +281,7 @@ export function useTracker() {
   const armedSegs = new Set(armedOrder);
   return { view, clock, pickClock, scope, pickScope, feed, connected,
            starIcons, pickStarIcons, showDust, pickShowDust, courseIcons,
+           segments, vocab, loadSegments,
            refresh, paused: pauseState.paused,
            pauseReason: pauseState.reason, togglePause,
            armedSegs, armedOrder, armedNames, lastPinnedSeg, stage,

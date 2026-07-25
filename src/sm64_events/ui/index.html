@@ -151,6 +151,29 @@
     width: 22px; height: 22px; flex: 0 0 22px;
     object-fit: contain; border-radius: 4px;
   }
+  /* Grid picker (spec 2026-07-25-picker-grid-navigation). Cells are the
+     practice banner's, so their internals are already styled by .starcell —
+     only the LAYOUT belongs here. auto-fill + minmax keeps 25 courses on one
+     screen without a scrollbar, which is the entire point of the redesign. */
+  .entity-grid {
+    display: grid; gap: .5rem;
+    grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+    align-content: start;
+  }
+  .entity-grid .starcell { width: auto; min-width: 0; }
+  .entity-section + .entity-section { margin-top: .8rem; }
+  .entity-section-head {
+    padding: .2rem .1rem .35rem; color: var(--muted);
+    font-size: .72rem; letter-spacing: .04em; text-transform: uppercase;
+  }
+  .entity-back {
+    display: inline-flex; align-items: center; gap: .3rem;
+    margin-bottom: .6rem; padding: .25rem .5rem;
+    background: transparent; border-color: var(--border-soft);
+    color: var(--muted); font-size: .78rem;
+  }
+  .entity-back > .ui-icon { transform: rotate(90deg); }
+  .entity-back:hover { color: var(--text); }
   .entity-search { width: 100%; margin-bottom: .6rem; }
   .entity-list {
     max-height: min(60vh, 460px); overflow-y: auto; overflow-x: hidden;
