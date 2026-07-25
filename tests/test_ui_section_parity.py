@@ -75,9 +75,17 @@ def test_both_cards_offer_a_failure_compilation():
 
 
 def test_entity_rank_tag_is_rendered_for_both_kinds():
-    """Rule 11: a feature built for one kind ships for both in the same change."""
+    """Rule 11: a feature built for one kind ships for both in the same change.
+
+    A raw `source.count("EntityRankTag") >= 2` (the previous form of this
+    test) is satisfied by the import plus a SINGLE card's usage -- it cannot
+    tell "both cards" from "one card, twice" apart. Check each section's own
+    body instead, the same way the strategy-picker and failure-compilation
+    tests above do."""
     source = PRACTICE_JS.read_text(encoding="utf-8")
-    assert source.count("EntityRankTag") >= 2
+    for name in ("StarSection", "SegmentSection"):
+        assert "EntityRankTag" in _components(_body(source, name)), \
+            f"{name} is missing the entity rank tag"
 
 
 def test_both_section_builders_emit_entity_rank():
