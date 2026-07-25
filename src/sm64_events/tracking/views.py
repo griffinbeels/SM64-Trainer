@@ -43,7 +43,8 @@ from sm64_events.stats.registry import (DEFAULT_STAT_MENU, REGISTRY,
                                         selection_order)
 from sm64_events.tracking.projection import DEFAULT_MIN_FRAMES, journal_id
 from sm64_events.tracking.routes import route_stats
-from sm64_events.tracking.segments import arm_level, time_bounds
+from sm64_events.tracking.segments import (arm_level, origin_view,
+                                            start_origin, time_bounds)
 
 # Timeline markers (per-section event graph): outcomes that plot as points.
 # Adding a marker kind is one row here (+ a style row in ui timeline.js).
@@ -440,6 +441,25 @@ def _segment_start_levels(start_triggers: list) -> list:
         if level is not None and level not in out:
             out.append(level)
     return out
+
+
+# Origin stamp for GET /api/segments (spec 2026-07-24-segment-origin-
+# categories): the library groups by WHERE a definition can start, derived
+# from its start rules. `overrides` is the ui_state KV `origin_overrides`
+# (segment id as a string -> node key), which a user sets in the editor when
+# the derivation guesses wrong; a KV rather than a column so correcting a
+# label never flips seed_dirty and freezes a seeded row against corpus
+# refreshes.
+def stamp_origins(rows: list[dict], overrides: dict) -> list[dict]:
+    stamped = []
+    for row in rows:
+        override = overrides.get(str(row["id"]))
+        node = override if override else start_origin(row["start_triggers"])
+        stamped.append({**row,
+                        "origin": {**origin_view(node),
+                                   "source": "override" if override
+                                             else "derived"}})
+    return stamped
 
 
 def build_session_view(db, service, clock: str, scope: str = "session") -> dict:

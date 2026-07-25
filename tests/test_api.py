@@ -540,6 +540,90 @@ def test_reset_route_endpoint_404_on_user_created(tmp_path):
         assert client.post(f"/api/routes/{rid}/reset").status_code == 404
 
 
+def test_segments_list_stamps_the_derived_origin(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        rows = client.get("/api/segments").json()
+        lblj = next(row for row in rows if row["name"] == "LBLJ")
+        assert lblj["origin"]["key"] == "6:1"
+        assert lblj["origin"]["label"] == "Lobby"
+        assert lblj["origin"]["region"] == "6:1"
+        assert lblj["origin"]["source"] == "derived"
+
+
+def test_origin_override_wins_and_can_be_cleared(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        target = next(row for row in client.get("/api/segments").json()
+                      if row["name"] == "LBLJ")
+        assert client.post(f"/api/segments/{target['id']}/origin",
+                           json={"origin": "6:2"}).status_code == 200
+        after = next(row for row in client.get("/api/segments").json()
+                     if row["id"] == target["id"])
+        assert after["origin"]["key"] == "6:2"
+        assert after["origin"]["label"] == "Upstairs"
+        assert after["origin"]["source"] == "override"
+
+        assert client.post(f"/api/segments/{target['id']}/origin",
+                           json={"origin": None}).status_code == 200
+        restored = next(row for row in client.get("/api/segments").json()
+                        if row["id"] == target["id"])
+        assert restored["origin"]["key"] == "6:1"
+        assert restored["origin"]["source"] == "derived"
+
+
+def test_origin_override_does_not_dirty_a_seeded_row(tmp_path):
+    # The WHY behind the KV: a seeded movement must stay eligible for corpus
+    # refreshes after the user fixes its label.
+    client, service, db = make_client(tmp_path)
+    with client:
+        target = next(row for row in client.get("/api/segments").json()
+                      if row["name"] == "LBLJ")
+        client.post(f"/api/segments/{target['id']}/origin",
+                    json={"origin": "6:2"})
+        after = next(row for row in client.get("/api/segments").json()
+                     if row["id"] == target["id"])
+        assert not after["seed_dirty"]
+
+
+def test_origin_override_rejects_a_node_outside_the_taxonomy(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        rows = client.get("/api/segments").json()
+        response = client.post(f"/api/segments/{rows[0]['id']}/origin",
+                               json={"origin": "not-a-node"})
+        assert response.status_code == 400
+
+
+def test_origin_override_404s_for_an_unknown_segment(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        assert client.post("/api/segments/99999/origin",
+                           json={"origin": "6:3"}).status_code == 404
+
+
+def test_a_location_free_segment_stamps_as_anywhere(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        created = client.post("/api/segments", json={
+            "name": "Anywhere start", "start_triggers": [{"type": "reset_game"}],
+            "end_triggers": [{"type": "level_enter", "to": 6}]})
+        assert created.status_code == 200
+        row = next(row for row in client.get("/api/segments").json()
+                   if row["id"] == created.json()["id"])
+        assert row["origin"]["key"] is None
+        assert row["origin"]["region"] is None
+        assert row["origin"]["label"] == "Anywhere"
+
+
+def test_segments_vocab_ships_the_origin_taxonomy(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        origins = client.get("/api/segments/vocab").json()["origins"]
+        assert [group["key"] for group in origins][:2] == ["16", "6:1"]
+        assert origins[-1]["key"] is None      # "Anywhere" last
+
+
 def test_target_accepts_segment_kind(tmp_path):
     client, service, db = make_client(tmp_path)
     with client:
