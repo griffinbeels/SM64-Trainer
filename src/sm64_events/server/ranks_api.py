@@ -117,7 +117,13 @@ def _append_excluded_rows(service, scope_id: str, groups: list[dict],
                 "excluded": True, "tier": None, "division": None})
 
 
-def _build_marelo(service, scope_id: str) -> dict:
+def _score_scope(service, scope_id: str) -> dict:
+    """The pure scoring path for one scope: groups -> entity scores ->
+    aggregate -> per-entity tier/division/gain -> excluded rows appended.
+    Touches no watermark state. `_build_marelo` layers the watermark
+    sync/seed + celebration side effects on top of this; any caller that
+    must NOT disturb them (a summary sweep over several scopes) calls this
+    directly instead of `_build_marelo`."""
     groups = _groups(service, scope_id)
     keys = [key for group in groups for key in group["candidates"]]
     scored = marelo_bridge.entity_scores(service.db.attempts(), service.ranks,
@@ -151,6 +157,11 @@ def _build_marelo(service, scope_id: str) -> dict:
     _append_excluded_rows(service, scope_id, groups, excluded, out)
     out["scope_id"] = scope_id
     out["label"] = _scope_label(service, scope_id)
+    return out
+
+
+def _build_marelo(service, scope_id: str) -> dict:
+    out = _score_scope(service, scope_id)
     out["celebration"] = None
     if out["tier"]:
         key = scoring.progression_key(out["tier"], out["division"])
@@ -163,6 +174,35 @@ def _build_marelo(service, scope_id: str) -> dict:
         # history at once. seed_watermark is a no-op once the key exists.
         service.seed_watermark(scope_id, key)
     return out
+
+
+_SUMMARY_CHIP_CAP = 6
+
+
+def _summary_scope_ids(service) -> list[str]:
+    """overall, then every route whose category begins "Main Categories",
+    then the active scope if not already present -- the fixed op.gg-style
+    chip row order (spec Task A). Capped last, so a large route library
+    can't turn the always-visible row into a second scope picker."""
+    scope_ids = ["overall"]
+    for route in service.db.routes():
+        if (route["category"] or "").startswith("Main Categories"):
+            scope_ids.append(f"route:{route['id']}")
+    active_scope_id = _active_scope(service)
+    if active_scope_id not in scope_ids:
+        scope_ids.append(active_scope_id)
+    return scope_ids[:_SUMMARY_CHIP_CAP]
+
+
+def _summary_chip(service, scope_id: str) -> dict:
+    """A leaner /api/marelo payload for one scope: same scoring path
+    (`_score_scope`), no `entities`/`celebration` -- op.gg's chip needs a
+    tier badge and a number, not a breakdown."""
+    scored = _score_scope(service, scope_id)
+    return {"scope_id": scope_id, "label": scored["label"],
+            "tier": scored["tier"], "division": scored["division"],
+            "marelo": scored["marelo"], "n": scored["n"],
+            "practiced": scored["practiced"]}
 
 
 def _scope_label(service, scope_id: str) -> str:
@@ -260,6 +300,18 @@ def create_ranks_router(service) -> APIRouter:
     @router.get("/marelo")
     def marelo(scope: str | None = None):
         return _build_marelo(service, scope or _active_scope(service))
+
+    @router.get("/marelo/summary")
+    def marelo_summary():
+        """The always-visible chip row (op.gg season-tier badges): overall,
+        every "Main Categories" route, and the active scope, one aggregate
+        per chip via `_score_scope` -- never `_build_marelo`, so this can
+        never seed or lower a celebration watermark for a scope the user
+        has not actually opened."""
+        if service.ranks is None or service.db is None:
+            raise HTTPException(503, "rank standards unavailable")
+        return {"chips": [_summary_chip(service, scope_id)
+                          for scope_id in _summary_scope_ids(service)]}
 
     @router.get("/marelo/history")
     def marelo_history(scope: str | None = None):

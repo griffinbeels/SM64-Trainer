@@ -123,6 +123,96 @@ def _ev(type_, frame, payload=None):
                  payload=payload or {})
 
 
+# -- /api/marelo/summary (op.gg-style always-visible chip row, Task A) -------
+
+def test_summary_lists_overall_first_with_the_chip_shape(tmp_path):
+    client, svc = make_client(tmp_path)
+    with client:
+        body = client.get("/api/marelo/summary").json()
+        assert body["chips"][0]["scope_id"] == "overall"
+        assert set(body["chips"][0]) >= {"scope_id", "label", "tier",
+                                         "division", "marelo", "n", "practiced"}
+
+
+def test_summary_never_errors_on_an_empty_route_list(tmp_path):
+    """Contract: an empty route list yields {"chips": [ {overall...} ]},
+    never an error -- this store has no routes at all."""
+    client, svc = make_client(tmp_path)
+    with client:
+        body = client.get("/api/marelo/summary").json()
+        assert body == {"chips": [body["chips"][0]]}
+        assert body["chips"][0]["scope_id"] == "overall"
+
+
+def test_summary_includes_main_category_routes_but_not_others(tmp_path):
+    client, svc = make_client(tmp_path)
+    with client:
+        svc.db.insert_route("16 Star", [], "2026-01-01T00:00:00Z",
+                            category="Main Categories/16 Star")
+        svc.db.insert_route("Side Quest", [], "2026-01-01T00:00:00Z",
+                            category="Custom/Whatever")
+        body = client.get("/api/marelo/summary").json()
+        labels = [chip["label"] for chip in body["chips"]]
+        assert labels[0] == "Overall"
+        assert "16 Star" in labels
+        assert "Side Quest" not in labels
+
+
+def test_summary_caps_at_six_chips(tmp_path):
+    client, svc = make_client(tmp_path)
+    with client:
+        for index in range(8):
+            svc.db.insert_route(f"Route {index}", [], "2026-01-01T00:00:00Z",
+                                category="Main Categories/Route")
+        body = client.get("/api/marelo/summary").json()
+        assert len(body["chips"]) == 6
+        assert body["chips"][0]["scope_id"] == "overall"
+
+
+def test_summary_appends_the_active_scope_when_not_already_present(tmp_path):
+    client, svc = make_client(tmp_path)
+    with client:
+        other_id = svc.db.insert_route("Odd Ball", [], "2026-01-01T00:00:00Z",
+                                       category="Custom/Whatever")
+        asyncio.run(svc.select_route(other_id))
+        body = client.get("/api/marelo/summary").json()
+        assert body["chips"][-1]["scope_id"] == f"route:{other_id}"
+
+
+def test_summary_reuses_build_marelos_scoring_path(tmp_path):
+    """The contract's central guarantee: a chip's tier/division/marelo must
+    be the SAME numbers /api/marelo computes for that scope -- not a second
+    tier lookup that could quietly disagree with it."""
+    client, svc = make_client(tmp_path)
+    with client:
+        full = client.get("/api/marelo?scope=overall").json()
+        chip = next(c for c in client.get("/api/marelo/summary").json()["chips"]
+                   if c["scope_id"] == "overall")
+        assert chip["tier"] == full["tier"]
+        assert chip["division"] == full["division"]
+        assert chip["marelo"] == full["marelo"]
+        assert chip["n"] == full["n"]
+        assert chip["practiced"] == full["practiced"]
+
+
+def test_summary_leaves_marelo_watermarks_untouched(tmp_path):
+    """The one thing that will bite you (Task A brief): _build_marelo syncs,
+    seeds, and reads a watermark as a side effect of scoring a scope --
+    that drives the rank-up celebration overlay. The seeded star:9:2 ladder
+    is unpracticed, so `overall` scores 0.0 and tiers as "Iron" (truthy),
+    which is enough to make a naive implementation that loops _build_marelo
+    seed a watermark for it. A summary fetch must leave marelo_watermarks
+    byte-identical -- seeding here would silently swallow that scope's real
+    first rank-up later."""
+    client, svc = make_client(tmp_path)
+    with client:
+        before = svc.marelo_watermarks()
+        assert before == {}
+        client.get("/api/marelo/summary")
+        after = svc.marelo_watermarks()
+        assert after == before == {}
+
+
 def test_entity_tier_matches_rank_for_on_a_ragged_ladder(tmp_path):
     """THE invariant (scoring.py:8) for an entity whose ladder is missing
     tiers. Confirmed repro: ladder {Mario 10.00, Gold 20.00, Silver 30.00},
