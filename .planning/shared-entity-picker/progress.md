@@ -15,8 +15,8 @@ marked complete is DONE — do not re-dispatch it.
 | 2 | T4 segments.js clause params | **complete** | `700e536`, render-verified, groupedDropdown deleted |
 | 2 | T5 header.js target modal | **complete** | `b86b7a7`, one star control, POST still numeric |
 | 2 | T6 routes.js step editor | **complete** | `6851806`, segments grouped by region |
-| 3 | T7 parity test + rules row + the id/name fold-in | dispatched | agent `p7-parity` |
-| — | Whole-branch review (Opus 5) | pending | NON-OPTIONAL |
+| 3 | T7 parity test + rules row + the id/name fold-in | **complete** | `63e0c85`, 3 parity tests |
+| — | Whole-branch review (Opus 5) | dispatched | agent `picker-review` |
 | — | Human audit (the ~120-option star list) | pending | only a human can judge type-ahead over it |
 
 ## Watch items (predicted breakage + the sanctioned remedy)
@@ -48,7 +48,7 @@ marked complete is DONE — do not re-dispatch it.
   another agent was mid-write reported 4 failures in that agent's file; the
   same command passed once the checkout settled. Re-run before believing a
   failure in a file you do not own.
-- Baseline before this branch: **1515 passed**; after wave 2: **1536 passed**.
+- Baseline before this branch: **1515 passed**; after wave 2: **1536 passed**; after T7: **1539 passed**.
 - **Controller-approved fold-in for T7 (not scope creep):** `GroupedPicker`'s
   `<select>` sets no `id`/`name`, so Chrome logs a form-field advisory at every
   call site now (found by T5's render check). The fix belongs in the shared
