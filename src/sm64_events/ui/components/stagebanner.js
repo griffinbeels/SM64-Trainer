@@ -32,7 +32,9 @@ import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
 import { Medal } from "./ranks.js";
-import { IconPicker, iconSrcFromStem } from "./iconpicker.js";
+import { IconPicker } from "./iconpicker.js";
+import { COURSE_ICON_PREFIXES, LEVEL_ICONS, fallbackToGenericStar,
+         isGenericArt, resolveIcon } from "./entityicons.js";
 
 const html = htm.bind(h);
 
@@ -93,56 +95,18 @@ const armedSegments = (t, v) =>
 
 // Look flags — flip during the human-audit playtest to taste. Kept as
 // constants (not props) so the cell below stays a single readable line.
-// Generic art is `ui/assets/star_{n}.png`; the slot index is clamped to
-// STAR_IMG_COUNT, so the 100-coin/7th slot reuses star_6.
-const STAR_IMG_COUNT = 6;    // star_1.png .. star_6.png in ui/assets/
 const STAR_DIM_IDLE = true;  // false = every star equally bright
 
-// Course split-icon art (t.starIcons === "course", the settings-drawer
-// "Star icons" preference, the DEFAULT): ui/assets/star_icons/
-// {prefix}{slot+1}.png, one per main-course star INCLUDING the 100-coin 7th
-// slot. Index = course_id-1 (catalog order, pinned against the assets by
-// tests/test_star_icons.py).
-const COURSE_ICON_PREFIXES = ["bob", "wf", "jrb", "ccm", "bbh", "hmc", "lll",
-                              "ssl", "ddd", "sl", "wdw", "ttm", "thi", "ttc",
-                              "rr"];
-
-// Course-mode fallback art for a SEGMENT, by start level: the icon set has
-// real art for the Bowser stages — keyed by both the course level (pipe-entry
-// segments) and its fight arena. Everything else (castle segments) defaults
-// to the generic star unless the user overrides it.
-const LEVEL_ICONS = { 17: "bitdw", 19: "bitfs", 21: "bits",
-                      30: "bitdw", 33: "bitfs", 34: "bits" };
-
-const genericStarSrc = (slot) =>
-  `/ui/assets/star_${Math.min(slot + 1, STAR_IMG_COUNT)}.png`;
-// generic gold-star art vs "real" art (bundled split icon OR uploaded user
-// icon) — the latter gets the opaque-square `courseicon` treatment
-const isGenericArt = (src) => /\/assets\/star_\d+\.png$/.test(src);
-
-// Cell art: user override (either mode — an explicit pick always wins) >
-// course-mode art > the generic gold star.
-function resolveIcon(t, ek, courseStem, slot) {
-  const override = ((t.view || {}).icon_overrides || {})[ek];
-  const stem = override
-    || (t.starIcons === "course" ? courseStem : null);
-  return stem ? iconSrcFromStem(stem) : genericStarSrc(slot);
-}
+// COURSE_ICON_PREFIXES, LEVEL_ICONS, resolveIcon, isGenericArt and
+// fallbackToGenericStar now live in entityicons.js (task D,
+// 2026-07-25-marelo-legibility) — the Rank tab's Top-N strip needed the
+// SAME course-prefix table and generic-star fallback this row already had,
+// and a second hand-written copy is exactly the kind of table that drifts.
 
 const segCourseStem = (s) =>
   (s.start_levels || []).map((lvl) => LEVEL_ICONS[lvl]).find(Boolean) || null;
 const segIconSrc = (t, s) =>
   resolveIcon(t, `segment:${s.segment_id}`, segCourseStem(s), 0);
-
-// A load failure (missing/corrupt icon) degrades to the generic star art;
-// dropping `courseicon` also removes the opaque-square styling.
-function fallbackToGenericStar(event, slot) {
-  const img = event.target;
-  if (!isGenericArt(img.src)) {
-    img.classList.remove("courseicon");
-    img.src = genericStarSrc(slot);
-  }
-}
 
 // Row-level icon-picking state: the ✎ on any cell opens ONE picker per row,
 // hoisted OUT of the cells so clicks inside the modal can never bubble into

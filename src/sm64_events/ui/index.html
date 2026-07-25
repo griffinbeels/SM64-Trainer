@@ -907,6 +907,33 @@
      --border-soft/--muted mirror the rest of the design system (this file
      has no --line or --dim token, despite what an earlier draft assumed). */
   .rank-page { display: flex; flex-direction: column; gap: 14px; }
+  /* Scope chip row (task D.1) — every season's tier at a glance, op.gg
+     style. Wraps onto more rows rather than scrolling; `.is-selected`
+     mirrors the scope <select>'s current value so clicking a chip never
+     looks like it did nothing. */
+  .scope-chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .scope-chip {
+    display: flex; align-items: center; gap: 8px; padding: 5px 10px 5px 6px;
+    border: 1px solid var(--border-soft); border-radius: 10px;
+    background: rgba(8, 20, 34, .4); cursor: pointer; text-align: left;
+  }
+  .scope-chip:hover { border-color: var(--gold); }
+  .scope-chip.is-selected { border-color: var(--gold); background: rgba(240, 189, 50, .14); }
+  .scope-chip-text { display: flex; flex-direction: column; line-height: 1.15; }
+  .scope-chip-text b { font-size: 12px; font-weight: 600; }
+  /* Top-N strip (task D.2) — op.gg's "recent form" row: small, tier-tinted
+     icon tiles, never a table. Fixed tile size + flex-wrap keeps rows even
+     at any width instead of the row wrapping raggedly. */
+  .rank-topn-card h3 { margin: 0 0 8px; }
+  .topn-strip { display: flex; flex-wrap: wrap; gap: 8px; }
+  .topn-tile {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 42px; height: 42px; border-radius: 8px; overflow: hidden;
+    border: 2px solid var(--tier-tint, var(--border-soft));
+    background: rgba(8, 20, 34, .4);
+  }
+  .topn-icon { width: 100%; height: 100%; object-fit: contain; }
+  .topn-icon.courseicon { width: 90%; height: 90%; }
   .rank-card-main { display: flex; align-items: center; gap: 16px; margin: 10px 0; }
   .rank-card-main h2 { margin: 0; font-size: 24px; }
   /* Task C.5: names the MARELO-vs-saved-PB distinction so it reads as

@@ -12,6 +12,8 @@ import { Crest, fmtPoints, fmtScore, toPoints } from "./marelo.js";
 import { Icon } from "./icons.js";
 import { PageState, InlineState } from "./states.js";
 import { useTween } from "../useTween.js";
+import { courseStemForEntityKey, fallbackSlotForEntityKey,
+         fallbackToGenericStar, isGenericArt, resolveIcon } from "./entityicons.js";
 
 const html = htm.bind(h);
 
@@ -266,6 +268,79 @@ function Breakdown({ data, routeOrder, onToggle }) {
   </div>`;
 }
 
+// The scope chip row (task D.1): every season's tier at a glance, op.gg
+// style, so comparing a 16 Star rank against a 120 Star rank no longer costs
+// a dropdown round-trip each way. Fetches `/api/marelo/summary` -- which
+// calls `_score_scope`, never `_build_marelo` (server/ranks_api.py), so
+// reading this row can never seed, sync or lower a celebration watermark
+// for a scope the user has not actually opened. `refreshKey` mirrors the
+// tab's own staleness fix (t.mareloRev): the chips must not go stale while
+// the tab is left open during play, same reason the breakdown re-fetches
+// on every REFRESH_ON event.
+function ScopeChips({ activeScopeId, onPick, refreshKey }) {
+  const [chips, setChips] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    getJSON("/api/marelo/summary").then((response) => alive && setChips(response.chips))
+      .catch(() => alive && setChips([]));
+    return () => { alive = false; };
+  }, [refreshKey]);
+  if (!chips || !chips.length) return null;
+  return html`<div class="scope-chip-row">
+    ${chips.map((chip) => html`<button type="button" key=${chip.scope_id}
+        class="scope-chip ${chip.scope_id === activeScopeId ? "is-selected" : ""}"
+        onclick=${() => onPick(chip.scope_id)}>
+      <${Crest} tier=${chip.tier} division=${chip.division} size=${26} />
+      <span class="scope-chip-text">
+        <b>${chip.label}</b>
+        <span class="meta">${fmtPoints(chip.marelo)} pts</span>
+      </span>
+    </button>`)}
+  </div>`;
+}
+
+// One glanceable icon tile for the Top-N strip below -- tier-tinted border,
+// the SAME icon resolution the practice selector's cells use (entityicons.js,
+// extracted from stagebanner.js for exactly this reuse) so a star's Top-N
+// tile can never show different art than its own selector cell does. A
+// segment key resolves no course stem at this layer (the breakdown payload
+// carries no start_levels) and falls back to the generic star, same as
+// stagebanner's own segment cells do for an unmapped level.
+function TopEntityIcon({ t, entity }) {
+  const fallbackSlot = fallbackSlotForEntityKey(entity.key);
+  const iconSrc = resolveIcon(t, entity.key,
+    courseStemForEntityKey(entity.key), fallbackSlot);
+  return html`<span class="topn-tile" style=${`--tier-tint:${rankColor(entity.tier)}`}
+      title=${`${entity.label} — ${entity.tier} ${entity.division} · ${fmtPoints(entity.score)} pts`}>
+    <img class="topn-icon ${isGenericArt(iconSrc) ? "" : "courseicon"}" src=${iconSrc}
+         onerror=${(event) => fallbackToGenericStar(event, fallbackSlot)}
+         alt="" draggable="false" />
+  </span>`;
+}
+
+const TOP_N_STRIP_SIZE = 12;
+
+// Task D.2: the CURRENT scope's best-scoring entities, modelled on op.gg's
+// "Recent Games" row -- a scannable answer to "what am I actually good at"
+// that a breakdown table can't give at a glance. Sourced from `data.entities`
+// (the SAME breakdown payload the table below already fetched) -- no new
+// endpoint. An unpracticed entity (score null, which also covers excluded
+// rows -- they carry the same null score) never appears: there is nothing to
+// be good at yet.
+function TopStrip({ t, entities }) {
+  const top = [...entities]
+    .filter((entity) => entity.score != null)
+    .sort((entityA, entityB) => entityB.score - entityA.score)
+    .slice(0, TOP_N_STRIP_SIZE);
+  if (!top.length) return null;
+  return html`<div class="practice-card rank-topn-card">
+    <h3>Best in scope</h3>
+    <div class="topn-strip">
+      ${top.map((entity) => html`<${TopEntityIcon} key=${entity.key} t=${t} entity=${entity} />`)}
+    </div>
+  </div>`;
+}
+
 export function RankPage({ t }) {
   const [scopes, setScopes] = useState(null);
   const [scopesErr, setScopesErr] = useState(null);
@@ -337,6 +412,7 @@ export function RankPage({ t }) {
   const routeOrder = scopeId.startsWith("route:");
 
   return html`<div class="rank-page">
+    <${ScopeChips} activeScopeId=${scopeId} onPick=${setScopeId} refreshKey=${t.mareloRev} />
     <div class="practice-card rank-card">
       <label class="route-focus-control">
         <${Icon} name="rank" size=${18} />
@@ -381,7 +457,8 @@ export function RankPage({ t }) {
             ${data.n < 5 && html`<p class="meta">Small scope — ${data.n} rated ${
               data.n === 1 ? "entry" : "entries"}.</p>`}`}
     </div>
-    ${data && !dataErr && html`<div class="practice-card">
+    ${data && !dataErr && html`<${TopStrip} t=${t} entities=${data.entities} />
+      <div class="practice-card">
         <h3>Progress</h3>
         <${HistoryChart} points=${points} />
         <p class="meta">Recomputed from your attempts against current standards —

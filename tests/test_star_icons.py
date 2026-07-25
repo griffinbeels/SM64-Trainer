@@ -35,24 +35,40 @@ def test_every_main_course_star_icon_exists():
     assert not missing, f"star_icons is missing {missing}"
 
 
-def test_stagebanner_prefix_registry_matches_course_order():
-    source = (UI / "components" / "stagebanner.js").read_text(encoding="utf-8")
+def test_prefix_registry_matches_course_order():
+    """COURSE_ICON_PREFIXES moved to entityicons.js (task D,
+    2026-07-25-marelo-legibility) once the Rank tab's Top-N strip needed the
+    same table stagebanner.js's star selector already had — one registry,
+    two consumers, still pinned against the catalog order here."""
+    source = (UI / "components" / "entityicons.js").read_text(encoding="utf-8")
     match = re.search(r"COURSE_ICON_PREFIXES\s*=\s*\[([^\]]*)\]", source)
-    assert match, "stagebanner.js lost its COURSE_ICON_PREFIXES registry"
+    assert match, "entityicons.js lost its COURSE_ICON_PREFIXES registry"
     listed = re.findall(r'"(\w+)"', match.group(1))
     assert listed == PREFIXES, (
         "COURSE_ICON_PREFIXES disagrees with the course catalog order: "
         f"{listed}")
+    banner = (UI / "components" / "stagebanner.js").read_text(encoding="utf-8")
+    assert "COURSE_ICON_PREFIXES = [" not in banner, \
+        "stagebanner.js should import COURSE_ICON_PREFIXES, not redeclare it"
+    assert 'from "./entityicons.js"' in banner, \
+        "stagebanner.js no longer imports the shared icon resolver"
 
 
 def test_setting_is_wired_through_store_header_and_banner():
     store = (UI / "store.js").read_text(encoding="utf-8")
     header = (UI / "components" / "header.js").read_text(encoding="utf-8")
     banner = (UI / "components" / "stagebanner.js").read_text(encoding="utf-8")
+    resolver = (UI / "components" / "entityicons.js").read_text(encoding="utf-8")
     assert "sm64.starIcons" in store, "store.js lost the sm64.starIcons key"
     assert "pickStarIcons" in store and "starIcons" in store
     assert "starIcons" in header, "settings drawer lost the star-icon control"
-    assert "t.starIcons" in banner, "StarRow no longer reads the icon mode"
+    # The preference check itself now lives in the shared resolver
+    # (resolveIcon, entityicons.js); the banner still owns PASSING `t`
+    # through to it on every cell.
+    assert "t.starIcons" in resolver, \
+        "entityicons.js's resolveIcon no longer reads the icon mode"
+    assert "resolveIcon(t" in banner, \
+        "StarRow no longer feeds the tracker state into icon resolution"
 
 
 def test_course_icons_are_the_default_mode():
