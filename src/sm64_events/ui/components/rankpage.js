@@ -94,6 +94,13 @@ export function RankPage({ t }) {
     return () => { alive = false; };
   }, []);
 
+  // t.mareloRev is a dependency, not just scopeId: it's bumped by store.js
+  // on every attempt_completed / marelo_changed / rank_mode_changed /
+  // route_selected (and more — see store.js REFRESH_ON). Without it this
+  // tab only ever fetched on mount and on scope change, so it went stale
+  // while open during play (spec 2026-07-24 Step 2b) — the rating, chart
+  // and breakdown kept showing pre-run numbers with nothing to indicate
+  // they were old.
   useEffect(() => {
     if (!scopeId) return undefined;
     let alive = true;
@@ -110,7 +117,7 @@ export function RankPage({ t }) {
     getJSON(`/api/marelo/history${query}`).then((response) => alive && setPoints(response.points))
       .catch(() => alive && setPoints([]));
     return () => { alive = false; };
-  }, [scopeId]);
+  }, [scopeId, t.mareloRev]);
 
   async function toggleExcluded(entityKey, excluded) {
     try {
