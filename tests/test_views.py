@@ -1639,3 +1639,22 @@ def test_star_sections_carry_no_default_strategy(tmp_path):
     seed(svc)
     view = build_session_view(db, svc, clock="igt")
     assert "default_strat" not in view["stars"][0]
+
+
+def test_catalog_carries_the_same_course_groups_as_vocab():
+    # The header and route pickers read the CATALOG; the segment builder reads
+    # VOCAB. They must group identically or the same star sits under different
+    # headings in different pickers.
+    from sm64_events.tracking.segments import course_groups, vocab
+    from sm64_events.tracking.views import _CATALOG
+
+    assert _CATALOG["course_groups"] == course_groups()
+    assert _CATALOG["course_groups"] == vocab()["course_groups"]
+
+
+def test_catalog_course_groups_cover_every_catalog_course():
+    from sm64_events.tracking.views import _CATALOG
+
+    grouped = {course for group in _CATALOG["course_groups"]
+               for course in group["courses"]}
+    assert grouped == {course["id"] for course in _CATALOG["courses"]}

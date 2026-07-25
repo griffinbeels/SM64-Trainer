@@ -17,6 +17,9 @@ import { Modal } from "./modal.js";
 import { buildTree } from "../group.js";
 import { usePaneCap } from "../viewport.js";
 import { GroupedList, useOpenGroups } from "./grouplist.js";
+import { GroupedPicker } from "./picker.js";
+import { parseStarId, segmentOptions,
+         starOptionsFromCatalog } from "../entities.js";
 
 const html = htm.bind(h);
 const pct = (r) => `${Math.round((r ?? 0) * 100)}%`;
@@ -128,36 +131,47 @@ function CategoryModal({ routes, current, onCancel, onSave }) {
   <//>`;
 }
 
-// Star/segment picker shared by "add step" and "add option to a group".
-function ItemPicker({ catalog, segs, onPick, label }) {
+// Star/segment picker shared by "add step" and "add option to a group". The
+// star side is one grouped control (course = optgroup, star = option) and the
+// segment side groups by castle region, same as the segment library beside it
+// — both through GroupedPicker/entities.js rather than a fourth hand-rolled
+// pair of selects.
+function ItemPicker({ catalog, segs, vocab, onPick, label }) {
   const [mode, setMode] = useState("star");
-  const [course, setCourse] = useState(catalog.courses[0] ? catalog.courses[0].id : 0);
-  const [star, setStar] = useState(0);
-  const [segId, setSegId] = useState(segs[0] ? segs[0].id : null);
-  const courseObj = catalog.courses.find((c) => c.id === course);
-  const pick = () => onPick(mode === "star"
-    ? { type: "star", course, star }
-    : { type: "segment", segment_id: segId });
+  const starGroups = starOptionsFromCatalog(catalog);
+  const firstStar = starGroups[0] ? starGroups[0].options[0].id : null;
+  const [star, setStar] = useState(firstStar);
+  const segGroups = segmentOptions(segs, (vocab || {}).origins);
+  const [segId, setSegId] = useState(segs[0] ? String(segs[0].id) : null);
+  const pick = () => {
+    // Neither branch has anything to post before its picker resolves a first
+    // value (star: catalog.course_groups missing course_groups on the
+    // fallback catalog leaves `star` null; segment: segs not yet fetched
+    // leaves `segId` null) — Number(null) is 0, and NaN serialises as null,
+    // either of which would post an incomplete candidate the server has to
+    // reject with a confusing 409 instead of the button staying inert
+    // (review M2, M3).
+    if (mode === "star") {
+      if (star == null) return;
+      const picked = parseStarId(star);
+      onPick({ type: "star", course: picked.course, star: picked.star });
+    } else {
+      if (segId == null) return;
+      onPick({ type: "segment", segment_id: Number(segId) });
+    }
+  };
   return html`<div class="routepick">
     <select value=${mode} onchange=${(e) => setMode(e.target.value)}>
       <option value="star">Star</option>
       <option value="segment">Segment</option>
     </select>
     ${mode === "star"
-      ? html`<select value=${course}
-            onchange=${(e) => { setCourse(Number(e.target.value)); setStar(0); }}>
-          ${catalog.courses.map((c) => html`<option value=${c.id}>${c.name}</option>`)}
-        </select>
-        <select value=${star} onchange=${(e) => setStar(Number(e.target.value))}>
-          ${(courseObj ? courseObj.stars : []).map((s, i) =>
-            html`<option value=${i}>${s}</option>`)}
-        </select>`
+      ? html`<${GroupedPicker} groups=${starGroups} value=${star}
+          placeholder=${null} onChange=${(id) => setStar(id)} />`
       : segs.length === 0
         ? html`<span class="meta">no segments defined</span>`
-        : html`<select value=${segId ?? ""}
-            onchange=${(e) => setSegId(Number(e.target.value))}>
-          ${segs.map((s) => html`<option value=${s.id}>${s.name}</option>`)}
-        </select>`}
+        : html`<${GroupedPicker} groups=${segGroups} value=${segId}
+            placeholder=${null} onChange=${(id) => setSegId(id)} />`}
     <button disabled=${mode === "segment" && segs.length === 0} onclick=${pick}>
       <${Icon} name="plus" size=${15} /> ${label || "Add"}
     </button>
@@ -166,7 +180,7 @@ function ItemPicker({ catalog, segs, onPick, label }) {
 
 // One step row. step = raw {label?, need, candidates[]}; view = resolved
 // {candidates:[{display}], step_rate, cumulative, broken} (parallel by index).
-function StepRow({ step, view, idx, total, catalog, segs, onChange, onMove, onRemove, weakest }) {
+function StepRow({ step, view, idx, total, catalog, segs, vocab, onChange, onMove, onRemove, weakest }) {
   const setNeed = (n) => onChange({ ...step, need: n });
   const addCand = (c) => onChange({ ...step, candidates: [...step.candidates, c] });
   const removeCand = (i) => {
@@ -213,7 +227,8 @@ function StepRow({ step, view, idx, total, catalog, segs, onChange, onMove, onRe
         <select value=${step.need} onchange=${(e) => setNeed(Number(e.target.value))}>
           ${step.candidates.map((_, i) => html`<option value=${i + 1}>${i + 1}</option>`)}
         </select></label>` : null}
-      <${ItemPicker} catalog=${catalog} segs=${segs} label="Add option" onPick=${addCand} />
+      <${ItemPicker} catalog=${catalog} segs=${segs} vocab=${vocab}
+          label="Add option" onPick=${addCand} />
     </div>
   </div>`;
 }
@@ -480,7 +495,7 @@ export function Routes({ t }) {
                   || { candidates: [], step_rate: 0, cumulative: 0, broken: false };
                 return html`<${StepRow} key=${i} step=${step} view=${vs} idx=${i}
                     total=${selected.steps.length} catalog=${catalog} segs=${segs}
-                    weakest=${i === view.weakest_step}
+                    vocab=${vocab} weakest=${i === view.weakest_step}
                     onChange=${(s) => editStep(i, s)}
                     onMove=${(dir) => moveStep(i, dir)}
                     onRemove=${() => removeStep(i)} />`;
@@ -491,7 +506,7 @@ export function Routes({ t }) {
                 <b>Add a step</b>
                 <span>Pick one star or segment to append to the route.</span>
               </div>
-              <${ItemPicker} catalog=${catalog} segs=${segs}
+              <${ItemPicker} catalog=${catalog} segs=${segs} vocab=${vocab}
                   label="Add step" onPick=${addStep} />
             </div>
           </section>
