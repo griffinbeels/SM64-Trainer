@@ -1,6 +1,6 @@
 from sm64_events.ranks.scopes import (
-    aggregate, celebration_delta, entity_groups, gain_for, rankable_entities,
-    scope_list)
+    UNPRACTICED_TARGET_TIER, aggregate, celebration_delta, entity_groups,
+    gain_for, rankable_entities, scope_list)
 from sm64_events.ranks.scoring import progression_key
 
 LADDERS = {"star:1:0": {"Standard": {"Mario": 45.4}},
@@ -156,6 +156,13 @@ def test_gain_is_the_marelo_the_next_tier_on_this_entity_is_worth():
     assert gain_for(50.0, 10) == (60.0 - 50.0) / 10   # Gold -> Platinum
     assert gain_for(None, 10) == 45.0 / 10            # unpracticed -> reach Gold
     assert gain_for(96.0, 10) == (100.0 - 96.0) / 10  # top tier still has room
+
+
+def test_unpracticed_target_tier_names_the_score_gain_for_actually_targets():
+    """Task C's breakdown "next rank" column shows this NAME for an
+    unpracticed entity ("-> Gold") -- it must never drift from the numeric
+    target `gain_for(None, ...)` grades against above."""
+    assert UNPRACTICED_TARGET_TIER == "Gold"
 
 
 def test_celebration_fires_only_on_a_rise_and_reports_the_span():

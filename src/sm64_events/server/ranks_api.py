@@ -122,7 +122,12 @@ def _append_excluded_rows(service, scope_id: str, groups: list[dict],
             out["entities"].append({
                 "key": key, "score": None, "gain": 0.0,
                 "label": entity_label(service.db, key),
-                "excluded": True, "tier": None, "division": None})
+                "excluded": True, "tier": None, "division": None,
+                # Same "no score yet" shape the scored loop above gives an
+                # unpracticed entity -- an excluded row is unscored too, it
+                # just got there by choice instead of by never being played.
+                "next_tier": scopes.UNPRACTICED_TARGET_TIER,
+                "next_division": None})
 
 
 def _score_scope(service, scope_id: str) -> dict:
@@ -158,9 +163,26 @@ def _score_scope(service, scope_id: str) -> dict:
         defined = defined_by_key.get(entity["key"])
         if entity["score"] is None:
             entity["tier"] = entity["division"] = None
+            # No score to step up from -- the breakdown's "next rank" column
+            # names what a FIRST practiced attempt targets (spec task C.3),
+            # the same Gold anchor gain_for below already grades unpracticed
+            # entities against. No division: there is nothing to be a
+            # division INTO yet.
+            entity["next_tier"] = scopes.UNPRACTICED_TARGET_TIER
+            entity["next_division"] = None
         else:
             entity["tier"], entity["division"] = scoring.division_for(
                 entity["score"], defined)
+            # One DIVISION up, not one tier up: `next_tier_target` (used by
+            # gain_for below) answers "how much score is the next TIER
+            # worth", the whole-ladder quest; `division_progress` answers
+            # "what's the very next step", the LP-style near-goal the
+            # breakdown's next-rank column exists to show. `next_tier`/
+            # `next_division` are None exactly when maxed (hardest tier this
+            # ladder defines, division I) -- the UI reads that as "Maxed".
+            next_step = scoring.division_progress(entity["score"], defined)
+            entity["next_tier"] = next_step["next_tier"]
+            entity["next_division"] = next_step["next_division"]
         entity["gain"] = scopes.gain_for(entity["score"], out["n"], defined)
     _append_excluded_rows(service, scope_id, groups, excluded, out)
     out["scope_id"] = scope_id

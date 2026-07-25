@@ -17,6 +17,11 @@ from typing import Iterable
 from sm64_events.ranks import scoring
 
 _UNPRACTICED_TARGET = scoring.SCORE_ANCHORS["Gold"]
+# The tier name _UNPRACTICED_TARGET encodes -- derived from the same
+# constant `gain_for` grades against, not a second "Gold" literal, so a
+# display caller (server/ranks_api.py's breakdown "next rank" column) can
+# never name a tier that disagrees with the score gain_for actually targets.
+UNPRACTICED_TARGET_TIER = scoring.tier_from_score(_UNPRACTICED_TARGET)
 
 
 def rankable_entities(ladders_by_entity: dict[str, dict[str, dict[str, float]]],

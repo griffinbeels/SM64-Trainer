@@ -909,6 +909,9 @@
   .rank-page { display: flex; flex-direction: column; gap: 14px; }
   .rank-card-main { display: flex; align-items: center; gap: 16px; margin: 10px 0; }
   .rank-card-main h2 { margin: 0; font-size: 24px; }
+  /* Task C.5: names the MARELO-vs-saved-PB distinction so it reads as
+     intentional, not as the two banners disagreeing by accident. */
+  .rank-card-note { margin: 0 0 10px; font-style: italic; }
   .rank-factors label { display: block; margin: 6px 0; font-size: 12px; color: var(--muted); }
   .rank-factors i {
     display: block; height: 8px; border-radius: 4px; background: var(--gold);
@@ -928,12 +931,27 @@
   .rank-table td {
     padding: 5px 8px; border-bottom: 1px solid var(--border-soft); vertical-align: middle;
   }
+  /* Column headers carry the "(pts)" unit ONCE per surface (task C.2) —
+     the score and gain cells below stay bare numbers, never repeating it
+     per row. */
+  .rank-table th {
+    padding: 4px 8px 6px; border-bottom: 1px solid var(--border-soft);
+    text-align: left; font-size: 11px; font-weight: 600; color: var(--muted);
+    white-space: nowrap;
+  }
   .rank-table tr.unpracticed .rank-cell-name { opacity: .55; }
   /* Excluded dims the WHOLE row (it counts nowhere); unpracticed dims only the
      name (gain_for's docstring: it should still read as a quest, not dead
      weight) — two different states, two different treatments. */
   .rank-table tr.is-excluded { opacity: .5; }
+  .rank-cell-points { text-align: right; white-space: nowrap; }
   .rank-cell-gain { color: var(--gold); text-align: right; white-space: nowrap; }
+  /* The next-rank column (task C.3) can run "Diamond III → Diamond IV" —
+     the longest string on the row; it gets the room a wrap would otherwise
+     take from the name column, and shrinks its type rather than reflow at
+     narrow widths (swept 900px in the harness, see task-c-report.md). */
+  .rank-cell-next { white-space: nowrap; font-size: 12px; }
+  @media (max-width: 640px) { .rank-cell-next { font-size: 11px; } }
   .objective-live-state {
     min-width: 0; min-height: 32px; display: flex; align-items: center; justify-content: center;
     gap: .4rem; color: var(--muted); border-inline: 1px solid var(--border-soft);

@@ -8,7 +8,7 @@ import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { rankColor } from "./ranks.js";
-import { Crest, fmtScore } from "./marelo.js";
+import { Crest, fmtPoints, fmtScore, toPoints } from "./marelo.js";
 import { Icon } from "./icons.js";
 import { PageState, InlineState } from "./states.js";
 import { useTween } from "../useTween.js";
@@ -208,6 +208,20 @@ export function HistoryChart({ points }) {
   </div>`;
 }
 
+// The breakdown's "next rank" column (task C.3): the single next STEP this
+// entity's own score is headed toward -- one division up within its tier,
+// or (already at the top division) the bottom division of the next tier --
+// sourced from `entity.next_tier`/`entity.next_division`, which the server
+// computes via `scoring.division_progress` against the entity's OWN ladder
+// (server/ranks_api.py::_score_scope). Never re-derived here: a second copy
+// of the division math in JS is exactly the kind of drift that would make
+// this column disagree with the Crest two columns to its left.
+function nextRankLabel(entity) {
+  if (entity.score == null) return `→ ${entity.next_tier}`;
+  if (!entity.next_tier) return "Maxed";
+  return `${entity.tier} ${entity.division} → ${entity.next_tier} ${entity.next_division}`;
+}
+
 function Breakdown({ data, routeOrder, onToggle }) {
   const [byGain, setByGain] = useState(!routeOrder);
   const rows = byGain
@@ -219,7 +233,15 @@ function Breakdown({ data, routeOrder, onToggle }) {
       <button type="button" class="chip" onclick=${() => setByGain(!byGain)}>
         ${byGain ? "Sort: biggest gain" : "Sort: route order"}</button>
     </div>
-    <table class="rank-table"><tbody>
+    <table class="rank-table">
+      <thead><tr>
+        <th>Entity</th><th>Rank</th>
+        <th class="rank-cell-points">Score (pts)</th>
+        <th>Next rank</th>
+        <th class="rank-cell-gain">Gain (pts)</th>
+        <th></th>
+      </tr></thead>
+      <tbody>
       ${rows.map((entity) => html`<tr class=${[
           entity.score == null ? "unpracticed" : "",
           entity.excluded ? "is-excluded" : ""].filter(Boolean).join(" ")}>
@@ -227,8 +249,9 @@ function Breakdown({ data, routeOrder, onToggle }) {
         <td>${entity.tier
           ? html`<${Crest} tier=${entity.tier} division=${entity.division} size=${22} />`
           : "–"}</td>
-        <td class="meta">${fmtScore(entity.score)}</td>
-        <td class="meta rank-cell-gain">+${entity.gain.toFixed(2)}</td>
+        <td class="meta rank-cell-points">${fmtPoints(entity.score)}</td>
+        <td class="meta rank-cell-next">${nextRankLabel(entity)}</td>
+        <td class="meta rank-cell-gain">+${toPoints(entity.gain)}</td>
         <td><button type="button" class="chip"
           onclick=${() => onToggle(entity.key, !entity.excluded)}
           title=${entity.excluded
@@ -236,7 +259,8 @@ function Breakdown({ data, routeOrder, onToggle }) {
             : "Exclude this from every rating"}>
           ${entity.excluded ? "Include" : "Ignore"}</button></td>
       </tr>`)}
-    </tbody></table>
+      </tbody>
+    </table>
   </div>`;
 }
 
@@ -329,10 +353,24 @@ export function RankPage({ t }) {
               <${Crest} tier=${data.tier} division=${data.division} size=${64} />
               <div>
                 <h2>${data.tier ? `${data.tier} ${data.division}` : "Unranked"}</h2>
-                <p class="meta">MARELO ${fmtScore(tweenedMarelo)} · next division at ${fmtScore(data.next_division_at)}</p>
+                <p class="meta">MARELO ${fmtPoints(tweenedMarelo)} pts · next division at ${fmtPoints(data.next_division_at)}</p>
               </div>
             </div>
+            <!-- Task C.5 (live report 2026-07-25): a user saw PLATINUM on a
+                 strategy banner next to Iron I here and filed it as a bug --
+                 it wasn't. MARELO auto-grades whatever the active rank
+                 mode's basis is on EVERY view; the practice card's PB banner
+                 only moves when you press its manual Save button. Naming
+                 that difference here is what turns "these disagree" into
+                 "these answer different questions" -- the no-friction MARELO
+                 behavior was a deliberate choice, not a bug to quietly fix. -->
+            <p class="meta rank-card-note">MARELO grades every attempt automatically —
+              it doesn't wait for a saved PB the way the practice card's rank banner does.</p>
             <div class="rank-factors">
+              <!-- Mastery stays 0-100 (task C.4): it's a MEAN SCORE, not a
+                   rating on the tier ladder (marelo = mastery x coverage),
+                   so running it through toPoints would imply a fourth scale
+                   that doesn't exist. fmtScore on purpose, not fmtPoints. -->
               <label>Mastery <i style=${`width:${tweenedMastery || 0}%`}></i>
                 <span class="meta">${fmtScore(tweenedMastery)} over ${data.practiced} practiced</span></label>
               <label>Coverage <i style=${`width:${tweenedCoveragePct || 0}%`}></i>

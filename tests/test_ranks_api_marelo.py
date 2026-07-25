@@ -44,7 +44,8 @@ def test_entities_carry_a_display_label_and_exclusion_state(client):
     body = client.get("/api/marelo").json()
     if body["entities"]:
         entity = body["entities"][0]
-        assert set(entity) >= {"key", "label", "score", "gain", "excluded"}
+        assert set(entity) >= {"key", "label", "score", "gain", "excluded",
+                               "next_tier", "next_division"}
         assert isinstance(entity["label"], str) and entity["label"]
 
 
@@ -361,3 +362,54 @@ def test_entity_tier_matches_rank_for_on_a_ragged_ladder(tmp_path):
         assert entity["score"] == 92.5
         assert entity["tier"] == classify.rank_for(ladder, 1050) == "Gold"
         assert entity["division"] == "I"
+
+
+# -- breakdown "next rank" column (task C) -----------------------------------
+
+def test_unpracticed_entity_next_rank_targets_gold_with_no_division(client):
+    """An entity with no score has nothing to be a division INTO yet -- only
+    the tier a first attempt targets is shown (spec's own example: "-> Gold",
+    no division)."""
+    body = client.get("/api/marelo").json()
+    entity = next(e for e in body["entities"] if e["key"] == "star:9:2")
+    assert entity["score"] is None
+    assert entity["next_tier"] == "Gold"
+    assert entity["next_division"] is None
+
+
+def test_practiced_entity_next_rank_is_one_division_step_not_a_whole_tier(
+        tmp_path):
+    client, svc = make_client(tmp_path)
+    with client:
+        asyncio.run(svc.set_strat(9, 2, "Nuts Pless"))
+        _mario_reset_and_collect(svc, 1000, 1420, 420)   # -> Iron I
+
+        body = client.get("/api/marelo").json()
+        entity = next(e for e in body["entities"] if e["key"] == "star:9:2")
+        defined = scoring.defined_tiers(scoring.best_ladder(
+            svc.ranks.ladders("star:9:2")))
+        # Recomputed from the same function the endpoint calls, not
+        # hand-derived -- the contract is "matches division_progress",
+        # never a guessed tier name.
+        expected = scoring.division_progress(entity["score"], defined)
+        assert entity["next_tier"] == expected["next_tier"]
+        assert entity["next_division"] == expected["next_division"]
+        # Iron I is not the top of the ladder, so there IS a next step.
+        assert entity["next_tier"] is not None
+
+
+def test_excluded_entitys_next_rank_reads_the_same_as_unpracticed(client):
+    """An excluded row is unscored too -- it just got there by choice, not by
+    never being played -- so its next-rank shape must match the unpracticed
+    case exactly, not read as broken/blank."""
+    before = client.get("/api/marelo").json()
+    if not before["entities"]:
+        return
+    key = before["entities"][0]["key"]
+    client.post("/api/marelo/exclude", json={"entity": key, "excluded": True})
+    after = client.get("/api/marelo").json()
+    row = next(e for e in after["entities"] if e["key"] == key)
+    assert row["excluded"] is True
+    assert row["next_tier"] == "Gold"
+    assert row["next_division"] is None
+    client.post("/api/marelo/exclude", json={"entity": key, "excluded": False})
