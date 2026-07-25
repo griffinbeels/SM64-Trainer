@@ -7,6 +7,8 @@ import { StratModal } from "./stratmodal.js";
 import { Icon } from "./icons.js";
 import { MareloBar } from "./marelo.js";
 import { celebrationsEnabled, setCelebrationsEnabled } from "./celebrate.js";
+import { GroupedPicker } from "./picker.js";
+import { parseStarId, starId, starOptionsFromCatalog } from "../entities.js";
 
 const html = htm.bind(h);
 
@@ -273,8 +275,6 @@ function TargetEditor({ t, close }) {
     close(); t.refresh();
   }
 
-  const courses = v.catalog.courses;
-  const stars = (courses.find((c) => c.id === Number(course)) || { stars: [] }).stars;
   const options = stratsFor(course, star);
 
   return html`<div class="target-editor-card" role="dialog" aria-modal="true"
@@ -285,12 +285,16 @@ function TargetEditor({ t, close }) {
           onclick=${close}><${Icon} name="close" /></button>
     </div>
     <div class="target-editor-fields">
-      <label>Course<select value=${course} onchange=${(e) => pickStar(e.target.value, 0)}>
-        ${courses.map((c) => html`<option value=${c.id}>${c.name}</option>`)}
-      </select></label>
-      <label>Star<select value=${star} onchange=${(e) => pickStar(course, e.target.value)}>
-        ${stars.map((name, i) => html`<option value=${i}>${name}</option>`)}
-      </select></label>
+      <label>Star<${GroupedPicker}
+        groups=${starOptionsFromCatalog(v.catalog)}
+        value=${starId(Number(course), Number(star))}
+        placeholder=${null}
+        onChange=${(id) => {
+          // One control, still two fields on the wire: unpack and reuse the
+          // existing pickStar so the strategy list re-resolves for the new star.
+          const picked = parseStarId(id);
+          pickStar(picked.course, picked.star);
+        }} /></label>
       <label>Strategy<select key=${`hstrat-${stratNonce}`} value=${strat}
           onchange=${(changeEvent) => changeEvent.target.value === "__new__"
             ? setShowStratModal(true) : setStrat(changeEvent.target.value)}>

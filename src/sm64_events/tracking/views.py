@@ -44,8 +44,9 @@ from sm64_events.stats.registry import (DEFAULT_STAT_MENU, REGISTRY,
                                         selection_order)
 from sm64_events.tracking.projection import DEFAULT_MIN_FRAMES, journal_id
 from sm64_events.tracking.routes import route_stats
-from sm64_events.tracking.segments import (arm_level, origin_view,
-                                            start_origin, time_bounds)
+from sm64_events.tracking.segments import (arm_level, course_groups,
+                                            origin_view, start_origin,
+                                            time_bounds)
 
 # Timeline markers (per-section event graph): outcomes that plot as points.
 # Adding a marker kind is one row here (+ a style row in ui timeline.js).
@@ -164,7 +165,12 @@ def _catalog() -> dict:
         n = max(star_count(cid), 1)
         courses.append({"id": cid, "name": cname,
                         "stars": [star_name(cid, s) for s in range(n)]})
-    return {"courses": courses}
+    # The SAME grouping vocab ships, so a catalog-driven picker (the practice
+    # target modal, the route step editor) files a star under the same castle
+    # region a vocab-driven one does (the segment builder). Pure and cheap, so
+    # computing it at import with the rest of the catalog is fine — but it must
+    # never grow a database dependency.
+    return {"courses": courses, "course_groups": course_groups()}
 
 
 _CATALOG = _catalog()
