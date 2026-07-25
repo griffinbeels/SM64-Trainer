@@ -736,6 +736,34 @@
   .marelo-track > i { display: block; height: 100%; }
   .marelo-split { white-space: nowrap; }
   @media (max-width: 900px) { .marelo-track, .marelo-split { display: none; } }
+  /* Rank-up celebration (celebrate.js): fixed overlay so it can never
+     reflow an OBS capture; pointer-events stay OFF on the overlay and ON
+     only for the card, so it never eats a click meant for the game. The
+     climb through every gained tier is JS state (RankUpOverlay's `step`),
+     not CSS -- only the fade-in and the final card's pop are real
+     animations, so those are the only things prefers-reduced-motion needs
+     to gate (same opt-in pattern as .starholder/.page-state above). z-index
+     sits above .modal-backdrop (200): a rank-up can land while a modal is
+     open and must still be seen. */
+  .rankup {
+    position: fixed; inset: 0; z-index: 210; display: flex;
+    align-items: center; justify-content: center; pointer-events: none;
+    background: radial-gradient(closest-side, color-mix(in srgb, var(--tier) 35%, transparent), transparent 70%);
+  }
+  .rankup-card {
+    pointer-events: auto; cursor: pointer; text-align: center;
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    padding: 26px 34px; border-radius: 16px;
+    background: rgba(11,25,41,.92); border: 2px solid var(--tier);
+    box-shadow: 0 0 60px color-mix(in srgb, var(--tier) 55%, transparent);
+  }
+  .rankup-card h2 { margin: 2px 0 0; font-size: 30px; color: var(--tier); }
+  @media (prefers-reduced-motion: no-preference) {
+    .rankup { animation: rankup-in .25s ease-out; }
+    .rankup-card.final { animation: rankup-pop .5s cubic-bezier(.2,1.6,.4,1); }
+    @keyframes rankup-in { from { opacity: 0 } to { opacity: 1 } }
+    @keyframes rankup-pop { from { transform: scale(.86) } to { transform: scale(1) } }
+  }
   /* Rank tab (rankpage.js): scope picker + card + chart + breakdown, all
      scaled off ONE scope response — no separate route/course/overall pages.
      --border-soft/--muted mirror the rest of the design system (this file
