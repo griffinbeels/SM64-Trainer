@@ -1,5 +1,6 @@
 # Intent — segment library categories from trigger origin
 
+**Status:** MERGED to main 2026-07-25 (`35304ba`, 29 commits, 1515 tests green)
 **Branch:** `feature/segment-origin-categories` (from `main` @ 9d278e3)
 **Spec:** `docs/superpowers/specs/2026-07-24-segment-origin-categories-design.md`
 
