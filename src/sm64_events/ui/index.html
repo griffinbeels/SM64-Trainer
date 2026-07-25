@@ -153,7 +153,21 @@
   .seg-end { border-color: #4a2f2f; } .seg-end .seghead { background: #291616; color: #ce8f8f; }
   .seg-guard { border-color: #4a3c2a; } .seg-guard .seghead { background: #292016; color: #cead7f; }
   .segclause { display: flex; flex-wrap: wrap; gap: .4rem; margin: .3rem 0; align-items: center; padding: .3rem .45rem; border-radius: 6px; }
-  .segclause select { max-width: 100%; min-width: 0; } /* min-width:0 required: flex min-width:auto = min-content, so a wide level name punches through the pane with max-width alone */
+  /* min-width:0 required: flex min-width:auto = min-content, so a wide level
+     name punches through the pane with max-width alone. flex-basis 12rem gives
+     the common names ("Bowser in the Dark World") room to render in full
+     instead of ellipsising at every width, and the row wraps rather than
+     squeezing them (live audit 2026-07-25). */
+  .segclause select {
+    max-width: 100%;
+    flex: 1 1 12rem;
+    /* min(12rem, 100%), not 0: the floor is what makes the ROW WRAP instead of
+       squeezing three selects into one line and ellipsising all of them. It
+       yields to the container below 12rem, so a narrow pane still never gets a
+       horizontal scrollbar — plain min-width:12rem would reintroduce exactly
+       that bug. */
+    min-width: min(12rem, 100%);
+  }
   .segword { color: #6c7686; font-size: .85em; }
   /* one tint per alternative clause (cycling): new color = new condition */
   .tint0 { background: #161d2b; border-left: 3px solid #4a6fa5; }
@@ -439,6 +453,15 @@
   select, input, textarea {
     border-color: #344b64; background: #0d1928; color: var(--text);
     min-height: 34px; padding: .32rem .5rem;
+  }
+  /* A <select>'s own dropdown arrow is drawn INSIDE its padding box, so with
+     symmetric padding a long option runs underneath it — "Bowser in the Dark
+     Worl⌄", clipped mid-word with the caret on top (live audit 2026-07-25).
+     Reserve the arrow's lane on the right and ellipsise instead of clipping,
+     so a name that does not fit ends in "…" clear of the caret. */
+  select {
+    padding-right: 1.6rem;
+    text-overflow: ellipsis;
   }
   /* Native <select> popup lists: Chromium derives the popup colors from the
      select itself, and several of ours are transparent — that produced a
