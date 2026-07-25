@@ -8,10 +8,10 @@ marked complete is DONE — do not re-dispatch it.
 
 | Wave | Task | State | Commits / notes |
 |---|---|---|---|
-| 1 | T1 addresses: `world_regions` BFS, MIPS table | dispatched | agent `t1-addresses` |
-| 1 | T2 `ui/group.js` `buildTree` | dispatched | agent `t2-grouptree` |
-| 2 | T3 `start_origin` + taxonomy (needs T1) | pending | |
-| 2 | T4 `GroupedList` + `.lib-cat` CSS (needs T2) | pending | |
+| 1 | T1 addresses: `world_regions` BFS, MIPS table | **complete** | `20ee546`, 18 tests in test_addresses.py |
+| 2 | T2 `ui/group.js` `buildTree` | **complete** | `5a4b734`, 3 node-driven tests (ran, not skipped) |
+| 2 | T3 `start_origin` + taxonomy (needs T1) | dispatched | agent `t3-origin` |
+| 2 | T4 `GroupedList` + `.lib-cat` CSS (needs T2) | dispatched | agent `t4-grouplist` |
 | 3 | T5 API stamp + override (needs T3) | pending | |
 | 3 | T6 routes.js migration (needs T2, T4) | pending | |
 | 3 | T7 corpus origin coverage test (needs T3) | pending | |
@@ -22,12 +22,20 @@ marked complete is DONE — do not re-dispatch it.
 
 ## Watch items (predicted breakage + the sanctioned remedy)
 
-- **Agent worktrees branch from `main`, not this branch** — the plan doc lives
-  only here. Every dispatch starts with
-  `git merge feature/segment-origin-categories --no-edit`, then cherry-pick
-  their task commits back (clean: tracks own disjoint files).
+- **`isolation: "worktree"` did NOT isolate (observed wave 1).** Both agents
+  ran in THIS checkout, on this branch, sharing one git index — T1 watched its
+  staged files get unstaged and a neighbour's untracked files appear staged
+  alongside its own. Nothing was lost (both commits are clean), but the
+  remedy is now mandatory in every dispatch: commit with an explicit PATHSPEC
+  (`git commit -F - -- <exact paths>`), which takes the working-tree content of
+  those paths and ignores whatever else sits in the shared index, then confirm
+  with `git show --stat HEAD`. No merging, no branch creation — the branch is
+  already correct.
 - **T8's `originLevels` keys the region level on `String(origin.region)`**, so
   a null region becomes `"null"` and matches the taxonomy's trailing
   `{key: null}` entry. Intended; change both sides or neither.
 - **`index.html` is owned by T4, then T9.** No other task may edit it.
+- **Between T4 and T6 the route library is transiently unstyled** — T4 deletes
+  the `.route-cat*` CSS while routes.js still emits those classes. T6 (same
+  wave) is what closes it; do not ship the branch with T6 unlanded.
 - **`segments.js` is owned by T8, then T9** — never concurrently.
