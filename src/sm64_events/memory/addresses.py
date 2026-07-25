@@ -11,6 +11,7 @@ they pass that harness. Cross-check sources on mismatch:
   - SM64 decomp US symbol map (sm64.us.map build artifact)
   - STROOP mapping tables (github.com/SM64-TAS-ABC/STROOP)
 """
+from functools import lru_cache
 
 KSEG0_BASE = 0x80000000
 RDRAM_MIN_SIZE = 0x400000   # 4 MB; vanilla SM64 runs without the expansion pak
@@ -498,8 +499,14 @@ BOWSER_STAGE_LEVELS = frozenset({17, 19, 21, BOWSER_1_ARENA,
 CASTLE_SECRET_STAR_AREAS = {3: AREA_BASEMENT, 4: AREA_BASEMENT}  # MIPS 1st/2nd
 
 
+@lru_cache(maxsize=1)
 def world_regions() -> dict[str, str]:
     """Every world node -> the castle-region node it belongs to.
+
+    Cached (review M10): `region_for_node` calls this once per segment, so an
+    uncached `GET /api/segments` reran the full BFS ~65 times a request. Safe
+    to cache because every input (WORLD_EDGES_*, CASTLE_REGION_NODES) is a
+    module constant, never mutated at runtime.
 
     BFS out from CASTLE_REGION_NODES over the same WORLD_EDGES_* tables the
     builder's dropdown filtering uses, treating one-way edges as undirected
