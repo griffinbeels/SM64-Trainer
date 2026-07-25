@@ -25,6 +25,17 @@ export function useTracker() {
   // being tuned (2026-07-24). Client display preference like starIcons.
   const [showDust, setShowDust] = useState(
     localStorage.getItem("sm64.showDust") === "1");
+  // Course portrait manifest (stem -> filename) from GET /api/icons/courses.
+  // Fetched ONCE: the set only changes with the install. Empty object until it
+  // lands, which the icon chain treats as "no portrait" and falls back to star
+  // art — so a slow fetch degrades to the same art the four painting-less
+  // courses use, never to a broken image.
+  const [courseIcons, setCourseIcons] = useState({});
+  useEffect(() => {
+    getJSON("/api/icons/courses")
+      .then((payload) => setCourseIcons(payload.courses || {}))
+      .catch(() => {});      // no portraits is a survivable state
+  }, []);
   const [feed, setFeed] = useState([]);
   const [connected, setConnected] = useState(false);
   // armedOrder: live armed membership (drives the honest "armed" chip) —
@@ -252,7 +263,7 @@ export function useTracker() {
     localStorage.setItem("sm64.showDust", on ? "1" : "0"); setShowDust(on); };
   const armedSegs = new Set(armedOrder);
   return { view, clock, pickClock, scope, pickScope, feed, connected,
-           starIcons, pickStarIcons, showDust, pickShowDust,
+           starIcons, pickStarIcons, showDust, pickShowDust, courseIcons,
            refresh, paused: pauseState.paused,
            pauseReason: pauseState.reason, togglePause,
            armedSegs, armedOrder, armedNames, lastPinnedSeg, stage,
