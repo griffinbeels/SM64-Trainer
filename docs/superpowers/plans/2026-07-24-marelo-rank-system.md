@@ -747,7 +747,9 @@ def _from_key(key: int) -> tuple[str, str]:
     return tier, scoring.DIVISION_NUMERALS[division_index]
 ```
 
-Note: `scoring` must re-export `RANK_NAMES` for `_from_key`. Add to the top of `ranks/scoring.py`, immediately after the import:
+Note: `_from_key` needs `scoring.RANK_NAMES`. **Task 1 already added that
+`__all__` re-export** — open `ranks/scoring.py`, confirm the block below is
+present, and move on. Do NOT add a second one.
 
 ```python
 __all__ = ["SCORE_ANCHORS", "TOP_SCORE", "DIVISIONS_PER_TIER",
@@ -755,6 +757,9 @@ __all__ = ["SCORE_ANCHORS", "TOP_SCORE", "DIVISIONS_PER_TIER",
            "score_for", "tier_from_score", "tier_band", "division_for",
            "progression_key", "next_tier_target"]
 ```
+
+This task otherwise creates `ranks/scopes.py` only — `ranks/scoring.py` is
+Task 1's file and needs no edit here.
 
 - [ ] **Step 4: Run test to verify it passes**
 
