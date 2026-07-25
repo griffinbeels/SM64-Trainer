@@ -66,8 +66,14 @@ def test_library_groups_by_origin_through_the_shared_primitives():
 
 def test_library_groups_come_from_the_server_stamp_not_a_js_copy():
     # The JS must never re-derive region membership — one taxonomy, server-side.
+    # Name the DERIVATION artifacts, not the word "WORLD_EDGES": that string
+    # legitimately appears in prose (the dropdown filter's comment cites
+    # addresses.WORLD_EDGES_* by name, which is what makes it greppable), and
+    # an assertion that cannot tell code from a comment gets "fixed" by
+    # rewording the comment — which is exactly what happened once.
     assert "origin.region" in SEGMENTS_JS_SOURCE or "origin || {}" in SEGMENTS_JS_SOURCE
-    assert "WORLD_EDGES" not in SEGMENTS_JS_SOURCE
+    for derivation in ("world_regions", "CASTLE_REGION", "region_for_node"):
+        assert derivation not in SEGMENTS_JS_SOURCE, derivation
 
 
 def test_search_opens_matching_groups():

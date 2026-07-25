@@ -18,8 +18,8 @@ const html = htm.bind(h);
 // --- world-topology option filtering (vocab.connections + param `flow`) ----
 // level_enter/level_exit params carry a `flow` annotation ({role, peer,
 // peer_subarea} — tracking/segments.py): once the OTHER side of the move is
-// picked, this side's dropdown only offers world-possible options (the
-// world-edge topology tables in addresses.py). "dest" params filter by the source's
+// picked, this side's dropdown only offers world-possible options
+// (addresses.WORLD_EDGES_*). "dest" params filter by the source's
 // SUCCESSORS, "source" params by the destination's PREDECESSORS. UI-only —
 // a stored value the topology disagrees with stays selectable (ParamInput
 // keeps the current value in the list) so legacy defs never blank out.
