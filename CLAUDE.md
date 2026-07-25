@@ -121,9 +121,5 @@ Contract changes land on main first, then dependent work fans out. Merge with
   cross-cutting knowledge — link, don't duplicate
 - commit messages explain WHY (follow the style in `git log`)
 
-**Wrap up a feature:** after the merge, run the `create-artifacts` skill —
-it routes the session's mistakes, review findings, and unverified assumptions
-into tests, hooks, point-of-use comments, docs, skills, and memories.
-
 **Build a UI / consumer:** speak only to the API — `ws://…/ws/events` (schema
 in README), `GET /state` for initial state, `GET /health` for liveness.
