@@ -48,11 +48,14 @@ changes that. Icons therefore require replacing the native control.
    rather than seven times.
 4. **Star row art follows the existing `starIcons` preference** — per-star
    course icons or the classic gold star, the user's existing setting.
-5. **The four missing course portraits fall back silently.** No TODO, no
-   marker: the fallback resolves to real art. Which four MOVED during design:
-   `sl.webp` was mislabelled and is actually CCM (user, 2026-07-25), so the
-   gaps are HMC, SSL, DDD and SL. That the correction was a file rename and
-   not a code change is the fallback chain doing its job.
+5. **Four courses have no portrait, and never will.** HMC, SSL, DDD and SL are
+   not entered through a painting in the game, so no portrait art exists to
+   find (user, 2026-07-25 — they run this game; do not go looking for these
+   files or file a TODO to source them). They resolve to their star-1 icon,
+   which is real art. This is the permanent answer, not a placeholder.
+   (Which four they are moved during design: `sl.webp` was mislabelled and is
+   actually CCM. That the correction was a file RENAME and not a code change is
+   the fallback chain doing its job.)
 
 ## 1. The component
 
@@ -96,8 +99,9 @@ star, under the same setting, and the segment picker shows the same art the
 banner shows for that segment. No second source of truth for entity art.
 
 **The four courses without a portrait (HMC, SSL, DDD, SL) resolve to their
-star-1 icon** — real art, so they read as intentional. Dropping those portraits
-in later needs no code change (§3).
+star-1 icon** — real art, so they read as intentional, which they are: those
+courses are not entered through a painting, so the portrait does not exist to
+ship (§Decisions 5). The fallback is the final state for them.
 
 ## 3. Keyboard and focus — specified, not left to taste
 
@@ -122,10 +126,11 @@ served tree) moves to `src/sm64_events/ui/assets/course_icons/`, which
 
 Extensions are mixed (`.webp` and `.png`), so the client must not guess:
 **`GET /api/icons/courses`** returns the directory listing, exactly as
-`GET /api/icons` already does for `star_icons`. Consequence: the four missing
-portraits — and any future re-art — appear by dropping files in the folder,
-with no code change. That property is the reason for the endpoint; a hardcoded
-extension map would forfeit it.
+`GET /api/icons` already does for `star_icons`. Consequence: re-art, a
+higher-resolution rip, or a portrait for a course that gains one appears by
+dropping the file in the folder, with no code change. That property is the
+reason for the endpoint; a hardcoded extension map would forfeit it. It is NOT
+there to await HMC/SSL/DDD/SL — those four have no painting in the game.
 
 ## 5. What this replaces
 
