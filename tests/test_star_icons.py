@@ -194,11 +194,13 @@ def _pixel_size(path):
     return (bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1
 
 
-# Portraits render in ~104px picker cells, so a 2x-DPI display asks for ~208px
-# of real art. Everything ripped properly is 500-740px; these two came in at
-# thumbnail size and visibly blur next to their neighbours. Listed rather than
-# silently tolerated — replace the art and delete the entry (audit 2026-07-25).
-KNOWN_LOW_RES_PORTRAITS = {"ttc.webp": (64, 64), "rr.png": (100, 100)}
+# Portraits render in ~104px picker cells and up to ~174px in the practice
+# banner, so a 3x-DPI display asks for ~520px of real art. The set is 500-740px
+# and this dict is EMPTY, which is the state worth defending: ttc (64x64) and rr
+# (100x100) shipped as thumbnails that visibly blurred next to their neighbours
+# until they were re-ripped at 600x600 (audit 2026-07-25). Name an exception
+# here only with the same intent — a stopgap someone is going to replace.
+KNOWN_LOW_RES_PORTRAITS = {}
 MIN_PORTRAIT_PIXELS = 256
 
 
