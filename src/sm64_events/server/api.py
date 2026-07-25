@@ -107,6 +107,19 @@ def _icon_stems() -> list[str]:
 # restart.
 _COURSE_ICON_DIR = Path(__file__).resolve().parents[1] / "ui" / "assets" / "course_icons"
 
+# Windows drops a Thumbs.db into any folder whose thumbnails get previewed, and
+# the staging copy of this art already has one. Listing it would invent a
+# "Thumbs" course whose portrait 404s, so the map takes image files only.
+_IMAGE_SUFFIXES = frozenset({".png", ".webp", ".jpg", ".jpeg", ".gif", ".avif"})
+
+
+def _course_icon_map(directory: Path) -> dict[str, str]:
+    """stem -> filename for every image in a course-portrait directory."""
+    if not directory.is_dir():
+        return {}
+    return {path.stem: path.name for path in sorted(directory.iterdir())
+            if path.is_file() and path.suffix.lower() in _IMAGE_SUFFIXES}
+
 
 # User-uploaded icons (spec addendum 2026-07-24): any image file, stored in
 # the DATA dir (core/paths.user_icons_dir — survives app updates), referenced
@@ -601,11 +614,7 @@ def create_api_router(service) -> APIRouter:
         entered through a painting, so the game has no portrait for them. The
         UI falls back to their star-1 icon (ui/entities.js optionIcon).
         """
-        if not _COURSE_ICON_DIR.is_dir():
-            return {"courses": {}}
-        return {"courses": {path.stem: path.name
-                            for path in sorted(_COURSE_ICON_DIR.iterdir())
-                            if path.is_file()}}
+        return {"courses": _course_icon_map(_COURSE_ICON_DIR)}
 
     @router.post("/icons/upload")
     async def icon_upload(name: str, request: Request):

@@ -18,6 +18,7 @@ Also pins the scale-to-fit contract: the selector row must never regrow a
 horizontal scrollbar (the 2026-07-24 UX fix this shipped with).
 """
 import re
+import struct
 from pathlib import Path
 
 UI = Path(__file__).resolve().parents[1] / "src" / "sm64_events" / "ui"
@@ -168,3 +169,45 @@ def test_special_and_substitute_stems_all_have_a_real_file():
             continue
         missing.append(stem)
     assert not missing, f"no art file for {missing}"
+
+
+def _pixel_size(path):
+    """(width, height) from a PNG or WEBP header — the two formats we ship.
+
+    Deliberately raises on anything else instead of returning a pass: a new
+    format silently reporting "fine" is how the floor below stops meaning
+    anything.
+    """
+    data = path.read_bytes()
+    if path.suffix.lower() == ".png":
+        return struct.unpack(">II", data[16:24])
+    assert path.suffix.lower() == ".webp", f"unhandled format: {path.name}"
+    chunk = data[12:16]
+    if chunk == b"VP8X":
+        return (int.from_bytes(data[24:27], "little") + 1,
+                int.from_bytes(data[27:30], "little") + 1)
+    if chunk == b"VP8 ":
+        return (int.from_bytes(data[26:28], "little") & 0x3FFF,
+                int.from_bytes(data[28:30], "little") & 0x3FFF)
+    assert chunk == b"VP8L", f"unhandled webp chunk {chunk!r} in {path.name}"
+    bits = int.from_bytes(data[21:25], "little")
+    return (bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1
+
+
+# Portraits render in ~104px picker cells, so a 2x-DPI display asks for ~208px
+# of real art. Everything ripped properly is 500-740px; these two came in at
+# thumbnail size and visibly blur next to their neighbours. Listed rather than
+# silently tolerated — replace the art and delete the entry (audit 2026-07-25).
+KNOWN_LOW_RES_PORTRAITS = {"ttc.webp": (64, 64), "rr.png": (100, 100)}
+MIN_PORTRAIT_PIXELS = 256
+
+
+def test_course_portraits_are_big_enough_for_the_grid():
+    small = {}
+    for path in sorted((UI / "assets" / "course_icons").iterdir()):
+        width, height = _pixel_size(path)
+        if min(width, height) < MIN_PORTRAIT_PIXELS:
+            small[path.name] = (width, height)
+    assert small == KNOWN_LOW_RES_PORTRAITS, (
+        "course portraits below the grid's render size changed: "
+        f"{small} vs the known set {KNOWN_LOW_RES_PORTRAITS}")
