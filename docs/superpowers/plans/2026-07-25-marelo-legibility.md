@@ -94,6 +94,41 @@ GET /api/marelo/summary -> {"chips": [
 
 ---
 
+---
+
+## Task E: Make the two ranks self-explanatory (live report 2026-07-25)
+
+A user set a PB and saw **PLATINUM** on the strategy banner next to **Iron I** on the entity tag, and filed it as mislabelling. It is not — confirmed against the data: their strategy ("WK Over Wall", Mario 17.56) is slow, while the star's fastest ("Sign Clip", Mario 13.06 / Bronze 16.33) makes their 17.93s an Iron time on the best-possible ladder. Both numbers correct; the card never says they answer different questions.
+
+Also reported on a second card: "am I Silver V or Silver I?" — the banner shows a bare tier while the tag shows a division, so the two read as contradictory.
+
+Requirements: the entity rank names the star's fastest strategy (turning confusion into "here is what to learn next"); both ranks are labelled with what they grade; and the strategy banner gains its missing division, sourced from the server (never re-derived in JS).
+
+## Task F: Celebrate every threshold, and tween every number
+
+Two live reports: nothing celebrated when a star improved, and the one celebration that did fire (a scope Iron I → Bronze V) was over too fast and never showed the before → after transition.
+
+### F1 — server: per-entity rank-up detection
+
+Only the scope can celebrate today; the spec called for entity-level too and the plan dropped it. Per-entity watermarks, evaluated over the **full** rankable corpus so an out-of-route improvement still fires, acked the same way scope celebrations are. Seeding must stay silent, and building a payload must never raise a watermark.
+
+### F2 — one tween primitive, used everywhere
+
+Every numeric surface animates **from its previous value**, never appearing at the new one: the strategy banner bar, mastery and coverage bars, the header MARELO track, and the rating number itself (counting up). One shared hook; no component rolls its own. `prefers-reduced-motion` snaps instead of animating.
+
+### F3 — celebration intensity, matched to what happened
+
+| Event | Treatment |
+|---|---|
+| Entity **division**-up | inline pop on that card's rank display |
+| Entity **tier**-up | **a toast on the active-target card itself, at the rank display** — user decision 2026-07-25: the rank-up belongs where the rank already lives, not in a detached corner |
+| Scope **division**-up | medium overlay |
+| Scope **tier**-up | the grand one: bar fills to the crossing point, then the crest turns over, then a long dismissible hold |
+
+The tiering exists so the rare event outranks the common one — a full-screen overlay every few minutes of grinding one star stops meaning anything.
+
+Constraints carried from the shipped overlay: fixed-position, never steals a click (the user plays with this on screen), honours the settings toggle, honours `prefers-reduced-motion`.
+
 ## Verification for the whole pass
 
 - `uv run pytest -q` ≥ 1896.
