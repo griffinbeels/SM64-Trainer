@@ -5,16 +5,24 @@ import { send } from "../api.js";
 import { RANK_MODE_OPTIONS } from "./ranks.js";
 import { StratModal } from "./stratmodal.js";
 import { Icon } from "./icons.js";
+import { MareloBar } from "./marelo.js";
+import { celebrationsEnabled, setCelebrationsEnabled } from "./celebrate.js";
 import { GroupedPicker } from "./picker.js";
 import { parseStarId, starId, starOptionsFromCatalog } from "../entities.js";
 
 const html = htm.bind(h);
 
-export function Header({ t, settingsOpen, closeSettings }) {
+export function Header({ t, settingsOpen, closeSettings, setTab }) {
   const v = t.view;
   const tgt = v && v.target;
   const [editing, setEditing] = useState(false);
   const [restarting, setRestarting] = useState(false);
+  const [celebrateOn, setCelebrateOn] = useState(celebrationsEnabled());
+
+  // marelo is store-owned (store.js) -- app.js reads the same object to
+  // decide whether the rank-up overlay is showing, so the header and the
+  // overlay can never disagree about a pending celebration.
+  const openMarelo = () => setTab("Rank");
 
   useEffect(() => {
     if (!settingsOpen && !editing) return;
@@ -138,6 +146,10 @@ export function Header({ t, settingsOpen, closeSettings }) {
       </label>
     </div>
 
+    <div class="marelo-row">
+      <${MareloBar} marelo=${t.marelo} onOpen=${openMarelo} />
+    </div>
+
     ${editing && v && html`<div class="context-editor">
       <${TargetEditor} t=${t} close=${() => setEditing(false)} />
     </div>`}
@@ -185,6 +197,17 @@ export function Header({ t, settingsOpen, closeSettings }) {
           </label>
           <p class="settings-note">Per-star icons show each star's
             split-icon artwork in the course selector row.</p>
+          <label class="settings-field">
+            <span>Celebrate rank-ups</span>
+            <input type="checkbox" checked=${celebrateOn}
+                onchange=${(e) => {
+                  setCelebrationsEnabled(e.target.checked);
+                  setCelebrateOn(e.target.checked);
+                }} />
+          </label>
+          <p class="settings-note">Show a full-screen crest climb when your
+            MARELO rank rises. The rank-up is acknowledged either way, so
+            turning this off never leaves one waiting to fire later.</p>
           <label class="settings-field">
             <span>Dust-trick counts</span>
             <input type="checkbox" checked=${t.showDust}

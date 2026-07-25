@@ -700,9 +700,21 @@
       color-mix(in srgb, var(--rank-glow, transparent) 34%, transparent),
       transparent 88%);
   }
-  .rank-slot { min-width: 0; overflow: hidden; }
-  .rank-slot .meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .rank-banner { min-width: 0; display: grid; gap: .34rem; }
+  /* Flex row, not block stacking: the entity medal (EntityRankTag) sits
+     BESIDE the strategy medal (RankBanner), not below it -- "two questions,
+     two numbers" reads as one line. RankBanner grows/shrinks with the
+     available width (its own children already ellipsis); the entity tag is
+     short and fixed so it never gets squeezed off. */
+  .rank-slot { min-width: 0; overflow: hidden; display: flex; align-items: center; gap: .6rem; }
+  .rank-slot .meta { min-width: 0; flex: 1 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rank-banner { min-width: 0; flex: 1 1 auto; display: grid; gap: .34rem; }
+  /* EntityRankTag: compact, never shrinks, separated from the strat medal by
+     a hairline so the two numbers read as distinct answers. */
+  .entity-rank {
+    flex: 0 0 auto; display: inline-flex; align-items: center; gap: .4rem;
+    white-space: nowrap; padding-left: .6rem; border-left: 1px solid var(--border-soft);
+  }
+  .entity-rank b { font-weight: 800; letter-spacing: .3px; font-size: .82rem; }
   .rank-banner-row {
     min-width: 0; display: flex; align-items: center; gap: .55rem;
     white-space: nowrap; overflow: hidden;
@@ -716,6 +728,91 @@
     background: rgba(4,13,23,.72);
   }
   .rank-progress-track i { display: block; height: 100%; border-radius: inherit; }
+  /* MARELO header bar: its own row below the session/target/clock/rank grid
+     rather than a 5th grid column -- .context-bar's 4-column template is
+     redefined at two breakpoints (1180px, 760px) and adding a column would
+     mean touching all three; a second flex row is additive and matches the
+     same centered width formula. --border/rgba(11,25,41,.92) mirror
+     .context-control's panel styling (this design system has no --panel or
+     --line token). Fixed 44px height so a rank-up never reflows the OBS
+     capture. */
+  .marelo-row {
+    width: calc(100% - 28px); max-width: 1472px; margin: 8px auto 0;
+    display: flex; justify-content: flex-end;
+  }
+  .marelo-bar {
+    display: flex; align-items: center; gap: 10px; height: 44px; padding: 0 12px;
+    border: 1px solid var(--border); border-radius: 7px; background: rgba(11,25,41,.92);
+    color: var(--text); cursor: pointer; flex: 0 0 auto;
+  }
+  .marelo-bar:hover { border-color: var(--gold); }
+  .marelo-crest {
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 6px; background: var(--crest); color: #0d1220; flex: 0 0 auto;
+    box-shadow: 0 0 0 2px rgba(255,255,255,.18) inset;
+  }
+  .marelo-bar-text { display: flex; flex-direction: column; line-height: 1.15; text-align: left; }
+  .marelo-track {
+    width: 96px; height: 6px; border-radius: 3px; background: rgba(255,255,255,.12);
+    overflow: hidden; flex: 0 0 auto;
+  }
+  .marelo-track > i { display: block; height: 100%; }
+  .marelo-split { white-space: nowrap; }
+  @media (max-width: 900px) { .marelo-track, .marelo-split { display: none; } }
+  /* Rank-up celebration (celebrate.js): fixed overlay so it can never
+     reflow an OBS capture; pointer-events stay OFF on the overlay and ON
+     only for the card, so it never eats a click meant for the game. The
+     climb through every gained tier is JS state (RankUpOverlay's `step`),
+     not CSS -- only the fade-in and the final card's pop are real
+     animations, so those are the only things prefers-reduced-motion needs
+     to gate (same opt-in pattern as .starholder/.page-state above). z-index
+     sits above .modal-backdrop (200): a rank-up can land while a modal is
+     open and must still be seen. */
+  .rankup {
+    position: fixed; inset: 0; z-index: 210; display: flex;
+    align-items: center; justify-content: center; pointer-events: none;
+    background: radial-gradient(closest-side, color-mix(in srgb, var(--tier) 35%, transparent), transparent 70%);
+  }
+  .rankup-card {
+    pointer-events: auto; cursor: pointer; text-align: center;
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    padding: 26px 34px; border-radius: 16px;
+    background: rgba(11,25,41,.92); border: 2px solid var(--tier);
+    box-shadow: 0 0 60px color-mix(in srgb, var(--tier) 55%, transparent);
+  }
+  .rankup-card h2 { margin: 2px 0 0; font-size: 30px; color: var(--tier); }
+  @media (prefers-reduced-motion: no-preference) {
+    .rankup { animation: rankup-in .25s ease-out; }
+    .rankup-card.final { animation: rankup-pop .5s cubic-bezier(.2,1.6,.4,1); }
+    @keyframes rankup-in { from { opacity: 0 } to { opacity: 1 } }
+    @keyframes rankup-pop { from { transform: scale(.86) } to { transform: scale(1) } }
+  }
+  /* Rank tab (rankpage.js): scope picker + card + chart + breakdown, all
+     scaled off ONE scope response — no separate route/course/overall pages.
+     --border-soft/--muted mirror the rest of the design system (this file
+     has no --line or --dim token, despite what an earlier draft assumed). */
+  .rank-page { display: flex; flex-direction: column; gap: 14px; }
+  .rank-card-main { display: flex; align-items: center; gap: 16px; margin: 10px 0; }
+  .rank-card-main h2 { margin: 0; font-size: 24px; }
+  .rank-factors label { display: block; margin: 6px 0; font-size: 12px; color: var(--muted); }
+  .rank-factors i {
+    display: block; height: 8px; border-radius: 4px; background: var(--gold);
+    margin: 3px 0; max-width: 100%;
+  }
+  .rank-chart { width: 100%; height: auto; max-height: 240px; }
+  .rank-breakdown-head {
+    display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;
+  }
+  .rank-table { width: 100%; border-collapse: collapse; }
+  .rank-table td {
+    padding: 5px 8px; border-bottom: 1px solid var(--border-soft); vertical-align: middle;
+  }
+  .rank-table tr.unpracticed .rank-cell-name { opacity: .55; }
+  /* Excluded dims the WHOLE row (it counts nowhere); unpracticed dims only the
+     name (gain_for's docstring: it should still read as a quest, not dead
+     weight) — two different states, two different treatments. */
+  .rank-table tr.is-excluded { opacity: .5; }
+  .rank-cell-gain { color: var(--gold); text-align: right; white-space: nowrap; }
   .objective-live-state {
     min-width: 0; min-height: 32px; display: flex; align-items: center; justify-content: center;
     gap: .4rem; color: var(--muted); border-inline: 1px solid var(--border-soft);
@@ -1555,6 +1652,24 @@
   .stdtools { min-width: 0; flex-wrap: wrap; gap: .4rem; }
   .stdtools button { min-height: 31px; font-size: .71rem; }
   .stdtools .is-selected { color: var(--gold-soft); border-color: #806d34; }
+
+  /* "You are here" marker (standards.js markerPosition). A cell highlight
+     would be a lie -- your time is essentially never AT a cutoff -- so the
+     label lives on the active column's header instead of floating a row
+     between two cutoffs: at narrow table widths (<= ~900px, live-tested)
+     a floating row's label collided with the cutoff time on the same row,
+     illegibly. The two cutoffs actually bracketing your time get their own
+     mark; every easier tier below that (already running faster than) reads
+     as beaten. */
+  .std-you-badge {
+    display: block; margin-top: 2px; font-size: 10px; font-weight: 600;
+    color: var(--gold); white-space: nowrap;
+  }
+  /* background, not box-shadow: .col-active already owns box-shadow on this
+     cell (the active-column outline), and two box-shadow rules of equal
+     specificity don't combine -- the later one simply wins outright. */
+  .std-marker-bracket { background: color-mix(in srgb, var(--gold) 22%, transparent); }
+  .std-beaten { background: color-mix(in srgb, var(--gold) 8%, transparent); }
 
   .update-summary {
     min-height: 54px; display: flex; align-items: center; gap: .7rem;

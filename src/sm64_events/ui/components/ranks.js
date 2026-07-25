@@ -75,3 +75,16 @@ export function RankBanner({ banner }) {
     </div>
   </div>`;
 }
+
+// The star's OWN rank, beside the strategy's. Two questions, two numbers:
+// the strat medal says how well you run THIS strat, this one says how close
+// that is to the fastest the star can be. Absent (not "–") when the entity
+// has no standards, so a segment without a ladder shows nothing rather than
+// implying it was graded and failed.
+export function EntityRankTag({ entityRank }) {
+  if (!entityRank) return null;
+  return html`<span class="entity-rank" title=${`Star rank — best strategy possible · score ${entityRank.score}`}>
+    <${Medal} rank=${entityRank.tier} size=${18} />
+    <b>${entityRank.tier} ${entityRank.division}</b>
+  </span>`;
+}

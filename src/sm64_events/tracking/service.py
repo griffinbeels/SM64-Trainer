@@ -896,6 +896,86 @@ class TrackerService:
                                              frame=0, timestamp_utc=_now(),
                                              payload={"mode": mode}))
 
+    # ---- MARELO: rank exclusions + celebration watermarks -------------------
+    def rank_excluded(self) -> set[str]:
+        """Entity keys the user has opted out of ranking entirely -- they
+        leave the numerator AND denominator of every scope. ui_state KV
+        `rank_excluded`, not the standards store: this is user preference,
+        and rank_standards.json is community data the bundled-seed reconcile
+        overwrites on upgrade, which would silently discard the opt-out."""
+        if self.db is None:
+            return set()
+        return set(self.db.get_state("rank_excluded", []))
+
+    async def set_rank_excluded(self, entity_key: str, excluded: bool) -> None:
+        """Broadcast-only like set_rank_mode/set_icon -- a display/scoring
+        preference, never journaled."""
+        if self.db is None:
+            raise RuntimeError("tracking database unavailable")
+        current = self.rank_excluded()
+        if excluded:
+            current.add(entity_key)
+        else:
+            current.discard(entity_key)
+        self.db.set_state("rank_excluded", sorted(current))
+        await self.broadcaster.publish(Event(
+            type="marelo_changed", frame=0, timestamp_utc=_now(),
+            payload={"entity": entity_key, "excluded": excluded}))
+
+    def marelo_watermarks(self) -> dict[str, int]:
+        """{scope_id: progression_key} -- the highest rank each scope has
+        been SEEN at. `ranks.scopes.celebration_delta` fires a celebration
+        only above it."""
+        if self.db is None:
+            return {}
+        return self.db.get_state("marelo_watermarks", {})
+
+    async def ack_celebration(self, scope_id: str, key: int) -> None:
+        """Raise a watermark -- but only once the UI has actually SHOWN the
+        rank-up, never when the payload is built. Written at build time
+        instead, a client that fetches and never renders (a dead tab, a poll
+        that beat the popup) would silently swallow the celebration. Guarded
+        like sync_watermark/seed_watermark so a stale or repeated ack can
+        never move it; broadcasts only on a real raise, so the OTHER open
+        client (browser/GUI parity, rule 10) dismisses the same celebration
+        instead of showing it a second time."""
+        if self.db is None:
+            raise RuntimeError("tracking database unavailable")
+        watermarks = self.marelo_watermarks()
+        if key > watermarks.get(scope_id, -1):
+            watermarks[scope_id] = int(key)
+            self.db.set_state("marelo_watermarks", watermarks)
+            await self.broadcaster.publish(Event(
+                type="marelo_changed", frame=0, timestamp_utc=_now(),
+                payload={"scope_id": scope_id, "key": key}))
+
+    def sync_watermark(self, scope_id: str, key: int) -> None:
+        """Follow a rank DOWN silently so re-climbing celebrates again.
+        Never raises (only ack_celebration does, gated on the UI having
+        shown it) and never CREATES a watermark (only seed_watermark does)
+        -- a scope with no watermark yet has nothing to drop from. Called
+        inline while building the /marelo payload, so deliberately sync/
+        broadcast-free: the response itself is the notification."""
+        if self.db is None:
+            return
+        watermarks = self.marelo_watermarks()
+        if scope_id in watermarks and key < watermarks[scope_id]:
+            watermarks[scope_id] = int(key)
+            self.db.set_state("marelo_watermarks", watermarks)
+
+    def seed_watermark(self, scope_id: str, key: int) -> None:
+        """Record a scope's FIRST observed rank without celebrating it -- a
+        first rank is not a rank-UP. Without this, the first view of any
+        scope would fire a celebration for every tier ever earned. No-op
+        once a watermark already exists for the scope; only ack_celebration
+        is allowed to raise one after that."""
+        if self.db is None:
+            return
+        watermarks = self.marelo_watermarks()
+        if scope_id not in watermarks:
+            watermarks[scope_id] = int(key)
+            self.db.set_state("marelo_watermarks", watermarks)
+
     # -- run lifecycle ---------------------------------------------------------
     async def _arm_run(self, route_id: int, void_active: bool = False) -> None:
         """Build and publish run_started. When void_active=True the payload

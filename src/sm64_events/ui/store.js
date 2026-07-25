@@ -5,7 +5,7 @@ import { getJSON, send } from "./api.js";
 const REFRESH_ON = new Set(["attempt_completed", "attempts_invalidated",
   "pb_saved", "pb_undone", "session_started", "target_changed",
   "star_collected", "strat_set", "rank_standards_changed",
-  "rank_mode_changed", "icons_changed"]);
+  "rank_mode_changed", "icons_changed", "marelo_changed", "route_selected"]);
 const RUN_REFRESH_ON = new Set(["run_started", "run_progress",
   "run_finished", "run_aborted", "game_reset"]);
 
@@ -54,6 +54,33 @@ export function useTracker() {
     try { setRun(await getJSON("/api/run")); } catch (e) { /* keep last */ }
   }, []);
   useEffect(() => { refreshRun(); }, [refreshRun]);
+
+  // marelo: the ACTIVE-scope MARELO figure (no ?scope= -> ranks_api
+  // _active_scope, the focus route) -- the header bar's crest AND the
+  // rank-up overlay's celebration both read this ONE fetch. Held here
+  // rather than locally in header.js so app.js can mount the overlay at
+  // root (browser<->GUI parity, rule 10) off the same object the header
+  // renders, instead of a second independent poll that could disagree
+  // about whether a celebration is pending.
+  const [marelo, setMarelo] = useState(null);
+  // mareloRev: bumped alongside every REFRESH_ON event. The Rank tab fetches
+  // its OWN scope-scoped /api/marelo + /api/marelo/history + breakdown and
+  // has no other way to notice a finished run while it stays mounted --
+  // without this it goes stale while open during play (spec 2026-07-24
+  // Step 2b). A counter, not a boolean: RankPage puts it straight in an
+  // effect's dependency list, and every REFRESH_ON tick must be a distinct
+  // dependency value even if two land back-to-back.
+  const [mareloRev, setMareloRev] = useState(0);
+  const refreshMarelo = useCallback(async () => {
+    try { setMarelo(await getJSON("/api/marelo")); } catch (e) { console.error(e); }
+  }, []);
+  useEffect(() => { refreshMarelo(); }, [refreshMarelo]);
+  // clearMareloCelebration: local-only clear so the overlay disappears the
+  // instant it acks, without waiting on the next REFRESH_ON fetch to bring
+  // back a marelo object whose celebration the server has already retired.
+  const clearMareloCelebration = useCallback(() => {
+    setMarelo((prev) => prev ? { ...prev, celebration: null } : prev);
+  }, []);
 
   // server-owned pause truth: {paused, reason: "manual"|"afk"|null}.
   // Polled (5 s) because "afk" flips server-side without any UI action;
@@ -142,7 +169,11 @@ export function useTracker() {
       ws.onmessage = (e) => {
         const ev = JSON.parse(e.data);
         setFeed((f) => [ev, ...f].slice(0, 200));
-        if (REFRESH_ON.has(ev.type)) refresh();
+        if (REFRESH_ON.has(ev.type)) {
+          refresh();
+          refreshMarelo();
+          setMareloRev((prevRev) => prevRev + 1);
+        }
         if (RUN_REFRESH_ON.has(ev.type)) refreshRun();
         if (ev.type === "segment_armed") {
           const id = ev.payload.segment_id;
@@ -257,6 +288,7 @@ export function useTracker() {
            pauseReason: pauseState.reason, togglePause,
            armedSegs, armedOrder, armedNames, lastPinnedSeg, stage,
            run, refreshRun,
+           marelo, mareloRev, clearMareloCelebration,
            update, updateForced, setUpdateForced, updateApplying,
            setUpdateApplying, updateMsg, checkUpdates, applyUpdate, skipUpdate };
 }

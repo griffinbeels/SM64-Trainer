@@ -1423,14 +1423,14 @@ def test_route_candidate_rank_follows_rank_mode(tmp_path):
 
 
 def test_valid_frames_filters_the_average_inputs():
-    """_valid_frames is the single funnel for every rank-mode average: only
+    """valid_frames is the single funnel for every rank-mode average: only
     successful, uncleared, strat-matching attempts with a real time on the
     grading clock count. rta==0 reset-race junk rows are excluded on the rta
     clock (projection.py docstring) but igt 0 is a legal time; attempts
     predating strat tagging (strat_tag None) never grade a named strat."""
     from types import SimpleNamespace
 
-    from sm64_events.tracking.views import _valid_frames
+    from sm64_events.tracking.views import valid_frames
 
     def att(**overrides):
         base = dict(outcome="success", cleared=False, strat_tag="fast",
@@ -1447,8 +1447,8 @@ def test_valid_frames_filters_the_average_inputs():
         att(igt_frames=None),               # no time on the igt clock
         att(rta_frames=0, igt_frames=0),    # rta race row; igt 0 is legal
     ]
-    assert _valid_frames(history, "fast", "igt") == [343, 0]
-    assert _valid_frames(history, "fast", "rta") == [400, 400]
+    assert valid_frames(history, "fast", "igt") == [343, 0]
+    assert valid_frames(history, "fast", "rta") == [400, 400]
 def test_deleted_strat_hidden_and_masked(tmp_path):
     db, svc = make(tmp_path)
     asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
