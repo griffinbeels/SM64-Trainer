@@ -16,8 +16,25 @@ marked complete is DONE — do not re-dispatch it.
 | 2 | T5 header.js target modal | **complete** | `b86b7a7`, one star control, POST still numeric |
 | 2 | T6 routes.js step editor | **complete** | `6851806`, segments grouped by region |
 | 3 | T7 parity test + rules row + the id/name fold-in | **complete** | `63e0c85`, 3 parity tests |
-| — | Whole-branch review (Opus 5) | dispatched | agent `picker-review` |
-| — | Human audit (the ~120-option star list) | pending | only a human can judge type-ahead over it |
+| — | Whole-branch review (Opus 5) | **complete** | `aa2d2e5` — 0 Critical, 5 Important, 9 Minor |
+| — | Review fix wave | **complete** | `813039e` (gate), `f39da39` (runtime edges), `052920e` (accuracy) |
+| — | Controller re-probe of the fixed gate | **complete** | both probes RED then restored green — evidence below |
+| — | Human audit (the ~120-option star list) | **PENDING — the last gate** | only a human can judge type-ahead over it |
+
+## The parity gate now has teeth (controller-verified, not taken on report)
+
+The review caught that all three original assertions were toothless. After the
+rewrite I probed it myself rather than trusting the fix report:
+
+1. Dropped a NEW file (`components/_probe.js`) containing
+   `catalog.courses.map(... <option ...)` → `test_no_hand_rolled_entity_select_outside_the_allowlist`
+   **FAILED**. Deleted the probe.
+2. Injected `const courseFallback = 1;` into `GroupedPicker`'s BODY (not a
+   comment) → `test_the_picker_owns_no_domain_vocabulary` **FAILED**. Restored.
+3. Both green again afterwards; full suite 1539, tree clean.
+
+That is the difference between a gate and a decoration, and it is the one thing
+on this branch worth re-verifying by hand.
 
 ## Watch items (predicted breakage + the sanctioned remedy)
 
