@@ -81,6 +81,13 @@ export function useTracker() {
   const clearMareloCelebration = useCallback(() => {
     setMarelo((prev) => prev ? { ...prev, celebration: null } : prev);
   }, []);
+  // clearEntityCelebration: the sibling for the entity_celebrations LIST --
+  // drops just the one entity that was actually shown+acked (task F3), the
+  // same instant-local-clear reasoning as clearMareloCelebration above.
+  const clearEntityCelebration = useCallback((entityKey) => {
+    setMarelo((prev) => prev ? { ...prev,
+      entity_celebrations: prev.entity_celebrations.filter((c) => c.entity !== entityKey) } : prev);
+  }, []);
 
   // server-owned pause truth: {paused, reason: "manual"|"afk"|null}.
   // Polled (5 s) because "afk" flips server-side without any UI action;
@@ -288,7 +295,7 @@ export function useTracker() {
            pauseReason: pauseState.reason, togglePause,
            armedSegs, armedOrder, armedNames, lastPinnedSeg, stage,
            run, refreshRun,
-           marelo, mareloRev, clearMareloCelebration,
+           marelo, mareloRev, clearMareloCelebration, clearEntityCelebration,
            update, updateForced, setUpdateForced, updateApplying,
            setUpdateApplying, updateMsg, checkUpdates, applyUpdate, skipUpdate };
 }

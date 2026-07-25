@@ -11,6 +11,7 @@ import { rankColor } from "./ranks.js";
 import { Crest, fmtScore } from "./marelo.js";
 import { Icon } from "./icons.js";
 import { PageState, InlineState } from "./states.js";
+import { useTween } from "../useTween.js";
 
 const html = htm.bind(h);
 
@@ -291,13 +292,23 @@ export function RankPage({ t }) {
     } catch (error) { setDataErr(error); }
   }
 
+  // The card's three numeric surfaces (spec task F2): the rating itself,
+  // and the Mastery/Coverage bars each tweened together with the number
+  // printed beside them, so a bar filling next to a number that already
+  // jumped to its new value can't read as two components disagreeing.
+  // Called unconditionally (rules of hooks) even while `data` is still
+  // loading or a scope switch has cleared it -- `null` passes straight
+  // through with no animation.
+  const tweenedMarelo = useTween(data ? data.marelo : null);
+  const tweenedMastery = useTween(data ? data.mastery : null);
+  const tweenedCoveragePct = useTween(data ? Math.round((data.coverage || 0) * 100) : null);
+
   if (!scopes) return html`<${PageState} kind=${t.connected ? "loading" : "offline"}
       title="Loading ranks" message=${scopesErr ? scopesErr.message : undefined} />`;
   if (!scopeId) return html`<${PageState} kind=${t.connected ? "loading" : "offline"}
       title="Loading ranks" />`;
 
   const routeOrder = scopeId.startsWith("route:");
-  const coveragePct = data ? Math.round((data.coverage || 0) * 100) : 0;
 
   return html`<div class="rank-page">
     <div class="practice-card rank-card">
@@ -318,13 +329,13 @@ export function RankPage({ t }) {
               <${Crest} tier=${data.tier} division=${data.division} size=${64} />
               <div>
                 <h2>${data.tier ? `${data.tier} ${data.division}` : "Unranked"}</h2>
-                <p class="meta">MARELO ${fmtScore(data.marelo)} · next division at ${fmtScore(data.next_division_at)}</p>
+                <p class="meta">MARELO ${fmtScore(tweenedMarelo)} · next division at ${fmtScore(data.next_division_at)}</p>
               </div>
             </div>
             <div class="rank-factors">
-              <label>Mastery <i style=${`width:${data.mastery || 0}%`}></i>
-                <span class="meta">${fmtScore(data.mastery)} over ${data.practiced} practiced</span></label>
-              <label>Coverage <i style=${`width:${coveragePct}%`}></i>
+              <label>Mastery <i style=${`width:${tweenedMastery || 0}%`}></i>
+                <span class="meta">${fmtScore(tweenedMastery)} over ${data.practiced} practiced</span></label>
+              <label>Coverage <i style=${`width:${tweenedCoveragePct || 0}%`}></i>
                 <span class="meta">${data.practiced}/${data.n}</span></label>
             </div>
             ${data.n < 5 && html`<p class="meta">Small scope — ${data.n} rated ${

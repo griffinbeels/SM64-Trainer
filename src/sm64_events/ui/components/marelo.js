@@ -4,6 +4,7 @@
 import { h } from "preact";
 import htm from "htm";
 import { rankColor } from "./ranks.js";
+import { useTween } from "../useTween.js";
 const html = htm.bind(h);
 
 export const fmtScore = (n) => (n == null ? "–" : n.toFixed(1));
@@ -20,13 +21,15 @@ export function Crest({ tier, division, size = 34 }) {
 }
 
 export function MareloBar({ marelo, onOpen }) {
+  // Tweened FROM the previous fetch's value (spec task F2) -- this bar is
+  // mounted once in the header and never unmounts, so it's the one place a
+  // rank improvement is visible from every tab, not just the Rank tab.
+  // Called unconditionally (rules of hooks) ahead of the `!marelo` early
+  // return; `null` passes straight through with no animation.
+  const fill = useTween(marelo ? Math.round((marelo.division_progress || 0) * 100) : null);
+  const score = useTween(marelo ? marelo.marelo : null);
   if (!marelo) return null;
   const { tier, division, label, mastery, coverage, n, practiced } = marelo;
-  const score = marelo.marelo;
-  // Endowed progress (spec section 2.4): the track shows how far into the
-  // CURRENT division you are, so there is a near goal even at Iron V. The
-  // server computes it (it owns the band edges) -- do not re-derive it here.
-  const fill = Math.round((marelo.division_progress || 0) * 100);
   return html`<button type="button" class="marelo-bar" onclick=${onOpen}
       title=${`${label}: mastery ${fmtScore(mastery)} x coverage ${practiced}/${n}`}>
     <${Crest} tier=${tier} division=${division} />

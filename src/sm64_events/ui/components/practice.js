@@ -13,6 +13,7 @@ import { StandardsPanel } from "./standards.js";
 import { StratPicker } from "./stratpicker.js";
 import { FailureCompilation } from "./failcomp.js";
 import { Icon } from "./icons.js";
+import { EntityCelebration, entityCelebrationFor } from "./celebrate.js";
 import { PageState } from "./states.js";
 
 const html = htm.bind(h);
@@ -437,10 +438,15 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
       </div>
       <div class="objective-metrics" style=${sec.rank && sec.rank.rank
           ? `--rank-glow:${rankColor(sec.rank.rank)}` : ""}>
-        <div class="rank-slot">
-          <${RankBanner} label="Strategy" banner=${sec.rank} />
-          ${sec.entity_rank && !activeStrategyIsFastest(sec) && html`<${RankBanner} label="Star" banner=${sec.entity_rank} />`}
-        </div>
+        <${EntityCelebration}
+            celebration=${pinned ? entityCelebrationFor(t.marelo, `star:${sec.course_id}:${sec.star_id}`) : null}
+            entityKey=${`star:${sec.course_id}:${sec.star_id}`}
+            onDone=${() => t.clearEntityCelebration(`star:${sec.course_id}:${sec.star_id}`)}>
+          <div class="rank-slot">
+            <${RankBanner} label="Strategy" banner=${sec.rank} />
+            ${sec.entity_rank && !activeStrategyIsFastest(sec) && html`<${RankBanner} label="Star" banner=${sec.entity_rank} />`}
+          </div>
+        <//>
         <div class="objective-live-state" aria-label="Practice state">
           <span class="live-state-icon">○</span><span>Ready</span>
         </div>
@@ -585,10 +591,15 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare }) {
       </div>
       <div class="objective-metrics" style=${sec.rank && sec.rank.rank
           ? `--rank-glow:${rankColor(sec.rank.rank)}` : ""}>
-        <div class="rank-slot">
-          <${RankBanner} label="Strategy" banner=${sec.rank} />
-          ${sec.entity_rank && !activeStrategyIsFastest(sec) && html`<${RankBanner} label="Segment" banner=${sec.entity_rank} />`}
-        </div>
+        <${EntityCelebration}
+            celebration=${pinned ? entityCelebrationFor(t.marelo, `segment:${sec.segment_id}`) : null}
+            entityKey=${`segment:${sec.segment_id}`}
+            onDone=${() => t.clearEntityCelebration(`segment:${sec.segment_id}`)}>
+          <div class="rank-slot">
+            <${RankBanner} label="Strategy" banner=${sec.rank} />
+            ${sec.entity_rank && !activeStrategyIsFastest(sec) && html`<${RankBanner} label="Segment" banner=${sec.entity_rank} />`}
+          </div>
+        <//>
         <div class="objective-live-state ${armed ? "running" : ""}"
             aria-label=${`Segment state: ${pinTag}`}>
           <${Icon} name="clock" size=${17} /><span>${pinTag}</span>

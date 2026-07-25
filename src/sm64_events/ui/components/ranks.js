@@ -2,6 +2,7 @@
 // and ranks/classify.RANK_NAMES (keep in lockstep).
 import { h } from "preact";
 import htm from "htm";
+import { useTween } from "../useTween.js";
 const html = htm.bind(h);
 
 export const RANK_NAMES = ["Mario", "Grandmaster", "Master", "Diamond",
@@ -94,7 +95,17 @@ function sentinelMsg(banner) {
 // component's job shrank back to what always fit: rank / division / bar /
 // next, none of which can be abbreviated.
 export function RankBanner({ label, banner }) {
-  if (!banner || !banner.rank) {
+  const ranked = !!(banner && banner.rank);
+  // Called unconditionally (rules of hooks) even on the sentinel/empty
+  // path below — `null` passes straight through useTween with no
+  // animation, which is exactly what a not-yet-ranked banner needs. This is
+  // the ONE division-fill tween for both banners this component renders
+  // (Strategy AND the entity's own Star/Segment banner, spec task F2) — a
+  // fresh attempt lands here as a fill % change and climbs to it instead of
+  // snapping, the same primitive every other numeric surface uses.
+  const rawFillPct = ranked ? (banner.next_tier ? Math.round((banner.fill || 0) * 100) : 100) : null;
+  const fillPct = useTween(rawFillPct);
+  if (!ranked) {
     return html`<div class="rank-banner rank-banner-empty">
       <span class="rank-banner-kicker">${label}</span>
       <span class="meta">${sentinelMsg(banner)}</span>
@@ -104,7 +115,7 @@ export function RankBanner({ label, banner }) {
   const basis = banner.basis;
   const nextLabel = banner.next_tier ? `${banner.next_tier} ${banner.next_division}` : null;
   const gap = banner.next_gap_cs != null ? (banner.next_gap_cs / 100).toFixed(2) : null;
-  const fillPct = banner.next_tier ? Math.round((banner.fill || 0) * 100) : 100;
+  const displayFillPct = Math.round(fillPct);
   // The mode name (e.g. "Avg 10") is dropped from the VISIBLE basis text —
   // round 4, 2026-07-25: it's global app state already shown in the
   // header's Rank Mode picker, not something this row needs to repeat, and
@@ -123,7 +134,7 @@ export function RankBanner({ label, banner }) {
   // the banner's full width, so the basis rides ITS tooltip too. That keeps
   // "what time is this rank graded on" recoverable at every width, which is
   // the premise the whole hide-the-basis decision rests on.
-  const trackTitle = [nextLabel ? `${fillPct}% of the way to ${nextLabel}` : "top rank",
+  const trackTitle = [nextLabel ? `${displayFillPct}% of the way to ${nextLabel}` : "top rank",
     basisTitle].filter(Boolean).join(" · ");
   return html`<div class="rank-banner">
     <div class="rank-banner-row">
