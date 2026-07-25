@@ -48,9 +48,15 @@ def main() -> int:
         return 0  # fail open: no node available
     try:
         with open(path, "rb") as src:
+            # CREATE_NO_WINDOW: this fires on EVERY .js Write/Edit, and a
+            # console app spawned from a hook runner that has no console of
+            # its own makes Windows allocate one — a window that flashes up
+            # and takes the keyboard while the user is typing (2026-07-25).
             r = subprocess.run([node, "--check", "--input-type=module"],
                                stdin=src, capture_output=True, text=True,
-                               timeout=15)
+                               timeout=15,
+                               creationflags=getattr(subprocess,
+                                                     "CREATE_NO_WINDOW", 0))
     except Exception:
         return 0  # fail open: runner error / unreadable file
     if r.returncode != 0:

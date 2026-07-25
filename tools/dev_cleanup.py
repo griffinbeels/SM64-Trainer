@@ -34,6 +34,13 @@ import sys
 
 _TARGET_MARKERS = ("-m http.server", "-m sm64_events.main")
 
+# This tool runs from a SessionStart hook, and the hook runner has no console
+# of its own — so Windows allocates one for every console child it spawns,
+# which flashes a window on screen and takes the keyboard from whatever the
+# user is typing into ("something pops up and i end up messing with it",
+# 2026-07-25). Every PowerShell call below is invisible.
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 _PS_ENUM = (
     "$procs = Get-CimInstance Win32_Process -Filter \"name='python.exe'\" | "
     "Select-Object ProcessId, CommandLine, CreationDate; "
@@ -49,6 +56,7 @@ def _enumerate() -> tuple[list[dict], set[int]]:
     raw = subprocess.run(
         ["powershell.exe", "-NoProfile", "-Command", _PS_ENUM],
         capture_output=True, text=True, timeout=30,
+        creationflags=_NO_WINDOW,
     )
     data = json.loads(raw.stdout)
     procs = data.get("procs") or []
@@ -78,7 +86,8 @@ def sweep(kill: bool = True) -> int:
         if kill:
             subprocess.run(["powershell.exe", "-NoProfile", "-Command",
                             f"Stop-Process -Id {proc_pid} -Force -Confirm:$false"],
-                           capture_output=True, timeout=15)
+                           capture_output=True, timeout=15,
+                           creationflags=_NO_WINDOW)
         killed.append((proc_pid, cmd))
 
     verb = "killed" if kill else "would kill"
