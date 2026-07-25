@@ -987,7 +987,6 @@
     align-content: start; gap: .4rem;
     padding-right: 2px; scrollbar-width: thin;
   }
-  .route-cat { min-width: 0; grid-template-columns: minmax(0,1fr); }
   .route-list-item {
     width: 100%; min-width: 0; min-height: 54px;
     display: grid; grid-template-columns: minmax(0,1fr) auto;
@@ -1002,13 +1001,17 @@
   .route-list-item > .ui-icon { transform: rotate(-90deg); color: var(--muted); }
   .route-list-item.on { border-color: #6287aa; background: rgba(61,101,143,.25); }
   .route-list-item.on > .ui-icon { color: #9cc9f2; }
-  /* Category groups (2026-07-24): the seeded corpus ships ~48 routes, so the
-     library is grouped and collapsible. Rows keep their own .4rem gap; the
-     group supplies a slightly larger gap above each header so the sections
-     read as sections without a divider line. */
-  .route-cat { display: grid; align-content: start; gap: .4rem; }
-  .route-cat + .route-cat { margin-top: .5rem; }
-  .route-cat-header {
+  /* Collapsible library groups (2026-07-24, generalized from the route
+     library): ONE class per level, indent driven by --depth, so a third level
+     costs nothing. Rows keep their own .4rem gap; the group supplies a
+     slightly larger gap above each header so sections read as sections
+     without a divider line. */
+  .lib-cat {
+    min-width: 0; display: grid; align-content: start; gap: .4rem;
+    grid-template-columns: minmax(0,1fr);
+  }
+  .lib-cat + .lib-cat { margin-top: .5rem; }
+  .lib-cat-header {
     width: 100%; min-width: 0; display: grid;
     grid-template-columns: auto minmax(0,1fr) auto;
     align-items: center; gap: .4rem;
@@ -1017,33 +1020,33 @@
     border-color: transparent; color: var(--muted);
     font-size: .72rem; letter-spacing: .04em; text-transform: uppercase;
   }
-  .route-cat-header:hover { color: var(--text); background: rgba(8,20,34,.5); }
-  .route-cat-header b {
+  .lib-cat-header:hover { color: var(--text); background: rgba(8,20,34,.5); }
+  .lib-cat-header b {
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font-size: .74rem; letter-spacing: inherit;
   }
-  .route-cat-header > .ui-icon { transition: transform .12s ease; }
-  .route-cat-header.shut > .ui-icon { transform: rotate(-90deg); }
-  /* Sub-category: indented and hung off a guide line, so a route reads as
-     belonging to the group above it. */
-  .route-subcat {
+  .lib-cat-header > .ui-icon { transition: transform .12s ease; }
+  .lib-cat-header.shut > .ui-icon { transform: rotate(-90deg); }
+  /* Nested levels hang off a guide line, so a row reads as belonging to the
+     group above it. */
+  .lib-cat .lib-group {
     min-width: 0; display: grid; grid-template-columns: minmax(0,1fr);
     align-content: start; gap: .4rem;
     margin-left: .5rem; padding-left: .45rem;
     border-left: 1px solid var(--border-soft);
   }
-  .route-cat-header.sub {
+  .lib-cat-header.sub {
     padding-left: .3rem; font-size: .68rem;
     text-transform: none; letter-spacing: .02em;
   }
-  .route-cat-header.sub b { font-size: .72rem; font-weight: 600; }
+  .lib-cat-header.sub b { font-size: .72rem; font-weight: 600; }
   /* Indent the ROW with a margin and let it stretch — `width: 100%` (the base
      .route-list-item rule) plus a margin is wider than the column, which both
      broke the indent and gave the library a horizontal scrollbar (live report
      2026-07-24). A vertical list never scrolls sideways: names ellipsise. */
-  .route-cat .route-list-item { width: auto; }
-  .route-cat > .route-list-item { margin-left: .6rem; }
-  .route-subcat > .route-list-item { margin-left: .5rem; }
+  .lib-cat .route-list-item, .lib-cat .segrow { width: auto; }
+  .lib-group > .route-list-item, .lib-group > .segrow { margin-left: .5rem; }
+  .lib-cat > .route-list-item, .lib-cat > .segrow { margin-left: .6rem; }
   /* Two columns, not three: the library column is 240-300px, and three
      icon+label buttons overflowed the card (live report 2026-07-24 — "Delete"
      hung past the edge). The third wraps to its own row. min-width:0 on the
