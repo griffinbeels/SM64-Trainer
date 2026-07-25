@@ -29,14 +29,17 @@ const html = htm.bind(h);
  * onChange    (id | null) => void
  * allow       optional (id) => boolean — the CALLER's domain filter
  * placeholder optional leading option's label; omit for no placeholder
- * id, name    optional — forwarded to the <select> so a caller that needs a
- *             form-field identity (label `for`, form submission) can supply
- *             one; the picker itself has no opinion on either
+ * name        form-field identity for the <select> (form submission);
+ *             defaults to a stable fallback so every call site gets one
+ *             without editing four call sites — a Chrome form-field advisory
+ *             fired at all three before this default existed, because
+ *             nobody ever passed it. No `id` prop: nothing needs a label
+ *             `for` yet, and a caller that does can add it back then.
  */
 export function GroupedPicker({ groups, value, onChange, allow, placeholder,
-                               disabled = false, id, name }) {
+                               disabled = false, name = "entity-picker" }) {
   const shown = visibleGroups(groups, allow, value);
-  return html`<select id=${id} name=${name} value=${value ?? ""}
+  return html`<select name=${name} value=${value ?? ""}
       disabled=${disabled}
       onchange=${(event) => onChange(event.target.value === ""
         ? null : event.target.value)}>

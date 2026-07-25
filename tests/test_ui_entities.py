@@ -83,6 +83,23 @@ const catalog = {
     assert groups[0]["options"][0] == {"id": "1:0", "name": "Big Bob-omb"}
 
 
+def test_segments_with_no_taxonomy_yet_form_one_group_not_n_others():
+    # Before /api/segments/vocab resolves, segmentOptions(segs, undefined) must
+    # not bucket by region into N groups that all fall back to the same
+    # "Other" label (review M4) — verified: two segments in different regions
+    # used to render as two separate "Other" optgroups.
+    body = """
+const defs = [
+  { id: 3, name: "LBLJ", origin: { region: "6:1" } },
+  { id: 7, name: "Lakitu Skip", origin: { region: "16" } },
+];
+console.log(JSON.stringify(segmentOptions(defs, undefined)));
+"""
+    groups = run_node("segmentOptions", body)
+    assert len(groups) == 1
+    assert [option["id"] for option in groups[0]["options"]] == ["3", "7"]
+
+
 def test_segments_group_by_origin_region_in_taxonomy_order():
     body = """
 const taxonomy = [

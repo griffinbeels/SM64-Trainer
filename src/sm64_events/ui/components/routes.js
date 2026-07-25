@@ -144,10 +144,19 @@ function ItemPicker({ catalog, segs, vocab, onPick, label }) {
   const segGroups = segmentOptions(segs, (vocab || {}).origins);
   const [segId, setSegId] = useState(segs[0] ? String(segs[0].id) : null);
   const pick = () => {
+    // Neither branch has anything to post before its picker resolves a first
+    // value (star: catalog.course_groups missing course_groups on the
+    // fallback catalog leaves `star` null; segment: segs not yet fetched
+    // leaves `segId` null) — Number(null) is 0, and NaN serialises as null,
+    // either of which would post an incomplete candidate the server has to
+    // reject with a confusing 409 instead of the button staying inert
+    // (review M2, M3).
     if (mode === "star") {
+      if (star == null) return;
       const picked = parseStarId(star);
       onPick({ type: "star", course: picked.course, star: picked.star });
     } else {
+      if (segId == null) return;
       onPick({ type: "segment", segment_id: Number(segId) });
     }
   };

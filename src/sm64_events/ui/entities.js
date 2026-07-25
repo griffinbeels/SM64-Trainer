@@ -79,6 +79,18 @@ export function starOptionsFromCatalog(catalog) {
  *  the same grouping the segment library uses, so the picker beside it reads
  *  the same way. `taxonomy` is vocab.origins. */
 export function segmentOptions(defs, taxonomy) {
+  // Before /api/segments/vocab resolves (first paint calls this with
+  // `taxonomy` undefined), every def would bucket by region into SEPARATE
+  // groups that all fall back to the same "Other" label — N identical
+  // headings instead of one flat list (review M4). Return one ungrouped
+  // bucket instead; it self-corrects once the taxonomy fetch lands.
+  if (!taxonomy || taxonomy.length === 0) {
+    return (defs || []).length === 0 ? [] : [{
+      key: "all",
+      label: "Segments",
+      options: defs.map((def) => ({ id: String(def.id), name: def.name })),
+    }];
+  }
   const order = (taxonomy || []).map((region) => String(region.key));
   const labels = new Map((taxonomy || [])
     .map((region) => [String(region.key), region.label]));
