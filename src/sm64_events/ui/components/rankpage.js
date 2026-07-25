@@ -208,18 +208,20 @@ export function HistoryChart({ points }) {
   </div>`;
 }
 
-// The breakdown's "next rank" column (task C.3): the single next STEP this
-// entity's own score is headed toward -- one division up within its tier,
-// or (already at the top division) the bottom division of the next tier --
-// sourced from `entity.next_tier`/`entity.next_division`, which the server
-// computes via `scoring.division_progress` against the entity's OWN ladder
-// (server/ranks_api.py::_score_scope). Never re-derived here: a second copy
-// of the division math in JS is exactly the kind of drift that would make
-// this column disagree with the Crest two columns to its left.
+// The breakdown's "next rank" column (task C.3, trimmed round 2): the
+// TARGET only -- "→ Platinum IV", "→ Gold", or "Maxed" -- never the
+// current tier/division too, which the Crest two columns over already
+// shows; one format for every row instead of a practiced-vs-unpracticed
+// split. Sourced from `entity.next_tier`/`entity.next_division`, which the
+// server computes via `scoring.division_progress` against the entity's OWN
+// ladder (server/ranks_api.py::_score_scope). Never re-derived here: a
+// second copy of the division math in JS is exactly the kind of drift that
+// would make this column disagree with the Crest.
 function nextRankLabel(entity) {
-  if (entity.score == null) return `→ ${entity.next_tier}`;
   if (!entity.next_tier) return "Maxed";
-  return `${entity.tier} ${entity.division} → ${entity.next_tier} ${entity.next_division}`;
+  return entity.next_division
+    ? `→ ${entity.next_tier} ${entity.next_division}`
+    : `→ ${entity.next_tier}`;
 }
 
 function Breakdown({ data, routeOrder, onToggle }) {
