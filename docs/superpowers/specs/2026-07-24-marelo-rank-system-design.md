@@ -203,14 +203,16 @@ Given a ladder and a displayed time `t` (centiseconds, via
   `score = anchor_last × cutoff_last / t` — trends toward 0, never reaches it
   (matching xcams' property that last place is not a zero);
 
-  **Confirmed by the user 2026-07-25**, after `classify.band()` separately
-  gained a linear Iron bar measured from `IRON_SPAN_MULT` (3×) the Bronze
-  cutoff. The two Iron scales coexist deliberately: the bar answers "how far
-  to Bronze", the score answers "how good is this, absolutely". The asymptote
-  is kept because a player slower than the notional start should still see the
-  number grow as they improve rather than sit at a flat zero — "growing
-  confidence as they approach bronze" rather than "feeling like a failure".
-  Any future change to one must not silently be applied to the other.
+  **Confirmed by the user 2026-07-25**, and `classify.band()` was brought onto
+  the SAME curve rather than left on the linear 3×-Bronze span it had briefly
+  acquired: the banner bar's Iron fill is now `easiest_cutoff / time`, which is
+  this tail normalised to 0..1. One shape, two surfaces, so the bar and the
+  score can never tell one run two different stories.
+
+  The rule behind it: **a flat 0% means "never attempted", never "slow"**.
+  However far off the pace a run is, improving it moves the number — growing
+  confidence approaching Bronze rather than a failure reading. Any future
+  change to the tail must be made in both places or in neither.
 - **no valid time:** score **0**. This is the coverage penalty and is distinct
   from *absent*.
 
