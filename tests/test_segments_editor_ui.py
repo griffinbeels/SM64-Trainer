@@ -111,22 +111,6 @@ def test_origin_override_is_offered_only_for_saved_segments():
 # by EntityPicker below. levelOptions and the topology filter are unchanged
 # by the control swap.
 
-def test_clause_params_render_through_the_shared_picker():
-    assert "EntityPicker" in SEGMENTS_JS_SOURCE
-    assert "levelOptions" in SEGMENTS_JS_SOURCE
-    # the file-local first draft is gone, not merely unused
-    assert "groupedDropdown" not in SEGMENTS_JS_SOURCE
-
-
-def test_the_topology_filter_stays_at_this_call_site():
-    # Domain rules never move into the picker: allowedIds is computed here and
-    # handed over as `allow`.
-    assert "allowedIds" in SEGMENTS_JS_SOURCE
-    assert "allow=${" in SEGMENTS_JS_SOURCE
-
-
-# --- entity picker icons (spec 2026-07-25-entity-picker-icons) -------------
-
 def test_clause_params_use_the_modal_picker():
     assert "EntityPicker" in SEGMENTS_JS_SOURCE
     assert "GroupedPicker" not in SEGMENTS_JS_SOURCE   # the select is gone

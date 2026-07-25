@@ -84,12 +84,6 @@ def test_routes_keeps_its_existing_open_state_key():
     assert '"sm64.routeCatsOpen"' in ROUTES
 
 
-def test_route_item_picker_uses_the_shared_picker():
-    assert "EntityPicker" in ROUTES
-    assert "starOptionsFromCatalog" in ROUTES
-    assert "segmentOptions" in ROUTES
-
-
 def test_route_segment_picker_groups_like_the_library():
     # The segment list beside it groups by origin region; this one did not.
     # Pin the BEHAVIOUR — segmentOptions is called with a taxonomy (`.origins`)
@@ -122,8 +116,10 @@ def test_segment_art_comes_from_the_origin_not_start_levels():
     # the session view's segment_targets. Assuming otherwise made every segment
     # row in the route editor fall back to a plain gold star (live render
     # check, 2026-07-25). The origin key is the canonical arm location anyway.
-    assert "segment.origin || {}" in ROUTES
-    # The wrong EXPRESSION, not the bare word — the comment above the fix
-    # mentions start_levels to explain the bug, and a guard that a comment can
-    # trip is not a guard (this file has caught that shape twice already).
+    # The derivation moved into entities.js::segmentLevelsOf once the header
+    # needed it too (whole-branch review I1) — one copy, two call sites.
+    assert "segmentLevelsOf(segs)" in ROUTES
+    # The wrong EXPRESSION, not the bare word — a comment explaining the bug
+    # mentions start_levels, and a guard that a comment can trip is not a guard
+    # (this file has caught that shape twice already).
     assert "segment.start_levels" not in ROUTES

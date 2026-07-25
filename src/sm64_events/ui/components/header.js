@@ -9,7 +9,7 @@ import { MareloBar } from "./marelo.js";
 import { celebrationsEnabled, setCelebrationsEnabled } from "./celebrate.js";
 import { EntityPicker } from "./entitymodal.js";
 import { courseUnionGroups, optionIcon, parseSegmentId, parseStarId,
-         starId } from "../entities.js";
+         segmentLevelsOf, starId } from "../entities.js";
 
 const html = htm.bind(h);
 
@@ -278,9 +278,15 @@ function TargetEditor({ t, close }) {
 
   const options = stratsFor(course, star);
 
+  // segmentLevels + iconOverrides are NOT optional here: without them every
+  // segment cell falls through optionIcon's chain to a plain gold star, while
+  // the banner and the route editor show its real art — and a user's explicit
+  // per-segment icon override is ignored (whole-branch review I1, 2026-07-25).
   const iconContext = {
     courseIcons: t.courseIcons || {},
     starIconsMode: t.starIcons || "course",
+    iconOverrides: (v || {}).icon_overrides || {},
+    segmentLevels: segmentLevelsOf(t.segments),
   };
   // Layer 1 is a grid of COURSES carrying their portraits; layer 2 is that
   // course's stars AND the segments that begin in it, because both are things

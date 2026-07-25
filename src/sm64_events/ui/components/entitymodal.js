@@ -1,5 +1,5 @@
 import { h } from "preact";
-import { useEffect, useMemo, useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { Modal } from "./modal.js";
 import { Icon } from "./icons.js";
@@ -43,8 +43,13 @@ const html = htm.bind(h);
 // a screen reader a lie. Buttons in a container is what this is, so that is
 // what it says.
 
-function CellGrid({ options, value, iconFor, onPick }) {
+function CellGrid({ options, value, iconFor, onPick, clearLabel }) {
   return html`<div class="entity-grid">
+    ${clearLabel ? html`<button type="button" class="entity-clear"
+        title=${clearLabel} onclick=${() => onPick(null)}>
+      <span class="entity-clear-mark">×</span>
+      <span class="entity-clear-label">${clearLabel}</span>
+    </button>` : null}
     ${options.map((option) => html`<${PracticeCell} key=${option.id}
       active=${option.id === value}
       iconSrc=${iconFor(option.id)}
@@ -57,12 +62,13 @@ function CellGrid({ options, value, iconFor, onPick }) {
 }
 
 function PickerDialog({ groups, value, allow, title, iconFor, depth,
-                       onPick, onClose }) {
+                       placeholder, onPick, onClose }) {
   // Which group has been drilled into (depth 2 only). Derived during render,
   // never in an effect — an effect would paint layer 1 and then correct it.
   const [openGroupKey, setOpenGroupKey] = useState(null);
-  const shown = useMemo(
-    () => visibleGroups(groups, allow, value), [groups, allow, value]);
+  // No useMemo: every call site builds `groups` and `allow` inline, so their
+  // identities change each render and the memo would never hit (review M9).
+  const shown = visibleGroups(groups, allow, value);
   const openGroup = shown.find((group) => group.key === openGroupKey) || null;
 
   // Escape goes BACK out of a drilled-in group before it closes the dialog —
@@ -83,10 +89,15 @@ function PickerDialog({ groups, value, allow, title, iconFor, depth,
   if (depth > 1 && !openGroup)
     return html`<${Modal} title=${title} icon="target" size="grid" onClose=${onClose}>
       <div class="entity-grid">
+        ${placeholder ? html`<button type="button" class="entity-clear"
+            title=${placeholder} onclick=${() => onPick(null)}>
+          <span class="entity-clear-mark">×</span>
+          <span class="entity-clear-label">${placeholder}</span>
+        </button>` : null}
         ${shown.map((group) => html`<${PracticeCell} key=${group.key}
           iconSrc=${group.icon || iconFor(group.options[0].id)}
           name=${group.label}
-          sub=${`${group.options.length}`}
+          sub=${`${group.options.length} to practice`}
           title=${group.label}
           onPick=${() => setOpenGroupKey(group.key)} />`)}
       </div>
@@ -104,12 +115,13 @@ function PickerDialog({ groups, value, allow, title, iconFor, depth,
     <//>`;
 
   return html`<${Modal} title=${title} icon="target" size="grid" onClose=${onClose}>
-    ${shown.map((group) => html`<div class="entity-section" key=${group.key}>
+    ${shown.map((group, index) => html`<div class="entity-section" key=${group.key}>
       ${shown.length > 1
         ? html`<div class="entity-section-head"><b>${group.label}</b></div>`
         : null}
       <${CellGrid} options=${group.options} value=${value}
-        iconFor=${iconFor} onPick=${onPick} />
+        iconFor=${iconFor} onPick=${onPick}
+        clearLabel=${index === 0 ? placeholder : null} />
     </div>`)}
   <//>`;
 }
@@ -122,7 +134,11 @@ function PickerDialog({ groups, value, allow, title, iconFor, depth,
  * iconFor     (id) => image URL for a cell
  * title       dialog heading, e.g. "Choose a star"
  * depth       1 = one grid with headings; 2 = groups, then the chosen group
- * placeholder trigger label when nothing is chosen
+ * placeholder trigger label when nothing is chosen AND the label of the clear
+ *             cell that emits null. Omit it and the picker cannot be cleared —
+ *             the native <select> this replaced had a placeholder <option>
+ *             emitting null, and dropping it silently made eight optional
+ *             clause params unclearable (whole-branch review C1, 2026-07-25).
  */
 export function EntityPicker({ groups, value, onChange, allow, iconFor,
                               title = "Choose", placeholder = "— pick —",
@@ -141,7 +157,7 @@ export function EntityPicker({ groups, value, onChange, allow, iconFor,
       <${Icon} name="chevron" size=${15} />
     </button>
     ${open ? html`<${PickerDialog} groups=${groups} value=${value} allow=${allow}
-      title=${title} iconFor=${iconFor} depth=${depth}
+      title=${title} iconFor=${iconFor} depth=${depth} placeholder=${placeholder}
       onPick=${(id) => { setOpen(false); onChange(id); }}
       onClose=${() => setOpen(false)} />` : null}
   <//>`;

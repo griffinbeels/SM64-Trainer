@@ -34,10 +34,10 @@ ALLOWED_HAND_ROLLED_SELECTS = {
     # The `subarea` branch renders a 3-item castle_areas list — nothing to
     # group (see ParamInput's comment in segments.js).
     "components/segments.js",
-    # entitymodal.js IS the shared row renderer every other file defers to.
-    # It renders <button role="option">, not <option>, so it would not trip the
-    # scan today — listed anyway so a future markup change does not silently
-    # make the shared component itself the violation.
+    # entitymodal.js IS the shared cell renderer every other file defers to.
+    # It renders PracticeCell buttons and contains no <option> at all today, so
+    # it would not trip the scan — listed anyway so a future markup change
+    # cannot silently make the shared component itself the violation.
     "components/entitymodal.js",
 }
 

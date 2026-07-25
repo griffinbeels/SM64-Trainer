@@ -138,3 +138,33 @@ def test_star_row_cannot_scroll_horizontally():
             f"fit instead (spec 2026-07-24): {rule[:120]}")
     assert "container-type: inline-size" in css, (
         "the scale-to-fit container queries need a container ancestor")
+
+
+def _stems_from(registry_name: str) -> list[str]:
+    """Values of a {key: "stem"} registry in entities.js."""
+    source = (UI / "entities.js").read_text(encoding="utf-8")
+    block = re.search(registry_name + r"\s*=\s*\{([^}]*)\}", source)
+    assert block, f"entities.js lost {registry_name}"
+    return re.findall(r':\s*"([\w-]+)"', block.group(1))
+
+
+def test_special_and_substitute_stems_all_have_a_real_file():
+    """The nine special-stage stems and the four painting-less substitutes
+    resolve to files that EXIST.
+
+    tests/test_ui_entities.py asserts on the returned URL string and never
+    touches the filesystem, so renaming vanish.png would quietly revert nine
+    stages to a plain gold star with a green suite — exactly the bug 6fe0379
+    was written to fix (whole-branch review I4, 2026-07-25). The JS onerror
+    fallback hides a missing file in playtests; only this test sees it.
+    """
+    star_icons = UI / "assets" / "star_icons"
+    course_icons = UI / "assets" / "course_icons"
+    missing = []
+    for stem in _stems_from("SPECIAL_COURSE_ICONS") + _stems_from("COURSE_SUBSTITUTE_ICONS"):
+        if (star_icons / f"{stem}.png").exists():
+            continue
+        if list(course_icons.glob(f"{stem}.*")):
+            continue
+        missing.append(stem)
+    assert not missing, f"no art file for {missing}"

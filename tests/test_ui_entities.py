@@ -291,14 +291,20 @@ def test_layer_two_unions_a_courses_stars_and_its_segments():
     assert hmc["options"][1]["id"] == "segment:3"
 
 
-def test_a_castle_segment_belongs_to_no_course():
-    # LBLJ starts in the lobby, which is not a course — it must not be filed
-    # under one. The route editor groups those by region instead.
+def test_a_castle_segment_is_filed_under_castle_not_a_course():
+    # LBLJ starts in the lobby, which is not a course. It must not be filed
+    # under one — but it must still be REACHABLE, which is why it lands in a
+    # trailing "Castle" group (review I2 corrected the original behaviour of
+    # dropping it entirely).
     groups = run_node("courseUnionGroups", CATALOG_UNION
                       + "console.log(JSON.stringify(courseUnionGroups("
                       + "catalog, segments, courseByLevel)));")
-    every_name = [option["name"] for group in groups for option in group["options"]]
-    assert "LBLJ" not in every_name
+    course_groups = [group for group in groups if group["label"] != "Castle"]
+    course_names = [option["name"] for group in course_groups
+                    for option in group["options"]]
+    assert "LBLJ" not in course_names
+    castle = next(group for group in groups if group["label"] == "Castle")
+    assert [option["name"] for option in castle["options"]] == ["LBLJ"]
 
 
 def test_grid_order_is_main_courses_then_specials_then_castle_secret():
@@ -321,8 +327,10 @@ def test_courses_keep_game_order():
     groups = run_node("courseUnionGroups", CATALOG_UNION
                       + "console.log(JSON.stringify(courseUnionGroups("
                       + "catalog, segments, courseByLevel)));")
+    # Castle trails the courses — it is the home for segments that belong to
+    # none of them, not a course itself.
     assert [group["label"] for group in groups] == [
-        "Bob-omb Battlefield", "Hazy Maze Cave"]
+        "Bob-omb Battlefield", "Hazy Maze Cave", "Castle"]
 
 
 def test_segment_ids_are_distinguishable_from_star_ids():
@@ -330,3 +338,29 @@ def test_segment_ids_are_distinguishable_from_star_ids():
                       'console.log(JSON.stringify(['
                       'parseSegmentId("segment:12"), parseSegmentId("8:1")]));')
     assert parsed == [12, None]
+
+
+def test_castle_segments_get_their_own_group_rather_than_vanishing():
+    # A segment starting in the castle belongs to no course. Dropping it made
+    # the union read as complete while there was no way to target it at all
+    # (whole-branch review I2, 2026-07-25).
+    groups = run_node("courseUnionGroups", """
+const catalog = { courses: [{ id: 1, name: "BoB", stars: ["Big Bob-omb"] }] };
+const segments = [{ id: 9, name: "LBLJ", origin: { key: "6:1" } }];
+console.log(JSON.stringify(courseUnionGroups(catalog, segments, { "9": 1 })));
+""")
+    assert [group["label"] for group in groups] == ["BoB", "Castle"]
+    assert groups[1]["options"] == [
+        {"id": "segment:9", "name": "LBLJ", "sub": "segment"}]
+
+
+def test_segment_levels_come_from_the_origin_in_one_place():
+    # Two call sites need this derivation; a second copy is where the header's
+    # missing segment art came from.
+    levels = run_node("segmentLevelsOf", """
+const segments = [{ id: 3, origin: { key: "30" } },
+                  { id: 4, origin: { key: "6:1" } },
+                  { id: 5, origin: { key: null } }];
+console.log(JSON.stringify(segmentLevelsOf(segments)));
+""")
+    assert levels == {"3": [30], "4": [6], "5": []}

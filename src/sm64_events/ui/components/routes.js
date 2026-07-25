@@ -18,7 +18,7 @@ import { buildTree } from "../group.js";
 import { usePaneCap } from "../viewport.js";
 import { GroupedList, useOpenGroups } from "./grouplist.js";
 import { EntityPicker } from "./entitymodal.js";
-import { optionIcon, parseStarId, segmentOptions,
+import { optionIcon, parseStarId, segmentLevelsOf, segmentOptions,
          starOptionsFromCatalog } from "../entities.js";
 
 const html = htm.bind(h);
@@ -153,16 +153,7 @@ function ItemPicker({ catalog, segs, vocab, t, onPick, label }) {
     courseIcons: (t && t.courseIcons) || {},
     starIconsMode: (t && t.starIcons) || "course",
     iconOverrides: ((t && t.view) || {}).icon_overrides || {},
-    segmentLevels: Object.fromEntries(
-      (segs || []).map((segment) => {
-        // origin.key is a world-node key: "30" (a level) or "6:1" (a castle
-        // subarea). Either way the level is the part before the colon.
-        const originKey = (segment.origin || {}).key;
-        const level = originKey == null
-          ? null : Number(String(originKey).split(":")[0]);
-        return [String(segment.id),
-                level == null || Number.isNaN(level) ? [] : [level]];
-      })),
+    segmentLevels: segmentLevelsOf(segs),
   };
   const pick = () => {
     // Neither branch has anything to post before its picker resolves a first

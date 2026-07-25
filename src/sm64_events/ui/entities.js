@@ -44,10 +44,11 @@ export function courseOptions(vocab) {
   })).filter((group) => group.options.length > 0);
 }
 
-// The star picker is ONE control (user decision 2026-07-25): the optgroup is
-// the COURSE, so region order survives one level up while the options are the
-// stars themselves. Two sources carry the same information — the builder vocab
-// and the session catalog — so each gets a thin adapter over one core.
+// Stars grouped by COURSE. The grid picker (2026-07-25) renders these as its
+// two layers — a course cell, then that course's stars — so the grouping
+// outlived the <optgroup> it was first written for. Two sources carry the same
+// information, the builder vocab and the session catalog, so each gets a thin
+// adapter over one core.
 
 function starGroups(courseGroups, courseName, starNames) {
   return (courseGroups || []).flatMap((group) => group.courses
@@ -264,12 +265,30 @@ export function optionIcon(kind, id, context = {}) {
 // course, so they appear in no course's layer 2 — the route editor groups
 // those by region instead.
 
-/** Course id a segment belongs to, or null. `courseByLevel` is vocab's. */
-export function segmentCourse(segment, courseByLevel) {
+/** The LEVEL a segment starts in, from its origin node key ("30" or "6:1"),
+ *  or null. /api/segments carries `origin`, never `start_levels` — that field
+ *  is on the session view's segment_targets, and assuming otherwise made every
+ *  segment row fall back to a plain star (2026-07-25, twice). */
+export function segmentLevel(segment) {
   const originKey = (segment.origin || {}).key;
   if (originKey == null) return null;
   const level = Number(String(originKey).split(":")[0]);
-  if (Number.isNaN(level)) return null;
+  return Number.isNaN(level) ? null : level;
+}
+
+/** The icon context's segmentLevels map, built the one right way. */
+export function segmentLevelsOf(segments) {
+  return Object.fromEntries((segments || []).map((segment) => {
+    const level = segmentLevel(segment);
+    return [String(segment.id), level == null ? [] : [level]];
+  }));
+}
+
+/** Course id a segment belongs to, or null. `courseByLevel` is vocab's.
+ *  Module-local: courseUnionGroups is its only consumer (review M9). */
+function segmentCourse(segment, courseByLevel) {
+  const level = segmentLevel(segment);
+  if (level == null) return null;
   const course = (courseByLevel || {})[String(level)];
   return course == null ? null : Number(course);
 }
@@ -305,7 +324,14 @@ export function courseUnionGroups(catalog, segments, courseByLevel) {
     const [rightBand, rightId] = gridRank(right.id);
     return leftBand - rightBand || leftId - rightId;
   });
-  return inGridOrder.map((course) => ({
+  // Segments that start in the castle itself (a lobby BLJ, a basement
+  // movement) belong to no course. They used to be dropped, which made the
+  // union read as complete while there was NO deliberate way to target them —
+  // the banner only offers them while you are standing there in-game (review
+  // I2). They get their own trailing group instead.
+  const castleSegments = (segments || []).filter((segment) =>
+    segmentCourse(segment, courseByLevel) == null);
+  const courseCells = inGridOrder.map((course) => ({
     key: `course-${course.id}`,
     label: course.name,
     options: [
@@ -317,6 +343,13 @@ export function courseUnionGroups(catalog, segments, courseByLevel) {
       })),
     ],
   })).filter((group) => group.options.length > 0);
+  if (castleSegments.length === 0) return courseCells;
+  return [...courseCells, {
+    key: "castle-segments", label: "Castle",
+    options: castleSegments.map((segment) => ({
+      id: `segment:${segment.id}`, name: segment.name, sub: "segment",
+    })),
+  }];
 }
 
 /** "segment:12" -> 12, or null for a star id. The target picker's two kinds
