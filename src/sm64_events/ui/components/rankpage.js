@@ -40,31 +40,49 @@ const CHART_PAD_BOTTOM = 26; // room for the dated x-axis ticks
 // measurement.
 const FALLBACK_CHART_WIDTH = 720;
 
-// Index of the tier band containing `score` (the largest floor <= score).
-function tierIndexOf(score) {
-  let index = 0;
-  for (let floorIndex = 0; floorIndex < TIER_FLOORS.length; floorIndex += 1) {
-    if (TIER_FLOORS[floorIndex] <= score) index = floorIndex;
-  }
-  return index;
+// Every tier boundary, Iron's floor through the 100 cap above Mario — the
+// full set of lines autoZoomDomain can widen toward.
+const TIER_BOUNDARIES = [...TIER_FLOORS, SCORE_CEILING];
+
+// A first pass at auto-zoom snapped the domain out to the tier boundary
+// BELOW low and the one ABOVE high — correct by that rule, but the rule
+// itself gave three tiers of headroom to six points of real climb (the
+// live report this chart exists for: MARELO 9.6, an Iron-to-Bronze move,
+// still read as flat). Padding by a fraction of the data's own range keeps
+// the zoom proportional to how much the data actually moved instead.
+const Y_PAD_FRACTION = 0.15;
+// Floor in score points, not a fraction of the range: a fraction alone
+// hits zero exactly when it matters most — every point at the same score,
+// where 0.15 * 0 is 0 and an unpadded domain divides by zero below.
+const Y_PAD_FLOOR = 2;
+
+function nearestBoundaryAtOrBelow(value) {
+  return [...TIER_BOUNDARIES].reverse().find((boundary) => boundary <= value);
+}
+function nearestBoundaryAtOrAbove(value) {
+  return TIER_BOUNDARIES.find((boundary) => boundary >= value);
 }
 
-// The score the tier at `index` tops out at: the next tier's floor, or the
-// 100 cap for Mario, which has no tier above it.
-function tierCeiling(index) {
-  return index + 1 < TIER_FLOORS.length ? TIER_FLOORS[index + 1] : SCORE_CEILING;
-}
-
-// Auto-zoom the Y axis to the data's own [low, high] range, expanded by one
-// full tier band above and below, clamped to Iron's floor and the 100 cap.
-// A fixed 0-100 axis compresses a real climb inside a single tier into a
-// sliver at the bottom — the reported bug: MARELO 9.6, an Iron-to-Bronze
-// climb, reads as a flat line. Always returns a positive span: the tier
-// below Iron and above Mario both clamp to an edge rather than vanishing.
+// Auto-zoom the Y axis to the data's own [low, high] range, padded by
+// Y_PAD_FRACTION of that range (floored at Y_PAD_FLOOR), clamped to Iron's
+// floor and the 100 cap. If the padded window ends up entirely inside one
+// tier band — no boundary crossing left to show — widen it just enough to
+// reach the nearer boundary, so the chart never loses its frame of
+// reference even when the whole climb happened inside a single tier.
 function autoZoomDomain(scores) {
   const low = Math.min(...scores), high = Math.max(...scores);
-  const domainLow = TIER_FLOORS[Math.max(0, tierIndexOf(low) - 1)];
-  const domainHigh = tierCeiling(Math.min(TIER_FLOORS.length - 1, tierIndexOf(high) + 1));
+  const pad = Math.max((high - low) * Y_PAD_FRACTION, Y_PAD_FLOOR);
+  let domainLow = Math.max(0, low - pad);
+  let domainHigh = Math.min(100, high + pad);
+
+  const hasBoundaryInView = TIER_BOUNDARIES.some(
+    (boundary) => boundary >= domainLow && boundary <= domainHigh);
+  if (!hasBoundaryInView) {
+    const boundaryBelow = nearestBoundaryAtOrBelow(domainLow);
+    const boundaryAbove = nearestBoundaryAtOrAbove(domainHigh);
+    if (domainLow - boundaryBelow <= boundaryAbove - domainHigh) domainLow = boundaryBelow;
+    else domainHigh = boundaryAbove;
+  }
   return [domainLow, domainHigh];
 }
 
