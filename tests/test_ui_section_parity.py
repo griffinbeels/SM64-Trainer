@@ -94,15 +94,26 @@ def test_two_rank_banners_are_rendered_for_both_kinds():
     characters of label did not fit a ~390px banner row, which is what left
     every fixture ellipsized mid-word. Asserting the exact kicker each
     section passes is what stops a future edit from quietly reintroducing
-    either fault."""
+    either fault.
+
+    Round 6 (2026-07-25) made the STRATEGY kicker dynamic: when both
+    measures grade identically -- always so for a star whose only strategy
+    carries standards -- the entity banner is suppressed and the survivor
+    reads "Strategy · Star", because a lone "STRATEGY" banner read as a star
+    rank that had failed to load. So that side is pinned as
+    `bannerLabel(sec, "<Kind>")`, which carries the per-kind noun into the
+    merged case; the entity banner's own kicker stays the literal it always
+    was."""
     source = PRACTICE_JS.read_text(encoding="utf-8")
     entity_label = {"StarSection": "Star", "SegmentSection": "Segment"}
     for name in ("StarSection", "SegmentSection"):
         body = _body(source, name)
         assert body.count("<${RankBanner}") >= 2, \
             f"{name} does not render both the strategy and entity rank banners"
-        assert 'label="Strategy"' in body, \
-            f"{name} is missing the strategy rank banner's kicker"
+        assert f'bannerLabel(sec, "{entity_label[name]}")' in body, \
+            (f"{name}'s strategy banner must take its kicker from "
+             f'bannerLabel(sec, "{entity_label[name]}") -- a hardcoded '
+             '"Strategy" cannot say "Strategy · Segment" on the merged card')
         assert f'label="{entity_label[name]}"' in body, \
             (f"{name}'s entity rank banner must be labelled "
              f"\"{entity_label[name]}\" -- the kicker names the entity this "

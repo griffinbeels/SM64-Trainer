@@ -94,7 +94,14 @@ function sentinelMsg(banner) {
 // point) — a wider, quieter region than this banner has room for. This
 // component's job shrank back to what always fit: rank / division / bar /
 // next, none of which can be abbreviated.
-export function RankBanner({ label, banner }) {
+//
+// `hint` is the kicker's tooltip, and today has exactly one caller: the
+// merged "Strategy · Star" label practice.js uses when the two measures
+// grade identically (bannerLabel/bannerHint). It stays a prop rather than
+// wording built here because the reason is a fact about the CALL SITE's
+// data, and this component is deliberately ignorant of which two ladders
+// produced the banner it was handed.
+export function RankBanner({ label, banner, hint = null }) {
   const ranked = !!(banner && banner.rank);
   // Called unconditionally (rules of hooks) even on the sentinel/empty
   // path below — `null` passes straight through useTween with no
@@ -107,7 +114,7 @@ export function RankBanner({ label, banner }) {
   const fillPct = useTween(rawFillPct);
   if (!ranked) {
     return html`<div class="rank-banner rank-banner-empty">
-      <span class="rank-banner-kicker">${label}</span>
+      <span class="rank-banner-kicker" title=${hint}>${label}</span>
       <span class="meta">${sentinelMsg(banner)}</span>
     </div>`;
   }
@@ -138,7 +145,7 @@ export function RankBanner({ label, banner }) {
     basisTitle].filter(Boolean).join(" · ");
   return html`<div class="rank-banner">
     <div class="rank-banner-row">
-      <span class="rank-banner-kicker">${label}</span>
+      <span class="rank-banner-kicker" title=${hint}>${label}</span>
       <${Medal} rank=${banner.rank} size=${24} />
       <b class="rank-banner-name">${banner.rank.toUpperCase()}${banner.division ? ` ${banner.division}` : ""}</b>
       ${basis && html`<span class="meta rank-banner-basis" title=${basisTitle}>${basisText}</span>`}

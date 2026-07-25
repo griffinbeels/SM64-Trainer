@@ -361,15 +361,32 @@ function TimeFilterChip({ sec, t }) {
   </span>`;
 }
 
-// True when the active strategy IS the star/segment's own fastest known one
-// (entity_rank.fastest_strat === the currently active strategy) -- both
-// RankBanners would show the numerically IDENTICAL rank, so rendering the
-// entity's banner a second time would read as a rendering glitch, not a
-// confirmation (spec 2026-07-25 round 3). StrategyFastestHint (below) says
-// nothing in this same case, for the same reason -- no point naming the
-// fastest strategy when it's the one already running (round 4 direction).
-function activeStrategyIsFastest(sec) {
-  return !!(sec.entity_rank && sec.entity_rank.fastest_strat === sec.last_strat);
+// True when the strategy banner and the entity banner are the SAME MEASURE:
+// the active strategy's ladder grades this time exactly where the entity's
+// best-possible ladder does. Always the case for a star with only ONE
+// strategy carrying standards -- its ladder IS the pointwise best -- and in
+// general whenever no other strategy beats it around the player's current
+// time. Two identical banners read as a duplicated widget (spec round 3), so
+// only one renders; see bannerLabel for why it can't render as a plain
+// "Strategy" one either.
+//
+// Compared field by field rather than by `entity_rank.fastest_strat ===
+// last_strat` (the round-3 rule this replaces): a ragged ladder can hand the
+// HARDEST tiers to the active strategy -- which is all _fastest_strategy
+// resolves (tracking/views.py) -- while a different strategy still sets a
+// lower cutoff around the time actually being graded, and then the two
+// banners genuinely differ. Comparing what is DISPLAYED cannot make that
+// mistake. `fill` is in the comparison because it is what keeps the merge
+// stable as a time improves: two different ladders that happen to agree on
+// tier and division will not also agree on the position within it.
+function ranksAreIdentical(sec) {
+  const strategy = sec.rank, entity = sec.entity_rank;
+  if (!strategy || !entity || !strategy.rank || !entity.rank) return false;
+  return strategy.rank === entity.rank
+    && strategy.division === entity.division
+    && strategy.next_tier === entity.next_tier
+    && strategy.next_division === entity.next_division
+    && Math.round((strategy.fill || 0) * 100) === Math.round((entity.fill || 0) * 100);
 }
 
 // Whether the entity's own RankBanner renders beside the strategy one. Both
@@ -378,7 +395,27 @@ function activeStrategyIsFastest(sec) {
 // colour boundary under nothing, which is the same class of "correct data,
 // unexplainable picture" bug the split exists to fix.
 function showsEntityBanner(sec) {
-  return !!(sec.entity_rank && !activeStrategyIsFastest(sec));
+  return !!(sec.entity_rank && !ranksAreIdentical(sec));
+}
+
+// The lone banner names BOTH measures when it IS both. Suppressing the
+// entity banner and leaving the survivor labelled "STRATEGY" reads as a
+// star rank that failed to load -- "it reads as there being a bug where the
+// star ranking is missing. In fact, it's both the same thing, right?" (live
+// report 2026-07-25 round 6, on a star whose only strategy is Standard).
+// The dual label costs nothing here: this is exactly the case where one
+// banner has the whole row, which is why the round-4 label budget (13
+// characters unaffordable when TWO banners share ~390px) doesn't bind.
+function bannerLabel(sec, entityNoun) {
+  return ranksAreIdentical(sec) ? `Strategy · ${entityNoun}` : "Strategy";
+}
+
+// Why the one banner carries two names, for anyone who hovers it.
+function bannerHint(sec, entityNoun) {
+  if (!ranksAreIdentical(sec)) return null;
+  return `This strategy's standards are the best this ${entityNoun.toLowerCase()}`
+    + ` has, so the strategy rank and the ${entityNoun.toLowerCase()}'s own`
+    + " rank are the same right now.";
 }
 
 // The rank wash's inputs (index.html, `.rank-slot-wrap::before`): each
@@ -469,7 +506,8 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
             entityKey=${`star:${sec.course_id}:${sec.star_id}`}
             onDone=${() => t.clearEntityCelebration(`star:${sec.course_id}:${sec.star_id}`)}>
           <div class="rank-slot">
-            <${RankBanner} label="Strategy" banner=${sec.rank} />
+            <${RankBanner} label=${bannerLabel(sec, "Star")}
+                hint=${bannerHint(sec, "Star")} banner=${sec.rank} />
             ${showsEntityBanner(sec) && html`<${RankBanner} label="Star" banner=${sec.entity_rank} />`}
           </div>
         <//>
@@ -621,7 +659,8 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare }) {
             entityKey=${`segment:${sec.segment_id}`}
             onDone=${() => t.clearEntityCelebration(`segment:${sec.segment_id}`)}>
           <div class="rank-slot">
-            <${RankBanner} label="Strategy" banner=${sec.rank} />
+            <${RankBanner} label=${bannerLabel(sec, "Segment")}
+                hint=${bannerHint(sec, "Segment")} banner=${sec.rank} />
             ${showsEntityBanner(sec) && html`<${RankBanner} label="Segment" banner=${sec.entity_rank} />`}
           </div>
         <//>
