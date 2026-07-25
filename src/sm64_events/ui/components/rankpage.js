@@ -114,14 +114,42 @@ const BAND_GRADIENT = "linear-gradient(90deg, "
 // deliberately renders no tier NAME for it, because naming one would mean
 // re-deriving `division_for` in JS, which is the server's job and the one
 // rule this file's chart follows everywhere else.
+// Which tier BAND a 0-100 score sits in. Tier only, never division: an
+// AGGREGATE has no ladder, so the server grades it against the full anchor
+// table too (`scoring.division_for` with `defined=None`), which is exactly
+// what ANCHORS mirrors — this agrees with it by construction. The division
+// numeral, which genuinely needs a ladder, is still never computed here.
+function bandForScore(score) {
+  return [...TIER_BANDS].reverse().find((band) => score >= band.from)
+    || TIER_BANDS[0];
+}
+
 function LadderBar({ value }) {
   const filled = Math.max(0, Math.min(SCORE_CEILING, value || 0));
+  const here = bandForScore(filled);
   const pips = TIER_BANDS.flatMap((band) => {
     const step = (band.to - band.from) / DIVISIONS_PER_TIER;
     return Array.from({ length: DIVISIONS_PER_TIER - 1 },
       (_, index) => band.from + step * (index + 1));
   });
-  return html`<div class="rank-ladder">
+  return html`<div>
+    <!-- Which band is which, named by the same medal every other rank
+         surface uses, centred over its own stretch of the track (live
+         request 2026-07-25 round 8 — "so that it's very clear what each one
+         is"). The band the value is currently in gets a bigger medal, sits
+         raised above the row and wears a YOU tag: the one thing this bar is
+         actually being read for is "where am I", and colour alone was not
+         answering it. -->
+    <div class="rank-ladder-scale">
+      ${TIER_BANDS.map((band) => html`<span
+          class="rank-ladder-mark ${band.tier === here.tier ? "is-you" : ""}"
+          style=${`left:${(band.from + band.to) / 2}%`}
+          title=${`${band.tier} — ${toPoints(band.from)} to ${toPoints(band.to)} pts`}>
+        ${band.tier === here.tier && html`<b class="rank-ladder-you">YOU</b>`}
+        <${Medal} rank=${band.tier} size=${band.tier === here.tier ? 22 : 13} />
+      </span>`)}
+    </div>
+    <div class="rank-ladder">
     <span class="rank-ladder-bands" style=${`background-image:${BAND_GRADIENT}`}></span>
     ${filled > 0 && html`<span class="rank-ladder-fill" style=${
       `width:${filled}%;background-image:${BAND_GRADIENT};`
@@ -131,6 +159,7 @@ function LadderBar({ value }) {
       class="rank-ladder-tick" style=${`left:${band.from}%`}
       title=${`${band.tier} starts at ${toPoints(band.from)} pts`}></span>`)}
     ${filled > 0 && html`<span class="rank-ladder-head" style=${`left:${filled}%`}></span>`}
+    </div>
   </div>`;
 }
 
@@ -475,14 +504,25 @@ function ScopeChips({ activeScopeId, onPick, refreshKey }) {
 // segment key resolves no course stem at this layer (the breakdown payload
 // carries no start_levels) and falls back to the generic star, same as
 // stagebanner's own segment cells do for an unmapped level.
-function TopEntityIcon({ t, entity, open, onToggle }) {
+// ONE tile for both icon rows on this tab — Best in scope and Coverage.
+// They differ only in size and in whether the entity is scored: an
+// unpracticed one keeps its art but loses the tier ring and dims, which is
+// what makes a coverage row readable as "these, not those" at a glance
+// (round 8). Never two components that happen to look alike — the split
+// rank banners were exactly that mistake one card over.
+function EntityTile({ t, entity, size = 42, open, onToggle }) {
   const fallbackSlot = fallbackSlotForEntityKey(entity.key);
   const iconSrc = resolveIcon(t, entity.key,
     courseStemForEntityKey(entity.key), fallbackSlot);
-  return html`<button type="button" class="topn-tile ${open ? "is-open" : ""}"
-      style=${`--tier-tint:${rankColor(entity.tier)}`} onclick=${onToggle}
-      aria-expanded=${open ? "true" : "false"}
-      title=${`${entity.label} — ${entity.tier} ${entity.division} · ${fmtPoints(entity.score)} pts`}>
+  const practiced = entity.score != null;
+  return html`<button type="button"
+      class="topn-tile ${open ? "is-open" : ""} ${practiced ? "" : "is-unpracticed"}"
+      style=${`--tile-size:${size}px;`
+        + (practiced ? `--tier-tint:${rankColor(entity.tier)}` : "")}
+      onclick=${onToggle} aria-expanded=${open ? "true" : "false"}
+      title=${practiced
+        ? `${entity.label} — ${entity.tier} ${entity.division} · ${fmtPoints(entity.score)} pts`
+        : `${entity.label} — not practiced yet`}>
     <img class="topn-icon ${isGenericArt(iconSrc) ? "" : "courseicon"}" src=${iconSrc}
          onerror=${(event) => fallbackToGenericStar(event, fallbackSlot)}
          alt="" draggable="false" />
@@ -586,10 +626,44 @@ function TopStrip({ t, entities }) {
   return html`<div class="practice-card rank-topn-card">
     <h3>Best in scope</h3>
     <div class="topn-strip">
-      ${top.map((entity) => html`<${TopEntityIcon} key=${entity.key} t=${t}
+      ${top.map((entity) => html`<${EntityTile} key=${entity.key} t=${t}
         entity=${entity} open=${entity.key === openKey}
         onToggle=${() => setOpenKey(entity.key === openKey ? null : entity.key)} />`)}
     </div>
+    ${open && html`<${TopEntityDetail} t=${t} entity=${open}
+      onClose=${() => setOpenKey(null)} />`}
+  </div>`;
+}
+
+const COVERAGE_TILE_PX = 30;
+
+// Coverage as the THING it counts, not a bar (live request 2026-07-25 round
+// 8): every rated entry in the scope, in the scope's own order — route order
+// for a route — lit with its tier ring when practiced and dimmed when not.
+// "The goal is to really really clearly showcase 'this is your coverage,
+// because you can see which stars you've practiced and which stars you
+// haven't' rather than it being a bar."
+//
+// Excluded rows are filtered OUT, which is what keeps the strip honest: the
+// server's `n` is the non-excluded count, so tile count == n and lit count
+// == practiced, and the caption below can never disagree with the picture
+// above it. Tiles open the SAME detail panel Best-in-scope uses — on an
+// unpracticed entry that panel is just "Practice this", which is the
+// obvious next move from a dim tile.
+function CoverageStrip({ t, data, caption }) {
+  const [openKey, setOpenKey] = useState(null);
+  const rated = data.entities.filter((entity) => !entity.excluded);
+  const open = rated.find((entity) => entity.key === openKey) || null;
+  // The caption is a PROP, not the sibling it used to be: an expanded
+  // detail panel rendered inside the label would otherwise sit between the
+  // tiles and the sentence explaining them.
+  return html`<div class="rank-coverage">
+    <div class="topn-strip rank-coverage-strip">
+      ${rated.map((entity) => html`<${EntityTile} key=${entity.key} t=${t}
+        entity=${entity} size=${COVERAGE_TILE_PX} open=${entity.key === openKey}
+        onToggle=${() => setOpenKey(entity.key === openKey ? null : entity.key)} />`)}
+    </div>
+    <span class="meta">${caption}</span>
     ${open && html`<${TopEntityDetail} t=${t} entity=${open}
       onClose=${() => setOpenKey(null)} />`}
   </div>`;
@@ -647,16 +721,17 @@ export function RankPage({ t }) {
     } catch (error) { setDataErr(error); }
   }
 
-  // The card's three numeric surfaces (spec task F2): the rating itself,
-  // and the Mastery/Coverage bars each tweened together with the number
-  // printed beside them, so a bar filling next to a number that already
-  // jumped to its new value can't read as two components disagreeing.
+  // The card's tweened surfaces (spec task F2): the rating itself and the
+  // Mastery ladder, each animated together with the number printed beside
+  // it, so a bar filling next to a number that already jumped to its new
+  // value can't read as two components disagreeing. Coverage lost its tween
+  // with its bar in round 8 — it is now a row of entity tiles, where the
+  // change is a tile lighting up rather than a length growing.
   // Called unconditionally (rules of hooks) even while `data` is still
   // loading or a scope switch has cleared it -- `null` passes straight
   // through with no animation.
   const tweenedMarelo = useTween(data ? data.marelo : null);
   const tweenedMastery = useTween(data ? data.mastery : null);
-  const tweenedCoveragePct = useTween(data ? Math.round((data.coverage || 0) * 100) : null);
 
   if (!scopes) return html`<${PageState} kind=${t.connected ? "loading" : "offline"}
       title="Loading ranks" message=${scopesErr ? scopesErr.message : undefined} />`;
@@ -708,11 +783,12 @@ export function RankPage({ t }) {
                   + `rank score of the ${data.practiced} `
                   + `${data.practiced === 1 ? "entry" : "entries"} you have practiced, `
                   + "on the same ladder the chart below draws"}</span></label>
-              <label>Coverage <i style=${`width:${tweenedCoveragePct || 0}%`}></i>
-                <span class="meta">${`${data.practiced} of ${data.n} rated `
-                  + `${data.n === 1 ? "entry" : "entries"} practiced — MARELO is `
-                  + "mastery × coverage, so an unpractised entry costs rating even "
-                  + "when the ones you do practise are strong"}</span></label>
+              <label>Coverage <${CoverageStrip} t=${t} data=${data}
+                caption=${`${data.practiced} of ${data.n} rated `
+                  + `${data.n === 1 ? "entry" : "entries"} practiced — dim tiles are `
+                  + "the ones you have not run yet. MARELO is mastery × coverage, so "
+                  + "an unpractised entry costs rating even when the ones you do "
+                  + "practise are strong"} /></label>
             </div>
             ${data.n < 5 && html`<p class="meta">Small scope — ${data.n} rated ${
               data.n === 1 ? "entry" : "entries"}.</p>`}`}

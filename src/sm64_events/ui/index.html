@@ -1071,10 +1071,21 @@
   .topn-strip { display: flex; flex-wrap: wrap; gap: 8px; }
   .topn-tile {
     display: inline-flex; align-items: center; justify-content: center;
-    width: 42px; height: 42px; border-radius: 8px; overflow: hidden;
+    width: var(--tile-size, 42px); height: var(--tile-size, 42px);
+    border-radius: 8px; overflow: hidden;
     border: 2px solid var(--tier-tint, var(--border-soft));
     background: rgba(8, 20, 34, .4);
   }
+  /* Coverage's unpracticed entries: the art stays (you have to recognise
+     WHICH star you haven't touched), the tier ring and the colour go. */
+  .topn-tile.is-unpracticed { opacity: .38; filter: grayscale(.75); }
+  .topn-tile.is-unpracticed:hover { opacity: .7; }
+  /* Coverage's own strip: tighter than Best-in-scope because it shows the
+     WHOLE scope â€” 24 entries for a 16 Star route, 120+ for a full run. The
+     cap plus scroll is what stops a long route pushing the chart and the
+     breakdown off the screen; five rows fit before it engages. */
+  .rank-coverage-strip { gap: 5px; max-height: 200px; overflow-y: auto; }
+  .rank-coverage { margin: 4px 0 3px; }
   .topn-icon { width: 100%; height: 100%; object-fit: contain; }
   .topn-icon.courseicon { width: 90%; height: 90%; }
   /* The tiles are buttons (round 7: "I could click on it and get an overview
@@ -1132,6 +1143,19 @@
   .rank-ladder {
     position: relative; height: 16px; margin: 4px 0 3px;
     border-radius: 8px; background: rgba(4,13,23,.72); overflow: hidden;
+  }
+  /* The medal row above the track: one per tier, centred over its own band,
+     with the current band's raised and enlarged. Fixed height so the card
+     doesn't reflow as YOU moves between bands of different medal sizes. */
+  .rank-ladder-scale { position: relative; height: 40px; }
+  .rank-ladder-mark {
+    position: absolute; bottom: 0; transform: translateX(-50%);
+    display: flex; flex-direction: column; align-items: center; gap: 1px;
+  }
+  .rank-ladder-mark.is-you { bottom: 5px; }
+  .rank-ladder-you {
+    color: var(--gold); font-size: .55rem; font-weight: 800;
+    letter-spacing: .12em; line-height: 1;
   }
   .rank-ladder-bands, .rank-ladder-fill {
     position: absolute; left: 0; top: 0; bottom: 0;
