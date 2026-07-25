@@ -59,10 +59,13 @@ def test_unknown_scope_is_none():
 
 def test_scope_list_offers_overall_then_routes_then_courses():
     scopes = scope_list(routes=ROUTES, courses={1: "Bob-omb Battlefield"})
-    assert scopes[0] == {"id": "overall", "label": "Overall", "kind": "overall"}
-    assert {"id": "route:3", "label": "16 Star", "kind": "route"} in scopes
-    assert {"id": "course:1", "label": "Bob-omb Battlefield",
-            "kind": "course"} in scopes
+    # Full-list equality, not just membership, so a reordering (e.g. courses
+    # before routes) fails this test instead of slipping through.
+    assert scopes == [
+        {"id": "overall", "label": "Overall", "kind": "overall"},
+        {"id": "route:3", "label": "16 Star", "kind": "route"},
+        {"id": "course:1", "label": "Bob-omb Battlefield", "kind": "course"},
+    ]
 
 
 def test_aggregate_counts_unpracticed_as_zero_in_the_denominator():
@@ -79,6 +82,32 @@ def test_aggregate_takes_the_best_k_of_a_group():
     out = aggregate({"a": 20.0, "b": 80.0}, groups)
     assert out["n"] == 1 and out["marelo"] == 80.0
     assert [e["key"] for e in out["entities"]] == ["b"]
+
+
+def test_aggregate_counts_a_genuine_zero_as_practiced():
+    """A candidate present in `scores` with value 0.0 is a real (if brutal)
+    practiced run, not an absent one. `practiced` must be counted by presence
+    in `scores` (`score is not None`), never by truthiness (`if score`) --
+    the latter would silently reclassify this scored zero as unpracticed and
+    corrupt coverage, which is half of MARELO = mastery * coverage."""
+    groups = [{"need": 1, "candidates": ["a"]}, {"need": 1, "candidates": ["b"]}]
+    out = aggregate({"a": 0.0}, groups)
+    assert out["n"] == 2 and out["practiced"] == 1
+    assert out["coverage"] == 0.5
+    assert out["mastery"] == 0.0
+    assert out["marelo"] == 0.0
+
+
+def test_aggregate_best_k_prefers_a_scored_zero_over_an_absent_candidate():
+    """The best-k sort must rank a genuine 0.0 above an absent candidate.
+    Coalescing a missing score to -1.0 (never `score or -1.0`, which treats
+    0.0 itself as missing) is what guarantees this; `absent` is listed FIRST
+    so a broken (tied) sort would keep it first via stability, exposing the
+    bug instead of hiding it behind incidental list order."""
+    groups = [{"need": 1, "candidates": ["absent", "zero"]}]
+    out = aggregate({"zero": 0.0}, groups)
+    assert out["practiced"] == 1 and out["coverage"] == 1.0
+    assert [entity["key"] for entity in out["entities"]] == ["zero"]
 
 
 def test_aggregate_of_an_empty_scope_is_none_not_zero():
