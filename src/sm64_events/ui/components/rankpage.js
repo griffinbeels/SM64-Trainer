@@ -89,6 +89,46 @@ function autoZoomDomain(scores) {
   return [domainLow, domainHigh];
 }
 
+// Wheel zoom (live request 2026-07-25 round 6). `zoom` is the FRACTION of the
+// full time span in view, always anchored at the newest point — "zooms toward
+// present day when scrolling in, and back out to all time when scrolling
+// out". 1 = the entire journey, which is the default the user asked to keep.
+const MIN_ZOOM = 0.02;
+const ZOOM_SENSITIVITY = 0.0015;
+// deltaY arrives in pixels (0), lines (1) or pages (2) depending on the
+// browser and device; Firefox reports ±3 LINES where Chrome reports ±100
+// pixels, so without this a Firefox wheel tick would move the zoom by 0.4%.
+const DELTA_SCALE = { 0: 1, 1: 16, 2: 400 };
+
+function wheelDelta(event) {
+  return event.deltaY * (DELTA_SCALE[event.deltaMode] || 1);
+}
+
+// A point is a rank-up when its tier or division differs from the previous
+// point's AND the rating went UP. MARELO can fall (a worse average, an
+// entity excluded, a route edited), and a fall back through a boundary is
+// not an event to celebrate — the same rule the server's celebration
+// watermark applies (`scopes.celebration_delta` fires only on a RISE). The
+// first point is never a rank-up either, for the same reason it is never a
+// celebration: there was no earlier rank to leave.
+function rankUpKind(point, previous) {
+  if (!previous || !point.tier || !(point.marelo > previous.marelo)) return null;
+  if (point.tier !== previous.tier) return "tier";
+  if (point.division !== previous.division) return "division";
+  return null;
+}
+
+// Hover text for a rank-up dot. Built outside the template because an SVG
+// <title> is markup, not an attribute: string-concatenating around an
+// html`` literal would splice a VNode into a string and render
+// "[object Object]".
+function markTitle(mark) {
+  const when = new Date(mark.point.utc)
+    .toLocaleDateString([], { month: "short", day: "numeric" });
+  return `${mark.kind === "tier" ? "Tier up" : "Division up"}`
+    + ` — ${mark.point.tier} ${mark.point.division} · ${when}`;
+}
+
 const DAY_MS = 86400000;
 
 // Tick label granularity follows the series' own span: a fixed format either
@@ -160,8 +200,25 @@ function useMeasuredWidth(fallback) {
 // Measures its own container and draws the viewBox at the SAME width, so the
 // chart always renders 1:1 — no `preserveAspectRatio="none"`, which would
 // stop the letterboxing but stretch the tier/tick text horizontally instead.
+//
+// Two axes, two different rules (live request 2026-07-25 round 6):
+//
+// X is the user's: the wheel zooms the time window, anchored at the newest
+// point, and the default is the whole journey. Points are never filtered out
+// of the path — the line is drawn in full and CLIPPED to the plot — so a
+// window holding one point or none still shows the curve passing through it
+// instead of collapsing to nothing.
+//
+// Y follows the zoom. Fully zoomed out it is the WHOLE ladder, Iron's floor
+// to the 100 cap, so every tier still to climb is on screen ("we should
+// actually show all of the higher tiers as well"). Zooming in eases it
+// toward `autoZoomDomain` over the visible points, which is what makes an
+// individual jump legible — the request's other half, and the reason the
+// auto-zoom this replaces existed at all. The blend is linear in `zoom` so
+// the axis dollies rather than snapping between two framings.
 export function HistoryChart({ points }) {
   const [setChartEl, measuredWidth] = useMeasuredWidth(FALLBACK_CHART_WIDTH);
+  const [zoom, setZoom] = useState(1);
   if (!points || points.length < 2)
     return html`<p class="meta">Not enough history yet — finish a few more runs.</p>`;
 
@@ -174,39 +231,97 @@ export function HistoryChart({ points }) {
 
   const times = points.map((point) => Date.parse(point.utc));
   const minTime = Math.min(...times), maxTime = Math.max(...times);
-  const timeSpan = maxTime - minTime;
+  const fullSpan = maxTime - minTime;
+  const viewStart = maxTime - fullSpan * zoom;
+  const viewSpan = maxTime - viewStart;
   const xForTime = (time) => plotLeft
-    + (timeSpan > 0 ? (time - minTime) / timeSpan : 0.5) * plotWidth;
+    + (viewSpan > 0 ? (time - viewStart) / viewSpan : 0.5) * plotWidth;
 
-  const [domainLow, domainHigh] = autoZoomDomain(points.map((point) => point.marelo));
-  const domainSpan = domainHigh - domainLow;
+  const inView = points.filter((point, index) => times[index] >= viewStart);
+  const [autoLow, autoHigh] = autoZoomDomain(
+    (inView.length ? inView : points).map((point) => point.marelo));
+  const domainLow = autoLow * (1 - zoom);
+  const domainHigh = SCORE_CEILING + (autoHigh - SCORE_CEILING) * (1 - zoom);
+  const domainSpan = Math.max(1e-6, domainHigh - domainLow);
   const yForScore = (score) => plotBottom
     - ((Math.max(domainLow, Math.min(domainHigh, score)) - domainLow) / domainSpan) * plotHeight;
 
   const line = points.map((point, index) =>
-    `${index ? "L" : "M"}${xForTime(Date.parse(point.utc)).toFixed(1)},${yForScore(point.marelo).toFixed(1)}`
+    `${index ? "L" : "M"}${xForTime(times[index]).toFixed(1)},${yForScore(point.marelo).toFixed(1)}`
   ).join(" ");
 
-  const visibleTiers = TIERS_ASCENDING.filter(([, floor]) => floor >= domainLow && floor <= domainHigh);
-  const ticks = timeTicks(minTime, maxTime, plotWidth);
+  // Every tier line in the domain, but a label only where there is room to
+  // read it: the top of the ladder packs Master 80, Grandmaster 90 and Mario
+  // 95 into the last fifth of the axis — about 9px between the last two on a
+  // 180px plot. Resolved from the TOP down so the tier that loses its label
+  // in a crowd is the one below; on a full-ladder view that drops
+  // "Grandmaster" and keeps "Mario", which is the label the whole
+  // show-every-higher-tier request is about.
+  let lastLabelY = -Infinity;
+  const tierLines = TIERS_ASCENDING
+    .filter(([, floor]) => floor >= domainLow && floor <= domainHigh)
+    .reverse()
+    .map(([tier, floor]) => {
+      const y = yForScore(floor);
+      const labelled = y - lastLabelY >= 11;
+      if (labelled) lastLabelY = y;
+      return { tier, y, labelled };
+    });
+
+  const marks = points.map((point, index) => ({
+    point, kind: rankUpKind(point, points[index - 1]),
+    x: xForTime(times[index]), y: yForScore(point.marelo),
+  })).filter((mark) => mark.kind);
+
+  const ticks = timeTicks(viewStart, maxTime, plotWidth);
+
+  function onWheel(event) {
+    const delta = wheelDelta(event);
+    // At either limit the wheel belongs to the page again — a chart that
+    // swallowed the scroll after it stopped zooming would trap the tab.
+    if ((zoom >= 1 && delta > 0) || (zoom <= MIN_ZOOM && delta < 0)) return;
+    event.preventDefault();
+    // Functional update, not `zoom * …`: a fast scroll delivers several
+    // wheel events inside ONE frame, and every handler in that burst would
+    // read the same rendered `zoom` — measured in the harness as twelve
+    // events moving the window exactly as far as one.
+    setZoom((current) => Math.min(1, Math.max(MIN_ZOOM,
+      current * Math.exp(delta * ZOOM_SENSITIVITY))));
+  }
 
   return html`<div class="rank-chart-block">
-    <svg class="rank-chart" ref=${setChartEl}
+    <svg class="rank-chart" ref=${setChartEl} onwheel=${onWheel}
         viewBox=${`0 0 ${measuredWidth} ${CHART_HEIGHT}`}
         role="img" aria-label="MARELO over time">
-      ${visibleTiers.map(([tier, floor]) => html`<g>
-        <line x1=${plotLeft} x2=${plotRight} y1=${yForScore(floor)} y2=${yForScore(floor)}
+      <defs><clipPath id="rank-chart-clip">
+        <rect x=${plotLeft} y=${plotTop - 4} width=${plotWidth} height=${plotHeight + 8} />
+      </clipPath></defs>
+      ${tierLines.map(({ tier, y, labelled }) => html`<g>
+        <line x1=${plotLeft} x2=${plotRight} y1=${y} y2=${y}
           stroke=${rankColor(tier)} stroke-opacity=".28" stroke-dasharray="3 4" />
-        <text x=${plotLeft - 8} y=${yForScore(floor) - 3} text-anchor="end"
-          fill=${rankColor(tier)} font-size="9">${tier}</text></g>`)}
+        ${labelled && html`<text x=${plotLeft - 8} y=${y - 3} text-anchor="end"
+          fill=${rankColor(tier)} font-size="9">${tier}</text>`}</g>`)}
       ${ticks.map((tick, tickIndex) => html`<text
           x=${xForTime(tick.time)} y=${CHART_HEIGHT - 8}
           text-anchor=${ticks.length === 1 ? "middle"
             : tickIndex === 0 ? "start" : tickIndex === ticks.length - 1 ? "end" : "middle"}
-          fill="var(--muted)" font-size="9">${fmtTick(new Date(tick.time), timeSpan)}</text>`)}
-      <path d=${line} fill="none" stroke="var(--gold)" stroke-width="2" />
+          fill="var(--muted)" font-size="9">${fmtTick(new Date(tick.time), viewSpan)}</text>`)}
+      <g clip-path="url(#rank-chart-clip)">
+        <path d=${line} fill="none" stroke="var(--gold)" stroke-width="2" />
+        ${marks.map((mark) => html`<circle cx=${mark.x} cy=${mark.y}
+            r=${mark.kind === "tier" ? 6 : 3.5} fill=${rankColor(mark.point.tier)}
+            stroke="rgba(6,16,28,.85)" stroke-width=${mark.kind === "tier" ? 2 : 1.5}>
+          <title>${markTitle(mark)}</title>
+        </circle>`)}
+      </g>
     </svg>
-    <p class="meta rank-chart-span">${fmtSpanCaption(minTime, maxTime)}</p>
+    <p class="meta rank-chart-span">
+      ${fmtSpanCaption(zoom < 1 ? viewStart : minTime, maxTime)}
+      ${zoom < 1
+        ? html` · <button type="button" class="linkish"
+            onclick=${() => setZoom(1)}>show all time</button>`
+        : html` · <span class="rank-chart-hint">scroll to zoom</span>`}
+    </p>
   </div>`;
 }
 

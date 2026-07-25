@@ -987,6 +987,15 @@
      whenever `max-height` capped it below what `width:100%` implied. */
   .rank-chart { display: block; width: 100%; height: 220px; }
   .rank-chart-span { margin: 4px 0 0; }
+  /* The wheel-zoom affordances (round 6): a hint while the whole journey is
+     in view, a reset once it isn't. Both live in the span caption rather
+     than as chrome over the plot — the chart is 220px of fixed height with
+     a tier label gutter, and a floating control would sit on the curve. */
+  .rank-chart-hint { opacity: .75; }
+  .rank-chart-block .linkish {
+    background: none; border: 0; padding: 0; font: inherit; color: var(--gold);
+    text-decoration: underline; cursor: pointer;
+  }
   .rank-breakdown-head {
     display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;
   }
