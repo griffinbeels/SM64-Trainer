@@ -1977,19 +1977,49 @@
     .compare-stage-card { min-height: 0; }
   }
 
-  /* Between roughly 761-1100px the sidebar has already collapsed to its
-     76px icon rail (the 1180px breakpoint above), but the card is still too
-     narrow for two full-width side-by-side rank banners: measured ~278px
-     per banner at a 900px viewport, not enough for kicker+medal+tier+
-     division+next+gap on a longer tier name ("Grandmaster II") without
-     ellipsis (round 4, 2026-07-25 -- "not mostly fits" is the bar). Stack
-     them instead, same technique the ≤760px block already uses below, but
-     the HEADING doesn't need to wrap yet at this width -- only the metrics
-     row grows, so this gets its own (smaller) fixed height rather than
-     reusing 258px, which was sized for a wrapped 2-row heading this range
-     doesn't have. OBS-stable: fixed height + overflow:hidden, same
-     reasoning as the other two breakpoints. */
-  @media (max-width: 1100px) and (min-width: 761px) {
+  /* Rank-banner crowding, keyed on the PANE and not the viewport.
+     ------------------------------------------------------------------
+     A rank banner cannot be abbreviated: kicker, medal, tier + division,
+     and the "next" target with its delta are all the information. When the
+     row runs out of room the text ellipsizes mid-word, which the user read
+     as "a visual error entirely" (live report 2026-07-25). Three rounds of
+     flex tuning did not fix it because the row was over-subscribed, and a
+     fourth round measured it at three viewport widths and still missed it.
+
+     These are @container rules, on .practice-page's inline-size container
+     (declared above, and already what the star row's cqw units resolve
+     against), because VIEWPORT WIDTH IS THE WRONG SIGNAL HERE: the sidebar
+     is 206px wide above 1180px and a 76px rail below it, so the pane a card
+     lives in is NOT monotonic in window width. Measured on the shipping
+     shell: a 1181px window gives the card a 947px pane, while a 1180px
+     window gives it 1076px. A max-width media query therefore cannot
+     express "this card is too narrow"; every viewport threshold is wrong on
+     one side of that jump. The container width is the thing that actually
+     varies, so it is the thing that gates.
+
+     Thresholds are measured, not guessed (headless sweep, 8 fixtures,
+     scrollWidth > clientWidth on every element inside .rank-banner):
+       - side by side, a banner gets about (pane - 260) / 2;
+       - the widest real row is "STRATEGY * GRANDMASTER III -> Grandmaster
+         II -1.28s" at 386px with the basis line hidden, 487px with it;
+       - so two banners need a pane over ~1250px to keep the basis line, and
+         over ~1100px without it. Below that they stack and each takes the
+         full row.
+     The basis line ("50/50 - 12:34.56") is what gives way first: it is
+     recoverable context -- the rank mode is in the header picker and the
+     full text stays in the title -- while the delta is the actionable
+     number a run is chasing. Drop the recoverable thing, keep the one that
+     says what to do next.
+
+     Stacking gets its own fixed height (190px) rather than reusing the
+     mobile 258px: only the metrics row grows here, the heading does not
+     wrap yet. Fixed height + overflow:hidden at every breakpoint, because
+     the user streams this card in OBS and a card that reflowed would shift
+     their capture mid-run. */
+  @container (max-width: 1250px) {
+    .rank-banner-basis { display: none; }
+  }
+  @container (max-width: 1100px) {
     .objective-card { height: 190px; min-height: 190px; overflow: hidden; }
     .rank-slot { flex-direction: column; align-items: stretch; gap: .3rem; }
     .objective-strategy-fastest { display: none; }
