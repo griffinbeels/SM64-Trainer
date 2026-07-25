@@ -37,6 +37,21 @@ def test_css_indents_every_level_and_never_scrolls_sideways():
     assert "width: auto" in INDEX
 
 
+def test_workshop_panes_are_viewport_bounded_so_the_page_never_shifts():
+    # Live audit 2026-07-25: opening a library group made the page taller than
+    # the viewport, a page scrollbar appeared, and because a scrollbar steals
+    # width the ENTIRE layout shifted sideways. The library was already capped;
+    # the right-hand pane was not, and it was the one overflowing.
+    # Measured after the fix at 1600x{760,880,1000}: page does not scroll, both
+    # panes sit 39px clear of the fold, the editor scrolls internally.
+    for pane in (".segment-editor", ".route-workspace"):
+        block = INDEX.split(pane + " {", 1)[1].split("}", 1)[0]
+        assert "max-height: calc(100vh" in block, pane
+    # Belt to that braces: reserve the gutter so any future overflow anywhere
+    # cannot shove the layout sideways.
+    assert "scrollbar-gutter: stable" in INDEX
+
+
 def test_no_route_specific_group_classes_remain():
     for legacy in (".route-cat", ".route-subcat"):
         assert legacy not in INDEX, f"{legacy} should be .lib-cat*"

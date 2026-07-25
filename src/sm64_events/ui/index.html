@@ -400,6 +400,12 @@
   }
   * { box-sizing: border-box; }
   html, body, #app { min-height: 100%; max-width: 100%; overflow-x: hidden; }
+  /* Reserve the scrollbar's width whether or not one is showing, so a pane
+     that grows past the fold can never shove the whole layout sideways (live
+     audit 2026-07-25: opening a library group shifted the entire page). This
+     is the belt to the viewport-bounded panes' braces — those stop the page
+     from scrolling at all, this stops the SHIFT if anything ever does. */
+  html { scrollbar-gutter: stable; }
   body {
     max-width: none; margin: 0; padding: 0; min-width: 320px;
     font-family: "Segoe UI Variable", "Aptos", "Segoe UI", sans-serif;
@@ -866,7 +872,17 @@
     grid-template-columns: minmax(300px,360px) minmax(0,1fr);
     align-items: start; gap: 12px;
   }
-  .segment-editor { min-height: 620px; }
+  /* The editor is the half that actually overflowed the PAGE: a fixed 620px
+     floor plus its own content grew the document past the viewport, the page
+     got a scrollbar, and because a scrollbar steals width the whole layout
+     shifted left the moment the library grew (live audit 2026-07-25 — the
+     library itself was already capped correctly, measured 39px clear of the
+     fold). Bound it to the viewport exactly like the library and let its own
+     body scroll; min() keeps the 620px floor only where it fits. */
+  .segment-editor {
+    min-height: min(620px, calc(100vh - 205px));
+    max-height: calc(100vh - 205px);
+  }
   /* Library panel: viewport-bounded, the LIST is the scroll container. The
      old cap sat on the list (100vh - 230px) and ignored the card's own
      offset from the viewport top, so the card bottom ran off-screen (user
@@ -922,7 +938,9 @@
   .segment-row-actions button { min-width: 0; min-height: 31px; padding: .25rem .35rem; font-size: .69rem; }
   .segment-row-actions .is-selected { color: var(--gold-soft); border-color: #846e2e; }
   .segment-row-actions .icon-button { width: 31px; min-width: 31px; }
-  .segment-editor { overflow: hidden; }
+  /* overflow-y auto, not hidden: the pane is viewport-bounded above, so a long
+     definition scrolls INSIDE the card rather than growing the document. */
+  .segment-editor { overflow-x: hidden; overflow-y: auto; }
   .segbuilder { min-width: 0; border: 0; padding: 0; margin: 0; }
   .builder-heading {
     min-height: 50px; display: flex; align-items: center;
@@ -1070,8 +1088,15 @@
   .library-actions > button {
     min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .route-workspace { min-width: 0; display: grid; gap: 12px; }
-  .route-empty-card { min-height: 520px; }
+  /* Same viewport bound as .segment-editor, for the same reason: an unbounded
+     right-hand pane grows the document, the page gets a scrollbar, and the
+     layout shifts sideways. The routes workshop has the identical shape, so it
+     gets the identical treatment rather than waiting to be reported. */
+  .route-workspace {
+    min-width: 0; display: grid; gap: 12px;
+    max-height: calc(100vh - 205px); overflow-x: hidden; overflow-y: auto;
+  }
+  .route-empty-card { min-height: min(520px, calc(100vh - 205px)); }
   .route-setup-card { min-height: 134px; }
   .route-identity { margin-bottom: .45rem; }
   .routeavg { margin: 0; }
