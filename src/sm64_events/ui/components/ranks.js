@@ -51,7 +51,19 @@ function sentinelMsg(banner) {
 // the --rank-glow var practice.js sets from rankColor); this component lays
 // out the medal, labels, and a full-width next-rank progress track. Nothing
 // here may exceed the slot — the old fixed 200px bar in a bordered box bled
-// past the card edge (user report 2026-07-24).
+// past the card edge (user report 2026-07-24). `.objective-card` is a HARD
+// fixed height (122px at desktop, 258px under 760px, both `overflow` values
+// that do NOT reflow the grid) — a kicker label or extra fact here must cost
+// WIDTH, never a new line, or it silently bleeds into the card below.
+//
+// The "Strategy" kicker + the sub-division on the tier name (PLATINUM I, not
+// bare PLATINUM) exist because this banner sits directly beside
+// EntityRankTag's "Star" rank and the two numbers answer different questions
+// — grading the ACTIVE strategy's own ladder here vs. the entity's
+// best-possible ladder there. A user reading e.g. "PLATINUM" next to "Iron I"
+// filed that as a mislabel bug (live report 2026-07-25); it wasn't wrong, it
+// was unlabelled. `division` rides the server's scoring.division_for — this
+// component must never compute that curve itself.
 export function RankBanner({ banner }) {
   if (!banner || !banner.rank) {
     return html`<span class="meta">${sentinelMsg(banner)}</span>`;
@@ -62,8 +74,9 @@ export function RankBanner({ banner }) {
   const fillPct = banner.next ? Math.round((banner.fill || 0) * 100) : 100;
   return html`<div class="rank-banner">
     <div class="rank-banner-row">
+      <span class="rank-banner-kicker" title="Graded on the strategy picked above">Strategy</span>
       <${Medal} rank=${banner.rank} size=${26} />
-      <b class="rank-banner-name">${banner.rank.toUpperCase()}</b>
+      <b class="rank-banner-name">${banner.rank.toUpperCase()}${banner.division ? ` ${banner.division}` : ""}</b>
       ${basis && html`<span class="meta rank-banner-basis">
         ${MODE_LABEL[banner.mode] || banner.mode} · avg of ${basis.count}${basis.window ? `/${basis.window}` : ""} · ${basis.display}</span>`}
       <span class="meta rank-banner-next">${banner.next
@@ -81,10 +94,24 @@ export function RankBanner({ banner }) {
 // that is to the fastest the star can be. Absent (not "–") when the entity
 // has no standards, so a segment without a ladder shows nothing rather than
 // implying it was graded and failed.
+//
+// The "Star" kicker mirrors RankBanner's "Strategy" one (see above) — same
+// single-row, no-new-line constraint (`.objective-card`'s fixed height,
+// above). When this rank sits well below the strategy rank beside it, the
+// reason is almost always "another strategy is faster here" —
+// `fastest_strat` (views.py::_fastest_strategy) names it directly, appended
+// to the same line, rather than leaving the user to guess; the tooltip
+// carries the full sentence for whenever the line itself has to ellipsize.
 export function EntityRankTag({ entityRank }) {
   if (!entityRank) return null;
-  return html`<span class="entity-rank" title=${`Star rank — best strategy possible · score ${entityRank.score}`}>
+  const fastest = entityRank.fastest_strat;
+  const title = fastest
+    ? `Star rank — best strategy possible · score ${entityRank.score} · fastest here: ${fastest}`
+    : `Star rank — best strategy possible · score ${entityRank.score}`;
+  return html`<span class="entity-rank" title=${title}>
+    <span class="entity-rank-kicker">Star</span>
     <${Medal} rank=${entityRank.tier} size=${18} />
     <b>${entityRank.tier} ${entityRank.division}</b>
+    ${fastest && html`<span class="meta entity-rank-fastest">· ${fastest}</span>`}
   </span>`;
 }

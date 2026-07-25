@@ -715,6 +715,25 @@
     white-space: nowrap; padding-left: .6rem; border-left: 1px solid var(--border-soft);
   }
   .entity-rank b { font-weight: 800; letter-spacing: .3px; font-size: .82rem; }
+  /* "Strategy"/"Star" kickers -- a one-word answer to "which does this
+     grade" prefixed on the SAME line as the medal, never a new line:
+     .objective-card is a hard fixed height (122px desktop / 258px under
+     760px, both non-reflowing) and a stacked layout here would silently
+     bleed the card into whatever sits below it. Deliberately NOT `.meta`
+     (unlike the sibling basis/next/fastest spans) -- `.rank-slot .meta`'s
+     `flex:1 1 auto; min-width:0` out-specifies a same-weight class rule here
+     and shrinks a one-word label into "STRA…", which reads as broken, not
+     tight; own color/no-shrink instead. */
+  .rank-banner-kicker, .entity-rank-kicker {
+    flex: 0 0 auto; color: var(--muted); text-transform: uppercase;
+    letter-spacing: .06em; font-size: .62rem; font-weight: 650;
+  }
+  /* fastest_strat (views.py::entity_rank) -- why the star rank reads lower
+     than the strategy rank beside it. Same line as the tier/division, own
+     ellipsis so a long strategy name clips instead of wrapping. */
+  .entity-rank-fastest {
+    max-width: 130px; overflow: hidden; text-overflow: ellipsis;
+  }
   .rank-banner-row {
     min-width: 0; display: flex; align-items: center; gap: .55rem;
     white-space: nowrap; overflow: hidden;
@@ -2110,6 +2129,10 @@
       align-items: center;
     }
     .rank-slot { min-height: 45px; }
+    /* Narrow cards have the least room; the fastest-strategy fact is the
+       first thing to give up its slice of the line (the tooltip still
+       carries it) so the kicker + tier/division stay legible. */
+    .entity-rank-fastest { display: none; }
     .objective-live-state { grid-column: 1; grid-row: 2; border: 0; justify-content: flex-start; }
     .objective-card .pbtag { grid-column: 2; grid-row: 1 / span 2; align-self: center; white-space: normal; }
     .analysis-card { height: 520px; min-height: 520px; }

@@ -284,6 +284,30 @@ def _strat_rank(ranks, ek, strat, basis) -> str | None:
     return classify.rank_for(ladder, classify.display_cs(basis["frames"]))
 
 
+def _fastest_strategy(ranks, ek, best_ladder_cs: dict) -> str | None:
+    """Which strategy OWNS the entity's best-possible ladder (best_ladder_cs
+    -- the pointwise minimum entity_rank already computed): the answer to
+    'why is my star's rank lower than my strategy's rank'.
+
+    Walks the ladder's own tiers hardest-first; at each tier, narrows the
+    candidate strategies to the ones whose OWN ladder matches the pointwise
+    minimum there -- the strategies that actually SET that entry. This stays
+    well-defined on ragged ladders (a strategy missing a tier just can't win
+    at it) and self-resolves ties by moving to the next-hardest tier both
+    still define. A strategy tied at every shared tier is broken
+    alphabetically -- arbitrary, but deterministic rather than dict-order
+    luck."""
+    candidates = ranks.strategies(ek)
+    for tier in scoring.defined_tiers(best_ladder_cs):
+        matching = [strat for strat in candidates
+                   if ranks.ladder_cs(ek, strat).get(tier) == best_ladder_cs[tier]]
+        if matching:
+            candidates = matching
+        if len(candidates) == 1:
+            return candidates[0]
+    return min(candidates, key=str) if candidates else None
+
+
 def entity_rank(ranks, ek, frames) -> dict | None:
     """The star/segment's OWN rank: the time graded against the entity's
     best-possible ladder (pointwise best across every strategy) rather than
@@ -293,7 +317,13 @@ def entity_rank(ranks, ek, frames) -> dict | None:
     section header and honestly less on the right: the strat score asks 'how
     well do I run this strat', the entity score asks 'how close is this to the
     fastest this star can be'. None when the entity has no standards or there
-    is no time to grade."""
+    is no time to grade.
+
+    Also carries `fastest_strat` (_fastest_strategy) -- the strategy that
+    actually sets this best-possible ladder -- so the UI can explain a low
+    entity rank next to a high strategy rank ("Iron I · fastest here is Sign
+    Clip") instead of leaving the two numbers to look like a contradiction
+    (live user report 2026-07-25)."""
     if ranks is None or frames is None:
         return None
     ladder = scoring.best_ladder(ranks.ladders(ek))
@@ -303,7 +333,8 @@ def entity_rank(ranks, ek, frames) -> dict | None:
     if score is None:
         return None
     tier, division = scoring.division_for(score, scoring.defined_tiers(ladder))
-    return {"score": round(score, 1), "tier": tier, "division": division}
+    return {"score": round(score, 1), "tier": tier, "division": division,
+            "fastest_strat": _fastest_strategy(ranks, ek, ladder)}
 
 
 def _section_banner(ranks, ek, strat, basis, mode) -> dict | None:
@@ -339,6 +370,14 @@ def _section_banner(ranks, ek, strat, basis, mode) -> dict | None:
     # a JS copy of score_for would silently disagree the next time the
     # Python side changes (the Iron tail moved on 2026-07-25).
     out["score"] = scoring.score_for(ladder, classify.display_cs(basis["frames"]))
+    # Sub-rank division (I..V within the tier), same source as EntityRankTag
+    # (scoring.division_for over the just-computed score) so the strategy
+    # banner can show "PLATINUM I" instead of a bare tier name — the UI must
+    # never compute this curve itself (user report 2026-07-25). division_for's
+    # own tier always agrees with out["rank"] (the score/medal invariant,
+    # tests/test_ranks_scoring_seed.py), so only the numeral is taken here.
+    out["division"] = (scoring.division_for(out["score"], scoring.defined_tiers(ladder))[1]
+                       if out["score"] is not None else None)
     out["mode"] = mode
     if mode != "pb":
         out["basis"] = {"frames": basis["frames"],
