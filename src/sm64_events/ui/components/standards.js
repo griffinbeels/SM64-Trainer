@@ -38,44 +38,20 @@ export function markerPosition(ladderSeconds, timeCs) {
   return { above: rows[rows.length - 1][0], below: null, frac: 0 };
 }
 
-// Mirrors ranks/scoring.py SCORE_ANCHORS -- kept in lockstep; Iron carries
-// no anchor, exactly as it carries no threshold in RANK_NAMES.
-const SCORE_ANCHORS = { Mario: 95, Grandmaster: 90, Master: 80, Diamond: 70,
-  Platinum: 60, Gold: 45, Silver: 25, Bronze: 10 };
-
-// Mirrors ranks/scoring.py::score_for -- piecewise-linear through the
-// anchors above, using the SAME two cutoffs markerPosition interpolates
-// between, so the marker's label can never disagree with where its line
-// sits. timeCs must be DISPLAYED centiseconds (project rule 7).
-function scoreFor(ladderSeconds, timeCs) {
-  const points = Object.entries(ladderSeconds)
-    .filter(([tier]) => tier in SCORE_ANCHORS)
-    .map(([tier, seconds]) => [Math.round(seconds * 100), SCORE_ANCHORS[tier]])
-    .sort((left, right) => left[0] - right[0]);
-  if (!points.length || timeCs == null) return null;
-  const [hardestCs, hardestScore] = points[0];
-  if (timeCs <= hardestCs) {
-    if (points.length === 1) return hardestScore;
-    const [nextCs, nextScore] = points[1];
-    const slope = (nextScore - hardestScore) / (nextCs - hardestCs);
-    return Math.min(100, hardestScore + slope * (timeCs - hardestCs));
-  }
-  for (let index = 0; index < points.length - 1; index += 1) {
-    const [fastCs, fastScore] = points[index], [slowCs, slowScore] = points[index + 1];
-    if (timeCs <= slowCs) {
-      const span = slowCs - fastCs;
-      return span > 0 ? fastScore + (slowScore - fastScore) * (timeCs - fastCs) / span : slowScore;
-    }
-  }
-  const [easiestCs, easiestScore] = points[points.length - 1];
-  return easiestScore * easiestCs / timeCs;
-}
+// score is NOT computed here. It comes from sectionRank.score, which
+// _section_banner (tracking/views.py) already grades against the active
+// strategy's own ladder via ranks/scoring.py::score_for -- a JS copy of that
+// curve would silently disagree the next time the Python side changes (the
+// Iron tail moved 2026-07-25; a standards.js copy would have drifted).
 
 const fmtScore = (score) => (score == null ? "—" : score.toFixed(1));
 
-// Mirrors ranks/classify.py::display_cs -- frames -> DISPLAYED centiseconds
-// (30fps quantized), so the marker's position never disagrees with the time
-// fmtIgt shows for the same frame count (project rule 7 / Usamune IGT clock).
+// Deliberate mirror of ranks/classify.py::display_cs (keep the two in
+// lockstep, same as fmtIgt mirrors core/timefmt.py in format.js): frames ->
+// DISPLAYED centiseconds (30fps quantized), so the marker's position never
+// disagrees with the time fmtIgt shows for the same frame count (project
+// rule 7 / Usamune IGT clock). This is pure quantization arithmetic, not a
+// curve -- unlike the score, it has had no reason to drift.
 function displayCs(frames) {
   return Math.floor(frames / 30) * 100 + Math.floor(((frames % 30) * 100) / 30);
 }
@@ -158,8 +134,8 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
   // split _section_banner already encodes server-side), so it falls back to
   // the saved PB row for this entity's clock. Interpolated against THIS
   // strategy's own ladder (the column actually on screen) rather than the
-  // entity's best-possible ladder, so the marker's line and its score label
-  // can never disagree with the rows it sits between.
+  // entity's best-possible ladder, so the marker's bracketed cutoffs can
+  // never disagree with the rows it sits between.
   const activeLadder = data && activeStrat ? (data.strategies[activeStrat] || {}) : {};
   const basisFrames = data && sectionRank && sectionRank.basis
     ? sectionRank.basis.frames
@@ -167,7 +143,13 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
   const timeCs = basisFrames != null ? displayCs(basisFrames) : null;
   const hasActiveLadder = Object.keys(activeLadder).length > 0;
   const marker = timeCs != null && hasActiveLadder ? markerPosition(activeLadder, timeCs) : null;
-  const entityScore = timeCs != null && hasActiveLadder ? scoreFor(activeLadder, timeCs) : null;
+  // The server-graded score for the active strategy's own ladder, or absent
+  // when sectionRank is one of _section_banner's sentinel states (no_strat /
+  // no_ladder / unranked -- e.g. pb mode with no saved PB on THIS strategy,
+  // even while the basisFrames fallback above still finds an entity-wide PB
+  // to position the marker with). No client-side fallback curve: a missing
+  // score is a real state to show honestly, not something to paper over.
+  const entityScore = sectionRank && sectionRank.score != null ? sectionRank.score : null;
   return html`<div class="stdpanel">
     <button class="disc standards-toggle" onclick=${toggle} aria-expanded=${open}>
       <${Icon} name="rank" size=${16} />
@@ -197,7 +179,7 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
           ? html`<a href=${headVid(strat)} target="_blank" rel="noopener" title="fastest-time video">${strat}</a>`
           : strat}${editing ? html` <button class="candx" title=${isSeeded(strat) ? "clear this strategy's standards" : "delete this strategy"} onclick=${() => delStrat(strat)}>×</button>` : ""}
           ${marker && strat === activeStrat ? html`<span class="std-you-badge"
-              title="your current time and score on this ladder">◀ you · ${fmtIgt(basisFrames)} · ${fmtScore(entityScore)}</span>` : ""}</th>`)}</tr></thead>
+              title="your current time and score on this ladder">◀ you · ${fmtIgt(basisFrames)}${entityScore != null ? ` · ${fmtScore(entityScore)}` : ""}</span>` : ""}</th>`)}</tr></thead>
         <tbody>
         ${RANK_NAMES.filter((r) => r !== "Iron").map((rank) => html`<tr>
           <td style=${`background:${rankColor(rank)};color:#111;font-weight:700`}>${rank}</td>
