@@ -486,6 +486,12 @@
      is the belt to the viewport-bounded panes' braces — those stop the page
      from scrolling at all, this stops the SHIFT if anything ever does. */
   html { scrollbar-gutter: stable; }
+  /* `color-scheme: dark` is set and still leaves Chromium drawing the OS's
+     LIGHT scrollbar over this shell (verified Chrome 150, 2026-07-25) — a
+     pale grey bar down a navy pane. Name the colours instead; scrollbar-color
+     inherits, so one declaration covers every scroller in the page. A native
+     <select> popup is NOT in the page and keeps its own. */
+  html { scrollbar-color: #33506e transparent; }
   body {
     max-width: none; margin: 0; padding: 0; min-width: 320px;
     font-family: "Segoe UI Variable", "Aptos", "Segoe UI", sans-serif;
@@ -529,11 +535,18 @@
     padding-right: 1.6rem;
     text-overflow: ellipsis;
   }
-  /* Native <select> popup lists: Chromium derives the popup colors from the
-     select itself, and several of ours are transparent — that produced a
-     white popup with inherited LIGHT text (unreadable, e.g. the sort menu).
-     Style the options explicitly so every dropdown list is dark + readable. */
-  option { background-color: #0d1928; color: var(--text); }
+  /* Native <select> popup lists. Chromium themes the popup off the SELECT's
+     own background — a transparent select gave a white popup with inherited
+     light text (2026-07-25), and the fix then was to colour the options.
+     That fix is what made the HIGHLIGHTED row unreadable: Chromium paints it
+     light-blue and picks dark text for it, but only when the author has not
+     named a colour; ours survived into that row, light on light (live audit
+     2026-07-25). So: set the row background — that is what makes the list
+     navy rather than Chromium's grey — and NEVER the text colour, which is
+     the browser's to choose per row. Every select must therefore keep an
+     opaque dark background of its own; the two that look transparent
+     (.context-select, .sort-control) do it without going transparent. */
+  option { background-color: #0d1928; }
   a { color: #79bafc; }
   h2, h3, h4, p { margin-top: 0; }
   h2 { font-size: 1.2rem; margin-bottom: 0; }
@@ -630,14 +643,23 @@
      opened from anywhere because it IS a <button>; the select cards only
      reacted on the select itself, and the mismatch read as a bug (user,
      2026-07-25). Fix: stretch the native <select> over the entire card and
-     paint it transparent — the dropdown is still the browser's, anchored to
-     the card, and the value + chevron under it are drawn by header.js. The
-     <option> list keeps the global `option` colors, so an invisible select
-     does not mean an invisible popup. */
+     hide it — the dropdown is still the browser's, anchored to the card, and
+     the value + chevron under it are drawn by header.js.
+     Hidden with OPACITY, not with transparent colours: Chromium themes the
+     popup off the select's computed background, so a transparent one gets a
+     white popup (see the `option` rule above). At opacity 0 the select keeps
+     the shell's opaque dark background — invisible on the card, correctly
+     dark in the list. */
   .context-select > select {
     position: absolute; inset: 0; width: 100%; height: 100%;
     margin: 0; padding: 0; min-height: 0; border: 0; cursor: pointer;
-    appearance: none; background: transparent; color: transparent;
+    appearance: none; opacity: 0;
+  }
+  /* An opacity-0 element cannot show its own focus ring, so the card wears
+     it — :has(:focus-visible), not :focus-within, so a mouse click does not
+     leave a ring behind the way it would on a plain focus. */
+  .context-select:has(> select:focus-visible) {
+    outline: 2px solid #78b9ff; outline-offset: 2px;
   }
   .context-select, button.context-control:not(:disabled) { cursor: pointer; }
   .context-select:hover, button.context-control:not(:disabled):hover {
@@ -1221,8 +1243,12 @@
     padding: .2rem .3rem .2rem .5rem; border: 1px solid #344b64;
     border-radius: 6px; background: #101f31; color: var(--muted);
   }
+  /* Matches .sort-control's own fill rather than going transparent: a
+     transparent select makes Chromium theme its popup WHITE (see the
+     `option` rule at the top of this stylesheet — this control was the
+     original casualty). */
   .sort-control select {
-    min-height: 26px; max-width: 130px; border: 0; background: transparent;
+    min-height: 26px; max-width: 130px; border: 0; background: #101f31;
     padding-block: 0; color: var(--text);
   }
   /* Focus ring wraps the WHOLE control (icon included), not just the inner
