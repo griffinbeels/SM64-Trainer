@@ -852,6 +852,37 @@ class TrackerService:
             type="icons_changed", frame=0, timestamp_utc=_now(),
             payload={"entity": ek, "icon": icon}))
 
+    async def set_segment_origin(self, segment_id: int,
+                                 origin: str | None) -> None:
+        """Pin (or clear, origin=None) a segment's library category — the
+        castle place its start rules are read as beginning in.
+
+        ui_state KV `origin_overrides` maps a segment id (string, as JSON
+        object keys are) to a world-node key; broadcast-only like set_icon, a
+        display preference that is never journaled. NOT a segment_defs column
+        deliberately: a write there flips seed_dirty, which would opt a seeded
+        castle movement out of every future corpus refresh just because the
+        user fixed its label.
+        """
+        if self.db is None:
+            raise RuntimeError("tracking database unavailable")
+        if all(d.id != segment_id for d in self._segment_defs):
+            raise LookupError(f"segment {segment_id} not found")
+        overrides = self.db.get_state("origin_overrides", {})
+        if origin is None:
+            overrides.pop(str(segment_id), None)
+        else:
+            overrides[str(segment_id)] = origin
+        self.db.set_state("origin_overrides", overrides)
+        # Mirror set_icon exactly (review I3): _segments_changed() reloads
+        # defs AND re-projects the whole journal, rebuilding every attempt
+        # and run — wasted work for a pure display facet the projector never
+        # reads, and it contradicted this docstring's own "broadcast-only"
+        # claim.
+        await self.broadcaster.publish(Event(
+            type="origins_changed", frame=0, timestamp_utc=_now(),
+            payload={"segment_id": segment_id, "origin": origin}))
+
     async def set_rank_mode(self, mode: str) -> None:
         """Persist the global rank-grading mode (average rank mode spec) to
         the ui_state KV and notify. Broadcast-only like the other rank

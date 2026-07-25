@@ -131,6 +131,10 @@
   .builder-icon .field-label { margin: 0; }
   .builder-icon-preview { width: 34px; height: 34px; border-radius: 8px;
                           object-fit: cover; }
+  .builder-origin { display: flex; align-items: center; gap: .6rem;
+                    margin: .5rem 0; }
+  .builder-origin .field-label { margin: 0; }
+  .builder-origin select { min-width: 0; max-width: 16rem; }
   .starsub .strat.none { opacity: .6; }
   @media (prefers-reduced-motion: no-preference) {
     .starcell.active-star .starholder { animation: starbob 2.4s ease-in-out infinite; }
@@ -396,6 +400,12 @@
   }
   * { box-sizing: border-box; }
   html, body, #app { min-height: 100%; max-width: 100%; overflow-x: hidden; }
+  /* Reserve the scrollbar's width whether or not one is showing, so a pane
+     that grows past the fold can never shove the whole layout sideways (live
+     audit 2026-07-25: opening a library group shifted the entire page). This
+     is the belt to the viewport-bounded panes' braces — those stop the page
+     from scrolling at all, this stops the SHIFT if anything ever does. */
+  html { scrollbar-gutter: stable; }
   body {
     max-width: none; margin: 0; padding: 0; min-width: 320px;
     font-family: "Segoe UI Variable", "Aptos", "Segoe UI", sans-serif;
@@ -862,7 +872,17 @@
     grid-template-columns: minmax(300px,360px) minmax(0,1fr);
     align-items: start; gap: 12px;
   }
-  .segment-editor { min-height: 620px; }
+  /* The editor is the half that actually overflowed the PAGE: a fixed 620px
+     floor plus its own content grew the document past the viewport, the page
+     got a scrollbar, and because a scrollbar steals width the whole layout
+     shifted left the moment the library grew (live audit 2026-07-25 — the
+     library itself was already capped correctly, measured 39px clear of the
+     fold). Bound it to the viewport exactly like the library and let its own
+     body scroll; min() keeps the 620px floor only where it fits. */
+  .segment-editor {
+    min-height: min(620px, var(--pane-cap, calc(100vh - 205px)));
+    max-height: var(--pane-cap, calc(100vh - 205px));
+  }
   /* Library panel: viewport-bounded, the LIST is the scroll container. The
      old cap sat on the list (100vh - 230px) and ignored the card's own
      offset from the viewport top, so the card bottom ran off-screen (user
@@ -871,7 +891,7 @@
   .segment-library, .route-library {
     display: flex; flex-direction: column;
     position: sticky; top: 88px;
-    min-height: 0; max-height: calc(100vh - 205px);
+    min-height: 0; max-height: var(--pane-cap, calc(100vh - 205px));
   }
   /* Library filter box — sits between the heading and the scrolling list, so
      it stays put while results scroll under it (flex: 0 0 auto against the
@@ -918,7 +938,9 @@
   .segment-row-actions button { min-width: 0; min-height: 31px; padding: .25rem .35rem; font-size: .69rem; }
   .segment-row-actions .is-selected { color: var(--gold-soft); border-color: #846e2e; }
   .segment-row-actions .icon-button { width: 31px; min-width: 31px; }
-  .segment-editor { overflow: hidden; }
+  /* overflow-y auto, not hidden: the pane is viewport-bounded above, so a long
+     definition scrolls INSIDE the card rather than growing the document. */
+  .segment-editor { overflow-x: hidden; overflow-y: auto; }
   .segbuilder { min-width: 0; border: 0; padding: 0; margin: 0; }
   .builder-heading {
     min-height: 50px; display: flex; align-items: center;
@@ -987,7 +1009,6 @@
     align-content: start; gap: .4rem;
     padding-right: 2px; scrollbar-width: thin;
   }
-  .route-cat { min-width: 0; grid-template-columns: minmax(0,1fr); }
   .route-list-item {
     width: 100%; min-width: 0; min-height: 54px;
     display: grid; grid-template-columns: minmax(0,1fr) auto;
@@ -1002,13 +1023,18 @@
   .route-list-item > .ui-icon { transform: rotate(-90deg); color: var(--muted); }
   .route-list-item.on { border-color: #6287aa; background: rgba(61,101,143,.25); }
   .route-list-item.on > .ui-icon { color: #9cc9f2; }
-  /* Category groups (2026-07-24): the seeded corpus ships ~48 routes, so the
-     library is grouped and collapsible. Rows keep their own .4rem gap; the
-     group supplies a slightly larger gap above each header so the sections
-     read as sections without a divider line. */
-  .route-cat { display: grid; align-content: start; gap: .4rem; }
-  .route-cat + .route-cat { margin-top: .5rem; }
-  .route-cat-header {
+  /* Collapsible library groups (2026-07-24, generalized from the route
+     library): ONE class per level, indent expressed by the nesting itself
+     (a node's children render through the same component one level deeper —
+     see grouplist.js), so a third level costs nothing new here either. Rows
+     keep their own .4rem gap; the group supplies a slightly larger gap above
+     each header so sections read as sections without a divider line. */
+  .lib-cat {
+    min-width: 0; display: grid; align-content: start; gap: .4rem;
+    grid-template-columns: minmax(0,1fr);
+  }
+  .lib-cat + .lib-cat { margin-top: .5rem; }
+  .lib-cat-header {
     width: 100%; min-width: 0; display: grid;
     grid-template-columns: auto minmax(0,1fr) auto;
     align-items: center; gap: .4rem;
@@ -1017,33 +1043,40 @@
     border-color: transparent; color: var(--muted);
     font-size: .72rem; letter-spacing: .04em; text-transform: uppercase;
   }
-  .route-cat-header:hover { color: var(--text); background: rgba(8,20,34,.5); }
-  .route-cat-header b {
+  .lib-cat-header:hover { color: var(--text); background: rgba(8,20,34,.5); }
+  .lib-cat-header b {
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font-size: .74rem; letter-spacing: inherit;
   }
-  .route-cat-header > .ui-icon { transition: transform .12s ease; }
-  .route-cat-header.shut > .ui-icon { transform: rotate(-90deg); }
-  /* Sub-category: indented and hung off a guide line, so a route reads as
-     belonging to the group above it. */
-  .route-subcat {
+  .lib-cat-header > .ui-icon { transition: transform .12s ease; }
+  .lib-cat-header.shut > .ui-icon { transform: rotate(-90deg); }
+  /* EVERY level indents, and the indent COMPOUNDS through nesting — a child
+     is always one step right of its parent, at any depth, with a guide line
+     tying it to the header above it (user rule 2026-07-25: anything that
+     implies a parent/child relationship indents the child one level; a
+     sub-group flush with its parent reads as a sibling).
+
+     This deliberately supersedes the earlier "depth-0 has no guide line"
+     rule, which restored a pre-migration route look at the cost of leaving
+     sub-group HEADERS flush with their parent — the regression the live audit
+     caught. One rule on .lib-group does it: nesting supplies the depth, so a
+     third or fourth level needs nothing new. */
+  .lib-group {
     min-width: 0; display: grid; grid-template-columns: minmax(0,1fr);
     align-content: start; gap: .4rem;
     margin-left: .5rem; padding-left: .45rem;
     border-left: 1px solid var(--border-soft);
   }
-  .route-cat-header.sub {
+  .lib-cat-header.sub {
     padding-left: .3rem; font-size: .68rem;
     text-transform: none; letter-spacing: .02em;
   }
-  .route-cat-header.sub b { font-size: .72rem; font-weight: 600; }
+  .lib-cat-header.sub b { font-size: .72rem; font-weight: 600; }
   /* Indent the ROW with a margin and let it stretch — `width: 100%` (the base
      .route-list-item rule) plus a margin is wider than the column, which both
      broke the indent and gave the library a horizontal scrollbar (live report
      2026-07-24). A vertical list never scrolls sideways: names ellipsise. */
-  .route-cat .route-list-item { width: auto; }
-  .route-cat > .route-list-item { margin-left: .6rem; }
-  .route-subcat > .route-list-item { margin-left: .5rem; }
+  .lib-cat .route-list-item, .lib-cat .segrow { width: auto; }
   /* Two columns, not three: the library column is 240-300px, and three
      icon+label buttons overflowed the card (live report 2026-07-24 — "Delete"
      hung past the edge). The third wraps to its own row. min-width:0 on the
@@ -1055,8 +1088,15 @@
   .library-actions > button {
     min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .route-workspace { min-width: 0; display: grid; gap: 12px; }
-  .route-empty-card { min-height: 520px; }
+  /* Same viewport bound as .segment-editor, for the same reason: an unbounded
+     right-hand pane grows the document, the page gets a scrollbar, and the
+     layout shifts sideways. The routes workshop has the identical shape, so it
+     gets the identical treatment rather than waiting to be reported. */
+  .route-workspace {
+    min-width: 0; display: grid; gap: 12px;
+    max-height: var(--pane-cap, calc(100vh - 205px)); overflow-x: hidden; overflow-y: auto;
+  }
+  .route-empty-card { min-height: min(520px, var(--pane-cap, calc(100vh - 205px))); }
   .route-setup-card { min-height: 134px; }
   .route-identity { margin-bottom: .45rem; }
   .routeavg { margin: 0; }

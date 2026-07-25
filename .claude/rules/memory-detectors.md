@@ -14,7 +14,7 @@ paths:
 
 | To change... | Edit |
 |---|---|
-| Memory addresses, action IDs, course/star names, traps, world topology | `memory/addresses.py` — THE registry; richly commented, read it. `WORLD_EDGES_TWO_WAY`/`_ONE_WAY` + `world_connections()` = directed (level, subarea) reachability under normal movement — drives the segment builder's dropdown filtering ONLY (warp menu can fabricate any edge; validation/matcher stay permissive) |
+| Memory addresses, action IDs, course/star names, traps, world topology | `memory/addresses.py` — THE registry; richly commented, read it. `WORLD_EDGES_TWO_WAY`/`_ONE_WAY` + `world_connections()` = directed (level, subarea) reachability under normal movement — drives the segment builder's dropdown filtering ONLY (warp menu can fabricate any edge; validation/matcher stay permissive); `world_regions()` BFSes those same edges from `CASTLE_REGION_NODES` (gameflow order) to answer "which castle region owns this place" for the segment-origin taxonomy — BBH→courtyard, VCUtM→grounds, CotMC→basement, each arena→its exit's region; `region_for_node` adds the one case the BFS can't answer (subarea-less castle interior → lobby, the transient-lobby rule). `CASTLE_SECRET_STAR_AREAS` is MIPS-only ON PURPOSE |
 | Endian decoding / typed reads | `memory/base.py` — the ONLY place that knows PJ64 byte order |
 | Process attach / RDRAM discovery | `memory/pj64.py` |
 | Object-pool decoding | `memory/objects.py` · test double: `memory/buffer.py` |

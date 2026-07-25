@@ -190,11 +190,17 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
 from dataclasses import dataclass, field, replace
 from typing import Callable
 
-from sm64_events.memory.addresses import (CASTLE_AREA_NAMES,
-                                          CASTLE_REGION_LEVELS, COURSE_NAMES,
+from sm64_events.memory.addresses import (AREA_LOBBY, BOWSER_STAGE_LEVELS,
+                                          CASTLE_AREA_NAMES,
+                                          CASTLE_REGION_LEVELS,
+                                          CASTLE_REGION_NODES,
+                                          CASTLE_SECRET_STAR_AREAS,
+                                          COURSE_BY_LEVEL, COURSE_NAMES,
                                           DOOR_ACTIONS, LEVEL_CASTLE_INSIDE,
-                                          LEVEL_NAMES, star_count, star_name,
-                                          world_connections)
+                                          LEVEL_NAMES, node_key, node_label,
+                                          region_for_node, star_count,
+                                          star_name, world_connections,
+                                          world_regions)
 
 _ANCHOR_TYPES = ("practice_reset", "state_loaded")  # attempt-anchor events
 
@@ -493,6 +499,220 @@ def start_level_set(start_triggers: list,
     return levels
 
 
+# --- Segment ORIGIN: where a definition can start (spec 2026-07-24) --------
+# Per-trigger source of the arm POSITION, as (level param, subarea param) —
+# read as data, exactly like arm_level reads the registry's param names rather
+# than its match lambdas. Adding a trigger type to TRIGGERS means adding one
+# row here, or accepting None ("Anywhere") by default.
+#
+# NB this is NOT arm_level's mapping: a level_exit ARMS at its destination but
+# ORIGINATES at its source. "SSL -> LLL" is filed under SSL because that is
+# what the rule keys on (50 of the 51 seeded exits omit `to`; the one that
+# carries it, MIPS Clip, is still filed by its source, which is the point).
+_ORIGIN_PARAMS: dict[str, tuple[str, str | None]] = {
+    "level_exit": ("from", "from_subarea"),
+    "level_enter": ("to", "to_subarea"),
+    "area_enter": ("level", "area"),
+    "attempt_anchor": ("level", "area"),
+    "spawned": ("level", None),
+    "warp_entered": ("level", None),
+    "key_grabbed": ("level", None),
+}
+
+# course id -> its level, for star_grabbed clauses. COURSE_BY_LEVEL is 1:1.
+_LEVEL_BY_COURSE = {course: level for level, course in COURSE_BY_LEVEL.items()}
+
+ANYWHERE_LABEL = "Anywhere"
+
+
+def _star_origin(trig: dict) -> str | None:
+    """A star grab places a segment when the star's course does. Course 0
+    (castle secret stars) has no level of its own — only the MIPS catches are
+    known (CASTLE_SECRET_STAR_AREAS); anything else stays unplaced."""
+    course = trig.get("course")
+    if course is None:
+        return None
+    if course == 0:
+        area = CASTLE_SECRET_STAR_AREAS.get(trig.get("star"))
+        return node_key(LEVEL_CASTLE_INSIDE, area) if area is not None else None
+    level = _LEVEL_BY_COURSE.get(course)
+    return node_key(level) if level is not None else None
+
+
+def _clause_origin(trig: dict) -> str | None:
+    kind = trig.get("type")
+    if kind == "star_grabbed":
+        return _star_origin(trig)
+    params = _ORIGIN_PARAMS.get(kind)
+    if params is None:
+        return None
+    level_param, area_param = params
+    level = trig.get(level_param)
+    if level is None:
+        return None
+    area = trig.get(area_param) if area_param else None
+    return node_key(level, area)
+
+
+def _refines(current: str, candidate: str) -> bool:
+    """candidate names the subarea of the same level current left unspecified."""
+    return (":" in candidate and ":" not in current
+            and candidate.partition(":")[0] == current)
+
+
+def start_origin(start_triggers: list) -> str | None:
+    """The world node a segment can START in, or None when its rules carry no
+    place at all (reset_game, an unscoped key grab, a Toad star).
+
+    MOST SPECIFIC WINS: LBLJ's `level_enter to=6` plus `attempt_anchor 6/1`
+    resolves to the lobby, since the anchor knows the subarea and the level
+    entry does not. If two clauses name genuinely DIFFERENT places, the FIRST
+    one wins — no seeded definition does this, and a user-built one gets a
+    stable answer plus an override in the editor if it guessed wrong.
+    """
+    origin = None
+    for trig in start_triggers:
+        candidate = _clause_origin(trig)
+        if candidate is None:
+            continue
+        if origin is None or _refines(origin, candidate):
+            origin = candidate
+    # A subarea-less castle interior ("6", from `level_enter to=6` with no
+    # to_subarea) is the LOBBY: every castle entry lands there before settling
+    # elsewhere — the transient-lobby behaviour detectors/level.py journals and
+    # area_changed's `from_transient` flags. Normalized HERE rather than at the
+    # region lookup, because a node with a region but no PLACE in
+    # origin_taxonomy renders its raw key as a group header (review I1).
+    if origin == node_key(LEVEL_CASTLE_INSIDE):
+        return node_key(LEVEL_CASTLE_INSIDE, AREA_LOBBY)
+    return origin
+
+
+def origin_view(node: str | None) -> dict:
+    """{key, label, region, region_label} for one origin node — the shape the
+    API stamps on a segment row and the UI groups by. None = "Anywhere"."""
+    if node is None:
+        return {"key": None, "label": ANYWHERE_LABEL,
+                "region": None, "region_label": ANYWHERE_LABEL}
+    region = region_for_node(node)
+    return {"key": node, "label": node_label(node), "region": region,
+            "region_label": node_label(region) if region else ANYWHERE_LABEL}
+
+
+def _place_sort_key(node: str, region: str) -> tuple:
+    """Class before id, inside a region (user decision, spec §2): the region's
+    own in-area starts, then its Bowser stage and arena, then its secret
+    stages, then the main courses. Course id IS gameflow order for the last
+    two; level id puts a Bowser course above its arena."""
+    if node == region:
+        return (0, 0)
+    level = int(node.partition(":")[0])
+    if level in BOWSER_STAGE_LEVELS:
+        return (1, level)
+    course = COURSE_BY_LEVEL.get(level)
+    if course is None:
+        # Defensive default, not a real case today: every node without a
+        # COURSE_BY_LEVEL entry is either a Bowser stage (caught above) or
+        # the region itself (caught by node == region), so this class is
+        # currently unreachable (review M14).
+        return (4, level)
+    return (2, course) if course >= 19 else (3, course)
+
+
+def origin_taxonomy() -> list[dict]:
+    """The ordered region -> place tree, shipped in vocab() and rendered by
+    the library (grouping) and the editor (the override picker).
+
+    Shape is deliberately domain-free — {key, label, children:[{key, label}]} —
+    so the categorized picker modal can serve courses/stars the same way and
+    reuse the same renderer.
+    """
+    places: dict[str, list[str]] = {node_key(level, area): []
+                                    for level, area in CASTLE_REGION_NODES}
+    for node, region in world_regions().items():
+        places[region].append(node)
+    taxonomy = []
+    for level, area in CASTLE_REGION_NODES:
+        region = node_key(level, area)
+        children = sorted(places[region],
+                          key=lambda node: _place_sort_key(node, region))
+        taxonomy.append({
+            "key": region, "label": node_label(region),
+            "children": [
+                {"key": node,
+                 "label": (f"{node_label(region)} (in-area starts)"
+                           if node == region else node_label(node))}
+                for node in children]})
+    taxonomy.append({"key": None, "label": ANYWHERE_LABEL, "children": []})
+    return taxonomy
+
+
+OTHER_GROUP_LABEL = "Other"
+
+
+def level_groups() -> list[dict]:
+    """Levels grouped by castle region, in the taxonomy's order — so the
+    builder's level dropdown reads like the library reads (user request
+    2026-07-25: a filtered dropdown should still be categorized).
+
+    Every level appears EXACTLY ONCE. The castle interior has a node in three
+    regions (`6:1`/`6:2`/`6:3`), so it takes the first in gameflow order — the
+    lobby, which is the same answer `region_for_node` gives a bare `"6"`.
+    Anything the topology does not place lands in a trailing Other group rather
+    than vanishing from the picker.
+    """
+    seen: set[int] = set()
+    groups: list[dict] = []
+    for region in origin_taxonomy():
+        if region["key"] is None:
+            continue
+        levels = []
+        for place in region["children"]:
+            level = int(place["key"].partition(":")[0])
+            if level in seen:
+                continue
+            seen.add(level)
+            levels.append(level)
+        if levels:
+            groups.append({"key": region["key"], "label": region["label"],
+                           "levels": levels})
+    leftovers = [level for level in sorted(LEVEL_NAMES) if level not in seen]
+    if leftovers:
+        groups.append({"key": None, "label": OTHER_GROUP_LABEL,
+                       "levels": leftovers})
+    return groups
+
+
+def course_groups() -> list[dict]:
+    """The same grouping projected onto COURSE ids, for the course dropdown.
+
+    A course is grouped by the region of its level. Course 0 (the castle
+    secret stars) has no level of its own, so it lands in Other — the same
+    honesty the "Anywhere" origin group shows.
+    """
+    groups: list[dict] = []
+    grouped: set[int] = set()
+    for group in level_groups():
+        if group["key"] is None:
+            continue
+        courses = []
+        for level in group["levels"]:
+            course = COURSE_BY_LEVEL.get(level)
+            if course is None or course in grouped:
+                continue
+            grouped.add(course)
+            courses.append(course)
+        if courses:
+            groups.append({"key": group["key"], "label": group["label"],
+                           "courses": courses})
+    leftovers = [course for course in sorted(COURSE_NAMES)
+                 if course not in grouped]
+    if leftovers:
+        groups.append({"key": None, "label": OTHER_GROUP_LABEL,
+                       "courses": leftovers})
+    return groups
+
+
 @dataclass(frozen=True)
 class GuardType:
     key: str
@@ -709,6 +929,16 @@ def vocab() -> dict:
         # destinations) — the builder filters flow-annotated level/subarea
         # dropdowns to world-possible moves (addresses.WORLD_EDGES_*)
         "connections": world_connections(),
+        # Ordered region -> place tree for the segment library's grouping and
+        # the editor's origin override (spec 2026-07-24-segment-origin-
+        # categories). Domain-free shape: {key, label, children:[...]}.
+        "origins": origin_taxonomy(),
+        # The SAME grouping, projected onto the id spaces the builder's
+        # dropdowns actually select from, so a level or course picker reads
+        # like the library reads (user request 2026-07-25). Shipped rather than
+        # derived in JS: the taxonomy has one home.
+        "level_groups": level_groups(),
+        "course_groups": course_groups(),
     }
 
 

@@ -10,6 +10,9 @@ import { getJSON, send } from "../api.js";
 import { Icon } from "./icons.js";
 import { IconPicker, iconSrcFromStem } from "./iconpicker.js";
 import { PageState } from "./states.js";
+import { buildTree } from "../group.js";
+import { usePaneCap } from "../viewport.js";
+import { GroupedList, useOpenGroups } from "./grouplist.js";
 
 const html = htm.bind(h);
 
@@ -69,6 +72,26 @@ export function ParamInput({ schema, name, value, vocab, clause, onChange }) {
     <option value="">${schema.required ? pickLabel : anyLabel}</option>
     ${entries.map(([id, n]) => html`<option value=${id}>${n}</option>`)}
   </select>`;
+  // Same shape, but split into the castle regions the library groups by (user
+  // request 2026-07-25 — a level picker should read like the library reads,
+  // and stay categorised even when the topology filter leaves two options).
+  // `groups` comes from vocab (level_groups / course_groups): the taxonomy has
+  // ONE home, server-side. A group with nothing left after filtering is
+  // dropped, so an empty heading never appears.
+  const groupedDropdown = (groups, idsOf, names, anyLabel, pickLabel) => {
+    const shown = groups
+      .map((group) => [group, idsOf(group).filter((id) => names[String(id)] !== undefined
+        && permitted([id]))])
+      .filter(([, ids]) => ids.length > 0);
+    return html`<select value=${value ?? ""}
+        onchange=${(e) => onChange(numOrNull(e.target.value))}>
+      <option value="">${schema.required ? pickLabel : anyLabel}</option>
+      ${shown.map(([group, ids]) => html`<optgroup key=${group.label}
+          label=${group.label}>
+        ${ids.map((id) => html`<option value=${id}>${names[String(id)]}</option>`)}
+      </optgroup>`)}
+    </select>`;
+  };
   // world-topology filter (see allowedIds above); the CURRENT value always
   // stays listed so an out-of-topology stored def renders and saves intact
   const allowed = allowedIds(schema, clause, vocab.connections);
@@ -77,10 +100,16 @@ export function ParamInput({ schema, name, value, vocab, clause, onChange }) {
   if (schema.kind === "level") {
     // schema.enum restricts the choices (area_enter offers only the castle
     // hubs); absent enum = the full level list.
-    const entries = Object.entries(vocab.levels).filter(
-      ([id]) => (!schema.enum || schema.enum.includes(Number(id)))
-        && permitted([id]));
-    return dropdown(entries, "(any level)", "— pick level —");
+    const inEnum = (id) => !schema.enum || schema.enum.includes(Number(id));
+    if (vocab.level_groups) {
+      const groups = vocab.level_groups.map((group) => ({
+        ...group, levels: group.levels.filter(inEnum) }));
+      return groupedDropdown(groups, (group) => group.levels, vocab.levels,
+                             "(any level)", "— pick level —");
+    }
+    return dropdown(Object.entries(vocab.levels)   // pre-groups vocab fallback
+      .filter(([id]) => inEnum(id) && permitted([id])),
+      "(any level)", "— pick level —");
   }
   if (schema.kind === "subarea")
     // Castle interior areas (lobby/upstairs/basement). Always optional — the
@@ -89,7 +118,11 @@ export function ParamInput({ schema, name, value, vocab, clause, onChange }) {
     return dropdown(Object.entries(vocab.castle_areas).filter(permitted),
                     "Any", "— pick subarea —");
   if (schema.kind === "course")
-    return dropdown(Object.entries(vocab.courses), "(any course)", "— pick course —");
+    // Grouped the same way, so a course picker and a level picker read alike.
+    return vocab.course_groups
+      ? groupedDropdown(vocab.course_groups, (group) => group.courses,
+                        vocab.courses, "(any course)", "— pick course —")
+      : dropdown(Object.entries(vocab.courses), "(any course)", "— pick course —");
   if (schema.kind === "star") {
     // dependent on the sibling course param: no course (or "any course")
     // implies any star, so the selector is disabled until a course is picked
@@ -199,7 +232,7 @@ export function ClauseRow({ clause, types, vocab, tint, onChange, onRemove }) {
 const SAVE_FIELDS = ["name", "enabled", "start_triggers", "end_triggers",
                      "guards"];
 
-function Builder({ vocab, initial, onSaved, onCancel, apiRef, t }) {
+function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load }) {
   const blank = { name: "", enabled: true,
     start_triggers: [{ type: "level_enter" }],
     end_triggers: [{ type: "level_enter" }], guards: [] };
@@ -212,6 +245,13 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t }) {
     ? ((((t || {}).view || {}).icon_overrides || {})[`segment:${initial.id}`]
        || null)
     : null;
+  // Origin override (existing segments only — keyed by id, like the icon).
+  // The library files a segment by where its rules say it starts; when that
+  // reads wrong, this pins it. "Auto" always NAMES the detected place, so a
+  // misclassification is visible to the person who has to fix it.
+  const detected = (initial && initial.origin) || null;
+  const [origin, setOrigin] = useState(
+    detected && detected.source === "override" ? detected.key : "");
   const [err, setErr] = useState(null);
   const edit = (k, i, clause) => setD({ ...d,
     [k]: d[k].map((c, j) => (j === i ? clause : c)) });
@@ -231,14 +271,32 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t }) {
       // omitted PATCH field stays untouched server-side.
       const body = Object.fromEntries(
         SAVE_FIELDS.map((field) => [field, d[field]]));
+      // Report WHICH segment was saved, so the parent can keep it open rather
+      // than dropping the user back to "Choose a segment to edit" (live audit
+      // 2026-07-25). A create only learns its id from the response.
+      let savedId;
       if (initial && initial.id != null) {
         await send("PUT", `/api/segments/${initial.id}`, body);
+        savedId = initial.id;
       } else {
-        await send("POST", "/api/segments", body);
+        savedId = (await send("POST", "/api/segments", body)).id;
       }
-      onSaved();
+      onSaved(savedId);
       return true;
     } catch (e) { setErr(String(e)); return false; }
+  }
+
+  async function saveOrigin(nextKey) {
+    setOrigin(nextKey);
+    try {
+      await send("POST", `/api/segments/${initial.id}/origin`,
+                 { origin: nextKey || null });
+      // Like toggle/remove below: the library's grouping reads `defs`, which
+      // only `load()` refreshes — `t.refresh()` alone updates the session
+      // view (no `origin` field), so the row silently stayed in its old
+      // group until the tab was re-entered (review I2).
+      load(); t.refresh();
+    } catch (e) { setErr(String(e)); }
   }
 
   // Expose a save handle + live dirty flag so the parent can offer "save your
@@ -290,6 +348,18 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t }) {
       <span class="meta">${iconOverride || "default"} · shown on the course
         quick-select</span>
     </div>`}
+    ${initial && initial.id != null && html`<label class="builder-origin">
+      <span class="field-label">Library category</span>
+      <select value=${origin} onchange=${(e) => saveOrigin(e.target.value)}>
+        <option value="">Auto (${detected ? detected.label : "Anywhere"})</option>
+        ${(vocab.origins || []).filter((region) => region.key !== null)
+          .map((region) => html`<optgroup key=${region.key} label=${region.label}>
+            ${region.children.map((place) => html`<option key=${place.key}
+              value=${place.key}>${place.label}</option>`)}
+          </optgroup>`)}
+      </select>
+      <span class="meta">where the library files this segment</span>
+    </label>`}
     ${pickingIcon && html`<${IconPicker}
         identity=${{ kind: "segment", segment_id: initial.id }}
         current=${iconOverride}
@@ -318,13 +388,62 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t }) {
   </div>`;
 }
 
+// Grouping POLICY for the segment library: castle region -> place, both read
+// off the server's `origin` stamp (GET /api/segments). The JS never derives
+// region membership — the taxonomy has ONE home, tracking/segments.py, and
+// the editor's override picker reads the same list from vocab.
+//
+// Order is carried by the server too: vocab().origins is already in gameflow
+// order with each region's Bowser and secret stages pinned above its main
+// courses, so the level `order` functions just look up that position.
+const originOf = (segment) => (segment.origin || {});
+
+function originLevels(taxonomy) {
+  const regionOrder = new Map();
+  const placeOrder = new Map();
+  taxonomy.forEach((region, regionIndex) => {
+    regionOrder.set(String(region.key), regionIndex);
+    region.children.forEach((place, placeIndex) =>
+      placeOrder.set(place.key, placeIndex));
+  });
+  const regionLabels = new Map(taxonomy.map((r) => [String(r.key), r.label]));
+  const placeLabels = new Map(taxonomy.flatMap((r) =>
+    r.children.map((place) => [place.key, place.label])));
+  return [
+    // ?? null, not || {} alone: a row with no `origin` stamp at all makes
+    // originOf return {}, and String(undefined) is the literal string
+    // "undefined" — which matches no taxonomy entry and renders its own
+    // group header (review M4). String(null) correctly routes into
+    // "Anywhere" (the {key: null} taxonomy entry).
+    { of: (segment) => String(originOf(segment).region ?? null),
+      label: (key) => regionLabels.get(key) || key,
+      // an unknown region (a stored override we no longer offer) sorts last
+      // rather than vanishing
+      order: (key) => regionOrder.has(key) ? regionOrder.get(key) : 999 },
+    { of: (segment) => originOf(segment).key || null,
+      label: (key) => placeLabels.get(key) || key,
+      order: (key) => placeOrder.has(key) ? placeOrder.get(key) : 999 },
+  ];
+}
+
 export function Segments({ t }) {
   const [defs, setDefs] = useState(null);
   const [query, setQuery] = useState("");
   const [vocabData, setVocabData] = useState(null);
   const [editing, setEditing] = useState(null);   // null | "new" | def object
   const editorRef = useRef(null);   // the open Builder's {save, dirty} handle
-  const load = async () => setDefs(await getJSON("/api/segments"));
+  const [openGroups, toggleGroup] = useOpenGroups("sm64.segOriginsOpen");
+  // Panes cap themselves to the space actually left below them (ui/viewport.js)
+  // so the PAGE never scrolls; --pane-cap inherits to both panes from here.
+  const workshopRef = usePaneCap();
+  // Returns the rows as well as storing them — saving re-selects the row it
+  // just wrote, which needs the FRESH copy (its origin stamp and seed_dirty
+  // may both have changed server-side).
+  const load = async () => {
+    const rows = await getJSON("/api/segments");
+    setDefs(rows);
+    return rows;
+  };
   useEffect(() => { load();
     getJSON("/api/segments/vocab").then(setVocabData); }, []);
   if (!defs || !vocabData) return html`<${PageState}
@@ -392,7 +511,7 @@ export function Segments({ t }) {
       </button>
     </header>
 
-    <div class="segments-workshop">
+    <div class="segments-workshop" ref=${workshopRef}>
       <aside class="practice-card workshop-card segment-library">
         <div class="workshop-card-heading">
           <div>
@@ -410,45 +529,59 @@ export function Segments({ t }) {
             No segments yet. Create one to time a repeatable section of the game.
           </div>` : shown.length === 0 ? html`<div class="workshop-empty compact">
             No segment matches “${query}”.
-          </div>` : shown.map((d) => {
-            const targeted = tgt.kind === "segment" && tgt.segment_id === d.id;
-            return html`<article class=${`segrow ${editing !== "new" && editing?.id === d.id ? "on" : ""}`}>
-              <button class="segment-row-main" onclick=${() => tryEdit(d)}>
-                <span class="segment-row-name">${d.name}</span>
-                <span class="segment-row-state">
-                  ${isArmed(d.id) && html`<span class="chip good">● Running</span>`}
-                  ${targeted && html`<span class="chip target-chip">◎ Target</span>`}
-                  ${!d.enabled && html`<span class="chip muted-chip">Hidden</span>`}
-                </span>
-              </button>
-              <div class="segment-row-actions">
-                <button class=${targeted ? "is-selected" : ""} onclick=${() => setTarget(d)}
-                    title="Set as practice target">
-                  <${Icon} name="target" size=${15} /> Target
+          </div>` : html`<${GroupedList}
+            tree=${buildTree(shown, originLevels(vocabData.origins || []))}
+            open=${openGroups} toggle=${toggleGroup}
+            forceOpen=${() => needle.length > 0}
+            renderRow=${(d) => {
+              const targeted = tgt.kind === "segment" && tgt.segment_id === d.id;
+              return html`<article key=${d.id}
+                  class=${`segrow ${editing !== "new" && editing?.id === d.id ? "on" : ""}`}>
+                <button class="segment-row-main" onclick=${() => tryEdit(d)}>
+                  <span class="segment-row-name">${d.name}</span>
+                  <span class="segment-row-state">
+                    ${isArmed(d.id) && html`<span class="chip good">● Running</span>`}
+                    ${targeted && html`<span class="chip target-chip">◎ Target</span>`}
+                    ${!d.enabled && html`<span class="chip muted-chip">Hidden</span>`}
+                  </span>
                 </button>
-                <button onclick=${() => toggle(d)} title=${d.enabled ? "Hide from practice" : "Show in practice"}>
-                  <${Icon} name=${d.enabled ? "eyeOff" : "check"} size=${15} />
-                  ${d.enabled ? "Hide" : "Show"}
-                </button>
-                <button onclick=${() => tryEdit(d)} title="Edit segment">
-                  <${Icon} name="edit" size=${15} /> Edit
-                </button>
-                <button class="icon-button danger-icon" onclick=${() => remove(d)}
-                    title="Delete segment" aria-label=${`Delete ${d.name}`}>
-                  <${Icon} name="trash" size=${15} />
-                </button>
-              </div>
-            </article>`;
-          })}
+                <div class="segment-row-actions">
+                  <button class=${targeted ? "is-selected" : ""} onclick=${() => setTarget(d)}
+                      title="Set as practice target">
+                    <${Icon} name="target" size=${15} /> Target
+                  </button>
+                  <button onclick=${() => toggle(d)} title=${d.enabled ? "Hide from practice" : "Show in practice"}>
+                    <${Icon} name=${d.enabled ? "eyeOff" : "check"} size=${15} />
+                    ${d.enabled ? "Hide" : "Show"}
+                  </button>
+                  <button onclick=${() => tryEdit(d)} title="Edit segment">
+                    <${Icon} name="edit" size=${15} /> Edit
+                  </button>
+                  <button class="icon-button danger-icon" onclick=${() => remove(d)}
+                      title="Delete segment" aria-label=${`Delete ${d.name}`}>
+                    <${Icon} name="trash" size=${15} />
+                  </button>
+                </div>
+              </article>`;
+            }} />`}
         </div>
       </aside>
 
       <main class="practice-card workshop-card segment-editor">
         ${editing
           ? html`<${Builder} key=${editing === "new" ? "new" : editing.id}
-              vocab=${vocabData} apiRef=${editorRef} t=${t}
+              vocab=${vocabData} apiRef=${editorRef} t=${t} load=${load}
               initial=${editing === "new" ? null : editing}
-              onSaved=${() => { setEditing(null); load(); t.refresh(); }}
+              onSaved=${async (savedId) => {
+                // Stay on what you just saved (live audit 2026-07-25): closing
+                // the editor threw the user back to the empty state, and after
+                // creating a segment there was no way back to it but hunting
+                // the library. Re-select from the RELOADED rows so the editor
+                // shows the server's version, not the form's.
+                const rows = await load();
+                setEditing(rows.find((row) => row.id === savedId) || null);
+                t.refresh();
+              }}
               onCancel=${() => setEditing(null)} />`
           : html`<div class="workshop-empty">
               <span class="workshop-empty-icon"><${Icon} name="segments" size=${34} /></span>

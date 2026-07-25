@@ -18,9 +18,10 @@ from sm64_events.links import star_links
 from sm64_events.ranks.standards import entity_key
 from sm64_events.stats.registry import (registry_meta, selection_id,
                                         selection_order)
-from sm64_events.tracking.segments import vocab
+from sm64_events.tracking.segments import origin_taxonomy, vocab
 from sm64_events.tracking.views import (build_route_view, build_run_history,
-                                        build_run_view, build_session_view)
+                                        build_run_view, build_session_view,
+                                        stamp_origins)
 
 
 class TargetBody(BaseModel):
@@ -81,6 +82,11 @@ class IconBody(BaseModel):
     icon: str | None = None
 
 
+class OriginBody(BaseModel):
+    # null clears the override and returns the segment to its derived origin
+    origin: str | None = None
+
+
 # The bundled selector-icon set (ui/assets/star_icons), resolved relative to
 # the package so it works from source AND frozen (build_exe's --add-data
 # keeps the ui/ tree at the same relative spot). Globbed per call: the set
@@ -129,6 +135,13 @@ def _icon_exists(stem: str) -> bool:
     if stem.startswith("user:"):
         return stem in _user_icon_names()
     return stem in _icon_stems()
+
+
+def _origin_nodes() -> set[str]:
+    """Every node key the origin taxonomy offers — the override allowlist."""
+    return {place["key"]
+            for group in origin_taxonomy() if group["key"] is not None
+            for place in group["children"]}
 
 
 class StatSelection(BaseModel):
@@ -298,10 +311,13 @@ def create_api_router(service) -> APIRouter:
 
     @router.get("/segments")
     def segments_list():
-        """List all segment definitions; 503 in degraded mode."""
+        """List all segment definitions, each stamped with its library
+        origin (derived from its start rules, or the user's override);
+        503 in degraded mode."""
         if service.db is None:
             raise HTTPException(503, "database unavailable")
-        return service.db.segment_defs()
+        return stamp_origins(service.db.segment_defs(),
+                             service.db.get_state("origin_overrides", {}))
 
     @router.get("/segments/vocab")
     def segments_vocab():
@@ -351,6 +367,20 @@ def create_api_router(service) -> APIRouter:
         declaration-order collision (fastapi-patterns)."""
         try:
             await service.reset_segment(segment_id)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True}
+
+    @router.post("/segments/{segment_id}/origin")
+    async def set_segment_origin(segment_id: int, body: OriginBody):
+        """Pin a segment's library category, or clear it (origin=null) back
+        to the value derived from its start rules. The node must exist in the
+        vocab taxonomy — 400 otherwise, so a typo can't hide a segment in a
+        group nothing renders."""
+        if body.origin is not None and body.origin not in _origin_nodes():
+            raise HTTPException(400, f"unknown origin: {body.origin}")
+        try:
+            await service.set_segment_origin(segment_id, body.origin)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True}

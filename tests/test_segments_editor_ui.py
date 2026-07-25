@@ -49,3 +49,57 @@ def test_editor_save_never_spreads_the_get_row():
     assert "created_utc: _c, ...body" not in source, (
         "the denylist spread is back — GET rows carry db-only columns that "
         "SegmentPatch rejects (see this file's docstring)")
+
+
+# --- grouped library (spec 2026-07-24-segment-origin-categories) -----------
+# Note: SEGMENTS_JS above is the Path (existing tests call .read_text() on
+# it directly) — this reads the source ONCE into its own name rather than
+# reassigning SEGMENTS_JS, which would turn it into a str and break both
+# tests above.
+SEGMENTS_JS_SOURCE = SEGMENTS_JS.read_text(encoding="utf-8")
+
+
+def test_library_groups_by_origin_through_the_shared_primitives():
+    assert "buildTree" in SEGMENTS_JS_SOURCE and "GroupedList" in SEGMENTS_JS_SOURCE
+    assert "sm64.segOriginsOpen" in SEGMENTS_JS_SOURCE   # its OWN new open-set key
+
+
+def test_library_groups_come_from_the_server_stamp_not_a_js_copy():
+    # The JS must never re-derive region membership — one taxonomy, server-side.
+    # Name the DERIVATION artifacts, not the word "WORLD_EDGES": that string
+    # legitimately appears in prose (the dropdown filter's comment cites
+    # addresses.WORLD_EDGES_* by name, which is what makes it greppable), and
+    # an assertion that cannot tell code from a comment gets "fixed" by
+    # rewording the comment — which is exactly what happened once.
+    # "origin.region" is dead here (that literal never appears — "origin ??
+    # {}" is what passes, review M9); only assert the half that's real.
+    assert "originOf(segment).region ?? null" in SEGMENTS_JS_SOURCE
+    for derivation in ("world_regions", "CASTLE_REGION", "region_for_node"):
+        assert derivation not in SEGMENTS_JS_SOURCE, derivation
+
+
+def test_search_opens_matching_groups():
+    # Everything starts collapsed; a search that dropped its hits into shut
+    # boxes would look broken. Assert the actual predicate, not just the
+    # word "forceOpen" — a comment mentioning it would satisfy a bare
+    # substring check (review M9).
+    assert "forceOpen=${() => needle.length > 0}" in SEGMENTS_JS_SOURCE
+
+
+# --- editor origin override (spec 2026-07-24-segment-origin-categories) ----
+
+def test_editor_offers_an_origin_override_with_the_detected_value_visible():
+    # Both substrings are prose-satisfiable alone (review M9) — pin the real
+    # call site and the real option label together.
+    assert "`/api/segments/${initial.id}/origin`" in SEGMENTS_JS_SOURCE
+    # "Auto" must NAME what was detected, or a wrong classification is
+    # invisible to the person who has to fix it.
+    assert 'Auto (${detected ? detected.label : "Anywhere"})' in SEGMENTS_JS_SOURCE
+
+
+def test_origin_override_is_offered_only_for_saved_segments():
+    # The override is keyed by id, so an unsaved segment has nowhere to hang
+    # one — same rule the icon override follows. Pin the "id != null" core
+    # only, not the full "initial && initial.id != null" expression — an
+    # equivalent `initial?.id != null` rewrite shouldn't break this (M9).
+    assert "id != null" in SEGMENTS_JS_SOURCE

@@ -11,6 +11,7 @@ they pass that harness. Cross-check sources on mismatch:
   - SM64 decomp US symbol map (sm64.us.map build artifact)
   - STROOP mapping tables (github.com/SM64-TAS-ABC/STROOP)
 """
+from functools import lru_cache
 
 KSEG0_BASE = 0x80000000
 RDRAM_MIN_SIZE = 0x400000   # 4 MB; vanilla SM64 runs without the expansion pak
@@ -428,6 +429,24 @@ def _world_node(spec) -> tuple:
     return spec if isinstance(spec, tuple) else (spec, None)
 
 
+def node_key(level: int, area: int | None = None) -> str:
+    """THE world-node key format: "6:1" for a castle subarea, "22" for a
+    whole level. Used by world_connections (the builder's dropdown filter),
+    the segment-origin taxonomy, and every consumer of either."""
+    return f"{level}:{area}" if area is not None else str(level)
+
+
+def node_label(key: str) -> str:
+    """Display name for a node key. Castle subareas read as "Basement";
+    everything else takes its LEVEL_NAMES entry. Display only — the key is
+    the identity."""
+    level_str, _, area_str = key.partition(":")
+    if area_str:
+        return CASTLE_AREA_NAMES.get(int(area_str), f"Area {area_str}")
+    level = int(level_str)
+    return LEVEL_NAMES.get(level, f"Level {level}")
+
+
 def world_connections() -> dict:
     """Successor map serialized for the segment-builder vocab: node key
     ("6:1" castle subarea / "22" whole level) -> sorted [level, area|None]
@@ -437,8 +456,7 @@ def world_connections() -> dict:
     def add_edge(from_spec, to_spec):
         from_level, from_area = _world_node(from_spec)
         to_level, to_area = _world_node(to_spec)
-        key = (f"{from_level}:{from_area}" if from_area is not None
-               else str(from_level))
+        key = node_key(from_level, from_area)
         destination = [to_level, to_area]
         bucket = successors.setdefault(key, [])
         if destination not in bucket:
@@ -451,6 +469,99 @@ def world_connections() -> dict:
         add_edge(from_spec, to_spec)
     return {key: sorted(dests, key=lambda d: (d[0], d[1] or 0))
             for key, dests in successors.items()}
+
+
+# --- Castle regions (segment-origin taxonomy, 2026-07-24) ------------------
+# The five castle nodes every other place hangs off, in GAMEFLOW order — the
+# order the castle opens up (8 stars -> basement, 12 -> courtyard, 30 ->
+# upstairs). The UI renders regions in this order; it is a user decision
+# (spec 2026-07-24-segment-origin-categories), not an implementation detail.
+CASTLE_REGION_NODES = (
+    (LEVEL_CASTLE_GROUNDS, None),
+    (LEVEL_CASTLE_INSIDE, AREA_LOBBY),
+    (LEVEL_CASTLE_INSIDE, AREA_BASEMENT),
+    (LEVEL_CASTLE_COURTYARD, None),
+    (LEVEL_CASTLE_INSIDE, AREA_UPSTAIRS),
+)
+
+# The Bowser courses (17/19/21) and their arenas. Grouped as one class so the
+# taxonomy can pin them above the main courses of their region; level-id order
+# then puts each course above its own arena (17 < 30, 19 < 33, 21 < 34).
+BOWSER_STAGE_LEVELS = frozenset({17, 19, 21, BOWSER_1_ARENA,
+                                 BOWSER_2_ARENA, BOWSER_3_ARENA})
+
+# Where a course-0 (castle secret) star is GRABBED, for segments that start on
+# one. MIPS runs in the basement, both catches. The Toad stars are DELIBERATELY
+# ABSENT: their per-star locations are not established anywhere in this
+# codebase, and a guessed row would mis-file a segment silently, where a
+# missing row files it under "Anywhere" where the user can see and fix it.
+# Do not "complete" this table from memory — only from a live check.
+CASTLE_SECRET_STAR_AREAS = {3: AREA_BASEMENT, 4: AREA_BASEMENT}  # MIPS 1st/2nd
+
+
+@lru_cache(maxsize=1)
+def world_regions() -> dict[str, str]:
+    """Every world node -> the castle-region node it belongs to.
+
+    Cached (review M10): `region_for_node` calls this once per segment, so an
+    uncached `GET /api/segments` reran the full BFS ~65 times a request. Safe
+    to cache because every input (WORLD_EDGES_*, CASTLE_REGION_NODES) is a
+    module constant, never mutated at runtime.
+
+    BFS out from CASTLE_REGION_NODES over the same WORLD_EDGES_* tables the
+    builder's dropdown filtering uses, treating one-way edges as undirected
+    (a Bowser arena belongs to the region its exit lands in). Region nodes are
+    pre-seeded, so the walk never crosses THROUGH one — each place is claimed
+    by the region you actually reach it from: BBH by the courtyard, VCUtM by
+    the grounds, CotMC by the basement (through HMC).
+
+    A node reachable from two regions at equal distance goes to whichever
+    comes first in CASTLE_REGION_NODES — gameflow order, deterministic.
+    A wrong or missing edge is fixed in ONE row of WORLD_EDGES_* and both this
+    and the dropdown filter re-derive.
+    """
+    adjacency: dict[str, set[str]] = {}
+
+    def link(from_key: str, to_key: str) -> None:
+        adjacency.setdefault(from_key, set()).add(to_key)
+
+    for node_a, node_b in WORLD_EDGES_TWO_WAY + WORLD_EDGES_ONE_WAY:
+        key_a = node_key(*_world_node(node_a))
+        key_b = node_key(*_world_node(node_b))
+        link(key_a, key_b)
+        link(key_b, key_a)
+
+    regions = {node_key(level, area): node_key(level, area)
+               for level, area in CASTLE_REGION_NODES}
+    frontier = list(regions)
+    while frontier:
+        current = frontier.pop(0)
+        for neighbour in sorted(adjacency.get(current, ())):
+            if neighbour in regions:
+                continue
+            regions[neighbour] = regions[current]
+            frontier.append(neighbour)
+    return regions
+
+
+def region_for_node(key: str | None) -> str | None:
+    """Region a node belongs to, or None when it has no place in the castle.
+
+    The one node the BFS cannot answer is a subarea-less castle interior
+    ("6", from a `level_enter to=6` with no to_subarea): regions are keyed on
+    the three subareas. It resolves to the LOBBY, because every castle entry
+    lands there before settling elsewhere — the same transient-lobby behaviour
+    detectors/level.py journals and area_changed's `from_transient` flags.
+    """
+    if key is None:
+        return None
+    regions = world_regions()
+    if key in regions:
+        return regions[key]
+    level_str, _, area_str = key.partition(":")
+    if not area_str and int(level_str) == LEVEL_CASTLE_INSIDE:
+        return node_key(LEVEL_CASTLE_INSIDE, AREA_LOBBY)
+    return None
 
 # ---------------------------------------------------------------------------
 # Name tables (display-only; IDs are the authoritative identity).

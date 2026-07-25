@@ -3,11 +3,15 @@ from dataclasses import replace
 
 import pytest
 
+from sm64_events.memory.addresses import COURSE_NAMES, LEVEL_NAMES
 from sm64_events.storage.db import EventRow
 from sm64_events.tracking.segments import (SEGMENT_ATTEMPT_OFFSET,
+                                           course_groups, level_groups,
                                            GUARDS, TRIGGERS, MatchContext,
                                            SegmentDef, SegmentEngine,
-                                           validate_definition, vocab)
+                                           origin_taxonomy, origin_view,
+                                           start_origin, validate_definition,
+                                           vocab)
 
 W = "2026-06-11T12:00:00Z"
 
@@ -2229,3 +2233,122 @@ def test_validate_rejects_a_non_string_default_strat():
                 "name": "x", "start_triggers": [{"type": "spawned"}],
                 "end_triggers": [{"type": "level_enter", "to": 6}],
                 "guards": [], "default_strat": bad})
+
+
+def test_start_origin_reads_the_source_of_a_level_exit():
+    # SSL -> LLL: the seeded exits carry no `to`, and the source is the place
+    # a runner names ("coming out of SSL").
+    assert start_origin([{"type": "level_exit", "from": 8}]) == "8"
+
+
+def test_start_origin_reads_the_destination_of_a_level_enter():
+    assert start_origin([{"type": "level_enter", "to": 9, "from": 6}]) == "9"
+
+
+def test_start_origin_reads_area_and_anchor_positions():
+    assert start_origin([{"type": "area_enter", "level": 6, "area": 2}]) == "6:2"
+    assert start_origin([{"type": "attempt_anchor", "level": 17}]) == "17"
+    assert start_origin([{"type": "spawned", "level": 16}]) == "16"
+
+
+def test_start_origin_prefers_the_clause_that_names_a_subarea():
+    # LBLJ arms either way; the anchor knows it is the lobby, the level entry
+    # does not.
+    assert start_origin([{"type": "level_enter", "to": 6, "from": 16},
+                         {"type": "attempt_anchor", "level": 6, "area": 1}]) == "6:1"
+
+
+def test_start_origin_keeps_the_first_clause_when_places_disagree():
+    assert start_origin([{"type": "level_exit", "from": 8},
+                         {"type": "level_exit", "from": 22}]) == "8"
+
+
+def test_start_origin_resolves_a_star_grab_through_its_course():
+    assert start_origin([{"type": "star_grabbed", "course": 9, "star": 0}]) == "23"
+
+
+def test_start_origin_places_the_mips_stars_in_the_basement():
+    assert start_origin([{"type": "star_grabbed", "course": 0, "star": 3}]) == "6:3"
+    assert start_origin([{"type": "star_grabbed", "course": 0, "star": 4}]) == "6:3"
+
+
+def test_start_origin_is_none_when_the_rules_carry_no_place():
+    assert start_origin([{"type": "reset_game"}]) is None
+    assert start_origin([{"type": "key_grabbed"}]) is None
+    assert start_origin([{"type": "star_grabbed", "course": 0, "star": 0}]) is None
+    assert start_origin([]) is None
+
+
+def test_origin_view_carries_the_region_and_its_labels():
+    view = origin_view("8")
+    assert view == {"key": "8", "label": "Shifting Sand Land",
+                    "region": "6:3", "region_label": "Basement"}
+    anywhere = origin_view(None)
+    assert anywhere["key"] is None and anywhere["region"] is None
+
+
+def test_origin_view_puts_a_subarea_less_castle_start_in_the_lobby():
+    # start_origin never emits a bare "6" anymore (see the test below), but a
+    # STORED value (an old override, a foreign payload) can still be one —
+    # origin_view must keep resolving its region rather than rendering a raw
+    # key as a group header (review I1).
+    assert origin_view("6")["region"] == "6:1"
+
+
+def test_a_subarea_less_castle_start_normalizes_to_the_lobby():
+    # Not just "has the lobby as its region" — it must BE a lobby place, or it
+    # renders as a group header labelled "6" (review I1).
+    assert start_origin([{"type": "level_enter", "to": 6}]) == "6:1"
+
+
+def test_origin_taxonomy_is_ordered_by_gameflow_then_class():
+    taxonomy = origin_taxonomy()
+    assert [group["key"] for group in taxonomy] == \
+        ["16", "6:1", "6:3", "26", "6:2", None]
+    lobby = next(group for group in taxonomy if group["key"] == "6:1")
+    labels = [place["label"] for place in lobby["children"]]
+    # region itself, then Bowser stage + arena, then secret stages, then the
+    # main courses in gameflow order
+    assert labels[:3] == ["Lobby (in-area starts)",
+                          "Bowser in the Dark World", "Bowser 1 Arena"]
+    assert labels[3:6] == ["The Princess's Secret Slide",
+                           "Tower of the Wing Cap", "The Secret Aquarium"]
+    assert labels[6:8] == ["Bob-omb Battlefield", "Whomp's Fortress"]
+
+
+def test_vocab_ships_the_origin_taxonomy():
+    assert vocab()["origins"] == origin_taxonomy()
+
+
+def test_level_groups_cover_every_level_exactly_once():
+    groups = level_groups()
+    seen = [level for group in groups for level in group["levels"]]
+    assert sorted(seen) == sorted(LEVEL_NAMES), "a level vanished from the picker"
+    assert len(seen) == len(set(seen)), "a level is offered twice"
+
+
+def test_level_groups_read_in_the_librarys_order():
+    groups = level_groups()
+    assert [group["label"] for group in groups][:5] == [
+        "Castle Grounds", "Lobby", "Basement", "Castle Courtyard", "Upstairs"]
+    lobby = next(group for group in groups if group["label"] == "Lobby")
+    # the castle interior has a node in three regions and takes the first —
+    # the same answer region_for_node gives a bare "6"
+    assert lobby["levels"][0] == 6
+    assert all(6 not in group["levels"] for group in groups
+               if group["label"] != "Lobby")
+
+
+def test_course_groups_put_the_castle_secret_stars_in_other():
+    groups = course_groups()
+    other = next(group for group in groups if group["label"] == "Other")
+    assert 0 in other["courses"]        # course 0 has no level of its own
+    seen = [course for group in groups for course in group["courses"]]
+    assert sorted(seen) == sorted(COURSE_NAMES)
+    assert len(seen) == len(set(seen))
+
+
+def test_vocab_ships_both_grouped_pickers():
+    shipped = vocab()
+    assert shipped["level_groups"] == level_groups()
+    assert shipped["course_groups"] == course_groups()

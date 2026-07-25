@@ -123,3 +123,55 @@ def test_world_connections_arena_edges_are_directed():
     assert not any(lvl == 17 for lvl, _ in conn["30"])     # arena never exits into BitDW
     assert [19, None] in conn["23"]                        # DDD sub bay -> BitFS
     assert not any(lvl == 23 for lvl, _ in conn["19"])     # BitFS never exits into DDD
+
+
+def test_world_regions_assigns_every_level():
+    regions = A.world_regions()
+    for level in A.LEVEL_NAMES:
+        if level == A.LEVEL_CASTLE_INSIDE:
+            continue          # the interior is three region nodes, not one
+        assert A.node_key(level) in regions, A.LEVEL_NAMES[level]
+
+
+def test_world_regions_match_the_castle_layout():
+    regions = A.world_regions()
+    lobby = A.node_key(A.LEVEL_CASTLE_INSIDE, A.AREA_LOBBY)
+    basement = A.node_key(A.LEVEL_CASTLE_INSIDE, A.AREA_BASEMENT)
+    upstairs = A.node_key(A.LEVEL_CASTLE_INSIDE, A.AREA_UPSTAIRS)
+    # the ones a naive level->region guess gets wrong
+    assert regions[A.node_key(4)] == A.node_key(A.LEVEL_CASTLE_COURTYARD)  # BBH
+    assert regions[A.node_key(18)] == A.node_key(A.LEVEL_CASTLE_GROUNDS)   # VCUtM
+    assert regions[A.node_key(28)] == basement          # CotMC, through HMC
+    assert regions[A.node_key(A.BOWSER_1_ARENA)] == lobby
+    assert regions[A.node_key(A.BOWSER_2_ARENA)] == basement
+    assert regions[A.node_key(A.BOWSER_3_ARENA)] == upstairs
+    # a region node is its own region
+    assert regions[basement] == basement
+
+
+def test_region_for_a_subarea_less_castle_node_is_the_lobby():
+    # `level_enter to=6` with no to_subarea: every castle entry lands in the
+    # lobby before settling, so that is where it belongs.
+    assert A.region_for_node(A.node_key(A.LEVEL_CASTLE_INSIDE)) == \
+        A.node_key(A.LEVEL_CASTLE_INSIDE, A.AREA_LOBBY)
+    assert A.region_for_node(None) is None
+
+
+def test_castle_region_nodes_are_in_gameflow_order():
+    assert A.CASTLE_REGION_NODES == (
+        (A.LEVEL_CASTLE_GROUNDS, None),
+        (A.LEVEL_CASTLE_INSIDE, A.AREA_LOBBY),
+        (A.LEVEL_CASTLE_INSIDE, A.AREA_BASEMENT),
+        (A.LEVEL_CASTLE_COURTYARD, None),
+        (A.LEVEL_CASTLE_INSIDE, A.AREA_UPSTAIRS))
+
+
+def test_mips_stars_resolve_to_the_basement():
+    assert A.CASTLE_SECRET_STAR_AREAS[3] == A.AREA_BASEMENT
+    assert A.CASTLE_SECRET_STAR_AREAS[4] == A.AREA_BASEMENT
+    assert 0 not in A.CASTLE_SECRET_STAR_AREAS   # Toad stars deliberately absent
+
+
+def test_node_label_reads_subareas_and_levels():
+    assert A.node_label(A.node_key(A.LEVEL_CASTLE_INSIDE, A.AREA_BASEMENT)) == "Basement"
+    assert A.node_label(A.node_key(8)) == "Shifting Sand Land"
