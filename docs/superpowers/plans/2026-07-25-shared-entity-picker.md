@@ -15,7 +15,7 @@
 - Branch off current `main`; run everything from the repo root (or the feature worktree root if one was created).
 - `uv run pytest -q` must pass before every commit. Never `pip`. **Baseline: 1515 passed.**
 - UI components import Preact through index.html's **importmap** under BARE specifiers (`import { h } from "preact"`, `"preact/hooks"`, `"htm"`, then `const html = htm.bind(h)`). There is no `vendor/preact.js`.
-- **A module that imports `preact`/`htm` cannot be unit-tested through node** — those are bare specifiers resolved only by index.html's importmap, and node has no node_modules. Pure logic that needs a node test must live in an import-free module (`ui/group.js`, `ui/entities.js`). This bit Task 1 mid-build: `visibleGroups` moved to `ui/entities.js` and `picker.js` imports it.
+- **To node-execute a UI module that imports `preact`/`htm`, register a resolver hook** — those are bare specifiers only index.html's importmap resolves. `tests/test_ui_picker.py` shows the pattern: a `node:module` `register()` from a `data:` URL mapping them to `ui/vendor/*.module.js`. Import-free modules (`ui/group.js`, `ui/entities.js`) need nothing.
 - `node --check` on a file path is BLIND to ESM. Syntax-check with `node --input-type=module --check < file.js`, and verify behaviour by rendering — unit tests plus a syntax check once shipped an invisible feature here.
 - Don't start `python -m sm64_events.main`; the user may be playing and it takes the recorder lock. UI verification uses a static harness on port **8137** (never 8064/8065/8066), deleted and killed in the same task.
 - Run verification through the **Bash tool** — PowerShell mangles native exit codes.
