@@ -99,3 +99,22 @@ export function segmentOptions(defs, taxonomy) {
     options: buckets.get(region),
   }));
 }
+
+// Applying a caller's filter to picker groups: emptied groups dropped, and the
+// CURRENT VALUE kept even when the filter rejects it (a stored value fed to a
+// filtered dropdown otherwise renders blank and reads as unset — fixed twice
+// before, separately, in stratpicker.js and the segment builder).
+//
+// It lives HERE rather than in components/picker.js because this module
+// imports nothing: node can load it directly, so the invariant above is
+// unit-testable. picker.js imports preact through the browser importmap, which
+// node cannot resolve.
+
+/** Groups with the filter applied: emptied groups removed, current value kept.
+ *  Pure — returns new objects, never mutates the caller's array. */
+export function visibleGroups(groups, allow, value) {
+  const keep = (option) => !allow || allow(option.id) || option.id === value;
+  return (groups || [])
+    .map((group) => ({ ...group, options: group.options.filter(keep) }))
+    .filter((group) => group.options.length > 0);
+}

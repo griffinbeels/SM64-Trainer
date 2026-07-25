@@ -1,8 +1,13 @@
-"""visibleGroups (ui/components/picker.js) driven through node.
+"""visibleGroups (ui/entities.js) driven through node.
 
 It is the whole reason the shared picker exists: dropping emptied groups and
 KEEPING THE CURRENT VALUE listed are behaviours that have been implemented —
 and got wrong — separately in stratpicker.js and the segment builder.
+
+visibleGroups lives in entities.js, not components/picker.js, because that
+module imports nothing (picker.js imports preact through the browser's
+importmap, which a bare node process cannot resolve) — see entities.js's
+comment above the function for the full reasoning.
 """
 import json
 import shutil
@@ -11,41 +16,15 @@ from pathlib import Path
 
 import pytest
 
-UI_DIR = Path(__file__).resolve().parent.parent / "src" / "sm64_events" / "ui"
-PICKER_JS = (UI_DIR / "components" / "picker.js").as_uri()
-
-# picker.js imports the bare specifiers "preact"/"htm" that index.html
-# resolves through its <script type="importmap"> in the browser (there is no
-# node_modules — the app ships with no build step). A bare `node` process has
-# no importmap, so ERR_MODULE_NOT_FOUND on "preact" would fail every test here
-# regardless of picker.js's own correctness. This resolver hook redirects
-# those two specifiers to the SAME vendor files the browser uses, so the test
-# runs the real component, unmodified. Test plumbing only.
-_RESOLVE_MAP = json.dumps({
-    "preact": (UI_DIR / "vendor" / "preact.module.js").as_uri(),
-    "preact/hooks": (UI_DIR / "vendor" / "hooks.module.js").as_uri(),
-    "htm": (UI_DIR / "vendor" / "htm.module.js").as_uri(),
-})
+ENTITIES_JS = (Path(__file__).resolve().parent.parent / "src" / "sm64_events"
+               / "ui" / "entities.js").as_uri()
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None,
                                 reason="node not on PATH")
 
 
 def run_node(body: str):
-    script = f"""
-import {{ register }} from 'node:module';
-const loaderSrc = `
-  const map = {_RESOLVE_MAP};
-  export function resolve(specifier, context, nextResolve) {{
-    const url = map[specifier];
-    if (url) return {{ url, format: 'module', shortCircuit: true }};
-    return nextResolve(specifier, context);
-  }}
-`;
-register('data:text/javascript,' + encodeURIComponent(loaderSrc), import.meta.url);
-const {{ visibleGroups }} = await import({PICKER_JS!r});
-{body}
-"""
+    script = f"import {{ visibleGroups }} from {ENTITIES_JS!r};\n{body}"
     result = subprocess.run(["node", "--input-type=module", "-"],
                             input=script, capture_output=True, text=True,
                             timeout=30)

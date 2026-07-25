@@ -1,5 +1,6 @@
 import { h } from "preact";
 import htm from "htm";
+import { visibleGroups } from "../entities.js";
 
 const html = htm.bind(h);
 
@@ -21,15 +22,6 @@ const html = htm.bind(h);
 //
 // Ids are STRINGS, so a composite id ("8:2" = course 8, star 2) is as valid as
 // a level id. The caller encodes and decodes; this file only passes them on.
-
-/** Groups with the filter applied: emptied groups removed, current value kept.
- *  Pure — returns new objects, never mutates the caller's array. */
-export function visibleGroups(groups, allow, value) {
-  const keep = (option) => !allow || allow(option.id) || option.id === value;
-  return (groups || [])
-    .map((group) => ({ ...group, options: group.options.filter(keep) }))
-    .filter((group) => group.options.length > 0);
-}
 
 /**
  * groups      [{ key, label, options: [{ id, name }] }]
