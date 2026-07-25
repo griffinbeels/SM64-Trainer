@@ -43,7 +43,15 @@ class ExcludeBody(BaseModel):
 
 
 class AckBody(BaseModel):
-    scope: str
+    """Exactly one of `scope`/`entity` must be set -- the endpoint acks
+    either a scope celebration or an entity celebration, never both at
+    once (they raise two different watermark stores; see
+    tracking/service.py's entity-watermark section for why they're
+    separate). `scope` alone stayed required pre-task-f1; both are
+    optional now so existing `{"scope": ..., "key": ...}` callers are
+    unaffected."""
+    scope: str | None = None
+    entity: str | None = None
     key: int
 
 
@@ -160,6 +168,44 @@ def _score_scope(service, scope_id: str) -> dict:
     return out
 
 
+def _entity_scores(service) -> list[dict]:
+    """Every RANKABLE entity, scored -- not just the active scope's
+    candidates. The `overall` scope's own group resolution
+    (`{need:1,candidates:[key]}` per rankable entity, see
+    `ranks.scopes.entity_groups`) already IS the full corpus, so this
+    reuses `_score_scope`'s pure path instead of a second scoring
+    pipeline. Measured ~2-3ms over the bundled seed's 102 entities on an
+    unpracticed store (task-f1 report has the full measurement) -- cheap
+    enough to run on every `/api/marelo` request regardless of which scope
+    was asked for, which is what lets an entity OUTSIDE the active scope
+    still celebrate (spec 7.4: entity rank-ups are the frequent reward)."""
+    return _score_scope(service, "overall")["entities"]
+
+
+def _entity_celebrations(service, entities: list[dict]) -> list[dict]:
+    """Sibling of `_build_marelo`'s scope celebration, batched: sync (follow
+    a drop down) -> celebration_delta against the pre-sync/pre-seed
+    watermark -> seed (create if absent, no-op if present) -- same
+    once-only-via-ack contract, applied to every scored entity in ONE
+    round trip (`sync_and_seed_entity_watermarks`) instead of one per
+    entity. Entities with no tier (never practiced, or excluded -- see
+    `_append_excluded_rows`) are skipped: there is nothing to celebrate."""
+    scored = [entity for entity in entities if entity["tier"] is not None]
+    current_by_key = {entity["key"]: scoring.progression_key(
+                          entity["tier"], entity["division"])
+                      for entity in scored}
+    watermark_by_key = service.sync_and_seed_entity_watermarks(current_by_key)
+    out = []
+    for entity in scored:
+        celebration = scopes.celebration_delta(
+            entity["tier"], entity["division"],
+            watermark_by_key.get(entity["key"]))
+        if celebration is not None:
+            out.append({**celebration, "entity": entity["key"],
+                       "label": entity["label"]})
+    return out
+
+
 def _build_marelo(service, scope_id: str) -> dict:
     out = _score_scope(service, scope_id)
     out["celebration"] = None
@@ -173,6 +219,11 @@ def _build_marelo(service, scope_id: str) -> dict:
         # stops the first view of a scope celebrating the user's whole
         # history at once. seed_watermark is a no-op once the key exists.
         service.seed_watermark(scope_id, key)
+    # Entity celebrations evaluate the FULL rankable corpus (see
+    # _entity_scores), not just this scope -- reuse `out["entities"]` when
+    # scope_id is already "overall" instead of scoring it twice.
+    corpus = out["entities"] if scope_id == "overall" else _entity_scores(service)
+    out["entity_celebrations"] = _entity_celebrations(service, corpus)
     return out
 
 
@@ -341,8 +392,13 @@ def create_ranks_router(service) -> APIRouter:
 
     @router.post("/marelo/ack")
     async def marelo_ack(body: AckBody):
+        if (body.scope is None) == (body.entity is None):
+            raise HTTPException(400, "ack needs exactly one of scope or entity")
         try:
-            await service.ack_celebration(body.scope, body.key)
+            if body.entity is not None:
+                await service.ack_entity_celebration(body.entity, body.key)
+            else:
+                await service.ack_celebration(body.scope, body.key)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True}
