@@ -1815,7 +1815,13 @@ def entity_label(db, ek: str) -> str:
     course, _, star = rest.partition(":")
     cid, sid = int(course), int(star)
     return f"{COURSE_NAMES.get(cid, cid)} — " \
-           f"{STAR_NAMES.get(cid, {}).get(sid) or f'star {sid + 1}'}"
+           f"{(STAR_NAMES.get(cid) or ())[sid] if sid < len(STAR_NAMES.get(cid) or ()) else f'star {sid + 1}'}"
+    # CORRECTED 2026-07-25: STAR_NAMES is {course: TUPLE positioned by star id},
+    # NOT a nested dict -- `.get(sid)` on it raises AttributeError. This line
+    # sat under a "verified shapes, do not guess" heading and was wrong anyway;
+    # the Task 8 implementer caught it live and routed through the existing
+    # course/star name helpers instead. Left visible rather than silently
+    # rewritten so the failure mode stays legible.
 ```
 
 **Verified shapes** (probe again if anything fails):
