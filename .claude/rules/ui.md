@@ -65,6 +65,13 @@ fixed-height slots); design contract/anti-slop rules in `.agents/skills/sm64-uiu
   MCP — unit tests + `node --check` alone shipped an invisible feature once.
   Fixture-server recipe, harness-page technique + headless-Chrome fallback:
   see auto-memory `verify-ui-effects-with-harness-page`.
+- **"Clicking anywhere on it works" is a hit-testing claim, and a screenshot
+  cannot show it.** Sample `document.elementFromPoint` at the corners, the
+  icon lane, the label and the centre, write the results into a `<pre>` on the
+  page, and read them back with `--dump-dom` — the whole-card selects were
+  proved that way at five widths (2026-07-25). Same for a state only a real
+  input produces: a native `<select>` popup opens on a genuine click, so drive
+  it with the MCP `click` and read `expanded` off the a11y snapshot.
 - **Prefer serving the REAL `index.html`/`app.js` against captured API
   fixtures over hand-building a harness page.** `GET /api/session?clock=&scope=`
   (plus marelo/segments/vocab/routes/pause/run) off a running instance is a
