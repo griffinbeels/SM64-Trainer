@@ -15,9 +15,13 @@ marked complete is DONE — do not re-dispatch it.
 | 2 | T4 segments.js clause params | **complete** | `6548ec2` — crash-recovered, see below |
 | 2 | T5 header.js target modal | **complete** | `9ad4e9b` — crash-recovered, see below |
 | 2 | T6 routes.js step editor | **complete** | `31866bf` — crash-recovered, see below |
-| 3 | T7 delete picker.js, retarget the gate | pending | |
-| — | Whole-branch review (Opus 5) | pending | NON-OPTIONAL |
+| 3 | T7 delete picker.js, retarget the gate | **complete** | `7561713`, gate re-probed by hand |
+| — | Grid redesign (mid-flight, user-directed) | **complete** | spec `6d771c7`, build `beb4737`, width fix `46667e5` |
+| — | Merge main (icon-registry collision) | **complete** | `eb7393d` — resolved BY LAYER, see below |
+| — | Whole-branch review (Opus 5) | **complete** | 1 Critical, 4 Important, 10 Minor |
+| — | Review fix wave | **complete** | `663f0e8` (C1/I1/I2/I4 + M1-M4/M9) and the follow-up (I3/M5-M8/M10) |
 | — | Human audit — **the keyboard path** | pending | mouse-only testing cannot see these regressions |
+| — | `wrap-feature` merge to main | pending | after the audit |
 
 ## Watch items (predicted breakage + the sanctioned remedy)
 

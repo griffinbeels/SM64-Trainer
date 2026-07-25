@@ -304,9 +304,12 @@ export function Routes({ t }) {
   const [selId, setSelId] = useState(null);
   const [view, setView] = useState(null);
   const [startCond, setStartCond] = useState(null);   // local start-condition edit buffer
-  const [segs, setSegs] = useState([]);
-  const [vocab, setVocab] = useState(null);
   const [err, setErr] = useState(null);
+  // Segment defs + vocab come from the STORE, not a third private copy: only
+  // the store's refetches on segments_changed/origins_changed, so a local copy
+  // went stale the moment a definition was edited in another tab (review M8).
+  const segs = t.segments || [];
+  const vocab = t.vocab || null;
   const [openGroups, toggleCategory] = useOpenGroups(OPEN_KEY);
   // Same measured cap as the segments workshop (ui/viewport.js): --pane-cap
   // inherits to the library and the workspace, so the PAGE never scrolls.
@@ -316,11 +319,7 @@ export function Routes({ t }) {
   const loadRoutes = async () => { const rs = await getJSON("/api/routes"); setRoutes(rs); return rs; };
   const loadView = async (id) =>
     setView(id == null ? null : await getJSON(`/api/routes/${id}`).catch(() => null));
-  useEffect(() => {
-    loadRoutes();
-    getJSON("/api/segments").then(setSegs);
-    getJSON("/api/segments/vocab").then(setVocab).catch(() => {});
-  }, []);
+  useEffect(() => { loadRoutes(); }, []);
   // re-fetch the resolved view whenever the selection OR the raw routes change
   // (a saveSteps PUT reloads routes -> this refreshes the % columns).
   // Known limitation (accepted, final review 2026-07-23): this tab has no WS

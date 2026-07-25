@@ -71,6 +71,13 @@ function PickerDialog({ groups, value, allow, title, iconFor, depth,
   const shown = visibleGroups(groups, allow, value);
   const openGroup = shown.find((group) => group.key === openGroupKey) || null;
 
+  // Drilling in unmounts the button that was clicked, so focus falls back to
+  // <body> — and the Modal shell only intercepts Tab at the FIRST and LAST
+  // focusable, so from <body> a Tab walks into the page behind the dialog
+  // (review M10). Move focus to Back, which is both a real target and the
+  // thing a keyboard user most likely wants next.
+  const focusOnDrillIn = (node) => { if (node) node.focus(); };
+
   // Escape goes BACK out of a drilled-in group before it closes the dialog —
   // what a two-step navigation makes people expect. Capture phase, so it wins
   // over the Modal shell's own Escape-to-close.
@@ -106,7 +113,7 @@ function PickerDialog({ groups, value, allow, title, iconFor, depth,
   if (depth > 1)
     return html`<${Modal} title=${openGroup.label} icon="target" size="grid"
         onClose=${onClose}>
-      <button type="button" class="entity-back"
+      <button type="button" class="entity-back" ref=${focusOnDrillIn}
           onclick=${() => setOpenGroupKey(null)}>
         <${Icon} name="chevron" size=${15} /> Back
       </button>
