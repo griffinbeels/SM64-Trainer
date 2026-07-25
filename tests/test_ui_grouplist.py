@@ -29,3 +29,18 @@ def test_css_indents_by_depth_variable_and_never_scrolls_sideways():
 def test_no_route_specific_group_classes_remain():
     for legacy in (".route-cat", ".route-subcat"):
         assert legacy not in INDEX, f"{legacy} should be .lib-cat*"
+
+
+ROUTES = (UI / "components" / "routes.js").read_text(encoding="utf-8")
+
+
+def test_routes_library_uses_the_shared_primitives():
+    assert "buildTree" in ROUTES and "GroupedList" in ROUTES
+    # the local implementations are gone, not merely unused
+    assert "function groupByCategory" not in ROUTES
+    assert "function loadOpenGroups" not in ROUTES
+
+
+def test_routes_keeps_its_existing_open_state_key():
+    # A new key here would silently reset every user's open groups.
+    assert '"sm64.routeCatsOpen"' in ROUTES

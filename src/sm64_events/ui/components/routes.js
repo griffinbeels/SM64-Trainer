@@ -14,6 +14,8 @@ import { Medal } from "./ranks.js";
 import { Icon } from "./icons.js";
 import { PageState } from "./states.js";
 import { Modal } from "./modal.js";
+import { buildTree } from "../group.js";
+import { GroupedList, useOpenGroups } from "./grouplist.js";
 
 const html = htm.bind(h);
 const pct = (r) => `${Math.round((r ?? 0) * 100)}%`;
@@ -59,28 +61,15 @@ function rankTop(name) {
   return name === UNCATEGORISED ? [2, 0] : [1, 0];
 }
 
-/** [[top, [[sub|null, routes]]]] — ordered, seeded groups first. */
-function groupByCategory(routes) {
-  const tops = new Map();
-  for (const r of routes) {
-    const top = categoryOf(r);
-    if (!tops.has(top)) tops.set(top, new Map());
-    const sub = subCategoryOf(r);
-    const subs = tops.get(top);
-    if (!subs.has(sub)) subs.set(sub, []);
-    subs.get(sub).push(r);
-  }
-  return [...tops.entries()]
-    .sort(([a], [b]) => {
-      const [ga, la] = rankTop(a); const [gb, lb] = rankTop(b);
-      return ga - gb || la - lb || byName(a, b);
-    })
-    .map(([top, subs]) => [top, [...subs.entries()].sort(([a], [b]) =>
-      // ungrouped routes sit above the sub-groups
-      a === null ? -1 : b === null ? 1 : byName(a, b))]);
-}
-
-const routeCount = (subs) => subs.reduce((n, [, rs]) => n + rs.length, 0);
+// Grouping POLICY for the route library; the engine is group.js buildTree.
+// Two levels off the free-text category PATH ("Main Categories/16 Star"):
+// seeded groups lead, user groups follow, Uncategorized last, names compared
+// numeric-aware so star counts read 0, 1, 16, 70, 120.
+const CATEGORY_LEVELS = [
+  { of: categoryOf, label: (name) => name,
+    order: (name) => [...rankTop(name), name] },
+  { of: subCategoryOf, label: (name) => name, order: (name) => name },
+];
 
 const NEW_OPTION = "__new__";   // can't collide with a real category name
 
@@ -140,11 +129,6 @@ function CategoryModal({ routes, current, onCancel, onSave }) {
 
     <p class="meta">Filed under <b>${path || "Uncategorized"}</b></p>
   <//>`;
-}
-
-function loadOpenGroups() {
-  try { return new Set(JSON.parse(localStorage.getItem(OPEN_KEY)) || []); }
-  catch { return new Set(); }   // private mode: everything starts collapsed
 }
 
 // Star/segment picker shared by "add step" and "add option to a group".
@@ -295,17 +279,7 @@ export function Routes({ t }) {
   const [segs, setSegs] = useState([]);
   const [vocab, setVocab] = useState(null);
   const [err, setErr] = useState(null);
-  const [openGroups, setOpenGroups] = useState(loadOpenGroups);
-
-  function toggleCategory(category) {
-    setOpenGroups((prev) => {
-      const next = new Set(prev);
-      if (!next.delete(category)) next.add(category);
-      try { localStorage.setItem(OPEN_KEY, JSON.stringify([...next])); }
-      catch { /* private mode: collapse still works for this session */ }
-      return next;
-    });
-  }
+  const [openGroups, toggleCategory] = useOpenGroups(OPEN_KEY);
   const catalog = (t.view && t.view.catalog) || { courses: [] };
 
   const loadRoutes = async () => { const rs = await getJSON("/api/routes"); setRoutes(rs); return rs; };
@@ -433,9 +407,10 @@ export function Routes({ t }) {
         <div class="route-list" role="list">
           ${routes.length === 0 ? html`<div class="workshop-empty compact">
             No routes yet. Build one from stars, segments, or groups.
-          </div>` : groupByCategory(routes).map(([category, subs]) => {
-            const shut = !openGroups.has(category);
-            const routeRow = (r) => html`<button role="listitem"
+          </div>` : html`<${GroupedList}
+            tree=${buildTree(routes, CATEGORY_LEVELS)}
+            open=${openGroups} toggle=${toggleCategory}
+            renderRow=${(r) => html`<button role="listitem"
                 key=${r.id}
                 class=${`route-list-item ${r.id === selId ? "on" : ""}`}
                 onclick=${() => setSelId(r.id)}>
@@ -444,32 +419,7 @@ export function Routes({ t }) {
                 <small>${r.steps.length} ${r.steps.length === 1 ? "step" : "steps"}</small>
               </span>
               <${Icon} name="chevron" size=${16} />
-            </button>`;
-            return html`<div class="route-cat">
-              <button class=${`route-cat-header ${shut ? "shut" : ""}`}
-                  aria-expanded=${!shut}
-                  onclick=${() => toggleCategory(category)}>
-                <${Icon} name="chevron" size=${15} />
-                <b>${category}</b>
-                <span class="count-badge">${routeCount(subs)}</span>
-              </button>
-              ${shut ? null : subs.map(([sub, inGroup]) => {
-                if (sub === null) return inGroup.map(routeRow);
-                const path = `${category}${CATEGORY_SEP}${sub}`;
-                const subShut = !openGroups.has(path);
-                return html`<div class="route-subcat" key=${path}>
-                  <button class=${`route-cat-header sub ${subShut ? "shut" : ""}`}
-                      aria-expanded=${!subShut}
-                      onclick=${() => toggleCategory(path)}>
-                    <${Icon} name="chevron" size=${14} />
-                    <b>${sub}</b>
-                    <span class="count-badge">${inGroup.length}</span>
-                  </button>
-                  ${subShut ? null : inGroup.map(routeRow)}
-                </div>`;
-              })}
-            </div>`;
-          })}
+            </button>`} />`}
         </div>
         ${selected ? html`<div class="library-actions">
           <button onclick=${renameRoute}><${Icon} name="edit" size=${15} /> Rename</button>
