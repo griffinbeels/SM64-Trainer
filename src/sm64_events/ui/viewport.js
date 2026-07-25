@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 
 // MEASURE the space a pane has left instead of guessing it.
 //
@@ -22,14 +22,21 @@ const BOTTOM_GAP_PX = 16;   // breathing room under the pane, matches the gutter
 const MIN_CAP_PX = 240;     // never collapse a pane to nothing on a tiny window
 
 /**
- * Ref for the element whose children should be capped to the remaining
- * viewport height. Re-measures on resize and on any layout change that moves
- * the element (hero wrapping, a notice appearing above it).
+ * Callback ref for the element whose children should be capped to the
+ * remaining viewport height. Re-measures on resize and on any layout change
+ * that moves the element (hero wrapping, a notice appearing above it).
+ *
+ * A CALLBACK ref held in state, not a useRef — and that distinction is the
+ * whole bug it was written to fix. Both library pages render a loading state
+ * until their fetches land, so on the first mount the capped element does not
+ * exist yet; a `useRef` + `[]`-deps effect reads `null`, bails, and never runs
+ * again once the real DOM arrives. Keying the effect on the NODE means it runs
+ * exactly when the node appears (live-verified 2026-07-25: --pane-cap was
+ * unset in the running app, and the CSS fallback was doing all the work).
  */
 export function usePaneCap() {
-  const ref = useRef(null);
+  const [element, setElement] = useState(null);
   useEffect(() => {
-    const element = ref.current;
     if (!element || typeof ResizeObserver === "undefined") return undefined;
     let lastCap = null;
     // Space consumed BELOW the pane — the workspace's bottom padding and any
@@ -45,17 +52,22 @@ export function usePaneCap() {
       const documentTop = element.getBoundingClientRect().top + window.scrollY;
       const available = Math.max(
         MIN_CAP_PX, window.innerHeight - documentTop - spaceBelowPane);
-      const cap = `${Math.round(available)}px`;
-      if (cap === lastCap) return;   // no write, so the observer can't loop
-      lastCap = cap;
-      element.style.setProperty("--pane-cap", cap);
+      const write = (value) => {
+        if (value === lastCap) return;   // no write, so the observer can't loop
+        lastCap = value;
+        element.style.setProperty("--pane-cap", value);
+      };
+      write(`${Math.round(available)}px`);
       // Second pass: if the document STILL overflows, whatever sits below the
       // pane is bigger than we thought. Take the difference off permanently.
+      // This must run even when the cap itself did not change — the overflow
+      // only appears once a group is EXPANDED and the pane actually reaches
+      // its cap, and an early return on an unchanged cap skipped it (live
+      // 2026-07-25: 12px of overflow survived the first fix for exactly this).
       const overflow = document.documentElement.scrollHeight - window.innerHeight;
       if (overflow > 0 && available > MIN_CAP_PX) {
         spaceBelowPane += overflow;
-        lastCap = `${Math.round(Math.max(MIN_CAP_PX, available - overflow))}px`;
-        element.style.setProperty("--pane-cap", lastCap);
+        write(`${Math.round(Math.max(MIN_CAP_PX, available - overflow))}px`);
       }
     };
     applyCap();
@@ -66,6 +78,6 @@ export function usePaneCap() {
       window.removeEventListener("resize", applyCap);
       observer.disconnect();
     };
-  }, []);
-  return ref;
+  }, [element]);
+  return setElement;
 }
