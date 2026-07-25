@@ -49,7 +49,10 @@ changes that. Icons therefore require replacing the native control.
 4. **Star row art follows the existing `starIcons` preference** — per-star
    course icons or the classic gold star, the user's existing setting.
 5. **The four missing course portraits fall back silently.** No TODO, no
-   marker: the fallback resolves to real art.
+   marker: the fallback resolves to real art. Which four MOVED during design:
+   `sl.webp` was mislabelled and is actually CCM (user, 2026-07-25), so the
+   gaps are HMC, SSL, DDD and SL. That the correction was a file rename and
+   not a code change is the fallback chain doing its job.
 
 ## 1. The component
 
@@ -92,7 +95,7 @@ The star row therefore shows the same art the practice banner shows for that
 star, under the same setting, and the segment picker shows the same art the
 banner shows for that segment. No second source of truth for entity art.
 
-**The four courses without a portrait (CCM, HMC, SSL, DDD) resolve to their
+**The four courses without a portrait (HMC, SSL, DDD, SL) resolve to their
 star-1 icon** — real art, so they read as intentional. Dropping those portraits
 in later needs no code change (§3).
 
@@ -112,7 +115,8 @@ This is what native gave us for free and what a custom control must earn back:
 
 ## 4. Assets and serving
 
-`assets/course_icons/` (13 files, currently **untracked** and outside the
+`assets/course_icons/` (13 files — 11 main-course portraits plus BitFS and
+PSS; currently **untracked** and outside the
 served tree) moves to `src/sm64_events/ui/assets/course_icons/`, which
 `tools/build_exe.py` already bundles as part of the `ui/` tree.
 
@@ -148,7 +152,7 @@ than layered over.
   a hand-rolled `<option>` list in a new file must turn it red.
 - **Render checks** (mandatory — unit tests plus `node --check` once shipped an
   invisible feature here): open the modal from the practice target; confirm
-  portraits render and CCM shows its fallback rather than a broken image; type
+  portraits render and HMC shows its fallback rather than a broken image; type
   to filter and confirm empty groups vanish; ↑/↓/Enter/Escape; focus returns to
   the trigger; and the modal renders correctly inside the height-capped,
   internally-scrolling workshop panes.
