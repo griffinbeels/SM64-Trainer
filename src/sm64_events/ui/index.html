@@ -799,7 +799,13 @@
     display: block; height: 8px; border-radius: 4px; background: var(--gold);
     margin: 3px 0; max-width: 100%;
   }
-  .rank-chart { width: 100%; height: auto; max-height: 240px; }
+  /* Fixed pixel height, not `height:auto` — HistoryChart measures its own
+     rendered width via ResizeObserver and redraws the viewBox to match, so
+     the box and the viewBox always share one aspect ratio (1:1 drawing, no
+     letterboxing, no scaled text). An `auto` height let the two diverge
+     whenever `max-height` capped it below what `width:100%` implied. */
+  .rank-chart { display: block; width: 100%; height: 220px; }
+  .rank-chart-span { margin: 4px 0 0; }
   .rank-breakdown-head {
     display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;
   }
