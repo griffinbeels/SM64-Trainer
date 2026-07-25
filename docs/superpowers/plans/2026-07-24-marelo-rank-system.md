@@ -2478,6 +2478,14 @@ Browser↔GUI parity (rule 10) means the overlay mounts in `app.js`, not inside 
 
 Add `"marelo_changed"` and `"route_selected"` to `REFRESH_ON` in `store.js`.
 
+- [ ] **Step 2b: Keep the Rank tab live (found during Task 10)**
+
+`RankPage` fetches on mount and on scope change only, so it goes **stale while open during play** — finish a run and the rating, chart and breakdown keep showing pre-run numbers with nothing to indicate they are old. Since the whole point of the feature is watching the number move, that is a real defect, not polish.
+
+Give `RankPage` a refresh trigger from the same WS events the header bar uses (`attempt_completed`, `marelo_changed`, `rank_mode_changed`, `route_selected`). Simplest shape that fits the existing store: expose a monotonically-increasing counter (e.g. `marelo Rev`) bumped in the WS handler, and include it in `RankPage`'s effect dependencies so all three fetches re-run.
+
+Verify by rendering: with the page mounted, dispatch the store's WS handler for `attempt_completed` with a changed stub payload and confirm from a screenshot that the card, chart and breakdown all update — not merely that a fetch fired.
+
 - [ ] **Step 3: Verify**
 
 Run: `node --check src/sm64_events/ui/app.js src/sm64_events/ui/store.js`
