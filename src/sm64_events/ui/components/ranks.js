@@ -47,9 +47,9 @@ function sentinelMsg(banner) {
 }
 
 // Rendered inside the objective card's rank slot, TWICE with different
-// data: once for the Strategy Rank (`sec.rank` — graded on the ACTIVE
-// strategy's own ladder, from _section_banner) and once for the Overall
-// Rank (`sec.entity_rank` — graded on the entity's best-possible ladder
+// data: once for the strategy rank (`sec.rank` — graded on the ACTIVE
+// strategy's own ladder, from _section_banner) and once for the entity's
+// own rank (`sec.entity_rank` — graded on the entity's best-possible ladder
 // across every strategy, from entity_rank). Same component, same layout,
 // same gradient wash, same progress bar — a labelled, gradient banner
 // sitting next to a small unlabelled chip read as a RENDERING FAULT to the
@@ -58,9 +58,15 @@ function sentinelMsg(banner) {
 // rendered twice, never two components that happen to look similar:
 // those drift apart visually, and this bug was exactly that kind of drift.
 //
-// `label` names which measure this is ("Strategy Rank" / "Overall Rank");
-// "Overall" rather than "Star" because this same component renders on
-// SEGMENT sections too (rule 11 parity) — "Star Rank" would be a lie there.
+// `label` names which measure this is — "Strategy" on both banners' left
+// half, and the ENTITY's own noun on the right: "Star" from StarSection,
+// "Segment" from SegmentSection. It comes from the call site rather than
+// being hardcoded here precisely because this component renders on both
+// kinds (rule 11 parity) — a fixed "Star" would be a lie on a segment card.
+// The word "Rank" was dropped from both in round 4 (2026-07-25): 13
+// characters of label is unaffordable on a ~390px row, the two sit adjacent
+// so the short forms can't be confused, and the medal + tier beside them
+// already say "rank" louder than the kicker did.
 //
 // `.objective-card` is a HARD fixed height (122px at desktop, 258px under
 // 760px, both `overflow` values that do NOT reflow the grid) — everything
@@ -78,7 +84,7 @@ function sentinelMsg(banner) {
 // so a good run visibly moves the bar instead of barely denting a
 // whole-tier span, and the number to chase is right there next to it.
 //
-// The Overall banner's `fastest_strat` does NOT render here (round 4,
+// The entity banner's `fastest_strat` does NOT render here (round 4,
 // 2026-07-25): on the live-report card it and the `next:` target both got
 // clipped mid-word competing for the same line — a tooltip on truncated
 // visible text still reads as a layout fault. It moved to the card's
@@ -106,13 +112,13 @@ export function RankBanner({ label, banner }) {
   // overflowing on the avg-mode fixture. Still in the title for anyone who
   // wants it. This is wording around the rank data, not the rank data
   // itself — the tier/division/count/time stay exactly as graded.
-  const basisText = basis && `${basis.count}${basis.window ? `/${basis.window}` : ""} · ${basis.display}`;
+  const basisText = basis && `${basis.count}${basis.window ? `/${basis.window}` : ""}·${basis.display}`;
   const basisTitle = basis && `${MODE_LABEL[banner.mode] || banner.mode} — `
     + `avg of ${basis.count}${basis.window ? `/${basis.window}` : ""} valid runs`;
   return html`<div class="rank-banner">
     <div class="rank-banner-row">
       <span class="rank-banner-kicker">${label}</span>
-      <${Medal} rank=${banner.rank} size=${26} />
+      <${Medal} rank=${banner.rank} size=${24} />
       <b class="rank-banner-name">${banner.rank.toUpperCase()}${banner.division ? ` ${banner.division}` : ""}</b>
       ${basis && html`<span class="meta rank-banner-basis" title=${basisTitle}>${basisText}</span>`}
       <span class="meta rank-banner-next">${nextLabel

@@ -362,8 +362,8 @@ function TimeFilterChip({ sec, t }) {
 
 // True when the active strategy IS the star/segment's own fastest known one
 // (entity_rank.fastest_strat === the currently active strategy) -- both
-// RankBanners would show the numerically IDENTICAL rank, so rendering
-// Overall Rank a second time would read as a rendering glitch, not a
+// RankBanners would show the numerically IDENTICAL rank, so rendering the
+// entity's banner a second time would read as a rendering glitch, not a
 // confirmation (spec 2026-07-25 round 3). StrategyFastestHint (below) says
 // nothing in this same case, for the same reason -- no point naming the
 // fastest strategy when it's the one already running (round 4 direction).
@@ -439,7 +439,7 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
           ? `--rank-glow:${rankColor(sec.rank.rank)}` : ""}>
         <div class="rank-slot">
           <${RankBanner} label="Strategy" banner=${sec.rank} />
-          ${sec.entity_rank && !activeStrategyIsFastest(sec) && html`<${RankBanner} label="Overall" banner=${sec.entity_rank} />`}
+          ${sec.entity_rank && !activeStrategyIsFastest(sec) && html`<${RankBanner} label="Star" banner=${sec.entity_rank} />`}
         </div>
         <div class="objective-live-state" aria-label="Practice state">
           <span class="live-state-icon">○</span><span>Ready</span>
@@ -587,7 +587,7 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare }) {
           ? `--rank-glow:${rankColor(sec.rank.rank)}` : ""}>
         <div class="rank-slot">
           <${RankBanner} label="Strategy" banner=${sec.rank} />
-          ${sec.entity_rank && !activeStrategyIsFastest(sec) && html`<${RankBanner} label="Overall" banner=${sec.entity_rank} />`}
+          ${sec.entity_rank && !activeStrategyIsFastest(sec) && html`<${RankBanner} label="Segment" banner=${sec.entity_rank} />`}
         </div>
         <div class="objective-live-state ${armed ? "running" : ""}"
             aria-label=${`Segment state: ${pinTag}`}>

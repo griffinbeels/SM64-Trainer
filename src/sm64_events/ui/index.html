@@ -695,7 +695,7 @@
     overflow: hidden; text-overflow: ellipsis; max-width: 100%;
   }
   .objective-metrics {
-    min-width: 0; display: grid; grid-template-columns: minmax(420px,2.6fr) 78px minmax(112px,auto);
+    min-width: 0; display: grid; grid-template-columns: minmax(420px,2.6fr) 66px minmax(112px,auto);
     gap: 12px; align-items: center; border-top: 1px solid var(--border-soft);
     margin-top: .62rem; padding-top: .55rem;
     position: relative; z-index: 0; /* stacking context for the rank wash */
@@ -746,7 +746,7 @@
     letter-spacing: .06em; font-size: .62rem; font-weight: 650;
   }
   .rank-banner-row {
-    min-width: 0; display: flex; align-items: center; gap: .38rem;
+    min-width: 0; display: flex; align-items: center; gap: .3rem;
     white-space: nowrap; overflow: hidden;
   }
   .rank-banner-name { font-weight: 800; letter-spacing: .4px; }
@@ -1977,6 +1977,24 @@
     .compare-stage-card { min-height: 0; }
   }
 
+  /* Between roughly 761-1100px the sidebar has already collapsed to its
+     76px icon rail (the 1180px breakpoint above), but the card is still too
+     narrow for two full-width side-by-side rank banners: measured ~278px
+     per banner at a 900px viewport, not enough for kicker+medal+tier+
+     division+next+gap on a longer tier name ("Grandmaster II") without
+     ellipsis (round 4, 2026-07-25 -- "not mostly fits" is the bar). Stack
+     them instead, same technique the ≤760px block already uses below, but
+     the HEADING doesn't need to wrap yet at this width -- only the metrics
+     row grows, so this gets its own (smaller) fixed height rather than
+     reusing 258px, which was sized for a wrapped 2-row heading this range
+     doesn't have. OBS-stable: fixed height + overflow:hidden, same
+     reasoning as the other two breakpoints. */
+  @media (max-width: 1100px) and (min-width: 761px) {
+    .objective-card { height: 190px; min-height: 190px; overflow: hidden; }
+    .rank-slot { flex-direction: column; align-items: stretch; gap: .3rem; }
+    .objective-strategy-fastest { display: none; }
+  }
+
   @media (max-width: 760px) {
     .app-shell { display: block; }
     .app-sidebar { display: none; }
@@ -2136,7 +2154,11 @@
     }
     .objective-strategy select { min-width: 0; max-width: 100%; }
     .objective-metrics {
-      grid-template-columns: minmax(0,1fr) minmax(125px,.7fr); gap: 8px;
+      /* PB tag needs ~130-150px, not the ~239px a .7fr share was giving it
+         at typical mobile widths -- rebalanced 2026-07-25 round 4 so the
+         stacked rank banners (now carrying a next: delta and, on longer
+         entity labels like "Segment", tighter margins) get the room. */
+      grid-template-columns: minmax(0,1.7fr) minmax(125px,.55fr); gap: 8px;
       align-items: center;
     }
     /* Two side-by-side banners have no room to breathe in this narrow
