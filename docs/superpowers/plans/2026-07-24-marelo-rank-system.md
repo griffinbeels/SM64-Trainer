@@ -542,8 +542,11 @@ def test_aggregate_of_an_empty_scope_is_none_not_zero():
 
 
 def test_aggregate_reports_tier_and_division():
+    # Gold spans 45-60 in 5 equal-width divisions (V..I): 50.0 lands in the
+    # 48-51 slice, i.e. IV -- pinned independently by test_ranks_scoring.py's
+    # division_for(48.0) == ("Gold", "IV").
     out = aggregate({"a": 50.0}, [{"need": 1, "candidates": ["a"]}])
-    assert out["tier"] == "Gold" and out["division"] == "III"
+    assert out["tier"] == "Gold" and out["division"] == "IV"
 
 
 def test_aggregate_reports_progress_through_the_current_division():
@@ -713,15 +716,15 @@ def _division_progress(marelo: float) -> tuple[float, float]:
             max(0.0, min(1.0, (marelo - division_low) / width)))
 
 
-def gain_for(score, n: int) -> float:
+def gain_for(score: float | None, slot_count: int) -> float:
     """The MARELO that reaching this entity's next tier is worth. Unpracticed
     entities target Gold rather than Iron, so they read as the real quests they
     are; a top-tier entity targets 100 so it never drops off the list."""
-    if n <= 0:
+    if slot_count <= 0:
         return 0.0
     if score is None:
-        return _UNPRACTICED_TARGET / n
-    return (scoring.next_tier_target(score) - score) / n
+        return _UNPRACTICED_TARGET / slot_count
+    return (scoring.next_tier_target(score) - score) / slot_count
 
 
 def celebration_delta(tier: str, numeral: str, watermark) -> dict | None:
