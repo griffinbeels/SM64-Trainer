@@ -17,8 +17,8 @@ import { Modal } from "./modal.js";
 import { buildTree } from "../group.js";
 import { usePaneCap } from "../viewport.js";
 import { GroupedList, useOpenGroups } from "./grouplist.js";
-import { GroupedPicker } from "./picker.js";
-import { parseStarId, segmentOptions,
+import { EntityPicker } from "./entitymodal.js";
+import { optionIcon, parseStarId, segmentOptions,
          starOptionsFromCatalog } from "../entities.js";
 
 const html = htm.bind(h);
@@ -134,15 +134,27 @@ function CategoryModal({ routes, current, onCancel, onSave }) {
 // Star/segment picker shared by "add step" and "add option to a group". The
 // star side is one grouped control (course = optgroup, star = option) and the
 // segment side groups by castle region, same as the segment library beside it
-// — both through GroupedPicker/entities.js rather than a fourth hand-rolled
+// — both through EntityPicker/entities.js rather than a fourth hand-rolled
 // pair of selects.
-function ItemPicker({ catalog, segs, vocab, onPick, label }) {
+function ItemPicker({ catalog, segs, vocab, t, onPick, label }) {
   const [mode, setMode] = useState("star");
   const starGroups = starOptionsFromCatalog(catalog);
   const firstStar = starGroups[0] ? starGroups[0].options[0].id : null;
   const [star, setStar] = useState(firstStar);
   const segGroups = segmentOptions(segs, (vocab || {}).origins);
   const [segId, setSegId] = useState(segs[0] ? String(segs[0].id) : null);
+  // Icon context assembled HERE, not inside the picker: the picker resolves
+  // no domain art of its own. segmentLevels comes from `segs` (each carries
+  // start_levels), so a segment row shows the same art the practice banner
+  // gives that segment.
+  const iconContext = {
+    courseIcons: (t && t.courseIcons) || {},
+    starIconsMode: (t && t.starIcons) || "course",
+    iconOverrides: ((t && t.view) || {}).icon_overrides || {},
+    segmentLevels: Object.fromEntries(
+      (segs || []).map((segment) => [String(segment.id),
+                                     segment.start_levels || []])),
+  };
   const pick = () => {
     // Neither branch has anything to post before its picker resolves a first
     // value (star: catalog.course_groups missing course_groups on the
@@ -166,12 +178,16 @@ function ItemPicker({ catalog, segs, vocab, onPick, label }) {
       <option value="segment">Segment</option>
     </select>
     ${mode === "star"
-      ? html`<${GroupedPicker} groups=${starGroups} value=${star}
-          placeholder=${null} onChange=${(id) => setStar(id)} />`
+      ? html`<${EntityPicker} groups=${starGroups} value=${star}
+          title="Choose a star"
+          iconFor=${(id) => optionIcon("star", id, iconContext)}
+          onChange=${(id) => setStar(id)} />`
       : segs.length === 0
         ? html`<span class="meta">no segments defined</span>`
-        : html`<${GroupedPicker} groups=${segGroups} value=${segId}
-            placeholder=${null} onChange=${(id) => setSegId(id)} />`}
+        : html`<${EntityPicker} groups=${segGroups} value=${segId}
+            title="Choose a segment"
+            iconFor=${(id) => optionIcon("segment", id, iconContext)}
+            onChange=${(id) => setSegId(id)} />`}
     <button disabled=${mode === "segment" && segs.length === 0} onclick=${pick}>
       <${Icon} name="plus" size=${15} /> ${label || "Add"}
     </button>
@@ -180,7 +196,7 @@ function ItemPicker({ catalog, segs, vocab, onPick, label }) {
 
 // One step row. step = raw {label?, need, candidates[]}; view = resolved
 // {candidates:[{display}], step_rate, cumulative, broken} (parallel by index).
-function StepRow({ step, view, idx, total, catalog, segs, vocab, onChange, onMove, onRemove, weakest }) {
+function StepRow({ step, view, idx, total, catalog, segs, vocab, t, onChange, onMove, onRemove, weakest }) {
   const setNeed = (n) => onChange({ ...step, need: n });
   const addCand = (c) => onChange({ ...step, candidates: [...step.candidates, c] });
   const removeCand = (i) => {
@@ -227,7 +243,7 @@ function StepRow({ step, view, idx, total, catalog, segs, vocab, onChange, onMov
         <select value=${step.need} onchange=${(e) => setNeed(Number(e.target.value))}>
           ${step.candidates.map((_, i) => html`<option value=${i + 1}>${i + 1}</option>`)}
         </select></label>` : null}
-      <${ItemPicker} catalog=${catalog} segs=${segs} vocab=${vocab}
+      <${ItemPicker} catalog=${catalog} segs=${segs} vocab=${vocab} t=${t}
           label="Add option" onPick=${addCand} />
     </div>
   </div>`;
@@ -495,7 +511,7 @@ export function Routes({ t }) {
                   || { candidates: [], step_rate: 0, cumulative: 0, broken: false };
                 return html`<${StepRow} key=${i} step=${step} view=${vs} idx=${i}
                     total=${selected.steps.length} catalog=${catalog} segs=${segs}
-                    vocab=${vocab} weakest=${i === view.weakest_step}
+                    vocab=${vocab} t=${t} weakest=${i === view.weakest_step}
                     onChange=${(s) => editStep(i, s)}
                     onMove=${(dir) => moveStep(i, dir)}
                     onRemove=${() => removeStep(i)} />`;
@@ -506,7 +522,7 @@ export function Routes({ t }) {
                 <b>Add a step</b>
                 <span>Pick one star or segment to append to the route.</span>
               </div>
-              <${ItemPicker} catalog=${catalog} segs=${segs} vocab=${vocab}
+              <${ItemPicker} catalog=${catalog} segs=${segs} vocab=${vocab} t=${t}
                   label="Add step" onPick=${addStep} />
             </div>
           </section>

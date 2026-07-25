@@ -85,7 +85,7 @@ def test_routes_keeps_its_existing_open_state_key():
 
 
 def test_route_item_picker_uses_the_shared_picker():
-    assert "GroupedPicker" in ROUTES
+    assert "EntityPicker" in ROUTES
     assert "starOptionsFromCatalog" in ROUTES
     assert "segmentOptions" in ROUTES
 
@@ -103,3 +103,15 @@ def test_route_segment_picker_groups_like_the_library():
     # "stop at the first )" match would cut off before reaching .origins
     window = ROUTES[call.end():call.end() + 40]
     assert ".origins" in window
+
+
+def test_route_item_picker_uses_the_icon_modal():
+    assert "EntityPicker" in ROUTES
+    assert "GroupedPicker" not in ROUTES
+    assert "optionIcon" in ROUTES
+
+
+def test_segment_rows_carry_the_art_the_banner_uses():
+    # segmentLevels feeds optionIcon's segment branch, which reuses the
+    # banner's override -> level-fallback chain.
+    assert "segmentLevels" in ROUTES
