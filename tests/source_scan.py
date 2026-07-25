@@ -1,5 +1,11 @@
 """Shared helper for tests that assert things about SOURCE TEXT.
 
+Import it as `from source_scan import strip_comments` — tests/ is not a
+package, so pytest puts this directory itself on sys.path. (`from
+tests.source_scan import ...` also resolves, via a sys.path append in
+tests/conftest.py, because that is the form people write first and an
+ImportError here aborts collection for the whole suite.)
+
 A substring assertion cannot tell code from prose, and this repo has shipped
 broken guards in BOTH directions:
 

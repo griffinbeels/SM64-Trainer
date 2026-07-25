@@ -1,7 +1,20 @@
 """Session-wide test guards."""
 import asyncio
+import sys
+from pathlib import Path
 
 import pytest
+
+# tests/ has no __init__.py, so pytest puts THIS directory on sys.path and the
+# shared helper imports bare: `from source_scan import strip_comments`. The
+# repo root goes on too (appended, so it can never shadow an installed package)
+# because `from tests.source_scan import ...` is the form people reach for
+# first, and getting it wrong is not a normal test failure — an ImportError at
+# collection time aborts the ENTIRE suite before anything runs (2026-07-25,
+# test_ui_empty_states.py did exactly that on main). Both forms now resolve.
+_REPO_ROOT = str(Path(__file__).resolve().parent.parent)
+if _REPO_ROOT not in sys.path:
+    sys.path.append(_REPO_ROOT)
 
 from sm64_events.core import perfmon, recorder_lock
 from sm64_events.server.broadcaster import Broadcaster
