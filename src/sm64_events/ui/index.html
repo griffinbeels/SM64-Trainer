@@ -880,8 +880,8 @@
      fold). Bound it to the viewport exactly like the library and let its own
      body scroll; min() keeps the 620px floor only where it fits. */
   .segment-editor {
-    min-height: min(620px, calc(100vh - 205px));
-    max-height: calc(100vh - 205px);
+    min-height: min(620px, var(--pane-cap, calc(100vh - 205px)));
+    max-height: var(--pane-cap, calc(100vh - 205px));
   }
   /* Library panel: viewport-bounded, the LIST is the scroll container. The
      old cap sat on the list (100vh - 230px) and ignored the card's own
@@ -891,7 +891,7 @@
   .segment-library, .route-library {
     display: flex; flex-direction: column;
     position: sticky; top: 88px;
-    min-height: 0; max-height: calc(100vh - 205px);
+    min-height: 0; max-height: var(--pane-cap, calc(100vh - 205px));
   }
   /* Library filter box — sits between the heading and the scrolling list, so
      it stays put while results scroll under it (flex: 0 0 auto against the
@@ -1094,9 +1094,9 @@
      gets the identical treatment rather than waiting to be reported. */
   .route-workspace {
     min-width: 0; display: grid; gap: 12px;
-    max-height: calc(100vh - 205px); overflow-x: hidden; overflow-y: auto;
+    max-height: var(--pane-cap, calc(100vh - 205px)); overflow-x: hidden; overflow-y: auto;
   }
-  .route-empty-card { min-height: min(520px, calc(100vh - 205px)); }
+  .route-empty-card { min-height: min(520px, var(--pane-cap, calc(100vh - 205px))); }
   .route-setup-card { min-height: 134px; }
   .route-identity { margin-bottom: .45rem; }
   .routeavg { margin: 0; }

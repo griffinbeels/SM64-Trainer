@@ -11,6 +11,7 @@ import { Icon } from "./icons.js";
 import { IconPicker, iconSrcFromStem } from "./iconpicker.js";
 import { PageState } from "./states.js";
 import { buildTree } from "../group.js";
+import { usePaneCap } from "../viewport.js";
 import { GroupedList, useOpenGroups } from "./grouplist.js";
 
 const html = htm.bind(h);
@@ -402,6 +403,9 @@ export function Segments({ t }) {
   const [editing, setEditing] = useState(null);   // null | "new" | def object
   const editorRef = useRef(null);   // the open Builder's {save, dirty} handle
   const [openGroups, toggleGroup] = useOpenGroups("sm64.segOriginsOpen");
+  // Panes cap themselves to the space actually left below them (ui/viewport.js)
+  // so the PAGE never scrolls; --pane-cap inherits to both panes from here.
+  const workshopRef = usePaneCap();
   // Returns the rows as well as storing them — saving re-selects the row it
   // just wrote, which needs the FRESH copy (its origin stamp and seed_dirty
   // may both have changed server-side).
@@ -477,7 +481,7 @@ export function Segments({ t }) {
       </button>
     </header>
 
-    <div class="segments-workshop">
+    <div class="segments-workshop" ref=${workshopRef}>
       <aside class="practice-card workshop-card segment-library">
         <div class="workshop-card-heading">
           <div>

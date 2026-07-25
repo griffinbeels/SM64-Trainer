@@ -44,9 +44,20 @@ def test_workshop_panes_are_viewport_bounded_so_the_page_never_shifts():
     # the right-hand pane was not, and it was the one overflowing.
     # Measured after the fix at 1600x{760,880,1000}: page does not scroll, both
     # panes sit 39px clear of the fold, the editor scrolls internally.
+    # The cap is MEASURED (ui/viewport.js sets --pane-cap from the pane's real
+    # distance to the fold), with the old constant left only as the fallback.
+    # A hardcoded offset was wrong three times: the card ran off-screen
+    # (2026-07-24), then the page still scrolled, twice (2026-07-25) — the hero
+    # wraps, the context bar reflows, and browser chrome differs from the
+    # desktop shell, so no constant can be right for all of them.
     for pane in (".segment-editor", ".route-workspace"):
         block = INDEX.split(pane + " {", 1)[1].split("}", 1)[0]
-        assert "max-height: calc(100vh" in block, pane
+        assert "max-height: var(--pane-cap" in block, pane
+    viewport = (UI / "viewport.js").read_text(encoding="utf-8")
+    assert "--pane-cap" in viewport
+    # the second pass that learns what sits BELOW the pane; without it the page
+    # still overflowed by 12px (measured)
+    assert "scrollHeight - window.innerHeight" in viewport
     # Belt to that braces: reserve the gutter so any future overflow anywhere
     # cannot shove the layout sideways.
     assert "scrollbar-gutter: stable" in INDEX

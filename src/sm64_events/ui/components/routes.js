@@ -15,6 +15,7 @@ import { Icon } from "./icons.js";
 import { PageState } from "./states.js";
 import { Modal } from "./modal.js";
 import { buildTree } from "../group.js";
+import { usePaneCap } from "../viewport.js";
 import { GroupedList, useOpenGroups } from "./grouplist.js";
 
 const html = htm.bind(h);
@@ -276,6 +277,9 @@ export function Routes({ t }) {
   const [vocab, setVocab] = useState(null);
   const [err, setErr] = useState(null);
   const [openGroups, toggleCategory] = useOpenGroups(OPEN_KEY);
+  // Same measured cap as the segments workshop (ui/viewport.js): --pane-cap
+  // inherits to the library and the workspace, so the PAGE never scrolls.
+  const workshopRef = usePaneCap();
   const catalog = (t.view && t.view.catalog) || { courses: [] };
 
   const loadRoutes = async () => { const rs = await getJSON("/api/routes"); setRoutes(rs); return rs; };
@@ -391,7 +395,7 @@ export function Routes({ t }) {
 
     ${err ? html`<div class="practice-card workshop-error badx">${err}</div>` : null}
 
-    <div class="routes-workshop">
+    <div class="routes-workshop" ref=${workshopRef}>
       <aside class="practice-card workshop-card route-library">
         <div class="workshop-card-heading">
           <div>
