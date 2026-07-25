@@ -10,14 +10,16 @@ import { getJSON, send } from "../api.js";
 import { Icon } from "./icons.js";
 import { IconPicker, iconSrcFromStem } from "./iconpicker.js";
 import { PageState } from "./states.js";
+import { buildTree } from "../group.js";
+import { GroupedList, useOpenGroups } from "./grouplist.js";
 
 const html = htm.bind(h);
 
 // --- world-topology option filtering (vocab.connections + param `flow`) ----
 // level_enter/level_exit params carry a `flow` annotation ({role, peer,
 // peer_subarea} — tracking/segments.py): once the OTHER side of the move is
-// picked, this side's dropdown only offers world-possible options
-// (addresses.WORLD_EDGES_*). "dest" params filter by the source's
+// picked, this side's dropdown only offers world-possible options (the
+// world-edge topology tables in addresses.py). "dest" params filter by the source's
 // SUCCESSORS, "source" params by the destination's PREDECESSORS. UI-only —
 // a stored value the topology disagrees with stays selectable (ParamInput
 // keeps the current value in the list) so legacy defs never blank out.
@@ -318,12 +320,46 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t }) {
   </div>`;
 }
 
+// Grouping POLICY for the segment library: castle region -> place, both read
+// off the server's `origin` stamp (GET /api/segments). The JS never derives
+// region membership — the taxonomy has ONE home, tracking/segments.py, and
+// the editor's override picker reads the same list from vocab.
+//
+// Order is carried by the server too: vocab().origins is already in gameflow
+// order with each region's Bowser and secret stages pinned above its main
+// courses, so the level `order` functions just look up that position.
+const originOf = (segment) => (segment.origin || {});
+
+function originLevels(taxonomy) {
+  const regionOrder = new Map();
+  const placeOrder = new Map();
+  taxonomy.forEach((region, regionIndex) => {
+    regionOrder.set(String(region.key), regionIndex);
+    region.children.forEach((place, placeIndex) =>
+      placeOrder.set(place.key, placeIndex));
+  });
+  const regionLabels = new Map(taxonomy.map((r) => [String(r.key), r.label]));
+  const placeLabels = new Map(taxonomy.flatMap((r) =>
+    r.children.map((place) => [place.key, place.label])));
+  return [
+    { of: (segment) => String(originOf(segment).region),
+      label: (key) => regionLabels.get(key) || key,
+      // an unknown region (a stored override we no longer offer) sorts last
+      // rather than vanishing
+      order: (key) => regionOrder.has(key) ? regionOrder.get(key) : 999 },
+    { of: (segment) => originOf(segment).key || null,
+      label: (key) => placeLabels.get(key) || key,
+      order: (key) => placeOrder.has(key) ? placeOrder.get(key) : 999 },
+  ];
+}
+
 export function Segments({ t }) {
   const [defs, setDefs] = useState(null);
   const [query, setQuery] = useState("");
   const [vocabData, setVocabData] = useState(null);
   const [editing, setEditing] = useState(null);   // null | "new" | def object
   const editorRef = useRef(null);   // the open Builder's {save, dirty} handle
+  const [openGroups, toggleGroup] = useOpenGroups("sm64.segOriginsOpen");
   const load = async () => setDefs(await getJSON("/api/segments"));
   useEffect(() => { load();
     getJSON("/api/segments/vocab").then(setVocabData); }, []);
@@ -410,36 +446,41 @@ export function Segments({ t }) {
             No segments yet. Create one to time a repeatable section of the game.
           </div>` : shown.length === 0 ? html`<div class="workshop-empty compact">
             No segment matches “${query}”.
-          </div>` : shown.map((d) => {
-            const targeted = tgt.kind === "segment" && tgt.segment_id === d.id;
-            return html`<article class=${`segrow ${editing !== "new" && editing?.id === d.id ? "on" : ""}`}>
-              <button class="segment-row-main" onclick=${() => tryEdit(d)}>
-                <span class="segment-row-name">${d.name}</span>
-                <span class="segment-row-state">
-                  ${isArmed(d.id) && html`<span class="chip good">● Running</span>`}
-                  ${targeted && html`<span class="chip target-chip">◎ Target</span>`}
-                  ${!d.enabled && html`<span class="chip muted-chip">Hidden</span>`}
-                </span>
-              </button>
-              <div class="segment-row-actions">
-                <button class=${targeted ? "is-selected" : ""} onclick=${() => setTarget(d)}
-                    title="Set as practice target">
-                  <${Icon} name="target" size=${15} /> Target
+          </div>` : html`<${GroupedList}
+            tree=${buildTree(shown, originLevels(vocabData.origins || []))}
+            open=${openGroups} toggle=${toggleGroup}
+            forceOpen=${() => needle.length > 0}
+            renderRow=${(d) => {
+              const targeted = tgt.kind === "segment" && tgt.segment_id === d.id;
+              return html`<article key=${d.id}
+                  class=${`segrow ${editing !== "new" && editing?.id === d.id ? "on" : ""}`}>
+                <button class="segment-row-main" onclick=${() => tryEdit(d)}>
+                  <span class="segment-row-name">${d.name}</span>
+                  <span class="segment-row-state">
+                    ${isArmed(d.id) && html`<span class="chip good">● Running</span>`}
+                    ${targeted && html`<span class="chip target-chip">◎ Target</span>`}
+                    ${!d.enabled && html`<span class="chip muted-chip">Hidden</span>`}
+                  </span>
                 </button>
-                <button onclick=${() => toggle(d)} title=${d.enabled ? "Hide from practice" : "Show in practice"}>
-                  <${Icon} name=${d.enabled ? "eyeOff" : "check"} size=${15} />
-                  ${d.enabled ? "Hide" : "Show"}
-                </button>
-                <button onclick=${() => tryEdit(d)} title="Edit segment">
-                  <${Icon} name="edit" size=${15} /> Edit
-                </button>
-                <button class="icon-button danger-icon" onclick=${() => remove(d)}
-                    title="Delete segment" aria-label=${`Delete ${d.name}`}>
-                  <${Icon} name="trash" size=${15} />
-                </button>
-              </div>
-            </article>`;
-          })}
+                <div class="segment-row-actions">
+                  <button class=${targeted ? "is-selected" : ""} onclick=${() => setTarget(d)}
+                      title="Set as practice target">
+                    <${Icon} name="target" size=${15} /> Target
+                  </button>
+                  <button onclick=${() => toggle(d)} title=${d.enabled ? "Hide from practice" : "Show in practice"}>
+                    <${Icon} name=${d.enabled ? "eyeOff" : "check"} size=${15} />
+                    ${d.enabled ? "Hide" : "Show"}
+                  </button>
+                  <button onclick=${() => tryEdit(d)} title="Edit segment">
+                    <${Icon} name="edit" size=${15} /> Edit
+                  </button>
+                  <button class="icon-button danger-icon" onclick=${() => remove(d)}
+                      title="Delete segment" aria-label=${`Delete ${d.name}`}>
+                    <${Icon} name="trash" size=${15} />
+                  </button>
+                </div>
+              </article>`;
+            }} />`}
         </div>
       </aside>
 

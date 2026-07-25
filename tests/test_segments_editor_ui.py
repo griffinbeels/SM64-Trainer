@@ -49,3 +49,28 @@ def test_editor_save_never_spreads_the_get_row():
     assert "created_utc: _c, ...body" not in source, (
         "the denylist spread is back — GET rows carry db-only columns that "
         "SegmentPatch rejects (see this file's docstring)")
+
+
+# --- grouped library (spec 2026-07-24-segment-origin-categories) -----------
+# Note: SEGMENTS_JS above is the Path (existing tests call .read_text() on
+# it directly) — this reads the source ONCE into its own name rather than
+# reassigning SEGMENTS_JS, which would turn it into a str and break both
+# tests above.
+SEGMENTS_JS_SOURCE = SEGMENTS_JS.read_text(encoding="utf-8")
+
+
+def test_library_groups_by_origin_through_the_shared_primitives():
+    assert "buildTree" in SEGMENTS_JS_SOURCE and "GroupedList" in SEGMENTS_JS_SOURCE
+    assert "sm64.segOriginsOpen" in SEGMENTS_JS_SOURCE   # its OWN new open-set key
+
+
+def test_library_groups_come_from_the_server_stamp_not_a_js_copy():
+    # The JS must never re-derive region membership — one taxonomy, server-side.
+    assert "origin.region" in SEGMENTS_JS_SOURCE or "origin || {}" in SEGMENTS_JS_SOURCE
+    assert "WORLD_EDGES" not in SEGMENTS_JS_SOURCE
+
+
+def test_search_opens_matching_groups():
+    # Everything starts collapsed; a search that dropped its hits into shut
+    # boxes would look broken.
+    assert "forceOpen" in SEGMENTS_JS_SOURCE
