@@ -700,18 +700,10 @@
     margin-top: .62rem; padding-top: .55rem;
     position: relative; z-index: 0; /* stacking context for the rank wash */
   }
-  /* Rank wash: the current rank's color sweeping the full card width, fading
-     left→right into the card. --rank-glow is set inline by practice.js from
-     rankColor(); unset (no rank) mixes to transparent = no wash. Negative
-     insets reach the card's padding so the gradient touches its edges. */
-  .objective-metrics::before {
-    content: ""; position: absolute; z-index: -1; pointer-events: none;
-    left: -16px; right: -16px; top: 0; bottom: -12px;
-    border-radius: 0 0 8px 8px;
-    background: linear-gradient(90deg,
-      color-mix(in srgb, var(--rank-glow, transparent) 34%, transparent),
-      transparent 88%);
-  }
+  /* The rank wash itself is on `.rank-slot-wrap::before` (below) so its split
+     lands exactly on the boundary between the two banners; the vars that
+     drive it (--rank-glow / --rank-glow-2 / --rank-wash-split) are set inline
+     HERE by practice.js and inherit down. */
   /* Two RankBanners side by side, EQUAL treatment (spec 2026-07-25 round 2):
      a labelled, gradient Strategy Rank banner next to a small unlabelled
      "Bronze III" chip read as a rendering fault to the user, not two
@@ -728,6 +720,50 @@
      positioned toast child would get clipped by it. The wrap has no padding
      of its own, so it shares `.rank-slot`'s exact footprint. */
   .rank-slot-wrap { position: relative; min-width: 0; }
+  /* Rank wash: ONE gradient PER rank banner, split down the boundary between
+     them (live report 2026-07-25 round 5 -- "both ranking indicators should
+     have their own visual gradients"). A single card-wide wash in the
+     STRATEGY tier's color ran straight under the STAR banner, colouring a
+     Bronze rank silver: the same "one visual treatment, two different
+     measures" fault the round-2 chip was, one layer down.
+
+     It hangs off `.rank-slot-wrap` rather than `.objective-metrics` because
+     the wrap's box IS the two banners' box, so a 50% split is the real
+     boundary at every width with no measured constant to keep in sync (the
+     metrics grid's other two columns -- 66px live-state, minmax(112px,auto)
+     PB tag -- make the boundary sit at a pane-width-dependent ~41-45% of the
+     CARD, which no static percentage can track). The left/right bleeds are
+     symmetric for the same reason: -16px on both sides keeps the midpoint of
+     the wash box exactly on the midpoint of the wrap. Left reaches the
+     card's padding edge (as the old card-wide wash did); right runs under the
+     column gap, where both layers are already transparent.
+     Vertical bleed is asymmetric (top sits just under the divider rule,
+     bottom reaches the card's bottom padding), so the stacked-layout split
+     below is off-centre by ~2px -- invisible at a 34% tint.
+
+     Layer 2 ramps IN over its first 8% instead of starting at full strength,
+     so the seam reads as shading rather than as a hard edge where one flat
+     colour abuts another. --rank-glow/--rank-glow-2 unset (no rank, or only
+     one banner rendered) mix to transparent = no wash on that half, and
+     --rank-wash-split defaults to 100% so a lone Strategy banner keeps the
+     full-width wash it has always had. */
+  .rank-slot-wrap::before {
+    content: ""; position: absolute; z-index: -1; pointer-events: none;
+    left: -16px; right: -16px; top: -8px; bottom: -12px;
+    border-radius: 0 0 8px 8px;
+    background-repeat: no-repeat;
+    background-image:
+      linear-gradient(90deg,
+        color-mix(in srgb, var(--rank-glow, transparent) 34%, transparent),
+        transparent 88%),
+      linear-gradient(90deg, transparent,
+        color-mix(in srgb, var(--rank-glow-2, transparent) 34%, transparent) 8%,
+        transparent 90%);
+    background-position: left center, right center;
+    background-size:
+      var(--rank-wash-split, 100%) 100%,
+      calc(100% - var(--rank-wash-split, 100%)) 100%;
+  }
   .rank-banner {
     min-width: 0; flex: 1 1 0; display: grid; gap: .34rem; align-content: center;
     min-height: 36px;
@@ -2153,6 +2189,19 @@
     .objective-card { height: 190px; min-height: 190px; overflow: hidden; }
     .rank-slot { flex-direction: column; align-items: stretch; gap: .3rem; }
     .objective-strategy-fastest { display: none; }
+    /* Banners stack here, so the wash splits on the same axis they do --
+       top half Strategy, bottom half Star/Segment. Same `--rank-wash-split`,
+       same two layers, only the axis swaps: a left/right split under a
+       vertical stack would put both colours under both banners, which is
+       exactly the confusion this wash exists to remove. Covers the ≤760px
+       phone layout too -- that viewport always makes .practice-page narrower
+       than 1100px, so this container query is the one place it lives. */
+    .rank-slot-wrap::before {
+      background-position: center top, center bottom;
+      background-size:
+        100% var(--rank-wash-split, 100%),
+        100% calc(100% - var(--rank-wash-split, 100%));
+    }
   }
 
   @media (max-width: 760px) {

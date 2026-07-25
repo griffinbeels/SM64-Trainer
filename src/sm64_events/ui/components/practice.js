@@ -372,6 +372,33 @@ function activeStrategyIsFastest(sec) {
   return !!(sec.entity_rank && sec.entity_rank.fastest_strat === sec.last_strat);
 }
 
+// Whether the entity's own RankBanner renders beside the strategy one. Both
+// the render and the wash below read this ONE predicate on purpose: a card
+// whose wash is split in half while only one banner rendered would draw a
+// colour boundary under nothing, which is the same class of "correct data,
+// unexplainable picture" bug the split exists to fix.
+function showsEntityBanner(sec) {
+  return !!(sec.entity_rank && !activeStrategyIsFastest(sec));
+}
+
+// The rank wash's inputs (index.html, `.rank-slot-wrap::before`): each
+// banner's tier colour, plus the 50% split that turns one card-wide gradient
+// into one gradient per banner. CSS owns the geometry and the gradient; this
+// owns only which colours and how many bands (live report 2026-07-25 round 5
+// -- a single Strategy-coloured wash running under a differently-ranked Star
+// banner painted a Bronze rank silver). A banner that renders without a rank
+// (the "no standards yet" sentinel) contributes the split but no colour, so
+// its half is honestly empty rather than borrowing its neighbour's tier.
+function rankWashStyle(sec) {
+  const bands = [];
+  if (sec.rank && sec.rank.rank) bands.push(`--rank-glow:${rankColor(sec.rank.rank)}`);
+  if (showsEntityBanner(sec)) {
+    bands.push("--rank-wash-split:50%");
+    if (sec.entity_rank.rank) bands.push(`--rank-glow-2:${rankColor(sec.entity_rank.rank)}`);
+  }
+  return bands.join(";");
+}
+
 // Names the star/segment's fastest known strategy, next to the strategy
 // picker -- NOT inside the rank banner (round 4, 2026-07-25): on the
 // live-report card, "· fastest here: Sign Clip" and the next: target both
@@ -436,15 +463,14 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
           <${StrategyFastestHint} sec=${sec} />
         </div>
       </div>
-      <div class="objective-metrics" style=${sec.rank && sec.rank.rank
-          ? `--rank-glow:${rankColor(sec.rank.rank)}` : ""}>
+      <div class="objective-metrics" style=${rankWashStyle(sec)}>
         <${EntityCelebration}
             celebration=${pinned ? entityCelebrationFor(t.marelo, `star:${sec.course_id}:${sec.star_id}`) : null}
             entityKey=${`star:${sec.course_id}:${sec.star_id}`}
             onDone=${() => t.clearEntityCelebration(`star:${sec.course_id}:${sec.star_id}`)}>
           <div class="rank-slot">
             <${RankBanner} label="Strategy" banner=${sec.rank} />
-            ${sec.entity_rank && !activeStrategyIsFastest(sec) && html`<${RankBanner} label="Star" banner=${sec.entity_rank} />`}
+            ${showsEntityBanner(sec) && html`<${RankBanner} label="Star" banner=${sec.entity_rank} />`}
           </div>
         <//>
         <div class="objective-live-state" aria-label="Practice state">
@@ -589,15 +615,14 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare }) {
           <${StrategyFastestHint} sec=${sec} />
         </div>
       </div>
-      <div class="objective-metrics" style=${sec.rank && sec.rank.rank
-          ? `--rank-glow:${rankColor(sec.rank.rank)}` : ""}>
+      <div class="objective-metrics" style=${rankWashStyle(sec)}>
         <${EntityCelebration}
             celebration=${pinned ? entityCelebrationFor(t.marelo, `segment:${sec.segment_id}`) : null}
             entityKey=${`segment:${sec.segment_id}`}
             onDone=${() => t.clearEntityCelebration(`segment:${sec.segment_id}`)}>
           <div class="rank-slot">
             <${RankBanner} label="Strategy" banner=${sec.rank} />
-            ${sec.entity_rank && !activeStrategyIsFastest(sec) && html`<${RankBanner} label="Segment" banner=${sec.entity_rank} />`}
+            ${showsEntityBanner(sec) && html`<${RankBanner} label="Segment" banner=${sec.entity_rank} />`}
           </div>
         <//>
         <div class="objective-live-state ${armed ? "running" : ""}"
