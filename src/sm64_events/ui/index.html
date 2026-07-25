@@ -683,7 +683,7 @@
   .objective-strategy { min-width: 0; display: grid; grid-template-columns: auto 1fr; gap: .4rem; align-items: center; }
   .objective-strategy select { width: 100%; min-width: 0; }
   .objective-metrics {
-    min-width: 0; display: grid; grid-template-columns: minmax(260px,1fr) 120px minmax(155px,auto);
+    min-width: 0; display: grid; grid-template-columns: minmax(380px,2.4fr) 92px minmax(130px,auto);
     gap: 14px; align-items: center; border-top: 1px solid var(--border-soft);
     margin-top: .62rem; padding-top: .55rem;
     position: relative; z-index: 0; /* stacking context for the rank wash */
@@ -700,46 +700,55 @@
       color-mix(in srgb, var(--rank-glow, transparent) 34%, transparent),
       transparent 88%);
   }
-  /* Flex row, not block stacking: the entity medal (EntityRankTag) sits
-     BESIDE the strategy medal (RankBanner), not below it -- "two questions,
-     two numbers" reads as one line. RankBanner grows/shrinks with the
-     available width (its own children already ellipsis); the entity tag is
-     short and fixed so it never gets squeezed off. */
-  .rank-slot { min-width: 0; overflow: hidden; display: flex; align-items: center; gap: .6rem; }
+  /* Two RankBanners side by side, EQUAL treatment (spec 2026-07-25 round 2):
+     a labelled, gradient Strategy Rank banner next to a small unlabelled
+     "Bronze III" chip read as a rendering fault to the user, not two
+     deliberate measures -- so the Overall Rank now gets the identical
+     .rank-banner box, sharing the row 50/50 rather than being squeezed into
+     a fixed-width hairline-divided chip. Each shrinks independently (its own
+     children ellipsis); when only one banner is present (Overall Rank is
+     absent when entity_rank has nothing to grade) it simply takes the row. */
+  .rank-slot { min-width: 0; overflow: hidden; display: flex; align-items: stretch; gap: .7rem; }
   .rank-slot .meta { min-width: 0; flex: 1 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .rank-banner { min-width: 0; flex: 1 1 auto; display: grid; gap: .34rem; }
-  /* EntityRankTag: compact, never shrinks, separated from the strat medal by
-     a hairline so the two numbers read as distinct answers. */
-  .entity-rank {
-    flex: 0 0 auto; display: inline-flex; align-items: center; gap: .4rem;
-    white-space: nowrap; padding-left: .6rem; border-left: 1px solid var(--border-soft);
+  .rank-banner {
+    min-width: 0; flex: 1 1 0; display: grid; gap: .34rem; align-content: center;
+    min-height: 36px;
   }
-  .entity-rank b { font-weight: 800; letter-spacing: .3px; font-size: .82rem; }
-  /* "Strategy"/"Star" kickers -- a one-word answer to "which does this
-     grade" prefixed on the SAME line as the medal, never a new line:
+  /* The sentinel ("no standards" / "pick a strat") variant of the SAME
+     banner box -- min-height matches the graded version (medal row + bar)
+     so the rare case of a sentinel Strategy banner beside a GRADED Overall
+     one (e.g. the active strategy has no ladder of its own, but the star's
+     best-possible ladder is still gradeable off the same time) doesn't look
+     visibly shorter. */
+  .rank-banner-empty { display: flex; align-items: center; gap: .5rem; }
+  /* "Strategy Rank" / "Overall Rank" kickers -- which measure this banner
+     is, prefixed on the SAME line as the medal, never a new line:
      .objective-card is a hard fixed height (122px desktop / 258px under
      760px, both non-reflowing) and a stacked layout here would silently
      bleed the card into whatever sits below it. Deliberately NOT `.meta`
-     (unlike the sibling basis/next/fastest spans) -- `.rank-slot .meta`'s
-     `flex:1 1 auto; min-width:0` out-specifies a same-weight class rule here
-     and shrinks a one-word label into "STRA…", which reads as broken, not
-     tight; own color/no-shrink instead. */
-  .rank-banner-kicker, .entity-rank-kicker {
+     -- `.rank-slot .meta`'s `flex:1 1 auto; min-width:0` out-specifies a
+     same-weight class rule here and shrinks the label into "STRA…", which
+     reads as broken, not tight; own color/no-shrink instead. */
+  .rank-banner-kicker {
     flex: 0 0 auto; color: var(--muted); text-transform: uppercase;
     letter-spacing: .06em; font-size: .62rem; font-weight: 650;
   }
-  /* fastest_strat (views.py::entity_rank) -- why the star rank reads lower
-     than the strategy rank beside it. Same line as the tier/division, own
-     ellipsis so a long strategy name clips instead of wrapping. */
-  .entity-rank-fastest {
-    max-width: 130px; overflow: hidden; text-overflow: ellipsis;
+  /* fastest_strat (views.py::entity_rank, Overall Rank banner only) -- why
+     this rank reads lower than the Strategy Rank beside it. Same line as
+     the tier/division, own ellipsis so a long strategy name clips instead
+     of wrapping. flex-shrink:3 (vs rank-banner-next's default 1) makes it
+     give up its space FIRST under pressure -- "next:" is the number a run
+     is actually chasing and stays legible; "fastest here" is the softer,
+     explanatory extra (full name still lives in the title attribute). */
+  .rank-banner-fastest {
+    max-width: 90px; flex-shrink: 3; overflow: hidden; text-overflow: ellipsis;
   }
   .rank-banner-row {
-    min-width: 0; display: flex; align-items: center; gap: .55rem;
+    min-width: 0; display: flex; align-items: center; gap: .5rem;
     white-space: nowrap; overflow: hidden;
   }
   .rank-banner-name { font-weight: 800; letter-spacing: .4px; }
-  .rank-banner-next { overflow: hidden; text-overflow: ellipsis; }
+  .rank-banner-next { flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; }
   /* Progress toward the next rank: full slot width, never a fixed px bar —
      a 200px bar used to bleed past the card edge (2026-07-24). */
   .rank-progress-track {
@@ -2128,11 +2137,16 @@
       grid-template-columns: minmax(0,1fr) minmax(125px,.7fr); gap: 8px;
       align-items: center;
     }
-    .rank-slot { min-height: 45px; }
-    /* Narrow cards have the least room; the fastest-strategy fact is the
-       first thing to give up its slice of the line (the tooltip still
-       carries it) so the kicker + tier/division stay legible. */
-    .entity-rank-fastest { display: none; }
+    /* Two side-by-side banners have no room to breathe in this narrow
+       column (shared with the pbtag column) -- stack them instead. The
+       258px card height (below) has the vertical room this budget never
+       had at 122px. */
+    .rank-slot { min-height: 45px; flex-direction: column; align-items: stretch; gap: .35rem; }
+    /* Narrow cards still have the least horizontal room; the
+       fastest-strategy fact is the first thing to give up its slice of the
+       line (the tooltip still carries it) so the kicker + tier/division
+       stay legible. */
+    .rank-banner-fastest { display: none; }
     .objective-live-state { grid-column: 1; grid-row: 2; border: 0; justify-content: flex-start; }
     .objective-card .pbtag { grid-column: 2; grid-row: 1 / span 2; align-self: center; white-space: normal; }
     .analysis-card { height: 520px; min-height: 520px; }

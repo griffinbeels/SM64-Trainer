@@ -20,7 +20,7 @@ from sm64_events.ranks.classify import RANK_NAMES
 __all__ = ["RANK_NAMES", "SCORE_ANCHORS", "TOP_SCORE", "DIVISIONS_PER_TIER",
            "DIVISION_NUMERALS", "defined_tiers", "best_ladder", "score_for",
            "tier_from_score", "tier_band", "division_for", "progression_key",
-           "next_tier_target"]
+           "next_tier_target", "division_progress"]
 
 # hardest -> easiest; Iron is the implicit floor and carries NO anchor, exactly
 # as it carries no threshold in classify.
@@ -131,3 +131,41 @@ def next_tier_target(score: float, defined: list[str] | None = None) -> float:
     so a top-tier entity still shows a remaining gain instead of dropping off
     the 'what should I practice' list."""
     return tier_band(tier_from_score(score, defined), defined)[1]
+
+
+def division_progress(score: float, defined: list[str] | None = None) -> dict:
+    """Where the score sits within its OWN division, and what the next STEP
+    is -- one division up within the same tier, or (already at the top
+    division) the bottom division of the next harder tier. The near-goal
+    sibling of `next_tier_target`: a whole-TIER bar barely moves after one
+    good run; a whole-DIVISION bar visibly does (spec 2026-07-25 round 2,
+    "the LP model" the user kept pointing at -- League-style Bronze
+    V/IV/.../I sub-ranks within a tier).
+
+    Mirrors `ranks/scopes.py::_division_progress`'s band-edge math (that one
+    grades a MARELO scope aggregate, which has no ladder of its own, so it
+    always uses the full rank table); this is the `defined`-aware sibling a
+    per-entity ladder needs -- a ragged ladder's division band edges must
+    come from the tiers it actually defines, same requirement `division_for`
+    already documents.
+
+    Returns {"tier", "division", "fill" (0..1, position inside the current
+    division), "next_tier", "next_division"}. next_* are None exactly when
+    there is no next step -- the hardest tier this ladder defines, division
+    I -- detected by recomputing where the division's own ceiling score
+    lands: if that's still "here", there's nowhere higher to go."""
+    tier, division = division_for(score, defined)
+    low, high = tier_band(tier, defined)
+    width = (high - low) / DIVISIONS_PER_TIER
+    if width <= 0:
+        fill, next_at = 1.0, TOP_SCORE
+    else:
+        index = DIVISION_NUMERALS.index(division)
+        div_low = low + index * width
+        fill = max(0.0, min(1.0, (score - div_low) / width))
+        next_at = min(TOP_SCORE, div_low + width)
+    next_tier, next_division = division_for(next_at, defined)
+    maxed = next_tier == tier and next_division == division
+    return {"tier": tier, "division": division, "fill": 1.0 if maxed else fill,
+            "next_tier": None if maxed else next_tier,
+            "next_division": None if maxed else next_division}

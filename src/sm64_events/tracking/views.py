@@ -313,17 +313,26 @@ def entity_rank(ranks, ek, frames) -> dict | None:
     best-possible ladder (pointwise best across every strategy) rather than
     the active strategy's. THE number MARELO aggregates.
 
-    This is why a mastered slow strategy reads Mario on the left of the
-    section header and honestly less on the right: the strat score asks 'how
-    well do I run this strat', the entity score asks 'how close is this to the
-    fastest this star can be'. None when the entity has no standards or there
-    is no time to grade.
+    This is why a mastered slow strategy reads Mario on one banner and
+    honestly less on the other: the strategy banner asks 'how well do I run
+    THIS strat', this one asks 'how close is this to the fastest this star
+    can be'. None when the entity has no standards or there is no time to
+    grade (the banner is simply not rendered — no sentinel wording, unlike
+    `_section_banner`; keeping this a plain None/dict contract, not a
+    sentinel one, was a deliberate choice on 2026-07-25 round 2 rather than
+    inventing wording nobody asked for).
 
-    Also carries `fastest_strat` (_fastest_strategy) -- the strategy that
-    actually sets this best-possible ladder -- so the UI can explain a low
-    entity rank next to a high strategy rank ("Iron I · fastest here is Sign
-    Clip") instead of leaving the two numbers to look like a contradiction
-    (live user report 2026-07-25)."""
+    Shape deliberately mirrors `_section_banner`'s graded output ("rank"/
+    "division"/"score"/"fill"/"next_tier"/"next_division") — spec 2026-07-25
+    round 2: a labelled, gradient banner next to a bare, unlabelled chip read
+    as a rendering fault to the user, not two deliberate measures, so both
+    are now rendered through the SAME ui/components/ranks.js RankBanner,
+    twice, with different data — never two components that happen to look
+    similar (those drift). Also carries `fastest_strat` (_fastest_strategy)
+    — the strategy that actually sets this best-possible ladder — so the UI
+    can explain a low entity rank next to a high strategy rank ("Iron I ·
+    fastest here is Sign Clip") instead of leaving the two numbers to look
+    like a contradiction (live user report 2026-07-25)."""
     if ranks is None or frames is None:
         return None
     ladder = scoring.best_ladder(ranks.ladders(ek))
@@ -332,8 +341,11 @@ def entity_rank(ranks, ek, frames) -> dict | None:
     score = scoring.score_for(ladder, classify.display_cs(frames))
     if score is None:
         return None
-    tier, division = scoring.division_for(score, scoring.defined_tiers(ladder))
-    return {"score": round(score, 1), "tier": tier, "division": division,
+    progress = scoring.division_progress(score, scoring.defined_tiers(ladder))
+    return {"score": round(score, 1), "rank": progress["tier"],
+            "division": progress["division"], "fill": progress["fill"],
+            "next_tier": progress["next_tier"],
+            "next_division": progress["next_division"],
             "fastest_strat": _fastest_strategy(ranks, ek, ladder)}
 
 
@@ -351,7 +363,22 @@ def _section_banner(ranks, ek, strat, basis, mode) -> dict | None:
                       strategy (another strategy's times never count).
     Every payload carries "mode"; non-pb modes with a gradeable basis also
     carry "basis" {frames, display, count, window} — what the rank is based
-    on (drives the banner's 'avg of N' line)."""
+    on (drives the banner's 'avg of N' line).
+
+    The graded shape also carries "score", "division", "fill", "next_tier"
+    and "next_division" (scoring.division_progress over the score computed
+    here — the UI must never compute this curve itself, user report
+    2026-07-25). "next_tier"/"next_division" name the next STEP, whichever
+    it is — one division up within this tier, or (already at the top
+    division) the next harder tier's bottom one — and "fill" measures
+    progress WITHIN that current division, not the whole tier: a whole-tier
+    bar barely moves after one good run (spec 2026-07-25 round 2, "the LP
+    model" the user kept pointing at). `classify.band` still supplies "rank"
+    itself unchanged (its own semantics and its other consumers — its unit
+    tests — are untouched); this is the only call site that ALSO read its
+    "next"/"gap_cs"/"fill" keys, and those are deliberately not forwarded
+    here anymore — the new division-aware fields replace them at the one
+    place that rendered them (ranks.js's RankBanner)."""
     if ranks is None:
         return None
     has_standards = bool(ranks.ladders(ek))
@@ -364,21 +391,17 @@ def _section_banner(ranks, ek, strat, basis, mode) -> dict | None:
         return {"rank": None, "reason": "no_ladder", "mode": mode}
     if basis is None:
         return {"rank": None, "reason": "unranked", "mode": mode}
-    out = classify.band(ladder, classify.display_cs(basis["frames"]))
+    band = classify.band(ladder, classify.display_cs(basis["frames"]))
     # The score for the ACTIVE strategy's own ladder — the column the
     # standards table renders. Sent so the UI never re-derives the curve:
     # a JS copy of score_for would silently disagree the next time the
     # Python side changes (the Iron tail moved on 2026-07-25).
-    out["score"] = scoring.score_for(ladder, classify.display_cs(basis["frames"]))
-    # Sub-rank division (I..V within the tier), same source as EntityRankTag
-    # (scoring.division_for over the just-computed score) so the strategy
-    # banner can show "PLATINUM I" instead of a bare tier name — the UI must
-    # never compute this curve itself (user report 2026-07-25). division_for's
-    # own tier always agrees with out["rank"] (the score/medal invariant,
-    # tests/test_ranks_scoring_seed.py), so only the numeral is taken here.
-    out["division"] = (scoring.division_for(out["score"], scoring.defined_tiers(ladder))[1]
-                       if out["score"] is not None else None)
-    out["mode"] = mode
+    score = scoring.score_for(ladder, classify.display_cs(basis["frames"]))
+    progress = scoring.division_progress(score, scoring.defined_tiers(ladder))
+    out = {"rank": band["rank"], "score": score,
+           "division": progress["division"], "fill": progress["fill"],
+           "next_tier": progress["next_tier"],
+           "next_division": progress["next_division"], "mode": mode}
     if mode != "pb":
         out["basis"] = {"frames": basis["frames"],
                         "display": format_igt(basis["frames"]),

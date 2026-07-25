@@ -1,7 +1,7 @@
 from sm64_events.ranks.classify import rank_for
 from sm64_events.ranks.scoring import (
-    SCORE_ANCHORS, best_ladder, defined_tiers, division_for, next_tier_target,
-    progression_key, score_for, tier_band, tier_from_score)
+    SCORE_ANCHORS, best_ladder, defined_tiers, division_for, division_progress,
+    next_tier_target, progression_key, score_for, tier_band, tier_from_score)
 
 # centiseconds, hardest -> easiest (the SSL "Nuts Pless" ladder)
 NUTS = {"Mario": 1293, "Grandmaster": 1303, "Master": 1316, "Diamond": 1336,
@@ -92,3 +92,45 @@ def test_next_tier_target_is_the_harder_anchor_and_100_at_the_top():
     assert next_tier_target(50.0) == 60.0             # Gold -> Platinum
     assert next_tier_target(96.0) == 100.0            # already Mario
     assert next_tier_target(75.0, ["Grandmaster", "Diamond"]) == 90.0
+
+
+def test_division_progress_mid_division_targets_the_next_division_up():
+    # Gold spans [45,60); division IV is [48,51) -- 50.0 sits 2/3 through it.
+    progress = division_progress(50.0)
+    assert progress["tier"] == "Gold" and progress["division"] == "IV"
+    assert abs(progress["fill"] - 2 / 3) < 1e-9
+    assert progress["next_tier"] == "Gold" and progress["next_division"] == "III"
+
+
+def test_division_progress_at_division_i_targets_the_next_tier_at_v():
+    # 59.9 sits in Gold's top division (I, [57,60)); the next STEP is the
+    # next harder tier's bottom division, not a division within Gold.
+    progress = division_progress(59.9)
+    assert progress["tier"] == "Gold" and progress["division"] == "I"
+    assert progress["next_tier"] == "Platinum" and progress["next_division"] == "V"
+
+
+def test_division_progress_is_maxed_at_the_top_of_the_full_table():
+    progress = division_progress(100.0)
+    assert progress == {"tier": "Mario", "division": "I", "fill": 1.0,
+                        "next_tier": None, "next_division": None}
+
+
+def test_division_progress_is_maxed_at_the_top_of_a_ragged_ladder():
+    # This ladder never defines Mario -- topping out at Grandmaster I must
+    # NOT claim "next: Mario V" for a tier this ladder doesn't know about.
+    defined = ["Grandmaster", "Diamond"]
+    progress = division_progress(99.9, defined)
+    assert progress["tier"] == "Grandmaster" and progress["division"] == "I"
+    assert progress["next_tier"] is None and progress["next_division"] is None
+    assert progress["fill"] == 1.0
+
+
+def test_division_progress_respects_a_ragged_ladders_band_edges():
+    # Diamond's band on this 2-tier ladder is [70,90) (its only harder
+    # neighbor is Grandmaster, not Master/Diamond's usual full-table one).
+    defined = ["Grandmaster", "Diamond"]
+    progress = division_progress(85.0, defined)
+    assert progress["tier"] == "Diamond" and progress["division"] == "II"
+    assert progress["fill"] == 0.75
+    assert progress["next_tier"] == "Diamond" and progress["next_division"] == "I"

@@ -74,18 +74,25 @@ def test_both_cards_offer_a_failure_compilation():
             f"{name} is missing the failure-compilation control"
 
 
-def test_entity_rank_tag_is_rendered_for_both_kinds():
-    """Rule 11: a feature built for one kind ships for both in the same change.
-
-    A raw `source.count("EntityRankTag") >= 2` (the previous form of this
-    test) is satisfied by the import plus a SINGLE card's usage -- it cannot
-    tell "both cards" from "one card, twice" apart. Check each section's own
-    body instead, the same way the strategy-picker and failure-compilation
-    tests above do."""
+def test_two_rank_banners_are_rendered_for_both_kinds():
+    """Rule 11: a feature built for one kind ships for both in the same
+    change. Round 2 of the rank-legibility fix (2026-07-25) merged the old
+    RankBanner + EntityRankTag pair into ONE component, rendered TWICE with
+    different data ("Strategy Rank" graded on the active strategy, "Overall
+    Rank" graded on the entity's best-possible ladder) -- deliberately never
+    two components that happen to look similar, since a labelled banner next
+    to a bare unlabelled chip is exactly the bug this fixed (live report
+    2026-07-25). A raw `_components()` set can't tell "one usage" from "two"
+    apart (it dedupes by name), so this counts RankBanner occurrences in each
+    section's own body instead, the same way the strategy-picker and
+    failure-compilation tests above do."""
     source = PRACTICE_JS.read_text(encoding="utf-8")
     for name in ("StarSection", "SegmentSection"):
-        assert "EntityRankTag" in _components(_body(source, name)), \
-            f"{name} is missing the entity rank tag"
+        body = _body(source, name)
+        assert body.count("<${RankBanner}") >= 2, \
+            f"{name} does not render both the Strategy Rank and Overall Rank banners"
+        assert "Strategy Rank" in body and "Overall Rank" in body, \
+            f"{name} is missing one of the two rank banner labels"
 
 
 def test_both_section_builders_emit_entity_rank():

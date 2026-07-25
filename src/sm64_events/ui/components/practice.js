@@ -8,7 +8,7 @@ import { StatMenu, DUST_STAT_KEYS } from "./statmenu.js";
 import { Timeline } from "./timeline.js";
 import { Progress } from "./progress.js";
 import { StageBanner } from "./stagebanner.js";
-import { Medal, RankBanner, EntityRankTag, rankColor } from "./ranks.js";
+import { Medal, RankBanner, rankColor } from "./ranks.js";
 import { StandardsPanel } from "./standards.js";
 import { StratPicker } from "./stratpicker.js";
 import { FailureCompilation } from "./failcomp.js";
@@ -409,7 +409,10 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
       </div>
       <div class="objective-metrics" style=${sec.rank && sec.rank.rank
           ? `--rank-glow:${rankColor(sec.rank.rank)}` : ""}>
-        <div class="rank-slot"><${RankBanner} banner=${sec.rank} /><${EntityRankTag} entityRank=${sec.entity_rank} /></div>
+        <div class="rank-slot">
+          <${RankBanner} label="Strategy Rank" banner=${sec.rank} />
+          ${sec.entity_rank && html`<${RankBanner} label="Overall Rank" banner=${sec.entity_rank} />`}
+        </div>
         <div class="objective-live-state" aria-label="Practice state">
           <span class="live-state-icon">○</span><span>Ready</span>
         </div>
@@ -553,7 +556,10 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare }) {
       </div>
       <div class="objective-metrics" style=${sec.rank && sec.rank.rank
           ? `--rank-glow:${rankColor(sec.rank.rank)}` : ""}>
-        <div class="rank-slot"><${RankBanner} banner=${sec.rank} /><${EntityRankTag} entityRank=${sec.entity_rank} /></div>
+        <div class="rank-slot">
+          <${RankBanner} label="Strategy Rank" banner=${sec.rank} />
+          ${sec.entity_rank && html`<${RankBanner} label="Overall Rank" banner=${sec.entity_rank} />`}
+        </div>
         <div class="objective-live-state ${armed ? "running" : ""}"
             aria-label=${`Segment state: ${pinTag}`}>
           <${Icon} name="clock" size=${17} /><span>${pinTag}</span>

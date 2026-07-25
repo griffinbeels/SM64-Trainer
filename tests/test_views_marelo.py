@@ -35,13 +35,32 @@ def test_grading_basis_and_valid_frames_are_public():
 
 def test_entity_rank_grades_the_best_possible_ladder():
     out = views.entity_rank(RANKS, "star:1:0", 1350)     # 45.00s
-    assert out["tier"] == "Mario" and out["score"] == 95.0
+    assert out["rank"] == "Mario" and out["score"] == 95.0
     assert out["division"]
 
 
 def test_entity_rank_of_a_slow_strat_time_is_below_mario():
     out = views.entity_rank(RANKS, "star:1:0", 1500)     # 50.00s
-    assert out["tier"] != "Mario"
+    assert out["rank"] != "Mario"
+
+
+def test_entity_rank_carries_the_same_division_progress_shape_as_the_banner():
+    """entity_rank and _section_banner render through the SAME RankBanner
+    component (spec 2026-07-25 round 2), so they must carry the same fields
+    with the same meaning -- not just an overlapping subset."""
+    ladder = scoring.best_ladder(RANKS.ladders("star:1:0"))
+    out = views.entity_rank(RANKS, "star:1:0", 1350)      # 45.00s, Mario's own cutoff
+    expected = scoring.division_progress(out["score"], scoring.defined_tiers(ladder))
+    assert out["rank"] == expected["tier"]
+    assert out["division"] == expected["division"]
+    assert out["fill"] == expected["fill"]
+    assert out["next_tier"] == expected["next_tier"]
+    assert out["next_division"] == expected["next_division"]
+    # Exactly at Mario's cutoff -- bottom of Mario's own division band (V),
+    # not maxed: there's still Mario IV..I above it on this ladder.
+    assert out["rank"] == "Mario" and out["division"] == "V"
+    assert out["fill"] == 0.0
+    assert out["next_tier"] == "Mario" and out["next_division"] == "IV"
 
 
 def test_entity_rank_is_none_without_standards_or_without_a_time():
@@ -92,14 +111,44 @@ def test_section_banner_carries_the_active_strategys_own_score():
 
 def test_section_banner_carries_the_active_strategys_division():
     """The strategy banner's division must come from the SAME
-    scoring.division_for path as EntityRankTag's -- never computed in JS."""
+    scoring.division_progress path as entity_rank's -- never computed in JS."""
     basis = {"frames": 1350, "count": 1, "window": None}
     out = views._section_banner(RANKS, "star:1:0", "Fast", basis, "pb")
     ladder = RANKS.ladder_cs("star:1:0", "Fast")
-    expected_tier, expected_division = scoring.division_for(
-        out["score"], scoring.defined_tiers(ladder))
-    assert out["rank"] == expected_tier
-    assert out["division"] == expected_division
+    expected = scoring.division_progress(out["score"], scoring.defined_tiers(ladder))
+    assert out["rank"] == expected["tier"]
+    assert out["division"] == expected["division"]
+
+
+def test_section_banner_next_step_is_division_aware():
+    """The 'next' step is the next division within the SAME tier when one is
+    still open, not the next whole tier -- a whole-tier bar barely moves
+    after one good run (spec 2026-07-25 round 2)."""
+    ladder_cs = RANKS.ladder_cs("star:1:0", "Fast")           # Mario 4500, Gold 6000
+    # Slower than Mario's own cutoff (4500) but still faster than Gold's
+    # (6000) -- inside the extrapolated-to-Iron zone above Mario is not
+    # reachable here, so this is comfortably mid-ladder, several divisions
+    # below Mario's own cutoff.
+    basis = {"frames": 1500, "count": 1, "window": None}      # 50.00s
+    out = views._section_banner(RANKS, "star:1:0", "Fast", basis, "pb")
+    expected = scoring.division_progress(
+        scoring.score_for(ladder_cs, views.classify.display_cs(1500)),
+        scoring.defined_tiers(ladder_cs))
+    assert out["fill"] == expected["fill"]
+    assert out["next_tier"] == expected["next_tier"]
+    assert out["next_division"] == expected["next_division"]
+    # This specific basis lands short of Mario -- confirms it's exercising
+    # the "next division, same tier" branch, not the "next tier" one.
+    assert out["next_tier"] == out["rank"]
+
+
+def test_section_banner_old_tier_wide_next_fields_are_not_forwarded():
+    """classify.band's own next/gap_cs keys (whole-tier) must not leak
+    through -- the division-aware next_tier/next_division replace them at
+    this call site; nothing else reads them off this payload."""
+    basis = {"frames": 1500, "count": 1, "window": None}
+    out = views._section_banner(RANKS, "star:1:0", "Fast", basis, "pb")
+    assert "next" not in out and "gap_cs" not in out
 
 
 def test_star_and_segment_sections_both_carry_entity_rank(tmp_path):
@@ -132,7 +181,7 @@ def test_star_and_segment_sections_both_carry_entity_rank(tmp_path):
     view = views.build_session_view(db, svc, clock="igt")
     [star_sec] = view["stars"]
     assert "entity_rank" in star_sec
-    assert star_sec["entity_rank"]["tier"] == "Diamond"     # 343f -> 11.43s
+    assert star_sec["entity_rank"]["rank"] == "Diamond"     # 343f -> 11.43s
 
     seg_sec = seg_section(view, 1)
     assert "entity_rank" in seg_sec
