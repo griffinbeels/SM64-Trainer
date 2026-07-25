@@ -9,6 +9,7 @@ import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
+import { fmtIgt } from "../format.js";
 import { RANK_NAMES, rankColor } from "./ranks.js";
 import { StratModal } from "./stratmodal.js";
 import { Modal } from "./modal.js";
@@ -16,7 +17,71 @@ import { Icon } from "./icons.js";
 const html = htm.bind(h);
 const enc = encodeURIComponent;
 
-export function StandardsPanel({ entity, activeStrat, strategies, onChanged, defaultOpen = false }) {
+// Your time is essentially never AT a cutoff, so "you are here" is not a
+// cell: it is a point BETWEEN two rows in one column. This returns that
+// point as a 0..1 fraction of the gap between the two cutoffs it falls
+// between, which is also exactly your division within the tier.
+export function markerPosition(ladderSeconds, timeCs) {
+  const rows = Object.entries(ladderSeconds)
+    .map(([tier, seconds]) => [tier, Math.round(seconds * 100)])
+    .sort((left, right) => left[1] - right[1]);               // fastest first
+  if (!rows.length || timeCs == null) return null;
+  if (timeCs <= rows[0][1]) return { above: null, below: rows[0][0], frac: 1 };
+  for (let index = 0; index < rows.length - 1; index += 1) {
+    const [fastTier, fastCs] = rows[index], [slowTier, slowCs] = rows[index + 1];
+    if (timeCs <= slowCs) {
+      const span = slowCs - fastCs;
+      return { above: fastTier, below: slowTier,
+        frac: span > 0 ? (slowCs - timeCs) / span : 1 };
+    }
+  }
+  return { above: rows[rows.length - 1][0], below: null, frac: 0 };
+}
+
+// Mirrors ranks/scoring.py SCORE_ANCHORS -- kept in lockstep; Iron carries
+// no anchor, exactly as it carries no threshold in RANK_NAMES.
+const SCORE_ANCHORS = { Mario: 95, Grandmaster: 90, Master: 80, Diamond: 70,
+  Platinum: 60, Gold: 45, Silver: 25, Bronze: 10 };
+
+// Mirrors ranks/scoring.py::score_for -- piecewise-linear through the
+// anchors above, using the SAME two cutoffs markerPosition interpolates
+// between, so the marker's label can never disagree with where its line
+// sits. timeCs must be DISPLAYED centiseconds (project rule 7).
+function scoreFor(ladderSeconds, timeCs) {
+  const points = Object.entries(ladderSeconds)
+    .filter(([tier]) => tier in SCORE_ANCHORS)
+    .map(([tier, seconds]) => [Math.round(seconds * 100), SCORE_ANCHORS[tier]])
+    .sort((left, right) => left[0] - right[0]);
+  if (!points.length || timeCs == null) return null;
+  const [hardestCs, hardestScore] = points[0];
+  if (timeCs <= hardestCs) {
+    if (points.length === 1) return hardestScore;
+    const [nextCs, nextScore] = points[1];
+    const slope = (nextScore - hardestScore) / (nextCs - hardestCs);
+    return Math.min(100, hardestScore + slope * (timeCs - hardestCs));
+  }
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const [fastCs, fastScore] = points[index], [slowCs, slowScore] = points[index + 1];
+    if (timeCs <= slowCs) {
+      const span = slowCs - fastCs;
+      return span > 0 ? fastScore + (slowScore - fastScore) * (timeCs - fastCs) / span : slowScore;
+    }
+  }
+  const [easiestCs, easiestScore] = points[points.length - 1];
+  return easiestScore * easiestCs / timeCs;
+}
+
+const fmtScore = (score) => (score == null ? "—" : score.toFixed(1));
+
+// Mirrors ranks/classify.py::display_cs -- frames -> DISPLAYED centiseconds
+// (30fps quantized), so the marker's position never disagrees with the time
+// fmtIgt shows for the same frame count (project rule 7 / Usamune IGT clock).
+function displayCs(frames) {
+  return Math.floor(frames / 30) * 100 + Math.floor(((frames % 30) * 100) / 30);
+}
+
+export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
+    defaultOpen = false, sectionRank = null, sectionPb = null }) {
   const [open, setOpen] = useState(defaultOpen);
   const [data, setData] = useState(null);
   const [editing, setEditing] = useState(false);
@@ -88,6 +153,21 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged, def
     ? [...Object.keys(data.strategies),
        ...(strategies || []).filter((s) => !Object.hasOwn(data.strategies, s))]
     : [];
+  // "You are here": the grading basis under the ACTIVE strategy. Avg rank
+  // modes carry it on sectionRank.basis; pb mode carries none (the same
+  // split _section_banner already encodes server-side), so it falls back to
+  // the saved PB row for this entity's clock. Interpolated against THIS
+  // strategy's own ladder (the column actually on screen) rather than the
+  // entity's best-possible ladder, so the marker's line and its score label
+  // can never disagree with the rows it sits between.
+  const activeLadder = data && activeStrat ? (data.strategies[activeStrat] || {}) : {};
+  const basisFrames = data && sectionRank && sectionRank.basis
+    ? sectionRank.basis.frames
+    : (data && sectionPb && sectionPb[data.clock] ? sectionPb[data.clock].frames : null);
+  const timeCs = basisFrames != null ? displayCs(basisFrames) : null;
+  const hasActiveLadder = Object.keys(activeLadder).length > 0;
+  const marker = timeCs != null && hasActiveLadder ? markerPosition(activeLadder, timeCs) : null;
+  const entityScore = timeCs != null && hasActiveLadder ? scoreFor(activeLadder, timeCs) : null;
   return html`<div class="stdpanel">
     <button class="disc standards-toggle" onclick=${toggle} aria-expanded=${open}>
       <${Icon} name="rank" size=${16} />
@@ -113,22 +193,36 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged, def
             title="browse every example run for this star on the xcams Daily Star page">Examples on xcams ↗</a>` : null}
       </div>
       <table class="stdtable"><thead><tr><th>Strat</th>
-        ${strats.map((s) => html`<th class=${s === activeStrat ? "col-active" : ""}>${headVid(s)
-          ? html`<a href=${headVid(s)} target="_blank" rel="noopener" title="fastest-time video">${s}</a>`
-          : s}${editing ? html` <button class="candx" title=${isSeeded(s) ? "clear this strategy's standards" : "delete this strategy"} onclick=${() => delStrat(s)}>×</button>` : ""}</th>`)}</tr></thead>
+        ${strats.map((strat) => html`<th class=${strat === activeStrat ? "col-active" : ""}>${headVid(strat)
+          ? html`<a href=${headVid(strat)} target="_blank" rel="noopener" title="fastest-time video">${strat}</a>`
+          : strat}${editing ? html` <button class="candx" title=${isSeeded(strat) ? "clear this strategy's standards" : "delete this strategy"} onclick=${() => delStrat(strat)}>×</button>` : ""}
+          ${marker && strat === activeStrat ? html`<span class="std-you-badge"
+              title="your current time and score on this ladder">◀ you · ${fmtIgt(basisFrames)} · ${fmtScore(entityScore)}</span>` : ""}</th>`)}</tr></thead>
         <tbody>
         ${RANK_NAMES.filter((r) => r !== "Iron").map((rank) => html`<tr>
           <td style=${`background:${rankColor(rank)};color:#111;font-weight:700`}>${rank}</td>
-          ${strats.map((s) => {
-            const v = (data.strategies[s] || {})[rank];
-            const vid = cutoffVid(s, rank);
+          ${strats.map((strat) => {
+            const v = (data.strategies[strat] || {})[rank];
+            const vid = cutoffVid(strat, rank);
             const label = v != null ? v.toFixed(2) : "—";
-            return html`<td class=${s === activeStrat ? "col-active" : ""}>
+            // "You are here" — a cell highlight would be a lie (your time is
+            // essentially never AT a cutoff), so instead the two cutoffs
+            // bracketing your interpolated position get their own mark, and
+            // every EASIER tier below that (a cutoff you are, by definition,
+            // already running faster than) reads as already-beaten.
+            const isBracket = marker && strat === activeStrat
+              && (rank === marker.above || rank === marker.below);
+            const beaten = marker && marker.below && strat === activeStrat
+              && RANK_NAMES.indexOf(rank) > RANK_NAMES.indexOf(marker.below);
+            const cellClass = [strat === activeStrat ? "col-active" : "",
+              isBracket ? "std-marker-bracket" : (beaten ? "std-beaten" : "")]
+              .filter(Boolean).join(" ");
+            return html`<td class=${cellClass}>
               ${editing
                 ? html`<span class="stdcell"><input class="stdinp" value=${v ?? ""} placeholder="—"
-                      onchange=${(e) => { const n = parseFloat(e.target.value); if (!isNaN(n)) put(s, rank, n); }} />
-                    <button class="vidbtn" title=${`${userVid(s, rank) ? "edit" : "add"} ${rank} example video`}
-                      onclick=${() => editVideo(s, rank)}>${userVid(s, rank) ? "▶✎" : "▶＋"}</button></span>`
+                      onchange=${(e) => { const n = parseFloat(e.target.value); if (!isNaN(n)) put(strat, rank, n); }} />
+                    <button class="vidbtn" title=${`${userVid(strat, rank) ? "edit" : "add"} ${rank} example video`}
+                      onclick=${() => editVideo(strat, rank)}>${userVid(strat, rank) ? "▶✎" : "▶＋"}</button></span>`
                 : (vid
                     ? html`<a href=${vid} target="_blank" rel="noopener" title=${`example ${rank} run`}>${label}</a>`
                     : label)}</td>`;

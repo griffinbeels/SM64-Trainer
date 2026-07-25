@@ -1533,6 +1533,24 @@
   .stdtools button { min-height: 31px; font-size: .71rem; }
   .stdtools .is-selected { color: var(--gold-soft); border-color: #806d34; }
 
+  /* "You are here" marker (standards.js markerPosition). A cell highlight
+     would be a lie -- your time is essentially never AT a cutoff -- so the
+     label lives on the active column's header instead of floating a row
+     between two cutoffs: at narrow table widths (<= ~900px, live-tested)
+     a floating row's label collided with the cutoff time on the same row,
+     illegibly. The two cutoffs actually bracketing your time get their own
+     mark; every easier tier below that (already running faster than) reads
+     as beaten. */
+  .std-you-badge {
+    display: block; margin-top: 2px; font-size: 10px; font-weight: 600;
+    color: var(--gold); white-space: nowrap;
+  }
+  /* background, not box-shadow: .col-active already owns box-shadow on this
+     cell (the active-column outline), and two box-shadow rules of equal
+     specificity don't combine -- the later one simply wins outright. */
+  .std-marker-bracket { background: color-mix(in srgb, var(--gold) 22%, transparent); }
+  .std-beaten { background: color-mix(in srgb, var(--gold) 8%, transparent); }
+
   .update-summary {
     min-height: 54px; display: flex; align-items: center; gap: .7rem;
     padding: .55rem .7rem; border: 1px solid var(--border-soft);
