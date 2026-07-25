@@ -22,10 +22,18 @@ _UNPRACTICED_TARGET = scoring.SCORE_ANCHORS["Gold"]
 def rankable_entities(ladders_by_entity: dict[str, dict[str, dict[str, float]]],
                        excluded: Iterable[str] = ()) -> list[str]:
     """Entity keys with at least one ladder, minus the user's exclusions.
-    `ladders_by_entity` is {entity_key: {strat: {rank: seconds}}}."""
+    `ladders_by_entity` is {entity_key: {strat: {rank: seconds}}}.
+
+    "Has a ladder" means `scoring.best_ladder` is non-empty, not merely that
+    the strategies dict is non-empty: `create_strategy` writes `{strat: {}}`
+    when a strategy is named purely to tag attempts (the ordinary
+    practice-card flow), which has no cutoffs at all. Admitting that entity
+    would hold a permanent, unscoreable denominator slot -- no ladder means
+    ABSENT, and every scoring path (tracking/marelo.py) already requires
+    `best_ladder` non-empty, so this is the same bar, just applied earlier."""
     excluded_keys = set(excluded or ())
     return [entity_key for entity_key, ladders in ladders_by_entity.items()
-            if ladders and entity_key not in excluded_keys]
+            if scoring.best_ladder(ladders) and entity_key not in excluded_keys]
 
 
 def _candidate_key(candidate: dict) -> str | None:

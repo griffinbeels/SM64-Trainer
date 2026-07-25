@@ -24,6 +24,17 @@ def test_rankable_skips_ladderless_entities_and_exclusions():
     assert "star:1:1" not in rankable_entities(LADDERS, excluded={"star:1:1"})
 
 
+def test_rankable_skips_a_strategy_named_with_no_cutoffs():
+    """`RankStandards.create_strategy` writes `{strat: {}}` -- naming a
+    strategy purely to tag attempts (the ordinary practice-card flow) must
+    not make the entity rankable. A non-empty STRATEGIES dict with an empty
+    cutoff dict inside it has no ladder (`best_ladder` collapses it to `{}`)
+    and every scoring path needs `best_ladder` non-empty
+    (`tracking/marelo.py`); admitting it here would hold a permanent,
+    unscoreable denominator slot -- absent, not zero, is the contract."""
+    assert rankable_entities({"star:1:0": {"Fast": {}}}) == []
+
+
 def test_overall_scope_is_one_group_per_entity():
     groups = entity_groups("overall", rankable=rankable_entities(LADDERS),
                            routes=ROUTES, segment_courses=SEGMENT_COURSES)
