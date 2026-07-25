@@ -6,7 +6,7 @@ import { getJSON, send } from "../api.js";
 import { ReplayPlayer } from "./replay.js";
 import { StatMenu, DUST_STAT_KEYS } from "./statmenu.js";
 import { Timeline } from "./timeline.js";
-import { Progress } from "./progress.js";
+import { Progress, hasProgressPoints } from "./progress.js";
 import { StageBanner } from "./stagebanner.js";
 import { Medal, RankBanner, rankColor } from "./ranks.js";
 import { StandardsPanel } from "./standards.js";
@@ -15,6 +15,7 @@ import { FailureCompilation } from "./failcomp.js";
 import { Icon } from "./icons.js";
 import { EntityCelebration, entityCelebrationFor } from "./celebrate.js";
 import { PageState } from "./states.js";
+import { EmptyState } from "./emptystate.js";
 
 const html = htm.bind(h);
 
@@ -452,6 +453,28 @@ function StrategyFastestHint({ sec }) {
       title=${`fastest strategy here: ${fastest}`}>· fastest: ${fastest}</span>`;
 }
 
+// The practice log's two empty states. They are NOT one state and must not
+// share copy: "nothing recorded yet" is answered by going and running the
+// thing, while "everything is filtered out" is answered by the two toggles in
+// this card's own footer — and sending a user off to practise when their
+// attempts are sitting right there behind a checkbox is the worse miss. One
+// component so the star and segment cards can't drift apart on either.
+function AttemptLogEmpty({ hasAttempts }) {
+  return hasAttempts
+    ? html`<${EmptyState} headline="Every attempt is filtered out"
+        hint="Clear the filters below to bring them back." />`
+    : html`<${EmptyState} headline="No attempts logged yet"
+        hint="Every run you finish lands here automatically." />`;
+}
+
+// The trend graph plots SUCCESSFUL attempts only, so it stays empty through a
+// session of resets — the copy has to say "completed" or it reads as broken
+// to someone who has been practising for an hour.
+function TrendEmpty() {
+  return html`<${EmptyState} headline="No completed attempts yet"
+      hint="Finish a run and your times start charting here." />`;
+}
+
 function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
   const [showHidden, setShowHidden] = useState(false);
   const [visible, setVisible] = useState(10);
@@ -530,7 +553,9 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
       <div class="analysis-block trend-block">
         <h4>Performance trend <span class="hint" tabindex="0"
           data-tip="Successful attempts over time — gold dots are saved PBs; click a dot to jump to its row">ⓘ</span></h4>
-        <${Progress} prog=${sec.progress} clock=${t.clock} onPick=${pick} />
+        ${hasProgressPoints(sec.progress, t.clock)
+          ? html`<${Progress} prog=${sec.progress} clock=${t.clock} onPick=${pick} />`
+          : html`<${TrendEmpty} />`}
       </div>
     </section>
 
@@ -542,11 +567,13 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
           <${SortControl} ui=${ui} />
         </div>
       </div>
-      <div class="attempt-scroll">
-        <${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t}
-          focus=${focus} clearFocus=${clearFocus} freshIds=${freshIds}
-          openCompare=${openCompare} sec=${sec} />
-      </div>
+      ${rows.length
+        ? html`<div class="attempt-scroll">
+            <${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t}
+              focus=${focus} clearFocus=${clearFocus} freshIds=${freshIds}
+              openCompare=${openCompare} sec=${sec} />
+          </div>`
+        : html`<${AttemptLogEmpty} hasAttempts=${sec.attempts.length > 0} />`}
       <div class="attempt-footer">
         <div class="attempt-pagination">
           ${rows.length > visible && html`<button class="quiet-button"
@@ -686,7 +713,9 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare }) {
       <div class="analysis-block trend-block">
         <h4>Performance trend <span class="hint" tabindex="0"
           data-tip="Successful attempts over time — gold dots are saved PBs; click a dot to jump to its row">ⓘ</span></h4>
-        <${Progress} prog=${sec.progress} clock="rta" onPick=${pick} />
+        ${hasProgressPoints(sec.progress, "rta")
+          ? html`<${Progress} prog=${sec.progress} clock="rta" onPick=${pick} />`
+          : html`<${TrendEmpty} />`}
       </div>
     </section>
 
@@ -698,11 +727,13 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare }) {
           <${SortControl} ui=${ui} />
         </div>
       </div>
-      <div class="attempt-scroll">
-        <${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t}
-          focus=${focus} clearFocus=${clearFocus} freshIds=${freshIds}
-          openCompare=${openCompare} sec=${sec} />
-      </div>
+      ${rows.length
+        ? html`<div class="attempt-scroll">
+            <${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t}
+              focus=${focus} clearFocus=${clearFocus} freshIds=${freshIds}
+              openCompare=${openCompare} sec=${sec} />
+          </div>`
+        : html`<${AttemptLogEmpty} hasAttempts=${sec.attempts.length > 0} />`}
       <div class="attempt-footer">
         <div class="attempt-pagination">
           ${rows.length > visible && html`<button class="quiet-button"
@@ -848,11 +879,9 @@ function EmptyPractice({ v, t, ui, unassignedRows, freshIds, openCompare,
       <div class="card-heading">
         <div><span class="eyebrow">Analysis</span><h3>Attempt history</h3></div>
       </div>
-      <div class="stable-chart-placeholder">
-        <${Icon} name="feed" size=${24} />
-        <b>Choose a star or segment to see its trend</b>
-        <span>Your session keeps recording while this view is idle.</span>
-      </div>
+      <${EmptyState} headline="Nothing selected to practice"
+          hint=${"Pick a star or segment above — its timeline, trend and log all "
+               + "fill in here. The session keeps recording either way."} />
     </section>
     <section class="practice-card attempts-card">
       <div class="card-heading attempts-heading">
@@ -862,12 +891,14 @@ function EmptyPractice({ v, t, ui, unassignedRows, freshIds, openCompare,
           <${SortControl} ui=${ui} />
         </div>
       </div>
-      <div class="attempt-scroll">
-        ${unassignedRows.length
-          ? html`<${AttemptTable} attempts=${v.unassigned} rows=${unassignedRows}
-              t=${t} freshIds=${freshIds} openCompare=${openCompare} />`
-          : html`<div class="stable-empty">No attempts are waiting for a target.</div>`}
-      </div>
+      ${unassignedRows.length
+        ? html`<div class="attempt-scroll">
+            <${AttemptTable} attempts=${v.unassigned} rows=${unassignedRows}
+              t=${t} freshIds=${freshIds} openCompare=${openCompare} />
+          </div>`
+        : html`<${EmptyState} headline="Nothing waiting for a target"
+            hint=${"Runs you finish without a target picked collect here "
+                 + "until you assign them."} />`}
       <div class="attempt-footer">
         <div class="attempt-pagination"></div>
         <div class="attempt-footer-tools">

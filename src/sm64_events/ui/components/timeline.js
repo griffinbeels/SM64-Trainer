@@ -115,6 +115,9 @@ export function Timeline({ tl, sec, t }) {
         <span>${tl ? `${tl.max_is_success ? "" : "~"}${tl.max_display}` : fmtIgt(axisMax)}</span>
       </div>
     </div>`}
+    ${!showStrip && html`<div class="stable-empty compact">
+      Nothing plotted yet — attempts and markers both land here.
+    </div>`}
     <div class="chips">
       ${markers.map((m, i) => html`<span class="chip" style="color:${ANNOT}">
         ${fmtIgt(m.frames)} ${m.label}

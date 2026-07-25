@@ -25,15 +25,29 @@ function fmtTick(iso, withDate) {
     : time;
 }
 
-export function Progress({ prog, clock, onPick }) {
-  if (!prog) return "";
+// The plottable-points rule, exported so a caller can ask "has this anything
+// to draw?" without re-deriving the filter. It has to be shared: the graph
+// answers an empty section by returning "", and a caller that wants to put an
+// empty state there instead (practice.js) must agree exactly with the graph
+// about which sections are empty, or one of the two renders nothing at all.
+// frames > 0 drops same-tick race rows (rta=0 junk; see projection.py
+// caveat 1) — deliberately a CLIENT-side filter so the igt clock keeps them.
+export function progressSessions(prog, clock) {
+  if (!prog) return [];
   const fKey = clock === "igt" ? "igt_frames" : "rta_frames";
-  const pbKey = clock === "igt" ? "is_pb_igt" : "is_pb_rta";
-  // frames > 0 drops same-tick race rows (rta=0 junk; see projection.py
-  // caveat 1) — deliberately a CLIENT-side filter so the igt clock keeps them
-  const segs = prog.sessions
+  return prog.sessions
     .map((s) => ({ ...s, points: s.points.filter((p) => p[fKey] != null && p[fKey] > 0) }))
     .filter((s) => s.points.length > 0);
+}
+
+export function hasProgressPoints(prog, clock) {
+  return progressSessions(prog, clock).length > 0;
+}
+
+export function Progress({ prog, clock, onPick }) {
+  const fKey = clock === "igt" ? "igt_frames" : "rta_frames";
+  const pbKey = clock === "igt" ? "is_pb_igt" : "is_pb_rta";
+  const segs = progressSessions(prog, clock);
   if (!segs.length) return "";
 
   const all = segs.flatMap((s) => s.points.map((p) => p[fKey]));

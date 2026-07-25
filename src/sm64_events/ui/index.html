@@ -1081,7 +1081,7 @@
   .topn-tile.is-unpracticed { opacity: .38; filter: grayscale(.75); }
   .topn-tile.is-unpracticed:hover { opacity: .7; }
   /* Coverage's own strip: tighter than Best-in-scope because it shows the
-     WHOLE scope â€” 24 entries for a 16 Star route, 120+ for a full run. The
+     WHOLE scope — 24 entries for a 16 Star route, 120+ for a full run. The
      cap plus scroll is what stops a long route pushing the chart and the
      breakdown off the screen; five rows fit before it engages. */
   .rank-coverage-strip { gap: 5px; max-height: 200px; overflow-y: auto; }
@@ -1259,6 +1259,11 @@
   .timeline-block { flex: 0 0 112px; }
   .trend-block { flex: 1 1 auto; min-height: 190px; overflow: hidden; }
   .trend-block svg { max-height: 210px; }
+  /* Only the EMPTY trend block becomes a flex column, so its empty state can
+     claim the block's slack and centre in it. Applying this unconditionally
+     would stop the graph's own margins collapsing against the h4's and push
+     the SVG down into `overflow: hidden`, clipping its x-axis labels. */
+  .trend-block:has(> .empty-state) { display: flex; flex-direction: column; }
   /* Practice-log controls, in the card they act on: sort in the heading,
      reset visibility in the footer (the old analysis toolbar is gone). */
   .attempts-tools { display: flex; align-items: center; gap: .7rem; }
@@ -1347,14 +1352,62 @@
     min-height: 80px; display: flex; align-items: center; justify-content: center;
     color: var(--muted); text-align: center;
   }
-  .stable-empty.compact { min-height: 32px; justify-content: flex-start; }
-  .stable-chart-placeholder {
-    flex: 1; min-height: 300px; display: flex; flex-direction: column;
-    align-items: center; justify-content: center; gap: .4rem; color: var(--muted);
-    text-align: center; border-bottom: 1px solid var(--border-soft);
+  .stable-empty.compact {
+    min-height: 32px; justify-content: flex-start; text-align: left;
   }
-  .stable-chart-placeholder b { color: #dce5ee; }
-  .stable-chart-placeholder span { font-size: .78rem; }
+  /* "Nothing here yet" panels -- components/emptystate.js.  A card with a
+     hard fixed height and no data to draw is a large silent void, and a void
+     reads as a broken render rather than an honest state (live report
+     2026-07-25).  So the four panels that can legitimately be empty get a
+     404-shaped state instead: one dimmed cast member, a headline naming what
+     is missing, the action that fills it, and a joke.
+
+     `flex: 1 1 auto; min-height: 0` makes it fill what the card has LEFT
+     without growing it -- .analysis-card/.attempts-card are a hard 458px for
+     OBS stability, and a placeholder that pushed past that would shove the
+     layout the moment the first attempt landed. */
+  .empty-state {
+    flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: .26rem;
+    padding: .6rem 1rem 1rem; text-align: center;
+  }
+  /* Sized by HEIGHT, never width: the six PNGs are alpha-trimmed to their own
+     silhouettes, so they have different aspect ratios and only a shared
+     height makes them read as one set. */
+  .empty-art {
+    position: relative; flex: 0 1 auto; min-height: 0;
+    height: 128px; margin-bottom: .5rem;
+    display: flex; align-items: flex-end; justify-content: center;
+  }
+  /* The floor.  A soft ellipse grounds the character so it reads as standing
+     in the panel instead of pasted onto it; it stays put while the art bobs,
+     because a shadow bobbing along with it would look like both are falling. */
+  .empty-art::after {
+    content: ""; position: absolute; z-index: 0;
+    left: 50%; bottom: -5px; transform: translateX(-50%);
+    width: 92px; height: 15px;
+    background: radial-gradient(closest-side, rgba(0,0,0,.6), transparent);
+  }
+  .empty-art img {
+    position: relative; z-index: 1;
+    height: 100%; width: auto; max-width: 100%; object-fit: contain;
+    /* Dimmed on purpose: at full strength a 128px Toad out-shouts the live
+       rank banner one card over.  Opacity plus a little desaturation makes it
+       decoration; the drop-shadow keeps the silhouette off the panel instead
+       of letting it dissolve into the navy. */
+    opacity: .42; filter: saturate(.75) drop-shadow(0 7px 11px rgba(0,0,0,.55));
+  }
+  .empty-headline { color: #dce5ee; font-size: .92rem; }
+  .empty-hint { max-width: 46ch; color: var(--muted); font-size: .78rem; }
+  .empty-quip {
+    max-width: 46ch; margin-top: .32rem; color: var(--gold-soft); opacity: .5;
+    font-size: .74rem; font-style: italic;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .empty-art img { animation: emptybob 4.4s ease-in-out infinite; }
+    @keyframes emptybob { 0%, 100% { transform: translateY(0); }
+                          50% { transform: translateY(-7px); } }
+  }
   .route-focus-card { overflow: hidden; }
   /* Segments + Routes share one calm, responsive workshop language.  The
      library and editor are separate cards so state changes replace content

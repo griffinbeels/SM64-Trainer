@@ -18,3 +18,17 @@ because the originals were 64×64 and 100×100 thumbnails that blurred in the
 picker; the size floor in `tests/test_star_icons.py` keeps that from recurring.
 Four main courses — HMC, SSL, DDD and SL — have no portrait at all, because
 they are not entered through a painting; they fall back to their star-1 icon.
+
+## Empty-state cast — `src/sm64_events/ui/assets/empty/`
+
+Six character renders — two Boo, two Ukiki, two Toad — drawn dimmed behind the
+Practice tab's "nothing here yet" panels (`ui/components/emptystate.js`). Model
+renders from Super Mario 64: Nintendo's artwork, used here in a free,
+non-commercial practice tool, as with the course portraits above.
+
+Supplied at 455×420 and installed at 360px wide, alpha-trimmed to each
+character's own silhouette (so they have different aspect ratios and are sized
+by HEIGHT in the CSS, which is what makes them read as one set). Registry ↔
+folder coverage is pinned both ways by `tests/test_ui_empty_states.py` — a
+renamed file would otherwise 404 a broken-image icon into the exact panel the
+art exists to make look deliberate.
