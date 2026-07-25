@@ -103,3 +103,19 @@ def test_origin_override_is_offered_only_for_saved_segments():
     # only, not the full "initial && initial.id != null" expression — an
     # equivalent `initial?.id != null` rewrite shouldn't break this (M9).
     assert "id != null" in SEGMENTS_JS_SOURCE
+
+
+# --- shared entity picker (spec 2026-07-25-shared-entity-picker) -----------
+
+def test_clause_params_render_through_the_shared_picker():
+    assert "GroupedPicker" in SEGMENTS_JS_SOURCE
+    assert "levelOptions" in SEGMENTS_JS_SOURCE
+    # the file-local first draft is gone, not merely unused
+    assert "groupedDropdown" not in SEGMENTS_JS_SOURCE
+
+
+def test_the_topology_filter_stays_at_this_call_site():
+    # Domain rules never move into the picker: allowedIds is computed here and
+    # handed over as `allow`.
+    assert "allowedIds" in SEGMENTS_JS_SOURCE
+    assert "allow=${" in SEGMENTS_JS_SOURCE

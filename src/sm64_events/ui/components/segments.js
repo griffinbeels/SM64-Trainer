@@ -13,6 +13,9 @@ import { PageState } from "./states.js";
 import { buildTree } from "../group.js";
 import { usePaneCap } from "../viewport.js";
 import { GroupedList, useOpenGroups } from "./grouplist.js";
+import { GroupedPicker } from "./picker.js";
+import { courseOptions, levelOptions, parseStarId, starId,
+         starOptionsFromVocab } from "../entities.js";
 
 const html = htm.bind(h);
 
@@ -72,66 +75,56 @@ export function ParamInput({ schema, name, value, vocab, clause, onChange }) {
     <option value="">${schema.required ? pickLabel : anyLabel}</option>
     ${entries.map(([id, n]) => html`<option value=${id}>${n}</option>`)}
   </select>`;
-  // Same shape, but split into the castle regions the library groups by (user
-  // request 2026-07-25 — a level picker should read like the library reads,
-  // and stay categorised even when the topology filter leaves two options).
-  // `groups` comes from vocab (level_groups / course_groups): the taxonomy has
-  // ONE home, server-side. A group with nothing left after filtering is
-  // dropped, so an empty heading never appears.
-  const groupedDropdown = (groups, idsOf, names, anyLabel, pickLabel) => {
-    const shown = groups
-      .map((group) => [group, idsOf(group).filter((id) => names[String(id)] !== undefined
-        && permitted([id]))])
-      .filter(([, ids]) => ids.length > 0);
-    return html`<select value=${value ?? ""}
-        onchange=${(e) => onChange(numOrNull(e.target.value))}>
-      <option value="">${schema.required ? pickLabel : anyLabel}</option>
-      ${shown.map(([group, ids]) => html`<optgroup key=${group.label}
-          label=${group.label}>
-        ${ids.map((id) => html`<option value=${id}>${names[String(id)]}</option>`)}
-      </optgroup>`)}
-    </select>`;
-  };
   // world-topology filter (see allowedIds above); the CURRENT value always
-  // stays listed so an out-of-topology stored def renders and saves intact
+  // stays listed so an out-of-topology stored def renders and saves intact.
+  // This filter is THIS call site's rule — it is computed here and handed to
+  // the picker as `allow`; GroupedPicker never learns about world edges.
   const allowed = allowedIds(schema, clause, vocab.connections);
   const permitted = ([id]) => !allowed || allowed.has(Number(id))
     || Number(id) === value;
+  const permittedId = (id) => permitted([id]);
   if (schema.kind === "level") {
     // schema.enum restricts the choices (area_enter offers only the castle
-    // hubs); absent enum = the full level list.
-    const inEnum = (id) => !schema.enum || schema.enum.includes(Number(id));
-    if (vocab.level_groups) {
-      const groups = vocab.level_groups.map((group) => ({
-        ...group, levels: group.levels.filter(inEnum) }));
-      return groupedDropdown(groups, (group) => group.levels, vocab.levels,
-                             "(any level)", "— pick level —");
-    }
-    return dropdown(Object.entries(vocab.levels)   // pre-groups vocab fallback
-      .filter(([id]) => inEnum(id) && permitted([id])),
-      "(any level)", "— pick level —");
+    // hubs); absent enum = every level. Split into the castle regions the
+    // library groups by (user request 2026-07-25 — a level picker should
+    // read like the library reads, and stay categorised even when the
+    // topology filter leaves two options).
+    const groups = levelOptions(vocab).map((group) => ({
+      ...group,
+      options: group.options.filter((option) =>
+        !schema.enum || schema.enum.includes(Number(option.id))),
+    })).filter((group) => group.options.length > 0);
+    return html`<${GroupedPicker} groups=${groups} allow=${permittedId}
+      value=${value == null ? null : String(value)}
+      placeholder=${schema.required ? "— pick level —" : "(any level)"}
+      onChange=${(id) => onChange(id == null ? null : Number(id))} />`;
   }
   if (schema.kind === "subarea")
     // Castle interior areas (lobby/upstairs/basement). Always optional — the
     // empty option is the explicit "Any" (matches any interior area). Shown
     // only when the companion level is Castle Inside (ClauseRow only_when).
+    // A 3-item list has nothing to group, so this stays a plain dropdown.
     return dropdown(Object.entries(vocab.castle_areas).filter(permitted),
                     "Any", "— pick subarea —");
   if (schema.kind === "course")
     // Grouped the same way, so a course picker and a level picker read alike.
-    return vocab.course_groups
-      ? groupedDropdown(vocab.course_groups, (group) => group.courses,
-                        vocab.courses, "(any course)", "— pick course —")
-      : dropdown(Object.entries(vocab.courses), "(any course)", "— pick course —");
+    return html`<${GroupedPicker} groups=${courseOptions(vocab)}
+      value=${value == null ? null : String(value)}
+      placeholder=${schema.required ? "— pick course —" : "(any course)"}
+      onChange=${(id) => onChange(id == null ? null : Number(id))} />`;
   if (schema.kind === "star") {
-    // dependent on the sibling course param: no course (or "any course")
-    // implies any star, so the selector is disabled until a course is picked
-    const names = vocab.stars[String(clause.course)] || [];
-    return html`<select value=${value ?? ""} disabled=${clause.course == null}
-        onchange=${(e) => onChange(numOrNull(e.target.value))}>
-      <option value="">${schema.required ? "— pick star —" : "(any star)"}</option>
-      ${names.map((n, i) => html`<option value=${i}>${n}</option>`)}
-    </select>`;
+    // Dependent on the sibling course param: with no course picked, any star
+    // matches, so the control is disabled rather than lying about a choice.
+    // The shared star groups carry composite ids, so this branch narrows them
+    // to the picked course and unpacks the star index on the way out — this
+    // control edits ONE param, so it must not set the course too.
+    const groups = starOptionsFromVocab(vocab)
+      .filter((group) => group.key === `course-${clause.course}`);
+    return html`<${GroupedPicker} groups=${groups}
+      disabled=${clause.course == null}
+      value=${value == null ? null : starId(clause.course, value)}
+      placeholder=${schema.required ? "— pick star —" : "(any star)"}
+      onChange=${(id) => onChange(id == null ? null : parseStarId(id).star)} />`;
   }
   if (schema.kind === "seconds") {
     // Stored as FRAMES (30 fps int — the project's primary clock); edited as
