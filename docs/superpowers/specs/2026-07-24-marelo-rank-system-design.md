@@ -202,6 +202,17 @@ Given a ladder and a displayed time `t` (centiseconds, via
 - **slower than the easiest defined tier** (the Iron zone): asymptotic decay
   `score = anchor_last × cutoff_last / t` — trends toward 0, never reaches it
   (matching xcams' property that last place is not a zero);
+
+  **Confirmed by the user 2026-07-25**, and `classify.band()` was brought onto
+  the SAME curve rather than left on the linear 3×-Bronze span it had briefly
+  acquired: the banner bar's Iron fill is now `easiest_cutoff / time`, which is
+  this tail normalised to 0..1. One shape, two surfaces, so the bar and the
+  score can never tell one run two different stories.
+
+  The rule behind it: **a flat 0% means "never attempted", never "slow"**.
+  However far off the pace a run is, improving it moves the number — growing
+  confidence approaching Bronze rather than a failure reading. Any future
+  change to the tail must be made in both places or in neither.
 - **no valid time:** score **0**. This is the coverage penalty and is distinct
   from *absent*.
 

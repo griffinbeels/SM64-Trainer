@@ -1,5 +1,5 @@
 from sm64_events.ranks.classify import (
-    RANK_NAMES, RANK_SCORE, IRON_SPAN_MULT, display_cs, rank_for, next_tier,
+    RANK_NAMES, RANK_SCORE, display_cs, rank_for, next_tier,
     band, resolve_cutoff_videos)
 
 NUTS = {"Mario": 1293, "Grandmaster": 1303, "Master": 1316, "Diamond": 1336,
@@ -34,15 +34,16 @@ def test_band_top_tier_has_no_bar():
     b = band(NUTS, 1290)
     assert b["rank"] == "Mario" and b["next"] is None and b["fill"] is None
 
-def test_band_iron_scales_from_notional_start():
-    # Iron owns no cutoff, so its bar starts at IRON_SPAN_MULT x the easiest
-    # defined tier: a time barely slower than that tier reads nearly full.
+def test_band_iron_fills_asymptotically_toward_the_easiest_tier():
+    # Iron owns no cutoff, so its bar has no start to measure from. It uses the
+    # SAME asymptotic shape as the MARELO score (ranks/scoring.score_for's Iron
+    # tail): fill = easiest_cutoff / your_time, which is 1.0 AT the cutoff and
+    # decays without ever reaching 0.
     b = band(NUTS, 1700)                        # 0.24s slower than Silver 1676
     assert b["rank"] == "Iron" and b["next"] == "Silver"
     assert b["gap_cs"] == 1700 - 1676
-    start = IRON_SPAN_MULT * 1676
-    assert abs(b["fill"] - (start - 1700) / (start - 1676)) < 1e-9
-    assert b["fill"] > 0.99
+    assert abs(b["fill"] - 1676 / 1700) < 1e-9
+    assert b["fill"] > 0.98
 
 def test_band_iron_live_report_reads_near_full():
     # user report 2026-07-25: a 7"53 PB against a 7.43s Bronze showed a flat 0%
@@ -50,12 +51,20 @@ def test_band_iron_live_report_reads_near_full():
     assert b["rank"] == "Iron" and b["next"] == "Bronze"
     assert round(b["fill"] * 100) == 99
 
-def test_band_iron_slower_than_notional_start_is_zero():
-    b = band(NUTS, IRON_SPAN_MULT * 1676 + 1)   # genuinely that slow
-    assert b["rank"] == "Iron" and b["fill"] == 0.0
+def test_band_iron_never_reaches_zero_however_slow():
+    # user decision 2026-07-25: a true 0% means "never attempted", never "bad".
+    # However slow the run, the bar keeps a sliver so improvement always shows.
+    slow = band(NUTS, 10 * 1676)["fill"]
+    slower = band(NUTS, 1000 * 1676)["fill"]
+    assert 0.0 < slower < slow < 0.11
+    assert band(NUTS, 10 ** 9)["fill"] > 0.0
+
+def test_band_iron_is_monotone_in_time():
+    fills = [band(NUTS, cs)["fill"] for cs in (1700, 2000, 3000, 6000)]
+    assert fills == sorted(fills, reverse=True)
 
 def test_band_iron_degenerate_ladder_is_zero():
-    # a zero cutoff leaves the notional start no span -> no progress to show
+    # a zero cutoff can only be reached by a zero time -> nothing to show
     assert band({"Bronze": 0}, 500)["fill"] == 0.0
 
 def test_band_empty_ladder():

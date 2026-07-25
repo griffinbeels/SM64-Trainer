@@ -8,14 +8,6 @@ RANK_NAMES = ["Mario", "Grandmaster", "Master", "Diamond", "Platinum",
               "Gold", "Silver", "Bronze", "Iron"]
 RANK_SCORE = {n: len(RANK_NAMES) - i for i, n in enumerate(RANK_NAMES)}
 
-# Iron owns no threshold, so its progress bar has no start to measure from.
-# `band` gives it a NOTIONAL one at this multiple of the easiest defined tier
-# (user spec 2026-07-25: "the threshold for Iron should be 3x the Bronze
-# time"). Purely a bar scale — it never moves a rank boundary, and slower than
-# the notional start is a genuine 0%.
-IRON_SPAN_MULT = 3
-
-
 def display_cs(frames: int) -> int:
     """Total centiseconds AS format_igt displays them (30 fps quantized)."""
     return (frames // 30) * 100 + (frames % 30) * 100 // 30
@@ -74,10 +66,19 @@ def band(ladder_cs: dict, time_cs: int) -> dict:
     """Banner data: current rank, next tier, remaining gap (cs), bar fill
     (0..1). fill/next are None at the top tier.
 
-    Every tier but Iron measures its bar from its OWN threshold; Iron, the
-    unbounded floor, borrows the notional IRON_SPAN_MULT start instead. Before
-    that it reported a flat 0% for every Iron time, so a PB 0.10s off Bronze
-    looked exactly as far away as one ten times slower (live report 2026-07-25)."""
+    Every tier but Iron measures its bar between its OWN threshold and the next
+    one. Iron is the unbounded floor with no threshold to start from, so it
+    fills ASYMPTOTICALLY toward the easiest defined tier — `easiest / your_time`,
+    which is 1.0 at that cutoff and decays without ever reaching 0.
+
+    That shape is deliberate and shared: it is the same curve
+    `ranks/scoring.score_for` uses for its Iron tail, so the banner bar and the
+    MARELO score never tell a player two different stories about the same run.
+    A flat 0% is reserved for "never attempted" (user decision 2026-07-25) —
+    never for "slow", so however far off the pace a run is, improving it always
+    moves the bar. Iron previously reported 0% for every Iron time, which made
+    a PB 0.10s off Bronze look exactly as far away as one ten times slower
+    (live report 2026-07-25)."""
     rank = rank_for(ladder_cs, time_cs)
     if rank is None:
         return {"rank": None, "next": None, "gap_cs": None, "fill": None}
@@ -85,12 +86,11 @@ def band(ladder_cs: dict, time_cs: int) -> dict:
     if nxt is None:                          # top tier -> no bar
         return {"rank": rank, "next": None, "gap_cs": None, "fill": None}
     gap = time_cs - ladder_cs[nxt]
-    start = IRON_SPAN_MULT * ladder_cs[nxt] if rank == "Iron" else ladder_cs[rank]
-    span = start - ladder_cs[nxt]
-    if span <= 0:                            # degenerate ladder (equal cutoffs,
-        fill = 0.0 if rank == "Iron" else 1.0   # or a 0s tier -> no Iron span)
+    if rank == "Iron":
+        fill = ladder_cs[nxt] / time_cs if time_cs > 0 else 0.0
     else:
-        fill = (start - time_cs) / span
+        span = ladder_cs[rank] - ladder_cs[nxt]
+        fill = (ladder_cs[rank] - time_cs) / span if span > 0 else 1.0
     return {"rank": rank, "next": nxt, "gap_cs": gap,
             "fill": max(0.0, min(1.0, fill))}
 
