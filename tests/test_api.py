@@ -1038,6 +1038,35 @@ def test_icon_upload_roundtrip_and_validation(tmp_path, monkeypatch):
                            content=b"\x89" * (2_000_001)).status_code == 413
 
 
+def test_course_icons_endpoint_maps_stems_to_real_filenames(tmp_path):
+    # The extensions are mixed (.webp and .png), so the client must never
+    # guess: it asks for the directory listing, exactly as /api/icons does for
+    # star_icons. Dropping new art in the folder then needs no code change.
+    client, service, db = make_client(tmp_path)
+    with client:
+        courses = client.get("/api/icons/courses").json()["courses"]
+        assert courses["bob"].startswith("bob.")
+        assert courses["rr"].startswith("rr.")
+        # every value is a real file in the bundled directory
+        from pathlib import Path
+        import sm64_events
+        asset_dir = (Path(sm64_events.__file__).parent / "ui" / "assets"
+                     / "course_icons")
+        for stem, filename in courses.items():
+            assert (asset_dir / filename).exists(), stem
+
+
+def test_course_icons_omit_the_four_courses_the_game_has_no_painting_for(tmp_path):
+    # HMC, SSL, DDD and SL are not entered through a painting, so no portrait
+    # exists. The picker falls back to star-1 art for them; this asserts we
+    # aren't silently shipping a wrong file under those names.
+    client, service, db = make_client(tmp_path)
+    with client:
+        courses = client.get("/api/icons/courses").json()["courses"]
+        for stem in ("hmc", "ssl", "ddd", "sl"):
+            assert stem not in courses, stem
+
+
 def test_segment_targets_include_locationless_defs(tmp_path):
     """Armed visibility (spec addendum): every definition must be reachable
     by the banner's armed-segment union, so segment_targets includes defs

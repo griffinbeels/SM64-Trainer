@@ -939,6 +939,11 @@ def vocab() -> dict:
         # derived in JS: the taxonomy has one home.
         "level_groups": level_groups(),
         "course_groups": course_groups(),
+        # Level -> course, so the UI's icon chain can find a level's art
+        # without duplicating COURSE_BY_LEVEL in JS. String keys: JSON object
+        # keys are strings, and the client indexes with String(level).
+        "course_by_level": {str(level): course
+                            for level, course in COURSE_BY_LEVEL.items()},
     }
 
 
