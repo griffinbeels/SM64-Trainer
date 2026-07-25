@@ -80,3 +80,18 @@ def test_search_opens_matching_groups():
     # Everything starts collapsed; a search that dropped its hits into shut
     # boxes would look broken.
     assert "forceOpen" in SEGMENTS_JS_SOURCE
+
+
+# --- editor origin override (spec 2026-07-24-segment-origin-categories) ----
+
+def test_editor_offers_an_origin_override_with_the_detected_value_visible():
+    assert "/origin" in SEGMENTS_JS_SOURCE
+    # "Auto" must NAME what was detected, or a wrong classification is
+    # invisible to the person who has to fix it.
+    assert "Auto (" in SEGMENTS_JS_SOURCE
+
+
+def test_origin_override_is_offered_only_for_saved_segments():
+    # The override is keyed by id, so an unsaved segment has nowhere to hang
+    # one — same rule the icon override follows.
+    assert "initial && initial.id != null" in SEGMENTS_JS_SOURCE

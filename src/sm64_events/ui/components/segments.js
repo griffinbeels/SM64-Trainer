@@ -214,6 +214,13 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t }) {
     ? ((((t || {}).view || {}).icon_overrides || {})[`segment:${initial.id}`]
        || null)
     : null;
+  // Origin override (existing segments only — keyed by id, like the icon).
+  // The library files a segment by where its rules say it starts; when that
+  // reads wrong, this pins it. "Auto" always NAMES the detected place, so a
+  // misclassification is visible to the person who has to fix it.
+  const detected = (initial && initial.origin) || null;
+  const [origin, setOrigin] = useState(
+    detected && detected.source === "override" ? detected.key : "");
   const [err, setErr] = useState(null);
   const edit = (k, i, clause) => setD({ ...d,
     [k]: d[k].map((c, j) => (j === i ? clause : c)) });
@@ -241,6 +248,15 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t }) {
       onSaved();
       return true;
     } catch (e) { setErr(String(e)); return false; }
+  }
+
+  async function saveOrigin(nextKey) {
+    setOrigin(nextKey);
+    try {
+      await send("POST", `/api/segments/${initial.id}/origin`,
+                 { origin: nextKey || null });
+      t.refresh();
+    } catch (e) { setErr(String(e)); }
   }
 
   // Expose a save handle + live dirty flag so the parent can offer "save your
@@ -292,6 +308,18 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t }) {
       <span class="meta">${iconOverride || "default"} · shown on the course
         quick-select</span>
     </div>`}
+    ${initial && initial.id != null && html`<label class="builder-origin">
+      <span class="field-label">Library category</span>
+      <select value=${origin} onchange=${(e) => saveOrigin(e.target.value)}>
+        <option value="">Auto (${detected ? detected.label : "Anywhere"})</option>
+        ${(vocab.origins || []).filter((region) => region.key !== null)
+          .map((region) => html`<optgroup key=${region.key} label=${region.label}>
+            ${region.children.map((place) => html`<option key=${place.key}
+              value=${place.key}>${place.label}</option>`)}
+          </optgroup>`)}
+      </select>
+      <span class="meta">where the library files this segment</span>
+    </label>`}
     ${pickingIcon && html`<${IconPicker}
         identity=${{ kind: "segment", segment_id: initial.id }}
         current=${iconOverride}
