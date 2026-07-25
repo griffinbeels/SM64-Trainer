@@ -196,3 +196,45 @@ def test_every_kind_returns_art_never_null():
         src = run_node("optionIcon", CONTEXT
                        + f'console.log(JSON.stringify({call}));')
         assert src.startswith("/ui/assets/"), (call, src)
+
+# --- visibleGroups -------------------------------------------------------
+# Moved here from tests/test_ui_picker.py when components/picker.js was
+# deleted (the icon modal replaced it). The function never lived in that
+# component — it is in entities.js precisely because this module imports
+# nothing and can therefore be executed by node — so the tests follow the
+# code rather than the control that used to render it.
+GROUPS = """
+const groups = [
+  { key: "a", label: "Lobby", options: [{ id: "9", name: "BoB" }, { id: "24", name: "WF" }] },
+  { key: "b", label: "Basement", options: [{ id: "8", name: "SSL" }] },
+];
+"""
+
+
+def test_without_a_filter_every_group_survives():
+    tree = run_node("visibleGroups", GROUPS + 'console.log(JSON.stringify(visibleGroups(groups, null, null)));')
+    assert [group["label"] for group in tree] == ["Lobby", "Basement"]
+    assert [option["id"] for option in tree[0]["options"]] == ["9", "24"]
+
+
+def test_a_group_emptied_by_the_filter_is_dropped():
+    tree = run_node("visibleGroups", GROUPS + 'console.log(JSON.stringify('
+                    'visibleGroups(groups, (id) => id === "9", null)));')
+    assert [group["label"] for group in tree] == ["Lobby"]
+    assert [option["id"] for option in tree[0]["options"]] == ["9"]
+
+
+def test_the_current_value_survives_a_filter_that_rejects_it():
+    # A stored/legacy value fed to a filtered dropdown must never vanish — it
+    # renders BLANK and reads as unset. Fixed twice before; pinned here.
+    tree = run_node("visibleGroups", GROUPS + 'console.log(JSON.stringify('
+                    'visibleGroups(groups, (id) => id === "9", "8")));')
+    assert [group["label"] for group in tree] == ["Lobby", "Basement"]
+    assert [option["id"] for option in tree[1]["options"]] == ["8"]
+
+
+def test_filtering_does_not_mutate_the_caller_s_groups():
+    tree = run_node("visibleGroups", GROUPS
+                    + 'visibleGroups(groups, () => false, null);\n'
+                    + 'console.log(JSON.stringify(groups.map((g) => g.options.length)));')
+    assert tree == [2, 1]

@@ -1,10 +1,10 @@
-// Turns the server's payloads into the group shape components/picker.js
+// Turns the server's payloads into the group shape components/entitymodal.js
 // renders. Pure and DOM-free — the same reason ui/group.js sits outside
 // components/, and what lets these be unit-tested through node.
 //
 // NO FILTERING happens here. Which options a given control may offer is the
 // CALL SITE's business (world topology in the segment builder, route scoping
-// in the route editor) and is passed to GroupedPicker as `allow`.
+// in the route editor) and is passed to EntityPicker as `allow`.
 //
 // The taxonomy itself is never re-derived here: level_groups, course_groups
 // and each segment's `origin` all come from the server, which has one home for
@@ -117,7 +117,7 @@ export function segmentOptions(defs, taxonomy) {
 // filtered dropdown otherwise renders blank and reads as unset — fixed twice
 // before, separately, in stratpicker.js and the segment builder).
 //
-// It lives HERE rather than in components/picker.js because this module
+// It lives HERE rather than in the picker component because this module
 // imports nothing: node can load it directly, so the invariant above is
 // unit-testable. picker.js imports preact through the browser importmap, which
 // node cannot resolve.
