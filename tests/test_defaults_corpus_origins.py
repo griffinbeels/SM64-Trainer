@@ -1,7 +1,10 @@
 """Every seeded segment must land in a real castle region — otherwise it hides
 in "Anywhere" where nobody browsing the library will find it.
 
-The four exceptions are the star-grab starts documented in the design spec.
+No seeded segment is unplaced today (EXPECTED_UNPLACED is empty) — every
+course-0 (castle secret) star start the corpus carries resolves via the MIPS
+catches table. A future course-0 Toad-star start, which has no table row,
+would land here first rather than in the UI.
 A NEW corpus row that resolves nowhere fails here rather than in the UI.
 """
 import json
@@ -14,8 +17,6 @@ SEED = json.loads((Path(__file__).resolve().parent.parent / "src"
                    / "sm64_events" / "data" / "defaults.seed.json")
                   .read_text(encoding="utf-8"))
 
-# Course-0 (castle secret) star starts we cannot place: only the MIPS catches
-# are known, and the Toad stars deliberately have no table row.
 EXPECTED_UNPLACED: set[str] = set()
 
 

@@ -507,7 +507,8 @@ def start_level_set(start_triggers: list,
 #
 # NB this is NOT arm_level's mapping: a level_exit ARMS at its destination but
 # ORIGINATES at its source. "SSL -> LLL" is filed under SSL because that is
-# what the rule keys on (and all 51 seeded exits omit `to` entirely).
+# what the rule keys on (50 of the 51 seeded exits omit `to`; the one that
+# carries it, MIPS Clip, is still filed by its source, which is the point).
 _ORIGIN_PARAMS: dict[str, tuple[str, str | None]] = {
     "level_exit": ("from", "from_subarea"),
     "level_enter": ("to", "to_subarea"),
@@ -610,7 +611,11 @@ def _place_sort_key(node: str, region: str) -> tuple:
         return (1, level)
     course = COURSE_BY_LEVEL.get(level)
     if course is None:
-        return (4, level)          # a castle node that is not this region
+        # Defensive default, not a real case today: every node without a
+        # COURSE_BY_LEVEL entry is either a Bowser stage (caught above) or
+        # the region itself (caught by node == region), so this class is
+        # currently unreachable (review M14).
+        return (4, level)
     return (2, course) if course >= 19 else (3, course)
 
 

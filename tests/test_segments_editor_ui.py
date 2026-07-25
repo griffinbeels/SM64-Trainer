@@ -71,27 +71,35 @@ def test_library_groups_come_from_the_server_stamp_not_a_js_copy():
     # addresses.WORLD_EDGES_* by name, which is what makes it greppable), and
     # an assertion that cannot tell code from a comment gets "fixed" by
     # rewording the comment — which is exactly what happened once.
-    assert "origin.region" in SEGMENTS_JS_SOURCE or "origin || {}" in SEGMENTS_JS_SOURCE
+    # "origin.region" is dead here (that literal never appears — "origin ??
+    # {}" is what passes, review M9); only assert the half that's real.
+    assert "originOf(segment).region ?? null" in SEGMENTS_JS_SOURCE
     for derivation in ("world_regions", "CASTLE_REGION", "region_for_node"):
         assert derivation not in SEGMENTS_JS_SOURCE, derivation
 
 
 def test_search_opens_matching_groups():
     # Everything starts collapsed; a search that dropped its hits into shut
-    # boxes would look broken.
-    assert "forceOpen" in SEGMENTS_JS_SOURCE
+    # boxes would look broken. Assert the actual predicate, not just the
+    # word "forceOpen" — a comment mentioning it would satisfy a bare
+    # substring check (review M9).
+    assert "forceOpen=${() => needle.length > 0}" in SEGMENTS_JS_SOURCE
 
 
 # --- editor origin override (spec 2026-07-24-segment-origin-categories) ----
 
 def test_editor_offers_an_origin_override_with_the_detected_value_visible():
-    assert "/origin" in SEGMENTS_JS_SOURCE
+    # Both substrings are prose-satisfiable alone (review M9) — pin the real
+    # call site and the real option label together.
+    assert "`/api/segments/${initial.id}/origin`" in SEGMENTS_JS_SOURCE
     # "Auto" must NAME what was detected, or a wrong classification is
     # invisible to the person who has to fix it.
-    assert "Auto (" in SEGMENTS_JS_SOURCE
+    assert 'Auto (${detected ? detected.label : "Anywhere"})' in SEGMENTS_JS_SOURCE
 
 
 def test_origin_override_is_offered_only_for_saved_segments():
     # The override is keyed by id, so an unsaved segment has nowhere to hang
-    # one — same rule the icon override follows.
-    assert "initial && initial.id != null" in SEGMENTS_JS_SOURCE
+    # one — same rule the icon override follows. Pin the "id != null" core
+    # only, not the full "initial && initial.id != null" expression — an
+    # equivalent `initial?.id != null` rewrite shouldn't break this (M9).
+    assert "id != null" in SEGMENTS_JS_SOURCE

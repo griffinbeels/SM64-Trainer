@@ -584,6 +584,7 @@ def test_origin_override_does_not_dirty_a_seeded_row(tmp_path):
         after = next(row for row in client.get("/api/segments").json()
                      if row["id"] == target["id"])
         assert not after["seed_dirty"]
+        assert after["seed_key"]   # else this passes vacuously (review M7)
 
 
 def test_origin_override_rejects_a_node_outside_the_taxonomy(tmp_path):

@@ -50,11 +50,6 @@ const subCategoryNames = (routes, top) =>
   [...new Set(routes.filter((r) => categoryOf(r) === top)
     .map(subCategoryOf).filter(Boolean))].sort();
 
-// Numeric-aware so "0 Star" < "1 Star" < "16 Star" < "70 Star" < "120 Star"
-// rather than the lexicographic 0, 1, 120, 16, 70.
-const byName = (a, b) =>
-  a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
-
 function rankTop(name) {
   const lead = LEAD_CATEGORIES.indexOf(name);
   if (lead !== -1) return [0, lead];
@@ -64,7 +59,8 @@ function rankTop(name) {
 // Grouping POLICY for the route library; the engine is group.js buildTree.
 // Two levels off the free-text category PATH ("Main Categories/16 Star"):
 // seeded groups lead, user groups follow, Uncategorized last, names compared
-// numeric-aware so star counts read 0, 1, 16, 70, 120.
+// numeric-aware (buildTree's compareKeys) so "0 Star" < "1 Star" < "16 Star"
+// < "70 Star" < "120 Star" rather than the lexicographic 0, 1, 120, 16, 70.
 const CATEGORY_LEVELS = [
   { of: categoryOf, label: (name) => name,
     order: (name) => [...rankTop(name), name] },

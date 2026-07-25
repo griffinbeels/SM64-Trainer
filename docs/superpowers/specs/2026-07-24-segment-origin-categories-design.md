@@ -68,7 +68,7 @@ rules carry no location.
 
 | Start clause | Origin node | Why |
 |---|---|---|
-| `level_exit` | `from` + `from_subarea` | The place you are leaving. All 51 seeded exits omit `to` entirely, so the source is the only signal there is — and it is the one runners name ("coming out of SSL"). |
+| `level_exit` | `from` + `from_subarea` | The place you are leaving. 50 of the 51 seeded exits omit `to` entirely, so the source is the only signal there usually is — and it is the one runners name ("coming out of SSL"). The one that does carry `to` (MIPS Clip) is still filed by its source, which is the point. |
 | `level_enter` | `to` + `to_subarea` | Where the arm lands. |
 | `area_enter`, `attempt_anchor` | `level` + `area` | Already a position. |
 | `spawned`, `warp_entered`, `key_grabbed` | `level` | Level-only; `key_grabbed`'s level is optional → may be `None`. |

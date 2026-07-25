@@ -1006,10 +1006,11 @@
   .route-list-item.on { border-color: #6287aa; background: rgba(61,101,143,.25); }
   .route-list-item.on > .ui-icon { color: #9cc9f2; }
   /* Collapsible library groups (2026-07-24, generalized from the route
-     library): ONE class per level, indent driven by --depth, so a third level
-     costs nothing. Rows keep their own .4rem gap; the group supplies a
-     slightly larger gap above each header so sections read as sections
-     without a divider line. */
+     library): ONE class per level, indent expressed by the nesting itself
+     (a node's children render through the same component one level deeper —
+     see grouplist.js), so a third level costs nothing new here either. Rows
+     keep their own .4rem gap; the group supplies a slightly larger gap above
+     each header so sections read as sections without a divider line. */
   .lib-cat {
     min-width: 0; display: grid; align-content: start; gap: .4rem;
     grid-template-columns: minmax(0,1fr);
@@ -1031,11 +1032,18 @@
   }
   .lib-cat-header > .ui-icon { transition: transform .12s ease; }
   .lib-cat-header.shut > .ui-icon { transform: rotate(-90deg); }
-  /* Nested levels hang off a guide line, so a row reads as belonging to the
-     group above it. */
-  .lib-cat .lib-group {
+  .lib-group {
     min-width: 0; display: grid; grid-template-columns: minmax(0,1fr);
     align-content: start; gap: .4rem;
+  }
+  /* Depth-0 rows sit directly under their header with no guide line — the
+     pre-migration top-level route row look. Only NESTED groups hang off a
+     line, which is what makes a sub-group read as belonging to the group
+     above it (review M1: the migration gave depth-0 rows a line they never
+     had). Depth is expressed by the nesting itself: any number of levels
+     works with no new rule, just a more specific selector here. */
+  .lib-cat > .lib-group { margin-left: 0; padding-left: 0; border-left: none; }
+  .lib-cat .lib-cat > .lib-group {
     margin-left: .5rem; padding-left: .45rem;
     border-left: 1px solid var(--border-soft);
   }
@@ -1049,8 +1057,8 @@
      broke the indent and gave the library a horizontal scrollbar (live report
      2026-07-24). A vertical list never scrolls sideways: names ellipsise. */
   .lib-cat .route-list-item, .lib-cat .segrow { width: auto; }
-  .lib-group > .route-list-item, .lib-group > .segrow { margin-left: .5rem; }
-  .lib-cat > .route-list-item, .lib-cat > .segrow { margin-left: .6rem; }
+  .lib-cat > .lib-group > .route-list-item,
+  .lib-cat > .lib-group > .segrow { margin-left: .6rem; }
   /* Two columns, not three: the library column is 240-300px, and three
      icon+label buttons overflowed the card (live report 2026-07-24 — "Delete"
      hung past the edge). The third wraps to its own row. min-width:0 on the

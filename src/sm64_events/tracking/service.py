@@ -874,7 +874,14 @@ class TrackerService:
         else:
             overrides[str(segment_id)] = origin
         self.db.set_state("origin_overrides", overrides)
-        await self._segments_changed()
+        # Mirror set_icon exactly (review I3): _segments_changed() reloads
+        # defs AND re-projects the whole journal, rebuilding every attempt
+        # and run — wasted work for a pure display facet the projector never
+        # reads, and it contradicted this docstring's own "broadcast-only"
+        # claim.
+        await self.broadcaster.publish(Event(
+            type="origins_changed", frame=0, timestamp_utc=_now(),
+            payload={"segment_id": segment_id, "origin": origin}))
 
     async def set_rank_mode(self, mode: str) -> None:
         """Persist the global rank-grading mode (average rank mode spec) to

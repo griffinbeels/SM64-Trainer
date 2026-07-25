@@ -19,9 +19,14 @@ def test_renderer_recurses_so_depth_is_not_capped_at_two():
     assert "depth=${depth + 1}" in GROUPLIST
 
 
-def test_css_indents_by_depth_variable_and_never_scrolls_sideways():
-    assert "--depth" in INDEX
-    assert ".lib-cat" in INDEX
+def test_css_indents_by_nesting_and_never_scrolls_sideways():
+    # There is no --depth custom property (review I4: it was dead — nothing
+    # read it). Indent comes from the DOM nesting itself: a depth-0 group has
+    # no guide line, a NESTED one does, via a more specific selector.
+    assert "--depth" not in INDEX
+    assert ".lib-cat > .lib-group { margin-left: 0; padding-left: 0; border-left: none; }" in INDEX
+    assert ".lib-cat .lib-cat > .lib-group" in INDEX
+    assert "border-left: 1px solid var(--border-soft);" in INDEX
     # the row-stretch rule that stopped the horizontal scrollbar
     assert "width: auto" in INDEX
 
