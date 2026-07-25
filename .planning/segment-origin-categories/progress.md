@@ -17,8 +17,11 @@ marked complete is DONE — do not re-dispatch it.
 | 3 | T7 corpus origin coverage test (needs T3) | **complete** | `821b810`, all 65 seeded segments resolve |
 | 4 | T8 segment library grouping (needs T4, T5) | **complete** | `c5c7c09` + controller fix `1ab2b66`, render-verified |
 | 5 | T9 editor origin override (needs T8) | **complete** | `98e1d6e`, render-verified against REAL API fixtures |
-| 6 | T10 docs (rule change maps) | dispatched | agent `t10-docs` |
-| — | Final whole-branch review (Opus 5) | pending | NON-OPTIONAL |
+| 6 | T10 docs (rule change maps) | **complete** | `ca61b79` |
+| — | Final whole-branch review (Opus 5) | **complete** | `98eebd0` — 0 Critical, 5 Important, 14 Minor; report kept in-branch |
+| — | Review fix wave | **complete** | `ac3926a` (I1/I2/M4/M8), `63ec718` (I3-I5, M1-M3, M5-M9, M12-M14), `2f7c208` (M10) |
+| — | **Human audit of the Segments tab** | **PENDING — blocks merge** | the taxonomy encodes route knowledge only a runner can sanity-check |
+| — | `wrap-feature` merge to main | pending | after the audit |
 
 ## Watch items (predicted breakage + the sanctioned remedy)
 
@@ -35,7 +38,7 @@ marked complete is DONE — do not re-dispatch it.
   no `ui/vendor/preact.js`; components import bare specifiers through
   index.html's importmap (`preact`, `preact/hooks`, `htm`). Plan corrected +
   added to Global Constraints so Tasks 6/8/9 cannot repeat it.
-- **Suite baseline is now 1508 passed** (1475 before wave 1); 16 commits on the branch.
+- **Suite is 1510 passed** (1475 before wave 1); 21 commits on the branch.
 - **The REST surface doc is `docs/api.md`, not the README** — the plan said
   README, which was wrong, and `tests/test_docs_cover_api.py` fails the suite
   for any undocumented `/api` route. T5 correctly wrote both entries itself
@@ -53,3 +56,26 @@ marked complete is DONE — do not re-dispatch it.
   the `.route-cat*` CSS while routes.js still emits those classes. T6 (same
   wave) is what closes it; do not ship the branch with T6 unlanded.
 - **`segments.js` is owned by T8, then T9** — never concurrently.
+
+## What the review caught that the per-task gates could not
+
+- **I1** — `start_origin` could return node `"6"`, which had a REGION but no
+  PLACE in the taxonomy, so a seeded segment rendered under a header labelled
+  `6`. Only visible once derivation, taxonomy and renderer were integrated.
+  Regression test added (`test_every_seeded_origin_has_a_place_in_the_taxonomy`)
+  — the old corpus test passed because `"6"` does have a region.
+- **I3** — `set_segment_origin` called `_segments_changed()`, which re-projects
+  the WHOLE journal, while its docstring and docs/api.md both said
+  "broadcast-only". The spec told it to do that; the spec was wrong about what
+  that method is. Now a real broadcast (`origins_changed`).
+- **I4 / M1** — `--depth` was dead CSS whose test a COMMENT satisfied, and the
+  routes migration had quietly given depth-0 rows a guide line they never had.
+
+## Standing lesson (third instance this branch)
+
+A test asserting a bare substring cannot tell code from prose, so it gets
+"satisfied" by editing prose: `1ab2b66` (comment reworded to dodge
+`"WORLD_EDGES"`), review I4 (`--depth` test passing on a comment), and the fix
+wave again (a CSS comment could not cite `.route-cat` because a test bans that
+literal anywhere in index.html). Assert the mechanism — a selector, a symbol,
+a predicate — never a word.
