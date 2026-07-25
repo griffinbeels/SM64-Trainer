@@ -124,6 +124,16 @@ def _build_marelo(service, scope_id: str) -> dict:
                                          keys, _rank_mode(service))
     out = scopes.aggregate(scored, groups)
     excluded = service.rank_excluded()
+    # aggregate() graded tier/division/gain against the FULL tier table --
+    # it only sees scores, not ladders. A ragged ladder (one missing a tier)
+    # still crosses that tier's score range, so a full-table lookup can name
+    # a tier the ladder does not define (scoring.py's invariant, line 8).
+    # Recompute per-entity against each entity's OWN ladder here, where the
+    # ladders are actually available; the scope-level tier/division above
+    # (out["tier"]/out["division"]) stays full-table on purpose -- a scope
+    # score has no single ladder of its own.
+    defined_by_key = {key: scoring.defined_tiers(ladder) for key, ladder in
+                      marelo_bridge.entity_ladders(service.ranks, keys).items()}
     for entity in out["entities"]:
         entity["label"] = entity_label(service.db, entity["key"])
         # Always False here: `groups` above was already built from the
@@ -131,11 +141,13 @@ def _build_marelo(service, scope_id: str) -> dict:
         # aggregate's numerator/denominator. The excluded rows themselves
         # are appended below, outside the scored block.
         entity["excluded"] = entity["key"] in excluded
+        defined = defined_by_key.get(entity["key"])
         if entity["score"] is None:
             entity["tier"] = entity["division"] = None
         else:
             entity["tier"], entity["division"] = scoring.division_for(
-                entity["score"])
+                entity["score"], defined)
+        entity["gain"] = scopes.gain_for(entity["score"], out["n"], defined)
     _append_excluded_rows(service, scope_id, groups, excluded, out)
     out["scope_id"] = scope_id
     out["label"] = _scope_label(service, scope_id)

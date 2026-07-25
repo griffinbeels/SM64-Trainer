@@ -136,17 +136,24 @@ def _division_progress(marelo: float) -> tuple[float, float]:
             max(0.0, min(1.0, (marelo - division_low) / width)))
 
 
-def gain_for(score: float | None, slot_count: int) -> float:
+def gain_for(score: float | None, slot_count: int,
+             defined: list[str] | None = None) -> float:
     """The MARELO that reaching this entity's next tier is worth. Unpracticed
     entities target Gold rather than Iron, so they read as the real quests they
     are; a top-tier entity targets 100 so it never drops off the list.
     `slot_count` is the scope's total slots -- how many ways this entity's
-    improvement gets diluted when averaged into the scope's MARELO."""
+    improvement gets diluted when averaged into the scope's MARELO.
+
+    `defined` narrows the target to the entity's OWN ladder, same as
+    `division_for` -- a ragged ladder's next tier must be one it actually
+    defines. Omitted only by `aggregate`'s own internal call, which grades a
+    SCOPE score with no single ladder behind it; callers with a real ladder
+    (server/ranks_api.py) pass it."""
     if slot_count <= 0:
         return 0.0
     if score is None:
         return _UNPRACTICED_TARGET / slot_count
-    return (scoring.next_tier_target(score) - score) / slot_count
+    return (scoring.next_tier_target(score, defined) - score) / slot_count
 
 
 def celebration_delta(tier: str, numeral: str,

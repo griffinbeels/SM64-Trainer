@@ -4,8 +4,13 @@
 Reuses test_ranks_api.py's make_client (a real seeded RankStandards store),
 so `entities` may be non-empty from the start -- the seeded star:9:2 ladder.
 """
+import asyncio
+from datetime import datetime, timezone
+
 import pytest
 
+from sm64_events.core.events import Event
+from sm64_events.ranks import classify, scoring
 from test_ranks_api import make_client
 
 
@@ -110,3 +115,39 @@ def test_history_of_an_unknown_scope_is_404(client):
 def test_ack_is_accepted(client):
     assert client.post("/api/marelo/ack",
                        json={"scope": "overall", "key": 3}).status_code == 200
+
+
+def _ev(type_, frame, payload=None):
+    return Event(type=type_, frame=frame,
+                 timestamp_utc=datetime(2026, 7, 25, tzinfo=timezone.utc),
+                 payload=payload or {})
+
+
+def test_entity_tier_matches_rank_for_on_a_ragged_ladder(tmp_path):
+    """THE invariant (scoring.py:8) for an entity whose ladder is missing
+    tiers. Confirmed repro: ladder {Mario 10.00, Gold 20.00, Silver 30.00},
+    time 10.50s -> score 92.5. A full-table lookup (the pre-fix bug) names
+    that Grandmaster III -- a tier this ladder does not define -- while
+    `classify.rank_for` (and `defined_tiers`-aware `division_for`) both say
+    Gold I. Same star, same time must not disagree between the score and the
+    medal beside it."""
+    client, svc = make_client(tmp_path)
+    with client:
+        asyncio.run(svc.publish(_ev("practice_reset", 1000, {"igt_frames_before": 0})))
+        asyncio.run(svc.publish(_ev("star_collected", 1315,
+                                    {"course_id": 8, "star_id": 2, "igt_frames": 315})))
+        client.put("/api/ranks/standards/star:8:2/Standard/Mario", json={"seconds": 10.0})
+        client.put("/api/ranks/standards/star:8:2/Standard/Gold", json={"seconds": 20.0})
+        client.put("/api/ranks/standards/star:8:2/Standard/Silver", json={"seconds": 30.0})
+        asyncio.run(svc.set_strat(8, 2, "Standard"))
+        # The attempt was journaled before the strategy existed; stamp it
+        # directly, the same way test_views_marelo.py does.
+        svc.db._conn.execute("UPDATE attempts SET strat_tag='Standard' WHERE course_id=8")
+        svc.db._conn.commit()
+
+        body = client.get("/api/marelo").json()
+        entity = next(e for e in body["entities"] if e["key"] == "star:8:2")
+        ladder = scoring.best_ladder(svc.ranks.ladders("star:8:2"))
+        assert entity["score"] == 92.5
+        assert entity["tier"] == classify.rank_for(ladder, 1050) == "Gold"
+        assert entity["division"] == "I"
