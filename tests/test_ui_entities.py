@@ -238,3 +238,31 @@ def test_filtering_does_not_mutate_the_caller_s_groups():
                     + 'visibleGroups(groups, () => false, null);\n'
                     + 'console.log(JSON.stringify(groups.map((g) => g.options.length)));')
     assert tree == [2, 1]
+
+
+def test_special_stages_use_their_own_art_not_a_plain_star():
+    # Courses 16-24 sit past the end of COURSE_ICON_PREFIXES, so before this
+    # map they fell through to the generic gold star — caught by a live render
+    # check (2026-07-25), not by a unit test, which is why this one exists.
+    for course, expected in ((16, "bitdw"), (18, "bits"), (20, "metal"),
+                             (22, "vanish"), (24, "aqua")):
+        src = run_node("optionIcon", CONTEXT
+                       + f'console.log(JSON.stringify(optionIcon("course", "{course}", context)));')
+        assert src == f"/ui/assets/star_icons/{expected}.png", course
+
+
+def test_a_special_stage_with_a_real_portrait_prefers_it():
+    # PSS is the one special stage the game DOES give a painting.
+    src = run_node("optionIcon", "const context = { courseIcons: "
+                   '{ princess_secret: "princess_secret.webp" } };\n'
+                   'console.log(JSON.stringify(optionIcon("course", "19", context)));')
+    assert src == "/ui/assets/course_icons/princess_secret.webp"
+
+
+def test_stars_inside_a_special_stage_wear_the_stage_art():
+    # A special stage has ONE icon, not seven, so `${prefix}${slot+1}` would
+    # request a vanish1.png that does not exist. Every star in it uses the
+    # stage's own art.
+    src = run_node("optionIcon", CONTEXT
+                   + 'console.log(JSON.stringify(optionIcon("star", "22:1", context)));')
+    assert src == "/ui/assets/star_icons/vanish.png"

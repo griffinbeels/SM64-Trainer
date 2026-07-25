@@ -163,6 +163,22 @@ export const LEVEL_ICONS = { 17: "bitdw", 19: "bitfs", 21: "bits",
 export const COURSE_SUBSTITUTE_ICONS = { hmc: "hmc6", ssl: "ssl2",
                                          ddd: "ddd1", sl: "sl6" };
 
+// The SPECIAL stages — Bowser levels, the caps, the slide, WMOTR, the aquarium
+// — are courses 16-24, past the end of COURSE_ICON_PREFIXES (which is indexed
+// by course_id-1 and only covers the 15 main courses). Without this map they
+// fell through to the generic gold star even though real art exists for every
+// one of them: the Bowser levels and the cap stages have star_icons entries,
+// and PSS has an actual portrait (live check 2026-07-25 — the target picker
+// showed a plain star for VCUtM, BitDW and PSS, which is what caught it).
+// Values are course_icons stems where a portrait exists, star_icons stems
+// otherwise; courseArt tries the portrait manifest first either way, so a
+// portrait dropped in later wins with no code change.
+export const SPECIAL_COURSE_ICONS = {
+  16: "bitdw", 17: "bitfs", 18: "bits",
+  19: "princess_secret",   // has a real portrait
+  20: "metal", 21: "wing", 22: "vanish", 23: "sky", 24: "aqua",
+};
+
 const GENERIC_STAR_SLOTS = 6;   // ui/assets/star_1.png … star_6.png
 const genericStar = (slot = 0) =>
   `/ui/assets/star_${Math.min(slot + 1, GENERIC_STAR_SLOTS)}.png`;
@@ -188,10 +204,19 @@ export function optionIcon(kind, id, context = {}) {
   const { courseIcons = {}, starIconsMode = "course", iconOverrides = {},
           courseByLevel = {}, segmentLevels = {} } = context;
   const prefixFor = (course) => COURSE_ICON_PREFIXES[Number(course) - 1] || null;
+  // A special stage's art is a COMPLETE stem ("vanish"), not a per-slot prefix
+  // — those courses have one icon, not seven, so `${prefix}${slot+1}` would ask
+  // for a vanish1.png that does not exist.
+  const specialFor = (course) => SPECIAL_COURSE_ICONS[Number(course)] || null;
   const courseArt = (course) => {
     const prefix = prefixFor(course);
-    if (!prefix) return genericStar();
-    if (courseIcons[prefix]) return `/ui/assets/course_icons/${courseIcons[prefix]}`;
+    const special = specialFor(course);
+    const stem = prefix || special;
+    if (!stem) return genericStar();
+    // The portrait manifest wins for either kind, so PSS uses its real
+    // painting and a portrait dropped in later needs no code change.
+    if (courseIcons[stem]) return `/ui/assets/course_icons/${courseIcons[stem]}`;
+    if (special) return starIconSrc(special);
     if (COURSE_SUBSTITUTE_ICONS[prefix])
       return starIconSrc(COURSE_SUBSTITUTE_ICONS[prefix]);
     return starIconSrc(`${prefix}1`);
@@ -202,7 +227,11 @@ export function optionIcon(kind, id, context = {}) {
     const { course, star } = parseStarId(id);
     if (starIconsMode !== "course") return genericStar(star);
     const prefix = prefixFor(course);
-    return prefix ? starIconSrc(`${prefix}${star + 1}`) : genericStar(star);
+    if (prefix) return starIconSrc(`${prefix}${star + 1}`);
+    // Special stages have ONE icon rather than one per slot, so every star in
+    // them wears the stage's own art instead of a generic gold star.
+    const special = specialFor(course);
+    return special ? starIconSrc(special) : genericStar(star);
   }
   if (kind === "level") {
     const level = Number(id);
