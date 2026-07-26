@@ -5,6 +5,7 @@
 import { h } from "preact";
 import htm from "htm";
 import { rankColor } from "./ranks.js";
+import { capName, divisionDigit } from "./caps.js";
 import { Hat } from "./hat.js";
 import { useTween } from "../useTween.js";
 const html = htm.bind(h);
@@ -46,7 +47,7 @@ export function MareloBar({ marelo, onOpen }) {
       title=${`${label}: mastery ${fmtScore(mastery)} x coverage ${practiced}/${n}`}>
     <${Hat} tier=${tier} division=${division} size=${34} />
     <span class="marelo-bar-text">
-      <b>${tier ? `${tier} ${division}` : "Unranked"}</b>
+      <b>${tier ? `${capName(tier)} ${divisionDigit(division)}` : "Unranked"}</b>
       <span class="meta">${label} · ${fmtPoints(score)} pts</span>
     </span>
     <span class="marelo-track"><i style=${`width:${fill}%;background:${rankColor(tier)}`}></i></span>

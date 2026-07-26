@@ -6,7 +6,7 @@ export { RANK_NAMES, rankColor } from "./caps.js";
 import { h } from "preact";
 import htm from "htm";
 import { useTween } from "../useTween.js";
-import { rankColor } from "./caps.js";
+import { capName, divisionDigit, rankColor } from "./caps.js";
 import { Hat } from "./hat.js";
 const html = htm.bind(h);
 
@@ -107,7 +107,8 @@ export function RankBanner({ label, banner, hint = null }) {
   }
   const c = rankColor(banner.rank);
   const basis = banner.basis;
-  const nextLabel = banner.next_tier ? `${banner.next_tier} ${banner.next_division}` : null;
+  const nextLabel = banner.next_tier
+    ? `${capName(banner.next_tier)} ${divisionDigit(banner.next_division)}` : null;
   const gap = banner.next_gap_cs != null ? (banner.next_gap_cs / 100).toFixed(2) : null;
   const displayFillPct = Math.round(fillPct);
   // The mode name (e.g. "Avg 10") is dropped from the VISIBLE basis text —
@@ -134,7 +135,7 @@ export function RankBanner({ label, banner, hint = null }) {
     <div class="rank-banner-row">
       <span class="rank-banner-kicker" title=${hint}>${label}</span>
       <${Hat} tier=${banner.rank} size=${24} />
-      <b class="rank-banner-name">${banner.rank.toUpperCase()}${banner.division ? ` ${banner.division}` : ""}</b>
+      <b class="rank-banner-name">${capName(banner.rank).toUpperCase()}${banner.division ? ` ${divisionDigit(banner.division)}` : ""}</b>
       ${basis && html`<span class="meta rank-banner-basis" title=${basisTitle}>${basisText}</span>`}
       <span class="meta rank-banner-next">${nextLabel
         ? html`→ <b>${nextLabel}</b>${gap ? ` −${gap}s` : ""}` : "top rank"}</span>

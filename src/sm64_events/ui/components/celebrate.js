@@ -21,6 +21,7 @@ import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
 import { RANK_NAMES, rankColor } from "./ranks.js";
+import { capName, divisionDigit } from "./caps.js";
 import { Hat } from "./hat.js";
 const html = htm.bind(h);
 
@@ -119,7 +120,7 @@ function TierRankUp({ celebration, scopeId, onDone }) {
         <${Hat} tier=${shownTier} division=${shownDivision} size=${96} />
       </span>
       ${phase === "fill" && html`<div class="rankup-fill-track"><i></i></div>`}
-      <h2>${shownTier}${phase !== "flip" ? ` ${shownDivision}` : ""}</h2>
+      <h2>${capName(shownTier)}${phase !== "flip" ? ` ${divisionDigit(shownDivision)}` : ""}</h2>
       <span class="meta">${caption}</span>
     </div>
   </div>`;
@@ -145,8 +146,8 @@ function DivisionRankUp({ celebration, scopeId, onDone }) {
     <div class="rankup-medium-card" onclick=${finish}>
       <${Hat} tier=${tier} division=${celebration.to.division} size=${40} />
       <span class="rankup-medium-text">
-        <b>${celebration.from.division} → ${celebration.to.division}</b>
-        <i>${tier} · click to dismiss</i>
+        <b>${divisionDigit(celebration.from.division)} → ${divisionDigit(celebration.to.division)}</b>
+        <i>${capName(tier)} · click to dismiss</i>
       </span>
     </div>
   </div>`;
@@ -209,7 +210,7 @@ export function EntityCelebration({ celebration, entityKey, onDone, children }) 
         style=${`--tier:${rankColor(celebration.to.tier)}`} onclick=${finish}>
       <${Hat} tier=${celebration.to.tier} division=${celebration.to.division} size=${30} />
       <span class="entity-rankup-text">
-        <b>${celebration.to.tier} ${celebration.to.division}</b>
+        <b>${capName(celebration.to.tier)} ${divisionDigit(celebration.to.division)}</b>
         <i>tier up · tap to dismiss</i>
       </span>
     </div>`}

@@ -8,6 +8,7 @@ import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { rankColor } from "./ranks.js";
+import { capName, divisionDigit } from "./caps.js";
 import { fmtPoints, fmtScore, toPoints } from "./marelo.js";
 import { Hat } from "./hat.js";
 import { Icon } from "./icons.js";
@@ -157,7 +158,7 @@ function LadderBar({ value }) {
     <div class="rank-ladder-scale">
       ${TIER_BANDS.filter((band) => band.tier !== here.tier).map((band) => html`<span
           class="rank-ladder-mark" style=${`left:${(band.from + band.to) / 2}%`}
-          title=${`${band.tier} — ${toPoints(band.from)} to ${toPoints(band.to)} pts`}>
+          title=${`${capName(band.tier)} — ${toPoints(band.from)} to ${toPoints(band.to)} pts`}>
         <${Hat} tier=${band.tier} size=${13} />
       </span>`)}
       <span class="rank-ladder-mark is-you" style=${`left:${filled}%`}
@@ -177,7 +178,7 @@ function LadderBar({ value }) {
     ${LADDER_STEPS.filter((step) => step.at > 0).map((step) => html`<span
       class="rank-ladder-step ${step.opensTier ? "is-tier" : ""}"
       style=${`left:${step.at}%`}
-      title=${`${step.tier} ${step.division} — MARELO ${toPoints(step.at)} pts`}></span>`)}
+      title=${`${capName(step.tier)} ${divisionDigit(step.division)} — MARELO ${toPoints(step.at)} pts`}></span>`)}
     ${filled > 0 && html`<span class="rank-ladder-head" style=${`left:${filled}%`}></span>`}
     </div>
   </div>`;
@@ -220,7 +221,7 @@ function markTitle(mark) {
   const when = new Date(mark.point.utc)
     .toLocaleDateString([], { month: "short", day: "numeric" });
   return `${mark.kind === "tier" ? "Tier up" : "Division up"}`
-    + ` — ${mark.point.tier} ${mark.point.division} · ${when}`;
+    + ` — ${capName(mark.point.tier)} ${divisionDigit(mark.point.division)} · ${when}`;
 }
 
 const DAY_MS = 86400000;
@@ -387,7 +388,7 @@ export function HistoryChart({ points }) {
         <line x1=${plotLeft} x2=${plotRight} y1=${y} y2=${y}
           stroke=${rankColor(tier)} stroke-opacity=".28" stroke-dasharray="3 4" />
         <text x=${plotLeft - 8} y=${y - 3} text-anchor="end"
-          fill=${rankColor(tier)} font-size="9">${tier}</text></g>`)}
+          fill=${rankColor(tier)} font-size="9">${capName(tier)}</text></g>`)}
       ${ticks.map((tick, tickIndex) => html`<text
           x=${xForTime(tick.time)} y=${CHART_HEIGHT - 8}
           text-anchor=${ticks.length === 1 ? "middle"
@@ -432,14 +433,14 @@ function nextRankLabel(entity) {
   if (entity.score == null) return "not practiced yet";
   if (!entity.next_tier) return "Maxed";
   return entity.next_division
-    ? `→ ${entity.next_tier} ${entity.next_division}`
-    : `→ ${entity.next_tier}`;
+    ? `→ ${capName(entity.next_tier)} ${divisionDigit(entity.next_division)}`
+    : `→ ${capName(entity.next_tier)}`;
 }
 
 function gainTitle(entity) {
   if (entity.score == null)
     return `What this scope's rating would gain if you practised this to `
-      + `${entity.next_tier} — that target is why an unpractised entry shows `
+      + `${capName(entity.next_tier)} — that target is why an unpractised entry shows `
       + `the biggest number in this column.`;
   return `What this scope's rating would gain if you reached the next tier here.`;
 }
@@ -541,7 +542,7 @@ function EntityTile({ t, entity, size = 42, open, onToggle }) {
         + (practiced ? `--tier-tint:${rankColor(entity.tier)}` : "")}
       onclick=${onToggle} aria-expanded=${open ? "true" : "false"}
       title=${practiced
-        ? `${entity.label} — ${entity.tier} ${entity.division} · ${fmtPoints(entity.score)} pts`
+        ? `${entity.label} — ${capName(entity.tier)} ${divisionDigit(entity.division)} · ${fmtPoints(entity.score)} pts`
         : `${entity.label} — not practiced yet`}>
     <img class="entity-tile-icon ${isGenericArt(iconSrc) ? "" : "courseicon"}" src=${iconSrc}
          onerror=${(event) => fallbackToGenericStar(event, fallbackSlot)}
@@ -756,7 +757,7 @@ export function RankPage({ t }) {
           : html`<div class="rank-card-main">
               <${Hat} tier=${data.tier} division=${data.division} size=${64} />
               <div>
-                <h2>${data.tier ? `${data.tier} ${data.division}` : "Unranked"}</h2>
+                <h2>${data.tier ? `${capName(data.tier)} ${divisionDigit(data.division)}` : "Unranked"}</h2>
                 <p class="meta">MARELO ${fmtPoints(tweenedMarelo)} pts · next division at ${fmtPoints(data.next_division_at)}</p>
               </div>
             </div>

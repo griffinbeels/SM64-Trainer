@@ -11,6 +11,7 @@ import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { ClauseRow } from "./segments.js";
 import { Hat } from "./hat.js";
+import { capName } from "./caps.js";
 import { Icon } from "./icons.js";
 import { PageState } from "./states.js";
 import { Modal } from "./modal.js";
@@ -473,7 +474,7 @@ export function Routes({ t }) {
               ${view.avg_rank ? html`<div class="routeavg">
                 <span class="meta">Average</span>
                 <${Hat} tier=${view.avg_rank.tier} size=${18} />
-                <b>${view.avg_rank.tier}</b>
+                <b>${capName(view.avg_rank.tier)}</b>
                 <span class="meta">${view.avg_rank.score}/9</span>
               </div>` : null}
             </div>
