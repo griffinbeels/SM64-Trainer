@@ -1028,6 +1028,64 @@
       50% { transform: rotate(14deg); }
     }
   }
+  /* Task 10 (addendum, 2026-07-25): the wing FOLD -- set by hat.js's
+     `foldWings` prop, true for exactly the ONE render TierRankUp shows at
+     its fill -> flip boundary (celebrate.js), where the outgoing division's
+     wings are drawn one last time so THIS can play instead of them simply
+     vanishing. User's own framing: "it flaps and celebrates, then folds
+     away and vanishes... booya, upgraded! Just gotta earn the wings again."
+     A performed loss, not a discontinuity -- the wing policy itself
+     (division V wears none) is unchanged.
+
+     Reuses the flap's own pivots (23%/64%, 69%/66%, measured off each wing
+     sprite's alpha bbox) and continues the SAME rotational sense as the
+     flap's downswing (wing-l negative, wing-r positive) so the tuck reads
+     as one continuous gesture rather than a new one. Wings already stack
+     UNDER the cap in hat.js's layer order, so rotating + shrinking them
+     toward that pivot makes them recede BEHIND the cap by construction --
+     "tucking its ears back" needs no z-index trick here. `forwards` holds
+     the ended (rotated, scaled down, invisible) state so nothing pops back
+     visible before the next tick actually drops the layer to 0 wings.
+
+     `.hat-fold::after` is the small bright blink the user asked the loss
+     to end on ("perhaps with a shiny blink") -- one radial flash on the
+     SAME .5s timeline as the fold, so it cannot drift out of sync with it.
+     `flap` and `foldWings` are never BOTH meaningful at once conceptually,
+     but celebrate.js always passes `flap=true` alongside `foldWings` on
+     this one tick for simplicity -- hat.js resolves that by putting
+     `hat-fold` on the outer span INSTEAD of `hat-flap` whenever folding
+     (see hat.js's `motionClass`), so only one of these two rule sets ever
+     actually applies to a given Hat; there is no dependency on CSS source
+     order to break the tie. */
+  @media (prefers-reduced-motion: no-preference) {
+    .hat-fold .wing-l {
+      transform-origin: 23% 64%;
+      animation: wing-fold-l .5s cubic-bezier(.4, 0, .6, 1) forwards;
+    }
+    .hat-fold .wing-r {
+      transform-origin: 69% 66%;
+      animation: wing-fold-r .5s cubic-bezier(.4, 0, .6, 1) forwards;
+    }
+    @keyframes wing-fold-l {
+      0% { transform: rotate(0deg) scale(1); opacity: 1; }
+      100% { transform: rotate(-80deg) scale(.3); opacity: 0; }
+    }
+    @keyframes wing-fold-r {
+      0% { transform: rotate(0deg) scale(1); opacity: 1; }
+      100% { transform: rotate(80deg) scale(.3); opacity: 0; }
+    }
+    .hat-fold::after {
+      content: ""; position: absolute; inset: -25%; border-radius: 50%;
+      background: radial-gradient(circle, rgba(255,255,255,.95), transparent 65%);
+      pointer-events: none; opacity: 0;
+      animation: wing-fold-shine .5s ease-out forwards;
+    }
+    @keyframes wing-fold-shine {
+      0%, 62% { opacity: 0; transform: scale(.5); }
+      74% { opacity: .9; transform: scale(1); }
+      100% { opacity: 0; transform: scale(1.3); }
+    }
+  }
   .marelo-bar-text { display: flex; flex-direction: column; line-height: 1.15; text-align: left; }
   .marelo-track {
     width: 96px; height: 6px; border-radius: 3px; background: rgba(255,255,255,.12);

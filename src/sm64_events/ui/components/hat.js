@@ -70,11 +70,11 @@ function wingLayers(wings) {
   const layers = [];
   // Increasing tier order, each appended after the last -- later tiers
   // paint OVER earlier ones, matching the reference sheet's verified stack.
-  // Each tier is split l/r (task 2) so a flap (task 6) can turn the two
-  // wings in opposite directions; both sides of a tier render as their own
-  // fill+shade pair via tintedPair. The side class (wing-l/wing-r) is what
-  // index.html's flap keyframes select on -- it carries no styling of its
-  // own.
+  // Each tier is split l/r (task 2) so a flap (task 6) or a fold (task 10)
+  // can turn the two wings independently; both sides of a tier render as
+  // their own fill+shade pair via tintedPair. The side class (wing-l/wing-r)
+  // is what index.html's flap/fold keyframes select on -- it carries no
+  // styling of its own.
   for (let tier = 1; tier <= wings; tier++) {
     for (const side of ["l", "r"]) {
       const stem = `wing${tier}_${side}`;
@@ -91,11 +91,25 @@ function wingLayers(wings) {
 // the practice cards) renders the exact same wings motionless. Constant
 // idle flapping across a screen of medals would be motion noise, and this
 // app runs on stream.
-export function Hat({ tier, division = null, size = 18, title = null, flap = false }) {
+//
+// `foldWings`: >0 only for the one render TierRankUp shows at the fill->flip
+// boundary (task 10, addendum, 2026-07-25 -- "the wings will disappear...
+// animate them down and behind the cap, like a dog tucking its ears").
+// Division alone would drop straight from `celebration.from.division`'s
+// wing count to division V's zero the instant the tier climb begins --
+// this decouples the WING COUNT from the shown division for exactly that
+// one tick, so the outgoing wings can still be drawn (and folded away)
+// while the glyph already reads the climbing tier's "no real division"
+// digit. `flap` and `foldWings` are mutually exclusive on the wing layers
+// (fold wins if both are passed, since celebrate.js does not bother
+// conditionally dropping `flap` for that one tick) -- see index.html's
+// `.hat-fold` rules.
+export function Hat({ tier, division = null, size = 18, title = null, flap = false, foldWings = 0 }) {
   const spec = CAP[tier] || {};
   const color = rankColor(tier);
   const detail = division != null && size >= DETAIL_MIN_SIZE;
-  const wings = detail ? wingTiers(tier, division) : 0;
+  const folding = foldWings > 0;
+  const wings = folding ? foldWings : (detail ? wingTiers(tier, division) : 0);
 
   // `size` is the CAP's own footprint, both axes -- the element Medal/Crest
   // used to occupy was exactly `size`px tall (and, being square, `size`px
@@ -194,7 +208,8 @@ export function Hat({ tier, division = null, size = 18, title = null, flap = fal
     : "Unranked";
   const resolvedTitle = title != null ? title : defaultTitle;
 
-  return html`<span class=${`hat${flap ? " hat-flap" : ""}`} title=${resolvedTitle} style=${outerStyle}>
+  const motionClass = folding ? " hat-fold" : flap ? " hat-flap" : "";
+  return html`<span class=${`hat${motionClass}`} title=${resolvedTitle} style=${outerStyle}>
     <span class="hat-canvas" style=${canvasStyle}>${layers}</span>
   </span>`;
 }

@@ -21,8 +21,9 @@ import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
 import { RANK_NAMES, rankColor } from "./ranks.js";
-import { capName, divisionDigit } from "./caps.js";
+import { capName, divisionDigit, wingTiers } from "./caps.js";
 import { Hat } from "./hat.js";
+import { prefersReducedMotion } from "../useTween.js";
 const html = htm.bind(h);
 
 const PREF = "sm64.celebrate";
@@ -113,11 +114,28 @@ function TierRankUp({ celebration, scopeId, onDone }) {
     : phase === "hold" ? celebration.to.division : "V";
   const caption = phase === "fill" ? "before" : phase === "flip" ? "climbing…" : "click to dismiss";
 
+  // The wing FOLD (task 10, addendum, 2026-07-25): the wing policy itself
+  // is unchanged -- division V (every "flip" tick) wears none -- but the
+  // very FIRST flip tick (flipStep === 1) is also the exact instant the
+  // fill beat's wings would otherwise just vanish. For that one tick only,
+  // render the OUTGOING division's wing count (still on the tier the climb
+  // is now leaving) with the fold animation instead of letting `division`
+  // alone drop them straight to zero; `foldWings` decouples the wing COUNT
+  // from the glyph digit shown (still "V"/no real division, per the comment
+  // above). Nothing to fold if the FROM division was already wingless.
+  // Reduced motion skips the tick's fold treatment entirely (the fold
+  // NEVER renders in that case) rather than showing motionless wings that
+  // are neither flapping nor folding -- same "jump straight to the end
+  // state" contract useTween already honours elsewhere.
+  const fromWings = wingTiers(celebration.from.tier, celebration.from.division);
+  const foldWings = phase === "flip" && flipStep === 1 && fromWings > 0 && !prefersReducedMotion()
+    ? fromWings : 0;
+
   return html`<div class="rankup" role="status" style=${`--tier:${rankColor(shownTier)}`}>
     <div class=${`rankup-card ${phase === "hold" ? "final" : ""}`} onclick=${finish}>
       <span class="meta">RANK UP</span>
       <span key=${`${phase}:${flipStep}`} class=${phase === "flip" ? "rankup-cap-flip" : ""}>
-        <${Hat} tier=${shownTier} division=${shownDivision} size=${96} flap=${true} />
+        <${Hat} tier=${shownTier} division=${shownDivision} size=${96} flap=${true} foldWings=${foldWings} />
       </span>
       ${phase === "fill" && html`<div class="rankup-fill-track"><i></i></div>`}
       <h2>${capName(shownTier)}${phase !== "flip" ? ` ${divisionDigit(shownDivision)}` : ""}</h2>
@@ -189,6 +207,14 @@ const ENTITY_TOAST_MS = 3600;
  * small toast sized to the rank-slot's own footprint so it can never grow
  * past `.objective-card`'s hard fixed height -- it just overlays inside the
  * existing box, the same constraint the shipped card layout already lives by.
+ *
+ * NOT given the wing fold (task 10, addendum, 2026-07-25): unlike
+ * TierRankUp, this toast has no fill beat -- it renders straight at
+ * `celebration.to.tier`/`to.division` with no "before" moment ever shown,
+ * so there is no on-screen wing state to fold FROM. Retrofitting one would
+ * mean inventing a phase machine here that doesn't otherwise exist, which
+ * is a bigger change than "apply the same treatment" asked for; flagged in
+ * the final report rather than forced.
  */
 export function EntityCelebration({ celebration, entityKey, onDone, children }) {
   const relevant = !!(celebration && celebration.entity === entityKey);
