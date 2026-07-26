@@ -3,6 +3,16 @@
 Status: approved 2026-07-25. Supersedes the header's inline `TargetEditor`
 card.
 
+**Base branch (decided 2026-07-26): `mario-cap-rank-icons`, not `main`.** That
+branch was already implemented and in flight, and it DELETES `Medal` in favour
+of `Hat` (`ui/components/hat.js`) plus a cap-name registry
+(`ui/components/caps.js`). This feature renders a rank icon in two new places
+and prints a rank string in one, so building on `main` would have written
+imports for a symbol about to disappear — a break git merges clean and the
+page dies on. Everywhere below that says "medal", read `Hat`; everywhere it
+prints a tier name, read `capName(tier)` / `divisionDigit(numeral)`. The
+implementation plan's Global Constraints carry the exact API.
+
 ## Problem
 
 Setting a practice target from the header takes one click too many and ends
