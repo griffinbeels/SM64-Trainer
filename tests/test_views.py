@@ -1803,3 +1803,91 @@ def test_entity_ranks_skip_a_tombstoned_strategy(tmp_path):
 
     out = build_entity_ranks(db, svc)
     assert out["star:2:2"]["strat"] == "Real"
+
+
+# -- build_entity_strategies (the picker step-3 "which strategy" answer) ------
+
+def test_entity_strategies_include_a_strategy_seen_only_on_attempts(tmp_path):
+    """The bug this endpoint fixes: a strategy used on an attempt but never
+    registered (ui_state) or defined in rank standards must still appear --
+    the header's picker must offer everything the practice card offers."""
+    from sm64_events.tracking.views import build_entity_strategies
+
+    db, svc = make(tmp_path)
+    seed(svc)
+    db._conn.execute("UPDATE attempts SET strat_tag='Wall Kick' WHERE course_id=2")
+    db._conn.commit()
+
+    out = build_entity_strategies(db, svc, "star:2:2")
+    assert "Wall Kick" in [s["name"] for s in out["strategies"]]
+
+
+def test_entity_strategies_rank_matches_the_section_banner_for_the_same_strategy(tmp_path):
+    """No two surfaces may disagree about a medal: this payload's rank for the
+    ACTIVE strategy must equal the session view's section banner rank for
+    that same entity+strategy -- the invariant this whole feature rests on."""
+    from sm64_events.tracking.views import build_entity_strategies
+
+    db, svc = make(tmp_path)
+    seed(svc)
+    svc.ranks = _ranks(tmp_path)                # defines star:2:2 -> "fast"
+    asyncio.run(svc.set_strat(2, 2, "fast"))
+    db._conn.execute("UPDATE attempts SET strat_tag='fast' WHERE course_id=2")
+    db._conn.commit()
+    best_aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    asyncio.run(svc.save_pb(best_aid, "igt"))
+
+    sec = build_session_view(db, svc, clock="igt")["stars"][0]
+    out = build_entity_strategies(db, svc, "star:2:2")
+    assert out["entity"] == "star:2:2" and out["kind"] == "star"
+    assert out["current"] == "fast"
+    strat_row = next(s for s in out["strategies"] if s["name"] == "fast")
+    assert strat_row["rank"] == sec["rank"]["rank"]
+
+
+def test_entity_strategies_report_an_ungraded_strategy_as_unranked_not_missing(tmp_path):
+    """A strategy with no PB is present in the list with rank: None -- 'not
+    ranked yet' rather than absent, matching the practice card's own state."""
+    from sm64_events.tracking.views import build_entity_strategies
+
+    db, svc = make(tmp_path)
+    seed(svc)
+    svc.ranks = _ranks(tmp_path)     # defines star:2:2 -> strategy "fast"
+
+    out = build_entity_strategies(db, svc, "star:2:2")
+    strat_row = next(s for s in out["strategies"] if s["name"] == "fast")
+    assert strat_row == {"name": "fast", "rank": None, "division": None,
+                         "score": None, "pb_display": None}
+
+
+def test_a_defaulted_segment_disallows_the_blank_strategy(tmp_path):
+    """A segment def carrying default_strat must report allow_blank=False --
+    the same rule stratpicker.js already applies from sec.default_strat
+    (projection.py caveat 17). A star always allows the blank option."""
+    from sm64_events.tracking.views import build_entity_strategies
+
+    seg_db = Database(tmp_path / "seg.db")
+    seg_db.update_segment_def(1, default_strat="Standard")
+    seg_svc = TrackerService(seg_db, Broadcaster())
+    asyncio.run(seg_svc.start())
+    seg_out = build_entity_strategies(seg_db, seg_svc, "segment:1")
+    assert seg_out["allow_blank"] is False
+
+    star_db, star_svc = make(tmp_path)
+    seed(star_svc)
+    star_out = build_entity_strategies(star_db, star_svc, "star:2:2")
+    assert star_out["allow_blank"] is True
+
+
+def test_entity_strategies_reject_an_unknown_entity(tmp_path):
+    """Both flavors of 'unknown' raise: a malformed key (bad shape) and a
+    syntactically valid segment id that names no real definition -- the same
+    existence check set_target_segment applies for the same picker flow."""
+    import pytest
+    from sm64_events.tracking.views import build_entity_strategies
+
+    db, svc = make(tmp_path)
+    with pytest.raises(LookupError):
+        build_entity_strategies(db, svc, "not_a_real_kind:1:2")
+    with pytest.raises(LookupError):
+        build_entity_strategies(db, svc, "segment:9999")

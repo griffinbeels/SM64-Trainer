@@ -657,6 +657,26 @@ def test_target_ranks_endpoint_on_a_fresh_db_is_empty(tmp_path):
         assert r.json() == {}
 
 
+def test_target_strategies_endpoint_returns_200_with_the_entity(tmp_path):
+    """The picker's step-3 fetch -- build_entity_strategies over the HTTP
+    boundary, for a real entity."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)
+        r = client.get("/api/target/strategies?entity=star:2:2")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["entity"] == "star:2:2" and body["kind"] == "star"
+        assert isinstance(body["strategies"], list)
+
+
+def test_target_strategies_endpoint_404s_on_a_malformed_entity(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.get("/api/target/strategies?entity=not_a_real_kind:1:2")
+        assert r.status_code == 404
+
+
 def test_segment_body_extra_field_is_422(tmp_path):
     client, service, db = make_client(tmp_path)
     with client:

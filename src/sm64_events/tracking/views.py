@@ -471,6 +471,117 @@ def build_entity_ranks(db, service) -> dict[str, dict]:
     return out
 
 
+def build_entity_strategies(db, service, entity_key: str) -> dict:
+    """The picker's step-3 "which strategy" answer: every strategy this
+    entity can be practised WITH, each carrying its own rank -- so a
+    strategy card can be chosen on evidence (rank + PB) instead of a bare
+    name in a dropdown.
+
+    Strategy names come from the SAME merged lists build_session_view's
+    sections already use -- `_strategies_for` (registered ui_state names
+    UNION observed-on-attempts UNION rank-standard names, stars) or
+    `_seg_strategies` (the same three sources, plus the definition's own
+    `default_strat` first, segments); tombstones (`deleted_strats`) are
+    already filtered out by those two. Before this endpoint existed the
+    header read the raw registered-strategy map directly and offered a
+    NARROWER list than the practice card -- this is the fix: one shared
+    source feeding both surfaces.
+
+    Each strategy is graded through the exact chain the session view's
+    section banner uses -- `ranks.clock_for` -> `grading_basis` ->
+    `_graded_progress` against that strategy's OWN ladder -- so a medal here
+    can never disagree with the banner for the same entity+strategy. A
+    strategy with no ladder or nothing gradeable reports rank/division/score
+    all None: present as "unranked", not absent. `pb_display` is always
+    that strategy's own SAVED pb (`format_igt`), independent of the active
+    rank mode -- in an average mode the grade can come from a different
+    basis than the displayed PB, the same split `sec["pb"]` vs `sec["rank"]`
+    already draws on the session view.
+
+    `current` is the entity's active strategy (`service.strat_by_star` /
+    `service.strat_by_segment`), masked to None when tombstoned. `allow_blank`
+    is False only for a segment carrying a truthy `default_strat` -- the rule
+    `stratpicker.js` already applies client-side from `sec.default_strat`
+    (projection.py caveat 17); a star is always blankable.
+
+    `entity_key` is parsed by hand (`ranks.standards.entity_key` has no
+    public inverse): `"segment:<id>"` or `"star:<course>:<star>"`; anything
+    else -- and any non-numeric id -- raises LookupError (-> 404, `_http`).
+    A segment id that parses but names no known definition ALSO raises --
+    the same existence check `service.set_target_segment` applies, since
+    this is the same picker flow. Stars carry no such check anywhere in the
+    codebase (course/star ids are never validated against the catalog, see
+    `service.set_target`), so none is added here either."""
+    parts = entity_key.split(":")
+    if len(parts) == 2 and parts[0] == "segment":
+        kind, id_parts = "segment", parts[1:]
+    elif len(parts) == 3 and parts[0] == "star":
+        kind, id_parts = "star", parts[1:]
+    else:
+        raise LookupError(f"bad entity key {entity_key!r}")
+    try:
+        ids = [int(p) for p in id_parts]
+    except ValueError:
+        raise LookupError(f"bad entity key {entity_key!r}") from None
+
+    ranks = service.ranks
+    all_attempts = db.attempts()
+    registered = db.get_state("strategies", {})
+    deleted = db.get_state("deleted_strats", {}).get(entity_key, [])
+    rank_mode = db.get_state("rank_mode", classify.DEFAULT_RANK_MODE)
+    if rank_mode not in classify.RANK_MODES:   # forward-safe: junk reads as pb
+        rank_mode = classify.DEFAULT_RANK_MODE
+    pbs_by_strat = _current_pbs_by_strat(db.pbs())
+
+    if kind == "star":
+        course_id, star_id = ids
+        history = [a for a in all_attempts
+                  if (a.course_id, a.star_id) == (course_id, star_id)]
+        names = _strategies_for(registered, all_attempts, course_id, star_id,
+                                ranks, deleted)
+        current_raw = service.strat_by_star.get((course_id, star_id))
+        pb_key_prefix = (course_id, star_id)
+        clock = ranks.clock_for(entity_key) if ranks else "igt"
+        allow_blank = True
+    else:
+        (segment_id,) = ids
+        history = [a for a in all_attempts if a.segment_id == segment_id]
+        seg_def = next((d for d in db.segment_defs() if d["id"] == segment_id),
+                       None)
+        if seg_def is None:   # same existence check set_target_segment applies
+            raise LookupError(f"segment {segment_id} not found")
+        default_strat = seg_def["default_strat"]
+        names = _seg_strategies(registered, history, segment_id, ranks,
+                                deleted, default_strat)
+        current_raw = service.strat_by_segment.get(segment_id)
+        pb_key_prefix = ("segment", segment_id)
+        clock = ranks.clock_for(entity_key) if ranks else "rta"
+        allow_blank = not bool(default_strat)
+
+    current = current_raw if current_raw and current_raw not in deleted else None
+
+    strategies = []
+    for name in names:
+        pb_row = pbs_by_strat.get((*pb_key_prefix, clock, name))
+        rank = division = score = None
+        if ranks is not None:
+            ladder = ranks.ladder_cs(entity_key, name)
+            if ladder:
+                basis = grading_basis(rank_mode, pb_row, history, name, clock)
+                if basis is not None:
+                    graded = _graded_progress(ladder,
+                                              classify.display_cs(basis["frames"]))
+                    rank, division = graded["rank"], graded["division"]
+                    score = round(graded["score"], 1)
+        strategies.append({
+            "name": name, "rank": rank, "division": division, "score": score,
+            "pb_display": format_igt(pb_row["frames"]) if pb_row else None,
+        })
+
+    return {"entity": entity_key, "kind": kind, "current": current,
+            "allow_blank": allow_blank, "strategies": strategies}
+
+
 def _section_banner(ranks, ek, strat, basis, mode) -> dict | None:
     """Rank banner for a section: the grading basis (PB in pb mode, mean of
     valid runs in avg modes — grading_basis) graded under the ACTIVE strat.

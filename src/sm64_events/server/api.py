@@ -19,9 +19,11 @@ from sm64_events.ranks.standards import entity_key
 from sm64_events.stats.registry import (registry_meta, selection_id,
                                         selection_order)
 from sm64_events.tracking.segments import origin_taxonomy, vocab
-from sm64_events.tracking.views import (build_entity_ranks, build_route_view,
-                                        build_run_history, build_run_view,
-                                        build_session_view, stamp_origins)
+from sm64_events.tracking.views import (build_entity_ranks,
+                                        build_entity_strategies,
+                                        build_route_view, build_run_history,
+                                        build_run_view, build_session_view,
+                                        stamp_origins)
 
 
 class TargetBody(BaseModel):
@@ -561,6 +563,21 @@ def create_api_router(service) -> APIRouter:
         if service.db is None:
             raise HTTPException(503, "database unavailable")
         return build_entity_ranks(service.db, service)
+
+    @router.get("/target/strategies")
+    def target_strategies(entity: str):
+        """Step-3 picker payload for ONE entity: every strategy it can be
+        practised with, each carrying its own rank + PB -- build_entity_ranks'
+        sibling, declared alongside it for the same reason (before any
+        '/target/{...}' path route). 404 for an unparseable/unknown entity
+        key (LookupError -> _http, matching every other kind-dispatched
+        endpoint); 503 in degraded mode, matching GET /target/ranks."""
+        if service.db is None:
+            raise HTTPException(503, "database unavailable")
+        try:
+            return build_entity_strategies(service.db, service, entity)
+        except LookupError as e:
+            raise _http(e)
 
     @router.post("/target")
     async def target(body: TargetBody):
