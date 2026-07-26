@@ -8,7 +8,7 @@ import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { rankColor } from "./ranks.js";
-import { accentColor, capName, divisionDigit } from "./caps.js";
+import { accentColor, capGradient, capName, divisionDigit } from "./caps.js";
 import { fmtPoints, fmtScore, toPoints } from "./marelo.js";
 import { RankIcon } from "./rankicon.js";
 import { Icon } from "./icons.js";
@@ -159,41 +159,59 @@ const LADDER_STEPS = TIER_BANDS.flatMap((band) => {
 // One flat size for all 45 (DIVISION_MARK_SIZE, below), always smaller than
 // YOU's 22px — YOU stays the most prominent thing on the bar.
 //
-// Each tier gets its OWN flex row of 5, not one long 45-wide row: a
-// division is an EQUAL slice of its tier's band by construction (`width =
-// band width / DIVISIONS_PER_TIER` — same math LADDER_STEPS already uses),
-// so `justify-content: space-between` across those 5 IS the true
-// proportional position within that tier, and the group itself still sits
-// at `left:band.from%` / `width:(band.to-band.from)%` on the real score
-// axis — nothing here stops being score-accurate. What it fixes is a
-// mismatch between the FLAT per-icon size the user asked for and Mario's
-// band being 5 SCORE-POINTS wide out of 100: five same-size icons in a
-// group that narrow cannot help but collide at any realistic card width, no
-// matter how the whole 45 are laid out — an icon COUNT problem, not a
-// layout-strategy one. `.rank-ladder-tier-group`'s own `@container` rule
-// (index.html) thins that ONE group back to its bottom division (`is-floor`
-// — the old single-medal-per-tier look) once ITS OWN rendered width can't
-// fit five without touching, so the widest bands (Silver, 20 points) keep
-// all five long after the narrowest (Mario/Grandmaster, 5) have already
-// thinned — verified at a width sweep, not assumed (see the task report).
+// Round 2's own attempt positioned each tier's group score-proportionally
+// (`left:band.from%`/`width:(band.to-band.from)%`) -- correct on the score
+// axis, but load-bearing wrong in spirit: the score anchors squeeze the top
+// tiers (Mario is 95-100, ~5% of the bar), so proportional placement
+// structurally CANNOT give the tiers a user is climbing TOWARD room for
+// five icons, no matter the card width -- verified with a width sweep up to
+// 1700px, where Mario/Grandmaster never once reached five. Backwards for a
+// feature whose whole point is showing where you're going.
+//
+// Round 3 (addendum, task 8, 2026-07-26 -- the user's ruling, after seeing
+// that finding: "nine equal groups of five icons above the bar... always"):
+// the strip is a SHOWCASE now, not a scale readout -- closer to the design
+// contact sheet embedded in the app, which is the intent the user described
+// from the start ("a version of the cap_contact_sheet... to showcase and
+// demonstrate how you're going to be progressing over time"). Nine EQUAL
+// flex groups (not score-proportional), each holding its own five, all one
+// flat size. The precise per-division score reading is already carried by
+// the bar below and by YOU's own true-value position -- losing exact
+// per-division x-alignment between the showcase strip and the bar it sits
+// above costs nothing real, per the ruling. Each group still shows ALL 45
+// icons (round 2's "drop the current tier's group, YOU stands in for it"
+// rule no longer applies -- a showcase shows everything, same as the
+// contact sheet does regardless of current rank; YOU is additionally
+// highlighted at its own true position, unchanged).
+//
+// A user must not have to count divisions to tell which five belong to
+// which tier now that they're no longer score-width-sized -- colour is the
+// tie (index.html's `.rank-ladder-tier-group` tints its background from
+// `--tier-tint`, the SAME `capGradient(tier) || rankColor(tier)` the ladder
+// band and the standards table already use for a tier's identity, so a
+// showcase group can never use a colour the rest of the app doesn't already
+// associate with that tier). Each icon keeps its own per-division tooltip
+// (title=, below) -- they're no longer co-located with the bar's own
+// division-line pips, so a hover has to name what reaching it makes you on
+// its own, same wording the pips already use.
 const DIVISION_MARK_SIZE = 14;
 
 function LadderBar({ value }) {
   const filled = Math.max(0, Math.min(SCORE_CEILING, value || 0));
   const here = bandForScore(filled);
   return html`<div>
-    <!-- The CURRENT rank's medal is bigger, raised, tagged YOU, and sits
-         over the value's ACTUAL position rather than its band's centre
-         (round 9: "our active rank should be above the ACTUAL position in
-         the bar — like that big white line"), so it travels along the track
-         as divisions are climbed instead of jumping a whole tier at a time.
-         Its band's own division group is dropped while it stands in for it
-         — two medals of the same rank on one row would read as a duplicate. -->
+    <!-- The showcase strip: nine equal groups, all 45 icons, always (round
+         3). YOU is a SEPARATE highlight -- bigger, raised, tagged YOU, at
+         the value's ACTUAL position (round 9: "our active rank should be
+         above the ACTUAL position in the bar"), overlaid on whichever group
+         it happens to land near; it no longer needs the current tier's own
+         group hidden to avoid a duplicate, since a showcase tile and a
+         true-value highlight read as two different kinds of mark. -->
     <div class="rank-ladder-scale">
-      ${TIER_BANDS.filter((band) => band.tier !== here.tier).map((band) => {
+      ${TIER_BANDS.map((band) => {
         const stepWidth = (band.to - band.from) / DIVISIONS_PER_TIER;
-        return html`<div class="rank-ladder-tier-group"
-            style=${`left:${band.from}%;width:${band.to - band.from}%`}>
+        const tint = capGradient(band.tier) || rankColor(band.tier);
+        return html`<div class="rank-ladder-tier-group" style=${`--tier-tint:${tint}`}>
           <div class="rank-division-row">
             ${DIVISION_NUMERALS.map((numeral, index) => html`<span
                 class="rank-division-mark ${index === 0 ? "is-floor" : ""}"
