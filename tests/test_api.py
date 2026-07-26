@@ -71,6 +71,29 @@ def test_target_clear_restore_pb_session_endpoints(tmp_path):
         assert r.status_code == 200 and r.json()["session_id"] == 2
 
 
+def test_target_with_explicit_null_strat_clears_it(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)
+        asyncio.run(service.set_strat(2, 2, "cannonless"))
+        r = client.post("/api/target", json={
+            "course_id": 2, "star_id": 2, "strat_tag": None})
+        assert r.status_code == 200
+        view = client.get("/api/session?clock=igt").json()
+        assert view["last_strat_by_star"].get("2:2") is None
+
+
+def test_target_without_a_strat_key_leaves_the_existing_one(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)
+        asyncio.run(service.set_strat(2, 2, "cannonless"))
+        r = client.post("/api/target", json={"course_id": 2, "star_id": 2})
+        assert r.status_code == 200
+        view = client.get("/api/session?clock=igt").json()
+        assert view["last_strat_by_star"].get("2:2") == "cannonless"
+
+
 def test_pb_on_missing_attempt_is_404(tmp_path):
     client, service, db = make_client(tmp_path)
     with client:
