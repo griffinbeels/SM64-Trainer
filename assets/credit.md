@@ -32,3 +32,18 @@ by HEIGHT in the CSS, which is what makes them read as one set). Registry ↔
 folder coverage is pinned both ways by `tests/test_ui_empty_states.py` — a
 renamed file would otherwise 404 a broken-image icon into the exact panel the
 art exists to make look deliberate.
+
+## Rank cap sprites — `src/sm64_events/ui/assets/hat/`
+
+The Mario-cap rank badges derive from `assets/hat_rank.psd` (Griffin's own
+Photoshop artwork) via `tools/build_hat_assets.py`, which turns the raw
+`assets/hat_raw/*.png` exports into the tintable white masters the renderer
+composes: the cap's HSV value channel becomes its white shading, the Capless
+outline is a dilated-then-subtracted ring, and each wing export is split into
+left/right halves so a flap can rotate them in opposite directions.
+Re-running the script after a re-export is the only way these files change.
+
+The division-digit glyph on each sign uses **Super Mario 256**
+(`src/sm64_events/ui/assets/fonts/SuperMario256.ttf`), a fan-made font in the
+style of the in-game HUD counter — not one of Nintendo's own font files —
+used here in a free, non-commercial practice tool.
