@@ -136,7 +136,56 @@ def test_css_reuses_the_entity_grid_geometry_idiom():
     assert "repeat(auto-fill, minmax(" in grid_rules
 
 
+def _writes_once_then_closes_holds(source: str) -> bool:
+    """Mirrors test_writes_exactly_once_then_closes' three assertions as one
+    probe function, so a comment-only/broken-code fixture can exercise the
+    guard without duplicating the real STEP_CODE checks above (M6, final
+    review 2026-07-26 -- the original test only proved strip_comments strips
+    a comment, a property of source_scan.py already tested there, and never
+    fed a sample to the count/ordering assertions themselves)."""
+    code = strip_comments(source)
+    if code.count('send("POST", "/api/target"') != 1:
+        return False
+    if code.count("onClose()") != 1:
+        return False
+    if "catch (writeError)" not in code:
+        return False
+    return code.index("onClose()") < code.index("catch (writeError)")
+
+
 def test_the_guards_can_still_fail():
+    # Probed in both directions (tests/source_scan.py), same pattern as
+    # test_the_grid_rank_guard_can_still_fail in test_ui_entitymodal.py.
+    # Comment-only: a note naming these calls by example must not satisfy
+    # the guard on its own.
+    assert not _writes_once_then_closes_holds(
+        '// send("POST", "/api/target", body) used to fire here\n'
+        "// onClose() followed it\n"
+        "// catch (writeError) handled a dropped write\n")
+    # Real code, correctly shaped: exactly what STEP_CODE has today.
+    assert _writes_once_then_closes_holds(
+        'await send("POST", "/api/target", body);\n'
+        "onClose();\n"
+        "} catch (writeError) {\n"
+        "  window.alert(String(writeError));\n"
+        "}")
+    # Real code, onClose AFTER the catch -- closing on a dropped write
+    # instead of a successful one, the exact ordering bug this guards.
+    assert not _writes_once_then_closes_holds(
+        "try {\n"
+        '  await send("POST", "/api/target", body);\n'
+        "} catch (writeError) {\n"
+        "  window.alert(String(writeError));\n"
+        "}\n"
+        "onClose();")
+    # Real code, the write fires twice -- the double-write bug the count
+    # guards against.
+    assert not _writes_once_then_closes_holds(
+        'await send("POST", "/api/target", body);\n'
+        'await send("POST", "/api/target", body);\n'
+        "onClose();\n"
+        "catch (writeError) {}")
+
     # Probed in both directions (tests/source_scan.py): a comment mentioning
     # onClose()/window.alert by name must not satisfy the ordering checks
     # above on its own -- covered by the real file already having exactly
