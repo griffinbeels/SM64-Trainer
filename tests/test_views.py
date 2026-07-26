@@ -1132,17 +1132,18 @@ def test_session_view_attaches_ranks(tmp_path):
     view = build_session_view(db, svc, clock="igt")
     [sec] = view["stars"]
     assert sec["rank"]["rank"] in {"Mario", "Diamond", "Silver", "Iron"}
-    assert any(at["rank"] in {"Mario", "Grandmaster", "Master", "Diamond",
-                              "Platinum", "Gold", "Silver", "Bronze", "Iron"}
+    assert any(at["rank"] and at["rank"]["rank"] in {"Mario", "Grandmaster",
+                              "Master", "Diamond", "Platinum", "Gold",
+                              "Silver", "Bronze", "Iron"}
                for at in sec["attempts"])
     assert any(p.get("rank") for s in sec["progress"]["sessions"] for p in s["points"])
 
 
 def test_rank_by_star_grades_active_strat_for_quick_select(tmp_path):
     """The stage quick-select grid grades each star under its active strat:
-    view['rank_by_star'] maps '<course>:<star>' -> rank name when the star has
-    a strat + PB + ladder, and omits stars that can't be graded. The PB (343f)
-    on the seeded 'fast' ladder lands on Diamond (see _ranks)."""
+    view['rank_by_star'] maps '<course>:<star>' -> {rank, division} when the
+    star has a strat + PB + ladder, and omits stars that can't be graded. The
+    PB (343f) on the seeded 'fast' ladder lands on Diamond (see _ranks)."""
     db, svc = make(tmp_path)
     seed(svc)
     svc.ranks = _ranks(tmp_path)
@@ -1154,7 +1155,7 @@ def test_rank_by_star_grades_active_strat_for_quick_select(tmp_path):
     best_aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
     asyncio.run(svc.save_pb(best_aid, "igt"))
     view = build_session_view(db, svc, clock="igt")
-    assert view["rank_by_star"]["2:2"] == "Diamond"
+    assert view["rank_by_star"]["2:2"] == {"rank": "Diamond", "division": "III"}
     # a star with a strat but no PB / no ladder is omitted, not None-valued
     asyncio.run(svc.set_strat(1, 0, "whatever"))
     view2 = build_session_view(db, svc, clock="igt")
@@ -1331,7 +1332,7 @@ def test_rank_mode_average_grades_the_mean_not_the_pb(tmp_path):
     assert view["rank_mode"] == "pb"
     assert sec["rank"]["rank"] == "Mario" and sec["rank"]["mode"] == "pb"
     assert "basis" not in sec["rank"]
-    assert view["rank_by_star"]["2:2"] == "Mario"
+    assert view["rank_by_star"]["2:2"]["rank"] == "Mario"
 
     db.set_state("rank_mode", "avg10")
     view = build_session_view(db, svc, clock="igt")
@@ -1340,9 +1341,9 @@ def test_rank_mode_average_grades_the_mean_not_the_pb(tmp_path):
     assert sec["rank"]["rank"] == "Diamond" and sec["rank"]["mode"] == "avg10"
     assert sec["rank"]["basis"] == {"frames": 346, "display": "0'11\"53",
                                     "count": 2, "window": 10}
-    assert view["rank_by_star"]["2:2"] == "Diamond"
+    assert view["rank_by_star"]["2:2"]["rank"] == "Diamond"
     # per-attempt medals stay per-run: the 343f attempt still reads Mario
-    assert [a["rank"] for a in sec["attempts"]
+    assert [a["rank"]["rank"] for a in sec["attempts"]
             if a["outcome"] == "success"][0] == "Mario"
 
 
@@ -1417,9 +1418,9 @@ def test_route_candidate_rank_follows_rank_mode(tmp_path):
     _seed_fast_with_pb(db, svc, tmp_path)
     rid = asyncio.run(svc.create_route({"name": "V", "steps": [
         {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 2}]}]}))
-    assert build_route_view(db, svc, rid)["steps"][0]["rank"] == "Mario"
+    assert build_route_view(db, svc, rid)["steps"][0]["rank"]["rank"] == "Mario"
     db.set_state("rank_mode", "avg10")
-    assert build_route_view(db, svc, rid)["steps"][0]["rank"] == "Diamond"
+    assert build_route_view(db, svc, rid)["steps"][0]["rank"]["rank"] == "Diamond"
 
 
 def test_valid_frames_filters_the_average_inputs():
@@ -1525,10 +1526,10 @@ def test_reclassified_attempt_regrades_its_medal(tmp_path):
     asyncio.run(svc.publish(star(1350)))          # igt 343 frames
     aid = db.attempts()[0].id
     before = build_session_view(db, svc, clock="igt")["stars"][0]["attempts"][0]
-    assert before["strat_tag"] == "Cannonless" and before["rank"] == "Iron"
+    assert before["strat_tag"] == "Cannonless" and before["rank"]["rank"] == "Iron"
     asyncio.run(svc.set_attempt_strat(aid, "Slide Kick"))
     after = build_session_view(db, svc, clock="igt")["stars"][0]["attempts"][0]
-    assert after["strat_tag"] == "Slide Kick" and after["rank"] == "Mario"
+    assert after["strat_tag"] == "Slide Kick" and after["rank"]["rank"] == "Mario"
 
 
 def test_the_seeded_corpus_does_not_bloat_the_session_view(tmp_path):

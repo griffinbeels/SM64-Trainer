@@ -212,7 +212,7 @@ function StepRow({ step, view, idx, total, catalog, segs, vocab, t, onChange, on
       <span class="routenum">${idx + 1}</span>
       ${group ? html`<span class="chip">${step.need} of ${step.candidates.length}</span>` : null}
       ${step.label ? html`<b>${step.label}</b>` : null}
-      ${view.rank ? html`<${RankIcon} tier=${view.rank} size=${16} />` : null}
+      ${view.rank ? html`<${RankIcon} tier=${view.rank.rank} division=${view.rank.division} size=${16} />` : null}
       ${weakest ? html`<span class="weakflag">weakest</span>` : null}
       <span style="flex:1"></span>
       <span class="route-stat"><small>Step</small><b>${pct(view.step_rate)}</b></span>

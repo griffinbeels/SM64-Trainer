@@ -134,7 +134,7 @@ export function RankBanner({ label, banner, hint = null }) {
   return html`<div class="rank-banner">
     <div class="rank-banner-row">
       <span class="rank-banner-kicker" title=${hint}>${label}</span>
-      <${RankIcon} tier=${banner.rank} size=${24} />
+      <${RankIcon} tier=${banner.rank} division=${banner.division} size=${24} />
       <b class="rank-banner-name">${capName(banner.rank).toUpperCase()}${banner.division ? ` ${divisionDigit(banner.division)}` : ""}</b>
       ${basis && html`<span class="meta rank-banner-basis" title=${basisTitle}>${basisText}</span>`}
       <span class="meta rank-banner-next">${nextLabel

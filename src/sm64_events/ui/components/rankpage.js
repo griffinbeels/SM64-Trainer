@@ -622,7 +622,7 @@ function EntityDetail({ t, entity, onClose }) {
         : html`<div class="entity-attempts"><table><tbody>
           ${rows.map((attempt) => html`<tr key=${attempt.id}
               class=${attempt.is_current_pb ? "is-pb" : ""}>
-            <td>${attempt.rank ? html`<${RankIcon} tier=${attempt.rank} size=${14} />` : ""}</td>
+            <td>${attempt.rank ? html`<${RankIcon} tier=${attempt.rank.rank} division=${attempt.rank.division} size=${14} />` : ""}</td>
             <td><b>${attempt[clock] || "—"}</b></td>
             <td class="entity-attempt-strat">${attempt.strat_tag || "—"}</td>
             <td>${attempt.is_current_pb ? "PB" : ""}</td>

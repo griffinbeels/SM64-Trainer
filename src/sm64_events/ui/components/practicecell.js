@@ -22,7 +22,10 @@ const html = htm.bind(h);
  * armed      a segment whose timer is running now
  * iconSrc    resolved art URL (ui/entities.js optionIcon, or the banner's own
  *            resolveIcon which additionally handles `user:` uploads)
- * rank       optional rank key -> Hat; renders "–" when absent
+ * rank       optional {rank, division} -> RankIcon; renders "–" when absent
+ *            (server shape since the addendum, task 8, 2026-07-26 — rank_by_
+ *            star/segment_targets' "rank" field carries a division alongside
+ *            the tier now, not a bare tier string)
  * sub        sub-line node (strat name, running chip, or nothing)
  * dimIdle    dim non-active cells — the BANNER's look; the picker grid passes
  *            false, since a grid of dim cells reads as disabled
@@ -46,7 +49,7 @@ export function PracticeCell({ active, armed, iconSrc, fallbackSlot = 0,
            alt="" draggable="false" />
     </span>
     <span class="starrank">
-      ${rank ? html`<${RankIcon} tier=${rank} size=${16} />` : "–"}</span>
+      ${rank ? html`<${RankIcon} tier=${rank.rank} division=${rank.division} size=${16} />` : "–"}</span>
     <span class="starname">${name}</span>
     <span class="starsub">${sub}</span>
     ${onEdit ? html`<span class="editicon" role="button" tabindex="0"
