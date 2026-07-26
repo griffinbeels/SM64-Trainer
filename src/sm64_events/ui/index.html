@@ -904,8 +904,33 @@
      never accounted for -- `.hat`'s wings are absolutely positioned OUTSIDE
      its declared box on purpose, so widening the row's shared `gap` would
      not have reached the actual overlap; this margin is scoped to the one
-     child that needs it. */
-  .rank-banner-icon { flex: 0 0 auto; display: inline-flex; margin: 0 9px; }
+     child that needs it.
+
+     Round 5 (addendum, task 8, 2026-07-26, "sweep every container sized for
+     the old disc"): this was the FIRST instance of the bug fixed, one round
+     before it was recognised as a class rather than a one-off -- the
+     9px-each-side margin above was hand-picked to match the wing spill AT
+     THIS ONE CALL SITE'S size (24px). Generalised into `.rank-icon-slot`
+     (below), which any container can reuse at any size, so the next call
+     site inherits the right geometry instead of re-deriving it: reserves
+     HAT_WING_SPILL_RATIO (~0.370, caps.js -- derived from the same
+     CAP_BOX/CANVAS geometry hat.js's own layout math uses, never hand-
+     copied) times `--icon-size` on each side. A call site sets
+     `--icon-size` to the SAME `size` it passes its RankIcon and adds the
+     class; the margin follows automatically at any size. Reserves the FULL
+     wing-inclusive extent rather than just the layout box: wings are
+     present at every division except V and never on Capless, so 32 of the
+     45 tier+division combinations DO have at least one wing pair --
+     reserving for them is the common case on this branch, not the rare
+     one, and this is the same choice the original 9px margin already made
+     (it happened to equal the FULL spill, not just the layout box, at its
+     one size). */
+  .rank-icon-slot {
+    --icon-size: 18px;
+    flex: 0 0 auto; display: inline-flex;
+    margin: 0 calc(var(--icon-size) * .370);
+  }
+  .rank-banner-icon { --icon-size: 24px; }
   .rank-banner-name { font-weight: 800; letter-spacing: .4px; }
   .rank-banner-next { flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; }
   /* Progress toward the next rank: full slot width, never a fixed px bar —
@@ -933,6 +958,12 @@
     color: var(--text); cursor: pointer; flex: 0 0 auto;
   }
   .marelo-bar:hover { border-color: var(--gold); }
+  /* Round 5 (addendum, task 8, 2026-07-26): `.marelo-bar`'s own 10px gap
+     was already close to this icon's wing spill at size 34 (~12.6px a
+     side) -- borderline enough that `.rank-icon-slot` is worth it here
+     too, rather than leaving a margin this narrow to fail the moment font
+     metrics or a future size change shift it. */
+  .marelo-bar-icon { --icon-size: 34px; }
   /* Mario-cap rank icons (spec 2026-07-25-mario-cap-rank-icons). Ports the
      design-probe reference sheet
      (.superpowers/sdd/2026-07-25-mario-cap-rank-icons/reference-sheet.html),
@@ -1186,6 +1217,9 @@
     background: rgba(11,25,41,.92); border: 1px solid var(--tier);
     box-shadow: 0 8px 28px color-mix(in srgb, var(--tier) 40%, transparent);
   }
+  /* Round 5 (addendum, task 8, 2026-07-26): 10px gap vs. a ~14.8px wing
+     spill at size 40 -- real overlap without this. */
+  .rankup-medium-icon { --icon-size: 40px; }
   .rankup-medium-text { display: flex; flex-direction: column; line-height: 1.2; text-align: left; }
   .rankup-medium-text b { color: var(--tier); font-size: 1rem; }
   .rankup-medium-text i { font-style: normal; color: var(--muted); font-size: .72rem; }
@@ -1224,6 +1258,9 @@
     background: rgba(11,25,41,.94);
     box-shadow: 0 0 22px color-mix(in srgb, var(--tier) 45%, transparent);
   }
+  /* Round 5 (addendum, task 8, 2026-07-26): 8px gap vs. a ~11.1px wing
+     spill at size 30. */
+  .entity-toast-icon { --icon-size: 30px; }
   .entity-rankup-text { min-width: 0; display: flex; flex-direction: column; line-height: 1.2; }
   .entity-rankup-text b { color: var(--tier); }
   .entity-rankup-text i { font-style: normal; color: var(--muted); font-size: .7rem; }
@@ -1252,6 +1289,9 @@
   .scope-chip.is-selected { border-color: var(--gold); background: rgba(240, 189, 50, .14); }
   .scope-chip-text { display: flex; flex-direction: column; line-height: 1.15; }
   .scope-chip-text b { font-size: 12px; font-weight: 600; }
+  /* Round 5 (addendum, task 8, 2026-07-26): 8px gap vs. a ~11.1px wing
+     spill at size 30. */
+  .scope-chip-icon { --icon-size: 30px; }
   /* One tier-tinted icon tile per rankable entity — the Coverage strip.
      (These names were `.topn-*` until round 9: they were introduced for a
      "Best in scope" top-12 card that Coverage made redundant, and the card
@@ -1291,6 +1331,9 @@
   .entity-detail-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .entity-detail-head h4 { margin: 0; font-size: 15px; }
   .entity-detail-head .meta { margin: 0; }
+  /* Round 5 (addendum, task 8, 2026-07-26): 10px gap vs. a ~11.1px wing
+     spill at size 30. */
+  .entity-detail-icon { --icon-size: 30px; }
   .entity-detail-spacer { flex: 1 1 auto; }
   /* Its own scroller with a fixed cap, not a growing list: this card sits
      above the chart and the breakdown, and a ten-row expansion that pushed
@@ -1303,7 +1346,13 @@
     padding: 4px 8px; border-bottom: 1px solid var(--border-soft);
     font-size: 12px; white-space: nowrap;
   }
-  .entity-attempts td:first-child { width: 22px; }
+  /* Round 5 (addendum, task 8, 2026-07-26 -- "sweep every container sized
+     for the old disc"): the SAME class of bug as `.attempt-medal` above,
+     smaller in magnitude only because this table's icons are size=14 --
+     22px was already narrower than the layout box alone (14 *
+     HAT_LAYOUT_WIDTH_RATIO ~= 23px, caps.js), before wings (14 *
+     HAT_WING_SPILL_RATIO ~= 5px each side) push the real extent to ~33px. */
+  .entity-attempts td:first-child { width: 34px; }
   .entity-attempts .entity-attempt-strat {
     width: 100%; white-space: nowrap; overflow: hidden;
     text-overflow: ellipsis; color: var(--muted);
@@ -1311,6 +1360,12 @@
   .entity-attempts tr.is-pb td { color: var(--gold); }
   .rank-card-main { display: flex; align-items: center; gap: 16px; margin: 10px 0; }
   .rank-card-main h2 { margin: 0; font-size: 24px; }
+  /* Round 5 (addendum, task 8, 2026-07-26 -- "sweep every container sized
+     for the old disc"): the biggest gap of the whole sweep -- 16px vs. a
+     ~23.7px wing spill at size 64. Every prior round's fixture happened to
+     land on Capless (which never wings), so this was never actually
+     rendered with wings on until this round's targeted check. */
+  .rank-card-icon { --icon-size: 64px; }
   /* Task C.5: names the MARELO-vs-saved-PB distinction so it reads as
      intentional, not as the two banners disagreeing by accident. */
   .rank-card-note { margin: 0 0 10px; font-style: italic; }
@@ -1616,7 +1671,19 @@
   .attempt-table tr { height: 40px; }
   .attempt-table td { padding: .3rem .36rem; border-bottom: 1px solid var(--border-soft); }
   .attempt-index { width: 38px; }
-  .attempt-medal { width: 34px; text-align: center; }
+  /* Round 5 (addendum, task 8, 2026-07-26 -- "sweep every container sized
+     for the old disc"): 34px was sized for a 22px SQUARE Medal/Crest. A Hat
+     at size=22 has a layout box alone of 22 * HAT_LAYOUT_WIDTH_RATIO (~1.632,
+     caps.js) = ~36px -- already wider than the old cell -- and its wings
+     then spill a further 22 * HAT_WING_SPILL_RATIO (~0.370) = ~8px past
+     that on each side, for a real extent of ~52px in a 34px cell: it could
+     never centre, and the overflow read as crowding the time column beside
+     it (the user's exact report). 54px reserves the full wing-inclusive
+     extent with a touch of room, consistent with the rank-banner fix
+     (round 4) and every other site swept this round -- see caps.js's
+     HAT_LAYOUT_WIDTH_RATIO/HAT_WING_SPILL_RATIO for where these numbers
+     come from. */
+  .attempt-medal { width: 54px; text-align: center; }
   .attempt-result { min-width: 0; }
   .attempt-delta { width: 72px; white-space: nowrap; font-weight: 700; }
   .attempt-strategy { width: 150px; white-space: nowrap; }

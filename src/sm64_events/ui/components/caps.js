@@ -121,3 +121,22 @@ export function wingTiers(tier, numeral) {
 export const CANVAS = { width: 1283, height: 675 };
 export const CAP_BOX = { left: 0.155885, top: 0.194074, width: 0.688231, height: 0.801481 };
 export const PATCH_BOX = { left: 0.356976, top: 0.263704, width: 0.286048, height: 0.410370 };
+
+// Round 5 (addendum, task 8, 2026-07-26 -- "sweep every container sized for
+// the old disc"): every container in the app whose width, padding or gap was
+// chosen around the old square Medal/Crest is too narrow for a Hat, because
+// a cap is wider than it is tall BEFORE its wings spill a further stretch
+// outside that box, by design (hat.js -- ".hat" itself never clips). Both
+// ratios are DERIVED from the same CAP_BOX/CANVAS geometry hat.js's own
+// layout math already uses, not hand-copied, so they can't drift out of
+// sync with the sprite if that geometry ever changes.
+const CANVAS_WIDTH_PER_SIZE = (CANVAS.width / CANVAS.height) / CAP_BOX.height;
+// ".hat"'s own declared box (hat.js's outerStyle) -- no wings yet. ~1.632.
+export const HAT_LAYOUT_WIDTH_RATIO = CAP_BOX.width * CANVAS_WIDTH_PER_SIZE;
+// How far a wing spills PAST that box, each side, symmetric by construction
+// (CAP_BOX.left and CANVAS.width - CAP_BOX.left - CAP_BOX.width are equal to
+// four decimal places). ~0.370 -- a container that only reserves the layout
+// box still gets its neighbour crowded by exactly this much per side
+// whenever a division actually has wings (every division except V, and
+// never on Capless -- see wingTiers above).
+export const HAT_WING_SPILL_RATIO = CAP_BOX.left * CANVAS_WIDTH_PER_SIZE;

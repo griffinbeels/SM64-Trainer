@@ -50,7 +50,9 @@ export function MareloBar({ marelo, onOpen }) {
   // as a bare "–"; this reuses that spelling rather than inventing a third.
   return html`<button type="button" class="marelo-bar" onclick=${onOpen}
       title=${`${label}: mastery ${fmtScore(mastery)} x coverage ${practiced}/${n}`}>
-    ${tier ? html`<${RankIcon} tier=${tier} division=${division} size=${34} />` : "–"}
+    ${tier ? html`<span class="rank-icon-slot marelo-bar-icon">
+      <${RankIcon} tier=${tier} division=${division} size=${34} />
+    </span>` : "–"}
     <span class="marelo-bar-text">
       <b>${tier ? `${capName(tier)} ${divisionDigit(division)}` : "Unranked"}</b>
       <span class="meta">${label} · ${fmtPoints(score)} pts</span>

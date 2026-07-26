@@ -532,7 +532,9 @@ function ScopeChips({ activeScopeId, onPick, refreshKey }) {
     ${chips.map((chip) => html`<button type="button" key=${chip.scope_id}
         class="scope-chip ${chip.scope_id === activeScopeId ? "is-selected" : ""}"
         onclick=${() => onPick(chip.scope_id)}>
-      <${RankIcon} tier=${chip.tier} division=${chip.division} size=${30} />
+      <span class="rank-icon-slot scope-chip-icon">
+        <${RankIcon} tier=${chip.tier} division=${chip.division} size=${30} />
+      </span>
       <span class="scope-chip-text">
         <b>${chip.label}</b>
         <span class="meta">${fmtPoints(chip.marelo)} pts</span>
@@ -620,7 +622,9 @@ function EntityDetail({ t, entity, onClose }) {
     : [];
   return html`<div class="entity-detail">
     <div class="entity-detail-head">
-      <${RankIcon} tier=${entity.tier} division=${entity.division} size=${30} />
+      <span class="rank-icon-slot entity-detail-icon">
+        <${RankIcon} tier=${entity.tier} division=${entity.division} size=${30} />
+      </span>
       <h4>${entity.label}</h4>
       <span class="meta">${fmtPoints(entity.score)} pts${
         pb ? ` · PB ${pb.display} (${clock})` : " · no saved PB"}</span>
@@ -781,8 +785,18 @@ export function RankPage({ t }) {
               <!-- Unranked is an EXPLICIT empty state (final review I5,
                    2026-07-25), matching PracticeCell's starrank "–" rather
                    than calling Hat with no tier and drawing a plain grey
-                   cap. -->
-              ${data.tier ? html`<${RankIcon} tier=${data.tier} division=${data.division} size=${64} />` : "–"}
+                   cap. Round 5 (addendum, task 8, 2026-07-26, "sweep every
+                   container sized for the old disc"): wrapped in the
+                   shared rank-icon-slot class -- at size 64 the wing spill
+                   is ~24px a side, comfortably more than this row's 16px
+                   gap, and this card had never actually been rendered with
+                   a WINGED division in any prior round's fixture (Capless,
+                   the only tier tested so far, never wings) -- the gap
+                   alone would have crowded "Capless 1"/"MARELO … pts" the
+                   moment a real winged rank showed here. -->
+              ${data.tier ? html`<span class="rank-icon-slot rank-card-icon">
+                <${RankIcon} tier=${data.tier} division=${data.division} size=${64} />
+              </span>` : "–"}
               <div>
                 <h2>${data.tier ? `${capName(data.tier)} ${divisionDigit(data.division)}` : "Unranked"}</h2>
                 <p class="meta">MARELO ${fmtPoints(tweenedMarelo)} pts · next division at ${fmtPoints(data.next_division_at)}</p>

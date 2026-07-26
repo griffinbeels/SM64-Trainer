@@ -147,7 +147,7 @@ export function RankBanner({ label, banner, hint = null }) {
            other. This wrapper's own margin reserves that spill so the
            row's real painted content stops overlapping, without widening
            the whole row's gap for every OTHER pair of children too. -->
-      <span class="rank-banner-icon"><${RankIcon} tier=${banner.rank} division=${banner.division} size=${24} /></span>
+      <span class="rank-icon-slot rank-banner-icon"><${RankIcon} tier=${banner.rank} division=${banner.division} size=${24} /></span>
       <b class="rank-banner-name">${capName(banner.rank).toUpperCase()}${banner.division ? ` ${divisionDigit(banner.division)}` : ""}</b>
       ${basis && html`<span class="meta rank-banner-basis" title=${basisTitle}>${basisText}</span>`}
       <span class="meta rank-banner-next">${nextLabel
