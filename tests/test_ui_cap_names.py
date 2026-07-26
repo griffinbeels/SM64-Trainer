@@ -40,13 +40,28 @@ RAW_TIER_EXPRESSIONS = (
     "data.tier", "chip.tier", "step.tier", "band.tier",
     "mark.point.tier", "celebration.to.tier", "celebration.from.tier",
     "view.avg_rank.tier", "videoEdit.rank",
+    # M6 (final review, 2026-07-25): these are today only prop handoffs --
+    # here.tier (rankpage.js ladder mark), attempt.rank (rankpage.js entity
+    # attempts), a.rank/s.rank (practice.js attempt medal and star/segment
+    # rank), view.rank (routes.js route step) -- nothing to catch YET, but
+    # I2 gave Hat a default title built from exactly this kind of
+    # expression, and an unwrapped `${attempt.rank}` in a future tooltip
+    # would sail through without this extension. `sec.rank` is different:
+    # it is ALREADY handed off bare, as `banner=${sec.rank}` (ranks.js
+    # RankBanner) and `sectionRank=${sec.rank}` (standards.js) -- adding it
+    # here without also widening _PROP_PREFIXES below turned those two
+    # legitimate whole-object handoffs into false positives.
+    "here.tier", "attempt.rank", "a.rank", "s.rank", "view.rank", "sec.rank",
 )
 
-# A tier expression handed to <Hat>/PracticeCell as a PROP (`tier=${x}`,
-# `division=${x}`, `rank=${x}`) is not printing -- those components take the
-# raw key and draw the icon (and, for Hat, the division glyph) themselves.
-# That is the one legitimate unwrapped consumer.
-_PROP_PREFIXES = ("tier=", "rank=", "division=")
+# A tier (or tier-holding object) expression handed to a component as a PROP
+# is not printing -- the component takes the raw value and either draws the
+# icon itself (`tier=`/`division=`/`rank=` to <Hat>/PracticeCell) or reads
+# named sub-fields off it internally, never printing the object whole
+# (`banner=` to RankBanner reads banner.rank/banner.next_tier; `sectionRank=`
+# to standards.js reads sectionRank.score/sectionRank.basis). That is the
+# legitimate unwrapped handoff in both shapes.
+_PROP_PREFIXES = ("tier=", "rank=", "division=", "banner=", "sectionRank=")
 
 
 def _bare_interpolation_pattern(expr: str) -> str:

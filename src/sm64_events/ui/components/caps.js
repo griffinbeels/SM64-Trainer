@@ -7,9 +7,17 @@
 // mirror is what made swapping a tier a three-edit job across two languages.
 //
 // Swapping a tier is ONE line. Replacing Toadsworth with Peach is:
-//     Silver: { name: "Peach", color: "#f19ec2" },
+//     Silver: { name: "Peach", color: "#f4a4d3" },
 // Dropping `pattern` stops the spots rendering; `treatment` changes the
 // material; `base` (default "cap") would point at different art entirely.
+//
+// That hex is not the first pink tried: test_ui_caps.py's
+// test_every_pair_of_tiers_is_visually_distinct guard is real and will
+// reject a colour that reads too close to another tier's -- a softer,
+// more pastel #f19ec2 scored 184.3 against Grandmaster's #82a0b5, 0.7
+// under the 185 floor (final review I6, 2026-07-25). #f4a4d3 clears every
+// other tier by 8+ units. That guard doing its job on this file's OWN
+// worked example is the point, not a bug in the example.
 //
 // Import-free on purpose, so node can unit-test it — same reason ui/entities.js
 // is import-free and entityicons.js is the layer above it.
