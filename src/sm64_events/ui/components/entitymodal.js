@@ -62,8 +62,12 @@ function CellGrid({ options, value, iconFor, onPick, clearLabel }) {
   </div>`;
 }
 
-function PickerDialog({ groups, value, allow, title, iconFor, depth,
-                       placeholder, nextStep, onPick, onClose }) {
+// Exported so a caller with its own trigger (header.js's context card IS the
+// trigger) can render the dialog directly instead of going through
+// EntityPicker, which would draw a second <button class="entity-trigger">
+// nobody wants (task 7, 2026-07-25-target-picker-strategy-step).
+export function PickerDialog({ groups, value, allow, title, iconFor, depth,
+                              placeholder, nextStep, onPick, onClose }) {
   // Which group has been drilled into (depth 2 only). Derived during render,
   // never in an effect — an effect would paint layer 1 and then correct it.
   const [openGroupKey, setOpenGroupKey] = useState(null);
