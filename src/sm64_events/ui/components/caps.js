@@ -79,21 +79,37 @@ export const capGradient = (tier) => {
 const DIGITS = { V: "5", IV: "4", III: "3", II: "2", I: "1" };
 export const divisionDigit = (numeral) => DIGITS[numeral] || "";
 
-// Below this cap height a division numeral is a smudge (design contact
-// sheet: dead at 22/26, readable from 30) -- shared by every STYLE
-// (rankicon.js::ICON_STYLES), not owned by hat.js alone, so a division
-// switches from digit to silhouette/star at the SAME size on every style
-// instead of one style keeping detail a beat longer than another as a
-// caller shrinks (task 8, 2026-07-25-mario-cap-rank-icons).
+// A division numeral/wings/patch draws at EVERY size a division is passed --
+// there is no size floor on WHETHER content draws (correction, addendum,
+// task 8, 2026-07-26: the user rejected an earlier `size >= DETAIL_MIN_SIZE`
+// gate outright -- "if we're using the cap system, we must be using the wing
+// system", every cap, every size). This constant survives only as a size
+// THRESHOLD hat.js's own rendering leans on for two purely visual tunings
+// that never hide content: the Capless outline's fill needs more opacity
+// below it (a thin ring can't survive downscaling on its own), and the
+// glyph claims a larger share of the sign field below it (more legible with
+// nothing else competing for those pixels) -- see hat.js's
+// `ringNeedsMoreFill`/`glyphFraction`. Named for its origin (the old
+// detail-gating floor, design contact sheet: numeral dead at 22/26,
+// comfortably readable from 30) rather than renamed, since it is still the
+// same size boundary, just backing weaker guarantees now.
 export const DETAIL_MIN_SIZE = 30;
 
 // THE wing policy, isolated so it can change without touching a renderer.
 // Division V is the bottom of a tier and wears no wings; division I wears all
 // four, which makes the top division of the top tier the actual Wing Cap.
-// Reserving wings for the top tier alone is:
-//     return tier === "Mario" ? ... : 0;
+//
+// Capless (Iron) is the one tier that NEVER wears wings, at any division
+// (correction, addendum, task 8, 2026-07-26 -- overrides an earlier "wings
+// everywhere including Capless" instruction). Capless means you have no cap;
+// wings are a thing a CAP earns, so a capless state sprouting wings is
+// incoherent -- and it would undercut the dotted outline (below), whose whole
+// job is to say "nothing here yet". Divisions within Capless are marked by
+// the numeral on the patch alone. Isolated here, not in hat.js/medal.js/
+// celebrate.js, so the policy can keep changing without a renderer knowing.
 export const WING_TIERS = 4;
 export function wingTiers(tier, numeral) {
+  if (tier === "Iron") return 0;
   const digit = Number(divisionDigit(numeral));
   if (!digit) return 0;
   return Math.max(0, Math.min(WING_TIERS, 5 - digit));

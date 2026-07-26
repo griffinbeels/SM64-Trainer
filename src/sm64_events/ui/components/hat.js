@@ -32,18 +32,44 @@ const html = htm.bind(h);
 const HAT_DIR = "/ui/assets/hat";
 const art = (stem) => `url(${HAT_DIR}/${stem}.png)`;
 
-// DETAIL_MIN_SIZE (caps.js) -- so patch/glyph/wings only draw at 30px+, and
-// only when there IS a division to show. `division == null` is a DATA rule,
-// not a size rule: Medal's silhouette-only call sites pass a 22px medal with
-// no division, and gating on size alone would draw an empty sign field
-// there. Shared with every other style (rankicon.js::ICON_STYLES) so a
-// division switches detail at the same size everywhere.
+// Whether the patch/glyph/wings draw is a DATA rule alone -- `division !=
+// null` -- with NO size floor (correction, addendum, task 8, 2026-07-26: the
+// user rejected the earlier `size >= DETAIL_MIN_SIZE` gate outright --
+// "if we're using the cap system, we must be using the wing system", every
+// cap, every size). `division == null` still means no numeral/wings: you
+// cannot draw a division you do not have, which is what keeps the
+// tier-only ladder-scale marks (13px, one per band, no division passed) as
+// clean silhouettes. DETAIL_MIN_SIZE (caps.js) now backs only two purely
+// visual size tunings below, neither of which hides content: the outline
+// ring's own fill opacity (a thin ring needs a more visible fill to survive
+// downscaling) and the glyph's share of the sign field (see glyphFraction).
 
 // Ink colour for the sign-field glyph. Not part of caps.js: it is a
 // rendering constant of the glyph itself (Mario red for the "M", a dark
 // bronze everywhere else), not a tier's own identity colour.
 const GLYPH_INK = "#1b1206";
 const GLYPH_INK_MARIO = "#d81f1f";
+
+// The glyph's share of `size`, as a fraction. At DETAIL_MIN_SIZE and above
+// this is the flat 0.26 already verified on the design contact sheet
+// (Task 4: identifiable at 30px, the least crisp of the nine but readable).
+// Below that floor the sign field has far fewer pixels to work with, so the
+// glyph claims proportionally MORE of it -- there is nothing else in the
+// icon competing for space at small sizes, so legibility is a pure function
+// of how many of those pixels the glyph itself gets. Interpolated linearly
+// down to GLYPH_FRACTION_AT_FLOOR at 13px (the smallest mark any surface in
+// this app draws, the ladder-scale row) and clamped there for anything
+// smaller still. Unclamped ABOVE DETAIL_MIN_SIZE, so every 30px+ caller sees
+// EXACTLY the prior, already-verified look -- this only changes what
+// happens below the floor that used to hide the glyph outright.
+const GLYPH_FRACTION_AT_DETAIL = 0.26;
+const GLYPH_FRACTION_AT_FLOOR = 0.435;
+const GLYPH_LEGIBILITY_FLOOR_SIZE = 13;
+function glyphFraction(size) {
+  const span = DETAIL_MIN_SIZE - GLYPH_LEGIBILITY_FLOOR_SIZE;
+  const t = Math.max(0, Math.min(1, (DETAIL_MIN_SIZE - size) / span));
+  return GLYPH_FRACTION_AT_DETAIL + (GLYPH_FRACTION_AT_FLOOR - GLYPH_FRACTION_AT_DETAIL) * t;
+}
 
 // A tinted layer is always a `.fill` (mask) + `.shade` (multiply) PAIR
 // reading the SAME art file -- index.html's `.hat .fill`/`.hat .shade` rules
@@ -107,9 +133,17 @@ function wingLayers(wings) {
 export function Hat({ tier, division = null, size = 18, title = null, flap = false, foldWings = 0 }) {
   const spec = CAP[tier] || {};
   const color = rankColor(tier);
-  const detail = division != null && size >= DETAIL_MIN_SIZE;
+  // DATA rule alone, no size floor (see the block comment above) -- a
+  // division draws at every size. wingTiers itself already returns 0 for
+  // Iron/Capless regardless of division (caps.js), so nothing here needs to
+  // special-case that tier.
+  const hasDivision = division != null;
+  // Purely visual: below this size the outline ring's own line is too thin
+  // to read on its own, so its underlying fill needs more presence. Never
+  // gates whether content draws, only how opaque the ring's fill is.
+  const ringNeedsMoreFill = size < DETAIL_MIN_SIZE;
   const folding = foldWings > 0;
-  const wings = folding ? foldWings : (detail ? wingTiers(tier, division) : 0);
+  const wings = folding ? foldWings : (hasDivision ? wingTiers(tier, division) : 0);
 
   // `size` is the CAP's own footprint, both axes -- the element Medal/Crest
   // used to occupy was exactly `size`px tall (and, being square, `size`px
@@ -169,16 +203,25 @@ export function Hat({ tier, division = null, size = 18, title = null, flap = fal
     // already uses `color-mix(in srgb, var(--tier) …, transparent)` for the
     // rank-up glow in index.html, same technique).
     //
-    // The fill's OWN opacity is size-dependent: at `detail` sizes (30px+)
-    // the ring itself is wide enough to read clearly, so the fill stays
-    // very faint and the icon reads as a hollow outline. Below that the
-    // ring's line is too thin to survive downscaling -- the fill is then
-    // the ONLY thing carrying "findable at all", so it needs more presence
-    // there than it's allowed at a size where the ring can carry it.
+    // The fill's OWN opacity is size-dependent (`ringNeedsMoreFill`, size
+    // alone -- decoupled from `hasDivision` since task 8's addendum, which
+    // is a DATA rule): at DETAIL_MIN_SIZE and above the ring itself is wide
+    // enough to read clearly, so the fill stays very faint and the icon
+    // reads as a hollow outline. Below that the ring's line is too thin to
+    // survive downscaling -- the fill is then the ONLY thing carrying
+    // "findable at all", so it needs more presence there than it's allowed
+    // at a size where the ring can carry it.
     const ringColor = `color-mix(in srgb, ${color} 55%, white)`;
-    const fillOpacity = detail ? 0.14 : 0.3;
+    const fillOpacity = ringNeedsMoreFill ? 0.3 : 0.14;
     layers.push(html`<i class="fill" style=${`--c:${color};opacity:${fillOpacity};--art:${art("cap")}`}></i>`);
-    layers.push(html`<i class="fill" style=${`--c:${ringColor};--art:${art("cap_outline")}`}></i>`);
+    // `dotted` (addendum, task 8, 2026-07-26): the ring reads as "you don't
+    // have this yet" rather than a thin solid cap -- see index.html's
+    // `.hat .fill.dotted` for the mask-composite that punches the gaps in,
+    // scaled as a fraction of the icon rather than baked at one resolution.
+    // Only the RING gets it; the dim under-fill above stays solid on purpose
+    // (constraint 2 of the addendum -- it is what keeps Capless findable at
+    // 13px, and dotting it too would remove the one thing carrying that job).
+    layers.push(html`<i class="fill dotted" style=${`--c:${ringColor};--art:${art("cap_outline")}`}></i>`);
   } else {
     layers.push(...tintedPair("cap", color));
     if (spec.treatment === "metal")
@@ -189,12 +232,12 @@ export function Hat({ tier, division = null, size = 18, title = null, flap = fal
     }
   }
 
-  if (detail) {
+  if (hasDivision) {
     layers.push(html`<i class="patch" style=${`--art:${art("patch")}`}></i>`);
     const glyphVars = `--patch-left:${PATCH_BOX.left * 100}%;--patch-top:${PATCH_BOX.top * 100}%;`
       + `--patch-width:${PATCH_BOX.width * 100}%;--patch-height:${PATCH_BOX.height * 100}%;`;
     const glyphColor = spec.glyph ? GLYPH_INK_MARIO : GLYPH_INK;
-    layers.push(html`<i class="glyph" style=${`${glyphVars}font-size:${size * 0.26}px;color:${glyphColor}`}>${spec.glyph || divisionDigit(division)}</i>`);
+    layers.push(html`<i class="glyph" style=${`${glyphVars}font-size:${size * glyphFraction(size)}px;color:${glyphColor}`}>${spec.glyph || divisionDigit(division)}</i>`);
   }
 
   // A DEFAULT title, derived from the same registry the icon itself reads,

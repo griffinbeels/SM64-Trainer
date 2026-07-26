@@ -181,6 +181,22 @@ def test_division_five_wears_no_wings_and_division_one_wears_four():
         "climb one wing per division up to I (all four)")
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+def test_capless_never_wears_wings_at_any_division():
+    """Correction (addendum, task 8, 2026-07-26): Capless (Iron) is the one
+    tier that never wears wings, at any division -- Capless means you have no
+    cap, and wings are a thing a cap earns. This must hold from caps.js's
+    OWN wingTiers alone (not a special case added in hat.js/medal.js/
+    celebrate.js) -- isolated here so the policy can change without a
+    renderer knowing."""
+    wings = run_node("wingTiers", "console.log(JSON.stringify("
+                     '["V", "IV", "III", "II", "I"].map((numeral) => '
+                     'wingTiers("Iron", numeral))));')
+    assert wings == [0, 0, 0, 0, 0], (
+        "Iron (Capless) must wear zero wings at every division -- Capless "
+        "means you have no cap, and wings are a thing a cap earns")
+
+
 def _tinted_pair_problems(source: str) -> list:
     """Everything wrong with hat.js's fill/shade emission, or [] if the
     tinted-pair invariant (final review I4, 2026-07-25) holds structurally:

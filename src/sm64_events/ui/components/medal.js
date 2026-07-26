@@ -19,7 +19,7 @@
 //     colours moved during the fix wave the day after it would have shipped.
 import { h } from "preact";
 import htm from "htm";
-import { rankColor, capName, divisionDigit, DETAIL_MIN_SIZE } from "./caps.js";
+import { rankColor, capName, divisionDigit } from "./caps.js";
 
 const html = htm.bind(h);
 
@@ -57,10 +57,13 @@ export function Medal({ tier, division = null, size = 18, title = null,
                         flap = false, foldWings = 0 }) {
   const background = rankColor(tier);
   const ink = inkFor(background);
-  // Same condition hat.js gates its own patch/glyph on (division present AND
-  // at/above DETAIL_MIN_SIZE) -- below that, or with no division at all, the
-  // disc shows the star the deleted Medal always drew.
-  const showDigit = division != null && size >= DETAIL_MIN_SIZE;
+  // DATA rule alone, no size floor (correction, addendum, task 8,
+  // 2026-07-26 -- the user rejected a size gate on the hat style outright,
+  // and the two styles must never disagree about when a division shows).
+  // `division == null` still means no digit: you cannot draw a division you
+  // do not have, so the disc falls back to the star the deleted Medal
+  // always drew.
+  const showDigit = division != null;
   const glyph = showDigit ? divisionDigit(division) : "★";
 
   // Same default-title contract as Hat's own `defaultTitle` (hat.js) so

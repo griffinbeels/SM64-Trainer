@@ -967,6 +967,36 @@
     -webkit-mask: var(--art) center / contain no-repeat;
             mask: var(--art) center / contain no-repeat;
   }
+  /* Capless's ring reads as "you don't have this yet" rather than "a thin
+     solid cap" (addendum, task 8, 2026-07-26 -- dashed/dotted is the
+     established convention for an absent/placeholder state, same reasoning
+     as a ghost outline in any other UI). A SECOND mask layer -- a diagonal
+     repeating-linear-gradient -- intersected with the existing cap_outline.png
+     silhouette punches gaps into the ring without touching the art file or
+     the --art custom property every OTHER tinted layer depends on (the
+     mask/shade invariant, tests/test_ui_caps.py, is untouched: this rule
+     only ever fires for the outline treatment's ring, never the shared
+     .fill/.shade pair). The gradient's stops are PERCENTAGES and its tile
+     size is set in `%` (not px), so the dash period scales with the icon
+     instead of being baked at one resolution -- a 96px cap and a 13px cap
+     get the same proportional dashing. `intersect` (unprefixed) is the
+     modern keyword; `source-in` is -webkit-mask-composite's legacy
+     equivalent for engines that don't ship the modern one yet -- same
+     dual-declaration pattern this file already uses for mask/-webkit-mask. */
+  .hat .fill.dotted {
+    --dots: repeating-linear-gradient(135deg,
+              #000 0%, #000 12%, transparent 12%, transparent 24%);
+    -webkit-mask-image: var(--art), var(--dots);
+            mask-image: var(--art), var(--dots);
+    -webkit-mask-size: contain, 22% 22%;
+            mask-size: contain, 22% 22%;
+    -webkit-mask-repeat: no-repeat, repeat;
+            mask-repeat: no-repeat, repeat;
+    -webkit-mask-position: center, center;
+            mask-position: center, center;
+    -webkit-mask-composite: source-in;
+            mask-composite: intersect;
+  }
   .hat .shade {
     background: var(--art) center / contain no-repeat;
     mix-blend-mode: multiply;
