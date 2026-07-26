@@ -12,6 +12,15 @@
 
 ## Global Constraints
 
+> **SUPERSEDED IN PART (2026-07-26 merge).** This plan was written against
+> `mario-cap-rank-icons` at 93a8aa0. That branch then replaced `Hat` with the
+> `RankIcon` style registry and changed `_strat_rank` to return
+> `{rank, division}` instead of a bare tier string, so every `Hat tier=${rank}`
+> and the `DETAIL_MIN_SIZE = 30` silhouette rule below are no longer how the
+> code reads. The shipped reconciliation is commit 05cae91; `practicecell.js`
+> and `.claude/rules/ui.md` are authoritative over this document.
+
+
 - **This branch is based on `mario-cap-rank-icons`, not on `main`** (decision, 2026-07-26). That branch **deleted `Medal`** from `ranks.js`. The rank icon is now `Hat` from `ui/components/hat.js`, and the tier registry lives in `ui/components/caps.js`. Anywhere this plan or the spec says "medal", read `Hat`.
   - `Hat({ tier, division = null, size = 18, title = null })` — `tier` is the raw tier key (`"Platinum"`), NOT a cap name.
   - **The division numeral only draws at `size >= 30`** (`DETAIL_MIN_SIZE` in `hat.js`) and only when `division` is non-null. A 16px Hat is a silhouette. Size the call site for what you need it to say.

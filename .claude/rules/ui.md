@@ -66,6 +66,37 @@ fixed-height slots); design contract/anti-slop rules in `.agents/skills/sm64-uiu
   MCP — unit tests + `node --check` alone shipped an invisible feature once.
   Fixture-server recipe, harness-page technique + headless-Chrome fallback:
   see auto-memory `verify-ui-effects-with-harness-page`.
+
+- **`--dump-dom` + `--virtual-time-budget` RENDERS the app but cannot DRIVE
+  it.** Clicks dispatch, DOM listeners fire, and no Preact re-render ever
+  happens — `document.body.innerHTML.length` came back byte-identical after
+  clicking a plain nav tab (2026-07-26). Anything needing interaction
+  (opening a modal, walking a multi-step flow) must go through CDP:
+  launch `chrome --headless=new --remote-debugging-port=N`, take the page's
+  `webSocketDebuggerUrl` from `http://127.0.0.1:N/json`, then
+  `Runtime.evaluate` with `awaitPromise: true`. Collect
+  `Runtime.consoleAPICalled` and `Runtime.exceptionThrown` as they arrive
+  between command replies — dropping those events is how a broken FIXTURE
+  looks like a broken feature.
+- **Start every driven run with a CONTROL interaction on something unrelated
+  and known-good** (a nav tab), and assert it changed the DOM. Without it a
+  harness fault is indistinguishable from the bug you are hunting: a whole
+  session's evidence pointed at "the new picker never opens" when the app was
+  frozen for an unrelated reason and nothing at all responded.
+- **A fixture must answer the query the UI actually sends, not just the
+  path.** `standards.js` fetches `/api/ranks/standards?entity=…`, which
+  returns a per-entity `{entity, clock, strategies, …}`; the same route with
+  no param returns the WHOLE store `{version, entities}`. A fixture server
+  that ignores query strings serves the wrong one, `Object.keys(undefined)`
+  throws **inside Preact's render**, and the entire tree stops updating while
+  DOM listeners keep firing — an app that looks alive and is not. Capture
+  fixtures with the same query string the component uses.
+- Generate fixtures for endpoints the RUNNING instance does not have (a new
+  route on your branch, or one whose shape your branch changed) by calling
+  the builders against a SQLite **online-backup** snapshot of the live db
+  (`sqlite3.Connection.backup`, never a file copy — a copy can catch a torn
+  WAL). `TrackerService(db, broadcaster, ranks=…)`: omit `ranks=` and every
+  rank builder short-circuits to empty, which reads as a broken builder.
 - **"Clicking anywhere on it works" is a hit-testing claim, and a screenshot
   cannot show it.** Sample `document.elementFromPoint` at the corners, the
   icon lane, the label and the centre, write the results into a `<pre>` on the
