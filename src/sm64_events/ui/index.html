@@ -925,6 +925,62 @@
     color: var(--text); cursor: pointer; flex: 0 0 auto;
   }
   .marelo-bar:hover { border-color: var(--gold); }
+  /* Mario-cap rank icons (spec 2026-07-25-mario-cap-rank-icons). Ports the
+     design-probe reference sheet
+     (.superpowers/sdd/2026-07-25-mario-cap-rank-icons/reference-sheet.html),
+     whose composition was rendered and eyeballed across 45 states before
+     this shipped -- hat.js is the only caller and these rules are not to be
+     "cleaned up" independent of a render. No animation ships in this task;
+     a later flap/shimmer must gate its own keyframes on
+     prefers-reduced-motion the way .starholder already does. */
+  @font-face { font-family: "SuperMario256"; src: url("/ui/assets/fonts/SuperMario256.ttf"); }
+  .hat { position: relative; display: inline-block; }
+  .hat i { position: absolute; inset: 0; display: block; }
+  /* Every tinted layer is TWO rules off the SAME --art: a masked colour fill
+     under a multiplied greyscale shade. One custom property feeds both, so
+     a call site cannot hand them different files and let the page backdrop
+     leak into the multiply (pinned by tests/test_ui_caps.py). */
+  .hat .fill {
+    background-color: var(--c);
+    -webkit-mask: var(--art) center / contain no-repeat;
+            mask: var(--art) center / contain no-repeat;
+  }
+  .hat .shade {
+    background: var(--art) center / contain no-repeat;
+    mix-blend-mode: multiply;
+  }
+  /* Grandmaster/Metal's specular sweep -- SCREENED rather than multiplied,
+     since it lightens the cap instead of shading it; the one non-multiply
+     blend a tier's material needs. */
+  .hat .highlight {
+    background: linear-gradient(135deg, rgba(255,255,255,.75) 0%, rgba(255,255,255,0) 55%);
+    -webkit-mask: var(--art) center / contain no-repeat;
+            mask: var(--art) center / contain no-repeat;
+    mix-blend-mode: screen;
+  }
+  /* The spots are painted in their own colour but must curve with the cap,
+     so their shade is the CAP's OWN greyscale (--art) masked to the spot
+     shapes (--mask) -- not the spots' own flat-white greyscale, which would
+     sit flat on the cap instead of curving with it. */
+  .hat .spot-shade {
+    background: var(--art) center / contain no-repeat;
+    -webkit-mask: var(--mask) center / contain no-repeat;
+            mask: var(--mask) center / contain no-repeat;
+    mix-blend-mode: multiply;
+  }
+  .hat .patch { background: var(--art) center / contain no-repeat; }
+  /* The sign field, positioned from caps.js's PATCH_BOX via custom
+     properties the component sets per instance, rather than a second copy
+     of the fractions living in this file. `inset: auto` FIRST -- it is the
+     shorthand for top/right/bottom/left, so declaring it after left/top
+     silently resets them (cost one render during design). */
+  .hat .glyph {
+    position: absolute; inset: auto;
+    left: var(--patch-left); top: var(--patch-top);
+    width: var(--patch-width); height: var(--patch-height);
+    display: grid; place-items: center; line-height: 1;
+    font-family: "SuperMario256", Impact, sans-serif;
+  }
   .marelo-crest {
     display: inline-flex; align-items: center; justify-content: center;
     border-radius: 6px; background: var(--crest); color: #0d1220; flex: 0 0 auto;

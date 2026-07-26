@@ -16,6 +16,7 @@ from sm64_events.ranks.classify import RANK_NAMES
 from tests.source_scan import strip_comments
 
 CAPS_JS = Path(__file__).resolve().parents[1] / "src" / "sm64_events" / "ui" / "components" / "caps.js"
+HAT_JS = CAPS_JS.parent / "hat.js"
 
 # Anything at or below this failed in production; the palette must clear it
 # with margin. Raising it is a decision, not a cleanup.
@@ -69,3 +70,34 @@ def test_the_guard_can_still_fail():
     assert redmean("#8a8a8a", "#c2c2c2") < MIN_SEPARATION   # the shipped bug
     assert redmean("#f5f7f8", "#eeeae4") < MIN_SEPARATION   # white vs off-white
     assert redmean("#e23b3b", "#3dc05c") > MIN_SEPARATION    # red vs green
+
+
+def test_the_mask_and_the_shade_come_from_one_sprite():
+    """Measured 2026-07-25: the tint is exact and backdrop-independent ONLY
+    because the masked colour layer and the multiplied greyscale layer read the
+    same PNG. Both rules must therefore resolve their art from the SAME custom
+    property, so a call site cannot hand them different files."""
+    css = strip_comments((CAPS_JS.parents[1] / "index.html").read_text(encoding="utf-8"))
+    fill = re.search(r"\.hat \.fill\s*\{(.*?)\}", css, re.S)
+    shade = re.search(r"\.hat \.shade\s*\{(.*?)\}", css, re.S)
+    assert fill and shade, "the .hat .fill / .hat .shade rules are missing"
+    assert "var(--art)" in fill.group(1) and "var(--art)" in shade.group(1), (
+        "both layers must take their art from --art; two sources let the "
+        "page backdrop leak into the multiply")
+    assert "mix-blend-mode: multiply" in shade.group(1)
+
+
+def test_the_glyph_rule_outranks_the_layer_rule():
+    """`.hat i { inset: 0; display: block }` is class+element and beats a bare
+    `.glyph` class, which silently parked the numeral outside the cap twice
+    during design. The glyph rule needs two classes."""
+    css = strip_comments((CAPS_JS.parents[1] / "index.html").read_text(encoding="utf-8"))
+    assert ".hat .glyph" in css, "the glyph rule must be .hat .glyph, not .glyph"
+    assert re.search(r"\.glyph\s*\{[^}]*inset:\s*auto[^}]*left:", css, re.S), (
+        "inset is the shorthand for top/right/bottom/left -- declaring it AFTER "
+        "left/top resets them; it must come first")
+
+
+def test_division_five_wears_no_wings_and_division_one_wears_four():
+    source = strip_comments(CAPS_JS.read_text(encoding="utf-8"))
+    assert "5 - digit" in source, "wingTiers must map division 5 -> 0 wings"
