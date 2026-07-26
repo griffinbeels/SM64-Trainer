@@ -343,13 +343,20 @@ export function courseUnionGroups(catalog, segments, courseByLevel, ranksByKey =
   // I2). They get their own trailing group instead.
   const castleSegments = (segments || []).filter((segment) =>
     segmentCourse(segment, courseByLevel) == null);
-  // `rank` rides `undefined` (never `null`) for an unmapped option: it is
-  // spread into a plain object headed for JSON.stringify, which OMITS an
+  // `rank`/`strat` ride `undefined` (never `null`) for an unmapped option: both
+  // are spread into a plain object headed for JSON.stringify, which OMITS an
   // undefined property entirely -- so a caller that never passes `ranksByKey`
   // gets back the exact same option shape as before this parameter existed.
-  const withRank = (option) => ({
-    ...option, rank: (ranksByKey[rankMapKey(option.id)] || {}).rank,
-  });
+  // `strat` names the strategy the `rank` medal was earned WITH (the
+  // best-scoring one, `build_entity_ranks`' answer) -- practicecell.js needs
+  // it on the badge's tooltip, since the SAME cell later shows the ACTIVE
+  // strategy's medal on the practice banner, often a different one (spec §3
+  // risk 1; final review I2, 2026-07-26 -- this was the one piece of that
+  // mitigation the client dropped).
+  const withRank = (option) => {
+    const { rank, strat } = ranksByKey[rankMapKey(option.id)] || {};
+    return { ...option, rank, strat };
+  };
   const courseCells = inGridOrder.map((course) => ({
     key: `course-${course.id}`,
     label: course.name,

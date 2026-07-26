@@ -86,7 +86,13 @@ def _grid_rank_guard_holds(index_source: str, cell_source: str) -> bool:
     grid_css = strip_comments(index_source)
     grid_rules = grid_css[grid_css.index(".entity-grid"):] if ".entity-grid" in grid_css else ""
     guard_present = ".entity-grid .starrank { display: none; }" in grid_rules
-    badge_wired = "rankBadge" in strip_comments(cell_source)
+    # M5 (final review, 2026-07-26): "rankBadge" alone only proves the PROP
+    # survives -- a refactor that keeps rankBadge in the signature but
+    # deletes the branch body that draws ".starrank-badge" reported green
+    # here while the picker silently regressed to the in-flow row the 900px
+    # audit removed. Both substrings must survive together.
+    stripped_cell = strip_comments(cell_source)
+    badge_wired = "rankBadge" in stripped_cell and "starrank-badge" in stripped_cell
     return guard_present and badge_wired
 
 
@@ -104,6 +110,24 @@ def test_the_picker_grid_actually_asks_for_the_badge_look():
     # would have silently resurrected the in-flow row the 900px audit
     # removed, invisibly to every other test in this file.
     assert "rankBadge=${true}" in MODAL_CODE
+
+
+def test_the_grid_passes_the_strategy_a_rank_was_earned_with_to_the_cell():
+    # I2 (final review, 2026-07-26): the picker grades a cell by its BEST
+    # strategy, but the SAME cell later shows the ACTIVE strategy's rank on
+    # the practice banner -- often a different one. Without `strat` reaching
+    # the cell, nothing on screen explains that. entities.js's withRank
+    # already carries `strat` (test_ui_entities.py); this pins that CellGrid
+    # forwards it rather than dropping it at this hop, the way it used to.
+    assert "strat=${option.strat}" in MODAL_CODE
+
+
+def test_the_badge_title_names_the_strategy_not_a_bare_tier_key():
+    # capName() is mandatory here (tests/test_ui_cap_names.py) -- a raw tier
+    # key is wrong on screen since the palette moved to cap colours.
+    assert "capName(rank)" in CELL_CODE
+    assert "best on" in CELL_CODE
+    assert "title=${badgeTitle}" in CELL_CODE
 
 
 def test_a_caller_without_a_next_step_still_closes_on_pick():
@@ -148,13 +172,20 @@ def test_the_grid_rank_guard_can_still_fail():
         "// .entity-grid .starrank { display: none; } used to live here\n",
         "// rankBadge used to gate the corner badge, removed in a refactor\n")
     # Real code, both halves present: caught as intact.
+    real_cell = ('function PracticeCell({ rankBadge = false }) '
+                '{ return rankBadge ? html`<span class="starrank-badge" />` : null; }')
     assert _grid_rank_guard_holds(
         ".entity-grid { color: red; }\n.entity-grid .starrank { display: none; }",
-        "function PracticeCell({ rankBadge = false }) {}")
+        real_cell)
     # Real code, only one half present: caught as broken either way.
     assert not _grid_rank_guard_holds(
         ".entity-grid { color: red; }\n.entity-grid .starrank { display: none; }",
         "function PracticeCell({}) {}")
     assert not _grid_rank_guard_holds(
-        ".entity-grid { color: red; }",
-        "function PracticeCell({ rankBadge = false }) {}")
+        ".entity-grid { color: red; }", real_cell)
+    # M5's own regression (final review, 2026-07-26): the prop survives in
+    # the signature but the branch body that draws the badge is gone --
+    # "rankBadge" alone used to pass this, silently.
+    assert not _grid_rank_guard_holds(
+        ".entity-grid { color: red; }\n.entity-grid .starrank { display: none; }",
+        "function PracticeCell({ rankBadge = false }) { return null; }")

@@ -56,6 +56,7 @@ function CellGrid({ options, value, iconFor, onPick, clearLabel }) {
       name=${option.name}
       sub=${option.sub ?? ""}
       rank=${option.rank}
+      strat=${option.strat}
       rankBadge=${true}
       title=${option.name}
       onPick=${() => onPick(option.id)} />`)}

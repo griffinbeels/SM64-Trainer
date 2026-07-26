@@ -352,6 +352,22 @@ console.log(JSON.stringify(courseUnionGroups(
     assert unranked.get("rank") is None
 
 
+def test_course_union_groups_attach_the_strategy_the_rank_was_earned_with():
+    # I2 (final review, 2026-07-26): `strat` must ride alongside `rank` --
+    # practicecell.js needs it to name which strategy a picker badge grades,
+    # since the SAME cell later shows a DIFFERENT (active) strategy's medal
+    # on the practice banner. Dropped at this exact hop before the fix.
+    body = CATALOG_UNION + """
+const ranksByKey = { "star:1:0": { rank: "Gold", division: "III", strat: "BLJ" } };
+console.log(JSON.stringify(courseUnionGroups(
+  catalog, segments, courseByLevel, ranksByKey)));
+"""
+    groups = run_node("courseUnionGroups", body)
+    bob = next(group for group in groups if group["label"] == "Bob-omb Battlefield")
+    ranked = next(option for option in bob["options"] if option["id"] == "1:0")
+    assert ranked["strat"] == "BLJ"
+
+
 def test_course_union_groups_attach_a_rank_from_the_segment_entity_key():
     # A segment option's id ("segment:3") already matches the rank map's key
     # shape -- no translation needed, unlike the star side above.

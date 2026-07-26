@@ -1,6 +1,7 @@
 import { h } from "preact";
 import htm from "htm";
 import { Hat } from "./hat.js";
+import { capName } from "./caps.js";
 import { fallbackToGenericStar, isGenericArt } from "./entityicons.js";
 
 const html = htm.bind(h);
@@ -23,6 +24,13 @@ const html = htm.bind(h);
  * iconSrc    resolved art URL (ui/entities.js optionIcon, or the banner's own
  *            resolveIcon which additionally handles `user:` uploads)
  * rank       optional rank key -> Hat; renders "–" when absent
+ * strat      the strategy `rank` was earned WITH, for the corner badge's
+ *            title (rankBadge only; see below) -- picker cells grade the
+ *            BEST-scoring strategy (build_entity_ranks), while the SAME cell
+ *            on the practice banner shows the ACTIVE one, often different.
+ *            Naming it is what stops the medal changing after you pick from
+ *            reading as a rendering fault (spec §3 risk 1; final review I2,
+ *            2026-07-25/26)
  * sub        sub-line node (strat name, running chip, or nothing)
  * dimIdle    dim non-active cells — the BANNER's look; the picker grid passes
  *            false, since a grid of dim cells reads as disabled
@@ -40,12 +48,20 @@ const html = htm.bind(h);
  *            picker has no per-cell icon override — that lives on the banner)
  */
 export function PracticeCell({ active, armed, iconSrc, fallbackSlot = 0,
-                              rank, name, sub, title, dimIdle = false,
+                              rank, strat, name, sub, title, dimIdle = false,
                               rankBadge = false, onPick, onEdit }) {
   const editKey = (keyEvent) => {
     if (keyEvent.key !== "Enter" && keyEvent.key !== " ") return;
     keyEvent.preventDefault(); keyEvent.stopPropagation(); onEdit();
   };
+  // The badge's OWN title, naming the strategy the medal was earned WITH
+  // (rankBadge only -- the banner's in-flow row shows the ACTIVE strategy,
+  // never ambiguous there, so it keeps Hat's own default title). capName()
+  // is mandatory here: a raw tier key is wrong on screen, never the style
+  // guide's plain preference (tests/test_ui_cap_names.py).
+  const badgeTitle = rank
+    ? (strat ? `${capName(rank)} · best on ${strat}` : capName(rank))
+    : null;
   return html`<button
       class="starcell ${active ? "active-star" : ""} ${armed ? "armed" : ""}"
       title=${title || name} onclick=${onPick}>
@@ -56,7 +72,7 @@ export function PracticeCell({ active, armed, iconSrc, fallbackSlot = 0,
            alt="" draggable="false" />
     </span>
     ${rankBadge
-      ? (rank ? html`<span class="starrank-badge"><${Hat} tier=${rank} size=${16} /></span>` : null)
+      ? (rank ? html`<span class="starrank-badge"><${Hat} tier=${rank} title=${badgeTitle} size=${16} /></span>` : null)
       : html`<span class="starrank">
       ${rank ? html`<${Hat} tier=${rank} size=${16} />` : "–"}</span>`}
     <span class="starname">${name}</span>
