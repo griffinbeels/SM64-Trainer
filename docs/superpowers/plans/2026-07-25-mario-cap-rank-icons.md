@@ -300,8 +300,11 @@ UI = ROOT / "src" / "sm64_events" / "ui"
 HAT = UI / "assets" / "hat"
 CAPS_JS = UI / "components" / "caps.js"
 
-# Parts every hat draws regardless of tier, plus the four wing steps.
-BASE_PARTS = {"cap", "patch"} | {f"wing{n}" for n in range(1, 5)}
+# Parts every hat draws regardless of tier, plus the four wing steps -- split
+# per side, because a flap rotates the two wings in OPPOSITE directions and one
+# image containing both can only rotate as a unit.
+BASE_PARTS = ({"cap", "patch"}
+              | {f"wing{n}_{side}" for n in range(1, 5) for side in ("l", "r")})
 
 
 def _named_parts() -> set[str]:
@@ -370,6 +373,13 @@ Three transformations, each with a reason:
    subtract the original; the ring is white so it tints like everything else.
    That is the Capless tier's whole appearance.
 3. **Patch and spots → pure white**, since they arrive at 236.
+4. **Split each wing at the canvas midpoint** into `wingN_l.png` and
+   `wingN_r.png`, each still on the full canvas so it stacks at `inset: 0`.
+   The cap is centred to the pixel (196px margins both sides), so the midpoint
+   is the correct seam. This is what makes the flap possible: the two wings
+   rotate in opposite directions, and one image holding both can only turn as
+   a unit. Assert each half is non-empty — a seam in the wrong place produces
+   one blank file and a hat with a single wing.
 
 Then downscale every output to **512 px wide** (`Image.LANCZOS`) — the largest
 on-screen use is a 96px cap, and 1283px sprites are ~120 KB each in an exe that
