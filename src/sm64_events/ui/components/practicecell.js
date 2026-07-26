@@ -1,6 +1,6 @@
 import { h } from "preact";
 import htm from "htm";
-import { Medal } from "./ranks.js";
+import { Hat } from "./hat.js";
 import { fallbackToGenericStar, isGenericArt } from "./entityicons.js";
 
 const html = htm.bind(h);
@@ -22,7 +22,7 @@ const html = htm.bind(h);
  * armed      a segment whose timer is running now
  * iconSrc    resolved art URL (ui/entities.js optionIcon, or the banner's own
  *            resolveIcon which additionally handles `user:` uploads)
- * rank       optional rank key -> Medal; renders "–" when absent
+ * rank       optional rank key -> Hat; renders "–" when absent
  * sub        sub-line node (strat name, running chip, or nothing)
  * dimIdle    dim non-active cells — the BANNER's look; the picker grid passes
  *            false, since a grid of dim cells reads as disabled
@@ -46,7 +46,7 @@ export function PracticeCell({ active, armed, iconSrc, fallbackSlot = 0,
            alt="" draggable="false" />
     </span>
     <span class="starrank">
-      ${rank ? html`<${Medal} rank=${rank} size=${16} />` : "–"}</span>
+      ${rank ? html`<${Hat} tier=${rank} size=${16} />` : "–"}</span>
     <span class="starname">${name}</span>
     <span class="starsub">${sub}</span>
     ${onEdit ? html`<span class="editicon" role="button" tabindex="0"

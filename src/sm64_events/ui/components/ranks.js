@@ -7,17 +7,8 @@ import { h } from "preact";
 import htm from "htm";
 import { useTween } from "../useTween.js";
 import { rankColor } from "./caps.js";
+import { Hat } from "./hat.js";
 const html = htm.bind(h);
-
-const FG = { Mario: "#fff", Grandmaster: "#fff", Master: "#fff", Diamond: "#fff",
-  Platinum: "#10300f", Gold: "#3a2c00", Silver: "#2a2a2a", Bronze: "#2e1c08", Iron: "#f6ece7" };
-
-export function Medal({ rank, size = 18 }) {
-  const bg = rankColor(rank), fg = FG[rank] || "#7e8796";
-  return html`<span title=${rank || "no rank"} style=${`display:inline-flex;align-items:center;justify-content:center;width:${size}px;height:${size}px;border-radius:50%;background:${bg};border:2px solid rgba(255,255,255,.5);flex:0 0 auto`}>
-    <span style=${`color:${fg};font-size:${Math.round(size * 0.5)}px;line-height:1`}>${rank ? "★" : "–"}</span>
-  </span>`;
-}
 
 // Mirrors ranks/classify.RANK_MODES keys+labels (keep in lockstep) in
 // dropdown order; the header's Rank picker renders from this.
@@ -142,7 +133,7 @@ export function RankBanner({ label, banner, hint = null }) {
   return html`<div class="rank-banner">
     <div class="rank-banner-row">
       <span class="rank-banner-kicker" title=${hint}>${label}</span>
-      <${Medal} rank=${banner.rank} size=${24} />
+      <${Hat} tier=${banner.rank} size=${24} />
       <b class="rank-banner-name">${banner.rank.toUpperCase()}${banner.division ? ` ${banner.division}` : ""}</b>
       ${basis && html`<span class="meta rank-banner-basis" title=${basisTitle}>${basisText}</span>`}
       <span class="meta rank-banner-next">${nextLabel

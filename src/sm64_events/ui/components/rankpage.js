@@ -7,8 +7,9 @@ import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
-import { Medal, rankColor } from "./ranks.js";
-import { Crest, fmtPoints, fmtScore, toPoints } from "./marelo.js";
+import { rankColor } from "./ranks.js";
+import { fmtPoints, fmtScore, toPoints } from "./marelo.js";
+import { Hat } from "./hat.js";
 import { Icon } from "./icons.js";
 import { PageState, InlineState } from "./states.js";
 import { useTween } from "../useTween.js";
@@ -157,12 +158,12 @@ function LadderBar({ value }) {
       ${TIER_BANDS.filter((band) => band.tier !== here.tier).map((band) => html`<span
           class="rank-ladder-mark" style=${`left:${(band.from + band.to) / 2}%`}
           title=${`${band.tier} — ${toPoints(band.from)} to ${toPoints(band.to)} pts`}>
-        <${Medal} rank=${band.tier} size=${13} />
+        <${Hat} tier=${band.tier} size=${13} />
       </span>`)}
       <span class="rank-ladder-mark is-you" style=${`left:${filled}%`}
           title=${`You are here — ${toPoints(filled)} pts`}>
         <b class="rank-ladder-you">YOU</b>
-        <${Medal} rank=${here.tier} size=${22} />
+        <${Hat} tier=${here.tier} size=${22} />
       </span>
     </div>
     <div class="rank-ladder">
@@ -413,13 +414,13 @@ export function HistoryChart({ points }) {
 
 // The breakdown's "next rank" column (task C.3, trimmed round 2): the
 // TARGET only -- "→ Platinum IV", "→ Gold", or "Maxed" -- never the
-// current tier/division too, which the Crest two columns over already
+// current tier/division too, which the Hat icon two columns over already
 // shows; one format for every row instead of a practiced-vs-unpracticed
 // split. Sourced from `entity.next_tier`/`entity.next_division`, which the
 // server computes via `scoring.division_progress` against the entity's OWN
 // ladder (server/ranks_api.py::_score_scope). Never re-derived here: a
 // second copy of the division math in JS is exactly the kind of drift that
-// would make this column disagree with the Crest.
+// would make this column disagree with the Hat icon.
 function nextRankLabel(entity) {
   // An entity you have never practiced has no rank to step up FROM, and the
   // server's `next_tier` for it is the Gold QUEST TARGET the Gain column is
@@ -468,7 +469,7 @@ function Breakdown({ data, routeOrder, onToggle }) {
           entity.excluded ? "is-excluded" : ""].filter(Boolean).join(" ")}>
         <td class="rank-cell-name">${entity.label}</td>
         <td>${entity.tier
-          ? html`<${Crest} tier=${entity.tier} division=${entity.division} size=${22} />`
+          ? html`<${Hat} tier=${entity.tier} division=${entity.division} size=${30} />`
           : "–"}</td>
         <td class="meta rank-cell-points">${fmtPoints(entity.score)}</td>
         <td class="meta rank-cell-next">${nextRankLabel(entity)}</td>
@@ -507,7 +508,7 @@ function ScopeChips({ activeScopeId, onPick, refreshKey }) {
     ${chips.map((chip) => html`<button type="button" key=${chip.scope_id}
         class="scope-chip ${chip.scope_id === activeScopeId ? "is-selected" : ""}"
         onclick=${() => onPick(chip.scope_id)}>
-      <${Crest} tier=${chip.tier} division=${chip.division} size=${26} />
+      <${Hat} tier=${chip.tier} division=${chip.division} size=${30} />
       <span class="scope-chip-text">
         <b>${chip.label}</b>
         <span class="meta">${fmtPoints(chip.marelo)} pts</span>
@@ -595,7 +596,7 @@ function EntityDetail({ t, entity, onClose }) {
     : [];
   return html`<div class="entity-detail">
     <div class="entity-detail-head">
-      <${Crest} tier=${entity.tier} division=${entity.division} size=${28} />
+      <${Hat} tier=${entity.tier} division=${entity.division} size=${30} />
       <h4>${entity.label}</h4>
       <span class="meta">${fmtPoints(entity.score)} pts${
         pb ? ` · PB ${pb.display} (${clock})` : " · no saved PB"}</span>
@@ -612,7 +613,7 @@ function EntityDetail({ t, entity, onClose }) {
         : html`<div class="entity-attempts"><table><tbody>
           ${rows.map((attempt) => html`<tr key=${attempt.id}
               class=${attempt.is_current_pb ? "is-pb" : ""}>
-            <td>${attempt.rank ? html`<${Medal} rank=${attempt.rank} size=${14} />` : ""}</td>
+            <td>${attempt.rank ? html`<${Hat} tier=${attempt.rank} size=${14} />` : ""}</td>
             <td><b>${attempt[clock] || "—"}</b></td>
             <td class="entity-attempt-strat">${attempt.strat_tag || "—"}</td>
             <td>${attempt.is_current_pb ? "PB" : ""}</td>
@@ -753,7 +754,7 @@ export function RankPage({ t }) {
         : !data
           ? html`<${InlineState}>Loading this scope…<//>`
           : html`<div class="rank-card-main">
-              <${Crest} tier=${data.tier} division=${data.division} size=${64} />
+              <${Hat} tier=${data.tier} division=${data.division} size=${64} />
               <div>
                 <h2>${data.tier ? `${data.tier} ${data.division}` : "Unranked"}</h2>
                 <p class="meta">MARELO ${fmtPoints(tweenedMarelo)} pts · next division at ${fmtPoints(data.next_division_at)}</p>

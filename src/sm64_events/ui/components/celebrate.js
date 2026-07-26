@@ -21,7 +21,7 @@ import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
 import { RANK_NAMES, rankColor } from "./ranks.js";
-import { Crest } from "./marelo.js";
+import { Hat } from "./hat.js";
 const html = htm.bind(h);
 
 const PREF = "sm64.celebrate";
@@ -116,7 +116,7 @@ function TierRankUp({ celebration, scopeId, onDone }) {
     <div class=${`rankup-card ${phase === "hold" ? "final" : ""}`} onclick=${finish}>
       <span class="meta">RANK UP</span>
       <span key=${`${phase}:${flipStep}`} class=${phase === "flip" ? "rankup-crest-flip" : ""}>
-        <${Crest} tier=${shownTier} division=${shownDivision} size=${96} />
+        <${Hat} tier=${shownTier} division=${shownDivision} size=${96} />
       </span>
       ${phase === "fill" && html`<div class="rankup-fill-track"><i></i></div>`}
       <h2>${shownTier}${phase !== "flip" ? ` ${shownDivision}` : ""}</h2>
@@ -143,7 +143,7 @@ function DivisionRankUp({ celebration, scopeId, onDone }) {
   const tier = celebration.to.tier;
   return html`<div class="rankup-medium" role="status" style=${`--tier:${rankColor(tier)}`}>
     <div class="rankup-medium-card" onclick=${finish}>
-      <${Crest} tier=${tier} division=${celebration.to.division} size=${40} />
+      <${Hat} tier=${tier} division=${celebration.to.division} size=${40} />
       <span class="rankup-medium-text">
         <b>${celebration.from.division} → ${celebration.to.division}</b>
         <i>${tier} · click to dismiss</i>
@@ -207,7 +207,7 @@ export function EntityCelebration({ celebration, entityKey, onDone, children }) 
     ${children}
     ${showing && tierUp && html`<div class="entity-rankup-toast" role="status"
         style=${`--tier:${rankColor(celebration.to.tier)}`} onclick=${finish}>
-      <${Crest} tier=${celebration.to.tier} division=${celebration.to.division} size=${28} />
+      <${Hat} tier=${celebration.to.tier} division=${celebration.to.division} size=${30} />
       <span class="entity-rankup-text">
         <b>${celebration.to.tier} ${celebration.to.division}</b>
         <i>tier up · tap to dismiss</i>

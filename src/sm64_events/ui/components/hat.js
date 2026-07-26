@@ -3,7 +3,7 @@
 // Ports the design-probe reference sheet
 // (.superpowers/sdd/2026-07-25-mario-cap-rank-icons/reference-sheet.html),
 // rendered and eyeballed across 45 states before this shipped -- its layer
-// composition (see the CSS in index.html, near .marelo-crest) is known-good
+// composition (see the CSS in index.html, the `.hat` rule block) is known-good
 // and is not to be "cleaned up" independent of a render. This file only
 // wires that composition to the real registry (caps.js) and the shipped
 // per-side wing sprites (task 2) instead of the reference's hardcoded
@@ -16,6 +16,17 @@ import {
 } from "./caps.js";
 
 const html = htm.bind(h);
+
+// One component, called with or without a division, replaces both Medal
+// (ranks.js) and Crest (marelo.js) -- Task 4, 2026-07-25-mario-cap-rank-icons.
+// This supersedes .claude/rules/ui.md's older note that Crest was "a CREST
+// not a medal on purpose": that comment's reasoning was about SHAPE (an
+// aggregate reads as "just another star's rank" if it looks identical to a
+// per-entity medal), but Crest had already spread to four per-entity sites
+// on the Rank tab by the time this task started, so shape was never actually
+// what separated the two call sites. The real distinction was always DATA --
+// does this rank carry a division to show -- which is exactly the `division`
+// prop here. One component rendered twice with different props is the rule.
 
 const HAT_DIR = "/ui/assets/hat";
 const art = (stem) => `url(${HAT_DIR}/${stem}.png)`;
