@@ -588,19 +588,20 @@ def create_api_router(service) -> APIRouter:
         the section simply accrues no attempts.
         kind="star" (default): requires course_id and star_id.
         """
+        # strat_tag present-and-null ("(no strategy)" in the picker) clears
+        # the entity's existing strat explicitly; strat_tag absent entirely
+        # leaves it alone. One read of model_fields_set, both kinds.
+        clear_strat = ("strat_tag" in body.model_fields_set
+                       and body.strat_tag is None)
         try:
             if body.kind == "segment":
                 if body.segment_id is None:
                     raise ValueError("segment target needs segment_id")
-                await service.set_target_segment(body.segment_id, body.strat_tag)
+                await service.set_target_segment(body.segment_id, body.strat_tag,
+                                                 clear_strat=clear_strat)
             else:
                 if body.course_id is None or body.star_id is None:
                     raise ValueError("star target needs course_id and star_id")
-                # strat_tag present-and-null ("(no strategy)" in the picker)
-                # clears the star's existing strat explicitly; strat_tag
-                # absent entirely leaves it alone.
-                clear_strat = ("strat_tag" in body.model_fields_set
-                               and body.strat_tag is None)
                 await service.set_target(body.course_id, body.star_id,
                                          body.strat_tag, clear_strat=clear_strat)
         except (LookupError, ValueError, RuntimeError) as e:

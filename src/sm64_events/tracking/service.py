@@ -330,10 +330,9 @@ class TrackerService:
         # when truthy, exactly as before, so no target_set consumer sees a
         # new field. An explicit clear ("(no strategy)" in the picker) is
         # instead journaled through set_strat(course, star, None), which
-        # already emits an explicit-null strat_set -- the same mechanism
-        # set_target_segment already delegates to via set_strat_segment for
-        # a truthy tag; this gives the star path the same "target and strat
-        # are separate journaled facts" shape.
+        # already emits an explicit-null strat_set -- the star/segment
+        # symmetric mechanism set_target_segment also uses (truthy tag ->
+        # set_strat_segment(tag), explicit clear -> set_strat_segment(None)).
         if strat_tag is not None:
             payload["strat_tag"] = strat_tag
         await self.publish(Event(type="target_set", frame=0,
@@ -344,7 +343,8 @@ class TrackerService:
             await self.set_strat(course_id, star_id, None)
 
     async def set_target_segment(self, segment_id: int,
-                                 strat_tag: str | None = None) -> None:
+                                 strat_tag: str | None = None,
+                                 clear_strat: bool = False) -> None:
         self._require_db()
         if all(d.id != segment_id for d in self._segment_defs):
             raise LookupError(f"segment {segment_id} not found")
@@ -356,6 +356,15 @@ class TrackerService:
             # segment strat memory is written via strat_set (the projector
             # ignores strat_tag inside segment target_set payloads)
             await self.set_strat_segment(segment_id, strat_tag)
+        elif clear_strat:
+            # mirror of set_target's clear_strat: explicit-null in the
+            # picker's "no strategy" card journals a null strat_set rather
+            # than leaving the existing strat in place. A defaulted segment
+            # (default_strat truthy) can't actually reach "no strategy" --
+            # the projector falls a falsy strat_set back to the def's own
+            # default (caveat 17) -- so this is only observable on the 10
+            # legacy tricks and user-created segments, deliberately.
+            await self.set_strat_segment(segment_id, None)
 
     async def set_strat(self, course_id: int, star_id: int,
                         strat_tag: str | None) -> None:
