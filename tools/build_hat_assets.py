@@ -9,6 +9,13 @@ The cap arrives RED. Its HSV *value* channel is exactly the shading a white
 cap needs -- a lit face reads 255 whatever the hue -- so V, normalised so the
 99th percentile of opaque pixels hits pure white, IS the white master.
 
+Side effect: also copies the SuperMario256 font from this machine's installed
+copy into the repo (`FONT_SRC` -> `assets/fonts/SuperMario256.ttf`), if it can
+find it -- the sprites are the only output every machine can reproduce; the
+font copy is a convenience for the machine that has the font installed, not a
+required step (final review M8, 2026-07-25: this used to hard-fail here on
+any OTHER machine, after every sprite had already been written).
+
 Run: uv run python tools/build_hat_assets.py
 """
 import re
@@ -186,11 +193,20 @@ def main():
         scaled = image.resize((DOWNSCALE_WIDTH, scaled_height), Image.LANCZOS)
         scaled.save(OUT / f"{name}.png")
 
-    FONT_OUT.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(require(FONT_SRC), FONT_OUT)
-
     print("wrote:", ", ".join(sorted(f"{name}.png" for name in outputs)))
-    print(f"font: {FONT_OUT}")
+
+    # Tolerant, unlike require(): FONT_SRC is a per-user installed-font path
+    # that only exists on Griffin's machine, not a repo asset -- failing here
+    # would stop a reproducible re-run of the sprite derivation above dead on
+    # any other machine, after every sprite had already been written. The
+    # font already committed at FONT_OUT (or a manual copy) is sufficient.
+    if FONT_SRC.exists():
+        FONT_OUT.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(FONT_SRC, FONT_OUT)
+        print(f"font: {FONT_OUT}")
+    else:
+        print(f"font: skipped -- {FONT_SRC} not found on this machine; "
+              f"copy SuperMario256.ttf to {FONT_OUT} by hand if it's missing there")
 
 
 if __name__ == "__main__":

@@ -933,7 +933,14 @@
      "cleaned up" independent of a render. The wing flap (task 6, below) is
      the one animation this component carries, gated on
      prefers-reduced-motion the way .starholder already does. */
-  @font-face { font-family: "SuperMario256"; src: url("/ui/assets/fonts/SuperMario256.ttf"); }
+  /* font-display: block (final review M9, 2026-07-25) -- without it the
+     glyph paints in the Impact fallback until the font loads, most visibly
+     on the 96px rank-up overlay whose whole job is to look like an event.
+     A short blank beats a flash of the wrong face there. */
+  @font-face {
+    font-family: "SuperMario256"; font-display: block;
+    src: url("/ui/assets/fonts/SuperMario256.ttf") format("truetype");
+  }
   /* `.hat`'s OWN box is exactly the cap's footprint, BOTH axes (hat.js sets
      width/height to the cap's own, not the canvas's) -- that is what makes
      it a drop-in for the medal/crest it replaced inside seventeen
