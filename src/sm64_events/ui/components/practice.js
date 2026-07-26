@@ -9,7 +9,7 @@ import { Timeline } from "./timeline.js";
 import { Progress, hasProgressPoints } from "./progress.js";
 import { StageBanner } from "./stagebanner.js";
 import { RankBanner, rankColor } from "./ranks.js";
-import { Hat } from "./hat.js";
+import { RankIcon } from "./rankicon.js";
 import { StandardsPanel } from "./standards.js";
 import { StratPicker } from "./stratpicker.js";
 import { FailureCompilation } from "./failcomp.js";
@@ -145,7 +145,7 @@ function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, sec }) {
       class="${a.cleared ? "cleared" : ""} ${flash ? "row-flash" : ""} ${isNew ? "row-new" : ""}">
     <td class="meta attempt-index">#${idx + 1}</td>
     <td class="attempt-medal">${a.rank
-      ? html`<${Hat} tier=${a.rank} size=${22} />` : ""}</td>
+      ? html`<${RankIcon} tier=${a.rank.rank} division=${a.rank.division} size=${22} />` : ""}</td>
     <td class="attempt-result ${a.outcome === "success" ? "good" : "badx"}">
       ${OUTCOME_LABEL[a.outcome] || a.outcome}
       ${a.outcome === "death" && a.outcome_detail
@@ -829,7 +829,7 @@ function RouteFocus({ rv, t, ui, freshIds, openCompare }) {
               onclick=${() => setTargetCandidate(c, t)}
               title="practice this">${c.display}</button>`)}
           <span style="flex:1"></span>
-          ${s.rank ? html`<${Hat} tier=${s.rank} size=${16} />` : null}
+          ${s.rank ? html`<${RankIcon} tier=${s.rank.rank} division=${s.rank.division} size=${16} />` : null}
           <span class="routerate">step ${fpct(s.step_rate)}</span>
           <span class="routecum">cum ${fpct(s.cumulative)}</span>
         </div>

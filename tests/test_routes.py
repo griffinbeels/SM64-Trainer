@@ -305,8 +305,9 @@ def test_route_view_has_step_ranks_and_average(tmp_path):
     rv = build_route_view(db, svc, route_id)
     step0 = rv["steps"][0]
     assert step0["rank"] is not None        # a real tier resolved (not the all-None regression)
+    assert step0["rank"]["division"] is not None   # addendum, task 8: a division rides along too
     assert rv["avg_rank"] is not None
-    assert rv["avg_rank"]["tier"] == step0["rank"]   # single ranked step -> avg tier == its tier
+    assert rv["avg_rank"]["tier"] == step0["rank"]["rank"]   # single ranked step -> avg tier == its tier
     assert rv["weakest_step"] == 0
 
     # Per-strategy ranking: switch the candidate's active strat to one with no

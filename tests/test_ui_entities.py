@@ -347,7 +347,10 @@ console.log(JSON.stringify(courseUnionGroups(
     groups = run_node("courseUnionGroups", body)
     bob = next(group for group in groups if group["label"] == "Bob-omb Battlefield")
     ranked = next(option for option in bob["options"] if option["id"] == "1:0")
-    assert ranked["rank"] == "Gold"
+    # `rank` rides NESTED {rank, division} (mario-cap-rank-icons integration,
+    # 2026-07-26) -- PracticeCell hands it straight to RankIcon, which now
+    # wants the same shape rank_by_star/segment_targets already carry.
+    assert ranked["rank"] == {"rank": "Gold", "division": "III"}
     unranked = next(option for option in bob["options"] if option["id"] == "1:1")
     assert unranked.get("rank") is None
 
@@ -379,7 +382,9 @@ console.log(JSON.stringify(courseUnionGroups(
     groups = run_node("courseUnionGroups", body)
     hmc = next(group for group in groups if group["label"] == "Hazy Maze Cave")
     ranked = next(option for option in hmc["options"] if option["id"] == "segment:3")
-    assert ranked["rank"] == "Bronze"
+    # No `division` in the source map here -- withRank still nests it as
+    # {rank, division}, and JSON.stringify drops the undefined-valued key.
+    assert ranked["rank"] == {"rank": "Bronze"}
 
 
 def test_course_union_groups_still_defaults_ranksbykey_for_the_old_call_shape():

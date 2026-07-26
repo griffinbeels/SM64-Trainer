@@ -1,6 +1,6 @@
 import { h } from "preact";
 import htm from "htm";
-import { Hat } from "./hat.js";
+import { RankIcon } from "./rankicon.js";
 import { capName } from "./caps.js";
 import { fallbackToGenericStar, isGenericArt } from "./entityicons.js";
 
@@ -23,7 +23,10 @@ const html = htm.bind(h);
  * armed      a segment whose timer is running now
  * iconSrc    resolved art URL (ui/entities.js optionIcon, or the banner's own
  *            resolveIcon which additionally handles `user:` uploads)
- * rank       optional rank key -> Hat; renders "–" when absent
+ * rank       optional {rank, division} -> RankIcon; renders "–" when absent
+ *            (server shape since the addendum, task 8, 2026-07-26 — rank_by_
+ *            star/segment_targets' "rank" field carries a division alongside
+ *            the tier now, not a bare tier string)
  * strat      the strategy `rank` was earned WITH, for the corner badge's
  *            title (rankBadge only; see below) -- picker cells grade the
  *            BEST-scoring strategy (build_entity_ranks), while the SAME cell
@@ -56,11 +59,14 @@ export function PracticeCell({ active, armed, iconSrc, fallbackSlot = 0,
   };
   // The badge's OWN title, naming the strategy the medal was earned WITH
   // (rankBadge only -- the banner's in-flow row shows the ACTIVE strategy,
-  // never ambiguous there, so it keeps Hat's own default title). capName()
-  // is mandatory here: a raw tier key is wrong on screen, never the style
-  // guide's plain preference (tests/test_ui_cap_names.py).
+  // never ambiguous there, so it keeps RankIcon's own default title).
+  // capName() is mandatory here: a raw tier key is wrong on screen, never
+  // the style guide's plain preference (tests/test_ui_cap_names.py). `rank`
+  // is now `{rank, division}` (the addendum, task 8, 2026-07-26), so this
+  // reads the tier off `rank.rank` rather than treating the whole object as
+  // the tier key.
   const badgeTitle = rank
-    ? (strat ? `${capName(rank)} · best on ${strat}` : capName(rank))
+    ? (strat ? `${capName(rank.rank)} · best on ${strat}` : capName(rank.rank))
     : null;
   return html`<button
       class="starcell ${active ? "active-star" : ""} ${armed ? "armed" : ""}"
@@ -72,9 +78,9 @@ export function PracticeCell({ active, armed, iconSrc, fallbackSlot = 0,
            alt="" draggable="false" />
     </span>
     ${rankBadge
-      ? (rank ? html`<span class="starrank-badge"><${Hat} tier=${rank} title=${badgeTitle} size=${16} /></span>` : null)
+      ? (rank ? html`<span class="starrank-badge"><${RankIcon} tier=${rank.rank} division=${rank.division} title=${badgeTitle} size=${16} /></span>` : null)
       : html`<span class="starrank">
-      ${rank ? html`<${Hat} tier=${rank} size=${16} />` : "–"}</span>`}
+      ${rank ? html`<${RankIcon} tier=${rank.rank} division=${rank.division} size=${16} />` : "–"}</span>`}
     <span class="starname">${name}</span>
     <span class="starsub">${sub}</span>
     ${onEdit ? html`<span class="editicon" role="button" tabindex="0"

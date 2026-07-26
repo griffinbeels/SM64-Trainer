@@ -234,11 +234,22 @@ def _seg_strategies(registered: dict, history, seg_id: int, ranks=None,
     return [s for s in out if s not in deleted]
 
 
-def _attempt_rank(a, frames, ranks) -> str | None:
+def _attempt_rank(a, frames, ranks) -> dict | None:
+    """{"rank", "division"} for one attempt's own medal, or None when
+    ungradeable. Routed through `_graded_progress` -- the SAME curve
+    `_section_banner` grades through -- rather than a second computation
+    (`classify.rank_for` used to answer this directly, off the raw ladder,
+    with no division of its own; addendum, task 8, 2026-07-26: an attempt
+    medal must never disagree with the section banner about which division a
+    tier is at)."""
     if ranks is None or frames is None or a.outcome != "success" or not a.strat_tag:
         return None
     ek = entity_key(a.course_id, a.star_id, a.segment_id)
-    return classify.rank_for(ranks.ladder_cs(ek, a.strat_tag), classify.display_cs(frames))
+    ladder = ranks.ladder_cs(ek, a.strat_tag)
+    if not ladder:
+        return None
+    progress = _graded_progress(ladder, classify.display_cs(frames))
+    return {"rank": progress["rank"], "division": progress["division"]}
 
 
 def valid_frames(history, strat, clock) -> list[int]:
@@ -280,20 +291,33 @@ def grading_basis(mode, pb, history, strat, clock) -> dict | None:
             "window": mode_def["window"]}
 
 
-def _strat_rank(ranks, ek, strat, basis) -> str | None:
-    """Rank NAME for an entity graded under `strat` at its grading basis
-    (grading_basis output: PB row in pb mode, mean of valid runs in avg
+def _strat_rank(ranks, ek, strat, basis) -> dict | None:
+    """{"rank", "division"} for an entity graded under `strat` at its grading
+    basis (grading_basis output: PB row in pb mode, mean of valid runs in avg
     modes), or None when ungradeable (no ranks loaded, no active strat, no
     basis, or the strat has no ladder). THE single grading path shared by
     route candidates and the stage quick-select star grid (view's
     rank_by_star) — keep it one place so a medal never disagrees with the
-    section banner / attempt medals."""
+    section banner / attempt medals.
+
+    Routed through `_graded_progress` (addendum, task 8, 2026-07-26) rather
+    than a second computation: this used to call `classify.rank_for` directly
+    against the raw ladder, which answers the tier alone via threshold-
+    crossing and has no division of its own -- so every consumer of this
+    function's payload (rank_by_star, segment_targets, route candidates) drew
+    an icon with no division to show, even though `_graded_progress` already
+    computes exactly that division and already feeds the section banner.
+    `_graded_progress`'s own tier answer is provably identical to
+    `classify.rank_for`'s (both are threshold-crossings against the same
+    ladder cutoffs; `_graded_progress` merely also carries the division),
+    so this is not a behavior change to the tier itself."""
     if ranks is None or not strat or basis is None:
         return None
     ladder = ranks.ladder_cs(ek, strat)
     if not ladder:
         return None
-    return classify.rank_for(ladder, classify.display_cs(basis["frames"]))
+    progress = _graded_progress(ladder, classify.display_cs(basis["frames"]))
+    return {"rank": progress["rank"], "division": progress["division"]}
 
 
 def _graded_progress(ladder: dict, time_cs: int) -> dict:
@@ -1085,13 +1109,14 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         "strategies": registered,
         "last_strat_by_star": {f"{c}:{s}": masked(v, entity_key(c, s))
                                for (c, s), v in service.strat_by_star.items()},
-        # Parallel to last_strat_by_star: each star's rank under its ACTIVE
-        # strat, graded on the PB achieved WITH that strat (per-strategy
-        # ranking — pbs_by_strat, never the strategy-blind overall PB), for
-        # the quick-select grid's at-a-glance medal. Only gradeable stars
-        # appear; recomputed every build so changing a star's strat updates
-        # its medal on the next view. A tombstoned strat is masked to None
-        # before grading — a deleted strategy must not keep showing a medal.
+        # Parallel to last_strat_by_star: each star's {rank, division} under
+        # its ACTIVE strat, graded on the PB achieved WITH that strat
+        # (per-strategy ranking — pbs_by_strat, never the strategy-blind
+        # overall PB), for the quick-select grid's at-a-glance medal. Only
+        # gradeable stars appear; recomputed every build so changing a star's
+        # strat updates its medal on the next view. A tombstoned strat is
+        # masked to None before grading — a deleted strategy must not keep
+        # showing a medal.
         "rank_by_star": {
             f"{c}:{s}": rank
             for (c, s), strat in service.strat_by_star.items()
@@ -1241,9 +1266,11 @@ def build_run_history(db, route_id: int | None = None) -> dict:
 
 
 def _candidate_rank(db, service, c, mode, by_star, by_seg,
-                    deleted_strats: dict) -> str | None:
-    """Rank for one route candidate under its active strat, graded by the
-    rank-mode basis (per-strategy: another strat's times never count).
+                    deleted_strats: dict) -> dict | None:
+    """{"rank", "division"} for one route candidate under its active strat,
+    graded by the rank-mode basis (per-strategy: another strat's times never
+    count) — a thin dispatch straight into `_strat_rank`, so it carries the
+    SAME division that function now computes (addendum, task 8, 2026-07-26).
     `by_star`/`by_seg` are the caller's one-pass attempt groupings (id order)
     so a route with many candidates never rescans the attempt list.
     `deleted_strats` is the deleted_strats KV (read once per route view build,
@@ -1278,8 +1305,12 @@ def build_route_view(db, service, route_id: int) -> dict:
     """Resolve a route for display: each step's candidates get names, plus the
     per-step success rate and cumulative product (tracking/routes.route_stats).
     A candidate whose segment was deleted is marked broken (no cascade).
-    Each step gains 'rank' (best-ranked candidate); the route view gains
-    'avg_rank' (nearest-tier mean of step ranks) and 'weakest_step' index."""
+    Each step gains 'rank' (best-ranked candidate's {rank, division} — or
+    None; addendum, task 8, 2026-07-26 added the division alongside the tier
+    that was already there); the route view gains 'avg_rank' (nearest-tier
+    mean of step ranks — {score, tier} only, no division: it names the
+    nearest tier to a MEAN score, which is not a real graded time and so has
+    no real division to show) and 'weakest_step' index."""
     route = next((r for r in db.routes() if r["id"] == route_id), None)
     if route is None:
         raise LookupError(f"route {route_id} not found")
@@ -1318,20 +1349,23 @@ def build_route_view(db, service, route_id: int) -> dict:
         ranks_here = [_candidate_rank(db, service, c, rank_mode, by_star,
                                       by_seg, deleted_strats)
                       for c in step["candidates"]]
+        # best is a {rank, division} dict (or None) -- the WINNING
+        # candidate's own graded division rides along, so the step's medal
+        # never has a tier with no division to show (addendum, task 8).
         best = max((r for r in ranks_here if r),
-                   key=lambda r: classify.RANK_SCORE[r], default=None)
+                   key=lambda r: classify.RANK_SCORE[r["rank"]], default=None)
         steps.append({"label": step.get("label"), "need": step["need"],
                       "candidates": cands, "step_rate": st["step_rate"],
                       "cumulative": st["cumulative"], "broken": broken,
                       "rank": best})
-    scored = [classify.RANK_SCORE[s["rank"]] for s in steps if s["rank"]]
+    scored = [classify.RANK_SCORE[s["rank"]["rank"]] for s in steps if s["rank"]]
     avg_rank = None
     weakest_step = None
     if scored:
         mean = sum(scored) / len(scored)
         tier = min(classify.RANK_SCORE, key=lambda n: abs(classify.RANK_SCORE[n] - mean))
         avg_rank = {"score": round(mean, 1), "tier": tier}
-        ranked = [(i, classify.RANK_SCORE[s["rank"]]) for i, s in enumerate(steps)
+        ranked = [(i, classify.RANK_SCORE[s["rank"]["rank"]]) for i, s in enumerate(steps)
                   if s["rank"]]
         weakest_step = min(ranked, key=lambda t: t[1])[0]
     return {"id": route["id"], "name": route["name"],

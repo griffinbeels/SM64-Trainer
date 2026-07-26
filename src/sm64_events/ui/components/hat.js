@@ -13,6 +13,7 @@ import { h } from "preact";
 import htm from "htm";
 import {
   CAP, capName, divisionDigit, wingTiers, rankColor, CANVAS, CAP_BOX, PATCH_BOX,
+  DETAIL_MIN_SIZE,
 } from "./caps.js";
 
 const html = htm.bind(h);
@@ -31,19 +32,87 @@ const html = htm.bind(h);
 const HAT_DIR = "/ui/assets/hat";
 const art = (stem) => `url(${HAT_DIR}/${stem}.png)`;
 
-// Below this cap height the numeral is a smudge (design contact sheet: dead
-// at 22/26, readable from 30) -- so patch/glyph/wings only draw at 30px+,
-// and only when there IS a division to show. `division == null` is a DATA
-// rule, not a size rule: Medal's silhouette-only call sites pass a 22px
-// medal with no division, and gating on size alone would draw an empty sign
-// field there.
-const DETAIL_MIN_SIZE = 30;
+// Capless's ring, low-poly outline (round 2 of the dotted-ring addendum,
+// task 8, 2026-07-26): an SVG polygon walked around the cap silhouette,
+// dashed via `stroke-dasharray` -- uniform BY CONSTRUCTION, unlike the
+// round-1 attempt (two intersecting CSS masks). That approach's defect was
+// angular, not scalar: a LINEAR gradient's band, clipped by a CURVED
+// contour, gives a dash whose apparent length depends on the angle between
+// the band and the local tangent -- no period tuning fixes that, only
+// measuring dash length ALONG the contour does, which is exactly what
+// stroke-dasharray does natively.
+//
+// Points are fractions of the cap's OWN silhouette canvas (measured via
+// `cv2.findContours` + `approxPolyDP` on cap.png's alpha channel, epsilon
+// 0.6% of the traced perimeter -- an 11-point low-poly approximation of the
+// real dome shape, close enough that the dashed ring and the solid cap
+// silhouette agree on where the edge is). This canvas shares its aspect
+// ratio and fractional-position convention with CANVAS/CAP_BOX/PATCH_BOX
+// (verified: this polygon's own bounding box is left=0.1562/top=0.1933/
+// width=0.6856/height=0.7993, matching CAP_BOX's 0.155885/0.194074/
+// 0.688231/0.801481 to three decimal places) -- so these fractions convert
+// to pixels the SAME way every other layer's geometry does, against
+// canvasWidthPx/canvasHeightPx.
+const CAP_OUTLINE_POLY = [
+  [0.1562, 0.5874], [0.2520, 0.8922], [0.3027, 0.9591], [0.3926, 0.9926],
+  [0.6172, 0.9926], [0.7031, 0.9591], [0.7930, 0.7955], [0.8418, 0.5911],
+  [0.6035, 0.1933], [0.3926, 0.1933], [0.2754, 0.3606],
+];
+
+// Whether the patch/glyph/wings draw is a DATA rule alone -- `division !=
+// null` -- with NO size floor (correction, addendum, task 8, 2026-07-26: the
+// user rejected the earlier `size >= DETAIL_MIN_SIZE` gate outright --
+// "if we're using the cap system, we must be using the wing system", every
+// cap, every size). `division == null` still means no numeral/wings: you
+// cannot draw a division you do not have, which is what keeps the
+// tier-only ladder-scale marks (13px, one per band, no division passed) as
+// clean silhouettes. DETAIL_MIN_SIZE (caps.js) now backs only ONE purely
+// visual size tuning below, which never hides content: the outline ring's
+// own fill opacity (a thin ring needs a more visible fill to survive
+// downscaling).
 
 // Ink colour for the sign-field glyph. Not part of caps.js: it is a
 // rendering constant of the glyph itself (Mario red for the "M", a dark
 // bronze everywhere else), not a tier's own identity colour.
 const GLYPH_INK = "#1b1206";
 const GLYPH_INK_MARIO = "#d81f1f";
+
+// The glyph's own font-size, computed from the sign field's ACTUAL pixel
+// geometry and the font's OWN ink metrics -- not a flat fraction of `size`
+// (addendum round 2, task 8, 2026-07-26: the user's target is "as big as
+// possible without overflowing the patch... about 80% of the patch, so a
+// 10% margin all around" -- 80% is the estimate to aim at, not a spec value).
+//
+// A CSS `font-size` is an EM box, not the glyph's own ink box, and this is
+// NOT a 1:1 relationship -- measured directly off SuperMario256.ttf
+// (PIL `font.getbbox(ch)` at a 1000px reference size, not assumed):
+// every digit's ink height is ~74.2% of the requested font-size (consistent
+// across 0-9), but ink WIDTH varies per glyph -- "4" is the widest of the
+// five division digits divisionDigit ever returns (76.1% of font-size),
+// and "M" is a different animal entirely: 74.2% tall (same ratio) but
+// 115.6% WIDE -- wider than its own em box, because it is a chunky display
+// face. Sizing purely off patch HEIGHT (as a naive "ink-height ×
+// height-ratio = 80% of patch height" calc would) makes "M" overflow the
+// patch's width well before it reaches 80% of the height, since the patch
+// is a DOME (PATCH_BOX) -- 0.6785×size wide but only 0.512×size tall, i.e.
+// proportionally WIDE, and "M" is proportionally the widest glyph shown.
+// So every glyph is sized by the SMALLER of a height-budget and a
+// width-budget candidate: digits are height-bound (their width headroom is
+// ample), "M" is width-bound (bound by its own unusual width, landing at a
+// smaller font-size and therefore under 80% height -- an intentional
+// trade, not a miss, verified by render rather than assumed correct).
+const FONT_INK_HEIGHT_RATIO = 0.742;
+const FONT_INK_WIDTH_RATIO_DIGIT = 0.761;   // "4", the widest of divisionDigit's 1-5
+const FONT_INK_WIDTH_RATIO_MARIO = 1.156;   // "M" -- wider than its own em box
+const GLYPH_HEIGHT_TARGET = 0.80;           // fraction of patch HEIGHT the ink should reach
+const GLYPH_WIDTH_MARGIN = 0.80;            // fraction of patch WIDTH the ink must not exceed
+
+function glyphFontSizePx(glyphChar, patchWidthPx, patchHeightPx) {
+  const heightBoundPx = (GLYPH_HEIGHT_TARGET * patchHeightPx) / FONT_INK_HEIGHT_RATIO;
+  const widthRatio = glyphChar === "M" ? FONT_INK_WIDTH_RATIO_MARIO : FONT_INK_WIDTH_RATIO_DIGIT;
+  const widthBoundPx = (GLYPH_WIDTH_MARGIN * patchWidthPx) / widthRatio;
+  return Math.min(heightBoundPx, widthBoundPx);
+}
 
 // A tinted layer is always a `.fill` (mask) + `.shade` (multiply) PAIR
 // reading the SAME art file -- index.html's `.hat .fill`/`.hat .shade` rules
@@ -107,9 +176,17 @@ function wingLayers(wings) {
 export function Hat({ tier, division = null, size = 18, title = null, flap = false, foldWings = 0 }) {
   const spec = CAP[tier] || {};
   const color = rankColor(tier);
-  const detail = division != null && size >= DETAIL_MIN_SIZE;
+  // DATA rule alone, no size floor (see the block comment above) -- a
+  // division draws at every size. wingTiers itself already returns 0 for
+  // Iron/Capless regardless of division (caps.js), so nothing here needs to
+  // special-case that tier.
+  const hasDivision = division != null;
+  // Purely visual: below this size the outline ring's own line is too thin
+  // to read on its own, so its underlying fill needs more presence. Never
+  // gates whether content draws, only how opaque the ring's fill is.
+  const ringNeedsMoreFill = size < DETAIL_MIN_SIZE;
   const folding = foldWings > 0;
-  const wings = folding ? foldWings : (detail ? wingTiers(tier, division) : 0);
+  const wings = folding ? foldWings : (hasDivision ? wingTiers(tier, division) : 0);
 
   // `size` is the CAP's own footprint, both axes -- the element Medal/Crest
   // used to occupy was exactly `size`px tall (and, being square, `size`px
@@ -169,16 +246,47 @@ export function Hat({ tier, division = null, size = 18, title = null, flap = fal
     // already uses `color-mix(in srgb, var(--tier) …, transparent)` for the
     // rank-up glow in index.html, same technique).
     //
-    // The fill's OWN opacity is size-dependent: at `detail` sizes (30px+)
-    // the ring itself is wide enough to read clearly, so the fill stays
-    // very faint and the icon reads as a hollow outline. Below that the
-    // ring's line is too thin to survive downscaling -- the fill is then
-    // the ONLY thing carrying "findable at all", so it needs more presence
-    // there than it's allowed at a size where the ring can carry it.
+    // The fill's OWN opacity is size-dependent (`ringNeedsMoreFill`, size
+    // alone -- decoupled from `hasDivision` since task 8's addendum, which
+    // is a DATA rule): at DETAIL_MIN_SIZE and above the ring itself is wide
+    // enough to read clearly, so the fill stays very faint and the icon
+    // reads as a hollow outline. Below that the ring's line is too thin to
+    // survive downscaling -- the fill is then the ONLY thing carrying
+    // "findable at all", so it needs more presence there than it's allowed
+    // at a size where the ring can carry it.
     const ringColor = `color-mix(in srgb, ${color} 55%, white)`;
-    const fillOpacity = detail ? 0.14 : 0.3;
+    const fillOpacity = ringNeedsMoreFill ? 0.3 : 0.14;
     layers.push(html`<i class="fill" style=${`--c:${color};opacity:${fillOpacity};--art:${art("cap")}`}></i>`);
-    layers.push(html`<i class="fill" style=${`--c:${ringColor};--art:${art("cap_outline")}`}></i>`);
+    // The ring reads as "you don't have this yet" rather than a thin solid
+    // cap -- dashed, walked around CAP_OUTLINE_POLY (round 2 of the addendum,
+    // task 8, 2026-07-26; see that constant's own comment for why an SVG
+    // polygon replaced round 1's CSS mask-composite attempt, which produced
+    // visibly uneven dashes -- a defect of intersecting a LINEAR gradient
+    // with a CURVED contour, not fixable by tuning the gradient's period).
+    // `pathLength="100"` normalizes the polygon's traced length for
+    // dasharray purposes, so "4 3.5" always means the same fourteen-ish
+    // dash+gap repeats regardless of the polygon's actual perimeter -- which
+    // itself scales linearly with `size` via canvasWidthPx/canvasHeightPx,
+    // so the dash COUNT (and so the visual rhythm) stays constant across
+    // sizes, same intent as round 1's percentage-sized mask tile, done
+    // correctly this time. The viewBox matches the SVG's own rendered pixel
+    // size exactly (canvasWidthPx × canvasHeightPx, not a normalized 0..1
+    // box) so the coordinate scale is UNIFORM in both axes -- CAP_OUTLINE_POLY
+    // is not square, and a non-uniform (distorted) viewBox scale would have
+    // reintroduced the exact angular defect this rewrite exists to remove,
+    // just via a different mechanism. Only the RING is dashed; the dim
+    // under-fill above stays solid on purpose (constraint 2 of the addendum
+    // -- it is what keeps Capless findable at 13px, and dotting it too would
+    // remove the one thing carrying that job).
+    const ringPoints = CAP_OUTLINE_POLY
+      .map(([xFrac, yFrac]) => `${xFrac * canvasWidthPx},${yFrac * canvasHeightPx}`)
+      .join(" ");
+    const ringStrokeWidth = Math.max(1, size * 0.05);
+    layers.push(html`<svg class="dotted-ring" viewBox=${`0 0 ${canvasWidthPx} ${canvasHeightPx}`}
+        preserveAspectRatio="none">
+      <polygon points=${ringPoints} pathLength="100"
+          style=${`stroke:${ringColor};stroke-width:${ringStrokeWidth};stroke-dasharray:4 3.5`} />
+    </svg>`);
   } else {
     layers.push(...tintedPair("cap", color));
     if (spec.treatment === "metal")
@@ -189,12 +297,16 @@ export function Hat({ tier, division = null, size = 18, title = null, flap = fal
     }
   }
 
-  if (detail) {
+  if (hasDivision) {
     layers.push(html`<i class="patch" style=${`--art:${art("patch")}`}></i>`);
     const glyphVars = `--patch-left:${PATCH_BOX.left * 100}%;--patch-top:${PATCH_BOX.top * 100}%;`
       + `--patch-width:${PATCH_BOX.width * 100}%;--patch-height:${PATCH_BOX.height * 100}%;`;
     const glyphColor = spec.glyph ? GLYPH_INK_MARIO : GLYPH_INK;
-    layers.push(html`<i class="glyph" style=${`${glyphVars}font-size:${size * 0.26}px;color:${glyphColor}`}>${spec.glyph || divisionDigit(division)}</i>`);
+    const glyphChar = spec.glyph || divisionDigit(division);
+    const patchWidthPx = PATCH_BOX.width * canvasWidthPx;
+    const patchHeightPx = PATCH_BOX.height * canvasHeightPx;
+    const glyphFontSize = glyphFontSizePx(glyphChar, patchWidthPx, patchHeightPx);
+    layers.push(html`<i class="glyph" style=${`${glyphVars}font-size:${glyphFontSize}px;color:${glyphColor}`}>${glyphChar}</i>`);
   }
 
   // A DEFAULT title, derived from the same registry the icon itself reads,

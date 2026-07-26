@@ -5,6 +5,7 @@ import { getJSON, send } from "../api.js";
 import { RANK_MODE_OPTIONS } from "./ranks.js";
 import { Icon } from "./icons.js";
 import { MareloBar } from "./marelo.js";
+import { ICON_STYLES } from "./rankicon.js";
 import { celebrationsEnabled, setCelebrationsEnabled } from "./celebrate.js";
 import { PickerDialog } from "./entitymodal.js";
 import { StrategyStep } from "./strategystep.js";
@@ -293,6 +294,16 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
           </label>
           <p class="settings-note">Per-star icons show each star's
             split-icon artwork in the course selector row.</p>
+          <label class="settings-field">
+            <span>Rank icons</span>
+            <select value=${t.rankIcons}
+                onchange=${(e) => t.pickRankIcons(e.target.value)}>
+              ${Object.entries(ICON_STYLES).map(([key, style]) =>
+                html`<option value=${key}>${style.label}</option>`)}
+            </select>
+          </label>
+          <p class="settings-note">Choose how a rank is drawn everywhere in
+            the app -- Mario caps or medals.</p>
           <label class="settings-field">
             <span>Celebrate rank-ups</span>
             <input type="checkbox" checked=${celebrateOn}

@@ -15,7 +15,7 @@ import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { parseSegmentId, parseStarId } from "../entities.js";
-import { Hat } from "./hat.js";
+import { RankIcon } from "./rankicon.js";
 import { capName, divisionDigit } from "./caps.js";
 import { StratModal } from "./stratmodal.js";
 import { Icon } from "./icons.js";
@@ -98,15 +98,19 @@ export function StrategyStep({ value, option, onBack, onClose }) {
 // Split out purely so the zero-strategy note below can sit alongside the
 // SAME two evergreen cards ("No strategy", "+ New strategy…") without a
 // second copy of their markup.
-// The strategy card's <Hat> below is called UNCONDITIONALLY with
+// The strategy card's <RankIcon> below is called UNCONDITIONALLY with
 // tier=${strat.rank}, which can be null for an unranked strategy -- unlike
-// the two AGGREGATE surfaces (MareloBar, the Rank tab card) that gate Hat
-// behind `tier ? <Hat/> : "–"` (ui.md's Cap icon row, final review I5). This
-// call site differs on purpose: the grey no-tier cap sits directly above the
-// "Unranked" label two lines down, which disambiguates it, and the plan
-// sanctioned rendering Hat's own no-rank state here rather than gating it
-// (M3, final review 2026-07-26) -- do not "fix" this back to the aggregate
-// pattern without re-reading that finding.
+// the two AGGREGATE surfaces (MareloBar, the Rank tab card) that gate it
+// behind `tier ? <RankIcon/> : "–"` (ui.md's Cap icon row, final review I5).
+// This call site differs on purpose: the grey no-tier cap sits directly
+// above the "Unranked" label two lines down, which disambiguates it, and the
+// plan sanctioned rendering the icon's own no-rank state here rather than
+// gating it (M3, final review 2026-07-26) -- do not "fix" this back to the
+// aggregate pattern without re-reading that finding. Switched from the
+// direct `Hat` import to `RankIcon` (mario-cap-rank-icons integration,
+// 2026-07-26) so this card honours the user's rank-icon style setting like
+// every other surface -- same prop surface, so this is the mechanical half
+// of that task's seventeen-call-site sweep, just landing one merge late.
 function StrategyCards({ data, saving, commit, onOpenNew }) {
   const { current, allow_blank, strategies } = data;
   return html`<${h.Fragment}>
@@ -119,7 +123,7 @@ function StrategyCards({ data, saving, commit, onOpenNew }) {
       </button>` : null}
       ${strategies.map((strat) => html`<button type="button" key=${strat.name}
           disabled=${saving} class="strat-card" onclick=${() => commit(strat.name)}>
-        <${Hat} tier=${strat.rank} division=${strat.division} size=${32} />
+        <${RankIcon} tier=${strat.rank} division=${strat.division} size=${32} />
         <span class="strat-rank-name">${strat.rank
           ? `${capName(strat.rank)} ${divisionDigit(strat.division)}` : "Unranked"}</span>
         <span class="strat-name">${strat.name}</span>

@@ -124,8 +124,11 @@ def test_the_grid_passes_the_strategy_a_rank_was_earned_with_to_the_cell():
 
 def test_the_badge_title_names_the_strategy_not_a_bare_tier_key():
     # capName() is mandatory here (tests/test_ui_cap_names.py) -- a raw tier
-    # key is wrong on screen since the palette moved to cap colours.
-    assert "capName(rank)" in CELL_CODE
+    # key is wrong on screen since the palette moved to cap colours. `rank`
+    # became {rank, division} once RankIcon replaced Hat here
+    # (mario-cap-rank-icons integration, 2026-07-26), so the tier reads off
+    # `rank.rank` now, still through capName().
+    assert "capName(rank.rank)" in CELL_CODE
     assert "best on" in CELL_CODE
     assert "title=${badgeTitle}" in CELL_CODE
 

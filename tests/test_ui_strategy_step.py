@@ -78,9 +78,16 @@ def test_write_failure_alerts_and_stays_open():
     assert STEP_CODE.index("catch (writeError)") < STEP_CODE.index("window.alert")
 
 
-def test_uses_hat_not_the_deleted_medal_component():
-    assert "Hat}" in STEP_CODE
-    assert "Medal" not in STEP_CODE
+def test_uses_rank_icon_not_a_direct_hat_import():
+    # Originally pinned Hat against a since-deleted Medal component; the
+    # mario-cap-rank-icons integration (2026-07-26) gave the app a real,
+    # user-selectable Medal STYLE, dispatched through RankIcon -- a direct
+    # `Hat` import here would silently ignore that setting and always draw
+    # caps while every other rank-icon surface honours it (RankIcon has the
+    # exact same tier/division/size prop surface Hat did, so this is a
+    # mechanical import+tag swap, not a behavior change to this card).
+    assert "RankIcon}" in STEP_CODE
+    assert 'from "./hat.js"' not in STEP_CODE
 
 
 def test_strategy_icon_is_the_detailed_32px_cap_with_its_division():

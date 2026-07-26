@@ -58,6 +58,11 @@ RAW_TIER_EXPRESSIONS = (
     # not a bare print) -- added so a future edit that prints it bare cannot
     # sail through unwrapped, same reasoning as the M6 batch above.
     "strat.rank",
+    # practicecell.js (mario-cap-rank-icons integration, 2026-07-26): `rank`
+    # became {rank, division} once RankIcon replaced Hat there, so the
+    # badge's title reads the tier off `rank.rank` -- already wrapped in
+    # capName() at that call site, same reasoning as `strat.rank` above.
+    "rank.rank",
 )
 
 # A tier (or tier-holding object) expression handed to a component as a PROP

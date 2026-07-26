@@ -1005,6 +1005,30 @@
     -webkit-mask: var(--art) center / contain no-repeat;
             mask: var(--art) center / contain no-repeat;
   }
+  /* Capless's ring reads as "you don't have this yet" rather than "a thin
+     solid cap" (dashed/dotted is the established convention for an absent/
+     placeholder state). Round 2 (addendum, task 8, 2026-07-26): an SVG
+     polygon walking CAP_OUTLINE_POLY (hat.js) with a dashed stroke, replacing
+     round 1's CSS mask-composite attempt (two intersecting masks -- a
+     repeating-linear-gradient over cap_outline.png), which produced visibly
+     uneven dashes. That defect was ANGULAR: a linear gradient's band, clipped
+     by a curved contour, gives a dash whose apparent length depends on the
+     angle between the band and the local tangent -- long smears where the
+     outline ran parallel to the bands, short stubs where it crossed them, and
+     no amount of retuning the gradient's period could fix an angular problem
+     with a scalar knob. `stroke-dasharray` measures dash length ALONG the
+     path, uniform by construction, which is the actual fix.
+     `.dotted-ring` only needs `position/inset` (`.hat i`'s rule doesn't
+     apply -- this is an `<svg>`, not an `<i>`) and `fill: none` on the
+     polygon so the ring reads as a stroke, not a filled shape (that would
+     paint over the dim under-fill beneath it, which must stay visible and
+     solid). Everything else (points, stroke colour/width, dasharray) is set
+     inline per-instance in hat.js, since they depend on `size`/the tier's own
+     colour -- this rule only supplies what's true for every instance. */
+  .hat .dotted-ring {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+  }
+  .hat .dotted-ring polygon { fill: none; }
   .hat .shade {
     background: var(--art) center / contain no-repeat;
     mix-blend-mode: multiply;
@@ -1343,18 +1367,62 @@
     position: relative; height: 16px; margin: 4px 0 3px;
     border-radius: 8px; background: rgba(4,13,23,.72); overflow: hidden;
   }
-  /* The medal row above the track: one per tier, centred over its own band,
-     with the current band's raised and enlarged. Fixed height so the card
-     doesn't reflow as YOU moves between bands of different medal sizes. */
-  .rank-ladder-scale { position: relative; height: 40px; }
+  /* The showcase strip: nine equal groups (below), plus YOU (raised and
+     enlarged, a separate highlight overlaid at the true score value — round
+     3 no longer drops any group for it, see rankpage.js). Fixed height so
+     the card doesn't reflow as YOU moves. */
+  .rank-ladder-scale {
+    position: relative; height: 40px;
+    display: flex; align-items: flex-end; gap: 3px;
+  }
   .rank-ladder-mark {
     position: absolute; bottom: 0; transform: translateX(-50%);
     display: flex; flex-direction: column; align-items: center; gap: 1px;
   }
-  .rank-ladder-mark.is-you { bottom: 5px; }
+  .rank-ladder-mark.is-you { bottom: 5px; z-index: 1; }
   .rank-ladder-you {
     color: var(--gold); font-size: .55rem; font-weight: 800;
     letter-spacing: .12em; line-height: 1;
+  }
+  /* Nine EQUAL groups, not score-proportional (round 3, addendum, task 8,
+     2026-07-26 — corrects round 2's own attempt, which sized each group to
+     its tier's real score-width and, as a direct consequence, gave the
+     TIGHTEST bands — Mario, Grandmaster, the tiers a user is climbing
+     TOWARD — the least room for icons, backwards for a progression
+     showcase). `flex: 1 1 0` splits `.rank-ladder-scale` into nine equal
+     shares regardless of each tier's real score-width; the bar below still
+     carries the true proportional reading, so nothing about score accuracy
+     is lost, only the strip's own x-alignment with it (the user's own
+     ruling: costs nothing real). `--tier-tint` (set inline, rankpage.js,
+     from the SAME `capGradient(tier) || rankColor(tier)` the ladder band
+     and the standards table already use) is the tie back to which tier a
+     group belongs, now that position no longer implies it. */
+  .rank-ladder-tier-group {
+    flex: 1 1 0; min-width: 0; height: 100%;
+    display: flex; align-items: flex-end;
+    background: color-mix(in srgb, var(--tier-tint) 22%, transparent);
+    border-radius: 5px;
+    container-type: inline-size;
+  }
+  .rank-division-row {
+    display: flex; align-items: flex-end; justify-content: space-between;
+    width: 100%; height: 100%; padding: 0 2px;
+  }
+  .rank-division-mark {
+    display: flex; flex-direction: column; align-items: center;
+    flex: 0 0 auto;
+  }
+  /* Nine EQUAL groups means this threshold now applies (or doesn't) to all
+     nine at once, not band-by-band (round 2 measured a per-band crossover;
+     round 3's groups are uniform, so there is exactly one crossover width
+     for the whole strip — task report has it). Below it, every group thins
+     to its bottom division alone (`is-floor`, the pre-round-2 single-icon-
+     per-tier look), re-centred (a lone flex child under `space-between`
+     sits at the start, not the centre, so this needs its own
+     `justify-content`). */
+  @container (max-width: 140px) {
+    .rank-division-row { justify-content: center; }
+    .rank-division-mark:not(.is-floor) { display: none; }
   }
   .rank-ladder-bands, .rank-ladder-fill {
     position: absolute; left: 0; top: 0; bottom: 0;

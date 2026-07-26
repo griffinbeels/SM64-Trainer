@@ -1,6 +1,7 @@
 // src/sm64_events/ui/store.js — session state + live WS subscription
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { getJSON, send } from "./api.js";
+import { getRankIconStyle, setRankIconStyle } from "./components/rankicon.js";
 
 const REFRESH_ON = new Set(["attempt_completed", "attempts_invalidated",
   "pb_saved", "pb_undone", "session_started", "target_changed",
@@ -20,6 +21,16 @@ export function useTracker() {
   // icon_overrides) and win in either mode.
   const [starIcons, setStarIcons] = useState(
     localStorage.getItem("sm64.starIcons") || "course");
+  // Rank-icon STYLE: which registered style (rankicon.js::ICON_STYLES) draws
+  // a rank -- "hat" (Mario caps, default) or "medal" (colour disc), and any
+  // future style added to that registry. Client display preference like
+  // starIcons above: localStorage `sm64.rankIcons`, never server state.
+  // rankicon.js owns the actual persisted value + the live update every
+  // mounted RankIcon subscribes to directly (most rank-icon call sites have
+  // no `t` in scope to read this off) -- this state exists only so
+  // header.js's settings control has the same t.<pref>/pickX shape every
+  // other display preference here already has.
+  const [rankIcons, setRankIconsState] = useState(getRankIconStyle());
   // Dust-trick visibility: the rollout/jump counts on attempt rows plus the
   // dust stats in the stat menu and chip row. Default OFF while detection is
   // being tuned (2026-07-24). Client display preference like starIcons.
@@ -314,11 +325,14 @@ export function useTracker() {
   const pickScope = (s) => { localStorage.setItem("scope", s); setScope(s); };
   const pickStarIcons = (mode) => {
     localStorage.setItem("sm64.starIcons", mode); setStarIcons(mode); };
+  const pickRankIcons = (style) => {
+    setRankIconStyle(style); setRankIconsState(style); };
   const pickShowDust = (on) => {
     localStorage.setItem("sm64.showDust", on ? "1" : "0"); setShowDust(on); };
   const armedSegs = new Set(armedOrder);
   return { view, clock, pickClock, scope, pickScope, feed, connected,
-           starIcons, pickStarIcons, showDust, pickShowDust, courseIcons,
+           starIcons, pickStarIcons, rankIcons, pickRankIcons,
+           showDust, pickShowDust, courseIcons,
            segments, vocab, loadSegments,
            refresh, paused: pauseState.paused,
            pauseReason: pauseState.reason, togglePause,
