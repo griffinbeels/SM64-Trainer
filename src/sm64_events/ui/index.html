@@ -898,6 +898,14 @@
     min-width: 0; display: flex; align-items: center; gap: .3rem;
     white-space: nowrap; overflow: hidden;
   }
+  /* Round 4 (addendum, task 8, 2026-07-26): reserves the icon's own wing
+     spill (see the comment in ranks.js) so the kicker and the rank name
+     stop visually colliding with painted wing pixels the flex `gap` above
+     never accounted for -- `.hat`'s wings are absolutely positioned OUTSIDE
+     its declared box on purpose, so widening the row's shared `gap` would
+     not have reached the actual overlap; this margin is scoped to the one
+     child that needs it. */
+  .rank-banner-icon { flex: 0 0 auto; display: inline-flex; margin: 0 9px; }
   .rank-banner-name { font-weight: 800; letter-spacing: .4px; }
   .rank-banner-next { flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; }
   /* Progress toward the next rank: full slot width, never a fixed px bar —

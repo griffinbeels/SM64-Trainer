@@ -134,7 +134,20 @@ export function RankBanner({ label, banner, hint = null }) {
   return html`<div class="rank-banner">
     <div class="rank-banner-row">
       <span class="rank-banner-kicker" title=${hint}>${label}</span>
-      <${RankIcon} tier=${banner.rank} division=${banner.division} size=${24} />
+      <!-- Round 4 (addendum, task 8, 2026-07-26 -- the user: "we probably
+           should push the rank name... and the rank division a little off
+           to the side, since it's overlapping, it feels very cramped right
+           now"). The row's own flex gap was never the gap that mattered:
+           the icon component deliberately draws its wings OUTSIDE its own
+           box (hat.js), so a wing-bearing icon paints past its declared
+           width with nothing in the flex layout accounting for it -- at
+           this size (24px) that spill is about 9px a side (the canvas
+           margin caps.js's own CAP_BOX defines), wide enough to visibly
+           collide with the kicker on one side and the rank name on the
+           other. This wrapper's own margin reserves that spill so the
+           row's real painted content stops overlapping, without widening
+           the whole row's gap for every OTHER pair of children too. -->
+      <span class="rank-banner-icon"><${RankIcon} tier=${banner.rank} division=${banner.division} size=${24} /></span>
       <b class="rank-banner-name">${capName(banner.rank).toUpperCase()}${banner.division ? ` ${divisionDigit(banner.division)}` : ""}</b>
       ${basis && html`<span class="meta rank-banner-basis" title=${basisTitle}>${basisText}</span>`}
       <span class="meta rank-banner-next">${nextLabel
