@@ -57,12 +57,12 @@ export function entityCelebrationFor(marelo, entityKey) {
 // keyframe durations (1.2s / .6s) -- a mismatch there would desync the CSS
 // animation from the phase that's actually showing.
 const FILL_MS = 1200;   // beat 1: the division bar visibly reaches the crossing point
-const FLIP_MS = 600;    // beat 2: one crest-flip per tier gained
+const FLIP_MS = 600;    // beat 2: one cap-flip per tier gained
 const HOLD_MS = 2700;   // beat 3: long enough to actually read, still dismissible
 
 // The three-beat climb the live report asked for: the bar fills to the
 // crossing point (so the BEFORE state is actually seen, not skipped), the
-// crest turns over once per tier gained (a multi-tier jump is climbed, not
+// cap turns over once per tier gained (a multi-tier jump is climbed, not
 // teleported -- the climb is the reward), then a long dismissible hold.
 // Roughly 4-5s total for a one-tier jump, longer for a bigger one.
 function TierRankUp({ celebration, scopeId, onDone }) {
@@ -116,7 +116,7 @@ function TierRankUp({ celebration, scopeId, onDone }) {
   return html`<div class="rankup" role="status" style=${`--tier:${rankColor(shownTier)}`}>
     <div class=${`rankup-card ${phase === "hold" ? "final" : ""}`} onclick=${finish}>
       <span class="meta">RANK UP</span>
-      <span key=${`${phase}:${flipStep}`} class=${phase === "flip" ? "rankup-crest-flip" : ""}>
+      <span key=${`${phase}:${flipStep}`} class=${phase === "flip" ? "rankup-cap-flip" : ""}>
         <${Hat} tier=${shownTier} division=${shownDivision} size=${96} flap=${true} />
       </span>
       ${phase === "fill" && html`<div class="rankup-fill-track"><i></i></div>`}

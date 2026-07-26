@@ -219,7 +219,7 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
                   setCelebrateOn(e.target.checked);
                 }} />
           </label>
-          <p class="settings-note">Show a full-screen crest climb when your
+          <p class="settings-note">Show a full-screen cap climb when your
             MARELO rank rises. The rank-up is acknowledged either way, so
             turning this off never leaves one waiting to fire later.</p>
           <label class="settings-field">

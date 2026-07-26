@@ -79,7 +79,7 @@ export function useTracker() {
   useEffect(() => { refreshRun(); }, [refreshRun]);
 
   // marelo: the ACTIVE-scope MARELO figure (no ?scope= -> ranks_api
-  // _active_scope, the focus route) -- the header bar's crest AND the
+  // _active_scope, the focus route) -- the header bar's cap AND the
   // rank-up overlay's celebration both read this ONE fetch. Held here
   // rather than locally in header.js so app.js can mount the overlay at
   // root (browser<->GUI parity, rule 10) off the same object the header
