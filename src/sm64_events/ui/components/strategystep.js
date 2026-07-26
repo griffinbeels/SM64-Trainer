@@ -98,6 +98,15 @@ export function StrategyStep({ value, option, onBack, onClose }) {
 // Split out purely so the zero-strategy note below can sit alongside the
 // SAME two evergreen cards ("No strategy", "+ New strategy…") without a
 // second copy of their markup.
+// The strategy card's <Hat> below is called UNCONDITIONALLY with
+// tier=${strat.rank}, which can be null for an unranked strategy -- unlike
+// the two AGGREGATE surfaces (MareloBar, the Rank tab card) that gate Hat
+// behind `tier ? <Hat/> : "–"` (ui.md's Cap icon row, final review I5). This
+// call site differs on purpose: the grey no-tier cap sits directly above the
+// "Unranked" label two lines down, which disambiguates it, and the plan
+// sanctioned rendering Hat's own no-rank state here rather than gating it
+// (M3, final review 2026-07-26) -- do not "fix" this back to the aggregate
+// pattern without re-reading that finding.
 function StrategyCards({ data, saving, commit, onOpenNew }) {
   const { current, allow_blank, strategies } = data;
   return html`<${h.Fragment}>
