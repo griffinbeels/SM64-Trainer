@@ -51,18 +51,27 @@ function wingLayers(wings) {
   // paint OVER earlier ones, matching the reference sheet's verified stack.
   // Each tier is split l/r (task 2) so a flap (task 6) can turn the two
   // wings in opposite directions; both sides of a tier render as their own
-  // fill+shade pair.
+  // fill+shade pair. The side class (wing-l/wing-r, alongside fill/shade,
+  // not instead of) is what index.html's flap keyframes select on -- it
+  // carries no styling of its own.
   for (let tier = 1; tier <= wings; tier++) {
     for (const side of ["l", "r"]) {
       const stem = `wing${tier}_${side}`;
-      layers.push(html`<i class="fill" style=${`--c:#eef3f7;--art:${art(stem)}`}></i>`);
-      layers.push(html`<i class="shade" style=${`--art:${art(stem)}`}></i>`);
+      const sideClass = side === "l" ? "wing-l" : "wing-r";
+      layers.push(html`<i class=${`fill ${sideClass}`} style=${`--c:#eef3f7;--art:${art(stem)}`}></i>`);
+      layers.push(html`<i class=${`shade ${sideClass}`} style=${`--art:${art(stem)}`}></i>`);
     }
   }
   return layers;
 }
 
-export function Hat({ tier, division = null, size = 18, title = null }) {
+// `flap`: true only at celebrate.js's three rank-up call sites (task 6). It
+// adds the `hat-flap` modifier class index.html's keyframes select on --
+// every OTHER Hat in the app (Rank tab tiles, MareloBar, RankBanner medals,
+// the practice cards) renders the exact same wings motionless. Constant
+// idle flapping across a screen of medals would be motion noise, and this
+// app runs on stream.
+export function Hat({ tier, division = null, size = 18, title = null, flap = false }) {
   const spec = CAP[tier] || {};
   const color = rankColor(tier);
   const detail = division != null && size >= DETAIL_MIN_SIZE;
@@ -145,7 +154,7 @@ export function Hat({ tier, division = null, size = 18, title = null }) {
     layers.push(html`<i class="glyph" style=${`${glyphVars}font-size:${size * 0.26}px;color:${glyphColor}`}>${spec.glyph || divisionDigit(division)}</i>`);
   }
 
-  return html`<span class="hat" title=${title} style=${outerStyle}>
+  return html`<span class=${`hat${flap ? " hat-flap" : ""}`} title=${title} style=${outerStyle}>
     <span class="hat-canvas" style=${canvasStyle}>${layers}</span>
   </span>`;
 }

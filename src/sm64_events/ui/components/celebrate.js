@@ -117,7 +117,7 @@ function TierRankUp({ celebration, scopeId, onDone }) {
     <div class=${`rankup-card ${phase === "hold" ? "final" : ""}`} onclick=${finish}>
       <span class="meta">RANK UP</span>
       <span key=${`${phase}:${flipStep}`} class=${phase === "flip" ? "rankup-crest-flip" : ""}>
-        <${Hat} tier=${shownTier} division=${shownDivision} size=${96} />
+        <${Hat} tier=${shownTier} division=${shownDivision} size=${96} flap=${true} />
       </span>
       ${phase === "fill" && html`<div class="rankup-fill-track"><i></i></div>`}
       <h2>${capName(shownTier)}${phase !== "flip" ? ` ${divisionDigit(shownDivision)}` : ""}</h2>
@@ -144,7 +144,7 @@ function DivisionRankUp({ celebration, scopeId, onDone }) {
   const tier = celebration.to.tier;
   return html`<div class="rankup-medium" role="status" style=${`--tier:${rankColor(tier)}`}>
     <div class="rankup-medium-card" onclick=${finish}>
-      <${Hat} tier=${tier} division=${celebration.to.division} size=${40} />
+      <${Hat} tier=${tier} division=${celebration.to.division} size=${40} flap=${true} />
       <span class="rankup-medium-text">
         <b>${divisionDigit(celebration.from.division)} → ${divisionDigit(celebration.to.division)}</b>
         <i>${capName(tier)} · click to dismiss</i>
@@ -208,7 +208,7 @@ export function EntityCelebration({ celebration, entityKey, onDone, children }) 
     ${children}
     ${showing && tierUp && html`<div class="entity-rankup-toast" role="status"
         style=${`--tier:${rankColor(celebration.to.tier)}`} onclick=${finish}>
-      <${Hat} tier=${celebration.to.tier} division=${celebration.to.division} size=${30} />
+      <${Hat} tier=${celebration.to.tier} division=${celebration.to.division} size=${30} flap=${true} />
       <span class="entity-rankup-text">
         <b>${capName(celebration.to.tier)} ${divisionDigit(celebration.to.division)}</b>
         <i>tier up · tap to dismiss</i>

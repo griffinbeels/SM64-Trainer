@@ -930,8 +930,8 @@
      (.superpowers/sdd/2026-07-25-mario-cap-rank-icons/reference-sheet.html),
      whose composition was rendered and eyeballed across 45 states before
      this shipped -- hat.js is the only caller and these rules are not to be
-     "cleaned up" independent of a render. No animation ships in this task;
-     a later flap/shimmer must gate its own keyframes on
+     "cleaned up" independent of a render. The wing flap (task 6, below) is
+     the one animation this component carries, gated on
      prefers-reduced-motion the way .starholder already does. */
   @font-face { font-family: "SuperMario256"; src: url("/ui/assets/fonts/SuperMario256.ttf"); }
   /* `.hat`'s OWN box is exactly the cap height (hat.js sets it to `size`px) --
@@ -990,6 +990,31 @@
     width: var(--patch-width); height: var(--patch-height);
     display: grid; place-items: center; line-height: 1;
     font-family: "SuperMario256", Impact, sans-serif;
+  }
+  /* Task 6 (2026-07-25-mario-cap-rank-icons): the wing flap. `.hat-flap`
+     is set only by hat.js's `flap` prop -- celebrate.js's three rank-up
+     call sites (TierRankUp, DivisionRankUp, the entity tier-up toast) --
+     never the idle rank icons scattered across every other card, which
+     would be motion noise on a screen that's on stream. `.wing-l`/`.wing-r`
+     are the side markers wingLayers() adds alongside `.fill`/`.shade`; the
+     two keyframes rotate opposite signs about a pivot near where each wing
+     meets the cap, so it reads as a flap rather than a spin. The pivot
+     percentages are measured off the wing1..4 PNGs' own alpha bounding
+     boxes -- the edge nearest the cap stays fixed across tiers while only
+     the tip grows outward -- not guessed. Runs for as long as the Hat
+     stays mounted (the existing fill/flip/hold beats in celebrate.js);
+     this adds no timer and does not extend any of them. */
+  @media (prefers-reduced-motion: no-preference) {
+    .hat-flap .wing-l { transform-origin: 23% 64%; animation: wing-flap-l 1.1s ease-in-out infinite; }
+    .hat-flap .wing-r { transform-origin: 69% 66%; animation: wing-flap-r 1.1s ease-in-out infinite; }
+    @keyframes wing-flap-l {
+      0%, 100% { transform: rotate(0deg); }
+      50% { transform: rotate(-14deg); }
+    }
+    @keyframes wing-flap-r {
+      0%, 100% { transform: rotate(0deg); }
+      50% { transform: rotate(14deg); }
+    }
   }
   .marelo-bar-text { display: flex; flex-direction: column; line-height: 1.15; text-align: left; }
   .marelo-track {
