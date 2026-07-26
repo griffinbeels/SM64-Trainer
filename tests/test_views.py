@@ -1712,6 +1712,33 @@ def test_entity_ranks_omit_an_entity_with_no_gradeable_time(tmp_path):
     assert "star:2:2" not in out
 
 
+def test_entity_ranks_skip_a_strategy_with_no_ladder_rows(tmp_path):
+    """A strategy merely NAMED in standards but defining no ladder rows (an
+    empty {}) must never win -- the same 'skip when the ladder is empty'
+    guard other rank call sites (_strat_rank) already apply, exercised
+    directly here so the branch doesn't survive only by construction of
+    other fixtures' complete ladders."""
+    import json
+
+    from sm64_events.ranks.standards import RankStandards
+    from sm64_events.tracking.views import build_entity_ranks
+
+    db, svc = make(tmp_path)
+    seed(svc)
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "star:2:2": {"clock": "igt", "strategies": {"Empty": {}}}}}))
+    svc.ranks = RankStandards(p); svc.ranks.load()
+
+    db._conn.execute("UPDATE attempts SET strat_tag='Empty' WHERE course_id=2")
+    db._conn.commit()
+    aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    asyncio.run(svc.save_pb(aid, "igt"))
+
+    out = build_entity_ranks(db, svc)
+    assert "star:2:2" not in out
+
+
 def test_entity_ranks_break_ties_on_the_strategy_name(tmp_path):
     """Two strategies grading to the identical score must resolve to the
     alphabetically-first name -- the same min(strat) convention

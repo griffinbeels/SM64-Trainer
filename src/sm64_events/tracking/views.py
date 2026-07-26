@@ -448,21 +448,22 @@ def build_entity_ranks(db, service) -> dict[str, dict]:
         rank_mode = classify.DEFAULT_RANK_MODE
     deleted_strats = db.get_state("deleted_strats", {})
 
+    # One (ek, history, pb_key_prefix) triple per candidate entity, stars
+    # then segments, so the grading loop below runs ONCE for both kinds —
+    # a field added to the emitted dict is then a one-place edit, not two.
+    candidates = [
+        (entity_key(course_id, star_id), history, (course_id, star_id))
+        for (course_id, star_id), history in attempts_by_star.items()
+    ] + [
+        (entity_key(None, None, seg_id), history, ("segment", seg_id))
+        for seg_id, history in attempts_by_seg.items()
+    ]
+
     out: dict[str, dict] = {}
-    for (course_id, star_id), history in attempts_by_star.items():
-        ek = entity_key(course_id, star_id)
+    for ek, history, pb_key_prefix in candidates:
         best = _best_strategy_graded(service.ranks, ek, history, pbs_by_strat,
                                      rank_mode, deleted_strats.get(ek, []),
-                                     (course_id, star_id))
-        if best:
-            strat, graded = best
-            out[ek] = {"rank": graded["rank"], "division": graded["division"],
-                      "strat": strat}
-    for seg_id, history in attempts_by_seg.items():
-        ek = entity_key(None, None, seg_id)
-        best = _best_strategy_graded(service.ranks, ek, history, pbs_by_strat,
-                                     rank_mode, deleted_strats.get(ek, []),
-                                     ("segment", seg_id))
+                                     pb_key_prefix)
         if best:
             strat, graded = best
             out[ek] = {"rank": graded["rank"], "division": graded["division"],
