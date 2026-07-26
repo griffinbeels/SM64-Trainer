@@ -121,16 +121,6 @@ function bandStops({ tier, from, to }) {
 }
 const BAND_GRADIENT = "linear-gradient(90deg, " + TIER_BANDS.map(bandStops).join(", ") + ")";
 
-// Which tier BAND a 0-100 score sits in. Tier only, never division: an
-// AGGREGATE has no ladder, so the server grades it against the full anchor
-// table too (`scoring.division_for` with `defined=None`), which is exactly
-// what ANCHORS mirrors — this agrees with it by construction. The division
-// numeral, which genuinely needs a ladder, is still never computed here.
-function bandForScore(score) {
-  return [...TIER_BANDS].reverse().find((band) => score >= band.from)
-    || TIER_BANDS[0];
-}
-
 // Every division line on the 0-100 axis: where it starts, and what reaching
 // it makes you. The tier's own floor is its BOTTOM division (V), so a tier
 // boundary is just the division line that happens to open a new tier.
@@ -142,13 +132,17 @@ const LADDER_STEPS = TIER_BANDS.flatMap((band) => {
   }));
 });
 
-// The Mastery bar (round 7): a mean 0-100 score drawn on the ladder it is
-// scored against, instead of a gold bar filling toward an unstated maximum.
-// A line per division, a heavier one per tier, every stretch in its own
-// tier's colour. The value is a SCORE, never a rating — the tier NAME under
-// the YOU medal is the band it falls in (bandForScore, full-table like the
-// server's own aggregate path), and the division numeral, which would need
-// a ladder, is still never computed here.
+// The ladder (round 7 origin; replotted round 4): a tier ladder with rank
+// icons on it means "this is your rank" -- so it plots MARELO (the entity's
+// actual rating, `data.tier`/`data.division`/the tweened `data.marelo`
+// score), the SAME number the card above it, the header pill and the
+// celebration all agree on. It used to plot MASTERY (a mean score) instead
+// -- a real logic mismatch the user caught directly (Capless 5 on the card,
+// the marker sitting in Toad territory on the bar): "the bar is internally
+// consistent with its own caption, so this is not a coding error -- it is a
+// design error." Mastery/Coverage still exist (they're the two factors
+// MARELO is made of) but no longer draw on THIS ladder -- see the plain
+// meter at their own call site in RankPage.
 //
 // Round 2 (addendum, task 8, 2026-07-26 — the user: "we should see ALL of
 // the tiers with ALL of the wing progressions and ALL of the number
@@ -156,8 +150,7 @@ const LADDER_STEPS = TIER_BANDS.flatMap((band) => {
 // embedded into the app as a visual progression tool"): the scale went from
 // nine tier medals to all 45 division steps (LADDER_STEPS already has one
 // per division; this just draws it instead of computing yet another table).
-// One flat size for all 45 (DIVISION_MARK_SIZE, below), always smaller than
-// YOU's 22px — YOU stays the most prominent thing on the bar.
+// One flat size for all 45 (DIVISION_MARK_SIZE, below).
 //
 // Round 2's own attempt positioned each tier's group score-proportionally
 // (`left:band.from%`/`width:(band.to-band.from)%`) -- correct on the score
@@ -178,53 +171,80 @@ const LADDER_STEPS = TIER_BANDS.flatMap((band) => {
 // flat size. The precise per-division score reading is already carried by
 // the bar below and by YOU's own true-value position -- losing exact
 // per-division x-alignment between the showcase strip and the bar it sits
-// above costs nothing real, per the ruling. Each group still shows ALL 45
-// icons (round 2's "drop the current tier's group, YOU stands in for it"
-// rule no longer applies -- a showcase shows everything, same as the
-// contact sheet does regardless of current rank; YOU is additionally
-// highlighted at its own true position, unchanged).
+// above costs nothing real, per the ruling. All nine always show (round 2's
+// "drop the current tier's group" rule no longer applies -- a showcase
+// shows everything, same as the contact sheet does regardless of rank).
 //
 // A user must not have to count divisions to tell which five belong to
 // which tier now that they're no longer score-width-sized -- colour is the
-// tie (index.html's `.rank-ladder-tier-group` tints its background from
-// `--tier-tint`, the SAME `capGradient(tier) || rankColor(tier)` the ladder
-// band and the standards table already use for a tier's identity, so a
-// showcase group can never use a colour the rest of the app doesn't already
-// associate with that tier). Each icon keeps its own per-division tooltip
-// (title=, below) -- they're no longer co-located with the bar's own
-// division-line pips, so a hover has to name what reaching it makes you on
-// its own, same wording the pips already use.
+// tie (index.html's `.rank-ladder-tier-group` tints an UNDERLINE from
+// `--ladder-tint`, the SAME `capGradient(tier) || rankColor(tier)` the
+// ladder band and the standards table already use for a tier's identity).
+// Round 4 (addendum, task 8, 2026-07-26): that tie used to be a full-height
+// background rectangle -- broken two ways the user found. First, a real
+// bug: `capGradient()` returns a `linear-gradient(...)` STRING for the two
+// patterned tiers, and the background used `color-mix()`, which requires
+// two <color> tokens -- feeding it a gradient is invalid CSS, so Toad and
+// Toadsworth's groups silently rendered no background at all. Second, a
+// design problem underneath the bug: a coloured RECTANGLE behind a group
+// reads as a band that ought to span the matching band on the bar below --
+// it never can, by the round-3 decoupling the user already approved, so the
+// rectangle was implying an alignment that cannot exist ("it has to match
+// the EXACT bounds of the rank... that's not what we did or want to do
+// here"). Fixed both by dropping `color-mix` for a plain
+// `background: var(--ladder-tint)` UNDERLINE strip under each group instead
+// of a full-height backdrop -- valid for a flat colour AND a gradient
+// string alike (a `background` shorthand accepts either), and a short strip
+// clearly belongs to the five icons directly above it rather than claiming
+// to span anything wider.
+//
+// Each icon keeps its own per-division tooltip (title=, below) -- they're
+// no longer co-located with the bar's own division-line pips, so a hover
+// has to name what reaching it makes you on its own, same wording the pips
+// already use.
 const DIVISION_MARK_SIZE = 14;
 
-function LadderBar({ value }) {
+// Round 4 (addendum, task 8, 2026-07-26 -- the user: "instead of the YOU
+// marker being a bigger version of the cap, how about we JUST have the
+// 'you' text... above the exact position on the ranked mastery bar. Then...
+// the ranked icon that we actually have (and that's already displayed on
+// the bar) floating up and down a bit... maybe with the wings animation
+// effect"). Drops the oversized duplicate icon entirely: YOU is now text
+// alone (`.rank-ladder-you`, Super Mario 256 face) at the true score
+// position, and the ONE showcase icon matching `tier`/`division` gets
+// `is-mine` -- a gentle bob (`@keyframes rank-mark-bob`, index.html) plus a
+// static glow (findable in a still screenshot, not just while animating,
+// since nothing is enlarged any more to do that job) plus the EXISTING wing
+// flap (`flap=${isMine}`) rather than a second animation -- `flap` is
+// always safe to pass: hat.js's own `wingLayers(0)` is empty for a wingless
+// division or for Capless (which never has wings, any division, task 8's
+// own wingTiers rule), so `.hat-flap` simply has nothing to animate there
+// and the bob alone carries it, exactly the case the user called out by
+// name ("handle the case of division 5 which doesn't have wings").
+function LadderBar({ value, tier, division }) {
   const filled = Math.max(0, Math.min(SCORE_CEILING, value || 0));
-  const here = bandForScore(filled);
   return html`<div>
-    <!-- The showcase strip: nine equal groups, all 45 icons, always (round
-         3). YOU is a SEPARATE highlight -- bigger, raised, tagged YOU, at
-         the value's ACTUAL position (round 9: "our active rank should be
-         above the ACTUAL position in the bar"), overlaid on whichever group
-         it happens to land near; it no longer needs the current tier's own
-         group hidden to avoid a duplicate, since a showcase tile and a
-         true-value highlight read as two different kinds of mark. -->
     <div class="rank-ladder-scale">
       ${TIER_BANDS.map((band) => {
         const stepWidth = (band.to - band.from) / DIVISIONS_PER_TIER;
         const tint = capGradient(band.tier) || rankColor(band.tier);
-        return html`<div class="rank-ladder-tier-group" style=${`--tier-tint:${tint}`}>
+        return html`<div class="rank-ladder-tier-group" style=${`--ladder-tint:${tint}`}>
           <div class="rank-division-row">
-            ${DIVISION_NUMERALS.map((numeral, index) => html`<span
-                class="rank-division-mark ${index === 0 ? "is-floor" : ""}"
-                title=${`${capName(band.tier)} ${numeral} — MARELO ${toPoints(band.from + stepWidth * index)} pts`}>
-              <${RankIcon} tier=${band.tier} division=${numeral} size=${DIVISION_MARK_SIZE} />
-            </span>`)}
+            ${DIVISION_NUMERALS.map((numeral, index) => {
+              const isMine = band.tier === tier && numeral === division;
+              return html`<span
+                  class="rank-division-mark ${index === 0 ? "is-floor" : ""} ${isMine ? "is-mine" : ""}"
+                  title=${`${capName(band.tier)} ${numeral} — MARELO ${toPoints(band.from + stepWidth * index)} pts`}>
+                <${RankIcon} tier=${band.tier} division=${numeral} size=${DIVISION_MARK_SIZE} flap=${isMine} />
+              </span>`;
+            })}
           </div>
+          <span class="rank-ladder-tier-strip"></span>
         </div>`;
       })}
       <span class="rank-ladder-mark is-you" style=${`left:${filled}%`}
           title=${`You are here — ${toPoints(filled)} pts`}>
         <b class="rank-ladder-you">YOU</b>
-        <${RankIcon} tier=${here.tier} size=${22} />
       </span>
     </div>
     <div class="rank-ladder">
@@ -825,6 +845,14 @@ export function RankPage({ t }) {
                 <p class="meta">MARELO ${fmtPoints(tweenedMarelo)} pts · next division at ${fmtPoints(data.next_division_at)}</p>
               </div>
             </div>
+            <!-- Round 4 (addendum, task 8, 2026-07-26): the ladder plots
+                 MARELO now, not Mastery -- it lives here, beside the rank it
+                 draws, instead of buried in the Mastery factor row below
+                 (see LadderBar's own comment for the "a tier ladder with
+                 icons on it means 'this is your rank'" reasoning). -->
+            <div class="rank-ladder-wrap">
+              <${LadderBar} value=${tweenedMarelo} tier=${data.tier} division=${data.division} />
+            </div>
             <!-- Task C.5 (live report 2026-07-25): a user saw PLATINUM on a
                  strategy banner next to Iron I here and filed it as a bug --
                  it wasn't. MARELO auto-grades whatever the active rank
@@ -850,12 +878,21 @@ export function RankPage({ t }) {
               <!-- Mastery stays 0-100 (task C.4): it's a MEAN SCORE, not a
                    rating on the tier ladder (marelo = mastery x coverage),
                    so running it through toPoints would imply a fourth scale
-                   that doesn't exist. fmtScore on purpose, not fmtPoints. -->
-              <div class="rank-factor">Mastery <${LadderBar} value=${tweenedMastery} />
+                   that doesn't exist. fmtScore on purpose, not fmtPoints.
+                   Round 4 (addendum, task 8, 2026-07-26): this used to be
+                   drawn on the SAME tier ladder as the card's own rank --
+                   two different numbers, a few pixels apart, on a scale
+                   whose whole point is "this is your rank" (the user caught
+                   it: Capless 5 on the card, the marker in Toad territory
+                   below). Mastery is one of the two factors MARELO is made
+                   of, not a rank of its own, so it gets a plain meter here
+                   instead -- the ladder above is the only rank-shaped
+                   drawing on this card now. -->
+              <div class="rank-factor">Mastery
+                <div class="rank-progress-track"><i style=${`width:${tweenedMastery || 0}%;background:${rankColor(data.tier)}`}></i></div>
                 <span class="meta">${`${fmtScore(tweenedMastery)} / 100 — the average `
                   + `rank score of the ${data.practiced} `
-                  + `${data.practiced === 1 ? "entry" : "entries"} you have practiced, `
-                  + "on the same ladder the chart below draws"}</span></div>
+                  + `${data.practiced === 1 ? "entry" : "entries"} you have practiced`}</span></div>
               <div class="rank-factor">Coverage <${CoverageStrip} t=${t} data=${data}
                 caption=${`${data.practiced} of ${data.n} rated `
                   + `${data.n === 1 ? "entry" : "entries"} practiced — dim tiles are `

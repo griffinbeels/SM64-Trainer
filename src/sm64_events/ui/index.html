@@ -1310,28 +1310,25 @@
      they forwarded hover and click to the first coverage tile inside them,
      so hovering the caption lit up an unrelated star. */
   .rank-factor { display: block; margin: 6px 0; font-size: 12px; color: var(--muted); }
-  /* (The plain gold `.rank-factors i` bar that used to live here is gone:
-     Mastery became the ladder below and Coverage became a row of entity
-     tiles, so nothing in this block is a plain fill any more.) */
-  /* Mastery as the LADDER it actually is (live request 2026-07-25 round 7 —
-     "it's not very clear what mastery means here. Out of what?"). Mastery is
-     a mean 0-100 SCORE, so the same anchors the chart's gridlines use apply
-     to it: the track is banded in each tier's own colour, a full-height tick
-     marks every tier threshold and a short pip every division inside it. The
-     bands are one gradient with hard stops, drawn TWICE — dim underneath,
-     full-strength in the fill — so "how far along the ladder" and "which
-     ranks those stretches are" are the same picture instead of a gold bar
-     that answers neither. The fill's background-size is set inline
-     (rankpage.js) because a percentage background resolves against the
-     FILL's box, not the track's; without it the whole ladder would be
-     squeezed into however much is filled. */
+  /* Round 4 (addendum, task 8, 2026-07-26): Mastery is a plain meter again,
+     reusing `.rank-progress-track` (below) — it moved OFF the tier ladder
+     because it isn't a rank. Mastery is a mean SCORE, one of the two
+     factors MARELO is made of (marelo = mastery x coverage), and drawing it
+     on a ladder that also carries rank icons implied it WAS a rank — the
+     user caught the two disagreeing outright (Capless 5 on the card, the
+     ladder marker sitting in Toad territory). The ladder now belongs to
+     MARELO alone (`.rank-ladder-wrap`, under `.rank-card-main`) so there is
+     exactly one rank-shaped drawing on this card. */
+  .rank-ladder-wrap { margin: 4px 0 10px; }
   .rank-ladder {
     position: relative; height: 16px; margin: 4px 0 3px;
     border-radius: 8px; background: rgba(4,13,23,.72); overflow: hidden;
   }
-  /* The showcase strip: nine equal groups (below), plus YOU (raised and
-     enlarged, a separate highlight overlaid at the true score value — round
-     3 no longer drops any group for it, see rankpage.js). Fixed height so
+  /* The showcase strip: nine equal groups (below), plus YOU. Round 4
+     (addendum, task 8, 2026-07-26 — the user: "instead of the YOU marker
+     being a bigger version of the cap, how about we JUST have the 'you'
+     text... above the exact position"): YOU is text alone now, no icon —
+     the enlarged duplicate cap this used to draw is gone. Fixed height so
      the card doesn't reflow as YOU moves. */
   .rank-ladder-scale {
     position: relative; height: 40px;
@@ -1342,9 +1339,15 @@
     display: flex; flex-direction: column; align-items: center; gap: 1px;
   }
   .rank-ladder-mark.is-you { bottom: 5px; z-index: 1; }
+  /* Same face as the cap's own sign-field glyph (`.hat .glyph`) — YOU is a
+     display word now, not a caption, so it gets the display font. Bumped a
+     step from the pre-round-4 size: a display face needs more size than a
+     UI face to read at this scale, and it no longer sits directly beside an
+     icon that could carry the eye on its own. */
   .rank-ladder-you {
-    color: var(--gold); font-size: .55rem; font-weight: 800;
-    letter-spacing: .12em; line-height: 1;
+    color: var(--gold); font-size: .68rem; font-weight: 700;
+    letter-spacing: .1em; line-height: 1;
+    font-family: "SuperMario256", Impact, sans-serif;
   }
   /* Nine EQUAL groups, not score-proportional (round 3, addendum, task 8,
      2026-07-26 — corrects round 2's own attempt, which sized each group to
@@ -1355,24 +1358,72 @@
      shares regardless of each tier's real score-width; the bar below still
      carries the true proportional reading, so nothing about score accuracy
      is lost, only the strip's own x-alignment with it (the user's own
-     ruling: costs nothing real). `--tier-tint` (set inline, rankpage.js,
-     from the SAME `capGradient(tier) || rankColor(tier)` the ladder band
-     and the standards table already use) is the tie back to which tier a
-     group belongs, now that position no longer implies it. */
+     ruling: costs nothing real).
+
+     Round 4 (addendum, task 8, 2026-07-26): the colour tie used to be a
+     full-height background on THIS element — broken two ways the user
+     found. First, a real bug: `capGradient()` (caps.js) returns a
+     `linear-gradient(...)` STRING for the two patterned tiers, and
+     `color-mix()` requires two `<color>` tokens — feeding it a gradient is
+     invalid CSS, so Toad and Toadsworth's groups silently got no background
+     at all. Second, underneath that: a coloured RECTANGLE spanning the
+     whole group reads as a band that ought to line up with the matching
+     band on the score bar below — it never can (nine equal groups vs. a
+     score-proportional bar, the very thing round 3 decoupled on purpose),
+     so the rectangle was implying an alignment that doesn't exist. Fixed
+     both by moving the tie to a short UNDERLINE strip
+     (`.rank-ladder-tier-strip`, below `.rank-division-row`) instead of a
+     full-height backdrop: `background` (unlike `color-mix`) accepts a flat
+     colour AND a gradient string alike, and a strip that ends exactly where
+     its five icons end reads as "this label belongs to this group", not as
+     a band claiming to span anything wider. Renamed `--tier-tint` to
+     `--ladder-tint` (set inline, rankpage.js, from the SAME
+     `capGradient(tier) || rankColor(tier)` the ladder band and the
+     standards table already use) — EntityTile's OWN unrelated `--tier-tint`
+     usage (`.entity-tile`, earlier in this file) was checked and is safe (always a plain
+     `rankColor`, never `capGradient`), but the rename avoids the two ever
+     being confused for the same variable again. */
   .rank-ladder-tier-group {
     flex: 1 1 0; min-width: 0; height: 100%;
-    display: flex; align-items: flex-end;
-    background: color-mix(in srgb, var(--tier-tint) 22%, transparent);
-    border-radius: 5px;
+    display: flex; flex-direction: column;
     container-type: inline-size;
   }
   .rank-division-row {
+    flex: 1 1 auto; min-height: 0;
     display: flex; align-items: flex-end; justify-content: space-between;
-    width: 100%; height: 100%; padding: 0 2px;
+    width: 100%; padding: 0 2px;
+  }
+  .rank-ladder-tier-strip {
+    display: block; flex: 0 0 auto; height: 3px; margin-top: 3px;
+    border-radius: 2px; background: var(--ladder-tint);
   }
   .rank-division-mark {
     display: flex; flex-direction: column; align-items: center;
     flex: 0 0 auto;
+  }
+  /* The user's own tier+division among the 45 (round 4, addendum, task 8,
+     2026-07-26 — the user: "the ranked icon that we actually have... should
+     be floating up and down"). This is now the ONLY highlight doing the job
+     the removed oversized YOU cap used to do, so it needs to be findable
+     in a STILL screenshot too, not only while animating — the glow is
+     unconditional, the bob is the motion layer on top of it. Gold, not
+     `--ladder-tint`: a `drop-shadow()` colour argument has the exact same
+     <color>-only constraint `color-mix()` does above, and `--ladder-tint`
+     is a gradient STRING for the two patterned tiers — reusing it here
+     would silently fail the same way. Gold also visually pairs the
+     highlight with `.rank-ladder-you`'s own colour, rather than tying it to
+     the tier it happens to sit in. */
+  .rank-division-mark.is-mine {
+    filter: drop-shadow(0 0 4px var(--gold));
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .rank-division-mark.is-mine {
+      animation: rank-mark-bob 2.4s ease-in-out infinite;
+    }
+    @keyframes rank-mark-bob {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-4px); }
+    }
   }
   /* Nine EQUAL groups means this threshold now applies (or doesn't) to all
      nine at once, not band-by-band (round 2 measured a per-band crossover;
@@ -1381,10 +1432,19 @@
      to its bottom division alone (`is-floor`, the pre-round-2 single-icon-
      per-tier look), re-centred (a lone flex child under `space-between`
      sits at the start, not the centre, so this needs its own
-     `justify-content`). */
+     `justify-content`).
+
+     Round 4 (addendum, task 8, 2026-07-26): `:not(.is-mine)` was added to
+     this hidden-selector after a narrow-width render caught the user's own
+     highlighted icon disappearing along with every other non-floor mark
+     whenever their division wasn't V -- exactly the "findable at a glance"
+     job the removed oversized YOU cap used to guarantee on its own. Below
+     this width a group can now show ONE icon (the floor, same as before)
+     or TWO (floor + the user's own, if they differ) -- never zero for the
+     tier the user is actually in. */
   @container (max-width: 140px) {
     .rank-division-row { justify-content: center; }
-    .rank-division-mark:not(.is-floor) { display: none; }
+    .rank-division-mark:not(.is-floor):not(.is-mine) { display: none; }
   }
   .rank-ladder-bands, .rank-ladder-fill {
     position: absolute; left: 0; top: 0; bottom: 0;
