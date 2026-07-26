@@ -215,6 +215,30 @@
   }
   .entity-back > .ui-icon { transform: rotate(90deg); }
   .entity-back:hover { color: var(--text); }
+  /* Strategy step (picker layer 3, spec 2026-07-25-target-picker-strategy-
+     step): the SAME auto-fill/minmax geometry as .entity-grid above, one
+     column wider — a strat card carries a rank icon plus two lines of text
+     where a bare star cell carries one. `.needs-strat` (below, the no-strat
+     blink) is declared AFTER this block on purpose: same specificity, so its
+     border-color/animation wins over this rule's plain border when both
+     classes land on the same "No strategy" card. */
+  .strat-grid {
+    display: grid; gap: .5rem;
+    grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+    align-content: start; margin-top: .4rem;
+  }
+  .strat-card {
+    display: grid; justify-items: center; gap: .25rem; text-align: center;
+    min-height: 108px; padding: .6rem .4rem;
+    background: rgba(8,20,34,.4); border: 1px solid var(--border-soft);
+    border-radius: 8px; color: var(--text);
+  }
+  .strat-card:hover { border-color: var(--gold); }
+  .strat-card:disabled { opacity: .55; cursor: default; }
+  .strat-rank-name { font-size: .72rem; color: var(--muted); }
+  .strat-name { font-size: .82rem; font-weight: 600; }
+  .strat-current { font-size: .68rem; color: var(--gold-soft); }
+  .strat-pb { font-size: .7rem; }
   .starsub .strat.none { opacity: .6; }
   @media (prefers-reduced-motion: no-preference) {
     .starcell.active-star .starholder { animation: starbob 2.4s ease-in-out infinite; }

@@ -52,6 +52,12 @@ RAW_TIER_EXPRESSIONS = (
     # here without also widening _PROP_PREFIXES below turned those two
     # legitimate whole-object handoffs into false positives.
     "here.tier", "attempt.rank", "a.rank", "s.rank", "view.rank", "sec.rank",
+    # strategystep.js (Task 6, 2026-07-25-target-picker-strategy-step): the
+    # strategy card's own rank, from GET /api/target/strategies' per-strategy
+    # `rank`. Already routed through capName() there (a ternary condition,
+    # not a bare print) -- added so a future edit that prints it bare cannot
+    # sail through unwrapped, same reasoning as the M6 batch above.
+    "strat.rank",
 )
 
 # A tier (or tier-holding object) expression handed to a component as a PROP
