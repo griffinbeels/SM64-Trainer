@@ -59,6 +59,11 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
   useEffect(() => {
     if (!editing) return;
     let alive = true;
+    // M9 (final review, 2026-07-26): clear the PREVIOUS open's badges before
+    // the new fetch lands, or reopening the picker paints stale ranks for a
+    // beat -- harmless flicker, but a picker cell briefly wearing a rank it
+    // no longer has reads as a bug the moment the real fetch corrects it.
+    setTargetRanks({});
     getJSON("/api/target/ranks")
       .then((ranks) => { if (alive) setTargetRanks(ranks); })
       .catch((fetchError) => console.error(fetchError));
