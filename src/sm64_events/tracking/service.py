@@ -361,7 +361,7 @@ class TrackerService:
             # picker's "no strategy" card journals a null strat_set rather
             # than leaving the existing strat in place. A defaulted segment
             # (default_strat truthy) can't actually reach "no strategy" --
-            # the projector falls a falsy strat_set back to the def's own
+            # the projector falls back a falsy strat_set to the def's own
             # default (caveat 17) -- so this is only observable on the 10
             # legacy tricks and user-created segments, deliberately.
             await self.set_strat_segment(segment_id, None)
