@@ -128,7 +128,7 @@ def _current_pbs_by_strat(pb_rows: list[dict]) -> dict:
     return out
 
 
-def _attempt_json(a, pbs, clock, ranks=None):
+def _attempt_json(a, pbs, clock, ranks=None, rank_clock=None):
     pb = pbs.get(("segment", a.segment_id, clock) if a.segment_id is not None
                  else (a.course_id, a.star_id, clock))
     frames = a.igt_frames if clock == "igt" else a.rta_frames
@@ -136,6 +136,18 @@ def _attempt_json(a, pbs, clock, ranks=None):
     delta = (frames - pb["frames"]
              if pb and frames is not None and not race_row and a.outcome == "success"
              else None)
+    # The medal grades on the LADDER's own clock, never the view clock --
+    # same reasoning as the section banner's basis two callers up (I1, final
+    # review 2026-07-26): an rta time systematically under-ranks against an
+    # igt-defined ladder, so before this fix a Diamond V banner could sit
+    # above the very attempt that earned it wearing a Platinum cap. Falls
+    # back to the view clock when the caller has none to defer to (unassigned
+    # attempts have no known entity, so the ladder lookup inside
+    # _attempt_rank never matches anything regardless of clock). The
+    # DISPLAYED frames/pb_delta above are unaffected -- that stays the view
+    # clock, a display choice.
+    rank_clock = clock if rank_clock is None else rank_clock
+    rank_frames = a.igt_frames if rank_clock == "igt" else a.rta_frames
     return {"id": a.id, "outcome": a.outcome, "outcome_detail": a.outcome_detail,
             "anchor_type": a.anchor_type, "strat_tag": a.strat_tag,
             "igt_frames": a.igt_frames,
@@ -152,7 +164,7 @@ def _attempt_json(a, pbs, clock, ranks=None):
             "rollouts_dustless": a.rollouts_dustless,
             "jumps_total": a.jumps_total,
             "jumps_dustless": a.jumps_dustless,
-            "rank": _attempt_rank(a, frames, ranks),
+            "rank": _attempt_rank(a, rank_frames, ranks),
             "segment_id": a.segment_id}
 
 
@@ -689,7 +701,7 @@ def _stats_for(history, stat_menu, clock) -> list[dict]:
 
 
 def _progress(attempts, pb_ids: set, session_meta, frames_of,
-              ranks=None, clock="igt") -> dict | None:
+              ranks=None, clock="igt", rank_clock=None) -> dict | None:
     """Completion-time-over-time points (spec §4): non-cleared successes of
     the SCOPED attempt list, grouped by session, chronological. A success
     qualifies when the section's clock (frames_of: stars igt, segments rta)
@@ -697,12 +709,19 @@ def _progress(attempts, pb_ids: set, session_meta, frames_of,
     Gold = explicitly saved PB rows (every save stays gold even when
     superseded). rta race rows (rta_frames == 0) ship as-is; the UI filters
     them. Resumed sessions append to their original group; within-group id
-    order is still chronological (journal ids are wall-clock monotonic)."""
+    order is still chronological (journal ids are wall-clock monotonic).
+
+    Dot medals grade on `rank_clock` (the LADDER's own clock), never `clock`
+    (the view clock) -- same rule and same reasoning as `_attempt_json`'s
+    `rank_frames` (I1, final review 2026-07-26): a progress dot for the same
+    attempt as an attempt-list row must never disagree with it. Falls back
+    to `clock` when the caller has none to defer to."""
+    rank_clock = clock if rank_clock is None else rank_clock
     by_session: dict[int, list] = {}
     for a in attempts:
         if a.outcome != "success" or a.cleared or frames_of(a) is None:
             continue
-        frames = a.igt_frames if clock == "igt" else a.rta_frames
+        rank_frames = a.igt_frames if rank_clock == "igt" else a.rta_frames
         by_session.setdefault(a.session_id, []).append({
             "t_utc": a.ended_utc,
             "igt_frames": a.igt_frames,
@@ -712,7 +731,7 @@ def _progress(attempts, pb_ids: set, session_meta, frames_of,
             "attempt_id": a.id,
             "is_pb_igt": (a.id, "igt") in pb_ids,
             "is_pb_rta": (a.id, "rta") in pb_ids,
-            "rank": _attempt_rank(a, frames, ranks),
+            "rank": _attempt_rank(a, rank_frames, ranks),
         })
     if not by_session:
         return None
@@ -940,7 +959,8 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "star_name": star_name(course_id, star_id),
             "links": star_links(course_id, star_id),
             "pb": pb_json,
-            "attempts": [_attempt_json(a, pbs, clock, service.ranks) for a in in_section],
+            "attempts": [_attempt_json(a, pbs, clock, service.ranks, rank_clock)
+                        for a in in_section],
             "stats": _stats_for(history, stat_menu, clock),
             "strategies": _strategies_for(registered, all_attempts, course_id, star_id,
                                          service.ranks, deleted_strats.get(ek, [])),
@@ -950,7 +970,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "time_filter": _time_filter_json(
                 time_filters_state.get(f"{course_id}:{star_id}")),
             "progress": _progress(in_section, pb_ids, session_meta, igt_of,
-                                  service.ranks, clock),
+                                  service.ranks, clock, rank_clock),
             "rank": _section_banner(
                 service.ranks, ek, star_strat, star_basis, rank_mode),
             "entity_rank": entity_rank(
@@ -1010,7 +1030,8 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                             "display": format_igt(pb_row["frames"]),
                             "attempt_id": pb_row["attempt_id"]}
                            if pb_row else None)},
-            "attempts": [_attempt_json(a, pbs, "rta", service.ranks) for a in in_section],
+            "attempts": [_attempt_json(a, pbs, "rta", service.ranks, seg_rank_clock)
+                        for a in in_section],
             "stats": _stats_for(history, stat_menu, "rta"),
             # registered ∪ observed-on-attempts ∪ rank-standard strategies
             "strategies": _seg_strategies(registered, history, seg_id,
@@ -1023,7 +1044,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "time_filter": _time_filter_json(
                 None, seg_guards=d.guards if d else []),
             "progress": _progress(in_section, pb_ids, session_meta, rta_of,
-                                  service.ranks, "rta"),
+                                  service.ranks, "rta", seg_rank_clock),
             "rank": _section_banner(
                 service.ranks, seg_ek, seg_strat, seg_basis, rank_mode),
             "entity_rank": entity_rank(

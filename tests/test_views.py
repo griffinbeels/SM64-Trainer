@@ -1931,6 +1931,24 @@ def test_a_star_section_grades_on_its_ladders_clock_not_the_view_clock(tmp_path)
     assert rta_view["rank"]["rank"] == igt_view["rank"]["rank"]
     assert rta_view["rank"]["division"] == igt_view["rank"]["division"]
 
+    # I1 (final review, 2026-07-26): the ATTEMPT medals and progress-graph
+    # dots must grade on the same ladder clock as the banner above, not the
+    # view clock -- otherwise the attempt row that produced the Diamond V
+    # banner wears a Platinum cap the instant the header's Clock control
+    # flips to rta (the very disagreement the docstring above is pinning).
+    igt_ranks = [a["rank"] for a in igt_view["attempts"]]
+    rta_ranks = [a["rank"] for a in rta_view["attempts"]]
+    assert any(rank is not None for rank in igt_ranks)  # not vacuous
+    assert rta_ranks == igt_ranks
+    for view in (igt_view, rta_view):
+        attempt_ranks = {a["id"]: a["rank"] for a in view["attempts"]}
+        progress_ranks = {point["attempt_id"]: point["rank"]
+                          for session in view["progress"]["sessions"]
+                          for point in session["points"]}
+        assert progress_ranks  # not vacuous
+        for attempt_id, rank in progress_ranks.items():
+            assert rank == attempt_ranks[attempt_id]
+
 
 def test_section_pb_display_stays_on_the_view_clock_after_the_grading_fix(tmp_path):
     """Regression guard for the task-3b fix above: only the GRADING basis

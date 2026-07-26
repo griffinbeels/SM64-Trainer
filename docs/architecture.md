@@ -784,15 +784,29 @@ per entity.
 
 **A ladder is defined in ONE clock, so that is the clock it grades in.**
 `RankStandards.clock_for(ek)` (igt for stars, rta for segments, overridable per
-entity) is THE grading clock everywhere — `_section_banner`, `entity_rank`, and
-both picker endpoints. It is deliberately NOT the view clock: with the header's
-Clock control on "Anchor → grab", a star's RTA time was being graded against its
-IGT-defined ladder, which is the wrong ruler — RTA includes approach time, so it
-systematically under-ranked. Measured on 2026-07-26: the same run read Platinum
-II on the section banner and Diamond V everywhere else. The DISPLAYED pb
-(`sec["pb"]`) still follows the view clock; that is a display choice and is
+entity) is THE grading clock for `_section_banner`, `entity_rank`, both picker
+endpoints, AND — since the I1 fix (final review, 2026-07-26) — the attempt-row
+medals and progress-graph dots `_attempt_json`/`_progress` compute (threaded in
+as `rank_clock`/`seg_rank_clock`, kept separate from the DISPLAYED frames/
+pb_delta, which stay on the view clock). It is deliberately NOT the view clock:
+with the header's Clock control on "Anchor → grab", a star's RTA time was being
+graded against its IGT-defined ladder, which is the wrong ruler — RTA includes
+approach time, so it systematically under-ranked. Measured on 2026-07-26: the
+same run read Platinum II on the section banner and Diamond V everywhere else;
+before I1, the same measurement also caught a Diamond V banner sitting directly
+above an attempt row for the very same run wearing a Platinum cap. The DISPLAYED
+pb (`sec["pb"]`) still follows the view clock; that is a display choice and is
 correct. Fixed in `build_session_view`, pinned both directions in
 `tests/test_views.py`.
+
+Two call sites remain named exceptions, deliberately not swept into this fix:
+`rank_by_star` and `segment_targets` (both `views.py`) hardcode `"igt"`/`"rta"`
+literals rather than calling `clock_for` for the stage quick-select banner's
+per-star/per-segment medal. They agree with `clock_for` today only because
+every loaded standard happens to define stars in igt and segments in rta — a
+coincidence of the standards data, not a rule the code enforces. Routing them
+through `clock_for` is a real fix; it just wasn't in scope for this pass (M1,
+final review 2026-07-26).
 
 **The 0–100 curve.** `ranks/scoring.py::score_for` interpolates a time between
 the ladder's cutoffs, anchored so each tier's floor is a fixed score
