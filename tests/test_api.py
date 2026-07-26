@@ -636,6 +636,27 @@ def test_target_accepts_segment_kind(tmp_path):
         assert r.status_code == 404
 
 
+def test_target_ranks_endpoint_returns_200_with_a_dict(tmp_path):
+    """The picker's lazy per-entity rank fetch — build_entity_ranks over the
+    HTTP boundary. No ranks are loaded here, so the map is empty, but the
+    shape (a dict, 200) is what the picker modal actually consumes."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)
+        r = client.get("/api/target/ranks")
+        assert r.status_code == 200
+        assert isinstance(r.json(), dict)
+
+
+def test_target_ranks_endpoint_on_a_fresh_db_is_empty(tmp_path):
+    """No attempts at all -> nothing to grade -> {}, not an error."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.get("/api/target/ranks")
+        assert r.status_code == 200
+        assert r.json() == {}
+
+
 def test_segment_body_extra_field_is_422(tmp_path):
     client, service, db = make_client(tmp_path)
     with client:

@@ -1658,3 +1658,121 @@ def test_catalog_course_groups_cover_every_catalog_course():
     grouped = {course for group in _CATALOG["course_groups"]
                for course in group["courses"]}
     assert grouped == {course["id"] for course in _CATALOG["courses"]}
+
+
+# -- build_entity_ranks (the picker's "how good am I at this star" answer) ----
+
+def test_entity_ranks_pick_the_best_strategy_not_the_active_one(tmp_path):
+    """The picker asks 'how good am I at this star', not 'how good am I at
+    what I'm about to run' -- build_entity_ranks must report the strategy
+    with the higher score even when a slower one is the currently ACTIVE
+    strat (which is what rank_by_star would report instead)."""
+    import json
+
+    from sm64_events.ranks.standards import RankStandards
+    from sm64_events.tracking.views import (_graded_progress, build_entity_ranks,
+                                            classify)
+
+    db, svc = make(tmp_path)
+    seed(svc)                            # successes at 343f and 350f, course 2 star 2
+    ladder = {"Mario": 11.0, "Diamond": 11.5, "Silver": 12.0}
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "star:2:2": {"clock": "igt", "strategies": {"Fast": ladder, "Slow": ladder}}}}))
+    svc.ranks = RankStandards(p); svc.ranks.load()
+
+    db._conn.execute("UPDATE attempts SET strat_tag='Fast' WHERE igt_frames=343")
+    db._conn.execute("UPDATE attempts SET strat_tag='Slow' WHERE igt_frames=350")
+    db._conn.commit()
+    fast_aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    slow_aid = next(a.id for a in db.attempts() if a.igt_frames == 350)
+    asyncio.run(svc.save_pb(fast_aid, "igt"))
+    asyncio.run(svc.save_pb(slow_aid, "igt"))
+    asyncio.run(svc.set_strat(2, 2, "Slow"))   # active strat is the SLOWER one
+
+    out = build_entity_ranks(db, svc)
+    assert out["star:2:2"]["strat"] == "Fast"
+    ladder_cs = svc.ranks.ladder_cs("star:2:2", "Fast")
+    expected = _graded_progress(ladder_cs, classify.display_cs(343))
+    assert out["star:2:2"]["rank"] == expected["rank"]
+    assert out["star:2:2"]["division"] == expected["division"]
+
+
+def test_entity_ranks_omit_an_entity_with_no_gradeable_time(tmp_path):
+    """An entity with attempts but no strat-tagged PB never grades on any
+    strategy -- absent from the map, not present with a null rank (that
+    absence IS the UI's 'no rank if never attempted yet')."""
+    from sm64_events.tracking.views import build_entity_ranks
+
+    db, svc = make(tmp_path)
+    seed(svc)                  # attempts exist; none tagged or saved as PB
+    svc.ranks = _ranks(tmp_path)   # defines star:2:2 -> strategy "fast"
+
+    out = build_entity_ranks(db, svc)
+    assert "star:2:2" not in out
+
+
+def test_entity_ranks_break_ties_on_the_strategy_name(tmp_path):
+    """Two strategies grading to the identical score must resolve to the
+    alphabetically-first name -- the same min(strat) convention
+    _fastest_strategy uses, so the winner is never dict-order luck. The seed
+    JSON lists 'Zebra' before 'Ant': a naive 'keep the first max seen' would
+    wrongly report Zebra."""
+    import json
+
+    from sm64_events.ranks.standards import RankStandards
+    from sm64_events.tracking.views import build_entity_ranks
+
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350, igt=343)))
+    asyncio.run(svc.publish(ev("practice_reset", 1400, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1750, igt=343)))   # identical time, second attempt
+
+    ladder = {"Mario": 11.0, "Diamond": 11.5, "Silver": 12.0}
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "star:2:2": {"clock": "igt", "strategies": {"Zebra": ladder, "Ant": ladder}}}}))
+    svc.ranks = RankStandards(p); svc.ranks.load()
+
+    successes = [a for a in db.attempts() if a.outcome == "success"]
+    assert len(successes) == 2
+    db._conn.execute("UPDATE attempts SET strat_tag='Zebra' WHERE id=?", (successes[0].id,))
+    db._conn.execute("UPDATE attempts SET strat_tag='Ant' WHERE id=?", (successes[1].id,))
+    db._conn.commit()
+    asyncio.run(svc.save_pb(successes[0].id, "igt"))
+    asyncio.run(svc.save_pb(successes[1].id, "igt"))
+
+    out = build_entity_ranks(db, svc)
+    assert out["star:2:2"]["strat"] == "Ant"
+
+
+def test_entity_ranks_skip_a_tombstoned_strategy(tmp_path):
+    """A strategy listed in the deleted_strats ui_state KV must never win,
+    even when it has the best time -- the same tombstone rule masked() and
+    _strategies_for() already apply, reused here inline (masked itself is a
+    closure local to build_session_view)."""
+    import json
+
+    from sm64_events.ranks.standards import RankStandards
+    from sm64_events.tracking.views import build_entity_ranks
+
+    db, svc = make(tmp_path)
+    seed(svc)                            # successes at 343f (faster) and 350f
+    ladder = {"Mario": 11.0, "Diamond": 11.5, "Silver": 12.0}
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "star:2:2": {"clock": "igt", "strategies": {"Ghost": ladder, "Real": ladder}}}}))
+    svc.ranks = RankStandards(p); svc.ranks.load()
+
+    db._conn.execute("UPDATE attempts SET strat_tag='Ghost' WHERE igt_frames=343")
+    db._conn.execute("UPDATE attempts SET strat_tag='Real' WHERE igt_frames=350")
+    db._conn.commit()
+    ghost_aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    real_aid = next(a.id for a in db.attempts() if a.igt_frames == 350)
+    asyncio.run(svc.save_pb(ghost_aid, "igt"))
+    asyncio.run(svc.save_pb(real_aid, "igt"))
+    db.set_state("deleted_strats", {"star:2:2": ["Ghost"]})
+
+    out = build_entity_ranks(db, svc)
+    assert out["star:2:2"]["strat"] == "Real"

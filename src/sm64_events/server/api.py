@@ -19,9 +19,9 @@ from sm64_events.ranks.standards import entity_key
 from sm64_events.stats.registry import (registry_meta, selection_id,
                                         selection_order)
 from sm64_events.tracking.segments import origin_taxonomy, vocab
-from sm64_events.tracking.views import (build_route_view, build_run_history,
-                                        build_run_view, build_session_view,
-                                        stamp_origins)
+from sm64_events.tracking.views import (build_entity_ranks, build_route_view,
+                                        build_run_history, build_run_view,
+                                        build_session_view, stamp_origins)
 
 
 class TargetBody(BaseModel):
@@ -550,6 +550,17 @@ def create_api_router(service) -> APIRouter:
         if service.db is None:
             raise HTTPException(503, "database unavailable")
         return build_run_view(service.db, service)
+
+    @router.get("/target/ranks")
+    def target_ranks():
+        """Lazy per-entity 'how good am I at this star' answer (the BEST
+        strategy's own rank), for the practice-target picker's grid cells --
+        declared before any '/target/{...}' path route, matching the
+        '/segments/vocab' declaration-order rule at api.py:341, in case one
+        is ever added. 503 in degraded mode, matching GET /session."""
+        if service.db is None:
+            raise HTTPException(503, "database unavailable")
+        return build_entity_ranks(service.db, service)
 
     @router.post("/target")
     async def target(body: TargetBody):

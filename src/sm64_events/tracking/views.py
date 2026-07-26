@@ -373,6 +373,103 @@ def entity_rank(ranks, ek, frames) -> dict | None:
             "fastest_strat": _fastest_strategy(ranks, ek, ladder)}
 
 
+def _best_strategy_graded(ranks, ek, history, pbs_by_strat, rank_mode,
+                          deleted, pb_key_prefix) -> tuple[str, dict] | None:
+    """The (strategy, _graded_progress) pair with the HIGHEST score among
+    `ranks.strategies(ek)`, skipping tombstoned names (`deleted`) and
+    strategies with no ladder or nothing gradeable. Ties break on
+    min(strat) -- same deterministic convention `_fastest_strategy` uses,
+    order-independent (a later tie only overwrites the running best when its
+    name sorts earlier, so iteration order never decides the winner).
+    `pb_key_prefix` is `(course_id, star_id)` or `("segment", segment_id)` --
+    `_current_pbs_by_strat`'s key shape minus (clock, strat)."""
+    clock = ranks.clock_for(ek)
+    best: tuple[str, dict] | None = None
+    for strat in ranks.strategies(ek):
+        if strat in deleted:
+            continue
+        ladder = ranks.ladder_cs(ek, strat)
+        if not ladder:
+            continue
+        basis = grading_basis(
+            rank_mode, pbs_by_strat.get((*pb_key_prefix, clock, strat)),
+            history, strat, clock)
+        if basis is None:
+            continue
+        graded = _graded_progress(ladder, classify.display_cs(basis["frames"]))
+        if best is None or graded["score"] > best[1]["score"] \
+                or (graded["score"] == best[1]["score"] and strat < best[0]):
+            best = (strat, graded)
+    return best
+
+
+def build_entity_ranks(db, service) -> dict[str, dict]:
+    """The picker's "how good am I at this star" answer, keyed by canonical
+    entity key: `{"rank": str, "division": str, "strat": str}` for every
+    practised entity that grades on AT LEAST ONE strategy.
+
+    A THIRD "which rank" answer, deliberately distinct from the other two in
+    this file: `rank_by_star` grades the ACTIVE strategy ("how am I doing at
+    what I'm about to run"), `entity_rank` grades the entity's best-POSSIBLE
+    ladder — a pointwise minimum no single strategy may actually own ("how
+    close is this to the fastest this star can be"). This one grades the
+    single BEST-SCORING strategy's own ladder — "how good am I at this star,
+    at all" — the number the target picker wants on a grid cell before any
+    strategy has been chosen for the run about to start.
+
+    An on-demand builder rather than a `build_session_view` field on
+    purpose: the session view rebuilds on every WebSocket event, and average
+    rank modes grade O(history) per strategy per entity — paying that for
+    every practised entity on every event would cost real per-event latency
+    for a number only the picker modal ever looks at. Callers fetch this
+    once, when the modal opens.
+
+    Candidate entities are read off ONE pass over `db.attempts()` (mirrors
+    `build_session_view`'s `attempts_by_star`/`attempts_by_seg` grouping,
+    ~line 643) rather than scanning `all_attempts` per entity — that
+    O(entities × attempts) shape was removed from the session view
+    deliberately (2026-07-23 review) and must not come back here. An entity
+    where no strategy grades is ABSENT from the map, not present with nulls
+    — the picker's "no rank if never attempted yet" is the absence."""
+    if service.ranks is None:
+        return {}
+    all_attempts = db.attempts()
+    attempts_by_star: dict = {}
+    attempts_by_seg: dict = {}
+    for a in all_attempts:
+        if a.segment_id is not None:
+            attempts_by_seg.setdefault(a.segment_id, []).append(a)
+        elif a.course_id is not None:
+            attempts_by_star.setdefault((a.course_id, a.star_id), []).append(a)
+
+    pbs_by_strat = _current_pbs_by_strat(db.pbs())
+    rank_mode = db.get_state("rank_mode", classify.DEFAULT_RANK_MODE)
+    if rank_mode not in classify.RANK_MODES:   # forward-safe: junk reads as pb
+        rank_mode = classify.DEFAULT_RANK_MODE
+    deleted_strats = db.get_state("deleted_strats", {})
+
+    out: dict[str, dict] = {}
+    for (course_id, star_id), history in attempts_by_star.items():
+        ek = entity_key(course_id, star_id)
+        best = _best_strategy_graded(service.ranks, ek, history, pbs_by_strat,
+                                     rank_mode, deleted_strats.get(ek, []),
+                                     (course_id, star_id))
+        if best:
+            strat, graded = best
+            out[ek] = {"rank": graded["rank"], "division": graded["division"],
+                      "strat": strat}
+    for seg_id, history in attempts_by_seg.items():
+        ek = entity_key(None, None, seg_id)
+        best = _best_strategy_graded(service.ranks, ek, history, pbs_by_strat,
+                                     rank_mode, deleted_strats.get(ek, []),
+                                     ("segment", seg_id))
+        if best:
+            strat, graded = best
+            out[ek] = {"rank": graded["rank"], "division": graded["division"],
+                      "strat": strat}
+    return out
+
+
 def _section_banner(ranks, ek, strat, basis, mode) -> dict | None:
     """Rank banner for a section: the grading basis (PB in pb mode, mean of
     valid runs in avg modes — grading_basis) graded under the ACTIVE strat.
