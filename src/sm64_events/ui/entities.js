@@ -293,14 +293,26 @@ function segmentCourse(segment, courseByLevel) {
   return course == null ? null : Number(course);
 }
 
+// The rank map (GET /api/target/ranks) is keyed "star:8:2" / "segment:12",
+// but a star OPTION's id is the bare composite "8:2" -- courseUnionGroups
+// builds it via starId(), same as every other star id in this file -- while
+// a segment option's id already IS "segment:12". Get this translation wrong
+// and every star silently shows no rank while every segment works, which
+// reads as missing data rather than as a bug.
+const rankMapKey = (optionId) =>
+  optionId.startsWith("segment:") ? optionId : `star:${optionId}`;
+
 /**
  * Layer-1 course cells with layer-2 options = that course's stars followed by
  * its segments. Courses keep the catalog's order, which is game order.
  *   catalog       session view catalog ({courses:[{id,name,stars:[]}]})
  *   segments      GET /api/segments rows (each carrying `origin`)
  *   courseByLevel vocab.course_by_level
+ *   ranksByKey    GET /api/target/ranks' {entity_key: {rank,division,strat}},
+ *                 optional -- a caller that has not fetched it yet (header.js,
+ *                 until a later task wires the fetch) keeps working unchanged.
  */
-export function courseUnionGroups(catalog, segments, courseByLevel) {
+export function courseUnionGroups(catalog, segments, courseByLevel, ranksByKey = {}) {
   const byCourse = new Map();
   for (const segment of segments || []) {
     const course = segmentCourse(segment, courseByLevel);
@@ -331,14 +343,21 @@ export function courseUnionGroups(catalog, segments, courseByLevel) {
   // I2). They get their own trailing group instead.
   const castleSegments = (segments || []).filter((segment) =>
     segmentCourse(segment, courseByLevel) == null);
+  // `rank` rides `undefined` (never `null`) for an unmapped option: it is
+  // spread into a plain object headed for JSON.stringify, which OMITS an
+  // undefined property entirely -- so a caller that never passes `ranksByKey`
+  // gets back the exact same option shape as before this parameter existed.
+  const withRank = (option) => ({
+    ...option, rank: (ranksByKey[rankMapKey(option.id)] || {}).rank,
+  });
   const courseCells = inGridOrder.map((course) => ({
     key: `course-${course.id}`,
     label: course.name,
     options: [
-      ...(course.stars || []).map((name, slot) => ({
+      ...(course.stars || []).map((name, slot) => withRank({
         id: starId(course.id, slot), name,
       })),
-      ...(byCourse.get(course.id) || []).map((segment) => ({
+      ...(byCourse.get(course.id) || []).map((segment) => withRank({
         id: `segment:${segment.id}`, name: segment.name, sub: "segment",
       })),
     ],
@@ -346,7 +365,7 @@ export function courseUnionGroups(catalog, segments, courseByLevel) {
   if (castleSegments.length === 0) return courseCells;
   return [...courseCells, {
     key: "castle-segments", label: "Castle",
-    options: castleSegments.map((segment) => ({
+    options: castleSegments.map((segment) => withRank({
       id: `segment:${segment.id}`, name: segment.name, sub: "segment",
     })),
   }];

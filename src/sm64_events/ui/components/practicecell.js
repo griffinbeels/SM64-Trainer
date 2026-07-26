@@ -26,12 +26,22 @@ const html = htm.bind(h);
  * sub        sub-line node (strat name, running chip, or nothing)
  * dimIdle    dim non-active cells — the BANNER's look; the picker grid passes
  *            false, since a grid of dim cells reads as disabled
+ * rankBadge  the picker grid's look (task 4, 2026-07-25): draws `rank` as an
+ *            out-of-flow corner badge over the art instead of the banner's
+ *            in-flow `.starrank` row, and renders NOTHING when `rank` is
+ *            falsy (never the banner's "–" placeholder) — an in-flow row
+ *            cost a line per grid ROW even when unranked, most of the 94px
+ *            that made the picker scroll on a 900px-tall window (live audit
+ *            2026-07-25); grading the cells does not pay that back, since a
+ *            course with two of seven stars practiced still renders five
+ *            placeholders. Default false = the banner's byte-for-byte
+ *            unchanged look.
  * onEdit     optional; omit and the ✎ affordance is not rendered at all (the
  *            picker has no per-cell icon override — that lives on the banner)
  */
 export function PracticeCell({ active, armed, iconSrc, fallbackSlot = 0,
                               rank, name, sub, title, dimIdle = false,
-                              onPick, onEdit }) {
+                              rankBadge = false, onPick, onEdit }) {
   const editKey = (keyEvent) => {
     if (keyEvent.key !== "Enter" && keyEvent.key !== " ") return;
     keyEvent.preventDefault(); keyEvent.stopPropagation(); onEdit();
@@ -45,8 +55,10 @@ export function PracticeCell({ active, armed, iconSrc, fallbackSlot = 0,
            onerror=${(errorEvent) => fallbackToGenericStar(errorEvent, fallbackSlot)}
            alt="" draggable="false" />
     </span>
-    <span class="starrank">
-      ${rank ? html`<${Hat} tier=${rank} size=${16} />` : "–"}</span>
+    ${rankBadge
+      ? (rank ? html`<span class="starrank-badge"><${Hat} tier=${rank} size=${16} /></span>` : null)
+      : html`<span class="starrank">
+      ${rank ? html`<${Hat} tier=${rank} size=${16} />` : "–"}</span>`}
     <span class="starname">${name}</span>
     <span class="starsub">${sub}</span>
     ${onEdit ? html`<span class="editicon" role="button" tabindex="0"
