@@ -143,6 +143,18 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
             `Session ${s.id}${s.id === active ? " ●" : ""} · ${s.attempts}`],
   )] : [];
 
+  // Re-picking the SAME star that's already the target, with a new (or
+  // first) strategy, leaves the projector's target tuple unchanged -- no
+  // WebSocket event in store.js's REFRESH_ON fires for that specific case
+  // (set_target's truthy-strat_tag branch never publishes strat_set, unlike
+  // set_target_segment's; verified empirically against TrackerService).
+  // Every other /api/target call site (stagebanner.js, practice.js, this
+  // card's own predecessor) refreshes explicitly right after for exactly
+  // this reason -- this picker must too, on every dismissal (a plain
+  // Esc/backdrop close just refetches data that didn't change, which is
+  // harmless, and keeps one path rather than two).
+  function closeTargetPicker() { setEditing(false); t.refresh(); }
+
   // Only ever CALLED while the dialog is open (the `editing && v` guard at
   // the call site short-circuits before this runs) -- courseUnionGroups
   // walks every course and segment, and the header re-renders on every
@@ -189,7 +201,7 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
         parseSegmentId(id) == null ? "star" : "segment",
         parseSegmentId(id) == null ? id : parseSegmentId(id), iconContext)}
       nextStep=${StrategyStep}
-      onPick=${() => setEditing(false)} onClose=${() => setEditing(false)} />`;
+      onPick=${closeTargetPicker} onClose=${closeTargetPicker} />`;
   }
 
   return html`<header class="context-shell">

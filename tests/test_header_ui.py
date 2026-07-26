@@ -90,6 +90,24 @@ def test_target_ranks_are_fetched_only_when_the_dialog_opens():
     assert "}, [editing]);" in HEADER_JS
 
 
+def test_closing_the_target_picker_refreshes_the_view():
+    # StrategyStep's write is a plain POST, not something the client always
+    # hears about over the WebSocket: re-picking a star that's ALREADY the
+    # target with a new (or first) strategy leaves the projector's target
+    # tuple unchanged, so service.py's auto target_changed republish never
+    # fires, and set_target's truthy-strat_tag branch never calls set_strat
+    # either (unlike set_target_segment, which delegates to
+    # set_strat_segment and self-heals) -- verified empirically against
+    # TrackerService: that specific call publishes ONLY "target_set", which
+    # is not in store.js's REFRESH_ON. Every other /api/target call site
+    # (stagebanner.js, practice.js, the deleted TargetEditor.apply()) closes
+    # AND refreshes explicitly right after, for exactly this reason -- the
+    # picker dialog must too, on every dismissal (a plain Esc/backdrop close
+    # refetches data that didn't change, which is harmless).
+    assert "function closeTargetPicker() { setEditing(false); t.refresh(); }" in HEADER_JS
+    assert "onPick=${closeTargetPicker} onClose=${closeTargetPicker}" in HEADER_JS
+
+
 def test_layer_one_cells_carry_a_course_portrait():
     # The heading-vs-cell decision itself lives in entitymodal.js, which this
     # file never opens — so assert only what IS this call site's job: attaching
