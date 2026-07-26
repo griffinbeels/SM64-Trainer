@@ -166,6 +166,37 @@ const CURRENT_RANK_ICON_SIZE = 34;
 
 function LadderBar({ value, tier, division }) {
   const filled = Math.max(0, Math.min(SCORE_CEILING, value || 0));
+  // Round 6 addendum (task 8, 2026-07-26 -- the user, after accepting the
+  // hover interaction itself: "I would expect my big symbol to still be
+  // visible, and for my exact progress inside the rank to still be
+  // visible... the big symbol, the position bar, and the 'you' [should be]
+  // all still displayed when hovering over your rank's area"). The marker
+  // used to hide the instant ANY band expanded, reasoned (at the time) as
+  // "its position is only true in the resting layout" -- correct as far as
+  // it went, but hiding was the wrong fix for it. The position was never
+  // actually unknowable during expansion: the user's score sits inside
+  // exactly ONE band, at a known FRACTION of that band's own span.
+  // Expressed band-locally -- a child of that SAME band, at that fraction
+  // of ITS width, exactly the coordinate space the pips/icons already use
+  // their own local percentages against -- the marker's position recomputes
+  // correctly whenever that band's own width changes, for free, the same
+  // way pip/icon alignment already survives expansion. Nothing needs to
+  // hide any more; the `:has()` rule that used to blank it is gone.
+  //
+  // The band is found by matching `tier` (the prop, the SAME tier the card
+  // above already shows) rather than by asking "which band does `filled`
+  // fall into" from scratch: `filled` is TWEENED and `tier` is not, so
+  // during a cross-tier rank-up the two can transiently disagree for the
+  // length of the tween. Anchoring the marker to the tier the card already
+  // names is what keeps this ladder from ever repeating round 4's original
+  // bug (a marker naming a different rank than the card two inches above
+  // it) -- the fraction is clamped to [0,1] defensively for that same
+  // transient window, so a mid-tween value can never push the marker
+  // outside the band it is being drawn in.
+  const currentBand = tier ? TIER_BANDS.find((band) => band.tier === tier) : null;
+  const markerFraction = currentBand
+    ? Math.max(0, Math.min(1, (filled - currentBand.from) / (currentBand.to - currentBand.from)))
+    : 0;
   return html`<div class="rank-ladder">
     ${TIER_BANDS.map((band) => {
       const stepWidth = (band.to - band.from) / DIVISIONS_PER_TIER;
@@ -196,6 +227,7 @@ function LadderBar({ value, tier, division }) {
         title: `${capName(band.tier)} ${numeral} — MARELO ${toPoints(band.from + stepWidth * index)} pts`,
         isTier: index === 0,
       }));
+      const isCurrentBand = !!(currentBand && band.tier === currentBand.tier);
       return html`<div class="rank-band" data-band-tier=${band.tier}
           style=${`--band-weight:${band.to - band.from};--band-tint:${tint}`}>
         <span class="rank-band-surface">
@@ -211,16 +243,24 @@ function LadderBar({ value, tier, division }) {
         ${divisions.map((d) => html`<span class="rank-band-icon" style=${`left:${d.iconPct}%`}>
           <${RankIcon} tier=${band.tier} division=${d.numeral} size=${BAND_ICON_SIZE} title=${d.title} />
         </span>`)}
+        <!-- The user's own marker: a CHILD of the one band it belongs in,
+             not a global overlay on the whole bar (see the comment above
+             LadderBar) -- this is also what fixes the stacking bug the
+             user found (the position line rendering BEHIND an expanded
+             band): nested inside that band, its own z-index is compared
+             only within that band's local stacking context, above that
+             band's own surface/pips/icons, in both the resting and the
+             expanded state. -->
+        ${isCurrentBand && html`<span class="rank-ladder-head" style=${`left:${markerFraction * 100}%`}></span>`}
+        ${isCurrentBand && html`<span class="rank-ladder-mark is-you" style=${`left:${markerFraction * 100}%`}
+            title=${`You are here — ${toPoints(filled)} pts`}>
+          <b class="rank-ladder-you">YOU</b>
+          <span class="rank-ladder-you-icon">
+            <${RankIcon} tier=${tier} division=${division} size=${CURRENT_RANK_ICON_SIZE} flap=${true} />
+          </span>
+        </span>`}
       </div>`;
     })}
-    ${filled > 0 && html`<span class="rank-ladder-head" style=${`left:${filled}%`}></span>`}
-    ${tier && html`<span class="rank-ladder-mark is-you" style=${`left:${filled}%`}
-        title=${`You are here — ${toPoints(filled)} pts`}>
-      <b class="rank-ladder-you">YOU</b>
-      <span class="rank-ladder-you-icon">
-        <${RankIcon} tier=${tier} division=${division} size=${CURRENT_RANK_ICON_SIZE} flap=${true} />
-      </span>
-    </span>`}
   </div>`;
 }
 

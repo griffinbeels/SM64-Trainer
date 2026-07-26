@@ -1515,10 +1515,21 @@
   }
   /* The reached-this-far marker: a bright edge on the fill, so the exact
      value is readable against a banded track that has plenty of edges of
-     its own. Absolutely positioned against `.rank-ladder` itself (a flex
-     container, but that only matters to its IN-FLOW children -- an
-     absolutely positioned one is removed from flex layout and placed by
-     `left:%` against the container's own box like any other). */
+     its own. Round 6 (addendum, task 8, 2026-07-26 -- the user: "I would
+     expect my big symbol to still be visible, and for my exact progress
+     inside the rank to still be visible... when hovering over your rank's
+     area"): a CHILD of the ONE `.rank-band` the user's own score falls in
+     now (rankpage.js sets `isCurrentBand`), not a global overlay on
+     `.rank-ladder` positioned by a percentage of the WHOLE bar. That used
+     to mean this line hid behind an EXPANDED band -- both were absolutely
+     positioned siblings competing for stacking inside the SAME parent
+     (`.rank-ladder`), and the hovered band's own `z-index: 3` beat this
+     line's `z-index: 2`. Nested inside that one band instead, this line's
+     z-index is compared only within THAT band's own local stacking
+     context (created the moment the band's `:hover`/`:focus-within` rule
+     sets its own `z-index`), above that band's surface/pips/icons in both
+     the resting and the expanded state -- the stacking bug is fixed as a
+     side effect of the same restructure that fixes the position. */
   .rank-ladder-head {
     position: absolute; top: -1px; bottom: -1px; width: 2px;
     background: var(--text); transform: translateX(-1px); z-index: 2;
@@ -1529,22 +1540,26 @@
      "this one is you" at rest any more. Same face as the cap's own
      sign-field glyph (`.hat .glyph`) for YOU -- a display word, not a
      caption -- with enough gap below it that the bigger icon can never
-     grow into the text above it. */
+     grow into the text above it.
+     Round 6 (addendum, task 8, 2026-07-26): no longer hides while a band
+     is expanded. The earlier reasoning -- "YOU's position is only true at
+     rest, and a hovered band is deliberately not proportional" -- was
+     correct as far as it went, but hiding was the wrong remedy: the user's
+     score is never actually unknowable during expansion, only expressed in
+     the wrong coordinate system. Positioned as a fraction of the ONE band
+     it belongs to (same as `.rank-ladder-head` above) instead of a
+     fraction of the whole bar, its position recomputes correctly whenever
+     that band's own width changes -- exactly how the pip/icon alignment
+     already survives expansion. Hovering the user's own band is now a
+     genuine zoom into where they actually are, with nothing left to hide:
+     the showcase icons sit at their slot's own midpoint (they label a
+     SPAN), this marker sits at the user's true fraction (it marks a
+     VALUE) -- different meanings, visibly different positions, neither
+     has to move off what it means. */
   .rank-ladder-mark.is-you {
     position: absolute; bottom: calc(100% + 8px); left: 0;
     transform: translateX(-50%); z-index: 4;
     display: flex; flex-direction: column; align-items: center; gap: 6px;
-  }
-  /* Hides while ANY band is expanded: YOU's position is only true in the
-     AT-REST proportional layout, and a band mid-hover is deliberately NOT
-     proportional (that is the whole trick the expansion relies on) --
-     showing a now-wrong "you are here" position during that transient
-     state would recreate exactly the kind of mismatch the user rejected
-     the old design over. `:has()` already has a precedent in this file
-     (header.js's context-select focus ring, `.context-select:has(>
-     select:focus-visible)`). */
-  .rank-ladder:has(.rank-band:hover, .rank-band:focus-within) .rank-ladder-mark.is-you {
-    opacity: 0; pointer-events: none;
   }
   .rank-ladder-you {
     color: var(--gold); font-size: .68rem; font-weight: 700;
