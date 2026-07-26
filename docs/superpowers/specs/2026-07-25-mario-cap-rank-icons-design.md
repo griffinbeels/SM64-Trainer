@@ -63,30 +63,33 @@ replaces** — worst case WALUIGI (7) against the old worst GRANDMASTER (11).
 | Tier key | Cap | Fill | Treatment |
 |---|---|---|---|
 | Mario | **Mario** | `#e23b3b` red | `M` glyph instead of a digit; warm glow |
-| Grandmaster | **Metal** | `#78899c` steel | opaque, specular sweep |
-| Master | **Vanish** | `#bfe6ff` pale | ~55% translucent, soft glow |
-| Diamond | **Luigi** | `#3fbf5f` green | solid |
-| Platinum | **Wario** | `#e8b21c` yellow | solid |
-| Gold | **Waluigi** | `#8b4fc0` purple | solid |
-| Silver | **Toadsworth** | `#d8ce80` khaki | large brown `#7a4f2a` spots |
-| Bronze | **Toad** | `#f5f7f8` white | small red `#e0453f` spots |
-| Iron | **Capless** | `#7c5347` rust | outline only, no fill |
+| Grandmaster | **Metal** | `#82a0b5` steel | opaque, specular sweep |
+| Master | **Vanish** | `#8fecfd` ghost-cyan | translucent, soft glow |
+| Diamond | **Luigi** | `#3dc05c` green | solid |
+| Platinum | **Wario** | `#e8af16` yellow | solid |
+| Gold | **Waluigi** | `#8d42c3` purple | solid |
+| Silver | **Toadsworth** | `#dad68c` khaki | spots, tinted brown `#7a4f2a` |
+| Bronze | **Toad** | `#ffffff` white | spots, tinted red `#e0453f` |
+| Iron | **Capless** | `#735648` rust | outline only, no fill |
 
-Two adjacencies are deliberate risks, both mitigated by something other than
-hue, which is only possible because the icon is composited at runtime rather
-than shipped as a flat disc:
+**These hexes are a search result, not a taste judgement.** A first hand-picked
+palette failed its own guard once that guard was scoped correctly. The guard
+must cover **every pair, not adjacent ones**: `rank-ladder-scale` renders all
+nine medals in one 13px row and the chart draws a dot per tier, so any two
+tiers can sit side by side. Measured on the redmean distance, the hand-picked
+palette put Vanish and Toad **98** apart — where the Iron/Silver pair that
+shipped as a bug and was rejected scored **168**.
 
-- **Toad above Capless, Toadsworth above Toad.** Two spotted mushroom caps in
-  neighbouring tiers is the Iron/Silver failure mode exactly. Separated by a
-  hue gap (cool white vs warm khaki), a value gap, and — most durably at 13px —
-  a *shape* difference: several small spots against one large plus one partial.
-- **Vanish directly above Metal.** Two light neutrals. Metal is pushed dark
-  (`#78899c`) for a large value gap, and translucent-with-glow against
-  opaque-with-specular separates them at the material level.
+The table above is the output of a constrained search: hold every pair apart
+while minimising drift from each character's real colour. Its worst pair is
+**190**, Mario is untouched, and most caps moved imperceptibly.
 
-**These hex values are a starting point and may be wrong.** They were chosen on
-paper. The contact sheet (below) is what decides them, and the adjacent-pair
-guard is what keeps them honest afterwards.
+The residual risk is Toadsworth against Toad, which *is* that worst pair and is
+the same kind of difference — two light, low-chroma fills. What carries it is
+that they are the only two tiers with **spots**, in sharply different colours
+(brown against red). Verified on the contact sheet at 13px: they read apart
+clearly. Vanish above Metal is also close in kind, separated by a large value
+gap plus translucent-with-glow against opaque-with-specular.
 
 ### 2. Arabic numerals everywhere
 
@@ -121,9 +124,15 @@ given:
 
 - no `division` → silhouette in the tier colour, no numeral, no wings. This is
   exactly the information `Medal` carries today.
-- `division` present and `size >= 22` → numeral and wings.
-- `division` present and `size < 22` → silhouette only; the numeral would be
+- `division` present and `size >= 30` → numeral and wings.
+- `division` present and `size < 30` → silhouette only; the numeral would be
   sub-pixel.
+
+**30, not 22.** The contact sheet rendered the digit at every size a `Crest` is
+used at today: it is a smudge at 22 and 26, marginal at 28, and only reliably
+readable from about 34. Two call sites currently sit below the threshold —
+`rankpage.js:471` (breakdown rows, 22) and `rankpage.js:510` (scope chips, 26) —
+and both are raised to 30, which they have room for.
 
 The data clause is load-bearing, not a nicety: two of the eight `Medal` call
 sites are already at 22px (`practice.js:147` attempt rows, `rankpage.js:165`
@@ -205,15 +214,22 @@ other hexes exactly either. The master is therefore **white**, and tint is:
 multiplies to the exact hex, the low-poly shading survives as darker shades of
 it, the black outline stays black.
 
-**`multiply` blends against its backdrop, and this app's backdrop is dark
-navy.** Per the compositing spec an isolated group makes this correct, but that
-is a claim about Chromium's compositor, not something to assert without a
-render. Proving it is the **first implementation task**, before anything else
-is built.
+**Proven, 2026-07-25.** The worry was that `multiply` blends against its
+backdrop and this app's backdrop is dark navy. Rendered headless and sampled
+per pixel, every tier comes out at *exactly* its hex — `#e23b3b` → `(226,59,59)`
+and so on for all nine — and identically over four backdrops (navy, a light
+card, a red gradient wash, transparency), **with and without**
+`isolation: isolate`.
 
-**Named fallback:** if the blend misbehaves in Chrome or WebView2, pre-multiply
-each tier once into a `<canvas>` at load and cache the data URL — nine bitmaps
-per part, no blend modes. Same registry, same assets, different renderer.
+The mechanism matters more than the result: it is backdrop-independent because
+the fill's mask and the shade's alpha are **the same PNG**, so wherever the
+shade has coverage the immediate backdrop is already the opaque fill. That is
+the invariant to protect — point the two layers at different files and the navy
+leaks straight in. `isolation: isolate` stays as a one-line guard against a
+future ancestor that blends, but it is defensive, not load-bearing.
+
+**Fallback, now unused:** pre-multiply each tier once into a `<canvas>` at load
+and cache the data URL. Kept here in case WebView2 diverges from Chrome 150.
 
 ## Assets
 
@@ -222,32 +238,42 @@ this writing). Exports land in `src/sm64_events/ui/assets/hat/`. The whole
 `ui/` tree is already bundled by `tools/build_exe.py:57`, so no build change is
 needed.
 
-| File | What it is |
+Raw exports, delivered 2026-07-25, all `1283 × 675` RGBA with nothing clipped
+on any edge:
+
+| Raw file | What it is |
 |---|---|
-| `cap.png` | Cap body alone — no patch, no M, no wings |
-| `cap_outline.png` | The outline stroke of the cap, for Capless |
+| `cap.png` | Cap body alone, **red**, no patch, no M, no wings |
 | `patch.png` | The white sign field alone |
-| `wing1.png` … `wing4.png` | The four Tier layers, **incremental**, **left side only** |
-| `spots_small.png` | Toad's spots, positioned on the cap — new art |
-| `spots_large.png` | Toadsworth's spots — new art |
+| `wing1.png` … `wing4.png` | The four Tier layers, **incremental**, both wings |
+| `spots_toad.png` | **One** spot pattern, shared by both spotted tiers |
 
-Export rules, in order of how badly getting them wrong hurts:
+Three things changed from the first draft of this section, each because the
+work proved them unnecessary:
 
-1. **The cap must be exported white, not red.** Desaturate, then push Levels
-   until the brightest lit face is pure 255. If the brightest face is 90% grey,
-   every tier renders 10% dark and Toad's white cap comes out grey. This one
-   step decides whether the palette is faithful.
-2. **One canvas, full document size for every layer** — Photoshop's
-   *File → Export → Layers to Files* with **Trim Layers OFF** — so layers stack
-   at `position:absolute; inset:0` with zero per-layer offsets. Canvas sized to
-   the full tier-4 wingspan, ~1024px wide (largest on-screen use is a 96px
-   crest).
-3. **Left wing only, cap horizontally centred on the canvas.** The art is
-   symmetric, so CSS mirrors it for the right side: half the files, and the two
-   wings can flap independently, which one combined image cannot do. The mirror
-   pivots on the canvas centre, hence the centring requirement.
-4. The cap's bounding box within that canvas is recorded as **one constant** so
-   the sub-22px sizes can zoom to the cap without a second export.
+- **No `m.png`.** The M is typed in Super Mario 256 over the patch, same code
+  path as the digits.
+- **One spot file, not two.** Toad and Toadsworth wear the same pattern; only
+  `patternColor` differs. The registry is simpler for it — and the two spotted
+  tiers are then separated by spot *colour* rather than spot *shape*, which the
+  contact sheet confirms reads at 13px.
+- **Nothing is exported white, and nothing is hand-aligned.** The cap's HSV
+  *value* channel is its shading — a lit face reads 255 whatever its hue — so
+  the white master is derived, not drawn. `tools/build_hat_assets.py` also
+  extracts the Capless outline by dilating the cap's alpha and subtracting it,
+  normalises the patch and spots from their exported `(236,236,236)` to pure
+  white (7% of every tint, otherwise lost), and downscales to 512px.
+
+The spots layer renders **below the patch**: the pattern includes a top spot
+the sign field is meant to cover, and drawing it above looks wrong.
+
+Geometry, measured from the exports and stored as constants in `caps.js` — the
+cap is `(200, 131, 1083, 672)` and the sign field `(458, 178, 825, 455)` inside
+the canvas. The cap is centred to the pixel (196px margins both sides).
+
+`SuperMario256.ttf` (16 KB) is copied to `ui/assets/fonts/` with an
+`@font-face`. It is a fan font; it gets a line in `assets/credit.md` alongside
+the course portraits and star icons.
 
 `SuperMario256.ttf` (16 KB, already installed on this machine) is copied to
 `ui/assets/fonts/` with an `@font-face`. It is a fan font; it gets a line in
@@ -310,12 +336,14 @@ page.
 1. **Registry completeness.** `Object.keys(CAP)` equals `classify.RANK_NAMES`
    in order. This is the one cross-language mirror that survives: tier *order*
    is data, tier *colour* no longer is.
-2. **Adjacent-pair separation.** Generalises the Iron-vs-Silver assertion at
-   `tests/test_ui_rank_chart.py:95` to every adjacent pair in the ladder. This
-   is the guard that protects the next Peach-style swap. The threshold is
-   calibrated against the real palette, and the test is **probed in both
-   directions** per the `test_the_guards_can_still_fail` norm — a guard that
-   cannot fail is not one.
+2. **Every-pair separation.** Generalises the Iron-vs-Silver assertion at
+   `tests/test_ui_rank_chart.py:95` to all 36 pairs — not adjacent ones, since
+   the ladder scale draws all nine medals in one 13px row. This is the guard
+   that protects the next Peach-style swap, and it already caught a 98-distance
+   pair in the first hand-picked palette. Threshold **185**, below the
+   achieved 190 and above the 168 that shipped as a bug, and the test is
+   **probed in both directions** per the `test_the_guards_can_still_fail`
+   norm — a guard that cannot fail is not one.
 3. **No raw tier name printed.** Source scan over `ui/` on
    `strip_comments(source)` (`tests/source_scan.py`), allowlisting only the
    `CAP` table. Catches a call site rendering "Gold" in purple.
