@@ -10,7 +10,7 @@ import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { ClauseRow } from "./segments.js";
-import { Hat } from "./hat.js";
+import { RankIcon } from "./rankicon.js";
 import { capName } from "./caps.js";
 import { Icon } from "./icons.js";
 import { PageState } from "./states.js";
@@ -212,7 +212,7 @@ function StepRow({ step, view, idx, total, catalog, segs, vocab, t, onChange, on
       <span class="routenum">${idx + 1}</span>
       ${group ? html`<span class="chip">${step.need} of ${step.candidates.length}</span>` : null}
       ${step.label ? html`<b>${step.label}</b>` : null}
-      ${view.rank ? html`<${Hat} tier=${view.rank} size=${16} />` : null}
+      ${view.rank ? html`<${RankIcon} tier=${view.rank} size=${16} />` : null}
       ${weakest ? html`<span class="weakflag">weakest</span>` : null}
       <span style="flex:1"></span>
       <span class="route-stat"><small>Step</small><b>${pct(view.step_rate)}</b></span>
@@ -473,7 +473,7 @@ export function Routes({ t }) {
               </div>
               ${view.avg_rank ? html`<div class="routeavg">
                 <span class="meta">Average</span>
-                <${Hat} tier=${view.avg_rank.tier} size=${18} />
+                <${RankIcon} tier=${view.avg_rank.tier} size=${18} />
                 <b>${capName(view.avg_rank.tier)}</b>
                 <span class="meta">${view.avg_rank.score}/9</span>
               </div>` : null}

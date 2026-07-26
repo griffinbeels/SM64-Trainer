@@ -79,6 +79,14 @@ export const capGradient = (tier) => {
 const DIGITS = { V: "5", IV: "4", III: "3", II: "2", I: "1" };
 export const divisionDigit = (numeral) => DIGITS[numeral] || "";
 
+// Below this cap height a division numeral is a smudge (design contact
+// sheet: dead at 22/26, readable from 30) -- shared by every STYLE
+// (rankicon.js::ICON_STYLES), not owned by hat.js alone, so a division
+// switches from digit to silhouette/star at the SAME size on every style
+// instead of one style keeping detail a beat longer than another as a
+// caller shrinks (task 8, 2026-07-25-mario-cap-rank-icons).
+export const DETAIL_MIN_SIZE = 30;
+
 // THE wing policy, isolated so it can change without touching a renderer.
 // Division V is the bottom of a tier and wears no wings; division I wears all
 // four, which makes the top division of the top tier the actual Wing Cap.

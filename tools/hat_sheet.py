@@ -1,11 +1,15 @@
-"""Render a contact sheet of every Hat state and screenshot it with headless
-Chrome, so a palette or geometry change in caps.js can be judged by eye
-instead of guessed at.
+"""Render a contact sheet of every registered rank-icon STYLE (rankicon.js::
+ICON_STYLES -- hat, medal, and any future style added to that registry) and
+screenshot it with headless Chrome, so a palette/geometry change in caps.js,
+or a brand-new style, can be judged by eye instead of guessed at.
 
-Renders three full 9-tier x 5-division grids (96px, 30px, 13px cap height)
-plus one extra 13px strip on the light card the celebration overlay uses.
-Imports the REAL caps.js/hat.js -- a sheet that drew its own copy of the
-registry could not catch a palette bug in the one it's supposed to check.
+Renders three full 9-tier x 5-division grids (96px, 30px, 13px cap height),
+every style side by side under one heading per size so a new style is judged
+against the others rather than alone (task 8 brief, 2026-07-25-mario-cap-
+rank-icons), plus one extra 13px strip per style on the light card the
+celebration overlay uses. Imports the REAL caps.js/rankicon.js -- a sheet
+that drew its own copy of the registry could not catch a palette bug (or a
+missing style) in the one it's supposed to check.
 
 The harness wears the REAL design-system stylesheet too: `.hat`'s rules live
 in ONE <style> block inside ui/index.html, not a linkable .css file, so the
@@ -43,7 +47,7 @@ LIGHT_STRIP_SIZE = 13
 
 HARNESS_HTML = """<!doctype html>
 <meta charset="utf-8">
-<title>cap contact sheet</title>
+<title>rank icon contact sheet</title>
 <script type="importmap">
 {"imports": {
   "preact": "/ui/vendor/preact.module.js",
@@ -55,22 +59,28 @@ HARNESS_HTML = """<!doctype html>
   body { background: #0d1220; color: #d8dee9; margin: 0; padding: 16px;
          font: 12px Consolas, monospace; }
   h2 { font-size: 12px; color: #9fb3c8; margin: 20px 0 8px; font-weight: 600; }
+  h3 { font-size: 11px; color: #6f95c2; margin: 0 0 6px; font-weight: 600;
+       text-transform: uppercase; letter-spacing: .04em; }
   table { border-collapse: collapse; }
   td, th { padding: 4px 10px; text-align: center; font-weight: 400; color: #7e8796; }
   th.tier { text-align: right; color: #d8dee9; white-space: nowrap; }
   th.div { color: #5f6b7a; }
-  .strip { display: flex; gap: 12px; align-items: center; }
+  .size-section { display: flex; gap: 28px; align-items: flex-start; flex-wrap: wrap; }
+  .style-block { flex: 0 0 auto; }
+  .strip { display: flex; gap: 24px; align-items: flex-start; }
   .light { background: #e8edf4; padding: 10px; display: inline-flex; gap: 12px; align-items: center; }
 </style>
 <script type="module">
   import { h, render } from "preact";
-  import { Hat } from "/ui/components/hat.js";
+  import { ICON_STYLES } from "/ui/components/rankicon.js";
   import { CAP, RANK_NAMES } from "/ui/components/caps.js";
 
   // Wear the REAL stylesheet: .hat's rules are one <style> block in
   // index.html, not a linkable .css file, so fetch the real page and steal
   // it rather than hand-copying (a copy could silently drift from what the
-  // app actually ships).
+  // app actually ships). Medal draws with inline styles only, so it needs
+  // nothing from this block -- it's fetched for Hat's sake, but any future
+  // style that DOES lean on the design system gets it for free too.
   const indexHtml = await fetch("/ui/index.html").then((r) => r.text());
   const styleMatch = indexHtml.match(/<style>([\\s\\S]*?)<\\/style>/);
   if (!styleMatch) throw new Error("index.html has no <style> block to steal");
@@ -82,7 +92,10 @@ HARNESS_HTML = """<!doctype html>
   // the same order caps.js's wingTiers/divisionDigit read.
   const DIVISIONS = ["V", "IV", "III", "II", "I"];
 
-  function grid(capHeight) {
+  // `renderIcon` is a STYLE's own render function (ICON_STYLES[key].render),
+  // never RankIcon itself -- the sheet must show every style at once, not
+  // whichever one the settings toggle currently has active.
+  function grid(renderIcon, capHeight) {
     const table = document.createElement("table");
     const head = table.insertRow();
     head.appendChild(document.createElement("th"));
@@ -100,11 +113,21 @@ HARNESS_HTML = """<!doctype html>
       row.appendChild(label);
       for (const numeral of DIVISIONS) {
         const holder = document.createElement("td");
-        render(h(Hat, { tier, division: numeral, size: capHeight }), holder);
+        render(h(renderIcon, { tier, division: numeral, size: capHeight }), holder);
         row.appendChild(holder);
       }
     }
     return table;
+  }
+
+  function styleBlock(styleEntry, capHeight) {
+    const block = document.createElement("div");
+    block.className = "style-block";
+    const label = document.createElement("h3");
+    label.textContent = styleEntry.label;
+    block.appendChild(label);
+    block.appendChild(grid(styleEntry.render, capHeight));
+    return block;
   }
 
   function heading(text) {
@@ -114,24 +137,34 @@ HARNESS_HTML = """<!doctype html>
   }
 
   for (const size of __SIZES__) {
-    heading(`${size}px cap height -- nine tiers x five divisions`);
-    document.body.appendChild(grid(size));
+    heading(`${size}px cap height -- nine tiers x five divisions, every style side by side`);
+    const section = document.createElement("div");
+    section.className = "size-section";
+    for (const styleEntry of Object.values(ICON_STYLES)) {
+      section.appendChild(styleBlock(styleEntry, size));
+    }
+    document.body.appendChild(section);
   }
 
   heading("__LIGHT_STRIP_SIZE__px again, on the light card the celebration overlay uses");
-  const light = document.createElement("div");
-  light.className = "light";
-  for (const tier of RANK_NAMES) {
-    const holder = document.createElement("span");
-    holder.title = tier;
-    render(h(Hat, { tier, division: "V", size: __LIGHT_STRIP_SIZE__, title: tier }), holder);
-    light.appendChild(holder);
+  const stripRow = document.createElement("div");
+  stripRow.className = "strip";
+  for (const styleEntry of Object.values(ICON_STYLES)) {
+    const light = document.createElement("div");
+    light.className = "light";
+    for (const tier of RANK_NAMES) {
+      const holder = document.createElement("span");
+      holder.title = tier;
+      render(h(styleEntry.render, { tier, division: "V", size: __LIGHT_STRIP_SIZE__, title: tier }), holder);
+      light.appendChild(holder);
+    }
+    stripRow.appendChild(light);
   }
-  document.body.appendChild(light);
+  document.body.appendChild(stripRow);
 
   // Read back by the measurement pass -- title is trivially recoverable
-  // from --dump-dom without waiting on any image decode, since every .hat
-  // span's box size comes from its own inline width/height, not from the
+  // from --dump-dom without waiting on any image decode, since every icon's
+  // box size comes from its own inline width/height, not from the
   // (still-loading) background art.
   document.title = `${document.documentElement.scrollWidth}x${document.documentElement.scrollHeight}`;
 </script>

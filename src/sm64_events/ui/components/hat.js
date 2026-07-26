@@ -13,6 +13,7 @@ import { h } from "preact";
 import htm from "htm";
 import {
   CAP, capName, divisionDigit, wingTiers, rankColor, CANVAS, CAP_BOX, PATCH_BOX,
+  DETAIL_MIN_SIZE,
 } from "./caps.js";
 
 const html = htm.bind(h);
@@ -31,13 +32,12 @@ const html = htm.bind(h);
 const HAT_DIR = "/ui/assets/hat";
 const art = (stem) => `url(${HAT_DIR}/${stem}.png)`;
 
-// Below this cap height the numeral is a smudge (design contact sheet: dead
-// at 22/26, readable from 30) -- so patch/glyph/wings only draw at 30px+,
-// and only when there IS a division to show. `division == null` is a DATA
-// rule, not a size rule: Medal's silhouette-only call sites pass a 22px
-// medal with no division, and gating on size alone would draw an empty sign
-// field there.
-const DETAIL_MIN_SIZE = 30;
+// DETAIL_MIN_SIZE (caps.js) -- so patch/glyph/wings only draw at 30px+, and
+// only when there IS a division to show. `division == null` is a DATA rule,
+// not a size rule: Medal's silhouette-only call sites pass a 22px medal with
+// no division, and gating on size alone would draw an empty sign field
+// there. Shared with every other style (rankicon.js::ICON_STYLES) so a
+// division switches detail at the same size everywhere.
 
 // Ink colour for the sign-field glyph. Not part of caps.js: it is a
 // rendering constant of the glyph itself (Mario red for the "M", a dark

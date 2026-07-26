@@ -10,7 +10,7 @@ import { getJSON, send } from "../api.js";
 import { rankColor } from "./ranks.js";
 import { accentColor, capName, divisionDigit } from "./caps.js";
 import { fmtPoints, fmtScore, toPoints } from "./marelo.js";
-import { Hat } from "./hat.js";
+import { RankIcon } from "./rankicon.js";
 import { Icon } from "./icons.js";
 import { PageState, InlineState } from "./states.js";
 import { useTween } from "../useTween.js";
@@ -167,12 +167,12 @@ function LadderBar({ value }) {
       ${TIER_BANDS.filter((band) => band.tier !== here.tier).map((band) => html`<span
           class="rank-ladder-mark" style=${`left:${(band.from + band.to) / 2}%`}
           title=${`${capName(band.tier)} — ${toPoints(band.from)} to ${toPoints(band.to)} pts`}>
-        <${Hat} tier=${band.tier} size=${13} />
+        <${RankIcon} tier=${band.tier} size=${13} />
       </span>`)}
       <span class="rank-ladder-mark is-you" style=${`left:${filled}%`}
           title=${`You are here — ${toPoints(filled)} pts`}>
         <b class="rank-ladder-you">YOU</b>
-        <${Hat} tier=${here.tier} size=${22} />
+        <${RankIcon} tier=${here.tier} size=${22} />
       </span>
     </div>
     <div class="rank-ladder">
@@ -478,7 +478,7 @@ function Breakdown({ data, routeOrder, onToggle }) {
           entity.excluded ? "is-excluded" : ""].filter(Boolean).join(" ")}>
         <td class="rank-cell-name">${entity.label}</td>
         <td>${entity.tier
-          ? html`<${Hat} tier=${entity.tier} division=${entity.division} size=${30} />`
+          ? html`<${RankIcon} tier=${entity.tier} division=${entity.division} size=${30} />`
           : "–"}</td>
         <td class="meta rank-cell-points">${fmtPoints(entity.score)}</td>
         <td class="meta rank-cell-next">${nextRankLabel(entity)}</td>
@@ -517,7 +517,7 @@ function ScopeChips({ activeScopeId, onPick, refreshKey }) {
     ${chips.map((chip) => html`<button type="button" key=${chip.scope_id}
         class="scope-chip ${chip.scope_id === activeScopeId ? "is-selected" : ""}"
         onclick=${() => onPick(chip.scope_id)}>
-      <${Hat} tier=${chip.tier} division=${chip.division} size=${30} />
+      <${RankIcon} tier=${chip.tier} division=${chip.division} size=${30} />
       <span class="scope-chip-text">
         <b>${chip.label}</b>
         <span class="meta">${fmtPoints(chip.marelo)} pts</span>
@@ -605,7 +605,7 @@ function EntityDetail({ t, entity, onClose }) {
     : [];
   return html`<div class="entity-detail">
     <div class="entity-detail-head">
-      <${Hat} tier=${entity.tier} division=${entity.division} size=${30} />
+      <${RankIcon} tier=${entity.tier} division=${entity.division} size=${30} />
       <h4>${entity.label}</h4>
       <span class="meta">${fmtPoints(entity.score)} pts${
         pb ? ` · PB ${pb.display} (${clock})` : " · no saved PB"}</span>
@@ -622,7 +622,7 @@ function EntityDetail({ t, entity, onClose }) {
         : html`<div class="entity-attempts"><table><tbody>
           ${rows.map((attempt) => html`<tr key=${attempt.id}
               class=${attempt.is_current_pb ? "is-pb" : ""}>
-            <td>${attempt.rank ? html`<${Hat} tier=${attempt.rank} size=${14} />` : ""}</td>
+            <td>${attempt.rank ? html`<${RankIcon} tier=${attempt.rank} size=${14} />` : ""}</td>
             <td><b>${attempt[clock] || "—"}</b></td>
             <td class="entity-attempt-strat">${attempt.strat_tag || "—"}</td>
             <td>${attempt.is_current_pb ? "PB" : ""}</td>
@@ -767,7 +767,7 @@ export function RankPage({ t }) {
                    2026-07-25), matching PracticeCell's starrank "–" rather
                    than calling Hat with no tier and drawing a plain grey
                    cap. -->
-              ${data.tier ? html`<${Hat} tier=${data.tier} division=${data.division} size=${64} />` : "–"}
+              ${data.tier ? html`<${RankIcon} tier=${data.tier} division=${data.division} size=${64} />` : "–"}
               <div>
                 <h2>${data.tier ? `${capName(data.tier)} ${divisionDigit(data.division)}` : "Unranked"}</h2>
                 <p class="meta">MARELO ${fmtPoints(tweenedMarelo)} pts · next division at ${fmtPoints(data.next_division_at)}</p>

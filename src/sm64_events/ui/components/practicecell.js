@@ -1,6 +1,6 @@
 import { h } from "preact";
 import htm from "htm";
-import { Hat } from "./hat.js";
+import { RankIcon } from "./rankicon.js";
 import { fallbackToGenericStar, isGenericArt } from "./entityicons.js";
 
 const html = htm.bind(h);
@@ -46,7 +46,7 @@ export function PracticeCell({ active, armed, iconSrc, fallbackSlot = 0,
            alt="" draggable="false" />
     </span>
     <span class="starrank">
-      ${rank ? html`<${Hat} tier=${rank} size=${16} />` : "–"}</span>
+      ${rank ? html`<${RankIcon} tier=${rank} size=${16} />` : "–"}</span>
     <span class="starname">${name}</span>
     <span class="starsub">${sub}</span>
     ${onEdit ? html`<span class="editicon" role="button" tabindex="0"

@@ -6,7 +6,7 @@ import { h } from "preact";
 import htm from "htm";
 import { rankColor } from "./ranks.js";
 import { capName, divisionDigit } from "./caps.js";
-import { Hat } from "./hat.js";
+import { RankIcon } from "./rankicon.js";
 import { useTween } from "../useTween.js";
 const html = htm.bind(h);
 
@@ -50,7 +50,7 @@ export function MareloBar({ marelo, onOpen }) {
   // as a bare "–"; this reuses that spelling rather than inventing a third.
   return html`<button type="button" class="marelo-bar" onclick=${onOpen}
       title=${`${label}: mastery ${fmtScore(mastery)} x coverage ${practiced}/${n}`}>
-    ${tier ? html`<${Hat} tier=${tier} division=${division} size=${34} />` : "–"}
+    ${tier ? html`<${RankIcon} tier=${tier} division=${division} size=${34} />` : "–"}
     <span class="marelo-bar-text">
       <b>${tier ? `${capName(tier)} ${divisionDigit(division)}` : "Unranked"}</b>
       <span class="meta">${label} · ${fmtPoints(score)} pts</span>

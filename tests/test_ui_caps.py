@@ -22,6 +22,8 @@ from tests.source_scan import strip_comments
 
 CAPS_JS = Path(__file__).resolve().parents[1] / "src" / "sm64_events" / "ui" / "components" / "caps.js"
 HAT_JS = CAPS_JS.parent / "hat.js"
+UI_DIR = CAPS_JS.parents[1]
+RANKICON_JS = CAPS_JS.parent / "rankicon.js"
 
 
 def run_node(imports: str, body: str):
@@ -261,3 +263,108 @@ function tintedPair(stem, color) {
     # (e.g. a future treatment hand-rolling its own greyscale multiply).
     extra_shade = good + '\nlayers.push(html`<i class="shade" style=${`--art:${art("cap_outline")}`}></i>`);\n'
     assert _tinted_pair_problems(extra_shade) != []
+
+
+# --- Task 8, 2026-07-25-mario-cap-rank-icons: the rank-icon STYLE registry --
+# rankicon.js::ICON_STYLES is what makes "adding a style touches no call
+# site" true; both guards below are what keeps that claim actually true
+# rather than aspirational prose.
+
+def _icon_styles_from_source(source: str) -> dict:
+    """{key: {"label": bool, "render": bool}} in declaration order, comments
+    stripped -- same convention as _cap_table() above, and for the same
+    reason: a real ICON_STYLES parse can tell a missing renderer from a
+    present one, a substring check cannot."""
+    code = strip_comments(source)
+    block = re.search(r"export const ICON_STYLES = \{(.*?)\n\};", code, re.S)
+    if not block:
+        return {}
+    entries = re.findall(r"(\w+):\s*\{([^}]*)\}", block.group(1), re.S)
+    return {name: {"label": bool(re.search(r'label:\s*["\']', body)),
+                   "render": bool(re.search(r"render:\s*\w+", body))}
+            for name, body in entries}
+
+
+def test_hat_is_first_and_every_icon_style_has_a_renderer():
+    """hat's default-ness is load-bearing (the user: "Hats as default"), and
+    an ICON_STYLES entry with no renderer would crash RankIcon the instant a
+    caller (or the settings control) picks it."""
+    styles = _icon_styles_from_source(RANKICON_JS.read_text(encoding="utf-8"))
+    assert styles, "ICON_STYLES not found in rankicon.js -- did it move or get renamed?"
+    keys = list(styles)
+    assert keys[0] == "hat", (
+        f"hat must be FIRST in ICON_STYLES (found order {keys}) -- header.js's "
+        "settings <select> and RankIcon's own default both depend on it")
+    for key, entry in styles.items():
+        assert entry["render"], f"ICON_STYLES.{key} has no render function"
+        assert entry["label"], f"ICON_STYLES.{key} has no label"
+
+
+def test_the_icon_styles_guard_can_still_fail():
+    """A guard that cannot fail is not one (tests/source_scan.py)."""
+    good = ('export const ICON_STYLES = {\n'
+            '  hat: { label: "Mario caps", render: Hat },\n'
+            '  medal: { label: "Medals", render: Medal },\n'
+            '};')
+    styles = _icon_styles_from_source(good)
+    assert list(styles) == ["hat", "medal"]
+    assert all(entry["render"] and entry["label"] for entry in styles.values())
+
+    # Regression shape 1: hat is not first.
+    reordered = ('export const ICON_STYLES = {\n'
+                 '  medal: { label: "Medals", render: Medal },\n'
+                 '  hat: { label: "Mario caps", render: Hat },\n'
+                 '};')
+    assert list(_icon_styles_from_source(reordered))[0] != "hat"
+
+    # Regression shape 2: an entry missing its renderer entirely.
+    no_render = ('export const ICON_STYLES = {\n'
+                 '  hat: { label: "Mario caps", render: Hat },\n'
+                 '  medal: { label: "Medals" },\n'
+                 '};')
+    assert not _icon_styles_from_source(no_render)["medal"]["render"]
+
+    # Comment-only mention must not be mistaken for a real entry.
+    assert _icon_styles_from_source(
+        "// medal: { label: \"Medals\", render: Medal },\n") == {}
+
+
+# Only rankicon.js may import a style's own renderer module -- every other
+# file must go through RankIcon, which is what keeps "a fifth style touches
+# no call site" true rather than aspirational.
+STYLE_RENDERER_FILES = ("hat.js", "medal.js")
+ALLOWED_STYLE_IMPORTERS = {"components/rankicon.js"}
+
+
+def style_renderer_import_offenders(source: str) -> list:
+    code = strip_comments(source)
+    return [name for name in STYLE_RENDERER_FILES
+            if re.search(rf'from\s+["\']\./{re.escape(name)}["\']', code)]
+
+
+def test_no_call_site_imports_a_style_renderer_directly():
+    for path in sorted(UI_DIR.rglob("*.js")):
+        relative = path.relative_to(UI_DIR).as_posix()
+        if relative in ALLOWED_STYLE_IMPORTERS:
+            continue
+        offenders = style_renderer_import_offenders(path.read_text(encoding="utf-8"))
+        assert not offenders, (
+            f"{relative}: imports {offenders} directly -- route it through "
+            "RankIcon (components/rankicon.js) so a new style never touches "
+            "a call site")
+
+
+def test_the_style_import_guard_can_still_fail():
+    # Comment-only: a note naming the old import by example must stay green.
+    assert style_renderer_import_offenders(
+        '// used to import { Hat } from "./hat.js"\n') == []
+
+    # Real code: a direct import of either renderer is caught.
+    assert style_renderer_import_offenders(
+        'import { Hat } from "./hat.js";') == ["hat.js"]
+    assert style_renderer_import_offenders(
+        'import { Medal } from "./medal.js";') == ["medal.js"]
+
+    # The dispatcher import is not an offense.
+    assert style_renderer_import_offenders(
+        'import { RankIcon } from "./rankicon.js";') == []
