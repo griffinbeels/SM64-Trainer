@@ -1463,10 +1463,12 @@
   /* The pip: a focusable 9px hit box (a 1px line is not a target -- same
      reasoning the old `.rank-ladder-step` used), positioned at a LOCAL
      percentage of its OWN band -- 0/20/40/60/80%, since DIVISIONS_PER_TIER
-     always cuts a tier into five equal-score slices. That percentage is
-     what stays correct whether the band is squeezed to a sliver (Mario, at
-     rest) or expanded to its full hover width -- the alignment guarantee
-     lives here, not in per-band math. */
+     always cuts a tier into five equal-score slices. That percentage marks
+     where the division BEGINS (round 6 -- the icon for the SAME division
+     sits at a different percentage now, its slot's own midpoint, see
+     `.rank-band-icon` below); it is what stays correct whether the band is
+     squeezed to a sliver (Mario, at rest) or expanded to its full hover
+     width -- the alignment guarantee lives here, not in per-band math. */
   .rank-band-pip {
     position: absolute; top: 0; bottom: 0; left: 0; width: 9px;
     transform: translateX(-50%); cursor: pointer;
@@ -1481,18 +1483,26 @@
   .rank-band-pip.is-tier::after {
     top: 0; bottom: 0; width: 2px; background: rgba(6,16,28,.9);
   }
-  /* The icon: `left: 50%` centres it on ITS OWN pip (the positioned parent),
-     the same local percentage the pip itself sits at -- pip and icon are
-     siblings sharing one coordinate space, which is what makes "always
-     exactly above its own pip" hold without per-band tuning. Hidden and
-     tucked toward the bar at rest (`pointer-events: none` so an invisible
-     icon can never steal a hover meant for a neighbour), popped up to full
-     size and opacity only while `.rank-band` is hovered or focused --
+  /* The icon: round 6 (addendum, task 8, 2026-07-26 -- the user: "each of
+     the symbols are in the middle of their subdivision section"). A pip
+     marks a BOUNDARY; an icon names the SPAN between one pip and the next,
+     so it sits at that span's own midpoint now, not on the boundary line --
+     sitting it on the pip made it ambiguous which of the two neighbouring
+     divisions it named. `.rank-band-icon` is a SIBLING of `.rank-band-pip`
+     (not nested inside it, which it was before this round) so it can carry
+     its OWN `left:%` at a different local percentage than the pip --
+     rankpage.js computes both from the SAME `index`, offset by half a
+     slice, so they can never drift apart even though they no longer share
+     one literal position. `left: 0` here is a harmless default; every
+     instance sets its own inline `left` (rankpage.js). Hidden and tucked
+     toward the bar at rest (`pointer-events: none` so an invisible icon can
+     never steal a hover meant for a neighbour), popped up to full size and
+     opacity only while `.rank-band` is hovered or focused --
      `pointer-events: auto` there so a mouse resting directly on the now-
      much-bigger icon gets ITS OWN tooltip rather than passing through to
      whatever's behind it. */
   .rank-band-icon {
-    position: absolute; left: 50%; bottom: calc(100% + 8px);
+    position: absolute; left: 0; bottom: calc(100% + 8px);
     opacity: 0; pointer-events: none;
     transform: translate(-50%, 10px) scale(.5);
   }

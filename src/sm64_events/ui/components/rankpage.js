@@ -178,22 +178,39 @@ function LadderBar({ value, tier, division }) {
       const reachedPct = band.to <= filled ? 100
         : band.from >= filled ? 0
         : ((filled - band.from) / (band.to - band.from)) * 100;
+      // Every division carries a pip (a BOUNDARY, where reaching it makes
+      // you that division) and an icon (a SLOT, the span between one pip
+      // and the next). Round 6 (addendum, task 8, 2026-07-26 -- the user:
+      // "everything should be shifted over to the right... each of the
+      // symbols are in the middle of their subdivision section"): sitting
+      // the icon ON its boundary pip made it ambiguous which of the two
+      // neighbouring divisions it named. The icon now sits at the SLOT's
+      // own midpoint (index + 0.5 of a step) instead of the pip's own
+      // position (index); the pip itself does not move -- it still marks
+      // the real boundary and still carries the tooltip. Computed once
+      // here, from the SAME `index`, so the two can never drift apart.
+      const divisions = DIVISION_NUMERALS.map((numeral, index) => ({
+        numeral,
+        pipPct: (index / DIVISIONS_PER_TIER) * 100,
+        iconPct: ((index + 0.5) / DIVISIONS_PER_TIER) * 100,
+        title: `${capName(band.tier)} ${numeral} — MARELO ${toPoints(band.from + stepWidth * index)} pts`,
+        isTier: index === 0,
+      }));
       return html`<div class="rank-band" data-band-tier=${band.tier}
           style=${`--band-weight:${band.to - band.from};--band-tint:${tint}`}>
         <span class="rank-band-surface">
           <span class="rank-band-base"></span>
           <span class="rank-band-fill" style=${`width:${reachedPct}%`}></span>
         </span>
-        ${DIVISION_NUMERALS.map((numeral, index) => {
-          const localPct = (index / DIVISIONS_PER_TIER) * 100;
-          const title = `${capName(band.tier)} ${numeral} — MARELO ${toPoints(band.from + stepWidth * index)} pts`;
-          return html`<span class="rank-band-pip ${index === 0 ? "is-tier" : ""}"
-              tabindex="0" style=${`left:${localPct}%`} title=${title}>
-            <span class="rank-band-icon">
-              <${RankIcon} tier=${band.tier} division=${numeral} size=${BAND_ICON_SIZE} title=${title} />
-            </span>
-          </span>`;
-        })}
+        <!-- Pips: each an independently positioned CHILD of .rank-band (a
+             sibling of the icons below, not their parent) -- both need the
+             SAME coordinate space (.rank-band's own width) since they now
+             sit at two DIFFERENT local percentages, not one shared one. -->
+        ${divisions.map((d) => html`<span class="rank-band-pip ${d.isTier ? "is-tier" : ""}"
+            tabindex="0" style=${`left:${d.pipPct}%`} title=${d.title}></span>`)}
+        ${divisions.map((d) => html`<span class="rank-band-icon" style=${`left:${d.iconPct}%`}>
+          <${RankIcon} tier=${band.tier} division=${d.numeral} size=${BAND_ICON_SIZE} title=${d.title} />
+        </span>`)}
       </div>`;
     })}
     ${filled > 0 && html`<span class="rank-ladder-head" style=${`left:${filled}%`}></span>`}
