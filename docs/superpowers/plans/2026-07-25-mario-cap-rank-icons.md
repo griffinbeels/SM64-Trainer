@@ -797,3 +797,71 @@ by tests in Task 3, but they are easy to reintroduce elsewhere:
 2. `.hat i` is class + element and outranks a bare `.glyph` class, so the base
    layer rule wins on `inset` and `display` unless the glyph rule uses two
    classes.
+
+---
+
+### Task 8: Rank icon STYLE is a registry, and the setting picks one
+
+Added 2026-07-26 on user feedback: *"add a setting in the settings menu to use
+medals INSTEAD of the visual layer we added for the hats. We should be able to
+swap between the two. It also would expand our ability to add a third, fourth,
+fifth option as we experiment. Hats as default."*
+
+**The shape this must take.** Not a boolean and not an `if hat else medal` at
+seventeen call sites — a **style registry**, because the stated purpose is to
+keep adding styles. One entry per style, each owning only how a rank is *drawn*.
+Adding a fifth style is one registry entry plus one renderer, touching no call
+site.
+
+**What a style does NOT own:** the tier's identity. Name and colour stay in
+`CAP` — a style changes the shape a rank is drawn as, never which rank it is or
+what it is called. So the medal style renders a Waluigi-purple disc labelled
+Waluigi, not a return to the pre-cap palette. (If a future style ever needs its
+own palette, that is a new optional field, not a second registry.)
+
+**Files:**
+- Create: `src/sm64_events/ui/components/rankicon.js` — `RankIcon` (the
+  dispatcher) + `ICON_STYLES` (the registry: key → label + renderer).
+- Create: `src/sm64_events/ui/components/medal.js` — the disc style.
+- Modify: the 17 call sites that import `Hat` today → `RankIcon`.
+- Modify: `ui/store.js` (pref + setter), `ui/components/header.js` (the control).
+- Modify: `tests/test_ui_caps.py` / `tests/test_ui_cap_names.py` guards.
+- Modify: `tools/hat_sheet.py` to render every style.
+
+**Contracts:**
+- `RankIcon({ tier, division = null, size = 18, title = null, flap, foldWings })`
+  — the same prop surface `Hat` has today, so the sweep is mechanical. It
+  resolves the active style and delegates. Props a style does not understand
+  (a medal has no wings to flap) are ignored by that style, never errors.
+- `ICON_STYLES` — `{ hat: { label, render }, medal: { label, render } }`.
+  Key order is the order the settings control offers them. `hat` is first and
+  is the default.
+- The pref follows the established `starIcons` pattern exactly: `t.rankIcons`,
+  localStorage `sm64.rankIcons`, **default `"hat"`**, control in the settings
+  drawer in `header.js`, state in `store.js`. A client display preference, never
+  server state.
+
+**The medal style's own contract:**
+- A disc in `rankColor(tier)`, sized like `Hat` (layout box exactly `size`).
+- With a `division` and at/above the detail floor, it shows the **Arabic digit**
+  — the same `divisionDigit` the hat uses, so two styles can never disagree
+  about what division you are.
+- Without a division it shows the star, which is what the deleted `Medal` drew.
+- `tier == null` gets the same unranked sentinel the hat gives.
+- Foreground contrast is **derived from the tier colour's luminance**, not a
+  hardcoded per-tier table. The deleted `FG` map was exactly such a table and it
+  would have to be hand-edited on every palette change — including the two
+  colours that moved during the fix wave.
+
+**Guards:**
+- Every `ICON_STYLES` key has a renderer, and `hat` is first (its default-ness
+  is load-bearing, per the user).
+- No call site imports `Hat` or the medal renderer directly — a source scan, in
+  the shape of the existing cap-name guard, allowlisting `rankicon.js`. This is
+  what keeps "adding a style touches no call site" true.
+- Probe both guards in both directions.
+
+**Verification:** the contact sheet renders **every style** side by side at 13 /
+30 / 96px, so a new style is judged against the others rather than alone. Toggle
+the setting in a real render and confirm every surface changes together — the
+banner, the practice cells, the Rank tab, the ladder scale and the chart.
