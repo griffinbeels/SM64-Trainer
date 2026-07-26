@@ -437,3 +437,62 @@ Then:
 - **The `pb_display` format** in Task 2 corrects the spec's illustrative `0:21.53` to this app's real `M'SS"CC`. If `format_igt` disagrees with that description, trust `core/timefmt.py`.
 - **The spec's step-3 mockup is pre-cap-icons.** It draws `( ★ )` and prints "Platinum II"; on this base those are a Mario cap and "Wario 2". The mockup's *layout* is the requirement — icon, rank line, strategy name, PB line, current marker — not its vocabulary. Global Constraints govern the words.
 - **`tests/test_ui_cap_names.py` is a gate this plan can trip.** Task 6 introduces a file that holds tier expressions; extending `RAW_TIER_EXPRESSIONS` is part of that task, not a follow-up. Task 4's badge passes `rank` as a prop (`tier=`), which `_PROP_PREFIXES` already exempts — no extension needed there.
+
+---
+
+### Task 3b: Grade a section on its ladder's OWN clock
+
+Added 2026-07-26, after a probe during Task 2's review found a plan
+contradiction. User ruling: fix the section banner.
+
+**Files:**
+- Modify: `src/sm64_events/tracking/views.py` (`build_session_view`, the star
+  section's `star_basis`; check the segment section's for symmetry)
+- Test: `tests/test_views.py`
+
+**The defect (measured, not theorised).** `_section_banner` grades on the
+**view** clock — whatever the header's Clock control is set to. But a rank
+ladder is defined in ONE clock, recorded per entity as
+`RankStandards.clock_for(ek)` (`igt` for stars, `rta` for segments). So with
+the header set to "Anchor → grab", a star's RTA time is graded against its
+IGT-defined ladder — the wrong ruler. RTA includes approach time, so it
+systematically under-ranks.
+
+Probe output, one star, one strategy, PBs saved on both clocks:
+
+```
+view clock=igt:  banner Diamond V   | picker endpoint Diamond V    AGREE
+view clock=rta:  banner Platinum II | picker endpoint Diamond V    DISAGREE
+```
+
+This is **pre-existing and already visible in the shipped app**: `rank_by_star`
+(the star quick-select row's medals) hardcodes `igt`, so at the rta setting
+that row already disagrees with the section banner directly beneath it. Tasks
+1 and 2 use `clock_for` and are on the correct side; the section banner is the
+outlier. Fixing it aligns three surfaces.
+
+**Contract:**
+
+- The **rank basis** clock becomes `service.ranks.clock_for(ek)`, falling back
+  to the view clock when `service.ranks is None`. This is the clock used to
+  pick the row out of `pbs_by_strat` AND the one passed to `grading_basis`.
+- **The displayed PB still follows the view clock.** `sec["pb"]` is a display
+  choice and is correct as it stands — do not touch it. Only the grading basis
+  moves. After this change `sec["pb"]` and `sec["rank"]` can legitimately be
+  measured on different clocks; that is the same split the docstring already
+  describes for average rank modes.
+- `entity_rank` reads the same basis, so it moves with it. That is intended:
+  it grades against the entity's best-possible ladder, which is defined in the
+  same clock.
+- Segment sections already force `rta`, which **equals** `clock_for` for every
+  segment. Route them through `clock_for` anyway so there is one rule rather
+  than one rule and one coincidence — and say that in the comment.
+
+**Steps:**
+
+- [ ] **Step 1: Write the failing test.** `test_a_star_section_grades_on_its_ladders_clock_not_the_view_clock`: seed one star, one strategy, PBs saved on BOTH clocks with times that land in different tiers, then assert `build_session_view(..., clock="rta")["stars"][0]["rank"]["rank"]` equals the value built at `clock="igt"`. The working probe is at `scratchpad/probe_clock.py` — read it, it already produces exactly this scenario.
+- [ ] **Step 2: Run it.** Expect FAIL, showing the two different tiers.
+- [ ] **Step 3: Add the regression guard.** A second test asserting `sec["pb"]` STILL follows the view clock — igt and rta views give different `pb` displays for the same star. Without this, a later "simplification" collapses both onto one clock and silently changes what the card shows.
+- [ ] **Step 4: Implement.** Comment must record WHY: the ladder is defined in one clock, so grading against another compares to the wrong ruler.
+- [ ] **Step 5: Run `tests/test_views.py`, `tests/test_views_marelo.py`, `tests/test_ranks_api_marelo.py`.** These three own rank grading. **Existing tests may legitimately break here** — this changes shipped behaviour on purpose. A break means reading that test and deciding whether it encoded the bug; if it did, update it AND say so in the report. Do not silently rewrite assertions to match new output.
+- [ ] **Step 6: Full suite, then commit.**
