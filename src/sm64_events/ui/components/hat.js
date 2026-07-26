@@ -78,10 +78,29 @@ export function Hat({ tier, division = null, size = 18, title = null }) {
     // Capless must stay visible at 13px -- on the design sheet a bare
     // outline read as a broken render on the app's navy, and this is the
     // floor tier, the most common icon in the app. A dim fill of the full
-    // cap silhouette, in the tier's own colour, sits under the ring so
-    // there is always a shape to see, not just a thin line.
-    layers.push(html`<i class="fill" style=${`--c:${color};opacity:.35;--art:${art("cap")}`}></i>`);
-    layers.push(html`<i class="fill" style=${`--c:${color};--art:${art("cap_outline")}`}></i>`);
+    // cap silhouette sits under the ring so there is always a shape to see
+    // at small sizes, not just a thin line.
+    //
+    // Fix round 1 (Griffin, 2026-07-25): the ring is what makes this read
+    // as "an outline you don't have yet" rather than "a solid cap you do
+    // have" -- painting the ring in the SAME raw tier hex as the dim fill
+    // made the two indistinguishable and the icon read as a dark blob. The
+    // ring must be the brightest part of the icon; the fill must stay
+    // clearly subordinate to it. `color-mix` toward white keeps the tier
+    // hue recognisable without touching the hex itself (this codebase
+    // already uses `color-mix(in srgb, var(--tier) …, transparent)` for the
+    // rank-up glow in index.html, same technique).
+    //
+    // The fill's OWN opacity is size-dependent: at `detail` sizes (30px+)
+    // the ring itself is wide enough to read clearly, so the fill stays
+    // very faint and the icon reads as a hollow outline. Below that the
+    // ring's line is too thin to survive downscaling -- the fill is then
+    // the ONLY thing carrying "findable at all", so it needs more presence
+    // there than it's allowed at a size where the ring can carry it.
+    const ringColor = `color-mix(in srgb, ${color} 55%, white)`;
+    const fillOpacity = detail ? 0.14 : 0.3;
+    layers.push(html`<i class="fill" style=${`--c:${color};opacity:${fillOpacity};--art:${art("cap")}`}></i>`);
+    layers.push(html`<i class="fill" style=${`--c:${ringColor};--art:${art("cap_outline")}`}></i>`);
   } else {
     layers.push(html`<i class="fill" style=${`--c:${color};--art:${art("cap")}`}></i>`);
     layers.push(html`<i class="shade" style=${`--art:${art("cap")}`}></i>`);
