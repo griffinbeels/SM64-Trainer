@@ -71,6 +71,58 @@ def test_target_clear_restore_pb_session_endpoints(tmp_path):
         assert r.status_code == 200 and r.json()["session_id"] == 2
 
 
+def test_target_with_explicit_null_strat_clears_it(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)
+        asyncio.run(service.set_strat(2, 2, "cannonless"))
+        r = client.post("/api/target", json={
+            "course_id": 2, "star_id": 2, "strat_tag": None})
+        assert r.status_code == 200
+        view = client.get("/api/session?clock=igt").json()
+        assert view["last_strat_by_star"].get("2:2") is None
+
+
+def test_target_without_a_strat_key_leaves_the_existing_one(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)
+        asyncio.run(service.set_strat(2, 2, "cannonless"))
+        r = client.post("/api/target", json={"course_id": 2, "star_id": 2})
+        assert r.status_code == 200
+        view = client.get("/api/session?clock=igt").json()
+        assert view["last_strat_by_star"].get("2:2") == "cannonless"
+
+
+def test_target_segment_with_explicit_null_strat_clears_it(tmp_path):
+    """Segment sibling of the star clearing test above. segment_id=1 (LBLJ,
+    migration-seeded) carries no default_strat, so an explicit-null strat_tag
+    can actually reach the 'no strategy' state -- a defaulted segment instead
+    falls back to its default on a falsy strat_set (projection.py caveat 17),
+    which is why this test deliberately avoids a defaulted segment."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        client.post("/api/target", json={"kind": "segment", "segment_id": 1,
+                                         "strat_tag": "no bljs"})
+        assert service.strat_by_segment[1] == "no bljs"
+        r = client.post("/api/target", json={"kind": "segment",
+                                              "segment_id": 1,
+                                              "strat_tag": None})
+        assert r.status_code == 200
+        assert service.strat_by_segment.get(1) is None
+
+
+def test_target_segment_without_a_strat_key_leaves_the_existing_one(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        client.post("/api/target", json={"kind": "segment", "segment_id": 1,
+                                         "strat_tag": "no bljs"})
+        r = client.post("/api/target", json={"kind": "segment",
+                                              "segment_id": 1})
+        assert r.status_code == 200
+        assert service.strat_by_segment[1] == "no bljs"
+
+
 def test_pb_on_missing_attempt_is_404(tmp_path):
     client, service, db = make_client(tmp_path)
     with client:
@@ -633,6 +685,47 @@ def test_target_accepts_segment_kind(tmp_path):
         assert r.status_code == 200
         r = client.post("/api/target", json={"kind": "segment",
                                              "segment_id": 9999})
+        assert r.status_code == 404
+
+
+def test_target_ranks_endpoint_returns_200_with_a_dict(tmp_path):
+    """The picker's lazy per-entity rank fetch — build_entity_ranks over the
+    HTTP boundary. No ranks are loaded here, so the map is empty, but the
+    shape (a dict, 200) is what the picker modal actually consumes."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)
+        r = client.get("/api/target/ranks")
+        assert r.status_code == 200
+        assert isinstance(r.json(), dict)
+
+
+def test_target_ranks_endpoint_on_a_fresh_db_is_empty(tmp_path):
+    """No attempts at all -> nothing to grade -> {}, not an error."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.get("/api/target/ranks")
+        assert r.status_code == 200
+        assert r.json() == {}
+
+
+def test_target_strategies_endpoint_returns_200_with_the_entity(tmp_path):
+    """The picker's step-3 fetch -- build_entity_strategies over the HTTP
+    boundary, for a real entity."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)
+        r = client.get("/api/target/strategies?entity=star:2:2")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["entity"] == "star:2:2" and body["kind"] == "star"
+        assert isinstance(body["strategies"], list)
+
+
+def test_target_strategies_endpoint_404s_on_a_malformed_entity(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.get("/api/target/strategies?entity=not_a_real_kind:1:2")
         assert r.status_code == 404
 
 

@@ -273,7 +273,7 @@ Composed segments (LBLJ, pipe entries, Bowser fights) as first-class practice ta
 
 **Segment/replay boundary ownership.** An attempt's boundaries ARE its trigger events: `start_frame`/`started_utc` stamp the arming event (or the rebasing real anchor), `ended_utc` stamps the closing event, and the replay clip span is `started_utc → ended_utc` ± padding **by construction** (`replay/service.py _span`). When a clip or total time looks wrong, the boundary OWNER is the segment engine's arm bookkeeping — not the replay renderer; the 2026-06-12 "replay starts at the wrong door" reports were all stale/rebased `_Arm` state (menu warp eaten as echo; door echo re-arming through the arm phase). Debug order: journal → attempt row's started/ended → only then the ring.
 
-**Stage quick-select banner (2026-06-13/14; Bowser geography 2026-06-25).** A presentation-only consumer of the course/segment registries: `ui/components/stagebanner.js` offers one-click practice targets for wherever Mario stands. Context comes from a broadcast-only `stage_changed {course_id, level, area, mode}` event (`detectors/stage.py`) — a live signal, **never journaled** (fully recomputable from `curr_level`/`curr_area`, no historical-query value; cached on `TrackerService.current_stage` for initial page load). The single `mode` field is the dispatch: `stars` (a main course → its stars), `castle` (a Castle Inside subarea → that subarea's segments), `bowser_course` (BitDW/BitFS/BitS → the reds 8-coin star + the level's no-reds pipe-entry segment), `arena` (a Bowser 1/2/3 fight → the single fight segment, auto-selected), or `None` (no banner). Which segments a context offers is **derived from the definitions, not the matcher**: `views._segment_start_areas` reads the `to_subarea`/`area` trigger param names *statically* for the castle's per-SUBAREA offer (a bare "enter Castle Inside" never qualifies, so LBLJ stays lobby-only), and the parallel `views._segment_start_levels` reads the whole-LEVEL scope for the Bowser banners (pipe segments start in 17/19/21, fights in 30/33/34). The `segment_targets` payload now carries `enabled` + `start_levels` and includes DISABLED segments — the castle row filters `enabled` client-side, but the Bowser row shows a disabled pipe-entry segment so its **no-reds** click can ENABLE it (mutual exclusion: **reds** disables the pipe + targets the star, **no-reds** enables it + targets the segment). The banner answers "where does this *start*?" as a static value (no live `_pending` deferral like the matcher). The param-name coupling is pinned by `test_views.test_segment_banner_param_names_match_the_registry`. Auto-select (arenas) is client-side — the banner POSTs `/api/target`, keeping the detector pure/broadcast-only and browser↔GUI parity intact. Rules live in the `detectors/stage.py` docstring + `views.py` comments; the wire payload is in `docs/api.md`. (v1.3.0 revamp: main-course stars now render as per-slot SM64 star art `ui/assets/star_{1..6}.png` with a rank Medal per star — presentation-only; detail in the CLAUDE.md module map.)
+**Stage quick-select banner (2026-06-13/14; Bowser geography 2026-06-25).** A presentation-only consumer of the course/segment registries: `ui/components/stagebanner.js` offers one-click practice targets for wherever Mario stands. Context comes from a broadcast-only `stage_changed {course_id, level, area, mode}` event (`detectors/stage.py`) — a live signal, **never journaled** (fully recomputable from `curr_level`/`curr_area`, no historical-query value; cached on `TrackerService.current_stage` for initial page load). The single `mode` field is the dispatch: `stars` (a main course → its stars), `castle` (a Castle Inside subarea → that subarea's segments), `bowser_course` (BitDW/BitFS/BitS → the reds 8-coin star + the level's no-reds pipe-entry segment), `arena` (a Bowser 1/2/3 fight → the single fight segment, auto-selected), or `None` (no banner). Which segments a context offers is **derived from the definitions, not the matcher**: `views._segment_start_areas` reads the `to_subarea`/`area` trigger param names *statically* for the castle's per-SUBAREA offer (a bare "enter Castle Inside" never qualifies, so LBLJ stays lobby-only), and the parallel `views._segment_start_levels` reads the whole-LEVEL scope for the Bowser banners (pipe segments start in 17/19/21, fights in 30/33/34). The `segment_targets` payload now carries `enabled` + `start_levels` and includes DISABLED segments — the castle row filters `enabled` client-side, but the Bowser row shows a disabled pipe-entry segment so its **no-reds** click can ENABLE it (mutual exclusion: **reds** disables the pipe + targets the star, **no-reds** enables it + targets the segment). The banner answers "where does this *start*?" as a static value (no live `_pending` deferral like the matcher). The param-name coupling is pinned by `test_views.test_segment_banner_param_names_match_the_registry`. Auto-select (arenas) is client-side — the banner POSTs `/api/target`, keeping the detector pure/broadcast-only and browser↔GUI parity intact. Rules live in the `detectors/stage.py` docstring + `views.py` comments; the wire payload is in `docs/api.md`. (v1.3.0 revamp: main-course stars now render as per-slot SM64 star art `ui/assets/star_{1..6}.png` with a rank Hat — the Mario-cap icon, `ui/components/hat.js` (2026-07-25-mario-cap-rank-icons; superseded the earlier "Medal") — per star; presentation-only; detail in the CLAUDE.md module map.)
 
 ## Roadmap (unbuilt)
 
@@ -760,16 +760,53 @@ change what" lives in `.claude/rules/ranks.md` (scoring/scopes/history),
 `.claude/rules/server.md` (endpoints) and `.claude/rules/ui.md` (surfaces) —
 this section is the cross-cutting model those three assume.
 
-**One time, two questions.** A practice card shows TWO ranks for the same run
-because they answer different things: the STRATEGY rank grades the time against
-the active strategy's own ladder ("how well do I run this strat"), the ENTITY
-rank grades it against the entity's **best-possible ladder** — the pointwise
-minimum across every strategy that has standards (`scoring.best_ladder`) —
-("how close is this to the fastest this star can be"). Mastering a slow strat
-therefore maxes that strat's rank but not the star's, which was the whole point
-of the design. When the two grade identically the UI shows ONE banner labelled
-with both names; it decides that by comparing the RENDERED fields, never by
-"is the active strat the fastest" (see `.claude/rules/ui.md`).
+**One time, three questions.** The same run grades three ways, because three
+different things are being asked. Two sit side by side on a practice card: the
+STRATEGY rank grades the time against the active strategy's own ladder ("how
+well do I run this strat"), the ENTITY rank grades it against the entity's
+**best-possible ladder** — the pointwise minimum across every strategy that has
+standards (`scoring.best_ladder`) — ("how close is this to the fastest this star
+can be"). Mastering a slow strat therefore maxes that strat's rank but not the
+star's, which was the whole point of the design. When the two grade identically
+the UI shows ONE banner labelled with both names; it decides that by comparing
+the RENDERED fields, never by "is the active strat the fastest" (see
+`.claude/rules/ui.md`).
+
+The third is `views.py::build_entity_ranks` (spec
+`2026-07-25-target-picker-strategy-step`): the **best-scoring strategy's own**
+rank, which is what the target picker's grid cells wear. At pick time no
+strategy has been chosen yet, so neither of the other two is the right question
+— "how good am I at this star, at all" is. Ties break on `min(strat)`, the same
+deterministic convention `_fastest_strategy` uses. It is an on-demand endpoint
+(`GET /api/target/ranks`), never a session-view field: the view rebuilds on
+every WebSocket event and the averaging rank modes grade O(history) per strategy
+per entity.
+
+**A ladder is defined in ONE clock, so that is the clock it grades in.**
+`RankStandards.clock_for(ek)` (igt for stars, rta for segments, overridable per
+entity) is THE grading clock for `_section_banner`, `entity_rank`, both picker
+endpoints, AND — since the I1 fix (final review, 2026-07-26) — the attempt-row
+medals and progress-graph dots `_attempt_json`/`_progress` compute (threaded in
+as `rank_clock`/`seg_rank_clock`, kept separate from the DISPLAYED frames/
+pb_delta, which stay on the view clock). It is deliberately NOT the view clock:
+with the header's Clock control on "Anchor → grab", a star's RTA time was being
+graded against its IGT-defined ladder, which is the wrong ruler — RTA includes
+approach time, so it systematically under-ranked. Measured on 2026-07-26: the
+same run read Platinum II on the section banner and Diamond V everywhere else;
+before I1, the same measurement also caught a Diamond V banner sitting directly
+above an attempt row for the very same run wearing a Platinum cap. The DISPLAYED
+pb (`sec["pb"]`) still follows the view clock; that is a display choice and is
+correct. Fixed in `build_session_view`, pinned both directions in
+`tests/test_views.py`.
+
+Two call sites remain named exceptions, deliberately not swept into this fix:
+`rank_by_star` and `segment_targets` (both `views.py`) hardcode `"igt"`/`"rta"`
+literals rather than calling `clock_for` for the stage quick-select banner's
+per-star/per-segment medal. They agree with `clock_for` today only because
+every loaded standard happens to define stars in igt and segments in rta — a
+coincidence of the standards data, not a rule the code enforces. Routing them
+through `clock_for` is a real fix; it just wasn't in scope for this pass (M1,
+final review 2026-07-26).
 
 **The 0–100 curve.** `ranks/scoring.py::score_for` interpolates a time between
 the ladder's cutoffs, anchored so each tier's floor is a fixed score
@@ -833,7 +870,7 @@ the chip row can poll safely.
 | A new **scope kind** | `scopes.entity_groups` (resolve the id → groups) + `scopes.scope_list` (so the picker offers it). Scoring, history, chips, chart and breakdown all follow for free — they only ever see groups. |
 | A new **rank surface** | Read `/api/marelo` (or `_score_scope` server-side). Never recompute tier/division/fill/next in JS; if the payload lacks a field, add it in `_score_scope` where the ladders are in hand. |
 | A change to **the curve or the anchors** | `ranks/scoring.py` only — then mirror `SCORE_ANCHORS`/`DIVISIONS_PER_TIER`/`DIVISION_NUMERALS` into `ui/components/rankpage.js` (pinned by `tests/test_ui_rank_chart.py`) and re-run `tests/test_ranks_scoring_seed.py`, which is what proves score and medal still agree. |
-| A **tier colour** | `ranks/standards.py::RANK_COLORS` + its mirror in `ui/components/ranks.js` (pinned by `tests/test_ui_rank_chart.py`). Every medal, crest, gridline, rank-up dot, ladder band and card wash reads from those two. |
+| A **tier colour** | `ui/components/caps.js::CAP` — the single authority (pinned by `tests/test_ui_caps.py`). The old `ranks/standards.py::RANK_COLORS` Python copy was deleted (2026-07-25): it had no runtime consumer, existing only to be mirrored, and the mirror is what made a tier swap a three-edit job across two languages. Every `Hat` icon (medal-style and division-bearing alike — one component replaced both `Medal` and `Crest`, Task 4, 2026-07-25), gridline, rank-up dot, ladder band and card wash reads its colour from `caps.js`. |
 | **Keeping an entity out of a rating** | `POST /api/marelo/exclude` (reversible; excluded rows stay in the payload as inert display rows). Entities with no standards are excluded by construction, not by flag. |
 
 ## Default routes foundation (2026-07-23, spec #1)

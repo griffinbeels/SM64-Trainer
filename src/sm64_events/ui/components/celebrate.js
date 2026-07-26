@@ -21,7 +21,9 @@ import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
 import { RANK_NAMES, rankColor } from "./ranks.js";
-import { Crest } from "./marelo.js";
+import { capName, divisionDigit, wingTiers } from "./caps.js";
+import { RankIcon } from "./rankicon.js";
+import { prefersReducedMotion } from "../useTween.js";
 const html = htm.bind(h);
 
 const PREF = "sm64.celebrate";
@@ -56,12 +58,12 @@ export function entityCelebrationFor(marelo, entityKey) {
 // keyframe durations (1.2s / .6s) -- a mismatch there would desync the CSS
 // animation from the phase that's actually showing.
 const FILL_MS = 1200;   // beat 1: the division bar visibly reaches the crossing point
-const FLIP_MS = 600;    // beat 2: one crest-flip per tier gained
+const FLIP_MS = 600;    // beat 2: one cap-flip per tier gained
 const HOLD_MS = 2700;   // beat 3: long enough to actually read, still dismissible
 
 // The three-beat climb the live report asked for: the bar fills to the
 // crossing point (so the BEFORE state is actually seen, not skipped), the
-// crest turns over once per tier gained (a multi-tier jump is climbed, not
+// cap turns over once per tier gained (a multi-tier jump is climbed, not
 // teleported -- the climb is the reward), then a long dismissible hold.
 // Roughly 4-5s total for a one-tier jump, longer for a bigger one.
 function TierRankUp({ celebration, scopeId, onDone }) {
@@ -112,14 +114,31 @@ function TierRankUp({ celebration, scopeId, onDone }) {
     : phase === "hold" ? celebration.to.division : "V";
   const caption = phase === "fill" ? "before" : phase === "flip" ? "climbing…" : "click to dismiss";
 
+  // The wing FOLD (task 10, addendum, 2026-07-25): the wing policy itself
+  // is unchanged -- division V (every "flip" tick) wears none -- but the
+  // very FIRST flip tick (flipStep === 1) is also the exact instant the
+  // fill beat's wings would otherwise just vanish. For that one tick only,
+  // render the OUTGOING division's wing count (still on the tier the climb
+  // is now leaving) with the fold animation instead of letting `division`
+  // alone drop them straight to zero; `foldWings` decouples the wing COUNT
+  // from the glyph digit shown (still "V"/no real division, per the comment
+  // above). Nothing to fold if the FROM division was already wingless.
+  // Reduced motion skips the tick's fold treatment entirely (the fold
+  // NEVER renders in that case) rather than showing motionless wings that
+  // are neither flapping nor folding -- same "jump straight to the end
+  // state" contract useTween already honours elsewhere.
+  const fromWings = wingTiers(celebration.from.tier, celebration.from.division);
+  const foldWings = phase === "flip" && flipStep === 1 && fromWings > 0 && !prefersReducedMotion()
+    ? fromWings : 0;
+
   return html`<div class="rankup" role="status" style=${`--tier:${rankColor(shownTier)}`}>
     <div class=${`rankup-card ${phase === "hold" ? "final" : ""}`} onclick=${finish}>
       <span class="meta">RANK UP</span>
-      <span key=${`${phase}:${flipStep}`} class=${phase === "flip" ? "rankup-crest-flip" : ""}>
-        <${Crest} tier=${shownTier} division=${shownDivision} size=${96} />
+      <span key=${`${phase}:${flipStep}`} class=${phase === "flip" ? "rankup-cap-flip" : ""}>
+        <${RankIcon} tier=${shownTier} division=${shownDivision} size=${96} flap=${true} foldWings=${foldWings} />
       </span>
       ${phase === "fill" && html`<div class="rankup-fill-track"><i></i></div>`}
-      <h2>${shownTier}${phase !== "flip" ? ` ${shownDivision}` : ""}</h2>
+      <h2>${capName(shownTier)}${phase !== "flip" ? ` ${divisionDigit(shownDivision)}` : ""}</h2>
       <span class="meta">${caption}</span>
     </div>
   </div>`;
@@ -143,10 +162,10 @@ function DivisionRankUp({ celebration, scopeId, onDone }) {
   const tier = celebration.to.tier;
   return html`<div class="rankup-medium" role="status" style=${`--tier:${rankColor(tier)}`}>
     <div class="rankup-medium-card" onclick=${finish}>
-      <${Crest} tier=${tier} division=${celebration.to.division} size=${40} />
+      <${RankIcon} tier=${tier} division=${celebration.to.division} size=${40} flap=${true} />
       <span class="rankup-medium-text">
-        <b>${celebration.from.division} → ${celebration.to.division}</b>
-        <i>${tier} · click to dismiss</i>
+        <b>${divisionDigit(celebration.from.division)} → ${divisionDigit(celebration.to.division)}</b>
+        <i>${capName(tier)} · click to dismiss</i>
       </span>
     </div>
   </div>`;
@@ -188,6 +207,14 @@ const ENTITY_TOAST_MS = 3600;
  * small toast sized to the rank-slot's own footprint so it can never grow
  * past `.objective-card`'s hard fixed height -- it just overlays inside the
  * existing box, the same constraint the shipped card layout already lives by.
+ *
+ * NOT given the wing fold (task 10, addendum, 2026-07-25): unlike
+ * TierRankUp, this toast has no fill beat -- it renders straight at
+ * `celebration.to.tier`/`to.division` with no "before" moment ever shown,
+ * so there is no on-screen wing state to fold FROM. Retrofitting one would
+ * mean inventing a phase machine here that doesn't otherwise exist, which
+ * is a bigger change than "apply the same treatment" asked for; flagged in
+ * the final report rather than forced.
  */
 export function EntityCelebration({ celebration, entityKey, onDone, children }) {
   const relevant = !!(celebration && celebration.entity === entityKey);
@@ -207,9 +234,9 @@ export function EntityCelebration({ celebration, entityKey, onDone, children }) 
     ${children}
     ${showing && tierUp && html`<div class="entity-rankup-toast" role="status"
         style=${`--tier:${rankColor(celebration.to.tier)}`} onclick=${finish}>
-      <${Crest} tier=${celebration.to.tier} division=${celebration.to.division} size=${28} />
+      <${RankIcon} tier=${celebration.to.tier} division=${celebration.to.division} size=${30} flap=${true} />
       <span class="entity-rankup-text">
-        <b>${celebration.to.tier} ${celebration.to.division}</b>
+        <b>${capName(celebration.to.tier)} ${divisionDigit(celebration.to.division)}</b>
         <i>tier up · tap to dismiss</i>
       </span>
     </div>`}

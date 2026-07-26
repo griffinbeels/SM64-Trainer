@@ -7,8 +7,10 @@ import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
-import { Medal, rankColor } from "./ranks.js";
-import { Crest, fmtPoints, fmtScore, toPoints } from "./marelo.js";
+import { rankColor } from "./ranks.js";
+import { accentColor, capGradient, capName, divisionDigit } from "./caps.js";
+import { fmtPoints, fmtScore, toPoints } from "./marelo.js";
+import { RankIcon } from "./rankicon.js";
 import { Icon } from "./icons.js";
 import { PageState, InlineState } from "./states.js";
 import { useTween } from "../useTween.js";
@@ -106,10 +108,18 @@ const TIER_BANDS = TIERS_ASCENDING.map(([tier, floor], index) => ({
   tier, from: floor,
   to: index + 1 < TIERS_ASCENDING.length ? TIERS_ASCENDING[index + 1][1] : SCORE_CEILING,
 }));
-// Score IS percent on a 0-100 axis, so a band's edges are its stops verbatim.
-const BAND_GRADIENT = "linear-gradient(90deg, "
-  + TIER_BANDS.map((band) => `${rankColor(band.tier)} ${band.from}% ${band.to}%`).join(", ")
-  + ")";
+// Score IS percent on a 0-100 axis, so a band's edges are its stops verbatim
+// -- except the two patterned tiers (Toadsworth/Toad, addendum 2,
+// 2026-07-25), whose band is a real two-tone gradient (base -> spots ->
+// base) across its own stretch of the track rather than a flat fill, same
+// reasoning as the standards table row (capGradient there).
+function bandStops({ tier, from, to }) {
+  const accent = accentColor(tier);
+  if (!accent) return `${rankColor(tier)} ${from}% ${to}%`;
+  const mid = (from + to) / 2;
+  return `${rankColor(tier)} ${from}%, ${accent} ${mid}%, ${rankColor(tier)} ${to}%`;
+}
+const BAND_GRADIENT = "linear-gradient(90deg, " + TIER_BANDS.map(bandStops).join(", ") + ")";
 
 // Which tier BAND a 0-100 score sits in. Tier only, never division: an
 // AGGREGATE has no ladder, so the server grades it against the full anchor
@@ -139,30 +149,82 @@ const LADDER_STEPS = TIER_BANDS.flatMap((band) => {
 // the YOU medal is the band it falls in (bandForScore, full-table like the
 // server's own aggregate path), and the division numeral, which would need
 // a ladder, is still never computed here.
+//
+// Round 2 (addendum, task 8, 2026-07-26 — the user: "we should see ALL of
+// the tiers with ALL of the wing progressions and ALL of the number
+// progressions above each of the bars... a version of the cap_contact_sheet
+// embedded into the app as a visual progression tool"): the scale went from
+// nine tier medals to all 45 division steps (LADDER_STEPS already has one
+// per division; this just draws it instead of computing yet another table).
+// One flat size for all 45 (DIVISION_MARK_SIZE, below), always smaller than
+// YOU's 22px — YOU stays the most prominent thing on the bar.
+//
+// Round 2's own attempt positioned each tier's group score-proportionally
+// (`left:band.from%`/`width:(band.to-band.from)%`) -- correct on the score
+// axis, but load-bearing wrong in spirit: the score anchors squeeze the top
+// tiers (Mario is 95-100, ~5% of the bar), so proportional placement
+// structurally CANNOT give the tiers a user is climbing TOWARD room for
+// five icons, no matter the card width -- verified with a width sweep up to
+// 1700px, where Mario/Grandmaster never once reached five. Backwards for a
+// feature whose whole point is showing where you're going.
+//
+// Round 3 (addendum, task 8, 2026-07-26 -- the user's ruling, after seeing
+// that finding: "nine equal groups of five icons above the bar... always"):
+// the strip is a SHOWCASE now, not a scale readout -- closer to the design
+// contact sheet embedded in the app, which is the intent the user described
+// from the start ("a version of the cap_contact_sheet... to showcase and
+// demonstrate how you're going to be progressing over time"). Nine EQUAL
+// flex groups (not score-proportional), each holding its own five, all one
+// flat size. The precise per-division score reading is already carried by
+// the bar below and by YOU's own true-value position -- losing exact
+// per-division x-alignment between the showcase strip and the bar it sits
+// above costs nothing real, per the ruling. Each group still shows ALL 45
+// icons (round 2's "drop the current tier's group, YOU stands in for it"
+// rule no longer applies -- a showcase shows everything, same as the
+// contact sheet does regardless of current rank; YOU is additionally
+// highlighted at its own true position, unchanged).
+//
+// A user must not have to count divisions to tell which five belong to
+// which tier now that they're no longer score-width-sized -- colour is the
+// tie (index.html's `.rank-ladder-tier-group` tints its background from
+// `--tier-tint`, the SAME `capGradient(tier) || rankColor(tier)` the ladder
+// band and the standards table already use for a tier's identity, so a
+// showcase group can never use a colour the rest of the app doesn't already
+// associate with that tier). Each icon keeps its own per-division tooltip
+// (title=, below) -- they're no longer co-located with the bar's own
+// division-line pips, so a hover has to name what reaching it makes you on
+// its own, same wording the pips already use.
+const DIVISION_MARK_SIZE = 14;
+
 function LadderBar({ value }) {
   const filled = Math.max(0, Math.min(SCORE_CEILING, value || 0));
   const here = bandForScore(filled);
   return html`<div>
-    <!-- Which band is which, named by the same medal every other rank
-         surface uses, centred over its own stretch of the track (live
-         request 2026-07-25 round 8 — "so that it's very clear what each one
-         is"). The CURRENT rank's medal is bigger, raised, tagged YOU, and
-         sits over the value's ACTUAL position rather than its band's centre
-         (round 9: "our active rank should be above the ACTUAL position in
-         the bar — like that big white line"), so it travels along the track
-         as divisions are climbed instead of jumping a whole tier at a time.
-         Its band's small medal is dropped while it stands in for it — two
-         medals of the same rank on one row would read as a duplicate. -->
+    <!-- The showcase strip: nine equal groups, all 45 icons, always (round
+         3). YOU is a SEPARATE highlight -- bigger, raised, tagged YOU, at
+         the value's ACTUAL position (round 9: "our active rank should be
+         above the ACTUAL position in the bar"), overlaid on whichever group
+         it happens to land near; it no longer needs the current tier's own
+         group hidden to avoid a duplicate, since a showcase tile and a
+         true-value highlight read as two different kinds of mark. -->
     <div class="rank-ladder-scale">
-      ${TIER_BANDS.filter((band) => band.tier !== here.tier).map((band) => html`<span
-          class="rank-ladder-mark" style=${`left:${(band.from + band.to) / 2}%`}
-          title=${`${band.tier} — ${toPoints(band.from)} to ${toPoints(band.to)} pts`}>
-        <${Medal} rank=${band.tier} size=${13} />
-      </span>`)}
+      ${TIER_BANDS.map((band) => {
+        const stepWidth = (band.to - band.from) / DIVISIONS_PER_TIER;
+        const tint = capGradient(band.tier) || rankColor(band.tier);
+        return html`<div class="rank-ladder-tier-group" style=${`--tier-tint:${tint}`}>
+          <div class="rank-division-row">
+            ${DIVISION_NUMERALS.map((numeral, index) => html`<span
+                class="rank-division-mark ${index === 0 ? "is-floor" : ""}"
+                title=${`${capName(band.tier)} ${numeral} — MARELO ${toPoints(band.from + stepWidth * index)} pts`}>
+              <${RankIcon} tier=${band.tier} division=${numeral} size=${DIVISION_MARK_SIZE} />
+            </span>`)}
+          </div>
+        </div>`;
+      })}
       <span class="rank-ladder-mark is-you" style=${`left:${filled}%`}
           title=${`You are here — ${toPoints(filled)} pts`}>
         <b class="rank-ladder-you">YOU</b>
-        <${Medal} rank=${here.tier} size=${22} />
+        <${RankIcon} tier=${here.tier} size=${22} />
       </span>
     </div>
     <div class="rank-ladder">
@@ -176,7 +238,7 @@ function LadderBar({ value }) {
     ${LADDER_STEPS.filter((step) => step.at > 0).map((step) => html`<span
       class="rank-ladder-step ${step.opensTier ? "is-tier" : ""}"
       style=${`left:${step.at}%`}
-      title=${`${step.tier} ${step.division} — MARELO ${toPoints(step.at)} pts`}></span>`)}
+      title=${`${capName(step.tier)} ${divisionDigit(step.division)} — MARELO ${toPoints(step.at)} pts`}></span>`)}
     ${filled > 0 && html`<span class="rank-ladder-head" style=${`left:${filled}%`}></span>`}
     </div>
   </div>`;
@@ -219,7 +281,7 @@ function markTitle(mark) {
   const when = new Date(mark.point.utc)
     .toLocaleDateString([], { month: "short", day: "numeric" });
   return `${mark.kind === "tier" ? "Tier up" : "Division up"}`
-    + ` — ${mark.point.tier} ${mark.point.division} · ${when}`;
+    + ` — ${capName(mark.point.tier)} ${divisionDigit(mark.point.division)} · ${when}`;
 }
 
 const DAY_MS = 86400000;
@@ -386,7 +448,7 @@ export function HistoryChart({ points }) {
         <line x1=${plotLeft} x2=${plotRight} y1=${y} y2=${y}
           stroke=${rankColor(tier)} stroke-opacity=".28" stroke-dasharray="3 4" />
         <text x=${plotLeft - 8} y=${y - 3} text-anchor="end"
-          fill=${rankColor(tier)} font-size="9">${tier}</text></g>`)}
+          fill=${rankColor(tier)} font-size="9">${capName(tier)}</text></g>`)}
       ${ticks.map((tick, tickIndex) => html`<text
           x=${xForTime(tick.time)} y=${CHART_HEIGHT - 8}
           text-anchor=${ticks.length === 1 ? "middle"
@@ -413,13 +475,13 @@ export function HistoryChart({ points }) {
 
 // The breakdown's "next rank" column (task C.3, trimmed round 2): the
 // TARGET only -- "→ Platinum IV", "→ Gold", or "Maxed" -- never the
-// current tier/division too, which the Crest two columns over already
+// current tier/division too, which the Hat icon two columns over already
 // shows; one format for every row instead of a practiced-vs-unpracticed
 // split. Sourced from `entity.next_tier`/`entity.next_division`, which the
 // server computes via `scoring.division_progress` against the entity's OWN
 // ladder (server/ranks_api.py::_score_scope). Never re-derived here: a
 // second copy of the division math in JS is exactly the kind of drift that
-// would make this column disagree with the Crest.
+// would make this column disagree with the Hat icon.
 function nextRankLabel(entity) {
   // An entity you have never practiced has no rank to step up FROM, and the
   // server's `next_tier` for it is the Gold QUEST TARGET the Gain column is
@@ -431,14 +493,14 @@ function nextRankLabel(entity) {
   if (entity.score == null) return "not practiced yet";
   if (!entity.next_tier) return "Maxed";
   return entity.next_division
-    ? `→ ${entity.next_tier} ${entity.next_division}`
-    : `→ ${entity.next_tier}`;
+    ? `→ ${capName(entity.next_tier)} ${divisionDigit(entity.next_division)}`
+    : `→ ${capName(entity.next_tier)}`;
 }
 
 function gainTitle(entity) {
   if (entity.score == null)
     return `What this scope's rating would gain if you practised this to `
-      + `${entity.next_tier} — that target is why an unpractised entry shows `
+      + `${capName(entity.next_tier)} — that target is why an unpractised entry shows `
       + `the biggest number in this column.`;
   return `What this scope's rating would gain if you reached the next tier here.`;
 }
@@ -468,7 +530,7 @@ function Breakdown({ data, routeOrder, onToggle }) {
           entity.excluded ? "is-excluded" : ""].filter(Boolean).join(" ")}>
         <td class="rank-cell-name">${entity.label}</td>
         <td>${entity.tier
-          ? html`<${Crest} tier=${entity.tier} division=${entity.division} size=${22} />`
+          ? html`<${RankIcon} tier=${entity.tier} division=${entity.division} size=${30} />`
           : "–"}</td>
         <td class="meta rank-cell-points">${fmtPoints(entity.score)}</td>
         <td class="meta rank-cell-next">${nextRankLabel(entity)}</td>
@@ -507,7 +569,7 @@ function ScopeChips({ activeScopeId, onPick, refreshKey }) {
     ${chips.map((chip) => html`<button type="button" key=${chip.scope_id}
         class="scope-chip ${chip.scope_id === activeScopeId ? "is-selected" : ""}"
         onclick=${() => onPick(chip.scope_id)}>
-      <${Crest} tier=${chip.tier} division=${chip.division} size=${26} />
+      <${RankIcon} tier=${chip.tier} division=${chip.division} size=${30} />
       <span class="scope-chip-text">
         <b>${chip.label}</b>
         <span class="meta">${fmtPoints(chip.marelo)} pts</span>
@@ -540,7 +602,7 @@ function EntityTile({ t, entity, size = 42, open, onToggle }) {
         + (practiced ? `--tier-tint:${rankColor(entity.tier)}` : "")}
       onclick=${onToggle} aria-expanded=${open ? "true" : "false"}
       title=${practiced
-        ? `${entity.label} — ${entity.tier} ${entity.division} · ${fmtPoints(entity.score)} pts`
+        ? `${entity.label} — ${capName(entity.tier)} ${divisionDigit(entity.division)} · ${fmtPoints(entity.score)} pts`
         : `${entity.label} — not practiced yet`}>
     <img class="entity-tile-icon ${isGenericArt(iconSrc) ? "" : "courseicon"}" src=${iconSrc}
          onerror=${(event) => fallbackToGenericStar(event, fallbackSlot)}
@@ -595,7 +657,7 @@ function EntityDetail({ t, entity, onClose }) {
     : [];
   return html`<div class="entity-detail">
     <div class="entity-detail-head">
-      <${Crest} tier=${entity.tier} division=${entity.division} size=${28} />
+      <${RankIcon} tier=${entity.tier} division=${entity.division} size=${30} />
       <h4>${entity.label}</h4>
       <span class="meta">${fmtPoints(entity.score)} pts${
         pb ? ` · PB ${pb.display} (${clock})` : " · no saved PB"}</span>
@@ -612,7 +674,7 @@ function EntityDetail({ t, entity, onClose }) {
         : html`<div class="entity-attempts"><table><tbody>
           ${rows.map((attempt) => html`<tr key=${attempt.id}
               class=${attempt.is_current_pb ? "is-pb" : ""}>
-            <td>${attempt.rank ? html`<${Medal} rank=${attempt.rank} size=${14} />` : ""}</td>
+            <td>${attempt.rank ? html`<${RankIcon} tier=${attempt.rank.rank} division=${attempt.rank.division} size=${14} />` : ""}</td>
             <td><b>${attempt[clock] || "—"}</b></td>
             <td class="entity-attempt-strat">${attempt.strat_tag || "—"}</td>
             <td>${attempt.is_current_pb ? "PB" : ""}</td>
@@ -753,9 +815,13 @@ export function RankPage({ t }) {
         : !data
           ? html`<${InlineState}>Loading this scope…<//>`
           : html`<div class="rank-card-main">
-              <${Crest} tier=${data.tier} division=${data.division} size=${64} />
+              <!-- Unranked is an EXPLICIT empty state (final review I5,
+                   2026-07-25), matching PracticeCell's starrank "–" rather
+                   than calling Hat with no tier and drawing a plain grey
+                   cap. -->
+              ${data.tier ? html`<${RankIcon} tier=${data.tier} division=${data.division} size=${64} />` : "–"}
               <div>
-                <h2>${data.tier ? `${data.tier} ${data.division}` : "Unranked"}</h2>
+                <h2>${data.tier ? `${capName(data.tier)} ${divisionDigit(data.division)}` : "Unranked"}</h2>
                 <p class="meta">MARELO ${fmtPoints(tweenedMarelo)} pts · next division at ${fmtPoints(data.next_division_at)}</p>
               </div>
             </div>

@@ -1132,17 +1132,18 @@ def test_session_view_attaches_ranks(tmp_path):
     view = build_session_view(db, svc, clock="igt")
     [sec] = view["stars"]
     assert sec["rank"]["rank"] in {"Mario", "Diamond", "Silver", "Iron"}
-    assert any(at["rank"] in {"Mario", "Grandmaster", "Master", "Diamond",
-                              "Platinum", "Gold", "Silver", "Bronze", "Iron"}
+    assert any(at["rank"] and at["rank"]["rank"] in {"Mario", "Grandmaster",
+                              "Master", "Diamond", "Platinum", "Gold",
+                              "Silver", "Bronze", "Iron"}
                for at in sec["attempts"])
     assert any(p.get("rank") for s in sec["progress"]["sessions"] for p in s["points"])
 
 
 def test_rank_by_star_grades_active_strat_for_quick_select(tmp_path):
     """The stage quick-select grid grades each star under its active strat:
-    view['rank_by_star'] maps '<course>:<star>' -> rank name when the star has
-    a strat + PB + ladder, and omits stars that can't be graded. The PB (343f)
-    on the seeded 'fast' ladder lands on Diamond (see _ranks)."""
+    view['rank_by_star'] maps '<course>:<star>' -> {rank, division} when the
+    star has a strat + PB + ladder, and omits stars that can't be graded. The
+    PB (343f) on the seeded 'fast' ladder lands on Diamond (see _ranks)."""
     db, svc = make(tmp_path)
     seed(svc)
     svc.ranks = _ranks(tmp_path)
@@ -1154,7 +1155,7 @@ def test_rank_by_star_grades_active_strat_for_quick_select(tmp_path):
     best_aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
     asyncio.run(svc.save_pb(best_aid, "igt"))
     view = build_session_view(db, svc, clock="igt")
-    assert view["rank_by_star"]["2:2"] == "Diamond"
+    assert view["rank_by_star"]["2:2"] == {"rank": "Diamond", "division": "III"}
     # a star with a strat but no PB / no ladder is omitted, not None-valued
     asyncio.run(svc.set_strat(1, 0, "whatever"))
     view2 = build_session_view(db, svc, clock="igt")
@@ -1331,7 +1332,7 @@ def test_rank_mode_average_grades_the_mean_not_the_pb(tmp_path):
     assert view["rank_mode"] == "pb"
     assert sec["rank"]["rank"] == "Mario" and sec["rank"]["mode"] == "pb"
     assert "basis" not in sec["rank"]
-    assert view["rank_by_star"]["2:2"] == "Mario"
+    assert view["rank_by_star"]["2:2"]["rank"] == "Mario"
 
     db.set_state("rank_mode", "avg10")
     view = build_session_view(db, svc, clock="igt")
@@ -1340,9 +1341,9 @@ def test_rank_mode_average_grades_the_mean_not_the_pb(tmp_path):
     assert sec["rank"]["rank"] == "Diamond" and sec["rank"]["mode"] == "avg10"
     assert sec["rank"]["basis"] == {"frames": 346, "display": "0'11\"53",
                                     "count": 2, "window": 10}
-    assert view["rank_by_star"]["2:2"] == "Diamond"
+    assert view["rank_by_star"]["2:2"]["rank"] == "Diamond"
     # per-attempt medals stay per-run: the 343f attempt still reads Mario
-    assert [a["rank"] for a in sec["attempts"]
+    assert [a["rank"]["rank"] for a in sec["attempts"]
             if a["outcome"] == "success"][0] == "Mario"
 
 
@@ -1417,9 +1418,9 @@ def test_route_candidate_rank_follows_rank_mode(tmp_path):
     _seed_fast_with_pb(db, svc, tmp_path)
     rid = asyncio.run(svc.create_route({"name": "V", "steps": [
         {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 2}]}]}))
-    assert build_route_view(db, svc, rid)["steps"][0]["rank"] == "Mario"
+    assert build_route_view(db, svc, rid)["steps"][0]["rank"]["rank"] == "Mario"
     db.set_state("rank_mode", "avg10")
-    assert build_route_view(db, svc, rid)["steps"][0]["rank"] == "Diamond"
+    assert build_route_view(db, svc, rid)["steps"][0]["rank"]["rank"] == "Diamond"
 
 
 def test_valid_frames_filters_the_average_inputs():
@@ -1525,10 +1526,10 @@ def test_reclassified_attempt_regrades_its_medal(tmp_path):
     asyncio.run(svc.publish(star(1350)))          # igt 343 frames
     aid = db.attempts()[0].id
     before = build_session_view(db, svc, clock="igt")["stars"][0]["attempts"][0]
-    assert before["strat_tag"] == "Cannonless" and before["rank"] == "Iron"
+    assert before["strat_tag"] == "Cannonless" and before["rank"]["rank"] == "Iron"
     asyncio.run(svc.set_attempt_strat(aid, "Slide Kick"))
     after = build_session_view(db, svc, clock="igt")["stars"][0]["attempts"][0]
-    assert after["strat_tag"] == "Slide Kick" and after["rank"] == "Mario"
+    assert after["strat_tag"] == "Slide Kick" and after["rank"]["rank"] == "Mario"
 
 
 def test_the_seeded_corpus_does_not_bloat_the_session_view(tmp_path):
@@ -1658,3 +1659,325 @@ def test_catalog_course_groups_cover_every_catalog_course():
     grouped = {course for group in _CATALOG["course_groups"]
                for course in group["courses"]}
     assert grouped == {course["id"] for course in _CATALOG["courses"]}
+
+
+# -- build_entity_ranks (the picker's "how good am I at this star" answer) ----
+
+def test_entity_ranks_pick_the_best_strategy_not_the_active_one(tmp_path):
+    """The picker asks 'how good am I at this star', not 'how good am I at
+    what I'm about to run' -- build_entity_ranks must report the strategy
+    with the higher score even when a slower one is the currently ACTIVE
+    strat (which is what rank_by_star would report instead)."""
+    import json
+
+    from sm64_events.ranks.standards import RankStandards
+    from sm64_events.tracking.views import (_graded_progress, build_entity_ranks,
+                                            classify)
+
+    db, svc = make(tmp_path)
+    seed(svc)                            # successes at 343f and 350f, course 2 star 2
+    ladder = {"Mario": 11.0, "Diamond": 11.5, "Silver": 12.0}
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "star:2:2": {"clock": "igt", "strategies": {"Fast": ladder, "Slow": ladder}}}}))
+    svc.ranks = RankStandards(p); svc.ranks.load()
+
+    db._conn.execute("UPDATE attempts SET strat_tag='Fast' WHERE igt_frames=343")
+    db._conn.execute("UPDATE attempts SET strat_tag='Slow' WHERE igt_frames=350")
+    db._conn.commit()
+    fast_aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    slow_aid = next(a.id for a in db.attempts() if a.igt_frames == 350)
+    asyncio.run(svc.save_pb(fast_aid, "igt"))
+    asyncio.run(svc.save_pb(slow_aid, "igt"))
+    asyncio.run(svc.set_strat(2, 2, "Slow"))   # active strat is the SLOWER one
+
+    out = build_entity_ranks(db, svc)
+    assert out["star:2:2"]["strat"] == "Fast"
+    ladder_cs = svc.ranks.ladder_cs("star:2:2", "Fast")
+    expected = _graded_progress(ladder_cs, classify.display_cs(343))
+    assert out["star:2:2"]["rank"] == expected["rank"]
+    assert out["star:2:2"]["division"] == expected["division"]
+
+
+def test_entity_ranks_omit_an_entity_with_no_gradeable_time(tmp_path):
+    """An entity with attempts but no strat-tagged PB never grades on any
+    strategy -- absent from the map, not present with a null rank (that
+    absence IS the UI's 'no rank if never attempted yet')."""
+    from sm64_events.tracking.views import build_entity_ranks
+
+    db, svc = make(tmp_path)
+    seed(svc)                  # attempts exist; none tagged or saved as PB
+    svc.ranks = _ranks(tmp_path)   # defines star:2:2 -> strategy "fast"
+
+    out = build_entity_ranks(db, svc)
+    assert "star:2:2" not in out
+
+
+def test_entity_ranks_skip_a_strategy_with_no_ladder_rows(tmp_path):
+    """A strategy merely NAMED in standards but defining no ladder rows (an
+    empty {}) must never win -- the same 'skip when the ladder is empty'
+    guard other rank call sites (_strat_rank) already apply, exercised
+    directly here so the branch doesn't survive only by construction of
+    other fixtures' complete ladders."""
+    import json
+
+    from sm64_events.ranks.standards import RankStandards
+    from sm64_events.tracking.views import build_entity_ranks
+
+    db, svc = make(tmp_path)
+    seed(svc)
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "star:2:2": {"clock": "igt", "strategies": {"Empty": {}}}}}))
+    svc.ranks = RankStandards(p); svc.ranks.load()
+
+    db._conn.execute("UPDATE attempts SET strat_tag='Empty' WHERE course_id=2")
+    db._conn.commit()
+    aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    asyncio.run(svc.save_pb(aid, "igt"))
+
+    out = build_entity_ranks(db, svc)
+    assert "star:2:2" not in out
+
+
+def test_entity_ranks_break_ties_on_the_strategy_name(tmp_path):
+    """Two strategies grading to the identical score must resolve to the
+    alphabetically-first name -- the same min(strat) convention
+    _fastest_strategy uses, so the winner is never dict-order luck. The seed
+    JSON lists 'Zebra' before 'Ant': a naive 'keep the first max seen' would
+    wrongly report Zebra."""
+    import json
+
+    from sm64_events.ranks.standards import RankStandards
+    from sm64_events.tracking.views import build_entity_ranks
+
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350, igt=343)))
+    asyncio.run(svc.publish(ev("practice_reset", 1400, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1750, igt=343)))   # identical time, second attempt
+
+    ladder = {"Mario": 11.0, "Diamond": 11.5, "Silver": 12.0}
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "star:2:2": {"clock": "igt", "strategies": {"Zebra": ladder, "Ant": ladder}}}}))
+    svc.ranks = RankStandards(p); svc.ranks.load()
+
+    successes = [a for a in db.attempts() if a.outcome == "success"]
+    assert len(successes) == 2
+    db._conn.execute("UPDATE attempts SET strat_tag='Zebra' WHERE id=?", (successes[0].id,))
+    db._conn.execute("UPDATE attempts SET strat_tag='Ant' WHERE id=?", (successes[1].id,))
+    db._conn.commit()
+    asyncio.run(svc.save_pb(successes[0].id, "igt"))
+    asyncio.run(svc.save_pb(successes[1].id, "igt"))
+
+    out = build_entity_ranks(db, svc)
+    assert out["star:2:2"]["strat"] == "Ant"
+
+
+def test_entity_ranks_skip_a_tombstoned_strategy(tmp_path):
+    """A strategy listed in the deleted_strats ui_state KV must never win,
+    even when it has the best time -- the same tombstone rule masked() and
+    _strategies_for() already apply, reused here inline (masked itself is a
+    closure local to build_session_view)."""
+    import json
+
+    from sm64_events.ranks.standards import RankStandards
+    from sm64_events.tracking.views import build_entity_ranks
+
+    db, svc = make(tmp_path)
+    seed(svc)                            # successes at 343f (faster) and 350f
+    ladder = {"Mario": 11.0, "Diamond": 11.5, "Silver": 12.0}
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "star:2:2": {"clock": "igt", "strategies": {"Ghost": ladder, "Real": ladder}}}}))
+    svc.ranks = RankStandards(p); svc.ranks.load()
+
+    db._conn.execute("UPDATE attempts SET strat_tag='Ghost' WHERE igt_frames=343")
+    db._conn.execute("UPDATE attempts SET strat_tag='Real' WHERE igt_frames=350")
+    db._conn.commit()
+    ghost_aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    real_aid = next(a.id for a in db.attempts() if a.igt_frames == 350)
+    asyncio.run(svc.save_pb(ghost_aid, "igt"))
+    asyncio.run(svc.save_pb(real_aid, "igt"))
+    db.set_state("deleted_strats", {"star:2:2": ["Ghost"]})
+
+    out = build_entity_ranks(db, svc)
+    assert out["star:2:2"]["strat"] == "Real"
+
+
+# -- build_entity_strategies (the picker step-3 "which strategy" answer) ------
+
+def test_entity_strategies_include_a_strategy_seen_only_on_attempts(tmp_path):
+    """The bug this endpoint fixes: a strategy used on an attempt but never
+    registered (ui_state) or defined in rank standards must still appear --
+    the header's picker must offer everything the practice card offers."""
+    from sm64_events.tracking.views import build_entity_strategies
+
+    db, svc = make(tmp_path)
+    seed(svc)
+    db._conn.execute("UPDATE attempts SET strat_tag='Wall Kick' WHERE course_id=2")
+    db._conn.commit()
+
+    out = build_entity_strategies(db, svc, "star:2:2")
+    assert "Wall Kick" in [s["name"] for s in out["strategies"]]
+
+
+def test_entity_strategies_rank_matches_the_section_banner_for_the_same_strategy(tmp_path):
+    """No two surfaces may disagree about a medal: this payload's rank for the
+    ACTIVE strategy must equal the session view's section banner rank for
+    that same entity+strategy -- the invariant this whole feature rests on."""
+    from sm64_events.tracking.views import build_entity_strategies
+
+    db, svc = make(tmp_path)
+    seed(svc)
+    svc.ranks = _ranks(tmp_path)                # defines star:2:2 -> "fast"
+    asyncio.run(svc.set_strat(2, 2, "fast"))
+    db._conn.execute("UPDATE attempts SET strat_tag='fast' WHERE course_id=2")
+    db._conn.commit()
+    best_aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    asyncio.run(svc.save_pb(best_aid, "igt"))
+
+    sec = build_session_view(db, svc, clock="igt")["stars"][0]
+    out = build_entity_strategies(db, svc, "star:2:2")
+    assert out["entity"] == "star:2:2" and out["kind"] == "star"
+    assert out["current"] == "fast"
+    strat_row = next(s for s in out["strategies"] if s["name"] == "fast")
+    assert strat_row["rank"] == sec["rank"]["rank"]
+
+
+def test_entity_strategies_report_an_ungraded_strategy_as_unranked_not_missing(tmp_path):
+    """A strategy with no PB is present in the list with rank: None -- 'not
+    ranked yet' rather than absent, matching the practice card's own state."""
+    from sm64_events.tracking.views import build_entity_strategies
+
+    db, svc = make(tmp_path)
+    seed(svc)
+    svc.ranks = _ranks(tmp_path)     # defines star:2:2 -> strategy "fast"
+
+    out = build_entity_strategies(db, svc, "star:2:2")
+    strat_row = next(s for s in out["strategies"] if s["name"] == "fast")
+    assert strat_row == {"name": "fast", "rank": None, "division": None,
+                         "score": None, "pb_display": None}
+
+
+def test_a_defaulted_segment_disallows_the_blank_strategy(tmp_path):
+    """A segment def carrying default_strat must report allow_blank=False --
+    the same rule stratpicker.js already applies from sec.default_strat
+    (projection.py caveat 17). A star always allows the blank option."""
+    from sm64_events.tracking.views import build_entity_strategies
+
+    seg_db = Database(tmp_path / "seg.db")
+    seg_db.update_segment_def(1, default_strat="Standard")
+    seg_svc = TrackerService(seg_db, Broadcaster())
+    asyncio.run(seg_svc.start())
+    seg_out = build_entity_strategies(seg_db, seg_svc, "segment:1")
+    assert seg_out["allow_blank"] is False
+
+    star_db, star_svc = make(tmp_path)
+    seed(star_svc)
+    star_out = build_entity_strategies(star_db, star_svc, "star:2:2")
+    assert star_out["allow_blank"] is True
+
+
+def test_entity_strategies_reject_an_unknown_entity(tmp_path):
+    """Both flavors of 'unknown' raise: a malformed key (bad shape) and a
+    syntactically valid segment id that names no real definition -- the same
+    existence check set_target_segment applies for the same picker flow."""
+    import pytest
+    from sm64_events.tracking.views import build_entity_strategies
+
+    db, svc = make(tmp_path)
+    with pytest.raises(LookupError):
+        build_entity_strategies(db, svc, "not_a_real_kind:1:2")
+    with pytest.raises(LookupError):
+        build_entity_strategies(db, svc, "segment:9999")
+
+
+def test_a_star_section_grades_on_its_ladders_clock_not_the_view_clock(tmp_path):
+    """A rank ladder is defined in exactly ONE clock (RankStandards.clock_for
+    -- igt for star:2:2 here). The section banner must grade against that
+    clock regardless of which clock the header's Clock control is set to --
+    grading an rta time (which includes approach time) against an
+    igt-defined ladder systematically under-ranks (probe_clock.py, task-3b).
+    Both PBs come off the SAME attempt, so this isolates the grading-clock
+    bug from any difference in which attempt is picked as PB."""
+    import json
+    from sm64_events.ranks.standards import RankStandards
+
+    db, svc = make(tmp_path)
+    seed(svc)
+    ladder = {"Mario": 11.0, "Diamond": 11.5, "Platinum": 12.0,
+              "Silver": 20.0, "Iron": 40.0}
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "star:2:2": {"clock": "igt", "strategies": {"fast": ladder}}}}))
+    svc.ranks = RankStandards(p); svc.ranks.load()
+
+    db._conn.execute("UPDATE attempts SET strat_tag='fast' WHERE course_id=2")
+    db._conn.commit()
+    asyncio.run(svc.set_strat(2, 2, "fast"))
+
+    aid = next(a.id for a in db.attempts() if a.outcome == "success")
+    asyncio.run(svc.save_pb(aid, "igt"))
+    asyncio.run(svc.save_pb(aid, "rta"))
+
+    igt_view = build_session_view(db, svc, clock="igt")["stars"][0]
+    rta_view = build_session_view(db, svc, clock="rta")["stars"][0]
+    # pin the known-bad values so a ladder edit can't make this vacuous: at
+    # igt the graded time is 343 frames (Diamond V); before the fix, rta
+    # graded 350 frames against the SAME igt-defined ladder and read
+    # Platinum II -- a worse tier for a run that didn't get worse.
+    assert igt_view["rank"]["rank"] == "Diamond" and igt_view["rank"]["division"] == "V"
+    assert rta_view["rank"]["rank"] == igt_view["rank"]["rank"]
+    assert rta_view["rank"]["division"] == igt_view["rank"]["division"]
+
+    # I1 (final review, 2026-07-26): the ATTEMPT medals and progress-graph
+    # dots must grade on the same ladder clock as the banner above, not the
+    # view clock -- otherwise the attempt row that produced the Diamond V
+    # banner wears a Platinum cap the instant the header's Clock control
+    # flips to rta (the very disagreement the docstring above is pinning).
+    igt_ranks = [a["rank"] for a in igt_view["attempts"]]
+    rta_ranks = [a["rank"] for a in rta_view["attempts"]]
+    assert any(rank is not None for rank in igt_ranks)  # not vacuous
+    assert rta_ranks == igt_ranks
+    for view in (igt_view, rta_view):
+        attempt_ranks = {a["id"]: a["rank"] for a in view["attempts"]}
+        progress_ranks = {point["attempt_id"]: point["rank"]
+                          for session in view["progress"]["sessions"]
+                          for point in session["points"]}
+        assert progress_ranks  # not vacuous
+        for attempt_id, rank in progress_ranks.items():
+            assert rank == attempt_ranks[attempt_id]
+
+
+def test_section_pb_display_stays_on_the_view_clock_after_the_grading_fix(tmp_path):
+    """Regression guard for the task-3b fix above: only the GRADING basis
+    moves to the ladder's own clock. sec["pb"] is a display choice and must
+    keep carrying the igt AND rta PBs exactly as saved, unmoved by which
+    clock the ladder is defined in or which clock the view header is set
+    to -- otherwise a later "simplification" collapses pb display onto the
+    grading clock and silently changes what the practice card shows."""
+    import json
+    from sm64_events.ranks.standards import RankStandards
+
+    db, svc = make(tmp_path)
+    seed(svc)
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "star:2:2": {"clock": "igt", "strategies": {
+            "fast": {"Mario": 11.0, "Diamond": 11.5}}}}}))
+    svc.ranks = RankStandards(p); svc.ranks.load()
+
+    db._conn.execute("UPDATE attempts SET strat_tag='fast' WHERE course_id=2")
+    db._conn.commit()
+    asyncio.run(svc.set_strat(2, 2, "fast"))
+
+    aid = next(a.id for a in db.attempts() if a.outcome == "success")
+    asyncio.run(svc.save_pb(aid, "igt"))
+    asyncio.run(svc.save_pb(aid, "rta"))
+
+    for clock in ("igt", "rta"):
+        sec = build_session_view(db, svc, clock=clock)["stars"][0]
+        assert sec["pb"]["igt"]["frames"] == 343
+        assert sec["pb"]["rta"]["frames"] == 350

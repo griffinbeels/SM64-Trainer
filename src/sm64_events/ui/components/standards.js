@@ -11,6 +11,7 @@ import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { fmtIgt } from "../format.js";
 import { RANK_NAMES, rankColor } from "./ranks.js";
+import { capName, capGradient } from "./caps.js";
 import { StratModal } from "./stratmodal.js";
 import { Modal } from "./modal.js";
 import { Icon } from "./icons.js";
@@ -182,7 +183,13 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
               title="your current time and score on this ladder">◀ you · ${fmtIgt(basisFrames)}${entityScore != null ? ` · ${fmtScore(entityScore)}` : ""}</span>` : ""}</th>`)}</tr></thead>
         <tbody>
         ${RANK_NAMES.filter((r) => r !== "Iron").map((rank) => html`<tr>
-          <td style=${`background:${rankColor(rank)};color:#111;font-weight:700`}>${rank}</td>
+          <!-- Large flat surface -> the tier's own gradient where it has
+               one (Toadsworth/Toad, addendum 2, 2026-07-25): a flat fill
+               here is a lie for a cap that's actually two-tone, and a
+               white slab (old Toad) was the live complaint that started
+               this. capGradient falls back to null for a flat tier. -->
+          <td style=${`background:${capGradient(rank) || rankColor(rank)};color:#111;font-weight:700`}
+              title=${`${capName(rank)} · ${rank} on xcams`}>${capName(rank)}</td>
           ${strats.map((strat) => {
             const v = (data.strategies[strat] || {})[rank];
             const vid = cutoffVid(strat, rank);
@@ -203,10 +210,10 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
               ${editing
                 ? html`<span class="stdcell"><input class="stdinp" value=${v ?? ""} placeholder="—"
                       onchange=${(e) => { const n = parseFloat(e.target.value); if (!isNaN(n)) put(strat, rank, n); }} />
-                    <button class="vidbtn" title=${`${userVid(strat, rank) ? "edit" : "add"} ${rank} example video`}
+                    <button class="vidbtn" title=${`${userVid(strat, rank) ? "edit" : "add"} ${capName(rank)} example video`}
                       onclick=${() => editVideo(strat, rank)}>${userVid(strat, rank) ? "▶✎" : "▶＋"}</button></span>`
                 : (vid
-                    ? html`<a href=${vid} target="_blank" rel="noopener" title=${`example ${rank} run`}>${label}</a>`
+                    ? html`<a href=${vid} target="_blank" rel="noopener" title=${`example ${capName(rank)} run`}>${label}</a>`
                     : label)}</td>`;
           })}</tr>`)}
         </tbody></table>
@@ -215,7 +222,7 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
         onSaved=${async () => { setShowAdd(false); await load(); onChanged && onChanged(); }}
         onClose=${() => setShowAdd(false)} />` : null}
     ${videoEdit ? html`<${Modal} title="Example video" icon="play"
-        description=${`${videoEdit.rank} rank · ${videoEdit.strat}`}
+        description=${`${capName(videoEdit.rank)} rank · ${videoEdit.strat}`}
         onClose=${videoEdit.saving ? null : () => setVideoEdit(null)}
         footer=${html`
           <button onclick=${() => setVideoEdit(null)} disabled=${videoEdit.saving}>Cancel</button>

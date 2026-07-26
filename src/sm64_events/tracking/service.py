@@ -322,25 +322,29 @@ class TrackerService:
             db.set_state("deleted_strats", tombs)
 
     async def set_target(self, course_id: int, star_id: int,
-                         strat_tag: str | None = None) -> None:
+                         strat_tag: str | None = None,
+                         clear_strat: bool = False) -> None:
         db = self._require_db()
         payload = {"course_id": course_id, "star_id": star_id}
-        # KNOWN GAP (found 2026-07-23, not yet fixed): a None strat_tag is
-        # omitted from the payload rather than journaled as an explicit clear,
-        # so picking "(no strategy)" in the header target editor leaves an
-        # already-set strat in place. Use set_strat(course, star, None), which
-        # DOES journal the null, until this is made symmetric — changing the
-        # shape here means auditing every target_set consumer (projection's
-        # strat_by_star, views' target payload, the run/segment target paths).
+        # target_set's payload shape is unchanged: strat_tag rides along only
+        # when truthy, exactly as before, so no target_set consumer sees a
+        # new field. An explicit clear ("(no strategy)" in the picker) is
+        # instead journaled through set_strat(course, star, None), which
+        # already emits an explicit-null strat_set -- the star/segment
+        # symmetric mechanism set_target_segment also uses (truthy tag ->
+        # set_strat_segment(tag), explicit clear -> set_strat_segment(None)).
         if strat_tag is not None:
             payload["strat_tag"] = strat_tag
         await self.publish(Event(type="target_set", frame=0,
                                  timestamp_utc=_now(), payload=payload))
         if strat_tag:
             self._register_strategy(db, entity_key(course_id, star_id), strat_tag)
+        elif clear_strat:
+            await self.set_strat(course_id, star_id, None)
 
     async def set_target_segment(self, segment_id: int,
-                                 strat_tag: str | None = None) -> None:
+                                 strat_tag: str | None = None,
+                                 clear_strat: bool = False) -> None:
         self._require_db()
         if all(d.id != segment_id for d in self._segment_defs):
             raise LookupError(f"segment {segment_id} not found")
@@ -352,6 +356,15 @@ class TrackerService:
             # segment strat memory is written via strat_set (the projector
             # ignores strat_tag inside segment target_set payloads)
             await self.set_strat_segment(segment_id, strat_tag)
+        elif clear_strat:
+            # mirror of set_target's clear_strat: explicit-null in the
+            # picker's "no strategy" card journals a null strat_set rather
+            # than leaving the existing strat in place. A defaulted segment
+            # (default_strat truthy) can't actually reach "no strategy" --
+            # the projector falls back a falsy strat_set to the def's own
+            # default (caveat 17) -- so this is only observable on the 10
+            # legacy tricks and user-created segments, deliberately.
+            await self.set_strat_segment(segment_id, None)
 
     async def set_strat(self, course_id: int, star_id: int,
                         strat_tag: str | None) -> None:

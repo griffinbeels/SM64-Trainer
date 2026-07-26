@@ -293,14 +293,39 @@ function segmentCourse(segment, courseByLevel) {
   return course == null ? null : Number(course);
 }
 
+// The rank map (GET /api/target/ranks) is keyed "star:8:2" / "segment:12",
+// but a star OPTION's id is the bare composite "8:2" -- courseUnionGroups
+// builds it via starId(), same as every other star id in this file -- while
+// a segment option's id already IS "segment:12". Get this translation wrong
+// and every star silently shows no rank while every segment works, which
+// reads as missing data rather than as a bug.
+const rankMapKey = (optionId) =>
+  optionId.startsWith("segment:") ? optionId : `star:${optionId}`;
+
+// build_entity_ranks (GET /api/target/ranks) answers per entity with a FLAT
+// {rank, division, strat} -- the endpoint's own docstring names this shape.
+// PracticeCell, after mario-cap-rank-icons (task 8, 2026-07-26), wants `rank`
+// NESTED as {rank, division} -- the same shape rank_by_star/segment_targets
+// already carry, so RankIcon has one prop contract everywhere it's used
+// (banner cells and picker cells alike). Reshaping happens HERE, at the
+// builder, rather than changing the server payload: build_entity_ranks' flat
+// shape is also its own OWN documented contract (other pure builders may key
+// off it directly), and this is the one place a star id gets translated to
+// the map's key already, so the reshape rides the same lookup.
+
 /**
  * Layer-1 course cells with layer-2 options = that course's stars followed by
  * its segments. Courses keep the catalog's order, which is game order.
  *   catalog       session view catalog ({courses:[{id,name,stars:[]}]})
  *   segments      GET /api/segments rows (each carrying `origin`)
  *   courseByLevel vocab.course_by_level
+ *   ranksByKey    GET /api/target/ranks' {entity_key: {rank,division,strat}},
+ *                 optional -- a caller that has not fetched it yet (header.js,
+ *                 until a later task wires the fetch) keeps working unchanged.
+ *                 An option's own `rank` comes back NESTED {rank,division} --
+ *                 see withRank below for why.
  */
-export function courseUnionGroups(catalog, segments, courseByLevel) {
+export function courseUnionGroups(catalog, segments, courseByLevel, ranksByKey = {}) {
   const byCourse = new Map();
   for (const segment of segments || []) {
     const course = segmentCourse(segment, courseByLevel);
@@ -331,14 +356,36 @@ export function courseUnionGroups(catalog, segments, courseByLevel) {
   // I2). They get their own trailing group instead.
   const castleSegments = (segments || []).filter((segment) =>
     segmentCourse(segment, courseByLevel) == null);
+  // An unmapped option gets NO `rank`/`strat` keys at all -- returning it
+  // untouched rather than spreading `{rank: undefined, strat: undefined}` --
+  // so a caller that never passes `ranksByKey` gets back the exact same
+  // option shape as before this parameter existed (JSON.stringify would drop
+  // the undefined-valued keys either way, but this needs no round-trip to
+  // prove it). `rank` is NESTED as `{rank, division}` -- PracticeCell's prop
+  // of the same name, which now feeds RankIcon exactly like `rank_by_star`/
+  // `segment_targets` do (mario-cap-rank-icons task 8, 2026-07-26) -- while
+  // `build_entity_ranks` itself keeps answering FLAT `{rank, division,
+  // strat}` per its own contract; the reshape happens at this one call site.
+  // `strat` names the strategy the `rank` medal was earned WITH (the
+  // best-scoring one, `build_entity_ranks`' answer) -- practicecell.js needs
+  // it on the badge's tooltip, since the SAME cell later shows the ACTIVE
+  // strategy's medal on the practice banner, often a different one (spec §3
+  // risk 1; final review I2, 2026-07-26 -- this was the one piece of that
+  // mitigation the client dropped).
+  const withRank = (option) => {
+    const entry = ranksByKey[rankMapKey(option.id)];
+    if (!entry) return option;
+    return { ...option, rank: { rank: entry.rank, division: entry.division },
+             strat: entry.strat };
+  };
   const courseCells = inGridOrder.map((course) => ({
     key: `course-${course.id}`,
     label: course.name,
     options: [
-      ...(course.stars || []).map((name, slot) => ({
+      ...(course.stars || []).map((name, slot) => withRank({
         id: starId(course.id, slot), name,
       })),
-      ...(byCourse.get(course.id) || []).map((segment) => ({
+      ...(byCourse.get(course.id) || []).map((segment) => withRank({
         id: `segment:${segment.id}`, name: segment.name, sub: "segment",
       })),
     ],
@@ -346,7 +393,7 @@ export function courseUnionGroups(catalog, segments, courseByLevel) {
   if (castleSegments.length === 0) return courseCells;
   return [...courseCells, {
     key: "castle-segments", label: "Castle",
-    options: castleSegments.map((segment) => ({
+    options: castleSegments.map((segment) => withRank({
       id: `segment:${segment.id}`, name: segment.name, sub: "segment",
     })),
   }];

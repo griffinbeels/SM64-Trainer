@@ -19,7 +19,9 @@ from sm64_events.ranks.standards import entity_key
 from sm64_events.stats.registry import (registry_meta, selection_id,
                                         selection_order)
 from sm64_events.tracking.segments import origin_taxonomy, vocab
-from sm64_events.tracking.views import (build_route_view, build_run_history,
+from sm64_events.tracking.views import (build_entity_ranks,
+                                        build_entity_strategies,
+                                        build_route_view, build_run_history,
                                         build_run_view, build_session_view,
                                         stamp_origins)
 
@@ -551,6 +553,32 @@ def create_api_router(service) -> APIRouter:
             raise HTTPException(503, "database unavailable")
         return build_run_view(service.db, service)
 
+    @router.get("/target/ranks")
+    def target_ranks():
+        """Lazy per-entity 'how good am I at this star' answer (the BEST
+        strategy's own rank), for the practice-target picker's grid cells --
+        declared before any '/target/{...}' path route, matching the
+        '/segments/vocab' declaration-order rule at api.py:341, in case one
+        is ever added. 503 in degraded mode, matching GET /session."""
+        if service.db is None:
+            raise HTTPException(503, "database unavailable")
+        return build_entity_ranks(service.db, service)
+
+    @router.get("/target/strategies")
+    def target_strategies(entity: str):
+        """Step-3 picker payload for ONE entity: every strategy it can be
+        practised with, each carrying its own rank + PB -- build_entity_ranks'
+        sibling, declared alongside it for the same reason (before any
+        '/target/{...}' path route). 404 for an unparseable/unknown entity
+        key (LookupError -> _http, matching every other kind-dispatched
+        endpoint); 503 in degraded mode, matching GET /target/ranks."""
+        if service.db is None:
+            raise HTTPException(503, "database unavailable")
+        try:
+            return build_entity_strategies(service.db, service, entity)
+        except LookupError as e:
+            raise _http(e)
+
     @router.post("/target")
     async def target(body: TargetBody):
         """Set the active practice target.
@@ -560,16 +588,22 @@ def create_api_router(service) -> APIRouter:
         the section simply accrues no attempts.
         kind="star" (default): requires course_id and star_id.
         """
+        # strat_tag present-and-null ("(no strategy)" in the picker) clears
+        # the entity's existing strat explicitly; strat_tag absent entirely
+        # leaves it alone. One read of model_fields_set, both kinds.
+        clear_strat = ("strat_tag" in body.model_fields_set
+                       and body.strat_tag is None)
         try:
             if body.kind == "segment":
                 if body.segment_id is None:
                     raise ValueError("segment target needs segment_id")
-                await service.set_target_segment(body.segment_id, body.strat_tag)
+                await service.set_target_segment(body.segment_id, body.strat_tag,
+                                                 clear_strat=clear_strat)
             else:
                 if body.course_id is None or body.star_id is None:
                     raise ValueError("star target needs course_id and star_id")
                 await service.set_target(body.course_id, body.star_id,
-                                         body.strat_tag)
+                                         body.strat_tag, clear_strat=clear_strat)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True}

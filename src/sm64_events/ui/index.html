@@ -161,11 +161,25 @@
     align-content: start;
   }
   .entity-grid .starcell { width: auto; min-width: 0; padding-block: .35rem; }
-  /* No rank slot in the picker: nothing grades a cell here, so it rendered a
-     column of "–" that cost a line per ROW — 4 rows of it was most of the 94px
+  /* The in-flow rank ROW stays hidden in the picker grid: it cost a line per
+     grid row even for an unranked cell — 4 rows of it was most of the 94px
      that made the grid scroll on a 900px-tall window (live audit 2026-07-25).
-     The banner still shows medals; this is grid-only. */
+     Grading a cell (task 4, 2026-07-25) does NOT pay that cost back — a
+     course with two of seven stars practiced still renders five "–"
+     placeholders — so the grade now draws as .starrank-badge, an
+     out-of-flow corner badge over the art that renders nothing when a cell
+     is unranked. This rule STAYS as a guard against a future call site
+     restoring the scrolling row, not because nothing grades a cell here. */
   .entity-grid .starrank { display: none; }
+  /* Rank badge (rankBadge=true — the picker grid only): a 16px Hat silhouette
+     pinned to the art's corner instead of the banner's in-flow .starrank row
+     (see the guard comment above). `.starcell` is already `position: relative`
+     (`.editicon`, above, already depends on it), so this needs no new
+     positioning context. Top-LEFT, not top-right, so it can never contest
+     `.editicon`'s `top: 3px; right: 3px` — the picker passes no `onEdit` so
+     the two never actually coexist today, but placing it opposite removes
+     the question rather than relying on that. */
+  .starrank-badge { position: absolute; top: 3px; left: 3px; }
   /* The clear cell ("(any level)" etc.) emits null, restoring what the native
      <select>'s placeholder option did. Muted, so it reads as an escape hatch
      rather than a choice. */
@@ -201,6 +215,30 @@
   }
   .entity-back > .ui-icon { transform: rotate(90deg); }
   .entity-back:hover { color: var(--text); }
+  /* Strategy step (picker layer 3, spec 2026-07-25-target-picker-strategy-
+     step): the SAME auto-fill/minmax geometry as .entity-grid above, one
+     column wider — a strat card carries a rank icon plus two lines of text
+     where a bare star cell carries one. `.needs-strat` (below, the no-strat
+     blink) is declared AFTER this block on purpose: same specificity, so its
+     border-color/animation wins over this rule's plain border when both
+     classes land on the same "No strategy" card. */
+  .strat-grid {
+    display: grid; gap: .5rem;
+    grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+    align-content: start; margin-top: .4rem;
+  }
+  .strat-card {
+    display: grid; justify-items: center; gap: .25rem; text-align: center;
+    min-height: 108px; padding: .6rem .4rem;
+    background: rgba(8,20,34,.4); border: 1px solid var(--border-soft);
+    border-radius: 8px; color: var(--text);
+  }
+  .strat-card:hover { border-color: var(--gold); }
+  .strat-card:disabled { opacity: .55; cursor: default; }
+  .strat-rank-name { font-size: .72rem; color: var(--muted); }
+  .strat-name { font-size: .82rem; font-weight: 600; }
+  .strat-current { font-size: .68rem; color: var(--gold-soft); }
+  .strat-pb { font-size: .7rem; }
   .starsub .strat.none { opacity: .6; }
   @media (prefers-reduced-motion: no-preference) {
     .starcell.active-star .starholder { animation: starbob 2.4s ease-in-out infinite; }
@@ -925,10 +963,190 @@
     color: var(--text); cursor: pointer; flex: 0 0 auto;
   }
   .marelo-bar:hover { border-color: var(--gold); }
-  .marelo-crest {
-    display: inline-flex; align-items: center; justify-content: center;
-    border-radius: 6px; background: var(--crest); color: #0d1220; flex: 0 0 auto;
-    box-shadow: 0 0 0 2px rgba(255,255,255,.18) inset;
+  /* Mario-cap rank icons (spec 2026-07-25-mario-cap-rank-icons). Ports the
+     design-probe reference sheet
+     (.superpowers/sdd/2026-07-25-mario-cap-rank-icons/reference-sheet.html),
+     whose composition was rendered and eyeballed across 45 states before
+     this shipped -- hat.js is the only caller and these rules are not to be
+     "cleaned up" independent of a render. The wing flap (task 6, below) is
+     the one animation this component carries, gated on
+     prefers-reduced-motion the way .starholder already does. */
+  /* font-display: block (final review M9, 2026-07-25) -- without it the
+     glyph paints in the Impact fallback until the font loads, most visibly
+     on the 96px rank-up overlay whose whole job is to look like an event.
+     A short blank beats a flash of the wrong face there. */
+  @font-face {
+    font-family: "SuperMario256"; font-display: block;
+    src: url("/ui/assets/fonts/SuperMario256.ttf") format("truetype");
+  }
+  /* `.hat`'s OWN box is exactly the cap's footprint, BOTH axes (hat.js sets
+     width/height to the cap's own, not the canvas's) -- that is what makes
+     it a drop-in for the medal/crest it replaced inside seventeen
+     fixed-height cards. `.hat-canvas` is the full sprite canvas (taller AND
+     wider, to hold the wingspan), positioned by hat.js so the cap portion
+     lines up with `.hat`'s own top-left corner -- the wings spill outside
+     `.hat` on purpose, on whichever side(s) they grow (fix round 1,
+     2026-07-25, height only: the first cut sized `.hat` itself to the
+     canvas and grew every caller's row ~6px. Fix round 2, final review I1,
+     2026-07-25: the same fix had never been applied to width, leaving the
+     box 45% wider than the cap at every call site that never draws a
+     wing). `.hat` must never gain its own `overflow: hidden`, or that spill
+     gets clipped instead of shown; an ANCESTOR doing that is the caller's
+     call, not this component's. */
+  .hat { position: relative; display: inline-block; }
+  .hat-canvas { position: absolute; }
+  .hat i { position: absolute; inset: 0; display: block; }
+  /* Every tinted layer is TWO rules off the SAME --art: a masked colour fill
+     under a multiplied greyscale shade. One custom property feeds both, so
+     a call site cannot hand them different files and let the page backdrop
+     leak into the multiply (pinned by tests/test_ui_caps.py). */
+  .hat .fill {
+    background-color: var(--c);
+    -webkit-mask: var(--art) center / contain no-repeat;
+            mask: var(--art) center / contain no-repeat;
+  }
+  /* Capless's ring reads as "you don't have this yet" rather than "a thin
+     solid cap" (dashed/dotted is the established convention for an absent/
+     placeholder state). Round 2 (addendum, task 8, 2026-07-26): an SVG
+     polygon walking CAP_OUTLINE_POLY (hat.js) with a dashed stroke, replacing
+     round 1's CSS mask-composite attempt (two intersecting masks -- a
+     repeating-linear-gradient over cap_outline.png), which produced visibly
+     uneven dashes. That defect was ANGULAR: a linear gradient's band, clipped
+     by a curved contour, gives a dash whose apparent length depends on the
+     angle between the band and the local tangent -- long smears where the
+     outline ran parallel to the bands, short stubs where it crossed them, and
+     no amount of retuning the gradient's period could fix an angular problem
+     with a scalar knob. `stroke-dasharray` measures dash length ALONG the
+     path, uniform by construction, which is the actual fix.
+     `.dotted-ring` only needs `position/inset` (`.hat i`'s rule doesn't
+     apply -- this is an `<svg>`, not an `<i>`) and `fill: none` on the
+     polygon so the ring reads as a stroke, not a filled shape (that would
+     paint over the dim under-fill beneath it, which must stay visible and
+     solid). Everything else (points, stroke colour/width, dasharray) is set
+     inline per-instance in hat.js, since they depend on `size`/the tier's own
+     colour -- this rule only supplies what's true for every instance. */
+  .hat .dotted-ring {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+  }
+  .hat .dotted-ring polygon { fill: none; }
+  .hat .shade {
+    background: var(--art) center / contain no-repeat;
+    mix-blend-mode: multiply;
+  }
+  /* Grandmaster/Metal's specular sweep -- SCREENED rather than multiplied,
+     since it lightens the cap instead of shading it; the one non-multiply
+     blend a tier's material needs. */
+  .hat .highlight {
+    background: linear-gradient(135deg, rgba(255,255,255,.75) 0%, rgba(255,255,255,0) 55%);
+    -webkit-mask: var(--art) center / contain no-repeat;
+            mask: var(--art) center / contain no-repeat;
+    mix-blend-mode: screen;
+  }
+  /* The spots are painted in their own colour but must curve with the cap,
+     so their shade is the CAP's OWN greyscale (--art) masked to the spot
+     shapes (--mask) -- not the spots' own flat-white greyscale, which would
+     sit flat on the cap instead of curving with it. */
+  .hat .spot-shade {
+    background: var(--art) center / contain no-repeat;
+    -webkit-mask: var(--mask) center / contain no-repeat;
+            mask: var(--mask) center / contain no-repeat;
+    mix-blend-mode: multiply;
+  }
+  .hat .patch { background: var(--art) center / contain no-repeat; }
+  /* The sign field, positioned from caps.js's PATCH_BOX via custom
+     properties the component sets per instance, rather than a second copy
+     of the fractions living in this file. `inset: auto` FIRST -- it is the
+     shorthand for top/right/bottom/left, so declaring it after left/top
+     silently resets them (cost one render during design). */
+  .hat .glyph {
+    position: absolute; inset: auto;
+    left: var(--patch-left); top: var(--patch-top);
+    width: var(--patch-width); height: var(--patch-height);
+    display: grid; place-items: center; line-height: 1;
+    font-family: "SuperMario256", Impact, sans-serif;
+  }
+  /* Task 6 (2026-07-25-mario-cap-rank-icons): the wing flap. `.hat-flap`
+     is set only by hat.js's `flap` prop -- celebrate.js's three rank-up
+     call sites (TierRankUp, DivisionRankUp, the entity tier-up toast) --
+     never the idle rank icons scattered across every other card, which
+     would be motion noise on a screen that's on stream. `.wing-l`/`.wing-r`
+     are the side markers wingLayers() adds alongside `.fill`/`.shade`; the
+     two keyframes rotate opposite signs about a pivot near where each wing
+     meets the cap, so it reads as a flap rather than a spin. The pivot
+     percentages are measured off the wing1..4 PNGs' own alpha bounding
+     boxes -- the edge nearest the cap stays fixed across tiers while only
+     the tip grows outward -- not guessed. Runs for as long as the Hat
+     stays mounted (the existing fill/flip/hold beats in celebrate.js);
+     this adds no timer and does not extend any of them. */
+  @media (prefers-reduced-motion: no-preference) {
+    .hat-flap .wing-l { transform-origin: 23% 64%; animation: wing-flap-l 1.1s ease-in-out infinite; }
+    .hat-flap .wing-r { transform-origin: 69% 66%; animation: wing-flap-r 1.1s ease-in-out infinite; }
+    @keyframes wing-flap-l {
+      0%, 100% { transform: rotate(0deg); }
+      50% { transform: rotate(-14deg); }
+    }
+    @keyframes wing-flap-r {
+      0%, 100% { transform: rotate(0deg); }
+      50% { transform: rotate(14deg); }
+    }
+  }
+  /* Task 10 (addendum, 2026-07-25): the wing FOLD -- set by hat.js's
+     `foldWings` prop, true for exactly the ONE render TierRankUp shows at
+     its fill -> flip boundary (celebrate.js), where the outgoing division's
+     wings are drawn one last time so THIS can play instead of them simply
+     vanishing. User's own framing: "it flaps and celebrates, then folds
+     away and vanishes... booya, upgraded! Just gotta earn the wings again."
+     A performed loss, not a discontinuity -- the wing policy itself
+     (division V wears none) is unchanged.
+
+     Reuses the flap's own pivots (23%/64%, 69%/66%, measured off each wing
+     sprite's alpha bbox) and continues the SAME rotational sense as the
+     flap's downswing (wing-l negative, wing-r positive) so the tuck reads
+     as one continuous gesture rather than a new one. Wings already stack
+     UNDER the cap in hat.js's layer order, so rotating + shrinking them
+     toward that pivot makes them recede BEHIND the cap by construction --
+     "tucking its ears back" needs no z-index trick here. `forwards` holds
+     the ended (rotated, scaled down, invisible) state so nothing pops back
+     visible before the next tick actually drops the layer to 0 wings.
+
+     `.hat-fold::after` is the small bright blink the user asked the loss
+     to end on ("perhaps with a shiny blink") -- one radial flash on the
+     SAME .5s timeline as the fold, so it cannot drift out of sync with it.
+     `flap` and `foldWings` are never BOTH meaningful at once conceptually,
+     but celebrate.js always passes `flap=true` alongside `foldWings` on
+     this one tick for simplicity -- hat.js resolves that by putting
+     `hat-fold` on the outer span INSTEAD of `hat-flap` whenever folding
+     (see hat.js's `motionClass`), so only one of these two rule sets ever
+     actually applies to a given Hat; there is no dependency on CSS source
+     order to break the tie. */
+  @media (prefers-reduced-motion: no-preference) {
+    .hat-fold .wing-l {
+      transform-origin: 23% 64%;
+      animation: wing-fold-l .5s cubic-bezier(.4, 0, .6, 1) forwards;
+    }
+    .hat-fold .wing-r {
+      transform-origin: 69% 66%;
+      animation: wing-fold-r .5s cubic-bezier(.4, 0, .6, 1) forwards;
+    }
+    @keyframes wing-fold-l {
+      0% { transform: rotate(0deg) scale(1); opacity: 1; }
+      100% { transform: rotate(-80deg) scale(.3); opacity: 0; }
+    }
+    @keyframes wing-fold-r {
+      0% { transform: rotate(0deg) scale(1); opacity: 1; }
+      100% { transform: rotate(80deg) scale(.3); opacity: 0; }
+    }
+    .hat-fold::after {
+      content: ""; position: absolute; inset: -25%; border-radius: 50%;
+      background: radial-gradient(circle, rgba(255,255,255,.95), transparent 65%);
+      pointer-events: none; opacity: 0;
+      animation: wing-fold-shine .5s ease-out forwards;
+    }
+    @keyframes wing-fold-shine {
+      0%, 62% { opacity: 0; transform: scale(.5); }
+      74% { opacity: .9; transform: scale(1); }
+      100% { opacity: 0; transform: scale(1.3); }
+    }
   }
   .marelo-bar-text { display: flex; flex-direction: column; line-height: 1.15; text-align: left; }
   .marelo-track {
@@ -944,7 +1162,7 @@
      never eats a click meant for the game. The three-beat phase machine
      (fill -> flip -> hold) is JS state (TierRankUp's `phase`/`flipStep`),
      not CSS -- CSS only plays each beat's own animation (fade-in, the fill
-     bar, the crest flip, the final pop), which is why those are the only
+     bar, the cap flip, the final pop), which is why those are the only
      things prefers-reduced-motion needs to gate (same opt-in pattern as
      .starholder/.page-state above). z-index sits above .modal-backdrop
      (200): a rank-up can land while a modal is open and must still be seen. */
@@ -969,8 +1187,8 @@
     overflow: hidden; background: rgba(255,255,255,.14);
   }
   .rankup-fill-track i { display: block; height: 100%; width: 100%; background: var(--tier); }
-  /* Beat 2 (flip): the crest turning over into each tier gained. */
-  .rankup-crest-flip { display: inline-flex; }
+  /* Beat 2 (flip): the cap turning over into each tier gained. */
+  .rankup-cap-flip { display: inline-flex; }
   @media (prefers-reduced-motion: no-preference) {
     .rankup { animation: rankup-in .25s ease-out; }
     .rankup-card.final { animation: rankup-pop .5s cubic-bezier(.2,1.6,.4,1); }
@@ -978,7 +1196,7 @@
     @keyframes rankup-pop { from { transform: scale(.86) } to { transform: scale(1) } }
     .rankup-fill-track i { animation: rankup-fill 1.2s linear; }
     @keyframes rankup-fill { from { width: 0 } to { width: 100% } }
-    .rankup-crest-flip { animation: rankup-flip .6s ease-in-out; }
+    .rankup-cap-flip { animation: rankup-flip .6s ease-in-out; }
     @keyframes rankup-flip {
       0% { transform: rotateY(0deg); } 50% { transform: rotateY(90deg); } 100% { transform: rotateY(0deg); }
     }
@@ -1149,18 +1367,62 @@
     position: relative; height: 16px; margin: 4px 0 3px;
     border-radius: 8px; background: rgba(4,13,23,.72); overflow: hidden;
   }
-  /* The medal row above the track: one per tier, centred over its own band,
-     with the current band's raised and enlarged. Fixed height so the card
-     doesn't reflow as YOU moves between bands of different medal sizes. */
-  .rank-ladder-scale { position: relative; height: 40px; }
+  /* The showcase strip: nine equal groups (below), plus YOU (raised and
+     enlarged, a separate highlight overlaid at the true score value — round
+     3 no longer drops any group for it, see rankpage.js). Fixed height so
+     the card doesn't reflow as YOU moves. */
+  .rank-ladder-scale {
+    position: relative; height: 40px;
+    display: flex; align-items: flex-end; gap: 3px;
+  }
   .rank-ladder-mark {
     position: absolute; bottom: 0; transform: translateX(-50%);
     display: flex; flex-direction: column; align-items: center; gap: 1px;
   }
-  .rank-ladder-mark.is-you { bottom: 5px; }
+  .rank-ladder-mark.is-you { bottom: 5px; z-index: 1; }
   .rank-ladder-you {
     color: var(--gold); font-size: .55rem; font-weight: 800;
     letter-spacing: .12em; line-height: 1;
+  }
+  /* Nine EQUAL groups, not score-proportional (round 3, addendum, task 8,
+     2026-07-26 — corrects round 2's own attempt, which sized each group to
+     its tier's real score-width and, as a direct consequence, gave the
+     TIGHTEST bands — Mario, Grandmaster, the tiers a user is climbing
+     TOWARD — the least room for icons, backwards for a progression
+     showcase). `flex: 1 1 0` splits `.rank-ladder-scale` into nine equal
+     shares regardless of each tier's real score-width; the bar below still
+     carries the true proportional reading, so nothing about score accuracy
+     is lost, only the strip's own x-alignment with it (the user's own
+     ruling: costs nothing real). `--tier-tint` (set inline, rankpage.js,
+     from the SAME `capGradient(tier) || rankColor(tier)` the ladder band
+     and the standards table already use) is the tie back to which tier a
+     group belongs, now that position no longer implies it. */
+  .rank-ladder-tier-group {
+    flex: 1 1 0; min-width: 0; height: 100%;
+    display: flex; align-items: flex-end;
+    background: color-mix(in srgb, var(--tier-tint) 22%, transparent);
+    border-radius: 5px;
+    container-type: inline-size;
+  }
+  .rank-division-row {
+    display: flex; align-items: flex-end; justify-content: space-between;
+    width: 100%; height: 100%; padding: 0 2px;
+  }
+  .rank-division-mark {
+    display: flex; flex-direction: column; align-items: center;
+    flex: 0 0 auto;
+  }
+  /* Nine EQUAL groups means this threshold now applies (or doesn't) to all
+     nine at once, not band-by-band (round 2 measured a per-band crossover;
+     round 3's groups are uniform, so there is exactly one crossover width
+     for the whole strip — task report has it). Below it, every group thins
+     to its bottom division alone (`is-floor`, the pre-round-2 single-icon-
+     per-tier look), re-centred (a lone flex child under `space-between`
+     sits at the start, not the centre, so this needs its own
+     `justify-content`). */
+  @container (max-width: 140px) {
+    .rank-division-row { justify-content: center; }
+    .rank-division-mark:not(.is-floor) { display: none; }
   }
   .rank-ladder-bands, .rank-ladder-fill {
     position: absolute; left: 0; top: 0; bottom: 0;
@@ -2325,24 +2587,9 @@
   .icon-button { width: 34px; min-width: 34px; padding-inline: 0; }
   .primary-button { color: #1b1607; background: var(--gold); border-color: var(--gold-soft); font-weight: 750; }
   .primary-button:hover { background: var(--gold-soft); }
-  .context-editor {
-    position: absolute; top: 76px; left: 14px; right: 14px; z-index: 35;
-    display: flex; justify-content: center;
-  }
-  .target-editor-card {
-    width: min(720px, 100%); padding: 16px; border: 1px solid #466582;
-    border-radius: 9px; background: #0d1b2b; box-shadow: 0 20px 60px rgba(0,0,0,.45);
-  }
-  .target-editor-head, .settings-head, .settings-section-head {
+  .settings-head, .settings-section-head {
     display: flex; align-items: center; justify-content: space-between; gap: 1rem;
   }
-  .target-editor-head b { display: block; }
-  .target-editor-fields {
-    display: grid; grid-template-columns: 1fr 1.25fr 1fr; gap: .65rem; margin: 1rem 0;
-  }
-  .target-editor-fields label { display: grid; gap: .25rem; color: var(--muted); font-size: .75rem; }
-  .target-editor-fields select { width: 100%; }
-  .target-editor-actions { display: flex; justify-content: flex-end; gap: .55rem; }
   .settings-backdrop {
     position: fixed; inset: 0; z-index: 60; display: flex; justify-content: flex-end;
     background: rgba(0,5,12,.58);
@@ -2709,8 +2956,6 @@
     .index-heading > .meta { display: none; }
     .practice-index-item > summary { grid-template-columns: 28px minmax(0,1fr) 22px; }
     .practice-index-item > summary > .meta { display: none; }
-    .target-editor-fields { grid-template-columns: 1fr; }
-    .context-editor { top: 122px; left: 10px; right: 10px; }
     .settings-actions { grid-template-columns: 1fr; }
   }
 

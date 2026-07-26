@@ -1,31 +1,14 @@
-// src/sm64_events/ui/components/ranks.js — mirrors ranks/standards.RANK_COLORS
-// and ranks/classify.RANK_NAMES (keep in lockstep).
+// src/sm64_events/ui/components/ranks.js — the rank BANNER and the rank-mode
+// list. The tier registry moved to caps.js (spec 2026-07-25-mario-cap-rank-icons);
+// these re-exports keep the call sites that import RANK_NAMES/rankColor from
+// here working, and are the only reason this file still exports them.
+export { RANK_NAMES, rankColor } from "./caps.js";
 import { h } from "preact";
 import htm from "htm";
 import { useTween } from "../useTween.js";
+import { capName, divisionDigit, rankColor } from "./caps.js";
+import { RankIcon } from "./rankicon.js";
 const html = htm.bind(h);
-
-export const RANK_NAMES = ["Mario", "Grandmaster", "Master", "Diamond",
-  "Platinum", "Gold", "Silver", "Bronze", "Iron"];
-export const RANK_COLORS = {
-  Mario: "#e23b3b", Grandmaster: "#8b1a1a", Master: "#7b3f9e",
-  Diamond: "#3f86d6", Platinum: "#5cb85c", Gold: "#e0b520",
-  // Iron is rusty, not grey — see the note on ranks/standards.RANK_COLORS,
-  // which this mirrors. Its FG flipped to light with it: dark text on a dark
-  // rust disc is the one combination that would have made the medal worse
-  // than the grey it replaced.
-  Silver: "#c2c2c2", Bronze: "#c0894a", Iron: "#7c5347" };
-const FG = { Mario: "#fff", Grandmaster: "#fff", Master: "#fff", Diamond: "#fff",
-  Platinum: "#10300f", Gold: "#3a2c00", Silver: "#2a2a2a", Bronze: "#2e1c08", Iron: "#f6ece7" };
-
-export const rankColor = (n) => RANK_COLORS[n] || "#3a4250";
-
-export function Medal({ rank, size = 18 }) {
-  const bg = rankColor(rank), fg = FG[rank] || "#7e8796";
-  return html`<span title=${rank || "no rank"} style=${`display:inline-flex;align-items:center;justify-content:center;width:${size}px;height:${size}px;border-radius:50%;background:${bg};border:2px solid rgba(255,255,255,.5);flex:0 0 auto`}>
-    <span style=${`color:${fg};font-size:${Math.round(size * 0.5)}px;line-height:1`}>${rank ? "★" : "–"}</span>
-  </span>`;
-}
 
 // Mirrors ranks/classify.RANK_MODES keys+labels (keep in lockstep) in
 // dropdown order; the header's Rank picker renders from this.
@@ -124,7 +107,8 @@ export function RankBanner({ label, banner, hint = null }) {
   }
   const c = rankColor(banner.rank);
   const basis = banner.basis;
-  const nextLabel = banner.next_tier ? `${banner.next_tier} ${banner.next_division}` : null;
+  const nextLabel = banner.next_tier
+    ? `${capName(banner.next_tier)} ${divisionDigit(banner.next_division)}` : null;
   const gap = banner.next_gap_cs != null ? (banner.next_gap_cs / 100).toFixed(2) : null;
   const displayFillPct = Math.round(fillPct);
   // The mode name (e.g. "Avg 10") is dropped from the VISIBLE basis text —
@@ -150,8 +134,8 @@ export function RankBanner({ label, banner, hint = null }) {
   return html`<div class="rank-banner">
     <div class="rank-banner-row">
       <span class="rank-banner-kicker" title=${hint}>${label}</span>
-      <${Medal} rank=${banner.rank} size=${24} />
-      <b class="rank-banner-name">${banner.rank.toUpperCase()}${banner.division ? ` ${banner.division}` : ""}</b>
+      <${RankIcon} tier=${banner.rank} division=${banner.division} size=${24} />
+      <b class="rank-banner-name">${capName(banner.rank).toUpperCase()}${banner.division ? ` ${divisionDigit(banner.division)}` : ""}</b>
       ${basis && html`<span class="meta rank-banner-basis" title=${basisTitle}>${basisText}</span>`}
       <span class="meta rank-banner-next">${nextLabel
         ? html`→ <b>${nextLabel}</b>${gap ? ` −${gap}s` : ""}` : "top rank"}</span>

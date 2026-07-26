@@ -224,7 +224,9 @@ Expected: PASS, 3 tests.
 
 In `src/sm64_events/ranks/standards.py`, delete the `RANK_COLORS` dict at lines 11-21 and its explanatory comment. In `tests/test_ranks_standards.py`, drop `RANK_COLORS` from the import on line 3 and delete the `RANK_COLORS["Mario"].startswith("#")` assertion on line 15.
 
-In `src/sm64_events/ui/components/ranks.js`, delete `RANK_NAMES`, `RANK_COLORS`, `FG` and `rankColor` (lines 8-21) and replace the header with a re-export so existing importers keep working:
+In `src/sm64_events/ui/components/ranks.js`, delete the `RANK_NAMES` and
+`RANK_COLORS` declarations (lines 8-17) and the local `rankColor` (line 21),
+replacing them with a re-export so existing importers keep working:
 
 ```js
 // src/sm64_events/ui/components/ranks.js — the rank BANNER and the rank-mode
@@ -233,6 +235,11 @@ In `src/sm64_events/ui/components/ranks.js`, delete `RANK_NAMES`, `RANK_COLORS`,
 // here working, and are the only reason this file still exports them.
 export { RANK_NAMES, rankColor } from "./caps.js";
 ```
+
+**Keep `FG` (line 18-19) for now.** It is `Medal`'s text colour and `Medal`
+still lives in this file until Task 4 deletes both together. Removing `FG`
+here breaks `Medal` on the very next line — this task must leave the file
+working, not merely smaller.
 
 In `tests/test_ui_rank_chart.py`, drop the `RANK_COLORS` import on line 15 and delete the mirror test (lines ~80-99) — `tests/test_ui_caps.py` now owns colour. Leave every chart-geometry test in that file untouched.
 
@@ -339,7 +346,7 @@ def test_every_sprite_shares_one_canvas():
 def test_tintable_sprites_reach_pure_white():
     """Multiply scales the tier colour by this grey; anything under 250 tints
     dark. The wings keep their own shading, so only their highlight matters."""
-    for stem in ("cap", "patch", "spots", "wing1", "wing4"):
+    for stem in ("cap", "patch", "spots", "wing1_l", "wing4_r"):
         art = Image.open(HAT / f"{stem}.png").convert("RGBA")
         alpha = art.getchannel("A")
         grey = art.convert("L")
@@ -379,7 +386,14 @@ Three transformations, each with a reason:
    is the correct seam. This is what makes the flap possible: the two wings
    rotate in opposite directions, and one image holding both can only turn as
    a unit. Assert each half is non-empty — a seam in the wrong place produces
-   one blank file and a hat with a single wing.
+   one blank file and a hat with a single wing. **Emit only the split halves**;
+   a combined `wingN.png` alongside them is an orphan and fails
+   `test_no_orphan_sprites`.
+
+The shipped set is therefore exactly twelve files: `cap`, `cap_outline`,
+`patch`, `spots`, and `wing{1..4}_{l,r}`. Note the raw export is named
+`spots_toad.png` but ships as `spots.png` — one pattern serves both spotted
+tiers, distinguished only by `patternColor`.
 
 Then downscale every output to **512 px wide** (`Image.LANCZOS`) — the largest
 on-screen use is a 96px cap, and 1283px sprites are ~120 KB each in an exe that
@@ -434,9 +448,17 @@ script so a re-export is one command.
 
 **Interfaces:**
 - Consumes: everything `caps.js` exports.
-- Produces: `Hat({ tier, division = null, size = 18, title = null })`. `size` is
-  the **cap height in px**; the element is wider than that because the sprite
-  canvas holds the wingspan. `division` is the Roman numeral the server sends.
+- Produces: `Hat({ tier, division = null, size = 18, title = null, flap = false })`.
+  `size` is the **cap's own footprint in px, both axes** — the element's box
+  is the cap, not the sprite canvas; the canvas is larger (it holds the
+  wingspan) and spills outside the box on whichever side(s) the wings grow.
+  `division` is the Roman numeral the server sends. (Correction, final
+  review I1, 2026-07-25: this line originally said "the element is wider
+  than that because the sprite canvas holds the wingspan", sanctioning a box
+  sized to the full canvas width. That predates round 1's correction on the
+  HEIGHT axis — the box matches what `Medal`/`Crest` occupied — which was
+  axis-neutral and had simply never been applied to width; round 2 made the
+  box cap-tight on both axes.)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -775,3 +797,71 @@ by tests in Task 3, but they are easy to reintroduce elsewhere:
 2. `.hat i` is class + element and outranks a bare `.glyph` class, so the base
    layer rule wins on `inset` and `display` unless the glyph rule uses two
    classes.
+
+---
+
+### Task 8: Rank icon STYLE is a registry, and the setting picks one
+
+Added 2026-07-26 on user feedback: *"add a setting in the settings menu to use
+medals INSTEAD of the visual layer we added for the hats. We should be able to
+swap between the two. It also would expand our ability to add a third, fourth,
+fifth option as we experiment. Hats as default."*
+
+**The shape this must take.** Not a boolean and not an `if hat else medal` at
+seventeen call sites — a **style registry**, because the stated purpose is to
+keep adding styles. One entry per style, each owning only how a rank is *drawn*.
+Adding a fifth style is one registry entry plus one renderer, touching no call
+site.
+
+**What a style does NOT own:** the tier's identity. Name and colour stay in
+`CAP` — a style changes the shape a rank is drawn as, never which rank it is or
+what it is called. So the medal style renders a Waluigi-purple disc labelled
+Waluigi, not a return to the pre-cap palette. (If a future style ever needs its
+own palette, that is a new optional field, not a second registry.)
+
+**Files:**
+- Create: `src/sm64_events/ui/components/rankicon.js` — `RankIcon` (the
+  dispatcher) + `ICON_STYLES` (the registry: key → label + renderer).
+- Create: `src/sm64_events/ui/components/medal.js` — the disc style.
+- Modify: the 17 call sites that import `Hat` today → `RankIcon`.
+- Modify: `ui/store.js` (pref + setter), `ui/components/header.js` (the control).
+- Modify: `tests/test_ui_caps.py` / `tests/test_ui_cap_names.py` guards.
+- Modify: `tools/hat_sheet.py` to render every style.
+
+**Contracts:**
+- `RankIcon({ tier, division = null, size = 18, title = null, flap, foldWings })`
+  — the same prop surface `Hat` has today, so the sweep is mechanical. It
+  resolves the active style and delegates. Props a style does not understand
+  (a medal has no wings to flap) are ignored by that style, never errors.
+- `ICON_STYLES` — `{ hat: { label, render }, medal: { label, render } }`.
+  Key order is the order the settings control offers them. `hat` is first and
+  is the default.
+- The pref follows the established `starIcons` pattern exactly: `t.rankIcons`,
+  localStorage `sm64.rankIcons`, **default `"hat"`**, control in the settings
+  drawer in `header.js`, state in `store.js`. A client display preference, never
+  server state.
+
+**The medal style's own contract:**
+- A disc in `rankColor(tier)`, sized like `Hat` (layout box exactly `size`).
+- With a `division` and at/above the detail floor, it shows the **Arabic digit**
+  — the same `divisionDigit` the hat uses, so two styles can never disagree
+  about what division you are.
+- Without a division it shows the star, which is what the deleted `Medal` drew.
+- `tier == null` gets the same unranked sentinel the hat gives.
+- Foreground contrast is **derived from the tier colour's luminance**, not a
+  hardcoded per-tier table. The deleted `FG` map was exactly such a table and it
+  would have to be hand-edited on every palette change — including the two
+  colours that moved during the fix wave.
+
+**Guards:**
+- Every `ICON_STYLES` key has a renderer, and `hat` is first (its default-ness
+  is load-bearing, per the user).
+- No call site imports `Hat` or the medal renderer directly — a source scan, in
+  the shape of the existing cap-name guard, allowlisting `rankicon.js`. This is
+  what keeps "adding a style touches no call site" true.
+- Probe both guards in both directions.
+
+**Verification:** the contact sheet renders **every style** side by side at 13 /
+30 / 96px, so a new style is judged against the others rather than alone. Toggle
+the setting in a real render and confirm every surface changes together — the
+banner, the practice cells, the Rank tab, the ladder scale and the chart.

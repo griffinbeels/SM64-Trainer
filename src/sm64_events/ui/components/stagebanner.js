@@ -31,7 +31,6 @@ import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
-import { Medal } from "./ranks.js";
 import { PracticeCell } from "./practicecell.js";
 import { IconPicker } from "./iconpicker.js";
 import { COURSE_ICON_PREFIXES, LEVEL_ICONS, genericStarSrc,

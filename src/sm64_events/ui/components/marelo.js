@@ -1,9 +1,12 @@
-// src/sm64_events/ui/components/marelo.js — MARELO crest + header bar.
-// Mirrors ranks/scoring.py's division numerals; the tier palette is
-// ranks.js RANK_COLORS (one registry, mirrored once).
+// src/sm64_events/ui/components/marelo.js — MARELO header bar.
+// Mirrors ranks/scoring.py's division numerals; the tier palette lives in
+// caps.js (Task 1, 2026-07-25-mario-cap-rank-icons) — this file never keeps
+// its own copy, it imports rankColor same as every other consumer.
 import { h } from "preact";
 import htm from "htm";
 import { rankColor } from "./ranks.js";
+import { capName, divisionDigit } from "./caps.js";
+import { RankIcon } from "./rankicon.js";
 import { useTween } from "../useTween.js";
 const html = htm.bind(h);
 
@@ -30,17 +33,6 @@ export const toPoints = (score) => (score == null ? null : Math.round(score * 10
 // value reads identically whether the caller wanted the raw score or points.
 export const fmtPoints = (score) => (score == null ? "–" : String(toPoints(score)));
 
-// A crest, not a medal: the section medals are per-strat and per-entity, and
-// an aggregate that looked identical to them would read as "just another
-// star's rank" in the header.
-export function Crest({ tier, division, size = 34 }) {
-  const c = rankColor(tier);
-  return html`<span class="marelo-crest" title=${tier ? `${tier} ${division}` : "unranked"}
-      style=${`--crest:${c};width:${size}px;height:${size}px`}>
-    <b style=${`font-size:${Math.round(size * 0.34)}px`}>${division || "–"}</b>
-  </span>`;
-}
-
 export function MareloBar({ marelo, onOpen }) {
   // Tweened FROM the previous fetch's value (spec task F2) -- this bar is
   // mounted once in the header and never unmounts, so it's the one place a
@@ -51,11 +43,16 @@ export function MareloBar({ marelo, onOpen }) {
   const score = useTween(marelo ? marelo.marelo : null);
   if (!marelo) return null;
   const { tier, division, label, mastery, coverage, n, practiced } = marelo;
+  // Unranked is an EXPLICIT empty state, not a Hat drawn with no tier (final
+  // review I5, 2026-07-25: `tier == null` used to still call Hat, which drew
+  // a plain grey cap with nothing in it -- the deleted Crest drew a "–" for
+  // the same state). PracticeCell's starrank cell already spells "no rank"
+  // as a bare "–"; this reuses that spelling rather than inventing a third.
   return html`<button type="button" class="marelo-bar" onclick=${onOpen}
       title=${`${label}: mastery ${fmtScore(mastery)} x coverage ${practiced}/${n}`}>
-    <${Crest} tier=${tier} division=${division} />
+    ${tier ? html`<${RankIcon} tier=${tier} division=${division} size=${34} />` : "–"}
     <span class="marelo-bar-text">
-      <b>${tier ? `${tier} ${division}` : "Unranked"}</b>
+      <b>${tier ? `${capName(tier)} ${divisionDigit(division)}` : "Unranked"}</b>
       <span class="meta">${label} · ${fmtPoints(score)} pts</span>
     </span>
     <span class="marelo-track"><i style=${`width:${fill}%;background:${rankColor(tier)}`}></i></span>

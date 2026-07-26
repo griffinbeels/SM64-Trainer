@@ -42,19 +42,70 @@ def test_the_hit_target_guard_can_still_fail():
         ".context-select > select { position: absolute; inset: 0; }")
 
 
-def test_target_modal_still_posts_course_and_star_as_numbers():
-    # The API contract is unchanged — only the control collapsed. This must
-    # catch the string/number boundary the refactor introduced (a picked id
-    # is a STRING; the endpoint needs integers) — `"course_id:" in HEADER_JS`
-    # alone would pass even if a raw string reached the API (review M6).
-    assert "course_id: Number(course)" in HEADER_JS
-    assert "star_id: Number(star)" in HEADER_JS
+# test_target_modal_still_posts_course_and_star_as_numbers used to live here,
+# pinning "course_id: Number(course)" / "star_id: Number(star)" in HEADER_JS.
+# Task 7 (2026-07-25-target-picker-strategy-step) deleted the inline
+# TargetEditor that write lived in -- the header now opens the picker dialog
+# directly and the write moved to strategystep.js, which owns the entity ids
+# once and for all. The same string->number boundary is now pinned by
+# tests/test_ui_strategy_step.py::test_posts_course_and_star_as_numbers (and
+# ::test_posts_segment_id_as_a_number_too for the segment shape this form
+# never had).
 
 
 def test_target_picker_is_the_icon_modal():
-    assert "EntityPicker" in HEADER_JS
+    # header.js renders PickerDialog directly rather than EntityPicker: its
+    # own context card IS the trigger, so it has no use for EntityPicker's
+    # own <button class="entity-trigger"> (task 7, 2026-07-25). The other
+    # three EntityPicker call sites (segment builder, route step editor) are
+    # untouched -- this only asserts what THIS file does.
+    assert "PickerDialog" in HEADER_JS
+    assert "EntityPicker" not in HEADER_JS
     assert "GroupedPicker" not in HEADER_JS
     assert "optionIcon" in HEADER_JS
+
+
+def test_target_editor_is_gone_the_card_opens_the_picker_directly():
+    # The inline two-field TargetEditor card is deleted; its star field and
+    # strategy field are now steps 2 and 3 of the SAME picker dialog
+    # (StrategyStep is the third layer, wired via PickerDialog's `nextStep`).
+    assert "TargetEditor" not in HEADER_JS
+    assert "StrategyStep" in HEADER_JS
+    assert "nextStep=" in HEADER_JS
+
+
+def test_target_picker_has_no_clear_cell():
+    # placeholder=null renders no clear cell (entitymodal.js). The old
+    # control's clear cell was dead by construction: /api/target requires an
+    # identity, so clicking it posted {course_id: null, star_id: null}, the
+    # server 409d, and the button silently did nothing (whole-branch review,
+    # task 7 brief, 2026-07-25). This is a live bug removed, not a refactor.
+    assert "placeholder=${null}" in HEADER_JS
+
+
+def test_target_ranks_are_fetched_only_when_the_dialog_opens():
+    # The header re-renders on every WebSocket event; the ranks fetch must be
+    # keyed on the dialog's own open state, not run on every render.
+    assert "/api/target/ranks" in HEADER_JS
+    assert "}, [editing]);" in HEADER_JS
+
+
+def test_closing_the_target_picker_refreshes_the_view():
+    # StrategyStep's write is a plain POST, not something the client always
+    # hears about over the WebSocket: re-picking a star that's ALREADY the
+    # target with a new (or first) strategy leaves the projector's target
+    # tuple unchanged, so service.py's auto target_changed republish never
+    # fires, and set_target's truthy-strat_tag branch never calls set_strat
+    # either (unlike set_target_segment, which delegates to
+    # set_strat_segment and self-heals) -- verified empirically against
+    # TrackerService: that specific call publishes ONLY "target_set", which
+    # is not in store.js's REFRESH_ON. Every other /api/target call site
+    # (stagebanner.js, practice.js, the deleted TargetEditor.apply()) closes
+    # AND refreshes explicitly right after, for exactly this reason -- the
+    # picker dialog must too, on every dismissal (a plain Esc/backdrop close
+    # refetches data that didn't change, which is harmless).
+    assert "function closeTargetPicker() { setEditing(false); t.refresh(); }" in HEADER_JS
+    assert "onPick=${closeTargetPicker} onClose=${closeTargetPicker}" in HEADER_JS
 
 
 def test_layer_one_cells_carry_a_course_portrait():

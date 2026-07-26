@@ -333,6 +333,72 @@ def test_courses_keep_game_order():
         "Bob-omb Battlefield", "Hazy Maze Cave", "Castle"]
 
 
+def test_course_union_groups_attach_a_rank_from_the_star_entity_key():
+    # The rank map is keyed "star:1:0", but the star OPTION's id is the bare
+    # composite "1:0" -- the likeliest silent bug in this feature is getting
+    # that translation backwards, which would leave every star unranked while
+    # segments (whose ids already match the map's "segment:N" keys) keep
+    # working. Star side first, on purpose.
+    body = CATALOG_UNION + """
+const ranksByKey = { "star:1:0": { rank: "Gold", division: "III" } };
+console.log(JSON.stringify(courseUnionGroups(
+  catalog, segments, courseByLevel, ranksByKey)));
+"""
+    groups = run_node("courseUnionGroups", body)
+    bob = next(group for group in groups if group["label"] == "Bob-omb Battlefield")
+    ranked = next(option for option in bob["options"] if option["id"] == "1:0")
+    # `rank` rides NESTED {rank, division} (mario-cap-rank-icons integration,
+    # 2026-07-26) -- PracticeCell hands it straight to RankIcon, which now
+    # wants the same shape rank_by_star/segment_targets already carry.
+    assert ranked["rank"] == {"rank": "Gold", "division": "III"}
+    unranked = next(option for option in bob["options"] if option["id"] == "1:1")
+    assert unranked.get("rank") is None
+
+
+def test_course_union_groups_attach_the_strategy_the_rank_was_earned_with():
+    # I2 (final review, 2026-07-26): `strat` must ride alongside `rank` --
+    # practicecell.js needs it to name which strategy a picker badge grades,
+    # since the SAME cell later shows a DIFFERENT (active) strategy's medal
+    # on the practice banner. Dropped at this exact hop before the fix.
+    body = CATALOG_UNION + """
+const ranksByKey = { "star:1:0": { rank: "Gold", division: "III", strat: "BLJ" } };
+console.log(JSON.stringify(courseUnionGroups(
+  catalog, segments, courseByLevel, ranksByKey)));
+"""
+    groups = run_node("courseUnionGroups", body)
+    bob = next(group for group in groups if group["label"] == "Bob-omb Battlefield")
+    ranked = next(option for option in bob["options"] if option["id"] == "1:0")
+    assert ranked["strat"] == "BLJ"
+
+
+def test_course_union_groups_attach_a_rank_from_the_segment_entity_key():
+    # A segment option's id ("segment:3") already matches the rank map's key
+    # shape -- no translation needed, unlike the star side above.
+    body = CATALOG_UNION + """
+const ranksByKey = { "segment:3": { rank: "Bronze" } };
+console.log(JSON.stringify(courseUnionGroups(
+  catalog, segments, courseByLevel, ranksByKey)));
+"""
+    groups = run_node("courseUnionGroups", body)
+    hmc = next(group for group in groups if group["label"] == "Hazy Maze Cave")
+    ranked = next(option for option in hmc["options"] if option["id"] == "segment:3")
+    # No `division` in the source map here -- withRank still nests it as
+    # {rank, division}, and JSON.stringify drops the undefined-valued key.
+    assert ranked["rank"] == {"rank": "Bronze"}
+
+
+def test_course_union_groups_still_defaults_ranksbykey_for_the_old_call_shape():
+    # header.js calls courseUnionGroups with only three arguments until a
+    # later task wires the ranks fetch -- the fourth parameter must default,
+    # and an option's shape must come back byte-for-byte the same as before
+    # this parameter existed (JSON.stringify drops an `undefined` property).
+    groups = run_node("courseUnionGroups", CATALOG_UNION
+                      + "console.log(JSON.stringify(courseUnionGroups("
+                      + "catalog, segments, courseByLevel)));")
+    hmc = next(group for group in groups if group["label"] == "Hazy Maze Cave")
+    assert hmc["options"][0] == {"id": "6:0", "name": "Swimming Beast"}
+
+
 def test_segment_ids_are_distinguishable_from_star_ids():
     parsed = run_node("parseSegmentId",
                       'console.log(JSON.stringify(['

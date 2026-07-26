@@ -1,6 +1,6 @@
 import json
 import pytest
-from sm64_events.ranks.standards import RankStandards, entity_key, RANK_COLORS
+from sm64_events.ranks.standards import RankStandards, entity_key
 
 def _seed(tmp_path):
     p = tmp_path / "seed.json"
@@ -12,7 +12,6 @@ def _seed(tmp_path):
 def test_entity_key_and_colors():
     assert entity_key(9, 2) == "star:9:2"
     assert entity_key(None, None, 8) == "segment:8"
-    assert RANK_COLORS["Mario"].startswith("#")
 
 def test_first_run_materializes_seed(tmp_path):
     data = tmp_path / "rs.json"

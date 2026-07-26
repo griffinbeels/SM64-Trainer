@@ -11,6 +11,7 @@ import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { Modal } from "./modal.js";
 import { RANK_NAMES, rankColor } from "./ranks.js";
+import { capName } from "./caps.js";
 import { Icon } from "./icons.js";
 
 const html = htm.bind(h);
@@ -144,17 +145,17 @@ export function StratModal({ entity, existing, onSaved, onClose }) {
         <span>Rank</span><span>Time (seconds)</span><span>Example video</span>
       </div>
       ${LADDER_RANKS.map((rank) => html`<div class="strategy-rank-row">
-        <span class="strategy-rank-name"
-            style=${`--rank-color:${rankColor(rank)}`}>${rank}</span>
+        <span class="strategy-rank-name" title=${`${capName(rank)} · ${rank} on xcams`}
+            style=${`--rank-color:${rankColor(rank)}`}>${capName(rank)}</span>
         <label>
-          <span class="sr-only">${rank} time in seconds</span>
+          <span class="sr-only">${capName(rank)} time in seconds</span>
           <input type="number" min="0" step="0.01" placeholder="—"
               value=${times[rank] || ""}
               oninput=${(inputEvent) =>
                 setTimes({ ...times, [rank]: inputEvent.target.value })} />
         </label>
         <label>
-          <span class="sr-only">${rank} example video URL</span>
+          <span class="sr-only">${capName(rank)} example video URL</span>
           <input type="url" placeholder="https://…" value=${videos[rank] || ""}
               oninput=${(inputEvent) =>
                 setVideos({ ...videos, [rank]: inputEvent.target.value })} />

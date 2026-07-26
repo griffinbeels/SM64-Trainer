@@ -56,48 +56,84 @@ function CellGrid({ options, value, iconFor, onPick, clearLabel }) {
       name=${option.name}
       sub=${option.sub ?? ""}
       rank=${option.rank}
+      strat=${option.strat}
+      rankBadge=${true}
       title=${option.name}
       onPick=${() => onPick(option.id)} />`)}
   </div>`;
 }
 
-function PickerDialog({ groups, value, allow, title, iconFor, depth,
-                       placeholder, onPick, onClose }) {
+// Exported so a caller with its own trigger (header.js's context card IS the
+// trigger) can render the dialog directly instead of going through
+// EntityPicker, which would draw a second <button class="entity-trigger">
+// nobody wants (task 7, 2026-07-25-target-picker-strategy-step).
+export function PickerDialog({ groups, value, allow, title, iconFor, depth,
+                              placeholder, nextStep, onPick, onClose }) {
   // Which group has been drilled into (depth 2 only). Derived during render,
   // never in an effect — an effect would paint layer 1 and then correct it.
   const [openGroupKey, setOpenGroupKey] = useState(null);
+  // Which cell has been picked toward the (optional) third step. Same reason
+  // as openGroupKey above: derived during render, not an effect.
+  const [pendingId, setPendingId] = useState(null);
   // No useMemo: every call site builds `groups` and `allow` inline, so their
   // identities change each render and the memo would never hit (review M9).
   const shown = visibleGroups(groups, allow, value);
   const openGroup = shown.find((group) => group.key === openGroupKey) || null;
+  const pendingOption = pendingId == null ? null
+    : shown.flatMap((group) => group.options)
+        .find((option) => option.id === pendingId) || null;
 
-  // Drilling in unmounts the button that was clicked, so focus falls back to
-  // <body> — and the Modal shell only intercepts Tab at the FIRST and LAST
-  // focusable, so from <body> a Tab walks into the page behind the dialog
-  // (review M10). Move focus to Back, which is both a real target and the
-  // thing a keyboard user most likely wants next.
+  // A caller with no nextStep keeps the original contract byte-for-byte:
+  // every pick reaches the outer onPick (close + onChange) immediately. The
+  // clear cell (id === null) always does too — there is no step to choose
+  // for "nothing", so it never enters pending state.
+  const handlePick = (id) => {
+    if (id === null || !nextStep) { onPick(id); return; }
+    setPendingId(id);
+  };
+
+  // Drilling in (or advancing to the step) unmounts the button that was
+  // clicked, so focus falls back to <body> — and the Modal shell only
+  // intercepts Tab at the FIRST and LAST focusable, so from <body> a Tab
+  // walks into the page behind the dialog (review M10). Move focus to Back,
+  // which is both a real target and the thing a keyboard user most likely
+  // wants next.
   const focusOnDrillIn = (node) => { if (node) node.focus(); };
 
-  // Escape goes BACK out of a drilled-in group before it closes the dialog —
-  // what a two-step navigation makes people expect. Capture phase, so it wins
-  // over the Modal shell's own Escape-to-close.
+  // Escape STACKS: at the step it clears the pending pick first (back to the
+  // grid it came from); only once nothing is pending does it back a drilled-
+  // in group out to layer 1. One handler for both, so they cannot race each
+  // other. Capture phase, so it wins over the Modal shell's own Escape-to-
+  // close — which is what fires at layer 1, where neither state is set.
   useEffect(() => {
-    if (!openGroup) return undefined;
+    if (!pendingOption && !openGroup) return undefined;
     const onKey = (keyEvent) => {
       if (keyEvent.key !== "Escape") return;
       keyEvent.preventDefault();
       keyEvent.stopPropagation();
+      if (pendingOption) { setPendingId(null); return; }
       setOpenGroupKey(null);
     };
     document.addEventListener("keydown", onKey, true);
     return () => document.removeEventListener("keydown", onKey, true);
-  }, [openGroup]);
+  }, [pendingOption, openGroup]);
+
+  // The step takes over the SAME dialog rather than opening a second one —
+  // it is a third layer of the one picker, not a separate flow. onChange is
+  // never called from here: the step owns the write (spec
+  // 2026-07-25-target-picker-strategy-step).
+  if (pendingOption)
+    return html`<${Modal} title=${pendingOption.name} icon="target" size="grid"
+        onClose=${onClose}>
+      <${nextStep} value=${pendingOption.id} option=${pendingOption}
+        onBack=${() => setPendingId(null)} onClose=${onClose} />
+    <//>`;
 
   if (depth > 1 && !openGroup)
     return html`<${Modal} title=${title} icon="target" size="grid" onClose=${onClose}>
       <div class="entity-grid">
         ${placeholder ? html`<button type="button" class="entity-clear"
-            title=${placeholder} onclick=${() => onPick(null)}>
+            title=${placeholder} onclick=${() => handlePick(null)}>
           <span class="entity-clear-mark">×</span>
           <span class="entity-clear-label">${placeholder}</span>
         </button>` : null}
@@ -118,7 +154,7 @@ function PickerDialog({ groups, value, allow, title, iconFor, depth,
         <${Icon} name="chevron" size=${15} /> Back
       </button>
       <${CellGrid} options=${openGroup.options} value=${value}
-        iconFor=${iconFor} onPick=${onPick} />
+        iconFor=${iconFor} onPick=${handlePick} />
     <//>`;
 
   return html`<${Modal} title=${title} icon="target" size="grid" onClose=${onClose}>
@@ -127,7 +163,7 @@ function PickerDialog({ groups, value, allow, title, iconFor, depth,
         ? html`<div class="entity-section-head"><b>${group.label}</b></div>`
         : null}
       <${CellGrid} options=${group.options} value=${value}
-        iconFor=${iconFor} onPick=${onPick}
+        iconFor=${iconFor} onPick=${handlePick}
         clearLabel=${index === 0 ? placeholder : null} />
     </div>`)}
   <//>`;
@@ -146,10 +182,16 @@ function PickerDialog({ groups, value, allow, title, iconFor, depth,
  *             the native <select> this replaced had a placeholder <option>
  *             emitting null, and dropping it silently made eight optional
  *             clause params unclearable (whole-branch review C1, 2026-07-25).
+ * nextStep    optional component for a third layer. Picking a cell (never the
+ *             clear cell) renders <${nextStep} value option onBack onClose />
+ *             inside this SAME dialog instead of calling onChange — the step
+ *             owns the write, this picker never learns what it is (spec
+ *             2026-07-25-target-picker-strategy-step). Omit it and every
+ *             call site is byte-for-byte what it was before this prop existed.
  */
 export function EntityPicker({ groups, value, onChange, allow, iconFor,
                               title = "Choose", placeholder = "— pick —",
-                              depth = 1, disabled = false }) {
+                              depth = 1, disabled = false, nextStep = null }) {
   const [open, setOpen] = useState(false);
   const current = visibleGroups(groups, allow, value)
     .flatMap((group) => group.options)
@@ -165,6 +207,7 @@ export function EntityPicker({ groups, value, onChange, allow, iconFor,
     </button>
     ${open ? html`<${PickerDialog} groups=${groups} value=${value} allow=${allow}
       title=${title} iconFor=${iconFor} depth=${depth} placeholder=${placeholder}
+      nextStep=${nextStep}
       onPick=${(id) => { setOpen(false); onChange(id); }}
       onClose=${() => setOpen(false)} />` : null}
   <//>`;

@@ -128,7 +128,7 @@ def _current_pbs_by_strat(pb_rows: list[dict]) -> dict:
     return out
 
 
-def _attempt_json(a, pbs, clock, ranks=None):
+def _attempt_json(a, pbs, clock, ranks=None, rank_clock=None):
     pb = pbs.get(("segment", a.segment_id, clock) if a.segment_id is not None
                  else (a.course_id, a.star_id, clock))
     frames = a.igt_frames if clock == "igt" else a.rta_frames
@@ -136,6 +136,18 @@ def _attempt_json(a, pbs, clock, ranks=None):
     delta = (frames - pb["frames"]
              if pb and frames is not None and not race_row and a.outcome == "success"
              else None)
+    # The medal grades on the LADDER's own clock, never the view clock --
+    # same reasoning as the section banner's basis two callers up (I1, final
+    # review 2026-07-26): an rta time systematically under-ranks against an
+    # igt-defined ladder, so before this fix a Diamond V banner could sit
+    # above the very attempt that earned it wearing a Platinum cap. Falls
+    # back to the view clock when the caller has none to defer to (unassigned
+    # attempts have no known entity, so the ladder lookup inside
+    # _attempt_rank never matches anything regardless of clock). The
+    # DISPLAYED frames/pb_delta above are unaffected -- that stays the view
+    # clock, a display choice.
+    rank_clock = clock if rank_clock is None else rank_clock
+    rank_frames = a.igt_frames if rank_clock == "igt" else a.rta_frames
     return {"id": a.id, "outcome": a.outcome, "outcome_detail": a.outcome_detail,
             "anchor_type": a.anchor_type, "strat_tag": a.strat_tag,
             "igt_frames": a.igt_frames,
@@ -152,7 +164,7 @@ def _attempt_json(a, pbs, clock, ranks=None):
             "rollouts_dustless": a.rollouts_dustless,
             "jumps_total": a.jumps_total,
             "jumps_dustless": a.jumps_dustless,
-            "rank": _attempt_rank(a, frames, ranks),
+            "rank": _attempt_rank(a, rank_frames, ranks),
             "segment_id": a.segment_id}
 
 
@@ -222,11 +234,22 @@ def _seg_strategies(registered: dict, history, seg_id: int, ranks=None,
     return [s for s in out if s not in deleted]
 
 
-def _attempt_rank(a, frames, ranks) -> str | None:
+def _attempt_rank(a, frames, ranks) -> dict | None:
+    """{"rank", "division"} for one attempt's own medal, or None when
+    ungradeable. Routed through `_graded_progress` -- the SAME curve
+    `_section_banner` grades through -- rather than a second computation
+    (`classify.rank_for` used to answer this directly, off the raw ladder,
+    with no division of its own; addendum, task 8, 2026-07-26: an attempt
+    medal must never disagree with the section banner about which division a
+    tier is at)."""
     if ranks is None or frames is None or a.outcome != "success" or not a.strat_tag:
         return None
     ek = entity_key(a.course_id, a.star_id, a.segment_id)
-    return classify.rank_for(ranks.ladder_cs(ek, a.strat_tag), classify.display_cs(frames))
+    ladder = ranks.ladder_cs(ek, a.strat_tag)
+    if not ladder:
+        return None
+    progress = _graded_progress(ladder, classify.display_cs(frames))
+    return {"rank": progress["rank"], "division": progress["division"]}
 
 
 def valid_frames(history, strat, clock) -> list[int]:
@@ -268,20 +291,33 @@ def grading_basis(mode, pb, history, strat, clock) -> dict | None:
             "window": mode_def["window"]}
 
 
-def _strat_rank(ranks, ek, strat, basis) -> str | None:
-    """Rank NAME for an entity graded under `strat` at its grading basis
-    (grading_basis output: PB row in pb mode, mean of valid runs in avg
+def _strat_rank(ranks, ek, strat, basis) -> dict | None:
+    """{"rank", "division"} for an entity graded under `strat` at its grading
+    basis (grading_basis output: PB row in pb mode, mean of valid runs in avg
     modes), or None when ungradeable (no ranks loaded, no active strat, no
     basis, or the strat has no ladder). THE single grading path shared by
     route candidates and the stage quick-select star grid (view's
     rank_by_star) — keep it one place so a medal never disagrees with the
-    section banner / attempt medals."""
+    section banner / attempt medals.
+
+    Routed through `_graded_progress` (addendum, task 8, 2026-07-26) rather
+    than a second computation: this used to call `classify.rank_for` directly
+    against the raw ladder, which answers the tier alone via threshold-
+    crossing and has no division of its own -- so every consumer of this
+    function's payload (rank_by_star, segment_targets, route candidates) drew
+    an icon with no division to show, even though `_graded_progress` already
+    computes exactly that division and already feeds the section banner.
+    `_graded_progress`'s own tier answer is provably identical to
+    `classify.rank_for`'s (both are threshold-crossings against the same
+    ladder cutoffs; `_graded_progress` merely also carries the division),
+    so this is not a behavior change to the tier itself."""
     if ranks is None or not strat or basis is None:
         return None
     ladder = ranks.ladder_cs(ek, strat)
     if not ladder:
         return None
-    return classify.rank_for(ladder, classify.display_cs(basis["frames"]))
+    progress = _graded_progress(ladder, classify.display_cs(basis["frames"]))
+    return {"rank": progress["rank"], "division": progress["division"]}
 
 
 def _graded_progress(ladder: dict, time_cs: int) -> dict:
@@ -371,6 +407,218 @@ def entity_rank(ranks, ek, frames) -> dict | None:
     progress = _graded_progress(ladder, classify.display_cs(frames))
     return {**progress, "score": round(progress["score"], 1),
             "fastest_strat": _fastest_strategy(ranks, ek, ladder)}
+
+
+def _best_strategy_graded(ranks, ek, history, pbs_by_strat, rank_mode,
+                          deleted, pb_key_prefix) -> tuple[str, dict] | None:
+    """The (strategy, _graded_progress) pair with the HIGHEST score among
+    `ranks.strategies(ek)`, skipping tombstoned names (`deleted`) and
+    strategies with no ladder or nothing gradeable. Ties break on
+    min(strat) -- same deterministic convention `_fastest_strategy` uses,
+    order-independent (a later tie only overwrites the running best when its
+    name sorts earlier, so iteration order never decides the winner).
+    `pb_key_prefix` is `(course_id, star_id)` or `("segment", segment_id)` --
+    `_current_pbs_by_strat`'s key shape minus (clock, strat)."""
+    clock = ranks.clock_for(ek)
+    best: tuple[str, dict] | None = None
+    for strat in ranks.strategies(ek):
+        if strat in deleted:
+            continue
+        ladder = ranks.ladder_cs(ek, strat)
+        if not ladder:
+            continue
+        basis = grading_basis(
+            rank_mode, pbs_by_strat.get((*pb_key_prefix, clock, strat)),
+            history, strat, clock)
+        if basis is None:
+            continue
+        graded = _graded_progress(ladder, classify.display_cs(basis["frames"]))
+        if best is None or graded["score"] > best[1]["score"] \
+                or (graded["score"] == best[1]["score"] and strat < best[0]):
+            best = (strat, graded)
+    return best
+
+
+def build_entity_ranks(db, service) -> dict[str, dict]:
+    """The picker's "how good am I at this star" answer, keyed by canonical
+    entity key: `{"rank": str, "division": str, "strat": str}` for every
+    practised entity that grades on AT LEAST ONE strategy.
+
+    A THIRD "which rank" answer, deliberately distinct from the other two in
+    this file: `rank_by_star` grades the ACTIVE strategy ("how am I doing at
+    what I'm about to run"), `entity_rank` grades the entity's best-POSSIBLE
+    ladder — a pointwise minimum no single strategy may actually own ("how
+    close is this to the fastest this star can be"). This one grades the
+    single BEST-SCORING strategy's own ladder — "how good am I at this star,
+    at all" — the number the target picker wants on a grid cell before any
+    strategy has been chosen for the run about to start.
+
+    An on-demand builder rather than a `build_session_view` field on
+    purpose: the session view rebuilds on every WebSocket event, and average
+    rank modes grade O(history) per strategy per entity — paying that for
+    every practised entity on every event would cost real per-event latency
+    for a number only the picker modal ever looks at. Callers fetch this
+    once, when the modal opens.
+
+    Candidate entities are read off ONE pass over `db.attempts()` (mirrors
+    `build_session_view`'s `attempts_by_star`/`attempts_by_seg` grouping,
+    ~line 643) rather than scanning `all_attempts` per entity — that
+    O(entities × attempts) shape was removed from the session view
+    deliberately (2026-07-23 review) and must not come back here. An entity
+    where no strategy grades is ABSENT from the map, not present with nulls
+    — the picker's "no rank if never attempted yet" is the absence."""
+    if service.ranks is None:
+        return {}
+    all_attempts = db.attempts()
+    attempts_by_star: dict = {}
+    attempts_by_seg: dict = {}
+    for a in all_attempts:
+        if a.segment_id is not None:
+            attempts_by_seg.setdefault(a.segment_id, []).append(a)
+        elif a.course_id is not None:
+            attempts_by_star.setdefault((a.course_id, a.star_id), []).append(a)
+
+    pbs_by_strat = _current_pbs_by_strat(db.pbs())
+    rank_mode = db.get_state("rank_mode", classify.DEFAULT_RANK_MODE)
+    if rank_mode not in classify.RANK_MODES:   # forward-safe: junk reads as pb
+        rank_mode = classify.DEFAULT_RANK_MODE
+    deleted_strats = db.get_state("deleted_strats", {})
+
+    # One (ek, history, pb_key_prefix) triple per candidate entity, stars
+    # then segments, so the grading loop below runs ONCE for both kinds —
+    # a field added to the emitted dict is then a one-place edit, not two.
+    candidates = [
+        (entity_key(course_id, star_id), history, (course_id, star_id))
+        for (course_id, star_id), history in attempts_by_star.items()
+    ] + [
+        (entity_key(None, None, seg_id), history, ("segment", seg_id))
+        for seg_id, history in attempts_by_seg.items()
+    ]
+
+    out: dict[str, dict] = {}
+    for ek, history, pb_key_prefix in candidates:
+        best = _best_strategy_graded(service.ranks, ek, history, pbs_by_strat,
+                                     rank_mode, deleted_strats.get(ek, []),
+                                     pb_key_prefix)
+        if best:
+            strat, graded = best
+            out[ek] = {"rank": graded["rank"], "division": graded["division"],
+                      "strat": strat}
+    return out
+
+
+def build_entity_strategies(db, service, ek: str) -> dict:
+    """The picker's step-3 "which strategy" answer: every strategy this
+    entity can be practised WITH, each carrying its own rank -- so a
+    strategy card can be chosen on evidence (rank + PB) instead of a bare
+    name in a dropdown.
+
+    Strategy names come from the SAME merged lists build_session_view's
+    sections already use -- `_strategies_for` (registered ui_state names
+    UNION observed-on-attempts UNION rank-standard names, stars) or
+    `_seg_strategies` (the same three sources, plus the definition's own
+    `default_strat` first, segments); tombstones (`deleted_strats`) are
+    already filtered out by those two. Before this endpoint existed the
+    header read the raw registered-strategy map directly and offered a
+    NARROWER list than the practice card -- this is the fix: one shared
+    source feeding both surfaces.
+
+    Each strategy is graded through the exact chain the session view's
+    section banner uses -- `ranks.clock_for` -> `grading_basis` ->
+    `_graded_progress` against that strategy's OWN ladder -- so a medal here
+    can never disagree with the banner for the same entity+strategy. A
+    strategy with no ladder or nothing gradeable reports rank/division/score
+    all None: present as "unranked", not absent. `pb_display` is always
+    that strategy's own SAVED pb (`format_igt`), independent of the active
+    rank mode -- in an average mode the grade can come from a different
+    basis than the displayed PB, the same split `sec["pb"]` vs `sec["rank"]`
+    already draws on the session view.
+
+    `current` is the entity's active strategy (`service.strat_by_star` /
+    `service.strat_by_segment`), masked to None when tombstoned. `allow_blank`
+    is False only for a segment carrying a truthy `default_strat` -- the rule
+    `stratpicker.js` already applies client-side from `sec.default_strat`
+    (projection.py caveat 17); a star is always blankable.
+
+    `ek` is parsed by hand (`ranks.standards.entity_key` has no public
+    inverse): `"segment:<id>"` or `"star:<course>:<star>"`; anything else --
+    and any non-numeric id -- raises LookupError (-> 404, `_http`). A segment
+    id that parses but names no known definition ALSO raises -- the same
+    existence check `service.set_target_segment` applies, since this is the
+    same picker flow. Stars carry no such check anywhere in the codebase
+    (course/star ids are never validated against the catalog, see
+    `service.set_target`), so none is added here either. Named `ek`, not
+    `entity_key`, so the parameter can't shadow the module-level
+    `ranks.standards.entity_key` import `build_entity_ranks` calls freely
+    twenty lines above (M2, final review 2026-07-26)."""
+    parts = ek.split(":")
+    if len(parts) == 2 and parts[0] == "segment":
+        kind, id_parts = "segment", parts[1:]
+    elif len(parts) == 3 and parts[0] == "star":
+        kind, id_parts = "star", parts[1:]
+    else:
+        raise LookupError(f"bad entity key {ek!r}")
+    try:
+        ids = [int(p) for p in id_parts]
+    except ValueError:
+        raise LookupError(f"bad entity key {ek!r}") from None
+
+    ranks = service.ranks
+    all_attempts = db.attempts()
+    registered = db.get_state("strategies", {})
+    deleted = db.get_state("deleted_strats", {}).get(ek, [])
+    rank_mode = db.get_state("rank_mode", classify.DEFAULT_RANK_MODE)
+    if rank_mode not in classify.RANK_MODES:   # forward-safe: junk reads as pb
+        rank_mode = classify.DEFAULT_RANK_MODE
+    pbs_by_strat = _current_pbs_by_strat(db.pbs())
+
+    if kind == "star":
+        course_id, star_id = ids
+        history = [a for a in all_attempts
+                  if (a.course_id, a.star_id) == (course_id, star_id)]
+        names = _strategies_for(registered, all_attempts, course_id, star_id,
+                                ranks, deleted)
+        current_raw = service.strat_by_star.get((course_id, star_id))
+        pb_key_prefix = (course_id, star_id)
+        clock = ranks.clock_for(ek) if ranks else "igt"
+        allow_blank = True
+    else:
+        (segment_id,) = ids
+        history = [a for a in all_attempts if a.segment_id == segment_id]
+        seg_def = next((d for d in db.segment_defs() if d["id"] == segment_id),
+                       None)
+        if seg_def is None:   # same existence check set_target_segment applies
+            raise LookupError(f"segment {segment_id} not found")
+        default_strat = seg_def.get("default_strat")
+        names = _seg_strategies(registered, history, segment_id, ranks,
+                                deleted, default_strat)
+        current_raw = service.strat_by_segment.get(segment_id)
+        pb_key_prefix = ("segment", segment_id)
+        clock = ranks.clock_for(ek) if ranks else "rta"
+        allow_blank = not bool(default_strat)
+
+    current = current_raw if current_raw and current_raw not in deleted else None
+
+    strategies = []
+    for name in names:
+        pb_row = pbs_by_strat.get((*pb_key_prefix, clock, name))
+        rank = division = score = None
+        if ranks is not None:
+            ladder = ranks.ladder_cs(ek, name)
+            if ladder:
+                basis = grading_basis(rank_mode, pb_row, history, name, clock)
+                if basis is not None:
+                    graded = _graded_progress(ladder,
+                                              classify.display_cs(basis["frames"]))
+                    rank, division = graded["rank"], graded["division"]
+                    score = round(graded["score"], 1)
+        strategies.append({
+            "name": name, "rank": rank, "division": division, "score": score,
+            "pb_display": format_igt(pb_row["frames"]) if pb_row else None,
+        })
+
+    return {"entity": ek, "kind": kind, "current": current,
+            "allow_blank": allow_blank, "strategies": strategies}
 
 
 def _section_banner(ranks, ek, strat, basis, mode) -> dict | None:
@@ -480,7 +728,7 @@ def _stats_for(history, stat_menu, clock) -> list[dict]:
 
 
 def _progress(attempts, pb_ids: set, session_meta, frames_of,
-              ranks=None, clock="igt") -> dict | None:
+              ranks=None, clock="igt", rank_clock=None) -> dict | None:
     """Completion-time-over-time points (spec §4): non-cleared successes of
     the SCOPED attempt list, grouped by session, chronological. A success
     qualifies when the section's clock (frames_of: stars igt, segments rta)
@@ -488,12 +736,19 @@ def _progress(attempts, pb_ids: set, session_meta, frames_of,
     Gold = explicitly saved PB rows (every save stays gold even when
     superseded). rta race rows (rta_frames == 0) ship as-is; the UI filters
     them. Resumed sessions append to their original group; within-group id
-    order is still chronological (journal ids are wall-clock monotonic)."""
+    order is still chronological (journal ids are wall-clock monotonic).
+
+    Dot medals grade on `rank_clock` (the LADDER's own clock), never `clock`
+    (the view clock) -- same rule and same reasoning as `_attempt_json`'s
+    `rank_frames` (I1, final review 2026-07-26): a progress dot for the same
+    attempt as an attempt-list row must never disagree with it. Falls back
+    to `clock` when the caller has none to defer to."""
+    rank_clock = clock if rank_clock is None else rank_clock
     by_session: dict[int, list] = {}
     for a in attempts:
         if a.outcome != "success" or a.cleared or frames_of(a) is None:
             continue
-        frames = a.igt_frames if clock == "igt" else a.rta_frames
+        rank_frames = a.igt_frames if rank_clock == "igt" else a.rta_frames
         by_session.setdefault(a.session_id, []).append({
             "t_utc": a.ended_utc,
             "igt_frames": a.igt_frames,
@@ -503,7 +758,7 @@ def _progress(attempts, pb_ids: set, session_meta, frames_of,
             "attempt_id": a.id,
             "is_pb_igt": (a.id, "igt") in pb_ids,
             "is_pb_rta": (a.id, "rta") in pb_ids,
-            "rank": _attempt_rank(a, frames, ranks),
+            "rank": _attempt_rank(a, rank_frames, ranks),
         })
     if not by_session:
         return None
@@ -707,10 +962,19 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         # Basis computed ONCE per section and shared by both rank numbers
         # below: the strat rank grades it against the ACTIVE strategy's
         # ladder, the entity rank against the entity's best-possible one.
+        # Graded on the LADDER's own clock (ranks.clock_for), not the view
+        # clock -- a ladder is defined in one clock, so grading a time from
+        # the OTHER clock compares it to the wrong ruler (an rta time
+        # includes approach time and systematically under-ranks against an
+        # igt-defined ladder). Falls back to the view clock when no
+        # standards are loaded at all, since there is then no ladder clock
+        # to defer to. The displayed PB (sec["pb"] below) is unaffected --
+        # that stays a display choice tied to the view clock.
         star_strat = masked(service.strat_by_star.get((course_id, star_id)), ek)
+        rank_clock = service.ranks.clock_for(ek) if service.ranks else clock
         star_basis = grading_basis(
-            rank_mode, pbs_by_strat.get((course_id, star_id, clock, star_strat)),
-            history, star_strat, clock)
+            rank_mode, pbs_by_strat.get((course_id, star_id, rank_clock, star_strat)),
+            history, star_strat, rank_clock)
         # Note: star sections intentionally omit "kind". The UI branches on
         # sec.kind being undefined for stars (SegmentSection vs StarSection),
         # so adding kind="star" here would silently break that check. Do not
@@ -722,7 +986,8 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "star_name": star_name(course_id, star_id),
             "links": star_links(course_id, star_id),
             "pb": pb_json,
-            "attempts": [_attempt_json(a, pbs, clock, service.ranks) for a in in_section],
+            "attempts": [_attempt_json(a, pbs, clock, service.ranks, rank_clock)
+                        for a in in_section],
             "stats": _stats_for(history, stat_menu, clock),
             "strategies": _strategies_for(registered, all_attempts, course_id, star_id,
                                          service.ranks, deleted_strats.get(ek, [])),
@@ -732,7 +997,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "time_filter": _time_filter_json(
                 time_filters_state.get(f"{course_id}:{star_id}")),
             "progress": _progress(in_section, pb_ids, session_meta, igt_of,
-                                  service.ranks, clock),
+                                  service.ranks, clock, rank_clock),
             "rank": _section_banner(
                 service.ranks, ek, star_strat, star_basis, rank_mode),
             "entity_rank": entity_rank(
@@ -760,11 +1025,17 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         in_section = [a for a in history if a in scoped_set]
         pb_row = pbs.get(("segment", seg_id, "rta"))
         # Basis computed ONCE per section, same reasoning as the star loop
-        # above: shared by the strat rank and the entity rank.
+        # above: shared by the strat rank and the entity rank. Routed
+        # through clock_for like the star section rather than hardcoding
+        # "rta" directly -- it resolves to "rta" for every segment today
+        # (segments have no igt clock), but that's a coincidence of the
+        # standards data, not a rule; one grading-clock rule beats a rule
+        # for stars and a coincidence for segments.
         seg_strat = masked(service.strat_by_segment.get(seg_id), seg_ek)
+        seg_rank_clock = service.ranks.clock_for(seg_ek) if service.ranks else "rta"
         seg_basis = grading_basis(
-            rank_mode, pbs_by_strat.get(("segment", seg_id, "rta", seg_strat)),
-            history, seg_strat, "rta")
+            rank_mode, pbs_by_strat.get(("segment", seg_id, seg_rank_clock, seg_strat)),
+            history, seg_strat, seg_rank_clock)
         seg_sections.append({
             "kind": "segment", "segment_id": seg_id,
             "last_activity": last_id.get(("segment", seg_id), -1),
@@ -786,7 +1057,8 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                             "display": format_igt(pb_row["frames"]),
                             "attempt_id": pb_row["attempt_id"]}
                            if pb_row else None)},
-            "attempts": [_attempt_json(a, pbs, "rta", service.ranks) for a in in_section],
+            "attempts": [_attempt_json(a, pbs, "rta", service.ranks, seg_rank_clock)
+                        for a in in_section],
             "stats": _stats_for(history, stat_menu, "rta"),
             # registered ∪ observed-on-attempts ∪ rank-standard strategies
             "strategies": _seg_strategies(registered, history, seg_id,
@@ -799,7 +1071,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "time_filter": _time_filter_json(
                 None, seg_guards=d.guards if d else []),
             "progress": _progress(in_section, pb_ids, session_meta, rta_of,
-                                  service.ranks, "rta"),
+                                  service.ranks, "rta", seg_rank_clock),
             "rank": _section_banner(
                 service.ranks, seg_ek, seg_strat, seg_basis, rank_mode),
             "entity_rank": entity_rank(
@@ -837,13 +1109,14 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         "strategies": registered,
         "last_strat_by_star": {f"{c}:{s}": masked(v, entity_key(c, s))
                                for (c, s), v in service.strat_by_star.items()},
-        # Parallel to last_strat_by_star: each star's rank under its ACTIVE
-        # strat, graded on the PB achieved WITH that strat (per-strategy
-        # ranking — pbs_by_strat, never the strategy-blind overall PB), for
-        # the quick-select grid's at-a-glance medal. Only gradeable stars
-        # appear; recomputed every build so changing a star's strat updates
-        # its medal on the next view. A tombstoned strat is masked to None
-        # before grading — a deleted strategy must not keep showing a medal.
+        # Parallel to last_strat_by_star: each star's {rank, division} under
+        # its ACTIVE strat, graded on the PB achieved WITH that strat
+        # (per-strategy ranking — pbs_by_strat, never the strategy-blind
+        # overall PB), for the quick-select grid's at-a-glance medal. Only
+        # gradeable stars appear; recomputed every build so changing a star's
+        # strat updates its medal on the next view. A tombstoned strat is
+        # masked to None before grading — a deleted strategy must not keep
+        # showing a medal.
         "rank_by_star": {
             f"{c}:{s}": rank
             for (c, s), strat in service.strat_by_star.items()
@@ -993,9 +1266,11 @@ def build_run_history(db, route_id: int | None = None) -> dict:
 
 
 def _candidate_rank(db, service, c, mode, by_star, by_seg,
-                    deleted_strats: dict) -> str | None:
-    """Rank for one route candidate under its active strat, graded by the
-    rank-mode basis (per-strategy: another strat's times never count).
+                    deleted_strats: dict) -> dict | None:
+    """{"rank", "division"} for one route candidate under its active strat,
+    graded by the rank-mode basis (per-strategy: another strat's times never
+    count) — a thin dispatch straight into `_strat_rank`, so it carries the
+    SAME division that function now computes (addendum, task 8, 2026-07-26).
     `by_star`/`by_seg` are the caller's one-pass attempt groupings (id order)
     so a route with many candidates never rescans the attempt list.
     `deleted_strats` is the deleted_strats KV (read once per route view build,
@@ -1030,8 +1305,12 @@ def build_route_view(db, service, route_id: int) -> dict:
     """Resolve a route for display: each step's candidates get names, plus the
     per-step success rate and cumulative product (tracking/routes.route_stats).
     A candidate whose segment was deleted is marked broken (no cascade).
-    Each step gains 'rank' (best-ranked candidate); the route view gains
-    'avg_rank' (nearest-tier mean of step ranks) and 'weakest_step' index."""
+    Each step gains 'rank' (best-ranked candidate's {rank, division} — or
+    None; addendum, task 8, 2026-07-26 added the division alongside the tier
+    that was already there); the route view gains 'avg_rank' (nearest-tier
+    mean of step ranks — {score, tier} only, no division: it names the
+    nearest tier to a MEAN score, which is not a real graded time and so has
+    no real division to show) and 'weakest_step' index."""
     route = next((r for r in db.routes() if r["id"] == route_id), None)
     if route is None:
         raise LookupError(f"route {route_id} not found")
@@ -1070,20 +1349,23 @@ def build_route_view(db, service, route_id: int) -> dict:
         ranks_here = [_candidate_rank(db, service, c, rank_mode, by_star,
                                       by_seg, deleted_strats)
                       for c in step["candidates"]]
+        # best is a {rank, division} dict (or None) -- the WINNING
+        # candidate's own graded division rides along, so the step's medal
+        # never has a tier with no division to show (addendum, task 8).
         best = max((r for r in ranks_here if r),
-                   key=lambda r: classify.RANK_SCORE[r], default=None)
+                   key=lambda r: classify.RANK_SCORE[r["rank"]], default=None)
         steps.append({"label": step.get("label"), "need": step["need"],
                       "candidates": cands, "step_rate": st["step_rate"],
                       "cumulative": st["cumulative"], "broken": broken,
                       "rank": best})
-    scored = [classify.RANK_SCORE[s["rank"]] for s in steps if s["rank"]]
+    scored = [classify.RANK_SCORE[s["rank"]["rank"]] for s in steps if s["rank"]]
     avg_rank = None
     weakest_step = None
     if scored:
         mean = sum(scored) / len(scored)
         tier = min(classify.RANK_SCORE, key=lambda n: abs(classify.RANK_SCORE[n] - mean))
         avg_rank = {"score": round(mean, 1), "tier": tier}
-        ranked = [(i, classify.RANK_SCORE[s["rank"]]) for i, s in enumerate(steps)
+        ranked = [(i, classify.RANK_SCORE[s["rank"]["rank"]]) for i, s in enumerate(steps)
                   if s["rank"]]
         weakest_step = min(ranked, key=lambda t: t[1])[0]
     return {"id": route["id"], "name": route["name"],

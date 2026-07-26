@@ -12,11 +12,9 @@ import re
 from pathlib import Path
 
 from sm64_events.ranks import scoring
-from sm64_events.ranks.standards import RANK_COLORS
 
 UI = Path(__file__).resolve().parents[1] / "src" / "sm64_events" / "ui"
 RANKPAGE_JS = UI / "components" / "rankpage.js"
-RANKS_JS = UI / "components" / "ranks.js"
 
 
 def test_rank_up_markers_require_a_rise_not_just_a_change():
@@ -74,28 +72,3 @@ def test_ui_mirrors_the_score_anchors_and_division_count():
     assert anchors["Iron"] == "0", "Iron is the implicit floor at 0"
     assert f"DIVISIONS_PER_TIER = {scoring.DIVISIONS_PER_TIER}" in source
     assert f"SCORE_CEILING = {int(scoring.TOP_SCORE)}" in source
-
-
-def test_iron_is_not_a_shade_of_silver():
-    """Iron read as a dim Silver at #8a8a8a and the two were indistinguishable
-    side by side on a practice card (live report 2026-07-25). Both registries
-    have to agree, and Iron has to stay far enough from Silver to tell apart:
-    its own rusty hue, not a grey."""
-    source = RANKS_JS.read_text(encoding="utf-8")
-    # The colour table only -- ranks.js declares a second, unrelated map
-    # right below it (FG, the medal's TEXT colour per rank).
-    table = re.search(r"export const RANK_COLORS = \{(.*?)\};", source, re.S)
-    assert table, "RANK_COLORS table not found in ranks.js"
-    js_colors = dict(re.findall(r"(\w+): \"(#[0-9a-fA-F]{6})\"", table.group(1)))
-    assert js_colors == RANK_COLORS, "ui/components/ranks.js mirrors standards.RANK_COLORS"
-
-    def channels(hex_color):
-        return [int(hex_color[index:index + 2], 16) for index in (1, 3, 5)]
-
-    red, green, blue = channels(RANK_COLORS["Iron"])
-    assert red - blue >= 24 and red - green >= 16, (
-        f"Iron {RANK_COLORS['Iron']} must be visibly warm/rusty rather than "
-        "a neutral grey, which is what made it read as Silver")
-    silver = channels(RANK_COLORS["Silver"])
-    assert sum(silver) - (red + green + blue) >= 120, (
-        "Iron must be substantially darker than Silver")

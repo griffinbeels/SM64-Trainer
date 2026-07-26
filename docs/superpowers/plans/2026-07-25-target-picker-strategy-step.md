@@ -12,6 +12,11 @@
 
 ## Global Constraints
 
+- **This branch is based on `mario-cap-rank-icons`, not on `main`** (decision, 2026-07-26). That branch **deleted `Medal`** from `ranks.js`. The rank icon is now `Hat` from `ui/components/hat.js`, and the tier registry lives in `ui/components/caps.js`. Anywhere this plan or the spec says "medal", read `Hat`.
+  - `Hat({ tier, division = null, size = 18, title = null })` — `tier` is the raw tier key (`"Platinum"`), NOT a cap name.
+  - **The division numeral only draws at `size >= 30`** (`DETAIL_MIN_SIZE` in `hat.js`) and only when `division` is non-null. A 16px Hat is a silhouette. Size the call site for what you need it to say.
+- **Never print a raw tier key.** Tier keys are scraped from xcams and were deliberately not renamed, so `Gold` now renders *purple* (Waluigi) and `Platinum` renders *yellow* (Wario) — a surface printing the raw key is wrong on screen, not merely off-style. Route every visible tier string through `capName(tier)` and every division numeral through `divisionDigit(numeral)`, both from `./caps.js`. Enforced by `tests/test_ui_cap_names.py`; when a new call site holds a tier expression, **extend that file's `RAW_TIER_EXPRESSIONS` tuple** — it is a consciously-maintained list, not a JS parse.
+  - This is a **UI-side** rule. The server keeps emitting raw tier keys (`"Platinum"`, `"II"`) — `ranks/` is the source of truth and must not learn cap vocabulary.
 - **Never write reference code from memory — read the real API.** Every signature in this plan was read out of the repo, but constants, field names and arithmetic in it may still be wrong. If a value here contradicts the code, **the code wins — flag it, do not bend working code to match this document.**
 - `uv run pytest -q` must pass before any commit. Run it from the repo root.
 - **Never put a backtick inside an `html\`\`` template**, including inside an HTML comment — the first one ends the template literal and the page dies with an unrelated-looking error while `node --check` still passes.
@@ -30,7 +35,7 @@
 | `src/sm64_events/tracking/views.py` | + `build_entity_ranks(db, service)` and `build_entity_strategies(db, service, ek)` — pure view builders beside the existing ones |
 | `src/sm64_events/server/api.py` | + `GET /api/target/ranks`, `GET /api/target/strategies`; `TargetBody` learns explicit-null |
 | `src/sm64_events/tracking/service.py` | `set_target` clears the strategy when the caller explicitly asks |
-| `src/sm64_events/ui/components/practicecell.js` | + `rankBadge` look flag (out-of-flow corner medal) |
+| `src/sm64_events/ui/components/practicecell.js` | + `rankBadge` look flag (out-of-flow corner `Hat`) |
 | `src/sm64_events/ui/entities.js` | `courseUnionGroups` stamps `rank` on options from a rank map |
 | `src/sm64_events/ui/components/entitymodal.js` | + optional `nextStep` prop; unchanged for callers that omit it |
 | `src/sm64_events/ui/components/strategystep.js` | **new** — the strategy cards, the fetch, the commit write, the `StratModal` |
@@ -144,6 +149,7 @@ Message: why this is a lazy endpoint and not a view field (the view rebuilds on 
   ] }
 ```
 
+- **`rank` and `division` are RAW tier keys** (`"Platinum"`, `"II"`), exactly as `_graded_progress` emits them. The server does not learn cap vocabulary — `capName`/`divisionDigit` are a UI-side display rule (see Global Constraints). Task 6 wraps them; this task must not.
 - **`pb_display` is the server's `format_igt` output** (`M'SS"CC`, e.g. `0'21"53`) — the same string every other PB in this app shows. The spec's mockup wrote `0:21.53`; that was illustrative. Do not invent a second time format, and do not format in JS: `ui/format.js::fmtIgt` exists but the server already has the value.
 - Strategy list comes from `_strategies_for` (stars) or `_seg_strategies` (segments) — the merged registered ∪ observed-on-attempts ∪ rank-standards list, tombstones filtered. Their exact signatures are at views.py:179 and :199; `_seg_strategies` additionally takes `default_strat` and puts it first. **Read both before calling them.**
 - `current` is the entity's active strategy — `service.strat_by_star[(course, star)]` / `service.strat_by_segment[segment_id]` — masked to `None` when tombstoned.
@@ -240,7 +246,8 @@ Both directions, or the fix is unpinned:
 
 So:
 
-- `rankBadge=true` renders the medal as an **absolutely-positioned corner badge** over `.starholder`, in a new `.starrank-badge` element, and renders **nothing at all** when `rank` is falsy. It does **not** render the in-flow `.starrank` span.
+- `rankBadge=true` renders the rank icon as an **absolutely-positioned corner badge** over `.starholder`, in a new `.starrank-badge` element, and renders **nothing at all** when `rank` is falsy. It does **not** render the in-flow `.starrank` span.
+- The badge draws `<${Hat} tier=${rank} size=${16} />` — **the same call the in-flow slot already makes** on this branch (`practicecell.js` line ~48). Do not pass `division`: at 16px `hat.js` draws no numeral anyway (`DETAIL_MIN_SIZE = 30`), and passing one would imply detail that is not rendered. `Hat` supplies its own tooltip from the tier.
 - `rankBadge=false` (the banner, the default) is **byte-for-byte unchanged** — in-flow `.starrank` with its `–` fallback and its `rankbob` animation.
 - `.entity-grid .starrank { display: none; }` **stays.** It is now a guard against a future call site restoring the scrolling row, and its comment should be updated to say that rather than "nothing grades a cell here", which stops being true.
 - `.starcell` is already `position: relative` (index.html:54, its hover ✎ depends on it) — no new positioning context needed.
@@ -328,7 +335,10 @@ Run: `node --check src/sm64_events/ui/components/entitymodal.js && uv run pytest
 
 - Parses `value` with `parseSegmentId` / `parseStarId` from `../entities.js`. `parseSegmentId(id)` returns a number or `null`; a `null` means it is a star id like `"8:2"`. Ids are **strings**; `POST /api/target` needs **integers** — this boundary is the one `tests/test_header_ui.py::test_target_modal_still_posts_course_and_star_as_numbers` exists to guard, and Task 7 relocates that test here.
 - Fetches with `getJSON` from `../api.js` on mount, keyed on `value`. Render a quiet loading state; on failure show the thrown message (`api.js` already unwraps the server's `detail`).
-- Renders a `.strat-grid` of `.strat-card` buttons: `Medal` + `${rank} ${division}` + strategy name + `PB ${pb_display}`. Unranked → the `Medal`'s own no-rank rendering (it already draws `–` and titles itself "no rank") and a muted "no attempts" line instead of the PB. The card for `current` carries a `● current` marker.
+- Renders a `.strat-grid` of `.strat-card` buttons: rank icon + rank name + strategy name + `PB ${pb_display}`. The card for `current` carries a `● current` marker.
+  - The icon is `<${Hat} tier=${rank} division=${division} size=${32} />`. **32, not 16** — `hat.js` draws the division numeral and wings only at `size >= 30`, and the division is exactly what distinguishes the strategies you are choosing between. This is the one call site in this plan that wants the detailed cap.
+  - The rank text is `` `${capName(rank)} ${divisionDigit(division)}` `` — never the raw keys. See Global Constraints; `tests/test_ui_cap_names.py` enforces it, and **this file's tier expressions must be added to its `RAW_TIER_EXPRESSIONS` tuple** as part of this task.
+  - Unranked (`rank: null`) → let `Hat` render its own no-rank state, and show a muted "no attempts" line instead of the PB.
 - **No strategy** card: present only when `allow_blank` is true. Commits with an explicit null strategy. Wears the existing `.needs-strat` class when `current` is null — that is the blinking display this feature was asked for, and it already exists in `index.html:280`.
 - **+ New strategy…** card: opens the existing `StratModal` (`./stratmodal.js`) with `entity` = the entity key and `existing` = the fetched names. On save, commit with that name. Match how `header.js` currently wires `onSaved`/`onClose`.
 - Zero strategies available → render only the two cards above, over a one-line `.stable-empty compact` note (index.html:1369). **Not** `emptystate.js` — its cast art + quip is sized for a 458px card, not a modal step.
@@ -425,3 +435,64 @@ Then:
 - **Spec coverage:** §1 → Tasks 5, 7. §1a → Task 4 (+ verified in Task 8). §2 → Task 6. §3 → Tasks 1, 2. §4 → Task 3. §5 → the File Structure table. §6 → each task's test steps + Task 8. §7 risks → Task 8's measured 900px check and the tooltip requirement in Task 1's payload (`strat` rides the map so the tile can name it).
 - **The rank-map key translation in Task 4** (`"8:2"` option id vs `"star:8:2"` map key) is the single likeliest silent bug in this plan. Its test is called out explicitly.
 - **The `pb_display` format** in Task 2 corrects the spec's illustrative `0:21.53` to this app's real `M'SS"CC`. If `format_igt` disagrees with that description, trust `core/timefmt.py`.
+- **The spec's step-3 mockup is pre-cap-icons.** It draws `( ★ )` and prints "Platinum II"; on this base those are a Mario cap and "Wario 2". The mockup's *layout* is the requirement — icon, rank line, strategy name, PB line, current marker — not its vocabulary. Global Constraints govern the words.
+- **`tests/test_ui_cap_names.py` is a gate this plan can trip.** Task 6 introduces a file that holds tier expressions; extending `RAW_TIER_EXPRESSIONS` is part of that task, not a follow-up. Task 4's badge passes `rank` as a prop (`tier=`), which `_PROP_PREFIXES` already exempts — no extension needed there.
+
+---
+
+### Task 3b: Grade a section on its ladder's OWN clock
+
+Added 2026-07-26, after a probe during Task 2's review found a plan
+contradiction. User ruling: fix the section banner.
+
+**Files:**
+- Modify: `src/sm64_events/tracking/views.py` (`build_session_view`, the star
+  section's `star_basis`; check the segment section's for symmetry)
+- Test: `tests/test_views.py`
+
+**The defect (measured, not theorised).** `_section_banner` grades on the
+**view** clock — whatever the header's Clock control is set to. But a rank
+ladder is defined in ONE clock, recorded per entity as
+`RankStandards.clock_for(ek)` (`igt` for stars, `rta` for segments). So with
+the header set to "Anchor → grab", a star's RTA time is graded against its
+IGT-defined ladder — the wrong ruler. RTA includes approach time, so it
+systematically under-ranks.
+
+Probe output, one star, one strategy, PBs saved on both clocks:
+
+```
+view clock=igt:  banner Diamond V   | picker endpoint Diamond V    AGREE
+view clock=rta:  banner Platinum II | picker endpoint Diamond V    DISAGREE
+```
+
+This is **pre-existing and already visible in the shipped app**: `rank_by_star`
+(the star quick-select row's medals) hardcodes `igt`, so at the rta setting
+that row already disagrees with the section banner directly beneath it. Tasks
+1 and 2 use `clock_for` and are on the correct side; the section banner is the
+outlier. Fixing it aligns three surfaces.
+
+**Contract:**
+
+- The **rank basis** clock becomes `service.ranks.clock_for(ek)`, falling back
+  to the view clock when `service.ranks is None`. This is the clock used to
+  pick the row out of `pbs_by_strat` AND the one passed to `grading_basis`.
+- **The displayed PB still follows the view clock.** `sec["pb"]` is a display
+  choice and is correct as it stands — do not touch it. Only the grading basis
+  moves. After this change `sec["pb"]` and `sec["rank"]` can legitimately be
+  measured on different clocks; that is the same split the docstring already
+  describes for average rank modes.
+- `entity_rank` reads the same basis, so it moves with it. That is intended:
+  it grades against the entity's best-possible ladder, which is defined in the
+  same clock.
+- Segment sections already force `rta`, which **equals** `clock_for` for every
+  segment. Route them through `clock_for` anyway so there is one rule rather
+  than one rule and one coincidence — and say that in the comment.
+
+**Steps:**
+
+- [ ] **Step 1: Write the failing test.** `test_a_star_section_grades_on_its_ladders_clock_not_the_view_clock`: seed one star, one strategy, PBs saved on BOTH clocks with times that land in different tiers, then assert `build_session_view(..., clock="rta")["stars"][0]["rank"]["rank"]` equals the value built at `clock="igt"`. The working probe is at `scratchpad/probe_clock.py` — read it, it already produces exactly this scenario.
+- [ ] **Step 2: Run it.** Expect FAIL, showing the two different tiers.
+- [ ] **Step 3: Add the regression guard.** A second test asserting `sec["pb"]` STILL follows the view clock — igt and rta views give different `pb` displays for the same star. Without this, a later "simplification" collapses both onto one clock and silently changes what the card shows.
+- [ ] **Step 4: Implement.** Comment must record WHY: the ladder is defined in one clock, so grading against another compares to the wrong ruler.
+- [ ] **Step 5: Run `tests/test_views.py`, `tests/test_views_marelo.py`, `tests/test_ranks_api_marelo.py`.** These three own rank grading. **Existing tests may legitimately break here** — this changes shipped behaviour on purpose. A break means reading that test and deciding whether it encoded the bug; if it did, update it AND say so in the report. Do not silently rewrite assertions to match new output.
+- [ ] **Step 6: Full suite, then commit.**
