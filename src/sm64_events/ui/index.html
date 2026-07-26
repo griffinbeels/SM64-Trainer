@@ -934,7 +934,17 @@
      a later flap/shimmer must gate its own keyframes on
      prefers-reduced-motion the way .starholder already does. */
   @font-face { font-family: "SuperMario256"; src: url("/ui/assets/fonts/SuperMario256.ttf"); }
+  /* `.hat`'s OWN box is exactly the cap height (hat.js sets it to `size`px) --
+     that is what makes it a drop-in for the medal/crest it replaced inside
+     seventeen fixed-height cards. `.hat-canvas` is the full sprite canvas
+     (taller AND wider, to hold the wingspan), positioned by hat.js so the cap
+     portion lines up with `.hat`'s own top -- the wings spill outside `.hat`
+     on purpose (fix round 1, 2026-07-25: the first cut sized `.hat` itself to
+     the canvas and grew every caller's row ~6px). `.hat` must never gain its
+     own `overflow: hidden`, or that spill gets clipped instead of shown; an
+     ANCESTOR doing that is the caller's call, not this component's. */
   .hat { position: relative; display: inline-block; }
+  .hat-canvas { position: absolute; left: 0; }
   .hat i { position: absolute; inset: 0; display: block; }
   /* Every tinted layer is TWO rules off the SAME --art: a masked colour fill
      under a multiplied greyscale shade. One custom property feeds both, so

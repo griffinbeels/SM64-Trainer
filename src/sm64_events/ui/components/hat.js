@@ -68,15 +68,29 @@ export function Hat({ tier, division = null, size = 18, title = null }) {
   const detail = division != null && size >= DETAIL_MIN_SIZE;
   const wings = detail ? wingTiers(tier, division) : 0;
 
-  // `size` is the CAP height; the element is wider than that because the
-  // sprite canvas also holds the wingspan either side of it.
+  // `size` is the CAP height. The sprite CANVAS is taller than the cap (it
+  // also holds the wingspan above/beside it), but the element Medal/Crest
+  // used to occupy was exactly `size`px tall in every fixed-height card this
+  // replaces -- so the OUTER box below must stay exactly `size`px tall too,
+  // not the taller canvas height. (Fix round 1, Griffin 2026-07-25: the
+  // first cut sized the outer box to the full canvas, growing every caller's
+  // row ~6px at typical sizes -- `canvasHeightPx = size / CAP_BOX.height`
+  // with CAP_BOX.height ~0.8 means the canvas is ~25% taller than the cap.)
+  // The full canvas renders in an INNER wrapper, shifted up by the cap's own
+  // vertical offset within it (capTopPx) so the cap aligns with the outer
+  // box's top -- everything above/below that (the wings) spills outside the
+  // outer box on purpose. Only an ancestor with its own overflow:hidden can
+  // clip that spill; `.hat` itself never does (index.html).
   const canvasHeightPx = size / CAP_BOX.height;
   const canvasWidthPx = canvasHeightPx * (CANVAS.width / CANVAS.height);
+  const capTopPx = CAP_BOX.top * canvasHeightPx;
+
+  const outerStyle = `width:${canvasWidthPx}px;height:${size}px;`;
 
   const filters = [];
   if (spec.treatment === "translucent" || spec.treatment === "glow")
     filters.push(`drop-shadow(0 0 ${size * 0.05}px ${color})`);
-  const style = `width:${canvasWidthPx}px;height:${canvasHeightPx}px;`
+  const canvasStyle = `width:${canvasWidthPx}px;height:${canvasHeightPx}px;top:${-capTopPx}px;`
     + (spec.treatment === "translucent" ? "opacity:.8;" : "")
     + (filters.length ? `filter:${filters.join(" ")};` : "");
 
@@ -131,5 +145,7 @@ export function Hat({ tier, division = null, size = 18, title = null }) {
     layers.push(html`<i class="glyph" style=${`${glyphVars}font-size:${size * 0.26}px;color:${glyphColor}`}>${spec.glyph || divisionDigit(division)}</i>`);
   }
 
-  return html`<span class="hat" title=${title} style=${style}>${layers}</span>`;
+  return html`<span class="hat" title=${title} style=${outerStyle}>
+    <span class="hat-canvas" style=${canvasStyle}>${layers}</span>
+  </span>`;
 }
