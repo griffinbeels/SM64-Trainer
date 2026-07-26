@@ -3,10 +3,11 @@
 Two regressions have real precedent. Colour: Iron shipped at #8a8a8a and read
 as a dim Silver at 24px (live report 2026-07-25) -- and the pair that failed
 scored 168 on the redmean distance used here, so the floor is set above it.
-The check is over EVERY pair, not adjacent ones: `rank-ladder-scale` renders
-all nine medals in one 13px row and the chart draws a dot per tier, so any two
-can end up side by side. Order: the JS key order IS the ladder, and a reorder
-would silently mis-rank every entity.
+The check is over EVERY pair, not adjacent ones: the Rank tab's ladder bar
+renders all nine tiers' tints side by side (`ui/components/rankpage.js`'s
+LadderBar) and the chart draws a dot per tier, so any two can end up next to
+each other. Order: the JS key order IS the ladder, and a reorder would
+silently mis-rank every entity.
 """
 import json
 import re

@@ -1327,161 +1327,171 @@
      ladder marker sitting in Toad territory). The ladder now belongs to
      MARELO alone (`.rank-ladder-wrap`, under `.rank-card-main`) so there is
      exactly one rank-shaped drawing on this card. */
-  .rank-ladder-wrap { margin: 4px 0 10px; }
+  /* Round 5 (addendum, task 8, 2026-07-26): replaces the permanent 45-icon
+     showcase strip entirely -- see rankpage.js's LadderBar comment for the
+     proof that a static layout could never satisfy "icons only ever sit
+     exactly above their own pip." Reserves room ABOVE the bar for whichever
+     floating icon layer is showing -- the at-rest YOU mark, or a hovered
+     band's five popped-out icons -- so neither ever overlaps the card text
+     sitting above this wrapper. */
+  .rank-ladder-wrap { margin: 4px 0 10px; padding-top: 62px; }
   .rank-ladder {
-    position: relative; height: 16px; margin: 4px 0 3px;
-    border-radius: 8px; background: rgba(4,13,23,.72); overflow: hidden;
+    position: relative; height: 16px;
+    display: flex; gap: 2px;
+    border-radius: 8px; background: rgba(4,13,23,.72);
   }
-  /* The showcase strip: nine equal groups (below), plus YOU. Round 4
-     (addendum, task 8, 2026-07-26 — the user: "instead of the YOU marker
-     being a bigger version of the cap, how about we JUST have the 'you'
-     text... above the exact position"): YOU is text alone now, no icon —
-     the enlarged duplicate cap this used to draw is gone. Fixed height so
-     the card doesn't reflow as YOU moves. */
-  .rank-ladder-scale {
-    position: relative; height: 40px;
-    display: flex; align-items: flex-end; gap: 3px;
+  /* Each tier is its own flex item, not a slice of one continuous gradient
+     (round 1-4's `.rank-ladder-bands`/`.rank-ladder-fill` pair, deleted).
+     `--band-weight` (set inline, rankpage.js) is `band.to - band.from` --
+     the tier's real SCORE width -- so flex-grow makes the resting layout
+     proportional BY CONSTRUCTION by is-mine, with no percentage maths
+     duplicated here. `min-width: 0` lets a band shrink below its own
+     content size: without it a flex item's default `min-width: auto`
+     refuses to shrink past whatever's inside, which would stop the eight
+     compressing bands (below) from ever getting small enough to hand a
+     hovered band its expansion width. */
+  .rank-band {
+    position: relative; min-width: 0; height: 100%;
+    flex-grow: var(--band-weight); flex-shrink: 1; flex-basis: 0%;
   }
-  .rank-ladder-mark {
-    position: absolute; bottom: 0; transform: translateX(-50%);
-    display: flex; flex-direction: column; align-items: center; gap: 1px;
+  @media (prefers-reduced-motion: no-preference) {
+    .rank-band { transition: flex-grow .35s ease, flex-basis .35s ease; }
   }
-  .rank-ladder-mark.is-you { bottom: 5px; z-index: 1; }
-  /* Same face as the cap's own sign-field glyph (`.hat .glyph`) — YOU is a
-     display word now, not a caption, so it gets the display font. Bumped a
-     step from the pre-round-4 size: a display face needs more size than a
-     UI face to read at this scale, and it no longer sits directly beside an
-     icon that could carry the eye on its own. */
+  /* The expansion is the thing that makes per-division icons legible at
+     all (see the LadderBar comment) -- not optional garnish. Fixed rigid
+     width (`flex-shrink: 0` too, so nothing can squeeze it back down) lets
+     the other eight bands compress to absorb the difference, proportionally
+     among themselves (their own flex-grow ratios are untouched -- only the
+     space left to share shrank). `max(230px, calc(var(--band-weight) * 1%))`
+     guards the one tier that's ALREADY wider than 230px at rest on a big
+     card (Toadsworth/Silver is 20 of the 100 score points -- 20% of a
+     ~1300px bar is ~260px): without the `max()`, "expanding" it would
+     actually shrink it, which reads as a bug, not an affordance.
+     `:focus-within` puts a keyboard user who Tabbed onto one of the five
+     pips inside in the exact same state a mouse hover would -- no separate
+     keyboard path to keep in sync with the mouse one. */
+  .rank-band:hover, .rank-band:focus-within {
+    flex: 0 0 max(230px, calc(var(--band-weight) * 1%));
+    z-index: 3;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .rank-band:hover, .rank-band:focus-within {
+      transform: translateY(-2px);
+      box-shadow: 0 3px 10px rgba(0,0,0,.4);
+      transition: transform .2s ease, box-shadow .2s ease;
+    }
+  }
+  /* The painted fill lives in its OWN clipped box, separate from the pips/
+     icons below: `.rank-band` itself must never clip, since a popped-out
+     icon has to escape upward past the bar's own top edge. Rounded corners
+     only on the two ends of the whole bar, same as the old single-element
+     bar's own border-radius. */
+  .rank-band-surface { position: absolute; inset: 0; overflow: hidden; }
+  .rank-band:first-child .rank-band-surface { border-radius: 8px 0 0 8px; }
+  .rank-band:last-child .rank-band-surface { border-radius: 0 8px 8px 0; }
+  /* Dim base + bright clipped fill is the SAME "how far along" reading the
+     old whole-bar gradient gave (`.rank-ladder-bands`/`.rank-ladder-fill`),
+     just scoped to one band's own `--band-tint` (`capGradient(tier) ||
+     rankColor(tier)`, rankpage.js -- the SAME colour the standards table
+     and every other tier surface already use) instead of one continuous
+     linear-gradient image spanning all nine. Plain `background` on purpose,
+     never `color-mix()`: `capGradient()` returns a `linear-gradient(...)`
+     STRING for the two patterned tiers (Toadsworth, Toad), and `color-mix`
+     requires two `<color>` tokens -- feeding it a gradient is invalid CSS,
+     exactly the round-4 bug. `background` accepts a flat colour or a
+     gradient string identically, so both forms render correctly here. */
+  .rank-band-base, .rank-band-fill {
+    position: absolute; inset: 0; background: var(--band-tint);
+  }
+  .rank-band-base { opacity: .26; }
+  .rank-band-fill { opacity: 1; width: 0; }
+  /* The pip: a focusable 9px hit box (a 1px line is not a target -- same
+     reasoning the old `.rank-ladder-step` used), positioned at a LOCAL
+     percentage of its OWN band -- 0/20/40/60/80%, since DIVISIONS_PER_TIER
+     always cuts a tier into five equal-score slices. That percentage is
+     what stays correct whether the band is squeezed to a sliver (Mario, at
+     rest) or expanded to its full hover width -- the alignment guarantee
+     lives here, not in per-band math. */
+  .rank-band-pip {
+    position: absolute; top: 0; bottom: 0; left: 0; width: 9px;
+    transform: translateX(-50%); cursor: pointer;
+  }
+  .rank-band-pip:focus-visible {
+    outline: 2px solid var(--gold); outline-offset: 1px; border-radius: 2px;
+  }
+  .rank-band-pip::after {
+    content: ""; position: absolute; left: 50%; top: 5px; bottom: 5px;
+    width: 1px; background: rgba(255,255,255,.28); transform: translateX(-50%);
+  }
+  .rank-band-pip.is-tier::after {
+    top: 0; bottom: 0; width: 2px; background: rgba(6,16,28,.9);
+  }
+  /* The icon: `left: 50%` centres it on ITS OWN pip (the positioned parent),
+     the same local percentage the pip itself sits at -- pip and icon are
+     siblings sharing one coordinate space, which is what makes "always
+     exactly above its own pip" hold without per-band tuning. Hidden and
+     tucked toward the bar at rest (`pointer-events: none` so an invisible
+     icon can never steal a hover meant for a neighbour), popped up to full
+     size and opacity only while `.rank-band` is hovered or focused --
+     `pointer-events: auto` there so a mouse resting directly on the now-
+     much-bigger icon gets ITS OWN tooltip rather than passing through to
+     whatever's behind it. */
+  .rank-band-icon {
+    position: absolute; left: 50%; bottom: calc(100% + 8px);
+    opacity: 0; pointer-events: none;
+    transform: translate(-50%, 10px) scale(.5);
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .rank-band-icon { transition: opacity .25s ease, transform .25s ease; }
+  }
+  .rank-band:hover .rank-band-icon, .rank-band:focus-within .rank-band-icon {
+    opacity: 1; pointer-events: auto;
+    transform: translate(-50%, 0) scale(1);
+  }
+  /* The reached-this-far marker: a bright edge on the fill, so the exact
+     value is readable against a banded track that has plenty of edges of
+     its own. Absolutely positioned against `.rank-ladder` itself (a flex
+     container, but that only matters to its IN-FLOW children -- an
+     absolutely positioned one is removed from flex layout and placed by
+     `left:%` against the container's own box like any other). */
+  .rank-ladder-head {
+    position: absolute; top: -1px; bottom: -1px; width: 2px;
+    background: var(--text); transform: translateX(-1px); z-index: 2;
+  }
+  /* The one permanent icon: the user's own rank, floating above its EXACT
+     score position -- never a showcase tile. Bigger than the hover-revealed
+     ones (CURRENT_RANK_ICON_SIZE, rankpage.js), since nothing else marks
+     "this one is you" at rest any more. Same face as the cap's own
+     sign-field glyph (`.hat .glyph`) for YOU -- a display word, not a
+     caption -- with enough gap below it that the bigger icon can never
+     grow into the text above it. */
+  .rank-ladder-mark.is-you {
+    position: absolute; bottom: calc(100% + 8px); left: 0;
+    transform: translateX(-50%); z-index: 4;
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+  }
+  /* Hides while ANY band is expanded: YOU's position is only true in the
+     AT-REST proportional layout, and a band mid-hover is deliberately NOT
+     proportional (that is the whole trick the expansion relies on) --
+     showing a now-wrong "you are here" position during that transient
+     state would recreate exactly the kind of mismatch the user rejected
+     the old design over. `:has()` already has a precedent in this file
+     (header.js's context-select focus ring, `.context-select:has(>
+     select:focus-visible)`). */
+  .rank-ladder:has(.rank-band:hover, .rank-band:focus-within) .rank-ladder-mark.is-you {
+    opacity: 0; pointer-events: none;
+  }
   .rank-ladder-you {
     color: var(--gold); font-size: .68rem; font-weight: 700;
     letter-spacing: .1em; line-height: 1;
     font-family: "SuperMario256", Impact, sans-serif;
   }
-  /* Nine EQUAL groups, not score-proportional (round 3, addendum, task 8,
-     2026-07-26 — corrects round 2's own attempt, which sized each group to
-     its tier's real score-width and, as a direct consequence, gave the
-     TIGHTEST bands — Mario, Grandmaster, the tiers a user is climbing
-     TOWARD — the least room for icons, backwards for a progression
-     showcase). `flex: 1 1 0` splits `.rank-ladder-scale` into nine equal
-     shares regardless of each tier's real score-width; the bar below still
-     carries the true proportional reading, so nothing about score accuracy
-     is lost, only the strip's own x-alignment with it (the user's own
-     ruling: costs nothing real).
-
-     Round 4 (addendum, task 8, 2026-07-26): the colour tie used to be a
-     full-height background on THIS element — broken two ways the user
-     found. First, a real bug: `capGradient()` (caps.js) returns a
-     `linear-gradient(...)` STRING for the two patterned tiers, and
-     `color-mix()` requires two `<color>` tokens — feeding it a gradient is
-     invalid CSS, so Toad and Toadsworth's groups silently got no background
-     at all. Second, underneath that: a coloured RECTANGLE spanning the
-     whole group reads as a band that ought to line up with the matching
-     band on the score bar below — it never can (nine equal groups vs. a
-     score-proportional bar, the very thing round 3 decoupled on purpose),
-     so the rectangle was implying an alignment that doesn't exist. Fixed
-     both by moving the tie to a short UNDERLINE strip
-     (`.rank-ladder-tier-strip`, below `.rank-division-row`) instead of a
-     full-height backdrop: `background` (unlike `color-mix`) accepts a flat
-     colour AND a gradient string alike, and a strip that ends exactly where
-     its five icons end reads as "this label belongs to this group", not as
-     a band claiming to span anything wider. Renamed `--tier-tint` to
-     `--ladder-tint` (set inline, rankpage.js, from the SAME
-     `capGradient(tier) || rankColor(tier)` the ladder band and the
-     standards table already use) — EntityTile's OWN unrelated `--tier-tint`
-     usage (`.entity-tile`, earlier in this file) was checked and is safe (always a plain
-     `rankColor`, never `capGradient`), but the rename avoids the two ever
-     being confused for the same variable again. */
-  .rank-ladder-tier-group {
-    flex: 1 1 0; min-width: 0; height: 100%;
-    display: flex; flex-direction: column;
-    container-type: inline-size;
-  }
-  .rank-division-row {
-    flex: 1 1 auto; min-height: 0;
-    display: flex; align-items: flex-end; justify-content: space-between;
-    width: 100%; padding: 0 2px;
-  }
-  .rank-ladder-tier-strip {
-    display: block; flex: 0 0 auto; height: 3px; margin-top: 3px;
-    border-radius: 2px; background: var(--ladder-tint);
-  }
-  .rank-division-mark {
-    display: flex; flex-direction: column; align-items: center;
-    flex: 0 0 auto;
-  }
-  /* The user's own tier+division among the 45 (round 4, addendum, task 8,
-     2026-07-26 — the user: "the ranked icon that we actually have... should
-     be floating up and down"). This is now the ONLY highlight doing the job
-     the removed oversized YOU cap used to do, so it needs to be findable
-     in a STILL screenshot too, not only while animating — the glow is
-     unconditional, the bob is the motion layer on top of it. Gold, not
-     `--ladder-tint`: a `drop-shadow()` colour argument has the exact same
-     <color>-only constraint `color-mix()` does above, and `--ladder-tint`
-     is a gradient STRING for the two patterned tiers — reusing it here
-     would silently fail the same way. Gold also visually pairs the
-     highlight with `.rank-ladder-you`'s own colour, rather than tying it to
-     the tier it happens to sit in. */
-  .rank-division-mark.is-mine {
-    filter: drop-shadow(0 0 4px var(--gold));
-  }
   @media (prefers-reduced-motion: no-preference) {
-    .rank-division-mark.is-mine {
-      animation: rank-mark-bob 2.4s ease-in-out infinite;
-    }
+    .rank-ladder-you-icon { animation: rank-mark-bob 2.4s ease-in-out infinite; }
     @keyframes rank-mark-bob {
       0%, 100% { transform: translateY(0); }
       50% { transform: translateY(-4px); }
     }
-  }
-  /* Nine EQUAL groups means this threshold now applies (or doesn't) to all
-     nine at once, not band-by-band (round 2 measured a per-band crossover;
-     round 3's groups are uniform, so there is exactly one crossover width
-     for the whole strip — task report has it). Below it, every group thins
-     to its bottom division alone (`is-floor`, the pre-round-2 single-icon-
-     per-tier look), re-centred (a lone flex child under `space-between`
-     sits at the start, not the centre, so this needs its own
-     `justify-content`).
-
-     Round 4 (addendum, task 8, 2026-07-26): `:not(.is-mine)` was added to
-     this hidden-selector after a narrow-width render caught the user's own
-     highlighted icon disappearing along with every other non-floor mark
-     whenever their division wasn't V -- exactly the "findable at a glance"
-     job the removed oversized YOU cap used to guarantee on its own. Below
-     this width a group can now show ONE icon (the floor, same as before)
-     or TWO (floor + the user's own, if they differ) -- never zero for the
-     tier the user is actually in. */
-  @container (max-width: 140px) {
-    .rank-division-row { justify-content: center; }
-    .rank-division-mark:not(.is-floor):not(.is-mine) { display: none; }
-  }
-  .rank-ladder-bands, .rank-ladder-fill {
-    position: absolute; left: 0; top: 0; bottom: 0;
-    background-repeat: no-repeat; background-size: 100% 100%;
-  }
-  .rank-ladder-bands { right: 0; opacity: .26; }
-  .rank-ladder-fill { opacity: 1; }
-  /* One element per division line, drawing its own 1px pip (2px and
-     full-height where the line opens a new tier). The BOX is 9px wide and
-     transparent because every line carries a tooltip naming what reaching
-     it makes you (round 9) — a 1px element is not something a mouse can
-     find. `pointer-events` therefore stays default; only the decorative
-     ::after is inert. */
-  .rank-ladder-step {
-    position: absolute; top: 0; bottom: 0; width: 9px;
-    transform: translateX(-50%); display: flex; justify-content: center;
-  }
-  .rank-ladder-step::after {
-    content: ""; width: 1px; margin: 5px 0; background: rgba(255,255,255,.28);
-  }
-  .rank-ladder-step.is-tier::after {
-    width: 2px; margin: 0; background: rgba(6,16,28,.9);
-  }
-  /* The reached-this-far marker: a bright edge on the fill, so the exact
-     value is readable against a banded track that has plenty of edges of
-     its own. */
-  .rank-ladder-head {
-    position: absolute; top: -1px; bottom: -1px; width: 2px;
-    background: var(--text); transform: translateX(-1px);
   }
   /* Fixed pixel height, not `height:auto` — HistoryChart measures its own
      rendered width via ResizeObserver and redraws the viewBox to match, so
