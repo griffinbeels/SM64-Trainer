@@ -224,7 +224,9 @@ Expected: PASS, 3 tests.
 
 In `src/sm64_events/ranks/standards.py`, delete the `RANK_COLORS` dict at lines 11-21 and its explanatory comment. In `tests/test_ranks_standards.py`, drop `RANK_COLORS` from the import on line 3 and delete the `RANK_COLORS["Mario"].startswith("#")` assertion on line 15.
 
-In `src/sm64_events/ui/components/ranks.js`, delete `RANK_NAMES`, `RANK_COLORS`, `FG` and `rankColor` (lines 8-21) and replace the header with a re-export so existing importers keep working:
+In `src/sm64_events/ui/components/ranks.js`, delete the `RANK_NAMES` and
+`RANK_COLORS` declarations (lines 8-17) and the local `rankColor` (line 21),
+replacing them with a re-export so existing importers keep working:
 
 ```js
 // src/sm64_events/ui/components/ranks.js — the rank BANNER and the rank-mode
@@ -233,6 +235,11 @@ In `src/sm64_events/ui/components/ranks.js`, delete `RANK_NAMES`, `RANK_COLORS`,
 // here working, and are the only reason this file still exports them.
 export { RANK_NAMES, rankColor } from "./caps.js";
 ```
+
+**Keep `FG` (line 18-19) for now.** It is `Medal`'s text colour and `Medal`
+still lives in this file until Task 4 deletes both together. Removing `FG`
+here breaks `Medal` on the very next line — this task must leave the file
+working, not merely smaller.
 
 In `tests/test_ui_rank_chart.py`, drop the `RANK_COLORS` import on line 15 and delete the mirror test (lines ~80-99) — `tests/test_ui_caps.py` now owns colour. Leave every chart-geometry test in that file untouched.
 
@@ -339,7 +346,7 @@ def test_every_sprite_shares_one_canvas():
 def test_tintable_sprites_reach_pure_white():
     """Multiply scales the tier colour by this grey; anything under 250 tints
     dark. The wings keep their own shading, so only their highlight matters."""
-    for stem in ("cap", "patch", "spots", "wing1", "wing4"):
+    for stem in ("cap", "patch", "spots", "wing1_l", "wing4_r"):
         art = Image.open(HAT / f"{stem}.png").convert("RGBA")
         alpha = art.getchannel("A")
         grey = art.convert("L")
@@ -379,7 +386,14 @@ Three transformations, each with a reason:
    is the correct seam. This is what makes the flap possible: the two wings
    rotate in opposite directions, and one image holding both can only turn as
    a unit. Assert each half is non-empty — a seam in the wrong place produces
-   one blank file and a hat with a single wing.
+   one blank file and a hat with a single wing. **Emit only the split halves**;
+   a combined `wingN.png` alongside them is an orphan and fails
+   `test_no_orphan_sprites`.
+
+The shipped set is therefore exactly twelve files: `cap`, `cap_outline`,
+`patch`, `spots`, and `wing{1..4}_{l,r}`. Note the raw export is named
+`spots_toad.png` but ships as `spots.png` — one pattern serves both spotted
+tiers, distinguished only by `patternColor`.
 
 Then downscale every output to **512 px wide** (`Image.LANCZOS`) — the largest
 on-screen use is a 96px cap, and 1283px sprites are ~120 KB each in an exe that
