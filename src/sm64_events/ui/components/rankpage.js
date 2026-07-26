@@ -755,7 +755,11 @@ export function RankPage({ t }) {
         : !data
           ? html`<${InlineState}>Loading this scope…<//>`
           : html`<div class="rank-card-main">
-              <${Hat} tier=${data.tier} division=${data.division} size=${64} />
+              <!-- Unranked is an EXPLICIT empty state (final review I5,
+                   2026-07-25), matching PracticeCell's starrank "–" rather
+                   than calling Hat with no tier and drawing a plain grey
+                   cap. -->
+              ${data.tier ? html`<${Hat} tier=${data.tier} division=${data.division} size=${64} />` : "–"}
               <div>
                 <h2>${data.tier ? `${capName(data.tier)} ${divisionDigit(data.division)}` : "Unranked"}</h2>
                 <p class="meta">MARELO ${fmtPoints(tweenedMarelo)} pts · next division at ${fmtPoints(data.next_division_at)}</p>

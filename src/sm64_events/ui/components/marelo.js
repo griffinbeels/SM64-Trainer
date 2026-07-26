@@ -43,9 +43,14 @@ export function MareloBar({ marelo, onOpen }) {
   const score = useTween(marelo ? marelo.marelo : null);
   if (!marelo) return null;
   const { tier, division, label, mastery, coverage, n, practiced } = marelo;
+  // Unranked is an EXPLICIT empty state, not a Hat drawn with no tier (final
+  // review I5, 2026-07-25: `tier == null` used to still call Hat, which drew
+  // a plain grey cap with nothing in it -- the deleted Crest drew a "–" for
+  // the same state). PracticeCell's starrank cell already spells "no rank"
+  // as a bare "–"; this reuses that spelling rather than inventing a third.
   return html`<button type="button" class="marelo-bar" onclick=${onOpen}
       title=${`${label}: mastery ${fmtScore(mastery)} x coverage ${practiced}/${n}`}>
-    <${Hat} tier=${tier} division=${division} size=${34} />
+    ${tier ? html`<${Hat} tier=${tier} division=${division} size=${34} />` : "–"}
     <span class="marelo-bar-text">
       <b>${tier ? `${capName(tier)} ${divisionDigit(division)}` : "Unranked"}</b>
       <span class="meta">${label} · ${fmtPoints(score)} pts</span>
