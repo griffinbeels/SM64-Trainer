@@ -1329,9 +1329,10 @@
     position: relative; height: 16px; margin: 4px 0 3px;
     border-radius: 8px; background: rgba(4,13,23,.72); overflow: hidden;
   }
-  /* The medal row above the track: one per tier, centred over its own band,
-     with the current band's raised and enlarged. Fixed height so the card
-     doesn't reflow as YOU moves between bands of different medal sizes. */
+  /* The medal row above the track: one group per tier band (below), plus
+     YOU (raised and enlarged, the current band's own group dropped while it
+     stands in). Fixed height so the card doesn't reflow as YOU moves
+     between bands. */
   .rank-ladder-scale { position: relative; height: 40px; }
   .rank-ladder-mark {
     position: absolute; bottom: 0; transform: translateX(-50%);
@@ -1341,6 +1342,44 @@
   .rank-ladder-you {
     color: var(--gold); font-size: .55rem; font-weight: 800;
     letter-spacing: .12em; line-height: 1;
+  }
+  /* One group per tier band (round 2, addendum, task 8, 2026-07-26): all
+     five divisions, evenly spaced -- an equal SLICE of the band's own
+     score-width by construction, so `space-between` across them is the true
+     proportional position within the tier, not an approximation. The OUTER
+     group sits at the band's own `left`/`width` (set inline, rankpage.js)
+     and owns `container-type: inline-size`, so the fallback below can key
+     off THIS group's own rendered width rather than the viewport's -- the
+     narrowest bands (Mario, Grandmaster: 5 score-points) run out of room
+     for five 14px icons at almost any card width, while the widest (Silver:
+     20 points) can hold five much longer, so the thinning has to be
+     per-group, not one global breakpoint for the whole bar. A container
+     cannot restyle ITSELF off its own query, only descendants -- hence the
+     separate `.rank-division-row` inner element the `@container` rule below
+     actually targets. */
+  .rank-ladder-tier-group {
+    position: absolute; bottom: 0; height: 100%;
+    container-type: inline-size;
+  }
+  .rank-division-row {
+    display: flex; align-items: flex-end; justify-content: space-between;
+    height: 100%;
+  }
+  .rank-division-mark {
+    display: flex; flex-direction: column; align-items: center;
+    flex: 0 0 auto;
+  }
+  /* Below this width five 14px icons (roughly 23px wide each at the hat
+     style's own aspect ratio) cannot fit without touching -- measured
+     against the render, not guessed (task report has the width sweep).
+     Thin back to the bottom division alone (`is-floor`), the same single
+     medal-per-tier look this feature replaces, and re-centre it over the
+     band the way that look always did (a lone flex child under
+     `space-between` sits at the start, not the centre, so this needs its
+     own `justify-content`). */
+  @container (max-width: 140px) {
+    .rank-division-row { justify-content: center; }
+    .rank-division-mark:not(.is-floor) { display: none; }
   }
   .rank-ladder-bands, .rank-ladder-fill {
     position: absolute; left: 0; top: 0; bottom: 0;

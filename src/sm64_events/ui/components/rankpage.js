@@ -149,26 +149,60 @@ const LADDER_STEPS = TIER_BANDS.flatMap((band) => {
 // the YOU medal is the band it falls in (bandForScore, full-table like the
 // server's own aggregate path), and the division numeral, which would need
 // a ladder, is still never computed here.
+//
+// Round 2 (addendum, task 8, 2026-07-26 — the user: "we should see ALL of
+// the tiers with ALL of the wing progressions and ALL of the number
+// progressions above each of the bars... a version of the cap_contact_sheet
+// embedded into the app as a visual progression tool"): the scale went from
+// nine tier medals to all 45 division steps (LADDER_STEPS already has one
+// per division; this just draws it instead of computing yet another table).
+// One flat size for all 45 (DIVISION_MARK_SIZE, below), always smaller than
+// YOU's 22px — YOU stays the most prominent thing on the bar.
+//
+// Each tier gets its OWN flex row of 5, not one long 45-wide row: a
+// division is an EQUAL slice of its tier's band by construction (`width =
+// band width / DIVISIONS_PER_TIER` — same math LADDER_STEPS already uses),
+// so `justify-content: space-between` across those 5 IS the true
+// proportional position within that tier, and the group itself still sits
+// at `left:band.from%` / `width:(band.to-band.from)%` on the real score
+// axis — nothing here stops being score-accurate. What it fixes is a
+// mismatch between the FLAT per-icon size the user asked for and Mario's
+// band being 5 SCORE-POINTS wide out of 100: five same-size icons in a
+// group that narrow cannot help but collide at any realistic card width, no
+// matter how the whole 45 are laid out — an icon COUNT problem, not a
+// layout-strategy one. `.rank-ladder-tier-group`'s own `@container` rule
+// (index.html) thins that ONE group back to its bottom division (`is-floor`
+// — the old single-medal-per-tier look) once ITS OWN rendered width can't
+// fit five without touching, so the widest bands (Silver, 20 points) keep
+// all five long after the narrowest (Mario/Grandmaster, 5) have already
+// thinned — verified at a width sweep, not assumed (see the task report).
+const DIVISION_MARK_SIZE = 14;
+
 function LadderBar({ value }) {
   const filled = Math.max(0, Math.min(SCORE_CEILING, value || 0));
   const here = bandForScore(filled);
   return html`<div>
-    <!-- Which band is which, named by the same medal every other rank
-         surface uses, centred over its own stretch of the track (live
-         request 2026-07-25 round 8 — "so that it's very clear what each one
-         is"). The CURRENT rank's medal is bigger, raised, tagged YOU, and
-         sits over the value's ACTUAL position rather than its band's centre
+    <!-- The CURRENT rank's medal is bigger, raised, tagged YOU, and sits
+         over the value's ACTUAL position rather than its band's centre
          (round 9: "our active rank should be above the ACTUAL position in
          the bar — like that big white line"), so it travels along the track
          as divisions are climbed instead of jumping a whole tier at a time.
-         Its band's small medal is dropped while it stands in for it — two
-         medals of the same rank on one row would read as a duplicate. -->
+         Its band's own division group is dropped while it stands in for it
+         — two medals of the same rank on one row would read as a duplicate. -->
     <div class="rank-ladder-scale">
-      ${TIER_BANDS.filter((band) => band.tier !== here.tier).map((band) => html`<span
-          class="rank-ladder-mark" style=${`left:${(band.from + band.to) / 2}%`}
-          title=${`${capName(band.tier)} — ${toPoints(band.from)} to ${toPoints(band.to)} pts`}>
-        <${RankIcon} tier=${band.tier} size=${13} />
-      </span>`)}
+      ${TIER_BANDS.filter((band) => band.tier !== here.tier).map((band) => {
+        const stepWidth = (band.to - band.from) / DIVISIONS_PER_TIER;
+        return html`<div class="rank-ladder-tier-group"
+            style=${`left:${band.from}%;width:${band.to - band.from}%`}>
+          <div class="rank-division-row">
+            ${DIVISION_NUMERALS.map((numeral, index) => html`<span
+                class="rank-division-mark ${index === 0 ? "is-floor" : ""}"
+                title=${`${capName(band.tier)} ${numeral} — MARELO ${toPoints(band.from + stepWidth * index)} pts`}>
+              <${RankIcon} tier=${band.tier} division=${numeral} size=${DIVISION_MARK_SIZE} />
+            </span>`)}
+          </div>
+        </div>`;
+      })}
       <span class="rank-ladder-mark is-you" style=${`left:${filled}%`}
           title=${`You are here — ${toPoints(filled)} pts`}>
         <b class="rank-ladder-you">YOU</b>
