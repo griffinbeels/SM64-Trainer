@@ -184,6 +184,11 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
     }));
     // The currently-set target, so the picker highlights it. `tgt` always
     // exists once `v` does (views.py always populates it with defaults).
+    // This card's deleted predecessor computed `starId(course_id ?? 1,
+    // star_id ?? 0)` unconditionally, so a SEGMENT target -- whose
+    // course_id is null -- always highlighted Bob-omb Battlefield's first
+    // star instead of the segment actually being practiced. Branching on
+    // `tgt.kind` first fixes that.
     const targetValue = tgt.kind === "segment"
       ? `segment:${tgt.segment_id}`
       : tgt.course_id != null
