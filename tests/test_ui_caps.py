@@ -8,15 +8,31 @@ all nine medals in one 13px row and the chart draws a dot per tier, so any two
 can end up side by side. Order: the JS key order IS the ladder, and a reorder
 would silently mis-rank every entity.
 """
+import json
 import re
+import shutil
+import subprocess
 from math import sqrt
 from pathlib import Path
+
+import pytest
 
 from sm64_events.ranks.classify import RANK_NAMES
 from tests.source_scan import strip_comments
 
 CAPS_JS = Path(__file__).resolve().parents[1] / "src" / "sm64_events" / "ui" / "components" / "caps.js"
 HAT_JS = CAPS_JS.parent / "hat.js"
+
+
+def run_node(imports: str, body: str):
+    """Execute caps.js for real -- it is import-free specifically so node can
+    unit-test it (caps.js:14), the same convention as ui/entities.js
+    (tests/test_ui_entities.py)."""
+    script = f"import {{ {imports} }} from {CAPS_JS.as_uri()!r};\n{body}"
+    result = subprocess.run(["node", "--input-type=module", "-"],
+                            input=script, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
 
 # Anything at or below this failed in production; the palette must clear it
 # with margin. Raising it is a decision, not a cleanup.
@@ -98,6 +114,101 @@ def test_the_glyph_rule_outranks_the_layer_rule():
         "left/top resets them; it must come first")
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
 def test_division_five_wears_no_wings_and_division_one_wears_four():
-    source = strip_comments(CAPS_JS.read_text(encoding="utf-8"))
-    assert "5 - digit" in source, "wingTiers must map division 5 -> 0 wings"
+    """M1 (final review, 2026-07-25): the old version of this test asserted
+    only `"5 - digit" in source`, a substring that stayed green no matter
+    what WING_TIERS or the clamp actually computed -- it could not tell 4
+    wings from 2, and never touched division I at all. caps.js is
+    import-free specifically so a guard like this one can execute the real
+    function instead of reading its text."""
+    wings = run_node("wingTiers", "console.log(JSON.stringify("
+                     '["V", "IV", "III", "II", "I"].map((numeral) => '
+                     'wingTiers("Mario", numeral))));')
+    assert wings == [0, 1, 2, 3, 4], (
+        "wingTiers must map division V (bottom of a tier) to 0 wings and "
+        "climb one wing per division up to I (all four)")
+
+
+def _tinted_pair_problems(source: str) -> list:
+    """Everything wrong with hat.js's fill/shade emission, or [] if the
+    tinted-pair invariant (final review I4, 2026-07-25) holds structurally:
+    every `.fill`/`.shade` pair must be built by ONE helper that resolves
+    art(stem) exactly once and reuses it for both layers, and that helper
+    must be the ONLY place in the file a `.shade` layer is ever constructed
+    -- a hand-written pair (or a lone hand-written `.shade`) elsewhere could
+    read a different --art file than its sibling with nothing to catch it.
+    Factored out (rather than written inline in the test) so
+    test_the_guard_can_still_fail_on_a_hand_written_shade can run it against
+    synthetic BAD source, not just trust the real file never regresses."""
+    code = strip_comments(source)
+    problems = []
+    helper = re.search(r"function tintedPair\([^)]*\)\s*\{(.*?)\n\}", code, re.S)
+    if not helper:
+        problems.append("no tintedPair(...) helper found")
+        return problems
+    body = helper.group(1)
+    art_calls = re.findall(r"\bart\(", body)
+    if len(art_calls) != 1:
+        problems.append(
+            f"tintedPair calls art() {len(art_calls)} times, not once -- it "
+            "must resolve art(stem) ONCE and reuse the result for both layers")
+    else:
+        bound = re.search(r"const (\w+)\s*=\s*art\(", body)
+        if not bound:
+            problems.append("tintedPair does not bind art(stem) to a local before using it")
+        elif body.count(f"--art:${{{bound.group(1)}}}") != 2:
+            problems.append(
+                f"the fill and shade layers do not both interpolate the same "
+                f"resolved {bound.group(1)}")
+    # Excludes "spot-shade", a deliberately different layer (spots tint from
+    # the CAP's own greyscale, not their own) -- see spec.pattern below.
+    shade_sites = len(re.findall(r"(?<!spot-)\bshade\b", code))
+    if shade_sites != 1:
+        problems.append(
+            f"found {shade_sites} places a .shade layer is built, not one -- "
+            "a layer built outside tintedPair can read a different --art "
+            "than its sibling .fill")
+    return problems
+
+
+def test_the_mask_and_the_shade_are_built_from_one_helper_call():
+    """I4 (final review, 2026-07-25): the CSS-text check above
+    (test_the_mask_and_the_shade_come_from_one_sprite) cannot see a JS-side
+    divergence -- hat.js used to set --art independently on the sibling
+    .fill and .shade elements of every tinted pair (the main cap AND each
+    wing side), so changing one art() call and not its twin broke the tint
+    with the whole suite green."""
+    assert _tinted_pair_problems(HAT_JS.read_text(encoding="utf-8")) == []
+
+
+def test_the_guard_can_still_fail_on_a_hand_written_shade():
+    """A guard that cannot fail is not one (tests/source_scan.py) -- probe
+    _tinted_pair_problems in both directions against synthetic source."""
+    good = """
+function tintedPair(stem, color) {
+  const artUrl = art(stem);
+  return [
+    html`<i class=${withSide("fill")} style=${`--art:${artUrl}`}></i>`,
+    html`<i class=${withSide("shade")} style=${`--art:${artUrl}`}></i>`,
+  ];
+}
+"""
+    assert _tinted_pair_problems(good) == []
+
+    # Regression shape 1: the pair resolves art() TWICE instead of sharing
+    # one call -- the exact bug this guard exists to catch.
+    two_calls = """
+function tintedPair(stem, color) {
+  return [
+    html`<i class=${withSide("fill")} style=${`--art:${art(stem)}`}></i>`,
+    html`<i class=${withSide("shade")} style=${`--art:${art(stem)}`}></i>`,
+  ];
+}
+"""
+    assert _tinted_pair_problems(two_calls) != []
+
+    # Regression shape 2: a SECOND .shade layer built outside the helper
+    # (e.g. a future treatment hand-rolling its own greyscale multiply).
+    extra_shade = good + '\nlayers.push(html`<i class="shade" style=${`--art:${art("cap_outline")}`}></i>`);\n'
+    assert _tinted_pair_problems(extra_shade) != []

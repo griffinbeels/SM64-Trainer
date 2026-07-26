@@ -448,9 +448,17 @@ script so a re-export is one command.
 
 **Interfaces:**
 - Consumes: everything `caps.js` exports.
-- Produces: `Hat({ tier, division = null, size = 18, title = null })`. `size` is
-  the **cap height in px**; the element is wider than that because the sprite
-  canvas holds the wingspan. `division` is the Roman numeral the server sends.
+- Produces: `Hat({ tier, division = null, size = 18, title = null, flap = false })`.
+  `size` is the **cap's own footprint in px, both axes** — the element's box
+  is the cap, not the sprite canvas; the canvas is larger (it holds the
+  wingspan) and spills outside the box on whichever side(s) the wings grow.
+  `division` is the Roman numeral the server sends. (Correction, final
+  review I1, 2026-07-25: this line originally said "the element is wider
+  than that because the sprite canvas holds the wingspan", sanctioning a box
+  sized to the full canvas width. That predates round 1's correction on the
+  HEIGHT axis — the box matches what `Medal`/`Crest` occupied — which was
+  axis-neutral and had simply never been applied to width; round 2 made the
+  box cap-tight on both axes.)
 
 - [ ] **Step 1: Write the failing test**
 

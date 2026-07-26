@@ -12,7 +12,7 @@
 import { h } from "preact";
 import htm from "htm";
 import {
-  CAP, divisionDigit, wingTiers, rankColor, CANVAS, CAP_BOX, PATCH_BOX,
+  CAP, capName, divisionDigit, wingTiers, rankColor, CANVAS, CAP_BOX, PATCH_BOX,
 } from "./caps.js";
 
 const html = htm.bind(h);
@@ -45,21 +45,41 @@ const DETAIL_MIN_SIZE = 30;
 const GLYPH_INK = "#1b1206";
 const GLYPH_INK_MARIO = "#d81f1f";
 
+// A tinted layer is always a `.fill` (mask) + `.shade` (multiply) PAIR
+// reading the SAME art file -- index.html's `.hat .fill`/`.hat .shade` rules
+// both resolve `var(--art)`, and that CSS-side agreement only holds if the
+// two elements were handed the same URL to begin with. Routing every pair
+// through this ONE helper makes that structural rather than a convention to
+// remember: `art(stem)` is resolved ONCE and reused for both layers, so
+// there is nowhere to hand them different files without editing this
+// function itself (final review I4, 2026-07-25 -- previously each pair set
+// `--art` twice, independently, on sibling elements, and changing one
+// `art("cap")` call and not its twin broke the tint with the whole suite
+// green). `extraClass` carries the wing side marker (wing-l/wing-r)
+// alongside fill/shade, not instead of them.
+function tintedPair(stem, color, extraClass = "") {
+  const artUrl = art(stem);
+  const withSide = (base) => (extraClass ? `${base} ${extraClass}` : base);
+  return [
+    html`<i class=${withSide("fill")} style=${`--c:${color};--art:${artUrl}`}></i>`,
+    html`<i class=${withSide("shade")} style=${`--art:${artUrl}`}></i>`,
+  ];
+}
+
 function wingLayers(wings) {
   const layers = [];
   // Increasing tier order, each appended after the last -- later tiers
   // paint OVER earlier ones, matching the reference sheet's verified stack.
   // Each tier is split l/r (task 2) so a flap (task 6) can turn the two
   // wings in opposite directions; both sides of a tier render as their own
-  // fill+shade pair. The side class (wing-l/wing-r, alongside fill/shade,
-  // not instead of) is what index.html's flap keyframes select on -- it
-  // carries no styling of its own.
+  // fill+shade pair via tintedPair. The side class (wing-l/wing-r) is what
+  // index.html's flap keyframes select on -- it carries no styling of its
+  // own.
   for (let tier = 1; tier <= wings; tier++) {
     for (const side of ["l", "r"]) {
       const stem = `wing${tier}_${side}`;
       const sideClass = side === "l" ? "wing-l" : "wing-r";
-      layers.push(html`<i class=${`fill ${sideClass}`} style=${`--c:#eef3f7;--art:${art(stem)}`}></i>`);
-      layers.push(html`<i class=${`shade ${sideClass}`} style=${`--art:${art(stem)}`}></i>`);
+      layers.push(...tintedPair(stem, "#eef3f7", sideClass));
     }
   }
   return layers;
@@ -77,29 +97,39 @@ export function Hat({ tier, division = null, size = 18, title = null, flap = fal
   const detail = division != null && size >= DETAIL_MIN_SIZE;
   const wings = detail ? wingTiers(tier, division) : 0;
 
-  // `size` is the CAP height. The sprite CANVAS is taller than the cap (it
-  // also holds the wingspan above/beside it), but the element Medal/Crest
-  // used to occupy was exactly `size`px tall in every fixed-height card this
-  // replaces -- so the OUTER box below must stay exactly `size`px tall too,
-  // not the taller canvas height. (Fix round 1, Griffin 2026-07-25: the
-  // first cut sized the outer box to the full canvas, growing every caller's
-  // row ~6px at typical sizes -- `canvasHeightPx = size / CAP_BOX.height`
-  // with CAP_BOX.height ~0.8 means the canvas is ~25% taller than the cap.)
-  // The full canvas renders in an INNER wrapper, shifted up by the cap's own
-  // vertical offset within it (capTopPx) so the cap aligns with the outer
-  // box's top -- everything above/below that (the wings) spills outside the
-  // outer box on purpose. Only an ancestor with its own overflow:hidden can
-  // clip that spill; `.hat` itself never does (index.html).
+  // `size` is the CAP's own footprint, both axes -- the element Medal/Crest
+  // used to occupy was exactly `size`px tall (and, being square, `size`px
+  // wide too) in every fixed-height card this replaces, so the OUTER box
+  // below must stay exactly the CAP's height and width, not the sprite
+  // CANVAS's -- the canvas is both taller AND wider than the cap (it also
+  // holds the wingspan above/beside it). (Fix round 1, Griffin 2026-07-25,
+  // height axis only: the first cut sized the outer box to the full canvas
+  // height, growing every caller's row ~6px. Fix round 2, final review I1,
+  // 2026-07-25: round 1's own argument -- "the box matches what Medal/Crest
+  // occupied" -- was axis-neutral and had simply never been applied to
+  // width, which left the box 45% wider than the cap it draws at every one
+  // of the nine call sites that never pass a division, and left the
+  // wingless division-V tier-up landing state paying for wingspan it could
+  // never use either.) The full canvas renders in an INNER wrapper, shifted
+  // up AND left by the cap's own offset within it (capTopPx/capLeftPx) so
+  // the cap aligns with the outer box's top-left corner -- everything
+  // outside that (the wings) spills off the outer box on purpose, on
+  // whichever side(s) they grow. Only an ancestor with its own
+  // overflow:hidden can clip that spill; `.hat` itself never does
+  // (index.html).
   const canvasHeightPx = size / CAP_BOX.height;
   const canvasWidthPx = canvasHeightPx * (CANVAS.width / CANVAS.height);
   const capTopPx = CAP_BOX.top * canvasHeightPx;
+  const capLeftPx = CAP_BOX.left * canvasWidthPx;
+  const capWidthPx = CAP_BOX.width * canvasWidthPx;
 
-  const outerStyle = `width:${canvasWidthPx}px;height:${size}px;`;
+  const outerStyle = `width:${capWidthPx}px;height:${size}px;`;
 
   const filters = [];
   if (spec.treatment === "translucent" || spec.treatment === "glow")
     filters.push(`drop-shadow(0 0 ${size * 0.05}px ${color})`);
-  const canvasStyle = `width:${canvasWidthPx}px;height:${canvasHeightPx}px;top:${-capTopPx}px;`
+  const canvasStyle = `width:${canvasWidthPx}px;height:${canvasHeightPx}px;`
+    + `top:${-capTopPx}px;left:${-capLeftPx}px;`
     + (spec.treatment === "translucent" ? "opacity:.8;" : "")
     + (filters.length ? `filter:${filters.join(" ")};` : "");
 
@@ -136,8 +166,7 @@ export function Hat({ tier, division = null, size = 18, title = null, flap = fal
     layers.push(html`<i class="fill" style=${`--c:${color};opacity:${fillOpacity};--art:${art("cap")}`}></i>`);
     layers.push(html`<i class="fill" style=${`--c:${ringColor};--art:${art("cap_outline")}`}></i>`);
   } else {
-    layers.push(html`<i class="fill" style=${`--c:${color};--art:${art("cap")}`}></i>`);
-    layers.push(html`<i class="shade" style=${`--art:${art("cap")}`}></i>`);
+    layers.push(...tintedPair("cap", color));
     if (spec.treatment === "metal")
       layers.push(html`<i class="highlight" style=${`--art:${art("cap")}`}></i>`);
     if (spec.pattern) {
@@ -154,7 +183,18 @@ export function Hat({ tier, division = null, size = 18, title = null, flap = fal
     layers.push(html`<i class="glyph" style=${`${glyphVars}font-size:${size * 0.26}px;color:${glyphColor}`}>${spec.glyph || divisionDigit(division)}</i>`);
   }
 
-  return html`<span class=${`hat${flap ? " hat-flap" : ""}`} title=${title} style=${outerStyle}>
+  // A DEFAULT title, derived from the same registry the icon itself reads,
+  // so no call site has to remember to pass one (final review I2,
+  // 2026-07-25: `title` was dead code -- all seventeen production call
+  // sites omitted it, and both components this replaced always set one).
+  // A caller that DOES pass an explicit `title` still wins -- this only
+  // fills the gap, it never overrides.
+  const defaultTitle = tier
+    ? `${capName(tier)}${division ? ` ${divisionDigit(division)}` : ""}`
+    : "Unranked";
+  const resolvedTitle = title != null ? title : defaultTitle;
+
+  return html`<span class=${`hat${flap ? " hat-flap" : ""}`} title=${resolvedTitle} style=${outerStyle}>
     <span class="hat-canvas" style=${canvasStyle}>${layers}</span>
   </span>`;
 }

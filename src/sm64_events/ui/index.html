@@ -934,17 +934,22 @@
      the one animation this component carries, gated on
      prefers-reduced-motion the way .starholder already does. */
   @font-face { font-family: "SuperMario256"; src: url("/ui/assets/fonts/SuperMario256.ttf"); }
-  /* `.hat`'s OWN box is exactly the cap height (hat.js sets it to `size`px) --
-     that is what makes it a drop-in for the medal/crest it replaced inside
-     seventeen fixed-height cards. `.hat-canvas` is the full sprite canvas
-     (taller AND wider, to hold the wingspan), positioned by hat.js so the cap
-     portion lines up with `.hat`'s own top -- the wings spill outside `.hat`
-     on purpose (fix round 1, 2026-07-25: the first cut sized `.hat` itself to
-     the canvas and grew every caller's row ~6px). `.hat` must never gain its
-     own `overflow: hidden`, or that spill gets clipped instead of shown; an
-     ANCESTOR doing that is the caller's call, not this component's. */
+  /* `.hat`'s OWN box is exactly the cap's footprint, BOTH axes (hat.js sets
+     width/height to the cap's own, not the canvas's) -- that is what makes
+     it a drop-in for the medal/crest it replaced inside seventeen
+     fixed-height cards. `.hat-canvas` is the full sprite canvas (taller AND
+     wider, to hold the wingspan), positioned by hat.js so the cap portion
+     lines up with `.hat`'s own top-left corner -- the wings spill outside
+     `.hat` on purpose, on whichever side(s) they grow (fix round 1,
+     2026-07-25, height only: the first cut sized `.hat` itself to the
+     canvas and grew every caller's row ~6px. Fix round 2, final review I1,
+     2026-07-25: the same fix had never been applied to width, leaving the
+     box 45% wider than the cap at every call site that never draws a
+     wing). `.hat` must never gain its own `overflow: hidden`, or that spill
+     gets clipped instead of shown; an ANCESTOR doing that is the caller's
+     call, not this component's. */
   .hat { position: relative; display: inline-block; }
-  .hat-canvas { position: absolute; left: 0; }
+  .hat-canvas { position: absolute; }
   .hat i { position: absolute; inset: 0; display: block; }
   /* Every tinted layer is TWO rules off the SAME --art: a masked colour fill
      under a multiplied greyscale shade. One custom property feeds both, so
@@ -1030,7 +1035,7 @@
      never eats a click meant for the game. The three-beat phase machine
      (fill -> flip -> hold) is JS state (TierRankUp's `phase`/`flipStep`),
      not CSS -- CSS only plays each beat's own animation (fade-in, the fill
-     bar, the crest flip, the final pop), which is why those are the only
+     bar, the cap flip, the final pop), which is why those are the only
      things prefers-reduced-motion needs to gate (same opt-in pattern as
      .starholder/.page-state above). z-index sits above .modal-backdrop
      (200): a rank-up can land while a modal is open and must still be seen. */
@@ -1055,8 +1060,8 @@
     overflow: hidden; background: rgba(255,255,255,.14);
   }
   .rankup-fill-track i { display: block; height: 100%; width: 100%; background: var(--tier); }
-  /* Beat 2 (flip): the crest turning over into each tier gained. */
-  .rankup-crest-flip { display: inline-flex; }
+  /* Beat 2 (flip): the cap turning over into each tier gained. */
+  .rankup-cap-flip { display: inline-flex; }
   @media (prefers-reduced-motion: no-preference) {
     .rankup { animation: rankup-in .25s ease-out; }
     .rankup-card.final { animation: rankup-pop .5s cubic-bezier(.2,1.6,.4,1); }
@@ -1064,7 +1069,7 @@
     @keyframes rankup-pop { from { transform: scale(.86) } to { transform: scale(1) } }
     .rankup-fill-track i { animation: rankup-fill 1.2s linear; }
     @keyframes rankup-fill { from { width: 0 } to { width: 100% } }
-    .rankup-crest-flip { animation: rankup-flip .6s ease-in-out; }
+    .rankup-cap-flip { animation: rankup-flip .6s ease-in-out; }
     @keyframes rankup-flip {
       0% { transform: rotateY(0deg); } 50% { transform: rotateY(90deg); } 100% { transform: rotateY(0deg); }
     }
