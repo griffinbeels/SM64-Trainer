@@ -916,10 +916,19 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         # Basis computed ONCE per section and shared by both rank numbers
         # below: the strat rank grades it against the ACTIVE strategy's
         # ladder, the entity rank against the entity's best-possible one.
+        # Graded on the LADDER's own clock (ranks.clock_for), not the view
+        # clock -- a ladder is defined in one clock, so grading a time from
+        # the OTHER clock compares it to the wrong ruler (an rta time
+        # includes approach time and systematically under-ranks against an
+        # igt-defined ladder). Falls back to the view clock when no
+        # standards are loaded at all, since there is then no ladder clock
+        # to defer to. The displayed PB (sec["pb"] below) is unaffected --
+        # that stays a display choice tied to the view clock.
         star_strat = masked(service.strat_by_star.get((course_id, star_id)), ek)
+        rank_clock = service.ranks.clock_for(ek) if service.ranks else clock
         star_basis = grading_basis(
-            rank_mode, pbs_by_strat.get((course_id, star_id, clock, star_strat)),
-            history, star_strat, clock)
+            rank_mode, pbs_by_strat.get((course_id, star_id, rank_clock, star_strat)),
+            history, star_strat, rank_clock)
         # Note: star sections intentionally omit "kind". The UI branches on
         # sec.kind being undefined for stars (SegmentSection vs StarSection),
         # so adding kind="star" here would silently break that check. Do not
@@ -969,11 +978,17 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         in_section = [a for a in history if a in scoped_set]
         pb_row = pbs.get(("segment", seg_id, "rta"))
         # Basis computed ONCE per section, same reasoning as the star loop
-        # above: shared by the strat rank and the entity rank.
+        # above: shared by the strat rank and the entity rank. Routed
+        # through clock_for like the star section rather than hardcoding
+        # "rta" directly -- it resolves to "rta" for every segment today
+        # (segments have no igt clock), but that's a coincidence of the
+        # standards data, not a rule; one grading-clock rule beats a rule
+        # for stars and a coincidence for segments.
         seg_strat = masked(service.strat_by_segment.get(seg_id), seg_ek)
+        seg_rank_clock = service.ranks.clock_for(seg_ek) if service.ranks else "rta"
         seg_basis = grading_basis(
-            rank_mode, pbs_by_strat.get(("segment", seg_id, "rta", seg_strat)),
-            history, seg_strat, "rta")
+            rank_mode, pbs_by_strat.get(("segment", seg_id, seg_rank_clock, seg_strat)),
+            history, seg_strat, seg_rank_clock)
         seg_sections.append({
             "kind": "segment", "segment_id": seg_id,
             "last_activity": last_id.get(("segment", seg_id), -1),

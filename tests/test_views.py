@@ -1891,3 +1891,74 @@ def test_entity_strategies_reject_an_unknown_entity(tmp_path):
         build_entity_strategies(db, svc, "not_a_real_kind:1:2")
     with pytest.raises(LookupError):
         build_entity_strategies(db, svc, "segment:9999")
+
+
+def test_a_star_section_grades_on_its_ladders_clock_not_the_view_clock(tmp_path):
+    """A rank ladder is defined in exactly ONE clock (RankStandards.clock_for
+    -- igt for star:2:2 here). The section banner must grade against that
+    clock regardless of which clock the header's Clock control is set to --
+    grading an rta time (which includes approach time) against an
+    igt-defined ladder systematically under-ranks (probe_clock.py, task-3b).
+    Both PBs come off the SAME attempt, so this isolates the grading-clock
+    bug from any difference in which attempt is picked as PB."""
+    import json
+    from sm64_events.ranks.standards import RankStandards
+
+    db, svc = make(tmp_path)
+    seed(svc)
+    ladder = {"Mario": 11.0, "Diamond": 11.5, "Platinum": 12.0,
+              "Silver": 20.0, "Iron": 40.0}
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "star:2:2": {"clock": "igt", "strategies": {"fast": ladder}}}}))
+    svc.ranks = RankStandards(p); svc.ranks.load()
+
+    db._conn.execute("UPDATE attempts SET strat_tag='fast' WHERE course_id=2")
+    db._conn.commit()
+    asyncio.run(svc.set_strat(2, 2, "fast"))
+
+    aid = next(a.id for a in db.attempts() if a.outcome == "success")
+    asyncio.run(svc.save_pb(aid, "igt"))
+    asyncio.run(svc.save_pb(aid, "rta"))
+
+    igt_view = build_session_view(db, svc, clock="igt")["stars"][0]
+    rta_view = build_session_view(db, svc, clock="rta")["stars"][0]
+    # pin the known-bad values so a ladder edit can't make this vacuous: at
+    # igt the graded time is 343 frames (Diamond V); before the fix, rta
+    # graded 350 frames against the SAME igt-defined ladder and read
+    # Platinum II -- a worse tier for a run that didn't get worse.
+    assert igt_view["rank"]["rank"] == "Diamond" and igt_view["rank"]["division"] == "V"
+    assert rta_view["rank"]["rank"] == igt_view["rank"]["rank"]
+    assert rta_view["rank"]["division"] == igt_view["rank"]["division"]
+
+
+def test_section_pb_display_stays_on_the_view_clock_after_the_grading_fix(tmp_path):
+    """Regression guard for the task-3b fix above: only the GRADING basis
+    moves to the ladder's own clock. sec["pb"] is a display choice and must
+    keep carrying the igt AND rta PBs exactly as saved, unmoved by which
+    clock the ladder is defined in or which clock the view header is set
+    to -- otherwise a later "simplification" collapses pb display onto the
+    grading clock and silently changes what the practice card shows."""
+    import json
+    from sm64_events.ranks.standards import RankStandards
+
+    db, svc = make(tmp_path)
+    seed(svc)
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "star:2:2": {"clock": "igt", "strategies": {
+            "fast": {"Mario": 11.0, "Diamond": 11.5}}}}}))
+    svc.ranks = RankStandards(p); svc.ranks.load()
+
+    db._conn.execute("UPDATE attempts SET strat_tag='fast' WHERE course_id=2")
+    db._conn.commit()
+    asyncio.run(svc.set_strat(2, 2, "fast"))
+
+    aid = next(a.id for a in db.attempts() if a.outcome == "success")
+    asyncio.run(svc.save_pb(aid, "igt"))
+    asyncio.run(svc.save_pb(aid, "rta"))
+
+    for clock in ("igt", "rta"):
+        sec = build_session_view(db, svc, clock=clock)["stars"][0]
+        assert sec["pb"]["igt"]["frames"] == 343
+        assert sec["pb"]["rta"]["frames"] == 350
