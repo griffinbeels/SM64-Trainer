@@ -168,6 +168,10 @@ lockstep.
   precedence** (result → counter → reconstructed, DISPLAY_TICK, reset-race
   guard): `detectors/star_grab.py` docstrings.
 - **Event schema**: README → Event schema (consumer-facing single source).
+- **The rating model** (two ranks per run, the 0–100 curve and its invariant,
+  divisions, scopes, mastery × coverage, watermarks) and **where to touch it to
+  extend it**: this file → MARELO. Per-module change maps stay in
+  `.claude/rules/{ranks,server,ui}.md`.
 
 ## Why there are three timers (history, not derivable from code)
 
@@ -734,15 +738,103 @@ Skip/BitS Entry get hand-authored default ladders in `DEFAULT_SEGMENT_LADDERS`.
 float to the centisecond count that would appear on the Usamune display before
 looking up the tier, so the badge always agrees with the shown time. Stars are
 graded on IGT, segments on RTA (driven by the per-entity `clock` field). The
-nine-tier ladder from fastest to slowest is Mario → Gold → Silver → A → B → C →
-D → Iron; `RANK_SCORE` maps each tier to a numeric score used for route-average
-computation.
+nine-tier ladder from fastest to slowest is **Mario → Grandmaster → Master →
+Diamond → Platinum → Gold → Silver → Bronze → Iron** (`classify.RANK_NAMES`);
+`RANK_SCORE` maps each tier to an ordinal (Mario 9 … Iron 1) used for
+route-average medals in `views.py`. Iron is the unbounded FLOOR: it carries no
+threshold, cannot be set, and its progress bar fills asymptotically
+(`easiest_cutoff / time`) so a flat 0% means "never attempted", never "slow".
 
 **LIVE-VERIFY GATE — PENDING.** Before fully trusting rank classification on a
 live session, the human must: run a known star and verify the displayed badge
 tier matches the xcams standard for that time + strategy; run a known segment and
 verify the same. Record the outcome here once confirmed. Until this is done,
 treat badge tiers as "best-effort" against the scraper data.
+
+## MARELO — the overall rating (2026-07-24/25)
+
+One rating derived from practice history, on top of the per-cutoff standards
+above. Design spec: `docs/superpowers/specs/2026-07-24-marelo-rank-system-design.md`
+(design-time; where it and this disagree, THIS is current). Per-module "where to
+change what" lives in `.claude/rules/ranks.md` (scoring/scopes/history),
+`.claude/rules/server.md` (endpoints) and `.claude/rules/ui.md` (surfaces) —
+this section is the cross-cutting model those three assume.
+
+**One time, two questions.** A practice card shows TWO ranks for the same run
+because they answer different things: the STRATEGY rank grades the time against
+the active strategy's own ladder ("how well do I run this strat"), the ENTITY
+rank grades it against the entity's **best-possible ladder** — the pointwise
+minimum across every strategy that has standards (`scoring.best_ladder`) —
+("how close is this to the fastest this star can be"). Mastering a slow strat
+therefore maxes that strat's rank but not the star's, which was the whole point
+of the design. When the two grade identically the UI shows ONE banner labelled
+with both names; it decides that by comparing the RENDERED fields, never by
+"is the active strat the fastest" (see `.claude/rules/ui.md`).
+
+**The 0–100 curve.** `ranks/scoring.py::score_for` interpolates a time between
+the ladder's cutoffs, anchored so each tier's floor is a fixed score
+(`SCORE_ANCHORS`: Mario 95, Grandmaster 90, Master 80, Diamond 70, Platinum 60,
+Gold 45, Silver 25, Bronze 10; Iron 0 implicitly). Below the easiest cutoff the
+same asymptotic Iron tail as the bar. **The invariant that holds the whole
+system together:** `tier_from_score(score_for(L,t), defined_tiers(L)) ==
+classify.rank_for(L, t)` — score and medal can never disagree, pinned over all
+278 seeded ladders by `tests/test_ranks_scoring_seed.py`. Ragged ladders are
+why `defined_tiers(ladder)` is REQUIRED for entity-level lookups: a ladder
+missing a tier still crosses that tier's score range, so a full-table lookup
+would name a tier the ladder doesn't define. Aggregates (which have no ladder)
+DO use the full table — that asymmetry is deliberate and is what lets the UI's
+`ANCHORS` mirror colour a MARELO score's band without re-deriving anything.
+
+**Divisions.** Each tier is cut into `DIVISIONS_PER_TIER` (5) equal
+score-width slices, numbered V (bottom) → I (top). `division_progress` returns
+the tier, the numeral, the fill WITHIN the current division, and the next step
+— always one division up, or the next tier's bottom division at the top of a
+tier. The UI never computes this: server-side only, `views.py::_graded_progress`
+is the one place a ladder + a time become the whole banner payload.
+
+**Scope = a derived SET, not a registry.** `scopes.entity_groups(scope_id)`
+resolves `overall`, `route:<id>` or `course:<id>` into GROUPS
+(`{"need": k, "candidates": [...]}`), so a route's K-of-N step contributes k
+slots scored by its best k candidates. Every route in the library — including
+one the user invents this afternoon — is therefore a rated scope with its own
+history for free, and there is no scope registry to maintain. The FOCUS ROUTE
+is the scope (`_active_scope`), so there is no second scope control to keep in
+sync; an unknown scope 404s deliberately rather than silently becoming a
+different rating.
+
+**MARELO = mastery × coverage.** Mastery is the mean 0–100 score over the
+entities you've practiced; coverage is practiced/total slots. The load-bearing
+distinction is **ABSENT vs ZERO**: an entity with no ladder never enters
+`rankable_entities` at all (so it can't drag a rating), while a rankable but
+unpracticed one is a real zero in the denominator. `practiced` is counted by a
+key's PRESENCE in the scores map, never truthiness, so a genuine 0.0 still
+counts. `gain_for` answers "what would the next tier here add to this scope" —
+diluted by slot count, and targeting Gold for unpracticed entities so they read
+as quests rather than floor entries.
+
+**History is recomputed, never stored.** `ranks/history.py` replays the
+successes chronologically, re-aggregating after each one, so a scope's curve
+follows CURRENT standards and CURRENT route membership by construction (a seed
+bump or a route edit reshapes the past — the UI says so rather than hiding it).
+Pure: the caller injects the scorer.
+
+**Celebrations ride watermarks, three distinct ops.** `ack` RAISES (UI-driven
+only, once the celebration has actually been shown), `sync` LOWERS on every GET
+(follows a drop down, so re-climbing celebrates again), `seed` CREATES on a
+first-ever rank (so opening a scope never celebrates your whole history at
+once). Scope watermarks and entity watermarks live in separate `ui_state` keys
+by construction. `/api/marelo/summary` triggers none of the three — that is why
+the chip row can poll safely.
+
+**Adding to this system.** The extension points, in the order they usually come up:
+
+| To add… | Touch |
+|---|---|
+| A new **scope kind** | `scopes.entity_groups` (resolve the id → groups) + `scopes.scope_list` (so the picker offers it). Scoring, history, chips, chart and breakdown all follow for free — they only ever see groups. |
+| A new **rank surface** | Read `/api/marelo` (or `_score_scope` server-side). Never recompute tier/division/fill/next in JS; if the payload lacks a field, add it in `_score_scope` where the ladders are in hand. |
+| A change to **the curve or the anchors** | `ranks/scoring.py` only — then mirror `SCORE_ANCHORS`/`DIVISIONS_PER_TIER`/`DIVISION_NUMERALS` into `ui/components/rankpage.js` (pinned by `tests/test_ui_rank_chart.py`) and re-run `tests/test_ranks_scoring_seed.py`, which is what proves score and medal still agree. |
+| A **tier colour** | `ranks/standards.py::RANK_COLORS` + its mirror in `ui/components/ranks.js` (pinned by `tests/test_ui_rank_chart.py`). Every medal, crest, gridline, rank-up dot, ladder band and card wash reads from those two. |
+| **Keeping an entity out of a rating** | `POST /api/marelo/exclude` (reversible; excluded rows stay in the payload as inert display rows). Entities with no standards are excluded by construction, not by flag. |
 
 ## Default routes foundation (2026-07-23, spec #1)
 
