@@ -8,6 +8,13 @@ Every assertion here runs against MODAL_CODE, never the raw file: the
 component's header comment names Escape, role="grid" and role="listbox" while
 explaining them, so a raw-text guard reports the prose and not the code (see
 tests/source_scan.py).
+
+The `nextStep` tests below (2026-07-25-target-picker-strategy-step, Task 5)
+are source scans too, and weaker evidence than usual for a stateful control
+like this one — a source assertion cannot run the component. The real proof
+that picking a cell actually shows the step, that Escape actually stacks, and
+that focus actually lands somewhere real is Task 8's live render; these only
+pin that the WIRING for it exists and cannot be silently deleted.
 """
 from pathlib import Path
 
@@ -85,6 +92,51 @@ def _grid_rank_guard_holds(index_source: str, cell_source: str) -> bool:
 
 def test_the_grid_hides_the_in_flow_rank_row_and_grades_via_a_corner_badge():
     assert _grid_rank_guard_holds(INDEX, CELL)
+
+
+def test_the_picker_grid_actually_asks_for_the_badge_look():
+    # Task 4 built the rankBadge branch and its CSS guard (the test above)
+    # but the plan assigned the call site to no task — CellGrid, the
+    # picker's own cell renderer, kept calling PracticeCell with the
+    # banner's default (rankBadge=false). The guard above cannot see this:
+    # it only checks that the BRANCH exists, not that anything asks for it.
+    # Without this wire, plumbing a rank onto picker options (a later task)
+    # would have silently resurrected the in-flow row the 900px audit
+    # removed, invisibly to every other test in this file.
+    assert "rankBadge=${true}" in MODAL_CODE
+
+
+def test_a_caller_without_a_next_step_still_closes_on_pick():
+    # nextStep defaults to null, so a caller that never mentions it (the
+    # segment builder, the route step editor, the header — all three existing
+    # call sites) hits handlePick's `!nextStep` branch for every id and
+    # forwards straight to the ORIGINAL onPick: close, then onChange. Nothing
+    # about that wiring may change shape for this case.
+    assert "nextStep = null" in MODAL_CODE
+    assert "if (id === null || !nextStep) { onPick(id); return; }" in MODAL_CODE
+    assert "onPick=${(id) => { setOpen(false); onChange(id); }}" in MODAL_CODE
+
+
+def test_the_clear_cell_never_enters_the_next_step():
+    # The clear cell always calls handlePick(null); handlePick's id === null
+    # branch is checked FIRST (before !nextStep), so it forwards straight to
+    # the outer onPick even when a nextStep is present — it can never reach
+    # setPendingId. There is no step to choose for "nothing".
+    assert "onclick=${() => handlePick(null)}" in MODAL_CODE
+    assert MODAL_CODE.count("onPick=${handlePick}") == 2
+    assert "if (id === null || !nextStep) { onPick(id); return; }" in MODAL_CODE
+
+
+def test_escape_backs_out_of_the_next_step_before_the_group():
+    # One handler — capture phase, registered exactly once — and inside it
+    # the pending-step check comes BEFORE the drilled-in-group check, so
+    # Escape stacks: step first, then group, then (falling through to the
+    # Modal shell's own handler once neither is set) close.
+    assert MODAL_CODE.count('addEventListener("keydown", onKey, true)') == 1
+    on_key_start = MODAL_CODE.index("const onKey = (keyEvent) => {")
+    on_key_end = MODAL_CODE.index("};", on_key_start)
+    on_key_body = MODAL_CODE[on_key_start:on_key_end]
+    assert on_key_body.index("if (pendingOption)") < on_key_body.index("setOpenGroupKey(null)")
 
 
 def test_the_grid_rank_guard_can_still_fail():
