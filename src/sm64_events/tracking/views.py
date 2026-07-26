@@ -483,7 +483,7 @@ def build_entity_ranks(db, service) -> dict[str, dict]:
     return out
 
 
-def build_entity_strategies(db, service, entity_key: str) -> dict:
+def build_entity_strategies(db, service, ek: str) -> dict:
     """The picker's step-3 "which strategy" answer: every strategy this
     entity can be practised WITH, each carrying its own rank -- so a
     strategy card can be chosen on evidence (rank + PB) instead of a bare
@@ -516,30 +516,33 @@ def build_entity_strategies(db, service, entity_key: str) -> dict:
     `stratpicker.js` already applies client-side from `sec.default_strat`
     (projection.py caveat 17); a star is always blankable.
 
-    `entity_key` is parsed by hand (`ranks.standards.entity_key` has no
-    public inverse): `"segment:<id>"` or `"star:<course>:<star>"`; anything
-    else -- and any non-numeric id -- raises LookupError (-> 404, `_http`).
-    A segment id that parses but names no known definition ALSO raises --
-    the same existence check `service.set_target_segment` applies, since
-    this is the same picker flow. Stars carry no such check anywhere in the
-    codebase (course/star ids are never validated against the catalog, see
-    `service.set_target`), so none is added here either."""
-    parts = entity_key.split(":")
+    `ek` is parsed by hand (`ranks.standards.entity_key` has no public
+    inverse): `"segment:<id>"` or `"star:<course>:<star>"`; anything else --
+    and any non-numeric id -- raises LookupError (-> 404, `_http`). A segment
+    id that parses but names no known definition ALSO raises -- the same
+    existence check `service.set_target_segment` applies, since this is the
+    same picker flow. Stars carry no such check anywhere in the codebase
+    (course/star ids are never validated against the catalog, see
+    `service.set_target`), so none is added here either. Named `ek`, not
+    `entity_key`, so the parameter can't shadow the module-level
+    `ranks.standards.entity_key` import `build_entity_ranks` calls freely
+    twenty lines above (M2, final review 2026-07-26)."""
+    parts = ek.split(":")
     if len(parts) == 2 and parts[0] == "segment":
         kind, id_parts = "segment", parts[1:]
     elif len(parts) == 3 and parts[0] == "star":
         kind, id_parts = "star", parts[1:]
     else:
-        raise LookupError(f"bad entity key {entity_key!r}")
+        raise LookupError(f"bad entity key {ek!r}")
     try:
         ids = [int(p) for p in id_parts]
     except ValueError:
-        raise LookupError(f"bad entity key {entity_key!r}") from None
+        raise LookupError(f"bad entity key {ek!r}") from None
 
     ranks = service.ranks
     all_attempts = db.attempts()
     registered = db.get_state("strategies", {})
-    deleted = db.get_state("deleted_strats", {}).get(entity_key, [])
+    deleted = db.get_state("deleted_strats", {}).get(ek, [])
     rank_mode = db.get_state("rank_mode", classify.DEFAULT_RANK_MODE)
     if rank_mode not in classify.RANK_MODES:   # forward-safe: junk reads as pb
         rank_mode = classify.DEFAULT_RANK_MODE
@@ -553,7 +556,7 @@ def build_entity_strategies(db, service, entity_key: str) -> dict:
                                 ranks, deleted)
         current_raw = service.strat_by_star.get((course_id, star_id))
         pb_key_prefix = (course_id, star_id)
-        clock = ranks.clock_for(entity_key) if ranks else "igt"
+        clock = ranks.clock_for(ek) if ranks else "igt"
         allow_blank = True
     else:
         (segment_id,) = ids
@@ -562,12 +565,12 @@ def build_entity_strategies(db, service, entity_key: str) -> dict:
                        None)
         if seg_def is None:   # same existence check set_target_segment applies
             raise LookupError(f"segment {segment_id} not found")
-        default_strat = seg_def["default_strat"]
+        default_strat = seg_def.get("default_strat")
         names = _seg_strategies(registered, history, segment_id, ranks,
                                 deleted, default_strat)
         current_raw = service.strat_by_segment.get(segment_id)
         pb_key_prefix = ("segment", segment_id)
-        clock = ranks.clock_for(entity_key) if ranks else "rta"
+        clock = ranks.clock_for(ek) if ranks else "rta"
         allow_blank = not bool(default_strat)
 
     current = current_raw if current_raw and current_raw not in deleted else None
@@ -577,7 +580,7 @@ def build_entity_strategies(db, service, entity_key: str) -> dict:
         pb_row = pbs_by_strat.get((*pb_key_prefix, clock, name))
         rank = division = score = None
         if ranks is not None:
-            ladder = ranks.ladder_cs(entity_key, name)
+            ladder = ranks.ladder_cs(ek, name)
             if ladder:
                 basis = grading_basis(rank_mode, pb_row, history, name, clock)
                 if basis is not None:
@@ -590,7 +593,7 @@ def build_entity_strategies(db, service, entity_key: str) -> dict:
             "pb_display": format_igt(pb_row["frames"]) if pb_row else None,
         })
 
-    return {"entity": entity_key, "kind": kind, "current": current,
+    return {"entity": ek, "kind": kind, "current": current,
             "allow_blank": allow_blank, "strategies": strategies}
 
 
