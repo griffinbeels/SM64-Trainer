@@ -760,16 +760,39 @@ change what" lives in `.claude/rules/ranks.md` (scoring/scopes/history),
 `.claude/rules/server.md` (endpoints) and `.claude/rules/ui.md` (surfaces) —
 this section is the cross-cutting model those three assume.
 
-**One time, two questions.** A practice card shows TWO ranks for the same run
-because they answer different things: the STRATEGY rank grades the time against
-the active strategy's own ladder ("how well do I run this strat"), the ENTITY
-rank grades it against the entity's **best-possible ladder** — the pointwise
-minimum across every strategy that has standards (`scoring.best_ladder`) —
-("how close is this to the fastest this star can be"). Mastering a slow strat
-therefore maxes that strat's rank but not the star's, which was the whole point
-of the design. When the two grade identically the UI shows ONE banner labelled
-with both names; it decides that by comparing the RENDERED fields, never by
-"is the active strat the fastest" (see `.claude/rules/ui.md`).
+**One time, three questions.** The same run grades three ways, because three
+different things are being asked. Two sit side by side on a practice card: the
+STRATEGY rank grades the time against the active strategy's own ladder ("how
+well do I run this strat"), the ENTITY rank grades it against the entity's
+**best-possible ladder** — the pointwise minimum across every strategy that has
+standards (`scoring.best_ladder`) — ("how close is this to the fastest this star
+can be"). Mastering a slow strat therefore maxes that strat's rank but not the
+star's, which was the whole point of the design. When the two grade identically
+the UI shows ONE banner labelled with both names; it decides that by comparing
+the RENDERED fields, never by "is the active strat the fastest" (see
+`.claude/rules/ui.md`).
+
+The third is `views.py::build_entity_ranks` (spec
+`2026-07-25-target-picker-strategy-step`): the **best-scoring strategy's own**
+rank, which is what the target picker's grid cells wear. At pick time no
+strategy has been chosen yet, so neither of the other two is the right question
+— "how good am I at this star, at all" is. Ties break on `min(strat)`, the same
+deterministic convention `_fastest_strategy` uses. It is an on-demand endpoint
+(`GET /api/target/ranks`), never a session-view field: the view rebuilds on
+every WebSocket event and the averaging rank modes grade O(history) per strategy
+per entity.
+
+**A ladder is defined in ONE clock, so that is the clock it grades in.**
+`RankStandards.clock_for(ek)` (igt for stars, rta for segments, overridable per
+entity) is THE grading clock everywhere — `_section_banner`, `entity_rank`, and
+both picker endpoints. It is deliberately NOT the view clock: with the header's
+Clock control on "Anchor → grab", a star's RTA time was being graded against its
+IGT-defined ladder, which is the wrong ruler — RTA includes approach time, so it
+systematically under-ranked. Measured on 2026-07-26: the same run read Platinum
+II on the section banner and Diamond V everywhere else. The DISPLAYED pb
+(`sec["pb"]`) still follows the view clock; that is a display choice and is
+correct. Fixed in `build_session_view`, pinned both directions in
+`tests/test_views.py`.
 
 **The 0–100 curve.** `ranks/scoring.py::score_for` interpolates a time between
 the ladder's cutoffs, anchored so each tier's floor is a fixed score
