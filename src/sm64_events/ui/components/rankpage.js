@@ -8,7 +8,7 @@ import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { rankColor } from "./ranks.js";
-import { capName, divisionDigit } from "./caps.js";
+import { accentColor, capName, divisionDigit } from "./caps.js";
 import { fmtPoints, fmtScore, toPoints } from "./marelo.js";
 import { Hat } from "./hat.js";
 import { Icon } from "./icons.js";
@@ -108,10 +108,18 @@ const TIER_BANDS = TIERS_ASCENDING.map(([tier, floor], index) => ({
   tier, from: floor,
   to: index + 1 < TIERS_ASCENDING.length ? TIERS_ASCENDING[index + 1][1] : SCORE_CEILING,
 }));
-// Score IS percent on a 0-100 axis, so a band's edges are its stops verbatim.
-const BAND_GRADIENT = "linear-gradient(90deg, "
-  + TIER_BANDS.map((band) => `${rankColor(band.tier)} ${band.from}% ${band.to}%`).join(", ")
-  + ")";
+// Score IS percent on a 0-100 axis, so a band's edges are its stops verbatim
+// -- except the two patterned tiers (Toadsworth/Toad, addendum 2,
+// 2026-07-25), whose band is a real two-tone gradient (base -> spots ->
+// base) across its own stretch of the track rather than a flat fill, same
+// reasoning as the standards table row (capGradient there).
+function bandStops({ tier, from, to }) {
+  const accent = accentColor(tier);
+  if (!accent) return `${rankColor(tier)} ${from}% ${to}%`;
+  const mid = (from + to) / 2;
+  return `${rankColor(tier)} ${from}%, ${accent} ${mid}%, ${rankColor(tier)} ${to}%`;
+}
+const BAND_GRADIENT = "linear-gradient(90deg, " + TIER_BANDS.map(bandStops).join(", ") + ")";
 
 // Which tier BAND a 0-100 score sits in. Tier only, never division: an
 // AGGREGATE has no ladder, so the server grades it against the full anchor
