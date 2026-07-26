@@ -66,7 +66,7 @@ rank at all for an entity that is not the current target.
 | Step | Shows | Leaving it |
 |---|---|---|
 | 1 | Course cells (existing layer 1) | Escape / backdrop closes, nothing written |
-| 2 | That course's stars ∪ segments, each with a rank medal | Back / Escape → step 1 |
+| 2 | That course's stars ∪ segments, each with a rank badge | Back / Escape → step 1 |
 | 3 | Strategy cards for the picked entity | Back / Escape → step 2 |
 
 The header's *Practice target* card opens the dialog at step 1 directly. The
@@ -78,6 +78,33 @@ Escape walks the stack 3 → 2 → 1 → closed, extending the rule
 A cell pick at step 2 does **not** write. It advances to step 3. The only
 write in the whole flow happens on a step-3 card click, and it closes the
 dialog.
+
+### 1a. The step-2 medal must cost zero height
+
+`index.html` currently carries, with its reason:
+
+> `.entity-grid .starrank { display: none; }` — No rank slot in the picker:
+> nothing grades a cell here, so it rendered a column of "–" that cost a line
+> per ROW — 4 rows of it was most of the 94px that made the grid scroll on a
+> 900px-tall window (live audit 2026-07-25).
+
+Simply un-hiding that slot re-introduces a bug this app has already audited
+and fixed. Grading the cells does not remove the cost: a course where you
+have practised two of seven stars still renders five "–" and the grid rows
+still grow.
+
+So the medal renders as an **out-of-flow corner badge over the cell art**,
+and only when a rank exists. `PracticeCell` gains one boolean LOOK flag,
+`rankBadge` — the same kind of call-site look flag `dimIdle` already is —
+which swaps the in-flow `.starrank` row for an absolutely-positioned
+`.starrank-badge` and renders nothing at all when `rank` is falsy.
+`.starcell` is already `position: relative` (its hover ✎ depends on it), so
+this needs no new positioning context. `.entity-grid .starrank { display:
+none }` **stays**, so a future call site cannot silently restore the
+scrolling row.
+
+The banner is untouched: it passes no `rankBadge` and keeps its in-flow slot,
+where the "–" is meaningful because every banner cell is graded.
 
 ## 2. Step 3 anatomy
 
@@ -202,8 +229,9 @@ consumer sees anything new.
 | `ui/components/entitymodal.js` | ONE new optional prop `nextStep` (a component). When given, a cell pick sets internal pending state and renders `nextStep` inside the SAME `Modal` (title = the picked cell's name) instead of calling `onChange` and closing. Absent → today's behaviour byte-for-byte, so the segment builder and route editor are untouched. The clear cell still emits `null` and closes. |
 | `ui/components/strategystep.js` | **new** — fetches `/api/target/strategies`, renders the cards, owns the commit write and the `StratModal`. |
 | `ui/components/header.js` | The target card opens the picker dialog directly; `TargetEditor` deleted. |
-| `ui/entities.js` | `courseUnionGroups` takes an optional rank map and stamps `rank` on options. `PracticeCell` already renders it. |
-| `ui/index.html` | `.strat-grid` / `.strat-card` CSS in the one design-system block. |
+| `ui/components/practicecell.js` | One boolean look flag `rankBadge` (§1a): out-of-flow corner medal, nothing when unranked. Default false — the banner is byte-for-byte unchanged. |
+| `ui/entities.js` | `courseUnionGroups` takes an optional rank map and stamps `rank` on options. |
+| `ui/index.html` | `.starrank-badge` (§1a) and `.strat-grid` / `.strat-card` CSS in the one design-system block. |
 | `tracking/views.py` | `build_entity_ranks` + `build_entity_strategies`. |
 | `server/api.py` | the two GETs + the `model_fields_set` change. |
 | `tracking/service.py` | the explicit-null clear. |
@@ -223,6 +251,10 @@ already has.
   directions, or the fix is unpinned.
 - `entitymodal.js`: a call site passing no `nextStep` still closes on pick
   (the three existing call sites depend on it).
+- §1a: `.entity-grid .starrank { display: none }` is still present in
+  `index.html`, and `practicecell.js` renders no in-flow rank element under
+  `rankBadge`. Both directions — the whole point is that a later change
+  cannot quietly put the scrolling row back.
 - `test_header_ui.py::test_target_modal_still_posts_course_and_star_as_numbers`
   **moves** to the strategy step — the string→number boundary at the API edge
   is still real, just relocated. Do not delete it.
