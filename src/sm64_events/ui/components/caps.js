@@ -22,15 +22,23 @@
 // Import-free on purpose, so node can unit-test it — same reason ui/entities.js
 // is import-free and entityicons.js is the layer above it.
 
+// Bronze/Toad darkened from pure white (addendum 2, 2026-07-25 -- the user's
+// call, reversing the earlier "leave it" ruling): a pure-white tier fed a
+// white chart gridline, rank-up dot, ladder band and a full-width white
+// standards-table row in a navy design system. Master/Vanish nudged
+// alongside it -- NOT cosmetic, load-bearing: a warm off-white Toad landed
+// 164.3 from the old pale-cyan Vanish, under the palette guard's 185 floor.
+// Moving Vanish 27 units toward saturation clears that pair at 187.4, the
+// tightest surviving pair among the un-patterned tiers (verified below).
 export const CAP = {
   Mario:       { name: "Mario",      color: "#e23b3b", treatment: "glow",  glyph: "M" },
   Grandmaster: { name: "Metal",      color: "#82a0b5", treatment: "metal" },
-  Master:      { name: "Vanish",     color: "#8fecfd", treatment: "translucent" },
+  Master:      { name: "Vanish",     color: "#7eebfc", treatment: "translucent" },
   Diamond:     { name: "Luigi",      color: "#3dc05c" },
   Platinum:    { name: "Wario",      color: "#e8af16" },
   Gold:        { name: "Waluigi",    color: "#8d42c3" },
   Silver:      { name: "Toadsworth", color: "#dad68c", pattern: "spots", patternColor: "#7a4f2a" },
-  Bronze:      { name: "Toad",       color: "#ffffff", pattern: "spots", patternColor: "#e0453f" },
+  Bronze:      { name: "Toad",       color: "#efe9e2", pattern: "spots", patternColor: "#e0453f" },
   Iron:        { name: "Capless",    color: "#735648", treatment: "outline" },
 };
 
@@ -40,6 +48,30 @@ export const RANK_NAMES = Object.keys(CAP);
 
 export const rankColor = (tier) => (CAP[tier] || {}).color || "#3a4250";
 export const capName = (tier) => (CAP[tier] || {}).name || tier || "Unranked";
+
+// Whether a tier renders TWO-TONE -- a base cap plus contrasting spots --
+// today only the two patterned tiers (Toadsworth, Toad). Null for every
+// flat tier, so a caller can test truthiness without special-casing which
+// tiers happen to have a pattern.
+export const accentColor = (tier) => {
+  const spec = CAP[tier] || {};
+  return spec.pattern ? spec.patternColor : null;
+};
+
+// A ready-to-use CSS gradient for a LARGE flat-colour surface (the
+// standards table row, the ladder band) -- addendum 2, 2026-07-25 (the
+// user's idea): a flat fill on those surfaces is a lie for the two
+// patterned tiers, whose actual identity is two-tone, and a white slab on
+// the standards table (Toad) was the live complaint that started this.
+// Driven from the registry (`color`/`patternColor`) rather than hardcoded,
+// so a future tier that gains a `pattern` gets the treatment automatically.
+// Null for a flat tier -- callers fall back to `rankColor(tier)`. NOT for
+// small marks (13px ladder dots, chart gridlines, rank-up dots): those stay
+// on the flat base colour, since a gradient in a 4px dot is mud.
+export const capGradient = (tier) => {
+  const accent = accentColor(tier);
+  return accent ? `linear-gradient(135deg, ${rankColor(tier)} 0%, ${accent} 50%, ${rankColor(tier)} 100%)` : null;
+};
 
 // Roman is what scoring.py stores; Arabic is what every surface shows. A "III"
 // is three glyphs in a sign field ~14px wide and cannot be read there, so the

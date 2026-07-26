@@ -39,14 +39,22 @@ def run_node(imports: str, body: str):
 MIN_SEPARATION = 185.0
 
 
-def _cap_table() -> dict[str, str]:
-    """{tier: hex} in declaration order, comments stripped."""
+def _cap_table() -> dict[str, dict]:
+    """{tier: {"color": hex, "pattern_color": hex|None}} in declaration
+    order, comments stripped."""
     source = strip_comments(CAPS_JS.read_text(encoding="utf-8"))
     block = re.search(r"export const CAP = \{(.*?)\n\};", source, re.S)
     assert block, "CAP table not found in caps.js -- did it move or get renamed?"
-    entries = re.findall(r'(\w+):\s*\{[^}]*?color:\s*"(#[0-9a-fA-F]{6})"', block.group(1), re.S)
+    entries = re.findall(r"(\w+):\s*\{([^}]*)\}", block.group(1), re.S)
     assert entries, "CAP parsed to nothing -- the entry shape changed"
-    return dict(entries)
+    table = {}
+    for name, body in entries:
+        color = re.search(r'color:\s*"(#[0-9a-fA-F]{6})"', body)
+        pattern_color = re.search(r'patternColor:\s*"(#[0-9a-fA-F]{6})"', body)
+        assert color, f"{name} has no color -- the entry shape changed"
+        table[name] = {"color": color.group(1),
+                        "pattern_color": pattern_color.group(1) if pattern_color else None}
+    return table
 
 
 def _channels(hex_color):
@@ -65,6 +73,30 @@ def redmean(first, second):
                 + (2 + (255 - mean_red) / 256) * db * db)
 
 
+def combined_distance(first_color, second_color, first_pattern=None, second_pattern=None):
+    """The palette guard's distance for one pair, pattern-aware (addendum 2,
+    2026-07-25 / whole-branch review M2). Comparing base colour ALONE
+    measures an icon that the two patterned tiers (Toadsworth, Toad) do not
+    actually render -- both are TWO-TONE, a base cap plus contrasting spots.
+    Where BOTH tiers in a pair carry a pattern, base and pattern colour are
+    two INDEPENDENT distinguishing signals, combined in quadrature (root of
+    the sum of squares) rather than requiring either alone to clear the
+    floor: concretely, Toad #efe9e2/#e0453f vs Toadsworth #dad68c/#7a4f2a
+    score 135.2 on base and 171.1 on pattern -- neither alone above 185, but
+    combined 218.0, MORE separable than a single pair of flat fills at the
+    190 the un-patterned tiers sit comfortably above.
+
+    A pair where only one (or neither) side has a pattern -- or where the
+    pattern colours happen to MATCH -- collapses back to base distance
+    alone, so this can never wave a pair through merely for having spots
+    (probed in test_the_guard_can_still_fail)."""
+    base_distance = redmean(first_color, second_color)
+    if first_pattern and second_pattern:
+        pattern_distance = redmean(first_pattern, second_pattern)
+        return sqrt(base_distance ** 2 + pattern_distance ** 2)
+    return base_distance
+
+
 def test_registry_covers_every_tier_in_ladder_order():
     assert list(_cap_table()) == list(RANK_NAMES)
 
@@ -74,10 +106,12 @@ def test_every_pair_of_tiers_is_visually_distinct():
     tiers = list(table)
     for index, first in enumerate(tiers):
         for second in tiers[index + 1:]:
-            distance = redmean(table[first], table[second])
+            distance = combined_distance(
+                table[first]["color"], table[second]["color"],
+                table[first]["pattern_color"], table[second]["pattern_color"])
             assert distance >= MIN_SEPARATION, (
-                f"{first} {table[first]} and {second} {table[second]} are only "
-                f"{distance:.0f} apart; the Iron/Silver pair that shipped as a "
+                f"{first} {table[first]['color']} and {second} {table[second]['color']} "
+                f"are only {distance:.1f} apart; the Iron/Silver pair that shipped as a "
                 f"bug scored 168")
 
 
@@ -86,6 +120,21 @@ def test_the_guard_can_still_fail():
     assert redmean("#8a8a8a", "#c2c2c2") < MIN_SEPARATION   # the shipped bug
     assert redmean("#f5f7f8", "#eeeae4") < MIN_SEPARATION   # white vs off-white
     assert redmean("#e23b3b", "#3dc05c") > MIN_SEPARATION    # red vs green
+
+    # Un-patterned path (either side missing a pattern) still uses base alone.
+    assert combined_distance("#8a8a8a", "#c2c2c2") < MIN_SEPARATION
+
+    # Patterned pair: base alone falls short but base+pattern combined clears
+    # the floor -- the real Toad/Toadsworth pair, addendum 2, 2026-07-25.
+    assert redmean("#efe9e2", "#dad68c") < MIN_SEPARATION
+    assert redmean("#e0453f", "#7a4f2a") < MIN_SEPARATION
+    assert combined_distance("#efe9e2", "#dad68c", "#e0453f", "#7a4f2a") >= MIN_SEPARATION
+
+    # A patterned pair must NOT be waved through merely for carrying a
+    # pattern: matching spot colours carry no distinguishing signal, so the
+    # combination collapses to base alone -- which must still reject a base
+    # too close to another tier's (the same shipped-bug pair, patterned).
+    assert combined_distance("#8a8a8a", "#c2c2c2", "#e0453f", "#e0453f") < MIN_SEPARATION
 
 
 def test_the_mask_and_the_shade_come_from_one_sprite():
