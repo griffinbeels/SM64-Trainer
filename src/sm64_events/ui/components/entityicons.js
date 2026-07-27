@@ -21,8 +21,9 @@
 //
 // Each was locally reasonable and the three disagreed. So there is now no
 // per-call-site stem derivation to get right: a caller passes an entity key
-// and gets a URL. `tests/test_star_icons.py::test_no_component_resolves_icon
-// _art_on_its_own` is what keeps that true rather than aspirational.
+// and gets a URL. `tests/test_single_source.py` is what keeps that true rather
+// than aspirational: it forbids every other file from naming an art path or an
+// icon registry, so a second chain cannot be written in the first place.
 import { entityIcon, fallbackSlotForEntityKey, genericStarSrc, isGenericArt,
          optionIcon, segmentLevelsOf } from "../entities.js";
 

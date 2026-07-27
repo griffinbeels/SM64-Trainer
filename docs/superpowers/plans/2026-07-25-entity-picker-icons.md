@@ -1,5 +1,14 @@
 # Entity Picker Icons Implementation Plan
 
+> **SUPERSEDED IN PART (2026-07-26).** This plan's decision that "`stagebanner.js`
+> keeps its own `resolveIcon`" — stated twice below — is what let three surfaces
+> resolve the same entity differently and ship a bug the user reported. There is
+> now ONE chain (`ui/entities.js::entityIcon`) behind one store-facing call
+> (`components/entityicons.js`), `resolveIcon` is deleted, and
+> `tests/test_single_source.py` forbids a second one. Read `.claude/rules/ui.md`
+> for the current design; everything else in this plan still describes what
+> shipped.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the native-`<select>` entity picker with a searchable modal that shows each course's portrait and each star's icon, so a user recognises what they're picking instead of reading it.
