@@ -473,3 +473,31 @@ def test_the_bar_is_full_at_the_top_of_the_ladder_not_empty():
     assert frames[3] == ["Iron", "I", 0.771]
     assert frames[4] == ["Iron", "V", 0.0]
     assert frames[5] == ["Iron", "V", 0.0], "below the floor clamps, never negative"
+
+
+def test_only_hat_js_sizes_the_cap_glyph():
+    """The M on Mario's cap took two live reports to size ("still needs to be
+    a little smaller… we need to make sure it's consistent across every single
+    place that we use it -- we should update it once and keep it in sync
+    everywhere"). It already is: `glyphFontSizePx` in hat.js is the only place
+    a rank icon's glyph gets a size, and every one of the seventeen call sites
+    goes through it.
+
+    This is what keeps that true. A second file computing its own font size
+    from the patch geometry is a second answer, and the next tuning round
+    would fix one of them.
+    """
+    owners = {"hat.js"}
+    ingredients = ("FONT_INK_WIDTH_RATIO", "GLYPH_WIDTH_MARGIN",
+                   "GLYPH_HEIGHT_TARGET", "PATCH_BOX.width", "PATCH_BOX.height")
+    offenders = {}
+    for path in [*UI_DIR.glob("*.js"), *(UI_DIR / "components").glob("*.js")]:
+        if path.name in owners:
+            continue
+        body = strip_comments(path.read_text(encoding="utf-8"))
+        named = [token for token in ingredients if token in body]
+        if named:
+            offenders[path.name] = named
+    assert not offenders, (
+        f"{offenders} size a cap glyph themselves -- route it through "
+        "hat.js::glyphFontSizePx so one tuning round fixes every surface")

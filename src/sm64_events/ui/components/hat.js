@@ -104,7 +104,14 @@ const GLYPH_INK_MARIO = "#d81f1f";
 const FONT_INK_HEIGHT_RATIO = 0.742;
 const FONT_INK_WIDTH_RATIO_DIGIT = 0.761;   // "4", the widest of divisionDigit's 1-5
 const FONT_INK_WIDTH_RATIO_MARIO = 1.156;   // "M" -- wider than its own em box
-const GLYPH_HEIGHT_TARGET = 0.80;           // fraction of patch HEIGHT the ink should reach
+// 0.62, not the 0.80 this shipped with: 0.80 is a fraction of PATCH_BOX, the
+// RECTANGLE around the sign field, and the field itself is a dome -- so a
+// digit sized to 80% of the box crossed the white onto the cap at the bottom
+// and the lower-left corner, which a high-zoom render of a Wario 4 shows
+// plainly (2026-07-27). Same defect the M had, one axis over; found while
+// fixing the M rather than reported, because both live reports were about
+// the letter.
+const GLYPH_HEIGHT_TARGET = 0.62;           // fraction of patch HEIGHT the ink should reach
 const GLYPH_WIDTH_MARGIN = 0.80;            // fraction of patch WIDTH the ink must not exceed
 // The "M" needs a tighter budget than the digits, and the reason is the SHAPE
 // of the sign field rather than anything about the letter: PATCH_BOX is the
@@ -114,9 +121,19 @@ const GLYPH_WIDTH_MARGIN = 0.80;            // fraction of patch WIDTH the ink m
 // of its own em box wide) and at 80% of the BOX it was spilling off the white
 // onto the cap -- "the M in the mario cap is actually slightly too big… it
 // overlaps with the hat color, and it looks wrong" (live report 2026-07-27).
-// 0.66 keeps the ink inside the dome at every size; digits are provably
-// untouched, since their width bound stays well above their height bound.
-const GLYPH_WIDTH_MARGIN_MARIO = 0.66;
+// Two rounds on this number, both live reports, both "still too big". 0.80 put
+// the M's arms on the red; 0.66 landed it just inside the dome's widest line,
+// which is not the same as looking like it has room -- the dome NARROWS above
+// and below that line, so an M that technically fits still reads as crowding
+// the white. 0.56 leaves visible patch on every side at every size.
+//
+// Digits are provably untouched by all of this: they keep GLYPH_WIDTH_MARGIN
+// and are HEIGHT-bound anyway (their width headroom is ample), so this
+// constant only ever moves the one glyph that is wider than its own em box.
+// It lives here, in the one function every rank icon sizes its glyph through,
+// so there is nowhere else to keep in sync -- pinned by
+// tests/test_ui_caps.py::test_only_hat_js_sizes_the_cap_glyph.
+const GLYPH_WIDTH_MARGIN_MARIO = 0.56;
 
 function glyphFontSizePx(glyphChar, patchWidthPx, patchHeightPx) {
   const heightBoundPx = (GLYPH_HEIGHT_TARGET * patchHeightPx) / FONT_INK_HEIGHT_RATIO;
