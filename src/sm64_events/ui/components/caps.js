@@ -113,13 +113,29 @@ export function rankPosition(tier, numeral, fill = 0) {
 
 // The inverse, for any point mid-climb: which rank is a position standing in.
 // Clamped at both ends, so a curve that overshoots by a rounding error still
-// names a real rank instead of returning undefined into a render.
+// names a real rank instead of returning undefined into a render. `level` is
+// the CLAMPED integer part, and callers need it -- see rankFrame.
 export function rankAt(position) {
   const top = RANK_NAMES.length * DIVISIONS_PER_TIER - 1;
   const level = Math.max(0, Math.min(top, Math.floor(position)));
   const tierIndex = RANK_NAMES.length - 1 - Math.floor(level / DIVISIONS_PER_TIER);
-  return { tier: RANK_NAMES[tierIndex],
+  return { level, tier: RANK_NAMES[tierIndex],
            division: DIVISION_NUMERALS[level % DIVISIONS_PER_TIER] };
+}
+
+// THE position -> what-gets-drawn conversion: rank plus how full the bar is.
+//
+// The fill measures from the CLAMPED level, not from `Math.floor(position)`,
+// and that distinction is the whole reason this is a function rather than two
+// lines at the call site. The top of the ladder is Mario I at level 44, and a
+// maxed rank is position 45 (the "no next step, so the bar is simply full"
+// sentinel) -- whose own fractional part is ZERO. Taking the fill from the
+// raw floor therefore emptied the bar at the exact moment the player reached
+// the highest rank in the game. Caught by a frame-by-frame render trace of a
+// Capless-to-Mario climb, on the last frame, with every earlier frame right.
+export function rankFrame(position) {
+  const { level, tier, division } = rankAt(position);
+  return { tier, division, fill: Math.max(0, Math.min(1, position - level)) };
 }
 
 // A division numeral/wings/patch draws at EVERY size a division is passed --

@@ -9,6 +9,7 @@ import { Timeline } from "./timeline.js";
 import { Progress, hasProgressPoints } from "./progress.js";
 import { StageBanner } from "./stagebanner.js";
 import { RankBanner, rankColor } from "./ranks.js";
+import { useHeldWhileCelebrating } from "../rankclimb.js";
 import { RankIcon } from "./rankicon.js";
 import { StandardsPanel } from "./standards.js";
 import { StratPicker } from "./stratpicker.js";
@@ -1004,13 +1005,39 @@ export function Practice({ t, openCompare }) {
       .then(() => t.refresh())      // pull the new active_route.star_keys
       .catch(() => {});   // selection still works locally if the write fails
   };
-  const v = t.view;
+  // Held while any rank on screen is mid-climb (user, 2026-07-27: "if the
+  // celebration occurs, and then… they leave the stage, we should prevent the
+  // practice UI from transitioning to the next stage until the celebration is
+  // completed"). Grabbing the star and immediately walking out is the normal
+  // way to end a run, so without this the reward is routinely cut off one
+  // frame after it starts.
+  //
+  // What is held is the SELECTION — which stage, which target, which segment
+  // is pinned — and nothing else. Holding the whole view instead deadlocks,
+  // measured: the header's MARELO bar reads `t.marelo` rather than this view,
+  // so it begins its own climb first, the hold engages, and the frozen view
+  // then withholds the very rank-up that would have made the card's banner
+  // climb — the page sat still through the entire celebration it was meant to
+  // be protecting. Letting section DATA through is also just correct: the
+  // attempt that earned the rank-up should appear in the log while the bar
+  // climbs.
+  const frozen = useHeldWhileCelebrating({
+    target: (t.view && t.view.target) || null, stage: t.stage,
+    armedOrder: t.armedOrder, lastPinnedSeg: t.lastPinnedSeg });
+  const v = t.view && { ...t.view, target: frozen.target };
   if (!v) return html`<${PageState} kind=${t.connected ? "loading" : "offline"}
       title=${t.connected ? "Preparing your practice view" : "Waiting for the trainer"}
       message=${t.connected
         ? "Loading your target, attempts, and current stage…"
         : "The app will reconnect automatically when the local server is available."} />`;
 
+  // `held` is `t` with the frozen SELECTION swapped in (and `view` carrying
+  // the held target): every action and all section data still come from the
+  // live store, and only which-stage-am-I-looking-at waits for the
+  // celebration. `target` lives on the view, not on `t`, so it is spread
+  // through `v` rather than listed here.
+  const held = { ...t, view: v, stage: frozen.stage,
+                 armedOrder: frozen.armedOrder, lastPinnedSeg: frozen.lastPinnedSeg };
   const tgt = v.target || {};
   const segs = v.segments || [];
   // Active star and active segment are mutually exclusive — a single practice
@@ -1035,11 +1062,11 @@ export function Practice({ t, openCompare }) {
   // segment being practiced (an accidental exit disarms — correct timing
   // semantics — but the section stays put until a different segment arms);
   // before anything has ever armed, the target segment pins.
-  const armedPins = [...t.armedOrder].reverse()
+  const armedPins = [...frozen.armedOrder].reverse()
     .map((id) => segs.find((s) => s.segment_id === id))
     .filter(Boolean);
-  const stickyPin = t.lastPinnedSeg != null
-    ? segs.find((s) => s.segment_id === t.lastPinnedSeg)
+  const stickyPin = frozen.lastPinnedSeg != null
+    ? segs.find((s) => s.segment_id === frozen.lastPinnedSeg)
     : undefined;
   const pinnedSegs = starActive ? []
     : armedPins.length ? armedPins
@@ -1091,7 +1118,7 @@ export function Practice({ t, openCompare }) {
       </div>`}
     </section>
 
-    <${StageBanner} t=${t} />
+    <${StageBanner} t=${held} />
 
     ${/* ONE picker for the page, not one per section: only the primary card
          offers the trigger, and mounting a dialog's state inside every card
@@ -1099,15 +1126,15 @@ export function Practice({ t, openCompare }) {
          that never runs. */""}
     ${activeStar
       ? html`<${StarSection} key=${`${activeStar.course_id}:${activeStar.star_id}`}
-          sec=${activeStar} t=${t} ui=${ui} pinned=${true}
+          sec=${activeStar} t=${held} ui=${ui} pinned=${true}
           openPicker=${openTargetPicker}
           freshIds=${freshIds} openCompare=${openCompare} />`
       : primarySeg
         ? html`<${SegmentSection} key=${`seg:${primarySeg.segment_id}`}
-            sec=${primarySeg} t=${t} ui=${ui} pinned=${true}
+            sec=${primarySeg} t=${held} ui=${ui} pinned=${true}
             openPicker=${openTargetPicker}
             freshIds=${freshIds} openCompare=${openCompare} />`
-        : html`<${EmptyPractice} v=${v} t=${t} ui=${ui}
+        : html`<${EmptyPractice} v=${v} t=${held} ui=${ui}
             unassignedRows=${unassignedRows} freshIds=${freshIds}
             openCompare=${openCompare} hidden=${unassignedHidden}
             showHidden=${showUnassignedHidden} openPicker=${openTargetPicker}
@@ -1115,7 +1142,7 @@ export function Practice({ t, openCompare }) {
 
     ${routeView
       ? html`<section class="practice-card route-focus-card">
-          <${RouteFocus} rv=${routeView} t=${t} ui=${ui}
+          <${RouteFocus} rv=${routeView} t=${held} ui=${ui}
             freshIds=${freshIds} openCompare=${openCompare} />
         </section>`
       : restSections.length > 0 && html`<section class="practice-index">
@@ -1135,10 +1162,10 @@ export function Practice({ t, openCompare }) {
               </summary>
               ${sec.kind === "segment"
                 ? html`<${SegmentSection} key=${`seg:${sec.segment_id}`}
-                    sec=${sec} t=${t} ui=${ui} pinned=${false}
+                    sec=${sec} t=${held} ui=${ui} pinned=${false}
                     freshIds=${freshIds} openCompare=${openCompare} />`
                 : html`<${StarSection} key=${`${sec.course_id}:${sec.star_id}`}
-                    sec=${sec} t=${t} ui=${ui} pinned=${false}
+                    sec=${sec} t=${held} ui=${ui} pinned=${false}
                     freshIds=${freshIds} openCompare=${openCompare} />`}
             </details>`)}
           </div>

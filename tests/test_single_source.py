@@ -92,6 +92,23 @@ INVARIANTS = (
             "the chain; entityicons.js is the only layer a component calls.",
     ),
     SingleSource(
+        concept="what a rank-up celebration looks like",
+        owners=frozenset({"celebrations.js", "rankclimb.js", "hat.js"}),
+        tokens=("growProgress", "foldProgress", "flapPhase",
+                "--climb-flash", "--climb-settle"),
+        files=ui_js(),
+        why="ui/celebrations.js is the registry: one entry per effect, "
+            "declaring when it fires and what it contributes. rankclimb.js "
+            "merges the live ones into one bundle and hat.js reads it. A "
+            "component that starts hand-assembling these — a second surface "
+            "deciding for itself what a level-up looks like — is exactly the "
+            "divergence the icon-art incident above produced, and it would "
+            "also defeat the point of the registry, which is that adding the "
+            "next celebration is ONE entry (user, 2026-07-27: 'make sure the "
+            "system is flexible so that we can add new celebrations / iterate "
+            "on this easily as we go').",
+    ),
+    SingleSource(
         concept="the server's TCP port",
         owners=frozenset({"paths.py"}),
         tokens=("8064", "8065"),
@@ -130,17 +147,26 @@ def test_only_the_owner_may_derive_it(invariant):
 def test_the_guards_can_still_fail():
     """Probed in both directions (tests/source_scan.py's rule): a comment
     naming an ingredient must not trip a guard, and real code must."""
-    icons = INVARIANTS[0]
+    # Looked up by CONCEPT, never by index: adding a row shifted these two
+    # apart on 2026-07-27 and the probe started asserting the wrong table.
+    by_concept = {invariant.concept: invariant for invariant in INVARIANTS}
+    icons = by_concept["star/segment icon art"]
     real = code_only(Path("sample.js"), 'const art = "/ui/assets/star_icons/x.png";')
     prose = code_only(Path("sample.js"), "// we used to read COURSE_ICON_PREFIXES here\n")
     assert [token for token in icons.tokens if token in real] == ["/ui/assets/star_"]
     assert not [token for token in icons.tokens if token in prose]
 
-    port = INVARIANTS[1]
+    port = by_concept["the server's TCP port"]
     real_py = code_only(Path("sample.py"), "PORT = 8064\n")
     docstring_py = code_only(Path("sample.py"), '"""binds :8064 normally."""\nPORT = None\n')
     assert [token for token in port.tokens if token in real_py] == ["8064"]
     assert not [token for token in port.tokens if token in docstring_py]
+
+    climb = by_concept["what a rank-up celebration looks like"]
+    real_js = code_only(Path("sample.js"), "const props = { growProgress: 0.5 };\n")
+    prose_js = code_only(Path("sample.js"), "// growProgress used to be built here\n")
+    assert [token for token in climb.tokens if token in real_js] == ["growProgress"]
+    assert not [token for token in climb.tokens if token in prose_js]
 
 
 def test_every_invariant_actually_covers_files():

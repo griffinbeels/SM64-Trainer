@@ -44,6 +44,18 @@ const easeOutBack = (fraction) => {
 
 const easeOutCubic = (fraction) => 1 - (1 - fraction) ** 3;
 
+// The user's "Celebrations" switch (header.js's settings drawer). It lives
+// with the registry rather than with the overlays because BOTH celebration
+// systems answer to it -- the scope overlays in components/celebrate.js and
+// the level-up climb in ui/rankclimb.js -- and the climb importing
+// celebrate.js would close an import cycle.
+const PREF = "sm64.celebrate";
+export const celebrationsEnabled = () =>
+  typeof localStorage === "undefined" || localStorage.getItem(PREF) !== "0";
+export const setCelebrationsEnabled = (on) =>
+  localStorage.setItem(PREF, on ? "1" : "0");
+
+
 // What the sign field reads at a given rank -- the tier's own glyph where it
 // has one (Mario's "M"), else the division digit. Lifted out so the reel can
 // ask it about the OUTGOING rank as easily as the incoming one.

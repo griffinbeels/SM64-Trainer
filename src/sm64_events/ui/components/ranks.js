@@ -126,8 +126,13 @@ export function RankBanner({ label, banner, hint = null, identity = null }) {
   // because that number is only true of the final rank.
   const settledNext = banner.next_tier
     ? { tier: banner.next_tier, division: banner.next_division } : null;
+  // `rankAt` clamps, so at the very top of the ladder the "next" step is the
+  // rank you are already on -- which would print "MARIO 1 -> Mario 1". That
+  // is the same "top rank" state the settled banner spells out, so say so.
   const climbingNext = rankAt(rankPosition(climb.tier, climb.division, climb.fill) + 1);
-  const next = climb.climbing ? climbingNext : settledNext;
+  const atCeiling = climbingNext.tier === climb.tier
+    && climbingNext.division === climb.division;
+  const next = climb.climbing ? (atCeiling ? null : climbingNext) : settledNext;
   const nextLabel = next ? `${capName(next.tier)} ${divisionDigit(next.division)}` : null;
   const gap = (!climb.climbing && banner.next_gap_cs != null)
     ? (banner.next_gap_cs / 100).toFixed(2) : null;

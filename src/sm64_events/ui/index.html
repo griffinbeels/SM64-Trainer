@@ -1006,7 +1006,28 @@
     background-size:
       var(--rank-wash-split, 100%) 100%,
       calc(100% - var(--rank-wash-split, 100%)) 100%;
+    /* ONE transition declaration, and the state rule below sets only the
+       target value -- a `:has()` block declaring its own `transition` would
+       WHOLESALE REPLACE this one while it matched, which is exactly what
+       made the Rank tab's ladder band expand instantly and collapse
+       smoothly under "identical" CSS. */
+    opacity: 1;
+    transition: opacity .3s ease;
   }
+  /* The wash is painted from the SERVER's rank -- the one the climb is
+     heading for -- while the banner above it is still down at the rank the
+     bar has actually reached. Left alone it both clashes (a Luigi-green wash
+     under a Wario-gold cap, seen in a mid-climb capture) and SPOILS the
+     reveal, showing the destination tier's colour several seconds before the
+     climb arrives there. It steps aside for the duration instead.
+
+     `:has()` because the climbing state belongs to the banner and the wash is
+     its ancestor -- the same pattern `.rank-ladder:has(.rank-band:hover)` and
+     the context cards' focus ring already use. Fading rather than recolouring:
+     the wash is one card-wide gradient split between two banners that can be
+     climbing independently, so there is no single colour it could correctly
+     take mid-climb. */
+  .rank-slot-wrap:has(.rank-banner.is-climbing)::before { opacity: 0; }
   .rank-banner {
     min-width: 0; flex: 1 1 0; display: grid; gap: .34rem; align-content: center;
     min-height: 36px;

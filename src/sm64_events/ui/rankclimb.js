@@ -17,19 +17,90 @@
 //   caps.js             WHICH RANK a position is (import-free, pinned to Python)
 // This file owns only the loop and the bookkeeping between them.
 import { useEffect, useRef, useState } from "preact/hooks";
-import { rankPosition, rankAt, rankColor, DIVISIONS_PER_TIER } from "./components/caps.js";
+import { rankPosition, rankAt, rankFrame, rankColor, DIVISIONS_PER_TIER } from "./components/caps.js";
 import { climbPosition, climbDurationBetween } from "./climbcurve.js";
-import { activeEffects, makeBeat, celebrationTailMs } from "./celebrations.js";
+import { activeEffects, makeBeat, celebrationTailMs, celebrationsEnabled }
+  from "./celebrations.js";
 import { prefersReducedMotion } from "./useTween.js";
 
 const now = () => performance.now();
 
+// ---- The celebration HOLD ------------------------------------------------
+//
+// User requirement, 2026-07-27: "if the celebration occurs, and then for some
+// reason the user changes stages… we should prevent the practice UI from
+// transitioning to the next stage until the celebration is completed."
+//
+// Grabbing the star and immediately walking out is the NORMAL way to end a
+// run, so without this the reward is routinely cut off one frame after it
+// starts — the card that is celebrating gets replaced by the next stage's.
+//
+// A module-level set rather than context or a store slot: the climbs are
+// started by leaf components (each RankBanner, the MareloBar) and the thing
+// that must wait is an ancestor of some of them and a stranger to the rest.
+// Same shape as rankicon.js's active-style slot, for the same reason.
+const liveClimbs = new Set();
+const holdListeners = new Set();
+let nextClimbToken = 0;
+
+// A frozen practice page is a far worse failure than a clipped animation, so
+// the hold can never outlive this even if a climb somehow fails to retire its
+// token. Comfortably past climbcurve's own 7s ceiling plus the longest
+// celebration tail.
+const HOLD_CEILING_MS = 12000;
+
+function setClimbing(token, running) {
+  const wasHolding = liveClimbs.size > 0;
+  if (running) liveClimbs.add(token);
+  else liveClimbs.delete(token);
+  const holding = liveClimbs.size > 0;
+  if (wasHolding !== holding) holdListeners.forEach((notify) => notify(holding));
+}
+
+/** True while any rank on screen is mid-climb. */
+export const isCelebrating = () => liveClimbs.size > 0;
+
+export function useCelebrating() {
+  const [celebrating, setCelebrating] = useState(isCelebrating());
+  useEffect(() => {
+    holdListeners.add(setCelebrating);
+    setCelebrating(isCelebrating());
+    return () => holdListeners.delete(setCelebrating);
+  }, []);
+  return celebrating;
+}
+
+/**
+ * `value`, frozen at whatever it was when a celebration began, released the
+ * moment the last climb finishes.
+ *
+ * The value that gets frozen is the one that ARRIVED WITH the rank-up — the
+ * climb only starts once the new rank has rendered — so the attempt that
+ * earned it is already on screen. What waits is everything after: the stage
+ * change, the target moving, the sections re-picking.
+ */
+export function useHeldWhileCelebrating(value) {
+  const celebrating = useCelebrating();
+  const [expired, setExpired] = useState(false);
+  const held = useRef(value);
+  useEffect(() => {
+    if (!celebrating) { setExpired(false); return undefined; }
+    const timer = setTimeout(() => setExpired(true), HOLD_CEILING_MS);
+    return () => clearTimeout(timer);
+  }, [celebrating]);
+  if (!celebrating || expired) held.current = value;
+  return held.current;
+}
+
 function renderState(position, beats, atMs) {
-  const { tier, division } = rankAt(position);
+  // rankFrame, never `position - Math.floor(position)`: at the top of the
+  // ladder a maxed rank is position 45, whose fractional part is zero, and
+  // the bar would empty at the highest rank in the game (caps.js has the
+  // full note).
+  const { tier, division, fill } = rankFrame(position);
   const { vars, icon } = activeEffects(beats, atMs);
   return {
-    tier, division,
-    fill: position - Math.floor(position),
+    tier, division, fill,
     // The registry's tierColor entry overrides this mid-crossing; the rest of
     // the time the surface just wears its own tier's colour. One name, so a
     // caller never has to know whether a celebration is running.
@@ -59,6 +130,8 @@ export function useRankClimb(rank, identity = null) {
   const target = rank && rank.tier
     ? rankPosition(rank.tier, rank.division, rank.fill || 0) : null;
 
+  const climbToken = useRef(0);
+  if (climbToken.current === 0) climbToken.current = ++nextClimbToken;
   const positionRef = useRef(null);
   const identityRef = useRef(identity);
   const beatsRef = useRef([]);
@@ -73,6 +146,8 @@ export function useRankClimb(rank, identity = null) {
     const identityChanged = identityRef.current !== identity;
     identityRef.current = identity;
 
+    setClimbing(climbToken.current, false);
+
     if (target == null) {
       positionRef.current = null;
       beatsRef.current = [];
@@ -84,6 +159,7 @@ export function useRankClimb(rank, identity = null) {
     const snap = from == null              // first value ever: nothing to climb from
       || identityChanged                   // a different measurement entirely
       || target <= from                    // never animate a regression
+      || !celebrationsEnabled()            // the user turned celebrations off
       || prefersReducedMotion();
     if (snap) {
       positionRef.current = target;
@@ -152,13 +228,19 @@ export function useRankClimb(rank, identity = null) {
       } else {
         beatsRef.current = [];
         frameRef.current = null;
+        setClimbing(climbToken.current, false);
         setState(renderState(target, [], at));
       }
     };
+    // The hold opens HERE, with the first frame, and closes in the two
+    // places the loop can end -- its own last tick, and this cleanup for an
+    // unmount mid-climb. A token left behind would freeze the practice page.
+    setClimbing(climbToken.current, true);
     frameRef.current = requestAnimationFrame(tick);
     return () => {
       if (frameRef.current != null) cancelAnimationFrame(frameRef.current);
       frameRef.current = null;
+      setClimbing(climbToken.current, false);
     };
   }, [target, identity]);
 

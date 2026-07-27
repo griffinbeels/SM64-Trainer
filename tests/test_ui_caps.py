@@ -452,3 +452,24 @@ def test_rank_at_clamps_to_a_real_rank_outside_the_ladder():
                     " return [r.tier, r.division]; })))")
     floor, ceiling = ["Iron", "V"], ["Mario", "I"]
     assert ends == [floor, floor, ceiling, ceiling, ceiling]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+def test_the_bar_is_full_at_the_top_of_the_ladder_not_empty():
+    """A maxed rank has no next step, so its position is the top level PLUS
+    one (Mario I is level 44, maxed is 45) -- and 45's own fractional part is
+    ZERO. Taking the bar's fill from the raw floor therefore emptied it at the
+    exact moment the player reached the highest rank in the game. Caught on
+    the LAST frame of a Capless-to-Mario render trace, with every earlier
+    frame correct, which is why this guard samples the ceiling specifically.
+    """
+    frames = run_node("rankFrame, rankPosition", "console.log(JSON.stringify("
+                      "[45, 44.5, 44, 4.771, 0, -2].map((p) => {"
+                      " const f = rankFrame(p); return [f.tier, f.division,"
+                      " Math.round(f.fill * 1000) / 1000]; })))")
+    assert frames[0] == ["Mario", "I", 1.0], "maxed must read as a FULL bar"
+    assert frames[1] == ["Mario", "I", 0.5]
+    assert frames[2] == ["Mario", "I", 0.0]
+    assert frames[3] == ["Iron", "I", 0.771]
+    assert frames[4] == ["Iron", "V", 0.0]
+    assert frames[5] == ["Iron", "V", 0.0], "below the floor clamps, never negative"

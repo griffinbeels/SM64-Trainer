@@ -340,7 +340,7 @@ export function useTracker() {
            pauseReason: pauseState.reason, togglePause,
            armedSegs, armedOrder, armedNames, lastPinnedSeg, stage,
            run, refreshRun,
-           marelo, mareloRev, clearMareloCelebration, clearEntityCelebration,
+           marelo, mareloRev, clearMareloCelebration,
            update, updateForced, setUpdateForced, updateApplying,
            setUpdateApplying, updateMsg, checkUpdates, applyUpdate, skipUpdate };
 }

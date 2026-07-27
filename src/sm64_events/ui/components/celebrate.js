@@ -40,10 +40,12 @@ import { RankIcon } from "./rankicon.js";
 import { prefersReducedMotion } from "../useTween.js";
 const html = htm.bind(h);
 
-const PREF = "sm64.celebrate";
-export const celebrationsEnabled = () => localStorage.getItem(PREF) !== "0";
-export const setCelebrationsEnabled = (on) =>
-  localStorage.setItem(PREF, on ? "1" : "0");
+// The "Celebrations" pref lives in ui/celebrations.js now and is re-exported
+// here so header.js's import is unchanged. It moved because the level-up
+// climb has to honour it too, and rankclimb.js importing THIS file would
+// close a cycle (celebrate.js -> ranks.js -> rankclimb.js).
+export { celebrationsEnabled, setCelebrationsEnabled } from "../celebrations.js";
+import { celebrationsEnabled } from "../celebrations.js";
 
 async function ackScope(scopeId, key, onDone) {
   try { await send("POST", "/api/marelo/ack", { scope: scopeId, key }); }
