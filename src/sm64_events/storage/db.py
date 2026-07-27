@@ -360,8 +360,16 @@ class Database:
     def delete_session(self, session_id: int) -> None:
         """Hard-deletes the session's journal slice. The attempts cache is
         NOT touched here — callers must re-project afterwards (the journal
-        is the source of truth). PB rows survive: they carry their frames;
-        a dangling attempt_id is informational only."""
+        is the source of truth).
+
+        PB rows are NOT touched here either, and a caller that is deleting a
+        session must drop them itself (`delete_pbs_for_attempts`, which is
+        what `TrackerService.delete_session` does). A pb row carries its own
+        `frames`, so one left behind keeps GRADING a time whose entire history
+        is gone — an empty practice log under a real rank (live report
+        2026-07-27). This used to read "PB rows survive… a dangling attempt_id
+        is informational only", which was true of the row and false of what
+        the row does."""
         with self._lock:
             self._conn.execute("DELETE FROM events WHERE session_id=?",
                                (session_id,))

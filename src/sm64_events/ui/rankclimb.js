@@ -38,6 +38,22 @@ const now = () => performance.now();
 // and a stale entry is harmless since the start time is always
 // `max(now, laneFree)`.
 const laneEnds = new Map();
+// How many climb hooks are mounted in each lane, and when the lane's FIRST
+// one appeared. Together these tell a card MOUNTING (page load, switching to
+// a different star -- every banner on it must snap, or the whole page would
+// animate on every refresh) from a banner ARRIVING LATE into a card that was
+// already on screen, which is a rank being earned for the first time and is
+// exactly what to celebrate.
+//
+// The member count is what makes the lane's start time reusable: it is
+// cleared when the last banner in the lane unmounts, so navigating back to a
+// star later reads as a fresh mount rather than as a very late arrival.
+const laneMembers = new Map();
+const laneFirstSeen = new Map();
+// Anything within this of the lane's first banner is part of the same mount.
+// Both banners of a card render in one tick; a banner that appears because a
+// strategy was just picked is seconds away.
+const LANE_MOUNT_GRACE_MS = 400;
 // Enough of a gap that the second climb reads as following the first rather
 // than as the same animation continuing.
 const LANE_GAP_MS = 220;
@@ -150,7 +166,30 @@ export function useRankClimb(rank, identity = null, { lane = null, order = 0 } =
 
   const climbToken = useRef(0);
   if (climbToken.current === 0) climbToken.current = ++nextClimbToken;
+  // Counts effect RUNS, not renders: the first run is a mount (snap) and a
+  // later one with no prior position is a first rank being earned (climb).
+  const runsRef = useRef(0);
   const positionRef = useRef(null);
+  // Lane membership is tracked on true mount/unmount, so it must not ride the
+  // main effect (which re-runs on every identity or target change).
+  const arrivedLateRef = useRef(false);
+  // What an in-flight climb is heading for, and whether one was in flight.
+  // Cleared only when the loop ENDS -- never in the effect cleanup, which
+  // runs before every re-entry and so cannot tell "interrupted" from "done".
+  const climbingToRef = useRef(null);
+  useEffect(() => {
+    if (!lane) return undefined;
+    laneMembers.set(lane, (laneMembers.get(lane) || 0) + 1);
+    const firstSeen = laneFirstSeen.get(lane);
+    if (firstSeen == null) laneFirstSeen.set(lane, now());
+    else arrivedLateRef.current = now() - firstSeen > LANE_MOUNT_GRACE_MS;
+    return () => {
+      const left = (laneMembers.get(lane) || 1) - 1;
+      if (left > 0) { laneMembers.set(lane, left); return; }
+      laneMembers.delete(lane);
+      laneFirstSeen.delete(lane);
+    };
+  }, [lane]);
   const identityRef = useRef(identity);
   const beatsRef = useRef([]);
   const frameRef = useRef(null);
@@ -173,13 +212,47 @@ export function useRankClimb(rank, identity = null, { lane = null, order = 0 } =
       return undefined;
     }
 
+    // A banner that had NO RANK AT ALL and now has one climbs from the FLOOR
+    // (user, 2026-07-27: recording a time with no strategy picked, then
+    // picking one, "ends up skipping all animations… it should show capless 5
+    // -> animate all the way to the achieved rank"). Two things had to be
+    // told apart to do that, and both look like `from == null`:
+    //
+    //   * the FIRST run for this mount -- a page load, or switching to a
+    //     different star -- which must snap, or every card on screen would
+    //     animate on every refresh;
+    //   * a later run on a banner that was showing a sentinel, which is a
+    //     first rank being earned and is exactly what to celebrate.
+    //
+    // An identity change is deliberately IGNORED on that second path: going
+    // from "no strategy" to a strategy is not a change of measurement, since
+    // there was no measurement before.
+    const isFirstRun = runsRef.current === 0;
+    runsRef.current += 1;
     const from = positionRef.current;
-    const snap = from == null              // first value ever: nothing to climb from
-      || identityChanged                   // a different measurement entirely
-      || target <= from                    // never animate a regression
+    // Two shapes of "a first rank was just earned", both of which look like
+    // `from == null`: the banner was on screen showing a sentinel and now has
+    // a rank, or the banner did not exist at all and has just ARRIVED into a
+    // card that was already up (picking a strategy for a star that already
+    // has a time -- live report 2026-07-27, "it should show capless 5 ->
+    // animate all the way to the achieved rank"). Neither is a page load.
+    const earnedFirstRank = from == null && target > 0
+      && (!isFirstRun || arrivedLateRef.current);
+    // A climb already heading for THIS target keeps going, whatever the
+    // identity says. Picking a strategy changes a card's identity but not the
+    // star's own rank, and snapping there cut the animation off at the exact
+    // moment the user had just triggered it (live report 2026-07-27). An
+    // identity change still snaps when the target actually moved -- that IS a
+    // different measurement.
+    const continuing = climbingToRef.current === target;
+    const startPosition = earnedFirstRank ? 0 : from;
+    const snap = (from == null && !earnedFirstRank)   // nothing to climb from
+      || (!earnedFirstRank && !continuing && identityChanged)  // a different measurement
+      || (startPosition != null && target <= startPosition)   // never a regression
       || !celebrationsEnabled()            // the user turned celebrations off
       || prefersReducedMotion();
     if (snap) {
+      climbingToRef.current = null;
       positionRef.current = target;
       beatsRef.current = [];
       setState(renderState(target, [], now()));
@@ -189,7 +262,8 @@ export function useRankClimb(rank, identity = null, { lane = null, order = 0 } =
     // A climb already in flight retargets from where it IS (positionRef is
     // updated every tick), never from where the last one began -- two
     // attempts landing close together must not snap back before continuing.
-    const startPosition = from;
+    // (`startPosition` is resolved above, so a first-ever rank starts at the
+    // floor rather than at nothing.)
     const durationMs = climbDurationBetween(startPosition, target);
     // Totals for the WHOLE climb, stamped onto every beat so an effect can
     // gate on how big a deal this was (`when: (beat) => beat.tiersGained >= 2`)
@@ -311,6 +385,7 @@ export function useRankClimb(rank, identity = null, { lane = null, order = 0 } =
       } else {
         beatsRef.current = [];
         frameRef.current = null;
+        climbingToRef.current = null;
         setClimbing(climbToken.current, false);
         setState(renderState(target, [], at));
       }
@@ -319,6 +394,7 @@ export function useRankClimb(rank, identity = null, { lane = null, order = 0 } =
     // places the loop can end -- its own last tick, and this cleanup for an
     // unmount mid-climb. A token left behind would freeze the practice page.
     setClimbing(climbToken.current, true);
+    climbingToRef.current = target;
     frameRef.current = requestAnimationFrame(tick);
     return () => {
       if (frameRef.current != null) cancelAnimationFrame(frameRef.current);

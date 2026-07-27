@@ -1468,5 +1468,23 @@ class TrackerService:
             raise ValueError("cannot delete the active session")
         if not any(s["id"] == session_id for s in db.sessions()):
             raise LookupError(f"no session {session_id}")
+        # The PBs SAVED from this session's attempts go with it. Without this
+        # a pb row outlived the attempt that set it -- db.delete_session's own
+        # docstring called a dangling attempt_id "informational only" -- and
+        # since a pb row carries its own `frames`, the rank kept grading a
+        # time whose entire history had been deleted: an empty practice log
+        # under a WALUIGI 4 banner and a live PB tag (live report 2026-07-27,
+        # after clearing session data to restart a progression).
+        #
+        # Collected BEFORE the delete, from the attempts cache, rather than
+        # swept up afterwards as orphans: an attempt's id is the journal id of
+        # its first event (projection.py), so this is exact, and it reuses
+        # `delete_pbs_for_attempts`' existing contract -- the previous pb row
+        # for that key restores automatically, which is the user's "I should
+        # now be ranked at whatever the next highest star is". With no earlier
+        # pb row the star simply has no PB again, and in an averaging rank
+        # mode the rank re-derives from the surviving attempts regardless.
+        doomed = [a.id for a in db.attempts() if a.session_id == session_id]
         db.delete_session(session_id)
+        db.delete_pbs_for_attempts(doomed)
         await self._reproject()

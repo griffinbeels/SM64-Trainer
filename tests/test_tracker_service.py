@@ -1586,3 +1586,49 @@ def test_purge_refuses_a_segments_default_strategy(tmp_path):
     asyncio.run(svc.purge_strategy("segment:1", "Blindfolded"))
     assert "Blindfolded" in db.get_state("deleted_strats", {})["segment:1"]
     assert svc.strat_by_segment.get(1) == "Standard"   # falls back, not cleared
+
+
+def test_deleting_a_session_takes_its_PBs_with_it(tmp_path):
+    """A pb row carries its own `frames`, so one left behind by a deleted
+    session keeps GRADING a time whose entire history is gone — an empty
+    practice log under a real rank, with a live PB tag beside it (live report
+    2026-07-27, after clearing session data to restart a progression).
+
+    The previous pb row for that key restores automatically, which is the
+    user's "I should now be ranked at whatever the next highest star is".
+    """
+    db, svc = make(tmp_path)
+    # Session 1: a fast run, saved as the PB.
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1300)))
+    fast = db.attempts()[-1]
+    asyncio.run(svc.save_pb(fast.id, "igt"))
+    assert [row["attempt_id"] for row in db.pbs()] == [fast.id]
+
+    # Session 2 (active), so session 1 is deletable.
+    asyncio.run(svc.new_session())
+    asyncio.run(svc.publish(ev("practice_reset", 5000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(5500)))
+
+    asyncio.run(svc.delete_session(1))
+    surviving = [row["attempt_id"] for row in db.pbs()]
+    assert fast.id not in surviving, (
+        "the PB outlived the session that set it -- the rank would keep "
+        "grading a time with no history behind it")
+
+
+def test_deleting_a_session_leaves_another_sessions_PB_alone(tmp_path):
+    """The mirror: only the deleted session's PBs go. A blanket wipe here
+    would silently reset ranks the user never asked to touch."""
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1300)))
+    asyncio.run(svc.new_session())
+    asyncio.run(svc.publish(ev("practice_reset", 5000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(5400)))
+    kept = db.attempts()[-1]
+    asyncio.run(svc.save_pb(kept.id, "igt"))
+
+    asyncio.run(svc.new_session())          # session 3, so session 1 is deletable
+    asyncio.run(svc.delete_session(1))
+    assert kept.id in [row["attempt_id"] for row in db.pbs()]
