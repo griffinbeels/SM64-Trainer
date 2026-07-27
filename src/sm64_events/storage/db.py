@@ -360,8 +360,16 @@ class Database:
     def delete_session(self, session_id: int) -> None:
         """Hard-deletes the session's journal slice. The attempts cache is
         NOT touched here — callers must re-project afterwards (the journal
-        is the source of truth). PB rows survive: they carry their frames;
-        a dangling attempt_id is informational only."""
+        is the source of truth).
+
+        PB rows are NOT touched here either, and a caller that is deleting a
+        session must drop them itself (`delete_pbs_for_attempts`, which is
+        what `TrackerService.delete_session` does). A pb row carries its own
+        `frames`, so one left behind keeps GRADING a time whose entire history
+        is gone — an empty practice log under a real rank (live report
+        2026-07-27). This used to read "PB rows survive… a dangling attempt_id
+        is informational only", which was true of the row and false of what
+        the row does."""
         with self._lock:
             self._conn.execute("DELETE FROM events WHERE session_id=?",
                                (session_id,))
@@ -705,6 +713,31 @@ class Database:
         with self._lock:
             self._conn.execute("DELETE FROM pbs WHERE id=?", (pb_id,))
             self._conn.commit()
+
+    def delete_orphaned_pbs(self) -> int:
+        """Drop pb rows whose saving attempt no longer exists, and return how
+        many went.
+
+        A pb row carries its own `frames`, so an orphan does not sit there
+        inertly — it keeps GRADING. That is how a star kept reading MARIO 1
+        with an empty practice log after its history was cleared (live report
+        2026-07-27): the rows outlived the attempts by design, and nothing
+        ever collected them.
+
+        Run on every re-projection, which is what makes it a REPAIR and not
+        just a guard: rows orphaned by any earlier delete or wipe — including
+        ones made before the callers started cleaning up after themselves —
+        are collected the next time the journal is replayed. An attempt's id
+        is the journal id of its first event (projection.py), so it is never
+        reused and this can never take a live row. `attempt_id IS NULL` rows
+        are left alone: they were never tied to an attempt to begin with.
+        """
+        with self._lock:
+            cursor = self._conn.execute(
+                "DELETE FROM pbs WHERE attempt_id IS NOT NULL"
+                " AND attempt_id NOT IN (SELECT id FROM attempts)")
+            self._conn.commit()
+            return cursor.rowcount
 
     def delete_pbs_for_attempts(self, attempt_ids: list[int]) -> None:
         """Session-scoped wipes: drop pb rows saved from the wiped attempts

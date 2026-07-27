@@ -12,8 +12,22 @@
 // button reads as dead. Callers that need to stay open on failure read the
 // boolean; the rest can ignore it.
 import { send } from "./api.js";
+import { releaseCelebrationHold } from "./rankclimb.js";
 
 export async function requestTarget(t, body) {
+  // A gesture beats the rank-up HOLD (ui/rankclimb.js). While a rank is
+  // climbing the practice page is frozen so the GAME cannot move it out from
+  // under the celebration -- walking out of the stage the instant you grab
+  // the star is the normal way to end a run. It was never meant to stop the
+  // PLAYER: "if I click on another star to target while ranking up, it should
+  // let me immediately jump to the other star" (2026-07-27).
+  //
+  // Here rather than in api.js, where it started life: this is the one door
+  // every target write already goes through, so the release is explicit
+  // instead of matched on a URL -- and matching the URL in api.js was a second
+  // source of truth for "which path moves the target", which
+  // tests/test_single_source.py rightly rejects.
+  releaseCelebrationHold();
   try {
     await send("POST", "/api/target", body);
     t.refresh();

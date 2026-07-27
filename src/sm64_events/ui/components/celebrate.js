@@ -4,13 +4,27 @@
 // actually seen it, never on arrival — a client that fetches and never
 // renders a celebration must not silently swallow it.
 //
-// Four treatments, tiered so the rare event outranks the common one (a
-// full-screen overlay every few minutes of grinding one star would stop
-// meaning anything):
+// Two treatments, both for the SCOPE rank (the aggregate MARELO rating),
+// tiered so the rare event outranks the common one — a full-screen overlay
+// every few minutes of grinding one star would stop meaning anything:
 //   scope tier-up      -> TierRankUp    (the grand one: fill -> flip -> hold)
 //   scope division-up  -> DivisionRankUp (a compact top-banner, not full-screen)
-//   entity tier-up     -> EntityCelebration's toast (on the active-target card)
-//   entity division-up -> EntityCelebration's inline pop (same card, quieter)
+//
+// The two ENTITY treatments that used to live here (a glow pop for a
+// division-up, a small toast for a tier-up, both on the active-target card)
+// were deleted with task 0012, 2026-07-26. The user's report was that they
+// "kinda just… appear", and the answer was not a better toast: the rank-up
+// is now performed by the rank BANNER itself climbing (ui/rankclimb.js), on
+// the very bar the rank already lives on. A toast beside a climbing bar would
+// be two things celebrating one event. That also retired the server's
+// per-entity celebration watermarks — the climb is live-only by decision, so
+// nothing needs to hold an unseen rank-up for later.
+//
+// KNOWN DEVIATION, not an oversight: the two overlays below still run their
+// own hand-rolled fill -> flip -> hold machine rather than the climb engine.
+// They are a full-screen takeover for a different (aggregate) rank, not an
+// in-place bar, and folding them onto ui/celebrations.js is a follow-up that
+// was deliberately kept out of task 0012's branch.
 //
 // `celebration_delta` (ranks/scopes.py) only ever fires on a RISE, so a
 // non-null celebration's `from.tier !== to.tier` is exactly "at least one
@@ -26,31 +40,19 @@ import { RankIcon } from "./rankicon.js";
 import { prefersReducedMotion } from "../useTween.js";
 const html = htm.bind(h);
 
-const PREF = "sm64.celebrate";
-export const celebrationsEnabled = () => localStorage.getItem(PREF) !== "0";
-export const setCelebrationsEnabled = (on) =>
-  localStorage.setItem(PREF, on ? "1" : "0");
+// The "Celebrations" pref lives in ui/celebrations.js now and is re-exported
+// here so header.js's import is unchanged. It moved because the level-up
+// climb has to honour it too, and rankclimb.js importing THIS file would
+// close a cycle (celebrate.js -> ranks.js -> rankclimb.js).
+export { celebrationsEnabled, setCelebrationsEnabled } from "../celebrations.js";
+import { celebrationsEnabled } from "../celebrations.js";
 
 async function ackScope(scopeId, key, onDone) {
   try { await send("POST", "/api/marelo/ack", { scope: scopeId, key }); }
   finally { onDone(); }
 }
 
-async function ackEntity(entityKey, key, onDone) {
-  try { await send("POST", "/api/marelo/ack", { entity: entityKey, key }); }
-  finally { onDone(); }
-}
-
 const isTierUp = (celebration) => celebration.from.tier !== celebration.to.tier;
-
-// entity_celebrations is a LIST (more than one entity can cross a tier
-// between two /api/marelo views) -- this picks the one entry for the ONE
-// entity a given card renders. Exported so practice.js's call sites don't
-// need to know the list shape.
-export function entityCelebrationFor(marelo, entityKey) {
-  const celebrations = marelo && marelo.entity_celebrations;
-  return (celebrations && celebrations.find((c) => c.entity === entityKey)) || null;
-}
 
 // -- Scope: the grand one (tier-up) ------------------------------------
 
@@ -187,62 +189,4 @@ export function RankUpOverlay({ celebration, scopeId, onDone }) {
   return isTierUp(celebration)
     ? html`<${TierRankUp} celebration=${celebration} scopeId=${scopeId} onDone=${onDone} />`
     : html`<${DivisionRankUp} celebration=${celebration} scopeId=${scopeId} onDone=${onDone} />`;
-}
-
-// -- Entity: pop (division-up) or toast (tier-up), on the active card ---
-
-const ENTITY_POP_MS = 1100;
-const ENTITY_TOAST_MS = 3600;
-
-/**
- * Wraps a practice card's `.rank-slot` (the RankBanner row). `celebration`
- * is the entry from `entity_celebrations` for THIS card's entity, or `null`
- * -- practice.js passes `null` whenever this card is not the active target
- * (user decision 2026-07-25: the rank-up belongs where the rank already
- * lives, not a detached corner), so an entity that ranks up off-screen stays
- * pending and celebrates whenever its card next becomes the active target,
- * exactly the same "ack on dismissal, never on arrival" contract the scope
- * overlay already honours.
- *
- * Division-up gets a quiet inline pop (a glow pulse on the existing rank
- * display, no extra copy) since it is the frequent event; tier-up gets a
- * small toast sized to the rank-slot's own footprint so it can never grow
- * past `.objective-card`'s hard fixed height -- it just overlays inside the
- * existing box, the same constraint the shipped card layout already lives by.
- *
- * NOT given the wing fold (task 10, addendum, 2026-07-25): unlike
- * TierRankUp, this toast has no fill beat -- it renders straight at
- * `celebration.to.tier`/`to.division` with no "before" moment ever shown,
- * so there is no on-screen wing state to fold FROM. Retrofitting one would
- * mean inventing a phase machine here that doesn't otherwise exist, which
- * is a bigger change than "apply the same treatment" asked for; flagged in
- * the final report rather than forced.
- */
-export function EntityCelebration({ celebration, entityKey, onDone, children }) {
-  const relevant = !!(celebration && celebration.entity === entityKey);
-  const tierUp = relevant && isTierUp(celebration);
-
-  async function finish() { await ackEntity(entityKey, celebration.key, onDone); }
-
-  useEffect(() => {
-    if (!relevant) return undefined;
-    if (!celebrationsEnabled()) { finish(); return undefined; }  // pref off: ack without showing
-    const timer = setTimeout(finish, tierUp ? ENTITY_TOAST_MS : ENTITY_POP_MS);
-    return () => clearTimeout(timer);
-  }, [relevant && celebration.key]);
-
-  const showing = relevant && celebrationsEnabled();
-  return html`<div class="rank-slot-wrap ${showing && !tierUp ? "rank-slot-pop" : ""}">
-    ${children}
-    ${showing && tierUp && html`<div class="entity-rankup-toast" role="status"
-        style=${`--tier:${rankColor(celebration.to.tier)}`} onclick=${finish}>
-      <span class="rank-icon-slot entity-toast-icon">
-        <${RankIcon} tier=${celebration.to.tier} division=${celebration.to.division} size=${30} flap=${true} />
-      </span>
-      <span class="entity-rankup-text">
-        <b>${capName(celebration.to.tier)} ${divisionDigit(celebration.to.division)}</b>
-        <i>tier up · tap to dismiss</i>
-      </span>
-    </div>`}
-  </div>`;
 }

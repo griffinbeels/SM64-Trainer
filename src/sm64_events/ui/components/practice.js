@@ -10,13 +10,13 @@ import { Timeline } from "./timeline.js";
 import { Progress, hasProgressPoints } from "./progress.js";
 import { StageBanner } from "./stagebanner.js";
 import { RankBanner, rankColor } from "./ranks.js";
+import { useHeldWhileCelebrating } from "../rankclimb.js";
 import { RankIcon } from "./rankicon.js";
 import { StandardsPanel } from "./standards.js";
 import { StratPicker } from "./stratpicker.js";
 import { useTargetPicker } from "./targetpicker.js";
 import { FailureCompilation } from "./failcomp.js";
 import { Icon } from "./icons.js";
-import { EntityCelebration, entityCelebrationFor } from "./celebrate.js";
 import { PageState } from "./states.js";
 import { EmptyState } from "./emptystate.js";
 
@@ -374,23 +374,25 @@ function TimeFilterChip({ sec, t }) {
 // only one renders; see bannerLabel for why it can't render as a plain
 // "Strategy" one either.
 //
-// Compared field by field rather than by `entity_rank.fastest_strat ===
-// last_strat` (the round-3 rule this replaces): a ragged ladder can hand the
-// HARDEST tiers to the active strategy -- which is all _fastest_strategy
-// resolves (tracking/views.py) -- while a different strategy still sets a
-// lower cutoff around the time actually being graded, and then the two
-// banners genuinely differ. Comparing what is DISPLAYED cannot make that
-// mistake. `fill` is in the comparison because it is what keeps the merge
-// stable as a time improves: two different ladders that happen to agree on
-// tier and division will not also agree on the position within it.
-function ranksAreIdentical(sec) {
-  const strategy = sec.rank, entity = sec.entity_rank;
-  if (!strategy || !entity || !strategy.rank || !entity.rank) return false;
-  return strategy.rank === entity.rank
-    && strategy.division === entity.division
-    && strategy.next_tier === entity.next_tier
-    && strategy.next_division === entity.next_division
-    && Math.round((strategy.fill || 0) * 100) === Math.round((entity.fill || 0) * 100);
+// One measure or two? Answered by the SERVER, from the ladders themselves
+// (views.py::ranks_share_ladder), not by comparing the two graded values.
+//
+// The field-by-field comparison this replaces was stable enough while both
+// sides were graded, but it could not answer the question at all before a
+// first time existed -- so the entity banner was simply absent until one
+// landed and then appeared out of nowhere, which is the live report this
+// fixes (2026-07-27). Reading the ladders also stops two genuinely different
+// measures merging on a run that happens to grade them alike and splitting
+// again on the next.
+function ranksShareOneLadder(sec) {
+  return !!sec.one_ladder;
+}
+
+// A strategy with a ladder but no time yet is at the FLOOR, not unranked:
+// both banners draw Capless V (ranks.js). Keyed off the STRATEGY banner's own
+// sentinel reason, which is the one place that knows a ladder exists.
+function ranksAreAtFloor(sec) {
+  return !!(sec.rank && !sec.rank.rank && sec.rank.reason === "unranked");
 }
 
 // Whether the entity's own RankBanner renders beside the strategy one. Both
@@ -399,7 +401,8 @@ function ranksAreIdentical(sec) {
 // colour boundary under nothing, which is the same class of "correct data,
 // unexplainable picture" bug the split exists to fix.
 function showsEntityBanner(sec) {
-  return !!(sec.entity_rank && !ranksAreIdentical(sec));
+  if (ranksShareOneLadder(sec)) return false;
+  return !!sec.entity_rank || ranksAreAtFloor(sec);
 }
 
 // The lone banner names BOTH measures when it IS both. Suppressing the
@@ -411,34 +414,35 @@ function showsEntityBanner(sec) {
 // banner has the whole row, which is why the round-4 label budget (13
 // characters unaffordable when TWO banners share ~390px) doesn't bind.
 function bannerLabel(sec, entityNoun) {
-  return ranksAreIdentical(sec) ? `Strategy · ${entityNoun}` : "Strategy";
+  return ranksShareOneLadder(sec) ? `Strategy · ${entityNoun}` : "Strategy";
 }
 
 // Why the one banner carries two names, for anyone who hovers it.
 function bannerHint(sec, entityNoun) {
-  if (!ranksAreIdentical(sec)) return null;
+  if (!ranksShareOneLadder(sec)) return null;
   return `This strategy's standards are the best this ${entityNoun.toLowerCase()}`
     + ` has, so the strategy rank and the ${entityNoun.toLowerCase()}'s own`
     + " rank are the same right now.";
 }
 
-// The rank wash's inputs (index.html, `.rank-slot-wrap::before`): each
-// banner's tier colour, plus the 50% split that turns one card-wide gradient
-// into one gradient per banner. CSS owns the geometry and the gradient; this
-// owns only which colours and how many bands (live report 2026-07-25 round 5
-// -- a single Strategy-coloured wash running under a differently-ranked Star
-// banner painted a Bronze rank silver). A banner that renders without a rank
-// (the "no standards yet" sentinel) contributes the split but no colour, so
-// its half is honestly empty rather than borrowing its neighbour's tier.
-function rankWashStyle(sec) {
-  const bands = [];
-  if (sec.rank && sec.rank.rank) bands.push(`--rank-glow:${rankColor(sec.rank.rank)}`);
-  if (showsEntityBanner(sec)) {
-    bands.push("--rank-wash-split:50%");
-    if (sec.entity_rank.rank) bands.push(`--rank-glow-2:${rankColor(sec.entity_rank.rank)}`);
-  }
-  return bands.join(";");
+// What a rank banner considers "the same measurement", so its level-up climb
+// fires on a real rise and nothing else (ui/rankclimb.js). Four things can
+// replace a banner's numbers without anyone having earned anything, and all
+// four are in here: a different entity (a new target), a different ladder
+// (the two banners grade against different ones -- `which`), a different
+// strategy (the strategy banner re-grades on that strat's own ladder), and a
+// different grading mode (PB vs an average window). Change any of them and
+// the banner SNAPS to the new rank instead of climbing to it.
+function rankIdentity(entityKey, which, sec, t) {
+  const mode = (t.view && t.view.rank_mode) || "";
+  return `${entityKey}|${which}|${sec.last_strat || ""}|${mode}`;
 }
+
+// The rank wash moved onto each `.rank-banner` itself (index.html,
+// 2026-07-27) so it can cross-fade with the climb instead of painting the
+// tier the climb is heading FOR. Nothing to hand down from here any more:
+// the split it needed was the DOM boundary between the two banners all
+// along, and the colour is the banner's own `--climb-color`.
 
 // Names the star/segment's fastest known strategy, next to the strategy
 // picker -- NOT inside the rank banner (round 4, 2026-07-25): on the
@@ -544,17 +548,17 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
           <${StrategyFastestHint} sec=${sec} />
         </div>
       </div>
-      <div class="objective-metrics" style=${rankWashStyle(sec)}>
-        <${EntityCelebration}
-            celebration=${pinned ? entityCelebrationFor(t.marelo, `star:${sec.course_id}:${sec.star_id}`) : null}
-            entityKey=${`star:${sec.course_id}:${sec.star_id}`}
-            onDone=${() => t.clearEntityCelebration(`star:${sec.course_id}:${sec.star_id}`)}>
+      <div class="objective-metrics">
           <div class="rank-slot">
             <${RankBanner} label=${bannerLabel(sec, "Star")}
-                hint=${bannerHint(sec, "Star")} banner=${sec.rank} />
-            ${showsEntityBanner(sec) && html`<${RankBanner} label="Star" banner=${sec.entity_rank} />`}
+                hint=${bannerHint(sec, "Star")} banner=${sec.rank}
+                atFloor=${ranksAreAtFloor(sec)} lane=${`star:${sec.course_id}:${sec.star_id}`} order=${0}
+                replayKey=${sec.last_strat || ""}
+                identity=${rankIdentity(`star:${sec.course_id}:${sec.star_id}`, "strategy", sec, t)} />
+            ${showsEntityBanner(sec) && html`<${RankBanner} label="Star" banner=${sec.entity_rank}
+                atFloor=${ranksAreAtFloor(sec)} lane=${`star:${sec.course_id}:${sec.star_id}`} order=${1}
+                identity=${rankIdentity(`star:${sec.course_id}:${sec.star_id}`, "entity", sec, t)} />`}
           </div>
-        <//>
         ${/* Same clock + word the segment card's live state uses. It was a
              bare "○" glyph until 2026-07-26, which only became visible as an
              asymmetry once the heading icon moved into ObjectiveEyebrow --
@@ -708,17 +712,17 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker 
           <${StrategyFastestHint} sec=${sec} />
         </div>
       </div>
-      <div class="objective-metrics" style=${rankWashStyle(sec)}>
-        <${EntityCelebration}
-            celebration=${pinned ? entityCelebrationFor(t.marelo, `segment:${sec.segment_id}`) : null}
-            entityKey=${`segment:${sec.segment_id}`}
-            onDone=${() => t.clearEntityCelebration(`segment:${sec.segment_id}`)}>
+      <div class="objective-metrics">
           <div class="rank-slot">
             <${RankBanner} label=${bannerLabel(sec, "Segment")}
-                hint=${bannerHint(sec, "Segment")} banner=${sec.rank} />
-            ${showsEntityBanner(sec) && html`<${RankBanner} label="Segment" banner=${sec.entity_rank} />`}
+                hint=${bannerHint(sec, "Segment")} banner=${sec.rank}
+                atFloor=${ranksAreAtFloor(sec)} lane=${`segment:${sec.segment_id}`} order=${0}
+                replayKey=${sec.last_strat || ""}
+                identity=${rankIdentity(`segment:${sec.segment_id}`, "strategy", sec, t)} />
+            ${showsEntityBanner(sec) && html`<${RankBanner} label="Segment" banner=${sec.entity_rank}
+                atFloor=${ranksAreAtFloor(sec)} lane=${`segment:${sec.segment_id}`} order=${1}
+                identity=${rankIdentity(`segment:${sec.segment_id}`, "entity", sec, t)} />`}
           </div>
-        <//>
         <div class="objective-live-state ${armed ? "running" : ""}"
             aria-label=${`Segment state: ${pinTag}`}>
           <${Icon} name="clock" size=${17} /><span>${pinTag}</span>
@@ -961,7 +965,22 @@ export function Practice({ t, openCompare }) {
     return s ? Number(s) : null;
   });
   const [routeView, setRouteView] = useState(null);
-  useEffect(() => { getJSON("/api/routes").then(setRoutes).catch(() => {}); }, []);
+  // The practice plan and the Rank tab's scope picker are ONE list, from
+  // ONE endpoint (user, 2026-07-27: "These should be identical lists and
+  // should be the exact same set of options that trigger the exact same
+  // things"). `/api/marelo/scopes` is that list -- the same labels, in the
+  // same order, with "Overall" as the first entry rather than a separate
+  // "All practice" wording for the same thing. Course scopes are dropped
+  // here and only here: a course is a rating you can BROWSE, not a plan
+  // you can practise, since there is no route for the focus to follow.
+  useEffect(() => {
+    getJSON("/api/marelo/scopes")
+      .then((body) => setRoutes((body.scopes || [])
+        .filter((scope) => scope.kind === "route")
+        .map((scope) => ({ id: Number(scope.id.slice("route:".length)),
+                           name: scope.label }))))
+      .catch(() => {});
+  }, []);
   // Refetch the resolved route view on selection change AND on every session
   // view update, so per-step/cumulative % stay live as attempts land. A 404
   // (route deleted) clears it → the tab falls back to normal practice.
@@ -993,13 +1012,57 @@ export function Practice({ t, openCompare }) {
       .then(() => t.refresh())      // pull the new active_route.star_keys
       .catch(() => {});   // selection still works locally if the write fails
   };
-  const v = t.view;
+  // ...and the line above is exactly why this exists. localStorage is an
+  // optimistic mirror of a JOURNALED decision, the write can fail silently,
+  // and the picker restores from localStorage on mount without ever telling
+  // the server again. The two then stay diverged forever, invisibly here and
+  // very visibly wherever the server DERIVES something from the active route:
+  // the header's MARELO bar reads "Overall" while the practice plan says
+  // "16 Star — LBLJ", because `/api/marelo`'s default scope IS the server's
+  // active route (live report 2026-07-27).
+  //
+  // Keyed on the two IDS, not on the view object: `t.view` is a fresh
+  // identity every fetch, so an object dependency here would re-POST on every
+  // WebSocket event for as long as the server kept disagreeing.
+  const serverRouteId = (t.view && t.view.active_route && t.view.active_route.id) ?? null;
+  useEffect(() => {
+    if (activeRouteId == null || serverRouteId === activeRouteId) return;
+    send("POST", "/api/route/select", { route_id: activeRouteId })
+      .then(() => t.refresh()).catch(() => {});
+  }, [serverRouteId, activeRouteId]);
+  // Held while any rank on screen is mid-climb (user, 2026-07-27: "if the
+  // celebration occurs, and then… they leave the stage, we should prevent the
+  // practice UI from transitioning to the next stage until the celebration is
+  // completed"). Grabbing the star and immediately walking out is the normal
+  // way to end a run, so without this the reward is routinely cut off one
+  // frame after it starts.
+  //
+  // What is held is the SELECTION — which stage, which target, which segment
+  // is pinned — and nothing else. Holding the whole view instead deadlocks,
+  // measured: the header's MARELO bar reads `t.marelo` rather than this view,
+  // so it begins its own climb first, the hold engages, and the frozen view
+  // then withholds the very rank-up that would have made the card's banner
+  // climb — the page sat still through the entire celebration it was meant to
+  // be protecting. Letting section DATA through is also just correct: the
+  // attempt that earned the rank-up should appear in the log while the bar
+  // climbs.
+  const frozen = useHeldWhileCelebrating({
+    target: (t.view && t.view.target) || null, stage: t.stage,
+    armedOrder: t.armedOrder, lastPinnedSeg: t.lastPinnedSeg });
+  const v = t.view && { ...t.view, target: frozen.target };
   if (!v) return html`<${PageState} kind=${t.connected ? "loading" : "offline"}
       title=${t.connected ? "Preparing your practice view" : "Waiting for the trainer"}
       message=${t.connected
         ? "Loading your target, attempts, and current stage…"
         : "The app will reconnect automatically when the local server is available."} />`;
 
+  // `held` is `t` with the frozen SELECTION swapped in (and `view` carrying
+  // the held target): every action and all section data still come from the
+  // live store, and only which-stage-am-I-looking-at waits for the
+  // celebration. `target` lives on the view, not on `t`, so it is spread
+  // through `v` rather than listed here.
+  const held = { ...t, view: v, stage: frozen.stage,
+                 armedOrder: frozen.armedOrder, lastPinnedSeg: frozen.lastPinnedSeg };
   const tgt = v.target || {};
   const segs = v.segments || [];
   // Active star and active segment are mutually exclusive — a single practice
@@ -1024,11 +1087,11 @@ export function Practice({ t, openCompare }) {
   // segment being practiced (an accidental exit disarms — correct timing
   // semantics — but the section stays put until a different segment arms);
   // before anything has ever armed, the target segment pins.
-  const armedPins = [...t.armedOrder].reverse()
+  const armedPins = [...frozen.armedOrder].reverse()
     .map((id) => segs.find((s) => s.segment_id === id))
     .filter(Boolean);
-  const stickyPin = t.lastPinnedSeg != null
-    ? segs.find((s) => s.segment_id === t.lastPinnedSeg)
+  const stickyPin = frozen.lastPinnedSeg != null
+    ? segs.find((s) => s.segment_id === frozen.lastPinnedSeg)
     : undefined;
   const pinnedSegs = starActive ? []
     : armedPins.length ? armedPins
@@ -1063,7 +1126,10 @@ export function Practice({ t, openCompare }) {
         <span class="field-label">Practice plan</span>
         <select value=${activeRouteId ?? ""}
             onchange=${(e) => pickRoute(e.target.value ? Number(e.target.value) : null)}>
-          <option value="">All practice</option>
+          <!-- Named for the SCOPE it selects, not for what it does to this
+               page: picking it is what puts the header's MARELO bar on the
+               Overall rating. -->
+          <option value="">Overall</option>
           ${routes.map((r) => html`<option value=${r.id}>${r.name}</option>`)}
         </select>
       </label>
@@ -1080,7 +1146,7 @@ export function Practice({ t, openCompare }) {
       </div>`}
     </section>
 
-    <${StageBanner} t=${t} />
+    <${StageBanner} t=${held} />
 
     ${/* ONE picker for the page, not one per section: only the primary card
          offers the trigger, and mounting a dialog's state inside every card
@@ -1088,15 +1154,15 @@ export function Practice({ t, openCompare }) {
          that never runs. */""}
     ${activeStar
       ? html`<${StarSection} key=${`${activeStar.course_id}:${activeStar.star_id}`}
-          sec=${activeStar} t=${t} ui=${ui} pinned=${true}
+          sec=${activeStar} t=${held} ui=${ui} pinned=${true}
           openPicker=${openTargetPicker}
           freshIds=${freshIds} openCompare=${openCompare} />`
       : primarySeg
         ? html`<${SegmentSection} key=${`seg:${primarySeg.segment_id}`}
-            sec=${primarySeg} t=${t} ui=${ui} pinned=${true}
+            sec=${primarySeg} t=${held} ui=${ui} pinned=${true}
             openPicker=${openTargetPicker}
             freshIds=${freshIds} openCompare=${openCompare} />`
-        : html`<${EmptyPractice} v=${v} t=${t} ui=${ui}
+        : html`<${EmptyPractice} v=${v} t=${held} ui=${ui}
             unassignedRows=${unassignedRows} freshIds=${freshIds}
             openCompare=${openCompare} hidden=${unassignedHidden}
             showHidden=${showUnassignedHidden} openPicker=${openTargetPicker}
@@ -1104,7 +1170,7 @@ export function Practice({ t, openCompare }) {
 
     ${routeView
       ? html`<section class="practice-card route-focus-card">
-          <${RouteFocus} rv=${routeView} t=${t} ui=${ui}
+          <${RouteFocus} rv=${routeView} t=${held} ui=${ui}
             freshIds=${freshIds} openCompare=${openCompare} />
         </section>`
       : restSections.length > 0 && html`<section class="practice-index">
@@ -1124,10 +1190,10 @@ export function Practice({ t, openCompare }) {
               </summary>
               ${sec.kind === "segment"
                 ? html`<${SegmentSection} key=${`seg:${sec.segment_id}`}
-                    sec=${sec} t=${t} ui=${ui} pinned=${false}
+                    sec=${sec} t=${held} ui=${ui} pinned=${false}
                     freshIds=${freshIds} openCompare=${openCompare} />`
                 : html`<${StarSection} key=${`${sec.course_id}:${sec.star_id}`}
-                    sec=${sec} t=${t} ui=${ui} pinned=${false}
+                    sec=${sec} t=${held} ui=${ui} pinned=${false}
                     freshIds=${freshIds} openCompare=${openCompare} />`}
             </details>`)}
           </div>

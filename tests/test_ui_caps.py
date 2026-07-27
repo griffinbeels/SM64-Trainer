@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from sm64_events.ranks import scoring
 from sm64_events.ranks.classify import RANK_NAMES
 from tests.source_scan import strip_comments
 
@@ -385,3 +386,118 @@ def test_the_style_import_guard_can_still_fail():
     # The dispatcher import is not an offense.
     assert style_renderer_import_offenders(
         'import { RankIcon } from "./rankicon.js";') == []
+
+
+# ---- The ladder coordinate (task 0012, the level-up climb) ----------------
+#
+# `rankPosition` collapses tier + division + fill into ONE monotone number so
+# the rank bars can animate a rise without the within-division `fill` running
+# backwards across a boundary. Its integer part must be byte-for-byte
+# `ranks/scoring.py::progression_key` -- if the two ever disagree, a climb
+# animates through ranks the server does not believe in.
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+def test_division_numerals_match_python_bottom_of_tier_first():
+    assert run_node("DIVISION_NUMERALS",
+                    "console.log(JSON.stringify(DIVISION_NUMERALS))") == scoring.DIVISION_NUMERALS
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+def test_rank_position_is_progression_key_for_every_tier_and_division():
+    pairs = [[tier, numeral] for tier in RANK_NAMES
+             for numeral in scoring.DIVISION_NUMERALS]
+    assert len(pairs) == 45, "the ladder is 9 tiers x 5 divisions"
+    from_js = run_node("rankPosition", "console.log(JSON.stringify("
+                       f"{json.dumps(pairs)}.map(([t, d]) => rankPosition(t, d))))")
+    from_python = [scoring.progression_key(tier, numeral) for tier, numeral in pairs]
+    assert from_js == from_python
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+def test_rank_at_names_the_rank_its_position_came_from():
+    pairs = [[tier, numeral] for tier in RANK_NAMES
+             for numeral in scoring.DIVISION_NUMERALS]
+    # Sampled mid-division too: every point INSIDE a division must still name
+    # that division, which is what a mid-climb frame asks for.
+    round_tripped = run_node(
+        "rankPosition, rankAt",
+        "console.log(JSON.stringify("
+        f"{json.dumps(pairs)}.flatMap(([t, d]) => [0, 0.5, 0.99]"
+        ".map((fill) => { const r = rankAt(rankPosition(t, d, fill));"
+        " return [r.tier, r.division]; }))))")
+    expected = [pair for pair in pairs for _ in range(3)]
+    assert round_tripped == expected
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+def test_the_fill_is_the_fraction_and_is_clamped():
+    samples = run_node("rankPosition", "console.log(JSON.stringify(["
+                       'rankPosition("Iron", "V", 0),'
+                       'rankPosition("Iron", "V", 0.25),'
+                       'rankPosition("Iron", "IV", 0.5),'
+                       'rankPosition("Iron", "V", 4),'      # over-full clamps
+                       'rankPosition("Iron", "V", -3),'     # negative clamps
+                       'rankPosition("Nonsense", "V"),'     # unknown tier
+                       'rankPosition("Iron", "XI")]))')     # unknown division
+    assert samples == [0, 0.25, 1.5, 1, 0, None, None]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+def test_rank_at_clamps_to_a_real_rank_outside_the_ladder():
+    # A curve that overshoots by a rounding error must still name a rank, not
+    # hand `undefined` to a render.
+    ends = run_node("rankAt", "console.log(JSON.stringify("
+                    "[-2, 0, 44, 44.9, 99].map((p) => { const r = rankAt(p);"
+                    " return [r.tier, r.division]; })))")
+    floor, ceiling = ["Iron", "V"], ["Mario", "I"]
+    assert ends == [floor, floor, ceiling, ceiling, ceiling]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+def test_the_bar_is_full_at_the_top_of_the_ladder_not_empty():
+    """A maxed rank has no next step, so its position is the top level PLUS
+    one (Mario I is level 44, maxed is 45) -- and 45's own fractional part is
+    ZERO. Taking the bar's fill from the raw floor therefore emptied it at the
+    exact moment the player reached the highest rank in the game. Caught on
+    the LAST frame of a Capless-to-Mario render trace, with every earlier
+    frame correct, which is why this guard samples the ceiling specifically.
+    """
+    frames = run_node("rankFrame, rankPosition", "console.log(JSON.stringify("
+                      "[45, 44.5, 44, 4.771, 0, -2].map((p) => {"
+                      " const f = rankFrame(p); return [f.tier, f.division,"
+                      " Math.round(f.fill * 1000) / 1000]; })))")
+    assert frames[0] == ["Mario", "I", 1.0], "maxed must read as a FULL bar"
+    assert frames[1] == ["Mario", "I", 0.5]
+    assert frames[2] == ["Mario", "I", 0.0]
+    assert frames[3] == ["Iron", "I", 0.771]
+    assert frames[4] == ["Iron", "V", 0.0]
+    assert frames[5] == ["Iron", "V", 0.0], "below the floor clamps, never negative"
+
+
+def test_only_hat_js_sizes_the_cap_glyph():
+    """The M on Mario's cap took two live reports to size ("still needs to be
+    a little smaller… we need to make sure it's consistent across every single
+    place that we use it -- we should update it once and keep it in sync
+    everywhere"). It already is: `glyphFontSizePx` in hat.js is the only place
+    a rank icon's glyph gets a size, and every one of the seventeen call sites
+    goes through it.
+
+    This is what keeps that true. A second file computing its own font size
+    from the patch geometry is a second answer, and the next tuning round
+    would fix one of them.
+    """
+    owners = {"hat.js"}
+    ingredients = ("FONT_INK_WIDTH_RATIO", "GLYPH_WIDTH_MARGIN",
+                   "GLYPH_HEIGHT_TARGET", "PATCH_BOX.width", "PATCH_BOX.height")
+    offenders = {}
+    for path in [*UI_DIR.glob("*.js"), *(UI_DIR / "components").glob("*.js")]:
+        if path.name in owners:
+            continue
+        body = strip_comments(path.read_text(encoding="utf-8"))
+        named = [token for token in ingredients if token in body]
+        if named:
+            offenders[path.name] = named
+    assert not offenders, (
+        f"{offenders} size a cap glyph themselves -- route it through "
+        "hat.js::glyphFontSizePx so one tuning round fixes every surface")

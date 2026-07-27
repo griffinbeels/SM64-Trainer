@@ -43,15 +43,13 @@ class ExcludeBody(BaseModel):
 
 
 class AckBody(BaseModel):
-    """Exactly one of `scope`/`entity` must be set -- the endpoint acks
-    either a scope celebration or an entity celebration, never both at
-    once (they raise two different watermark stores; see
-    tracking/service.py's entity-watermark section for why they're
-    separate). `scope` alone stayed required pre-task-f1; both are
-    optional now so existing `{"scope": ..., "key": ...}` callers are
-    unaffected."""
+    """Dismisses a SCOPE celebration. `scope` is optional in the schema only
+    so the endpoint can answer a missing one with its own 400 rather than a
+    422 -- it is required in practice. The `entity` field this carried
+    between task-f1 and task 0012 is gone with the per-entity celebrations
+    themselves; an out-of-date client still sending one falls through to
+    that same 400 instead of being silently accepted."""
     scope: str | None = None
-    entity: str | None = None
     key: int
 
 
@@ -190,44 +188,6 @@ def _score_scope(service, scope_id: str) -> dict:
     return out
 
 
-def _entity_scores(service) -> list[dict]:
-    """Every RANKABLE entity, scored -- not just the active scope's
-    candidates. The `overall` scope's own group resolution
-    (`{need:1,candidates:[key]}` per rankable entity, see
-    `ranks.scopes.entity_groups`) already IS the full corpus, so this
-    reuses `_score_scope`'s pure path instead of a second scoring
-    pipeline. Measured ~2-3ms over the bundled seed's 102 entities on an
-    unpracticed store (task-f1 report has the full measurement) -- cheap
-    enough to run on every `/api/marelo` request regardless of which scope
-    was asked for, which is what lets an entity OUTSIDE the active scope
-    still celebrate (spec 7.4: entity rank-ups are the frequent reward)."""
-    return _score_scope(service, "overall")["entities"]
-
-
-def _entity_celebrations(service, entities: list[dict]) -> list[dict]:
-    """Sibling of `_build_marelo`'s scope celebration, batched: sync (follow
-    a drop down) -> celebration_delta against the pre-sync/pre-seed
-    watermark -> seed (create if absent, no-op if present) -- same
-    once-only-via-ack contract, applied to every scored entity in ONE
-    round trip (`sync_and_seed_entity_watermarks`) instead of one per
-    entity. Entities with no tier (never practiced, or excluded -- see
-    `_append_excluded_rows`) are skipped: there is nothing to celebrate."""
-    scored = [entity for entity in entities if entity["tier"] is not None]
-    current_by_key = {entity["key"]: scoring.progression_key(
-                          entity["tier"], entity["division"])
-                      for entity in scored}
-    watermark_by_key = service.sync_and_seed_entity_watermarks(current_by_key)
-    out = []
-    for entity in scored:
-        celebration = scopes.celebration_delta(
-            entity["tier"], entity["division"],
-            watermark_by_key.get(entity["key"]))
-        if celebration is not None:
-            out.append({**celebration, "entity": entity["key"],
-                       "label": entity["label"]})
-    return out
-
-
 def _build_marelo(service, scope_id: str) -> dict:
     out = _score_scope(service, scope_id)
     out["celebration"] = None
@@ -241,11 +201,12 @@ def _build_marelo(service, scope_id: str) -> dict:
         # stops the first view of a scope celebrating the user's whole
         # history at once. seed_watermark is a no-op once the key exists.
         service.seed_watermark(scope_id, key)
-    # Entity celebrations evaluate the FULL rankable corpus (see
-    # _entity_scores), not just this scope -- reuse `out["entities"]` when
-    # scope_id is already "overall" instead of scoring it twice.
-    corpus = out["entities"] if scope_id == "overall" else _entity_scores(service)
-    out["entity_celebrations"] = _entity_celebrations(service, corpus)
+    # There is NO per-entity celebration here any more (task 0012,
+    # 2026-07-26). A star's or segment's own rank-up is performed live by the
+    # rank banner climbing (ui/rankclimb.js) rather than held as a payload to
+    # be shown and acked later, so nothing needs a watermark and nothing needs
+    # this endpoint to score the whole rankable corpus a second time on every
+    # request for a non-overall scope.
     return out
 
 
@@ -424,13 +385,17 @@ def create_ranks_router(service) -> APIRouter:
 
     @router.post("/marelo/ack")
     async def marelo_ack(body: AckBody):
-        if (body.scope is None) == (body.entity is None):
-            raise HTTPException(400, "ack needs exactly one of scope or entity")
+        """Dismisses a SCOPE celebration (the full-screen MARELO overlay).
+
+        The `{entity, key}` arm this used to accept is gone with task 0012
+        (2026-07-26): a per-entity rank-up is now performed live by the rank
+        banner climbing, so there is no held celebration to acknowledge. An
+        entity ack is a 400 rather than a silent no-op — a client still
+        sending one is out of date, and answering "ok" would hide that."""
+        if body.scope is None:
+            raise HTTPException(400, "ack needs a scope")
         try:
-            if body.entity is not None:
-                await service.ack_entity_celebration(body.entity, body.key)
-            else:
-                await service.ack_celebration(body.scope, body.key)
+            await service.ack_celebration(body.scope, body.key)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True}

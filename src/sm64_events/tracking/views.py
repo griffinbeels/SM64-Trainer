@@ -410,6 +410,28 @@ def entity_rank(ranks, ek, frames) -> dict | None:
             "fastest_strat": _fastest_strategy(ranks, ek, ladder)}
 
 
+def ranks_share_ladder(ranks, ek, strat) -> bool:
+    """Whether the ACTIVE strategy's ladder IS the entity's best-possible one.
+
+    When it is, the strategy rank and the entity's own rank are not two
+    measures that happen to agree - they are ONE measure, and the UI draws a
+    single banner labelled for both (live report 2026-07-25: a lone banner
+    labelled "STRATEGY" read as the star rank failing to load).
+
+    Answered from the LADDERS, never from the two graded values, and that is
+    the point: it is stable. Two genuinely different ladders that happen to
+    grade today's time into the same tier stay two banners instead of merging
+    and splitting again on the next run, and a strategy with no time yet still
+    knows which case it is - which is what lets BOTH banners render at the
+    Capless V default rather than the entity's appearing out of nowhere the
+    moment a first time lands (live report 2026-07-27).
+    """
+    if ranks is None or not strat:
+        return False
+    ladder = ranks.ladder_cs(ek, strat)
+    return bool(ladder) and ladder == scoring.best_ladder(ranks.ladders(ek))
+
+
 def _best_strategy_graded(ranks, ek, history, pbs_by_strat, rank_mode,
                           deleted, pb_key_prefix) -> tuple[str, dict] | None:
     """The (strategy, _graded_progress) pair with the HIGHEST score among
@@ -972,6 +994,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                 service.ranks, ek, star_strat, star_basis, rank_mode),
             "entity_rank": entity_rank(
                 service.ranks, ek, star_basis and star_basis["frames"]),
+            "one_ladder": ranks_share_ladder(service.ranks, ek, star_strat),
         })
     sections.sort(key=lambda s: last_id.get((s["course_id"], s["star_id"]), -1),
                   reverse=True)
@@ -1046,6 +1069,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                 service.ranks, seg_ek, seg_strat, seg_basis, rank_mode),
             "entity_rank": entity_rank(
                 service.ranks, seg_ek, seg_basis and seg_basis["frames"]),
+            "one_ladder": ranks_share_ladder(service.ranks, seg_ek, seg_strat),
         })
     seg_sections.sort(
         key=lambda s: last_id.get(("segment", s["segment_id"]), -1),

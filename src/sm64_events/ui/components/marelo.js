@@ -4,10 +4,10 @@
 // its own copy, it imports rankColor same as every other consumer.
 import { h } from "preact";
 import htm from "htm";
-import { rankColor } from "./ranks.js";
 import { capName, divisionDigit } from "./caps.js";
 import { RankIcon } from "./rankicon.js";
 import { useTween } from "../useTween.js";
+import { useRankClimb } from "../rankclimb.js";
 const html = htm.bind(h);
 
 export const fmtScore = (n) => (n == null ? "–" : n.toFixed(1));
@@ -33,28 +33,37 @@ export const toPoints = (score) => (score == null ? null : Math.round(score * 10
 // value reads identically whether the caller wanted the raw score or points.
 export const fmtPoints = (score) => (score == null ? "–" : String(toPoints(score)));
 
-export function MareloBar({ marelo, onOpen }) {
-  // Tweened FROM the previous fetch's value (spec task F2) -- this bar is
-  // mounted once in the header and never unmounts, so it's the one place a
-  // rank improvement is visible from every tab, not just the Rank tab.
+export function MareloBar({ marelo, onOpen, identity = null }) {
+  // This bar is mounted once in the header and never unmounts, so it is the
+  // one place a rank improvement is visible from every tab -- and it had the
+  // SAME backwards-bar bug the practice card's banners had (task 0012): it
+  // tweened `division_progress`, which is progress WITHIN the current
+  // division, so crossing a boundary ran it from ~1 back to ~0. It climbs
+  // through the shared primitive now, exactly as RankBanner does; the score
+  // NUMBER beside it is not a rank and keeps its plain tween.
+  //
   // Called unconditionally (rules of hooks) ahead of the `!marelo` early
   // return; `null` passes straight through with no animation.
-  const fill = useTween(marelo ? Math.round((marelo.division_progress || 0) * 100) : null);
+  const climb = useRankClimb(marelo && marelo.tier ? {
+    tier: marelo.tier, division: marelo.division,
+    fill: marelo.division_progress || 0,
+  } : null, identity);
   const score = useTween(marelo ? marelo.marelo : null);
   if (!marelo) return null;
-  const { tier, division, label, mastery, coverage, n, practiced } = marelo;
+  const { label, mastery, coverage, n, practiced } = marelo;
   // Unranked is an EXPLICIT empty state, not a Hat drawn with no tier (final
   // review I5, 2026-07-25: `tier == null` used to still call Hat, which drew
   // a plain grey cap with nothing in it -- the deleted Crest drew a "–" for
   // the same state). PracticeCell's starrank cell already spells "no rank"
   // as a bare "–"; this reuses that spelling rather than inventing a third.
-  return html`<button type="button" class="marelo-bar" onclick=${onOpen}
+  return html`<button type="button" class=${`marelo-bar${climb && climb.climbing ? " is-climbing" : ""}`}
+      onclick=${onOpen} style=${climb ? climb.vars : null}
       title=${`${label}: mastery ${fmtScore(mastery)} x coverage ${practiced}/${n}`}>
-    ${tier ? html`<span class="rank-icon-slot marelo-bar-icon">
-      <${RankIcon} tier=${tier} division=${division} size=${34} />
+    ${climb ? html`<span class="rank-icon-slot marelo-bar-icon">
+      <${RankIcon} ...${climb.icon} tier=${climb.tier} division=${climb.division} size=${34} />
     </span>` : "–"}
     <span class="marelo-bar-text">
-      <b>${tier ? `${capName(tier)} ${divisionDigit(division)}` : "Unranked"}</b>
+      <b>${climb ? `${capName(climb.tier)} ${divisionDigit(climb.division)}` : "Unranked"}</b>
       ${/* Points BEFORE the scope label (2026-07-26): the bar moved into the
            context grid, so it is now as wide as its column rather than as
            wide as its contents, and this line ellipsises. Measured across a
@@ -65,7 +74,7 @@ export function MareloBar({ marelo, onOpen }) {
         null}
       <span class="meta">${fmtPoints(score)} pts · ${label}</span>
     </span>
-    <span class="marelo-track"><i style=${`width:${fill}%;background:${rankColor(tier)}`}></i></span>
+    <span class="marelo-track"><i style=${`width:${climb ? climb.fill * 100 : 0}%`}></i></span>
     <!-- Mastery stays 0-100, never points: it's a mean SCORE (mastery x
          coverage = marelo), not a rating on the tier ladder, and running it
          through toPoints would imply a fourth scale that doesn't exist. -->
