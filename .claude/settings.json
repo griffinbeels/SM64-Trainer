@@ -21,6 +21,15 @@
             "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/git-staging-guard.py\""
           }
         ]
+      },
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/no-app-server.py\""
+          }
+        ]
       }
     ],
     "PostToolUse": [
