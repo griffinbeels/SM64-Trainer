@@ -1073,7 +1073,20 @@
     font-weight: 800; letter-spacing: .4px;
     min-width: 0; overflow: hidden; text-overflow: ellipsis;
   }
-  .rank-banner-next { flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; }
+  /* Wipes in left-to-right when a climb settles (`--climb-reveal`, written by
+     ui/celebrations.js). The mask's two stops are 30% of the width apart, so
+     the leading edge is a soft gradient rather than a hard curtain -- "fade in
+     from the left most text to the right most text". Defaults to 1, so every
+     banner that is not mid-climb renders exactly as it always did. */
+  .rank-banner-next {
+    flex-shrink: 1; overflow: hidden; text-overflow: ellipsis;
+    -webkit-mask-image: linear-gradient(90deg, #000
+        calc(var(--climb-reveal, 1) * 130% - 30%), transparent
+        calc(var(--climb-reveal, 1) * 130%));
+            mask-image: linear-gradient(90deg, #000
+        calc(var(--climb-reveal, 1) * 130% - 30%), transparent
+        calc(var(--climb-reveal, 1) * 130%));
+  }
   /* Progress toward the next rank: full slot width, never a fixed px bar —
      a 200px bar used to bleed past the card edge (2026-07-24). */
   .rank-progress-track {

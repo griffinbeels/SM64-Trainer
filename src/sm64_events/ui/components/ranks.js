@@ -27,6 +27,14 @@ const RANK_SENTINEL = {
   no_strat: "— pick a strat to see your rank",
 };
 
+// What the floor default costs the reader: the sentinel sentence it
+// replaces. It rides the kicker's tooltip rather than disappearing. The
+// entity banner has no payload to take a reason from, so it says the plain
+// truth instead.
+function floorHint(banner) {
+  return banner ? sentinelMsg(banner) : "No time recorded here yet";
+}
+
 function sentinelMsg(banner) {
   if (!banner) return RANK_SENTINEL.no_strat;
   if (banner.reason === "unranked" && banner.mode && banner.mode !== "pb")
@@ -88,7 +96,9 @@ function sentinelMsg(banner) {
 // wording built here because the reason is a fact about the CALL SITE's
 // data, and this component is deliberately ignorant of which two ladders
 // produced the banner it was handed.
-export function RankBanner({ label, banner, hint = null, identity = null }) {
+export function RankBanner({ label, banner, hint = null, identity = null,
+                             atFloor: atFloorProp = false,
+                             lane = null, order = 0 }) {
   const ranked = !!(banner && banner.rank);
   // Called unconditionally (rules of hooks) even on the sentinel/empty path
   // below — `null` passes straight through with no animation, which is what
@@ -120,21 +130,32 @@ export function RankBanner({ label, banner, hint = null, identity = null }) {
   // keep their sentinel: there is no ladder for a floor to sit at the bottom
   // OF, and the user's own call on the second — "you must select a strat to
   // see a rank for the strat".
-  const atFloor = !ranked && !!banner && banner.reason === "unranked";
+  // The ENTITY banner has no payload of its own until a first time lands,
+  // so the caller tells it (practice.js::ranksAreAtFloor, read off the
+  // STRATEGY banner's sentinel reason -- the one place that knows a
+  // ladder exists). The strategy banner can also answer for itself.
+  const atFloor = !ranked
+    && (atFloorProp || (!!banner && banner.reason === "unranked"));
   const graded = ranked ? {
     tier: banner.rank, division: banner.division,
     // At the top of the ladder there is no next step to fill toward, so the
     // bar is simply full — the same sentinel the old tween used.
     fill: banner.next_tier ? (banner.fill || 0) : 1,
   } : atFloor ? { ...rankAt(0), fill: 0 } : null;
-  const climb = useRankClimb(graded, identity);
+  // `lane`/`order` sequence the two banners on one card: the STRATEGY rank
+  // climbs, then the star's (user, 2026-07-27 -- "Strategy first. Then
+  // star"). A lone banner, and the MARELO bar, pass neither and start
+  // immediately.
+  const climb = useRankClimb(graded, identity, { lane, order });
   if (!graded || !climb) {
     return html`<div class="rank-banner rank-banner-empty">
       <span class="rank-banner-kicker" title=${hint}>${label}</span>
       <span class="meta">${sentinelMsg(banner)}</span>
     </div>`;
   }
-  const basis = banner.basis;
+  // Everything below has to survive `banner == null`: the entity banner
+  // renders at the floor with no payload at all.
+  const basis = ranked ? banner.basis : null;
   // Mid-climb the server's `next_tier` names the step after the rank you are
   // LANDING on, which would read as a contradiction beside a rank name that
   // is still climbing ("WALUIGI 4 -> Waluigi 3" while the cap already says
@@ -144,7 +165,7 @@ export function RankBanner({ label, banner, hint = null, identity = null }) {
   // At the floor default the server sent no `next_tier` (it sent no rank at
   // all), so the next step is simply the one above the floor — otherwise the
   // row would read "CAPLESS 5 · top rank", which is the opposite of true.
-  const settledNext = banner.next_tier
+  const settledNext = (ranked && banner.next_tier)
     ? { tier: banner.next_tier, division: banner.next_division }
     : atFloor ? rankAt(1) : null;
   // `rankAt` clamps, so at the very top of the ladder the "next" step is the
@@ -155,7 +176,7 @@ export function RankBanner({ label, banner, hint = null, identity = null }) {
     && climbingNext.division === climb.division;
   const next = climb.climbing ? (atCeiling ? null : climbingNext) : settledNext;
   const nextLabel = next ? `${capName(next.tier)} ${divisionDigit(next.division)}` : null;
-  const gap = (!climb.climbing && banner.next_gap_cs != null)
+  const gap = (!climb.climbing && ranked && banner.next_gap_cs != null)
     ? (banner.next_gap_cs / 100).toFixed(2) : null;
   const fillPct = climb.fill * 100;
   const displayFillPct = Math.round(fillPct);
@@ -184,13 +205,20 @@ export function RankBanner({ label, banner, hint = null, identity = null }) {
   // per-frame effect values ui/celebrations.js contributes. Every one of
   // them has a CSS fallback, so a surface still renders correctly with no
   // celebration running.
-  return html`<div class=${`rank-banner${climb.climbing ? " is-climbing" : ""}`} style=${climb.vars}>
+  // The next-step line stays wiped OUT for the whole climb and is wiped back
+  // IN by the settle celebration, so the reader never sees the mid-climb text
+  // hard-cut to the settled one. Set here rather than in the registry because
+  // it is the ABSENCE of a celebration that has to hold it hidden, and a
+  // registry entry only ever describes something happening.
+  const vars = climb.climbing && climb.vars["--climb-reveal"] === undefined
+    ? { ...climb.vars, "--climb-reveal": 0 } : climb.vars;
+  return html`<div class=${`rank-banner${climb.climbing ? " is-climbing" : ""}`} style=${vars}>
     <div class="rank-banner-row">
       <!-- At the floor default the sentinel's own wording ("no PB on this
            strategy yet") is the only thing lost by showing Capless 5, so it
            rides the kicker's tooltip rather than disappearing. -->
       <span class="rank-banner-kicker"
-          title=${hint || (atFloor ? sentinelMsg(banner) : null)}>${label}</span>
+          title=${hint || (atFloor ? floorHint(banner) : null)}>${label}</span>
       <!-- Round 4 (addendum, task 8, 2026-07-26 -- the user: "we probably
            should push the rank name... and the rank division a little off
            to the side, since it's overlapping, it feels very cramped right
@@ -208,8 +236,14 @@ export function RankBanner({ label, banner, hint = null, identity = null }) {
           tier=${climb.tier} division=${climb.division} size=${24} /></span>
       <b class="rank-banner-name">${capName(climb.tier).toUpperCase()}${climb.division ? ` ${divisionDigit(climb.division)}` : ""}</b>
       ${basis && html`<span class="meta rank-banner-basis" title=${basisTitle}>${basisText}</span>`}
+      <!-- "X.XXs to rank up", not a bare "−0.22s" (user, 2026-07-27) -- the
+           number is the thing you chase, and a signed delta made the reader
+           work out what it was a delta FROM. It wipes in left-to-right when
+           the climb settles, which is also what covers the swap from the
+           mid-climb next-step (derived from where the bar is) to the real
+           one (the server's, with its time). -->
       <span class="meta rank-banner-next">${nextLabel
-        ? html`→ <b>${nextLabel}</b>${gap ? ` −${gap}s` : ""}` : "top rank"}</span>
+        ? html`→ <b>${nextLabel}</b>${gap ? ` · ${gap}s to rank up` : ""}` : "top rank"}</span>
     </div>
     <div class="rank-progress-track" title=${trackTitle}>
       <i style=${`width:${fillPct}%`}></i>

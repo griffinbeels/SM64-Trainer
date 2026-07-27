@@ -149,16 +149,20 @@ export const CELEBRATIONS = {
     icon: (_beat, progress) => ({ sparkle: progress }),
   },
 
-  // A tier crossing lands on division V, which wears no wings -- so the ones
-  // on screen have to go somewhere. They tuck during the ANTICIPATION, so the
-  // cap is already bare by the time it flattens (the user's own framing for
-  // the fold this reuses: "booya, upgraded! Just gotta earn the wings again").
-  wingFold: {
-    on: "anticipate", ms: (beat) => Math.min(420, beat.anticipateMs),
-    when: (beat) => beat.wingsBefore > 0,
-    icon: (beat, progress) => ({ foldWings: beat.wingsBefore,
-                                 foldProgress: easeOutCubic(progress) }),
-  },
+  // NO wing fold during the anticipation, and that is a correction rather
+  // than an omission (live report, 2026-07-27: "the wings briefly disappear,
+  // and then reappear for the shake and squash… the wings should stay at the
+  // highest tier for the duration of the animation, until we actually have
+  // the new cap"). The fold ran for 420ms of a ~900ms build and then EXPIRED,
+  // at which point `wingTiers` -- reading a position still on the old tier's
+  // division I -- put all four wings straight back.
+  //
+  // They now simply STAY: the position does not cross the boundary until the
+  // burst, so the wings squash along with the cap and are gone the instant
+  // the new cap exists, which is exactly where the user drew the line. It
+  // also lands on the flattest frame of the whole sequence, so nothing pops.
+  // `foldWings`/`foldProgress` survive as props -- the scope overlay still
+  // folds, on its own schedule.
 
   // The one thing that CAN lerp: the flat surfaces -- the bar, and the wash
   // behind the banner, which read the same `--climb-color`. Colour is
@@ -172,6 +176,17 @@ export const CELEBRATIONS = {
       "--climb-color": `color-mix(in srgb, ${rankColor(beat.tier)} `
         + `${(easeOutCubic(progress) * 100).toFixed(1)}%, ${rankColor(beat.fromTier)})`,
     }),
+  },
+
+  // "the amount of time required to level up to the next star should animate
+  // in… it should say 'X.XXs to rank up' and this should all fade in from the
+  // left most text to the right most text" (user, 2026-07-27). A mask wipe
+  // rather than per-word spans: one element, no splitting of a string that
+  // ellipsises, and the soft edge reads as a fade rather than a curtain.
+  // ranks.js holds it at 0 for the rest of the climb.
+  nextReveal: {
+    on: "settle", ms: 640,
+    vars: (_beat, progress) => ({ "--climb-reveal": easeOutCubic(progress).toFixed(3) }),
   },
 
   // The landing. A short settle on the whole surface so a climb ENDS on

@@ -373,23 +373,25 @@ function TimeFilterChip({ sec, t }) {
 // only one renders; see bannerLabel for why it can't render as a plain
 // "Strategy" one either.
 //
-// Compared field by field rather than by `entity_rank.fastest_strat ===
-// last_strat` (the round-3 rule this replaces): a ragged ladder can hand the
-// HARDEST tiers to the active strategy -- which is all _fastest_strategy
-// resolves (tracking/views.py) -- while a different strategy still sets a
-// lower cutoff around the time actually being graded, and then the two
-// banners genuinely differ. Comparing what is DISPLAYED cannot make that
-// mistake. `fill` is in the comparison because it is what keeps the merge
-// stable as a time improves: two different ladders that happen to agree on
-// tier and division will not also agree on the position within it.
-function ranksAreIdentical(sec) {
-  const strategy = sec.rank, entity = sec.entity_rank;
-  if (!strategy || !entity || !strategy.rank || !entity.rank) return false;
-  return strategy.rank === entity.rank
-    && strategy.division === entity.division
-    && strategy.next_tier === entity.next_tier
-    && strategy.next_division === entity.next_division
-    && Math.round((strategy.fill || 0) * 100) === Math.round((entity.fill || 0) * 100);
+// One measure or two? Answered by the SERVER, from the ladders themselves
+// (views.py::ranks_share_ladder), not by comparing the two graded values.
+//
+// The field-by-field comparison this replaces was stable enough while both
+// sides were graded, but it could not answer the question at all before a
+// first time existed -- so the entity banner was simply absent until one
+// landed and then appeared out of nowhere, which is the live report this
+// fixes (2026-07-27). Reading the ladders also stops two genuinely different
+// measures merging on a run that happens to grade them alike and splitting
+// again on the next.
+function ranksShareOneLadder(sec) {
+  return !!sec.one_ladder;
+}
+
+// A strategy with a ladder but no time yet is at the FLOOR, not unranked:
+// both banners draw Capless V (ranks.js). Keyed off the STRATEGY banner's own
+// sentinel reason, which is the one place that knows a ladder exists.
+function ranksAreAtFloor(sec) {
+  return !!(sec.rank && !sec.rank.rank && sec.rank.reason === "unranked");
 }
 
 // Whether the entity's own RankBanner renders beside the strategy one. Both
@@ -398,7 +400,8 @@ function ranksAreIdentical(sec) {
 // colour boundary under nothing, which is the same class of "correct data,
 // unexplainable picture" bug the split exists to fix.
 function showsEntityBanner(sec) {
-  return !!(sec.entity_rank && !ranksAreIdentical(sec));
+  if (ranksShareOneLadder(sec)) return false;
+  return !!sec.entity_rank || ranksAreAtFloor(sec);
 }
 
 // The lone banner names BOTH measures when it IS both. Suppressing the
@@ -410,12 +413,12 @@ function showsEntityBanner(sec) {
 // banner has the whole row, which is why the round-4 label budget (13
 // characters unaffordable when TWO banners share ~390px) doesn't bind.
 function bannerLabel(sec, entityNoun) {
-  return ranksAreIdentical(sec) ? `Strategy · ${entityNoun}` : "Strategy";
+  return ranksShareOneLadder(sec) ? `Strategy · ${entityNoun}` : "Strategy";
 }
 
 // Why the one banner carries two names, for anyone who hovers it.
 function bannerHint(sec, entityNoun) {
-  if (!ranksAreIdentical(sec)) return null;
+  if (!ranksShareOneLadder(sec)) return null;
   return `This strategy's standards are the best this ${entityNoun.toLowerCase()}`
     + ` has, so the strategy rank and the ${entityNoun.toLowerCase()}'s own`
     + " rank are the same right now.";
@@ -548,8 +551,10 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
           <div class="rank-slot">
             <${RankBanner} label=${bannerLabel(sec, "Star")}
                 hint=${bannerHint(sec, "Star")} banner=${sec.rank}
+                atFloor=${ranksAreAtFloor(sec)} lane=${`star:${sec.course_id}:${sec.star_id}`} order=${0}
                 identity=${rankIdentity(`star:${sec.course_id}:${sec.star_id}`, "strategy", sec, t)} />
             ${showsEntityBanner(sec) && html`<${RankBanner} label="Star" banner=${sec.entity_rank}
+                atFloor=${ranksAreAtFloor(sec)} lane=${`star:${sec.course_id}:${sec.star_id}`} order=${1}
                 identity=${rankIdentity(`star:${sec.course_id}:${sec.star_id}`, "entity", sec, t)} />`}
           </div>
         ${/* Same clock + word the segment card's live state uses. It was a
@@ -709,8 +714,10 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker 
           <div class="rank-slot">
             <${RankBanner} label=${bannerLabel(sec, "Segment")}
                 hint=${bannerHint(sec, "Segment")} banner=${sec.rank}
+                atFloor=${ranksAreAtFloor(sec)} lane=${`segment:${sec.segment_id}`} order=${0}
                 identity=${rankIdentity(`segment:${sec.segment_id}`, "strategy", sec, t)} />
             ${showsEntityBanner(sec) && html`<${RankBanner} label="Segment" banner=${sec.entity_rank}
+                atFloor=${ranksAreAtFloor(sec)} lane=${`segment:${sec.segment_id}`} order=${1}
                 identity=${rankIdentity(`segment:${sec.segment_id}`, "entity", sec, t)} />`}
           </div>
         <div class="objective-live-state ${armed ? "running" : ""}"
@@ -989,6 +996,24 @@ export function Practice({ t, openCompare }) {
       .then(() => t.refresh())      // pull the new active_route.star_keys
       .catch(() => {});   // selection still works locally if the write fails
   };
+  // ...and the line above is exactly why this exists. localStorage is an
+  // optimistic mirror of a JOURNALED decision, the write can fail silently,
+  // and the picker restores from localStorage on mount without ever telling
+  // the server again. The two then stay diverged forever, invisibly here and
+  // very visibly wherever the server DERIVES something from the active route:
+  // the header's MARELO bar reads "Overall" while the practice plan says
+  // "16 Star — LBLJ", because `/api/marelo`'s default scope IS the server's
+  // active route (live report 2026-07-27).
+  //
+  // Keyed on the two IDS, not on the view object: `t.view` is a fresh
+  // identity every fetch, so an object dependency here would re-POST on every
+  // WebSocket event for as long as the server kept disagreeing.
+  const serverRouteId = (t.view && t.view.active_route && t.view.active_route.id) ?? null;
+  useEffect(() => {
+    if (activeRouteId == null || serverRouteId === activeRouteId) return;
+    send("POST", "/api/route/select", { route_id: activeRouteId })
+      .then(() => t.refresh()).catch(() => {});
+  }, [serverRouteId, activeRouteId]);
   // Held while any rank on screen is mid-climb (user, 2026-07-27: "if the
   // celebration occurs, and then… they leave the stage, we should prevent the
   // practice UI from transitioning to the next stage until the celebration is

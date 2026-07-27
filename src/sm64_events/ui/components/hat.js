@@ -106,11 +106,24 @@ const FONT_INK_WIDTH_RATIO_DIGIT = 0.761;   // "4", the widest of divisionDigit'
 const FONT_INK_WIDTH_RATIO_MARIO = 1.156;   // "M" -- wider than its own em box
 const GLYPH_HEIGHT_TARGET = 0.80;           // fraction of patch HEIGHT the ink should reach
 const GLYPH_WIDTH_MARGIN = 0.80;            // fraction of patch WIDTH the ink must not exceed
+// The "M" needs a tighter budget than the digits, and the reason is the SHAPE
+// of the sign field rather than anything about the letter: PATCH_BOX is the
+// rectangle AROUND the patch, but the patch art itself is a DOME, so it is
+// narrower than the box everywhere except its own widest line. A digit is
+// height-bound and never gets near the sides; "M" is width-bound (it is 116%
+// of its own em box wide) and at 80% of the BOX it was spilling off the white
+// onto the cap -- "the M in the mario cap is actually slightly too big… it
+// overlaps with the hat color, and it looks wrong" (live report 2026-07-27).
+// 0.66 keeps the ink inside the dome at every size; digits are provably
+// untouched, since their width bound stays well above their height bound.
+const GLYPH_WIDTH_MARGIN_MARIO = 0.66;
 
 function glyphFontSizePx(glyphChar, patchWidthPx, patchHeightPx) {
   const heightBoundPx = (GLYPH_HEIGHT_TARGET * patchHeightPx) / FONT_INK_HEIGHT_RATIO;
-  const widthRatio = glyphChar === "M" ? FONT_INK_WIDTH_RATIO_MARIO : FONT_INK_WIDTH_RATIO_DIGIT;
-  const widthBoundPx = (GLYPH_WIDTH_MARGIN * patchWidthPx) / widthRatio;
+  const isMario = glyphChar === "M";
+  const widthRatio = isMario ? FONT_INK_WIDTH_RATIO_MARIO : FONT_INK_WIDTH_RATIO_DIGIT;
+  const widthMargin = isMario ? GLYPH_WIDTH_MARGIN_MARIO : GLYPH_WIDTH_MARGIN;
+  const widthBoundPx = (widthMargin * patchWidthPx) / widthRatio;
   return Math.min(heightBoundPx, widthBoundPx);
 }
 

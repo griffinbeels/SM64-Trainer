@@ -25,6 +25,24 @@ import { prefersReducedMotion } from "./useTween.js";
 
 const now = () => performance.now();
 
+// ---- Climb LANES: two banners on one card climb in turn -----------------
+//
+// "the 'Strategy' rank should rank up first. Then, the 'Star' rank should
+// rank up. It should be sequential" (user, 2026-07-27). Both banners get the
+// same lane (their entity) and an explicit order, and a climb simply starts
+// when the lane is free rather than negotiating with its sibling: each one
+// publishes the timestamp it will finish at, and the next order waits for it.
+//
+// A scheduler rather than a queue because it needs no coordination at all --
+// a lone banner, or the MARELO bar, passes no lane and starts immediately,
+// and a stale entry is harmless since the start time is always
+// `max(now, laneFree)`.
+const laneEnds = new Map();
+// Enough of a gap that the second climb reads as following the first rather
+// than as the same animation continuing.
+const LANE_GAP_MS = 220;
+
+
 // ---- The celebration HOLD ------------------------------------------------
 //
 // User requirement, 2026-07-27: "if the celebration occurs, and then for some
@@ -126,7 +144,7 @@ function renderState(position, beats, atMs) {
  * `icon` is a ready-assembled prop bundle for `RankIcon`, spread at the call
  * site so no surface ever builds icon props itself.
  */
-export function useRankClimb(rank, identity = null) {
+export function useRankClimb(rank, identity = null, { lane = null, order = 0 } = {}) {
   const target = rank && rank.tier
     ? rankPosition(rank.tier, rank.division, rank.fill || 0) : null;
 
@@ -172,7 +190,6 @@ export function useRankClimb(rank, identity = null) {
     // updated every tick), never from where the last one began -- two
     // attempts landing close together must not snap back before continuing.
     const startPosition = from;
-    const startedAt = now();
     const durationMs = climbDurationBetween(startPosition, target);
     // Totals for the WHOLE climb, stamped onto every beat so an effect can
     // gate on how big a deal this was (`when: (beat) => beat.tiersGained >= 2`)
@@ -191,6 +208,20 @@ export function useRankClimb(rank, identity = null) {
       if (rankAt(candidate).tier !== rankAt(candidate - 1).tier) boundaries.push(candidate);
     }
     const { anticipateMs, payoffMs } = tierDwell(boundaries.length);
+
+    // Wait for the lane, if this climb is in one and is not first in it.
+    // Until `startedAt`, `elapsed` is negative and climbPosition holds the
+    // banner at the rank it already had -- no special "waiting" state to
+    // render, and the hold below covers the wait as well as the climb.
+    const tailMs = Math.max(celebrationTailMs("division", { anticipateMs, payoffMs }),
+                            celebrationTailMs("tier", { anticipateMs, payoffMs }),
+                            celebrationTailMs("settle", { anticipateMs, payoffMs }));
+    const totalMs = durationMs + boundaries.length * (anticipateMs + payoffMs) + tailMs;
+    const laneFreeAt = lane ? (laneEnds.get(lane) || 0) : 0;
+    const startedAt = (lane && order > 0)
+      ? Math.max(now(), laneFreeAt + LANE_GAP_MS) : now();
+    const laneEndsAt = startedAt + totalMs;
+    if (lane) laneEnds.set(lane, laneEndsAt);
 
     beatsRef.current = [];
     let level = Math.floor(startPosition);
@@ -273,9 +304,7 @@ export function useRankClimb(rank, identity = null) {
       // or the last flap would freeze mid-beat.
       const tail = beatsRef.current.length
         ? beatsRef.current[beatsRef.current.length - 1].at
-          + Math.max(celebrationTailMs("division", { anticipateMs, payoffMs }),
-                     celebrationTailMs("tier", { anticipateMs, payoffMs }),
-                     celebrationTailMs("settle", { anticipateMs, payoffMs }))
+          + tailMs
         : 0;
       if (!landed || at < tail) {
         frameRef.current = requestAnimationFrame(tick);
@@ -295,8 +324,11 @@ export function useRankClimb(rank, identity = null) {
       if (frameRef.current != null) cancelAnimationFrame(frameRef.current);
       frameRef.current = null;
       setClimbing(climbToken.current, false);
+      // Free the lane if this climb still owns it -- an abandoned climb must
+      // not keep its sibling waiting for a slot it will never use.
+      if (lane && laneEnds.get(lane) === laneEndsAt) laneEnds.delete(lane);
     };
-  }, [target, identity]);
+  }, [target, identity, lane, order]);
 
   return state && { ...state, climbing: frameRef.current != null };
 }
