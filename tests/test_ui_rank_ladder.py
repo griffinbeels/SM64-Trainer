@@ -15,42 +15,66 @@ on that bar he had earned.
 
 That is a tuning failure, not a missing rule, so the guard has to be numeric:
 it composites the two treatments the CSS actually declares over the ladder's
-own backdrop and asserts the dimmest LIT tier still clearly out-brightens the
-brightest UNREACHED one. It fails on the CSS as shipped at the time of the
-report, and on either half of the fix alone (see MIN_LIT_DIM_RATIO).
+own backdrop and scores them.
+
+It is TWO-SIDED, and the second side was bought the hard way. The first fix
+also dimmed and desaturated the unreached bands to widen the gap, which drew
+the opposite report the same day: "the dimmed bars should be way less
+dimmed... they all basically look black. I think we should at least show a
+little bit of color for each of them!!" So a band still to climb has a floor
+of its own — it is what the user is climbing TOWARD, and a map of the ladder
+that renders eight ninths of itself as black is not showing them the ladder.
+Both floors are anchored to a state a real person rejected, not to taste:
+MIN_LIT_DIM_RATIO by the first report, MIN_UNREACHED_COLOUR by the second.
+Neither names a mechanism, so a better treatment than the gloss is free to
+replace it.
 
 The compositing model is validated against the real render, not assumed: with
 the sample point set to the bar's vertical midline (alpha .0745 in the gloss
-gradient), it predicts Capless lit = rgb(125, 99, 86) and Vanish unreached =
-rgb(28, 45, 57), against rgb(124, 97, 84) and rgb(28, 46, 58) measured off a
-CDP screenshot of the real Rank tab at 2026-07-27. The ratio below uses the
-gloss's AREA-AVERAGED alpha instead, which is what the eye integrates over a
-16px bar rather than what any single scanline shows.
+gradient as it then stood), it predicts Capless lit = rgb(125, 99, 86) and
+Vanish unreached = rgb(28, 45, 57), against rgb(124, 97, 84) and
+rgb(28, 46, 58) measured off a CDP screenshot of the real Rank tab at
+2026-07-27. The ratio below uses the gloss's AREA-AVERAGED alpha instead,
+which is what the eye integrates over a 16px bar rather than what any single
+scanline shows.
+
+What no threshold here can see: whether a cleared band READS as lit, and
+whether the gloss has started milking the hue it is lifting. Both were
+settled by rendering the real app across six rank states, bottom of the
+ladder to Mario I — the numbers catch the black bar and the invisible fill,
+the contact sheet catches everything else.
 """
 import re
 from pathlib import Path
 
-from tests.test_ui_caps import _cap_table
+from tests.test_ui_caps import _cap_table, redmean
 
 INDEX_HTML = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
               / "ui" / "index.html")
 
 # The dimmest LIT tier must out-brighten the brightest UNREACHED one by at
-# least this much. Run against this ladder's own palette, the four combinations
-# of the fix's two levers score (each one executed, 2026-07-27, by pointing
-# INDEX_HTML at a mutated copy — not estimated):
-#   neither (the CSS as reported, base .26 opaque + no gloss) ... 1.53
-#   gloss alone ................................................ 2.50
-#   dimmed+desaturated base alone .............................. 3.64
-#   both (shipped) ............................................. 5.95
-# The worst pair is the same in all four: a cleared Toadsworth band read at
+# least this much. Scored against this ladder's own palette (every figure here
+# executed by pointing INDEX_HTML at a mutated copy, never estimated):
+#   1.53  base .26, no gloss ...... REJECTED, "incorrectly DIM"
+#   2.50  base .26, gloss avg .145
+#   3.05  base .26, gloss avg .212  SHIPPED
+#   5.95  base .14 + saturate(.55), gloss avg .145 ... REJECTED the other way
+# The worst pair is the same in every one: a cleared Toadsworth band read at
 # its brown spot colour against an unreached Toad band read at its near-white
 # one — the two patterned tiers, whose gradients put the ladder's darkest lit
-# pixel next to its brightest unlit one.
-# So the floor demands a real separation without naming a mechanism: any
-# treatment that gets a cleared band that far clear of an uncleared one
-# passes, whether or not it is the gloss.
-MIN_LIT_DIM_RATIO = 5.0
+# pixel next to its brightest unlit one. That pair is why the numbers look
+# low; no flat tier comes close to being the binding constraint.
+MIN_LIT_DIM_RATIO = 2.4
+
+# ...and an unreached band must still LOOK like its tier. Perceptual distance
+# (redmean, the same one the palette guard uses) between the band as composited
+# and the plate it sits on, worst tier — Capless every time, being the darkest
+# cap in the registry:
+#   30.8  base .14 + saturate(.55) .... REJECTED, "they all basically look black"
+#   45.0  base .20
+#   58.3  base .26 ..................... SHIPPED (and the level shown in both
+#                                        screenshots he did NOT object to)
+MIN_UNREACHED_COLOUR = 40.0
 
 
 def _css_rule(selector: str, optional: bool = False) -> str:
@@ -69,6 +93,13 @@ def _css_rule(selector: str, optional: bool = False) -> str:
 
 def _channels(hex_color):
     return [int(hex_color[index:index + 2], 16) for index in (1, 3, 5)]
+
+
+def _hex(channels):
+    """`redmean` speaks hex — it is shared with the palette guard, so the
+    perceptual distance in both files is the same function, not two of them."""
+    return "#%02x%02x%02x" % tuple(
+        int(round(max(0.0, min(255.0, value)))) for value in channels)
 
 
 def _over(top, bottom, alpha):
@@ -143,23 +174,28 @@ def _tier_tints():
     return tints
 
 
-def _lit_and_unreached():
-    base_rule = _css_rule(".rank-band-base")
-    opacity = re.search(r"opacity:\s*([\d.]+)", base_rule)
+def _unreached_paint():
+    """Each tier's colours as an UNREACHED band actually composites them:
+    `.rank-band-base`'s opacity (and any filter it declares) over the plate."""
+    rule = _css_rule(".rank-band-base")
+    opacity = re.search(r"opacity:\s*([\d.]+)", rule)
     assert opacity, ".rank-band-base lost its opacity — the dim state is the guard's other half"
-    saturation = re.search(r"saturate\(([\d.]+)\)", base_rule)
+    saturation = re.search(r"saturate\(([\d.]+)\)", rule)
     amount = float(saturation.group(1)) if saturation else 1.0
     backdrop = _backdrop()
-    gloss = _gloss_average_alpha()
+    return {tier: [_over(_saturate(colour, amount), backdrop,
+                         float(opacity.group(1))) for colour in colours]
+            for tier, colours in _tier_tints().items()}
 
+
+def _lit_and_unreached():
+    gloss = _gloss_average_alpha()
+    unreached_paint = _unreached_paint()
     lit, unreached = {}, {}
     for tier, colours in _tier_tints().items():
         lit[tier] = min(_luminance(_over([255, 255, 255], colour, gloss))
                         for colour in colours)
-        unreached[tier] = max(
-            _luminance(_over(_saturate(colour, amount), backdrop,
-                             float(opacity.group(1))))
-            for colour in colours)
+        unreached[tier] = max(_luminance(paint) for paint in unreached_paint[tier])
     return lit, unreached
 
 
@@ -177,6 +213,25 @@ def test_a_cleared_band_out_brightens_every_band_still_to_climb():
         f"a cleared {dimmest_lit} band is only {ratio:.2f}x as bright as an "
         f"unreached {brightest_unreached} one (floor {MIN_LIT_DIM_RATIO}) — at "
         "1.84x the user reported the cleared band as 'incorrectly DIM'")
+
+
+def test_a_band_still_to_climb_still_reads_as_its_own_tier():
+    """The opposite failure, reported the same day the one above was fixed:
+    "the dimmed bars should be way less dimmed... they all basically look
+    black. I think we should at least show a little bit of color for each of
+    them!!" These nine bands are a MAP of the whole ladder, not nine
+    have/have-not badges — a tier you have not reached is the thing you are
+    climbing toward, and it has to be findable and worth aiming at. Capless
+    binds again, from the other direction: darkest cap, so first to vanish."""
+    paint = _unreached_paint()
+    plate = _hex(_backdrop())
+    distances = {tier: redmean(_hex(colours[0]), plate)
+                 for tier, colours in paint.items()}
+    faintest = min(distances, key=distances.get)
+    assert distances[faintest] >= MIN_UNREACHED_COLOUR, (
+        f"an unreached {faintest} band sits only {distances[faintest]:.1f} from "
+        f"the plate behind it (floor {MIN_UNREACHED_COLOUR}) — at 30.8 the user "
+        "reported the unreached bands as 'basically look black'")
 
 
 def test_the_lit_treatment_does_not_depend_on_the_tier_s_own_colour():

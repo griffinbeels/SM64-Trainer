@@ -1660,18 +1660,21 @@
   .rank-band-base, .rank-band-fill {
     position: absolute; inset: 0; background: var(--band-tint);
   }
-  /* The OTHER half of the 2026-07-27 "light up what I have cleared" fix (the
-     gloss below is the first half). A tier still to climb is now clearly OFF:
-     dimmer, and desaturated toward the shell's own navy the same way an
-     unpracticed `.entity-tile` is (`opacity: .38; filter: grayscale(.75)` --
-     the established "you have not got here yet" treatment in this file). At
-     .26 with full saturation the eight unreached bands each read as a
-     confident block of tier colour, which is what left the ONE cleared band
-     competing with them instead of standing out from them -- the boundary at
-     the YOU mark has to be the loudest edge on the bar, and it could not be
-     while both sides were painted at similar weight. Saturation rather than
-     grayscale keeps each tier's hue findable for the hover that expands it. */
-  .rank-band-base { opacity: .14; filter: saturate(.55); }
+  /* Deliberately NOT the lever for "light up what I have cleared", and the
+     2026-07-27 fix's first attempt spent a round learning that. It dropped
+     this to `opacity: .14; filter: saturate(.55)` -- borrowing
+     `.entity-tile.is-unpracticed`'s dim+desaturate -- so the eight unreached
+     bands would stop competing with the one cleared band. They stopped
+     competing by disappearing: "the dimmed bars should be way less dimmed...
+     they all basically look black. I think we should at least show a little
+     bit of color for each of them!!" A tile is a discrete thing you either
+     have or have not; these nine bands are a MAP of the whole ladder, and a
+     tier you have not reached yet still has to be findable on it -- it is
+     what you are climbing toward, and the hover that expands it has to look
+     worth aiming at. So this is back at the value it has always had, and the
+     entire lit/unlit distinction is carried by the gloss below, on the side
+     that is meant to change. */
+  .rank-band-base { opacity: .26; }
   .rank-band-fill { opacity: 1; width: 0; }
   /* What makes a REACHED band read as lit (live report 2026-07-27 -- "the bar
      is incorrectly DIM for the section of the bar to the left... all of the
@@ -1695,13 +1698,19 @@
      matter its own luminance, and a lit Capless differs from a lit Toad in
      HUE, not in whether it looks switched on. It rides the FILL, whose width
      IS the reached fraction, so a partially-reached band is glossed for
-     exactly as far as the user has got and not a pixel further. */
+     exactly as far as the user has got and not a pixel further.
+     Strengthened (avg alpha .145 -> .212) when the base above went back to
+     .26: with the dim side no longer helping, the whole separation is this
+     rule's to earn. There is a ceiling on that -- rendering every tier lit
+     at once, an average past ~.22 starts milking the hues it is lifting
+     (Waluigi purple toward lavender, Mario red toward pink), which is the
+     same crime as the over-dimming, just on the other side of the bar. */
   .rank-band-fill::after {
     content: ""; position: absolute; inset: 0;
-    background: linear-gradient(180deg, rgba(255,255,255,.34) 0%,
-      rgba(255,255,255,.12) 40%, rgba(255,255,255,.02) 62%,
-      rgba(255,255,255,.18) 100%);
-    box-shadow: inset 0 1px 0 rgba(255,255,255,.55);
+    background: linear-gradient(180deg, rgba(255,255,255,.46) 0%,
+      rgba(255,255,255,.18) 40%, rgba(255,255,255,.05) 62%,
+      rgba(255,255,255,.26) 100%);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.6);
   }
   /* The pip: a focusable 9px hit box (a 1px line is not a target -- same
      reasoning the old `.rank-ladder-step` used), positioned at a LOCAL
