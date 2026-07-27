@@ -1660,8 +1660,49 @@
   .rank-band-base, .rank-band-fill {
     position: absolute; inset: 0; background: var(--band-tint);
   }
-  .rank-band-base { opacity: .26; }
+  /* The OTHER half of the 2026-07-27 "light up what I have cleared" fix (the
+     gloss below is the first half). A tier still to climb is now clearly OFF:
+     dimmer, and desaturated toward the shell's own navy the same way an
+     unpracticed `.entity-tile` is (`opacity: .38; filter: grayscale(.75)` --
+     the established "you have not got here yet" treatment in this file). At
+     .26 with full saturation the eight unreached bands each read as a
+     confident block of tier colour, which is what left the ONE cleared band
+     competing with them instead of standing out from them -- the boundary at
+     the YOU mark has to be the loudest edge on the bar, and it could not be
+     while both sides were painted at similar weight. Saturation rather than
+     grayscale keeps each tier's hue findable for the hover that expands it. */
+  .rank-band-base { opacity: .14; filter: saturate(.55); }
   .rank-band-fill { opacity: 1; width: 0; }
+  /* What makes a REACHED band read as lit (live report 2026-07-27 -- "the bar
+     is incorrectly DIM for the section of the bar to the left... all of the
+     bars, across all ranks from 0...the users current rank, should be lit up
+     -- because this should be symbolizing 'i have made it this far'").
+     Capless's band was ALREADY filled to 100% when that was written; measuring
+     the reported screenshot's own pixels gave #735648 exactly, i.e. the tint at
+     full opacity. The defect was not the fill width, it was that "reached" was
+     encoded ONLY as opacity of the tier's own colour -- a RELATIVE signal,
+     legible in the one partially-filled band (where the dim and bright halves
+     of ONE hue sit against each other) and nowhere else. A fully-reached band
+     has no dim half beside it, so the eye judges it against its NEIGHBOURS,
+     which are different hues -- and Capless (#735648) is the darkest cap in
+     the registry. Lit to 100% it measured 10.77% relative luminance against
+     5.85% for the brightest band the user had NOT reached (Vanish): 1.84x,
+     which is a difference in shade, not a difference in state. The first
+     thing anyone earns was the thing least likely to look earned.
+     The gloss is the fix because it is an ABSOLUTE lift -- a fixed amount of
+     white composited over whatever the tier's colour happens to be -- so every
+     reached band gains the same "the light is on behind this" surface no
+     matter its own luminance, and a lit Capless differs from a lit Toad in
+     HUE, not in whether it looks switched on. It rides the FILL, whose width
+     IS the reached fraction, so a partially-reached band is glossed for
+     exactly as far as the user has got and not a pixel further. */
+  .rank-band-fill::after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(180deg, rgba(255,255,255,.34) 0%,
+      rgba(255,255,255,.12) 40%, rgba(255,255,255,.02) 62%,
+      rgba(255,255,255,.18) 100%);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.55);
+  }
   /* The pip: a focusable 9px hit box (a 1px line is not a target -- same
      reasoning the old `.rank-ladder-step` used), positioned at a LOCAL
      percentage of its OWN band -- 0/20/40/60/80%, since DIVISIONS_PER_TIER
