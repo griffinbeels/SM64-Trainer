@@ -56,7 +56,7 @@ const laneFirstSeen = new Map();
 const LANE_MOUNT_GRACE_MS = 400;
 // Enough of a gap that the second climb reads as following the first rather
 // than as the same animation continuing.
-const LANE_GAP_MS = 220;
+const LANE_GAP_MS = 90;
 
 
 // ---- The celebration HOLD ------------------------------------------------
@@ -84,15 +84,30 @@ let nextClimbToken = 0;
 const HOLD_CEILING_MS = 20000;
 
 function setClimbing(token, running) {
-  const wasHolding = liveClimbs.size > 0;
+  const wasHolding = isCelebrating();
   if (running) liveClimbs.add(token);
   else liveClimbs.delete(token);
-  const holding = liveClimbs.size > 0;
+  if (!liveClimbs.size) holdReleased = false;   // the release lasts one climb
+  const holding = isCelebrating();
   if (wasHolding !== holding) holdListeners.forEach((notify) => notify(holding));
 }
 
 /** True while any rank on screen is mid-climb. */
-export const isCelebrating = () => liveClimbs.size > 0;
+// A user GESTURE beats the hold. The hold exists so the GAME cannot move the
+// page on mid-celebration (walking out of the stage); it was never meant to
+// stop the player clicking a different star (live report 2026-07-27: "it
+// should let me immediately jump to the other star"). Sticky until the last
+// climb ends, so the page does not re-freeze on the next frame; the abandoned
+// climb simply unmounts, and coming back later shows the finished rank
+// because a remount snaps.
+let holdReleased = false;
+export function releaseCelebrationHold() {
+  if (!liveClimbs.size || holdReleased) return;
+  holdReleased = true;
+  holdListeners.forEach((notify) => notify(false));
+}
+
+export const isCelebrating = () => liveClimbs.size > 0 && !holdReleased;
 
 export function useCelebrating() {
   const [celebrating, setCelebrating] = useState(isCelebrating());
@@ -160,7 +175,8 @@ function renderState(position, beats, atMs) {
  * `icon` is a ready-assembled prop bundle for `RankIcon`, spread at the call
  * site so no surface ever builds icon props itself.
  */
-export function useRankClimb(rank, identity = null, { lane = null, order = 0 } = {}) {
+export function useRankClimb(rank, identity = null,
+                             { lane = null, order = 0, replayKey = null } = {}) {
   const target = rank && rank.tier
     ? rankPosition(rank.tier, rank.division, rank.fill || 0) : null;
 
@@ -177,6 +193,7 @@ export function useRankClimb(rank, identity = null, { lane = null, order = 0 } =
   // Cleared only when the loop ENDS -- never in the effect cleanup, which
   // runs before every re-entry and so cannot tell "interrupted" from "done".
   const climbingToRef = useRef(null);
+  const replayKeyRef = useRef(replayKey);
   useEffect(() => {
     if (!lane) return undefined;
     laneMembers.set(lane, (laneMembers.get(lane) || 0) + 1);
@@ -236,8 +253,20 @@ export function useRankClimb(rank, identity = null, { lane = null, order = 0 } =
     // card that was already up (picking a strategy for a star that already
     // has a time -- live report 2026-07-27, "it should show capless 5 ->
     // animate all the way to the achieved rank"). Neither is a page load.
-    const earnedFirstRank = from == null && target > 0
-      && (!isFirstRun || arrivedLateRef.current);
+    // "any time we select a strategy for the first time, its rank standard
+    // banner should always start from capless 5, and then animate to whatever
+    // the first entry is… if we change strats… that new strategy should
+    // repeat the animation process" (user, 2026-07-27). A strategy's rank is
+    // a measurement being SHOWN for the first time, so it is earned in the
+    // same sense a first-ever rank is -- it just happens to already have a
+    // number behind it. Only the STRATEGY banner passes a replayKey: the
+    // star's own rank does not depend on which strategy is selected, so it
+    // must sit still through the switch.
+    const replayed = replayKeyRef.current !== replayKey;
+    replayKeyRef.current = replayKey;
+    const earnedFirstRank = target > 0
+      && ((from == null && (!isFirstRun || arrivedLateRef.current))
+          || (replayed && !isFirstRun));
     // A climb already heading for THIS target keeps going, whatever the
     // identity says. Picking a strategy changes a card's identity but not the
     // star's own rank, and snapping there cut the animation off at the exact
@@ -290,7 +319,13 @@ export function useRankClimb(rank, identity = null, { lane = null, order = 0 } =
     const tailMs = Math.max(celebrationTailMs("division", { anticipateMs, payoffMs }),
                             celebrationTailMs("tier", { anticipateMs, payoffMs }),
                             celebrationTailMs("settle", { anticipateMs, payoffMs }));
-    const totalMs = durationMs + boundaries.length * (anticipateMs + payoffMs) + tailMs;
+    // The next banner starts when this one's POSITION lands, not when its
+    // last sparkle fades: waiting out the effect tail as well made the gap
+    // read as dead air (live report 2026-07-27, "the timing gap … is too
+    // long"). The two tails overlap by design now -- the first banner is
+    // settling while the second starts climbing, which is what makes them
+    // read as one gesture in two parts rather than two animations.
+    const totalMs = durationMs + boundaries.length * (anticipateMs + payoffMs);
     const laneFreeAt = lane ? (laneEnds.get(lane) || 0) : 0;
     const startedAt = (lane && order > 0)
       ? Math.max(now(), laneFreeAt + LANE_GAP_MS) : now();
@@ -404,7 +439,7 @@ export function useRankClimb(rank, identity = null, { lane = null, order = 0 } =
       // not keep its sibling waiting for a slot it will never use.
       if (lane && laneEnds.get(lane) === laneEndsAt) laneEnds.delete(lane);
     };
-  }, [target, identity, lane, order]);
+  }, [target, identity, lane, order, replayKey]);
 
   return state && { ...state, climbing: frameRef.current != null };
 }

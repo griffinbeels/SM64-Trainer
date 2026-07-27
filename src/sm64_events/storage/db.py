@@ -714,6 +714,31 @@ class Database:
             self._conn.execute("DELETE FROM pbs WHERE id=?", (pb_id,))
             self._conn.commit()
 
+    def delete_orphaned_pbs(self) -> int:
+        """Drop pb rows whose saving attempt no longer exists, and return how
+        many went.
+
+        A pb row carries its own `frames`, so an orphan does not sit there
+        inertly — it keeps GRADING. That is how a star kept reading MARIO 1
+        with an empty practice log after its history was cleared (live report
+        2026-07-27): the rows outlived the attempts by design, and nothing
+        ever collected them.
+
+        Run on every re-projection, which is what makes it a REPAIR and not
+        just a guard: rows orphaned by any earlier delete or wipe — including
+        ones made before the callers started cleaning up after themselves —
+        are collected the next time the journal is replayed. An attempt's id
+        is the journal id of its first event (projection.py), so it is never
+        reused and this can never take a live row. `attempt_id IS NULL` rows
+        are left alone: they were never tied to an attempt to begin with.
+        """
+        with self._lock:
+            cursor = self._conn.execute(
+                "DELETE FROM pbs WHERE attempt_id IS NOT NULL"
+                " AND attempt_id NOT IN (SELECT id FROM attempts)")
+            self._conn.commit()
+            return cursor.rowcount
+
     def delete_pbs_for_attempts(self, attempt_ids: list[int]) -> None:
         """Session-scoped wipes: drop pb rows saved from the wiped attempts
         so the previous PB (latest remaining row) restores automatically."""

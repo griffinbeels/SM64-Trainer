@@ -1632,3 +1632,38 @@ def test_deleting_a_session_leaves_another_sessions_PB_alone(tmp_path):
     asyncio.run(svc.new_session())          # session 3, so session 1 is deletable
     asyncio.run(svc.delete_session(1))
     assert kept.id in [row["attempt_id"] for row in db.pbs()]
+
+
+def test_orphaned_PBs_are_collected_on_reprojection(tmp_path):
+    """The REPAIR half of the session/PB fix: rows orphaned by a delete or a
+    wipe that predates the callers cleaning up after themselves. A pb row
+    carries its own frames, so an orphan keeps GRADING — which is how a star
+    kept reading a real rank with an empty practice log (live report
+    2026-07-27) even after the delete path started tidying up.
+    """
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1300)))
+    attempt = db.attempts()[-1]
+    asyncio.run(svc.save_pb(attempt.id, "igt"))
+    assert db.pbs()
+
+    # Simulate the damage: the attempt's journal slice is gone but its pb row
+    # was left behind, exactly as an older delete_session would have left it.
+    db.delete_session(attempt.session_id)
+    assert db.pbs(), "the row should still be there before the repair runs"
+
+    asyncio.run(svc._reproject())
+    assert db.pbs() == [], "the orphaned PB survived a re-projection"
+
+
+def test_a_live_PB_survives_the_orphan_sweep(tmp_path):
+    """The mirror. A sweep that also took live rows would silently reset every
+    rank in the app on the next re-projection."""
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1300)))
+    attempt = db.attempts()[-1]
+    asyncio.run(svc.save_pb(attempt.id, "igt"))
+    asyncio.run(svc._reproject())
+    assert [row["attempt_id"] for row in db.pbs()] == [attempt.id]

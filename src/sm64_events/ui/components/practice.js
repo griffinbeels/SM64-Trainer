@@ -552,6 +552,7 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
             <${RankBanner} label=${bannerLabel(sec, "Star")}
                 hint=${bannerHint(sec, "Star")} banner=${sec.rank}
                 atFloor=${ranksAreAtFloor(sec)} lane=${`star:${sec.course_id}:${sec.star_id}`} order=${0}
+                replayKey=${sec.last_strat || ""}
                 identity=${rankIdentity(`star:${sec.course_id}:${sec.star_id}`, "strategy", sec, t)} />
             ${showsEntityBanner(sec) && html`<${RankBanner} label="Star" banner=${sec.entity_rank}
                 atFloor=${ranksAreAtFloor(sec)} lane=${`star:${sec.course_id}:${sec.star_id}`} order=${1}
@@ -715,6 +716,7 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker 
             <${RankBanner} label=${bannerLabel(sec, "Segment")}
                 hint=${bannerHint(sec, "Segment")} banner=${sec.rank}
                 atFloor=${ranksAreAtFloor(sec)} lane=${`segment:${sec.segment_id}`} order=${0}
+                replayKey=${sec.last_strat || ""}
                 identity=${rankIdentity(`segment:${sec.segment_id}`, "strategy", sec, t)} />
             ${showsEntityBanner(sec) && html`<${RankBanner} label="Segment" banner=${sec.entity_rank}
                 atFloor=${ranksAreAtFloor(sec)} lane=${`segment:${sec.segment_id}`} order=${1}
@@ -964,7 +966,22 @@ export function Practice({ t, openCompare }) {
     return s ? Number(s) : null;
   });
   const [routeView, setRouteView] = useState(null);
-  useEffect(() => { getJSON("/api/routes").then(setRoutes).catch(() => {}); }, []);
+  // The practice plan and the Rank tab's scope picker are ONE list, from
+  // ONE endpoint (user, 2026-07-27: "These should be identical lists and
+  // should be the exact same set of options that trigger the exact same
+  // things"). `/api/marelo/scopes` is that list -- the same labels, in the
+  // same order, with "Overall" as the first entry rather than a separate
+  // "All practice" wording for the same thing. Course scopes are dropped
+  // here and only here: a course is a rating you can BROWSE, not a plan
+  // you can practise, since there is no route for the focus to follow.
+  useEffect(() => {
+    getJSON("/api/marelo/scopes")
+      .then((body) => setRoutes((body.scopes || [])
+        .filter((scope) => scope.kind === "route")
+        .map((scope) => ({ id: Number(scope.id.slice("route:".length)),
+                           name: scope.label }))))
+      .catch(() => {});
+  }, []);
   // Refetch the resolved route view on selection change AND on every session
   // view update, so per-step/cumulative % stay live as attempts land. A 404
   // (route deleted) clears it → the tab falls back to normal practice.
@@ -1110,7 +1127,10 @@ export function Practice({ t, openCompare }) {
         <span class="field-label">Practice plan</span>
         <select value=${activeRouteId ?? ""}
             onchange=${(e) => pickRoute(e.target.value ? Number(e.target.value) : null)}>
-          <option value="">All practice</option>
+          <!-- Named for the SCOPE it selects, not for what it does to this
+               page: picking it is what puts the header's MARELO bar on the
+               Overall rating. -->
+          <option value="">Overall</option>
           ${routes.map((r) => html`<option value=${r.id}>${r.name}</option>`)}
         </select>
       </label>

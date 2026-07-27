@@ -129,6 +129,13 @@ class TrackerService:
         attempts, self._projector = replay(events, segments=self._segment_defs,
                                            time_filters=self._time_filters())
         self.db.replace_attempts(attempts)
+        # Boot repair, same reason as in _reproject: an orphaned pb row keeps
+        # GRADING, so a db that already carries some from an older delete or
+        # wipe would otherwise keep showing a rank for a star with no history
+        # until something happened to trigger a re-projection.
+        orphaned = self.db.delete_orphaned_pbs()
+        if orphaned:
+            log.info("dropped %d PB row(s) whose attempts no longer exist", orphaned)
         self.db.replace_runs([r.as_row() for r in self._projector.finished_runs()])
         self._persisted_runs = [r.id for r in self._projector.finished_runs()]
         self.session_id = self.db.insert_session(_iso(_now()))
@@ -1295,6 +1302,13 @@ class TrackerService:
         # keep the live session: replayed projector state is authoritative
         self._projector = projector
         db.replace_attempts(attempts)
+        # Every attempt the journal still supports has just been written; any
+        # pb row pointing outside that set is an orphan, and an orphan keeps
+        # GRADING (db.delete_orphaned_pbs). Here rather than in each caller so
+        # it repairs rows left behind by deletes and wipes that predate those
+        # callers cleaning up — which is what kept a cleared star reading
+        # MARIO 1 (live report 2026-07-27).
+        db.delete_orphaned_pbs()
         db.replace_runs([r.as_row() for r in projector.finished_runs()])
         self._persisted_runs = [r.id for r in projector.finished_runs()]
         # replay re-derives armed state silently; the UI badge must not lie

@@ -98,7 +98,7 @@ function sentinelMsg(banner) {
 // produced the banner it was handed.
 export function RankBanner({ label, banner, hint = null, identity = null,
                              atFloor: atFloorProp = false,
-                             lane = null, order = 0 }) {
+                             lane = null, order = 0, replayKey = null }) {
   const ranked = !!(banner && banner.rank);
   // Called unconditionally (rules of hooks) even on the sentinel/empty path
   // below — `null` passes straight through with no animation, which is what
@@ -146,7 +146,7 @@ export function RankBanner({ label, banner, hint = null, identity = null,
   // climbs, then the star's (user, 2026-07-27 -- "Strategy first. Then
   // star"). A lone banner, and the MARELO bar, pass neither and start
   // immediately.
-  const climb = useRankClimb(graded, identity, { lane, order });
+  const climb = useRankClimb(graded, identity, { lane, order, replayKey });
   if (!graded || !climb) {
     return html`<div class="rank-banner rank-banner-empty">
       <span class="rank-banner-kicker" title=${hint}>${label}</span>
