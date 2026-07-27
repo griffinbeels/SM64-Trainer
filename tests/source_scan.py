@@ -24,7 +24,11 @@ feed it a comment-only sample (must pass) and a real-code sample (must fail).
 That probe used to be done by hand after every retarget, which is exactly the
 kind of step that gets skipped.
 """
+import ast
+import io
 import re
+import tokenize
+from pathlib import Path
 
 _BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
 _LINE_COMMENT = re.compile(r"^\s*//.*$", re.MULTILINE)
@@ -33,3 +37,39 @@ _LINE_COMMENT = re.compile(r"^\s*//.*$", re.MULTILINE)
 def strip_comments(source: str) -> str:
     """JS/CSS source with both comment styles removed."""
     return _LINE_COMMENT.sub("", _BLOCK_COMMENT.sub("", source))
+
+
+# --- Python -----------------------------------------------------------------
+# Same problem, other language: a `# comment` or a docstring explaining WHY a
+# thing is absent must not satisfy (or trip) a guard about the code. Python
+# docstrings are the reason a naive strip is not enough — core/relaunch.py and
+# desktop/single_instance.py both explain the server port by number in their
+# module docstrings, and a text scan reads those as hardcoded ports.
+def python_code(source: str) -> str:
+    """Python source with comments and docstrings removed, as loose tokens.
+
+    Token-joined, not reconstructed: this is for substring assertions, never
+    for execution. Non-docstring string LITERALS are kept on purpose — a
+    hardcoded value inside one is exactly the kind of second source of truth
+    these guards exist to find.
+    """
+    docstring_lines: set[int] = set()
+    for node in ast.walk(ast.parse(source)):
+        body = getattr(node, "body", None)
+        if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                                 ast.AsyncFunctionDef)) or not body:
+            continue
+        first = body[0]
+        if (isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant)
+                and isinstance(first.value.value, str)):
+            docstring_lines.update(range(first.lineno, (first.end_lineno or first.lineno) + 1))
+    kept = [token.string
+            for token in tokenize.generate_tokens(io.StringIO(source).readline)
+            if token.type != tokenize.COMMENT and token.start[0] not in docstring_lines]
+    return "\n".join(kept)
+
+
+def code_only(path: Path, source: str | None = None) -> str:
+    """Comment-free source for a file, dispatched on its suffix."""
+    text = source if source is not None else path.read_text(encoding="utf-8")
+    return python_code(text) if path.suffix == ".py" else strip_comments(text)

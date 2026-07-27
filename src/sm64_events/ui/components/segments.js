@@ -8,14 +8,15 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { Icon } from "./icons.js";
-import { IconPicker, iconSrcFromStem } from "./iconpicker.js";
+import { IconPicker } from "./iconpicker.js";
 import { PageState } from "./states.js";
 import { buildTree } from "../group.js";
 import { usePaneCap } from "../viewport.js";
 import { GroupedList, useOpenGroups } from "./grouplist.js";
 import { EntityPicker } from "./entitymodal.js";
-import { courseOptions, levelOptions, optionIcon, parseStarId, starId,
+import { courseOptions, levelOptions, parseStarId, starId,
          starOptionsFromVocab } from "../entities.js";
+import { entityIconSrc, optionIconSrc } from "./entityicons.js";
 
 const html = htm.bind(h);
 
@@ -83,13 +84,9 @@ export function ParamInput({ schema, name, value, vocab, clause, onChange, t }) 
   const permitted = ([id]) => !allowed || allowed.has(Number(id))
     || Number(id) === value;
   const permittedId = (id) => permitted([id]);
-  // Icon context assembled HERE, not inside the picker: the picker resolves
-  // no domain art of its own.
-  const iconContext = {
-    courseIcons: (t && t.courseIcons) || {},
-    starIconsMode: (t && t.starIcons) || "course",
-    courseByLevel: vocab.course_by_level || {},
-  };
+  // Art comes from entityicons.js: the picker resolves no domain art of its
+  // own, and a second context is how these cells came to disagree with the
+  // banner (2026-07-26).
   if (schema.kind === "level") {
     // schema.enum restricts the choices (area_enter offers only the castle
     // hubs); absent enum = every level. Split into the castle regions the
@@ -105,7 +102,7 @@ export function ParamInput({ schema, name, value, vocab, clause, onChange, t }) 
       value=${value == null ? null : String(value)}
       title="Choose a level"
       placeholder=${schema.required ? "— pick level —" : "(any level)"}
-      iconFor=${(id) => optionIcon("level", id, iconContext)}
+      iconFor=${(id) => optionIconSrc(t, "level", id)}
       onChange=${(id) => onChange(id == null ? null : Number(id))} />`;
   }
   if (schema.kind === "subarea")
@@ -121,7 +118,7 @@ export function ParamInput({ schema, name, value, vocab, clause, onChange, t }) 
       value=${value == null ? null : String(value)}
       title="Choose a course"
       placeholder=${schema.required ? "— pick course —" : "(any course)"}
-      iconFor=${(id) => optionIcon("course", id, iconContext)}
+      iconFor=${(id) => optionIconSrc(t, "course", id)}
       onChange=${(id) => onChange(id == null ? null : Number(id))} />`;
   if (schema.kind === "star") {
     // Dependent on the sibling course param: with no course picked, any star
@@ -136,7 +133,7 @@ export function ParamInput({ schema, name, value, vocab, clause, onChange, t }) 
       value=${value == null ? null : starId(clause.course, value)}
       title="Choose a star"
       placeholder=${schema.required ? "— pick star —" : "(any star)"}
-      iconFor=${(id) => optionIcon("star", id, iconContext)}
+      iconFor=${(id) => optionIconSrc(t, "star", id)}
       onChange=${(id) => onChange(id == null ? null : parseStarId(id).star)} />`;
   }
   if (schema.kind === "seconds") {
@@ -347,8 +344,7 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load }) {
     ${initial && initial.id != null && html`<div class="builder-icon">
       <span class="field-label">Icon</span>
       <img class="builder-icon-preview" alt="" draggable="false"
-           src=${iconOverride ? iconSrcFromStem(iconOverride)
-                              : "/ui/assets/star_1.png"} />
+           src=${entityIconSrc(t || {}, `segment:${initial.id}`)} />
       <button type="button" onclick=${() => setPickingIcon(true)}>
         Choose icon…</button>
       <span class="meta">${iconOverride || "default"} · shown on the course

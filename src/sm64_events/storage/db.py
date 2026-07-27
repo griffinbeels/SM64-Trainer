@@ -225,6 +225,26 @@ MIGRATIONS = [
     """
     ALTER TABLE segment_defs ADD COLUMN default_strat TEXT;
     """,
+    # v14 — three icons that were UPLOADS become bundled art (user, 2026-07-26:
+    # "can you make these default for all users?"). ui/assets/star_icons now
+    # ships blj/lakitu/castle_movement, and ui/entities.js hands them to the
+    # seeded definitions that should wear them by default. This repoints the
+    # per-entity OVERRIDES that already named the uploaded copies — editing the
+    # asset set alone only helps a fresh install, and an override always wins,
+    # so without this the two segments that have one would keep resolving
+    # `user:*.png` out of the data dir forever (auto-memory: a seed fix needs
+    # its own repair migration). Guarded on the exact stored value, quotes
+    # included, so it can only ever match those three JSON strings; every other
+    # override and every db without them is untouched.
+    """
+    UPDATE ui_state SET value = replace(value, '"user:blj.png"', '"blj"')
+      WHERE key='icon_overrides';
+    UPDATE ui_state SET value = replace(value, '"user:lakitu.png"', '"lakitu"')
+      WHERE key='icon_overrides';
+    UPDATE ui_state
+       SET value = replace(value, '"user:castle_movement.png"', '"castle_movement"')
+      WHERE key='icon_overrides';
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",

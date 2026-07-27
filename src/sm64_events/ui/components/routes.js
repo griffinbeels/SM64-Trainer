@@ -19,8 +19,9 @@ import { buildTree } from "../group.js";
 import { usePaneCap } from "../viewport.js";
 import { GroupedList, useOpenGroups } from "./grouplist.js";
 import { EntityPicker } from "./entitymodal.js";
-import { optionIcon, parseStarId, segmentLevelsOf, segmentOptions,
+import { parseStarId, segmentOptions,
          starOptionsFromCatalog } from "../entities.js";
+import { optionIconSrc } from "./entityicons.js";
 
 const html = htm.bind(h);
 const pct = (r) => `${Math.round((r ?? 0) * 100)}%`;
@@ -144,18 +145,10 @@ function ItemPicker({ catalog, segs, vocab, t, onPick, label }) {
   const [star, setStar] = useState(firstStar);
   const segGroups = segmentOptions(segs, (vocab || {}).origins);
   const [segId, setSegId] = useState(segs[0] ? String(segs[0].id) : null);
-  // Icon context assembled HERE, not inside the picker: the picker resolves
-  // no domain art of its own. segmentLevels comes from each row's ORIGIN — the
-  // canonical arm location the server already derives — NOT from start_levels,
-  // which /api/segments does not carry (that field is on the session view's
-  // segment_targets). Assuming it did made every segment row fall back to a
-  // plain star, found by a live render check 2026-07-25.
-  const iconContext = {
-    courseIcons: (t && t.courseIcons) || {},
-    starIconsMode: (t && t.starIcons) || "course",
-    iconOverrides: ((t && t.view) || {}).icon_overrides || {},
-    segmentLevels: segmentLevelsOf(segs),
-  };
+  // Art comes from entityicons.js, which reads the store itself: these cells
+  // must resolve exactly what the practice banner and the Rank tab resolve,
+  // and three hand-built contexts is how they diverged (2026-07-26). `segs`
+  // IS t.segments, so nothing is lost by asking the store instead of the prop.
   const pick = () => {
     // Neither branch has anything to post before its picker resolves a first
     // value (star: catalog.course_groups missing course_groups on the
@@ -181,13 +174,13 @@ function ItemPicker({ catalog, segs, vocab, t, onPick, label }) {
     ${mode === "star"
       ? html`<${EntityPicker} groups=${starGroups} value=${star} depth=${2}
           title="Choose a star"
-          iconFor=${(id) => optionIcon("star", id, iconContext)}
+          iconFor=${(id) => optionIconSrc(t, "star", id)}
           onChange=${(id) => setStar(id)} />`
       : segs.length === 0
         ? html`<span class="meta">no segments defined</span>`
         : html`<${EntityPicker} groups=${segGroups} value=${segId} depth=${2}
             title="Choose a segment"
-            iconFor=${(id) => optionIcon("segment", id, iconContext)}
+            iconFor=${(id) => optionIconSrc(t, "segment", id)}
             onChange=${(id) => setSegId(id)} />`}
     <button disabled=${mode === "segment" && segs.length === 0} onclick=${pick}>
       <${Icon} name="plus" size=${15} /> ${label || "Add"}

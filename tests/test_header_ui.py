@@ -105,7 +105,7 @@ def test_target_picker_is_the_icon_modal():
     assert "PickerDialog" in PICKER_JS
     assert "EntityPicker" not in PICKER_JS
     assert "GroupedPicker" not in PICKER_JS
-    assert "optionIcon" in PICKER_JS
+    assert "optionIconSrc" in PICKER_JS
 
 
 def test_target_editor_is_gone_the_trigger_opens_the_picker_directly():
@@ -157,13 +157,17 @@ def test_layer_one_cells_carry_a_course_portrait():
     # an icon to each course group (review M4: the old version asserted the
     # five-character substring "icon:" and could not fail for its stated
     # reason).
-    assert 'icon: optionIcon("course"' in PICKER_JS
+    assert 'icon: optionIconSrc(t, "course"' in PICKER_JS
 
 
 def test_target_picker_resolves_segment_art_like_the_banner_does():
-    # Without segmentLevels + iconOverrides in the icon context, every segment
-    # cell falls through to a plain gold star while the banner and the route
-    # editor show its real art — and a user's explicit icon override is
-    # ignored (whole-branch review I1, 2026-07-25).
-    assert "segmentLevelsOf(t.segments)" in PICKER_JS
-    assert "icon_overrides" in PICKER_JS
+    # A hand-built icon context is how this picker drew a plain gold star for
+    # a segment the banner drew real art for (whole-branch review I1,
+    # 2026-07-25 — the context was missing segmentLevels and iconOverrides).
+    # It now takes entityicons.js's shared builder, which is the only way the
+    # two surfaces can be structurally unable to disagree (2026-07-26, after
+    # the Rank tab turned out to have the same bug for a different field).
+    assert "optionIconSrc(t" in PICKER_JS
+    assert 'from "./entityicons.js"' in PICKER_JS
+    assert "iconContext" not in strip_comments(PICKER_JS), \
+        "the target picker is back to holding an icon context of its own"

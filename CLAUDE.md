@@ -102,6 +102,27 @@ Contract changes land on main first, then dependent work fans out. Merge with
 - **UI changes are verified by rendering** (headless Chrome or chrome-devtools
   MCP), never by unit tests + `node --check` alone — that combination once
   shipped an invisible feature.
+- **A value two surfaces show gets ONE DOOR, and the door is enforced.** "Don't
+  repeat yourself" cannot fail a build, and the divergence that matters is never
+  copy-paste: three surfaces each grew their own honest way to turn a star into
+  an icon and quietly disagreed (2026-07-26). Three checkable properties, all
+  three or none:
+  1. one module owns the derivation, import-free where it can be, so node/pytest
+     can drive it directly;
+  2. its public call takes **identity only, never ingredients** — every argument
+     a caller assembles is a chance to assemble it differently, and this bug
+     produced both halves (three hand-built contexts, then one call site passing
+     the context BUILDER where the context belonged, silently defaulting every
+     field);
+  3. a row in `tests/test_single_source.py` naming the INGREDIENTS — the asset
+     path, the lookup table, the literal — so no other file may name them. Not
+     "is the shared function called", which passes while a second path exists
+     beside it: the question is whether a second path can be written at all.
+  Prove a new row has teeth by mutation (add the violation, watch it fail,
+  revert) — a scan that matches nothing is green forever.
+  This finds a second DOOR, never a wrong value through the right one: that same
+  context-builder bug satisfied every scan and still repainted a whole grid.
+  Rendering is the other half, not an alternative to it.
 - **Exit-code honesty:** run verification through the Bash tool. Never pipe
   native exes into `Select-Object` or use `2>&1` on them in PS 5.1 (false
   failures).

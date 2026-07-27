@@ -1,32 +1,112 @@
-// src/sm64_events/ui/components/entityicons.js — the star/segment entity ->
-// icon URL resolution. Extracted from stagebanner.js (task D,
-// 2026-07-25-marelo-legibility) once the Rank tab's Top-N strip needed the
-// SAME course-prefix table and generic-star fallback the quick-select row
-// already had: a second copy of COURSE_ICON_PREFIXES is exactly the kind of
-// table that silently drifts from the asset set (see tests/test_star_icons.py,
-// which pins this file's registry against the course catalog order, and
-// tests/test_ui_picker_parity.py's sibling history for why a shared table
-// beats a second hand-written one). `iconSrcFromStem` (the stem -> URL rule
-// for a resolved icon, bundled OR user-uploaded) stays owned by
-// iconpicker.js — this module only adds the layer ABOVE it: which stem an
-// entity resolves to in the first place.
-import { iconSrcFromStem } from "./iconpicker.js";
+// src/sm64_events/ui/components/entityicons.js — the ONE place a component
+// turns a star/segment into art. A component calls `entityIconSrc(t, key)` (an
+// entity key) or `optionIconSrc(t, kind, id)` (a picker option) and gets a URL;
+// `iconContext(t)`, which assembles the resolver's context out of the store,
+// is theirs to call, not a caller's. The chain itself lives in ../entities.js
+// (`entityIcon`), which imports nothing and is therefore node-testable; this
+// module is the layer that knows about the store.
+//
+// It exists because the same entity used to resolve THREE different ways
+// (fixed 2026-07-26, live report: BitFS Pipe Entry drew Bowser on the
+// practice banner and a plain gold star on the Rank tab's coverage strip):
+//
+//   - the banner passed a stem it derived itself, from the session view's
+//     `start_levels` — right for segments, but it had no branch for the
+//     Bowser/cap courses, whose stars fell through to a gold star;
+//   - the Rank tab derived its stem from the entity KEY alone, which carries
+//     no start level at all, so EVERY segment fell through to a gold star;
+//   - the pickers called entities.js's own chain with a hand-built context,
+//     which knew about the special courses but ignored a star's override and
+//     resolved an uploaded `user:` override to a 404.
+//
+// Each was locally reasonable and the three disagreed. So there is now no
+// per-call-site stem derivation to get right: a caller passes an entity key
+// and gets a URL. `tests/test_star_icons.py::test_no_component_resolves_icon
+// _art_on_its_own` is what keeps that true rather than aspirational.
+import { entityIcon, fallbackSlotForEntityKey, genericStarSrc, isGenericArt,
+         optionIcon, segmentLevelsOf } from "../entities.js";
 
-// The PURE registries live in ../entities.js — that module imports nothing,
-// so node can unit-test the picker's icon chain (entities.js::optionIcon)
-// against the same table this file resolves with. Re-exported here so a
-// component never has to know which of the two layers it wants (merge
-// resolution 2026-07-25: two branches extracted these registries on the same
-// day, one for the Rank tab's Top-N strip and one for the picker grid).
-export { COURSE_ICON_PREFIXES, LEVEL_ICONS, genericStarSrc,
-         isGenericArt } from "../entities.js";
-import { COURSE_ICON_PREFIXES, LEVEL_ICONS, genericStarSrc,
+// The pure helpers a rendering component still needs by name: the generic-star
+// slot for its img onerror, and the generic-vs-real test that decides the
+// opaque-square `courseicon` styling. Re-exported so a component never has to
+// know which of the two layers it wants. The TABLES themselves
+// (COURSE_ICON_PREFIXES, LEVEL_ICONS, SPECIAL_COURSE_ICONS) are deliberately
+// NOT re-exported any more: a component that reads one is a component
+// deriving its own stem, which is the bug this module exists to prevent.
+export { fallbackSlotForEntityKey, genericStarSrc,
          isGenericArt } from "../entities.js";
 
-export function resolveIcon(t, entityKey, courseStem, slot) {
-  const override = ((t.view || {}).icon_overrides || {})[entityKey];
-  const stem = override || (t.starIcons === "course" ? courseStem : null);
-  return stem ? iconSrcFromStem(stem) : genericStarSrc(slot);
+// A segment's icon follows the level it STARTS in, and two payloads answer
+// that question. The session view's `segment_targets` carries the real
+// `start_levels` off the segment's start triggers; `/api/segments` carries
+// only an `origin`, whose level is derived the same way BUT can be overridden
+// by hand (the library's "category" control writes it). So triggers win where
+// the view has them, and origin fills in for every segment the current view
+// doesn't list — which is what lets the Rank tab and the pickers, neither of
+// which has a stage view, resolve the same art the banner does. Re-pointing a
+// segment's library category must not silently repaint its icon.
+function segmentLevels(t) {
+  const view = t.view || {};
+  const levels = segmentLevelsOf(t.segments);
+  for (const target of view.segment_targets || [])
+    if ((target.start_levels || []).length)
+      levels[String(target.segment_id)] = target.start_levels;
+  return levels;
+}
+
+// The corpus's own identity and grouping for each definition, straight off
+// /api/segments — `seed_key` survives a rename and is identical on every
+// install, `category` is the seed's classification ("Castle Movement"), not a
+// second one invented in the UI. Both feed the default-art registries in
+// entities.js; a user-created segment has neither and falls through to the
+// generic star, which is correct — nothing knows what it is.
+function segmentMeta(t) {
+  return Object.fromEntries((t.segments || []).map((segment) =>
+    [String(segment.id),
+     { seedKey: segment.seed_key || null, category: segment.category || null }]));
+}
+
+// One-entry memo. The context is derived from six store slots and rebuilding
+// it means walking every segment definition; the Rank tab's coverage strip
+// alone resolves ~24 entities per render and the whole page re-renders on
+// every WebSocket event. Identity comparison is enough because all six are
+// replaced wholesale by their fetches, never mutated in place.
+let memo = null;
+
+export function iconContext(t) {
+  const view = t.view || {};
+  const slots = [t.segments, view.segment_targets, view.icon_overrides,
+                 t.courseIcons, t.starIcons, t.vocab];
+  if (memo && slots.every((slot, index) => slot === memo.slots[index]))
+    return memo.context;
+  const context = {
+    courseIcons: t.courseIcons || {},
+    starIconsMode: t.starIcons || "course",
+    iconOverrides: view.icon_overrides || {},
+    courseByLevel: (t.vocab || {}).course_by_level || {},
+    segmentLevels: segmentLevels(t),
+    segmentMeta: segmentMeta(t),
+  };
+  memo = { slots, context };
+  return context;
+}
+
+/** Art for one entity key ("star:8:2", "segment:6", "course:8", "level:19"),
+ *  resolved against the live store. THE call every component makes. */
+export function entityIconSrc(t, entityKey) {
+  return entityIcon(entityKey, iconContext(t || {}));
+}
+
+/** The same, addressed the way a PICKER addresses an option: a kind plus that
+ *  kind's own id. Exists so no component ever holds a context object — a
+ *  picker's `iconFor` is `(id) => optionIconSrc(t, "star", id)` and there is
+ *  nothing to pass wrongly. Passing the `iconContext` FUNCTION where the
+ *  context belonged is a real bug this shape removes: every field destructures
+ *  to its default, so the whole grid silently drew fallback art (caught by
+ *  render, 2026-07-26 — every course portrait became a star icon and PSS, whose
+ *  fallback stem has no .png, 404'd through to a plain gold star). */
+export function optionIconSrc(t, kind, id) {
+  return optionIcon(kind, id, iconContext(t || {}));
 }
 
 // A load failure (missing/corrupt icon) degrades to the generic star art;
@@ -37,31 +117,4 @@ export function fallbackToGenericStar(event, slot) {
     img.classList.remove("courseicon");
     img.src = genericStarSrc(slot);
   }
-}
-
-// Course stem + fallback slot straight from a rankable ENTITY KEY
-// ("star:course:star" or "segment:id") — the Rank tab's breakdown only
-// carries the key string, not the catalog/segment objects stagebanner.js's
-// callers already have in hand when they build the same stem via
-// `${prefix}${star_id + 1}` inline. A segment key resolves to `null`: this
-// layer has no start-level data (the /api/marelo payload doesn't carry
-// segment start_levels), so it falls back to the generic star exactly the
-// way stagebanner's own segCourseStem does when a segment starts nowhere
-// LEVEL_ICONS knows about — same fallback, just reached for a different
-// reason (missing data here vs. an unmapped level there).
-function starKeyParts(entityKey) {
-  const match = /^star:(\d+):(\d+)$/.exec(entityKey);
-  return match ? { courseId: Number(match[1]), starId: Number(match[2]) } : null;
-}
-
-export function courseStemForEntityKey(entityKey) {
-  const parts = starKeyParts(entityKey);
-  if (!parts) return null;
-  const prefix = COURSE_ICON_PREFIXES[parts.courseId - 1];
-  return prefix ? `${prefix}${parts.starId + 1}` : null;
-}
-
-export function fallbackSlotForEntityKey(entityKey) {
-  const parts = starKeyParts(entityKey);
-  return parts ? parts.starId : 0;
 }

@@ -2,7 +2,7 @@ import json
 from datetime import datetime, timezone
 
 from sm64_events.core.events import Event
-from sm64_events.storage.db import Database
+from sm64_events.storage.db import MIGRATIONS, Database
 
 T0 = datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -21,7 +21,7 @@ def test_migrations_set_user_version_and_create_tables(tmp_path):
         "SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"events", "sessions", "attempts", "pbs", "ui_state", "routes", "runs",
             "comparisons"} <= names
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 13
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
 
 
 def test_reopening_existing_db_is_idempotent(tmp_path):
@@ -29,7 +29,7 @@ def test_reopening_existing_db_is_idempotent(tmp_path):
     sid = first.insert_session("2026-06-10T12:00:00Z")
     first.close()
     db = make_db(tmp_path)  # second open: migrations must not re-run/crash
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 13
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
     row = db._conn.execute("SELECT * FROM sessions WHERE id=?", (sid,)).fetchone()
     assert row is not None and row["started_utc"] == "2026-06-10T12:00:00Z"
 
@@ -165,7 +165,7 @@ def test_v1_database_upgrades_in_place(tmp_path):
     conn.commit()
     conn.close()
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 13
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
     assert db.attempts()[0].rollouts_total == 0   # backfilled default
     assert db.attempts()[0].jumps_total == 0
 
@@ -286,7 +286,7 @@ def test_v3_database_pb_rows_survive_v4_rebuild(tmp_path):
     conn.commit()
     conn.close()
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 13
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
     [row] = db.pbs()
     assert row["id"] == 7 and row["frames"] == 500
     assert row["course_id"] == 2 and row["star_id"] == 3
@@ -313,7 +313,7 @@ def test_v5_updates_existing_v4_lblj_row_with_area_anchor(tmp_path):
     conn.commit()
     conn.close()
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 13
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
     lblj = next(d for d in db.segment_defs() if d["name"] == "LBLJ")
     assert lblj["start_triggers"] == [
         {"type": "level_enter", "to": 6, "from": 16},
@@ -343,7 +343,7 @@ def test_v6_repairs_existing_bowser3_end_trigger(tmp_path):
     conn.commit()
     conn.close()
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 13
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
     b3 = next(d for d in db.segment_defs() if d["name"] == "Bowser 3")
     assert b3["end_triggers"] == [{"type": "key_grabbed", "level": 34}]
 
@@ -427,8 +427,9 @@ def test_failed_migration_rolls_back_schema_and_version(tmp_path, monkeypatch):
     with pytest.raises(sqlite3.OperationalError):
         Database(path)
     check = sqlite3.connect(str(path))
-    # (a) version reflects only the successful prefix
-    assert check.execute("PRAGMA user_version").fetchone()[0] == 13
+    # (a) version reflects only the successful prefix — the real migrations,
+    # not the deliberately-broken one appended above
+    assert check.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
     # partial application rolled back: first statement did NOT stick
     names = {r[0] for r in check.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
@@ -438,7 +439,8 @@ def test_failed_migration_rolls_back_schema_and_version(tmp_path, monkeypatch):
     fixed = "CREATE TABLE extra (id INTEGER);"
     monkeypatch.setattr(db_mod, "MIGRATIONS", db_mod.MIGRATIONS[:-1] + [fixed])
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 14
+    # the real migrations plus the one this test appends
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS) + 1
     db.close()
 
 
@@ -580,3 +582,54 @@ def test_segment_def_round_trips_default_strat(tmp_path):
     db.update_segment_def(sid, default_strat="Blindfolded")
     assert next(r for r in db.segment_defs()
                 if r["id"] == sid)["default_strat"] == "Blindfolded"
+
+
+# -- migration v14: uploaded icons became bundled art -------------------------
+
+def _v13_db_with_overrides(tmp_path, overrides):
+    """A db one version behind, carrying `overrides`, then opened for real so
+    the v14 entry runs against it."""
+    import sqlite3
+    path = tmp_path / "t.db"
+    conn = sqlite3.connect(str(path))
+    for script in MIGRATIONS[:13]:
+        conn.executescript(script)
+    conn.execute("INSERT INTO ui_state (key, value) VALUES ('icon_overrides', ?)",
+                 (json.dumps(overrides),))
+    conn.execute("PRAGMA user_version = 13")
+    conn.commit()
+    conn.close()
+    db = Database(path)
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
+    return db.get_state("icon_overrides", {})
+
+
+def test_v14_repoints_overrides_from_the_uploads_to_the_bundled_stems(tmp_path):
+    """Three icons the user uploaded now ship in ui/assets/star_icons, and
+    ui/entities.js hands them to the seeded definitions that should wear them
+    by default. An override always WINS over a default, so the two entities
+    that already named the uploaded copy would otherwise keep resolving
+    `user:*.png` out of the data dir forever — editing the asset set alone only
+    helps a fresh install (auto-memory: a seed fix needs its own repair
+    migration)."""
+    overrides = _v13_db_with_overrides(tmp_path, {
+        "segment:1": "user:blj.png", "segment:3": "user:lakitu.png",
+        "segment:8": "user:castle_movement.png",
+        "segment:2": "mips1", "star:9:0": "user:mine.png"})
+    assert overrides["segment:1"] == "blj"
+    assert overrides["segment:3"] == "lakitu"
+    assert overrides["segment:8"] == "castle_movement"
+    # Everything else is untouched — including another user upload, which must
+    # not move just because it is also an upload.
+    assert overrides["segment:2"] == "mips1"
+    assert overrides["star:9:0"] == "user:mine.png"
+
+
+def test_v14_matches_the_whole_stored_value_not_a_prefix(tmp_path):
+    """Guarded on the exact JSON string, quotes included: a DIFFERENT upload
+    whose name merely starts the same way keeps its own art."""
+    overrides = _v13_db_with_overrides(tmp_path, {
+        "segment:4": "user:blj-of-my-own.png",
+        "segment:5": "user:lakitu2.png"})
+    assert overrides == {"segment:4": "user:blj-of-my-own.png",
+                         "segment:5": "user:lakitu2.png"}

@@ -18,8 +18,8 @@ import htm from "htm";
 import { getJSON } from "../api.js";
 import { PickerDialog } from "./entitymodal.js";
 import { StrategyStep } from "./strategystep.js";
-import { courseUnionGroups, optionIcon, parseSegmentId,
-         segmentLevelsOf, starId } from "../entities.js";
+import { courseUnionGroups, parseSegmentId, starId } from "../entities.js";
+import { optionIconSrc } from "./entityicons.js";
 
 const html = htm.bind(h);
 
@@ -66,17 +66,12 @@ export function useTargetPicker(t) {
   // short-circuits first) -- courseUnionGroups walks every course and
   // segment, and the host re-renders on every WebSocket event.
   function render() {
-    // segmentLevels + iconOverrides are NOT optional: without them every
-    // segment cell falls through optionIcon's chain to a plain gold star
-    // while the banner and the route editor show its real art -- and a user's
-    // explicit per-segment icon override is ignored (whole-branch review I1,
-    // 2026-07-25).
-    const iconContext = {
-      courseIcons: t.courseIcons || {},
-      starIconsMode: t.starIcons || "course",
-      iconOverrides: v.icon_overrides || {},
-      segmentLevels: segmentLevelsOf(t.segments),
-    };
+    // Art comes from entityicons.js, which builds the context itself — this
+    // file never holds one. Hand-building a context per call site is what let
+    // a segment cell fall through to a plain gold star while the banner drew
+    // its real art (whole-branch review I1, 2026-07-25, fixed by supplying
+    // the missing fields; unified into ONE builder 2026-07-26, after the Rank
+    // tab turned out to have the same bug for a different missing field).
     // Layer 1 is a grid of COURSES carrying their portraits; layer 2 is that
     // course's stars AND the segments that begin in it, because both are
     // things you practice and /api/target already takes either (user,
@@ -86,7 +81,7 @@ export function useTargetPicker(t) {
       targetRanks,
     ).map((group) => ({
       ...group,
-      icon: optionIcon("course", group.key.replace("course-", ""), iconContext),
+      icon: optionIconSrc(t, "course", group.key.replace("course-", "")),
     }));
     // The currently-set target, so the picker highlights it. `tgt` always
     // exists once `v` does (views.py always populates it with defaults).
@@ -106,9 +101,9 @@ export function useTargetPicker(t) {
     // (dead by construction; whole-branch review, task 7, 2026-07-25).
     return html`<${PickerDialog} groups=${courseGroups} value=${targetValue}
       title="Choose a course" depth=${2} placeholder=${null}
-      iconFor=${(id) => optionIcon(
+      iconFor=${(id) => optionIconSrc(t,
         parseSegmentId(id) == null ? "star" : "segment",
-        parseSegmentId(id) == null ? id : parseSegmentId(id), iconContext)}
+        parseSegmentId(id) == null ? id : parseSegmentId(id))}
       nextStep=${StrategyStep}
       onPick=${close} onClose=${close} />`;
   }

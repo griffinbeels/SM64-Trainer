@@ -4,6 +4,8 @@ shipped invisible here before on unit tests alone)."""
 import re
 from pathlib import Path
 
+from source_scan import strip_comments
+
 UI = Path(__file__).resolve().parent.parent / "src" / "sm64_events" / "ui"
 GROUPLIST = (UI / "components" / "grouplist.js").read_text(encoding="utf-8")
 INDEX = (UI / "index.html").read_text(encoding="utf-8")
@@ -106,19 +108,25 @@ def test_route_item_picker_uses_the_icon_modal():
 
 
 def test_segment_rows_carry_the_art_the_banner_uses():
-    # segmentLevels feeds optionIcon's segment branch, which reuses the
-    # banner's override -> level-fallback chain.
-    assert "segmentLevels" in ROUTES
+    # The route editor's rows resolve through the SAME context builder the
+    # banner and the Rank tab use. It assembled its own until 2026-07-26,
+    # which is how three surfaces came to draw the same segment three ways.
+    assert "optionIconSrc(t" in ROUTES
+    assert "iconContext" not in strip_comments(ROUTES),         "routes.js is back to holding an icon context of its own"
 
 
 def test_segment_art_comes_from_the_origin_not_start_levels():
     # /api/segments rows carry `origin`, NOT `start_levels` — that field is on
     # the session view's segment_targets. Assuming otherwise made every segment
     # row in the route editor fall back to a plain gold star (live render
-    # check, 2026-07-25). The origin key is the canonical arm location anyway.
-    # The derivation moved into entities.js::segmentLevelsOf once the header
-    # needed it too (whole-branch review I1) — one copy, two call sites.
-    assert "segmentLevelsOf(segs)" in ROUTES
+    # check, 2026-07-25). Both sources are now read in ONE place, and this is
+    # the rule between them: the view's real start triggers win where the view
+    # has them, and origin covers every segment the current view does not list
+    # (the Rank tab and the pickers have no stage view at all).
+    resolver = strip_comments(
+        (UI / "components" / "entityicons.js").read_text(encoding="utf-8"))
+    assert "segmentLevelsOf(t.segments)" in resolver,         "entityicons.js stopped deriving a segment's level from its origin"
+    assert "target.start_levels" in resolver,         "entityicons.js stopped preferring the view's real start levels"
     # The wrong EXPRESSION, not the bare word — a comment explaining the bug
     # mentions start_levels, and a guard that a comment can trip is not a guard
     # (this file has caught that shape twice already).

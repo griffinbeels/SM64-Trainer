@@ -28,14 +28,13 @@
 // enable/disable) -- the same endpoints the rest of the UI uses, so the normal
 // target_changed flow updates the header, the pinned section, and this.
 import { h } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useEffect } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
 import { Icon } from "./icons.js";
 import { PracticeCell } from "./practicecell.js";
-import { IconPicker } from "./iconpicker.js";
-import { COURSE_ICON_PREFIXES, LEVEL_ICONS, genericStarSrc,
-         resolveIcon } from "./entityicons.js";
+import { iconIdentityForKey, useIconPicking } from "./iconpicker.js";
+import { entityIconSrc, genericStarSrc } from "./entityicons.js";
 
 const html = htm.bind(h);
 
@@ -105,7 +104,6 @@ function PendingChip({ t }) {
   </span>`;
 }
 
-
 // --- route focus ------------------------------------------------------------
 // With a route active the selectors narrow to that route's members. Returns
 // null when there is nothing to narrow BY — no active route, or the route
@@ -137,33 +135,26 @@ const armedSegments = (t, v) =>
 // constants (not props) so the cell below stays a single readable line.
 const STAR_DIM_IDLE = true;  // false = every star equally bright
 
-// COURSE_ICON_PREFIXES, LEVEL_ICONS, resolveIcon, isGenericArt and
-// fallbackToGenericStar live in entityicons.js (task D,
-// 2026-07-25-marelo-legibility) — the Rank tab's Top-N strip needed the SAME
-// table this row already had. The PURE data behind them (the prefix list, the
-// level map, the substitutes) sits one layer further down in ../entities.js,
-// which imports nothing and can therefore be node-tested; entityicons.js
-// re-exports it so a component never has to know which of the two it wants.
+// Art resolution lives in entityicons.js (`entityIconSrc`), over the pure
+// chain in ../entities.js (`entityIcon`) — this row passes an entity key and
+// gets a URL. It derived its own stems until 2026-07-26, which is how the
+// same segment came to wear Bowser here and a plain gold star on the Rank tab.
 //
 // The cell itself is components/practicecell.js, shared with the entity
 // picker's grid (2026-07-25) so a star looks the same where you pick it and
 // where you practice it.
 
-const segCourseStem = (s) =>
-  (s.start_levels || []).map((lvl) => LEVEL_ICONS[lvl]).find(Boolean) || null;
-const segIconSrc = (t, s) =>
-  resolveIcon(t, `segment:${s.segment_id}`, segCourseStem(s), 0);
+// A cell's art is `entityIconSrc(t, <entity key>)` and nothing else — this row
+// used to derive a stem itself (LEVEL_ICONS off the segment's start_levels,
+// `${prefix}${slot+1}` off COURSE_ICON_PREFIXES) and the Rank tab derived a
+// different one from the same entity. The start-level lookup now happens once,
+// inside entityicons.js's iconContext; the Bowser/cap courses this row had no
+// branch for resolve there too (2026-07-26).
+const segKey = (s) => `segment:${s.segment_id}`;
+const starKey = (courseId, slot) => `star:${courseId}:${slot}`;
 
-// Row-level icon-picking state: the ✎ on any cell opens ONE picker per row,
-// hoisted OUT of the cells so clicks inside the modal can never bubble into
-// a cell's target-setting onclick. identity = the /api/icon body + its ek.
-function useIconPicking(t) {
-  const [picking, setPicking] = useState(null);
-  const modal = picking && html`<${IconPicker} identity=${picking}
-      current=${(((t.view || {}).icon_overrides) || {})[picking.ek] || null}
-      onDone=${() => { setPicking(null); t.refresh(); }} />`;
-  return [setPicking, modal];
-}
+// Row-level icon-picking state (the ✎ on any cell) is iconpicker.js's
+// useIconPicking, shared with the Rank tab's coverage tiles since 2026-07-26.
 
 // The banner cell is components/practicecell.js — shared with the entity
 // picker's grid so a star looks the same where you pick it and where you
@@ -191,12 +182,11 @@ function StandardSegmentCell({ t, s, setPicking }) {
   return html`<${PracticeCell} dimIdle=${STAR_DIM_IDLE}
     active=${tgt.kind === "segment" && tgt.segment_id === s.segment_id}
     armed=${armed}
-    iconSrc=${segIconSrc(t, s)}
+    iconSrc=${entityIconSrc(t, segKey(s))}
     rank=${s.rank} name=${s.name}
     sub=${armed ? runningChip : stratSub(s.strat)}
     onPick=${pick}
-    onEdit=${() => setPicking({ kind: "segment", segment_id: s.segment_id,
-                                ek: `segment:${s.segment_id}` })} />`;
+    onEdit=${() => setPicking(iconIdentityForKey(segKey(s)))} />`;
 }
 
 // A RUNNING segment must never be invisible (spec addendum 2026-07-24):
@@ -227,7 +217,6 @@ function StarRow({ t, v, stage }) {
   if (!course) return html`<${StagePlaceholder} t=${t} />`;
 
   const tgt = v.target || {};
-  const prefix = COURSE_ICON_PREFIXES[stage.course_id - 1] || null;
   const lastStratFor = (i) =>
     v.last_strat_by_star[`${stage.course_id}:${i}`] || "";
   // Rank under that star's ACTIVE strat (server-graded). Changing the strat
@@ -265,13 +254,11 @@ function StarRow({ t, v, stage }) {
         key=${`${stage.course_id}:${i}`}
         active=${tgt.kind !== "segment"
           && tgt.course_id === stage.course_id && tgt.star_id === i}
-        iconSrc=${resolveIcon(t, `star:${stage.course_id}:${i}`,
-                              prefix ? `${prefix}${i + 1}` : null, i)}
+        iconSrc=${entityIconSrc(t, starKey(stage.course_id, i))}
         fallbackSlot=${i} rank=${rankFor(i)} name=${name}
         sub=${stratSub(lastStratFor(i))}
         onPick=${() => pick(i)}
-        onEdit=${() => setPicking({ course_id: stage.course_id, star_id: i,
-                                    ek: `star:${stage.course_id}:${i}` })} />`)}
+        onEdit=${() => setPicking(iconIdentityForKey(starKey(stage.course_id, i)))} />`)}
       ${armedExtraCells(t, v, new Set(), setPicking,
                         startsInLevel(stage.level))}
     </div>
@@ -345,23 +332,21 @@ function BowserCourseRow({ t, v, stage }) {
     <div class="starrow segcells">
       <${PracticeCell} dimIdle=${STAR_DIM_IDLE}
         active=${redsActive}
-        iconSrc=${resolveIcon(t, `star:${stage.course_id}:0`, null, 0)}
+        iconSrc=${entityIconSrc(t, starKey(stage.course_id, 0))}
         rank=${(v.rank_by_star || {})[`${stage.course_id}:0`]}
         name="Reds" title=${course.stars[0] || "8 Red Coins"}
         sub=${html`<span class="strat">${course.stars[0] || "8 Red Coins"}</span>`}
         onPick=${pickReds}
-        onEdit=${() => setPicking({ course_id: stage.course_id, star_id: 0,
-                                    ek: `star:${stage.course_id}:0` })} />
+        onEdit=${() => setPicking(iconIdentityForKey(starKey(stage.course_id, 0)))} />
       ${pipes.map((s) => html`<${PracticeCell} dimIdle=${STAR_DIM_IDLE} key=${`seg:${s.segment_id}`}
         active=${tgt.kind === "segment" && tgt.segment_id === s.segment_id}
         armed=${t.armedSegs.has(s.segment_id)}
-        iconSrc=${segIconSrc(t, s)}
+        iconSrc=${entityIconSrc(t, segKey(s))}
         rank=${s.rank} name="No reds" title=${s.name}
         sub=${t.armedSegs.has(s.segment_id) ? runningChip
           : html`<span class="strat">${s.name}</span>`}
         onPick=${() => pickNoReds(s)}
-        onEdit=${() => setPicking({ kind: "segment", segment_id: s.segment_id,
-                                    ek: `segment:${s.segment_id}` })} />`)}
+        onEdit=${() => setPicking(iconIdentityForKey(segKey(s)))} />`)}
       ${armedExtraCells(t, v, new Set(pipes.map((s) => s.segment_id)),
                         setPicking)}
     </div>

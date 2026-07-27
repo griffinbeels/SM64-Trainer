@@ -14,8 +14,9 @@ import { RankIcon } from "./rankicon.js";
 import { Icon } from "./icons.js";
 import { PageState, InlineState } from "./states.js";
 import { useTween } from "../useTween.js";
-import { courseStemForEntityKey, fallbackSlotForEntityKey,
-         fallbackToGenericStar, isGenericArt, resolveIcon } from "./entityicons.js";
+import { entityIconSrc, fallbackSlotForEntityKey,
+         fallbackToGenericStar, isGenericArt } from "./entityicons.js";
+import { iconIdentityForKey, useIconPicking } from "./iconpicker.js";
 
 const html = htm.bind(h);
 
@@ -620,24 +621,35 @@ function ScopeChips({ activeScopeId, onPick, refreshKey }) {
   </div>`;
 }
 
-// One glanceable icon tile for the Top-N strip below -- tier-tinted border,
-// the SAME icon resolution the practice selector's cells use (entityicons.js,
-// extracted from stagebanner.js for exactly this reuse) so a star's Top-N
-// tile can never show different art than its own selector cell does. A
-// segment key resolves no course stem at this layer (the breakdown payload
-// carries no start_levels) and falls back to the generic star, same as
-// stagebanner's own segment cells do for an unmapped level.
+// One glanceable icon tile — tier-tinted border, art from the SAME
+// `entityIconSrc` the practice selector's cells call, so a star or segment can
+// never show different art here than on the banner. It used to derive its own
+// stem from the entity KEY alone, which carries no start level, so every
+// SEGMENT fell through to a plain gold star while the banner drew its real
+// Bowser art (live report 2026-07-26 — BitFS Pipe Entry). The start levels now
+// come from the store the same way for both, inside iconContext.
+//
+// The ✎ is the banner's own affordance on the banner's own cells, reached here
+// through iconpicker.js's shared useIconPicking: this strip is the one surface
+// that lists every entity in a scope, so it is the only place you can repoint
+// the art of a star in a course you are not currently standing in. `onEdit` is
+// optional — a caller that passes none renders no ✎ at all.
+//
 // ONE tile for both icon rows on this tab — Best in scope and Coverage.
 // They differ only in size and in whether the entity is scored: an
 // unpracticed one keeps its art but loses the tier ring and dims, which is
 // what makes a coverage row readable as "these, not those" at a glance
 // (round 8). Never two components that happen to look alike — the split
 // rank banners were exactly that mistake one card over.
-function EntityTile({ t, entity, size = 42, open, onToggle }) {
+function EntityTile({ t, entity, size = 42, open, onToggle, onEdit }) {
   const fallbackSlot = fallbackSlotForEntityKey(entity.key);
-  const iconSrc = resolveIcon(t, entity.key,
-    courseStemForEntityKey(entity.key), fallbackSlot);
+  const iconSrc = entityIconSrc(t, entity.key);
   const practiced = entity.score != null;
+  // Enter/Space on the ✎ must not also fire the tile's own click.
+  const editKey = (keyEvent) => {
+    if (keyEvent.key !== "Enter" && keyEvent.key !== " ") return;
+    keyEvent.preventDefault(); keyEvent.stopPropagation(); onEdit();
+  };
   return html`<button type="button"
       class="entity-tile ${open ? "is-open" : ""} ${practiced ? "" : "is-unpracticed"}"
       style=${`--tile-size:${size}px;`
@@ -649,6 +661,11 @@ function EntityTile({ t, entity, size = 42, open, onToggle }) {
     <img class="entity-tile-icon ${isGenericArt(iconSrc) ? "" : "courseicon"}" src=${iconSrc}
          onerror=${(event) => fallbackToGenericStar(event, fallbackSlot)}
          alt="" draggable="false" />
+    ${onEdit ? html`<span class="editicon tile-editicon" role="button"
+          tabindex="0" title=${`Choose icon for ${entity.label}…`}
+          aria-label=${`Choose icon for ${entity.label}`}
+          onclick=${(clickEvent) => { clickEvent.stopPropagation(); onEdit(); }}
+          onkeydown=${editKey}>✎</span>` : null}
   </button>`;
 }
 
@@ -754,6 +771,10 @@ const COVERAGE_TILE_PX = 42;
 // obvious next move from a dim tile.
 function CoverageStrip({ t, data, caption }) {
   const [openKey, setOpenKey] = useState(null);
+  // ONE icon picker for the whole strip, hoisted out of the tiles for the
+  // same reason the banner hoists its own: a click inside the modal must
+  // never bubble into a tile's expand-detail onclick.
+  const [setPicking, pickerModal] = useIconPicking(t);
   const rated = data.entities.filter((entity) => !entity.excluded);
   const open = rated.find((entity) => entity.key === openKey) || null;
   // The caption is a PROP, not the sibling it used to be: an expanded
@@ -763,11 +784,13 @@ function CoverageStrip({ t, data, caption }) {
     <div class="entity-strip rank-coverage-strip">
       ${rated.map((entity) => html`<${EntityTile} key=${entity.key} t=${t}
         entity=${entity} size=${COVERAGE_TILE_PX} open=${entity.key === openKey}
-        onToggle=${() => setOpenKey(entity.key === openKey ? null : entity.key)} />`)}
+        onToggle=${() => setOpenKey(entity.key === openKey ? null : entity.key)}
+        onEdit=${() => setPicking(iconIdentityForKey(entity.key))} />`)}
     </div>
     <span class="meta">${caption}</span>
     ${open && html`<${EntityDetail} t=${t} entity=${open}
       onClose=${() => setOpenKey(null)} />`}
+    ${pickerModal}
   </div>`;
 }
 

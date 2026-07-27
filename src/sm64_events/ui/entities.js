@@ -10,6 +10,10 @@
 // and each segment's `origin` all come from the server, which has one home for
 // them (tracking/segments.py).
 
+// ":" does double duty on purpose: it joins a star's composite id ("8:2")
+// AND an entity key's kind to its id ("star:8:2", "segment:6"). That is what
+// makes a picker option's (kind, id) pair and the server's entity key the
+// same string — see parseEntityKey / optionIcon below.
 const STAR_ID_SEP = ":";
 
 /** "8:1" -> { course: 8, star: 1 } — the composite id star pickers select. */
@@ -156,6 +160,26 @@ export const COURSE_ICON_PREFIXES = ["bob", "wf", "jrb", "ccm", "bbh", "hmc",
 export const LEVEL_ICONS = { 17: "bitdw", 19: "bitfs", 21: "bits",
                              30: "bitdw", 33: "bitfs", 34: "bits" };
 
+// Default art for a SEEDED segment, keyed by the seed_key the corpus gives it
+// (tools/corpus_*.py) rather than by name or id: a rename keeps the art, and
+// every install agrees without a migration. Only the definitions whose art is
+// a specific thing rather than a class live here — the class case is the
+// category table below.
+export const SEGMENT_SEED_ICONS = {
+  "seg:lblj": "blj",
+  "seg:lakitu-skip": "lakitu",
+  "seg:mips-clip": "mips1",
+};
+
+// Default art for a whole CATEGORY of segment — the corpus's own grouping,
+// persisted on `segment_defs.category` and shipped on every /api/segments row,
+// so this is the seed's classification rather than a second one invented here.
+// 59 of the 65 seeded definitions are Castle Movement; the ones among them
+// that start in a Bowser stage keep that stage's art, because LEVEL_ICONS is
+// consulted first (user, 2026-07-26: "update ALL castle movement segments to
+// use the castle_movement picture").
+export const SEGMENT_CATEGORY_ICONS = { "Castle Movement": "castle_movement" };
+
 // Four main courses are not entered through a painting, so the game has NO
 // portrait for them. These are hand-picked stand-ins (user, 2026-07-25) — the
 // star art that reads as that course — rather than a positional star-1
@@ -189,25 +213,83 @@ const genericStar = genericStarSrc;
 export const isGenericArt = (src) => /\/assets\/star_\d+\.png$/.test(src);
 const starIconSrc = (stem) => `/ui/assets/star_icons/${stem}.png`;
 
+/** THE stem -> img-src rule: "user:<file>" is an icon the user uploaded,
+ *  served out of the data dir; anything else is a bundled split-icon stem.
+ *  It lives here rather than in components/iconpicker.js (which re-exports it
+ *  for its own callers) because entityIcon below has to resolve an OVERRIDE
+ *  stem too, and this module imports nothing — so the one rule stays where
+ *  node can test it. Resolving an override through starIconSrc instead asks
+ *  for `/ui/assets/star_icons/user:foo.png`: a 404 that falls back to a plain
+ *  star, which is what the picker did to every uploaded icon until 2026-07-26. */
+export function iconSrcFromStem(stem) {
+  const raw = String(stem);
+  if (raw.startsWith("user:"))
+    return `/api/icons/file/${encodeURIComponent(raw.slice(5))}`;
+  return starIconSrc(raw);
+}
+
+/** An entity KEY -> {kind, id}: "star:8:2" -> {kind:"star", id:"8:2"},
+ *  "segment:6" -> {kind:"segment", id:"6"}. The key is the vocabulary the
+ *  server already speaks (icon_overrides, /api/target/ranks, the MARELO
+ *  breakdown), and a picker option's own (kind, id) pair joined by ":" IS
+ *  that key — which is why optionIcon below is a one-line wrapper. */
+export function parseEntityKey(entityKey) {
+  const raw = String(entityKey);
+  const cut = raw.indexOf(STAR_ID_SEP);
+  return cut < 0 ? { kind: raw, id: "" }
+                 : { kind: raw.slice(0, cut), id: raw.slice(cut + 1) };
+}
+
+/** The generic-star slot an entity falls back to: a star's own slot (so the
+ *  seven per-course stars keep distinct gold art), 0 for everything else.
+ *  Shared by the chain's own fallback and by every caller's img onerror, so a
+ *  load failure lands on the same art the resolver would have chosen. */
+export function fallbackSlotForEntityKey(entityKey) {
+  const { kind, id } = parseEntityKey(entityKey);
+  if (kind !== "star") return 0;
+  const { star } = parseStarId(id);
+  return Number.isFinite(star) ? star : 0;
+}
+
 /**
- * Art for one picker row. ALWAYS returns a URL — a row with no icon would
- * collapse its own layout, so every branch ends at the generic star.
+ * THE art chain: an entity key -> an image URL. Every surface that draws a
+ * practiceable thing goes through this one function — the practice banner,
+ * the target picker, the route and segment editors, the Rank tab's coverage
+ * tiles — so the same star or segment can never wear different art in two
+ * places. ALWAYS returns a URL: a cell with no art collapses its own layout,
+ * so every branch ends at the generic star.
  *
- * kind    "course" | "star" | "level" | "segment"
- * id      the option id (a star's is composite, "8:2")
- * context { courseIcons     stem -> filename, from GET /api/icons/courses
- *           starIconsMode   "course" | "classic", the user's setting
- *           iconOverrides   view.icon_overrides, per-entity user picks
- *           courseByLevel   vocab.course_by_level
- *           segmentLevels   segment id -> its start levels }
+ * entityKey  "star:<course>:<slot>" | "segment:<id>" | "course:<id>"
+ *            | "level:<id>"
+ * context    { courseIcons     stem -> filename, from GET /api/icons/courses
+ *              starIconsMode   "course" | "classic", the user's setting
+ *              iconOverrides   view.icon_overrides, per-entity user picks
+ *              courseByLevel   vocab.course_by_level
+ *              segmentLevels   segment id -> its start levels
+ *              segmentMeta     segment id -> {seedKey, category}, the corpus's
+ *                              own identity + grouping off /api/segments }
+ *            Built ONCE, by components/entityicons.js::iconContext(t) — never
+ *            per call site. Three hand-built contexts is exactly how the Rank
+ *            tab ended up drawing a plain gold star for BitFS Pipe Entry
+ *            while the banner drew Bowser (live report 2026-07-26).
+ *
+ * Two rules the whole chain rests on:
+ * - an explicit OVERRIDE wins for every kind and in either star-icon mode.
+ *   It is the user naming this entity's art, not a default to re-derive.
+ * - "classic" is a STAR setting (its control is labelled "Star icons", and
+ *   the generic gold star is a star's own fallback). A segment and a Bowser
+ *   stage keep their real art in classic mode.
  *
  * Four main courses (HMC, SSL, DDD, SL) have no portrait because the game has
- * no painting for them; they resolve to their star-1 icon, which is the final
- * answer, not a placeholder.
+ * no painting for them; they resolve to a hand-picked stand-in star icon,
+ * which is the final answer, not a placeholder.
  */
-export function optionIcon(kind, id, context = {}) {
+export function entityIcon(entityKey, context = {}) {
   const { courseIcons = {}, starIconsMode = "course", iconOverrides = {},
-          courseByLevel = {}, segmentLevels = {} } = context;
+          courseByLevel = {}, segmentLevels = {}, segmentMeta = {} } = context;
+  const { kind, id } = parseEntityKey(entityKey);
+  const override = iconOverrides[String(entityKey)];
+  if (override) return iconSrcFromStem(override);
   const prefixFor = (course) => COURSE_ICON_PREFIXES[Number(course) - 1] || null;
   // A special stage's art is a COMPLETE stem ("vanish"), not a per-slot prefix
   // — those courses have one icon, not seven, so `${prefix}${slot+1}` would ask
@@ -245,13 +327,27 @@ export function optionIcon(kind, id, context = {}) {
     return course ? courseArt(course) : genericStar();
   }
   if (kind === "segment") {
-    const override = iconOverrides[`segment:${id}`];
-    if (override) return starIconSrc(override);
-    const stem = (segmentLevels[String(id)] || [])
-      .map((level) => LEVEL_ICONS[level]).find(Boolean);
+    // NOT gated on starIconsMode: see the "classic is a STAR setting" rule
+    // above. Most specific first — this definition's own art, then the stage
+    // it starts in, then what its whole category wears. A Bowser pipe entry is
+    // categorised Castle Movement AND starts in a Bowser stage, and the stage
+    // is the more useful thing to show, which is why LEVEL_ICONS outranks the
+    // category table.
+    const { seedKey, category } = segmentMeta[String(id)] || {};
+    const stem = SEGMENT_SEED_ICONS[seedKey]
+      || (segmentLevels[String(id)] || [])
+           .map((level) => LEVEL_ICONS[level]).find(Boolean)
+      || SEGMENT_CATEGORY_ICONS[category];
     return stem ? starIconSrc(stem) : genericStar();
   }
-  return genericStar();
+  return genericStar(fallbackSlotForEntityKey(entityKey));
+}
+
+/** The same chain, addressed the way a PICKER addresses an option: a kind
+ *  plus that kind's own id ("8:2" for a star, "6" for a segment). Joined by
+ *  ":" they ARE the entity key, so this is a rename, not a second chain. */
+export function optionIcon(kind, id, context = {}) {
+  return entityIcon(`${kind}${STAR_ID_SEP}${id}`, context);
 }
 
 // --- Grid picker layers ---------------------------------------------------

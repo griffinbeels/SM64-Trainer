@@ -430,3 +430,161 @@ const segments = [{ id: 3, origin: { key: "30" } },
 console.log(JSON.stringify(segmentLevelsOf(segments)));
 """)
     assert levels == {"3": [30], "4": [6], "5": []}
+
+
+# --- entityIcon: THE one chain --------------------------------------------
+# `optionIcon(kind, id, ctx)` is a wrapper over `entityIcon(key, ctx)`, so the
+# cases above cover the chain's rungs. What follows pins what the KEY form
+# adds — the cases three hand-rolled resolvers used to answer differently
+# (live report 2026-07-26: BitFS Pipe Entry drew Bowser on the practice banner
+# and a plain gold star on the Rank tab's coverage strip).
+
+
+def test_a_segment_key_resolves_the_same_art_the_banner_draws():
+    # The Rank tab has only the entity KEY; the banner had start_levels. Both
+    # go through this call now, and the start level rides the shared context.
+    src = run_node("entityIcon", CONTEXT
+                   + 'console.log(JSON.stringify(entityIcon("segment:7", context)));')
+    assert src == "/ui/assets/star_icons/bitfs.png"
+
+
+def test_option_and_key_forms_are_the_same_chain():
+    both = run_node("entityIcon, optionIcon", CONTEXT + """
+console.log(JSON.stringify([
+  [entityIcon("star:1:2", context), optionIcon("star", "1:2", context)],
+  [entityIcon("segment:7", context), optionIcon("segment", "7", context)],
+  [entityIcon("course:1", context), optionIcon("course", "1", context)],
+  [entityIcon("level:17", context), optionIcon("level", "17", context)],
+]));
+""")
+    for key_form, option_form in both:
+        assert key_form == option_form, (key_form, option_form)
+
+
+def test_bowser_and_cap_stage_stars_wear_their_stage_art():
+    # Courses 16-24 are past the end of COURSE_ICON_PREFIXES. Deriving a stem
+    # from that table ALONE is why `star:16:0` (BitDW's 8-coin star) drew a
+    # generic gold star on the Rank tab and on the Bowser banner row, while
+    # the target picker showed the real thing.
+    for key, expected in (("star:16:0", "bitdw"), ("star:17:0", "bitfs"),
+                          ("star:18:0", "bits"), ("star:21:0", "wing")):
+        src = run_node("entityIcon", CONTEXT
+                       + f'console.log(JSON.stringify(entityIcon("{key}", context)));')
+        assert src == f"/ui/assets/star_icons/{expected}.png", key
+
+
+def test_an_override_wins_for_a_star_too_and_in_either_mode():
+    # optionIcon consulted iconOverrides for SEGMENTS only, so a star's
+    # override showed on the banner and was ignored in every picker.
+    srcs = run_node("entityIcon", CONTEXT + """
+const overridden = { ...context,
+  iconOverrides: { ...context.iconOverrides, "star:1:2": "rr7" } };
+console.log(JSON.stringify([
+  entityIcon("star:1:2", overridden),
+  entityIcon("star:1:2", { ...overridden, starIconsMode: "classic" }),
+]));
+""")
+    assert srcs == ["/ui/assets/star_icons/rr7.png"] * 2
+
+
+def test_an_uploaded_override_resolves_to_its_upload_url():
+    # An override stem may be `user:<file>`. Resolving one as a bundled stem
+    # asks for /ui/assets/star_icons/user:foo.png — a 404 that degrades to a
+    # plain star, which is what every picker did to uploaded icons.
+    src = run_node("entityIcon", CONTEXT + """
+const uploaded = { ...context, iconOverrides: { "segment:7": "user:my icon.png" } };
+console.log(JSON.stringify(entityIcon("segment:7", uploaded)));
+""")
+    assert src == "/api/icons/file/my%20icon.png"
+
+
+def test_classic_mode_flattens_stars_only():
+    # The setting's control is labelled "Star icons", and the generic gold
+    # star is a STAR's own fallback (user decision 2026-07-26). A segment and
+    # a Bowser stage keep their real art in classic mode.
+    srcs = run_node("entityIcon", CONTEXT + """
+const classic = { ...context, starIconsMode: "classic", iconOverrides: {} };
+console.log(JSON.stringify([
+  entityIcon("star:1:2", classic),
+  entityIcon("segment:7", classic),
+  entityIcon("star:16:0", classic),
+]));
+""")
+    star, segment, bowser_star = srcs
+    assert star == "/ui/assets/star_3.png"
+    assert segment == "/ui/assets/star_icons/bitfs.png"
+    assert bowser_star == "/ui/assets/star_1.png"
+
+
+def test_the_fallback_slot_follows_the_star_and_is_zero_otherwise():
+    # Every caller's img onerror uses this, so a load failure has to land on
+    # the same art the chain itself would have chosen.
+    slots = run_node("fallbackSlotForEntityKey", """
+console.log(JSON.stringify(["star:1:2", "star:8:0", "segment:7", "course:1",
+                            "nonsense"].map(fallbackSlotForEntityKey)));
+""")
+    assert slots == [2, 0, 0, 0, 0]
+
+
+# --- default art for a SEEDED segment ---------------------------------------
+# Two registries, both keyed on what the corpus itself already says about a
+# definition (user, 2026-07-26: "make these default for all users… update ALL
+# castle movement segments to use the castle_movement picture"). The context
+# fields come off /api/segments rows, so nothing new is derived in the UI.
+
+SEG_CONTEXT = """
+const context = {
+  courseIcons: {}, starIconsMode: "course", iconOverrides: {},
+  courseByLevel: {},
+  segmentLevels: { "1": [6], "3": [16], "5": [17], "20": [6], "99": [6] },
+  segmentMeta: {
+    "1":  { seedKey: "seg:lblj",        category: "Tricks" },
+    "3":  { seedKey: "seg:lakitu-skip", category: "Tricks" },
+    "5":  { seedKey: "seg:bitdw-pipe",  category: "Castle Movement" },
+    "20": { seedKey: "seg:bob->wf",     category: "Castle Movement" },
+    "99": { seedKey: null,              category: null },
+  },
+};
+"""
+
+
+def test_a_seeded_trick_wears_the_art_its_seed_key_names():
+    # seed_key, not name or id: a rename keeps the art and every install agrees
+    # without a migration.
+    srcs = run_node("entityIcon", SEG_CONTEXT + """
+console.log(JSON.stringify([entityIcon("segment:1", context),
+                            entityIcon("segment:3", context)]));
+""")
+    assert srcs == ["/ui/assets/star_icons/blj.png",
+                    "/ui/assets/star_icons/lakitu.png"]
+
+
+def test_every_castle_movement_wears_the_castle_movement_art():
+    src = run_node("entityIcon", SEG_CONTEXT
+                   + 'console.log(JSON.stringify(entityIcon("segment:20", context)));')
+    assert src == "/ui/assets/star_icons/castle_movement.png"
+
+
+def test_a_bowser_pipe_keeps_its_stage_art_despite_its_category():
+    # The pipe entries are categorised Castle Movement AND start in a Bowser
+    # stage. The stage is the more useful thing to show, which is why
+    # LEVEL_ICONS outranks the category table — this is the ordering, pinned.
+    src = run_node("entityIcon", SEG_CONTEXT
+                   + 'console.log(JSON.stringify(entityIcon("segment:5", context)));')
+    assert src == "/ui/assets/star_icons/bitdw.png"
+
+
+def test_a_user_created_segment_has_no_default_and_keeps_the_generic_star():
+    # It carries neither seed_key nor category, and nothing in the UI knows
+    # what it is. The ✎ override is the answer for those, not a guess.
+    src = run_node("entityIcon", SEG_CONTEXT
+                   + 'console.log(JSON.stringify(entityIcon("segment:99", context)));')
+    assert src == "/ui/assets/star_1.png"
+
+
+def test_an_override_still_beats_every_seeded_default():
+    src = run_node("entityIcon", SEG_CONTEXT + """
+const picked = { ...context, iconOverrides: { "segment:20": "toad1" } };
+console.log(JSON.stringify(entityIcon("segment:20", picked)));
+""")
+    assert src == "/ui/assets/star_icons/toad1.png"

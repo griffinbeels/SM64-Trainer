@@ -13,17 +13,43 @@ import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
+import { iconSrcFromStem, parseEntityKey, parseStarId } from "../entities.js";
 import { Modal } from "./modal.js";
 
 const html = htm.bind(h);
 
-// THE stem -> img-src rule, shared by the banner cells and the segment
-// editor's preview: "user:<file>" = an uploaded icon served from the data
-// dir; anything else = a bundled split-icon stem.
-export function iconSrcFromStem(stem) {
-  if (stem.startsWith("user:"))
-    return `/api/icons/file/${encodeURIComponent(stem.slice(5))}`;
-  return `/ui/assets/star_icons/${stem}.png`;
+// THE stem -> img-src rule moved DOWN to ../entities.js on 2026-07-26, so the
+// import-free resolver that has to apply it to an override stem can reach it
+// too. Re-exported (imported above as well — a bare `export … from` makes no
+// local binding, and the grid below calls it) because this module's own
+// callers have always imported it from here.
+export { iconSrcFromStem };
+
+/** The /api/icon identity for an entity key — the kind-dispatched body the
+ *  endpoint takes, plus the `ek` the caller uses to look its current override
+ *  up. Derived from the key rather than hand-built per call site, so a new
+ *  surface offering ✎ cannot invent a fourth shape. */
+export function iconIdentityForKey(entityKey) {
+  const { kind, id } = parseEntityKey(entityKey);
+  if (kind === "segment")
+    return { kind: "segment", segment_id: Number(id), ek: entityKey };
+  const { course, star } = parseStarId(id);
+  return { course_id: course, star_id: star, ek: entityKey };
+}
+
+/** Icon-picking state for a surface that offers ✎ on more than one cell:
+ *  ONE picker per surface, hoisted OUT of the cells so a click inside the
+ *  modal can never bubble into a cell's own onclick. Returns [setPicking,
+ *  modal] — call setPicking(identityForKey(key)) to open. Lived in
+ *  stagebanner.js until the Rank tab's coverage tiles needed the same thing
+ *  (2026-07-26); it is here rather than there because a hook that opens THIS
+ *  modal belongs beside it. */
+export function useIconPicking(t) {
+  const [picking, setPicking] = useState(null);
+  const modal = picking && html`<${IconPicker} identity=${picking}
+      current=${(((t.view || {}).icon_overrides) || {})[picking.ek] || null}
+      onDone=${() => { setPicking(null); t.refresh(); }} />`;
+  return [setPicking, modal];
 }
 
 const tileLabel = (stem) =>

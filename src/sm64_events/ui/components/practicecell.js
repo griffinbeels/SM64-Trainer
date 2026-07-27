@@ -21,8 +21,8 @@ const html = htm.bind(h);
 /**
  * active     this is the current target (glow + bob)
  * armed      a segment whose timer is running now
- * iconSrc    resolved art URL (ui/entities.js optionIcon, or the banner's own
- *            resolveIcon which additionally handles `user:` uploads)
+ * iconSrc    resolved art URL — always from entityicons.js's entityIconSrc /
+ *            entityIcon chain, never derived at a call site (2026-07-26)
  * rank       optional {rank, division} -> RankIcon; renders "–" when absent
  *            (server shape since the addendum, task 8, 2026-07-26 — rank_by_
  *            star/segment_targets' "rank" field carries a division alongside
