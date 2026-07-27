@@ -1417,16 +1417,21 @@
      width (`flex-shrink: 0` too, so nothing can squeeze it back down) lets
      the other eight bands compress to absorb the difference, proportionally
      among themselves (their own flex-grow ratios are untouched -- only the
-     space left to share shrank). `max(230px, calc(var(--band-weight) * 1%))`
-     guards the one tier that's ALREADY wider than 230px at rest on a big
-     card (Toadsworth/Silver is 20 of the 100 score points -- 20% of a
-     ~1300px bar is ~260px): without the `max()`, "expanding" it would
-     actually shrink it, which reads as a bug, not an affordance.
-     `:focus-within` puts a keyboard user who Tabbed onto one of the five
-     pips inside in the exact same state a mouse hover would -- no separate
-     keyboard path to keep in sync with the mouse one. */
+     space left to share shrank). `max(260px, calc(var(--band-weight) * 1%))`
+     guards the one tier that's ALREADY close to 260px at rest on a big card
+     (Toadsworth/Silver is 20 of the 100 score points -- 20% of a ~1300px bar
+     is ~260px): without the `max()`, "expanding" it could actually shrink
+     it, which reads as a bug, not an affordance. 260px (round 7, task 8,
+     2026-07-26 -- widened from 230px, "so five slots breathe", a starting
+     point settled by render, not arithmetic, once the user's own division
+     could sit at any fraction of the slot it fills rather than only ever
+     on a midpoint) is comfortable room for four or five 20px icons with
+     realistic wing spill. `:focus-within` puts a keyboard user who Tabbed
+     onto one of the five pips inside in the exact same state a mouse hover
+     would -- no separate keyboard path to keep in sync with the mouse
+     one. */
   .rank-band:hover, .rank-band:focus-within {
-    flex: 0 0 max(230px, calc(var(--band-weight) * 1%));
+    flex: 0 0 max(260px, calc(var(--band-weight) * 1%));
     z-index: 3;
   }
   @media (prefers-reduced-motion: no-preference) {

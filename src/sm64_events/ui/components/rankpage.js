@@ -160,9 +160,16 @@ const TIER_BANDS = TIERS_ASCENDING.map(([tier, floor], index) => ({
 // exactly why the bar stays proportional at rest and only the transient
 // hover state gets a fixed, non-proportional width.
 const BAND_ICON_SIZE = 20;
-// Matches MareloBar's own icon (marelo.js) -- the one permanent icon on
-// this ladder reads as the same rank the header pill already shows.
-const CURRENT_RANK_ICON_SIZE = 34;
+// Round 7 (task 8, 2026-07-26 -- the user asked for this shrunk from its
+// original 34px, "so it reads as the same family as the showcase icons
+// rather than looming over them"): still bigger than BAND_ICON_SIZE, but
+// only a little now that the marker no longer needs size ALONE to read as
+// "this one is you" -- it also carries the YOU label, the bob and the
+// flap, and (round 7) the showcase icon for the user's own division is
+// gone from that band entirely, so there is no neighbour left to loom
+// over in the first place. A starting point, settled by render, not by
+// arithmetic -- see the report for what was actually checked.
+const CURRENT_RANK_ICON_SIZE = 26;
 
 function LadderBar({ value, tier, division }) {
   const filled = Math.max(0, Math.min(SCORE_CEILING, value || 0));
@@ -240,7 +247,20 @@ function LadderBar({ value, tier, division }) {
              sit at two DIFFERENT local percentages, not one shared one. -->
         ${divisions.map((d) => html`<span class="rank-band-pip ${d.isTier ? "is-tier" : ""}"
             tabindex="0" style=${`left:${d.pipPct}%`} title=${d.title}></span>`)}
-        ${divisions.map((d) => html`<span class="rank-band-icon" style=${`left:${d.iconPct}%`}>
+        <!-- Round 7 (task 8, 2026-07-26 -- the user: "your current icon is
+             now rendering behind the actual rank icon for that subdivision.
+             Your rank icon should replace the icon associated with that
+             subdivision"). ONE division is represented twice otherwise: a
+             showcase icon labelling its span, and the user's own marker
+             (below) sitting inside that SAME span. In the user's OWN band,
+             the showcase icon for the user's OWN division is skipped
+             entirely -- the marker stands in for it -- and the other four
+             render as usual. Every other band still renders all five;
+             pips are UNCHANGED (all five always render, in every band --
+             only the ICON is ever suppressed, never the boundary it
+             carries a tooltip for). -->
+        ${divisions.map((d) => (isCurrentBand && d.numeral === division) ? null
+          : html`<span class="rank-band-icon" style=${`left:${d.iconPct}%`}>
           <${RankIcon} tier=${band.tier} division=${d.numeral} size=${BAND_ICON_SIZE} title=${d.title} />
         </span>`)}
         <!-- The user's own marker: a CHILD of the one band it belongs in,
