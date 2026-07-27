@@ -162,7 +162,9 @@ function DivisionRankUp({ celebration, scopeId, onDone }) {
   const tier = celebration.to.tier;
   return html`<div class="rankup-medium" role="status" style=${`--tier:${rankColor(tier)}`}>
     <div class="rankup-medium-card" onclick=${finish}>
-      <${RankIcon} tier=${tier} division=${celebration.to.division} size=${40} flap=${true} />
+      <span class="rank-icon-slot rankup-medium-icon">
+        <${RankIcon} tier=${tier} division=${celebration.to.division} size=${40} flap=${true} />
+      </span>
       <span class="rankup-medium-text">
         <b>${divisionDigit(celebration.from.division)} → ${divisionDigit(celebration.to.division)}</b>
         <i>${capName(tier)} · click to dismiss</i>
@@ -234,7 +236,9 @@ export function EntityCelebration({ celebration, entityKey, onDone, children }) 
     ${children}
     ${showing && tierUp && html`<div class="entity-rankup-toast" role="status"
         style=${`--tier:${rankColor(celebration.to.tier)}`} onclick=${finish}>
-      <${RankIcon} tier=${celebration.to.tier} division=${celebration.to.division} size=${30} flap=${true} />
+      <span class="rank-icon-slot entity-toast-icon">
+        <${RankIcon} tier=${celebration.to.tier} division=${celebration.to.division} size=${30} flap=${true} />
+      </span>
       <span class="entity-rankup-text">
         <b>${capName(celebration.to.tier)} ${divisionDigit(celebration.to.division)}</b>
         <i>tier up · tap to dismiss</i>

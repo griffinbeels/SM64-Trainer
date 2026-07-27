@@ -936,6 +936,39 @@
     min-width: 0; display: flex; align-items: center; gap: .3rem;
     white-space: nowrap; overflow: hidden;
   }
+  /* Round 4 (addendum, task 8, 2026-07-26): reserves the icon's own wing
+     spill (see the comment in ranks.js) so the kicker and the rank name
+     stop visually colliding with painted wing pixels the flex `gap` above
+     never accounted for -- `.hat`'s wings are absolutely positioned OUTSIDE
+     its declared box on purpose, so widening the row's shared `gap` would
+     not have reached the actual overlap; this margin is scoped to the one
+     child that needs it.
+
+     Round 5 (addendum, task 8, 2026-07-26, "sweep every container sized for
+     the old disc"): this was the FIRST instance of the bug fixed, one round
+     before it was recognised as a class rather than a one-off -- the
+     9px-each-side margin above was hand-picked to match the wing spill AT
+     THIS ONE CALL SITE'S size (24px). Generalised into `.rank-icon-slot`
+     (below), which any container can reuse at any size, so the next call
+     site inherits the right geometry instead of re-deriving it: reserves
+     HAT_WING_SPILL_RATIO (~0.370, caps.js -- derived from the same
+     CAP_BOX/CANVAS geometry hat.js's own layout math uses, never hand-
+     copied) times `--icon-size` on each side. A call site sets
+     `--icon-size` to the SAME `size` it passes its RankIcon and adds the
+     class; the margin follows automatically at any size. Reserves the FULL
+     wing-inclusive extent rather than just the layout box: wings are
+     present at every division except V and never on Capless, so 32 of the
+     45 tier+division combinations DO have at least one wing pair --
+     reserving for them is the common case on this branch, not the rare
+     one, and this is the same choice the original 9px margin already made
+     (it happened to equal the FULL spill, not just the layout box, at its
+     one size). */
+  .rank-icon-slot {
+    --icon-size: 18px;
+    flex: 0 0 auto; display: inline-flex;
+    margin: 0 calc(var(--icon-size) * .370);
+  }
+  .rank-banner-icon { --icon-size: 24px; }
   .rank-banner-name { font-weight: 800; letter-spacing: .4px; }
   .rank-banner-next { flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; }
   /* Progress toward the next rank: full slot width, never a fixed px bar —
@@ -963,6 +996,12 @@
     color: var(--text); cursor: pointer; flex: 0 0 auto;
   }
   .marelo-bar:hover { border-color: var(--gold); }
+  /* Round 5 (addendum, task 8, 2026-07-26): `.marelo-bar`'s own 10px gap
+     was already close to this icon's wing spill at size 34 (~12.6px a
+     side) -- borderline enough that `.rank-icon-slot` is worth it here
+     too, rather than leaving a margin this narrow to fail the moment font
+     metrics or a future size change shift it. */
+  .marelo-bar-icon { --icon-size: 34px; }
   /* Mario-cap rank icons (spec 2026-07-25-mario-cap-rank-icons). Ports the
      design-probe reference sheet
      (.superpowers/sdd/2026-07-25-mario-cap-rank-icons/reference-sheet.html),
@@ -1216,6 +1255,9 @@
     background: rgba(11,25,41,.92); border: 1px solid var(--tier);
     box-shadow: 0 8px 28px color-mix(in srgb, var(--tier) 40%, transparent);
   }
+  /* Round 5 (addendum, task 8, 2026-07-26): 10px gap vs. a ~14.8px wing
+     spill at size 40 -- real overlap without this. */
+  .rankup-medium-icon { --icon-size: 40px; }
   .rankup-medium-text { display: flex; flex-direction: column; line-height: 1.2; text-align: left; }
   .rankup-medium-text b { color: var(--tier); font-size: 1rem; }
   .rankup-medium-text i { font-style: normal; color: var(--muted); font-size: .72rem; }
@@ -1254,6 +1296,9 @@
     background: rgba(11,25,41,.94);
     box-shadow: 0 0 22px color-mix(in srgb, var(--tier) 45%, transparent);
   }
+  /* Round 5 (addendum, task 8, 2026-07-26): 8px gap vs. a ~11.1px wing
+     spill at size 30. */
+  .entity-toast-icon { --icon-size: 30px; }
   .entity-rankup-text { min-width: 0; display: flex; flex-direction: column; line-height: 1.2; }
   .entity-rankup-text b { color: var(--tier); }
   .entity-rankup-text i { font-style: normal; color: var(--muted); font-size: .7rem; }
@@ -1282,6 +1327,9 @@
   .scope-chip.is-selected { border-color: var(--gold); background: rgba(240, 189, 50, .14); }
   .scope-chip-text { display: flex; flex-direction: column; line-height: 1.15; }
   .scope-chip-text b { font-size: 12px; font-weight: 600; }
+  /* Round 5 (addendum, task 8, 2026-07-26): 8px gap vs. a ~11.1px wing
+     spill at size 30. */
+  .scope-chip-icon { --icon-size: 30px; }
   /* One tier-tinted icon tile per rankable entity — the Coverage strip.
      (These names were `.topn-*` until round 9: they were introduced for a
      "Best in scope" top-12 card that Coverage made redundant, and the card
@@ -1321,6 +1369,9 @@
   .entity-detail-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .entity-detail-head h4 { margin: 0; font-size: 15px; }
   .entity-detail-head .meta { margin: 0; }
+  /* Round 5 (addendum, task 8, 2026-07-26): 10px gap vs. a ~11.1px wing
+     spill at size 30. */
+  .entity-detail-icon { --icon-size: 30px; }
   .entity-detail-spacer { flex: 1 1 auto; }
   /* Its own scroller with a fixed cap, not a growing list: this card sits
      above the chart and the breakdown, and a ten-row expansion that pushed
@@ -1333,7 +1384,13 @@
     padding: 4px 8px; border-bottom: 1px solid var(--border-soft);
     font-size: 12px; white-space: nowrap;
   }
-  .entity-attempts td:first-child { width: 22px; }
+  /* Round 5 (addendum, task 8, 2026-07-26 -- "sweep every container sized
+     for the old disc"): the SAME class of bug as `.attempt-medal` above,
+     smaller in magnitude only because this table's icons are size=14 --
+     22px was already narrower than the layout box alone (14 *
+     HAT_LAYOUT_WIDTH_RATIO ~= 23px, caps.js), before wings (14 *
+     HAT_WING_SPILL_RATIO ~= 5px each side) push the real extent to ~33px. */
+  .entity-attempts td:first-child { width: 34px; }
   .entity-attempts .entity-attempt-strat {
     width: 100%; white-space: nowrap; overflow: hidden;
     text-overflow: ellipsis; color: var(--muted);
@@ -1341,6 +1398,12 @@
   .entity-attempts tr.is-pb td { color: var(--gold); }
   .rank-card-main { display: flex; align-items: center; gap: 16px; margin: 10px 0; }
   .rank-card-main h2 { margin: 0; font-size: 24px; }
+  /* Round 5 (addendum, task 8, 2026-07-26 -- "sweep every container sized
+     for the old disc"): the biggest gap of the whole sweep -- 16px vs. a
+     ~23.7px wing spill at size 64. Every prior round's fixture happened to
+     land on Capless (which never wings), so this was never actually
+     rendered with wings on until this round's targeted check. */
+  .rank-card-icon { --icon-size: 64px; }
   /* Task C.5: names the MARELO-vs-saved-PB distinction so it reads as
      intentional, not as the two banners disagreeing by accident. */
   .rank-card-note { margin: 0 0 10px; font-style: italic; }
@@ -1348,110 +1411,249 @@
      they forwarded hover and click to the first coverage tile inside them,
      so hovering the caption lit up an unrelated star. */
   .rank-factor { display: block; margin: 6px 0; font-size: 12px; color: var(--muted); }
-  /* (The plain gold `.rank-factors i` bar that used to live here is gone:
-     Mastery became the ladder below and Coverage became a row of entity
-     tiles, so nothing in this block is a plain fill any more.) */
-  /* Mastery as the LADDER it actually is (live request 2026-07-25 round 7 —
-     "it's not very clear what mastery means here. Out of what?"). Mastery is
-     a mean 0-100 SCORE, so the same anchors the chart's gridlines use apply
-     to it: the track is banded in each tier's own colour, a full-height tick
-     marks every tier threshold and a short pip every division inside it. The
-     bands are one gradient with hard stops, drawn TWICE — dim underneath,
-     full-strength in the fill — so "how far along the ladder" and "which
-     ranks those stretches are" are the same picture instead of a gold bar
-     that answers neither. The fill's background-size is set inline
-     (rankpage.js) because a percentage background resolves against the
-     FILL's box, not the track's; without it the whole ladder would be
-     squeezed into however much is filled. */
+  /* Round 4 (addendum, task 8, 2026-07-26): Mastery is a plain meter again,
+     reusing `.rank-progress-track` (below) — it moved OFF the tier ladder
+     because it isn't a rank. Mastery is a mean SCORE, one of the two
+     factors MARELO is made of (marelo = mastery x coverage), and drawing it
+     on a ladder that also carries rank icons implied it WAS a rank — the
+     user caught the two disagreeing outright (Capless 5 on the card, the
+     ladder marker sitting in Toad territory). The ladder now belongs to
+     MARELO alone (`.rank-ladder-wrap`, under `.rank-card-main`) so there is
+     exactly one rank-shaped drawing on this card. */
+  /* Round 5 (addendum, task 8, 2026-07-26): replaces the permanent 45-icon
+     showcase strip entirely -- see rankpage.js's LadderBar comment for the
+     proof that a static layout could never satisfy "icons only ever sit
+     exactly above their own pip." Reserves room ABOVE the bar for whichever
+     floating icon layer is showing -- the at-rest YOU mark, or a hovered
+     band's five popped-out icons -- so neither ever overlaps the card text
+     sitting above this wrapper. */
+  .rank-ladder-wrap { margin: 4px 0 10px; padding-top: 62px; }
   .rank-ladder {
-    position: relative; height: 16px; margin: 4px 0 3px;
-    border-radius: 8px; background: rgba(4,13,23,.72); overflow: hidden;
+    position: relative; height: 16px;
+    display: flex; gap: 2px;
+    border-radius: 8px; background: rgba(4,13,23,.72);
   }
-  /* The showcase strip: nine equal groups (below), plus YOU (raised and
-     enlarged, a separate highlight overlaid at the true score value — round
-     3 no longer drops any group for it, see rankpage.js). Fixed height so
-     the card doesn't reflow as YOU moves. */
-  .rank-ladder-scale {
-    position: relative; height: 40px;
-    display: flex; align-items: flex-end; gap: 3px;
+  /* Each tier is its own flex item, not a slice of one continuous gradient
+     (round 1-4's `.rank-ladder-bands`/`.rank-ladder-fill` pair, deleted).
+     `--band-weight` (set inline, rankpage.js) is `band.to - band.from` --
+     the tier's real SCORE width -- so flex-grow makes the resting layout
+     proportional BY CONSTRUCTION by is-mine, with no percentage maths
+     duplicated here. `min-width: 0` lets a band shrink below its own
+     content size: without it a flex item's default `min-width: auto`
+     refuses to shrink past whatever's inside, which would stop the eight
+     compressing bands (below) from ever getting small enough to hand a
+     hovered band its expansion width. */
+  .rank-band {
+    position: relative; min-width: 0; height: 100%;
+    flex-grow: var(--band-weight); flex-shrink: 1; flex-basis: 0%;
+    box-shadow: 0 0 0 0 rgba(0,0,0,0);
   }
-  .rank-ladder-mark {
-    position: absolute; bottom: 0; transform: translateX(-50%);
-    display: flex; flex-direction: column; align-items: center; gap: 1px;
+  /* Round 8 (task 8, 2026-07-26 -- the user: "it should animate from the
+     starting bar position to the expanded bar position... it should also
+     animate back"): ONE `transition` declaration for `.rank-band`, covering
+     every property EITHER state of it ever sets (flex-grow/flex-basis here,
+     transform/box-shadow below), and it is the ONLY place `transition` is
+     declared for this element -- no separate declaration on the `:hover`
+     rule below. That used to be two rules: this one covered flex-grow/
+     flex-basis, `:hover`'s own rule covered transform/box-shadow -- and
+     since `:hover` has higher specificity, its `transition` COMPLETELY
+     REPLACED this one's (CSS `transition` is not additive across rules on
+     the same element) the instant a band gained the `:hover` match, so
+     flex-grow/flex-basis had NO transition during the split second they
+     needed one most: entering hover. Leaving hover worked fine, because
+     `:hover` stops matching and THIS rule's transition takes back over --
+     which is exactly the asymmetric "some things snap, some things don't,
+     and it depends on direction" bug a probe confirmed before this fix
+     (measured `flex-basis`/width jumping straight to its target value on
+     the very first frame of expansion, but interpolating smoothly on
+     collapse). Fixed by moving every property either state can change onto
+     ONE list, here, so there is exactly one transition config regardless of
+     which direction the state is changing -- same duration, same easing,
+     both directions, structurally impossible to diverge again. This is
+     also what lets the flex reflow trick work AT ALL: the eight compressing
+     siblings never transition their OWN flex-grow/basis (those values never
+     change for them), they only look smooth because the hovered band's
+     property is ACTUALLY interpolating frame by frame and the browser
+     naturally reflows around that on every rendered frame -- if the
+     hovered band's own change snaps, the siblings have nothing to reflow
+     smoothly around either, which is why the ENTIRE row used to snap
+     together on expand and only the row's OWN sizing snapped, not the
+     icons (see `.rank-band-icon` below, which was never double-declared
+     and always animated correctly in both directions). Pip/icon/marker
+     `left:%` positions need no transition of their own for the same
+     reason: they are computed from the band's CURRENT width every frame,
+     so they ride this one width transition for free once it is real. */
+  @media (prefers-reduced-motion: no-preference) {
+    .rank-band {
+      transition: flex-grow .25s ease, flex-basis .25s ease,
+        transform .25s ease, box-shadow .25s ease;
+    }
   }
-  .rank-ladder-mark.is-you { bottom: 5px; z-index: 1; }
-  .rank-ladder-you {
-    color: var(--gold); font-size: .55rem; font-weight: 800;
-    letter-spacing: .12em; line-height: 1;
+  /* The expansion is the thing that makes per-division icons legible at
+     all (see the LadderBar comment) -- not optional garnish. Fixed rigid
+     width (`flex-shrink: 0` too, so nothing can squeeze it back down) lets
+     the other eight bands compress to absorb the difference, proportionally
+     among themselves (their own flex-grow ratios are untouched -- only the
+     space left to share shrank). `max(260px, calc(var(--band-weight) * 1%))`
+     guards the one tier that's ALREADY close to 260px at rest on a big card
+     (Toadsworth/Silver is 20 of the 100 score points -- 20% of a ~1300px bar
+     is ~260px): without the `max()`, "expanding" it could actually shrink
+     it, which reads as a bug, not an affordance. 260px (round 7, task 8,
+     2026-07-26 -- widened from 230px, "so five slots breathe", a starting
+     point settled by render, not arithmetic, once the user's own division
+     could sit at any fraction of the slot it fills rather than only ever
+     on a midpoint) is comfortable room for four or five 20px icons with
+     realistic wing spill. `:focus-within` puts a keyboard user who Tabbed
+     onto one of the five pips inside in the exact same state a mouse hover
+     would -- no separate keyboard path to keep in sync with the mouse
+     one. Sets ONLY target values here, deliberately -- the transition that
+     animates TOWARD them lives once, above, on the unconditional rule. */
+  .rank-band:hover, .rank-band:focus-within {
+    flex: 0 0 max(260px, calc(var(--band-weight) * 1%));
+    z-index: 3;
   }
-  /* Nine EQUAL groups, not score-proportional (round 3, addendum, task 8,
-     2026-07-26 — corrects round 2's own attempt, which sized each group to
-     its tier's real score-width and, as a direct consequence, gave the
-     TIGHTEST bands — Mario, Grandmaster, the tiers a user is climbing
-     TOWARD — the least room for icons, backwards for a progression
-     showcase). `flex: 1 1 0` splits `.rank-ladder-scale` into nine equal
-     shares regardless of each tier's real score-width; the bar below still
-     carries the true proportional reading, so nothing about score accuracy
-     is lost, only the strip's own x-alignment with it (the user's own
-     ruling: costs nothing real). `--tier-tint` (set inline, rankpage.js,
-     from the SAME `capGradient(tier) || rankColor(tier)` the ladder band
-     and the standards table already use) is the tie back to which tier a
-     group belongs, now that position no longer implies it. */
-  .rank-ladder-tier-group {
-    flex: 1 1 0; min-width: 0; height: 100%;
-    display: flex; align-items: flex-end;
-    background: color-mix(in srgb, var(--tier-tint) 22%, transparent);
-    border-radius: 5px;
-    container-type: inline-size;
+  @media (prefers-reduced-motion: no-preference) {
+    .rank-band:hover, .rank-band:focus-within {
+      transform: translateY(-2px);
+      box-shadow: 0 3px 10px rgba(0,0,0,.4);
+    }
   }
-  .rank-division-row {
-    display: flex; align-items: flex-end; justify-content: space-between;
-    width: 100%; height: 100%; padding: 0 2px;
+  /* The painted fill lives in its OWN clipped box, separate from the pips/
+     icons below: `.rank-band` itself must never clip, since a popped-out
+     icon has to escape upward past the bar's own top edge. Rounded corners
+     only on the two ends of the whole bar, same as the old single-element
+     bar's own border-radius. */
+  .rank-band-surface { position: absolute; inset: 0; overflow: hidden; }
+  .rank-band:first-child .rank-band-surface { border-radius: 8px 0 0 8px; }
+  .rank-band:last-child .rank-band-surface { border-radius: 0 8px 8px 0; }
+  /* Dim base + bright clipped fill is the SAME "how far along" reading the
+     old whole-bar gradient gave (`.rank-ladder-bands`/`.rank-ladder-fill`),
+     just scoped to one band's own `--band-tint` (`capGradient(tier) ||
+     rankColor(tier)`, rankpage.js -- the SAME colour the standards table
+     and every other tier surface already use) instead of one continuous
+     linear-gradient image spanning all nine. Plain `background` on purpose,
+     never `color-mix()`: `capGradient()` returns a `linear-gradient(...)`
+     STRING for the two patterned tiers (Toadsworth, Toad), and `color-mix`
+     requires two `<color>` tokens -- feeding it a gradient is invalid CSS,
+     exactly the round-4 bug. `background` accepts a flat colour or a
+     gradient string identically, so both forms render correctly here. */
+  .rank-band-base, .rank-band-fill {
+    position: absolute; inset: 0; background: var(--band-tint);
   }
-  .rank-division-mark {
-    display: flex; flex-direction: column; align-items: center;
-    flex: 0 0 auto;
+  .rank-band-base { opacity: .26; }
+  .rank-band-fill { opacity: 1; width: 0; }
+  /* The pip: a focusable 9px hit box (a 1px line is not a target -- same
+     reasoning the old `.rank-ladder-step` used), positioned at a LOCAL
+     percentage of its OWN band -- 0/20/40/60/80%, since DIVISIONS_PER_TIER
+     always cuts a tier into five equal-score slices. That percentage marks
+     where the division BEGINS (round 6 -- the icon for the SAME division
+     sits at a different percentage now, its slot's own midpoint, see
+     `.rank-band-icon` below); it is what stays correct whether the band is
+     squeezed to a sliver (Mario, at rest) or expanded to its full hover
+     width -- the alignment guarantee lives here, not in per-band math. */
+  .rank-band-pip {
+    position: absolute; top: 0; bottom: 0; left: 0; width: 9px;
+    transform: translateX(-50%); cursor: pointer;
   }
-  /* Nine EQUAL groups means this threshold now applies (or doesn't) to all
-     nine at once, not band-by-band (round 2 measured a per-band crossover;
-     round 3's groups are uniform, so there is exactly one crossover width
-     for the whole strip — task report has it). Below it, every group thins
-     to its bottom division alone (`is-floor`, the pre-round-2 single-icon-
-     per-tier look), re-centred (a lone flex child under `space-between`
-     sits at the start, not the centre, so this needs its own
-     `justify-content`). */
-  @container (max-width: 140px) {
-    .rank-division-row { justify-content: center; }
-    .rank-division-mark:not(.is-floor) { display: none; }
+  .rank-band-pip:focus-visible {
+    outline: 2px solid var(--gold); outline-offset: 1px; border-radius: 2px;
   }
-  .rank-ladder-bands, .rank-ladder-fill {
-    position: absolute; left: 0; top: 0; bottom: 0;
-    background-repeat: no-repeat; background-size: 100% 100%;
+  .rank-band-pip::after {
+    content: ""; position: absolute; left: 50%; top: 5px; bottom: 5px;
+    width: 1px; background: rgba(255,255,255,.28); transform: translateX(-50%);
   }
-  .rank-ladder-bands { right: 0; opacity: .26; }
-  .rank-ladder-fill { opacity: 1; }
-  /* One element per division line, drawing its own 1px pip (2px and
-     full-height where the line opens a new tier). The BOX is 9px wide and
-     transparent because every line carries a tooltip naming what reaching
-     it makes you (round 9) — a 1px element is not something a mouse can
-     find. `pointer-events` therefore stays default; only the decorative
-     ::after is inert. */
-  .rank-ladder-step {
-    position: absolute; top: 0; bottom: 0; width: 9px;
-    transform: translateX(-50%); display: flex; justify-content: center;
+  .rank-band-pip.is-tier::after {
+    top: 0; bottom: 0; width: 2px; background: rgba(6,16,28,.9);
   }
-  .rank-ladder-step::after {
-    content: ""; width: 1px; margin: 5px 0; background: rgba(255,255,255,.28);
+  /* The icon: round 6 (addendum, task 8, 2026-07-26 -- the user: "each of
+     the symbols are in the middle of their subdivision section"). A pip
+     marks a BOUNDARY; an icon names the SPAN between one pip and the next,
+     so it sits at that span's own midpoint now, not on the boundary line --
+     sitting it on the pip made it ambiguous which of the two neighbouring
+     divisions it named. `.rank-band-icon` is a SIBLING of `.rank-band-pip`
+     (not nested inside it, which it was before this round) so it can carry
+     its OWN `left:%` at a different local percentage than the pip --
+     rankpage.js computes both from the SAME `index`, offset by half a
+     slice, so they can never drift apart even though they no longer share
+     one literal position. `left: 0` here is a harmless default; every
+     instance sets its own inline `left` (rankpage.js). Hidden and tucked
+     toward the bar at rest (`pointer-events: none` so an invisible icon can
+     never steal a hover meant for a neighbour), popped up to full size and
+     opacity only while `.rank-band` is hovered or focused --
+     `pointer-events: auto` there so a mouse resting directly on the now-
+     much-bigger icon gets ITS OWN tooltip rather than passing through to
+     whatever's behind it. */
+  .rank-band-icon {
+    position: absolute; left: 0; bottom: calc(100% + 8px);
+    opacity: 0; pointer-events: none;
+    transform: translate(-50%, 10px) scale(.5);
   }
-  .rank-ladder-step.is-tier::after {
-    width: 2px; margin: 0; background: rgba(6,16,28,.9);
+  @media (prefers-reduced-motion: no-preference) {
+    .rank-band-icon { transition: opacity .25s ease, transform .25s ease; }
+  }
+  .rank-band:hover .rank-band-icon, .rank-band:focus-within .rank-band-icon {
+    opacity: 1; pointer-events: auto;
+    transform: translate(-50%, 0) scale(1);
   }
   /* The reached-this-far marker: a bright edge on the fill, so the exact
      value is readable against a banded track that has plenty of edges of
-     its own. */
+     its own. Round 6 (addendum, task 8, 2026-07-26 -- the user: "I would
+     expect my big symbol to still be visible, and for my exact progress
+     inside the rank to still be visible... when hovering over your rank's
+     area"): a CHILD of the ONE `.rank-band` the user's own score falls in
+     now (rankpage.js sets `isCurrentBand`), not a global overlay on
+     `.rank-ladder` positioned by a percentage of the WHOLE bar. That used
+     to mean this line hid behind an EXPANDED band -- both were absolutely
+     positioned siblings competing for stacking inside the SAME parent
+     (`.rank-ladder`), and the hovered band's own `z-index: 3` beat this
+     line's `z-index: 2`. Nested inside that one band instead, this line's
+     z-index is compared only within THAT band's own local stacking
+     context (created the moment the band's `:hover`/`:focus-within` rule
+     sets its own `z-index`), above that band's surface/pips/icons in both
+     the resting and the expanded state -- the stacking bug is fixed as a
+     side effect of the same restructure that fixes the position. */
   .rank-ladder-head {
     position: absolute; top: -1px; bottom: -1px; width: 2px;
-    background: var(--text); transform: translateX(-1px);
+    background: var(--text); transform: translateX(-1px); z-index: 2;
+  }
+  /* The one permanent icon: the user's own rank, floating above its EXACT
+     score position -- never a showcase tile. Bigger than the hover-revealed
+     ones (CURRENT_RANK_ICON_SIZE, rankpage.js), since nothing else marks
+     "this one is you" at rest any more. Same face as the cap's own
+     sign-field glyph (`.hat .glyph`) for YOU -- a display word, not a
+     caption -- with enough gap below it that the bigger icon can never
+     grow into the text above it.
+     Round 6 (addendum, task 8, 2026-07-26): no longer hides while a band
+     is expanded. The earlier reasoning -- "YOU's position is only true at
+     rest, and a hovered band is deliberately not proportional" -- was
+     correct as far as it went, but hiding was the wrong remedy: the user's
+     score is never actually unknowable during expansion, only expressed in
+     the wrong coordinate system. Positioned as a fraction of the ONE band
+     it belongs to (same as `.rank-ladder-head` above) instead of a
+     fraction of the whole bar, its position recomputes correctly whenever
+     that band's own width changes -- exactly how the pip/icon alignment
+     already survives expansion. Hovering the user's own band is now a
+     genuine zoom into where they actually are, with nothing left to hide:
+     the showcase icons sit at their slot's own midpoint (they label a
+     SPAN), this marker sits at the user's true fraction (it marks a
+     VALUE) -- different meanings, visibly different positions, neither
+     has to move off what it means. */
+  .rank-ladder-mark.is-you {
+    position: absolute; bottom: calc(100% + 8px); left: 0;
+    transform: translateX(-50%); z-index: 4;
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+  }
+  .rank-ladder-you {
+    color: var(--gold); font-size: .68rem; font-weight: 700;
+    letter-spacing: .1em; line-height: 1;
+    font-family: "SuperMario256", Impact, sans-serif;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .rank-ladder-you-icon { animation: rank-mark-bob 2.4s ease-in-out infinite; }
+    @keyframes rank-mark-bob {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-4px); }
+    }
   }
   /* Fixed pixel height, not `height:auto` — HistoryChart measures its own
      rendered width via ResizeObserver and redraws the viewBox to match, so
@@ -1576,7 +1778,19 @@
   .attempt-table tr { height: 40px; }
   .attempt-table td { padding: .3rem .36rem; border-bottom: 1px solid var(--border-soft); }
   .attempt-index { width: 38px; }
-  .attempt-medal { width: 34px; text-align: center; }
+  /* Round 5 (addendum, task 8, 2026-07-26 -- "sweep every container sized
+     for the old disc"): 34px was sized for a 22px SQUARE Medal/Crest. A Hat
+     at size=22 has a layout box alone of 22 * HAT_LAYOUT_WIDTH_RATIO (~1.632,
+     caps.js) = ~36px -- already wider than the old cell -- and its wings
+     then spill a further 22 * HAT_WING_SPILL_RATIO (~0.370) = ~8px past
+     that on each side, for a real extent of ~52px in a 34px cell: it could
+     never centre, and the overflow read as crowding the time column beside
+     it (the user's exact report). 54px reserves the full wing-inclusive
+     extent with a touch of room, consistent with the rank-banner fix
+     (round 4) and every other site swept this round -- see caps.js's
+     HAT_LAYOUT_WIDTH_RATIO/HAT_WING_SPILL_RATIO for where these numbers
+     come from. */
+  .attempt-medal { width: 54px; text-align: center; }
   .attempt-result { min-width: 0; }
   .attempt-delta { width: 72px; white-space: nowrap; font-weight: 700; }
   .attempt-strategy { width: 150px; white-space: nowrap; }

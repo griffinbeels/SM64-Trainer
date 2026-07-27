@@ -8,7 +8,7 @@ import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { rankColor } from "./ranks.js";
-import { accentColor, capGradient, capName, divisionDigit } from "./caps.js";
+import { capGradient, capName, divisionDigit } from "./caps.js";
 import { fmtPoints, fmtScore, toPoints } from "./marelo.js";
 import { RankIcon } from "./rankicon.js";
 import { Icon } from "./icons.js";
@@ -108,139 +108,179 @@ const TIER_BANDS = TIERS_ASCENDING.map(([tier, floor], index) => ({
   tier, from: floor,
   to: index + 1 < TIERS_ASCENDING.length ? TIERS_ASCENDING[index + 1][1] : SCORE_CEILING,
 }));
-// Score IS percent on a 0-100 axis, so a band's edges are its stops verbatim
-// -- except the two patterned tiers (Toadsworth/Toad, addendum 2,
-// 2026-07-25), whose band is a real two-tone gradient (base -> spots ->
-// base) across its own stretch of the track rather than a flat fill, same
-// reasoning as the standards table row (capGradient there).
-function bandStops({ tier, from, to }) {
-  const accent = accentColor(tier);
-  if (!accent) return `${rankColor(tier)} ${from}% ${to}%`;
-  const mid = (from + to) / 2;
-  return `${rankColor(tier)} ${from}%, ${accent} ${mid}%, ${rankColor(tier)} ${to}%`;
-}
-const BAND_GRADIENT = "linear-gradient(90deg, " + TIER_BANDS.map(bandStops).join(", ") + ")";
-
-// Which tier BAND a 0-100 score sits in. Tier only, never division: an
-// AGGREGATE has no ladder, so the server grades it against the full anchor
-// table too (`scoring.division_for` with `defined=None`), which is exactly
-// what ANCHORS mirrors — this agrees with it by construction. The division
-// numeral, which genuinely needs a ladder, is still never computed here.
-function bandForScore(score) {
-  return [...TIER_BANDS].reverse().find((band) => score >= band.from)
-    || TIER_BANDS[0];
-}
-
-// Every division line on the 0-100 axis: where it starts, and what reaching
-// it makes you. The tier's own floor is its BOTTOM division (V), so a tier
-// boundary is just the division line that happens to open a new tier.
-const LADDER_STEPS = TIER_BANDS.flatMap((band) => {
-  const width = (band.to - band.from) / DIVISIONS_PER_TIER;
-  return DIVISION_NUMERALS.map((numeral, index) => ({
-    at: band.from + width * index, tier: band.tier, division: numeral,
-    opensTier: index === 0,
-  }));
-});
-
-// The Mastery bar (round 7): a mean 0-100 score drawn on the ladder it is
-// scored against, instead of a gold bar filling toward an unstated maximum.
-// A line per division, a heavier one per tier, every stretch in its own
-// tier's colour. The value is a SCORE, never a rating — the tier NAME under
-// the YOU medal is the band it falls in (bandForScore, full-table like the
-// server's own aggregate path), and the division numeral, which would need
-// a ladder, is still never computed here.
+// Round 5 (addendum, task 8, 2026-07-26): replaces the permanent showcase
+// strip rounds 2-4 built (nine groups of 45 icons, always on screen) --
+// that design turned out to be UNSATISFIABLE against the user's own
+// requirement: "the symbols for each subdivision should ONLY EVER appear
+// above the exact line/pip for that subdivision... otherwise, this is
+// meaningless." That cannot hold at rest. Grandmaster and Mario are 5
+// score-points wide each (see the ANCHORS mirror above), so their five
+// division pips sit ~1% of the bar apart on the real scale -- five icons
+// above them would overlap by an order of magnitude. Equal-width groups
+// (round 3) broke pip alignment to fix icon legibility; score-proportional
+// groups (round 2) broke icon legibility to fix pip alignment. No STATIC
+// layout satisfies both at once, which is exactly why this is an
+// INTERACTION now: icons only need to fit beside their pips when one
+// tier's band is expanded, and only one band expands at a time, on demand.
 //
-// Round 2 (addendum, task 8, 2026-07-26 — the user: "we should see ALL of
-// the tiers with ALL of the wing progressions and ALL of the number
-// progressions above each of the bars... a version of the cap_contact_sheet
-// embedded into the app as a visual progression tool"): the scale went from
-// nine tier medals to all 45 division steps (LADDER_STEPS already has one
-// per division; this just draws it instead of computing yet another table).
-// One flat size for all 45 (DIVISION_MARK_SIZE, below), always smaller than
-// YOU's 22px — YOU stays the most prominent thing on the bar.
+// Nothing shows permanently any more except the user's OWN rank: one icon
+// (`.rank-ladder-you-icon`), bigger than the hover-revealed ones, floating
+// above its exact score position, bobbing and flapping (if it has wings) --
+// the round 2-4 "is-mine" treatment one icon out of 45 got is now the ONLY
+// icon at rest. YOU stays text alone above it (unchanged since round 4),
+// with enough gap that the now-bigger icon can never grow into it.
 //
-// Round 2's own attempt positioned each tier's group score-proportionally
-// (`left:band.from%`/`width:(band.to-band.from)%`) -- correct on the score
-// axis, but load-bearing wrong in spirit: the score anchors squeeze the top
-// tiers (Mario is 95-100, ~5% of the bar), so proportional placement
-// structurally CANNOT give the tiers a user is climbing TOWARD room for
-// five icons, no matter the card width -- verified with a width sweep up to
-// 1700px, where Mario/Grandmaster never once reached five. Backwards for a
-// feature whose whole point is showing where you're going.
+// Hovering OR focusing any pip inside a tier's band (`.rank-band-pip`)
+// reveals that tier's five division icons, each popping up exactly above
+// its own pip, and expands the band to a fixed comfortable width so the
+// five don't crowd (index.html) -- the other eight compress to absorb the
+// difference, proportionally among themselves. Leaving/blurring reverses
+// both. This is what makes the alignment requirement a STRUCTURAL
+// guarantee instead of something tuned per band: a pip and its icon are
+// SIBLINGS positioned at the SAME local percentage (0/20/40/60/80%, since
+// DIVISIONS_PER_TIER always cuts a tier into five equal-score slices) of
+// the SAME band element -- centring one over the other holds whether that
+// band is squeezed to a couple of percent of the bar (Mario, at rest) or
+// expanded to its full hover width, with no separate math for the two
+// states. `:hover, :focus-within` (index.html) is what makes this reachable
+// without a mouse for free: every pip is a real focusable element, so
+// Tabbing onto one puts its ANCESTOR band into the exact state a mouse
+// hover would, with no JS event wiring on either path.
 //
-// Round 3 (addendum, task 8, 2026-07-26 -- the user's ruling, after seeing
-// that finding: "nine equal groups of five icons above the bar... always"):
-// the strip is a SHOWCASE now, not a scale readout -- closer to the design
-// contact sheet embedded in the app, which is the intent the user described
-// from the start ("a version of the cap_contact_sheet... to showcase and
-// demonstrate how you're going to be progressing over time"). Nine EQUAL
-// flex groups (not score-proportional), each holding its own five, all one
-// flat size. The precise per-division score reading is already carried by
-// the bar below and by YOU's own true-value position -- losing exact
-// per-division x-alignment between the showcase strip and the bar it sits
-// above costs nothing real, per the ruling. Each group still shows ALL 45
-// icons (round 2's "drop the current tier's group, YOU stands in for it"
-// rule no longer applies -- a showcase shows everything, same as the
-// contact sheet does regardless of current rank; YOU is additionally
-// highlighted at its own true position, unchanged).
-//
-// A user must not have to count divisions to tell which five belong to
-// which tier now that they're no longer score-width-sized -- colour is the
-// tie (index.html's `.rank-ladder-tier-group` tints its background from
-// `--tier-tint`, the SAME `capGradient(tier) || rankColor(tier)` the ladder
-// band and the standards table already use for a tier's identity, so a
-// showcase group can never use a colour the rest of the app doesn't already
-// associate with that tier). Each icon keeps its own per-division tooltip
-// (title=, below) -- they're no longer co-located with the bar's own
-// division-line pips, so a hover has to name what reaching it makes you on
-// its own, same wording the pips already use.
-const DIVISION_MARK_SIZE = 14;
+// Griffin's question 3 -- why aren't the nine bands equal width -- is
+// answered here, since a future reader will look at TIER_BANDS for it: a
+// band's flex-grow (index.html) IS `band.to - band.from`, directly
+// encoding its width in SCORE POINTS, and those widths are `ranks/
+// scoring.py`'s SCORE_ANCHORS (the ANCHORS mirror above) verbatim --
+// xcams' own player-distribution bands. Toadsworth (Silver) is 20 points
+// wide; Metal (Grandmaster) and Mario are 5 each, a 4x spread, deliberately
+// compressed at the top because five points of real skill is far harder to
+// gain in Grandmaster than in Bronze. The bar isn't distorting anything by
+// giving Mario a sliver of width -- it's showing that truth, which is
+// exactly why the bar stays proportional at rest and only the transient
+// hover state gets a fixed, non-proportional width.
+const BAND_ICON_SIZE = 20;
+// Round 7 (task 8, 2026-07-26 -- the user asked for this shrunk from its
+// original 34px, "so it reads as the same family as the showcase icons
+// rather than looming over them"): still bigger than BAND_ICON_SIZE, but
+// only a little now that the marker no longer needs size ALONE to read as
+// "this one is you" -- it also carries the YOU label, the bob and the
+// flap, and (round 7) the showcase icon for the user's own division is
+// gone from that band entirely, so there is no neighbour left to loom
+// over in the first place. A starting point, settled by render, not by
+// arithmetic -- see the report for what was actually checked.
+const CURRENT_RANK_ICON_SIZE = 26;
 
-function LadderBar({ value }) {
+function LadderBar({ value, tier, division }) {
   const filled = Math.max(0, Math.min(SCORE_CEILING, value || 0));
-  const here = bandForScore(filled);
-  return html`<div>
-    <!-- The showcase strip: nine equal groups, all 45 icons, always (round
-         3). YOU is a SEPARATE highlight -- bigger, raised, tagged YOU, at
-         the value's ACTUAL position (round 9: "our active rank should be
-         above the ACTUAL position in the bar"), overlaid on whichever group
-         it happens to land near; it no longer needs the current tier's own
-         group hidden to avoid a duplicate, since a showcase tile and a
-         true-value highlight read as two different kinds of mark. -->
-    <div class="rank-ladder-scale">
-      ${TIER_BANDS.map((band) => {
-        const stepWidth = (band.to - band.from) / DIVISIONS_PER_TIER;
-        const tint = capGradient(band.tier) || rankColor(band.tier);
-        return html`<div class="rank-ladder-tier-group" style=${`--tier-tint:${tint}`}>
-          <div class="rank-division-row">
-            ${DIVISION_NUMERALS.map((numeral, index) => html`<span
-                class="rank-division-mark ${index === 0 ? "is-floor" : ""}"
-                title=${`${capName(band.tier)} ${numeral} — MARELO ${toPoints(band.from + stepWidth * index)} pts`}>
-              <${RankIcon} tier=${band.tier} division=${numeral} size=${DIVISION_MARK_SIZE} />
-            </span>`)}
-          </div>
-        </div>`;
-      })}
-      <span class="rank-ladder-mark is-you" style=${`left:${filled}%`}
-          title=${`You are here — ${toPoints(filled)} pts`}>
-        <b class="rank-ladder-you">YOU</b>
-        <${RankIcon} tier=${here.tier} size=${22} />
-      </span>
-    </div>
-    <div class="rank-ladder">
-    <span class="rank-ladder-bands" style=${`background-image:${BAND_GRADIENT}`}></span>
-    ${filled > 0 && html`<span class="rank-ladder-fill" style=${
-      `width:${filled}%;background-image:${BAND_GRADIENT};`
-      + `background-size:${(100 / filled) * 100}% 100%`}></span>`}
-    <!-- Every line is hoverable and says what reaching it makes you (round
-         9). The element is a 9px transparent box drawing its own 1-2px line,
-         because a 1px pip is not a hit target. -->
-    ${LADDER_STEPS.filter((step) => step.at > 0).map((step) => html`<span
-      class="rank-ladder-step ${step.opensTier ? "is-tier" : ""}"
-      style=${`left:${step.at}%`}
-      title=${`${capName(step.tier)} ${divisionDigit(step.division)} — MARELO ${toPoints(step.at)} pts`}></span>`)}
-    ${filled > 0 && html`<span class="rank-ladder-head" style=${`left:${filled}%`}></span>`}
-    </div>
+  // Round 6 addendum (task 8, 2026-07-26 -- the user, after accepting the
+  // hover interaction itself: "I would expect my big symbol to still be
+  // visible, and for my exact progress inside the rank to still be
+  // visible... the big symbol, the position bar, and the 'you' [should be]
+  // all still displayed when hovering over your rank's area"). The marker
+  // used to hide the instant ANY band expanded, reasoned (at the time) as
+  // "its position is only true in the resting layout" -- correct as far as
+  // it went, but hiding was the wrong fix for it. The position was never
+  // actually unknowable during expansion: the user's score sits inside
+  // exactly ONE band, at a known FRACTION of that band's own span.
+  // Expressed band-locally -- a child of that SAME band, at that fraction
+  // of ITS width, exactly the coordinate space the pips/icons already use
+  // their own local percentages against -- the marker's position recomputes
+  // correctly whenever that band's own width changes, for free, the same
+  // way pip/icon alignment already survives expansion. Nothing needs to
+  // hide any more; the `:has()` rule that used to blank it is gone.
+  //
+  // The band is found by matching `tier` (the prop, the SAME tier the card
+  // above already shows) rather than by asking "which band does `filled`
+  // fall into" from scratch: `filled` is TWEENED and `tier` is not, so
+  // during a cross-tier rank-up the two can transiently disagree for the
+  // length of the tween. Anchoring the marker to the tier the card already
+  // names is what keeps this ladder from ever repeating round 4's original
+  // bug (a marker naming a different rank than the card two inches above
+  // it) -- the fraction is clamped to [0,1] defensively for that same
+  // transient window, so a mid-tween value can never push the marker
+  // outside the band it is being drawn in.
+  const currentBand = tier ? TIER_BANDS.find((band) => band.tier === tier) : null;
+  const markerFraction = currentBand
+    ? Math.max(0, Math.min(1, (filled - currentBand.from) / (currentBand.to - currentBand.from)))
+    : 0;
+  return html`<div class="rank-ladder">
+    ${TIER_BANDS.map((band) => {
+      const stepWidth = (band.to - band.from) / DIVISIONS_PER_TIER;
+      const tint = capGradient(band.tier) || rankColor(band.tier);
+      // How much of THIS band is behind the current value: 0 before it is
+      // reached, 100 once fully passed, a partial fraction while inside it
+      // -- the same dim-base/bright-fill reading the old whole-bar gradient
+      // gave, just scoped to one band instead of drawn as one continuous
+      // image across all nine.
+      const reachedPct = band.to <= filled ? 100
+        : band.from >= filled ? 0
+        : ((filled - band.from) / (band.to - band.from)) * 100;
+      // Every division carries a pip (a BOUNDARY, where reaching it makes
+      // you that division) and an icon (a SLOT, the span between one pip
+      // and the next). Round 6 (addendum, task 8, 2026-07-26 -- the user:
+      // "everything should be shifted over to the right... each of the
+      // symbols are in the middle of their subdivision section"): sitting
+      // the icon ON its boundary pip made it ambiguous which of the two
+      // neighbouring divisions it named. The icon now sits at the SLOT's
+      // own midpoint (index + 0.5 of a step) instead of the pip's own
+      // position (index); the pip itself does not move -- it still marks
+      // the real boundary and still carries the tooltip. Computed once
+      // here, from the SAME `index`, so the two can never drift apart.
+      const divisions = DIVISION_NUMERALS.map((numeral, index) => ({
+        numeral,
+        pipPct: (index / DIVISIONS_PER_TIER) * 100,
+        iconPct: ((index + 0.5) / DIVISIONS_PER_TIER) * 100,
+        title: `${capName(band.tier)} ${numeral} — MARELO ${toPoints(band.from + stepWidth * index)} pts`,
+        isTier: index === 0,
+      }));
+      const isCurrentBand = !!(currentBand && band.tier === currentBand.tier);
+      return html`<div class="rank-band" data-band-tier=${band.tier}
+          style=${`--band-weight:${band.to - band.from};--band-tint:${tint}`}>
+        <span class="rank-band-surface">
+          <span class="rank-band-base"></span>
+          <span class="rank-band-fill" style=${`width:${reachedPct}%`}></span>
+        </span>
+        <!-- Pips: each an independently positioned CHILD of .rank-band (a
+             sibling of the icons below, not their parent) -- both need the
+             SAME coordinate space (.rank-band's own width) since they now
+             sit at two DIFFERENT local percentages, not one shared one. -->
+        ${divisions.map((d) => html`<span class="rank-band-pip ${d.isTier ? "is-tier" : ""}"
+            tabindex="0" style=${`left:${d.pipPct}%`} title=${d.title}></span>`)}
+        <!-- Round 7 (task 8, 2026-07-26 -- the user: "your current icon is
+             now rendering behind the actual rank icon for that subdivision.
+             Your rank icon should replace the icon associated with that
+             subdivision"). ONE division is represented twice otherwise: a
+             showcase icon labelling its span, and the user's own marker
+             (below) sitting inside that SAME span. In the user's OWN band,
+             the showcase icon for the user's OWN division is skipped
+             entirely -- the marker stands in for it -- and the other four
+             render as usual. Every other band still renders all five;
+             pips are UNCHANGED (all five always render, in every band --
+             only the ICON is ever suppressed, never the boundary it
+             carries a tooltip for). -->
+        ${divisions.map((d) => (isCurrentBand && d.numeral === division) ? null
+          : html`<span class="rank-band-icon" style=${`left:${d.iconPct}%`}>
+          <${RankIcon} tier=${band.tier} division=${d.numeral} size=${BAND_ICON_SIZE} title=${d.title} />
+        </span>`)}
+        <!-- The user's own marker: a CHILD of the one band it belongs in,
+             not a global overlay on the whole bar (see the comment above
+             LadderBar) -- this is also what fixes the stacking bug the
+             user found (the position line rendering BEHIND an expanded
+             band): nested inside that band, its own z-index is compared
+             only within that band's local stacking context, above that
+             band's own surface/pips/icons, in both the resting and the
+             expanded state. -->
+        ${isCurrentBand && html`<span class="rank-ladder-head" style=${`left:${markerFraction * 100}%`}></span>`}
+        ${isCurrentBand && html`<span class="rank-ladder-mark is-you" style=${`left:${markerFraction * 100}%`}
+            title=${`You are here — ${toPoints(filled)} pts`}>
+          <b class="rank-ladder-you">YOU</b>
+          <span class="rank-ladder-you-icon">
+            <${RankIcon} tier=${tier} division=${division} size=${CURRENT_RANK_ICON_SIZE} flap=${true} />
+          </span>
+        </span>`}
+      </div>`;
+    })}
   </div>`;
 }
 
@@ -569,7 +609,9 @@ function ScopeChips({ activeScopeId, onPick, refreshKey }) {
     ${chips.map((chip) => html`<button type="button" key=${chip.scope_id}
         class="scope-chip ${chip.scope_id === activeScopeId ? "is-selected" : ""}"
         onclick=${() => onPick(chip.scope_id)}>
-      <${RankIcon} tier=${chip.tier} division=${chip.division} size=${30} />
+      <span class="rank-icon-slot scope-chip-icon">
+        <${RankIcon} tier=${chip.tier} division=${chip.division} size=${30} />
+      </span>
       <span class="scope-chip-text">
         <b>${chip.label}</b>
         <span class="meta">${fmtPoints(chip.marelo)} pts</span>
@@ -657,7 +699,9 @@ function EntityDetail({ t, entity, onClose }) {
     : [];
   return html`<div class="entity-detail">
     <div class="entity-detail-head">
-      <${RankIcon} tier=${entity.tier} division=${entity.division} size=${30} />
+      <span class="rank-icon-slot entity-detail-icon">
+        <${RankIcon} tier=${entity.tier} division=${entity.division} size=${30} />
+      </span>
       <h4>${entity.label}</h4>
       <span class="meta">${fmtPoints(entity.score)} pts${
         pb ? ` · PB ${pb.display} (${clock})` : " · no saved PB"}</span>
@@ -818,12 +862,30 @@ export function RankPage({ t }) {
               <!-- Unranked is an EXPLICIT empty state (final review I5,
                    2026-07-25), matching PracticeCell's starrank "–" rather
                    than calling Hat with no tier and drawing a plain grey
-                   cap. -->
-              ${data.tier ? html`<${RankIcon} tier=${data.tier} division=${data.division} size=${64} />` : "–"}
+                   cap. Round 5 (addendum, task 8, 2026-07-26, "sweep every
+                   container sized for the old disc"): wrapped in the
+                   shared rank-icon-slot class -- at size 64 the wing spill
+                   is ~24px a side, comfortably more than this row's 16px
+                   gap, and this card had never actually been rendered with
+                   a WINGED division in any prior round's fixture (Capless,
+                   the only tier tested so far, never wings) -- the gap
+                   alone would have crowded "Capless 1"/"MARELO … pts" the
+                   moment a real winged rank showed here. -->
+              ${data.tier ? html`<span class="rank-icon-slot rank-card-icon">
+                <${RankIcon} tier=${data.tier} division=${data.division} size=${64} />
+              </span>` : "–"}
               <div>
                 <h2>${data.tier ? `${capName(data.tier)} ${divisionDigit(data.division)}` : "Unranked"}</h2>
                 <p class="meta">MARELO ${fmtPoints(tweenedMarelo)} pts · next division at ${fmtPoints(data.next_division_at)}</p>
               </div>
+            </div>
+            <!-- Round 4 (addendum, task 8, 2026-07-26): the ladder plots
+                 MARELO now, not Mastery -- it lives here, beside the rank it
+                 draws, instead of buried in the Mastery factor row below
+                 (see LadderBar's own comment for the "a tier ladder with
+                 icons on it means 'this is your rank'" reasoning). -->
+            <div class="rank-ladder-wrap">
+              <${LadderBar} value=${tweenedMarelo} tier=${data.tier} division=${data.division} />
             </div>
             <!-- Task C.5 (live report 2026-07-25): a user saw PLATINUM on a
                  strategy banner next to Iron I here and filed it as a bug --
@@ -850,12 +912,21 @@ export function RankPage({ t }) {
               <!-- Mastery stays 0-100 (task C.4): it's a MEAN SCORE, not a
                    rating on the tier ladder (marelo = mastery x coverage),
                    so running it through toPoints would imply a fourth scale
-                   that doesn't exist. fmtScore on purpose, not fmtPoints. -->
-              <div class="rank-factor">Mastery <${LadderBar} value=${tweenedMastery} />
+                   that doesn't exist. fmtScore on purpose, not fmtPoints.
+                   Round 4 (addendum, task 8, 2026-07-26): this used to be
+                   drawn on the SAME tier ladder as the card's own rank --
+                   two different numbers, a few pixels apart, on a scale
+                   whose whole point is "this is your rank" (the user caught
+                   it: Capless 5 on the card, the marker in Toad territory
+                   below). Mastery is one of the two factors MARELO is made
+                   of, not a rank of its own, so it gets a plain meter here
+                   instead -- the ladder above is the only rank-shaped
+                   drawing on this card now. -->
+              <div class="rank-factor">Mastery
+                <div class="rank-progress-track"><i style=${`width:${tweenedMastery || 0}%;background:${rankColor(data.tier)}`}></i></div>
                 <span class="meta">${`${fmtScore(tweenedMastery)} / 100 — the average `
                   + `rank score of the ${data.practiced} `
-                  + `${data.practiced === 1 ? "entry" : "entries"} you have practiced, `
-                  + "on the same ladder the chart below draws"}</span></div>
+                  + `${data.practiced === 1 ? "entry" : "entries"} you have practiced`}</span></div>
               <div class="rank-factor">Coverage <${CoverageStrip} t=${t} data=${data}
                 caption=${`${data.practiced} of ${data.n} rated `
                   + `${data.n === 1 ? "entry" : "entries"} practiced — dim tiles are `
