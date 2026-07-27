@@ -6,7 +6,8 @@ import { RANK_MODE_OPTIONS } from "./ranks.js";
 import { Icon } from "./icons.js";
 import { MareloBar } from "./marelo.js";
 import { ICON_STYLES } from "./rankicon.js";
-import { celebrationsEnabled, setCelebrationsEnabled } from "./celebrate.js";
+import { celebrationsEnabled, setCelebrationsEnabled,
+         CLIMB_SKIP_STYLES, climbSkipStyle, setClimbSkipStyle } from "./celebrate.js";
 
 const html = htm.bind(h);
 
@@ -46,6 +47,7 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
   const v = t.view;
   const [restarting, setRestarting] = useState(false);
   const [celebrateOn, setCelebrateOn] = useState(celebrationsEnabled());
+  const [skipStyle, setSkipStyle] = useState(climbSkipStyle());
 
   // marelo is store-owned (store.js) -- app.js reads the same object to
   // decide whether the rank-up overlay is showing, so the header and the
@@ -228,6 +230,20 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
           <p class="settings-note">Show a full-screen cap climb when your
             MARELO rank rises. The rank-up is acknowledged either way, so
             turning this off never leaves one waiting to fire later.</p>
+          <label class="settings-field">
+            <span>Skipped ranks</span>
+            <select value=${skipStyle}
+                onchange=${(e) => {
+                  setClimbSkipStyle(e.target.value);
+                  setSkipStyle(e.target.value);
+                }}>
+              ${Object.entries(CLIMB_SKIP_STYLES).map(([key, style]) =>
+                html`<option value=${key}>${style.label}</option>`)}
+            </select>
+          </label>
+          <p class="settings-note">When one PB climbs through a whole rank you
+            never stop in, either pop its wings out on the way past or keep the
+            wings on and chain the caps together.</p>
           <label class="settings-field">
             <span>Dust-trick counts</span>
             <input type="checkbox" checked=${t.showDust}

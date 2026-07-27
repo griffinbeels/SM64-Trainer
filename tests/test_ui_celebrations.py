@@ -25,17 +25,25 @@ pytestmark = pytest.mark.skipif(shutil.which("node") is None,
                                 reason="node on PATH")
 
 RANKCLIMB_JS = UI / "rankclimb.js"
+CLIMBPLAN_JS = UI / "climbplan.js"
 
 
 def beat_kinds() -> set[str]:
     """Every kind the climb engine can emit, read OUT of the engine rather
     than listed here — a hand-kept list would let a registry entry listen for
-    a kind that stopped existing and stay green."""
+    a kind that stopped existing and stay green.
+
+    Two files now: the plan names the steps (`ui/climbplan.js`) and the loop
+    adds the one kind no step carries, the settle. Extra names picked up here
+    are harmless — the assertion below is that a registry entry never listens
+    for something ABSENT, so a superset of the truth can only make it stricter
+    where it matters and never looser."""
     kinds = set()
-    for line in RANKCLIMB_JS.read_text(encoding="utf-8").splitlines():
-        if "kind:" in line:
-            kinds.update(re.findall(r'"(\w+)"', line))
-    assert kinds, "no beat kinds found in rankclimb.js -- did makeBeat move?"
+    for source in (CLIMBPLAN_JS, RANKCLIMB_JS):
+        for line in source.read_text(encoding="utf-8").splitlines():
+            if "kind" in line:
+                kinds.update(re.findall(r'"(\w+)"', line))
+    assert kinds, "no beat kinds found -- did makeBeat or the plan move?"
     return kinds
 
 
@@ -51,22 +59,28 @@ def run_node(body: str):
 # A beat per kind, built through the registry's OWN makeBeat so the wing
 # counts come from caps.js's policy rather than from this file's idea of it.
 # Diamond II -> Diamond I is a division crossing that gains a wing pair;
-# Gold I -> Platinum V is a tier crossing that sheds four.
+# Gold I -> Platinum V is a tier crossing that sheds four; Gold V -> Gold I is
+# a whole tier skipped at once, which grows all four (the `pop` style).
+STEP_MS = 460
 BEATS_JS = """
 const beats = [
-  makeBeat({ kind: "division", at: 0, level: 26,
+  makeBeat({ kind: "division", at: 0, level: 26, stepMs: 460,
              from: { tier: "Diamond", division: "II" },
              to: { tier: "Diamond", division: "I" },
              tiersGained: 0, divisionsGained: 1, anticipateMs: 900, payoffMs: 700 }),
-  makeBeat({ kind: "anticipate", at: 0, level: 25,
+  makeBeat({ kind: "tierskip", at: 0, level: 24, stepMs: 460,
+             from: { tier: "Gold", division: "V" },
+             to: { tier: "Gold", division: "I" },
+             tiersGained: 1, divisionsGained: 5, anticipateMs: 900, payoffMs: 700 }),
+  makeBeat({ kind: "anticipate", at: 0, level: 25, stepMs: 900,
              from: { tier: "Gold", division: "I" },
              to: { tier: "Platinum", division: "V" },
              tiersGained: 1, divisionsGained: 1, anticipateMs: 900, payoffMs: 700 }),
-  makeBeat({ kind: "tier", at: 0, level: 25,
+  makeBeat({ kind: "tier", at: 0, level: 25, stepMs: 700,
              from: { tier: "Gold", division: "I" },
              to: { tier: "Platinum", division: "V" },
              tiersGained: 1, divisionsGained: 1, anticipateMs: 900, payoffMs: 700 }),
-  makeBeat({ kind: "settle", at: 0, level: 26,
+  makeBeat({ kind: "settle", at: 0, level: 26, stepMs: 460,
              from: { tier: "Diamond", division: "I" },
              to: { tier: "Diamond", division: "I" },
              tiersGained: 1, divisionsGained: 6, anticipateMs: 900, payoffMs: 700 }),
@@ -145,16 +159,27 @@ def test_every_css_variable_is_used_by_the_stylesheet():
 
 def test_an_effect_is_only_active_inside_its_own_window():
     """`delay` and `ms` have to bound an effect, or two celebrations overlap
-    into each other and a long climb becomes one continuous smear."""
+    into each other and a long climb becomes one continuous smear.
+
+    Both may be FUNCTIONS of the beat now — the flap starts where the wings
+    finish growing, and the grow fills whatever step length the plan handed
+    it — so the window is resolved against a real beat rather than read off
+    the entry as a constant."""
     windows = run_node(BEATS_JS + """
 const wingFlap = CELEBRATIONS.wingFlap;
-const before = activeEffects(beats, wingFlap.delay - 20);
-const during = activeEffects(beats, wingFlap.delay + wingFlap.ms / 2);
-const after = activeEffects(beats, wingFlap.delay + wingFlap.ms + 20);
-console.log(JSON.stringify([
+const beat = beats.find((one) => one.kind === "division");
+const resolve = (value) => (typeof value === "function" ? value(beat) : value);
+const delay = resolve(wingFlap.delay), ms = resolve(wingFlap.ms);
+const before = activeEffects(beats, delay - 20);
+const during = activeEffects(beats, delay + ms / 2);
+const after = activeEffects(beats, delay + ms + 20);
+console.log(JSON.stringify([delay, ms,
   'flapPhase' in before.icon, 'flapPhase' in during.icon, 'flapPhase' in after.icon]));
 """)
-    assert windows == [False, True, False], (
+    delay, length, before, during, after = windows
+    assert delay == STEP_MS, "the flap must start where its own step's grow ends"
+    assert length > 0
+    assert [before, during, after] == [False, True, False], (
         "wingFlap leaked outside its own delay..delay+ms window")
 
 

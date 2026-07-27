@@ -44,7 +44,8 @@ const html = htm.bind(h);
 // here so header.js's import is unchanged. It moved because the level-up
 // climb has to honour it too, and rankclimb.js importing THIS file would
 // close a cycle (celebrate.js -> ranks.js -> rankclimb.js).
-export { celebrationsEnabled, setCelebrationsEnabled } from "../celebrations.js";
+export { celebrationsEnabled, setCelebrationsEnabled,
+         CLIMB_SKIP_STYLES, climbSkipStyle, setClimbSkipStyle } from "../celebrations.js";
 import { celebrationsEnabled } from "../celebrations.js";
 
 async function ackScope(scopeId, key, onDone) {

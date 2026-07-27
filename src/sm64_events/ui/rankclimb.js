@@ -6,21 +6,25 @@
 // the server's within-division `fill` from .95 to .05 and the bar ran
 // BACKWARDS on the one event it exists to celebrate.
 //
-// This hook animates caps.js's `rankPosition` instead: one monotone number
-// where 1.0 is one division. The bar is its fractional part, the rank is
-// `rankAt(floor(...))`, and a level-up is that floor incrementing. The bar
-// cannot decrease during a rise because the position cannot.
+// This hook walks a PLAN instead: an ordered list of steps, each naming the
+// ladder level it shows and where the bar sits across it. A rank-up is a step
+// boundary, and the bar is pinned FULL across every one of them until the
+// destination is reached (user, 2026-07-27: "ONCE IT'S FULL, AND IF WE HAVE
+// MORE RANKS TO FULLY LEVEL UP THROUGH, IT STAYS FULL"), which one continuous
+// position could not express — see ui/climbplan.js's header for why.
 //
-// Three collaborators, each replaceable on its own:
+// Four collaborators, each replaceable on its own:
+//   ui/climbplan.js     WHAT HAPPENS, IN WHAT ORDER (import-free, node-tested)
 //   ui/climbcurve.js    HOW FAST (import-free, node-tested)
 //   ui/celebrations.js  WHAT IT LOOKS LIKE (the registry — add effects there)
-//   caps.js             WHICH RANK a position is (import-free, pinned to Python)
+//   caps.js             WHICH RANK a level is (import-free, pinned to Python)
 // This file owns only the loop and the bookkeeping between them.
 import { useEffect, useRef, useState } from "preact/hooks";
-import { rankPosition, rankAt, rankFrame, rankColor, DIVISIONS_PER_TIER } from "./components/caps.js";
-import { climbPosition, climbDurationBetween, tierDwell } from "./climbcurve.js";
-import { activeEffects, makeBeat, celebrationTailMs, celebrationsEnabled }
-  from "./celebrations.js";
+import { rankPosition, rankAt, rankColor, DIVISIONS_PER_TIER } from "./components/caps.js";
+import { climbTimings, barEase } from "./climbcurve.js";
+import { buildClimbPlan } from "./climbplan.js";
+import { activeEffects, makeBeat, celebrationTailMs, celebrationsEnabled,
+         climbSkipStyle } from "./celebrations.js";
 import { prefersReducedMotion } from "./useTween.js";
 
 const now = () => performance.now();
@@ -141,15 +145,16 @@ export function useHeldWhileCelebrating(value) {
   return held.current;
 }
 
-function renderState(position, beats, atMs) {
-  // rankFrame, never `position - Math.floor(position)`: at the top of the
-  // ladder a maxed rank is position 45, whose fractional part is zero, and
-  // the bar would empty at the highest rank in the game (caps.js has the
-  // full note).
-  const { tier, division, fill } = rankFrame(position);
+// `level` and `bar` are independent now, which is the whole point: a pinned
+// bar sits at 1 while the level keeps ticking. It also retires the old
+// "position 45 has a fractional part of zero, so a maxed rank empties its own
+// bar" trap outright — a maxed rank is level 44 with `bar` 1, and there is no
+// arithmetic in between to get wrong.
+function renderState(level, bar, beats, atMs) {
+  const { tier, division } = rankAt(level);
   const { vars, icon } = activeEffects(beats, atMs);
   return {
-    tier, division, fill,
+    tier, division, level, fill: bar,
     // The registry's tierColor entry overrides this mid-crossing; the rest of
     // the time the surface just wears its own tier's colour. One name, so a
     // caller never has to know whether a celebration is running.
@@ -177,15 +182,29 @@ function renderState(position, beats, atMs) {
  */
 export function useRankClimb(rank, identity = null,
                              { lane = null, order = 0, replayKey = null } = {}) {
-  const target = rank && rank.tier
-    ? rankPosition(rank.tier, rank.division, rank.fill || 0) : null;
+  // Level and fill are kept APART from here down. `rankPosition(..., 0)` is
+  // exactly the level, and asking for it with a fill of 1 (which ranks.js
+  // legitimately sends for a maxed rank) would return 45 — a level that does
+  // not exist. Keeping them separate is what makes that unrepresentable
+  // rather than clamped.
+  const targetLevel = rank && rank.tier
+    ? rankPosition(rank.tier, rank.division, 0) : null;
+  const targetFill = targetLevel == null
+    ? 0 : Math.max(0, Math.min(1, rank.fill || 0));
+  // One number for the comparisons that only ever ask "is this the same
+  // measurement / is it higher": the effect's dependency, the retarget check,
+  // and the never-animate-a-regression guard.
+  const target = targetLevel == null ? null : targetLevel + targetFill;
 
   const climbToken = useRef(0);
   if (climbToken.current === 0) climbToken.current = ++nextClimbToken;
   // Counts effect RUNS, not renders: the first run is a mount (snap) and a
   // later one with no prior position is a first rank being earned (climb).
   const runsRef = useRef(0);
-  const positionRef = useRef(null);
+  // `{level, bar}` as last drawn — what a retarget mid-climb resumes from. A
+  // pinned bar resumes at 1, so a second PB landing mid-climb continues up the
+  // ladder instead of replaying an approach it already finished.
+  const shownRef = useRef(null);
   // Lane membership is tracked on true mount/unmount, so it must not ride the
   // main effect (which re-runs on every identity or target change).
   const arrivedLateRef = useRef(false);
@@ -211,7 +230,7 @@ export function useRankClimb(rank, identity = null,
   const beatsRef = useRef([]);
   const frameRef = useRef(null);
   const [state, setState] = useState(() =>
-    (target == null ? null : renderState(target, [], now())));
+    (targetLevel == null ? null : renderState(targetLevel, targetFill, [], now())));
 
   useEffect(() => {
     if (frameRef.current != null) cancelAnimationFrame(frameRef.current);
@@ -222,8 +241,8 @@ export function useRankClimb(rank, identity = null,
 
     setClimbing(climbToken.current, false);
 
-    if (target == null) {
-      positionRef.current = null;
+    if (targetLevel == null) {
+      shownRef.current = null;
       beatsRef.current = [];
       setState(null);
       return undefined;
@@ -246,7 +265,7 @@ export function useRankClimb(rank, identity = null,
     // there was no measurement before.
     const isFirstRun = runsRef.current === 0;
     runsRef.current += 1;
-    const from = positionRef.current;
+    const from = shownRef.current;
     // Two shapes of "a first rank was just earned", both of which look like
     // `from == null`: the banner was on screen showing a sentinel and now has
     // a rank, or the banner did not exist at all and has just ARRIVED into a
@@ -274,7 +293,9 @@ export function useRankClimb(rank, identity = null,
     // identity change still snaps when the target actually moved -- that IS a
     // different measurement.
     const continuing = climbingToRef.current === target;
-    const startPosition = earnedFirstRank ? 0 : from;
+    const startLevel = earnedFirstRank ? 0 : (from ? from.level : null);
+    const startFill = earnedFirstRank ? 0 : (from ? from.bar : 0);
+    const startPosition = startLevel == null ? null : startLevel + startFill;
     const snap = (from == null && !earnedFirstRank)   // nothing to climb from
       || (!earnedFirstRank && !continuing && identityChanged)  // a different measurement
       || (startPosition != null && target <= startPosition)   // never a regression
@@ -282,50 +303,48 @@ export function useRankClimb(rank, identity = null,
       || prefersReducedMotion();
     if (snap) {
       climbingToRef.current = null;
-      positionRef.current = target;
+      shownRef.current = { level: targetLevel, bar: targetFill };
       beatsRef.current = [];
-      setState(renderState(target, [], now()));
+      setState(renderState(targetLevel, targetFill, [], now()));
       return undefined;
     }
 
-    // A climb already in flight retargets from where it IS (positionRef is
+    // A climb already in flight retargets from where it IS (`shownRef` is
     // updated every tick), never from where the last one began -- two
     // attempts landing close together must not snap back before continuing.
-    // (`startPosition` is resolved above, so a first-ever rank starts at the
-    // floor rather than at nothing.)
-    const durationMs = climbDurationBetween(startPosition, target);
+    // (`startLevel`/`startFill` are resolved above, so a first-ever rank
+    // starts at the floor rather than at nothing.)
+    const plan = buildClimbPlan({
+      fromLevel: startLevel, fromFill: startFill,
+      toLevel: targetLevel, toFill: targetFill,
+      divisionsPerTier: DIVISIONS_PER_TIER,
+      skipStyle: climbSkipStyle(),
+      timings: climbTimings,
+    });
+    const { anticipateMs, payoffMs, ladderMs } = plan.timings;
     // Totals for the WHOLE climb, stamped onto every beat so an effect can
     // gate on how big a deal this was (`when: (beat) => beat.tiersGained >= 2`)
     // without the registry needing to see the climb itself.
-    const divisionsGained = Math.floor(target) - Math.floor(startPosition);
-    const tiersGained = Math.floor(Math.floor(target) / DIVISIONS_PER_TIER)
-      - Math.floor(Math.floor(startPosition) / DIVISIONS_PER_TIER);
-
-    // Every tier boundary this climb will cross, in order. The climb HALTS at
-    // each one: anticipation while the bar sits full on the last subdivision
-    // of the old tier, then the crossing, then a beat to look at the new cap
-    // (user, 2026-07-27 -- "it needs to feel EXTRA juicy… BOOM we rank up").
-    const boundaries = [];
-    for (let candidate = Math.floor(startPosition) + 1;
-         candidate <= Math.floor(target); candidate += 1) {
-      if (rankAt(candidate).tier !== rankAt(candidate - 1).tier) boundaries.push(candidate);
-    }
-    const { anticipateMs, payoffMs } = tierDwell(boundaries.length);
+    const divisionsGained = targetLevel - startLevel;
+    const tiersGained = Math.floor(targetLevel / DIVISIONS_PER_TIER)
+      - Math.floor(startLevel / DIVISIONS_PER_TIER);
 
     // Wait for the lane, if this climb is in one and is not first in it.
-    // Until `startedAt`, `elapsed` is negative and climbPosition holds the
-    // banner at the rank it already had -- no special "waiting" state to
-    // render, and the hold below covers the wait as well as the climb.
-    const tailMs = Math.max(celebrationTailMs("division", { anticipateMs, payoffMs }),
-                            celebrationTailMs("tier", { anticipateMs, payoffMs }),
-                            celebrationTailMs("settle", { anticipateMs, payoffMs }));
+    // Until `startedAt`, `elapsed` is negative, no step has been entered and
+    // the banner simply renders the rank it already had -- no special
+    // "waiting" state, and the hold below covers the wait as well as the climb.
+    const tailSample = { anticipateMs, payoffMs, stepMs: ladderMs };
+    const tailMs = Math.max(celebrationTailMs("division", tailSample),
+                            celebrationTailMs("tierskip", tailSample),
+                            celebrationTailMs("tier", tailSample),
+                            celebrationTailMs("settle", tailSample));
     // The next banner starts when this one's POSITION lands, not when its
     // last sparkle fades: waiting out the effect tail as well made the gap
     // read as dead air (live report 2026-07-27, "the timing gap … is too
     // long"). The two tails overlap by design now -- the first banner is
     // settling while the second starts climbing, which is what makes them
     // read as one gesture in two parts rather than two animations.
-    const totalMs = durationMs + boundaries.length * (anticipateMs + payoffMs);
+    const totalMs = plan.totalMs;
     const laneFreeAt = lane ? (laneEnds.get(lane) || 0) : 0;
     const startedAt = (lane && order > 0)
       ? Math.max(now(), laneFreeAt + LANE_GAP_MS) : now();
@@ -333,81 +352,57 @@ export function useRankClimb(rank, identity = null,
     if (lane) laneEnds.set(lane, laneEndsAt);
 
     beatsRef.current = [];
-    let level = Math.floor(startPosition);
+    // The last step ENTERED. -1 while the lane is still busy, which is what
+    // makes the wait render as the rank the banner already had.
+    let stepIndex = -1;
     let settled = false;
-    // "climb" | "anticipate" | "payoff". `dwellMs` is the time already spent
-    // paused, subtracted from the clock so the CURVE never advances during a
-    // dwell -- the pause costs the climb nothing, it just interrupts it.
-    let phase = "climb";
-    let phaseSince = 0;
-    let dwellMs = 0;
 
     const tick = () => {
       const at = now();
-      let elapsed = at - startedAt - dwellMs;
-      let position;
-      if (phase === "climb") {
-        position = climbPosition(startPosition, target, elapsed);
-        // Held a hair BELOW the boundary, so the bar reads full on the tier
-        // being left rather than empty on the one being entered.
-        if (boundaries.length && position >= boundaries[0]) {
-          position = boundaries[0] - 1e-4;
-          phase = "anticipate";
-          phaseSince = at;
-          beatsRef.current.push(makeBeat({
-            kind: "anticipate", at, level: boundaries[0],
-            from: rankAt(boundaries[0] - 1), to: rankAt(boundaries[0]),
-            tiersGained, divisionsGained, anticipateMs, payoffMs,
-          }));
-        }
-      } else if (phase === "anticipate") {
-        position = boundaries[0] - 1e-4;
-        if (at - phaseSince >= anticipateMs) {
-          dwellMs += at - phaseSince;
-          // Crossing the boundary here is what fires the "tier" beat below.
-          position = boundaries[0];
-          phase = "payoff";
-          phaseSince = at;
-        }
-      } else {
-        position = boundaries[0];
-        if (at - phaseSince >= payoffMs) {
-          dwellMs += at - phaseSince;
-          boundaries.shift();
-          phase = "climb";
-          elapsed = at - startedAt - dwellMs;
-        }
-      }
-      positionRef.current = position;
+      const elapsed = at - startedAt;
 
-      // Every level the frame passed gets its own beat, even if one frame
-      // crossed two of them -- a dropped frame during a fast climb must not
-      // silently swallow a celebration.
-      while (Math.floor(position) > level) {
-        level += 1;
-        const before = rankAt(level - 1);
-        const after = rankAt(level);
+      // Enter every step whose start time has passed, even if one frame
+      // swallowed several -- a dropped frame during a compressed climb must
+      // not silently swallow a celebration.
+      while (stepIndex + 1 < plan.steps.length
+             && elapsed >= plan.steps[stepIndex + 1].at) {
+        stepIndex += 1;
+        const entered = plan.steps[stepIndex];
+        if (!entered.beat) continue;
         beatsRef.current.push(makeBeat({
-          kind: before.tier === after.tier ? "division" : "tier",
-          at, level, from: before, to: after, tiersGained, divisionsGained,
-          anticipateMs, payoffMs,
+          kind: entered.kind, at, level: entered.level,
+          from: rankAt(entered.beat.fromLevel), to: rankAt(entered.beat.toLevel),
+          tiersGained, divisionsGained, anticipateMs, payoffMs,
+          stepMs: entered.ms,
         }));
       }
 
-      // Landed only once the CURVE is spent AND nothing is mid-dwell -- a
-      // climb whose last act is a tier crossing must not settle underneath it.
-      const landed = phase === "climb" && elapsed >= durationMs;
+      // The bar eases across its own step and the rank is simply the step's.
+      // A pinned step has `barFrom === barTo === 1`, so "the bar stays full
+      // while ranks remain" needs no branch here at all -- see climbplan.js.
+      let level = startLevel;
+      let bar = startFill;
+      if (stepIndex >= 0) {
+        const step = plan.steps[stepIndex];
+        const within = step.ms > 0
+          ? Math.max(0, Math.min(1, (elapsed - step.at) / step.ms)) : 1;
+        level = step.level;
+        bar = step.barFrom + (step.barTo - step.barFrom) * barEase(within);
+      }
+      shownRef.current = { level, bar };
+
+      const landed = elapsed >= totalMs;
       if (landed && !settled) {
         settled = true;
-        const here = rankAt(target);
+        const here = rankAt(targetLevel);
         beatsRef.current.push(makeBeat({
-          kind: "settle", at, level: Math.floor(target),
+          kind: "settle", at, level: targetLevel,
           from: here, to: here, tiersGained, divisionsGained,
-          anticipateMs, payoffMs,
+          anticipateMs, payoffMs, stepMs: ladderMs,
         }));
       }
 
-      setState(renderState(position, beatsRef.current, at));
+      setState(renderState(level, bar, beatsRef.current, at));
 
       // Keep ticking past the landing until the slowest effect has finished,
       // or the last flap would freeze mid-beat.
@@ -422,7 +417,8 @@ export function useRankClimb(rank, identity = null,
         frameRef.current = null;
         climbingToRef.current = null;
         setClimbing(climbToken.current, false);
-        setState(renderState(target, [], at));
+        shownRef.current = { level: targetLevel, bar: targetFill };
+        setState(renderState(targetLevel, targetFill, [], at));
       }
     };
     // The hold opens HERE, with the first frame, and closes in the two

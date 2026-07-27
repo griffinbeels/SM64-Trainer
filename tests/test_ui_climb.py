@@ -1,15 +1,17 @@
-"""ui/climbcurve.js — the level-up climb's motion.
+"""ui/climbcurve.js — how long each part of a level-up climb lasts.
 
-The bug this feature exists to kill (task 0012) is a progress bar that runs
-BACKWARDS when you rank up: `RankBanner` animated the server's within-division
-`fill`, so crossing a boundary tweened 95% -> 5%. The fix is to animate ladder
-POSITION instead and take the bar from its fractional part, which makes
-"the bar never goes backwards during a rise" a property of the curve rather
-than a case someone has to remember to handle.
+The climb is a PLAN of steps (ui/climbplan.js, tests/test_ui_climbplan.py);
+this file owns only the numbers the plan sizes itself with. Two properties are
+worth a guard rather than a reading:
 
-So that property is what gets asserted here, at 1ms granularity across the
-whole climb — not the endpoints. Both end states already looked correct in the
-shipped bug; sampling only those is exactly how it survived review.
+* a bar sweep is monotone AND lands exactly on its target — "we should NEVER
+  overshoot in a progress bar. It reads as annoying and an error -- you gave me
+  progress and then took it away!!!!" (user, 2026-07-27). Sampled at 1ms across
+  the whole sweep, never at the endpoints: both end states already looked
+  correct in the ORIGINAL backwards-bar bug, which is exactly how it survived
+  review.
+* the per-step budgets stay bounded as a climb gets huge, so the rarest and
+  biggest celebration in the game is still something you sit through once.
 """
 import json
 import shutil
@@ -28,7 +30,7 @@ pytestmark = pytest.mark.skipif(shutil.which("node") is None,
 
 def run_node(imports: str, body: str):
     """Execute climbcurve.js for real — it is import-free specifically so node
-    can unit-test it, the same convention as ui/entities.js and caps.js."""
+    can unit-test it, the same convention as ui/climbplan.js and caps.js."""
     script = f"import {{ {imports} }} from {CLIMB_JS.as_uri()!r};\n{body}"
     result = subprocess.run(["node", "--input-type=module", "-"],
                             input=script, capture_output=True, text=True, timeout=60)
@@ -36,139 +38,124 @@ def run_node(imports: str, body: str):
     return json.loads(result.stdout)
 
 
-# The durations the design targets, in ms. These are a FEEL decision (spec
-# 2026-07-26-progression-celebration §2), not a derivation — if a tuning round
-# moves them, this table moves with it deliberately.
-DURATION_TARGETS = {
-    0.25: 750,      # a fill improvement with no rank change
-    1: 1500,        # one division
-    5: 3354,        # one whole tier
-    12: 5700,       # a multi-tier jump
+# ---- Bar sweeps ----------------------------------------------------------
+#
+# A sweep is at most ONE division by construction: the bar is pinned full
+# across every rank-up in between, so the only sweeps that exist are "fill up
+# the division you were in", "grow into the one you landed in", and "you
+# improved without ranking up".
+
+# The durations the design targets, in ms. A FEEL decision (spec
+# 2026-07-27-multi-rank-climb), not a derivation — if a tuning round moves
+# them, this table moves with it deliberately.
+SWEEP_TARGETS = {
+    0.09: 450,      # floored: a few percent reads as a flicker otherwise
+    0.25: 750,
+    0.5: 1061,
+    1: 1500,        # a whole empty division filling
 }
 
 
-def test_the_duration_targets_hold():
-    got = run_node("climbDuration", "console.log(JSON.stringify("
-                   f"{json.dumps(list(DURATION_TARGETS))}.map(climbDuration)))")
-    for (distance, want), actual in zip(DURATION_TARGETS.items(), got):
+def test_the_sweep_duration_targets_hold():
+    got = run_node("barSweepMs", "console.log(JSON.stringify("
+                   f"{json.dumps(list(SWEEP_TARGETS))}.map(barSweepMs)))")
+    for (distance, want), actual in zip(SWEEP_TARGETS.items(), got):
         assert isclose(actual, want, abs_tol=15), f"{distance} divisions -> {actual}ms"
 
 
-def test_a_twitch_is_floored_and_a_huge_jump_is_capped():
-    floored, capped, nothing = run_node(
-        "climbDuration",
-        "console.log(JSON.stringify([climbDuration(0.004), climbDuration(40),"
-        " climbDuration(0)]))")
+def test_a_sweep_is_floored_and_capped_at_one_division():
+    floored, zero, capped = run_node(
+        "barSweepMs",
+        "console.log(JSON.stringify([barSweepMs(0.004), barSweepMs(0),"
+        " barSweepMs(4)]))")
     assert floored == 450, "a few percent of a division must not read as a flicker"
-    assert capped == 7000, "no climb may hold the UI past the cap"
-    assert nothing == 0
+    assert zero == 450, ("a sweep with nowhere to go still has to LAND -- a "
+                         "zero-length step would make the arrival invisible")
+    assert capped == 1500, "no sweep is longer than one division; clamp, never scale"
 
 
-def test_the_two_halves_of_the_duration_law_are_one_curve():
-    # C¹ continuity at the crossover: same value AND same slope from each
-    # side, which is what stops a 5.01-division climb taking visibly longer
-    # than a 4.99-division one.
+def test_the_sweep_law_is_smooth_in_distance():
     below, at, above = run_node(
-        "climbDuration",
-        "console.log(JSON.stringify([climbDuration(4.99), climbDuration(5),"
-        " climbDuration(5.01)]))")
-    assert isclose(at, 1500 * sqrt(5), abs_tol=1)
-    assert isclose(at - below, above - at, rel_tol=0.02)
+        "barSweepMs",
+        "console.log(JSON.stringify([barSweepMs(0.49), barSweepMs(0.5),"
+        " barSweepMs(0.51)]))")
+    assert isclose(at, 1500 * sqrt(0.5), abs_tol=1)
+    assert isclose(at - below, above - at, rel_tol=0.05)
 
 
-@pytest.mark.parametrize("distance", [0.05, 0.3, 1, 1.4, 4.99, 5, 5.01, 9, 12, 23])
-def test_the_climb_never_moves_backwards(distance):
-    """THE guard. Sampled every 1ms over the whole climb plus a margin past
-    the end, since a real rAF frame can land after the deadline."""
+def test_the_bar_never_overshoots_and_never_goes_backwards():
+    """THE guard, and it is two-sided on purpose.
+
+    Backwards was the original bug (a rank-up ran the bar .95 -> .05). The
+    overshoot half is the user's own addendum, reported against a preview
+    that eased to 8% and settled back to 4%: "we should NEVER overshoot in a
+    progress bar... you gave me progress and then took it away!!!!" A
+    one-sided monotonicity check passes an `easeOutBack` happily, which is
+    exactly the curve that drew the complaint.
+    """
     samples = run_node(
-        "climbDuration, climbTravelled",
-        f"const d = {distance};\n"
-        "const total = climbDuration(d);\n"
+        "barEase",
         "const out = [];\n"
-        "for (let t = -5; t <= total + 40; t += 1) out.push(climbTravelled(d, t));\n"
+        "for (let t = -0.05; t <= 1.05; t += 0.001) out.push(barEase(t));\n"
         "console.log(JSON.stringify(out));")
     for index in range(1, len(samples)):
         assert samples[index] >= samples[index - 1] - 1e-12, (
-            f"{distance} divisions: travelled fell at sample {index} "
+            f"the bar went backwards at sample {index} "
             f"({samples[index - 1]} -> {samples[index]})")
-    assert samples[0] == 0
-    assert isclose(samples[-1], distance, rel_tol=1e-9)
+        assert samples[index] <= 1 + 1e-12, (
+            f"the bar overshot its target at sample {index}: {samples[index]}")
+    assert samples[0] == 0, "clamped below, never negative"
+    assert isclose(samples[-1], 1, rel_tol=1e-9)
 
 
-@pytest.mark.parametrize("distance", [1, 5, 12])
-def test_the_bar_only_ever_fills(distance):
-    """The rendered consequence of the guard above: the bar is the fractional
-    part of the position, so between two frames the fill must either rise or
-    reset — and it may only reset on a frame that crossed a level."""
-    samples = run_node(
-        "climbDuration, climbTravelled",
-        f"const d = {distance};\n"
-        "const total = climbDuration(d);\n"
-        "const out = [];\n"
-        "for (let t = 0; t <= total; t += 1) {\n"
-        "  const x = climbTravelled(d, t);\n"
-        "  out.push([Math.floor(x), x - Math.floor(x)]);\n"
-        "}\n"
-        "console.log(JSON.stringify(out));")
-    for index in range(1, len(samples)):
-        (previous_level, previous_fill) = samples[index - 1]
-        (level, fill) = samples[index]
-        if level == previous_level:
-            assert fill >= previous_fill - 1e-12, (
-                f"the bar shrank inside level {level} at sample {index}")
-        else:
-            assert level > previous_level, "a level was lost going up"
+def test_a_sweep_eases_in_and_out_rather_than_starting_at_full_speed():
+    """"a slow crawl, easy ease into the pace… and then it eventually easy ease
+    and slow down" — the original climb spec's ask, which survives the rewrite.
+    """
+    start, quarter, middle, end = run_node(
+        "barEase", "console.log(JSON.stringify("
+        "[barEase(0.02) , barEase(0.25), barEase(0.5), barEase(0.98)]))")
+    assert start < 0.02, "a sweep must not leave at full speed"
+    assert 1 - end < 0.02, "nor arrive at it"
+    assert isclose(middle, 0.5, abs_tol=1e-9), "symmetric about the midpoint"
+    assert quarter < 0.25
 
 
-def test_the_middle_of_a_long_climb_is_speed_capped():
-    """The reason this is a trapezoid and not an ease-in-out: an ease-in-out's
-    peak speed scales with the distance, so the celebrations in the middle of
-    a big jump would be unreadable."""
-    peak_short, peak_long, cruise = run_node(
-        "climbDuration, climbTravelled, CRUISE_DIVISIONS_PER_S",
-        "const peak = (d) => {\n"
-        "  const total = climbDuration(d);\n"
-        "  let best = 0;\n"
-        "  for (let t = 0; t < total; t += 1)\n"
-        "    best = Math.max(best, (climbTravelled(d, t + 1) - climbTravelled(d, t)) * 1000);\n"
-        "  return best;\n"
-        "};\n"
-        "console.log(JSON.stringify([peak(5), peak(20), CRUISE_DIVISIONS_PER_S]));")
-    assert peak_short <= cruise * 1.02
-    # A 20-division climb is past the duration cap, so it is allowed to exceed
-    # cruise — but only by the amount the cap forces, not by scaling freely.
-    assert peak_long <= cruise * 1.6, "the cap must not turn into an ease-in-out"
+# ---- Ladder steps: one rank-up each --------------------------------------
+
+def test_a_lone_rank_up_gets_the_full_step():
+    assert run_node("ladderStepMs", "console.log(JSON.stringify(ladderStepMs(1)))") == 460
 
 
-def test_a_drop_is_not_a_climb():
-    """The app never animates a regression — it shows the new state. Anything
-    else would spend four seconds celebrating a worse time."""
-    landed, duration = run_node(
-        "climbPosition, climbDurationBetween",
-        "console.log(JSON.stringify([climbPosition(41.9, 38.2, 0),"
-        " climbDurationBetween(41.9, 38.2)]))")
-    assert landed == 38.2, "a drop lands immediately"
-    assert duration == 0
+def test_the_ladder_steps_share_a_budget_so_a_long_climb_stays_watchable():
+    """A climb can hold at most 15 ladder steps (<=4 out of the tier you
+    started in, <=4 into the one you land in, <=7 whole tiers passed through).
+    Fifteen unhurried ones on top of eight tier dwells is a celebration nobody
+    wants to sit through twice."""
+    totals = run_node("ladderStepMs", "console.log(JSON.stringify("
+                      "[1, 4, 7, 8, 15].map((n) => [n * ladderStepMs(n), ladderStepMs(n)])))")
+    per_step = [each for _total, each in totals]
+    assert per_step == sorted(per_step, reverse=True), (
+        "more steps must never make each one longer")
+    assert all(each >= 220 for each in per_step), (
+        "a step below the floor reads as a stutter, not a rank-up")
+    assert max(total for total, _each in totals) <= 3500, (
+        "the whole ladder budget must stay bounded")
+    assert run_node("ladderStepMs", "console.log(JSON.stringify(ladderStepMs(0)))") == 0
 
 
-def test_a_rise_starts_where_it_was_and_ends_where_it_is_going():
-    start, middle, end = run_node(
-        "climbPosition, climbDurationBetween",
-        "const from = 41.95, to = 43.10;\n"
-        "const total = climbDurationBetween(from, to);\n"
-        "console.log(JSON.stringify([climbPosition(from, to, 0),"
-        " climbPosition(from, to, total / 2), climbPosition(from, to, total)]));")
-    assert start == 41.95, "the climb begins at the rank you actually had"
-    assert 41.95 < middle < 43.10
-    assert isclose(end, 43.10, rel_tol=1e-9)
+def test_the_users_own_example_is_not_compressed():
+    """Capless V -> Waluigi IV in the `pop` style is 4 division steps out of
+    Capless, 2 skipped tiers and 1 into Waluigi = 7 ladder steps. That climb is
+    the spec's worked example and has to read at full pace."""
+    assert run_node("ladderStepMs", "console.log(JSON.stringify(ladderStepMs(7)))") == 460
 
 
 # ---- Tier dwells: the climb STOPS at every tier boundary -------------------
 #
-# Cruising through a tier crossing at three divisions a second threw away the
-# biggest moment in the feature (live report 2026-07-27: "it needs to feel
-# EXTRA juicy"). The climb now halts at each one — anticipation, crossing,
-# then a beat to look at it.
+# Cruising through a tier crossing threw away the biggest moment in the feature
+# (live report 2026-07-27: "it needs to feel EXTRA juicy"). The climb halts at
+# each one — anticipation, crossing, then a beat to look at it.
 
 def test_one_tier_crossing_gets_the_full_dwell():
     dwell = run_node("tierDwell", "console.log(JSON.stringify(tierDwell(1)))")
@@ -198,3 +185,16 @@ def test_the_dwells_share_a_budget_so_a_long_climb_stays_watchable():
 def test_no_crossings_means_no_dwell():
     dwell = run_node("tierDwell", "console.log(JSON.stringify(tierDwell(0)))")
     assert dwell == {"anticipateMs": 0, "payoffMs": 0}
+
+
+def test_the_timing_table_answers_in_the_shape_the_plan_asks_for():
+    """`buildClimbPlan` destructures exactly these four; a rename here that the
+    plan does not follow makes every step `undefined` ms long, which is a NaN
+    clock rather than a wrong-looking animation."""
+    keys, ladder, anticipate = run_node(
+        "climbTimings",
+        "const t = climbTimings({ crossings: 2, ladder: 3 });\n"
+        "console.log(JSON.stringify([Object.keys(t).sort(), t.ladderMs, t.anticipateMs]));")
+    assert keys == ["anticipateMs", "barSweepMs", "ladderMs", "payoffMs"]
+    assert ladder == 460
+    assert anticipate > 0

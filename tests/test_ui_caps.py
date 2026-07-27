@@ -455,24 +455,32 @@ def test_rank_at_clamps_to_a_real_rank_outside_the_ladder():
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
-def test_the_bar_is_full_at_the_top_of_the_ladder_not_empty():
-    """A maxed rank has no next step, so its position is the top level PLUS
-    one (Mario I is level 44, maxed is 45) -- and 45's own fractional part is
-    ZERO. Taking the bar's fill from the raw floor therefore emptied it at the
-    exact moment the player reached the highest rank in the game. Caught on
-    the LAST frame of a Capless-to-Mario render trace, with every earlier
-    frame correct, which is why this guard samples the ceiling specifically.
+def test_a_rank_asked_for_its_level_alone_always_names_a_real_level():
+    """`useRankClimb` splits a rank into a LEVEL and a bar, and reads the level
+    as `rankPosition(tier, division, 0)`.
+
+    The reason it must ask with a fill of zero: `ranks.js` legitimately sends
+    `fill: 1` for a maxed rank (no next step, so the bar is simply full), and
+    `rankPosition("Mario", "I", 1)` is 45 -- one past the top of a ladder whose
+    levels stop at 44. That number used to reach the drawing code as a
+    position, where its own fractional part is ZERO, and emptied the bar at the
+    exact moment the player reached the highest rank in the game (caught on the
+    LAST frame of a Capless-to-Mario render trace, every earlier frame correct).
+
+    So this asserts both halves: every one of the 45 ranks answers with a real
+    level, and the maxed spelling that caused the bug is still out of range and
+    therefore must never be used as one.
     """
-    frames = run_node("rankFrame, rankPosition", "console.log(JSON.stringify("
-                      "[45, 44.5, 44, 4.771, 0, -2].map((p) => {"
-                      " const f = rankFrame(p); return [f.tier, f.division,"
-                      " Math.round(f.fill * 1000) / 1000]; })))")
-    assert frames[0] == ["Mario", "I", 1.0], "maxed must read as a FULL bar"
-    assert frames[1] == ["Mario", "I", 0.5]
-    assert frames[2] == ["Mario", "I", 0.0]
-    assert frames[3] == ["Iron", "I", 0.771]
-    assert frames[4] == ["Iron", "V", 0.0]
-    assert frames[5] == ["Iron", "V", 0.0], "below the floor clamps, never negative"
+    levels, maxed = run_node(
+        "rankPosition, RANK_NAMES, DIVISION_NUMERALS",
+        "const all = [];\n"
+        "for (const tier of RANK_NAMES)\n"
+        "  for (const numeral of DIVISION_NUMERALS)\n"
+        "    all.push(rankPosition(tier, numeral, 0));\n"
+        'console.log(JSON.stringify([all, rankPosition("Mario", "I", 1)]));')
+    assert sorted(levels) == list(range(45))
+    assert all(float(level).is_integer() for level in levels)
+    assert maxed == 45, "the maxed spelling is out of range on purpose"
 
 
 def test_only_hat_js_sizes_the_cap_glyph():

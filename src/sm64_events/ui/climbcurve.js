@@ -1,129 +1,76 @@
-// src/sm64_events/ui/climbcurve.js — the level-up climb's motion, as pure
-// arithmetic. Import-free on purpose, the same convention as ui/entities.js
-// and ui/components/caps.js, so node can execute it directly
-// (tests/test_ui_climbcurve.js via tests/test_ui_climb.py).
+// src/sm64_events/ui/climbcurve.js — how long each part of a level-up climb
+// lasts, and the one easing a progress bar is allowed to use. Pure arithmetic,
+// import-free on purpose, the same convention as ui/climbplan.js and
+// ui/components/caps.js, so node can execute it directly
+// (tests/test_ui_climb.js via tests/test_ui_climb.py).
 //
-// The coordinate this moves along is caps.js's `rankPosition` — tier +
-// division + fill collapsed into one monotone number where 1.0 is one
-// division. This file never imports it; it only ever sees a distance in
-// divisions, which is what keeps it testable without a registry.
-//
-// WHY a trapezoid and not an ease-in-out (spec 2026-07-26-progression-
-// celebration §2). The user asked for "a slow crawl, easy ease into the pace,
-// and then reach a max progression speed… and then it eventually easy ease
-// and slow down". An ease-in-out has no max: its peak speed is proportional
-// to the distance, so a twelve-division jump would blur through the middle at
-// four times the speed of a three-division one and no celebration in there
-// would be readable. A trapezoid caps the middle by construction.
+// This file used to own a TRAPEZOID (accelerate → cruise → decelerate) for one
+// continuous sweep across the whole ladder: an ease-in-out's peak speed scales
+// with distance, so a twelve-division jump blurred through its own middle and
+// no celebration in there was readable. The climb is a PLAN of steps now
+// (ui/climbplan.js, spec 2026-07-27-multi-rank-climb) and the bar never sweeps
+// more than ONE division — it is pinned full across every rank-up in between —
+// so the cruise phase became unreachable and came out. What is left is the
+// short-climb law it always had at that end of the range, plus the per-step
+// budgets the plan asks for.
 
-// ---- The two constants everything else is derived from -------------------
-//
-// Deriving rather than listing them is what stops the curve going incoherent
-// when someone tunes it: change SHORT_MS and the ramp time, the cruise speed
-// and the crossover all move together, still C¹-continuous at the join.
+// ---- Bar sweeps ----------------------------------------------------------
 
-// A climb of `d` divisions, while short, takes SHORT_MS × sqrt(d). Square-root
-// rather than linear because the reward for a bigger jump should be a longer
-// climb, not a proportionally longer one — 5 divisions is a much bigger deal
-// than 1, but it is not 5 times as much sitting and watching.
+// A sweep of `d` divisions takes SHORT_MS × sqrt(d). Square-root rather than
+// linear because the reward for a bigger move should be a longer sweep, not a
+// proportionally longer one. `d` is at most 1 by construction, so this spans
+// 450ms (a twitch) to 1500ms (a whole empty division filling).
 const SHORT_MS = 1500;
-// Where the short law hands over to cruise-limited: one full tier. Not an
-// arbitrary tuning number — it is the point past which a climb stops being
-// "a rank-up" and starts being "a run of them", which is exactly when a speed
-// ceiling starts to matter.
-const CROSSOVER_DIVISIONS = 5;
-
-// The slope of the short law AT the crossover, in ms per division — so the
-// cruise phase continues at exactly the speed the short law was already
-// travelling. This is what makes the two halves one curve rather than two.
-const MS_PER_DIVISION = SHORT_MS / (2 * Math.sqrt(CROSSOVER_DIVISIONS));
-// The fixed accelerate (and decelerate) TIME of a cruise-limited climb, again
-// forced by continuity: T(crossover) must agree from both sides.
-export const RAMP_MS = (SHORT_MS * Math.sqrt(CROSSOVER_DIVISIONS)) / 2;
-// Divisions per second at cruise. Reported for tests and tuning; the profile
-// below computes its own V so a capped climb can legitimately exceed it.
-export const CRUISE_DIVISIONS_PER_S = 1000 / MS_PER_DIVISION;
-
-// A jump big enough to hit this is climbing several tiers at once and is
-// vanishingly rare; past here the climb gets FASTER rather than longer,
-// because holding the UI for ten seconds stops being a reward.
-const MAX_MS = 7000;
-// Below this a "climb" is a few percent of one division and reads as a
-// twitch rather than a move.
+// Below this a sweep is a few percent of a division and reads as a flicker
+// rather than a move. Also the floor for the arrival of a rank you only just
+// scraped into, where the bar has almost nothing to travel but the moment
+// still has to land.
 const MIN_MS = 450;
 
-/** Total wall-clock for a climb of `divisions`, in ms. Monotone in distance. */
-export function climbDuration(divisions) {
-  const distance = Math.max(0, divisions);
-  if (distance === 0) return 0;
-  const raw = distance <= CROSSOVER_DIVISIONS
-    ? SHORT_MS * Math.sqrt(distance)
-    : RAMP_MS + distance * MS_PER_DIVISION;
-  return Math.max(MIN_MS, Math.min(MAX_MS, raw));
+/** Wall-clock for a bar sweep of `divisions` (0..1), in ms. */
+export function barSweepMs(divisions) {
+  const distance = Math.max(0, Math.min(1, divisions || 0));
+  return Math.max(MIN_MS, Math.min(SHORT_MS, SHORT_MS * Math.sqrt(distance)));
 }
 
 /**
- * The accelerate → cruise → decelerate shape for a climb of `divisions`:
- * `rampMs` each side, `cruiseMs` between them, at `speed` divisions per ms.
+ * THE progress-bar easing: smoothstep, 0 → 1, monotone, landing exactly on
+ * its target.
  *
- * A short climb has `cruiseMs === 0` and is pure accelerate-then-decelerate —
- * which is the common one-division rank-up, and is why that case reads as
- * "crawls off the old fill, then settles" with no separate code path.
- */
-export function climbProfile(divisions) {
-  const distance = Math.max(0, divisions);
-  const durationMs = climbDuration(distance);
-  if (durationMs === 0) return { durationMs: 0, rampMs: 0, cruiseMs: 0, speed: 0, distance };
-  const rampMs = Math.min(RAMP_MS, durationMs / 2);
-  const cruiseMs = durationMs - 2 * rampMs;
-  // Distance under one smoothstep ramp is exactly half of speed × rampMs
-  // (∫₀¹ 3u²−2u³ du = ½), so the whole trip is speed × (rampMs + cruiseMs).
-  return { durationMs, rampMs, cruiseMs, speed: distance / (rampMs + cruiseMs), distance };
-}
-
-// ∫₀^u of the smoothstep 3u²−2u³ — the distance covered by a ramp that is
-// `u` of the way through it, as a fraction of speed × rampMs. Reaches ½ at
-// u = 1, which is the half-of-a-rectangle a ramp is worth.
-const rampDistance = (fraction) => fraction ** 3 - (fraction ** 4) / 2;
-
-/**
- * How far along a climb of `divisions` we are `elapsedMs` in — in divisions
- * travelled, never overshooting `divisions` and never decreasing.
+ * Monotone-and-exact is a hard style rule rather than a taste (user,
+ * 2026-07-27): "we should NEVER overshoot in a progress bar. It reads as
+ * annoying and an error -- you gave me progress and then took it away!!!!"
+ * An `easeOutBack` overshoot belongs to things that are physical objects
+ * springing — the digit reel, the cap squash, both in ui/celebrations.js —
+ * never to a length that reads as progress being claimed and then revoked.
  *
- * That last property is the whole point of this feature: the bar is the
- * fractional part of the position, so a travelled distance that only ever
- * grows is a bar that can only ever fill. It is asserted directly, at 1ms
- * granularity, by tests/test_ui_climb.py.
+ * Zero velocity at both ends is the "slow crawl, easy ease into the pace …
+ * and then it eventually easy ease and slow down" the original climb spec
+ * asked for, and it survives the plan rewrite unchanged.
  */
-export function climbTravelled(divisions, elapsedMs) {
-  const { durationMs, rampMs, cruiseMs, speed, distance } = climbProfile(divisions);
-  if (durationMs === 0 || elapsedMs >= durationMs) return distance;
-  if (elapsedMs <= 0) return 0;
-  if (elapsedMs < rampMs) {
-    return speed * rampMs * rampDistance(elapsedMs / rampMs);
-  }
-  const accelerated = (speed * rampMs) / 2;
-  if (elapsedMs < rampMs + cruiseMs) {
-    return accelerated + speed * (elapsedMs - rampMs);
-  }
-  const into = (elapsedMs - rampMs - cruiseMs) / rampMs;
-  return accelerated + speed * cruiseMs
-    + speed * rampMs * (0.5 - rampDistance(1 - into));
+export function barEase(fraction) {
+  const at = Math.max(0, Math.min(1, fraction));
+  return at * at * (3 - 2 * at);
 }
 
-/**
- * Absolute ladder position `elapsedMs` into a climb from `from` to `to`.
- * A non-rise (`to <= from`) is not a climb and lands immediately — the app
- * never animates a regression, it just shows the new state.
- */
-export function climbPosition(from, to, elapsedMs) {
-  if (!(to > from)) return to;
-  return from + climbTravelled(to - from, elapsedMs);
-}
+// ---- Ladder steps: one rank-up each --------------------------------------
+//
+// Long enough for the wings to grow out and be seen (ui/celebrations.js's
+// wingGrow fills exactly one step — it reads `beat.stepMs`, so these two can
+// never drift apart).
+const LADDER_STEP_MS = 460;
+// Steps share a budget the way tier dwells below do. A climb can hold at most
+// 15 of them (≤4 climbing out of the tier you started in, ≤4 into the one you
+// land in, ≤7 whole tiers passed through), and fifteen unhurried ones on top
+// of eight tier dwells is a celebration nobody wants to sit through twice.
+const LADDER_BUDGET_MS = 3400;
+const MIN_LADDER_STEP_MS = 220;
 
-/** Wall-clock for the climb from `from` to `to`; 0 for a non-rise. */
-export function climbDurationBetween(from, to) {
-  return to > from ? climbDuration(to - from) : 0;
+/** How long each of `steps` ladder steps gets. */
+export function ladderStepMs(steps) {
+  if (steps <= 0) return 0;
+  return Math.max(MIN_LADDER_STEP_MS,
+                  Math.min(LADDER_STEP_MS, LADDER_BUDGET_MS / steps));
 }
 
 // ---- Tier crossings: the climb STOPS ------------------------------------
@@ -154,4 +101,13 @@ export function tierDwell(crossings) {
                         Math.min(FULL_DWELL_MS, DWELL_BUDGET_MS / crossings));
   const anticipateMs = Math.round(each * ANTICIPATE_SHARE);
   return { anticipateMs, payoffMs: Math.round(each) - anticipateMs };
+}
+
+/**
+ * The whole timing table for one climb, in the shape `buildClimbPlan` asks
+ * for. Called with the counts read off the plan's own structure, so there is
+ * no second copy of "how many crossings will this have" to go stale.
+ */
+export function climbTimings({ crossings, ladder }) {
+  return { barSweepMs, ladderMs: ladderStepMs(ladder), ...tierDwell(crossings) };
 }

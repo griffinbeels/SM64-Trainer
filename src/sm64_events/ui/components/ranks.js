@@ -6,7 +6,7 @@ export { RANK_NAMES, rankColor } from "./caps.js";
 import { h } from "preact";
 import htm from "htm";
 import { useRankClimb } from "../rankclimb.js";
-import { capName, divisionDigit, rankPosition, rankAt } from "./caps.js";
+import { capName, divisionDigit, rankAt } from "./caps.js";
 import { RankIcon } from "./rankicon.js";
 const html = htm.bind(h);
 
@@ -171,7 +171,12 @@ export function RankBanner({ label, banner, hint = null, identity = null,
   // `rankAt` clamps, so at the very top of the ladder the "next" step is the
   // rank you are already on -- which would print "MARIO 1 -> Mario 1". That
   // is the same "top rank" state the settled banner spells out, so say so.
-  const climbingNext = rankAt(rankPosition(climb.tier, climb.division, climb.fill) + 1);
+  // Straight off the climb's own level, NOT rebuilt out of the bar: the bar is
+  // pinned at 1 for the whole ladder now (climbplan.js), and
+  // `rankPosition(tier, division, 1)` already IS the next level -- so
+  // reconstructing a position here would have named the rank after the next
+  // one for the entire climb.
+  const climbingNext = rankAt(climb.level + 1);
   const atCeiling = climbingNext.tier === climb.tier
     && climbingNext.division === climb.division;
   const next = climb.climbing ? (atCeiling ? null : climbingNext) : settledNext;

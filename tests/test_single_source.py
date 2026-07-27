@@ -109,6 +109,22 @@ INVARIANTS = (
             "on this easily as we go').",
     ),
     SingleSource(
+        concept="what a rank-up climb DOES, step by step",
+        owners=frozenset({"climbplan.js", "climbcurve.js", "celebrations.js",
+                          "rankclimb.js"}),
+        tokens=("tierskip", "anticipate"),
+        files=ui_js(),
+        why="ui/climbplan.js decides the whole sequence -- which ranks get a "
+            "step of their own, which whole tier is condensed into one, and "
+            "where the bar is pinned. celebrations.js may NAME those steps "
+            "(that is what an `on:` list is) and rankclimb.js walks them; a "
+            "third surface naming one is a second opinion about the order a "
+            "climb happens in. The live risk is real and already written down: "
+            "components/celebrate.js's scope overlay still runs its own "
+            "hand-rolled fill->flip->hold machine, so it is exactly the file "
+            "that would grow a competing multi-rank sequence.",
+    ),
+    SingleSource(
         concept="the server's TCP port",
         owners=frozenset({"paths.py"}),
         tokens=("8064", "8065"),
