@@ -15,7 +15,8 @@ from collections import deque
 from dataclasses import dataclass
 
 from sm64_events.core.paths import bundled_defaults_seed
-from sm64_events.memory.addresses import (LEVEL_CASTLE_INSIDE,
+from sm64_events.memory.addresses import (COURSE_BY_LEVEL,
+                                          LEVEL_CASTLE_INSIDE,
                                           WORLD_EDGES_ONE_WAY,
                                           WORLD_EDGES_TWO_WAY)
 from sm64_events.tracking.segments import (MatchContext, SegmentDef,
@@ -292,6 +293,46 @@ def test_no_movement_starts_and_ends_on_the_SAME_event():
             row["seed_key"],
             f"level_exit from={start['from']} and level_enter to={end['to']} "
             "are one event — the world has a direct edge; start it earlier")
+
+
+def test_a_menu_warp_into_a_course_arms_no_movement():
+    """The whole class behind the live report of 2026-07-27.
+
+    Usamune's warp menu fabricates edges the world does not have: warping
+    between two stars is ONE level_changed straight from course to course, so
+    `level_exit from=24` fires with Mario standing in Cool, Cool Mountain. No
+    castle movement can be RUN from inside a course — it needs the castle to
+    walk through — so the armed set, which is what the practice page pins and
+    labels ACTIVE SEGMENT, must stay empty however the player got there.
+
+    Every source level any movement exits, crossed with every course in the
+    game: 24 -> 5 is the reported case, the rest are the same bug waiting.
+    Note the destination's own movement is no exception — warping WF -> CCM
+    did not PERFORM "WF -> CCM", and arming it there would hang forever (the
+    start and end are one event; see the UNFIREABLE test above)."""
+    engine = SegmentEngine([
+        SegmentDef(id=index, name=row["name"], enabled=True,
+                   start_triggers=row["start_triggers"],
+                   end_triggers=row["end_triggers"],
+                   waypoints=row["waypoints"], guards=[])
+        for index, row in enumerate(MOVEMENTS, start=1)])
+    sources = sorted({row["start_triggers"][0]["from"] for row in MOVEMENTS
+                      if row["start_triggers"][0]["type"] == "level_exit"})
+    frame = 100
+    for source in sources:
+        for destination in sorted(COURSE_BY_LEVEL):
+            if destination == source:
+                continue
+            frame += 1
+            engine.feed(
+                Ev(frame, "level_changed", frame,
+                   {"from": source, "to": destination}),
+                MatchContext(level=destination, prev_level=source, num_stars=0,
+                             area=1))
+            armed = sorted(engine.armed_ids())
+            assert not armed, (
+                f"warp {source} -> {destination} armed "
+                f"{[MOVEMENTS[i - 1]['seed_key'] for i in armed]}")
 
 
 def test_a_movement_only_fires_on_a_walk_that_reaches_its_endpoint():

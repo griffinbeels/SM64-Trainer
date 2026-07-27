@@ -2361,3 +2361,135 @@ def test_vocab_ships_course_by_level():
     assert shipped["9"] == 1        # BoB
     assert shipped["24"] == 2       # WF
     assert all(isinstance(key, str) for key in shipped)   # JSON object keys
+
+
+# ---------------------------------------------------------------------------
+# Arm-position gate (live report 2026-07-27): a Usamune menu warp fabricates a
+# level edge the world does not have, so a start trigger can fire with Mario
+# standing somewhere the segment cannot be run from.
+# ---------------------------------------------------------------------------
+
+# The seeded WF -> SSL movement, verbatim: leave Whomp's Fortress, cross into
+# the castle basement, enter Shifting Sand Land.
+WF_TO_SSL = SegmentDef(
+    id=21, name="WF -> SSL", enabled=True,
+    start_triggers=[{"type": "level_exit", "from": 24}],
+    waypoints=[[{"type": "area_enter", "level": 6, "area": 3}]],
+    end_triggers=[{"type": "level_enter", "to": 8}], guards=[])
+
+
+def test_a_menu_warp_between_courses_arms_nothing():
+    """THE LIVE REPORT (2026-07-27, journal ids 1547-1564). Warping WF -> CCM
+    from the Usamune menu is ONE level_changed 24 -> 5 — no castle in between —
+    so `level_exit from=24` fired with Mario standing in Cool, Cool Mountain.
+    WF -> SSL armed there and nothing disarmed it while the player practised in
+    CCM, so the page read "ACTIVE SEGMENT  WF -> SSL  Running" for six
+    minutes."""
+    e = SegmentEngine([WF_TO_SSL])
+    e.feed(jev(1547, "level_changed", 5065014, {"from": 24, "to": 5}),
+           ctx(level=5, prev_level=24))
+    assert e.armed_ids() == set()
+    # and it stays that way through the practice loop that followed
+    e.feed(jev(1549, "area_changed", 5065014,
+               {"level": 5, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=5))
+    e.feed(jev(1552, "practice_reset", 5065066, {"paused_frames_before": 4392}),
+           ctx(level=5))
+    assert e.armed_ids() == set()
+
+
+def test_the_same_walk_still_arms_when_it_goes_through_the_castle():
+    """The other half of the gate: the REAL exit lands in the castle, which is
+    exactly where WF -> SSL has to start. Without this the fix is just a way to
+    stop the feature working."""
+    e = SegmentEngine([WF_TO_SSL])
+    e.feed(jev(1, "level_changed", 1000, {"from": 24, "to": 6}),
+           ctx(level=6, prev_level=24))
+    assert e.armed_ids() == {21}
+
+
+def test_a_menu_warp_onto_the_destination_arms_nothing():
+    """Warping WF -> SSL is not PERFORMING WF -> SSL: the movement whose route
+    you skipped cannot start where it was supposed to end."""
+    e = SegmentEngine([WF_TO_SSL])
+    e.feed(jev(1, "level_changed", 1000, {"from": 24, "to": 8}),
+           ctx(level=8, prev_level=24))
+    assert e.armed_ids() == set()
+
+
+def test_a_castle_exit_into_a_course_still_arms():
+    """The gate keys on where a COURSE exit lands, so leaving the castle — the
+    one level whose exits are courses — is untouched."""
+    e = SegmentEngine([_seg(start_triggers=[{"type": "level_exit", "from": 6}])])
+    e.feed(jev(1, "level_changed", 1000, {"from": 6, "to": 7}), ctx(level=7))
+    assert e.armed_ids() == {1}
+
+
+def test_a_placeless_start_trigger_arms_anywhere():
+    """A def that never says where it starts keeps arming wherever it fires —
+    unknown means yes, as everywhere else in the matcher."""
+    e = SegmentEngine([SegmentDef(
+        id=1, name="x", enabled=True, waypoints=[], guards=[],
+        start_triggers=[{"type": "star_grabbed"}],
+        end_triggers=[{"type": "level_enter", "to": 17}])])
+    e.feed(jev(1, "star_collected", 1000, {"course_id": 4, "star_id": 0}),
+           ctx(level=5))
+    assert e.armed_ids() == {1}
+
+
+# The seeded corpus only ever exercises rule (B) — every one of its movements
+# leaves a COURSE, so "the exit landed outside the castle" catches each bad arm
+# before the other two rules are consulted. These two defs leave the COURTYARD
+# instead: a castle level, whose exits legitimately include a course (BBH), so
+# rule (B) is off by construction and (A) and (C) are what is left. Both shapes
+# are ones the segment builder can produce.
+def _courtyard_to_ssl(waypoint):
+    return SegmentDef(id=1, name="Courtyard -> SSL", enabled=True,
+                      start_triggers=[{"type": "level_exit", "from": 26}],
+                      waypoints=[[waypoint]],
+                      end_triggers=[{"type": "level_enter", "to": 8}],
+                      guards=[])
+
+
+def test_an_arm_that_cannot_take_its_next_step_is_refused():
+    """Rule (A). Waypoint: cross into the basement — which needs Mario to be
+    inside the castle. A warp that drops him in Cool, Cool Mountain leaves the
+    sequence with nowhere to go, whatever the end trigger says."""
+    definition = _courtyard_to_ssl({"type": "area_enter", "level": 6, "area": 3})
+    warped = SegmentEngine([definition])
+    warped.feed(jev(1, "level_changed", 1000, {"from": 26, "to": 5}),
+                ctx(level=5, prev_level=26))
+    assert warped.armed_ids() == set()
+    walked = SegmentEngine([definition])
+    walked.feed(jev(1, "level_changed", 1000, {"from": 26, "to": 6}),
+                ctx(level=6, prev_level=26))
+    assert walked.armed_ids() == {1}       # the real exit still arms
+
+
+def test_an_arm_standing_on_its_own_destination_is_refused():
+    """Rule (C). Waypoint: enter the castle — firable from Shifting Sand Land,
+    so (A) is satisfied and only "you are already at the finish" can tell that
+    warping straight to SSL did not PERFORM the movement to SSL."""
+    definition = _courtyard_to_ssl({"type": "level_enter", "to": 6})
+    warped = SegmentEngine([definition])
+    warped.feed(jev(1, "level_changed", 1000, {"from": 26, "to": 8}),
+                ctx(level=8, prev_level=26))
+    assert warped.armed_ids() == set()
+    walked = SegmentEngine([definition])
+    walked.feed(jev(1, "level_changed", 1000, {"from": 26, "to": 4}),
+                ctx(level=4, prev_level=26))
+    assert walked.armed_ids() == {1}       # BBH is a real courtyard exit
+
+
+def test_a_reset_started_segment_arms_despite_the_stale_level():
+    """The gate's one exemption. The projector holds the PRE-reset level until
+    the next level_changed, so at a game_reset ctx.level names where the player
+    was, not where the reset put them — reading it would refuse to arm a
+    reset-started def whenever the player happened to F1 inside its own
+    destination."""
+    e = SegmentEngine([SegmentDef(
+        id=1, name="from the top", enabled=True, waypoints=[], guards=[],
+        start_triggers=[{"type": "reset_game"}],
+        end_triggers=[{"type": "level_enter", "to": 9}])])
+    e.feed(jev(1, "game_reset", 40, {}), ctx(level=9))   # F1'd inside BoB
+    assert e.armed_ids() == {1}

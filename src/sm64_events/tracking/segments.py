@@ -19,6 +19,17 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
   segment on an EARLIER event instead (the star that opens the way, an area
   crossing).  Guarded for the seeded corpus by
   tests/test_defaults_corpus.py::test_no_movement_starts_and_ends_on_the_SAME_event
+- ARM POSITION must be RUNNABLE (live report 2026-07-27): a matched start
+  trigger arms only if the segment could still be run from where the event
+  actually left Mario standing (can_run_from — its own section comment carries
+  the three rules and why they read the definition rather than the world
+  topology).  A start trigger describes what happened, not where it ended: the
+  seeded `level_exit from=X` clauses omit `to` because every real course exit
+  lands in the castle, so a Usamune menu warp fabricating WF -> CCM (ONE
+  level_changed 24 -> 5) armed WF -> SSL inside Cool, Cool Mountain and left it
+  showing as ACTIVE SEGMENT ... Running — nothing below disarms a def whose
+  player then stays put.  game_reset is exempt (ctx.level is the PRE-reset
+  level until the next level_changed).
 - anchor closures are POSITION-GATED (segment swap, live report 2026-06-12).
   Each _Arm remembers the MatchContext (level, area) where it armed — the
   segment's start position; a co-frame establishing area_changed pins the
@@ -191,7 +202,7 @@ from dataclasses import dataclass, field, replace
 from typing import Callable
 
 from sm64_events.memory.addresses import (AREA_LOBBY, BOWSER_STAGE_LEVELS,
-                                          CASTLE_AREA_NAMES,
+                                          CASTLE_AREA_NAMES, CASTLE_LEVELS,
                                           CASTLE_REGION_LEVELS,
                                           CASTLE_REGION_NODES,
                                           CASTLE_SECRET_STAR_AREAS,
@@ -476,7 +487,10 @@ def start_areas(start_triggers: list) -> list:
           row contributes nothing — forward-safe]
     The UI (ui/components/stagebanner.js) filters these by the current castle
     subarea (stage_changed carries level+area) to offer one-click segment
-    targets; tracking/pending_target.py asks the same question of a held intent.
+    targets. NOT the reader for "may this be practiced here" — that is
+    start_origin (see tracking/practicable.py): arm_level answers None for 50
+    of the 51 seeded level_exit clauses, so these two place only 11 of 65
+    definitions and the banner shows no castle movement at all.
     """
     out: list = []
     for trig in start_triggers:
@@ -546,6 +560,145 @@ def start_level_set(start_triggers: list,
     return levels
 
 
+# course id -> its level, for star_grabbed clauses. COURSE_BY_LEVEL is 1:1.
+_LEVEL_BY_COURSE = {course: level for level, course in COURSE_BY_LEVEL.items()}
+
+
+# --- Can this segment be RUN from here? (arm-position plausibility) --------
+# A start trigger says what HAPPENED, not where it left Mario standing: 50 of
+# the 51 seeded `level_exit from=X` clauses omit `to`, because in the real
+# world every course exit lands in the castle. The Usamune warp menu fabricates
+# edges the world does not have — a WF -> CCM menu warp is ONE level_changed
+# 24 -> 5 — so "you left WF" fired with Mario standing in Cool, Cool Mountain
+# and armed WF -> SSL there, a castle movement that cannot be run from inside a
+# course. Nothing disarms a def whose player then stays put, so it read as
+# "ACTIVE SEGMENT  WF -> SSL  Running" for six minutes of CCM practice (live
+# report 2026-07-27, journal ids 1547-1564).
+#
+# Three questions, none of which consults the world-edge table: a stored def
+# must keep matching whatever edges the emulator invents (the same reason
+# TRIGGERS' `flow` annotations are UI-only), and a check derived from that
+# table could only ever be tested against the table it came from.
+#   A. can the segment's NEXT required step still fire from here? (fires_from)
+#   B. did an unpinned course exit land somewhere a course exit cannot?
+#   C. are we already standing at every finish it has?  (_end_destination_level)
+# Any "no" makes the arm impossible and the engine refuses it, so the armed
+# set — which is what the practice page pins and calls ACTIVE SEGMENT — can
+# never name a segment the player is standing somewhere unable to run.
+
+# The level Mario must ALREADY be standing in for a clause to fire, as the
+# param NAME carrying it — read as data, exactly like arm_level and
+# _ORIGIN_PARAMS read the registry's param names rather than its match lambdas.
+# A new trigger type is one row here, or "anywhere" by default.
+#
+# NB this is a THIRD, distinct mapping: `level_exit from=8` FIRES from SSL,
+# ARMS in the castle (arm_level -> `to`), and is FILED under SSL
+# (_ORIGIN_PARAMS). level_enter and star_grabbed carry no row because their
+# precondition is not a plain param read — see fires_from.
+_PRECONDITION_PARAM: dict[str, str] = {
+    "level_exit": "from",
+    "area_enter": "level",
+    "warp_entered": "level",
+    "key_grabbed": "level",
+    "attempt_anchor": "level",
+    "spawned": "level",
+}
+
+
+def fires_from(trig: dict, level: int) -> bool:
+    """Could this clause fire with Mario standing in `level`?
+
+    True whenever the clause names no place it must fire from (reset_game, an
+    unscoped key grab, a Toad star) — the codebase-wide "unknown means yes".
+    """
+    kind = trig.get("type")
+    if kind == "level_enter":
+        # A level entry needs a REAL edge (_real_edge: from != to), so an
+        # unscoped one fires from anywhere EXCEPT its own destination — that
+        # single exclusion is what stops a fabricated WF -> CCM warp arming
+        # "WF -> CCM" inside CCM, where it could only ever hang armed.
+        source = trig.get("from")
+        return level == source if source is not None else level != trig["to"]
+    if kind == "star_grabbed":
+        # A star grab happens in its course's level; course 0 (the castle
+        # secret stars) and an unscoped clause name no level of their own.
+        course_level = _LEVEL_BY_COURSE.get(trig.get("course"))
+        return course_level is None or level == course_level
+    param = _PRECONDITION_PARAM.get(kind)
+    required = trig.get(param) if param else None
+    return required is None or level == required
+
+
+def _exit_landing_is_impossible(start_clause: dict, level: int) -> bool:
+    """A course exit lands in the castle — did this one land somewhere else?
+
+    50 of the 51 seeded `level_exit` clauses omit `to`, so the DEFINITION says
+    nothing about where the player ends up and the emulator decides. The world
+    is hub-and-spoke: leaving anything but a castle level (6/16/26) puts Mario
+    in one, so an arm on such a clause that lands elsewhere is a menu warp and
+    the movement it would time never happened. This is what stops a WF -> CCM
+    warp arming "WF -> Secret Aquarium" in Cool, Cool Mountain — a def that (A)
+    waves through, since its `level_enter to=20` end is firable from any level
+    but 20, and that in reality can now only ever disarm.
+
+    The two one-way in-course shortcuts the world does have (DDD -> BitFS
+    through the sub, HMC -> CotMC) are rejected too, deliberately: no seeded
+    movement arms on either, and one that did would arm doomed — its remaining
+    route needs the castle, and the level change back there disarms it.
+    """
+    return (start_clause.get("type") == "level_exit"
+            and start_clause.get("to") is None
+            and start_clause["from"] not in CASTLE_LEVELS
+            and level not in CASTLE_LEVELS)
+
+
+def _end_destination_level(trig: dict) -> int | None:
+    """The level this end clause leaves Mario standing in, when that is
+    knowable AT ARM TIME — otherwise None.
+
+    Only `level_enter` qualifies, and the omissions are deliberate rather than
+    unfinished. `area_enter` names a castle SUBAREA, and an arm taken on a
+    level_changed records a STALE ctx.area (the area detector establishes the
+    new area one event later, same tick — see feed), so "are we already there"
+    cannot be answered for it; every seeded movement that ends in a castle area
+    legitimately arms elsewhere in the castle, which is exactly the case a
+    level-only comparison would wrongly reject. A `level_exit` end names where
+    Mario leaves FROM, not where he lands.
+    """
+    return trig.get("to") if trig.get("type") == "level_enter" else None
+
+
+def can_run_from(d, start_clause: dict, level: int | None) -> bool:
+    """Could a segment freshly armed by `start_clause`, with Mario standing in
+    `level`, still be run to completion? The engine's arm gate — see the
+    section comment above.
+
+    Unknown position (legacy journals carry no level events) always passes:
+    "could be anywhere", the same conservative reading start_level_set takes.
+    """
+    if level is None:
+        return True
+    # (B) see _exit_landing_is_impossible.
+    if _exit_landing_is_impossible(start_clause, level):
+        return False
+    # (C) A journey cannot start at its own destination. Redundant with (B) for
+    # the seeded corpus, but it is the rule that holds for a def whose start
+    # DOES pin a destination, and it is what (A) cannot see for a WAYPOINT-
+    # bearing def — that one still has an unrelated first step to take, so a
+    # BBH -> DDD menu warp armed "BBH -> DDD" inside DDD, whose remaining route
+    # (basement, then DDD again) is walkable and would have banked a bogus
+    # attempt.
+    destinations = [_end_destination_level(c) for c in d.end_triggers]
+    if destinations and all(dest == level for dest in destinations):
+        return False
+    # (A) Whatever comes next is the ONLY thing that can happen before this def
+    # disarms: a plain def is closed or silently disarmed by the next level
+    # change, a waypoint-bearing one advances or is cancelled by it. So the
+    # step after the arm has to be firable from where the arm actually landed.
+    nxt = d.waypoints[0] if d.waypoints else d.end_triggers
+    return any(fires_from(clause, level) for clause in nxt)
+
+
 # --- Segment ORIGIN: where a definition can start (spec 2026-07-24) --------
 # Per-trigger source of the arm POSITION, as (level param, subarea param) —
 # read as data, exactly like arm_level reads the registry's param names rather
@@ -566,30 +719,43 @@ _ORIGIN_PARAMS: dict[str, tuple[str, str | None]] = {
     "key_grabbed": ("level", None),
 }
 
-# course id -> its level, for star_grabbed clauses. COURSE_BY_LEVEL is 1:1.
-_LEVEL_BY_COURSE = {course: level for level, course in COURSE_BY_LEVEL.items()}
-
 ANYWHERE_LABEL = "Anywhere"
 
 
-def _star_origin(trig: dict) -> str | None:
-    """A star grab places a segment when the star's course does. Course 0
-    (castle secret stars) has no level of its own — only the MIPS catches are
-    known (CASTLE_SECRET_STAR_AREAS); anything else stays unplaced."""
-    course = trig.get("course")
+def star_origin(course: int | None, star: int | None = None) -> str | None:
+    """The world node a STAR is practiced in. Course 0 (castle secret stars)
+    has no level of its own — only the MIPS catches are known
+    (CASTLE_SECRET_STAR_AREAS); anything else stays unplaced.
+
+    The star-side sibling of start_origin, so "where does this live" has ONE
+    answer per entity KIND and both are the same node vocabulary — which is
+    what lets tracking/practicable.py ask one question about either.
+    """
     if course is None:
         return None
     if course == 0:
-        area = CASTLE_SECRET_STAR_AREAS.get(trig.get("star"))
+        area = CASTLE_SECRET_STAR_AREAS.get(star)
         return node_key(LEVEL_CASTLE_INSIDE, area) if area is not None else None
     level = _LEVEL_BY_COURSE.get(course)
     return node_key(level) if level is not None else None
 
 
+def stage_origin(level: int | None, area: int | None = None) -> str | None:
+    """The world node the PLAYER is standing in, in the same vocabulary.
+
+    Only the castle interior is keyed by subarea — every other level is one
+    place, and courses have interior areas of their own (CCM's slide is area
+    2) that must not split a course into two nodes.
+    """
+    if level is None:
+        return None
+    return node_key(level, area if level == LEVEL_CASTLE_INSIDE else None)
+
+
 def _clause_origin(trig: dict) -> str | None:
     kind = trig.get("type")
     if kind == "star_grabbed":
-        return _star_origin(trig)
+        return star_origin(trig.get("course"), trig.get("star"))
     params = _ORIGIN_PARAMS.get(kind)
     if params is None:
         return None
@@ -633,6 +799,21 @@ def start_origin(start_triggers: list) -> str | None:
     if origin == node_key(LEVEL_CASTLE_INSIDE):
         return node_key(LEVEL_CASTLE_INSIDE, AREA_LOBBY)
     return origin
+
+
+def segment_origin(segment_id: int, start_triggers: list,
+                   overrides: dict | None) -> str | None:
+    """THE resolved origin of one definition: derived, unless the user has
+    overridden it in the editor (the `origin_overrides` ui_state KV, keyed by
+    segment id as a JSON object string).
+
+    Every consumer goes through here — the library stamp (views.stamp_origins),
+    the target rule (tracking/service), and target retirement
+    (tracking/projection) — so a corrected origin cannot mean one place in the
+    picker and another to the thing deciding what you may practice.
+    """
+    override = (overrides or {}).get(str(segment_id))
+    return override if override else start_origin(start_triggers)
 
 
 def origin_view(node: str | None) -> dict:
@@ -1278,9 +1459,19 @@ class SegmentEngine:
             # progress back to 0. Only gates while armed: once _feed_waypoint
             # has disarmed the def (major-action cancel), a fresh start-clause
             # match here re-arms normally, same as any other def.
+            # ARM-POSITION gate (live report 2026-07-27): a start trigger
+            # fired, but a Usamune menu warp can leave Mario somewhere the
+            # segment cannot be run from — see can_run_from's section comment.
+            # A game_reset is exempt: the projector keeps the pre-reset level
+            # until the next level_changed, so ctx.level names where the player
+            # WAS, not where the reset put them.
+            arm_position_possible = starts and (
+                ev.type == "game_reset"
+                or can_run_from(d, start_clause, ctx.level))
             if starts and (not echo_invisible or relocation_arm) \
                     and not (d.waypoints and d.id in self._armed) \
                     and _route_allows(d, ctx) \
+                    and arm_position_possible \
                     and all(GUARDS[g["type"]].check(g, ctx)
                             for g in d.guards
                             if GUARDS[g["type"]].phase == "arm"):
