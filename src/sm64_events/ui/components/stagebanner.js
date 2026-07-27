@@ -31,6 +31,7 @@ import { h } from "preact";
 import { useEffect } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
+import { requestTarget } from "../target.js";
 import { Icon } from "./icons.js";
 import { PracticeCell } from "./practicecell.js";
 import { iconIdentityForKey, useIconPicking } from "./iconpicker.js";
@@ -64,44 +65,7 @@ function StagePlaceholder({ t }) {
     <div><b>No course target available</b>
       <span class="meta">Move into a course, or pick one from the active
         target card below.</span></div>
-    <${PendingChip} t=${t} />
-  </section>`;
-}
-
-// The target the player has picked but not reached yet — a server-held INTENT
-// rather than a target that has moved (tracking/pending_target.py). It rides
-// the stage header because the banner already answers "where am I, and what
-// can I practice here"; an intent is that same question one step ahead. It
-// renders nothing at all when nothing is held, so no stage header ever
-// changes height for it. Every mode's header gets one, including the
-// placeholder — an intent must not become invisible in exactly the place
-// (a hub, a cap stage) you are most likely to be while walking toward it.
-function PendingChip({ t }) {
-  const held = t && t.view && t.view.pending_target;
-  if (!held) return null;
-  // The ENTITY's own name, never "course · star": the destination is already
-  // the next span, and printing it twice spent the truncation budget on the
-  // repeat instead of on the thing being waited for (render, 2026-07-26 —
-  // "Shifting Sand Land · Shi…" beside "on reaching Shifting Sand Land").
-  const name = held.kind === "segment" ? held.segment_name : held.star_name;
-  const where = held.where;   // null for a segment — see pending_target_payload
-  async function cancel(event) {
-    event.stopPropagation();
-    await send("DELETE", "/api/target/pending");
-    t.refresh();
-  }
-  return html`<span class="pending-target"
-      title=${where
-        ? `Waiting for you to enter ${where}. Enter a different course `
-          + "instead and this is dropped."
-        : "Waiting for you to reach where this segment starts. Enter a "
-          + "different course instead and this is dropped."}>
-    <${Icon} name="target" size=${14} />
-    <b>Next</b><span class="pending-target-name">${name}</span>
-    ${where && html`<span class="meta">in ${where}</span>`}
-    <button type="button" class="pending-clear" onclick=${cancel}
-        aria-label=${`Cancel practising ${name}`}>×</button>
-  </span>`;
+      </section>`;
 }
 
 // --- route focus ------------------------------------------------------------
@@ -176,8 +140,7 @@ function StandardSegmentCell({ t, s, setPicking }) {
   async function pick() {
     if (!s.enabled)
       await send("PUT", `/api/segments/${s.segment_id}`, { enabled: true });
-    await send("POST", "/api/target", { kind: "segment", segment_id: s.segment_id });
-    t.refresh();
+    await requestTarget(t, { kind: "segment", segment_id: s.segment_id });
   }
   return html`<${PracticeCell} dimIdle=${STAR_DIM_IDLE}
     active=${tgt.kind === "segment" && tgt.segment_id === s.segment_id}
@@ -225,11 +188,10 @@ function StarRow({ t, v, stage }) {
     (v.rank_by_star || {})[`${stage.course_id}:${i}`];
 
   async function pick(i) {
-    await send("POST", "/api/target", {
+    await requestTarget(t, {
       course_id: stage.course_id, star_id: i,
       strat_tag: lastStratFor(i) || null,
     });
-    t.refresh();
   }
 
   // Route focus (user request 2026-07-24): with a route active the selector
@@ -248,7 +210,7 @@ function StarRow({ t, v, stage }) {
     <div class="shead"><b>▸ ${course.name}</b>
       <span class="meta">${routeStars
         ? html`showing this route's stars · tap to practice`
-        : "tap a star to practice"}</span><${PendingChip} t=${t} /></div>
+        : "tap a star to practice"}</span></div>
     <div class="starrow">
       ${shown.map(({ name, i }) => html`<${PracticeCell} dimIdle=${STAR_DIM_IDLE}
         key=${`${stage.course_id}:${i}`}
@@ -284,8 +246,7 @@ function BowserCourseRow({ t, v, stage }) {
     for (const s of pipes)
       if (s.enabled)
         await send("PUT", `/api/segments/${s.segment_id}`, { enabled: false });
-    await send("POST", "/api/target", { course_id: stage.course_id, star_id: 0 });
-    t.refresh();
+    await requestTarget(t, { course_id: stage.course_id, star_id: 0 });
   }
 
   // "no reds" — practice the pipe-entry skip: enable that segment so it tracks,
@@ -293,8 +254,7 @@ function BowserCourseRow({ t, v, stage }) {
   async function pickNoReds(s) {
     if (!s.enabled)
       await send("PUT", `/api/segments/${s.segment_id}`, { enabled: true });
-    await send("POST", "/api/target", { kind: "segment", segment_id: s.segment_id });
-    t.refresh();
+    await requestTarget(t, { kind: "segment", segment_id: s.segment_id });
   }
 
   // Restore the LEVEL'S last selection on entry — walking into BitDW while you
@@ -328,7 +288,7 @@ function BowserCourseRow({ t, v, stage }) {
   return html`<section class="practice-card selector-card stagebanner">
     <div class="shead"><b>▸ ${course.name}</b>
       <span class="meta">reds (8-coin star) · or the pipe-entry skip (no reds)</span>
-      <${PendingChip} t=${t} /></div>
+      </div>
     <div class="starrow segcells">
       <${PracticeCell} dimIdle=${STAR_DIM_IDLE}
         active=${redsActive}
@@ -371,8 +331,7 @@ function ArenaRow({ t, v, stage }) {
     (async () => {
       if (!only.enabled)
         await send("PUT", `/api/segments/${only.segment_id}`, { enabled: true });
-      await send("POST", "/api/target", { kind: "segment", segment_id: only.segment_id });
-      t.refresh();
+      await requestTarget(t, { kind: "segment", segment_id: only.segment_id });
     })();
   }, [stage.level, only && only.segment_id]);
 
@@ -383,7 +342,7 @@ function ArenaRow({ t, v, stage }) {
   return html`<section class="practice-card selector-card stagebanner">
     <div class="shead"><b>▸ Bowser Fight</b>
       <span class="meta">auto-selected — tap to re-arm</span>
-      <${PendingChip} t=${t} /></div>
+      </div>
     <div class="starrow segcells">
       ${fights.map((s) => html`<${StandardSegmentCell}
         key=${`seg:${s.segment_id}`} t=${t} s=${s} setPicking=${setPicking} />`)}
@@ -413,7 +372,7 @@ function SegmentRow({ t, v, stage }) {
   return html`<section class="practice-card selector-card stagebanner">
     <div class="shead"><b>▸ Castle ${CASTLE_AREA_NAMES[stage.area]}</b>
       <span class="meta">tap a segment to practice</span>
-      <${PendingChip} t=${t} /></div>
+      </div>
     <div class="starrow segcells">
       ${segs.map((s) => html`<${StandardSegmentCell}
         key=${`seg:${s.segment_id}`} t=${t} s=${s} setPicking=${setPicking} />`)}
@@ -430,7 +389,7 @@ function ArmedOnlyRow({ t, v }) {
   return html`<section class="practice-card selector-card stagebanner">
     <div class="shead"><b>▸ Running</b>
       <span class="meta">a segment timer is live</span>
-      <${PendingChip} t=${t} /></div>
+      </div>
     <div class="starrow segcells">
       ${armedSegments(t, v).map((s) => html`<${StandardSegmentCell}
         key=${`seg:${s.segment_id}`} t=${t} s=${s} setPicking=${setPicking} />`)}

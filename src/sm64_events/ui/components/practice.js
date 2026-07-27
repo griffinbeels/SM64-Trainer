@@ -3,6 +3,7 @@ import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
+import { requestTarget } from "../target.js";
 import { ReplayPlayer } from "./replay.js";
 import { StatMenu, DUST_STAT_KEYS } from "./statmenu.js";
 import { Timeline } from "./timeline.js";
@@ -815,11 +816,9 @@ function candIsTarget(c, tgt) {
 }
 
 async function setTargetCandidate(c, t) {
-  if (c.kind === "segment")
-    await send("POST", "/api/target", { kind: "segment", segment_id: c.segment_id });
-  else
-    await send("POST", "/api/target", { course_id: c.course, star_id: c.star });
-  t.refresh();
+  await requestTarget(t, c.kind === "segment"
+    ? { kind: "segment", segment_id: c.segment_id }
+    : { course_id: c.course, star_id: c.star });
 }
 
 function RouteFocus({ rv, t, ui, freshIds, openCompare }) {

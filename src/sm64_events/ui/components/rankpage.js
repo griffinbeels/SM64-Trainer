@@ -7,6 +7,7 @@ import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
+import { requestTarget } from "../target.js";
 import { rankColor } from "./ranks.js";
 import { capGradient, capName, divisionDigit } from "./caps.js";
 import { fmtPoints, fmtScore, toPoints } from "./marelo.js";
@@ -688,10 +689,9 @@ function sectionForKey(view, entityKey) {
 
 async function practiceEntity(entityKey, t) {
   const parts = entityKey.split(":");
-  await send("POST", "/api/target", parts[0] === "segment"
+  await requestTarget(t, parts[0] === "segment"
     ? { kind: "segment", segment_id: Number(parts[1]) }
     : { course_id: Number(parts[1]), star_id: Number(parts[2]) });
-  t.refresh();
 }
 
 const TOP_N_ATTEMPTS = 10;

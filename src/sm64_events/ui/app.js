@@ -178,6 +178,7 @@ function App() {
           : null}
       </div>
     </main>
+    ${t.notice && html`<div class="app-notice" role="status">${t.notice}</div>`}
     <${MobileNav} tab=${tab} setTab=${setTab}
       openMore=${() => setMoreOpen(true)} />
     <${MobileMore} open=${moreOpen} close=${() => setMoreOpen(false)}

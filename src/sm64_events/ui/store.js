@@ -7,11 +7,7 @@ const REFRESH_ON = new Set(["attempt_completed", "attempts_invalidated",
   "pb_saved", "pb_undone", "session_started", "target_changed",
   "star_collected", "strat_set", "rank_standards_changed",
   "rank_mode_changed", "icons_changed", "marelo_changed", "route_selected",
-  // A HELD target (tracking/pending_target.py) appearing, committing or
-  // being dropped changes only the view's pending_target — no target_changed
-  // fires for the appear/drop halves, so without this the chip would sit
-  // there stale until something else refetched.
-  "target_pending"]);
+]);
 const RUN_REFRESH_ON = new Set(["run_started", "run_progress",
   "run_finished", "run_aborted", "game_reset"]);
 
@@ -276,6 +272,16 @@ export function useTracker() {
   const [updateForced, setUpdateForced] = useState(false); // manual check found one -> show despite Skip/Later
   const [updateApplying, setUpdateApplying] = useState(false);
   const [updateMsg, setUpdateMsg] = useState("");          // transient header toast
+  // notice: a transient, app-wide "the server said no" line (app.js renders it).
+  // Added for the practice-target refusal (2026-07-27) -- a rejected write that
+  // rejects into a click handler leaves the button looking dead, and the server
+  // already writes a sentence that names the fix.
+  const [notice, setNotice] = useState("");
+  useEffect(() => {
+    if (!notice) return undefined;
+    const id = setTimeout(() => setNotice(""), 6000);
+    return () => clearTimeout(id);
+  }, [notice]);
   const fetchUpdate = useCallback(async (force) => {
     try {
       const st = await getJSON("/api/update/status" + (force ? "?force=1" : ""));
@@ -345,5 +351,6 @@ export function useTracker() {
            run, refreshRun,
            marelo, mareloRev, clearMareloCelebration, clearEntityCelebration,
            update, updateForced, setUpdateForced, updateApplying,
-           setUpdateApplying, updateMsg, checkUpdates, applyUpdate, skipUpdate };
+           setUpdateApplying, updateMsg, checkUpdates, applyUpdate, skipUpdate,
+           notice, setNotice };
 }

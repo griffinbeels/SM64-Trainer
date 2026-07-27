@@ -93,16 +93,17 @@ Caveats (hard-won — keep these current):
     another stage). course_for_level (addresses.py) bridges the level-id ->
     course-id gap; hub levels / Bowser arenas have NO course, so passing
     through them keeps the target and the retry loop is uninterrupted. SEGMENT
-    targets retire by START LEVEL instead (user report 2026-07-23: Bowser 1
-    stayed "ACTIVE SEGMENT" after a warp to WF): when EVERY start trigger of
-    the def is level-bound (segments.start_level_set), a level_changed to a
-    level outside that set retires the target — the segment cannot possibly
-    start from there. A location-free start trigger (star_grabbed, reset_game,
-    ...) or a deleted def keeps the target (None = can start anywhere).
-    start_level_set is fed the def's WAYPOINTS too (fix 2026-07-24): a
-    multi-level segment's sequence can re-enter a level outside its start
-    set (e.g. SL->HMC re-enters SL mid-sequence), so waypoint levels are
-    unioned in — without this a waypoint landing pulled the target early.
+    targets retire by exactly the SAME rule (rewritten 2026-07-27): entering a
+    course that is not where the segment is practiced FROM retires it, and the
+    hubs/castle stay transit for both kinds. `_seg_origins` is
+    segments.segment_origin — where the definition STARTS, plus the user's
+    origin override. Its predecessor read `start_level_set`, i.e. `arm_level`,
+    i.e. where a start trigger LEAVES Mario, which is None for 50 of the 51
+    seeded `level_exit` clauses: 54 of 65 definitions answered "anywhere" and
+    this branch was dead for every castle movement, which is the live report of
+    2026-07-27 ("ACTIVE SEGMENT  WF -> SSL" while standing in CCM). A
+    definition that genuinely names no place (a `reset_game` start) still
+    answers None and still keeps its target, as does a deleted def.
     No resume stash for segments: the matcher re-arms on return (armed pins the
     UI) and the arena/stage banner re-targets on entry. A segment that
     SUCCEEDS by entering a star stage (its closing event is a level_changed
@@ -180,8 +181,8 @@ from sm64_events.memory.addresses import CASTLE_LEVELS, course_for_level
 # module-level import cannot cycle (see SegmentEngine.feed).
 from sm64_events.tracking.runs import RunTracker
 from sm64_events.tracking.segments import (
-    SEGMENT_ATTEMPT_OFFSET, MatchContext, SegmentEngine, start_level_set,
-    time_bounds)
+    SEGMENT_ATTEMPT_OFFSET, MatchContext, SegmentEngine, segment_origin,
+    stage_origin, time_bounds)
 
 
 @dataclass(frozen=True)
@@ -282,7 +283,8 @@ class Projector:
                  segments: list | None = None,
                  time_filters: dict | None = None,
                  touched: set[int] | None = None,
-                 strat_overrides: dict[int, str | None] | None = None):
+                 strat_overrides: dict[int, str | None] | None = None,
+                 origin_overrides: dict | None = None):
         self._cleared = cleared if cleared is not None else {}
         # attempt_id -> reclassified strat (caveat 16); shadows the strat
         # remembered at close time.
@@ -317,13 +319,14 @@ class Projector:
         self._touched = touched if touched is not None else set()
         self._seg_bounds = {d.id: time_bounds(d.guards)
                             for d in (segments or [])}
-        # def id -> levels the segment can occupy — start triggers UNION
-        # waypoints, so a multi-level segment's re-entry level counts too
-        # (None = anywhere); drives segment-target retirement on
-        # level_changed (caveat 12; waypoint fix 2026-07-24).
-        self._seg_start_levels = {d.id: start_level_set(d.start_triggers,
-                                                        d.waypoints)
-                                  for d in (segments or [])}
+        # def id -> the world node the segment is practiced FROM (None =
+        # anywhere); drives segment-target retirement on level_changed
+        # (caveat 12). `origin_overrides` is the ui_state KV a user sets when
+        # the derivation guesses wrong — threaded in like `time_filters` so
+        # the picker and this rule cannot disagree about where a segment is.
+        self._seg_origins = {
+            d.id: segment_origin(d.id, d.start_triggers, origin_overrides)
+            for d in (segments or [])}
         self.segment_notices: list[dict] = []  # live-broadcast queue, drained by service
         self._runs = RunTracker()
         self.run_notices: list[dict] = []   # live-broadcast queue, drained by service
@@ -499,22 +502,31 @@ class Projector:
             # an exit that lands straight INTO a segment is retired by the
             # arm-clear in feed() instead. Close FIRST (above) so the abandoned
             # run still attributes to the star we were on.
-            # A SEGMENT target whose every start trigger is level-bound
-            # cannot possibly START outside those levels, so entering any
-            # other level retires it (user report 2026-07-23: Bowser 1 stayed
-            # "ACTIVE SEGMENT" after a Usamune warp to WF). Defs with a
-            # location-free start trigger — or unknown to this projector
-            # (deleted def) — get None here and keep their target. Runs in
-            # _dispatch, BEFORE feed()'s close/auto-follow, so a success
-            # closed BY this very level_changed still follows onto the
+            to_course = course_for_level(to_level)
+            # A SEGMENT target is retired by the SAME rule as a star's, one
+            # line below: walking into a course that isn't where this one is
+            # practiced means you are doing something else now (user report
+            # 2026-07-23, Bowser 1 stayed "ACTIVE SEGMENT" after a warp to WF;
+            # again 2026-07-27, WF -> SSL in Cool, Cool Mountain). The hubs
+            # and the castle are TRANSIT for a segment exactly as they are for
+            # a star — every course is entered through them — so they never
+            # retire anything.
+            #
+            # `_seg_origins` is where the segment is practiced FROM
+            # (segments.start_origin), not where its start trigger lands you:
+            # the old reader was `start_level_set`, built on `arm_level`, and
+            # it answered None for 54 of the 65 seeded definitions, so this
+            # branch was dead for every castle movement. A def that names no
+            # place at all still answers None and still keeps its target.
+            # Runs in _dispatch, BEFORE feed()'s close/auto-follow, so a
+            # success closed BY this very level_changed still follows onto the
             # segment; the NEXT level move retires it. No resume stash: the
             # matcher re-arms on return (armed pins the UI) and the arena
             # banner re-targets on entry, so nothing is lost.
-            if self.target and self.target[0] == "segment":
-                seg_starts = self._seg_start_levels.get(self.target[1])
-                if seg_starts is not None and to_level not in seg_starts:
+            if self.target and self.target[0] == "segment" and to_course is not None:
+                origin = self._seg_origins.get(self.target[1])
+                if origin is not None and origin != stage_origin(to_level):
                     self.target = None
-            to_course = course_for_level(to_level)
             if self.target and self.target[0] == "star":
                 if to_course is not None and to_course != self.target[1]:
                     self._suspended_star = self.target[1:]  # resume on re-entry (caveat 13)
@@ -753,10 +765,12 @@ def wipe_matches(a: Attempt, p: dict) -> bool:
     return True  # kind == "all"
 
 
-def replay(events, segments=None, time_filters=None) -> tuple[list[Attempt], Projector]:
+def replay(events, segments=None, time_filters=None,
+           origin_overrides=None) -> tuple[list[Attempt], Projector]:
     proj = Projector(cleared_ids(events), segments=segments,
                      time_filters=time_filters, touched=touched_ids(events),
-                     strat_overrides=strat_overrides(events))
+                     strat_overrides=strat_overrides(events),
+                     origin_overrides=origin_overrides)
     attempts: list[Attempt] = []
     for ev in events:
         if ev.type == "data_wiped":
@@ -771,8 +785,10 @@ def replay(events, segments=None, time_filters=None) -> tuple[list[Attempt], Pro
     return attempts, proj
 
 
-def project(events, segments=None, time_filters=None) -> list[Attempt]:
-    return replay(events, segments=segments, time_filters=time_filters)[0]
+def project(events, segments=None, time_filters=None,
+            origin_overrides=None) -> list[Attempt]:
+    return replay(events, segments=segments, time_filters=time_filters,
+                  origin_overrides=origin_overrides)[0]
 
 
 def journal_id(attempt_id: int) -> int:

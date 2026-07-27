@@ -57,11 +57,12 @@ def test_needs_strat_blinks_only_when_nothing_is_current():
 
 
 def test_writes_exactly_once_then_closes():
-    assert STEP_CODE.count('send("POST", "/api/target"') == 1
+    assert STEP_CODE.count("requestTarget(t, body)") == 1
     assert STEP_CODE.count("onClose()") == 1
-    # onClose only follows a successful write -- it must appear in the try
-    # block, strictly before the catch that handles a dropped write.
-    assert STEP_CODE.index("onClose()") < STEP_CODE.index("catch (writeError)")
+    # onClose is GATED on the write landing -- requestTarget answers false for
+    # a dropped write and for the server refusing the pick (2026-07-27: you
+    # may only practice what you are standing in front of).
+    assert "if (await requestTarget(t, body)) onClose();" in STEP_CODE
 
 
 def test_never_writes_through_the_active_strat_endpoint():
@@ -71,11 +72,14 @@ def test_never_writes_through_the_active_strat_endpoint():
     assert '"/api/strat"' not in STEP_CODE
 
 
-def test_write_failure_alerts_and_stays_open():
-    assert "window.alert(String(writeError))" in STEP_CODE
-    # Alert lives in the catch, after the (single) onClose in the try --
-    # already pinned above as an ordering fact, this just names the alert.
-    assert STEP_CODE.index("catch (writeError)") < STEP_CODE.index("window.alert")
+def test_a_refused_or_dropped_write_stays_open_and_re_enables_the_cards():
+    assert "else setSaving(false);" in STEP_CODE
+    # No local alert: the message belongs to the ONE door every target write
+    # goes through (ui/target.js), which raises the server's own sentence --
+    # "you can only practice what you are standing in" names the fix, an
+    # alert() only names the failure and steals the keyboard doing it.
+    assert "window.alert" not in STEP_CODE
+    assert 'from "../target.js"' in STEP_CODE
 
 
 def test_uses_rank_icon_not_a_direct_hat_import():

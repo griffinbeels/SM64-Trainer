@@ -14,6 +14,7 @@ import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
+import { requestTarget } from "../target.js";
 import { parseSegmentId, parseStarId } from "../entities.js";
 import { RankIcon } from "./rankicon.js";
 import { capName, divisionDigit } from "./caps.js";
@@ -32,7 +33,7 @@ const html = htm.bind(h);
 // drill-in (entitymodal.js's focusOnDrillIn).
 const focusOnEntry = (node) => { if (node) node.focus(); };
 
-export function StrategyStep({ value, option, onBack, onClose }) {
+export function StrategyStep({ value, option, onBack, onClose, t }) {
   // `option` (the picked cell's full object) is part of the nextStep
   // contract every caller receives, but this step has nothing to add to
   // what it already shows — the enclosing Modal's title is `option.name`
@@ -69,15 +70,13 @@ export function StrategyStep({ value, option, onBack, onClose }) {
       ? { kind: "segment", segment_id: Number(segmentId), strat_tag: stratTag }
       : { course_id: Number(parsedStar.course), star_id: Number(parsedStar.star),
           strat_tag: stratTag };
-    try {
-      await send("POST", "/api/target", body);
-      onClose();
-    } catch (writeError) {
-      // A dropped write must not look like it worked — stay open, matching
-      // stratpicker.js's own recovery for the same failure.
-      window.alert(String(writeError));
-      setSaving(false);
-    }
+    // A dropped OR REFUSED write must not look like it worked — stay open,
+    // matching stratpicker.js's own recovery for the same failure. Since
+    // 2026-07-27 the likeliest failure is the server refusing a pick from
+    // somewhere the player isn't standing, and requestTarget puts that
+    // sentence on screen for us (ui/target.js).
+    if (await requestTarget(t, body)) onClose();
+    else setSaving(false);
   }
 
   return html`<${h.Fragment}>

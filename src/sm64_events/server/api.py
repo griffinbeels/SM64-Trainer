@@ -588,11 +588,12 @@ def create_api_router(service) -> APIRouter:
         the section simply accrues no attempts.
         kind="star" (default): requires course_id and star_id.
 
-        A pick the player cannot practice where they are standing does NOT
-        move the target: it is held until they walk into its stage, and
-        dropped if they walk into a different one instead (see
-        tracking/pending_target.py). `pending` in the response says which
-        happened, so the caller never has to infer it from the view.
+        A pick the player is not STANDING IN FRONT OF is refused with 409:
+        you practice what is in front of you, and picking otherwise was
+        "logically inconsistent with how you would actually practice the
+        game" (user, 2026-07-27 — see tracking/practicable.py). Re-picking
+        what is already the target always succeeds, so a strategy edit is
+        never rejected for a position the player has since left.
         """
         # strat_tag present-and-null ("(no strategy)" in the picker) clears
         # the entity's existing strat explicitly; strat_tag absent entirely
@@ -607,13 +608,6 @@ def create_api_router(service) -> APIRouter:
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True, **result}
-
-    @router.delete("/target/pending")
-    async def clear_pending_target():
-        """Abandon a held intent without moving the target (the pending
-        chip's ×). Idempotent: clearing nothing is not an error."""
-        await service.clear_pending_target()
-        return {"ok": True}
 
     @router.post("/strat")
     async def strat(body: StratBody):

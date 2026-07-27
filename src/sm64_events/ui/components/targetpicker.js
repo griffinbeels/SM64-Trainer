@@ -4,10 +4,12 @@
 // card. That card was removed: it named a target the Active-target card and
 // the quick-select row already name, and its own pick was mostly unusable —
 // you cannot practice Shifting Sand Land while loaded into Lethal Lava Land
-// (user). The picker itself survives, re-homed onto the Active-target card,
-// and an out-of-stage pick is now HELD as an intent by the server rather than
-// applied (tracking/pending_target.py) — which is what makes picking a star
-// somewhere else a sensible thing to do again.
+// (user). The picker itself survives, re-homed onto the Active-target card.
+// An out-of-stage pick was HELD as an intent for a day; since 2026-07-27 the
+// server REFUSES it outright (tracking/practicable.py) and ui/target.js puts
+// the reason on screen. The picker still BROWSES everything — its cells are
+// also how you reach an entity's strategies — but only what you are standing
+// in front of can be made the target.
 //
 // Exported as a hook returning [open, dialog] — the same shape as
 // stagebanner.js's useIconPicking — so a caller supplies its own trigger and
@@ -104,7 +106,10 @@ export function useTargetPicker(t) {
       iconFor=${(id) => optionIconSrc(t,
         parseSegmentId(id) == null ? "star" : "segment",
         parseSegmentId(id) == null ? id : parseSegmentId(id))}
-      nextStep=${StrategyStep}
+      ${/* bound so StrategyStep reaches the shared target door
+           (ui/target.js) — PickerDialog's nextStep contract is
+           value/option/onBack/onClose and knows nothing of the store */""}
+      nextStep=${(props) => html`<${StrategyStep} ...${props} t=${t} />`}
       onPick=${close} onClose=${close} />`;
   }
 

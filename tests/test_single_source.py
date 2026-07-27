@@ -103,6 +103,20 @@ INVARIANTS = (
             "worlds. (Both numbers appear in PROSE in relaunch.py and "
             "single_instance.py, which is why this scans code, not text.)",
     ),
+    SingleSource(
+        concept="moving the practice target",
+        owners=frozenset({"target.js"}),
+        tokens=('"/api/target"',),
+        files=ui_js(),
+        why="POST /api/target can REFUSE since 2026-07-27 (you may only "
+            "practice what you are standing in front of -- see "
+            "tracking/practicable.py). A bare `await send(...)` inside a click "
+            "handler rejects into nothing, so the refusal is invisible and the "
+            "button reads as dead; NINE call sites had exactly that shape and "
+            "would each have needed their own catch. ui/target.js's "
+            "requestTarget does the write, puts the server's own sentence on "
+            "screen, and returns whether it landed.",
+    ),
 )
 
 
@@ -135,6 +149,12 @@ def test_the_guards_can_still_fail():
     prose = code_only(Path("sample.js"), "// we used to read COURSE_ICON_PREFIXES here\n")
     assert [token for token in icons.tokens if token in real] == ["/ui/assets/star_"]
     assert not [token for token in icons.tokens if token in prose]
+
+    target = INVARIANTS[2]
+    real_js = code_only(Path("sample.js"), 'send("POST", "/api/target", body);')
+    prose_js = code_only(Path("sample.js"), '// every write goes through "/api/target"\n')
+    assert [token for token in target.tokens if token in real_js] == ['"/api/target"']
+    assert not [token for token in target.tokens if token in prose_js]
 
     port = INVARIANTS[1]
     real_py = code_only(Path("sample.py"), "PORT = 8064\n")

@@ -776,10 +776,11 @@ def _progress(attempts, pb_ids: set, session_meta, frames_of,
 # a bare "enter Castle Inside" with no subarea must NOT surface the segment in
 # The quick-select banner's two "where does this segment start" readers live in
 # tracking/segments.py as `start_areas`/`start_levels` (moved DOWN there
-# 2026-07-26, beside the `arm_level` they already read through): the service
-# needs the same answer to decide whether a HELD practice intent has been
-# reached (tracking/pending_target.py), and the service must not import the
-# view layer to get it.
+# 2026-07-26, beside the `arm_level` they already read through).
+# They are the BANNER's readers only. "May this be practiced here" is answered
+# by start_origin (tracking/practicable.py) — arm_level places 11 of the 65
+# seeded definitions, start_origin places all 65, which is why the banner still
+# offers no castle movement and these two are not the shared answer.
 
 
 # Origin stamp for GET /api/segments (spec 2026-07-24-segment-origin-
@@ -1069,11 +1070,6 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         "sessions": sessions_list,
         "clock": clock,
         "target": target,
-        # The target the player asked for but has not reached yet, or None —
-        # held rather than applied because they picked somewhere they aren't
-        # standing (tracking/pending_target.py). Named for display by the
-        # service, so no consumer turns a course id into a sentence twice.
-        "pending_target": service.pending_target_payload(),
         "stat_menu": stat_menu,
         "catalog": _CATALOG,
         "stars": sections,

@@ -7,6 +7,7 @@ import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
+import { requestTarget } from "../target.js";
 import { Icon } from "./icons.js";
 import { IconPicker } from "./iconpicker.js";
 import { PageState } from "./states.js";
@@ -467,8 +468,7 @@ export function Segments({ t }) {
   // every view fetch reconciles it so it never stays stale (store.js).
   const isArmed = (id) => t.armedSegs.has(id);
   async function setTarget(d) {
-    await send("POST", "/api/target", { kind: "segment", segment_id: d.id });
-    t.refresh();
+    await requestTarget(t, { kind: "segment", segment_id: d.id });
   }
   async function toggle(d) {
     await send("PUT", `/api/segments/${d.id}`, { enabled: !d.enabled });
