@@ -6,7 +6,12 @@ import { getRankIconStyle, setRankIconStyle } from "./components/rankicon.js";
 const REFRESH_ON = new Set(["attempt_completed", "attempts_invalidated",
   "pb_saved", "pb_undone", "session_started", "target_changed",
   "star_collected", "strat_set", "rank_standards_changed",
-  "rank_mode_changed", "icons_changed", "marelo_changed", "route_selected"]);
+  "rank_mode_changed", "icons_changed", "marelo_changed", "route_selected",
+  // A HELD target (tracking/pending_target.py) appearing, committing or
+  // being dropped changes only the view's pending_target — no target_changed
+  // fires for the appear/drop halves, so without this the chip would sit
+  // there stale until something else refetched.
+  "target_pending"]);
 const RUN_REFRESH_ON = new Set(["run_started", "run_progress",
   "run_finished", "run_aborted", "game_reset"]);
 

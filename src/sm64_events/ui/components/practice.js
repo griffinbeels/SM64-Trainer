@@ -12,6 +12,7 @@ import { RankBanner, rankColor } from "./ranks.js";
 import { RankIcon } from "./rankicon.js";
 import { StandardsPanel } from "./standards.js";
 import { StratPicker } from "./stratpicker.js";
+import { useTargetPicker } from "./targetpicker.js";
 import { FailureCompilation } from "./failcomp.js";
 import { Icon } from "./icons.js";
 import { EntityCelebration, entityCelebrationFor } from "./celebrate.js";
@@ -476,7 +477,25 @@ function TrendEmpty() {
       hint="Finish a run and your times start charting here." />`;
 }
 
-function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
+// The objective card's symbol + eyebrow, which on the ACTIVE card double as
+// the target picker's trigger (the header's PRACTICE TARGET card owned that
+// job until 2026-07-26 — see targetpicker.js for why it moved here). Shared
+// by the star card, the segment card and the no-target card so all three open
+// the same dialog from the same place; `openPicker` absent renders exactly the
+// two plain spans that were there before, which is what every card in the
+// practice index still gets.
+function ObjectiveEyebrow({ iconName, label, openPicker }) {
+  const inside = html`<span class="objective-symbol">
+      <${Icon} name=${iconName} size=${20} /></span>
+    <span class="eyebrow">${label}</span>`;
+  if (!openPicker) return inside;
+  return html`<button type="button" class="objective-pick" onclick=${openPicker}
+      title="Practice a different star, segment, or strategy">
+    ${inside}<${Icon} name="chevron" size=${14} />
+  </button>`;
+}
+
+function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) {
   const [showHidden, setShowHidden] = useState(false);
   const [visible, setVisible] = useState(10);
   const pb = sec.pb[t.clock];
@@ -509,8 +528,8 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
   return html`<div class="practice-detail-grid ${pinned ? "is-primary" : ""}">
     <section class="practice-card objective-card ${pinned ? "active-star" : ""}">
       <div class="objective-heading">
-        <span class="objective-symbol"><${Icon} name="target" size=${20} /></span>
-        <span class="eyebrow">${pinned ? "Active target" : "Star practice"}</span>
+        <${ObjectiveEyebrow} iconName="target" openPicker=${openPicker}
+          label=${pinned ? "Active target" : "Star practice"} />
         <div class="objective-name" title=${`${sec.course_name} · ${sec.star_name}`}>
           <span class="objective-context">${sec.course_name}</span>
           <h2>${sec.star_name}</h2>
@@ -535,8 +554,15 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
             ${showsEntityBanner(sec) && html`<${RankBanner} label="Star" banner=${sec.entity_rank} />`}
           </div>
         <//>
+        ${/* Same clock + word the segment card's live state uses. It was a
+             bare "○" glyph until 2026-07-26, which only became visible as an
+             asymmetry once the heading icon moved into ObjectiveEyebrow --
+             tests/test_ui_section_parity.py went red, correctly: the two
+             cards are meant to be siblings, and ONLY_IN_* staying empty is
+             the property worth keeping. A star has nothing to arm, so its
+             word is constant where the segment's varies. */""}
         <div class="objective-live-state" aria-label="Practice state">
-          <span class="live-state-icon">○</span><span>Ready</span>
+          <${Icon} name="clock" size=${17} /><span>Ready</span>
         </div>
         <${PbTag} pb=${pb} mode=${t.clock} rows=${rows} pick=${pick} t=${t} />
       </div>
@@ -625,7 +651,7 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare }) {
 // Broken sections (definition deleted, history remains) render but drop the
 // timeline/marker editor and the strat picker — both key off the deleted
 // definition (POST /api/strat 404s for a segment that no longer exists).
-function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare }) {
+function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) {
   const [showHidden, setShowHidden] = useState(false);
   const [visible, setVisible] = useState(10);
   // armedSegs is the single live source: WS notices are instant, every view
@@ -663,8 +689,8 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare }) {
   return html`<div class="practice-detail-grid ${pinned ? "is-primary" : ""}">
     <section class="practice-card objective-card ${pinned ? "active-star" : ""}">
       <div class="objective-heading">
-        <span class="objective-symbol"><${Icon} name="segments" size=${20} /></span>
-        <span class="eyebrow">${pinned ? "Active segment" : "Segment practice"}</span>
+        <${ObjectiveEyebrow} iconName="segments" openPicker=${openPicker}
+          label=${pinned ? "Active segment" : "Segment practice"} />
         <div class="objective-name" title=${sec.name}>
           <span class="objective-context">${sec.broken ? "History only" : "Segment"}</span>
           <h2>${sec.name}</h2>
@@ -859,12 +885,12 @@ function ResetFilterToggle({ ui }) {
 }
 
 function EmptyPractice({ v, t, ui, unassignedRows, freshIds, openCompare,
-                         hidden, showHidden, setShowHidden }) {
+                         hidden, showHidden, setShowHidden, openPicker }) {
   return html`<div class="practice-detail-grid is-primary">
     <section class="practice-card objective-card objective-empty">
       <div class="objective-heading">
-        <span class="objective-symbol"><${Icon} name="target" size=${20} /></span>
-        <span class="eyebrow">Active objective</span>
+        <${ObjectiveEyebrow} iconName="target" label="Active objective"
+          openPicker=${openPicker} />
         <div class="objective-name">
           <span class="objective-context">Waiting for a target</span>
           <h2>No active objective</h2>
@@ -929,6 +955,7 @@ export function Practice({ t, openCompare }) {
     },
   };
   const freshIds = useFreshAttemptIds(t);
+  const [openTargetPicker, targetPickerDialog] = useTargetPicker(t);
   const [routes, setRoutes] = useState([]);
   const [activeRouteId, setActiveRouteId] = useState(() => {
     const s = localStorage.getItem("sm64.activeRoute");
@@ -1056,18 +1083,24 @@ export function Practice({ t, openCompare }) {
 
     <${StageBanner} t=${t} />
 
+    ${/* ONE picker for the page, not one per section: only the primary card
+         offers the trigger, and mounting a dialog's state inside every card
+         in the practice index would pay for ~30 copies of a fetch effect
+         that never runs. */""}
     ${activeStar
       ? html`<${StarSection} key=${`${activeStar.course_id}:${activeStar.star_id}`}
           sec=${activeStar} t=${t} ui=${ui} pinned=${true}
+          openPicker=${openTargetPicker}
           freshIds=${freshIds} openCompare=${openCompare} />`
       : primarySeg
         ? html`<${SegmentSection} key=${`seg:${primarySeg.segment_id}`}
             sec=${primarySeg} t=${t} ui=${ui} pinned=${true}
+            openPicker=${openTargetPicker}
             freshIds=${freshIds} openCompare=${openCompare} />`
         : html`<${EmptyPractice} v=${v} t=${t} ui=${ui}
             unassignedRows=${unassignedRows} freshIds=${freshIds}
             openCompare=${openCompare} hidden=${unassignedHidden}
-            showHidden=${showUnassignedHidden}
+            showHidden=${showUnassignedHidden} openPicker=${openTargetPicker}
             setShowHidden=${setShowUnassignedHidden} />`}
 
     ${routeView
@@ -1100,5 +1133,7 @@ export function Practice({ t, openCompare }) {
             </details>`)}
           </div>
         </section>`}
+
+    ${targetPickerDialog}
   </div>`;
 }

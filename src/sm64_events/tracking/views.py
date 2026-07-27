@@ -45,7 +45,8 @@ from sm64_events.stats.registry import (DEFAULT_STAT_MENU, REGISTRY,
 from sm64_events.tracking.projection import DEFAULT_MIN_FRAMES, journal_id
 from sm64_events.tracking.routes import route_stats
 from sm64_events.tracking.segments import (arm_level, course_groups,
-                                            origin_view, start_origin,
+                                            origin_view, start_areas,
+                                            start_levels, start_origin,
                                             time_bounds)
 
 # Timeline markers (per-section event graph): outcomes that plot as points.
@@ -773,44 +774,12 @@ def _progress(attempts, pb_ids: set, session_meta, frames_of,
 # Castle-subarea quick-select: the (level, area) pairs a segment EXPLICITLY
 # starts in, read off its start triggers. Only subarea-scoped triggers count —
 # a bare "enter Castle Inside" with no subarea must NOT surface the segment in
-# every subarea (that is what keeps LBLJ out of Upstairs). Derived from the
-# trigger param NAMES (stable across the matcher), so this stays decoupled from
-# segments.py's registry:
-#   area_enter / attempt_anchor : (level, area)
-#   level_enter / level_exit    : (to, to_subarea)   [to_subarea exists once the
-#       subarea-trigger work lands; until then .get() returns None and the row
-#       contributes nothing — forward-safe]
-# The UI (ui/components/stagebanner.js) filters these by the current castle
-# subarea (stage_changed carries level+area) to offer one-click segment targets.
-def _segment_start_areas(start_triggers: list) -> list:
-    out: list = []
-    for trig in start_triggers:
-        kind = trig.get("type")
-        if kind in ("area_enter", "attempt_anchor"):
-            level, area = trig.get("level"), trig.get("area")
-        elif kind in ("level_enter", "level_exit"):
-            level, area = trig.get("to"), trig.get("to_subarea")
-        else:
-            continue
-        if level is not None and area is not None and [level, area] not in out:
-            out.append([level, area])
-    return out
-
-
-# Whole-LEVEL quick-select: the levels a segment EXPLICITLY starts in, ignoring
-# subarea. The Bowser banner (BitDW/BitFS/BitS courses + the 1/2/3 arenas) has no
-# castle-style subareas — it offers segments by level alone (pipe-entry segments
-# start in level 17/19/21; fight segments in 30/33/34). Reads the same trigger
-# param NAMES as _segment_start_areas (decoupled from the matcher), taking only
-# the level; `spawned` carries a level too (e.g. Lakitu Skip). The UI
-# (ui/components/stagebanner.js) filters these by the current level.
-def _segment_start_levels(start_triggers: list) -> list:
-    out: list = []
-    for trig in start_triggers:
-        level = arm_level(trig)   # shared reader (tracking/segments.py)
-        if level is not None and level not in out:
-            out.append(level)
-    return out
+# The quick-select banner's two "where does this segment start" readers live in
+# tracking/segments.py as `start_areas`/`start_levels` (moved DOWN there
+# 2026-07-26, beside the `arm_level` they already read through): the service
+# needs the same answer to decide whether a HELD practice intent has been
+# reached (tracking/pending_target.py), and the service must not import the
+# view layer to get it.
 
 
 # Origin stamp for GET /api/segments (spec 2026-07-24-segment-origin-
@@ -841,7 +810,7 @@ def segment_courses(db) -> dict:
     from sm64_events.memory.addresses import COURSE_BY_LEVEL
     out = {}
     for d in db.segment_defs():
-        for level in _segment_start_levels(d["start_triggers"]):
+        for level in start_levels(d["start_triggers"]):
             course = COURSE_BY_LEVEL.get(level)
             if course is not None:
                 out[d["id"]] = course
@@ -1100,6 +1069,11 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         "sessions": sessions_list,
         "clock": clock,
         "target": target,
+        # The target the player asked for but has not reached yet, or None —
+        # held rather than applied because they picked somewhere they aren't
+        # standing (tracking/pending_target.py). Named for display by the
+        # service, so no consumer turns a course id into a sentence twice.
+        "pending_target": service.pending_target_payload(),
         "stat_menu": stat_menu,
         "catalog": _CATALOG,
         "stars": sections,
@@ -1156,8 +1130,8 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             # surface it: a RUNNING segment must never be invisible (spec
             # addendum 2026-07-24).
             for d in service.segment_defs
-            for areas, levels in ((_segment_start_areas(d.start_triggers),
-                                   _segment_start_levels(d.start_triggers)),)],
+            for areas, levels in ((start_areas(d.start_triggers),
+                                   start_levels(d.start_triggers)),)],
         # user-picked selector icons: entity_key -> icon stem (ui_state KV,
         # written by POST /api/icon; ui/components/stagebanner.js resolves
         # override > mode art > generic star)

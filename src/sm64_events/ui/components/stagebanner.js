@@ -31,6 +31,7 @@ import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
+import { Icon } from "./icons.js";
 import { PracticeCell } from "./practicecell.js";
 import { IconPicker } from "./iconpicker.js";
 import { COURSE_ICON_PREFIXES, LEVEL_ICONS, genericStarSrc,
@@ -43,7 +44,7 @@ const CASTLE_AREA_NAMES = { 1: "Lobby", 2: "Upstairs", 3: "Basement" };
 export function StageBanner({ t }) {
   const v = t.view;
   const stage = t.stage;
-  if (!v) return html`<${StagePlaceholder} />`;
+  if (!v) return html`<${StagePlaceholder} t=${t} />`;
   let row = null;
   switch (stage && stage.mode) {
     case "stars":         row = html`<${StarRow} t=${t} v=${v} stage=${stage} />`; break;
@@ -55,16 +56,55 @@ export function StageBanner({ t }) {
   // show the running segments instead of the empty placeholder.
   if (!row && armedSegments(t, v).length)
     row = html`<${ArmedOnlyRow} t=${t} v=${v} />`;
-  return row || html`<${StagePlaceholder} />`;
+  return row || html`<${StagePlaceholder} t=${t} />`;
 }
 
-function StagePlaceholder() {
+function StagePlaceholder({ t }) {
   return html`<section class="practice-card selector-card stagebanner selector-empty">
     <div class="selector-empty-symbol" aria-hidden="true">☆</div>
     <div><b>No course target available</b>
-      <span class="meta">Move into a course or choose a target above.</span></div>
+      <span class="meta">Move into a course, or pick one from the active
+        target card below.</span></div>
+    <${PendingChip} t=${t} />
   </section>`;
 }
+
+// The target the player has picked but not reached yet — a server-held INTENT
+// rather than a target that has moved (tracking/pending_target.py). It rides
+// the stage header because the banner already answers "where am I, and what
+// can I practice here"; an intent is that same question one step ahead. It
+// renders nothing at all when nothing is held, so no stage header ever
+// changes height for it. Every mode's header gets one, including the
+// placeholder — an intent must not become invisible in exactly the place
+// (a hub, a cap stage) you are most likely to be while walking toward it.
+function PendingChip({ t }) {
+  const held = t && t.view && t.view.pending_target;
+  if (!held) return null;
+  // The ENTITY's own name, never "course · star": the destination is already
+  // the next span, and printing it twice spent the truncation budget on the
+  // repeat instead of on the thing being waited for (render, 2026-07-26 —
+  // "Shifting Sand Land · Shi…" beside "on reaching Shifting Sand Land").
+  const name = held.kind === "segment" ? held.segment_name : held.star_name;
+  const where = held.where;   // null for a segment — see pending_target_payload
+  async function cancel(event) {
+    event.stopPropagation();
+    await send("DELETE", "/api/target/pending");
+    t.refresh();
+  }
+  return html`<span class="pending-target"
+      title=${where
+        ? `Waiting for you to enter ${where}. Enter a different course `
+          + "instead and this is dropped."
+        : "Waiting for you to reach where this segment starts. Enter a "
+          + "different course instead and this is dropped."}>
+    <${Icon} name="target" size=${14} />
+    <b>Next</b><span class="pending-target-name">${name}</span>
+    ${where && html`<span class="meta">in ${where}</span>`}
+    <button type="button" class="pending-clear" onclick=${cancel}
+        aria-label=${`Cancel practising ${name}`}>×</button>
+  </span>`;
+}
+
 
 // --- route focus ------------------------------------------------------------
 // With a route active the selectors narrow to that route's members. Returns
@@ -184,7 +224,7 @@ function StarRow({ t, v, stage }) {
   // hooks first — the early return below must never change the hook count
   const [setPicking, pickerModal] = useIconPicking(t);
   const course = v.catalog.courses.find((c) => c.id === stage.course_id);
-  if (!course) return html`<${StagePlaceholder} />`;
+  if (!course) return html`<${StagePlaceholder} t=${t} />`;
 
   const tgt = v.target || {};
   const prefix = COURSE_ICON_PREFIXES[stage.course_id - 1] || null;
@@ -219,7 +259,7 @@ function StarRow({ t, v, stage }) {
     <div class="shead"><b>▸ ${course.name}</b>
       <span class="meta">${routeStars
         ? html`showing this route's stars · tap to practice`
-        : "tap a star to practice"}</span></div>
+        : "tap a star to practice"}</span><${PendingChip} t=${t} /></div>
     <div class="starrow">
       ${shown.map(({ name, i }) => html`<${PracticeCell} dimIdle=${STAR_DIM_IDLE}
         key=${`${stage.course_id}:${i}`}
@@ -296,11 +336,12 @@ function BowserCourseRow({ t, v, stage }) {
     }
   }, [stage.level, enabledPipe && enabledPipe.segment_id]);
 
-  if (!course) return html`<${StagePlaceholder} />`;
+  if (!course) return html`<${StagePlaceholder} t=${t} />`;
 
   return html`<section class="practice-card selector-card stagebanner">
     <div class="shead"><b>▸ ${course.name}</b>
-      <span class="meta">reds (8-coin star) · or the pipe-entry skip (no reds)</span></div>
+      <span class="meta">reds (8-coin star) · or the pipe-entry skip (no reds)</span>
+      <${PendingChip} t=${t} /></div>
     <div class="starrow segcells">
       <${PracticeCell} dimIdle=${STAR_DIM_IDLE}
         active=${redsActive}
@@ -352,11 +393,12 @@ function ArenaRow({ t, v, stage }) {
 
   const extras = armedExtraCells(
     t, v, new Set(fights.map((s) => s.segment_id)), setPicking);
-  if (!fights.length && !extras.length) return html`<${StagePlaceholder} />`;
+  if (!fights.length && !extras.length) return html`<${StagePlaceholder} t=${t} />`;
 
   return html`<section class="practice-card selector-card stagebanner">
     <div class="shead"><b>▸ Bowser Fight</b>
-      <span class="meta">auto-selected — tap to re-arm</span></div>
+      <span class="meta">auto-selected — tap to re-arm</span>
+      <${PendingChip} t=${t} /></div>
     <div class="starrow segcells">
       ${fights.map((s) => html`<${StandardSegmentCell}
         key=${`seg:${s.segment_id}`} t=${t} s=${s} setPicking=${setPicking} />`)}
@@ -381,11 +423,12 @@ function SegmentRow({ t, v, stage }) {
   const segs = inRoute.length ? inRoute : here;   // never empty the row
   const extras = armedExtraCells(
     t, v, new Set(segs.map((s) => s.segment_id)), setPicking);
-  if (!segs.length && !extras.length) return html`<${StagePlaceholder} />`;
+  if (!segs.length && !extras.length) return html`<${StagePlaceholder} t=${t} />`;
 
   return html`<section class="practice-card selector-card stagebanner">
     <div class="shead"><b>▸ Castle ${CASTLE_AREA_NAMES[stage.area]}</b>
-      <span class="meta">tap a segment to practice</span></div>
+      <span class="meta">tap a segment to practice</span>
+      <${PendingChip} t=${t} /></div>
     <div class="starrow segcells">
       ${segs.map((s) => html`<${StandardSegmentCell}
         key=${`seg:${s.segment_id}`} t=${t} s=${s} setPicking=${setPicking} />`)}
@@ -401,7 +444,8 @@ function ArmedOnlyRow({ t, v }) {
   const [setPicking, pickerModal] = useIconPicking(t);
   return html`<section class="practice-card selector-card stagebanner">
     <div class="shead"><b>▸ Running</b>
-      <span class="meta">a segment timer is live</span></div>
+      <span class="meta">a segment timer is live</span>
+      <${PendingChip} t=${t} /></div>
     <div class="starrow segcells">
       ${armedSegments(t, v).map((s) => html`<${StandardSegmentCell}
         key=${`seg:${s.segment_id}`} t=${t} s=${s} setPicking=${setPicking} />`)}

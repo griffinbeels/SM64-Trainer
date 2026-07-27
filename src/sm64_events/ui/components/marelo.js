@@ -55,7 +55,15 @@ export function MareloBar({ marelo, onOpen }) {
     </span>` : "–"}
     <span class="marelo-bar-text">
       <b>${tier ? `${capName(tier)} ${divisionDigit(division)}` : "Unranked"}</b>
-      <span class="meta">${label} · ${fmtPoints(score)} pts</span>
+      ${/* Points BEFORE the scope label (2026-07-26): the bar moved into the
+           context grid, so it is now as wide as its column rather than as
+           wide as its contents, and this line ellipsises. Measured across a
+           width sweep, the old "<label> · <n> pts" order spent the whole
+           truncation budget on the number -- "16 Star - LBLJ (Standard) . 1..."
+           -- losing the one part of the line that is a value rather than
+           context. Reversed, a narrow column drops "(Standard)" instead. */
+        null}
+      <span class="meta">${fmtPoints(score)} pts · ${label}</span>
     </span>
     <span class="marelo-track"><i style=${`width:${fill}%;background:${rankColor(tier)}`}></i></span>
     <!-- Mastery stays 0-100, never points: it's a mean SCORE (mastery x

@@ -581,12 +581,18 @@ def create_api_router(service) -> APIRouter:
 
     @router.post("/target")
     async def target(body: TargetBody):
-        """Set the active practice target.
+        """Set the active practice target — or hold it as an intent.
 
         kind="segment": requires segment_id; targeting a DISABLED definition
         is allowed — disabling pauses detection without forfeiting the target;
         the section simply accrues no attempts.
         kind="star" (default): requires course_id and star_id.
+
+        A pick the player cannot practice where they are standing does NOT
+        move the target: it is held until they walk into its stage, and
+        dropped if they walk into a different one instead (see
+        tracking/pending_target.py). `pending` in the response says which
+        happened, so the caller never has to infer it from the view.
         """
         # strat_tag present-and-null ("(no strategy)" in the picker) clears
         # the entity's existing strat explicitly; strat_tag absent entirely
@@ -594,18 +600,19 @@ def create_api_router(service) -> APIRouter:
         clear_strat = ("strat_tag" in body.model_fields_set
                        and body.strat_tag is None)
         try:
-            if body.kind == "segment":
-                if body.segment_id is None:
-                    raise ValueError("segment target needs segment_id")
-                await service.set_target_segment(body.segment_id, body.strat_tag,
-                                                 clear_strat=clear_strat)
-            else:
-                if body.course_id is None or body.star_id is None:
-                    raise ValueError("star target needs course_id and star_id")
-                await service.set_target(body.course_id, body.star_id,
-                                         body.strat_tag, clear_strat=clear_strat)
+            result = await service.request_target(
+                body.kind, course_id=body.course_id, star_id=body.star_id,
+                segment_id=body.segment_id, strat_tag=body.strat_tag,
+                clear_strat=clear_strat)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
+        return {"ok": True, **result}
+
+    @router.delete("/target/pending")
+    async def clear_pending_target():
+        """Abandon a held intent without moving the target (the pending
+        chip's ×). Idempotent: clearing nothing is not an error."""
+        await service.clear_pending_target()
         return {"ok": True}
 
     @router.post("/strat")

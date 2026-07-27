@@ -5,7 +5,8 @@ from sm64_events.core.events import Event
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.storage.db import Database
 from sm64_events.tracking.service import TrackerService
-from sm64_events.tracking.views import _segment_start_areas, build_session_view
+from sm64_events.tracking.segments import start_areas, start_levels
+from sm64_events.tracking.views import build_session_view
 
 T0 = datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -833,7 +834,6 @@ def test_segment_targets_include_disabled_segments(tmp_path):
 
 
 def test_segment_start_levels_reads_level_scoped_triggers():
-    from sm64_events.tracking.views import _segment_start_levels
     triggers = [
         {"type": "level_enter", "to": 17},
         {"type": "attempt_anchor", "level": 17},          # dup -> deduped
@@ -841,8 +841,8 @@ def test_segment_start_levels_reads_level_scoped_triggers():
         {"type": "area_enter", "level": 6, "area": 2},
         {"type": "spawned", "level": 16},
     ]
-    assert _segment_start_levels(triggers) == [17, 6, 16]
-    assert _segment_start_levels([{"type": "warp_entered", "level": 17}]) == []
+    assert start_levels(triggers) == [17, 6, 16]
+    assert start_levels([{"type": "warp_entered", "level": 17}]) == []
 
 
 def test_segment_start_areas_reads_only_subarea_scoped_triggers():
@@ -854,13 +854,13 @@ def test_segment_start_areas_reads_only_subarea_scoped_triggers():
         {"type": "level_enter", "to": 6, "from": 16},               # no subarea -> ignored
         {"type": "spawned", "level": 16},                           # not subarea -> ignored
     ]
-    assert _segment_start_areas(triggers) == [[6, 2], [6, 1], [6, 3]]
+    assert start_areas(triggers) == [[6, 2], [6, 1], [6, 3]]
     # a bare Castle-Inside trigger contributes nothing (keeps LBLJ lobby-only)
-    assert _segment_start_areas([{"type": "level_enter", "to": 6}]) == []
+    assert start_areas([{"type": "level_enter", "to": 6}]) == []
 
 
 def test_segment_banner_param_names_match_the_registry():
-    # _segment_start_areas reads these trigger PARAM NAMES off the dicts
+    # segments.start_areas reads these trigger PARAM NAMES off the dicts
     # statically; a rename in segments.py's TRIGGERS would silently break the
     # castle banner with no other coupling pointing back. Pin the contract
     # (see the NB comment above TRIGGERS in segments.py).
@@ -869,7 +869,7 @@ def test_segment_banner_param_names_match_the_registry():
     assert {"to", "to_subarea"} <= set(TRIGGERS["level_exit"].params)
     assert {"level", "area"} <= set(TRIGGERS["area_enter"].params)
     assert {"level", "area"} <= set(TRIGGERS["attempt_anchor"].params)
-    # _segment_start_levels (the Bowser banner) ALSO reads `spawned.level`.
+    # segments.start_levels (the Bowser banner) ALSO reads `spawned.level`.
     assert {"level"} <= set(TRIGGERS["spawned"].params)
 
 

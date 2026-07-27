@@ -26,9 +26,11 @@ from sm64_events.memory.addresses import course_name, star_name
 from sm64_events.ranks.classify import RANK_MODES
 from sm64_events.ranks.standards import entity_key
 from sm64_events.storage.db import Database, EventRow
+from sm64_events.tracking import pending_target as pending
 from sm64_events.tracking.defaults import resolve_steps
 from sm64_events.tracking.projection import Projector, replay, wipe_matches
-from sm64_events.tracking.segments import SegmentDef, validate_definition
+from sm64_events.tracking.segments import (SegmentDef, start_areas,
+                                           start_levels, validate_definition)
 from sm64_events.tracking import routes as route_logic
 
 log = logging.getLogger("sm64.tracker")
@@ -82,6 +84,10 @@ class TrackerService:
                                     time_filters=self._time_filters())
         self._current_stage = {"course_id": None, "level": None,
                                "area": None, "mode": None}
+        # A target picked for somewhere the player isn't standing, held until
+        # they follow through (tracking/pending_target.py). Live state like
+        # _current_stage: broadcast-only, never journaled, gone on restart.
+        self._pending_target: dict | None = None
         self._persisted_runs: list[int] = []
 
     def _load_segment_defs(self) -> list[SegmentDef]:
@@ -138,6 +144,16 @@ class TrackerService:
             # journal row would only add replay/projection noise). Same
             # broadcast-only discipline as the segment notices.
             self._current_stage = dict(event.payload)
+            # Where the player just walked is the ONLY signal that answers
+            # "did they follow through on the target they picked" -- resolve
+            # any held intent here, before anything else can observe the new
+            # stage. Isolated like _track below: a pending-target failure must
+            # never kill the poll loop.
+            try:
+                await self._resolve_pending_target()
+            except Exception:
+                log.exception("pending-target resolution failed; intent dropped")
+                self._pending_target = None
             return
         if self.db is None or self.session_id is None:
             return
@@ -252,6 +268,36 @@ class TrackerService:
         return {"kind": "star", "course_id": c, "star_id": s,
                 "strat_tag": self._projector.strat_tag}
 
+    def pending_target_payload(self) -> dict | None:
+        """The held intent, named for display, or None.
+
+        Same shape as target_payload plus `where` -- the place the player has
+        to reach for it to commit, which is the whole reason the intent is
+        visible at all ("Shining Atop the Pyramid, in Shifting Sand Land").
+        The UI must never have to re-derive that sentence from a course id.
+
+        `where` is None for a SEGMENT and that is deliberate: a segment's
+        location is a set of start levels and castle subareas, not one place
+        with a name, and answering "Lethal Lava Land · LBLJ" with the
+        segment's own name (the first cut) put the same words on screen
+        twice while truncating the half that identifies it.
+        """
+        held = self._pending_target
+        if held is None:
+            return None
+        if held["kind"] == "segment":
+            return {"kind": "segment", "segment_id": held["segment_id"],
+                    "segment_name": self._segment_name(held["segment_id"]),
+                    "course_id": None, "star_id": None,
+                    "strat_tag": held["strat_tag"], "where": None}
+        course, star = held["course_id"], held["star_id"]
+        return {"kind": "star", "course_id": course, "star_id": star,
+                "segment_id": None, "segment_name": None,
+                "strat_tag": held["strat_tag"],
+                "course_name": course_name(course),
+                "star_name": star_name(course, star),
+                "where": course_name(course)}
+
     # -- state ------------------------------------------------------------------
     @property
     def target(self):
@@ -320,6 +366,114 @@ class TrackerService:
             if not tombs[ek]:
                 tombs.pop(ek)
             db.set_state("deleted_strats", tombs)
+
+    # -- practice target: request (may hold) vs set (always commits) ---------
+    # set_target / set_target_segment below are the COMMIT primitives and are
+    # unchanged -- they move the target now, and every internal caller wants
+    # exactly that. request_target is the layer the UI posts to: it decides
+    # whether the pick is something the player can practice where they stand,
+    # and holds it as an intent if not (tracking/pending_target.py). Keeping
+    # the two apart is what stops the commit path re-entering the decision.
+
+    def _pending_start_locations(self, held: dict) -> tuple[list, list]:
+        """(levels, areas) a held SEGMENT intent can start in; ([], []) for a
+        star, whose location is its course id and needs no lookup."""
+        if held["kind"] != "segment":
+            return [], []
+        found = next((d for d in self._segment_defs
+                      if d.id == held["segment_id"]), None)
+        if found is None:
+            return [], []
+        return start_levels(found.start_triggers), start_areas(found.start_triggers)
+
+    def _is_current_target(self, held: dict) -> bool:
+        """Re-picking what is ALREADY the target is never a change of place --
+        only its strategy can differ, so it commits immediately rather than
+        waiting for the player to 'arrive' somewhere they already are."""
+        if held["kind"] == "segment":
+            return self.target == ("segment", held["segment_id"])
+        return self.target == ("star", held["course_id"], held["star_id"])
+
+    async def request_target(self, kind: str, course_id: int | None = None,
+                             star_id: int | None = None,
+                             segment_id: int | None = None,
+                             strat_tag: str | None = None,
+                             clear_strat: bool = False) -> dict:
+        """Set the practice target, or hold it until the player gets there.
+
+        Returns {"pending": bool} so the caller can tell the two apart. The
+        identity is validated BEFORE anything is held: a bad segment id must
+        404 now, not sit in an intent that can never commit.
+        """
+        self._require_db()
+        if kind == "segment":
+            if segment_id is None:
+                raise ValueError("segment target needs segment_id")
+            if all(d.id != segment_id for d in self._segment_defs):
+                raise LookupError(f"segment {segment_id} not found")
+        else:
+            if course_id is None or star_id is None:
+                raise ValueError("star target needs course_id and star_id")
+        held = {"kind": "segment" if kind == "segment" else "star",
+                "course_id": course_id, "star_id": star_id,
+                "segment_id": segment_id, "strat_tag": strat_tag,
+                "clear_strat": clear_strat}
+        # No live stage means no way to judge following-through (the emulator
+        # isn't attached, or the player is somewhere that offers nothing) --
+        # holding an intent there could strand the target forever, so commit.
+        stage = self._current_stage
+        here = (stage or {}).get("mode") is None or self._is_current_target(held) \
+            or pending.belongs_to_stage(stage, held["kind"], course_id,
+                                        *self._pending_start_locations(held))
+        was_held = self._pending_target
+        self._pending_target = None if here else held
+        if here:
+            await self._commit_target(held)
+        # Only when the held state actually moved: an ordinary in-stage pick
+        # already refreshes every client through target_changed, and a second
+        # "nothing is pending" notice would make it refetch twice.
+        if was_held != self._pending_target:
+            await self._publish_pending()
+        return {"pending": not here}
+
+    async def clear_pending_target(self) -> None:
+        """Abandon a held intent without moving the target (the UI's × on the
+        pending chip). A no-op when nothing is held, so it is safe to spam."""
+        if self._pending_target is None:
+            return
+        self._pending_target = None
+        await self._publish_pending()
+
+    async def _commit_target(self, held: dict) -> None:
+        if held["kind"] == "segment":
+            await self.set_target_segment(held["segment_id"], held["strat_tag"],
+                                          clear_strat=held["clear_strat"])
+        else:
+            await self.set_target(held["course_id"], held["star_id"],
+                                  held["strat_tag"],
+                                  clear_strat=held["clear_strat"])
+
+    async def _resolve_pending_target(self) -> None:
+        """Called on every stage_changed: commit, drop, or keep holding."""
+        held = self._pending_target
+        if held is None:
+            return
+        verdict = pending.resolve(self._current_stage, held["kind"],
+                                  held["course_id"],
+                                  *self._pending_start_locations(held))
+        if verdict == pending.HOLD:
+            return
+        self._pending_target = None
+        if verdict == pending.COMMIT:
+            await self._commit_target(held)
+        await self._publish_pending()
+
+    async def _publish_pending(self) -> None:
+        """Broadcast-only, like the segment notices: an intent is ephemeral UI
+        state and journaling one would let a replay resurrect it."""
+        await self.broadcaster.publish(
+            Event(type="target_pending", frame=0, timestamp_utc=_now(),
+                  payload={"pending": self.pending_target_payload()}))
 
     async def set_target(self, course_id: int, star_id: int,
                          strat_tag: str | None = None,

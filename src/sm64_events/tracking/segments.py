@@ -463,6 +463,53 @@ def arm_level(trig: dict) -> int | None:
     return None
 
 
+def start_areas(start_triggers: list) -> list:
+    """[[level, area], …] — the castle SUBAREAS a segment explicitly starts in.
+
+    Subarea-scoped triggers only, so a whole-level rule never claims every
+    subarea (that is what keeps LBLJ out of Upstairs). Derived from the trigger
+    param NAMES (stable across the matcher), so this stays decoupled from the
+    registry above:
+      area_enter / attempt_anchor : (level, area)
+      level_enter / level_exit    : (to, to_subarea)   [to_subarea exists once
+          the subarea-trigger work lands; until then .get() returns None and the
+          row contributes nothing — forward-safe]
+    The UI (ui/components/stagebanner.js) filters these by the current castle
+    subarea (stage_changed carries level+area) to offer one-click segment
+    targets; tracking/pending_target.py asks the same question of a held intent.
+    """
+    out: list = []
+    for trig in start_triggers:
+        kind = trig.get("type")
+        if kind in ("area_enter", "attempt_anchor"):
+            level, area = trig.get("level"), trig.get("area")
+        elif kind in ("level_enter", "level_exit"):
+            level, area = trig.get("to"), trig.get("to_subarea")
+        else:
+            continue
+        if level is not None and area is not None and [level, area] not in out:
+            out.append([level, area])
+    return out
+
+
+def start_levels(start_triggers: list) -> list:
+    """The LEVELS a segment explicitly starts in, ignoring subarea.
+
+    The Bowser banner (BitDW/BitFS/BitS courses + the 1/2/3 arenas) has no
+    castle-style subareas — it offers segments by level alone (pipe-entry
+    segments start in level 17/19/21; fight segments in 30/33/34). Reads the
+    same trigger param NAMES as start_areas, taking only the level; `spawned`
+    carries a level too (e.g. Lakitu Skip). The UI filters these by the current
+    level.
+    """
+    out: list = []
+    for trig in start_triggers:
+        level = arm_level(trig)
+        if level is not None and level not in out:
+            out.append(level)
+    return out
+
+
 def start_level_set(start_triggers: list,
                      waypoints: list | None = None) -> set[int] | None:
     """Levels this segment can plausibly occupy while it's the active

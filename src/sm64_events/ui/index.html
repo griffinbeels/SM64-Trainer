@@ -59,15 +59,26 @@
   /* a segment cell whose start condition is met — the timer is running NOW */
   .starcell.armed { border-color: #3f8a5f; background: #16241c; }
   /* hover ✎ -> icon picker; revealed on cell hover or keyboard focus */
-  .starcell .editicon { position: absolute; top: 3px; right: 3px;
+  /* The ✎ icon-override affordance. ONE rule for both surfaces that offer it
+     — the banner's practice cells and the Rank tab's coverage tiles — with
+     exactly one named difference: the tile's is scaled down, because a 42px
+     tile cannot carry the banner cell's 20px badge (2026-07-26). */
+  .starcell .editicon, .entity-tile .editicon {
+              position: absolute; top: 3px; right: 3px;
               width: 20px; height: 20px; display: flex; align-items: center;
               justify-content: center; border-radius: 6px; font-size: .72rem;
               color: var(--muted); background: rgba(10,23,38,.88);
               border: 1px solid var(--border-soft);
               opacity: 0; transition: opacity .12s; }
   .starcell:hover .editicon, .starcell:focus-within .editicon,
-  .starcell .editicon:focus-visible { opacity: 1; }
-  .starcell .editicon:hover { color: var(--text); border-color: #3e607f; }
+  .starcell .editicon:focus-visible,
+  .entity-tile:hover .editicon, .entity-tile:focus-within .editicon,
+  .entity-tile .editicon:focus-visible { opacity: 1; }
+  .starcell .editicon:hover, .entity-tile .editicon:hover {
+              color: var(--text); border-color: #3e607f; }
+  .entity-tile .tile-editicon { top: 1px; right: 1px; width: 15px;
+              height: 15px; border-radius: 5px; font-size: .55rem;
+              background: rgba(10,23,38,.94); }
   /* rank medal (or "–" when unranked) sitting between the star and its name;
      nudged up (negative margin) to sit centered in the gap — the star art has
      transparent bottom margin below its legs. Bobs with the active star. */
@@ -712,7 +723,18 @@
     display: block; overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap; font-weight: 650;
   }
-  .target-context .context-label { color: var(--green); }
+  /* Slot 2 of the context bar: the MARELO rank bar, which took the space the
+     deleted PRACTICE TARGET card used to hold (2026-07-26 — header.js carries
+     the why). The slot exists in its own right because MareloBar renders
+     nothing until /api/marelo lands, and a missing grid child would slide
+     every later card one column left; while empty it wears the neighbouring
+     cards' panel so the bar reads as four cards loading, not three and a
+     hole. */
+  .marelo-slot { min-width: 0; display: grid; container-type: inline-size; }
+  .marelo-slot:empty {
+    border: 1px solid var(--border); border-radius: 7px;
+    background: rgba(11,25,41,.92);
+  }
   .workspace {
     width: 100%; max-width: 1500px; min-width: 0; margin: 0 auto;
     padding: 4px 14px 28px; overflow-x: hidden;
@@ -800,6 +822,67 @@
   .selector-empty-symbol { color: var(--muted); font-size: 2.8rem; line-height: 1; }
   .selector-empty b { display: block; margin-bottom: .25rem; }
   .selector-empty .meta { display: block; }
+  /* A HELD practice target — picked for somewhere the player isn't standing,
+     waiting for them to walk there (tracking/pending_target.py). It rides the
+     stage header's own line rather than a row of its own: the header is
+     already "where am I and what can I practice here", it has 30px of height
+     reserved whether or not this is in it, and a strip that appears above the
+     banner would shove the whole page down at the moment the player is aiming
+     at a star. margin-left:auto puts it on the right of every mode's header;
+     in the centered .selector-empty placeholder that resolves to no offset,
+     which is what that layout wants anyway. */
+  /* min-width:0 + a shrinkable name so the chip COMPRESSES before .shead's
+     flex-wrap moves it to a second line: wrapping grows the banner the moment
+     the intent appears, and a transient element must not shove the star row
+     the player is aiming at (measured 2026-07-26 — it wrapped below ~850px). */
+  .pending-target {
+    margin-left: auto; min-width: 0; flex: 0 1 auto;
+    display: inline-flex; align-items: center; gap: .4rem;
+    padding: .2rem .3rem .2rem .5rem; border-radius: 999px;
+    border: 1px solid rgba(240,189,50,.42); background: rgba(240,189,50,.10);
+    color: var(--text); font-size: .78rem; line-height: 1.1;
+    animation: pending-in 220ms ease both;
+  }
+  .pending-target > .ui-icon { color: var(--gold); flex: 0 0 auto; }
+  .pending-target b { color: var(--gold); text-transform: uppercase;
+    font-size: .66rem; letter-spacing: .06em; }
+  .pending-target-name {
+    min-width: 5ch; max-width: 30ch; flex: 0 1 auto;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-weight: 650;
+  }
+  .pending-target .meta { white-space: nowrap; flex: 0 1 auto; overflow: hidden;
+    text-overflow: ellipsis; }
+  .pending-clear {
+    width: 20px; height: 20px; min-height: 0; padding: 0; flex: 0 0 auto;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 0; border-radius: 50%; background: transparent;
+    color: var(--muted); font-size: 1rem; line-height: 1; cursor: pointer;
+    transition: background 140ms ease, color 140ms ease;
+  }
+  .pending-clear:hover { background: rgba(255,255,255,.10); color: var(--text); }
+  @keyframes pending-in {
+    from { opacity: 0; transform: translateX(6px); }
+    to   { opacity: 1; transform: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pending-target { animation: none; }
+  }
+  /* Under ~1000px of pane the banner's own header is already tight; the
+     "in X" tail is the redundant half (the chip's title says it in full, and
+     the name is the part being waited on). */
+  @container (max-width: 1000px) { .pending-target .meta { display: none; } }
+  /* Narrower still, the chip no longer fits beside the banner's title AND its
+     hint, and .shead's flex-wrap moves it to a second line. Measured, that
+     costs 32px INSIDE a fixed-height card — the star row keeps its computed
+     height and the bottom of every cell is clipped instead (2026-07-26, the
+     card/row heights were byte-identical with the chip removed from the DOM,
+     which is what proved the cost was clipping and not growth). So drop the
+     banner's own hint, and ONLY while an intent is held: it is a standing
+     instruction repeated on every visit, where the chip is news. */
+  @container (max-width: 760px) {
+    .selector-card .shead:has(.pending-target) > .meta { display: none; }
+  }
   .practice-detail-grid {
     display: grid; grid-template-columns: minmax(330px,.9fr) minmax(520px,1.35fr);
     gap: 12px; min-width: 0;
@@ -817,6 +900,21 @@
   .objective-symbol {
     color: var(--gold); display: inline-flex; align-items: center; justify-content: center;
   }
+  /* The active card's symbol + eyebrow ARE the target picker's trigger (the
+     header's PRACTICE TARGET card owned that job until 2026-07-26). It spans
+     the two cells those elements already occupied, so the heading's four
+     column tracks are untouched and nothing else on the card moves. Its own
+     padding is negative-margined back out for the same reason. */
+  .objective-pick {
+    grid-column: 1 / 3; display: inline-flex; align-items: center; gap: .5rem;
+    margin: -.28rem -.4rem; padding: .28rem .4rem;
+    border: 1px solid transparent; border-radius: 7px;
+    background: transparent; color: inherit; cursor: pointer;
+    transition: background 140ms ease, border-color 140ms ease;
+  }
+  .objective-pick:hover { background: #16283e; border-color: #496784; }
+  .objective-pick > .ui-icon { color: var(--muted); }
+  .objective-pick .eyebrow { cursor: pointer; }
   .objective-name { min-width: 0; }
   .objective-context {
     display: block; color: var(--muted); font-size: .72rem;
@@ -978,24 +1076,44 @@
     background: rgba(4,13,23,.72);
   }
   .rank-progress-track i { display: block; height: 100%; border-radius: inherit; }
-  /* MARELO header bar: its own row below the session/target/clock/rank grid
-     rather than a 5th grid column -- .context-bar's 4-column template is
-     redefined at two breakpoints (1180px, 760px) and adding a column would
-     mean touching all three; a second flex row is additive and matches the
-     same centered width formula. --border/rgba(11,25,41,.92) mirror
-     .context-control's panel styling (this design system has no --panel or
-     --line token). Fixed 44px height so a rank-up never reflows the OBS
-     capture. */
-  .marelo-row {
-    width: calc(100% - 28px); max-width: 1472px; margin: 8px auto 0;
-    display: flex; justify-content: flex-end;
-  }
+  /* MARELO header bar. It used to sit right-aligned on a 44px row of its own
+     UNDER the context grid, because .context-bar's 4-column template is
+     redefined at two breakpoints and a 5th column would have meant touching
+     all three. It is now IN the grid, in slot 2 — the practice-target card
+     that occupied that slot was deleted (2026-07-26, user), so the column
+     came free with no template change and the extra header row went away.
+     --border/rgba(11,25,41,.92) mirror .context-control's panel styling (this
+     design system has no --panel or --line token). Height is no longer fixed
+     at 44px and does not need to be: it fills a grid cell whose height is set
+     by .context-bar's own min-height and its 54px siblings, so a rank-up
+     still cannot reflow the OBS capture. */
   .marelo-bar {
-    display: flex; align-items: center; gap: 10px; height: 44px; padding: 0 12px;
+    display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0;
+    min-height: 54px; padding: 0 12px;
     border: 1px solid var(--border); border-radius: 7px; background: rgba(11,25,41,.92);
-    color: var(--text); cursor: pointer; flex: 0 0 auto;
+    color: var(--text); cursor: pointer; text-align: left;
   }
   .marelo-bar:hover { border-color: var(--gold); }
+  /* The bar is now as wide as its column rather than as wide as its contents,
+     so its text has to behave like the context cards' does: the name/label
+     line ellipsises, and the mastery/coverage split — the one part whose
+     information also lives in the bar's own title — is what gives way first
+     when the column narrows. */
+  .marelo-bar .marelo-bar-text { min-width: 0; flex: 1 1 auto; }
+  .marelo-bar .marelo-bar-text > * {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* What gives way first as the column narrows, measured rather than guessed
+     (render sweep 2026-07-26): the mastery/coverage split, then the progress
+     track. Both are the bar's least identifying parts and both are restated
+     in its own title, which survives because the title rides the BUTTON — an
+     element that is always rendered, so it can always be hovered (a hidden
+     element's own title is not a fallback). The threshold is a CONTAINER
+     query on the slot, not a viewport media query: the sidebar's 1180px step
+     means this column's width is not monotonic in window width, so a media
+     query gets it wrong on both sides of that step. */
+  @container (max-width: 500px) { .marelo-split { display: none; } }
+  @container (max-width: 330px) { .marelo-track { display: none; } }
   /* Round 5 (addendum, task 8, 2026-07-26): `.marelo-bar`'s own 10px gap
      was already close to this icon's wing spill at size 34 (~12.6px a
      side) -- borderline enough that `.rank-icon-slot` is worth it here
@@ -1340,6 +1458,8 @@
   .entity-strip { display: flex; flex-wrap: wrap; gap: 8px; }
   .entity-tile {
     flex: 0 0 auto;
+    /* the ✎ badge positions against this — see the .editicon block above */
+    position: relative;
     display: inline-flex; align-items: center; justify-content: center;
     width: var(--tile-size, 42px); height: var(--tile-size, 42px);
     border-radius: 8px; overflow: hidden;

@@ -1,16 +1,12 @@
 import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
-import { getJSON, send } from "../api.js";
+import { send } from "../api.js";
 import { RANK_MODE_OPTIONS } from "./ranks.js";
 import { Icon } from "./icons.js";
 import { MareloBar } from "./marelo.js";
 import { ICON_STYLES } from "./rankicon.js";
 import { celebrationsEnabled, setCelebrationsEnabled } from "./celebrate.js";
-import { PickerDialog } from "./entitymodal.js";
-import { StrategyStep } from "./strategystep.js";
-import { courseUnionGroups, optionIcon, parseSegmentId,
-         segmentLevelsOf, starId } from "../entities.js";
 
 const html = htm.bind(h);
 
@@ -48,28 +44,8 @@ function ContextSelect({ icon, label, options, value, onChange, id, name,
 
 export function Header({ t, settingsOpen, closeSettings, setTab }) {
   const v = t.view;
-  const tgt = v && v.target;
-  const [editing, setEditing] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [celebrateOn, setCelebrateOn] = useState(celebrationsEnabled());
-  // The target picker's rank badges (courseUnionGroups' optional 4th arg).
-  // Keyed on `editing` alone, never fetched on the header's other renders --
-  // it re-renders on every WebSocket event while this dialog is normally
-  // closed.
-  const [targetRanks, setTargetRanks] = useState({});
-  useEffect(() => {
-    if (!editing) return;
-    let alive = true;
-    // M9 (final review, 2026-07-26): clear the PREVIOUS open's badges before
-    // the new fetch lands, or reopening the picker paints stale ranks for a
-    // beat -- harmless flicker, but a picker cell briefly wearing a rank it
-    // no longer has reads as a bug the moment the real fetch corrects it.
-    setTargetRanks({});
-    getJSON("/api/target/ranks")
-      .then((ranks) => { if (alive) setTargetRanks(ranks); })
-      .catch((fetchError) => console.error(fetchError));
-    return () => { alive = false; };
-  }, [editing]);
 
   // marelo is store-owned (store.js) -- app.js reads the same object to
   // decide whether the rank-up overlay is showing, so the header and the
@@ -77,15 +53,11 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
   const openMarelo = () => setTab("Rank");
 
   useEffect(() => {
-    if (!settingsOpen && !editing) return;
-    const onKey = (event) => {
-      if (event.key !== "Escape") return;
-      if (editing) setEditing(false);
-      else closeSettings();
-    };
+    if (!settingsOpen) return;
+    const onKey = (event) => { if (event.key === "Escape") closeSettings(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [settingsOpen, editing, closeSettings]);
+  }, [settingsOpen, closeSettings]);
 
   async function restartServer() {
     if (restarting) return;
@@ -136,84 +108,10 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
     t.refresh();
   }
 
-  const targetName = tgt && tgt.kind === "segment"
-    ? tgt.segment_name
-    : tgt && tgt.course_id !== null
-      ? `${tgt.course_name} · ${tgt.star_name}`
-      : "Choose a practice target";
-  const running = [...t.armedOrder].reverse()
-    .map((id) => t.armedNames[id] || `segment ${id}`).join(" · ");
-
   const sessionOptions = v ? [["lifetime", "Lifetime"], ...v.sessions.map(
     (s) => [String(s.id),
             `Session ${s.id}${s.id === active ? " ●" : ""} · ${s.attempts}`],
   )] : [];
-
-  // Re-picking the SAME star that's already the target, with a new (or
-  // first) strategy, leaves the projector's target tuple unchanged -- no
-  // WebSocket event in store.js's REFRESH_ON fires for that specific case
-  // (set_target's truthy-strat_tag branch never publishes strat_set, unlike
-  // set_target_segment's; verified empirically against TrackerService).
-  // Every other /api/target call site (stagebanner.js, practice.js, this
-  // card's own predecessor) refreshes explicitly right after for exactly
-  // this reason -- this picker must too, on every dismissal (a plain
-  // Esc/backdrop close just refetches data that didn't change, which is
-  // harmless, and keeps one path rather than two).
-  function closeTargetPicker() { setEditing(false); t.refresh(); }
-
-  // Only ever CALLED while the dialog is open (the `editing && v` guard at
-  // the call site short-circuits before this runs) -- courseUnionGroups
-  // walks every course and segment, and the header re-renders on every
-  // WebSocket event, so this must not run on the other renders.
-  function renderTargetPicker() {
-    // segmentLevels + iconOverrides are NOT optional here: without them
-    // every segment cell falls through optionIcon's chain to a plain gold
-    // star, while the banner and the route editor show its real art — and a
-    // user's explicit per-segment icon override is ignored (whole-branch
-    // review I1, 2026-07-25).
-    const iconContext = {
-      courseIcons: t.courseIcons || {},
-      starIconsMode: t.starIcons || "course",
-      iconOverrides: v.icon_overrides || {},
-      segmentLevels: segmentLevelsOf(t.segments),
-    };
-    // Layer 1 is a grid of COURSES carrying their portraits; layer 2 is that
-    // course's stars AND the segments that begin in it, because both are
-    // things you practice and /api/target already takes either (user,
-    // 2026-07-25).
-    const courseGroups = courseUnionGroups(
-      v.catalog, t.segments || [], (t.vocab || {}).course_by_level || {},
-      targetRanks,
-    ).map((group) => ({
-      ...group,
-      icon: optionIcon("course", group.key.replace("course-", ""), iconContext),
-    }));
-    // The currently-set target, so the picker highlights it. `tgt` always
-    // exists once `v` does (views.py always populates it with defaults).
-    // This card's deleted predecessor computed `starId(course_id ?? 1,
-    // star_id ?? 0)` unconditionally, so a SEGMENT target -- whose
-    // course_id is null -- always highlighted Bob-omb Battlefield's first
-    // star instead of the segment actually being practiced. Branching on
-    // `tgt.kind` first fixes that.
-    const targetValue = tgt.kind === "segment"
-      ? `segment:${tgt.segment_id}`
-      : tgt.course_id != null
-        ? starId(Number(tgt.course_id), Number(tgt.star_id))
-        : null;
-    // placeholder=null renders no clear cell at either layer. The native
-    // <select> this replaced had no "no target" option either -- /api/target
-    // always requires an identity, so a clear cell here posted
-    // {course_id: null, star_id: null}, the server 409d, and the button
-    // silently did nothing (dead by construction; whole-branch review, task
-    // 7 brief, 2026-07-25). This removes a live bug, not just a refactor.
-    return html`<${PickerDialog} groups=${courseGroups} value=${targetValue}
-      title="Choose a course" depth=${2} placeholder=${null}
-      iconFor=${(id) => optionIcon(
-        parseSegmentId(id) == null ? "star" : "segment",
-        parseSegmentId(id) == null ? id : parseSegmentId(id), iconContext)}
-      nextStep=${StrategyStep}
-      onPick=${closeTargetPicker} onClose=${closeTargetPicker} />`;
-  }
 
   return html`<header class="context-shell">
     <div class="context-bar" aria-label="Practice context">
@@ -222,34 +120,42 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
         value=${t.scope === "lifetime" ? "lifetime" : String(active)}
         empty="Loading…" />
 
-      <button type="button" class="context-control target-context"
-          disabled=${!v} onclick=${() => setEditing(!editing)}
-          title="Choose a star, segment, or strategy">
-        <${Icon} name="target" size=${19} />
-        <span class="context-control-copy">
-          <span class="context-label">${running ? "Running" : "Practice target"}</span>
-          <span class="context-value">${running || targetName}</span>
-        </span>
-        <${Icon} name="chevron" size=${16} />
-      </button>
+      ${/* Slot 2 used to be a PRACTICE TARGET card naming the current target
+            and opening the picker. Removed 2026-07-26 (user): the
+            Active-target card and the quick-select row both name the target
+            already, and its own pick was mostly a dead end -- you cannot
+            practice Shifting Sand Land while loaded into Lethal Lava Land.
+            The picker moved to the Active-target card (targetpicker.js) and
+            the MARELO bar took the space, which is how it comes to sit in the
+            middle of the bar instead of on a second row of its own.
+            The wrapper around it is NOT decoration: MareloBar renders null
+            until the first /api/marelo lands, and a null grid child is no
+            child at all -- the clock card would slide into this column and
+            the whole bar would shift left for a beat. An always-present cell
+            holds the place, wearing its neighbours' panel while empty. */
+        null}
+      <div class="marelo-slot">
+        <${MareloBar} marelo=${t.marelo} onOpen=${openMarelo} />
+      </div>
 
       <${ContextSelect} icon="clock" label="Clock" id="clock-select"
         name="clock" options=${CLOCK_OPTIONS} value=${t.clock}
         onChange=${(e) => t.pickClock(e.target.value)} empty="—" />
 
-      <${ContextSelect} icon="rank" label="Rank" id="rankmode-select"
+      ${/* Labelled "Grading", not "Rank": it sets HOW a rank is graded, and
+            it now sits two cards from the MARELO bar, which shows what your
+            rank IS. Two cards reading RANK side by side, one of them a mode,
+            is the kind of correct-but-unexplained pairing that reads as a
+            rendering fault. The id/name stay rank_mode -- the wire contract
+            is unchanged. */
+        null}
+      <${ContextSelect} icon="rank" label="Grading" id="rankmode-select"
         name="rank_mode" options=${v ? RANK_MODE_OPTIONS : []}
         value=${v ? v.rank_mode : null}
         title="Grade medals by saved PB or by a recent/best average"
         onChange=${(e) => send("PUT", "/api/ranks/mode",
           { mode: e.target.value }).then(() => t.refresh())} empty="—" />
     </div>
-
-    <div class="marelo-row">
-      <${MareloBar} marelo=${t.marelo} onOpen=${openMarelo} />
-    </div>
-
-    ${editing && v && renderTargetPicker()}
 
     ${settingsOpen && html`<div class="settings-backdrop" onclick=${closeSettings}>
       <aside class="settings-drawer" role="dialog" aria-modal="true"
