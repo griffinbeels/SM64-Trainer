@@ -269,6 +269,57 @@ indefinitely.
 5. **Parity**: `tests/test_ui_section_parity.py` must still pass — the star
    and segment cards render the same banner through the same hook.
 
+## Round 2 — five live reports (2026-07-27)
+
+All five verified by frame-by-frame render trace, not by end-state screenshot.
+
+1. **Wing tips were being cut off.** `.rank-banner-row` (the icon's direct
+   parent) and `.rank-slot` both carried `overflow: hidden`. `.hat` paints its
+   wings ~0.24x the icon size ABOVE the cap by design, so any clipping
+   ancestor decapitates them. Both clips are gone; the two elements that can
+   actually overflow (`.rank-banner-name`, `.rank-banner-next`) ellipsise
+   themselves instead — a container clip cannot tell a wing from a word. The
+   icon now paints 9px above the banner box with no reflow (card height and
+   page width byte-identical across the whole trace).
+
+2. **The wash must cross-fade, not disappear.** Round 1 hid it during a climb
+   because it painted the DESTINATION tier — a Luigi-green wash under a
+   Wario-gold cap. The user rejected hiding outright: "all the colors should
+   animate from the original coloring to the new coloring." The wash moved
+   from `.rank-slot-wrap::before` down onto `.rank-banner::before`, where
+   `--climb-color` already lives, so the wash, the bar and the cap now read
+   one value and cannot disagree. The `--rank-wash-split: 50%` constant and
+   `rankWashStyle` are gone with it — the boundary between two banners IS the
+   DOM boundary between them, at every width and in the stacked layout. So is
+   `.rank-slot-wrap`, whose only two reasons (the deleted toast, the wash)
+   both went away.
+
+3. **A first-ever rank must climb the whole way.** Falls out of 4.
+
+4. **Capless V is the default rank**, shown through the normal UI: a strategy
+   with a ladder but no time yet renders Capless 5 with an empty bar and
+   "→ Capless 4" instead of a sentinel sentence. That is what gives the first
+   rank you ever earn a position to climb FROM — verified end to end: a star
+   with no attempts reads CAPLESS 5, and one fast time climbs all 44 levels to
+   Mario 1. `no_ladder` (no standards at all) and `no_strat` keep their
+   sentinel; the second is the user's own call ("you must select a strat to
+   see a rank for the strat").
+
+5. **A tier crossing is now an event, not a transition.** The climb STOPS at
+   every tier boundary (`climbcurve.js::tierDwell`): anticipation while the
+   bar sits full on the last subdivision of the old tier — the cap shaking
+   harder and faster while squashing toward a flat line — then the crossing,
+   then a beat to look at the new cap. The release is a burst out of the flat
+   line with an overshoot, plus four-point sparkles thrown out in sequence,
+   with the colours turning over across it. This replaced the edge-on cap
+   flip, which was a transition where an event was wanted.
+
+   The pause is BEFORE the boundary, not after: that is where anticipation
+   belongs, and it also hides the rank swap inside the flattest frame. Dwells
+   share a budget (1.6s for a single crossing, floored at 700ms when a climb
+   crosses many) so the once-ever full-ladder climb stays watchable rather
+   than costing thirteen seconds of dwell on top of the movement.
+
 ## Risks
 
 - **CSS `transition` is not additive.** A higher-specificity `:hover`/`:focus`

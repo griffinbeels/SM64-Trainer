@@ -24,9 +24,19 @@ INDEX_HTML = UI / "index.html"
 pytestmark = pytest.mark.skipif(shutil.which("node") is None,
                                 reason="node on PATH")
 
-# Every kind the climb engine (ui/rankclimb.js) can emit. An entry listening
-# for anything else would never fire.
-BEAT_KINDS = ("division", "tier", "settle")
+RANKCLIMB_JS = UI / "rankclimb.js"
+
+
+def beat_kinds() -> set[str]:
+    """Every kind the climb engine can emit, read OUT of the engine rather
+    than listed here — a hand-kept list would let a registry entry listen for
+    a kind that stopped existing and stay green."""
+    kinds = set()
+    for line in RANKCLIMB_JS.read_text(encoding="utf-8").splitlines():
+        if "kind:" in line:
+            kinds.update(re.findall(r'"(\w+)"', line))
+    assert kinds, "no beat kinds found in rankclimb.js -- did makeBeat move?"
+    return kinds
 
 
 def run_node(body: str):
@@ -47,15 +57,19 @@ const beats = [
   makeBeat({ kind: "division", at: 0, level: 26,
              from: { tier: "Diamond", division: "II" },
              to: { tier: "Diamond", division: "I" },
-             tiersGained: 0, divisionsGained: 1 }),
+             tiersGained: 0, divisionsGained: 1, anticipateMs: 900, payoffMs: 700 }),
+  makeBeat({ kind: "anticipate", at: 0, level: 25,
+             from: { tier: "Gold", division: "I" },
+             to: { tier: "Platinum", division: "V" },
+             tiersGained: 1, divisionsGained: 1, anticipateMs: 900, payoffMs: 700 }),
   makeBeat({ kind: "tier", at: 0, level: 25,
              from: { tier: "Gold", division: "I" },
              to: { tier: "Platinum", division: "V" },
-             tiersGained: 1, divisionsGained: 1 }),
+             tiersGained: 1, divisionsGained: 1, anticipateMs: 900, payoffMs: 700 }),
   makeBeat({ kind: "settle", at: 0, level: 26,
              from: { tier: "Diamond", division: "I" },
              to: { tier: "Diamond", division: "I" },
-             tiersGained: 1, divisionsGained: 6 }),
+             tiersGained: 1, divisionsGained: 6, anticipateMs: 900, payoffMs: 700 }),
 ];
 """
 
@@ -87,11 +101,12 @@ def test_every_registry_entry_declares_a_kind_the_engine_emits():
     kinds = run_node("console.log(JSON.stringify(Object.fromEntries("
                      "Object.entries(CELEBRATIONS).map(([name, entry]) => "
                      "[name, Array.isArray(entry.on) ? entry.on : [entry.on]]))));")
+    emitted = beat_kinds()
     for name, listens_for in kinds.items():
-        unknown = [kind for kind in listens_for if kind not in BEAT_KINDS]
+        unknown = [kind for kind in listens_for if kind not in emitted]
         assert not unknown, (
             f"celebration {name!r} listens for {unknown}, which ui/rankclimb.js "
-            f"never emits -- it would never fire. Valid kinds: {list(BEAT_KINDS)}")
+            f"never emits -- it would never fire. Emitted: {sorted(emitted)}")
 
 
 def test_every_registry_entry_contributes_something():

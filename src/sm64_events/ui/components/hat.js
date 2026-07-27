@@ -135,6 +135,34 @@ function tintedPair(stem, color, extraClass = "", extraStyle = "") {
   ];
 }
 
+// The twinkle thrown out of the cap when a tier crossing lands (user,
+// 2026-07-27: "maybe a bit of star twinkling appears"). Positions are
+// fractions of a 100x100 box centred on the icon; each sparkle has its own
+// start offset so they pop in sequence rather than blinking as one block,
+// and its own life is a half-sine, so it grows and fades without needing a
+// keyframe or a second timer.
+const SPARKLE_STAR =
+  "M6 0C6.6 4 8 5.4 12 6C8 6.6 6.6 8 6 12C5.4 8 4 6.6 0 6C4 5.4 5.4 4 6 0Z";
+const SPARKLES = [           // x, y, size, when it starts (0..1 of the burst)
+  [18, 26, 1.5, 0.00], [82, 30, 1.8, 0.10], [50, 8, 1.3, 0.20],
+  [30, 74, 1.1, 0.28], [74, 70, 1.4, 0.36],
+];
+const SPARKLE_LIFE = 0.55;
+
+function Sparkles(burst) {
+  const points = SPARKLES.map(([x, y, size, from]) => {
+    const life = (burst - from) / SPARKLE_LIFE;
+    if (life <= 0 || life >= 1) return null;
+    const grow = Math.sin(life * Math.PI);          // 0 -> 1 -> 0
+    const scale = (size * grow).toFixed(3);
+    return html`<path d=${SPARKLE_STAR} fill="#fff" opacity=${grow.toFixed(3)}
+        transform=${`translate(${x} ${y}) scale(${scale}) translate(-6 -6)`} />`;
+  }).filter(Boolean);
+  if (!points.length) return null;
+  return html`<svg class="hat-sparkles" viewBox="0 0 100 100"
+      preserveAspectRatio="xMidYMid meet">${points}</svg>`;
+}
+
 // `tuck` is 0 (fully out) to 1 (folded away behind the cap) -- ONE number
 // driving both the fold and its reverse, the grow (task 0012). It rides the
 // individual wing layers rather than `.hat` because the two differ in scope:
@@ -197,7 +225,8 @@ function wingLayers(wings, { growWings = 0, growProgress = 1, foldProgress = nul
 // rule per wing rather than two rules racing (index.html's `.hat .wing-l`).
 export function Hat({ tier, division = null, size = 18, title = null, flap = false, foldWings = 0,
                       growWings = 0, growProgress = 1, foldProgress = null,
-                      flapPhase = null, flip = null, roll = null }) {
+                      flapPhase = null, roll = null,
+                      squashX = null, squashY = null, shake = null, sparkle = null }) {
   const spec = CAP[tier] || {};
   const color = rankColor(tier);
   // DATA rule alone, no size floor (see the block comment above) -- a
@@ -370,10 +399,15 @@ export function Hat({ tier, division = null, size = 18, title = null, flap = fal
     : (flap && !climbDrivesFlap) ? " hat-flap" : "";
   // Both climb variables live on `.hat` and inherit down to every wing; a
   // wing the climb is growing overrides `--wing-tuck` on itself (wingLayers).
+  // The squash/shake pair drives the tier-crossing slam and is written on the
+  // OUTER span so it scales the whole icon, wings included.
   const climbStyle = (flapPhase != null ? `--wing-flap:${flapPhase.toFixed(4)};` : "")
-    + (flip != null ? `--cap-flip:${flip.toFixed(4)};` : "");
-  return html`<span class=${`hat${motionClass}${flip != null ? " hat-flipping" : ""}`}
+    + (squashX != null ? `--cap-sx:${squashX.toFixed(4)};` : "")
+    + (squashY != null ? `--cap-sy:${squashY.toFixed(4)};` : "")
+    + (shake != null ? `--cap-shake:${shake.toFixed(3)};` : "");
+  return html`<span class=${`hat${motionClass}`}
       title=${resolvedTitle} style=${`${outerStyle}${climbStyle}`}>
     <span class="hat-canvas" style=${canvasStyle}>${layers}</span>
+    ${sparkle != null && sparkle < 1 && Sparkles(sparkle)}
   </span>`;
 }

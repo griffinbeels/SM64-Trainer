@@ -105,13 +105,30 @@ export function RankBanner({ label, banner, hint = null, identity = null }) {
   // simply being handed a different measurement: switching strategy, rank
   // mode or target all legitimately produce a higher rank nobody earned. The
   // caller owns it; see practice.js.
-  const climb = useRankClimb(ranked ? {
+  //
+  // A strategy with standards but no time yet grades as the FLOOR — Capless
+  // V, an empty bar — rather than as a sentinel sentence (user, 2026-07-27:
+  // "The default rank for every strategy is capless 5 with 0 pts contributed.
+  // We should show the same UI as normal, just with capless 5"). That is not
+  // only nicer to look at: it is what makes the FIRST rank you ever earn
+  // climb. A sentinel has no ladder position, so the hook had nothing to
+  // climb FROM and snapped — and a first rank is often several tiers up,
+  // which is exactly the moment worth celebrating.
+  //
+  // Only for `unranked`, which means "this strategy has a ladder, you just
+  // have no time on it". `no_ladder` (no standards at all) and `no_strat`
+  // keep their sentinel: there is no ladder for a floor to sit at the bottom
+  // OF, and the user's own call on the second — "you must select a strat to
+  // see a rank for the strat".
+  const atFloor = !ranked && !!banner && banner.reason === "unranked";
+  const graded = ranked ? {
     tier: banner.rank, division: banner.division,
     // At the top of the ladder there is no next step to fill toward, so the
     // bar is simply full — the same sentinel the old tween used.
     fill: banner.next_tier ? (banner.fill || 0) : 1,
-  } : null, identity);
-  if (!ranked || !climb) {
+  } : atFloor ? { ...rankAt(0), fill: 0 } : null;
+  const climb = useRankClimb(graded, identity);
+  if (!graded || !climb) {
     return html`<div class="rank-banner rank-banner-empty">
       <span class="rank-banner-kicker" title=${hint}>${label}</span>
       <span class="meta">${sentinelMsg(banner)}</span>
@@ -124,8 +141,12 @@ export function RankBanner({ label, banner, hint = null, identity = null }) {
   // 3). While the climb is running the next step is derived from where the
   // bar actually is; the exact time delta is withheld until it settles,
   // because that number is only true of the final rank.
+  // At the floor default the server sent no `next_tier` (it sent no rank at
+  // all), so the next step is simply the one above the floor — otherwise the
+  // row would read "CAPLESS 5 · top rank", which is the opposite of true.
   const settledNext = banner.next_tier
-    ? { tier: banner.next_tier, division: banner.next_division } : null;
+    ? { tier: banner.next_tier, division: banner.next_division }
+    : atFloor ? rankAt(1) : null;
   // `rankAt` clamps, so at the very top of the ladder the "next" step is the
   // rank you are already on -- which would print "MARIO 1 -> Mario 1". That
   // is the same "top rank" state the settled banner spells out, so say so.
@@ -165,7 +186,11 @@ export function RankBanner({ label, banner, hint = null, identity = null }) {
   // celebration running.
   return html`<div class=${`rank-banner${climb.climbing ? " is-climbing" : ""}`} style=${climb.vars}>
     <div class="rank-banner-row">
-      <span class="rank-banner-kicker" title=${hint}>${label}</span>
+      <!-- At the floor default the sentinel's own wording ("no PB on this
+           strategy yet") is the only thing lost by showing Capless 5, so it
+           rides the kicker's tooltip rather than disappearing. -->
+      <span class="rank-banner-kicker"
+          title=${hint || (atFloor ? sentinelMsg(banner) : null)}>${label}</span>
       <!-- Round 4 (addendum, task 8, 2026-07-26 -- the user: "we probably
            should push the rank name... and the rank division a little off
            to the side, since it's overlapping, it feels very cramped right

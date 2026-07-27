@@ -125,3 +125,33 @@ export function climbPosition(from, to, elapsedMs) {
 export function climbDurationBetween(from, to) {
   return to > from ? climbDuration(to - from) : 0;
 }
+
+// ---- Tier crossings: the climb STOPS ------------------------------------
+//
+// Crossing into a new cap is the moment worth the whole feature, and cruising
+// through it at 3 divisions a second threw it away (live report, 2026-07-27:
+// "it needs to feel EXTRA juicy… we make it an AMAZING celebration to go from
+// one division to the next"). So the climb halts at every tier boundary:
+// anticipation first (the cap shaking harder and harder, squashing toward a
+// flat line), then the crossing itself, then a beat to look at it.
+//
+// The pause is BEFORE the boundary, not after, because that is where
+// anticipation belongs — the bar sits full on the last subdivision of the old
+// tier while the pressure builds, and the release IS the crossing.
+const ANTICIPATE_SHARE = 0.56;
+const FULL_DWELL_MS = 1600;
+// A climb through eight tiers must not hold the UI for thirteen seconds, so
+// the dwells share a budget. One crossing gets the full treatment; the rare
+// multi-tier run trades length for pace, down to a floor that still reads as
+// a pause rather than a stutter.
+const DWELL_BUDGET_MS = 5200;
+const MIN_DWELL_MS = 700;
+
+/** `{anticipateMs, payoffMs}` for each of `crossings` tier boundaries. */
+export function tierDwell(crossings) {
+  if (crossings <= 0) return { anticipateMs: 0, payoffMs: 0 };
+  const each = Math.max(MIN_DWELL_MS,
+                        Math.min(FULL_DWELL_MS, DWELL_BUDGET_MS / crossings));
+  const anticipateMs = Math.round(each * ANTICIPATE_SHARE);
+  return { anticipateMs, payoffMs: Math.round(each) - anticipateMs };
+}

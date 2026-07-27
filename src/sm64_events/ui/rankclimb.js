@@ -18,7 +18,7 @@
 // This file owns only the loop and the bookkeeping between them.
 import { useEffect, useRef, useState } from "preact/hooks";
 import { rankPosition, rankAt, rankFrame, rankColor, DIVISIONS_PER_TIER } from "./components/caps.js";
-import { climbPosition, climbDurationBetween } from "./climbcurve.js";
+import { climbPosition, climbDurationBetween, tierDwell } from "./climbcurve.js";
 import { activeEffects, makeBeat, celebrationTailMs, celebrationsEnabled }
   from "./celebrations.js";
 import { prefersReducedMotion } from "./useTween.js";
@@ -47,7 +47,7 @@ let nextClimbToken = 0;
 // the hold can never outlive this even if a climb somehow fails to retire its
 // token. Comfortably past climbcurve's own 7s ceiling plus the longest
 // celebration tail.
-const HOLD_CEILING_MS = 12000;
+const HOLD_CEILING_MS = 20000;
 
 function setClimbing(token, running) {
   const wasHolding = liveClimbs.size > 0;
@@ -181,14 +181,63 @@ export function useRankClimb(rank, identity = null) {
     const tiersGained = Math.floor(Math.floor(target) / DIVISIONS_PER_TIER)
       - Math.floor(Math.floor(startPosition) / DIVISIONS_PER_TIER);
 
+    // Every tier boundary this climb will cross, in order. The climb HALTS at
+    // each one: anticipation while the bar sits full on the last subdivision
+    // of the old tier, then the crossing, then a beat to look at the new cap
+    // (user, 2026-07-27 -- "it needs to feel EXTRA juicy… BOOM we rank up").
+    const boundaries = [];
+    for (let candidate = Math.floor(startPosition) + 1;
+         candidate <= Math.floor(target); candidate += 1) {
+      if (rankAt(candidate).tier !== rankAt(candidate - 1).tier) boundaries.push(candidate);
+    }
+    const { anticipateMs, payoffMs } = tierDwell(boundaries.length);
+
     beatsRef.current = [];
     let level = Math.floor(startPosition);
     let settled = false;
+    // "climb" | "anticipate" | "payoff". `dwellMs` is the time already spent
+    // paused, subtracted from the clock so the CURVE never advances during a
+    // dwell -- the pause costs the climb nothing, it just interrupts it.
+    let phase = "climb";
+    let phaseSince = 0;
+    let dwellMs = 0;
 
     const tick = () => {
       const at = now();
-      const elapsed = at - startedAt;
-      const position = climbPosition(startPosition, target, elapsed);
+      let elapsed = at - startedAt - dwellMs;
+      let position;
+      if (phase === "climb") {
+        position = climbPosition(startPosition, target, elapsed);
+        // Held a hair BELOW the boundary, so the bar reads full on the tier
+        // being left rather than empty on the one being entered.
+        if (boundaries.length && position >= boundaries[0]) {
+          position = boundaries[0] - 1e-4;
+          phase = "anticipate";
+          phaseSince = at;
+          beatsRef.current.push(makeBeat({
+            kind: "anticipate", at, level: boundaries[0],
+            from: rankAt(boundaries[0] - 1), to: rankAt(boundaries[0]),
+            tiersGained, divisionsGained, anticipateMs, payoffMs,
+          }));
+        }
+      } else if (phase === "anticipate") {
+        position = boundaries[0] - 1e-4;
+        if (at - phaseSince >= anticipateMs) {
+          dwellMs += at - phaseSince;
+          // Crossing the boundary here is what fires the "tier" beat below.
+          position = boundaries[0];
+          phase = "payoff";
+          phaseSince = at;
+        }
+      } else {
+        position = boundaries[0];
+        if (at - phaseSince >= payoffMs) {
+          dwellMs += at - phaseSince;
+          boundaries.shift();
+          phase = "climb";
+          elapsed = at - startedAt - dwellMs;
+        }
+      }
       positionRef.current = position;
 
       // Every level the frame passed gets its own beat, even if one frame
@@ -201,16 +250,20 @@ export function useRankClimb(rank, identity = null) {
         beatsRef.current.push(makeBeat({
           kind: before.tier === after.tier ? "division" : "tier",
           at, level, from: before, to: after, tiersGained, divisionsGained,
+          anticipateMs, payoffMs,
         }));
       }
 
-      const landed = elapsed >= durationMs;
+      // Landed only once the CURVE is spent AND nothing is mid-dwell -- a
+      // climb whose last act is a tier crossing must not settle underneath it.
+      const landed = phase === "climb" && elapsed >= durationMs;
       if (landed && !settled) {
         settled = true;
         const here = rankAt(target);
         beatsRef.current.push(makeBeat({
           kind: "settle", at, level: Math.floor(target),
           from: here, to: here, tiersGained, divisionsGained,
+          anticipateMs, payoffMs,
         }));
       }
 
@@ -220,8 +273,9 @@ export function useRankClimb(rank, identity = null) {
       // or the last flap would freeze mid-beat.
       const tail = beatsRef.current.length
         ? beatsRef.current[beatsRef.current.length - 1].at
-          + Math.max(celebrationTailMs("division"), celebrationTailMs("tier"),
-                     celebrationTailMs("settle"))
+          + Math.max(celebrationTailMs("division", { anticipateMs, payoffMs }),
+                     celebrationTailMs("tier", { anticipateMs, payoffMs }),
+                     celebrationTailMs("settle", { anticipateMs, payoffMs }))
         : 0;
       if (!landed || at < tail) {
         frameRef.current = requestAnimationFrame(tick);

@@ -941,12 +941,8 @@
     min-width: 0; display: grid; grid-template-columns: minmax(420px,2.6fr) 66px minmax(112px,auto);
     gap: 12px; align-items: center; border-top: 1px solid var(--border-soft);
     margin-top: .62rem; padding-top: .55rem;
-    position: relative; z-index: 0; /* stacking context for the rank wash */
+    position: relative; z-index: 0;
   }
-  /* The rank wash itself is on `.rank-slot-wrap::before` (below) so its split
-     lands exactly on the boundary between the two banners; the vars that
-     drive it (--rank-glow / --rank-glow-2 / --rank-wash-split) are set inline
-     HERE by practice.js and inherit down. */
   /* Two RankBanners side by side, EQUAL treatment (spec 2026-07-25 round 2):
      a labelled, gradient Strategy Rank banner next to a small unlabelled
      "Bronze III" chip read as a rendering fault to the user, not two
@@ -955,82 +951,59 @@
      a fixed-width hairline-divided chip. Each shrinks independently (its own
      children ellipsis); when only one banner is present (Overall Rank is
      absent when entity_rank has nothing to grade) it simply takes the row. */
-  .rank-slot { min-width: 0; overflow: hidden; display: flex; align-items: stretch; gap: .7rem; }
+  /* NO `overflow: hidden` here, and that is load-bearing (live report,
+     2026-07-27: "the tips of the wings get cut off at the top of the rank
+     standard rectangle"). `.hat` draws its wings OUTSIDE its own declared box
+     by design, about 0.24x the icon size above the cap, so any clipping
+     ancestor decapitates them. The clip used to be the row's blunt safety net
+     for long text; that job moved onto the two elements that can actually
+     overflow (`.rank-banner-name` and `.rank-banner-next` both ellipsise
+     themselves), which is where it belonged anyway -- a container clip cannot
+     tell a wing from a word. */
+  .rank-slot { min-width: 0; display: flex; align-items: stretch; gap: .7rem; }
   .rank-slot .meta { min-width: 0; flex: 1 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  /* Positioning context for an entity celebration (celebrate.js
-     EntityCelebration, task F3) -- a plain wrapper, not `.rank-slot` itself,
-     because `.rank-slot` keeps its own `overflow:hidden` and an absolutely
-     positioned toast child would get clipped by it. The wrap has no padding
-     of its own, so it shares `.rank-slot`'s exact footprint. */
-  .rank-slot-wrap { position: relative; min-width: 0; }
-  /* Rank wash: ONE gradient PER rank banner, split down the boundary between
-     them (live report 2026-07-25 round 5 -- "both ranking indicators should
-     have their own visual gradients"). A single card-wide wash in the
-     STRATEGY tier's color ran straight under the STAR banner, colouring a
-     Bronze rank silver: the same "one visual treatment, two different
-     measures" fault the round-2 chip was, one layer down.
+  /* Rank wash: ONE gradient per rank banner, painted BY that banner
+     (moved down from `.rank-slot-wrap::before` on 2026-07-27). It used to
+     hang off the shared wrapper with a `--rank-wash-split: 50%` and two
+     colours handed down from practice.js, which was fine while a banner's
+     colour was a constant -- and wrong the moment the banner started
+     CLIMBING through tiers, because the wash still showed the destination.
+     It clashed with the cap on screen and spoiled the reveal several seconds
+     early (live report 2026-07-27, a Luigi-green wash under a Wario-gold
+     cap).
 
-     It hangs off `.rank-slot-wrap` rather than `.objective-metrics` because
-     the wrap's box IS the two banners' box, so a 50% split is the real
-     boundary at every width with no measured constant to keep in sync (the
-     metrics grid's other two columns -- 66px live-state, minmax(112px,auto)
-     PB tag -- make the boundary sit at a pane-width-dependent ~41-45% of the
-     CARD, which no static percentage can track). The left/right bleeds are
-     symmetric for the same reason: -16px on both sides keeps the midpoint of
-     the wash box exactly on the midpoint of the wrap. Left reaches the
-     card's padding edge (as the old card-wide wash did); right runs under the
-     column gap, where both layers are already transparent.
-     Vertical bleed is asymmetric (top sits just under the divider rule,
-     bottom reaches the card's bottom padding), so the stacked-layout split
-     below is off-centre by ~2px -- invisible at a 34% tint.
+     Painting it here fixes that by construction: `--climb-color` is the
+     banner's own colour at THIS frame, already cross-faded across a tier
+     boundary by ui/celebrations.js, so the wash, the bar and the cap can
+     never disagree again. The split constant is gone too -- the boundary
+     between two banners IS the DOM boundary between them, at every width and
+     in the stacked layout, with nothing to keep in sync.
 
-     Layer 2 ramps IN over its first 8% instead of starting at full strength,
-     so the seam reads as shading rather than as a hard edge where one flat
-     colour abuts another. --rank-glow/--rank-glow-2 unset (no rank, or only
-     one banner rendered) mix to transparent = no wash on that half, and
-     --rank-wash-split defaults to 100% so a lone Strategy banner keeps the
-     full-width wash it has always had. */
-  .rank-slot-wrap::before {
+     Bleeds match what the wrapper had: -8px top / -12px bottom on every
+     banner, and -16px on whichever OUTER edge a banner actually owns (a lone
+     banner is both first and last, so it keeps the full-width wash it always
+     had). A second banner ramps in over its first 8% so the seam reads as
+     shading rather than two flat colours abutting. An unranked banner has no
+     `--climb-color` and paints nothing, which is what it did before. */
+  .rank-banner::before {
     content: ""; position: absolute; z-index: -1; pointer-events: none;
-    left: -16px; right: -16px; top: -8px; bottom: -12px;
-    border-radius: 0 0 8px 8px;
-    background-repeat: no-repeat;
-    background-image:
-      linear-gradient(90deg,
-        color-mix(in srgb, var(--rank-glow, transparent) 34%, transparent),
-        transparent 88%),
-      linear-gradient(90deg, transparent,
-        color-mix(in srgb, var(--rank-glow-2, transparent) 34%, transparent) 8%,
-        transparent 90%);
-    background-position: left center, right center;
-    background-size:
-      var(--rank-wash-split, 100%) 100%,
-      calc(100% - var(--rank-wash-split, 100%)) 100%;
-    /* ONE transition declaration, and the state rule below sets only the
-       target value -- a `:has()` block declaring its own `transition` would
-       WHOLESALE REPLACE this one while it matched, which is exactly what
-       made the Rank tab's ladder band expand instantly and collapse
-       smoothly under "identical" CSS. */
-    opacity: 1;
-    transition: opacity .3s ease;
+    top: -8px; bottom: -12px; left: 0; right: 0;
+    background-image: linear-gradient(90deg,
+      color-mix(in srgb, var(--climb-color, transparent) 34%, transparent),
+      transparent 88%);
   }
-  /* The wash is painted from the SERVER's rank -- the one the climb is
-     heading for -- while the banner above it is still down at the rank the
-     bar has actually reached. Left alone it both clashes (a Luigi-green wash
-     under a Wario-gold cap, seen in a mid-climb capture) and SPOILS the
-     reveal, showing the destination tier's colour several seconds before the
-     climb arrives there. It steps aside for the duration instead.
-
-     `:has()` because the climbing state belongs to the banner and the wash is
-     its ancestor -- the same pattern `.rank-ladder:has(.rank-band:hover)` and
-     the context cards' focus ring already use. Fading rather than recolouring:
-     the wash is one card-wide gradient split between two banners that can be
-     climbing independently, so there is no single colour it could correctly
-     take mid-climb. */
-  .rank-slot-wrap:has(.rank-banner.is-climbing)::before { opacity: 0; }
+  .rank-banner:not(:first-child)::before {
+    background-image: linear-gradient(90deg, transparent,
+      color-mix(in srgb, var(--climb-color, transparent) 34%, transparent) 8%,
+      transparent 90%);
+  }
+  .rank-banner:first-child::before { left: -16px; border-radius: 0 0 0 8px; }
+  .rank-banner:last-child::before { right: -16px; border-radius: 0 0 8px 0; }
+  .rank-banner-empty::before { background-image: none; }
   .rank-banner {
     min-width: 0; flex: 1 1 0; display: grid; gap: .34rem; align-content: center;
     min-height: 36px;
+    position: relative; z-index: 0;   /* hosts its own wash, below */
   }
   /* The sentinel ("no standards" / "pick a strat") variant of the SAME
      banner box -- min-height matches the graded version (medal row + bar)
@@ -1051,10 +1024,16 @@
     flex: 0 0 auto; color: var(--muted); text-transform: uppercase;
     letter-spacing: .06em; font-size: .62rem; font-weight: 650;
   }
+  /* Also un-clipped, for the wings (see `.rank-slot` above) -- this row is the
+     icon's DIRECT parent and was the closer of the two clippers. Each child
+     now owns its own truncation instead: the name and the "next" span
+     ellipsise, the kicker is `flex: 0 0 auto` on purpose, and the icon must
+     not be squeezed either. */
   .rank-banner-row {
     min-width: 0; display: flex; align-items: center; gap: .3rem;
-    white-space: nowrap; overflow: hidden;
+    white-space: nowrap;
   }
+  .rank-banner-row > .rank-icon-slot { flex: 0 0 auto; }
   /* Round 4 (addendum, task 8, 2026-07-26): reserves the icon's own wing
      spill (see the comment in ranks.js) so the kicker and the rank name
      stop visually colliding with painted wing pixels the flex `gap` above
@@ -1088,7 +1067,12 @@
     margin: 0 calc(var(--icon-size) * .370);
   }
   .rank-banner-icon { --icon-size: 24px; }
-  .rank-banner-name { font-weight: 800; letter-spacing: .4px; }
+  /* Truncates itself, now that neither `.rank-slot` nor `.rank-banner-row`
+     clips (they cannot, without cutting the icon's wings off). */
+  .rank-banner-name {
+    font-weight: 800; letter-spacing: .4px;
+    min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  }
   .rank-banner-next { flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; }
   /* Progress toward the next rank: full slot width, never a fixed px bar —
      a 200px bar used to bleed past the card edge (2026-07-24). */
@@ -1117,9 +1101,10 @@
      would push the one below it or clip — so every effect is a colour, a
      shadow or a transform. */
   .rank-banner .rank-progress-track {
-    box-shadow: 0 0 calc(var(--climb-flash, 0) * 10px)
+    box-shadow: 0 0 calc((var(--climb-flash, 0) + var(--climb-anticipate, 0) * .85) * 10px)
                 color-mix(in srgb, var(--climb-color, #3a4250)
-                          calc(var(--climb-flash, 0) * 85%), transparent);
+                          calc((var(--climb-flash, 0)
+                                + var(--climb-anticipate, 0) * .85) * 85%), transparent);
   }
   .rank-banner .rank-progress-track i { background: var(--climb-color, #3a4250); }
   .rank-banner .rank-banner-name {
@@ -1302,12 +1287,30 @@
   .hat .glyph-reel > span > b {
     display: grid; place-items: center; height: 50%; font-weight: inherit;
   }
-  /* The new tier's cap swinging in edge-on. `rotate` (the individual
-     transform property) rather than `transform`, for the same
-     one-declaration-per-element reason the wings use it -- `.hat` may also
-     be carrying a caller's own transform one day, and these must compose
-     rather than replace each other. */
-  .hat-flipping { rotate: y calc(var(--cap-flip) * -90deg); }
+  /* The tier-crossing SLAM (task 0012 round 2, 2026-07-27 -- "the new hat
+     should SLAM in… it should squash and shake allllll the way down to a
+     flat line, and then BURST back up"). `scale`/`translate` (the individual
+     transform properties) rather than `transform`, for the same
+     one-declaration-per-element reason the wings use them: they compose with
+     anything else that ever transforms this icon instead of replacing it.
+
+     `transform-origin: 50% 100%` is what makes it read as weight rather than
+     as a zoom -- the cap compresses onto its own brim and springs off it. The
+     defaults are the identity, so every icon in the app that is not mid-slam
+     is untouched. */
+  .hat {
+    transform-origin: 50% 100%;
+    scale: var(--cap-sx, 1) var(--cap-sy, 1);
+    translate: calc(var(--cap-shake, 0) * 1px) 0;
+  }
+  /* The twinkle. Sits OUTSIDE the cap's box on purpose (like the wings) and
+     must never be clipped -- see `.rank-slot` for why nothing above it
+     clips. `mix-blend-mode: screen` so a sparkle over the cap brightens it
+     instead of stamping a flat white shape on it. */
+  .hat-sparkles {
+    position: absolute; left: -35%; top: -45%; width: 170%; height: 180%;
+    pointer-events: none; overflow: visible; mix-blend-mode: screen;
+  }
   /* ONE transform declaration per wing, driven by two registered custom
      properties -- and that is the whole trick (task 0012, 2026-07-26). Three
      different things move a wing: the idle flap (`.hat-flap`, a keyframe),
@@ -1334,7 +1337,6 @@
      there is no second set of numbers for it. */
   @property --wing-tuck { syntax: "<number>"; inherits: true; initial-value: 0; }
   @property --wing-flap { syntax: "<number>"; inherits: true; initial-value: 0; }
-  @property --cap-flip { syntax: "<number>"; inherits: true; initial-value: 0; }
   .hat .wing-l, .hat .wing-r {
     scale: calc(1 - var(--wing-tuck) * .7);
     opacity: calc(1 - var(--wing-tuck));
@@ -3206,19 +3208,10 @@
     .objective-card { height: 190px; min-height: 190px; overflow: hidden; }
     .rank-slot { flex-direction: column; align-items: stretch; gap: .3rem; }
     .objective-strategy-fastest { display: none; }
-    /* Banners stack here, so the wash splits on the same axis they do --
-       top half Strategy, bottom half Star/Segment. Same `--rank-wash-split`,
-       same two layers, only the axis swaps: a left/right split under a
-       vertical stack would put both colours under both banners, which is
-       exactly the confusion this wash exists to remove. Covers the ≤760px
-       phone layout too -- that viewport always makes .practice-page narrower
-       than 1100px, so this container query is the one place it lives. */
-    .rank-slot-wrap::before {
-      background-position: center top, center bottom;
-      background-size:
-        100% var(--rank-wash-split, 100%),
-        100% calc(100% - var(--rank-wash-split, 100%));
-    }
+    /* Stacked here, so each banner's wash is full width and the outer
+       bleeds swap axis with them. No split to swap any more -- each
+       banner paints its own box whichever way they are laid out. */
+    .rank-banner::before { left: -16px; right: -16px; border-radius: 0; }
   }
 
   @media (max-width: 760px) {

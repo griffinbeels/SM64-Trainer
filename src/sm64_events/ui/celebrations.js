@@ -43,6 +43,7 @@ const easeOutBack = (fraction) => {
 };
 
 const easeOutCubic = (fraction) => 1 - (1 - fraction) ** 3;
+const easeInCubic = (fraction) => fraction ** 3;
 
 // The user's "Celebrations" switch (header.js's settings drawer). It lives
 // with the registry rather than with the overlays because BOTH celebration
@@ -104,33 +105,69 @@ export const CELEBRATIONS = {
     icon: (beat, progress) => ({ flapPhase: Math.sin(progress * Math.PI * 2) }),
   },
 
-  // A tier crossing lands on division V, which wears no wings — so the ones
-  // on screen have to go somewhere. They tuck, they don't vanish (the user's
-  // own framing for the fold this reuses: "booya, upgraded! Just gotta earn
-  // the wings again").
+  // ---- The tier crossing: anticipation, then a slam ---------------------
+  //
+  // The climb STOPS at a tier boundary (ui/climbcurve.js::tierDwell, held by
+  // the engine) and these three carry the pause. Cruising through it at three
+  // divisions a second is what made the biggest moment in the feature read as
+  // just another tick.
+
+  // The build. Shake amplitude AND frequency both grow, and the cap squashes
+  // toward a flat line -- anticipation in the animation-principles sense: the
+  // further it compresses, the further it is obviously about to spring.
+  tierAnticipate: {
+    on: "anticipate", ms: (beat) => beat.anticipateMs,
+    icon: (_beat, progress) => {
+      const squashY = 1 - easeInCubic(progress) * 0.94;
+      return {
+        squashY, squashX: 1 + (1 - squashY) * 0.5,
+        // p*p in the phase, p^2.2 in the amplitude: it reads as winding up
+        // rather than as a constant vibration that happens to get louder.
+        shake: Math.sin(progress * progress * 46) * progress ** 2.2 * 3.2,
+      };
+    },
+    vars: (_beat, progress) => ({ "--climb-anticipate": progress.toFixed(3) }),
+  },
+
+  // The release. Out of the flat line with an overshoot, so it lands rather
+  // than arrives -- and the cap it lands as is already the NEW tier's, which
+  // is why this replaced the old edge-on flip: a flip pretends to hide a swap
+  // that the climb's own position already made.
+  tierBurst: {
+    on: "tier", ms: (beat) => beat.payoffMs,
+    icon: (_beat, progress) => {
+      const squashY = 0.06 + 0.94 * easeOutBack(progress);
+      return { squashY, squashX: 1 + (1 - squashY) * 0.5 };
+    },
+  },
+
+  // "maybe a bit of star twinkling appears" -- four-point sparkles thrown out
+  // of the cap on the slam, each one on its own short life so they pop in
+  // sequence instead of blinking as one block.
+  tierSparkle: {
+    on: "tier", ms: (beat) => beat.payoffMs,
+    icon: (_beat, progress) => ({ sparkle: progress }),
+  },
+
+  // A tier crossing lands on division V, which wears no wings -- so the ones
+  // on screen have to go somewhere. They tuck during the ANTICIPATION, so the
+  // cap is already bare by the time it flattens (the user's own framing for
+  // the fold this reuses: "booya, upgraded! Just gotta earn the wings again").
   wingFold: {
-    on: "tier", ms: 420,
+    on: "anticipate", ms: (beat) => Math.min(420, beat.anticipateMs),
     when: (beat) => beat.wingsBefore > 0,
     icon: (beat, progress) => ({ foldWings: beat.wingsBefore,
                                  foldProgress: easeOutCubic(progress) }),
   },
 
-  // The cap can't lerp — Capless is a dashed outline, Metal carries a
-  // highlight layer, Toad and Toadsworth carry spots — so the NEW cap swings
-  // in edge-on instead. Deliberately not the overlay's turn-away-and-back:
-  // the art here is driven by the climb's own position, so it has already
-  // become the new tier's cap by the time this runs. A cap arriving is
-  // honest about that; a cap turning away and back would be pretending to
-  // hide a swap that already happened.
-  capFlip: {
-    on: "tier", ms: 520,
-    icon: (_beat, progress) => ({ flip: 1 - easeOutCubic(progress) }),
-  },
-
-  // The one thing that CAN lerp: the flat surfaces. Colour is per-tier in
-  // this system, so this is the only beat that changes it.
+  // The one thing that CAN lerp: the flat surfaces -- the bar, and the wash
+  // behind the banner, which read the same `--climb-color`. Colour is
+  // per-tier in this system, so this is the only beat that changes it, and it
+  // runs across the slam so the whole row turns over together (user,
+  // 2026-07-27: "all the colors should animate from the original coloring to
+  // the new coloring").
   tierColor: {
-    on: "tier", ms: 700,
+    on: "tier", ms: (beat) => beat.payoffMs,
     vars: (beat, progress) => ({
       "--climb-color": `color-mix(in srgb, ${rankColor(beat.tier)} `
         + `${(easeOutCubic(progress) * 100).toFixed(1)}%, ${rankColor(beat.fromTier)})`,
@@ -157,9 +194,10 @@ const contribution = (value, beat, progress) =>
  * stays where it lives (caps.js::wingTiers) no matter how many effects read
  * it.
  */
-export function makeBeat({ kind, at, level, from, to, tiersGained, divisionsGained }) {
+export function makeBeat({ kind, at, level, from, to, tiersGained, divisionsGained,
+                           anticipateMs = 0, payoffMs = 0 }) {
   return {
-    kind, at, level,
+    kind, at, level, anticipateMs, payoffMs,
     tier: to.tier, division: to.division,
     fromTier: from.tier, fromDivision: from.division,
     wingsBefore: wingTiers(from.tier, from.division),
@@ -184,9 +222,13 @@ export function activeEffects(beats, nowMs) {
     for (const beat of beats) {
       if (!kinds.includes(beat.kind)) continue;
       if (entry.when && !entry.when(beat)) continue;
+      // `ms` may be a function of the beat: a tier dwell's length depends
+      // on how many tiers THIS climb crosses (climbcurve.js::tierDwell), so
+      // the effects that fill the dwell cannot be fixed-length constants.
+      const windowMs = typeof entry.ms === "function" ? entry.ms(beat) : entry.ms;
       const elapsed = nowMs - beat.at - (entry.delay || 0);
-      if (elapsed < 0 || elapsed > entry.ms) continue;
-      const progress = entry.ms > 0 ? Math.min(1, elapsed / entry.ms) : 1;
+      if (elapsed < 0 || elapsed > windowMs) continue;
+      const progress = windowMs > 0 ? Math.min(1, elapsed / windowMs) : 1;
       if (entry.vars) Object.assign(vars, contribution(entry.vars, beat, progress));
       if (entry.icon) Object.assign(icon, contribution(entry.icon, beat, progress));
       // One beat per entry per frame: with several crossings in flight the
@@ -199,11 +241,12 @@ export function activeEffects(beats, nowMs) {
 }
 
 /** How long after its beat the slowest effect for `kind` is still running. */
-export function celebrationTailMs(kind) {
+export function celebrationTailMs(kind, sample = { anticipateMs: 1600, payoffMs: 1600 }) {
   let tail = 0;
   for (const entry of Object.values(CELEBRATIONS)) {
     if (!kindsOf(entry).includes(kind)) continue;
-    tail = Math.max(tail, (entry.delay || 0) + entry.ms);
+    tail = Math.max(tail, (entry.delay || 0)
+                    + (typeof entry.ms === "function" ? entry.ms(sample) : entry.ms));
   }
   return tail;
 }

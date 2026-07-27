@@ -434,23 +434,11 @@ function rankIdentity(entityKey, which, sec, t) {
   return `${entityKey}|${which}|${sec.last_strat || ""}|${mode}`;
 }
 
-// The rank wash's inputs (index.html, `.rank-slot-wrap::before`): each
-// banner's tier colour, plus the 50% split that turns one card-wide gradient
-// into one gradient per banner. CSS owns the geometry and the gradient; this
-// owns only which colours and how many bands (live report 2026-07-25 round 5
-// -- a single Strategy-coloured wash running under a differently-ranked Star
-// banner painted a Bronze rank silver). A banner that renders without a rank
-// (the "no standards yet" sentinel) contributes the split but no colour, so
-// its half is honestly empty rather than borrowing its neighbour's tier.
-function rankWashStyle(sec) {
-  const bands = [];
-  if (sec.rank && sec.rank.rank) bands.push(`--rank-glow:${rankColor(sec.rank.rank)}`);
-  if (showsEntityBanner(sec)) {
-    bands.push("--rank-wash-split:50%");
-    if (sec.entity_rank.rank) bands.push(`--rank-glow-2:${rankColor(sec.entity_rank.rank)}`);
-  }
-  return bands.join(";");
-}
+// The rank wash moved onto each `.rank-banner` itself (index.html,
+// 2026-07-27) so it can cross-fade with the climb instead of painting the
+// tier the climb is heading FOR. Nothing to hand down from here any more:
+// the split it needed was the DOM boundary between the two banners all
+// along, and the colour is the banner's own `--climb-color`.
 
 // Names the star/segment's fastest known strategy, next to the strategy
 // picker -- NOT inside the rank banner (round 4, 2026-07-25): on the
@@ -556,8 +544,7 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
           <${StrategyFastestHint} sec=${sec} />
         </div>
       </div>
-      <div class="objective-metrics" style=${rankWashStyle(sec)}>
-        <div class="rank-slot-wrap">
+      <div class="objective-metrics">
           <div class="rank-slot">
             <${RankBanner} label=${bannerLabel(sec, "Star")}
                 hint=${bannerHint(sec, "Star")} banner=${sec.rank}
@@ -565,7 +552,6 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
             ${showsEntityBanner(sec) && html`<${RankBanner} label="Star" banner=${sec.entity_rank}
                 identity=${rankIdentity(`star:${sec.course_id}:${sec.star_id}`, "entity", sec, t)} />`}
           </div>
-        </div>
         ${/* Same clock + word the segment card's live state uses. It was a
              bare "○" glyph until 2026-07-26, which only became visible as an
              asymmetry once the heading icon moved into ObjectiveEyebrow --
@@ -719,8 +705,7 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker 
           <${StrategyFastestHint} sec=${sec} />
         </div>
       </div>
-      <div class="objective-metrics" style=${rankWashStyle(sec)}>
-        <div class="rank-slot-wrap">
+      <div class="objective-metrics">
           <div class="rank-slot">
             <${RankBanner} label=${bannerLabel(sec, "Segment")}
                 hint=${bannerHint(sec, "Segment")} banner=${sec.rank}
@@ -728,7 +713,6 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker 
             ${showsEntityBanner(sec) && html`<${RankBanner} label="Segment" banner=${sec.entity_rank}
                 identity=${rankIdentity(`segment:${sec.segment_id}`, "entity", sec, t)} />`}
           </div>
-        </div>
         <div class="objective-live-state ${armed ? "running" : ""}"
             aria-label=${`Segment state: ${pinTag}`}>
           <${Icon} name="clock" size=${17} /><span>${pinTag}</span>

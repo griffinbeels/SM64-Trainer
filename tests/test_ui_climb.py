@@ -161,3 +161,40 @@ def test_a_rise_starts_where_it_was_and_ends_where_it_is_going():
     assert start == 41.95, "the climb begins at the rank you actually had"
     assert 41.95 < middle < 43.10
     assert isclose(end, 43.10, rel_tol=1e-9)
+
+
+# ---- Tier dwells: the climb STOPS at every tier boundary -------------------
+#
+# Cruising through a tier crossing at three divisions a second threw away the
+# biggest moment in the feature (live report 2026-07-27: "it needs to feel
+# EXTRA juicy"). The climb now halts at each one — anticipation, crossing,
+# then a beat to look at it.
+
+def test_one_tier_crossing_gets_the_full_dwell():
+    dwell = run_node("tierDwell", "console.log(JSON.stringify(tierDwell(1)))")
+    assert dwell["anticipateMs"] + dwell["payoffMs"] == 1600
+    assert dwell["anticipateMs"] > dwell["payoffMs"], (
+        "the build-up is the longer half -- anticipation is what makes the "
+        "release land")
+
+
+def test_the_dwells_share_a_budget_so_a_long_climb_stays_watchable():
+    """Eight tier crossings at the full 1.6s each would hold the UI for
+    thirteen seconds on top of the movement."""
+    totals = run_node("tierDwell", "console.log(JSON.stringify("
+                      "[1, 2, 4, 8, 20].map((n) => {"
+                      " const d = tierDwell(n);"
+                      " return [n * (d.anticipateMs + d.payoffMs), d.anticipateMs + d.payoffMs];"
+                      "})))")
+    per_crossing = [each for _total, each in totals]
+    assert per_crossing == sorted(per_crossing, reverse=True), (
+        "more crossings must never make each one longer")
+    assert all(each >= 700 for each in per_crossing), (
+        "a dwell below the floor reads as a stutter, not a pause")
+    assert max(total for total, _each in totals) <= 14000, (
+        "the whole dwell budget must stay bounded")
+
+
+def test_no_crossings_means_no_dwell():
+    dwell = run_node("tierDwell", "console.log(JSON.stringify(tierDwell(0)))")
+    assert dwell == {"anticipateMs": 0, "payoffMs": 0}
