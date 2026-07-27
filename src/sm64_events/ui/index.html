@@ -1408,9 +1408,48 @@
   .rank-band {
     position: relative; min-width: 0; height: 100%;
     flex-grow: var(--band-weight); flex-shrink: 1; flex-basis: 0%;
+    box-shadow: 0 0 0 0 rgba(0,0,0,0);
   }
+  /* Round 8 (task 8, 2026-07-26 -- the user: "it should animate from the
+     starting bar position to the expanded bar position... it should also
+     animate back"): ONE `transition` declaration for `.rank-band`, covering
+     every property EITHER state of it ever sets (flex-grow/flex-basis here,
+     transform/box-shadow below), and it is the ONLY place `transition` is
+     declared for this element -- no separate declaration on the `:hover`
+     rule below. That used to be two rules: this one covered flex-grow/
+     flex-basis, `:hover`'s own rule covered transform/box-shadow -- and
+     since `:hover` has higher specificity, its `transition` COMPLETELY
+     REPLACED this one's (CSS `transition` is not additive across rules on
+     the same element) the instant a band gained the `:hover` match, so
+     flex-grow/flex-basis had NO transition during the split second they
+     needed one most: entering hover. Leaving hover worked fine, because
+     `:hover` stops matching and THIS rule's transition takes back over --
+     which is exactly the asymmetric "some things snap, some things don't,
+     and it depends on direction" bug a probe confirmed before this fix
+     (measured `flex-basis`/width jumping straight to its target value on
+     the very first frame of expansion, but interpolating smoothly on
+     collapse). Fixed by moving every property either state can change onto
+     ONE list, here, so there is exactly one transition config regardless of
+     which direction the state is changing -- same duration, same easing,
+     both directions, structurally impossible to diverge again. This is
+     also what lets the flex reflow trick work AT ALL: the eight compressing
+     siblings never transition their OWN flex-grow/basis (those values never
+     change for them), they only look smooth because the hovered band's
+     property is ACTUALLY interpolating frame by frame and the browser
+     naturally reflows around that on every rendered frame -- if the
+     hovered band's own change snaps, the siblings have nothing to reflow
+     smoothly around either, which is why the ENTIRE row used to snap
+     together on expand and only the row's OWN sizing snapped, not the
+     icons (see `.rank-band-icon` below, which was never double-declared
+     and always animated correctly in both directions). Pip/icon/marker
+     `left:%` positions need no transition of their own for the same
+     reason: they are computed from the band's CURRENT width every frame,
+     so they ride this one width transition for free once it is real. */
   @media (prefers-reduced-motion: no-preference) {
-    .rank-band { transition: flex-grow .35s ease, flex-basis .35s ease; }
+    .rank-band {
+      transition: flex-grow .25s ease, flex-basis .25s ease,
+        transform .25s ease, box-shadow .25s ease;
+    }
   }
   /* The expansion is the thing that makes per-division icons legible at
      all (see the LadderBar comment) -- not optional garnish. Fixed rigid
@@ -1429,7 +1468,8 @@
      realistic wing spill. `:focus-within` puts a keyboard user who Tabbed
      onto one of the five pips inside in the exact same state a mouse hover
      would -- no separate keyboard path to keep in sync with the mouse
-     one. */
+     one. Sets ONLY target values here, deliberately -- the transition that
+     animates TOWARD them lives once, above, on the unconditional rule. */
   .rank-band:hover, .rank-band:focus-within {
     flex: 0 0 max(260px, calc(var(--band-weight) * 1%));
     z-index: 3;
@@ -1438,7 +1478,6 @@
     .rank-band:hover, .rank-band:focus-within {
       transform: translateY(-2px);
       box-shadow: 0 3px 10px rgba(0,0,0,.4);
-      transition: transform .2s ease, box-shadow .2s ease;
     }
   }
   /* The painted fill lives in its OWN clipped box, separate from the pips/
