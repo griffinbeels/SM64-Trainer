@@ -5,8 +5,8 @@
 export { RANK_NAMES, rankColor } from "./caps.js";
 import { h } from "preact";
 import htm from "htm";
-import { useTween } from "../useTween.js";
-import { capName, divisionDigit, rankColor } from "./caps.js";
+import { useRankClimb } from "../rankclimb.js";
+import { capName, divisionDigit, rankPosition, rankAt } from "./caps.js";
 import { RankIcon } from "./rankicon.js";
 const html = htm.bind(h);
 
@@ -88,28 +88,50 @@ function sentinelMsg(banner) {
 // wording built here because the reason is a fact about the CALL SITE's
 // data, and this component is deliberately ignorant of which two ladders
 // produced the banner it was handed.
-export function RankBanner({ label, banner, hint = null }) {
+export function RankBanner({ label, banner, hint = null, identity = null }) {
   const ranked = !!(banner && banner.rank);
-  // Called unconditionally (rules of hooks) even on the sentinel/empty
-  // path below — `null` passes straight through useTween with no
-  // animation, which is exactly what a not-yet-ranked banner needs. This is
-  // the ONE division-fill tween for both banners this component renders
-  // (Strategy AND the entity's own Star/Segment banner, spec task F2) — a
-  // fresh attempt lands here as a fill % change and climbs to it instead of
-  // snapping, the same primitive every other numeric surface uses.
-  const rawFillPct = ranked ? (banner.next_tier ? Math.round((banner.fill || 0) * 100) : 100) : null;
-  const fillPct = useTween(rawFillPct);
-  if (!ranked) {
+  // Called unconditionally (rules of hooks) even on the sentinel/empty path
+  // below — `null` passes straight through with no animation, which is what
+  // a not-yet-ranked banner needs.
+  //
+  // This used to be `useTween` on the raw `fill`, and that was the bug task
+  // 0012 exists to kill: `fill` is progress WITHIN the current division, so a
+  // rank-up sent it from .95 to .05 and the bar animated BACKWARDS on the one
+  // event it is there to celebrate. `useRankClimb` animates the ladder
+  // POSITION instead and hands back the tier/division/fill to draw at this
+  // frame — the bar is the fractional part, so it can only ever fill.
+  //
+  // `identity` is what makes a rank RISE distinguishable from the banner
+  // simply being handed a different measurement: switching strategy, rank
+  // mode or target all legitimately produce a higher rank nobody earned. The
+  // caller owns it; see practice.js.
+  const climb = useRankClimb(ranked ? {
+    tier: banner.rank, division: banner.division,
+    // At the top of the ladder there is no next step to fill toward, so the
+    // bar is simply full — the same sentinel the old tween used.
+    fill: banner.next_tier ? (banner.fill || 0) : 1,
+  } : null, identity);
+  if (!ranked || !climb) {
     return html`<div class="rank-banner rank-banner-empty">
       <span class="rank-banner-kicker" title=${hint}>${label}</span>
       <span class="meta">${sentinelMsg(banner)}</span>
     </div>`;
   }
-  const c = rankColor(banner.rank);
   const basis = banner.basis;
-  const nextLabel = banner.next_tier
-    ? `${capName(banner.next_tier)} ${divisionDigit(banner.next_division)}` : null;
-  const gap = banner.next_gap_cs != null ? (banner.next_gap_cs / 100).toFixed(2) : null;
+  // Mid-climb the server's `next_tier` names the step after the rank you are
+  // LANDING on, which would read as a contradiction beside a rank name that
+  // is still climbing ("WALUIGI 4 -> Waluigi 3" while the cap already says
+  // 3). While the climb is running the next step is derived from where the
+  // bar actually is; the exact time delta is withheld until it settles,
+  // because that number is only true of the final rank.
+  const settledNext = banner.next_tier
+    ? { tier: banner.next_tier, division: banner.next_division } : null;
+  const climbingNext = rankAt(rankPosition(climb.tier, climb.division, climb.fill) + 1);
+  const next = climb.climbing ? climbingNext : settledNext;
+  const nextLabel = next ? `${capName(next.tier)} ${divisionDigit(next.division)}` : null;
+  const gap = (!climb.climbing && banner.next_gap_cs != null)
+    ? (banner.next_gap_cs / 100).toFixed(2) : null;
+  const fillPct = climb.fill * 100;
   const displayFillPct = Math.round(fillPct);
   // The mode name (e.g. "Avg 10") is dropped from the VISIBLE basis text —
   // round 4, 2026-07-25: it's global app state already shown in the
@@ -131,7 +153,12 @@ export function RankBanner({ label, banner, hint = null }) {
   // the premise the whole hide-the-basis decision rests on.
   const trackTitle = [nextLabel ? `${displayFillPct}% of the way to ${nextLabel}` : "top rank",
     basisTitle].filter(Boolean).join(" · ");
-  return html`<div class="rank-banner">
+  // The climb's own variables ride the banner root: `--climb-color` (the
+  // tier colour, cross-faded while a tier boundary is being crossed) and the
+  // per-frame effect values ui/celebrations.js contributes. Every one of
+  // them has a CSS fallback, so a surface still renders correctly with no
+  // celebration running.
+  return html`<div class=${`rank-banner${climb.climbing ? " is-climbing" : ""}`} style=${climb.vars}>
     <div class="rank-banner-row">
       <span class="rank-banner-kicker" title=${hint}>${label}</span>
       <!-- Round 4 (addendum, task 8, 2026-07-26 -- the user: "we probably
@@ -147,14 +174,15 @@ export function RankBanner({ label, banner, hint = null }) {
            other. This wrapper's own margin reserves that spill so the
            row's real painted content stops overlapping, without widening
            the whole row's gap for every OTHER pair of children too. -->
-      <span class="rank-icon-slot rank-banner-icon"><${RankIcon} tier=${banner.rank} division=${banner.division} size=${24} /></span>
-      <b class="rank-banner-name">${capName(banner.rank).toUpperCase()}${banner.division ? ` ${divisionDigit(banner.division)}` : ""}</b>
+      <span class="rank-icon-slot rank-banner-icon"><${RankIcon} ...${climb.icon}
+          tier=${climb.tier} division=${climb.division} size=${24} /></span>
+      <b class="rank-banner-name">${capName(climb.tier).toUpperCase()}${climb.division ? ` ${divisionDigit(climb.division)}` : ""}</b>
       ${basis && html`<span class="meta rank-banner-basis" title=${basisTitle}>${basisText}</span>`}
       <span class="meta rank-banner-next">${nextLabel
         ? html`→ <b>${nextLabel}</b>${gap ? ` −${gap}s` : ""}` : "top rank"}</span>
     </div>
     <div class="rank-progress-track" title=${trackTitle}>
-      <i style=${`width:${fillPct}%;background:${c}`}></i>
+      <i style=${`width:${fillPct}%`}></i>
     </div>
   </div>`;
 }

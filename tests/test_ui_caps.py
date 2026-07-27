@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from sm64_events.ranks import scoring
 from sm64_events.ranks.classify import RANK_NAMES
 from tests.source_scan import strip_comments
 
@@ -385,3 +386,69 @@ def test_the_style_import_guard_can_still_fail():
     # The dispatcher import is not an offense.
     assert style_renderer_import_offenders(
         'import { RankIcon } from "./rankicon.js";') == []
+
+
+# ---- The ladder coordinate (task 0012, the level-up climb) ----------------
+#
+# `rankPosition` collapses tier + division + fill into ONE monotone number so
+# the rank bars can animate a rise without the within-division `fill` running
+# backwards across a boundary. Its integer part must be byte-for-byte
+# `ranks/scoring.py::progression_key` -- if the two ever disagree, a climb
+# animates through ranks the server does not believe in.
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+def test_division_numerals_match_python_bottom_of_tier_first():
+    assert run_node("DIVISION_NUMERALS",
+                    "console.log(JSON.stringify(DIVISION_NUMERALS))") == scoring.DIVISION_NUMERALS
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+def test_rank_position_is_progression_key_for_every_tier_and_division():
+    pairs = [[tier, numeral] for tier in RANK_NAMES
+             for numeral in scoring.DIVISION_NUMERALS]
+    assert len(pairs) == 45, "the ladder is 9 tiers x 5 divisions"
+    from_js = run_node("rankPosition", "console.log(JSON.stringify("
+                       f"{json.dumps(pairs)}.map(([t, d]) => rankPosition(t, d))))")
+    from_python = [scoring.progression_key(tier, numeral) for tier, numeral in pairs]
+    assert from_js == from_python
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+def test_rank_at_names_the_rank_its_position_came_from():
+    pairs = [[tier, numeral] for tier in RANK_NAMES
+             for numeral in scoring.DIVISION_NUMERALS]
+    # Sampled mid-division too: every point INSIDE a division must still name
+    # that division, which is what a mid-climb frame asks for.
+    round_tripped = run_node(
+        "rankPosition, rankAt",
+        "console.log(JSON.stringify("
+        f"{json.dumps(pairs)}.flatMap(([t, d]) => [0, 0.5, 0.99]"
+        ".map((fill) => { const r = rankAt(rankPosition(t, d, fill));"
+        " return [r.tier, r.division]; }))))")
+    expected = [pair for pair in pairs for _ in range(3)]
+    assert round_tripped == expected
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+def test_the_fill_is_the_fraction_and_is_clamped():
+    samples = run_node("rankPosition", "console.log(JSON.stringify(["
+                       'rankPosition("Iron", "V", 0),'
+                       'rankPosition("Iron", "V", 0.25),'
+                       'rankPosition("Iron", "IV", 0.5),'
+                       'rankPosition("Iron", "V", 4),'      # over-full clamps
+                       'rankPosition("Iron", "V", -3),'     # negative clamps
+                       'rankPosition("Nonsense", "V"),'     # unknown tier
+                       'rankPosition("Iron", "XI")]))')     # unknown division
+    assert samples == [0, 0.25, 1.5, 1, 0, None, None]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+def test_rank_at_clamps_to_a_real_rank_outside_the_ladder():
+    # A curve that overshoots by a rounding error must still name a rank, not
+    # hand `undefined` to a render.
+    ends = run_node("rankAt", "console.log(JSON.stringify("
+                    "[-2, 0, 44, 44.9, 99].map((p) => { const r = rankAt(p);"
+                    " return [r.tier, r.division]; })))")
+    floor, ceiling = ["Iron", "V"], ["Mario", "I"]
+    assert ends == [floor, floor, ceiling, ceiling, ceiling]

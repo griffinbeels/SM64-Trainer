@@ -135,7 +135,14 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
             holds the place, wearing its neighbours' panel while empty. */
         null}
       <div class="marelo-slot">
-        <${MareloBar} marelo=${t.marelo} onOpen=${openMarelo} />
+        <!-- The identity prop is what tells a genuine rank RISE apart from
+             the same bar being handed a different measurement: switching the
+             active scope re-rates against a different set of entities, and
+             changing the grading mode re-grades every one of them. Both can
+             legitimately produce a higher rank nobody earned, and neither may
+             fire a level-up climb (ui/rankclimb.js). -->
+        <${MareloBar} marelo=${t.marelo} onOpen=${openMarelo}
+            identity=${`${t.marelo ? t.marelo.label : ""}|${v ? v.rank_mode : ""}`} />
       </div>
 
       <${ContextSelect} icon="clock" label="Clock" id="clock-select"

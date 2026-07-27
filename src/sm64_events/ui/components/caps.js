@@ -79,6 +79,49 @@ export const capGradient = (tier) => {
 const DIGITS = { V: "5", IV: "4", III: "3", II: "2", I: "1" };
 export const divisionDigit = (numeral) => DIGITS[numeral] || "";
 
+// Bottom of a tier first, mirroring ranks/scoring.py::DIVISION_NUMERALS --
+// DIGITS' key order already WAS this list, implicitly, and naming it is what
+// lets rankPosition below stop being a second opinion about the order.
+// Pinned against the Python list by tests/test_ui_caps.py.
+export const DIVISION_NUMERALS = Object.keys(DIGITS);
+export const DIVISIONS_PER_TIER = DIVISION_NUMERALS.length;
+
+// THE ladder coordinate, and the reason the rank bars can animate at all.
+//
+// A rank is drawn from three values that move together -- tier, division, and
+// how far through that division you are -- and animating the third ALONE is
+// what made a rank-up read as a demotion: the server's `fill` is progress
+// WITHIN the current division, so crossing a boundary sends .95 -> .05 and the
+// bar ran backwards (the whole of task 0012). Collapsing all three into one
+// monotone number removes the possibility rather than special-casing it:
+// position 41.95 -> 42.05 is a rise, always, and the bar is just the
+// fractional part.
+//
+// The integer part is exactly `ranks/scoring.py::progression_key` (Iron V = 0,
+// hardest-last), pinned against it over all 45 pairs by tests/test_ui_caps.py.
+// This file is the right home for it because it already owns BOTH registries
+// the arithmetic needs -- RANK_NAMES' order and DIVISION_NUMERALS' -- and is
+// import-free, so node can execute it directly.
+export function rankPosition(tier, numeral, fill = 0) {
+  const tierIndex = RANK_NAMES.indexOf(tier);
+  const divisionIndex = DIVISION_NUMERALS.indexOf(numeral);
+  if (tierIndex < 0 || divisionIndex < 0) return null;
+  const fromFloor = RANK_NAMES.length - 1 - tierIndex;
+  return fromFloor * DIVISIONS_PER_TIER + divisionIndex
+    + Math.max(0, Math.min(1, fill || 0));
+}
+
+// The inverse, for any point mid-climb: which rank is a position standing in.
+// Clamped at both ends, so a curve that overshoots by a rounding error still
+// names a real rank instead of returning undefined into a render.
+export function rankAt(position) {
+  const top = RANK_NAMES.length * DIVISIONS_PER_TIER - 1;
+  const level = Math.max(0, Math.min(top, Math.floor(position)));
+  const tierIndex = RANK_NAMES.length - 1 - Math.floor(level / DIVISIONS_PER_TIER);
+  return { tier: RANK_NAMES[tierIndex],
+           division: DIVISION_NUMERALS[level % DIVISIONS_PER_TIER] };
+}
+
 // A division numeral/wings/patch draws at EVERY size a division is passed --
 // there is no size floor on WHETHER content draws (correction, addendum,
 // task 8, 2026-07-26: the user rejected an earlier `size >= DETAIL_MIN_SIZE`

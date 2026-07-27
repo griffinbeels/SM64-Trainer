@@ -1143,78 +1143,14 @@ class TrackerService:
             watermarks[scope_id] = int(key)
             self.db.set_state("marelo_watermarks", watermarks)
 
-    # ---- MARELO: per-ENTITY celebration watermarks --------------------------
-    # A single star or segment ranking up is the frequent reward the whole
-    # feature exists to deliver -- the scope aggregate moves glacially by
-    # design (spec 2026-07-24-marelo-rank-system-design section 7.4: "fires
-    # when an entity's tier, OR the active scope's tier/division, rises").
-    # Stored under their OWN ui_state KV (`entity_rank_watermarks`), never
-    # merged into `marelo_watermarks` above: scope ids ("overall",
-    # "route:3", "course:9") and entity keys ("star:6:0", "segment:3") don't
-    # collide by prefix today, but a second KV makes that true by
-    # CONSTRUCTION instead of by convention, and keeps each dict's key count
-    # bounded by what it actually is -- a handful of scopes vs. up to ~102
-    # entities -- rather than one growing blob.
-    def entity_watermarks(self) -> dict[str, int]:
-        """{entity_key: progression_key} -- the highest rank each individual
-        star/segment has been SEEN at. Same role as marelo_watermarks(),
-        one level down."""
-        if self.db is None:
-            return {}
-        return self.db.get_state("entity_rank_watermarks", {})
-
-    def sync_and_seed_entity_watermarks(
-            self, current_by_key: dict[str, int]) -> dict[str, int | None]:
-        """Batch sibling of sync_watermark + seed_watermark, for the FULL
-        rankable corpus (~102 entities) scored on every `/api/marelo`
-        request. Doing the scope path's per-key dance -- one get_state plus
-        maybe one set_state EACH -- would turn a single request into up to
-        ~200 sqlite commits; this round-trips the whole dict ONCE instead
-        (one read, at most one write) regardless of corpus size.
-
-        Applies the exact same two rules as the scope path, key by key:
-        follow a drop down silently so re-climbing celebrates again, and
-        create a first-ever watermark silently so the very first score
-        never celebrates the whole corpus at once. Returns, for every key
-        in `current_by_key`, the watermark AFTER sync but BEFORE seed (None
-        if the key had never been seen) -- mirrors the scope path's read
-        order (sync, then read for celebration_delta, then seed) so the
-        caller can feed this straight to celebration_delta without a first
-        score ever reading back as a rank-up."""
-        if self.db is None:
-            return {key: None for key in current_by_key}
-        watermarks = self.entity_watermarks()
-        changed = False
-        post_sync: dict[str, int | None] = {}
-        for entity_key, key in current_by_key.items():
-            if entity_key in watermarks and key < watermarks[entity_key]:
-                watermarks[entity_key] = int(key)
-                changed = True
-            post_sync[entity_key] = watermarks.get(entity_key)
-        for entity_key, key in current_by_key.items():
-            if entity_key not in watermarks:
-                watermarks[entity_key] = int(key)
-                changed = True
-        if changed:
-            self.db.set_state("entity_rank_watermarks", watermarks)
-        return post_sync
-
-    async def ack_entity_celebration(self, entity_key: str, key: int) -> None:
-        """Entity sibling of ack_celebration -- same once-only raise guard
-        (a stale or repeated ack can never move it), same UI-driven-only
-        contract (fired once the celebration has actually been shown, never
-        while a payload is being built), same broadcast-only marelo_changed
-        so another open client dismisses this celebration instead of
-        showing it a second time."""
-        if self.db is None:
-            raise RuntimeError("tracking database unavailable")
-        watermarks = self.entity_watermarks()
-        if key > watermarks.get(entity_key, -1):
-            watermarks[entity_key] = int(key)
-            self.db.set_state("entity_rank_watermarks", watermarks)
-            await self.broadcaster.publish(Event(
-                type="marelo_changed", frame=0, timestamp_utc=_now(),
-                payload={"entity": entity_key, "key": key}))
+    # There are NO per-ENTITY celebration watermarks (deleted with task 0012,
+    # 2026-07-26). A star's or segment's own rank-up used to be held in an
+    # `entity_rank_watermarks` KV until a client rendered and acked it; it is
+    # now performed live by the rank banner climbing (ui/rankclimb.js), which
+    # is a client-side consequence of the rank simply having changed. That
+    # removed a KV read plus a write from EVERY `/api/marelo` request. The
+    # SCOPE watermarks above are unchanged -- the full-screen MARELO overlay
+    # still needs to be held and acked.
 
     # -- run lifecycle ---------------------------------------------------------
     async def _arm_run(self, route_id: int, void_active: bool = False) -> None:

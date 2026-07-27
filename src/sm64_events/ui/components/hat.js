@@ -126,16 +126,23 @@ function glyphFontSizePx(glyphChar, patchWidthPx, patchHeightPx) {
 // `art("cap")` call and not its twin broke the tint with the whole suite
 // green). `extraClass` carries the wing side marker (wing-l/wing-r)
 // alongside fill/shade, not instead of them.
-function tintedPair(stem, color, extraClass = "") {
+function tintedPair(stem, color, extraClass = "", extraStyle = "") {
   const artUrl = art(stem);
   const withSide = (base) => (extraClass ? `${base} ${extraClass}` : base);
   return [
-    html`<i class=${withSide("fill")} style=${`--c:${color};--art:${artUrl}`}></i>`,
-    html`<i class=${withSide("shade")} style=${`--art:${artUrl}`}></i>`,
+    html`<i class=${withSide("fill")} style=${`--c:${color};--art:${artUrl}${extraStyle}`}></i>`,
+    html`<i class=${withSide("shade")} style=${`--art:${artUrl}${extraStyle}`}></i>`,
   ];
 }
 
-function wingLayers(wings) {
+// `tuck` is 0 (fully out) to 1 (folded away behind the cap) -- ONE number
+// driving both the fold and its reverse, the grow (task 0012). It rides the
+// individual wing layers rather than `.hat` because the two differ in scope:
+// a fold takes EVERY wing, while a grow takes only the pair the division just
+// earned, and the established pairs beside it must not move. `null` leaves
+// the layer inheriting `.hat`'s own value, which is what lets the legacy
+// keyframe path (`.hat-fold`, the scope overlay) keep working untouched.
+function wingLayers(wings, { growWings = 0, growProgress = 1, foldProgress = null } = {}) {
   const layers = [];
   // Increasing tier order, each appended after the last -- later tiers
   // paint OVER earlier ones, matching the reference sheet's verified stack.
@@ -145,10 +152,16 @@ function wingLayers(wings) {
   // is what index.html's flap/fold keyframes select on -- it carries no
   // styling of its own.
   for (let tier = 1; tier <= wings; tier++) {
+    // The newest pairs are the highest-numbered ones (wingTiers counts up as
+    // the division improves), so "the ones that just grew" is the tail.
+    const justGrew = tier > wings - growWings;
+    const tuck = foldProgress != null ? foldProgress
+      : justGrew ? 1 - growProgress : null;
+    const tuckStyle = tuck != null ? `;--wing-tuck:${tuck.toFixed(4)}` : "";
     for (const side of ["l", "r"]) {
       const stem = `wing${tier}_${side}`;
       const sideClass = side === "l" ? "wing-l" : "wing-r";
-      layers.push(...tintedPair(stem, "#eef3f7", sideClass));
+      layers.push(...tintedPair(stem, "#eef3f7", sideClass, tuckStyle));
     }
   }
   return layers;
@@ -173,7 +186,18 @@ function wingLayers(wings) {
 // (fold wins if both are passed, since celebrate.js does not bother
 // conditionally dropping `flap` for that one tick) -- see index.html's
 // `.hat-fold` rules.
-export function Hat({ tier, division = null, size = 18, title = null, flap = false, foldWings = 0 }) {
+// The six props below (`growWings` … `roll`) are the CLIMB's own motion state
+// and come from ONE place: `useRankClimb(...).icon`, spread at the call site.
+// They are never assembled by hand -- every one of them is contributed by an
+// entry in ui/celebrations.js, which is where a new celebration goes, and
+// tests/test_single_source.py is what keeps a second assembler from being
+// written. `flap`/`foldWings` are the OLDER one-shot pair, still driven by
+// CSS keyframes for the scope overlay (celebrate.js); both paths end up in
+// the same `--wing-tuck`/`--wing-flap` variables, so there is one transform
+// rule per wing rather than two rules racing (index.html's `.hat .wing-l`).
+export function Hat({ tier, division = null, size = 18, title = null, flap = false, foldWings = 0,
+                      growWings = 0, growProgress = 1, foldProgress = null,
+                      flapPhase = null, flip = null, roll = null }) {
   const spec = CAP[tier] || {};
   const color = rankColor(tier);
   // DATA rule alone, no size floor (see the block comment above) -- a
@@ -187,6 +211,12 @@ export function Hat({ tier, division = null, size = 18, title = null, flap = fal
   const ringNeedsMoreFill = size < DETAIL_MIN_SIZE;
   const folding = foldWings > 0;
   const wings = folding ? foldWings : (hasDivision ? wingTiers(tier, division) : 0);
+  // A climb drives the tuck/flap NUMERICALLY (one value per frame, so a
+  // second rank-up can retarget mid-flight); the keyframe classes are the
+  // one-shot path and must not also apply, or the animation would win over
+  // the inline value and freeze the climb's wings.
+  const climbDrivesTuck = foldProgress != null || growWings > 0;
+  const climbDrivesFlap = flapPhase != null;
 
   // `size` is the CAP's own footprint, both axes -- the element Medal/Crest
   // used to occupy was exactly `size`px tall (and, being square, `size`px
@@ -227,7 +257,7 @@ export function Hat({ tier, division = null, size = 18, title = null, flap = fal
   // Layer order, bottom to top, is load-bearing: wings -> cap (or outline)
   // -> spots -> patch -> glyph. The patch sits above the spots on purpose:
   // the spot art includes a top spot the sign field is meant to cover.
-  const layers = wingLayers(wings);
+  const layers = wingLayers(wings, { growWings, growProgress, foldProgress });
 
   if (spec.treatment === "outline") {
     // Capless must stay visible at 13px -- on the design sheet a bare
@@ -305,8 +335,24 @@ export function Hat({ tier, division = null, size = 18, title = null, flap = fal
     const glyphChar = spec.glyph || divisionDigit(division);
     const patchWidthPx = PATCH_BOX.width * canvasWidthPx;
     const patchHeightPx = PATCH_BOX.height * canvasHeightPx;
-    const glyphFontSize = glyphFontSizePx(glyphChar, patchWidthPx, patchHeightPx);
-    layers.push(html`<i class="glyph" style=${`${glyphVars}font-size:${glyphFontSize}px;color:${glyphColor}`}>${glyphChar}</i>`);
+    // The reel is sized off the WIDER of the two glyphs it shows, so a "1"
+    // rolling into an "M" doesn't resize the type mid-roll -- the digit and
+    // the letter have very different ink widths (see the ratios above), and
+    // a font-size that changes on the way past reads as a wobble rather than
+    // a slot.
+    const rolling = roll && roll.from !== roll.to;
+    const shown = rolling ? [roll.from, roll.to] : [glyphChar];
+    const glyphFontSize = Math.min(...shown.map(
+      (char) => glyphFontSizePx(char, patchWidthPx, patchHeightPx)));
+    const glyphStyle = `${glyphVars}font-size:${glyphFontSize}px;color:${glyphColor}`;
+    layers.push(rolling
+      // Two cells and a slide between them: a division tick (4 -> 3), a tier
+      // crossing (1 -> 5) and a climb into Mario (1 -> M) are then all the
+      // same motion, with no wrap-around to special-case.
+      ? html`<i class="glyph glyph-reel" style=${`${glyphStyle};--roll:${roll.progress.toFixed(4)}`}>
+          <span><b>${roll.from}</b><b>${roll.to}</b></span>
+        </i>`
+      : html`<i class="glyph" style=${glyphStyle}>${glyphChar}</i>`);
   }
 
   // A DEFAULT title, derived from the same registry the icon itself reads,
@@ -320,8 +366,14 @@ export function Hat({ tier, division = null, size = 18, title = null, flap = fal
     : "Unranked";
   const resolvedTitle = title != null ? title : defaultTitle;
 
-  const motionClass = folding ? " hat-fold" : flap ? " hat-flap" : "";
-  return html`<span class=${`hat${motionClass}`} title=${resolvedTitle} style=${outerStyle}>
+  const motionClass = climbDrivesTuck ? "" : folding ? " hat-fold"
+    : (flap && !climbDrivesFlap) ? " hat-flap" : "";
+  // Both climb variables live on `.hat` and inherit down to every wing; a
+  // wing the climb is growing overrides `--wing-tuck` on itself (wingLayers).
+  const climbStyle = (flapPhase != null ? `--wing-flap:${flapPhase.toFixed(4)};` : "")
+    + (flip != null ? `--cap-flip:${flip.toFixed(4)};` : "");
+  return html`<span class=${`hat${motionClass}${flip != null ? " hat-flipping" : ""}`}
+      title=${resolvedTitle} style=${`${outerStyle}${climbStyle}`}>
     <span class="hat-canvas" style=${canvasStyle}>${layers}</span>
   </span>`;
 }

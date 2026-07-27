@@ -1076,6 +1076,42 @@
     background: rgba(4,13,23,.72);
   }
   .rank-progress-track i { display: block; height: 100%; border-radius: inherit; }
+  /* ---- The level-up climb (task 0012, 2026-07-26) ------------------------
+     Three variables, all written per frame by ui/rankclimb.js from the
+     entries in ui/celebrations.js, all with a fallback so a surface renders
+     correctly with no celebration running:
+
+       --climb-color    the tier's colour, cross-faded across a tier boundary
+       --climb-flash    1 -> 0 decay at each level crossed
+       --climb-settle   1 -> 0 decay when the whole climb lands
+
+     They are read here rather than set inline per element for the reason the
+     bar's colour moved off `style=` at all: during a tier crossing the colour
+     is a BLEND of two tiers, and having one name for "whatever colour this
+     rank is right now" is what lets the bar, the glow and the rank name agree
+     on it without three call sites each mixing their own.
+
+     Nothing here changes layout. `.objective-card` is a hard fixed height
+     (122px desktop, 258px under 760px) and a celebration that grew the card
+     would push the one below it or clip — so every effect is a colour, a
+     shadow or a transform. */
+  .rank-banner .rank-progress-track {
+    box-shadow: 0 0 calc(var(--climb-flash, 0) * 10px)
+                color-mix(in srgb, var(--climb-color, #3a4250)
+                          calc(var(--climb-flash, 0) * 85%), transparent);
+  }
+  .rank-banner .rank-progress-track i { background: var(--climb-color, #3a4250); }
+  .rank-banner .rank-banner-name {
+    color: color-mix(in srgb, #fff calc(var(--climb-flash, 0) * 55%), currentColor);
+    text-shadow: 0 0 calc(var(--climb-flash, 0) * 9px)
+                 color-mix(in srgb, var(--climb-color, #3a4250)
+                           calc(var(--climb-flash, 0) * 90%), transparent);
+  }
+  /* The landing. `scale` (the individual transform property) so it composes
+     with anything else that ever transforms this row rather than replacing
+     it -- the same reason the wings use `rotate`/`scale` instead of
+     `transform`. */
+  .rank-banner { scale: calc(1 + var(--climb-settle, 0) * .012); }
   /* MARELO header bar. It used to sit right-aligned on a 44px row of its own
      UNDER the context grid, because .context-bar's 4-column template is
      redefined at two breakpoints and a 5th column would have meant touching
@@ -1222,29 +1258,85 @@
     display: grid; place-items: center; line-height: 1;
     font-family: "SuperMario256", Impact, sans-serif;
   }
-  /* Task 6 (2026-07-25-mario-cap-rank-icons): the wing flap. `.hat-flap`
-     is set only by hat.js's `flap` prop -- celebrate.js's three rank-up
-     call sites (TierRankUp, DivisionRankUp, the entity tier-up toast) --
-     never the idle rank icons scattered across every other card, which
-     would be motion noise on a screen that's on stream. `.wing-l`/`.wing-r`
-     are the side markers wingLayers() adds alongside `.fill`/`.shade`; the
-     two keyframes rotate opposite signs about a pivot near where each wing
-     meets the cap, so it reads as a flap rather than a spin. The pivot
-     percentages are measured off the wing1..4 PNGs' own alpha bounding
+  /* The slot reel (task 0012, "animate the number ticking in, like a slot
+     machine… it should feel like a slot ticking up"). TWO cells and a slide
+     between them, never a wrapping strip of all five digits: a tier crossing
+     (1 -> 5) and a climb into Mario (1 -> M) are then the same motion as an
+     ordinary 4 -> 3, with no wrap to special-case and no moment where the
+     reel jumps backwards to re-enter at the top.
+
+     `clip-path` rather than `overflow: hidden` alone: the sign field is a
+     DOME (caps.js's PATCH_BOX is a rectangle around it, not its shape), so a
+     rectangular clip lets a digit in transit show its corners outside the
+     patch art. The ellipse follows the dome's crown closely enough at every
+     size, and costs no second mask image to keep in step with patch.png. */
+  .hat .glyph.glyph-reel {
+    display: block; overflow: hidden;
+    clip-path: inset(0 round 46% 46% 12% 12% / 52% 52% 12% 12%);
+  }
+  .hat .glyph-reel > span {
+    display: block; height: 200%;
+    translate: 0 calc(var(--roll) * -50%);
+  }
+  .hat .glyph-reel > span > b {
+    display: grid; place-items: center; height: 50%; font-weight: inherit;
+  }
+  /* The new tier's cap swinging in edge-on. `rotate` (the individual
+     transform property) rather than `transform`, for the same
+     one-declaration-per-element reason the wings use it -- `.hat` may also
+     be carrying a caller's own transform one day, and these must compose
+     rather than replace each other. */
+  .hat-flipping { rotate: y calc(var(--cap-flip) * -90deg); }
+  /* ONE transform declaration per wing, driven by two registered custom
+     properties -- and that is the whole trick (task 0012, 2026-07-26). Three
+     different things move a wing: the idle flap (`.hat-flap`, a keyframe),
+     the one-shot fold (`.hat-fold`, a keyframe), and the climb (numbers
+     written per frame by ui/rankclimb.js). Expressed as three rules each
+     setting `transform`, the highest-specificity one WHOLESALE REPLACES the
+     others -- `transition`/`transform` are not additive across rules, which
+     is the exact defect that made the Rank tab's ladder band expand
+     instantly and collapse smoothly under "identical" CSS. Expressed as
+     inputs to one declaration, they compose instead: a wing can be growing
+     and flapping at once, and a climb can interrupt a flap mid-cycle.
+
+     `@property` is what makes a custom property animatable at all -- an
+     unregistered one is a string to the animation engine and jumps from one
+     keyframe to the next with no interpolation.
+
+     `--wing-tuck` 0 = out, 1 = folded away behind the cap; the pivots (23%
+     64%, 69% 66%) are measured off the wing1..4 PNGs' own alpha bounding
      boxes -- the edge nearest the cap stays fixed across tiers while only
-     the tip grows outward -- not guessed. Runs for as long as the Hat
-     stays mounted (the existing fill/flip/hold beats in celebrate.js);
-     this adds no timer and does not extend any of them. */
+     the tip grows outward -- not guessed. Wings already stack UNDER the cap
+     in hat.js's layer order, so rotating and shrinking toward that pivot
+     makes them recede BEHIND it by construction. The GROW is that same
+     motion played backwards (a wing arrives the way it leaves), which is why
+     there is no second set of numbers for it. */
+  @property --wing-tuck { syntax: "<number>"; inherits: true; initial-value: 0; }
+  @property --wing-flap { syntax: "<number>"; inherits: true; initial-value: 0; }
+  @property --cap-flip { syntax: "<number>"; inherits: true; initial-value: 0; }
+  .hat .wing-l, .hat .wing-r {
+    scale: calc(1 - var(--wing-tuck) * .7);
+    opacity: calc(1 - var(--wing-tuck));
+  }
+  .hat .wing-l {
+    transform-origin: 23% 64%;
+    rotate: calc(var(--wing-tuck) * -80deg + var(--wing-flap) * -14deg);
+  }
+  .hat .wing-r {
+    transform-origin: 69% 66%;
+    rotate: calc(var(--wing-tuck) * 80deg + var(--wing-flap) * 14deg);
+  }
+  /* Task 6 (2026-07-25-mario-cap-rank-icons): the idle flap. `.hat-flap` is
+     set only by hat.js's `flap` prop -- celebrate.js's rank-up overlays --
+     never the idle rank icons scattered across every other card, which would
+     be motion noise on a screen that's on stream. It now animates the
+     VARIABLE rather than the transform, so it shares the declaration above
+     with the climb instead of overriding it. */
   @media (prefers-reduced-motion: no-preference) {
-    .hat-flap .wing-l { transform-origin: 23% 64%; animation: wing-flap-l 1.1s ease-in-out infinite; }
-    .hat-flap .wing-r { transform-origin: 69% 66%; animation: wing-flap-r 1.1s ease-in-out infinite; }
-    @keyframes wing-flap-l {
-      0%, 100% { transform: rotate(0deg); }
-      50% { transform: rotate(-14deg); }
-    }
-    @keyframes wing-flap-r {
-      0%, 100% { transform: rotate(0deg); }
-      50% { transform: rotate(14deg); }
+    .hat-flap { animation: wing-flap 1.1s ease-in-out infinite; }
+    @keyframes wing-flap {
+      0%, 100% { --wing-flap: 0; }
+      50% { --wing-flap: 1; }
     }
   }
   /* Task 10 (addendum, 2026-07-25): the wing FOLD -- set by hat.js's
@@ -1277,21 +1369,16 @@
      actually applies to a given Hat; there is no dependency on CSS source
      order to break the tie. */
   @media (prefers-reduced-motion: no-preference) {
-    .hat-fold .wing-l {
-      transform-origin: 23% 64%;
-      animation: wing-fold-l .5s cubic-bezier(.4, 0, .6, 1) forwards;
-    }
-    .hat-fold .wing-r {
-      transform-origin: 69% 66%;
-      animation: wing-fold-r .5s cubic-bezier(.4, 0, .6, 1) forwards;
-    }
-    @keyframes wing-fold-l {
-      0% { transform: rotate(0deg) scale(1); opacity: 1; }
-      100% { transform: rotate(-80deg) scale(.3); opacity: 0; }
-    }
-    @keyframes wing-fold-r {
-      0% { transform: rotate(0deg) scale(1); opacity: 1; }
-      100% { transform: rotate(80deg) scale(.3); opacity: 0; }
+    /* Now one keyframe on the SHARED variable rather than a per-side
+       transform (task 0012): the end state it used to spell out by hand --
+       rotate ±80deg, scale .3, opacity 0 -- is exactly `--wing-tuck: 1` in
+       the declaration above, which is also what the climb's grow animates
+       backwards through. Two treatments, one geometry, no chance of the two
+       disagreeing about where a folded wing sits. */
+    .hat-fold { animation: wing-tuck .5s cubic-bezier(.4, 0, .6, 1) forwards; }
+    @keyframes wing-tuck {
+      from { --wing-tuck: 0; }
+      to { --wing-tuck: 1; }
     }
     .hat-fold::after {
       content: ""; position: absolute; inset: -25%; border-radius: 50%;
@@ -1310,7 +1397,20 @@
     width: 96px; height: 6px; border-radius: 3px; background: rgba(255,255,255,.12);
     overflow: hidden; flex: 0 0 auto;
   }
-  .marelo-track > i { display: block; height: 100%; }
+  /* Same three climb variables as the practice card's banners, read the same
+     way -- this bar runs the same primitive (ui/rankclimb.js), so it must not
+     grow a second way of expressing the same celebration. */
+  .marelo-track > i { display: block; height: 100%; background: var(--climb-color, #3a4250); }
+  .marelo-bar .marelo-track {
+    box-shadow: 0 0 calc(var(--climb-flash, 0) * 10px)
+                color-mix(in srgb, var(--climb-color, #3a4250)
+                          calc(var(--climb-flash, 0) * 85%), transparent);
+  }
+  .marelo-bar-text b {
+    text-shadow: 0 0 calc(var(--climb-flash, 0) * 9px)
+                 color-mix(in srgb, var(--climb-color, #3a4250)
+                           calc(var(--climb-flash, 0) * 90%), transparent);
+  }
   .marelo-split { white-space: nowrap; }
   @media (max-width: 900px) { .marelo-track, .marelo-split { display: none; } }
   /* Scope TIER-up celebration -- the grand one (celebrate.js TierRankUp,
@@ -1386,46 +1486,13 @@
       to { opacity: 1; transform: translate(-50%, 0); }
     }
   }
-  /* Entity DIVISION-up -- an inline pop directly on the existing rank
-     display (celebrate.js EntityCelebration, `.rank-slot-pop`), no extra
-     copy: the common event, so it must read as quieter than the tier-up
-     toast below. */
-  .rank-slot-pop > .rank-slot { border-radius: 6px; }
-  @media (prefers-reduced-motion: no-preference) {
-    .rank-slot-pop > .rank-slot { animation: entity-rank-pop 1.1s ease-out; }
-    @keyframes entity-rank-pop {
-      0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--gold) 55%, transparent); }
-      35% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--gold) 40%, transparent); }
-      100% { box-shadow: 0 0 0 0 transparent; }
-    }
-  }
-  /* Entity TIER-up -- a toast sized to `.rank-slot`'s own footprint
-     (`.rank-slot-wrap` has no padding of its own, so `inset:0` here exactly
-     covers it) so it can never grow past `.objective-card`'s hard fixed
-     height -- it overlays INSIDE the existing box, never changing the
-     card's height. Not `position:fixed`: this lives inside one specific
-     card, not the whole viewport, so it never needs the click-swallowing
-     guard the scope overlays above do -- `.rank-slot` renders no
-     interactive controls of its own for the toast to cover. */
-  .entity-rankup-toast {
-    position: absolute; inset: 0; z-index: 5; cursor: pointer;
-    display: flex; align-items: center; gap: 8px; padding: 0 10px;
-    border-radius: 6px; border: 1px solid var(--tier);
-    background: rgba(11,25,41,.94);
-    box-shadow: 0 0 22px color-mix(in srgb, var(--tier) 45%, transparent);
-  }
-  /* Round 5 (addendum, task 8, 2026-07-26): 8px gap vs. a ~11.1px wing
-     spill at size 30. */
-  .entity-toast-icon { --icon-size: 30px; }
-  .entity-rankup-text { min-width: 0; display: flex; flex-direction: column; line-height: 1.2; }
-  .entity-rankup-text b { color: var(--tier); }
-  .entity-rankup-text i { font-style: normal; color: var(--muted); font-size: .7rem; }
-  @media (prefers-reduced-motion: no-preference) {
-    .entity-rankup-toast { animation: entity-toast-in .2s ease-out; }
-    @keyframes entity-toast-in {
-      from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: scale(1); }
-    }
-  }
+  /* The two ENTITY celebrations that lived here -- an inline glow pop for a
+     division-up and a small in-card toast for a tier-up -- were deleted with
+     task 0012 (2026-07-26). The rank-up is performed by the rank BANNER
+     itself climbing now (ui/rankclimb.js), on the very bar the rank already
+     lives on, so a toast beside it would be two things celebrating one
+     event. Their replacement variables (--climb-flash, --climb-settle,
+     --climb-color) are up beside .rank-progress-track. */
   /* Rank tab (rankpage.js): scope picker + card + chart + breakdown, all
      scaled off ONE scope response — no separate route/course/overall pages.
      --border-soft/--muted mirror the rest of the design system (this file

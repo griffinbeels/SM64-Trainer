@@ -226,14 +226,14 @@ def test_summary_leaves_marelo_watermarks_untouched(tmp_path):
         assert after == before == {}
 
 
-# -- entity-level rank-up celebrations (task-f1) -----------------------------
+# -- the ack endpoint after per-entity celebrations were removed -------------
 #
-# A single star or segment ranking up is the frequent reward the feature
-# exists to deliver -- the scope aggregate barely moves per-star. The seed in
-# this file (_seed) has exactly ONE ladder (star:9:2), which is convenient
-# here: with only one rankable entity, `overall`'s MARELO equals that
-# entity's own score (n=1), so improving it moves scope and entity tier
-# together -- letting one scenario cover "both present in one payload" too.
+# Task 0012 (2026-07-26) deleted entity-level rank-up celebrations entirely:
+# a star's or segment's own rank-up is performed live by the rank banner
+# climbing (ui/rankclimb.js) instead of being held server-side until a client
+# renders and acks it. What is asserted here is that the removal is COMPLETE
+# and LOUD -- no vestigial payload key, and an out-of-date client's entity ack
+# rejected rather than silently accepted.
 
 def _mario_reset_and_collect(svc, frame_reset, frame_collect, igt_frames):
     asyncio.run(svc.publish(_ev("practice_reset", frame_reset,
@@ -243,107 +243,32 @@ def _mario_reset_and_collect(svc, frame_reset, frame_collect, igt_frames):
                                  "igt_frames": igt_frames})))
 
 
-def test_marelo_payload_carries_an_entity_celebrations_list(client):
+def test_the_payload_no_longer_carries_entity_celebrations(client):
     body = client.get("/api/marelo").json()
-    assert "entity_celebrations" in body
-    assert body["entity_celebrations"] == []
+    assert "entity_celebrations" not in body
+    # The SCOPE celebration is a different feature and stays.
+    assert "celebration" in body
 
 
-def test_first_ever_score_seeds_the_entity_watermark_silently(tmp_path):
-    client, svc = make_client(tmp_path)
-    with client:
-        asyncio.run(svc.set_strat(9, 2, "Nuts Pless"))
-        _mario_reset_and_collect(svc, 1000, 1420, 420)   # -> Iron I
-
-        body = client.get("/api/marelo").json()
-        assert body["celebration"] is None
-        assert body["entity_celebrations"] == []
-        assert svc.entity_watermarks().get("star:9:2") is not None
-
-
-def test_entity_rank_up_celebrates_alongside_the_scope_and_not_again_after_ack(
-        tmp_path):
-    client, svc = make_client(tmp_path)
-    with client:
-        asyncio.run(svc.set_strat(9, 2, "Nuts Pless"))
-        _mario_reset_and_collect(svc, 1000, 1420, 420)   # -> Iron I
-        first = client.get("/api/marelo").json()
-        assert first["celebration"] is None
-        assert first["entity_celebrations"] == []
-
-        # A big improvement crosses several tiers at once for BOTH the
-        # entity and (because it's the only ranked entity) the scope.
-        _mario_reset_and_collect(svc, 2000, 2399, 399)   # -> Diamond IV
-        risen = client.get("/api/marelo").json()
-
-        assert risen["celebration"] is not None
-        assert risen["celebration"]["to"] == {"tier": "Diamond", "division": "IV"}
-
-        assert len(risen["entity_celebrations"]) == 1
-        entity_celebration = risen["entity_celebrations"][0]
-        assert entity_celebration["entity"] == "star:9:2"
-        assert entity_celebration["to"] == {"tier": "Diamond", "division": "IV"}
-        assert entity_celebration["from"] == {"tier": "Iron", "division": "I"}
-        assert entity_celebration["label"]
-        assert isinstance(entity_celebration["key"], int)
-
-        # Un-acked: the SAME rise keeps reporting on every fetch (matches
-        # the scope contract -- only ack raises the watermark).
-        again = client.get("/api/marelo").json()
-        assert again["celebration"] is not None
-        assert len(again["entity_celebrations"]) == 1
-
-        client.post("/api/marelo/ack",
-                    json={"scope": "overall", "key": risen["celebration"]["key"]})
-        client.post("/api/marelo/ack",
-                    json={"entity": entity_celebration["entity"],
-                          "key": entity_celebration["key"]})
-
-        after_ack = client.get("/api/marelo").json()
-        assert after_ack["celebration"] is None
-        assert after_ack["entity_celebrations"] == []
-
-
-def test_entity_celebration_fires_for_an_entity_outside_the_active_scope(tmp_path):
-    """The point of the feature: an entity NOT in the currently-viewed scope
-    must still celebrate. star:9:2 is scored regardless of which scope the
-    request asks for, because entity celebrations evaluate the full
-    rankable corpus, not the scope's own candidate list."""
-    client, svc = make_client(tmp_path)
-    with client:
-        other_route = svc.db.insert_route("Empty Route", [], "2026-01-01T00:00:00Z")
-        asyncio.run(svc.set_strat(9, 2, "Nuts Pless"))
-        _mario_reset_and_collect(svc, 1000, 1420, 420)   # -> Iron I, seeds silently
-        client.get(f"/api/marelo?scope=route:{other_route}")
-
-        _mario_reset_and_collect(svc, 2000, 2399, 399)   # -> Diamond IV
-        body = client.get(f"/api/marelo?scope=route:{other_route}").json()
-        assert body["scope_id"] == f"route:{other_route}"
-        assert any(e["entity"] == "star:9:2" for e in body["entity_celebrations"])
-
-
-def test_ack_requires_exactly_one_of_scope_or_entity(client):
+def test_an_entity_ack_from_an_out_of_date_client_is_rejected(client):
+    """A 400, never a 200. Answering "ok" to an ack for a celebration that no
+    longer exists would hide a stale client instead of surfacing it."""
+    assert client.post("/api/marelo/ack",
+                       json={"entity": "star:9:2", "key": 1}).status_code == 400
     assert client.post("/api/marelo/ack", json={"key": 1}).status_code == 400
-    assert client.post(
-        "/api/marelo/ack",
-        json={"scope": "overall", "entity": "star:9:2", "key": 1}
-    ).status_code == 400
 
 
-def test_summary_still_leaves_entity_watermarks_untouched(tmp_path):
-    """Sibling of test_summary_leaves_marelo_watermarks_untouched: the
-    summary chip row must never seed/sync/ack an ENTITY watermark either --
-    it only ever calls _score_scope, which entity celebration logic never
-    touches."""
-    client, svc = make_client(tmp_path)
-    with client:
-        asyncio.run(svc.set_strat(9, 2, "Nuts Pless"))
-        _mario_reset_and_collect(svc, 1000, 1420, 420)
-        before = svc.entity_watermarks()
-        assert before == {}
-        client.get("/api/marelo/summary")
-        after = svc.entity_watermarks()
-        assert after == before == {}
+def test_the_service_holds_no_entity_watermarks(tmp_path):
+    """The KV and its three methods are gone, not merely unused -- a dormant
+    read plus write on every /api/marelo request is what this removed."""
+    _client, svc = make_client(tmp_path)
+    for gone in ("entity_watermarks", "sync_and_seed_entity_watermarks",
+                 "ack_entity_celebration"):
+        assert not hasattr(svc, gone), f"{gone} survived the removal"
+    # The SCOPE watermark trio is untouched.
+    for kept in ("marelo_watermarks", "sync_watermark", "seed_watermark",
+                 "ack_celebration"):
+        assert hasattr(svc, kept), f"{kept} was removed by mistake"
 
 
 def test_entity_tier_matches_rank_for_on_a_ragged_ladder(tmp_path):

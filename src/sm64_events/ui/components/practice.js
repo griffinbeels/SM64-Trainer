@@ -15,7 +15,6 @@ import { StratPicker } from "./stratpicker.js";
 import { useTargetPicker } from "./targetpicker.js";
 import { FailureCompilation } from "./failcomp.js";
 import { Icon } from "./icons.js";
-import { EntityCelebration, entityCelebrationFor } from "./celebrate.js";
 import { PageState } from "./states.js";
 import { EmptyState } from "./emptystate.js";
 
@@ -421,6 +420,19 @@ function bannerHint(sec, entityNoun) {
     + " rank are the same right now.";
 }
 
+// What a rank banner considers "the same measurement", so its level-up climb
+// fires on a real rise and nothing else (ui/rankclimb.js). Four things can
+// replace a banner's numbers without anyone having earned anything, and all
+// four are in here: a different entity (a new target), a different ladder
+// (the two banners grade against different ones -- `which`), a different
+// strategy (the strategy banner re-grades on that strat's own ladder), and a
+// different grading mode (PB vs an average window). Change any of them and
+// the banner SNAPS to the new rank instead of climbing to it.
+function rankIdentity(entityKey, which, sec, t) {
+  const mode = (t.view && t.view.rank_mode) || "";
+  return `${entityKey}|${which}|${sec.last_strat || ""}|${mode}`;
+}
+
 // The rank wash's inputs (index.html, `.rank-slot-wrap::before`): each
 // banner's tier colour, plus the 50% split that turns one card-wide gradient
 // into one gradient per banner. CSS owns the geometry and the gradient; this
@@ -544,16 +556,15 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
         </div>
       </div>
       <div class="objective-metrics" style=${rankWashStyle(sec)}>
-        <${EntityCelebration}
-            celebration=${pinned ? entityCelebrationFor(t.marelo, `star:${sec.course_id}:${sec.star_id}`) : null}
-            entityKey=${`star:${sec.course_id}:${sec.star_id}`}
-            onDone=${() => t.clearEntityCelebration(`star:${sec.course_id}:${sec.star_id}`)}>
+        <div class="rank-slot-wrap">
           <div class="rank-slot">
             <${RankBanner} label=${bannerLabel(sec, "Star")}
-                hint=${bannerHint(sec, "Star")} banner=${sec.rank} />
-            ${showsEntityBanner(sec) && html`<${RankBanner} label="Star" banner=${sec.entity_rank} />`}
+                hint=${bannerHint(sec, "Star")} banner=${sec.rank}
+                identity=${rankIdentity(`star:${sec.course_id}:${sec.star_id}`, "strategy", sec, t)} />
+            ${showsEntityBanner(sec) && html`<${RankBanner} label="Star" banner=${sec.entity_rank}
+                identity=${rankIdentity(`star:${sec.course_id}:${sec.star_id}`, "entity", sec, t)} />`}
           </div>
-        <//>
+        </div>
         ${/* Same clock + word the segment card's live state uses. It was a
              bare "○" glyph until 2026-07-26, which only became visible as an
              asymmetry once the heading icon moved into ObjectiveEyebrow --
@@ -708,16 +719,15 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker 
         </div>
       </div>
       <div class="objective-metrics" style=${rankWashStyle(sec)}>
-        <${EntityCelebration}
-            celebration=${pinned ? entityCelebrationFor(t.marelo, `segment:${sec.segment_id}`) : null}
-            entityKey=${`segment:${sec.segment_id}`}
-            onDone=${() => t.clearEntityCelebration(`segment:${sec.segment_id}`)}>
+        <div class="rank-slot-wrap">
           <div class="rank-slot">
             <${RankBanner} label=${bannerLabel(sec, "Segment")}
-                hint=${bannerHint(sec, "Segment")} banner=${sec.rank} />
-            ${showsEntityBanner(sec) && html`<${RankBanner} label="Segment" banner=${sec.entity_rank} />`}
+                hint=${bannerHint(sec, "Segment")} banner=${sec.rank}
+                identity=${rankIdentity(`segment:${sec.segment_id}`, "strategy", sec, t)} />
+            ${showsEntityBanner(sec) && html`<${RankBanner} label="Segment" banner=${sec.entity_rank}
+                identity=${rankIdentity(`segment:${sec.segment_id}`, "entity", sec, t)} />`}
           </div>
-        <//>
+        </div>
         <div class="objective-live-state ${armed ? "running" : ""}"
             aria-label=${`Segment state: ${pinTag}`}>
           <${Icon} name="clock" size=${17} /><span>${pinTag}</span>
