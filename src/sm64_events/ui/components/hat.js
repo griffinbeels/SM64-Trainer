@@ -283,7 +283,7 @@ export function Hat({ tier, division = null, size = 18, title = null, flap = fal
   // wide too) in every fixed-height card this replaces, so the OUTER box
   // below must stay exactly the CAP's height and width, not the sprite
   // CANVAS's -- the canvas is both taller AND wider than the cap (it also
-  // holds the wingspan above/beside it). (Fix round 1, Griffin 2026-07-25,
+  // holds the wingspan above/beside it). (Fix round 1, live report 2026-07-25,
   // height axis only: the first cut sized the outer box to the full canvas
   // height, growing every caller's row ~6px. Fix round 2, final review I1,
   // 2026-07-25: round 1's own argument -- "the box matches what Medal/Crest
@@ -326,7 +326,7 @@ export function Hat({ tier, division = null, size = 18, title = null, flap = fal
     // cap silhouette sits under the ring so there is always a shape to see
     // at small sizes, not just a thin line.
     //
-    // Fix round 1 (Griffin, 2026-07-25): the ring is what makes this read
+    // Fix round 1 (live report, 2026-07-25): the ring is what makes this read
     // as "an outline you don't have yet" rather than "a solid cap you do
     // have" -- painting the ring in the SAME raw tier hex as the dim fill
     // made the two indistinguishable and the icon read as a dark blob. The

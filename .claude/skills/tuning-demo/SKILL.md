@@ -5,7 +5,7 @@ description: Extract any card, animation, or feel-based surface of SM64 Trainer 
 
 # Tuning demos: any surface, tunable like a Godot Inspector
 
-Griffin judges feel; I cannot. A loop where I pick a number, he watches it and
+The human judges feel; I cannot. A loop where I pick a number, he watches it and
 reports a verdict is the slowest possible way to find a value that needs ten
 guesses — and it is *wrong* as often as it is slow, because a curve judged by
 watching is judged from its middle. He said how he wants to work instead:

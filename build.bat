@@ -1,17 +1,24 @@
 @echo off
 REM ============================================================
-REM  One-click build for sm64_tracker.
-REM  Double-click this file to produce dist\sm64_tracker.exe.
+REM  One-click build for SM64 Trainer.
+REM  Double-click this file to build BOTH artifacts:
+REM    dist\SM64Trainer\SM64Trainer.exe   the app (onedir)
+REM    dist\SM64TrainerSetup.exe          the bootstrap installer
 REM  ffmpeg is bundled automatically from your PATH; to use a
 REM  specific ffmpeg.exe, drag it onto this .bat (or pass its
 REM  path as the first argument).
+REM
+REM  This is `tools\build_exe.py --mode all`. For just one, run
+REM  that script with --mode app or --mode bootstrap. To PUBLISH,
+REM  use tools\release.py instead -- it builds, checksums, tags
+REM  and uploads in one command.
 REM ============================================================
 setlocal
 cd /d "%~dp0"
 
 echo.
 echo ============================================================
-echo   Building sm64_tracker.exe  --  takes a couple of minutes
+echo   Building SM64 Trainer  --  takes a couple of minutes
 echo ============================================================
 echo.
 
@@ -33,8 +40,9 @@ if errorlevel 1 goto failed
 
 echo.
 echo ============================================================
-echo   DONE.  Your exe is here:
-echo   %~dp0dist\sm64_tracker.exe
+echo   DONE.  Your build is here:
+echo     %~dp0dist\SM64Trainer\SM64Trainer.exe    (the app)
+echo     %~dp0dist\SM64TrainerSetup.exe           (the installer)
 echo ============================================================
 echo.
 pause

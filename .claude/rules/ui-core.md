@@ -35,7 +35,9 @@ Built-in viewer: `ui/index.html` — served per request: edit + refresh, no
 restart. Components/store/API client: `ui/components/` · `ui/store.js` ·
 `ui/api.js` · `ui/app.js`; vendored Preact in `ui/vendor/`. Shared formatting:
 `ui/format.js` (fmtIgt mirrors core/timefmt.py — pinned by
-`tests/test_ui_format_parity.py`). Design system: one big CSS block in
+`tests/test_cross_language_parity.py`, which also pins the rank ladder, the
+rank-mode registry and stat-chip identity across the two languages). Design
+system: one big CSS block in
 index.html (cosmic "observatory": navy+gold, card-based, OBS-stable
 fixed-height slots); design contract/anti-slop rules in
 `.claude/skills/sm64-uiux/` (the `.agents/` path this used to name is now a

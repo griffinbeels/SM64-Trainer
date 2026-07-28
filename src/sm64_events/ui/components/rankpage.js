@@ -149,7 +149,7 @@ const TIER_BANDS = TIERS_ASCENDING.map(([tier, floor], index) => ({
 // Tabbing onto one puts its ANCESTOR band into the exact state a mouse
 // hover would, with no JS event wiring on either path.
 //
-// Griffin's question 3 -- why aren't the nine bands equal width -- is
+// The standing question -- why aren't the nine bands equal width -- is
 // answered here, since a future reader will look at TIER_BANDS for it: a
 // band's flex-grow (index.html) IS `band.to - band.from`, directly
 // encoding its width in SCORE POINTS, and those widths are `ranks/

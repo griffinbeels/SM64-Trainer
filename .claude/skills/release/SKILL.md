@@ -141,8 +141,13 @@ popup strips through the marker, so **recurring users see only your patch
 notes** while the GitHub page shows setup + notes. Never hand-add setup
 steps to the memo (they'd duplicate the header), and never remove the
 marker mechanism. If the setup flow ever changes, edit
-`docs/release_setup_header.md` AND the README's First-time setup section
-together — they mirror each other.
+`docs/release_setup_header.md` AND the README's Install section together.
+They are worded differently on purpose (the header opens with "Already
+installed? You don't need anything from this page"), so they are NOT compared
+as text — but `tests/test_release.py::test_readme_and_release_page_agree_on_every_setup_fact`
+fails if they disagree on any fact a user acts on: asset names, install
+location, the Project64 and Usamune versions, the WebView2 and SmartScreen
+notices. Change one and the suite tells you about the other.
 
 Show the user the final memo before publishing.
 

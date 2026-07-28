@@ -1,4 +1,4 @@
-"""Turn Griffin's Photoshop hat exports (`assets/hat_raw/`) into the tintable
+"""Turn the maintainer's Photoshop hat exports (`assets/hat_raw/`) into the tintable
 sprites the cap renderer composes (`src/sm64_events/ui/assets/hat/`).
 
 Re-run this any time the exports are replaced -- it is the only place the
@@ -196,7 +196,7 @@ def main():
     print("wrote:", ", ".join(sorted(f"{name}.png" for name in outputs)))
 
     # Tolerant, unlike require(): FONT_SRC is a per-user installed-font path
-    # that only exists on Griffin's machine, not a repo asset -- failing here
+    # that exists only on the machine the font was installed on, not a repo asset -- failing here
     # would stop a reproducible re-run of the sprite derivation above dead on
     # any other machine, after every sprite had already been written. The
     # font already committed at FONT_OUT (or a manual copy) is sufficient.
