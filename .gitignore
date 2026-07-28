@@ -12,6 +12,15 @@ _dbg/
 internal_notes/
 .planning/
 
+# Working notes: kept on disk, never shared. This is a PUBLIC repo, and the
+# specs/plans under here quote the author directly and name his other projects
+# (user, 2026-07-27, having made the same call in task_tracker and
+# claude-console the same day: "we should just .gitignore it, but should keep
+# it locally, for reference. It's useful, just shouldn't be shared").
+# 47 of these files were already pushed before this rule existed and remain
+# reachable in git history; removing THAT needs a history rewrite.
+docs/superpowers/
+
 # bundled package data (rank-standards seed) must be tracked despite the data/ rule above
 !src/sm64_events/data/
 !src/sm64_events/data/**
