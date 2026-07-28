@@ -1083,6 +1083,47 @@ def test_segment_with_a_location_free_start_trigger_keeps_its_target():
     assert p.target == ("segment", 11)
 
 
+def _ddd_bitfs_loose_reentry():
+    """A LOOSE re-entry movement practiced FROM DDD (level 23, course 9):
+    start_triggers' `level_exit from=23` resolves its origin to node "23"
+    (segments.start_origin), same as the corpus's real DDD -> BitFS
+    movements."""
+    from sm64_events.tracking.segments import SegmentDef
+    return SegmentDef(id=30, name="DDD -> BitFS (loose, re-entry)",
+                      enabled=True,
+                      start_triggers=[{"type": "level_exit", "from": 23}],
+                      end_triggers=[{"type": "level_enter", "to": 19}],
+                      guards=[], match_mode="loose")
+
+
+def test_an_armed_loose_segment_survives_entering_a_foreign_course():
+    # Task 5 (spec 2026-07-28-multi-step-segments), task 0017's second
+    # example: "when we have started a multi-step segment and enter a
+    # course where that multi-step segment is still valid, we should be
+    # able to see that it's still active". The origin-retirement rule just
+    # above is right for an IDLE pin (see the paired test below) and wrong
+    # for an ARM -- a re-entry movement enters a course on purpose, and this
+    # rule was hiding the card exactly while the segment was running.
+    d = _ddd_bitfs_loose_reentry()
+    p = Projector(segments=[d])
+    p.feed(jev(1, "target_set", 0, {"kind": "segment", "segment_id": d.id}))
+    p.feed(jev(2, "level_changed", 500, {"from": 23, "to": 6}))  # exits DDD via the hub: arms
+    assert p.armed_segment_ids() == {d.id}
+    p.feed(jev(3, "level_changed", 600, {"from": 6, "to": 24}))  # into WF -- not DDD's origin
+    assert p.target == ("segment", d.id)
+
+
+def test_an_idle_loose_segment_target_still_retires_on_a_foreign_course():
+    # The 2026-07-27 rule is unchanged for anything not armed: a target that
+    # never ran is exactly the "doing something else now" case it exists for.
+    d = _ddd_bitfs_loose_reentry()
+    p = Projector(segments=[d])
+    p.feed(jev(1, "target_set", 0, {"kind": "segment", "segment_id": d.id}))
+    p.feed(jev(2, "level_changed", 500, {"from": 6, "to": 24}))  # into WF, never armed
+    assert p.armed_segment_ids() == set()
+    assert p.target is None
+
+
 def _sl_hmc_waypoint_segment():
     from sm64_events.tracking.segments import SegmentDef
     return SegmentDef(id=20, name="SL->HMC", enabled=True,

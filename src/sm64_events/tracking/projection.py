@@ -381,6 +381,28 @@ class Projector:
         into privates."""
         return self._segments.armed_ids()
 
+    def _armed_loosely(self, segment_id: int) -> bool:
+        """True when `segment_id` is currently armed AND its def is LOOSE-
+        matched (task 5, spec 2026-07-28-multi-step-segments) — the property
+        that exempts a segment target from the origin-retirement rule in
+        _dispatch below.
+
+        Scoped to LOOSE defs only, not "any armed segment" (the brief's
+        version): a STRICT multi-step def that wanders into a level outside
+        its waypoint sequence is SILENTLY CANCELLED by the matcher on this
+        very event (segments.py's `_feed_waypoint` "major action" branch),
+        so exempting it here too would leave a stale target pointing at a
+        def the matcher just disarmed — caught by
+        test_waypoint_level_keeps_a_multi_level_segment_target, which needs
+        exactly that retirement on an unrelated level move mid-sequence.
+        Loose mode's whole point is tolerating such a move without
+        cancelling (it "stays armed through everything but its end and a
+        staleness deadline"), so only loose earns the exemption."""
+        if segment_id not in self.armed_segment_ids():
+            return False
+        d = self._segments.definition(segment_id)
+        return d is not None and d.match_mode == "loose"
+
     def armed_arms(self) -> dict[int, dict]:
         """Per-armed-id detail for the view's "waiting for" card (spec
         2026-07-28-multi-step-segments): {segment_id: {progress, total,
@@ -544,7 +566,28 @@ class Projector:
             # segment; the NEXT level move retires it. No resume stash: the
             # matcher re-arms on return (armed pins the UI) and the arena
             # banner re-targets on entry, so nothing is lost.
-            if self.target and self.target[0] == "segment" and to_course is not None:
+            #
+            # A segment that is ARMED and LOOSE-matched is exempt from this
+            # rule (task 5, spec 2026-07-28-multi-step-segments; see
+            # _armed_loosely for why the exemption stops at loose and does
+            # not cover every armed segment): the two lines above were
+            # written for an IDLE pin, where entering a foreign course really
+            # does mean "doing something else now". Under loose matching
+            # that reasoning breaks down while the segment is RUNNING -- a
+            # re-entry movement enters another course on purpose (task
+            # 0017's second example), and this rule was hiding the card
+            # exactly while the segment was mid-sequence. Still runs in
+            # _dispatch, BEFORE feed(), so `_armed_loosely` reads
+            # armed_segment_ids() as of the PREVIOUS event, not this one --
+            # that is correct, not an off-by-one, for a loose def: loose
+            # stays armed through everything but its own end/deadline, so
+            # "was armed last event" and "is armed after this one" agree. A
+            # segment armed earlier is mid-sequence now, which is exactly
+            # the case this exception exists for. The rule is unchanged for
+            # anything not currently armed loosely, which is what it was
+            # written for.
+            if (self.target and self.target[0] == "segment" and to_course is not None
+                    and not self._armed_loosely(self.target[1])):
                 origin = self._seg_origins.get(self.target[1])
                 if origin is not None and origin != stage_origin(to_level):
                     self.target = None
