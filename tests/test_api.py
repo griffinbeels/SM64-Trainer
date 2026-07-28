@@ -538,6 +538,80 @@ def test_get_segments_lists_seeds(tmp_path):
         assert any(d["name"] == "LBLJ" for d in r.json())
 
 
+def test_timeline_returns_labelled_recent_events_oldest_first(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)  # practice_reset (id 1), then star_collected (id 2)
+        r = client.get("/api/segments/timeline?limit=50&view=all")
+        assert r.status_code == 200
+        rows = r.json()["rows"]
+        assert all(row["label"] for row in rows)
+        # Ordered by journal id, oldest first (newest last) -- NOT by frame;
+        # see test_timeline_orders_by_journal_id_not_frame below for why
+        # frame can't be the sort key.
+        assert [row["id"] for row in rows] == sorted(row["id"] for row in rows)
+
+
+def test_timeline_limit_is_bounded(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        assert client.get(
+            "/api/segments/timeline?limit=99999").status_code == 422
+
+
+def test_timeline_orders_by_journal_id_not_frame(tmp_path):
+    """CORRECTION to the task-11 brief: its sketch asserted rows sorted by
+    `frame`, but `frame` is the raw game-frame counter and is NOT
+    chronological -- it drops toward 0 across every practice reset and
+    session boundary (measured against the real journal, 2026-07-28: 469
+    backward jumps). Journal `id` is the field that stays monotonic. Build
+    two events where id-order and frame-order disagree (the second event is
+    chronologically later -- higher id -- but carries a LOWER frame, as a
+    reset would produce) and assert the endpoint follows id. This fails
+    under `ORDER BY frame`, which would return frame 100 before frame 5000."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        async def go():
+            await service.publish(Event(type="level_changed", frame=5000,
+                                        timestamp_utc=T0,
+                                        payload={"from": 1, "to": 9}))
+            await service.publish(Event(type="level_changed", frame=100,
+                                        timestamp_utc=T0,
+                                        payload={"from": 9, "to": 15}))
+        asyncio.run(go())
+        r = client.get("/api/segments/timeline?limit=50")
+        assert r.status_code == 200
+        rows = r.json()["rows"]
+        assert [row["id"] for row in rows] == sorted(row["id"] for row in rows)
+        assert [row["frame"] for row in rows] == [5000, 100]
+
+
+def test_timeline_default_view_hides_high_volume_bookkeeping_types(tmp_path):
+    """The labelling-volume decision this task owns (see the endpoint's
+    docstring + tracking/eventlabel.py's module docstring for the counts):
+    of eventlabel.LABELLABLE_TYPES's 9 types, `practice_reset` alone is
+    2,829 of 18,656 real events and names no place -- showing it by default
+    would bury the level/star/warp/key rows a human can actually act on.
+    Default `view=steps` excludes it; `view=all` still reaches it."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)  # practice_reset, then star_collected
+        default_rows = client.get(
+            "/api/segments/timeline?limit=50").json()["rows"]
+        assert [row["type"] for row in default_rows] == ["star_collected"]
+        all_rows = client.get(
+            "/api/segments/timeline?limit=50&view=all").json()["rows"]
+        assert [row["type"] for row in all_rows] == \
+            ["practice_reset", "star_collected"]
+
+
+def test_timeline_rejects_unknown_view(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        assert client.get(
+            "/api/segments/timeline?view=bogus").status_code == 422
+
+
 def test_post_invalid_segment_is_409(tmp_path):
     client, service, db = make_client(tmp_path)
     with client:
@@ -998,6 +1072,7 @@ def test_segments_503_when_db_none(tmp_path):
     app = create_app(poller, broadcaster, service=service)
     with TestClient(app) as client:
         assert client.get("/api/segments").status_code == 503
+        assert client.get("/api/segments/timeline").status_code == 503
         assert client.post("/api/segments", json={
             "name": "X", "start_triggers": [{"type": "spawned"}],
             "end_triggers": [{"type": "level_enter", "to": 6}]

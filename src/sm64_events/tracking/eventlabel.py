@@ -190,6 +190,14 @@ _LABELERS: dict[str, Callable[[dict], str | None]] = {
 # TRIGGERS registry. NOT the set of types the timeline should default to
 # showing (see the labelling-volume decision above) — a type being in here
 # says nothing about how a later task chooses to display it.
+#
+# THE GUARD'S BLIND SPOT: test_every_trigger_type_has_a_labellable_event_shape
+# fails the day a NEW TriggerType lands with no entry in its trigger->journal-
+# type mapping, but it reads that mapping as a hand-written literal, not from
+# TRIGGERS' own match lambdas — so if an EXISTING trigger's match lambda were
+# edited to dispatch on a different journal type, the guard's literal mapping
+# would go stale silently and keep passing. Living with this rather than
+# building lambda introspection to close it.
 LABELLABLE_TYPES = frozenset(_LABELERS)
 
 

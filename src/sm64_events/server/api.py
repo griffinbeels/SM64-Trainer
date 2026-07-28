@@ -10,7 +10,7 @@ import dataclasses
 import re
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -20,6 +20,7 @@ from sm64_events.ranks.standards import entity_key
 from sm64_events.stats.registry import (registry_meta, selection_id,
                                         selection_order)
 from sm64_events.tracking.backtest import backtest
+from sm64_events.tracking.eventlabel import label_event
 from sm64_events.tracking.segments import (SegmentDef, origin_taxonomy,
                                            validate_definition, vocab)
 from sm64_events.tracking.views import (build_entity_ranks,
@@ -295,6 +296,22 @@ def _http(e: Exception) -> HTTPException:
     return HTTPException(503, str(e))  # RuntimeError: degraded mode
 
 
+# GET /api/segments/timeline's default "steps" view (the labelling-volume
+# decision -- tracking/eventlabel.py's module docstring works the full
+# arithmetic; this is the four types it names as the answer). The other 5 of
+# eventlabel.LABELLABLE_TYPES's 9 types (practice_reset, area_changed,
+# spawned, state_loaded, game_reset) are real boundary-capable events -- they
+# back real segment start triggers (attempt_anchor/area_enter/spawned/
+# reset_game, tracking/segments.py::TRIGGERS) -- but at 2026-07-28's measured
+# volume they are 76% of the capable set and carry no place at all in three
+# of the five cases, so surfacing them BY DEFAULT would bury the ~10% of rows
+# ("a step I just performed") a human can actually recognise under thousands
+# of bare "Reset the level" rows. `view=all` reaches the full set for the
+# rarer segment that starts on one of those triggers instead.
+_TIMELINE_STEP_TYPES = frozenset(
+    {"level_changed", "star_collected", "warp_entered", "key_grabbed"})
+
+
 def create_api_router(service) -> APIRouter:
     router = APIRouter(prefix="/api")
 
@@ -371,6 +388,53 @@ def create_api_router(service) -> APIRouter:
         the literal 'vocab' path before treating it as an id (declaration
         order wins — fastapi-patterns)."""
         return vocab()
+
+    @router.get("/segments/timeline")
+    def segments_timeline(limit: int = Query(default=200, ge=1, le=500),
+                          view: str = "steps"):
+        """The recent journal, as rows a human can point at to define a
+        segment from what they just did (`GET /api/segments/timeline`) --
+        the endpoint behind Task 10's `tracking/eventlabel.py::label_event`.
+        Declared BEFORE /segments/{segment_id}, same declaration-order rule
+        as /segments/vocab above (fastapi-patterns).
+
+        Rows are `{id, frame, type, label, wall_time_utc}`, oldest first
+        (newest last) -- ordered by the journal's own auto-increment `id`,
+        NEVER by `frame`. `frame` is the raw game-frame counter and is NOT
+        chronological: it runs backward across every practice reset and
+        session boundary (measured against the real journal, 2026-07-28:
+        469 backward jumps, landing at 0 on the 7 `game_reset`s and 159
+        `session_started`s alone). An `ORDER BY frame` timeline would
+        silently interleave rows across every reset with no error -- `id`
+        is the one field the journal never reorders, so it is the only
+        sort key this endpoint uses; `frame` still rides along as display
+        data.
+
+        `view` picks which of eventlabel.LABELLABLE_TYPES's 9 types show:
+        "steps" (default) is the ~10% subset (level_changed, star_collected,
+        warp_entered, key_grabbed) a human recognises as a step they just
+        performed; "all" adds the 5 that are real boundaries too but
+        dominate by raw volume or carry no place (practice_reset,
+        area_changed, spawned, state_loaded, game_reset) -- for the rarer
+        segment that starts on one of THOSE triggers. 422 on an
+        unrecognised `view`, matching /api/session's own clock/scope
+        validation. `limit` caps at 500 rows (422 above it) and is applied
+        AFTER filtering, to the most recent rows in the selected view.
+        503 in degraded mode."""
+        if view not in ("steps", "all"):
+            raise HTTPException(422, "view must be steps or all")
+        if service.db is None:
+            raise HTTPException(503, "database unavailable")
+        rows = []
+        for row in service.db.events():  # ORDER BY id -- oldest first
+            label = label_event(row)
+            if label is None:
+                continue
+            if view == "steps" and row.type not in _TIMELINE_STEP_TYPES:
+                continue
+            rows.append({"id": row.id, "frame": row.frame, "type": row.type,
+                        "label": label, "wall_time_utc": row.wall_time_utc})
+        return {"rows": rows[-limit:]}
 
     @router.post("/segments")
     async def create_segment(body: SegmentBody):
