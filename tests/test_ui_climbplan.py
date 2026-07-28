@@ -312,8 +312,8 @@ def test_the_worked_example_and_the_worst_case_stay_watchable():
     example_pop, example_chain, worst_pop, worst_chain = run_node(
         "const REF = { barSweepFullMs: 1500, barSweepMinMs: 450,\n"
         "  ladderStepMs: 460, ladderBudgetMs: 3400, ladderStepMinMs: 220,\n"
-        "  tierDwellMs: 1600, tierDwellBudgetMs: 5200, tierDwellMinMs: 700,\n"
-        "  anticipateShare: 0.56 };\n"
+        "  tierDwellMs: 1600, tierDwellMinMs: 700, tierDwellMinAt: 7,\n"
+        "  tierDwellCurve: 1, anticipateShare: 0.56 };\n"
         "const real = (counts) => climbTimings(counts, REF);\n"
         "const ms = (from, to, style) => plan(from, to, style, real).totalMs;\n"
         "console.log(JSON.stringify([\n"

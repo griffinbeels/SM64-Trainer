@@ -40,8 +40,8 @@ pytestmark = pytest.mark.skipif(shutil.which("node") is None,
 REFERENCE = {
     "barSweepFullMs": 1500, "barSweepMinMs": 450,
     "ladderStepMs": 460, "ladderBudgetMs": 3400, "ladderStepMinMs": 220,
-    "tierDwellMs": 1600, "tierDwellBudgetMs": 5200, "tierDwellMinMs": 700,
-    "anticipateShare": 0.56,
+    "tierDwellMs": 1600, "tierDwellMinMs": 700, "tierDwellMinAt": 7,
+    "tierDwellCurve": 1, "anticipateShare": 0.56,
 }
 
 
@@ -184,21 +184,45 @@ def test_one_tier_crossing_gets_the_full_dwell():
         "release land")
 
 
-def test_the_dwells_share_a_budget_so_a_long_climb_stays_watchable():
-    """Eight tier crossings at the full 1.6s each would hold the UI for
-    thirteen seconds on top of the movement."""
-    totals = run_node("tierDwell", "console.log(JSON.stringify("
-                      "[1, 2, 4, 8, 20].map((n) => {"
-                      " const d = tierDwell(n, REF);"
-                      " return [n * (d.anticipateMs + d.payoffMs), d.anticipateMs + d.payoffMs];"
-                      "})))")
-    per_crossing = [each for _total, each in totals]
-    assert per_crossing == sorted(per_crossing, reverse=True), (
-        "more crossings must never make each one longer")
-    assert all(each >= 700 for each in per_crossing), (
-        "a dwell below the floor reads as a stutter, not a pause")
-    assert max(total for total, _each in totals) <= 14000, (
-        "the whole dwell budget must stay bounded")
+def test_a_crossing_falls_off_from_one_tier_to_many():
+    """User, 2026-07-27: "a single climb should be the max duration… when we
+    have, say, 7 ranks to climb, it should scale down to some minimum, like
+    200. And then the number of tiers along the way would interpolate between
+    that min / max."
+
+    Every clause of that is asserted: the endpoints land exactly, the middle
+    interpolates, and it never turns back upward. This replaced a shared BUDGET
+    whose 1/n curve spent almost all its fall-off between one crossing and
+    three — a shape nobody chose and nothing could tune.
+    """
+    each = run_node("tierDwell", "console.log(JSON.stringify("
+                    "[1, 2, 3, 4, 5, 6, 7, 8].map((n) => {"
+                    " const d = tierDwell(n, REF); return d.anticipateMs + d.payoffMs;"
+                    "})))")
+    assert each[0] == 1600, "one crossing gets the full duration, exactly"
+    assert each[6] == 700, "the fall-off count reaches the short duration, exactly"
+    assert each[7] == 700, "and past it, it stays there rather than shrinking on"
+    assert each == sorted(each, reverse=True), (
+        "more crossings must never make a crossing longer")
+    assert all(700 <= one <= 1600 for one in each), (
+        "an interpolation may never leave its own endpoints")
+    # Linear at curve 1: the midpoint of the span sits at the midpoint of the
+    # durations. This is what makes the curve knob's effect legible.
+    assert each[3] == 1150, each
+
+
+def test_the_fall_off_curve_moves_where_the_shortening_happens():
+    """Below 1 shortens hard on the first extra tier and levels off; above 1
+    stays long and drops late. Without this the knob could be wired to nothing
+    and every assertion above would still pass."""
+    early, linear, late = run_node(
+        "tierDwell",
+        "const at = (curve) => { const d = tierDwell(2, { ...REF, tierDwellCurve: curve });"
+        " return d.anticipateMs + d.payoffMs; };"
+        "console.log(JSON.stringify([at(0.3), at(1), at(3)]));")
+    assert early < linear < late, (early, linear, late)
+    assert late > 1500, "a late curve must still be near the full duration at two"
+    assert early < 1100, "an early curve must have given up most of it by two"
 
 
 def test_no_crossings_means_no_dwell():
@@ -248,9 +272,13 @@ def test_no_floor_can_push_a_duration_past_the_ceiling_that_was_asked_for():
         "          barSweepMinMs: floor };\n"
         "        const step = ladderStepMs(n, tune);\n"
         "        if (step > ceiling + 1e-9) bad.push(['ladder', ceiling, floor, budget, n, step]);\n"
-        "        const dwell = tierDwell(n, tune);\n"
+        # A crossing is an INTERPOLATION between two endpoints now, not a
+        # clamp, so its invariant is that it never leaves them — in either
+        # direction, whichever way round the two are set.
+        "        const dwell = tierDwell(n, { ...tune, tierDwellMinAt: 7, tierDwellCurve: 1 });\n"
         "        const each = dwell.anticipateMs + dwell.payoffMs;\n"
-        "        if (each > ceiling + 1) bad.push(['dwell', ceiling, floor, budget, n, each]);\n"
+        "        const lo = Math.min(ceiling, floor), hi = Math.max(ceiling, floor);\n"
+        "        if (each < lo - 1 || each > hi + 1) bad.push(['dwell', ceiling, floor, n, each]);\n"
         "        for (const d of [0, 0.04, 0.5, 1]) {\n"
         "          const sweep = barSweepMs(d, tune);\n"
         "          if (sweep > ceiling + 1e-9) bad.push(['sweep', ceiling, floor, d, sweep]);\n"

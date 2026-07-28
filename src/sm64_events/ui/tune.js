@@ -93,18 +93,29 @@ function PlanReadout({ values, startLevel, destLevel, destFill }) {
     timings: (counts) => climbTimings(counts, values),
   }), [values, startLevel, destLevel, destFill]);
 
-  // A control whose number is not the number that runs. Named as the pair it
-  // is, so the reader is pointed at the OTHER knob rather than left guessing.
+  // A control whose number is not the number that runs, and which the reader
+  // did NOT ask for. Only the ladder qualifies: its budget still squeezes a
+  // step on a crowded climb, which is a surprise.
+  //
+  // The tier crossing deliberately does NOT appear here. It interpolates from
+  // its one-tier length down to its many-tier one by design, so warning about
+  // it would fire on every multi-tier climb and mean nothing — a warning that
+  // is always on is a warning nobody reads. It gets a neutral line instead,
+  // stating the fall-off as the arithmetic it is.
   const clamps = [
     ["Ladder step", values.ladderStepMs, plan.timings.ladderMs,
      "ladder budget / floor"],
-    ["Tier crossing", values.tierDwellMs,
-     plan.timings.anticipateMs + plan.timings.payoffMs,
-     "tier crossing budget / floor"],
   ].filter(([, set, effective]) => plan.ladder > 0 && Math.abs(set - effective) > 1);
+  const crossingMs = plan.timings.anticipateMs + plan.timings.payoffMs;
 
   return html`<div>
     <h2>What will play · ${(plan.totalMs / 1000).toFixed(2)}s</h2>
+    ${plan.crossings > 0 && html`<p class="tune-note">
+      ${plan.crossings} tier crossing${plan.crossings === 1 ? "" : "s"}${" "}
+      → <b>${Math.round(crossingMs)}ms</b> each${" "}
+      ${plan.crossings > 1 ? html`(${values.tierDwellMs}ms at one,${" "}
+        ${values.tierDwellMinMs}ms at ${values.tierDwellMinAt})` : null}
+    </p>`}
     ${/* The explicit spaces are load-bearing: htm collapses whitespace between
          a text node and an element, and this line read "but220ms will run"
          without them -- the same trap the settings-note paragraph hit. */""}

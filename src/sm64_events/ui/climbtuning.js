@@ -58,19 +58,24 @@ export const TUNABLES = {
     why: "Shortest a ladder step may be squeezed to. Below this a rank-up reads as a stutter.",
   },
   tierDwellMs: {
-    group: "Pace", label: "Tier crossing", value: 350,
-    min: 200, max: 5000, step: 50, unit: "ms",
-    why: "Build-up plus payoff for ONE tier crossing — the biggest moment in the feature.",
-  },
-  tierDwellBudgetMs: {
-    group: "Pace", label: "Tier crossing budget", value: 3400,
-    min: 700, max: 20000, step: 100, unit: "ms",
-    why: "Total shared by every tier crossing in one climb, so an eight-tier jump stays watchable.",
+    group: "Pace", label: "Tier crossing · crossing one tier", value: 350,
+    min: 100, max: 5000, step: 50, unit: "ms",
+    why: "Build-up plus payoff when the climb crosses ONE tier — the biggest moment in the feature, and the longest a crossing ever gets.",
   },
   tierDwellMinMs: {
-    group: "Pace", label: "Tier crossing · floor", value: 350,
-    min: 100, max: 2500, step: 50, unit: "ms",
-    why: "Shortest a tier crossing may be squeezed to.",
+    group: "Pace", label: "Tier crossing · crossing many", value: 200,
+    min: 50, max: 2500, step: 25, unit: "ms",
+    why: "What each crossing shortens to once the climb is crossing 'many' tiers. Reached at the fall-off count below.",
+  },
+  tierDwellMinAt: {
+    group: "Pace", label: "Tier crossing · fall-off count", value: 7,
+    min: 2, max: 8, step: 1, unit: "",
+    why: "How many tier crossings it takes to reach the short duration. Anything between one and this interpolates; the ladder tops out at 8.",
+  },
+  tierDwellCurve: {
+    group: "Pace", label: "Tier crossing · fall-off curve", value: 1,
+    min: 0.2, max: 4, step: 0.05, unit: "",
+    why: "1 is a straight line from long to short. Below 1 shortens hard on the first extra tier and levels off; above 1 stays long and drops late.",
   },
   anticipateShare: {
     group: "Pace", label: "Build-up share of crossing", value: 0.1,

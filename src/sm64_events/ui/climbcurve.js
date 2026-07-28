@@ -111,16 +111,30 @@ export function ladderStepMs(steps, tuning = DEFAULTS) {
 // The pause is BEFORE the boundary, not after, because that is where
 // anticipation belongs — the bar sits full on the last subdivision of the old
 // tier while the pressure builds, and the release IS the crossing.
-// A climb through eight tiers must not hold the UI for thirteen seconds, so
-// the dwells share a budget. One crossing gets the full treatment; the rare
-// multi-tier run trades length for pace, down to a floor that still reads as
-// a pause rather than a stutter.
+// A climb through eight tiers must not hold the UI for thirteen seconds, so a
+// crossing gets shorter the more of them there are. This used to be a shared
+// BUDGET (each = total / crossings), which is a 1/n curve nobody chose: it
+// collapsed almost all of its fall-off between one crossing and three, and the
+// only handles on it were a total and a floor — neither of which is the
+// question being asked. The user asked the question directly (2026-07-27):
+//
+//   "a single climb should be the max duration… when we have, say, 7 ranks to
+//    climb, it should scale down to some minimum, like 200. And then the
+//    number of tiers along the way would interpolate between that min / max."
+//
+// So it interpolates between two ENDPOINTS over an explicit count, with a
+// curve knob for how the fall-off is distributed. Every part of that sentence
+// is now a control, and the budget is gone rather than left to fight it —
+// two mechanisms deciding one duration is the bug this file just fixed.
 
 /** `{anticipateMs, payoffMs}` for each of `crossings` tier boundaries. */
 export function tierDwell(crossings, tuning = DEFAULTS) {
   if (crossings <= 0) return { anticipateMs: 0, payoffMs: 0 };
-  const each = floored(tuning.tierDwellBudgetMs / crossings,
-                       tuning.tierDwellMinMs, tuning.tierDwellMs);
+  // 0 at one crossing, 1 once there are `tierDwellMinAt` of them.
+  const span = Math.max(1, tuning.tierDwellMinAt - 1);
+  const along = Math.min(1, Math.max(0, (crossings - 1) / span));
+  const each = tuning.tierDwellMs + (tuning.tierDwellMinMs - tuning.tierDwellMs)
+    * along ** Math.max(0.01, tuning.tierDwellCurve);
   const anticipateMs = Math.round(each * tuning.anticipateShare);
   return { anticipateMs, payoffMs: Math.round(each) - anticipateMs };
 }
