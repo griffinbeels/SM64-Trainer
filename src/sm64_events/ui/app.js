@@ -35,6 +35,26 @@ const NAV_GROUPS = [
   ]],
 ];
 
+// Every destination the shell has, flat. The narrow layouts DERIVE from this
+// rather than restating it, and that is the whole point: MobileNav and
+// MobileMore used to carry their own hand-written lists, Rank appeared in
+// NAV_GROUPS and in NEITHER of them, and it was therefore unreachable at every
+// width at or below 760px — confirmed by the sweep at all 13 of them (live
+// report 2026-07-28, "rank is missing from the more menu at the bottom!!!!").
+//
+// Nothing enumerates destinations twice now: the bar declares the few that
+// earn a permanent slot, and More is the COMPLEMENT — computed, so a new entry
+// in NAV_GROUPS cannot fail to appear somewhere.
+const NAV_ITEMS = NAV_GROUPS.flatMap(([, items]) => items);
+
+// The bottom bar has room for three plus "More". This is a ranking of what
+// gets a permanent slot, NOT a second list of what exists: anything named here
+// that is not a real destination is a bug, and anything omitted still shows up
+// in More automatically.
+const MOBILE_BAR = ["Practice", "Run", "Compare"];
+
+const inBar = ([name]) => MOBILE_BAR.includes(name);
+
 function NavItem({ name, icon, tab, setTab, onSessions, compact = false }) {
   const active = tab === name;
   const choose = () => name === "Sessions" ? onSessions() : setTab(name);
@@ -96,9 +116,7 @@ function MobileTop({ t, openSettings }) {
 }
 
 function MobileNav({ tab, setTab, openMore }) {
-  const items = [
-    ["Practice", "practice"], ["Run", "run"], ["Compare", "compare"],
-  ];
+  const items = NAV_ITEMS.filter(inBar);
   return html`<nav class="mobile-nav" aria-label="Primary navigation">
     ${items.map(([name, icon]) => html`<${NavItem}
       name=${name} icon=${icon} tab=${tab} setTab=${setTab}
@@ -122,15 +140,15 @@ function MobileMore({ open, close, tab, setTab, openSettings }) {
           <${Icon} name="close" /></button>
       </div>
       <div class="mobile-more-grid">
-        ${[["Routes", "routes"], ["Segments", "segments"],
-           ["Live feed", "feed"]].map(([name, icon]) => html`
+        ${/* The complement of the bottom bar, computed — never a second list.
+             Sessions opens the settings drawer rather than a tab, the same
+             special case the sidebar makes. */""}
+        ${NAV_ITEMS.filter((item) => !inBar(item)).map(([name, icon]) => html`
           <button type="button" class=${tab === name ? "on" : ""}
-              onclick=${() => pick(name)}>
+              onclick=${() => (name === "Sessions"
+                ? (close(), openSettings()) : pick(name))}>
             <${Icon} name=${icon} size=${21} /><span>${name}</span>
           </button>`)}
-        <button type="button" onclick=${() => { close(); openSettings(); }}>
-          <${Icon} name="sessions" size=${21} /><span>Sessions</span>
-        </button>
         <button type="button" onclick=${() => { close(); openSettings(); }}>
           <${Icon} name="settings" size=${21} /><span>Settings</span>
         </button>

@@ -48,14 +48,12 @@ KNOWN_DEFECTS: dict[str, str] = {
         "Wave 3: 646px of content in a 617px card",
     "761x1000 [Practice] clipped :: main.app-main":
         "Wave 3: consequence of the objective card above",
-    # The reported nav dead end (task 0032). Rank is in app.js's NAV_GROUPS and
-    # in NEITHER hardcoded mobile list, so below 760px it cannot be reached.
-    **{f"{w}x{h} [shell] unreachable :: Rank":
-       "Wave 3: MobileNav/MobileMore hardcode their own lists"
-       for w, h in [(320, 800), (330, 1000), (331, 1000), (430, 1000),
-                    (431, 1000), (500, 1000), (501, 1000), (600, 1000),
-                    (601, 1000), (640, 1000), (641, 1000), (760, 1000),
-                    (760, 1180)]},
+    # The reported nav dead end (Rank unreachable at all 13 widths <= 760px)
+    # was FIXED 2026-07-28 -- MobileNav and MobileMore now derive from
+    # NAV_GROUPS, so its 13 rows came out of this dict. The stale-exemption
+    # test below is what forced them out rather than leaving them here lying
+    # about a bug that no longer exists. Guarded going forward by
+    # tests/test_ui_nav.py plus this file's unreachable probe.
     **{f"{w}x{h} [Practice] clipped :: div.analysis-block.trend-block":
        "Wave 3: 6px of chart past the block at the WCAG reflow floor"
        for w, h in [(320, 800), (330, 1000), (331, 1000)]},
