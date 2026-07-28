@@ -112,9 +112,17 @@ Contract changes land on main first, then dependent work fans out. Merge with
   numbers are its output. Recipe, the four properties that make a surface
   extractable, and the traps: the **`tuning-demo`** skill. Worked example at
   `/ui/tune.html` (`ui/climbtuning.js` + `ui/tune.js` + `server/tuning_api.py`).
-  Corollary that bites everywhere else: **once SAVE writes the shipped
-  defaults, no test may assert one** — pin the law against a reference config
-  and check only that the live values are in range.
+  Corollary that bites everywhere else: **no test may assert the CONTENTS of a
+  shipped default.** Once SAVE writes the tuning defaults, a test reading
+  `DEFAULTS` turns every tuning round red — pin the law against a reference
+  config and check only that the live values are in range. The same shape
+  arrives with no inspector anywhere near it: four tests in `test_views.py`
+  named the default stat chips, so changing a *preference* (2026-07-27, avg
+  10/25/50 + success rate replacing best/worst) was a red build for reasons
+  unrelated to the change. A test that needs a config should STORE the one it
+  probes; the default's own coherence — no two entries sharing an identity,
+  every entry addressable by both implementations that read it — belongs in
+  ONE place (`tests/test_stats.py` for the stat menu).
 - **A value two surfaces show gets ONE DOOR, and the door is enforced.** "Don't
   repeat yourself" cannot fail a build, and the divergence that matters is never
   copy-paste: three surfaces each grew their own honest way to turn a star into
