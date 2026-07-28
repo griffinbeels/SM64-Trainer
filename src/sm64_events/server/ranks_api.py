@@ -195,9 +195,33 @@ def _build_marelo(service, scope_id: str) -> dict:
     if out["tier"]:
         key = scoring.progression_key(out["tier"], out["division"])
         service.sync_watermark(scope_id, key)          # follow a drop down
-        out["celebration"] = scopes.celebration_delta(
-            out["tier"], out["division"],
-            service.marelo_watermarks().get(scope_id))
+        # ONLY the active scope may celebrate, and only when arriving here was
+        # not itself the thing that made it active (live report 2026-07-28:
+        # "Swapping between routes like that should never trigger any rank
+        # up"). Two rules, and each covers a hole the other cannot:
+        #
+        #   * `scope_id == active` stops the RANK TAB firing one. Browsing the
+        #     scope chips fetches /api/marelo?scope=<other>, which is looking
+        #     at a rating, not earning it.
+        #   * `note_active_scope` stops the SWITCH itself firing one. A
+        #     watermark could only ever be raised by ack_celebration -- i.e.
+        #     by a celebration having been SHOWN -- so every scope held a
+        #     rank-up it had never displayed and discharged it the moment the
+        #     user looked at that scope.
+        #
+        # Arriving ABSORBS instead: the rank a scope already holds is the new
+        # baseline. The cost, decided by the user rather than assumed: scopes
+        # overlap (one star feeds many routes), so a rank-up genuinely earned
+        # on a route you were not focused on is absorbed silently and never
+        # celebrated. The rank itself is still there to see.
+        active = _active_scope(service)
+        if scope_id == active:
+            if service.note_active_scope(active):
+                service.absorb_watermark(scope_id, key)
+            else:
+                out["celebration"] = scopes.celebration_delta(
+                    out["tier"], out["division"],
+                    service.marelo_watermarks().get(scope_id))
         # A scope's FIRST rank is not a rank-up. Seeding it silently is what
         # stops the first view of a scope celebrating the user's whole
         # history at once. seed_watermark is a no-op once the key exists.
