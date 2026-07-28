@@ -2791,6 +2791,21 @@ def test_the_budget_tightens_once_the_segment_has_a_best_time():
         == segments_module.MIN_BUDGET_FRAMES     # floor wins for a fast one
 
 
+def test_the_staleness_budget_never_clips_a_realistic_movement():
+    # Assert the RANGE, never the number: the constants are measured
+    # (tools/measure_budget.py, Task 9) and will be re-measured again once
+    # the loose-native corpus grows — a test naming the shipped value turns
+    # a re-measurement into a red build (the shipped-default rule in
+    # CLAUDE.md). The real journal's forced-loose max was 4244 frames
+    # (141.5s); these bounds are wide enough to survive a re-measurement but
+    # tight enough to catch a nonsense value (e.g. a floor under a minute,
+    # or a factor so small a single retry would expire).
+    assert 1800 <= segments_module.MIN_BUDGET_FRAMES <= 18000
+    assert 3 <= segments_module.BUDGET_FACTOR <= 20
+    # 30s is a fast castle movement; six of them is not an attempt.
+    assert segments_module.budget_frames(900) >= 900 * 3
+
+
 def test_a_loose_def_armed_through_the_deferred_subarea_path_carries_a_deadline():
     # THE GAP this task's brief missed (see task-3-report.md Item 0/1C): a
     # destination-subarea start trigger (to_subarea) can't be confirmed on

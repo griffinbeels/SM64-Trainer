@@ -278,13 +278,43 @@ _DIALOG_ECHO_WINDOW = 30  # frames; the intro IGT re-init lands +1 frame after
 # next F1 — the exact symptom of the 2026-07-24 live report (WF -> SSL stuck
 # running in an unrelated course), reintroduced by design rather than by bug.
 #
-# THESE TWO NUMBERS ARE A DELIBERATE STARTING POINT, NOT A MEASUREMENT —
-# Task 9 of the implementation plan WILL replay the real journal through
-# tools/measure_budget.py and rewrite them with the distribution; its
-# acceptance criterion is the smallest pair that expires zero real
-# completions. Today's reasoning, ahead of that data: 3 minutes at 30 fps
-# comfortably exceeds any seeded castle movement, and a run six times your
-# own best is not an attempt.
+# MEASURED 2026-07-28 (Task 9, tools/measure_budget.py) against the real
+# journal: 18,656 events, 2026-06-11 -> 2026-07-28, all 67 seeded definitions
+# replayed with match_mode forced "loose" (the mode the budget applies to —
+# the stored definitions keep their own authored mode). 106 timed segment
+# completions (105 with each def's own stored mode; the +1 is just the
+# handful of plain movements this corpus happens to have, not a verdict on
+# the feature — the movements that actually NEED loose matching, e.g. Bowser
+# 2 -> BitS, 100-coin -> exit star, Bowser reds -> pipe, don't exist in the
+# corpus until a later task). Distribution: min 219, median 1188, p95 2733,
+# MAX 4244 frames (141.5 s).
+#
+# MIN_BUDGET_FRAMES = 5400 is the Task 3 starting guess, CONFIRMED rather
+# than replaced: the grid below (min_frames, expired-completion-count at
+# BUDGET_FACTOR in {3,4,6,8}) shows 3600 still clips 3-4 real completions,
+# while 4500 is the first round value to clip zero — bisection puts the
+# exact zero-margin boundary at 4245 (one frame past the observed max). That
+# boundary is only 6% above 4244, i.e. no headroom for ordinary run-to-run
+# variance on the SAME 16 defs that have any history at all, let alone the
+# longer loose-native movements a later task is about to seed. 5400 keeps a
+# 27% margin over the observed max and is the smaller of the two once
+# "margin" is taken seriously, so it survives unchanged:
+#   1800  ->  5-8 expired   2700  ->  3-4 expired   3600  ->  3-4 expired
+#   4500  ->  0 expired     5400  ->  0 expired      7200  ->  0 expired
+#
+# BUDGET_FACTOR = 6 is UNFALSIFIED, not confirmed the same way — say so
+# plainly rather than implying equal footing with the floor above. Only
+# 16 of 67 definitions have even one timed success (11 have five or more);
+# the other 51 have no history and never reach BUDGET_FACTOR at all. Worse,
+# for the 16 that do: every one's best-so-far, times ANY of 3/4/6/8, still
+# lands above MIN_BUDGET_FRAMES once it matters (the largest best-so-far is
+# 4244, and even *3 = 12732 frames comfortably clears 5400) — so this
+# journal cannot currently distinguish BUDGET_FACTOR=3 from 8, and the grid
+# above reads identically across every factor column. 6 ships because
+# nothing here contradicts it, not because 16 definitions' worth of data
+# picked it over 3 or 8. Re-run tools/measure_budget.py once the loose-native
+# movements above exist and have their own history — that is the corpus
+# this constant is actually waiting on.
 MIN_BUDGET_FRAMES = 5400   # 3 minutes at 30 fps; the floor for a def with no history
 BUDGET_FACTOR = 6          # multiple of the definition's best success so far
 
