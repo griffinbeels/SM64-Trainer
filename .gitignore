@@ -11,6 +11,12 @@ data/replay_buffer/
 _dbg/
 internal_notes/
 .planning/
+# The local task backlog. tests/test_docs_links_resolve.py has treated .tasks/
+# as private since it was written, but the rule it assumed was never here — so
+# the guard protecting it was theatre, and its own
+# test_every_private_dir_is_actually_ignored says so. Nothing was exposed (no
+# .tasks file has ever been tracked); the rule was simply missing.
+.tasks/
 
 # Working notes: kept on disk, never shared. This is a PUBLIC repo, and the
 # specs/plans under here quote the author directly and name his other projects
