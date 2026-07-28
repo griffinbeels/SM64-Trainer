@@ -247,7 +247,7 @@ any higher one, and generates a control for every row in `ui/climbtuning.js`.
 
 | Route | Purpose |
 |---|---|
-| `POST /api/climb/tuning` `{values: {<tunable>: number \| string}}` | Rewrite the `value:` fields of `src/sm64_events/ui/climbtuning.js` so the tuned numbers BECOME the shipped defaults — no runtime overlay, and the change lands in `git diff` ready to commit. Validates each key against that file's own `min`/`max`/`options` rather than a copy of them, so it can never drift from the registry; it can only replace a `value:` that already exists, never add a key or reach another field. Returns `{written, values, path}`. **409 when frozen** — the packaged app has no repo to write to. |
+| `POST /api/tuning/{registry}` `{values: {<tunable>: number \| string}}` | Rewrite the `value:` fields of `src/sm64_events/ui/climbtuning.js` so the tuned numbers BECOME the shipped defaults — no runtime overlay, and the change lands in `git diff` ready to commit. Validates each key against that file's own `min`/`max`/`options` rather than a copy of them, so it can never drift from the registry; it can only replace a `value:` that already exists, never add a key or reach another field. Returns `{written, values, path}`. `{registry}` is a key of `TUNING_REGISTRIES` (an allowlist, never a path — the endpoint WRITES, so a caller must not be able to name the file it lands in); `climb` is the only one today and **404** names the known set. Adding a second tunable surface is one row there — see `.claude/skills/tuning-demo`. **409 when frozen** — the packaged app has no repo to write to. |
 
 The settings string the page exports carries EVERY tunable, not just the ones
 that differ from the defaults, so it still means the same thing after a default

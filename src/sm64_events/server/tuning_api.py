@@ -33,7 +33,20 @@ from pydantic import BaseModel
 
 from sm64_events.core.paths import is_frozen
 
-TUNING_JS = (Path(__file__).resolve().parents[1] / "ui" / "climbtuning.js")
+_UI = Path(__file__).resolve().parents[1] / "ui"
+
+# EVERY tunable surface, by name. Adding a second inspector -- a card, a
+# transition, anything judged by feel -- is one row here plus its own registry
+# module and page; see `.claude/skills/tuning-demo`. An allowlist rather than a
+# path parameter because the endpoint WRITES: a caller must never be able to
+# name the file it lands in.
+TUNING_REGISTRIES = {
+    "climb": _UI / "climbtuning.js",
+}
+
+# The original single-surface name, kept as the climb's own path so nothing
+# reading it has to learn the registry map. New surfaces use /api/tuning/<name>.
+TUNING_JS = TUNING_REGISTRIES["climb"]
 
 # A row runs from `\n  <key>: {` to the `\n  },` that closes it — the file's
 # own two-space layout, which is what lets this stay a regex over a small,
@@ -123,15 +136,20 @@ def rewrite_defaults(source: str, values: dict[str, object]) -> tuple[str, dict]
 def create_tuning_router() -> APIRouter:
     router = APIRouter()
 
-    @router.post("/api/climb/tuning")
-    def save_climb_tuning(body: TuningBody) -> dict:
+    @router.post("/api/tuning/{registry}")
+    def save_tuning(registry: str, body: TuningBody) -> dict:
         if is_frozen():
             raise HTTPException(
                 409, "The tuning inspector can only write to a source checkout; "
                      "this is the packaged app.")
-        if not TUNING_JS.is_file():
-            raise HTTPException(503, f"{TUNING_JS} is missing")
-        source = TUNING_JS.read_text(encoding="utf-8")
+        target = TUNING_REGISTRIES.get(registry)
+        if target is None:
+            raise HTTPException(
+                404, f"no tunable surface called {registry!r} -- known: "
+                     f"{', '.join(sorted(TUNING_REGISTRIES))}")
+        if not target.is_file():
+            raise HTTPException(503, f"{target} is missing")
+        source = target.read_text(encoding="utf-8")
         try:
             updated, written = rewrite_defaults(source, dict(body.values))
         except ValueError as error:
@@ -140,8 +158,7 @@ def create_tuning_router() -> APIRouter:
             # newline="" so the file keeps the LF endings git recorded; Python's
             # default would rewrite every line as CRLF on Windows and turn a
             # three-value tuning change into a whole-file diff.
-            TUNING_JS.write_text(updated, encoding="utf-8", newline="")
-        return {"written": len(written), "values": written,
-                "path": str(TUNING_JS)}
+            target.write_text(updated, encoding="utf-8", newline="")
+        return {"written": len(written), "values": written, "path": str(target)}
 
     return router

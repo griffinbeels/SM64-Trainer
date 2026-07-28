@@ -102,6 +102,16 @@ Contract changes land on main first, then dependent work fans out. Merge with
 - **UI changes are verified by rendering** (headless Chrome or chrome-devtools
   MCP), never by unit tests + `node --check` alone — that combination once
   shipped an invisible feature.
+- **Anything judged by FEEL gets an inspector, never a guess.** Timings,
+  easing, juice, transitions, layout weights: build the tuning page first, let
+  the human tune it live, and codify what he saves — "like how I would work
+  with an Inspector in Godot" (2026-07-27). The rig is the deliverable; the
+  numbers are its output. Recipe, the four properties that make a surface
+  extractable, and the traps: the **`tuning-demo`** skill. Worked example at
+  `/ui/tune.html` (`ui/climbtuning.js` + `ui/tune.js` + `server/tuning_api.py`).
+  Corollary that bites everywhere else: **once SAVE writes the shipped
+  defaults, no test may assert one** — pin the law against a reference config
+  and check only that the live values are in range.
 - **A value two surfaces show gets ONE DOOR, and the door is enforced.** "Don't
   repeat yourself" cannot fail a build, and the divergence that matters is never
   copy-paste: three surfaces each grew their own honest way to turn a star into

@@ -7,7 +7,7 @@
 // day: "what if I can access that page at any time, mess with the settings,
 // SAVE, and then it automatically applies to my repo immediately?"
 //
-// So SAVE is not an export step. It POSTs to /api/climb/tuning, which rewrites
+// So SAVE is not an export step. It POSTs to /api/tuning/climb, which rewrites
 // the `value:` fields in ui/climbtuning.js — the shipped defaults themselves —
 // and the page reloads onto them. What lands in `git diff` afterwards is
 // exactly the tuning, ready to commit. (Refused from a frozen exe, which has
@@ -225,7 +225,7 @@ function Inspector() {
   async function saveToRepo() {
     setStatus({ kind: "busy", text: "Saving..." });
     try {
-      const response = await fetch("/api/climb/tuning", {
+      const response = await fetch("/api/tuning/climb", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ values }),
       });

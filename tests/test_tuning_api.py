@@ -97,7 +97,7 @@ def test_the_endpoint_refuses_to_write_from_the_packaged_app(monkeypatch):
     router = tuning_api.create_tuning_router()
     endpoint = router.routes[0].endpoint
     with pytest.raises(HTTPException) as raised:
-        endpoint(tuning_api.TuningBody(values={"ladderStepMs": 300}))
+        endpoint("climb", tuning_api.TuningBody(values={"ladderStepMs": 300}))
     assert raised.value.status_code == 409
     assert "packaged app" in raised.value.detail
 
