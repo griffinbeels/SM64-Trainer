@@ -205,6 +205,7 @@ class SegmentBody(BaseModel):
     enabled: bool = True
     waypoints: list = []
     category: str | None = None
+    match_mode: str = "loose"
 
 
 class SegmentPatch(BaseModel):
@@ -222,6 +223,8 @@ class SegmentPatch(BaseModel):
     # PATCH (e.g. just flipping `enabled`).
     waypoints: list | None = None
     category: str | None = None
+    # None = untouched, exactly like waypoints above.
+    match_mode: str | None = None
 
 
 class TimeFilterBody(BaseModel):

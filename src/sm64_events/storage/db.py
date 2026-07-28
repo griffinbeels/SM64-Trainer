@@ -245,6 +245,19 @@ MIGRATIONS = [
        SET value = replace(value, '"user:castle_movement.png"', '"castle_movement"')
       WHERE key='icon_overrides';
     """,
+    # v15 — how forgiving this definition's matcher is (spec
+    # 2026-07-28-multi-step-segments). 'strict' is today's behaviour: an
+    # off-sequence star grab or level crossing cancels the arm. 'loose' stays
+    # armed through them until the end trigger fires or the arm's staleness
+    # deadline passes. DEFAULT 'strict' with no repair UPDATE, deliberately:
+    # every existing row keeps matching exactly as it did, and the seeded
+    # corpus converts one movement at a time with the BFS corpus test proving
+    # each conversion safe. A NEW definition is created loose — that default
+    # lives in insert_segment_def, not here, because it is an authoring
+    # preference and not a statement about rows that already exist.
+    """
+    ALTER TABLE segment_defs ADD COLUMN match_mode TEXT NOT NULL DEFAULT 'strict';
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
@@ -423,6 +436,7 @@ class Database:
                  "category": r["category"],
                  "seed_key": r["seed_key"], "seed_dirty": r["seed_dirty"],
                  "default_strat": r["default_strat"],
+                 "match_mode": r["match_mode"],
                  "created_utc": r["created_utc"]} for r in rows]
 
     def insert_segment_def(self, name: str, start_triggers: list,
@@ -431,16 +445,18 @@ class Database:
                            waypoints: list | None = None,
                            category: str | None = None,
                            seed_key: str | None = None,
-                           default_strat: str | None = None) -> int:
+                           default_strat: str | None = None,
+                           match_mode: str = "loose") -> int:
         with self._lock:
             cur = self._conn.execute(
                 "INSERT INTO segment_defs (name, enabled, start_triggers,"
                 " end_triggers, waypoints, guards, category, seed_key,"
-                " default_strat, created_utc) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                " default_strat, match_mode, created_utc)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (name, int(enabled), json.dumps(start_triggers),
                  json.dumps(end_triggers), json.dumps(waypoints or []),
                  json.dumps(guards), category, seed_key, default_strat,
-                 created_utc))
+                 match_mode, created_utc))
             self._conn.commit()
             return cur.lastrowid
 
@@ -449,7 +465,8 @@ class Database:
                 "start_triggers": json.dumps, "end_triggers": json.dumps,
                 "waypoints": json.dumps, "guards": json.dumps,
                 "category": lambda v: v, "seed_key": lambda v: v,
-                "default_strat": lambda v: v, "seed_dirty": int}
+                "default_strat": lambda v: v, "seed_dirty": int,
+                "match_mode": lambda v: v}
         if set(fields) - set(cols):
             raise ValueError(f"unknown fields {sorted(set(fields) - set(cols))}")
         sets, vals = [], []

@@ -633,3 +633,31 @@ def test_v14_matches_the_whole_stored_value_not_a_prefix(tmp_path):
         "segment:5": "user:lakitu2.png"})
     assert overrides == {"segment:4": "user:blj-of-my-own.png",
                          "segment:5": "user:lakitu2.png"}
+
+
+# -- migration v15: match_mode on a segment definition ------------------------
+
+def test_segment_defs_round_trip_match_mode(tmp_path):
+    db = make_db(tmp_path)
+    sid = db.insert_segment_def(
+        name="x", start_triggers=[{"type": "spawned"}],
+        end_triggers=[{"type": "spawned"}], guards=[],
+        created_utc="2026-07-28T00:00:00Z")
+    # New rows default to loose — the mode we want people authoring in.
+    assert next(r for r in db.segment_defs() if r["id"] == sid)["match_mode"] \
+        == "loose"
+    db.update_segment_def(sid, match_mode="strict")
+    assert next(r for r in db.segment_defs() if r["id"] == sid)["match_mode"] \
+        == "strict"
+
+
+def test_existing_rows_migrate_to_strict(tmp_path):
+    # v15 must not change how a single already-seeded definition matches:
+    # the corpus converts row by row in Phase 7, never silently here.
+    db = make_db(tmp_path)
+    db._conn.execute("INSERT INTO segment_defs (name, enabled, start_triggers,"
+                     " end_triggers, waypoints, guards, created_utc)"
+                     " VALUES ('legacy',1,'[]','[]','[]','[]','2026-01-01')")
+    db._conn.commit()
+    assert next(r for r in db.segment_defs()
+                if r["name"] == "legacy")["match_mode"] == "strict"

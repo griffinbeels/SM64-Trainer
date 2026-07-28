@@ -290,6 +290,14 @@ class SegmentDef:
     # here — the matcher is strategy-blind and stays that way. Defaulted for
     # the same reason waypoints is.
     default_strat: str | None = None
+    # Which armed-branch matcher runs for this definition (spec
+    # 2026-07-28-multi-step-segments). Defaulted to "strict" for the same
+    # reason waypoints and default_strat are: a non-default field would
+    # TypeError every existing SegmentDef(...) construction that omits it, and
+    # "strict" is what every pre-migration row means. New rows are created
+    # "loose" by db.insert_segment_def — an authoring default, not a claim
+    # about existing data.
+    match_mode: str = "strict"
 
 
 @dataclass(frozen=True)
@@ -1050,6 +1058,28 @@ GUARDS: dict[str, GuardType] = {g.key: g for g in [
               {}, "", lambda p, ctx: True, phase="arm"),
 ]}
 
+# How forgiving an armed definition is (spec 2026-07-28-multi-step-segments).
+# ONE registry, same role TRIGGERS/GUARDS play: it drives validation, the
+# armed-branch dispatch, and the editor control through vocab(). A third mode
+# is one row here plus one handler.
+MATCH_MODES = {
+    "loose": {
+        "key": "loose",
+        "label": "Loose — ends only where I said",
+        "description": ("Stays armed through star grabs, key grabs and level "
+                        "changes until the end trigger fires. Use this for "
+                        "anything that crosses courses or takes several "
+                        "steps."),
+    },
+    "strict": {
+        "key": "strict",
+        "label": "Strict — cancels if I go off-route",
+        "description": ("Cancels the moment anything happens that is not the "
+                        "next expected step. Use this when a stray star grab "
+                        "means the attempt is over."),
+    },
+}
+
 
 def _check_clause(clause: dict, registry: dict, what: str) -> None:
     if not isinstance(clause, dict):
@@ -1139,6 +1169,11 @@ def validate_definition(d: dict) -> None:
         # strategy" everywhere while still suppressing the blank option in
         # the picker, leaving no way to express either.
         raise ValueError("default_strat must be a non-empty string or absent")
+    mode = d.get("match_mode", "strict")
+    if mode not in MATCH_MODES:
+        raise ValueError(
+            f"unknown match_mode {mode!r}; expected one of "
+            f"{sorted(MATCH_MODES)}")
     guards = d.get("guards") or []
     if not isinstance(guards, list):
         raise ValueError("guards must be a list")
@@ -1169,6 +1204,9 @@ def vocab() -> dict:
         "guards": [{"key": g.key, "label": g.label, "params": g.params,
                     "template": g.template, "phase": g.phase}
                    for g in GUARDS.values()],
+        # Ordered for the editor control (spec 2026-07-28-multi-step-segments):
+        # loose first — it is the default and the one we want read first.
+        "match_modes": [MATCH_MODES["loose"], MATCH_MODES["strict"]],
         "levels": {str(k): v for k, v in sorted(LEVEL_NAMES.items())},
         "castle_areas": {str(k): v for k, v in CASTLE_AREA_NAMES.items()},
         "courses": {str(k): v for k, v in COURSE_NAMES.items()},

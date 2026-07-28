@@ -2493,3 +2493,42 @@ def test_a_reset_started_segment_arms_despite_the_stale_level():
         end_triggers=[{"type": "level_enter", "to": 9}])])
     e.feed(jev(1, "game_reset", 40, {}), ctx(level=9))   # F1'd inside BoB
     assert e.armed_ids() == {1}
+
+
+# ---------------------------------------------------------------------------
+# Task 1: SegmentDef.match_mode (spec 2026-07-28-multi-step-segments). Pure
+# plumbing — the field, its validation, and the editor vocab. No matching
+# behaviour changes: every def (waypoint-bearing or plain) still runs the
+# armed-branch chain this file already exercises above; a mode's HANDLING is
+# added in a later task.
+# ---------------------------------------------------------------------------
+
+def test_segmentdef_defaults_to_strict_match_mode():
+    # Defaulted for the same reason waypoints is: a non-default field would
+    # TypeError every existing SegmentDef(...) construction that omits it.
+    d = SegmentDef(id=1, name="x", enabled=True,
+                   start_triggers=[{"type": "spawned"}],
+                   end_triggers=[{"type": "spawned"}], guards=[])
+    assert d.match_mode == "strict"
+
+
+def test_validate_accepts_both_match_modes():
+    for mode in ("strict", "loose"):
+        validate_definition({"name": "x", "match_mode": mode,
+                             "start_triggers": [{"type": "spawned"}],
+                             "end_triggers": [{"type": "spawned"}],
+                             "guards": []})  # no raise
+
+
+def test_validate_rejects_an_unknown_match_mode():
+    with pytest.raises(ValueError, match="match_mode"):
+        validate_definition({"name": "x", "match_mode": "sloppy",
+                             "start_triggers": [{"type": "spawned"}],
+                             "end_triggers": [{"type": "spawned"}],
+                             "guards": []})
+
+
+def test_vocab_ships_the_match_modes_for_the_editor():
+    modes = vocab()["match_modes"]
+    assert [m["key"] for m in modes] == ["loose", "strict"]
+    assert all(m["label"] and m["description"] for m in modes)
