@@ -3,6 +3,11 @@ paths:
   - "src/sm64_events/replay/**"
   - "src/sm64_events/compare/**"
   - "src/sm64_events/core/recorder_lock.py"
+  - "src/sm64_events/ui/components/replay.js"
+  - "src/sm64_events/ui/components/compare.js"
+  - "src/sm64_events/ui/components/videosync.js"
+  - "src/sm64_events/ui/components/failcomp.js"
+  - "src/sm64_events/ui/frame.js"
 ---
 
 # Replay, compare, compilation — where to change what
@@ -32,3 +37,17 @@ test_replay_{config,service,api}.py. Mirror commits 69bb83d / 29fd542.
 Settings persist in `data/replay_settings.json` (a JSON overlay beats a db
 migration for scalars); corrupt/out-of-range files lose to defaults so the
 server always starts.
+
+
+## Replay / compare / compilation UI
+
+Moved here from `.claude/rules/ui.md` on 2026-07-28 so one zone has one rule
+file across its server and UI halves. `.claude/rules/ui-core.md` also loads for
+these components and carries the UI verification norms — read it before
+changing a component.
+
+| To change... | Edit |
+|---|---|
+| Replay player + recording dot | `ui/components/replay.js` (incl. BufferSettings panel) |
+| Compare tab UI | `ui/components/compare.js` (my-run vs comparison, one centered transport) + `ui/components/videosync.js` (`useSyncController` drives N `<video>` in lockstep; `VideoStage` forwards its element via `onEl`; `WorkArea` in/out handles + click/drag-to-scrub playhead) + `ui/frame.js` (shared game-frame step/jump, also used by replay.js) |
+| Failure compilation UI | `ui/components/failcomp.js` — shared `FailureCompilation({identity})` (X/Y inputs in localStorage, Generate → poll → summary + Reveal); mounted in BOTH practice cards' detail drawer (`practice.js`), pinned by test_ui_section_parity.py |

@@ -40,8 +40,11 @@ automatically when you touch matching files. Zones:
 | Memory reads + detectors + recipes (new event, dust trick, memory hunting) | `memory/`, `detectors/`, `core/snapshot.py`, `core/events.py` | `.claude/rules/memory-detectors.md` |
 | Tracking, storage, stats, routes/runs/segments, defaults corpus | `tracking/`, `storage/`, `stats/`, `data/`, `tools/corpus_*` | `.claude/rules/tracking-storage.md` |
 | Server, REST/WS APIs, wiring, paths, perf probes | `server/`, `main.py`, `core/paths.py`, `core/procmem.py`, `core/perfmon.py` | `.claude/rules/server.md` |
-| UI (all components, store, assets, parity + armed-visibility rules) | `ui/`, `links.py` | `.claude/rules/ui.md` |
-| Replay capture/encode/extract, compare, compilation, replay-setting recipe | `replay/`, `compare/`, `core/recorder_lock.py` | `.claude/rules/replay-compare.md` |
+| UI shell, shared primitives, **verification norms** (loads for all of `ui/`) | `ui/` | `.claude/rules/ui-core.md` |
+| Practice, stage banner, pickers, segments, routes, runs, strategies, graphs | `ui/components/practice*`, `stagebanner.js`, `entity*`, `segments.js`, `routes.js`, `runview.js`, `strat*`, `links.py` | `.claude/rules/ui-practice.md` |
+| Rank icons + caps, banners, Rank tab, MARELO pill | `ui/components/caps.js`, `rankicon.js`, `hat.js`, `ranks.js`, `rankpage.js`, `marelo.js`, `standards.js` | `.claude/rules/ui-ranks.md` |
+| Celebrations, the level-up climb, the tuning inspector | `ui/celebrations.js`, `rankclimb.js`, `climb*.js`, `tune*`, `components/celebrate.js`, `server/tuning_api.py` | `.claude/rules/ui-climb.md` |
+| Replay capture/encode/extract, compare, compilation + **their UI** | `replay/`, `compare/`, `core/recorder_lock.py`, `ui/components/replay.js`, `compare.js`, `videosync.js`, `failcomp.js` | `.claude/rules/replay-compare.md` |
 | Desktop shell, self-update, build, release | `desktop/`, `bootstrap/`, `core/update*`, `tools/build_exe.py`, `tools/release.py` | `.claude/rules/desktop-update-release.md` |
 | Ranks (classify, standards, scraper) | `ranks/`, `tools/scrape_ranks.py` | `.claude/rules/ranks.md` |
 

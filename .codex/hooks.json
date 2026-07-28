@@ -1,4 +1,5 @@
 {
+  "_comment": "Codex runs the SAME hook scripts as Claude Code (.claude/hooks/). There is no second copy to drift: .codex/hooks/*.py were deleted 2026-07-28 after no-app-server.py -- the guard that stops an agent seizing the recorder lock out from under a live practice session -- shipped to .claude/settings.json on 2026-07-26 and never reached the Codex mirror. tests/test_agent_config_parity.py fails if the two harnesses stop running the same set. Paths are repo-relative on purpose: the absolute C:\\Users\\... paths this file held until 2026-07-28 work in exactly one checkout on one machine.",
   "hooks": {
     "PreToolUse": [
       {
@@ -6,7 +7,16 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python 'C:\\Users\\griff\\Desktop\\code\\sm64_tracker\\.codex\\hooks\\git-staging-guard.py'"
+            "command": "python .claude/hooks/git-staging-guard.py"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/hooks/no-app-server.py"
           }
         ]
       }
@@ -17,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python 'C:\\Users\\griff\\Desktop\\code\\sm64_tracker\\.codex\\hooks\\jscheck.py'"
+            "command": "python .claude/hooks/jscheck.py"
           }
         ]
       }
