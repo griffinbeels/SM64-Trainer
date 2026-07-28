@@ -58,7 +58,7 @@ export const TUNABLES = {
     why: "Shortest a ladder step may be squeezed to. Below this a rank-up reads as a stutter.",
   },
   tierDwellMs: {
-    group: "Pace", label: "Tier crossing · crossing one tier", value: 350,
+    group: "Pace", label: "Tier crossing · crossing one tier", value: 650,
     min: 100, max: 5000, step: 50, unit: "ms",
     why: "Build-up plus payoff when the climb crosses ONE tier — the biggest moment in the feature, and the longest a crossing ever gets.",
   },
@@ -71,6 +71,11 @@ export const TUNABLES = {
     group: "Pace", label: "Tier crossing · fall-off count", value: 7,
     min: 2, max: 8, step: 1, unit: "",
     why: "How many tier crossings it takes to reach the short duration. Anything between one and this interpolates; the ladder tops out at 8.",
+  },
+  finalTierOverlap: {
+    group: "Pace", label: "Final tier · ladder overlap", value: 0.6,
+    min: 0, max: 1, step: 0.05, unit: "x",
+    why: "When the climb lands in the tier it FINISHES in, how much of that crossing's release the ladder climb plays over the top of. 0 waits for the crossing to finish first; 1 starts the ladder the instant the new cap appears. A tier the climb only passes through is never overlapped — it has no ladder of its own.",
   },
   tierDwellCurve: {
     group: "Pace", label: "Tier crossing · fall-off curve", value: 1,
@@ -119,7 +124,7 @@ export const TUNABLES = {
 
   // ---- Wings -------------------------------------------------------------
   wingGrowScale: {
-    group: "Wings", label: "Wing grow · share of step", value: 1.05,
+    group: "Wings", label: "Wing grow · share of step", value: 1,
     min: 0.1, max: 3, step: 0.05, unit: "x",
     why: "The grow fills this much of its own step, so it stays in time however hard a long climb compresses things.",
   },
@@ -129,7 +134,7 @@ export const TUNABLES = {
     why: "One flap cycle after the wings finish growing.",
   },
   wingFlapDelayScale: {
-    group: "Wings", label: "Flap starts at · share of step", value: 1,
+    group: "Wings", label: "Flap starts at · share of step", value: 0.5,
     min: 0, max: 3, step: 0.05, unit: "x",
     why: "When the flap begins, as a share of the step. 1 means exactly where the grow ends.",
   },

@@ -148,6 +148,16 @@ export function climbTimings({ crossings, ladder }, tuning = DEFAULTS) {
   return {
     barSweepMs: (divisions) => barSweepMs(divisions, tuning),
     ladderMs: ladderStepMs(ladder, tuning),
+    // How much of the FINAL crossing's release the destination tier's ladder
+    // plays over — see climbplan.js, which is the only thing that reads it.
+    //
+    // Guarded against a non-number rather than clamped blindly: `Math.min(1,
+    // undefined)` is NaN, and a NaN here multiplies into EVERY step's start
+    // time, which is a climb that never ends and only the hold ceiling would
+    // notice. A hand-built tuning that omits the key gets the sequential
+    // behaviour instead, which is the safe end of the range.
+    finalTierOverlap: Number.isFinite(tuning.finalTierOverlap)
+      ? Math.max(0, Math.min(1, tuning.finalTierOverlap)) : 0,
     ...tierDwell(crossings, tuning),
   };
 }

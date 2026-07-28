@@ -123,10 +123,20 @@ function PlanReadout({ values, startLevel, destLevel, destFill }) {
       <b>${label}</b>${" "}is set to ${Math.round(set)}ms but${" "}
       <b>${Math.round(effective)}ms</b>${" "}will run — the ${blame} is deciding.
     </p>`)}
-    <pre class="tune-plan">${plan.steps.map((step) => {
+    ${/* The START offset is a column, not a derived running total, because a
+         step may OVERLAP the one before it (the destination tier's ladder
+         plays over its own crossing). Printing only durations would make two
+         concurrent steps look sequential — hiding the exact thing the overlap
+         control exists to move. "over" marks a step that begins before its
+         predecessor has finished animating. */""}
+    <pre class="tune-plan">${plan.steps.map((step, index) => {
       const { tier, division } = rankAt(step.level);
-      return `${step.kind.padEnd(11)}${capName(tier)} ${divisionDigit(division)}`
-        .padEnd(30) + `${Math.round(step.ms)}ms`;
+      const previous = plan.steps[index - 1];
+      const over = previous && step.at < previous.at + previous.ms - 0.5;
+      return `${String(Math.round(step.at)).padStart(5)}ms  `
+        + `${step.kind.padEnd(11)}${capName(tier)} ${divisionDigit(division)}`
+          .padEnd(28) + `${String(Math.round(step.ms)).padStart(4)}ms`
+        + (over ? "  over" : "");
     }).join("\n")}</pre>
   </div>`;
 }

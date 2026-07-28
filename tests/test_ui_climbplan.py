@@ -31,7 +31,7 @@ pytestmark = pytest.mark.skipif(shutil.which("node") is None,
 # Deliberately unlike the shipped numbers, and all distinct, so a step that
 # reads the wrong duration shows up as a wrong number rather than blending in.
 FIXED_TIMINGS = ("({ barSweepMs: () => 100, ladderMs: 11,"
-                 " anticipateMs: 22, payoffMs: 33 })")
+                 " anticipateMs: 22, payoffMs: 33, finalTierOverlap: 0 })")
 
 # Iron V is level 0 and each tier is five divisions, so:
 IRON_V, IRON_I = 0, 4
@@ -265,9 +265,14 @@ def test_every_climb_on_the_ladder_is_well_formed(style):
         "    const p = plan([from, 0.25], [to, 0.6], style);\n"
         "    let clock = 0, shown = from;\n"
         "    for (const step of p.steps) {\n"
+        # `handoffMs`, not `ms`: a step may still be ANIMATING when the next
+        # one starts (the destination tier's crossing overlaps its own
+        # ladder), so the timeline is contiguous in hand-off time, not in
+        # duration. Checking `ms` here is what would break the moment overlap
+        # is switched on -- and it did, which is why this reads handoff.
         "      if (Math.abs(step.at - clock) > 1e-9) bad.push([from, to, 'gap', step.kind]);\n"
         "      if (step.ms <= 0) bad.push([from, to, 'zero-length', step.kind]);\n"
-        "      clock += step.ms;\n"
+        "      clock += step.handoffMs;\n"
         "      if (step.level < shown) bad.push([from, to, 'went down', step.kind]);\n"
         "      shown = step.level;\n"
         "      if (Math.abs(step.barTo - step.barFrom) > 1)\n"
@@ -313,7 +318,7 @@ def test_the_worked_example_and_the_worst_case_stay_watchable():
         "const REF = { barSweepFullMs: 1500, barSweepMinMs: 450,\n"
         "  ladderStepMs: 460, ladderBudgetMs: 3400, ladderStepMinMs: 220,\n"
         "  tierDwellMs: 1600, tierDwellMinMs: 700, tierDwellMinAt: 7,\n"
-        "  tierDwellCurve: 1, anticipateShare: 0.56 };\n"
+        "  tierDwellCurve: 1, anticipateShare: 0.56, finalTierOverlap: 0 };\n"
         "const real = (counts) => climbTimings(counts, REF);\n"
         "const ms = (from, to, style) => plan(from, to, style, real).totalMs;\n"
         "console.log(JSON.stringify([\n"
@@ -333,3 +338,85 @@ def test_the_worked_example_and_the_worst_case_stay_watchable():
     # length only while a climb is small enough to still be paying full price
     # per step, which is every climb a human will ever actually see.
     assert worst_chain <= worst_pop + 1, (worst_chain, worst_pop)
+
+
+# ---- The destination tier's ladder plays OVER its own crossing ------------
+#
+# User, 2026-07-27: "if we rank up from, say, Capless 5 -> Toadsworth 1, I want
+# it to feel smoother flowing into the final climb from Toadsworth 5 to
+# Toadsworth 1... DURING THE TIER CROSSING ANIMATION, IT SHOULD ALSO BE DOING
+# THE LADDER STEP ANIMATION... Note that during Capless 5 -> Toad 1, we skip
+# that, because it's NOT the final rank we're leveling up to."
+
+def overlapped(to_level, overlap, style="chain"):
+    """The plan's tail as `[kind, rank, at, ms, handoffMs]`, at a given
+    overlap. Timings are fixed and distinct so a wrong one is a wrong number."""
+    return run_node(
+        f"const t = () => ({{ barSweepMs: () => 100, ladderMs: 10,"
+        f" anticipateMs: 20, payoffMs: 60, finalTierOverlap: {overlap} }});\n"
+        f"const p = plan([{IRON_V}, 0], [{to_level}, 0], {style!r}, t);\n"
+        "console.log(JSON.stringify(p.steps.map((s) => [s.kind,\n"
+        "  `${capName(rankAt(s.level).tier)} ${divisionDigit(rankAt(s.level).division)}`,\n"
+        "  Math.round(s.at), Math.round(s.ms), Math.round(s.handoffMs)])));")
+
+
+def test_at_zero_overlap_the_ladder_still_queues_behind_the_crossing():
+    """The floor of the knob is exactly today's behaviour, so the feature can
+    be turned off rather than merely turned down."""
+    steps = overlapped(SILVER_I, 0)
+    tier = next(s for s in steps if s[0] == "tier" and s[1] == "Toadsworth 5")
+    first = next(s for s in steps if s[0] == "division" and s[1] == "Toadsworth 4")
+    assert tier[4] == tier[3], "a non-overlapped step hands off when it ends"
+    assert first[2] == tier[2] + tier[3], "the ladder waits for the whole crossing"
+
+
+def test_the_final_tiers_ladder_starts_inside_its_own_crossing():
+    steps = overlapped(SILVER_I, 0.5)
+    tier = next(s for s in steps if s[0] == "tier" and s[1] == "Toadsworth 5")
+    first = next(s for s in steps if s[0] == "division" and s[1] == "Toadsworth 4")
+    assert tier[3] == 60, "the crossing still ANIMATES for its full length"
+    assert tier[4] == 30, "but hands off halfway through it"
+    assert first[2] == tier[2] + 30, "so the ladder begins mid-crossing"
+    # And at full overlap the ladder starts on the crossing's own frame.
+    steps = overlapped(SILVER_I, 1)
+    tier = next(s for s in steps if s[0] == "tier" and s[1] == "Toadsworth 5")
+    first = next(s for s in steps if s[0] == "division" and s[1] == "Toadsworth 4")
+    assert first[2] == tier[2], "at overlap 1 they start on the same frame"
+
+
+def test_a_tier_the_climb_only_passes_through_is_never_overlapped():
+    """The user's own carve-out. Capless 5 -> Toadsworth 1 crosses into Toad on
+    the way and must NOT overlap there: it has no ladder of its own, and in
+    `chain` it is one step wide."""
+    steps = overlapped(SILVER_I, 1)
+    passing = next(s for s in steps if s[0] == "tier" and s[1].startswith("Toad "))
+    assert passing[4] == passing[3], (
+        "a passed-through crossing handed off early -- there is nothing there "
+        "to overlap with")
+
+
+def test_overlapping_shortens_the_climb_without_shortening_the_crossing():
+    """The point of the feature: the same animations, less dead time. The
+    crossing keeps its full length; only the gap after it closes."""
+    lengths = {}
+    for overlap in (0, 0.5, 1):
+        steps = overlapped(SILVER_I, overlap)
+        tier = next(s for s in steps if s[0] == "tier" and s[1] == "Toadsworth 5")
+        lengths[overlap] = (max(s[2] + s[3] for s in steps), tier[3])
+    assert lengths[1][0] < lengths[0.5][0] < lengths[0][0], lengths
+    assert {ms for _total, ms in lengths.values()} == {60}, (
+        "the crossing's own animation must be the same length at every overlap")
+
+
+def test_the_plan_never_ends_before_its_last_animation_does():
+    """`totalMs` is the max of `at + ms`, not the running hand-off clock — with
+    an overlap those differ, and using the clock would end the climb while the
+    crossing was still bursting."""
+    for overlap in (0, 0.5, 1):
+        steps = overlapped(SILVER_I, overlap)
+        latest = max(step[2] + step[3] for step in steps)
+        total = run_node(
+            f"const t = () => ({{ barSweepMs: () => 100, ladderMs: 10,"
+            f" anticipateMs: 20, payoffMs: 60, finalTierOverlap: {overlap} }});\n"
+            f"console.log(JSON.stringify(plan([{IRON_V}, 0], [{SILVER_I}, 0], 'chain', t).totalMs));")
+        assert round(total) == latest, (overlap, total, latest)

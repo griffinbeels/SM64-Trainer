@@ -116,6 +116,23 @@ export function buildClimbPlan({ fromLevel, fromFill, toLevel, toFill,
       const traversed = toLevel > top;
       const landsOn = (traversed && skipStyle === "chain") ? top : next;
       push(TIER, landsOn, 1, 1, { fromLevel: shown, toLevel: landsOn });
+      // Landing in the tier the climb FINISHES in, with rungs still to climb:
+      // the ladder plays OVER this crossing's release rather than queueing
+      // behind it (user, 2026-07-27: "DURING THE TIER CROSSING ANIMATION, IT
+      // SHOULD ALSO BE DOING THE LADDER STEP ANIMATION… we would see the
+      // squashing and shaking, AND ALSO, it would do the ladder steps").
+      //
+      // Nothing about the beats changes, and that is why this is a one-flag
+      // edit: a beat's effect runs for its OWN window wherever the walker has
+      // got to (ui/celebrations.js merges every live beat), so simply letting
+      // the next step start early puts the wing-grow and the digit roll on
+      // screen while the cap is still bursting.
+      //
+      // A tier the climb only PASSES THROUGH never gets this — it has no
+      // ladder of its own to overlap, which is the user's own carve-out:
+      // "during Capless 5 -> Toad 1, we skip that, because it's NOT the final
+      // rank we're leveling up to."
+      steps[steps.length - 1].overlapNext = !traversed && toLevel > landsOn;
       shown = landsOn;
       if (traversed && skipStyle !== "chain") {
         push(TIER_SKIP, top, 1, 1, { fromLevel: shown, toLevel: top });
@@ -135,7 +152,8 @@ export function buildClimbPlan({ fromLevel, fromFill, toLevel, toFill,
   const crossings = steps.filter((step) => step.kind === TIER).length;
   const ladder = steps.filter((step) => LADDER_KINDS.includes(step.kind)).length;
   const resolved = timings({ crossings, ladder });
-  const { barSweepMs, ladderMs, anticipateMs, payoffMs } = resolved;
+  const { barSweepMs, ladderMs, anticipateMs, payoffMs,
+          finalTierOverlap = 0 } = resolved;
   let at = 0;
   for (const step of steps) {
     step.ms = step.kind === ANTICIPATE ? anticipateMs
@@ -143,10 +161,18 @@ export function buildClimbPlan({ fromLevel, fromFill, toLevel, toFill,
       : LADDER_KINDS.includes(step.kind) ? ladderMs
       : barSweepMs(Math.abs(step.barTo - step.barFrom));
     step.at = at;
-    at += step.ms;
+    // `handoffMs` is when the NEXT step starts, which is the step's own length
+    // everywhere except an overlapped crossing. Keeping them as two numbers is
+    // what lets a step go on ANIMATING for its full `ms` after the one behind
+    // it has already begun.
+    step.handoffMs = step.overlapNext ? step.ms * (1 - finalTierOverlap) : step.ms;
+    at += step.handoffMs;
   }
+  // The climb ends when the LAST THING STILL MOVING stops — which is not
+  // necessarily the last step to start, once one of them overlaps.
+  const totalMs = steps.reduce((end, step) => Math.max(end, step.at + step.ms), 0);
   // `timings` comes back out so the caller never has to resolve it a second
   // time to learn how long a dwell or a ladder step ended up being — the
   // celebration tail is measured against exactly the numbers the plan used.
-  return { steps, totalMs: at, crossings, ladder, timings: resolved };
+  return { steps, totalMs, crossings, ladder, timings: resolved };
 }

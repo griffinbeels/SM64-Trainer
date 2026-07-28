@@ -63,7 +63,6 @@ def run_node(body: str):
 # Diamond II -> Diamond I is a division crossing that gains a wing pair;
 # Gold I -> Platinum V is a tier crossing that sheds four; Gold V -> Gold I is
 # a whole tier skipped at once, which grows all four (the `pop` style).
-STEP_MS = 460
 BEATS_JS = """
 const beats = [
   makeBeat({ kind: "division", at: 0, level: 26, stepMs: 460,
@@ -179,8 +178,12 @@ console.log(JSON.stringify([delay, ms,
   'flapPhase' in before.icon, 'flapPhase' in during.icon, 'flapPhase' in after.icon]));
 """)
     delay, length, before, during, after = windows
-    assert delay == STEP_MS, "the flap must start where its own step's grow ends"
-    assert length > 0
+    # NOT `delay == STEP_MS`. That pinned `wingFlapDelayScale` at 1, which is a
+    # tunable the user owns — he moved it to 0.5 and the assertion failed for
+    # the tool working exactly as intended (2026-07-27). What this test is
+    # actually for is that the window BOUNDS the effect; the scale's value is
+    # nobody's business here.
+    assert delay >= 0 and length > 0, (delay, length)
     assert [before, during, after] == [False, True, False], (
         "wingFlap leaked outside its own delay..delay+ms window")
 
