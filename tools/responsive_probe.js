@@ -16,10 +16,12 @@
 (() => {
   const EPS = 1.5;                        // sub-pixel layout noise
 
+  // SVG elements carry an SVGAnimatedString in .className, which stringifies
+  // to "[object SVGAnimatedString]" and made every chart defect unreadable on
+  // the first clean run. classList is the form that works in both namespaces.
   const path = (el) => {
     if (el.id) return "#" + el.id;
-    const cls = (el.className || "").toString().trim().split(/\s+/)
-      .filter(Boolean).slice(0, 3).join(".");
+    const cls = Array.from(el.classList || []).slice(0, 3).join(".");
     return el.tagName.toLowerCase() + (cls ? "." + cls : "");
   };
 
@@ -95,6 +97,11 @@
     //    states look fine in a screenshot, which is why it survived review.
     for (const el of all) {
       const style = getComputedStyle(el);
+      // Visually-hidden text (.sr-only: 1x1px, clip: rect(0,0,0,0)) is clipped
+      // ON PURPOSE -- that IS the technique. It fired at all 30 viewports on
+      // the first run, which is the shape of false positive that gets a whole
+      // probe exemption-listed into uselessness.
+      if (style.clip !== "auto" || style.clipPath !== "none") continue;
       const hiddenY = style.overflowY === "hidden" || style.overflow === "hidden";
       const hiddenX = style.overflowX === "hidden" || style.overflow === "hidden";
       if (hiddenY && el.scrollHeight - el.clientHeight > EPS)
@@ -121,6 +128,12 @@
     //    positioned things, negative margins and the rank washes overlap by
     //    design, and a broad test drowns the real signal in them.
     for (const parent of all) {
+      // Inside an SVG, overlapping geometry IS the point -- a chart's line
+      // crosses its own gridlines and its points sit on the line. The rank and
+      // trend charts produced every overlap false positive on the first clean
+      // run (2026-07-28).
+      if (parent.ownerSVGElement || parent.tagName.toLowerCase() === "svg")
+        continue;
       const kids = Array.from(parent.children).filter((kid) => {
         if (!visible(kid)) return false;
         const style = getComputedStyle(kid);

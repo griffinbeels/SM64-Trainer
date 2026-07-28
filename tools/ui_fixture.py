@@ -28,6 +28,8 @@ from pathlib import Path
 
 import uvicorn
 
+from sm64_events.core.paths import bundled_rank_standards, rank_standards_path
+from sm64_events.ranks.standards import RankStandards
 from sm64_events.server.app import create_app
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.server.poller import Poller
@@ -86,7 +88,16 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30):
 
     database = Database(db_path)
     broadcaster = Broadcaster()
-    service = TrackerService(database, broadcaster)
+    # `ranks=` is NOT optional here, whatever the signature says. Omit it and
+    # every rank builder short-circuits to empty -- /api/ranks/standards starts
+    # answering "rank standards unavailable", the rank banners never render,
+    # and the Active Target card measures SHORTER than it really is. The first
+    # sweep run made exactly that mistake and under-reported the one card it
+    # was built to measure (2026-07-28), which is the failure mode
+    # .claude/rules/ui-core.md warns reads as a broken builder.
+    ranks = RankStandards(rank_standards_path(), bundled_rank_standards())
+    ranks.load()
+    service = TrackerService(database, broadcaster, ranks=ranks)
     poller = Poller(_OfflineMemory(), [], service)
     app = create_app(poller, broadcaster, service=service)
 
