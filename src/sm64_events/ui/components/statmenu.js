@@ -5,7 +5,11 @@ import htm from "htm";
 import { getJSON, send } from "../api.js";
 
 const html = htm.bind(h);
-// Selection identity — MUST match selection_id() in stats/registry.py:
+// Selection identity — MUST match selection_id() in stats/registry.py, and
+// tests/test_cross_language_parity.py is what makes that "must" real (it
+// extracts this very declaration and runs it against the Python one). Disagree
+// and ticking a chip's checkbox adds a duplicate instead of toggling the chip
+// already on the card. Detail:
 // avg_last_n is parameterized by n (each N its own chip); every other stat
 // is identified by key alone, so a stored param variant (e.g. a legacy
 // custom failures set) still matches its checkbox and unchecking removes

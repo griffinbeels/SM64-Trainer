@@ -222,7 +222,8 @@ PASSIVE_ACTIONS = frozenset({
 # is still decomp-only — check a courtyard entry flags correctly.
 CASTLE_LEVELS = frozenset({6, 16, 26})  # inside, grounds, courtyard
 
-# --- Segment-event primitives (spec: docs/superpowers/specs/2026-06-11) ----
+# --- Segment-event primitives (2026-06-11; FSM contract lives in --------
+# --- tracking/segments.py's module docstring, which is the authority) ---
 
 # gCurrLevelNum LEVEL ids — decomp levels/level_defines.h DEFINE_LEVEL order
 # (1-based). Cross-validated against three live-verified anchors we already

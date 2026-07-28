@@ -4,6 +4,19 @@ CLAUDE.md is the index; this file holds only knowledge that has no better
 home. Facts that belong to one module are documented IN that module —
 follow the pointers instead of duplicating here.
 
+**Design specs are not in this repository.** `docs/superpowers/` (the specs and
+plans each feature was built from) is a local working directory, gitignored
+since 2026-07-27 — it quotes the author directly and names unrelated projects,
+and this repo is public. So a spec is never the authority here: **this file,
+the module docstrings and the tests are.** Sections below say "spec (local
+working note)" where one exists on the author's machine and nowhere else;
+anything a spec settled that a future session actually needs was copied into
+this file or into the code, with its evidence. If you find a claim here that
+only a spec could justify, that is a bug in this file — fix it here.
+
+**The backlog is not in this repository either.** Open work lives in `.tasks/`
+(also local). Nothing below is a to-do list.
+
 ## Data flow
 
 ```
@@ -93,10 +106,10 @@ live gate with the human.
 
 ## Practice-quality round (2026-06-11)
 
-Garbage-run discards, markers, progress graph, pinned-target UI. Spec:
-`docs/superpowers/specs/2026-06-11-garbage-runs-markers-progress-ui-design.md`
-(decision log there is authoritative); castle fix:
-`docs/superpowers/plans/2026-06-11-castle-reset-attribution-addendum.md`.
+Garbage-run discards, markers, progress graph, pinned-target UI. (Spec + the
+castle-reset attribution addendum are local working notes, 2026-06-11.) The
+decisions that survived are below and in `tracking/projection.py`'s docstrings,
+which are authoritative.
 
 **AFK discard rides an inference, not an address.** "Paused in the Usamune
 menu" is inferred as: `igt_overall` frozen while `global_timer` advances
@@ -259,7 +272,7 @@ Principles:
 
 ## Segment events (2026-06-11/12, segment-events branch)
 
-Composed segments (LBLJ, pipe entries, Bowser fights) as first-class practice targets. Full spec: `docs/superpowers/specs/2026-06-11-segment-events-design.md`.
+Composed segments (LBLJ, pipe entries, Bowser fights) as first-class practice targets. (Spec is a local working note, 2026-06-11.) The FSM invariants are in `tracking/segments.py`'s module docstring — that is the authority.
 
 **Journal facts vs derived segment attempts.** Four new detectors (`detectors/area.py`, `detectors/warp.py`, `detectors/key.py`, `detectors/spawn.py`) journal primitive facts (`area_changed`, `warp_entered`, `key_grabbed`, `spawned`) into the append-only event journal exactly like star events. `SegmentEngine` in `tracking/segments.py` runs per-definition FSMs **in the tracking layer** (not in detectors) — composition is a projection concern. Because segment attempts are entirely derived from journaled primitives, **re-projection makes new definitions retroactive**: `POST /api/segments` or `PUT /api/segments/{id}` triggers a full re-projection and every past occurrence surfaces immediately, no new memory reads required.
 
@@ -275,42 +288,22 @@ Composed segments (LBLJ, pipe entries, Bowser fights) as first-class practice ta
 
 **Stage quick-select banner (2026-06-13/14; Bowser geography 2026-06-25).** A presentation-only consumer of the course/segment registries: `ui/components/stagebanner.js` offers one-click practice targets for wherever Mario stands. Context comes from a broadcast-only `stage_changed {course_id, level, area, mode}` event (`detectors/stage.py`) — a live signal, **never journaled** (fully recomputable from `curr_level`/`curr_area`, no historical-query value; cached on `TrackerService.current_stage` for initial page load). The single `mode` field is the dispatch: `stars` (a main course → its stars), `castle` (a Castle Inside subarea → that subarea's segments), `bowser_course` (BitDW/BitFS/BitS → the reds 8-coin star + the level's no-reds pipe-entry segment), `arena` (a Bowser 1/2/3 fight → the single fight segment, auto-selected), or `None` (no banner). Which segments a context offers is **derived from the definitions, not the matcher**: `views._segment_start_areas` reads the `to_subarea`/`area` trigger param names *statically* for the castle's per-SUBAREA offer (a bare "enter Castle Inside" never qualifies, so LBLJ stays lobby-only), and the parallel `views._segment_start_levels` reads the whole-LEVEL scope for the Bowser banners (pipe segments start in 17/19/21, fights in 30/33/34). The `segment_targets` payload now carries `enabled` + `start_levels` and includes DISABLED segments — the castle row filters `enabled` client-side, but the Bowser row shows a disabled pipe-entry segment so its **no-reds** click can ENABLE it (mutual exclusion: **reds** disables the pipe + targets the star, **no-reds** enables it + targets the segment). The banner answers "where does this *start*?" as a static value (no live `_pending` deferral like the matcher). The param-name coupling is pinned by `test_views.test_segment_banner_param_names_match_the_registry`. Auto-select (arenas) is client-side — the banner POSTs `/api/target`, keeping the detector pure/broadcast-only and browser↔GUI parity intact. Rules live in the `detectors/stage.py` docstring + `views.py` comments; the wire payload is in `docs/api.md`. (v1.3.0 revamp: main-course stars now render as per-slot SM64 star art `ui/assets/star_{1..6}.png` with a rank Hat — the Mario-cap icon, `ui/components/hat.js` (2026-07-25-mario-cap-rank-icons; superseded the earlier "Medal") — per star; presentation-only; detail in the CLAUDE.md module map.)
 
-## Roadmap (unbuilt)
+## Designed but unbuilt
 
-Delivered in phase 1 (this branch): attempt tracking, stats registry, REST API, Practice
-tab UI, death/level-change detectors, activity discard, per-star strategies, timelines,
-session continue/delete, PB-glow, single-instance lock (features #3, #4, #6, #9, #11 +
-live-feedback round + incident-response from the spec). Remaining phases per
-`docs/superpowers/specs/2026-06-10-practice-tracker-platform-design.md §11`:
+**Not a backlog** — that is `.tasks/` (local). These are two pieces of DESIGN
+work that were reasoned through, found to be worth doing, and then not done.
+They live here rather than in a task file because each carries a technical
+finding that would otherwise have to be re-derived. Everything else that was
+once listed here shipped and is documented in its own section below; the
+struck-through "Delivered" list was removed on 2026-07-28 for saying nothing a
+reader could act on.
 
-- **Phase 2** — dust tricks: built (rollout + chained double/triple jump
-  events, per-attempt counts, `dustless_rate`/`dustless_jump_rate` stats, UI
-  rate displays, schema v3). The original "direct dive→rollout edge" model
-  was WRONG — a 50-trial live session + decomp cross-check established that
-  landing transitions run `set_mario_action(...); break;` so one visible
-  landing frame IS the frame-perfect input (evidence quoted in
-  `memory/addresses.py`; model documented in `detectors/dust.py`; old
-  journals re-derive via the projection's compat shim). The particle flags
-  and jump-chain action ids were live-verified 2026-06-12 (segment-events
-  gate sessions: consistent `[DUST]` and dustless/late classification
-  across castle/BitS/arena play).
-- **Practice-quality round (2026-06-11, delivered):** AFK/no-activity/castle
-  discards, `mario_acted` + `strat_set` events, timeline markers, progress
-  graph, pinned active star, sort/hide-resets/batching controls, stat-chip
-  identity+order registry. See the section above.
-- **Phase 3** — TriggerDetector (door/key-door rows), MenuDetector
-  (menu-open address hunt required). Delivers menu-failure attempt outcome.
-  Urgency reduced: the AFK rule already covers the practice-relevant menu
-  case via the IGT-freeze inference; hunt the address only if that inference
-  misfires live.
-- ~~**Phase 4** — Routes storage + probability board + Routes tab~~ — **Delivered:**
-  ordered star/segment route plans with cumulative best-K success + import/
-  export (`tracking/routes.py`, `ui/components/routes.js`, `routes` table v7).
-- **Full-game run timer — Delivered (Runs):** forgiving-RTA timer over a
-  route (`tracking/runs.py`, `ui/components/runview.js`, `runs` table v8) —
-  see the "Routes & runs" section below.
-- **Side-by-side compare — Delivered (v1.3.0):** see the "Compare" section below.
-- ~~Dedicated key / grand-star events~~ — **Delivered in segment-events branch**: `key_grabbed` claims all three fight-ending grabs (B1/B2 keys + B3 grand star via `ACT_JUMBO_STAR_CUTSCENE` — the grand star never enters a star-dance action; evidence in `addresses.py`).
+- **TriggerDetector + MenuDetector** (door/key-door rows; menu-open address
+  hunt required) would deliver a menu-failure attempt outcome. **Urgency is
+  low by finding, not by neglect:** the AFK rule already covers the
+  practice-relevant menu case via the IGT-freeze inference (see
+  "Practice-quality round" above). Hunt the address only if that inference is
+  observed to misfire live — otherwise this buys an address for nothing.
 - **`door_used` primitive (designed follow-up, 2026-06-12):** doors are
   object-pool objects with fixed positions, and `MarioState`'s used-object
   pointer names the exact door during the animation — a `door_used {x, z,
@@ -483,59 +476,21 @@ kill-on-close Job Object assigned to every ffmpeg child
 (`ffmpeg_sink._assign_kill_on_close`, behaviorally tested) — an orphan
 encoder is structurally impossible no matter how Python dies.
 
-## Self-update (2026-06-16) — SUPERSEDED by "Incremental updates" below
+## Self-update — the 2026-06-16 single-exe swap (removed 2026-07-28)
 
-> The single-exe swap described here shipped in v1.0.x–v1.3.x and was
-> replaced by the manifest-sync system (next section) on 2026-07-23. The
-> OS facts (rename-a-running-exe, sys.executable) still underpin the new
-> apply layer; the `download_and_stage`/`apply_update` code itself is gone.
-
-The packaged exe updates itself from GitHub releases (`core/updater.py`,
-`server/update_api.py`, `ui/components/update.js`, `tools/release.py`). The
-facts that make it safe, so the next session doesn't re-derive them.
-
-**The enabling OS fact: Windows forbids DELETING a running exe but ALLOWS
-RENAMING one.** So the swap is two `os.replace` calls — rename the running
-`SM64Trainer.exe` aside to `*.exe.old`, then move the downloaded
-`*.exe.new` into the canonical name. The old process keeps executing from the
-renamed file (the OS tracks the open file object, not the path). This is why
-no separate helper/.bat is needed.
-
-**`sys.executable` does the rest for free.** It is the canonical path string,
-captured at process start. After the swap that path points at the NEW exe, so
-`core/relaunch.spawn_replacement()` (which relaunches `sys.executable`)
-launches the new build with ZERO change to relaunch.py — apply just calls the
-same restart path as `/api/admin/restart`. `wait_port_free` hands the port
-from old to new; `cleanup_old_exe()` (run at startup in `main.py`) deletes the
-now-unlocked `*.old`.
-
-**Failure-safety is non-negotiable for a self-overwriting exe** (a review
-caught both of these before ship):
-- The two-rename retry must hoist the rename-aside OUT of the retry loop. The
-  naive "retry the whole pair" bug: step 1 succeeds, step 2 fails (AV briefly
-  locks the new file), the retry deletes the backup then hits
-  `FileNotFoundError` on the already-moved current — leaving the user with NO
-  exe. Fix: rename aside once; retry only the staged→current move; on final
-  failure restore the backup (`apply_update`).
-- A release with no `.sha256` asset must mean "no update", never "skip
-  verification". `check_for_update` returns None without the checksum asset,
-  so an unverified exe can never be applied. The download verifies SHA-256
-  before any rename; a mismatch raises and keeps the current exe.
-
-**The user's state survives every update** because `%LOCALAPPDATA%\SM64Trainer`
-(DB, PBs, saved replays; the pre-1.0.2 `sm64_tracker` dir is migrated on first
-launch) is separate from the exe (`core/paths.py`), and the new exe runs its DB
-migrations on launch. Everything is guarded on
-`is_frozen()` — from source the updater is inert so a dev tree is never
-swapped (`SM64_UPDATE_FAKE=1` renders the popup in dev without a real
-release). The exe is unsigned, so the FIRST manual (browser) download trips
-SmartScreen; in-app updates don't (the app, not the browser, fetches the
-file). Code signing is the documented future fix.
+Shipped in v1.0.x-v1.3.x, replaced by the manifest-sync system below on
+2026-07-23. Its 49 lines of description were deleted rather than kept as a
+SUPERSEDED block: the code they described is gone, and the ONE fact that
+still matters -- Windows forbids DELETING a running exe or a loaded DLL but
+ALLOWS renaming them, which is what makes any in-place update possible at
+all -- is carried, with far more detail than this file ever had, by
+`core/update_apply.py`'s module docstring. Read that. A superseded section is
+a second answer to a question the live code already answers, which is exactly
+the shape of thing this file is not for.
 
 ## Incremental updates (2026-07-23)
 
-Spec: `docs/superpowers/specs/2026-07-23-incremental-updates-design.md` ·
-Plan: `docs/superpowers/plans/2026-07-23-incremental-updates.md`. Why: the
+(Spec + plan are local working notes, 2026-07-23.) Why: the
 onefile exe was 220 MB and every update re-downloaded all of it; the bulk
 (ffmpeg, Python runtime, numpy/av DLLs) never changes between releases.
 
@@ -754,10 +709,11 @@ treat badge tiers as "best-effort" against the scraper data.
 ## MARELO — the overall rating (2026-07-24/25)
 
 One rating derived from practice history, on top of the per-cutoff standards
-above. Design spec: `docs/superpowers/specs/2026-07-24-marelo-rank-system-design.md`
-(design-time; where it and this disagree, THIS is current). Per-module "where to
+above. (Design spec is a local working note, 2026-07-24, and design-time —
+where it and this disagree, THIS is current.) Per-module "where to
 change what" lives in `.claude/rules/ranks.md` (scoring/scopes/history),
-`.claude/rules/server.md` (endpoints) and `.claude/rules/ui.md` (surfaces) —
+`.claude/rules/server.md` (endpoints) and `.claude/rules/ui-ranks.md` +
+`ui-climb.md` (surfaces) —
 this section is the cross-cutting model those three assume.
 
 **One time, three questions.** The same run grades three ways, because three
@@ -876,11 +832,10 @@ the chip row can poll safely.
 ## Default routes foundation (2026-07-23, spec #1)
 
 Ships the engine + storage mechanism for the standard Usamune route corpus
-(the corpus itself is spec #2). Full spec:
-`docs/superpowers/specs/2026-07-23-default-routes-foundation-design.md`; plan:
-`docs/superpowers/plans/2026-07-23-default-routes-foundation.md`. Consumer
-detail (fields, functions) is in the CLAUDE.md module map — this section
-records the two pieces of cross-cutting rationale.
+(the corpus itself is spec #2). (Spec + plan are local working notes,
+2026-07-23.) Consumer detail (fields, functions) is in
+`.claude/rules/tracking-storage.md` — this section records the two pieces of
+cross-cutting rationale.
 
 **The segment matcher generalizes from a 2-state chain to an N-state ordered
 automaton.** `SegmentEngine` already ran a two-state instance of an

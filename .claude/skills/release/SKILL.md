@@ -16,7 +16,8 @@ description: >-
 # Release SM64 Trainer
 
 This project ships as a self-updating Windows app with **incremental updates**
-(since v1.4.0, 2026-07-23 — spec/plan under `docs/superpowers/`). A release =
+(since v1.4.0, 2026-07-23; the mechanism is documented in
+`docs/architecture.md` → "Incremental updates"). A release =
 bump the version, build the **onedir app + bootstrap installer**, and publish
 **SIX assets** with **user-facing notes**:
 

@@ -1,8 +1,9 @@
 // src/sm64_events/ui/components/hat.js — the Mario-cap rank icon renderer.
 //
-// Ports the design-probe reference sheet
-// (.superpowers/sdd/2026-07-25-mario-cap-rank-icons/reference-sheet.html),
-// rendered and eyeballed across 45 states before this shipped -- its layer
+// Ports a design probe (2026-07-25) that was rendered and eyeballed across all
+// 45 tier x division states before this shipped; the probe was a scratch file
+// and is gone, but `tools/hat_sheet.py` regenerates the same contact sheet from
+// the LIVE registry, which is the reproduction that matters. Its layer
 // composition (see the CSS in index.html, the `.hat` rule block) is known-good
 // and is not to be "cleaned up" independent of a render. This file only
 // wires that composition to the real registry (caps.js) and the shipped

@@ -10,10 +10,13 @@ Two consequences show up all over this file:
     that movement's step — which is also exactly how the wiki reads
     ("Upstairs Toad (near TTM) | Tall, Tall Mountain").
 
-Content is transcribed from
-docs/superpowers/specs/2026-07-24-default-routes-corpus-sources.md; the
-community nicknames (Cannonless, Pless, Owlless, ...) are resolved by that
-file's alias glossary.
+Content was transcribed from the Ukikipedia route pages via a sources note
+(2026-07-24) that is a LOCAL working file, not in this repo. Everything the
+transcription decided is therefore pinned by tests, not by that note:
+tests/test_corpus_routes_main.py is the authority on what these routes contain,
+and tests/test_defaults_corpus.py on the shapes. The community nicknames
+(Cannonless, Pless, Owlless, ...) resolve through the alias glossary in
+corpus_vocab.py.
 """
 from corpus_vocab import MAIN, route, segment, star, stars, sub
 

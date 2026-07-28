@@ -4,6 +4,12 @@ disagrees with the time the user sees (project rule: Usamune IGT clock)."""
 
 # hardest -> easiest. Iron is the implicit floor: it carries NO threshold in
 # data; a completion slower than the easiest defined tier ranks Iron.
+#
+# DUPLICATED IN JS on purpose (`ui/components/caps.js::CAP`, which is where the
+# tier's name/colour/treatment live) and held together by
+# tests/test_cross_language_parity.py, not by this comment. Adding a tier here
+# alone renders it as its own raw key in fallback grey on a ladder one rung
+# short, and throws nothing.
 RANK_NAMES = ["Mario", "Grandmaster", "Master", "Diamond", "Platinum",
               "Gold", "Silver", "Bronze", "Iron"]
 RANK_SCORE = {n: len(RANK_NAMES) - i for i, n in enumerate(RANK_NAMES)}
@@ -99,7 +105,10 @@ def band(ladder_cs: dict, time_cs: int) -> dict:
 # display picks the time it grades. order None = the saved per-strategy PB
 # row (no averaging); "recent" = the last `window` valid runs; "top" = the
 # `window` fastest ever; window None = every valid run. Adding a mode is one
-# row here (ui/components/ranks.js RANK_MODE_OPTIONS mirrors the labels).
+# row here AND one in ui/components/ranks.js RANK_MODE_OPTIONS (ids, labels and
+# ORDER; the picker renders that list directly and PUT /api/ranks/mode 409s on
+# an id this dict lacks). tests/test_cross_language_parity.py fails if the two
+# stop agreeing — a mode added on one side only ships invisible or ships broken.
 RANK_MODES = {
     "pb":       {"label": "PB",       "window": None, "order": None},
     "avg10":    {"label": "Avg 10",   "window": 10,   "order": "recent"},

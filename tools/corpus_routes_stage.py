@@ -1,11 +1,11 @@
-"""The 37 Stage RTA routes (spec 2026-07-24 §7.2) — per-course ordered star
-lists, no movement steps. start_condition is entering the course, so the run
-clock starts on the painting rather than on F1, which is what a stage RTA
-actually times.
+"""The 37 Stage RTA routes — per-course ordered star lists, no movement steps.
+start_condition is entering the course, so the run clock starts on the painting
+rather than on F1, which is what a stage RTA actually times.
 
-Content is transcribed from
-docs/superpowers/specs/2026-07-24-default-routes-corpus-sources.md
-§"Per-course ordered star lists".
+Content was transcribed (2026-07-24) from the same per-course ordered star
+lists corpus_routes_main.py uses; the sources note is a LOCAL working file, not
+in this repo, so tests/test_corpus_routes_stage.py is the authority on what
+these routes contain.
 """
 from sm64_events.memory.addresses import course_name, star_name
 

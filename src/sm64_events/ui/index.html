@@ -1139,12 +1139,12 @@
      too, rather than leaving a margin this narrow to fail the moment font
      metrics or a future size change shift it. */
   .marelo-bar-icon { --icon-size: 34px; }
-  /* Mario-cap rank icons (spec 2026-07-25-mario-cap-rank-icons). Ports the
-     design-probe reference sheet
-     (.superpowers/sdd/2026-07-25-mario-cap-rank-icons/reference-sheet.html),
-     whose composition was rendered and eyeballed across 45 states before
+  /* Mario-cap rank icons (2026-07-25). Ports a design probe whose composition
+     was rendered and eyeballed across all 45 tier x division states before
      this shipped -- hat.js is the only caller and these rules are not to be
-     "cleaned up" independent of a render. The wing flap (task 6, below) is
+     "cleaned up" independent of a render. Regenerate the contact sheet from
+     the live registry with `tools/hat_sheet.py` before touching any of them.
+     The wing flap (task 6, below) is
      the one animation this component carries, gated on
      prefers-reduced-motion the way .starholder already does. */
   /* font-display: block (final review M9, 2026-07-25) -- without it the
