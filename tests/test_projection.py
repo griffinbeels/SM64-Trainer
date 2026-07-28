@@ -1178,6 +1178,62 @@ def test_basement_respawn_does_not_arm_lobby_anchored_lblj():
     assert [a for a in closed if a.segment_id == 1] == []
 
 
+# -- armed_arms (Task 4, spec 2026-07-28-multi-step-segments) -----------------
+
+def test_armed_arms_reports_progress_total_and_frames_for_a_waypoint_def():
+    from sm64_events.tracking.segments import SegmentDef
+    d = SegmentDef(id=21, name="WF -> SSL", enabled=True,
+                   start_triggers=[{"type": "level_exit", "from": 24}],
+                   waypoints=[[{"type": "area_enter", "level": 6, "area": 3}]],
+                   end_triggers=[{"type": "level_enter", "to": 8}], guards=[])
+    p = Projector(segments=[d])
+    p.feed(jev(1, "level_changed", 1000, {"from": 24, "to": 6}))
+    arm = p.armed_arms()[21]
+    assert arm["progress"] == 0 and arm["total"] == 1
+    assert arm["start_frame"] == 1000
+    assert arm["deadline_frame"] is None      # strict def: no staleness budget
+    p.feed(jev(2, "area_changed", 1010, {"level": 6, "from": 1, "to": 3}))
+    assert p.armed_arms()[21]["progress"] == 1   # waypoint consumed
+
+
+def test_armed_arms_carries_a_deadline_for_a_loose_def():
+    from sm64_events.tracking import segments as segments_module
+    from sm64_events.tracking.segments import SegmentDef
+    loose = SegmentDef(id=20, name="DDD -> BitFS (loose)", enabled=True,
+                       start_triggers=[{"type": "level_exit", "from": 23}],
+                       end_triggers=[{"type": "level_enter", "to": 19}],
+                       guards=[], match_mode="loose")
+    p = Projector(segments=[loose])
+    p.feed(jev(1, "level_changed", 1000, {"from": 23, "to": 6}))
+    arm = p.armed_arms()[20]
+    assert arm["total"] == 0   # no waypoints
+    # No history yet, so the budget is the floor (never the literal constant
+    # — Task 9 re-measures it; see progress.md and CLAUDE.md's shipped-
+    # default rule).
+    assert arm["deadline_frame"] == 1000 + segments_module.budget_frames(None)
+
+
+def test_armed_arms_is_empty_with_nothing_armed():
+    from sm64_events.tracking.segments import SegmentDef
+    d = SegmentDef(id=1, name="LBLJ", enabled=True, guards=[],
+                   start_triggers=[{"type": "level_enter", "to": 6, "from": 16}],
+                   end_triggers=[{"type": "level_enter", "to": 17}])
+    p = Projector(segments=[d])
+    assert p.armed_arms() == {}
+
+
+def test_armed_arms_drops_an_id_once_it_closes():
+    from sm64_events.tracking.segments import SegmentDef
+    d = SegmentDef(id=1, name="LBLJ", enabled=True, guards=[],
+                   start_triggers=[{"type": "level_enter", "to": 6, "from": 16}],
+                   end_triggers=[{"type": "level_enter", "to": 17}])
+    p = Projector(segments=[d])
+    p.feed(jev(1, "level_changed", 1000, {"from": 16, "to": 6}))
+    assert 1 in p.armed_arms()
+    p.feed(jev(2, "level_changed", 1085, {"from": 6, "to": 17}))
+    assert p.armed_arms() == {}
+
+
 def test_replay_derives_finished_run(tmp_path):
     from sm64_events.tracking.projection import replay
     from sm64_events.storage.db import Database

@@ -688,6 +688,25 @@ def test_segment_section_armed_flag_tracks_live_projector(tmp_path):
     assert sec["attempts"][0]["rta_frames"] == 85
 
 
+def test_segment_section_armed_detail_reports_progress_and_waiting_for(tmp_path):
+    # Task 4, spec 2026-07-28-multi-step-segments: the card needs to say
+    # WHAT an armed def is waiting for, not just that it is armed. LBLJ (id
+    # 1, seeded, no waypoints, strict) is the same fixture the plain "armed"
+    # test above uses.
+    db, svc = make(tmp_path)
+    asyncio.run(svc.set_target_segment(1))
+    asyncio.run(svc.publish(lvl(1000, 16, 6)))          # arms LBLJ
+    view = build_session_view(db, svc, clock="igt")
+    detail = seg_section(view, 1)["armed_detail"]
+    assert detail["progress"] == 0 and detail["total"] == 0
+    assert detail["start_frame"] == 1000
+    assert detail["deadline_frame"] is None             # strict: no budget
+    assert detail["waiting_for"] == "You enter level Bowser in the Dark World"
+    asyncio.run(svc.publish(lvl(1085, 6, 17)))          # closes it
+    view2 = build_session_view(db, svc, clock="igt")
+    assert seg_section(view2, 1)["armed_detail"] is None
+
+
 def test_segment_sections_order_by_journal_recency_not_raw_id(tmp_path):
     # segment attempt ids carry def_id * 1e10, so a higher def id always
     # raw-sorts above a lower one; recency must compare journal_id(...).
@@ -1654,6 +1673,20 @@ def test_star_sections_carry_no_default_strategy(tmp_path):
     seed(svc)
     view = build_session_view(db, svc, clock="igt")
     assert "default_strat" not in view["stars"][0]
+
+
+def test_star_sections_carry_no_arm_detail(tmp_path):
+    """Deliberate star/segment asymmetry (Task 4, spec 2026-07-28-multi-
+    step-segments): armed_detail describes a SEGMENT DEFINITION's waypoint
+    sequence and staleness deadline — a star has no armed-branch matcher, no
+    waypoints, and no deadline to report, so it never gets the key at all
+    (same shape as default_strat above, not a copy of its reasoning: a star
+    can be a practice TARGET without ever being "armed" the way a segment
+    is — arming is a segment-matcher concept end to end)."""
+    db, svc = make(tmp_path)
+    seed(svc)
+    view = build_session_view(db, svc, clock="igt")
+    assert "armed_detail" not in view["stars"][0]
 
 
 def test_catalog_carries_the_same_course_groups_as_vocab():

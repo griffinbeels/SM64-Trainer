@@ -302,6 +302,14 @@ class TrackerService:
         refresh self-heal the UI's armed badge after missed notices."""
         return self._projector.armed_segment_ids()
 
+    @property
+    def armed_arms(self) -> dict[int, dict]:
+        """Per-armed-id progress/total/start_frame/deadline_frame (spec
+        2026-07-28-multi-step-segments) -- same self-heal rationale as
+        armed_segment_ids: a plain view refresh reads the projector directly
+        rather than depending on a missed segment_disarmed/armed notice."""
+        return self._projector.armed_arms()
+
     def _require_db(self) -> Database:
         if self.db is None or self.session_id is None:
             raise RuntimeError("database unavailable")

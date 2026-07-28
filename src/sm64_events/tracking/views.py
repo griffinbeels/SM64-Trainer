@@ -48,7 +48,7 @@ from sm64_events.tracking.segments import (arm_level, course_groups,
                                             origin_course, origin_view,
                                             segment_origin, start_areas,
                                             start_levels, start_origin,
-                                            time_bounds)
+                                            time_bounds, waiting_for_sentence)
 
 # Timeline markers (per-section event graph): outcomes that plot as points.
 # Adding a marker kind is one row here (+ a style row in ui timeline.js).
@@ -934,6 +934,10 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     # badge has somewhere to live and a plain refresh self-heals it.
     # sorted = deterministic tie order among fresh (-1 recency) sections.
     armed = service.armed_segment_ids
+    # Per-id progress/total/start_frame/deadline_frame (spec 2026-07-28-
+    # multi-step-segments) -- same live-projector self-heal reasoning as
+    # `armed` above, read once here rather than per section.
+    armed_arms = service.armed_arms
     for sid in sorted(armed):
         seen_segs.setdefault(sid, None)
 
@@ -1051,6 +1055,19 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "course_id": origin_course(segment_origin(
                 seg_id, d.start_triggers, origin_overrides)) if d else None,
             "armed": seg_id in armed,
+            # Arm progress/deadline detail plus the plain-language "waiting
+            # for" line (spec 2026-07-28-multi-step-segments) -- None while
+            # idle. A deleted definition (`d is None`) has no detail even if
+            # somehow still armed (armed_arms() already excludes it). Stars
+            # carry no such key: a star has no waypoint sequence or
+            # staleness deadline to describe (rule 11 asymmetry, same shape
+            # as default_strat below -- see
+            # test_star_sections_carry_no_arm_detail).
+            "armed_detail": ({**armed_arms[seg_id],
+                              "waiting_for": waiting_for_sentence(
+                                  d, armed_arms[seg_id]["progress"])}
+                             if d is not None and seg_id in armed_arms
+                             else None),
             "category": meta.get("category"),
             "seeded": meta.get("seed_key") is not None,
             # The definition's own strategy, or None. The card reads this to

@@ -381,6 +381,27 @@ class Projector:
         into privates."""
         return self._segments.armed_ids()
 
+    def armed_arms(self) -> dict[int, dict]:
+        """Per-armed-id detail for the view's "waiting for" card (spec
+        2026-07-28-multi-step-segments): {segment_id: {progress, total,
+        start_frame, deadline_frame}}. `total` is the def's own waypoint
+        count (0 for a plain start/end pair), so the UI can read
+        "progress of total" without a second lookup. `waiting_for` is NOT
+        computed here — that needs waiting_for_sentence, a segments.py
+        concern, and views.py already holds the def for its section loop.
+        A def missing from definition() (deleted mid-arm) is skipped rather
+        than raised: this engine's _armed can only ever hold ids from its
+        OWN def list, so the guard is defensive, not a live path."""
+        arms = {}
+        for sid, arm in self._segments.armed_items().items():
+            d = self._segments.definition(sid)
+            if d is None:
+                continue
+            arms[sid] = {"progress": arm.progress, "total": len(d.waypoints),
+                        "start_frame": arm.start_frame,
+                        "deadline_frame": arm.deadline_frame}
+        return arms
+
     def armed_route_id(self):
         return self._runs.armed_route_id()
 

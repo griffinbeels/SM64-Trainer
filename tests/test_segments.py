@@ -12,7 +12,7 @@ from sm64_events.tracking.segments import (SEGMENT_ATTEMPT_OFFSET,
                                            SegmentDef, SegmentEngine,
                                            origin_taxonomy, origin_view,
                                            start_origin, validate_definition,
-                                           vocab)
+                                           vocab, waiting_for_sentence)
 
 W = "2026-06-11T12:00:00Z"
 
@@ -82,6 +82,77 @@ def test_vocab_ships_connections_and_flow_annotations():
     assert level_exit["params"]["from"]["flow"]["role"] == "source"
     assert level_exit["params"]["to"]["flow"]["role"] == "dest"
     assert level_exit["params"]["from_subarea"]["flow"]["role"] == "source"
+
+
+# ---------------------------------------------------------------------------
+# waiting_for_sentence (Task 4, spec 2026-07-28-multi-step-segments): plain
+# language for what an armed def is waiting for next.
+# ---------------------------------------------------------------------------
+
+WF_TO_SSL_WAYPOINT = SegmentDef(
+    id=21, name="WF -> SSL", enabled=True,
+    start_triggers=[{"type": "level_exit", "from": 24}],
+    waypoints=[[{"type": "area_enter", "level": 6, "area": 3}]],
+    end_triggers=[{"type": "level_enter", "to": 8}], guards=[])
+
+
+def test_waiting_for_sentence_reads_the_next_unconsumed_waypoint():
+    sentence = waiting_for_sentence(WF_TO_SSL_WAYPOINT, 0)
+    assert sentence == "You enter area Castle Inside Basement"
+
+
+def test_waiting_for_sentence_falls_back_to_the_end_trigger_once_consumed():
+    # progress == len(waypoints): every waypoint is behind it, so the next
+    # thing the def waits for is its end trigger.
+    sentence = waiting_for_sentence(WF_TO_SSL_WAYPOINT, 1)
+    assert sentence == "You enter level Shifting Sand Land"
+
+
+def test_waiting_for_sentence_joins_an_any_of_clause_set_with_or():
+    d = SegmentDef(id=2, name="beat Bowser", enabled=True, guards=[],
+                   start_triggers=[],
+                   end_triggers=[{"type": "star_grabbed"},
+                                 {"type": "key_grabbed", "level": 17}])
+    sentence = waiting_for_sentence(d, 0)
+    assert sentence == ("You grab a star or "
+                        "You grab a Bowser key / grand star in "
+                        "Bowser in the Dark World")
+
+
+def test_waiting_for_sentence_drops_a_dangling_connector_for_an_unset_param():
+    # LBLJ's real seeded end trigger: {"to": 17} only, no `from`. A naive
+    # literal substitution would leave "...coming from " hanging; the
+    # optional param's own template segment must vanish with it instead.
+    d = SegmentDef(id=1, name="LBLJ", enabled=True, guards=[],
+                   start_triggers=[{"type": "level_enter", "to": 6, "from": 16}],
+                   end_triggers=[{"type": "level_enter", "to": 17}])
+    sentence = waiting_for_sentence(d, 0)
+    assert sentence == "You enter level Bowser in the Dark World"
+    assert "coming from" not in sentence
+
+
+def test_every_trigger_template_resolves_cleanly():
+    """Guard for the clause renderer behind waiting_for_sentence: every
+    TriggerType's template, filled with every param IT declares, must leave
+    no literal "{token}" behind, and every param name the template mentions
+    must be one this trigger actually has in its own `params` dict. Fails
+    the day a new trigger type's template typos a param name, rather than a
+    user seeing a brace on the practice card."""
+    kind_samples = {"level": 6, "subarea": 1, "course": 1, "star": 0}
+    for spec in TRIGGERS.values():
+        named = set(re.findall(r"\{(\w+)\}", spec.template))
+        assert named <= set(spec.params), \
+            f"{spec.key}: template names {named - set(spec.params)}, " \
+            "which is not one of its own params"
+        clause = {"type": spec.key}
+        for name, meta in spec.params.items():
+            clause[name] = kind_samples[meta["kind"]]
+        d = SegmentDef(id=1, name="probe", enabled=True, guards=[],
+                       start_triggers=[], end_triggers=[clause])
+        sentence = waiting_for_sentence(d, 0)
+        assert "{" not in sentence and "}" not in sentence, \
+            f"{spec.key}: leftover template token in {sentence!r}"
+        assert spec.label in sentence
 
 
 def test_start_level_set_classifies_level_bound_defs():
@@ -190,6 +261,34 @@ def test_arm_then_end_is_a_success_with_rta_delta():
     assert a.course_id is None and a.star_id is None
     assert a.id == 10 + SEGMENT_ATTEMPT_OFFSET * 1
     assert a.anchor_type == "level_changed"
+
+
+def test_armed_items_carries_the_live_arm_for_each_armed_id():
+    e = SegmentEngine([LBLJ])
+    lblj_arm(e, frame=1000)
+    items = e.armed_items()
+    assert set(items) == {1}
+    assert items[1].start_frame == 1000
+
+
+def test_armed_items_returns_a_copy_not_the_live_dict():
+    # Same defensive-copy contract as armed_ids() — a caller mutating what
+    # it got back must never reach engine-private state.
+    e = SegmentEngine([LBLJ])
+    lblj_arm(e, frame=1000)
+    items = e.armed_items()
+    items.clear()
+    assert e.armed_ids() == {1}
+
+
+def test_definition_returns_the_loaded_def_by_id():
+    e = SegmentEngine([LBLJ])
+    assert e.definition(1) is LBLJ
+
+
+def test_definition_returns_none_for_an_unknown_id():
+    e = SegmentEngine([LBLJ])
+    assert e.definition(999) is None
 
 
 B3 = SegmentDef(id=10, name="Bowser 3", enabled=True,

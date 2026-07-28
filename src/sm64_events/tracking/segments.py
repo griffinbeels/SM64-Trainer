@@ -2,8 +2,10 @@
 
 ONE registry: TRIGGERS/GUARDS drive (a) definition validation at the API
 boundary, (b) the matcher, (c) GET /api/segments/vocab that renders the
-builder GUI. Adding a trigger type = one TriggerType row here (label +
-params + the sentence template the builder renders).
+builder GUI, and (d) waiting_for_sentence's read-only "waiting for" line on
+an armed practice card (spec 2026-07-28-multi-step-segments). Adding a
+trigger type = one TriggerType row here (label + params + the sentence
+template both the builder AND waiting_for_sentence render from).
 
 Matcher invariants (spec §Matcher semantics — tests are the contract):
 - closures (success/failure) process BEFORE arming; one event may close an
@@ -214,6 +216,7 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
   negative-rta self-heal covers the time-jump consequences.  Acceptable: door
   echoes are constant, this edge is rare.
 """
+import re
 from dataclasses import dataclass, field, replace
 from typing import Callable
 
@@ -509,6 +512,95 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 {}, "on F1 or console reset",
                 lambda p, ev, ctx: ev.type == "game_reset"),
 ]}
+
+
+def _resolve_param(kind: str, value, clause: dict) -> str:
+    """Display text for one clause param, by the vocabulary's own KIND — the
+    four TRIGGERS params ever carry. `star` also reads the clause's `course`
+    (a star's name is meaningless without one; a course-less star clause
+    falls back to the generic "Star N" addresses.star_name itself uses for
+    an unrecognised course)."""
+    if kind == "level":
+        return LEVEL_NAMES.get(value, f"Level {value}")
+    if kind == "subarea":
+        return CASTLE_AREA_NAMES.get(value, f"Area {value}")
+    if kind == "course":
+        return COURSE_NAMES.get(value, f"Course {value}")
+    if kind == "star":
+        course = clause.get("course")
+        return star_name(course, value) if course is not None \
+            else f"Star {value + 1}"
+    return str(value)
+
+
+_TEMPLATE_TOKENS = re.compile(r"(\{\w+\})")
+
+
+def _render_clause(clause: dict) -> str:
+    """One trigger clause -> plain English, through TRIGGERS[type].label +
+    .template (spec 2026-07-28-multi-step-segments; waiting_for_sentence
+    below is the only caller).
+
+    A param the clause leaves unset drops its own SEGMENT of the template —
+    the literal words that introduce it, together with the placeholder —
+    rather than leaving a dangling connector: a level_enter clause with no
+    `from` renders "You enter level Castle Inside", never "...coming from ".
+    Done by pairing each placeholder with the literal text immediately
+    BEFORE it (that is what "introduces" it, e.g. "coming from {from}");
+    text after the LAST placeholder is unconditional trailing punctuation.
+    A required param (the common case) is always present, so this only ever
+    prunes an OPTIONAL one the author left blank ("any level" etc).
+
+    A placeholder naming a param outside its own trigger's `params` (an
+    authoring bug in TRIGGERS itself) renders the brace literally instead of
+    raising — test_every_trigger_template_resolves_cleanly is the guard that
+    catches this at test time, on the day such a type is added, rather than
+    a user seeing the brace.
+
+    This tokenizer is deliberately independent of
+    ui/components/segments.js's — see waiting_for_sentence's own docstring
+    for why that is not a second door."""
+    spec = TRIGGERS[clause["type"]]
+    tokens = _TEMPLATE_TOKENS.split(spec.template)
+    parts: list[str] = []
+    i = 0
+    while i + 1 < len(tokens):
+        literal_before, placeholder = tokens[i], tokens[i + 1]
+        name = placeholder[1:-1]
+        meta = spec.params.get(name)
+        if meta is None:
+            parts.append(literal_before)
+            parts.append(placeholder)
+        else:
+            value = clause.get(name)
+            if value is not None:
+                parts.append(literal_before)
+                parts.append(_resolve_param(meta["kind"], value, clause))
+        i += 2
+    parts.append(tokens[-1])   # trailing literal after the last placeholder
+    return f"{spec.label} {''.join(parts)}".strip()
+
+
+def waiting_for_sentence(d: SegmentDef, progress: int) -> str:
+    """Plain language for what an ARMED definition is waiting for next (spec
+    2026-07-28-multi-step-segments): its next unconsumed waypoint
+    (`d.waypoints[progress]`), or its end trigger once every waypoint is
+    consumed (`progress >= len(d.waypoints)`). A clause-set is an ANY-OF
+    list (see `_matches`) — its members join with " or ".
+
+    Read-only sibling of ui/components/segments.js's ClauseRow, which
+    tokenizes the SAME TRIGGERS[type].template into an editable FORM
+    (dropdowns interleaved with muted words, entangled with
+    setParam/onChange/visible()/allowedIds/vocab.connections). DESIGN
+    QUESTION settled before this was written (progress.md, Task 4): that is
+    a different artifact from a read-only "waiting for X" string, not a
+    second implementation of one thing to unify with. Both consumers read
+    the ONE TRIGGERS registry and the same vocab enums (generated from
+    Python), so neither restates the template — the JS side edits a clause,
+    this side describes one. Do not "helpfully" merge them."""
+    clause_set = (d.waypoints[progress] if progress < len(d.waypoints)
+                 else d.end_triggers)
+    return " or ".join(_render_clause(clause) for clause in clause_set)
 
 
 def arm_level(trig: dict) -> int | None:
@@ -1373,6 +1465,19 @@ class SegmentEngine:
 
     def armed_ids(self) -> set[int]:
         return set(self._armed)
+
+    def armed_items(self) -> dict[int, _Arm]:
+        """Currently-armed defs with their live `_Arm` (spec 2026-07-28-
+        multi-step-segments): a COPY, like armed_ids() — a caller must never
+        be able to mutate engine-private state through it. The projector's
+        armed_arms() is the one consumer, for the view's progress/deadline
+        detail."""
+        return dict(self._armed)
+
+    def definition(self, sid: int) -> SegmentDef | None:
+        """The def for an id, or None (a deleted or never-loaded definition —
+        callers must not assume every armed/pending id still has one)."""
+        return self._def_by_id.get(sid)
 
     def feed(self, ev, ctx: MatchContext):
         """Returns (closed raw Attempts, notices). Closures before arming."""
