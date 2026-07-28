@@ -8,6 +8,8 @@ HEADER_JS = (UI / "components" / "header.js").read_text(encoding="utf-8")
 PICKER_JS = (UI / "components" / "targetpicker.js").read_text(encoding="utf-8")
 PRACTICE_JS = (UI / "components" / "practice.js").read_text(encoding="utf-8")
 INDEX_HTML = (UI / "index.html").read_text(encoding="utf-8")
+MARELO_JS = (UI / "components" / "marelo.js").read_text(encoding="utf-8")
+CONTEXT_JS = (UI / "components" / "contextselect.js").read_text(encoding="utf-8")
 
 
 def context_select_rule(css: str) -> str:
@@ -19,21 +21,43 @@ def context_select_rule(css: str) -> str:
 
 def test_every_context_card_is_one_hit_target():
     # A click ANYWHERE on a context card opens it, and the card highlights as
-    # a unit — the practice-target card did this for free by being a <button>,
-    # the three select cards only reacted on the select itself, and the
-    # mismatch read as a bug (user, 2026-07-25). The fix lives half in JS (the
-    # shared ContextSelect renders the value + chevron and tags the card) and
-    # half in CSS (that select is absolutely stretched over the card). Either
-    # half alone silently restores the small hit target, so pin both.
-    # Three cards today: session, clock, grading. A fourth raises the count
-    # deliberately — it must not appear by growing a hand-rolled one.
+    # a unit (user, 2026-07-25 -- the mismatch between a whole-card <button>
+    # and three select-only cards read as a bug). The fix is half JS (the
+    # stretched <select> plus the value + chevron we draw ourselves) and half
+    # CSS; either half alone silently restores the small hit target.
+    #
+    # FOUR cards since 2026-07-28: session, route rank, clock, grading. The
+    # fourth is the route rank card, and it must go through the SAME
+    # mechanism rather than hand-rolling one -- which is what CardSelect is
+    # for, and why the count below is of CardSelect and not of markup.
     assert strip_comments(HEADER_JS).count("<${ContextSelect}") == 3
+    assert strip_comments(CONTEXT_JS).count("<${CardSelect}") == 1
+    assert strip_comments(MARELO_JS).count("<${CardSelect}") == 1
     rule = context_select_rule(INDEX_HTML)
     assert "position: absolute" in rule and "inset: 0" in rule, rule
     # Hidden by OPACITY, never by transparent colours: Chromium themes a
     # select's popup off its computed background, so a transparent one gets a
     # white list (tests/test_ui_dropdown_theming.py owns that rule).
     assert "opacity: 0" in rule, rule
+
+
+def test_the_rank_card_names_the_scope_it_is_rating():
+    # "the M 25.6 and C 16% feels like worthless AI slop information to me. It
+    # should just be clear that this is the OVERALL RANKING FOR THE ROUTE THAT
+    # I'M PRACTICING" (user, 2026-07-28). Mastery and Coverage keep their real
+    # meters on the Rank tab and the card's own title; the freed line is what
+    # lets the scope name sit under the rank.
+    code = strip_comments(MARELO_JS)
+    assert "marelo-split" not in code
+    assert "Route rank" in code and "Overall rank" in code
+
+
+def test_the_rank_card_never_renders_nothing():
+    # It hosts the route picker now, so the control has to exist before the
+    # rating does. `.marelo-slot:empty` was the placeholder that covered the
+    # old null render and goes with it.
+    assert "return null" not in strip_comments(MARELO_JS)
+    assert ".marelo-slot:empty" not in strip_comments(INDEX_HTML)
 
 
 def test_the_hit_target_guard_can_still_fail():
@@ -64,10 +88,10 @@ def test_the_header_no_longer_carries_a_practice_target_card():
 
 def test_the_rank_bar_sits_in_the_context_grid_not_a_row_of_its_own():
     body = strip_comments(HEADER_JS)
-    assert body.count("<${MareloBar}") == 1
+    assert body.count("<${RouteRankCard}") == 1
     assert "marelo-row" not in body and "marelo-row" not in strip_comments(INDEX_HTML)
-    # MareloBar renders null until /api/marelo lands. A null grid child is no
-    # child at all, so without a wrapper the clock card would slide into this
+    # The wrapper carries container-type: inline-size for the card's own
+    # @container rules -- without it the clock card would slide into this
     # column and the whole bar would shift left for a beat.
     assert 'class="marelo-slot"' in body
     assert ".marelo-slot" in strip_comments(INDEX_HTML)

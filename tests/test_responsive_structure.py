@@ -42,7 +42,6 @@ LEGACY_VIEWPORT_RULES: dict[str, str] = {
     '(max-width:820px) :: .compare-col, .compare-center': "pre-existing 2026-07-28; Wave 2",
     '(max-width:820px) :: .compare-center': "pre-existing 2026-07-28; Wave 2",
     '(max-width:820px) :: .compare-transport': "pre-existing 2026-07-28; Wave 2",
-    '(max-width: 900px) :: .marelo-track, .marelo-split': "pre-existing 2026-07-28; Wave 2",
     '(max-width: 640px) :: .rank-cell-next': "pre-existing 2026-07-28; Wave 2",
     '(max-width: 1180px) :: .connection-line': "pre-existing 2026-07-28; Wave 2",
     '(max-width: 1180px) :: .recording-status': "pre-existing 2026-07-28; Wave 2",

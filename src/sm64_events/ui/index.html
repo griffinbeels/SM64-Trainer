@@ -742,18 +742,12 @@
     display: block; overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap; font-weight: 650;
   }
-  /* Slot 2 of the context bar: the MARELO rank bar, which took the space the
+  /* Slot 2 of the context bar: the route rank card, which took the space the
      deleted PRACTICE TARGET card used to hold (2026-07-26 — header.js carries
-     the why). The slot exists in its own right because MareloBar renders
-     nothing until /api/marelo lands, and a missing grid child would slide
-     every later card one column left; while empty it wears the neighbouring
-     cards' panel so the bar reads as four cards loading, not three and a
-     hole. */
+     the why). container-type: inline-size is what the card's own @container
+     rules measure against (the sidebar's 1180px step means this column's
+     width is not monotonic in window width). */
   .marelo-slot { min-width: 0; display: grid; container-type: inline-size; }
-  .marelo-slot:empty {
-    border: 1px solid var(--border); border-radius: 7px;
-    background: rgba(11,25,41,.92);
-  }
   .workspace {
     width: 100%; max-width: 1500px; min-width: 0; margin: 0 auto;
     padding: 4px 14px 28px; overflow-x: hidden;
@@ -1106,11 +1100,15 @@
      at 44px and does not need to be: it fills a grid cell whose height is set
      by .context-bar's own min-height and its 54px siblings, so a rank-up
      still cannot reflow the OBS capture. */
+  /* .marelo-bar also always carries .context-control and .context-select
+     (marelo.js) -- position: relative and cursor: pointer come from those
+     shared rules, so this block only adds what is genuinely specific to the
+     rank card (the fixed min-height, the gold hover below). */
   .marelo-bar {
     display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0;
     min-height: 54px; padding: 0 12px;
     border: 1px solid var(--border); border-radius: 7px; background: rgba(11,25,41,.92);
-    color: var(--text); cursor: pointer; text-align: left;
+    color: var(--text); text-align: left;
   }
   .marelo-bar:hover { border-color: var(--gold); }
   /* The bar is now as wide as its column rather than as wide as its contents,
@@ -1123,15 +1121,14 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   /* What gives way first as the column narrows, measured rather than guessed
-     (render sweep 2026-07-26): the mastery/coverage split, then the progress
-     track. Both are the bar's least identifying parts and both are restated
-     in its own title, which survives because the title rides the BUTTON — an
-     element that is always rendered, so it can always be hovered (a hidden
-     element's own title is not a fallback). The threshold is a CONTAINER
-     query on the slot, not a viewport media query: the sidebar's 1180px step
-     means this column's width is not monotonic in window width, so a media
-     query gets it wrong on both sides of that step. */
-  @container (max-width: 500px) { .marelo-split { display: none; } }
+     (render sweep 2026-07-26): the progress track. It is the bar's least
+     identifying part and is restated in its own title, which survives
+     because the title rides the card — an element that is always rendered,
+     so it can always be hovered (a hidden element's own title is not a
+     fallback). The threshold is a CONTAINER query on the slot, not a
+     viewport media query: the sidebar's 1180px step means this column's
+     width is not monotonic in window width, so a media query gets it wrong
+     on both sides of that step. */
   @container (max-width: 330px) { .marelo-track { display: none; } }
   /* Round 5 (addendum, task 8, 2026-07-26): `.marelo-bar`'s own 10px gap
      was already close to this icon's wing spill at size 34 (~12.6px a
@@ -1411,8 +1408,6 @@
                  color-mix(in srgb, var(--climb-color, #3a4250)
                            calc(var(--climb-flash, 0) * 90%), transparent);
   }
-  .marelo-split { white-space: nowrap; }
-  @media (max-width: 900px) { .marelo-track, .marelo-split { display: none; } }
   /* Scope TIER-up celebration -- the grand one (celebrate.js TierRankUp,
      task F3): fixed overlay so it can never reflow an OBS capture;
      pointer-events stay OFF on the overlay and ON only for the card, so it
