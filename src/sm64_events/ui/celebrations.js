@@ -52,6 +52,33 @@ const easeOutBack = (fraction, overshoot) => {
 
 const easeOutCubic = (fraction) => 1 - (1 - fraction) ** 3;
 const easeInCubic = (fraction) => fraction ** 3;
+const smoothstep = (fraction) => fraction * fraction * (3 - 2 * fraction);
+
+/**
+ * An amplitude window over an effect's own `progress`: 0 at both ends, 1
+ * across the middle, ramping in and out over `ramp` of the run each side.
+ *
+ * "The wing animation should EASE IN and EASE OUT btw. Basically all of these
+ * animation should generally ease in and ease out… we NEVER want to abruptly
+ * stop." (user, 2026-07-27)
+ *
+ * The distinction that matters is VALUE versus SPEED. Most effects here
+ * already land on their end value gently — `easeOutCubic` and `(1-p)**2` both
+ * have zero slope at the finish. The wing flap does not: `sin(2*pi*p)` returns
+ * to zero having never slowed down, so the wings are travelling at full speed
+ * on the frame the beat expires and simply cease. Ending at the right value is
+ * not the same as coming to rest, and only the second one reads as easing.
+ *
+ * A window rather than a different oscillator because the flap's SHAPE is
+ * already right — one clean cycle. What was missing was somewhere for it to
+ * start from and settle into.
+ */
+const envelope = (fraction, ramp) => {
+  if (!(ramp > 0)) return 1;
+  const width = Math.min(0.5, ramp);
+  return smoothstep(Math.min(1, fraction / width))
+    * smoothstep(Math.min(1, (1 - fraction) / width));
+};
 
 // The user's "Celebrations" switch (header.js's settings drawer). It lives
 // with the registry rather than with the overlays because BOTH celebration
@@ -162,7 +189,9 @@ export const CELEBRATIONS = {
     ms: (_beat, tune) => tune.wingFlapMs,
     delay: (beat, tune) => beat.stepMs * tune.wingFlapDelayScale,
     when: (beat) => beat.wingsAfter > 0,
-    icon: (beat, progress) => ({ flapPhase: Math.sin(progress * Math.PI * 2) }),
+    icon: (_beat, progress, tune) => ({
+      flapPhase: Math.sin(progress * Math.PI * 2) * envelope(progress, tune.easeRamp),
+    }),
   },
 
   // ---- The tier crossing: anticipation, then a slam ---------------------

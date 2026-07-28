@@ -127,6 +127,12 @@ export const TUNABLES = {
     why: "How far past its slot the digit travels before settling — a slot reel, not a slide. 0 removes the bounce.",
   },
 
+  easeRamp: {
+    group: "Wings", label: "Ease in / out ramp", value: 0.25,
+    min: 0, max: 0.5, step: 0.01, unit: "x",
+    why: "How much of an effect's run is spent swelling in and dying away, each side. Applied wherever a motion would otherwise be travelling at full speed on the frame it ends -- today the wing flap, which returns to zero without ever slowing down. 0 restores the abrupt stop; 0.5 is one continuous swell with no steady middle.",
+  },
+
   // ---- Wings -------------------------------------------------------------
   wingGrowScale: {
     group: "Wings", label: "Wing grow · share of step", value: 1,
