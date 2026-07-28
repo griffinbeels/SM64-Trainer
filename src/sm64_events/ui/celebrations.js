@@ -266,7 +266,17 @@ export const CELEBRATIONS = {
   // something rather than just stopping.
   settle: {
     on: "settle", ms: (_beat, tune) => tune.settleMs,
-    vars: (_beat, progress) => ({ "--climb-settle": (1 - progress) ** 2 }),
+    // The variable IS the scale delta, not a bare 0->1 decay, because the
+    // AMPLITUDE is the control that was missing. It lived as a hardcoded
+    // `* .012` in the stylesheet, so the only thing tunable about the landing
+    // was its LENGTH -- and shortening it made the pop worse rather than
+    // gentler, because the same 1.2% jump then had to happen in one frame.
+    // Measured at settleMs 20: scale 1 -> 1.012 -> 1 across 32ms, the only
+    // motion anywhere in the climb, which is the "little shake alll the way at
+    // the end" (user, 2026-07-27). It defaults to 0 now, at his call.
+    vars: (_beat, progress, tune) => ({
+      "--climb-settle-scale": (1 - progress) ** 2 * tune.settleScale,
+    }),
   },
 };
 

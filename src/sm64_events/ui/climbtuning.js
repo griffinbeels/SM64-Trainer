@@ -184,6 +184,11 @@ export const TUNABLES = {
   },
 
   // ---- The landing -------------------------------------------------------
+  settleScale: {
+    group: "Landing", label: "Settle pop", value: 0,
+    min: 0, max: 0.06, step: 0.002, unit: "x",
+    why: "How far the whole banner swells on the landing frame, as a fraction of its size. 0 is no pop at all. Shipped at 0.012 as a hardcoded CSS value until 2026-07-27, where it read as a shake because only its LENGTH was tunable.",
+  },
   settleMs: {
     group: "Landing", label: "Settle", value: 20,
     min: 0, max: 2500, step: 10, unit: "ms",

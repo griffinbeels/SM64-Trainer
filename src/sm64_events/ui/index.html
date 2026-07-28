@@ -1065,7 +1065,7 @@
 
        --climb-color    the tier's colour, cross-faded across a tier boundary
        --climb-flash    1 -> 0 decay at each level crossed
-       --climb-settle   1 -> 0 decay when the whole climb lands
+       --climb-settle-scale  how much the banner is swollen right now
 
      They are read here rather than set inline per element for the reason the
      bar's colour moved off `style=` at all: during a tier crossing the colour
@@ -1094,7 +1094,7 @@
      with anything else that ever transforms this row rather than replacing
      it -- the same reason the wings use `rotate`/`scale` instead of
      `transform`. */
-  .rank-banner { scale: calc(1 + var(--climb-settle, 0) * .012); }
+  .rank-banner { scale: calc(1 + var(--climb-settle-scale, 0)); }
   /* MARELO header bar. It used to sit right-aligned on a 44px row of its own
      UNDER the context grid, because .context-bar's 4-column template is
      redefined at two breakpoints and a 5th column would have meant touching
@@ -1491,7 +1491,7 @@
      task 0012 (2026-07-26). The rank-up is performed by the rank BANNER
      itself climbing now (ui/rankclimb.js), on the very bar the rank already
      lives on, so a toast beside it would be two things celebrating one
-     event. Their replacement variables (--climb-flash, --climb-settle,
+     event. Their replacement variables (--climb-flash, --climb-settle-scale,
      --climb-color) are up beside .rank-progress-track. */
   /* Rank tab (rankpage.js): scope picker + card + chart + breakdown, all
      scaled off ONE scope response — no separate route/course/overall pages.

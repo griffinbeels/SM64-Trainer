@@ -95,7 +95,7 @@ INVARIANTS = (
         concept="what a rank-up celebration looks like",
         owners=frozenset({"celebrations.js", "rankclimb.js", "hat.js"}),
         tokens=("growProgress", "foldProgress", "flapPhase",
-                "--climb-flash", "--climb-settle"),
+                "--climb-flash", "--climb-settle-scale"),
         files=ui_js(),
         why="ui/celebrations.js is the registry: one entry per effect, "
             "declaring when it fires and what it contributes. rankclimb.js "
