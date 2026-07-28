@@ -292,6 +292,11 @@ def test_entity_tier_matches_rank_for_on_a_ragged_ladder(tmp_path):
         # directly, the same way test_views_marelo.py does.
         svc.db._conn.execute("UPDATE attempts SET strat_tag='Standard' WHERE course_id=8")
         svc.db._conn.commit()
+        # CHANGED 2026-07-28 (task 0034): pb mode grades the SAVED row now,
+        # not the fastest attempt -- save it explicitly rather than relying
+        # on the attempt landing.
+        star_aid = next(a.id for a in svc.db.attempts() if a.course_id == 8)
+        asyncio.run(svc.save_pb(star_aid, "igt"))
 
         body = client.get("/api/marelo").json()
         entity = next(e for e in body["entities"] if e["key"] == "star:8:2")
@@ -320,6 +325,10 @@ def test_practiced_entity_next_rank_is_one_division_step_not_a_whole_tier(
     with client:
         asyncio.run(svc.set_strat(9, 2, "Nuts Pless"))
         _mario_reset_and_collect(svc, 1000, 1420, 420)   # -> Iron I
+        # CHANGED 2026-07-28 (task 0034): pb mode grades the SAVED row now,
+        # not the fastest attempt -- save it explicitly.
+        star_aid = next(a.id for a in svc.db.attempts() if a.course_id == 9)
+        asyncio.run(svc.save_pb(star_aid, "igt"))
 
         body = client.get("/api/marelo").json()
         entity = next(e for e in body["entities"] if e["key"] == "star:9:2")
