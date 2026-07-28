@@ -234,3 +234,67 @@ def test_every_invariant_actually_covers_files():
         assert invariant.owners <= names, (
             f"{invariant.concept} exempts {sorted(invariant.owners - names)}, "
             "which its own file set never scans")
+
+
+import re
+
+# code_only()'s Python branch (source_scan.py::python_code) joins every kept
+# TOKEN with "\n" -- deliberately, so a docstring or comment can never fake an
+# adjacency a formatter didn't put there. The side effect: a literal substring
+# search for `row["strat_tag"]` can never match ANYTHING, real or fake, since
+# that expression is four tokens (`row`, `[`, `"strat_tag"`, `]`) and the
+# joined form always has a newline between them. This regex matches the same
+# SHAPE against the newline-per-token form instead -- any identifier
+# subscripted by the literal key "strat_tag" -- which also means the
+# variable's own name (row, r, entry, ...) never matters, only the pattern.
+_STRAT_TAG_SUBSCRIPT = re.compile(r'\w+\n\[\n"strat_tag"\n\]')
+
+
+def _keys_a_row_by_strat_tag(path: Path) -> bool:
+    return bool(_STRAT_TAG_SUBSCRIPT.search(code_only(path)))
+
+
+def test_only_views_reads_the_pbs_table_for_a_rank():
+    """Which of my saved times a rank grades has exactly ONE answer, and it is
+    `views.current_pbs_by_strat`. It grew a second one in tracking/marelo.py
+    -- min() over raw attempts -- which paid MARELO out before the user
+    clicked Save as PB and survived every test for weeks (task 0034).
+
+    Files allowed to key a pb row by strategy at all: views.py (the door) and
+    marelo.py (which calls it). A third file doing its own latest-row-wins
+    scan is the bug coming back.
+
+    service.py is exempted too, but for a DIFFERENT reason than views/marelo:
+    `undo_pb` reads `row["strat_tag"]` off the ONE row it just deleted, only
+    to echo it back into the `pb_undone` broadcast payload -- there is no
+    scan, no per-strategy keying, nothing this guard is protecting against.
+    Excluding it by name (rather than loosening the pattern) keeps the check
+    honest: a SECOND legitimate reason to touch this field is still only one
+    file wide, and a new one shows up in a diff of this list."""
+    offenders = []
+    for path in (SRC / "tracking").glob("*.py"):
+        if path.name in ("views.py", "marelo.py", "service.py"):
+            continue
+        if _keys_a_row_by_strat_tag(path) and "pbs" in code_only(path):
+            offenders.append(path.name)
+    for path in (SRC / "ranks").glob("*.py"):
+        if _keys_a_row_by_strat_tag(path):
+            offenders.append(path.name)
+    assert not offenders, (
+        f"{offenders} reads pb rows directly. Rank grading goes through "
+        "tracking/views.py::current_pbs_by_strat -- see task 0034.")
+
+
+def test_the_pb_door_guard_can_still_fail():
+    # Probed in both directions, through the SAME code_only() the real guard
+    # uses (tests/source_scan.py's rule) -- a bare substring check on raw text
+    # would trip on a comment mentioning the pattern, which is not what the
+    # guard above actually does, and (as this file's own history shows) a
+    # naive literal substring check against code_only()'s newline-per-token
+    # form can never match real code at all.
+    real = code_only(Path("sample.py"),
+                     'for row in db.pbs():\n    x = row["strat_tag"]\n')
+    prose = code_only(Path("sample.py"),
+                      '# never read row["strat_tag"] off the pbs table here\n')
+    assert _STRAT_TAG_SUBSCRIPT.search(real) and "pbs" in real
+    assert not _STRAT_TAG_SUBSCRIPT.search(prose)
