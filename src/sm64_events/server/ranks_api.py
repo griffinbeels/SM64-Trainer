@@ -138,7 +138,8 @@ def _score_scope(service, scope_id: str) -> dict:
     groups = _groups(service, scope_id)
     keys = [key for group in groups for key in group["candidates"]]
     scored = marelo_bridge.entity_scores(service.db.attempts(), service.ranks,
-                                         keys, _rank_mode(service))
+                                         keys, _rank_mode(service),
+                                         service.db.pbs())
     out = scopes.aggregate(scored, groups)
     excluded = service.rank_excluded()
     # aggregate() graded tier/division/gain against the FULL tier table --
