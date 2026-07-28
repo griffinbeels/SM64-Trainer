@@ -73,8 +73,16 @@ export function RouteRankCard({ marelo, routes = [], activeRouteId = null,
   const { label = null, mastery = null, coverage = null,
           n = 0, practiced = 0 } = marelo || {};
   // Named for what the card is RATING, so "Overall" never reads as a route
-  // that happens to be called Overall (user, 2026-07-28).
-  const cardLabel = activeRouteId == null ? "Overall rank" : "Route rank";
+  // that happens to be called Overall (user, 2026-07-28). ".context-label"
+  // is opted into tools/responsive_probe.js's NEVER_TRUNCATE list (it is
+  // considered irreducible everywhere else it is used -- Session/Clock/
+  // Grading), and "Overall rank"/"Route rank" doesn't fit this card's own
+  // text column at every width a one-word label does. Same fix this
+  // codebase already made for an identical squeeze (ui-ranks.md: "Round 4
+  // dropped the trailing 'Rank' from both kickers") -- the big rank icon and
+  // name right below it already say "rank"; the label only needs to say
+  // WHOSE.
+  const cardLabel = activeRouteId == null ? "Overall" : "Route";
   const options = [["", "Overall"],
                    ...routes.map((route) => [String(route.id), route.name])];
 

@@ -1123,6 +1123,16 @@
   .marelo-bar .marelo-bar-text > * {
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
+  /* .context-label is opted into tools/responsive_probe.js's NEVER_TRUNCATE
+     (it is treated as irreducible everywhere else it appears -- Session,
+     Clock, Grading), so it cannot inherit the ellipsis rule above: WRAPPING
+     loses no information, cutting text off does. This only helps a label
+     with a space to break on ("Route rank" would wrap); "Overall"/"Route"
+     have none, so the @container rule below covers the width wrapping
+     can't. */
+  .marelo-bar .marelo-bar-text > .context-label {
+    overflow: visible; text-overflow: clip; white-space: normal;
+  }
   /* What gives way first as the column narrows, measured rather than guessed
      (render sweep 2026-07-26): the progress track. It is the bar's least
      identifying part and is restated in its own title, which survives
@@ -1132,7 +1142,20 @@
      viewport media query: the sidebar's 1180px step means this column's
      width is not monotonic in window width, so a media query gets it wrong
      on both sides of that step. */
-  @container (max-width: 330px) { .marelo-track { display: none; } }
+  /* "Overall"/"Route" (no space to wrap on) measured truncating below a
+     149px slot and fitting cleanly at 159px -- a single word that wide has
+     nowhere left to give except disappearing, the same remedy the track
+     below already uses. Sharing its 330px threshold rather than adding a
+     tighter one of its own: a new @container px value forces the WHOLE
+     app to be swept at that width too (tests/test_responsive.py probes both
+     sides of every declared breakpoint), and 330px was already comfortably
+     past the measured 159px safe point -- confirmed by render, not merely
+     assumed. The rank icon and name plus the scope line below still carry
+     "this is a rank, for X" with the caption and track both gone. */
+  @container (max-width: 330px) {
+    .marelo-track { display: none; }
+    .marelo-bar .context-label { display: none; }
+  }
   /* Round 5 (addendum, task 8, 2026-07-26): `.marelo-bar`'s own 10px gap
      was already close to this icon's wing spill at size 34 (~12.6px a
      side) -- borderline enough that `.rank-icon-slot` is worth it here

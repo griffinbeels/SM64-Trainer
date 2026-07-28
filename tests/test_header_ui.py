@@ -47,9 +47,18 @@ def test_the_rank_card_names_the_scope_it_is_rating():
     # I'M PRACTICING" (user, 2026-07-28). Mastery and Coverage keep their real
     # meters on the Rank tab and the card's own title; the freed line is what
     # lets the scope name sit under the rank.
+    #
+    # The label reads "Overall"/"Route", not "Overall rank"/"Route rank": the
+    # responsive sweep (tools/responsive_probe.js's NEVER_TRUNCATE, which
+    # `.context-label` is opted into everywhere else it appears -- Session,
+    # Clock, Grading) caught the longer pair genuinely truncating at several
+    # widths, and this codebase already made the identical call for an
+    # identical squeeze (ui-ranks.md: "Round 4 dropped the trailing 'Rank'
+    # from both kickers") -- the big rank icon and name right below the label
+    # already say "rank".
     code = strip_comments(MARELO_JS)
     assert "marelo-split" not in code
-    assert "Route rank" in code and "Overall rank" in code
+    assert '"Overall"' in code and '"Route"' in code
 
 
 def test_the_rank_card_never_renders_nothing():
