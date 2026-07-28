@@ -414,13 +414,22 @@ WORLD_EDGES_TWO_WAY = (
 
 # One-way edges: moves with a DIFFERENT return path. Arena pipes only run
 # course -> arena; fight exits (key grab / death) dump Mario at the course's
-# castle region, never back into the course; DDD's vanishing sub is the only
-# natural way INTO BitFS while its exits land in the basement (two-way row
-# above).
+# castle region, never back into the course.
+#
+# `(23, 19)` -- "DDD sub bay -> BitFS", described here as the only natural way
+# INTO BitFS -- was REMOVED 2026-07-27. BitFS is entered from the BASEMENT,
+# which the two-way `(_BASEMENT, 19)` row above already says. Live capture of
+# the real walk, twice in one session: `level_changed 23 -> 6 (from_area 2)`,
+# `area_changed 6: 2 -> 3`, `warp_entered {level: 6, area: 3}`, then
+# `level_changed 6 -> 19 (from_area 3)`. There is no 23 -> 19 transition in
+# the journal at all. The bad edge made the corpus's own independent walker
+# route DDD -> BitFS in one hop, which is what forced `seg:ddd->bitfs` onto a
+# `star_grabbed` start (see tools/corpus_movements.py) -- and that start is
+# what fired the movement while the player was still standing in DDD holding
+# the star they were practising (live report 2026-07-27).
 WORLD_EDGES_ONE_WAY = (
     (17, 30), (19, 33), (21, 34),                 # Bowser course pipe -> arena
     (30, _LOBBY), (33, _BASEMENT), (34, _UPSTAIRS),  # fight exit -> castle
-    (23, 19),                                     # DDD sub bay -> BitFS
 )
 
 

@@ -121,7 +121,16 @@ def test_world_connections_arena_edges_are_directed():
     assert [6, 1] in conn["30"]                            # fight exit -> lobby
     assert not any(lvl == 30 for lvl, _ in conn["6:1"])    # lobby can't enter the arena
     assert not any(lvl == 17 for lvl, _ in conn["30"])     # arena never exits into BitDW
-    assert [19, None] in conn["23"]                        # DDD sub bay -> BitFS
+    # BitFS is entered from the BASEMENT, never straight out of DDD. This
+    # asserted `[19, None] in conn["23"]` -- a "DDD sub bay -> BitFS" edge --
+    # until 2026-07-27, when the real walk was captured twice: `23 -> 6
+    # (from_area 2)`, `area 2 -> 3`, `warp_entered {level: 6, area: 3}`,
+    # `6 -> 19 (from_area 3)`. There is no 23 -> 19 transition in the journal
+    # at all. That edge is what made the corpus walker route DDD -> BitFS in
+    # one hop, which forced seg:ddd->bitfs onto a `star_grabbed` start and
+    # fired the movement while the player still stood in DDD.
+    assert [19, None] in conn["6:3"]                       # basement -> BitFS
+    assert not any(lvl == 19 for lvl, _ in conn["23"])     # DDD has no BitFS door
     assert not any(lvl == 23 for lvl, _ in conn["19"])     # BitFS never exits into DDD
 
 

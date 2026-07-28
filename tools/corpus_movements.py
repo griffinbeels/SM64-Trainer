@@ -76,15 +76,28 @@ MOVEMENTS = [
              grab_star(0, 4), enter_level(18), via=[enter_level(16)]),
     movement("seg:vcutm->ccm", "VCUtM → CCM",
              exit_level(18), enter_level(5), via=[enter_level(6)]),
-    # Starts on the star that OPENS the sub, not on leaving DDD. Entering
-    # BitFS through the sub is a DIRECT level change (23 -> 19, the one-way
-    # edge), so `level_exit from=23` and `level_enter to=19` are the SAME
-    # event — and closures are processed before arming, so such a def arms on
-    # the event that should close it and then hangs armed forever. Live report
-    # 2026-07-24: warping DDD -> SSL left "DDD → BitFS (sub)" showing as
-    # running in Shifting Sand Land.
+    # Started on the star that opens the sub until 2026-07-27, on the premise
+    # that BitFS is entered DIRECTLY from DDD (23 -> 19) — which would make
+    # `level_exit from=23` and `level_enter to=19` the same event, arming a def
+    # on the event that should close it. The premise was false: BitFS is
+    # entered from the BASEMENT, and the live journal of the real walk has no
+    # 23 -> 19 transition at all (`23 -> 6 (from_area 2)`, `area 2 -> 3`,
+    # `warp_entered {level: 6, area: 3}`, `6 -> 19 (from_area 3)`). The bad
+    # one-way edge is gone from addresses.py, so this is now the same plain
+    # basement-to-basement shape as LLL → DDD and HMC → DDD, and needs no
+    # waypoint: both ends are the one region.
+    #
+    # What the old start cost: a movement fired the moment the DDD star was
+    # grabbed, while the player was still standing in DDD — and since an arm
+    # retires a star target (projection.py), practising that star lost the
+    # target on every successful grab (live report 2026-07-27).
+    #
+    # The hang it was working around — warping DDD -> SSL left this "running"
+    # in Shifting Sand Land (2026-07-24) — is now handled structurally by the
+    # arm-position gate: an unpinned `level_exit` from a non-castle level must
+    # land in CASTLE_LEVELS, and SSL is not the castle, so that arm is refused.
     movement("seg:ddd->bitfs", "DDD → BitFS (sub)",
-             grab_star(9, 0), enter_level(19)),
+             exit_level(23), enter_level(19)),
     movement("seg:ddd->wdw", "DDD → WDW (BitFS re-entry, pause exit)",
              exit_level(23), enter_level(11),
              via=[enter_level(19), exit_level(19)]),

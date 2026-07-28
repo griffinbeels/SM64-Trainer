@@ -1300,9 +1300,8 @@
       "enabled": true,
       "start_triggers": [
         {
-          "type": "star_grabbed",
-          "course": 9,
-          "star": 0
+          "type": "level_exit",
+          "from": 23
         }
       ],
       "end_triggers": [
