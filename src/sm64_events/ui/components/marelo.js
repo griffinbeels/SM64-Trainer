@@ -8,6 +8,7 @@ import { capName, divisionDigit } from "./caps.js";
 import { RankIcon } from "./rankicon.js";
 import { useTween } from "../useTween.js";
 import { useRankClimb } from "../rankclimb.js";
+import { CardSelect } from "./contextselect.js";
 const html = htm.bind(h);
 
 export const fmtScore = (n) => (n == null ? "–" : n.toFixed(1));
@@ -33,52 +34,82 @@ export const toPoints = (score) => (score == null ? null : Math.round(score * 10
 // value reads identically whether the caller wanted the raw score or points.
 export const fmtPoints = (score) => (score == null ? "–" : String(toPoints(score)));
 
-export function MareloBar({ marelo, onOpen, identity = null }) {
-  // This bar is mounted once in the header and never unmounts, so it is the
-  // one place a rank improvement is visible from every tab -- and it had the
-  // SAME backwards-bar bug the practice card's banners had (task 0012): it
-  // tweened `division_progress`, which is progress WITHIN the current
-  // division, so crossing a boundary ran it from ~1 back to ~0. It climbs
-  // through the shared primitive now, exactly as RankBanner does; the score
-  // NUMBER beside it is not a rank and keeps its plain tween.
-  //
-  // Called unconditionally (rules of hooks) ahead of the `!marelo` early
-  // return; `null` passes straight through with no animation.
-  const climb = useRankClimb(marelo && marelo.tier ? {
-    tier: marelo.tier, division: marelo.division,
-    fill: marelo.division_progress || 0,
-  } : null, identity);
+// The route rank card — slot 2 of the header's context grid.
+//
+// It was the MARELO bar (a <button> jumping to the Rank tab) until
+// 2026-07-28. The user's report: "the M 25.6 and C 16% feels like worthless
+// AI slop information to me. It should just be clear that this is the OVERALL
+// RANKING FOR THE ROUTE THAT I'M PRACTICING. Maybe we can combine the
+// 'practice plan' card with this rank display card to create a route rank
+// card?" So the practice-plan <select> moved up here — the two controls were
+// already the same thing, and practice.js's own comment said so — and the
+// card's one gesture is now the route picker, like its three siblings. The
+// Rank tab keeps its place in the nav rail.
+//
+// Mastery and Coverage are not deleted, they are rehomed: the Rank tab draws
+// both as real meters, and this card's title still spells them out.
+//
+// `rank` and `interactive` exist for ONE caller, the celebration overlay
+// (components/marelocelebrate.js, Wave 3): it renders this same card, parked
+// at the BEFORE rank and with no dropdown, so the thing that flies to the
+// centre of the screen is the card itself rather than a lookalike. `tune` is
+// forwarded to useRankClimb the same way -- Wave 3 adds the option there;
+// today's rankclimb.js simply ignores it, which is what lets the two waves
+// compose without a rankclimb.js edit here.
+export function RouteRankCard({ marelo, routes = [], activeRouteId = null,
+                               onPickRoute = null, identity = null,
+                               rank = undefined, interactive = true,
+                               tune = null }) {
+  // Hooks run unconditionally (rules of hooks) — `null` passes straight
+  // through both with no animation.
+  const shown = rank !== undefined ? rank
+    : (marelo && marelo.tier
+       ? { tier: marelo.tier, division: marelo.division,
+           fill: marelo.division_progress || 0 }
+       : null);
+  const climb = useRankClimb(shown, identity, { tune });
   const score = useTween(marelo ? marelo.marelo : null);
-  if (!marelo) return null;
-  const { label, mastery, coverage, n, practiced } = marelo;
-  // Unranked is an EXPLICIT empty state, not a Hat drawn with no tier (final
-  // review I5, 2026-07-25: `tier == null` used to still call Hat, which drew
-  // a plain grey cap with nothing in it -- the deleted Crest drew a "–" for
-  // the same state). PracticeCell's starrank cell already spells "no rank"
-  // as a bare "–"; this reuses that spelling rather than inventing a third.
-  return html`<button type="button" class=${`marelo-bar${climb && climb.climbing ? " is-climbing" : ""}`}
-      onclick=${onOpen} style=${climb ? climb.vars : null}
-      title=${`${label}: mastery ${fmtScore(mastery)} x coverage ${practiced}/${n}`}>
+
+  const { label = null, mastery = null, coverage = null,
+          n = 0, practiced = 0 } = marelo || {};
+  // Named for what the card is RATING, so "Overall" never reads as a route
+  // that happens to be called Overall (user, 2026-07-28). ".context-label"
+  // is opted into tools/responsive_probe.js's NEVER_TRUNCATE list (it is
+  // considered irreducible everywhere else it is used -- Session/Clock/
+  // Grading), and "Overall rank"/"Route rank" doesn't fit this card's own
+  // text column at every width a one-word label does. Same fix this
+  // codebase already made for an identical squeeze (ui-ranks.md: "Round 4
+  // dropped the trailing 'Rank' from both kickers") -- the big rank icon and
+  // name right below it already say "rank"; the label only needs to say
+  // WHOSE.
+  const cardLabel = activeRouteId == null ? "Overall" : "Route";
+  const options = [["", "Overall"],
+                   ...routes.map((route) => [String(route.id), route.name])];
+
+  return html`<div class=${`context-control context-select marelo-bar${
+      climb && climb.climbing ? " is-climbing" : ""}`}
+      style=${climb ? climb.vars : null}
+      title=${label
+        ? `${label}: mastery ${fmtScore(mastery)} x coverage ${practiced}/${n}`
+        : "Your rating for the practice plan you have selected"}>
     ${climb ? html`<span class="rank-icon-slot marelo-bar-icon">
       <${RankIcon} ...${climb.icon} tier=${climb.tier} division=${climb.division} size=${34} />
-    </span>` : "–"}
+    </span>` : html`<span class="rank-icon-slot marelo-bar-icon">–</span>`}
     <span class="marelo-bar-text">
+      <span class="context-label">${cardLabel}</span>
       <b>${climb ? `${capName(climb.tier)} ${divisionDigit(climb.division)}` : "Unranked"}</b>
-      ${/* Points BEFORE the scope label (2026-07-26): the bar moved into the
-           context grid, so it is now as wide as its column rather than as
-           wide as its contents, and this line ellipsises. Measured across a
-           width sweep, the old "<label> · <n> pts" order spent the whole
-           truncation budget on the number -- "16 Star - LBLJ (Standard) . 1..."
-           -- losing the one part of the line that is a value rather than
-           context. Reversed, a narrow column drops "(Standard)" instead. */
+      ${/* Points BEFORE the scope name: the card is as wide as its column, so
+           this line ellipsises, and a narrow column must drop the scope name
+           rather than the one part of the line that is a value. */
         null}
-      <span class="meta">${fmtPoints(score)} pts · ${label}</span>
+      <span class="meta">${fmtPoints(score)} pts · ${label || "…"}</span>
     </span>
     <span class="marelo-track"><i style=${`width:${climb ? climb.fill * 100 : 0}%`}></i></span>
-    <!-- Mastery stays 0-100, never points: it's a mean SCORE (mastery x
-         coverage = marelo), not a rating on the tier ladder, and running it
-         through toPoints would imply a fourth scale that doesn't exist. -->
-    <span class="meta marelo-split">M ${fmtScore(mastery)} · C ${
-      n ? Math.round((coverage || 0) * 100) : 0}%</span>
-  </button>`;
+    ${interactive && onPickRoute ? html`<${CardSelect} id="route-select"
+      name="active_route" label=${cardLabel}
+      title="Which route you are practising — this is also what the rank rates"
+      options=${options} value=${activeRouteId == null ? "" : String(activeRouteId)}
+      onChange=${(event) => onPickRoute(
+        event.target.value ? Number(event.target.value) : null)} />` : null}
+  </div>`;
 }

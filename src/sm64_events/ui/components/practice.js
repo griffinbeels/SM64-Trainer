@@ -501,6 +501,37 @@ function ObjectiveEyebrow({ iconName, label, openPicker }) {
   </button>`;
 }
 
+// The stat chips plus the control that chooses them. ONE component for both
+// section kinds (rule 11) — the chips loop was pasted into StarSection and
+// SegmentSection identically, and adding a control to two copies of markup is
+// how the two drift.
+//
+// The trigger moved here from the practice toolbar on 2026-07-28: StatMenu
+// picks WHICH chips are shown, and this row is the only place they appear, so
+// the control sat one card away from the only thing it changed. The popover
+// anchors on this row, which is why the row is position: relative.
+//
+// Consequence, stated rather than hidden: with no target there is no detail
+// drawer, so there are no chips and no trigger. That is coherent — there is
+// nothing to configure — but it is a change from a button that was always
+// present.
+function StatChipsRow({ sec, t }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  return html`<div class="chips stat-chips">
+    ${sec.stats.filter((stat) => t.showDust || !DUST_STAT_KEYS.has(stat.key))
+      .map((stat) => html`
+      <span class="chip" title=${stat.key}>${stat.label} ${stat.display ?? "–"}</span>`)}
+    <button type="button" class="chip chip-button"
+        onclick=${() => setMenuOpen(!menuOpen)}
+        title="Choose which stats appear here">
+      <${Icon} name="feed" size=${14} />${" "}Stats
+    </button>
+    ${menuOpen && html`<div class="stats-popover">
+      <${StatMenu} t=${t} close=${() => setMenuOpen(false)} />
+    </div>`}
+  </div>`;
+}
+
 function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) {
   const [showHidden, setShowHidden] = useState(false);
   const [visible, setVisible] = useState(10);
@@ -633,11 +664,7 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
             ? "Wipe this star's data across all sessions"
             : "Wipe this star's data in the current session"}>Clear data</button>
       </div>
-      <div class="chips">
-        ${sec.stats.filter((s) => t.showDust || !DUST_STAT_KEYS.has(s.key))
-          .map((s) => html`
-          <span class="chip" title=${s.key}>${s.label} ${s.display ?? "–"}</span>`)}
-      </div>
+      <${StatChipsRow} sec=${sec} t=${t} />
       <${StandardsPanel} entity=${`star:${sec.course_id}:${sec.star_id}`}
           activeStrat=${sec.last_strat} strategies=${sec.strategies}
           sectionRank=${sec.rank} sectionPb=${sec.pb}
@@ -791,11 +818,7 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker 
             ? "Wipe this segment's data across all sessions"
             : "Wipe this segment's data in the current session"}>Clear data</button>
       </div>
-      <div class="chips">
-        ${sec.stats.filter((s) => t.showDust || !DUST_STAT_KEYS.has(s.key))
-          .map((s) => html`
-          <span class="chip" title=${s.key}>${s.label} ${s.display ?? "–"}</span>`)}
-      </div>
+      <${StatChipsRow} sec=${sec} t=${t} />
       <${StandardsPanel} entity=${`segment:${sec.segment_id}`}
           activeStrat=${sec.last_strat} strategies=${sec.strategies}
           sectionRank=${sec.rank} sectionPb=${sec.pb}
@@ -953,7 +976,6 @@ function EmptyPractice({ v, t, ui, unassignedRows, freshIds, openCompare,
 }
 
 export function Practice({ t, openCompare }) {
-  const [menuOpen, setMenuOpen] = useState(false);
   const [showUnassignedHidden, setShowUnassignedHidden] = useState(false);
   const stored = localStorage.getItem("sm64.sort");
   const [sort, setSortState] = useState(
@@ -970,28 +992,8 @@ export function Practice({ t, openCompare }) {
   };
   const freshIds = useFreshAttemptIds(t);
   const [openTargetPicker, targetPickerDialog] = useTargetPicker(t);
-  const [routes, setRoutes] = useState([]);
-  const [activeRouteId, setActiveRouteId] = useState(() => {
-    const s = localStorage.getItem("sm64.activeRoute");
-    return s ? Number(s) : null;
-  });
+  const { activeRouteId, pickRoute } = t;
   const [routeView, setRouteView] = useState(null);
-  // The practice plan and the Rank tab's scope picker are ONE list, from
-  // ONE endpoint (user, 2026-07-27: "These should be identical lists and
-  // should be the exact same set of options that trigger the exact same
-  // things"). `/api/marelo/scopes` is that list -- the same labels, in the
-  // same order, with "Overall" as the first entry rather than a separate
-  // "All practice" wording for the same thing. Course scopes are dropped
-  // here and only here: a course is a rating you can BROWSE, not a plan
-  // you can practise, since there is no route for the focus to follow.
-  useEffect(() => {
-    getJSON("/api/marelo/scopes")
-      .then((body) => setRoutes((body.scopes || [])
-        .filter((scope) => scope.kind === "route")
-        .map((scope) => ({ id: Number(scope.id.slice("route:".length)),
-                           name: scope.label }))))
-      .catch(() => {});
-  }, []);
   // Refetch the resolved route view on selection change AND on every session
   // view update, so per-step/cumulative % stay live as attempts land. A 404
   // (route deleted) clears it → the tab falls back to normal practice.
@@ -1008,39 +1010,6 @@ export function Practice({ t, openCompare }) {
       if (e && e.status === 404) pickRoute(null);
     });
   }, [activeRouteId, t.view]);
-  const pickRoute = (id) => {
-    if (id == null) localStorage.removeItem("sm64.activeRoute");
-    else localStorage.setItem("sm64.activeRoute", String(id));
-    setActiveRouteId(id);
-    // Tell the SERVER too (spec 2026-07-23 §5: localStorage is an optimistic
-    // mirror, the journaled route_selected is the source of truth). Without
-    // this the active route was never journaled, so every seeded castle-
-    // movement segment — all 55 carry the in_active_route guard — could only
-    // ever arm as a standalone target, i.e. the route corpus was inert. It
-    // also feeds active_route.star_keys, which is what lets the selector show
-    // only the route's stars.
-    send("POST", "/api/route/select", { route_id: id })
-      .then(() => t.refresh())      // pull the new active_route.star_keys
-      .catch(() => {});   // selection still works locally if the write fails
-  };
-  // ...and the line above is exactly why this exists. localStorage is an
-  // optimistic mirror of a JOURNALED decision, the write can fail silently,
-  // and the picker restores from localStorage on mount without ever telling
-  // the server again. The two then stay diverged forever, invisibly here and
-  // very visibly wherever the server DERIVES something from the active route:
-  // the header's MARELO bar reads "Overall" while the practice plan says
-  // "16 Star — LBLJ", because `/api/marelo`'s default scope IS the server's
-  // active route (live report 2026-07-27).
-  //
-  // Keyed on the two IDS, not on the view object: `t.view` is a fresh
-  // identity every fetch, so an object dependency here would re-POST on every
-  // WebSocket event for as long as the server kept disagreeing.
-  const serverRouteId = (t.view && t.view.active_route && t.view.active_route.id) ?? null;
-  useEffect(() => {
-    if (activeRouteId == null || serverRouteId === activeRouteId) return;
-    send("POST", "/api/route/select", { route_id: activeRouteId })
-      .then(() => t.refresh()).catch(() => {});
-  }, [serverRouteId, activeRouteId]);
   // Held while any rank on screen is mid-climb (user, 2026-07-27: "if the
   // celebration occurs, and then… they leave the stage, we should prevent the
   // practice UI from transitioning to the next stage until the celebration is
@@ -1161,32 +1130,6 @@ export function Practice({ t, openCompare }) {
     .sort(comparator(sort, t.clock));
 
   return html`<div class="practice-page">
-    <section class="practice-toolbar practice-card">
-      <label class="route-focus-control">
-        <${Icon} name="routes" size=${18} />
-        <span class="field-label">Practice plan</span>
-        <select value=${activeRouteId ?? ""}
-            onchange=${(e) => pickRoute(e.target.value ? Number(e.target.value) : null)}>
-          <!-- Named for the SCOPE it selects, not for what it does to this
-               page: picking it is what puts the header's MARELO bar on the
-               Overall rating. -->
-          <option value="">Overall</option>
-          ${routes.map((r) => html`<option value=${r.id}>${r.name}</option>`)}
-        </select>
-      </label>
-      <span class="toolbar-note">${routeView
-        ? "Route focus is on · history still records"
-        : "Choose from the current course or your practice index"}</span>
-      <button type="button" onclick=${() => setMenuOpen(!menuOpen)}>
-        <${Icon} name="feed" size=${17} />Stats
-      </button>
-      ${/* Anchored INSIDE the toolbar: as a sibling grid item it added a
-           practice-page grid row, shifting every card 12px on open. */""}
-      ${menuOpen && html`<div class="stats-popover">
-        <${StatMenu} t=${t} close=${() => setMenuOpen(false)} />
-      </div>`}
-    </section>
-
     <${StageBanner} t=${held} />
 
     ${/* ONE picker for the page, not one per section: only the primary card
@@ -1212,6 +1155,11 @@ export function Practice({ t, openCompare }) {
 
     ${routeView
       ? html`<section class="practice-card route-focus-card">
+          ${/* Was the practice toolbar's note. It is real state feedback, not
+               guidance for a control, so it moves to the surface it is about
+               rather than being deleted with the toolbar. */
+            null}
+          <p class="toolbar-note">Route focus is on · history still records</p>
           <${RouteFocus} rv=${routeView} t=${held} ui=${ui}
             freshIds=${freshIds} openCompare=${openCompare} />
         </section>`
