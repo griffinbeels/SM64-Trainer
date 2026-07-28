@@ -559,6 +559,46 @@ def test_segment_crud_roundtrip(tmp_path):
         assert client.delete(f"/api/segments/{sid}").status_code == 404
 
 
+def test_post_segment_persists_the_chosen_match_mode(tmp_path):
+    """Regression (fix round 1, spec 2026-07-28-multi-step-segments):
+    create_segment's db.insert_segment_def call omitted match_mode entirely,
+    so a client's explicit choice was silently discarded and every segment
+    landed on the insert-time default ("loose") no matter what was POSTed.
+    Drives the real TrackerService.create_segment through the API — the
+    round-trip test in test_storage.py exercises db.insert_segment_def
+    directly, which is beneath this gap and cannot see it."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.post("/api/segments", json={
+            "name": "Custom", "start_triggers": [{"type": "spawned"}],
+            "end_triggers": [{"type": "level_enter", "to": 6}],
+            "match_mode": "strict"})
+        assert r.status_code == 200
+        sid = r.json()["id"]
+        assert next(s for s in db.segment_defs()
+                    if s["id"] == sid)["match_mode"] == "strict"
+
+
+def test_put_segment_persists_a_changed_match_mode(tmp_path):
+    """Regression (fix round 1, spec 2026-07-28-multi-step-segments):
+    update_segment's key allowlist omitted match_mode, so a PATCH changing it
+    returned 200 but never reached db.update_segment_def — a write the API
+    reported as successful that never happened. Drives the real
+    TrackerService.update_segment through the API."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.post("/api/segments", json={
+            "name": "Custom", "start_triggers": [{"type": "spawned"}],
+            "end_triggers": [{"type": "level_enter", "to": 6}]})
+        sid = r.json()["id"]
+        assert next(s for s in db.segment_defs()
+                    if s["id"] == sid)["match_mode"] == "loose"
+        assert client.put(f"/api/segments/{sid}",
+                          json={"match_mode": "strict"}).status_code == 200
+        assert next(s for s in db.segment_defs()
+                    if s["id"] == sid)["match_mode"] == "strict"
+
+
 def test_reset_segment_endpoint_restores_seeded_definition(tmp_path):
     client, service, db = make_client(tmp_path)
     with client:

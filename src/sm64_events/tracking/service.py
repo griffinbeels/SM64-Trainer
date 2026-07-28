@@ -619,7 +619,8 @@ class TrackerService:
                                     _iso(_now()),
                                     enabled=d.get("enabled", True),
                                     waypoints=d.get("waypoints", []),
-                                    category=d.get("category"))
+                                    category=d.get("category"),
+                                    match_mode=d.get("match_mode", "loose"))
         await self._segments_changed()
         return sid
 
@@ -635,7 +636,7 @@ class TrackerService:
         db.update_segment_def(segment_id, **{
             k: d[k] for k in ("name", "enabled", "start_triggers",
                               "end_triggers", "waypoints", "guards",
-                              "category") if k in d})
+                              "category", "match_mode") if k in d})
         if current.get("seed_key"):
             # a user edit to a seeded row protects it from reconcile's
             # refresh (tracking/defaults.py) until reset_segment clears the
