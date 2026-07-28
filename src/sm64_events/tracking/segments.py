@@ -1387,109 +1387,19 @@ class SegmentEngine:
             arm = self._armed.get(d.id)
             start_clause = self._first_match(d.start_triggers, ev, ctx)
             starts = start_clause is not None
-            if arm is not None and d.waypoints:
-                closed.extend(
-                    self._feed_waypoint(Attempt, d, arm, ev, ctx, notices))
-            elif arm is not None:
-                if self._matches(d.end_triggers, ev, ctx):
-                    a = self._close(Attempt, d, arm, ev, "success", None)
-                    if a:
-                        closed.append(a)
-                    self._disarm(d, ev, notices)
-                elif ev.type == "area_changed" \
-                        and not _at_arm_position(arm, ctx):
-                    # RELOCATION via area change (live report 2026-06-13): Mario
-                    # moved to a DIFFERENT castle area than where this segment
-                    # armed (the lobby<->upstairs star door, a basement door, a
-                    # warp), so its start position no longer holds — disarm with
-                    # NO row, exactly as a warp/savestate to another area does.
-                    # Without this a lobby segment stays armed after crossing to
-                    # the upstairs and double-arms with the upstairs segment; the
-                    # co-frame load echo that WOULD relocate it is suppressed
-                    # (anchor_is_echo). A segment armed by THIS tick's level entry
-                    # was re-pinned to ctx.area above, and a same-area door fires
-                    # no area_changed at all (intra-area echo, still armed), so
-                    # neither is touched. Supersedes the 2026-06-12 "stay armed
-                    # through a cross-area door" behaviour.
-                    self._disarm(d, ev, notices)
-                elif ev.type in _ANCHOR_TYPES \
-                        and ev.frame == arm.start_frame:
-                    # Shape (1) — arm-frame echo: the level_changed that armed
-                    # this segment and the synthetic anchor it triggers share
-                    # the same global-timer tick.  Suppressed UNCONDITIONALLY:
-                    # the player may have been paused on the grounds for
-                    # minutes before entering the lobby — a large
-                    # paused_frames_before here is normal and must not
-                    # reclassify this as a real reset.  Per-def (depends on
-                    # the arm), unlike the event-level shapes below.
-                    # (live gate 2026-06-12, seq 40-45)
-                    pass
-                elif ev.type in _ANCHOR_TYPES and anchor_is_echo:
-                    # Shapes (2a)/(2b)/(3) — event-level echoes, classified
-                    # once before the loop (see anchor_is_echo above; full
-                    # taxonomy in the module docstring).  No closure, no row,
-                    # no disarm — and the arm phase below skips echoes too,
-                    # so the _Arm is untouched.
-                    pass
-                elif ev.type in _ANCHOR_TYPES \
-                        and not _at_arm_position(arm, ctx):
-                    # RELOCATION (live report 2026-06-12): a real warp/load
-                    # landed outside this segment's start position — the
-                    # Usamune menu warp to another area is the player MOVING,
-                    # not a failed attempt, so no reset row. The start
-                    # conditions no longer hold → disarm (notice); defs
-                    # anchored at the destination arm in the arm phase below
-                    # (segment swap).
-                    self._disarm(d, ev, notices)
-                elif ev.type in _ANCHOR_TYPES:
-                    # AFK (>= 150 paused frames) and no-op closures (Mario
-                    # never acted since the last anchor — warp/reset spam,
-                    # live feedback 2026-06-12) discard the row; both still
-                    # re-arm below.  acted_tracking-gated: historical events
-                    # without the flag keep recording (mirrors the star-side
-                    # discard in projection._close_by_reset).
-                    afk = ev.payload.get("paused_frames_before", 0) \
-                        >= _AFK_PAUSE_FRAMES
-                    unacted = ev.payload.get("acted_tracking", False) \
-                        and not ev.payload.get("mario_acted", False)
-                    if not afk and not unacted:
-                        a = self._close(Attempt, d, arm, ev, "reset", None)
-                        if a:
-                            closed.append(a)
-                    # Re-arm in place at the anchor frame instead of disarming.
-                    # A Usamune L-reset respawns Mario at the level's last entrance
-                    # — which IS the segment's start position in the practice loop
-                    # (lobby door for LBLJ, HMC exit for MIPS). Timing from this
-                    # anchor is equivalent to a fresh start-trigger arm.
-                    # The segment never stops being armed; no armed/disarmed
-                    # notices are emitted (attempt boundary, not a state change).
-                    # For defs with attempt_anchor start triggers the arm phase
-                    # below will replace this _Arm with identical values
-                    # (fresh=False → no duplicate notice) — idempotent.
-                    # Position carries over (ctx wins, arm fills unknowns) so
-                    # the gate above keeps working across continuations.
-                    self._armed[d.id] = _Arm(
-                        jid=ev.id, start_frame=ev.frame,
-                        started_utc=ev.wall_time_utc,
-                        anchor_type=ev.type,
-                        session_id=ev.session_id,
-                        level=ctx.level if ctx.level is not None else arm.level,
-                        area=ctx.area if ctx.area is not None else arm.area,
-                    )
-                elif ev.type == "death":
-                    a = self._close(Attempt, d, arm, ev, "death",
-                                    ev.payload.get("cause"))
-                    if a:
-                        closed.append(a)
-                    self._disarm(d, ev, notices)
-                elif ev.type == "game_reset":
-                    a = self._close(Attempt, d, arm, ev, "hard_reset", None)
-                    if a:
-                        closed.append(a)
-                    self._disarm(d, ev, notices)
-                elif ev.type in ("level_changed", "session_started") \
-                        and not starts:
-                    self._disarm(d, ev, notices)   # silent: no row
+            if arm is not None:
+                # Armed-branch dispatch (spec 2026-07-28-multi-step-segments).
+                # A loose def owns its own waypoint progression, so it takes
+                # _feed_loose whether or not it carries waypoints; a strict
+                # def splits on waypoints exactly as it did before.
+                if d.match_mode == "loose":
+                    handler = self._feed_loose
+                elif d.waypoints:
+                    handler = self._feed_waypoint
+                else:
+                    handler = self._feed_strict
+                closed.extend(handler(Attempt, d, arm, ev, ctx, notices,
+                                      anchor_is_echo, starts))
             # arm / re-arm — guards re-evaluated every time (spec).
             # Echo anchors are INVISIBLE here too: an involuntary door/load
             # echo matching an attempt_anchor start trigger must neither arm
@@ -1625,7 +1535,118 @@ class SegmentEngine:
                 and 0 <= ev.payload["frames_since_dialog"]
                 <= _DIALOG_ECHO_WINDOW))
 
-    def _feed_waypoint(self, Attempt, d, arm: _Arm, ev, ctx, notices) -> list:
+    def _feed_strict(self, Attempt, d, arm: _Arm, ev, ctx, notices,
+                     anchor_is_echo: bool, starts: bool) -> list:
+        """Today's armed-branch chain, extracted verbatim from feed() so the
+        armed branch can dispatch on SegmentDef.match_mode (spec
+        2026-07-28-multi-step-segments). Behaviour is unchanged — the module
+        docstring's closure/anchor/echo invariants all describe THIS method.
+        `anchor_is_echo` and `starts` are computed once per event in feed()
+        and passed down rather than recomputed."""
+        closed = []
+        if self._matches(d.end_triggers, ev, ctx):
+            a = self._close(Attempt, d, arm, ev, "success", None)
+            if a:
+                closed.append(a)
+            self._disarm(d, ev, notices)
+        elif ev.type == "area_changed" \
+                and not _at_arm_position(arm, ctx):
+            # RELOCATION via area change (live report 2026-06-13): Mario
+            # moved to a DIFFERENT castle area than where this segment
+            # armed (the lobby<->upstairs star door, a basement door, a
+            # warp), so its start position no longer holds — disarm with
+            # NO row, exactly as a warp/savestate to another area does.
+            # Without this a lobby segment stays armed after crossing to
+            # the upstairs and double-arms with the upstairs segment; the
+            # co-frame load echo that WOULD relocate it is suppressed
+            # (anchor_is_echo). A segment armed by THIS tick's level entry
+            # was re-pinned to ctx.area above, and a same-area door fires
+            # no area_changed at all (intra-area echo, still armed), so
+            # neither is touched. Supersedes the 2026-06-12 "stay armed
+            # through a cross-area door" behaviour.
+            self._disarm(d, ev, notices)
+        elif ev.type in _ANCHOR_TYPES \
+                and ev.frame == arm.start_frame:
+            # Shape (1) — arm-frame echo: the level_changed that armed
+            # this segment and the synthetic anchor it triggers share
+            # the same global-timer tick.  Suppressed UNCONDITIONALLY:
+            # the player may have been paused on the grounds for
+            # minutes before entering the lobby — a large
+            # paused_frames_before here is normal and must not
+            # reclassify this as a real reset.  Per-def (depends on
+            # the arm), unlike the event-level shapes below.
+            # (live gate 2026-06-12, seq 40-45)
+            pass
+        elif ev.type in _ANCHOR_TYPES and anchor_is_echo:
+            # Shapes (2a)/(2b)/(3) — event-level echoes, classified
+            # once before the loop (see anchor_is_echo above; full
+            # taxonomy in the module docstring).  No closure, no row,
+            # no disarm — and the arm phase below skips echoes too,
+            # so the _Arm is untouched.
+            pass
+        elif ev.type in _ANCHOR_TYPES \
+                and not _at_arm_position(arm, ctx):
+            # RELOCATION (live report 2026-06-12): a real warp/load
+            # landed outside this segment's start position — the
+            # Usamune menu warp to another area is the player MOVING,
+            # not a failed attempt, so no reset row. The start
+            # conditions no longer hold → disarm (notice); defs
+            # anchored at the destination arm in the arm phase below
+            # (segment swap).
+            self._disarm(d, ev, notices)
+        elif ev.type in _ANCHOR_TYPES:
+            # AFK (>= 150 paused frames) and no-op closures (Mario
+            # never acted since the last anchor — warp/reset spam,
+            # live feedback 2026-06-12) discard the row; both still
+            # re-arm below.  acted_tracking-gated: historical events
+            # without the flag keep recording (mirrors the star-side
+            # discard in projection._close_by_reset).
+            afk = ev.payload.get("paused_frames_before", 0) \
+                >= _AFK_PAUSE_FRAMES
+            unacted = ev.payload.get("acted_tracking", False) \
+                and not ev.payload.get("mario_acted", False)
+            if not afk and not unacted:
+                a = self._close(Attempt, d, arm, ev, "reset", None)
+                if a:
+                    closed.append(a)
+            # Re-arm in place at the anchor frame instead of disarming.
+            # A Usamune L-reset respawns Mario at the level's last entrance
+            # — which IS the segment's start position in the practice loop
+            # (lobby door for LBLJ, HMC exit for MIPS). Timing from this
+            # anchor is equivalent to a fresh start-trigger arm.
+            # The segment never stops being armed; no armed/disarmed
+            # notices are emitted (attempt boundary, not a state change).
+            # For defs with attempt_anchor start triggers the arm phase
+            # below will replace this _Arm with identical values
+            # (fresh=False → no duplicate notice) — idempotent.
+            # Position carries over (ctx wins, arm fills unknowns) so
+            # the gate above keeps working across continuations.
+            self._armed[d.id] = _Arm(
+                jid=ev.id, start_frame=ev.frame,
+                started_utc=ev.wall_time_utc,
+                anchor_type=ev.type,
+                session_id=ev.session_id,
+                level=ctx.level if ctx.level is not None else arm.level,
+                area=ctx.area if ctx.area is not None else arm.area,
+            )
+        elif ev.type == "death":
+            a = self._close(Attempt, d, arm, ev, "death",
+                            ev.payload.get("cause"))
+            if a:
+                closed.append(a)
+            self._disarm(d, ev, notices)
+        elif ev.type == "game_reset":
+            a = self._close(Attempt, d, arm, ev, "hard_reset", None)
+            if a:
+                closed.append(a)
+            self._disarm(d, ev, notices)
+        elif ev.type in ("level_changed", "session_started") \
+                and not starts:
+            self._disarm(d, ev, notices)   # silent: no row
+        return closed
+
+    def _feed_waypoint(self, Attempt, d, arm: _Arm, ev, ctx, notices,
+                       anchor_is_echo, starts) -> list:
         """Ordered-sequence matcher for a waypoint-bearing def (spec
         2026-07-23-default-routes-foundation) — the armed-branch counterpart
         to the plain success/relocation/anchor/death chain above, taken for
@@ -1659,6 +1680,10 @@ class SegmentEngine:
         route's start trigger should be written at least as specific as
         every waypoint clause it could be confused with, or a misroute can
         silently resume instead of truly cancelling."""
+        _ = (anchor_is_echo, starts)  # uniform dispatch signature (Task 2,
+        # spec 2026-07-28-multi-step-segments) — this matcher derives its
+        # own echo classification (self._anchor_echo) and never disarms on
+        # a bare level_changed/session_started, so it needs neither.
         closed = []
         complete = arm.progress >= len(d.waypoints)
         if complete and self._matches(d.end_triggers, ev, ctx):
@@ -1701,6 +1726,13 @@ class SegmentEngine:
             self._disarm(d, ev, notices)   # silent cancel, no row
             return closed
         return closed   # transparent
+
+    def _feed_loose(self, Attempt, d, arm: _Arm, ev, ctx, notices,
+                    anchor_is_echo, starts) -> list:
+        """Not yet implemented (Task 3, spec 2026-07-28-multi-step-segments).
+        Stub only, so Task 2's dispatch table cannot silently change
+        behaviour for any def — nothing is match_mode == "loose" yet."""
+        raise NotImplementedError("Task 3")
 
     def _disarm(self, d, ev, notices) -> None:
         if self._armed.pop(d.id, None) is not None:
