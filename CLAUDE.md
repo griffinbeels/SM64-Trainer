@@ -136,6 +136,34 @@ Contract changes land on main first, then dependent work fans out. Merge with
   This finds a second DOOR, never a wrong value through the right one: that same
   context-builder bug satisfied every scan and still repainted a whole grid.
   Rendering is the other half, not an alternative to it.
+- **When one door is impossible, the duplicate gets a test that COMPARES the
+  two.** Four values are computed in Python for the server and again in JS for
+  the browser — the rank ladder (`classify.RANK_NAMES` ↔ `caps.js::CAP`), the
+  rank-mode registry, the IGT display format, stat-chip identity. That second
+  copy is a real decision (the browser cannot round-trip for it), not an
+  oversight, and until 2026-07-28 each site was held together by a comment
+  saying "keep the two in lockstep". `tests/test_cross_language_parity.py`
+  compares the REAL implementations: import-free JS modules are imported by
+  node; the ones that pull in Preact have their declaration extracted from
+  comment-stripped source and evaluated. Never restate the rule in the test —
+  a restatement is a third copy. Same mutation proof as above.
+- **A pointer must resolve in a FRESH CLONE.** `docs/superpowers/`, `.tasks/`,
+  `internal_notes/`, `.planning/` and `.superpowers/` are local working
+  directories in a PUBLIC repo. Citing one is a dead link for everyone but this
+  machine — and ignoring a directory does not touch the files already citing
+  it, so it fails silently for the only person who cannot see it. State the
+  FACT and name a tracked thing that carries it.
+  `tests/test_docs_links_resolve.py` enforces this, with a by-path exemption
+  list carrying a reason per row.
+- **A rule file is a MAP, and it has a budget.** `.claude/rules/*.md` load
+  automatically on a matching file read, so their cost is paid on every edit in
+  the zone. `.claude/rules/ui.md` reached ~26k tokens with an 18,301-character
+  table cell before it was split four ways (2026-07-28). When one grows, split
+  it by path into a narrower sub-zone rule and lift long narratives into
+  `## sections` below the table — never summarize, the evidence is the point.
+  `tests/test_rule_files.py` holds the ceilings and, more usefully, fails when
+  a `paths:` glob matches nothing: a rule that never loads reaches nobody while
+  looking perfectly healthy.
 - **Exit-code honesty:** run verification through the Bash tool. Never pipe
   native exes into `Select-Object` or use `2>&1` on them in PS 5.1 (false
   failures).
@@ -150,10 +178,13 @@ Contract changes land on main first, then dependent work fans out. Merge with
   updated if the consumer-facing surface changed; docs/architecture.md updated
   if domain knowledge was gained (record hard-won facts WITH their evidence)
 - one fact, one authoritative place: code docstrings for module-local
-  knowledge, addresses.py for memory facts, README for the API surface,
-  `.claude/rules/` for per-zone change maps, architecture.md only for
-  cross-cutting knowledge — link, don't duplicate
+  knowledge, addresses.py for memory facts, **docs/api.md for the API
+  surface**, `.claude/rules/` for per-zone change maps, architecture.md only
+  for cross-cutting knowledge — link, don't duplicate. The README is for a
+  HUMAN deciding whether to use or build this; endpoint tables belong in
+  docs/api.md (`tests/test_docs_cover_api.py` accepts either file, so this is
+  a convention the test cannot enforce for you)
 - commit messages explain WHY (follow the style in `git log`)
 
 **Build a UI / consumer:** speak only to the API — `ws://…/ws/events` (schema
-in README), `GET /state` for initial state, `GET /health` for liveness.
+in `docs/api.md`), `GET /state` for initial state, `GET /health` for liveness.
