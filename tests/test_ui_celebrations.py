@@ -272,3 +272,61 @@ def test_a_banners_flap_never_gates_the_next_banners_climb():
     # `tailMs` still has a job -- keeping the loop alive so the flap finishes.
     assert "tailMs" in engine, (
         "nothing keeps ticking for the tail; the last flap would freeze mid-beat")
+
+
+# Effects allowed to be travelling at full speed when their window closes, and
+# why. A wind-up SHOULD end at maximum violence -- that is the anticipation
+# principle -- and `tierBurst` picks the motion up on the very next frame, so
+# nothing on screen actually stops.
+ENDS_AT_SPEED_ON_PURPOSE = {"tierAnticipate"}
+
+
+def test_no_effect_stops_dead_unless_something_takes_the_motion_over():
+    """"we NEVER want to abruptly stop" (user, 2026-07-27), reported against
+    the wing flap.
+
+    The trap is that VALUE and SPEED are different questions, and only the
+    first one is obvious. `sin(2*pi*p)` returns to exactly zero, so the flap
+    ended on precisely the right rotation -- having never slowed down. Sampled
+    as values it looked perfect; sampled as per-frame DELTAS the closing six
+    frames were 0.88, 0.89, 0.92, 0.92, 0.94, 0.82 degrees, a flat line into a
+    wall.
+
+    So this measures the slope over the last 1% of each effect's own run,
+    which is the thing that was wrong and the thing no value-based check sees.
+    """
+    speeds = run_node("""
+const beat = { kind: "division", at: 0, stepMs: 100, anticipateMs: 100,
+  payoffMs: 100, wingsAfter: 4, wingsBefore: 2, tier: "Gold", division: "I",
+  fromTier: "Silver", fromDivision: "V" };
+const numbers = (out) => Object.entries(out || {}).flatMap(([key, value]) =>
+  typeof value === "number" ? [[key, value]]
+  : (value && typeof value.progress === "number") ? [[key + ".progress", value.progress]] : []);
+const worst = {};
+for (const [name, entry] of Object.entries(CELEBRATIONS)) {
+  for (const field of ["icon", "vars"]) {
+    if (typeof entry[field] !== "function") continue;
+    const before = numbers(entry[field](beat, 0.99, DEFAULTS));
+    const after = numbers(entry[field](beat, 1, DEFAULTS));
+    before.forEach(([key, value], index) => {
+      const delta = Math.abs(after[index][1] - value);
+      if (!(worst[name] >= delta)) worst[name] = delta;
+    });
+  }
+}
+console.log(JSON.stringify(worst));
+""")
+    assert speeds, "no effect produced a numeric output at all"
+    stopping_dead = {name: round(speed, 4) for name, speed in speeds.items()
+                     if speed > 0.02 and name not in ENDS_AT_SPEED_ON_PURPOSE}
+    assert not stopping_dead, (
+        f"{stopping_dead} are still moving when their window closes, so they "
+        "stop dead rather than coming to rest. Give the amplitude an envelope "
+        "(ui/celebrations.js::envelope) or add the effect to "
+        "ENDS_AT_SPEED_ON_PURPOSE with the thing that takes its motion over.")
+    # And the allowlist must not rot into a way of ignoring the check: every
+    # name in it has to still exist and still actually end at speed.
+    for name in ENDS_AT_SPEED_ON_PURPOSE:
+        assert speeds.get(name, 0) > 0.02, (
+            f"{name} no longer ends at speed -- take it out of the allowlist "
+            "rather than leaving a permanent exemption behind")
