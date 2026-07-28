@@ -21,6 +21,18 @@ internal_notes/
 # reachable in git history; removing THAT needs a history rewrite.
 docs/superpowers/
 
+# Same reasoning as docs/superpowers/ above: the task tracker's notes quote the
+# author and name his other projects. Listed HERE, in the tracked .gitignore,
+# rather than relying on the self-ignoring `.tasks/.gitignore` (a file
+# containing `*`, which therefore ignores itself and is untracked). That worked
+# in this checkout and nowhere else — a fresh clone or a new git worktree has
+# no such file, so `.tasks/` was NOT ignored there and
+# tests/test_docs_links_resolve.py::test_every_private_dir_is_actually_ignored
+# failed the moment this branch was built in a worktree (2026-07-28). A guard
+# that depends on an untracked file is the exact "must resolve in a fresh
+# clone" failure that test exists to catch.
+.tasks/
+
 # bundled package data (rank-standards seed) must be tracked despite the data/ rule above
 !src/sm64_events/data/
 !src/sm64_events/data/**

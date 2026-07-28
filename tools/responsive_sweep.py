@@ -44,10 +44,19 @@ FIXED_POINTS = (
 )
 
 # The tab swept at EVERY viewport: the densest page, and the one both reported
-# bugs live on.  The rest are swept at REDUCED_POINTS only -- and the sweep
-# prints what that skipped, because a silent cap reads as full coverage.
+# bugs live on.  The rest are swept at SECONDARY_WIDTHS -- and the sweep prints
+# what that skipped, because a silent cap reads as full coverage.
 PRIMARY_TAB = "Practice"
-REDUCED_POINTS = ("reported-vertical", "reported-narrow", "max-workspace")
+
+# Widths where a secondary page is actually worth re-measuring: both sides of
+# each sidebar step (where the pane jumps WIDER as the window narrows), both
+# sides of the 700px container threshold the narrow layouts now use, a mid
+# desktop width, and the WCAG reflow floor.
+#
+# Three labels used to be enough because the other pages carried no converted
+# rules. They do now, and a conversion checked at three viewports is a
+# conversion checked nowhere near its own thresholds.
+SECONDARY_WIDTHS = (1500, 1181, 1180, 901, 900, 761, 760, 701, 700, 431, 430, 320)
 
 # Interactions the sweep drives, as one injected helper.  Kept beside the probe
 # rather than inline in Python so both halves of "what runs in the page" are
@@ -173,7 +182,7 @@ def run_sweep(viewports: list[Viewport] | None = None, shots: bool = False,
             session.evaluate(CONTROL_JS)
 
             sweep_tabs = [PRIMARY_TAB]
-            if view.label in REDUCED_POINTS:
+            if view.width in SECONDARY_WIDTHS:
                 sweep_tabs += secondary
             else:
                 skipped.append(f"{view.width}x{view.height}: "

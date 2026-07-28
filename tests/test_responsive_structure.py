@@ -38,10 +38,6 @@ from css_blocks import (UI_HTML, is_shell, parse_blocks,  # noqa: E402
 #      for b in size_blocks(parse_blocks(css)) if b.kind == 'media' \
 #      for s in b.selectors if not is_shell(s)]"
 LEGACY_VIEWPORT_RULES: dict[str, str] = {
-    '(max-width:820px) :: .compare-grid': "pre-existing 2026-07-28; Wave 2",
-    '(max-width:820px) :: .compare-col, .compare-center': "pre-existing 2026-07-28; Wave 2",
-    '(max-width:820px) :: .compare-center': "pre-existing 2026-07-28; Wave 2",
-    '(max-width:820px) :: .compare-transport': "pre-existing 2026-07-28; Wave 2",
     '(max-width: 900px) :: .marelo-track, .marelo-split': "pre-existing 2026-07-28; Wave 2",
     '(max-width: 640px) :: .rank-cell-next': "pre-existing 2026-07-28; Wave 2",
     '(max-width: 1180px) :: .connection-line': "pre-existing 2026-07-28; Wave 2",
@@ -106,9 +102,6 @@ LEGACY_VIEWPORT_RULES: dict[str, str] = {
     '(max-width: 760px) :: .run-history-row': "pre-existing 2026-07-28; Wave 2",
     '(max-width: 760px) :: .run-history-date': "pre-existing 2026-07-28; Wave 2",
     '(max-width: 760px) :: .run-history-splits': "pre-existing 2026-07-28; Wave 2",
-    '(max-width: 760px) :: .compare-transport-card': "pre-existing 2026-07-28; Wave 2",
-    '(max-width: 760px) :: .compare-transport': "pre-existing 2026-07-28; Wave 2",
-    '(max-width: 760px) :: .compare-transport button': "pre-existing 2026-07-28; Wave 2",
     '(max-width: 760px) :: .cf-head': "pre-existing 2026-07-28; Wave 2",
     '(max-width: 760px) :: .cf-head select': "pre-existing 2026-07-28; Wave 2",
     '(max-width: 760px) :: .cf-row': "pre-existing 2026-07-28; Wave 2",

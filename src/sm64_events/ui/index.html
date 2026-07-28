@@ -487,13 +487,12 @@
   .cd-url input { flex:1 1 180px; min-width:0; }
   .cd-url button { flex:0 0 auto; }
 
-  /* narrow screens: stack (video / controls / video) with a horizontal control row */
-  @media (max-width:820px){
-    .compare-grid { flex-direction:column; }
-    .compare-col, .compare-center { width:100%; flex:none; }
-    .compare-center { padding-top:.4rem; }
-    .compare-transport { flex-direction:row; flex-wrap:wrap; justify-content:center; }
-  }
+  /* narrow screens: the responsive Compare rules live BELOW the base ones —
+     see "Compare, narrow pane" further down. They were briefly up here, where
+     the old @media block sat, and lost to `.compare-transport
+     .primary-transport` at line ~2700 on source order alone: same specificity
+     (0,2,0), later rule wins, so the button kept its 92px and the sweep kept
+     reporting the same overlap through a fix that looked correct. */
 
   /* ---------------------------------------------------------------------
      Practice Index shell — calm observatory, fixed live-state tracks
@@ -779,6 +778,21 @@
     padding: 4px 14px 28px; overflow-x: hidden;
   }
   .view-pane, .practice-page { min-width: 0; max-width: 100%; }
+  /* Every page gets a size container, not just Practice.
+     ------------------------------------------------------------------
+     `.practice-page` has declared `container-type: inline-size` since the
+     rank-banner fix; the other five pages (Run, Compare, Routes, Segments,
+     Live feed) had none, so their layout had no choice but to key on the
+     viewport -- which in this shell is the wrong signal, because the sidebar
+     steps make pane width non-monotonic in window width (1181px window -> a
+     932px pane; 1180px window -> 1061px).
+
+     inline-size only: the block axis is untouched, so nothing that depends on
+     content height changes. Note the containment this imposes means a child
+     cannot measure the container with cqw and BE the thing that sizes it --
+     which is why the star row's cqw units still resolve against
+     `.practice-page` (its own nearer container), not this one. */
+  .view-pane { container-type: inline-size; }
   .mobile-appbar, .mobile-nav, .mobile-more-backdrop { display: none; }
   /* THE size container all selector cqw units + @container rules resolve
      against — the pane the star row must fit inside. inline-size only, so
@@ -2673,6 +2687,39 @@
   .compare-transport .primary-transport {
     min-width: 92px; color: #171407; background: var(--gold); border-color: var(--gold-soft); font-weight: 750;
   }
+
+  /* Compare, narrow pane. Was `@media (max-width:820px)` plus a second half in
+     `@media (max-width:760px)` until 2026-07-28. Viewport 820 gives the pane
+     701px and viewport 760 gives it 725px, so the pair were applying their
+     "narrower" treatment to a WIDER pane — the same inversion the Active
+     Target card had. One threshold, on the pane, replaces both.
+
+     Placed HERE, immediately after the base rules, and that is load-bearing:
+     these first went in where the old @media block sat near the top of the
+     stylesheet and silently lost to `.primary-transport` above on source
+     order — identical specificity (0,2,0), later rule wins. The sweep kept
+     reporting the identical overlap through a fix that read as correct. */
+  @container (max-width: 700px) {
+    .compare-grid { flex-direction: column; }
+    .compare-col, .compare-center { width: 100%; flex: none; }
+    .compare-center { padding-top: .4rem; }
+    .compare-transport { flex-direction: row; flex-wrap: wrap; justify-content: center; }
+    .compare-transport-card { align-items: stretch; flex-direction: column; }
+  }
+  /* Four transport buttons across, once wrapping them is worse than shrinking
+     them. `.primary-transport` is named EXPLICITLY rather than relying on the
+     neighbouring `.compare-transport button` reset: that reset is (0,1,1) and
+     the 92px min-width above is (0,2,0), so the button stayed 92px wide inside
+     a ~64px grid cell and overlapped its neighbour by 22px at 320px. Found by
+     the sweep the first time secondary tabs were measured at more than three
+     viewports — the old coverage never looked at Compare below 760. */
+  @container (max-width: 430px) {
+    .compare-transport { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); }
+    .compare-transport button,
+    .compare-transport .primary-transport {
+      min-width: 0; padding-inline: .28rem; font-size: .7rem;
+    }
+  }
   .compare-grid {
     min-width: 0; display: grid; grid-template-columns: repeat(2,minmax(0,1fr));
     gap: 12px; align-items: start;
@@ -3368,11 +3415,6 @@
     .run-history-row { grid-template-columns: minmax(0,1fr) auto 20px; }
     .run-history-date { grid-column: 1 / -1; }
     .run-history-splits { padding-left: .45rem; }
-    .compare-transport-card { align-items: stretch; flex-direction: column; }
-    .compare-transport { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); }
-    .compare-transport button {
-      min-width: 0; padding-inline: .28rem; font-size: .7rem;
-    }
     .cf-head { align-items: end; }
     .cf-head select { min-width: 0; max-width: 48%; }
     .cf-row {
