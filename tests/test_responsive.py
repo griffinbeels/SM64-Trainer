@@ -20,7 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from cdp import CHROME  # noqa: E402
 from css_blocks import (UI_HTML, parse_blocks, size_blocks,  # noqa: E402
                         style_block, thresholds)
-from responsive_sweep import derived_matrix, run_sweep  # noqa: E402
+from responsive_sweep import (derived_matrix, measure_panes,  # noqa: E402
+                              run_sweep)
 
 SKIPPING = os.environ.get("SM64_SKIP_SWEEP") == "1"
 
@@ -136,6 +137,30 @@ def test_no_layout_defects_across_the_matrix(sweep):
     assert not result["errors"], (
         f"{len(result['errors'])} page exception(s) during the sweep — the app "
         f"threw while rendering:\n  " + "\n  ".join(result["errors"][:5]))
+
+
+@pytest.mark.skipif(SKIPPING, reason="SM64_SKIP_SWEEP=1")
+def test_pane_width_is_not_monotonic_in_viewport_width():
+    """The evidence the @container law rests on, kept executable.
+
+    Dropping the sidebar to a rail at 1180px and removing it at 760px each make
+    the pane WIDER as the window gets narrower.  Measured 2026-07-28: viewport
+    1181 -> pane 932, viewport 1180 -> pane 1061 (+129); viewport 761 -> pane
+    642, viewport 760 -> pane 725 (+83).  So `@media (max-width: 760px)` styles
+    a 725px pane while the rules above it style a 642px one -- the narrowest
+    layout applied to the WIDER container.
+
+    If this ever stops being true the law's justification has changed and
+    someone should read it again rather than discover it by surprise.  No
+    tolerance on the exact pixels: the direction of the jump is the claim.
+    """
+    rows = dict(measure_panes([1181, 1180, 761, 760]))
+    assert rows[1180]["pane"] > rows[1181]["pane"], (
+        "the sidebar->rail step no longer widens the pane: "
+        f"1181 -> {rows[1181]['pane']}, 1180 -> {rows[1180]['pane']}")
+    assert rows[760]["pane"] > rows[761]["pane"], (
+        "dropping the sidebar no longer widens the pane: "
+        f"761 -> {rows[761]['pane']}, 760 -> {rows[760]['pane']}")
 
 
 def test_the_known_defect_list_does_not_outlive_its_defects(sweep):

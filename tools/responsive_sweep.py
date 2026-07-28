@@ -208,6 +208,70 @@ def run_sweep(viewports: list[Viewport] | None = None, shots: bool = False,
             "viewports": len(viewports)}
 
 
+PANE_JS = """
+(() => {
+  const inner = (sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return null;
+    const cs = getComputedStyle(el);
+    return Math.round(el.clientWidth
+      - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight));
+  };
+  return JSON.stringify({sidebar: inner(".app-sidebar"), pane: inner(".practice-page"),
+                         objective: inner(".objective-card"),
+                         metrics: inner(".objective-metrics"),
+                         rankslot: inner(".rank-slot")});
+})()
+"""
+
+
+def measure_panes(widths: list[int] | None = None) -> list[tuple[int, dict]]:
+    """Viewport width -> the width each container ACTUALLY gets.
+
+    The translation table for turning a viewport threshold into a container
+    one, and the reason that translation can never be a rename.  Measured on
+    the shipping shell 2026-07-28:
+
+        viewport 1181 -> pane  932        viewport 761 -> pane 642
+        viewport 1180 -> pane 1061        viewport 760 -> pane 725
+
+    Pane width is not monotonic in viewport width, and the discontinuities are
+    large: dropping the sidebar to a rail at 1180px makes the pane 129px WIDER,
+    and dropping it entirely at 760px makes it 83px wider again.  So the mobile
+    block styles a 725px pane while the block above it styles a 642px pane --
+    the narrowest layout applied to the WIDER container.  No viewport threshold
+    can express "this card is too narrow", which is the whole reason for the
+    @container law in .claude/rules/ui-core.md.
+    """
+    widths = widths or sorted({v.width for v in derived_matrix()}, reverse=True)
+    rows = []
+    with serve_ui() as base, chrome_session(f"{base}/ui/index.html") as page:
+        for width in widths:
+            page.set_viewport(width, 1000)
+            time.sleep(0.35)
+            page.evaluate(CONTROL_JS)
+            page.evaluate(f'__goto("{PRIMARY_TAB}")')
+            time.sleep(0.25)
+            rows.append((width, json.loads(page.evaluate(PANE_JS))))
+    return rows
+
+
+def _print_panes(rows: list[tuple[int, dict]]) -> None:
+    keys = ("sidebar", "pane", "objective", "metrics", "rankslot")
+    print(f"{'viewport':>9}" + "".join(f"{k:>10}" for k in keys))
+    print("-" * (9 + 10 * len(keys)))
+    previous = None
+    for width, row in rows:
+        cells = "".join(f"{'-' if row[k] is None else row[k]:>10}" for k in keys)
+        jump = ""
+        if previous is not None and row["pane"] and previous > row["pane"] * 0:
+            delta = (row["pane"] or 0) - previous
+            if delta > 0:
+                jump = f"   <- pane grew {delta}px as the viewport SHRANK"
+        previous = row["pane"] or previous
+        print(f"{width:>9}{cells}{jump}")
+
+
 def _contact_sheet(images: list[tuple[str, bytes]]) -> Path:
     """A grid of every rendered size, for a HUMAN eye.  Never a gate."""
     import io
@@ -239,7 +303,13 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="machine-readable")
     parser.add_argument("--shots", action="store_true", help="contact sheet")
     parser.add_argument("--width", type=int, help="sweep one width only")
+    parser.add_argument("--panes", action="store_true",
+                        help="viewport -> container width table (no defect scan)")
     args = parser.parse_args()
+
+    if args.panes:
+        _print_panes(measure_panes())
+        return 0
 
     matrix = derived_matrix()
     if args.width:
