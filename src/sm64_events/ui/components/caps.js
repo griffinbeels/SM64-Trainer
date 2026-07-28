@@ -114,7 +114,8 @@ export function rankPosition(tier, numeral, fill = 0) {
 // The inverse, for any point mid-climb: which rank is a position standing in.
 // Clamped at both ends, so a curve that overshoots by a rounding error still
 // names a real rank instead of returning undefined into a render. `level` is
-// the CLAMPED integer part, and callers need it -- see rankFrame.
+// the CLAMPED integer part, which is what stops a curve that overshoots by a
+// rounding error from naming a level that does not exist.
 export function rankAt(position) {
   const top = RANK_NAMES.length * DIVISIONS_PER_TIER - 1;
   const level = Math.max(0, Math.min(top, Math.floor(position)));

@@ -172,7 +172,7 @@ def test_a_tuning_change_actually_reaches_the_plan():
         # defaults are the user's and may already be as fast as this test
         # wants to tune them, which would make the comparison unfalsifiable.
         "const SLOW = { ...DEFAULTS, tierDwellMs: 1600, tierDwellMinMs: 700,\n"
-        "  tierDwellBudgetMs: 5200, ladderStepMs: 460, ladderStepMinMs: 220,\n"
+        "  ladderStepMs: 460, ladderStepMinMs: 220,\n"
         "  ladderBudgetMs: 3400 };\n"
         "const total = (tuning) => buildClimbPlan({\n"
         "  fromLevel: 0, fromFill: 0.3, toLevel: 16, toFill: 0.04,\n"

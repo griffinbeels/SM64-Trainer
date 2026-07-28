@@ -267,7 +267,7 @@ def test_no_floor_can_push_a_duration_past_the_ceiling_that_was_asked_for():
         "      for (const n of [1, 2, 3, 5, 8, 15]) {\n"
         "        const tune = { ladderStepMs: ceiling, ladderStepMinMs: floor,\n"
         "          ladderBudgetMs: budget, tierDwellMs: ceiling,\n"
-        "          tierDwellMinMs: floor, tierDwellBudgetMs: budget,\n"
+        "          tierDwellMinMs: floor,\n"
         "          anticipateShare: 0.5, barSweepFullMs: ceiling,\n"
         "          barSweepMinMs: floor };\n"
         "        const step = ladderStepMs(n, tune);\n"

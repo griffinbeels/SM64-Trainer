@@ -2,6 +2,13 @@
 
 Task `.tasks/open/0012-progression-celebration.md`, 2026-07-26.
 
+> **§2's motion model is SUPERSEDED** by
+> `2026-07-27-multi-rank-climb-design.md`. The trapezoid, `climbDuration` /
+> `climbPosition` / `climbTravelled`, and "the bar is the fractional part of one
+> monotone position" were all replaced: a climb is an ordered PLAN of steps, the
+> bar is its own value pinned full across every rank-up, and no sweep is longer
+> than one division. Everything else here still holds. Read that spec first.
+
 ## The problem
 
 `ui/components/ranks.js`'s `RankBanner` animates the server's `fill` field
