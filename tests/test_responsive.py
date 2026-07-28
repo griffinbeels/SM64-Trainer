@@ -20,7 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from cdp import CHROME  # noqa: E402
 from css_blocks import (UI_HTML, parse_blocks, size_blocks,  # noqa: E402
                         style_block, thresholds)
-from responsive_sweep import derived_matrix, run_sweep  # noqa: E402
+from responsive_sweep import (derived_matrix, measure_panes,  # noqa: E402
+                              run_sweep)
 
 SKIPPING = os.environ.get("SM64_SKIP_SWEEP") == "1"
 
@@ -29,36 +30,14 @@ SKIPPING = os.environ.get("SM64_SKIP_SWEEP") == "1"
 # Everything below is Wave 3 work, recorded here so the suite is green while it
 # is outstanding and so the list of what is broken is the list of what to fix.
 # Each row must name a REASON, and deleting the row is how a fix is signed off.
-KNOWN_DEFECTS: dict[str, str] = {
-    # The reported bug (task 0032, live 2026-07-28). `.objective-card` is
-    # height:258px under @media (max-width:760px) and its content needs 277px,
-    # so 21px -- the "Ready" row -- is guillotined by overflow:hidden. The
-    # height was hand-set before the card grew a second rank banner, the
-    # moved-in strategy picker and the target-pick eyebrow.
-    **{f"{w}x{h} [Practice] clipped :: section.practice-card.objective-card":
-       "Wave 3: fixed height 258px vs 277px of content"
-       for w, h in [(320, 800), (330, 1000), (331, 1000), (430, 1000),
-                    (431, 1000), (500, 1000), (501, 1000), (600, 1000),
-                    (601, 1000), (640, 1000), (641, 1000), (760, 1000),
-                    (760, 1180)]},
-    # Same card, the other axis, at the one width where the rail is still
-    # present but the mobile layout has not taken over.
-    "761x1000 [Practice] clipped :: section.practice-card.objective-card":
-        "Wave 3: 646px of content in a 617px card",
-    "761x1000 [Practice] clipped :: main.app-main":
-        "Wave 3: consequence of the objective card above",
-    # The reported nav dead end (task 0032). Rank is in app.js's NAV_GROUPS and
-    # in NEITHER hardcoded mobile list, so below 760px it cannot be reached.
-    **{f"{w}x{h} [shell] unreachable :: Rank":
-       "Wave 3: MobileNav/MobileMore hardcode their own lists"
-       for w, h in [(320, 800), (330, 1000), (331, 1000), (430, 1000),
-                    (431, 1000), (500, 1000), (501, 1000), (600, 1000),
-                    (601, 1000), (640, 1000), (641, 1000), (760, 1000),
-                    (760, 1180)]},
-    **{f"{w}x{h} [Practice] clipped :: div.analysis-block.trend-block":
-       "Wave 3: 6px of chart past the block at the WCAG reflow floor"
-       for w, h in [(320, 800), (330, 1000), (331, 1000)]},
-}
+#
+# EMPTY as of 2026-07-28: the sweep reports zero defects across all 36
+# viewports.  Both reported bugs are fixed (the Active Target card's clipping
+# and the Rank dead end), along with two the sweep found on its own -- the
+# context bar overflowing `main.app-main` through the 761..775 band, and a
+# hint tooltip wider than the block that clips it.  Every row that used to be
+# here was removed by fixing the thing, not by exempting it.
+KNOWN_DEFECTS: dict[str, str] = {}
 
 
 def test_chrome_is_available_or_the_opt_out_is_explicit():
@@ -136,6 +115,30 @@ def test_no_layout_defects_across_the_matrix(sweep):
     assert not result["errors"], (
         f"{len(result['errors'])} page exception(s) during the sweep — the app "
         f"threw while rendering:\n  " + "\n  ".join(result["errors"][:5]))
+
+
+@pytest.mark.skipif(SKIPPING, reason="SM64_SKIP_SWEEP=1")
+def test_pane_width_is_not_monotonic_in_viewport_width():
+    """The evidence the @container law rests on, kept executable.
+
+    Dropping the sidebar to a rail at 1180px and removing it at 760px each make
+    the pane WIDER as the window gets narrower.  Measured 2026-07-28: viewport
+    1181 -> pane 932, viewport 1180 -> pane 1061 (+129); viewport 761 -> pane
+    642, viewport 760 -> pane 725 (+83).  So `@media (max-width: 760px)` styles
+    a 725px pane while the rules above it style a 642px one -- the narrowest
+    layout applied to the WIDER container.
+
+    If this ever stops being true the law's justification has changed and
+    someone should read it again rather than discover it by surprise.  No
+    tolerance on the exact pixels: the direction of the jump is the claim.
+    """
+    rows = dict(measure_panes([1181, 1180, 761, 760]))
+    assert rows[1180]["pane"] > rows[1181]["pane"], (
+        "the sidebar->rail step no longer widens the pane: "
+        f"1181 -> {rows[1181]['pane']}, 1180 -> {rows[1180]['pane']}")
+    assert rows[760]["pane"] > rows[761]["pane"], (
+        "dropping the sidebar no longer widens the pane: "
+        f"761 -> {rows[761]['pane']}, 760 -> {rows[760]['pane']}")
 
 
 def test_the_known_defect_list_does_not_outlive_its_defects(sweep):

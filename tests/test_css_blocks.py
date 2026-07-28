@@ -69,6 +69,30 @@ def test_a_prose_comment_naming_container_is_not_parsed_as_a_block():
     assert shape(prose + SAMPLE) == shape(SAMPLE)
 
 
+def test_a_comment_quoting_a_REAL_condition_is_not_parsed_as_a_block():
+    """The harder case, and the one that actually bit (2026-07-28).
+
+    Requiring `(` after the at-rule name is not enough, because this
+    stylesheet's comments quote conditions verbatim: the @container block for
+    the objective card explains what it replaced by writing
+    `@media (max-width: 760px)` in prose.  A raw scan read that sentence as a
+    block with twelve rules in it and inflated the violation count the
+    structural guard depends on.
+    """
+    prose = ("/* Moved out of @media (max-width: 760px) on 2026-07-28,\n"
+             "   because the pane there is 725px and not 642px. */\n")
+    shape = lambda css: [(b.kind, b.condition, b.selectors)   # noqa: E731
+                         for b in parse_blocks(css)]
+    assert shape(prose + SAMPLE) == shape(SAMPLE)
+
+
+def test_line_numbers_survive_comment_stripping():
+    """Stripping must blank comments, not delete them: `line` is how a failure
+    message points a reader at the offending rule."""
+    css = "/* one\n   two\n   three */\n@media (max-width: 500px) { .a { color: red; } }"
+    assert parse_blocks(css)[0].line == 4
+
+
 def test_the_real_stylesheet_parses_and_has_the_blocks_we_expect():
     css = style_block(UI_HTML.read_text(encoding="utf-8"))
     blocks = size_blocks(parse_blocks(css))

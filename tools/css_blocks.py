@@ -54,12 +54,25 @@ def style_block(html: str) -> str:
     return html[start:html.index("</style>", start)]
 
 
-def parse_blocks(css: str) -> list[Block]:
-    """Every @media/@container block, brace-matched, with its own selectors.
+def strip_comments(css: str) -> str:
+    """Blank out /* ... */ comments, PRESERVING line numbers.
 
-    The `\\(` in the pattern is load-bearing: it is what stops a comment
-    mentioning the at-rule from being read as one.
+    Required, not defensive.  Requiring a `(` after the at-rule name is not
+    enough: this stylesheet's comments quote real conditions verbatim -- the
+    @container block for the objective card explains what it replaced by
+    writing `@media (max-width: 760px)` in prose -- and a raw scan read that
+    sentence as a block with twelve rules in it, corrupting the violation count
+    the structural guard is built on (2026-07-28).
+
+    Newlines inside the comment are kept so `line` still points at the source.
     """
+    return re.sub(r"/\*.*?\*/",
+                  lambda m: "\n" * m.group(0).count("\n"), css, flags=re.S)
+
+
+def parse_blocks(css: str) -> list[Block]:
+    """Every @media/@container block, brace-matched, with its own selectors."""
+    css = strip_comments(css)
     blocks: list[Block] = []
     for match in re.finditer(r"@(media|container)\s*(\([^{]*)\{", css):
         depth, index = 1, match.end()
