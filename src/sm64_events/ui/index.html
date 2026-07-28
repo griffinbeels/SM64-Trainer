@@ -1434,86 +1434,49 @@
                  color-mix(in srgb, var(--climb-color, #3a4250)
                            calc(var(--climb-flash, 0) * 90%), transparent);
   }
-  /* Scope TIER-up celebration -- the grand one (celebrate.js TierRankUp,
-     task F3): fixed overlay so it can never reflow an OBS capture;
-     pointer-events stay OFF on the overlay and ON only for the card, so it
-     never eats a click meant for the game. The three-beat phase machine
-     (fill -> flip -> hold) is JS state (TierRankUp's `phase`/`flipStep`),
-     not CSS -- CSS only plays each beat's own animation (fade-in, the fill
-     bar, the cap flip, the final pop), which is why those are the only
-     things prefers-reduced-motion needs to gate (same opt-in pattern as
-     .starholder/.page-state above). z-index sits above .modal-backdrop
-     (200): a rank-up can land while a modal is open and must still be seen. */
-  .rankup {
-    position: fixed; inset: 0; z-index: 210; display: flex;
-    align-items: center; justify-content: center; pointer-events: none;
-    background: radial-gradient(closest-side, color-mix(in srgb, var(--tier) 35%, transparent), transparent 70%);
+  /* The overall rank-up (components/marelocelebrate.js, 2026-07-28).
+     Replaces the two hand-rolled scope overlays that used to live here
+     (TierRankUp's fill->flip->hold, DivisionRankUp's top banner) -- a KNOWN
+     DEVIATION flagged since 2026-07-26. This overlay clones the REAL route
+     rank card, flies it to the centre, and hands it to ui/rankclimb.js, the
+     same climb every rank banner runs -- so there is no CSS here for the
+     climb itself (the flash/shake/burst/digit-reel/wing-grow variables are
+     already up beside .rank-progress-track and .rank-banner) and no size
+     @media at all: the card's geometry is MEASURED from the live header at
+     runtime and expressed as a transform, so it is correct at every width by
+     construction (`.marelo-celebrate*` are component selectors --
+     `tests/test_responsive_structure.py` is a red build for a viewport rule
+     on one).
+
+     Fixed so it can never reflow an OBS capture; pointer-events OFF on the
+     wrapper and ON only for the card, so it never eats a click meant for the
+     game. z-index sits above .modal-backdrop (200): a rank-up can land while
+     a modal is open and must still be seen. */
+  .marelo-celebrate {
+    position: fixed; inset: 0; z-index: 210; pointer-events: none;
+    background:
+      color-mix(in srgb, var(--climb-color, transparent) var(--backdrop-tint, 0%),
+                rgba(3, 9, 18, 1));
+    opacity: 0; transition: opacity var(--fly-ms, 900ms) var(--fly-ease, ease);
   }
-  .rankup-card {
-    pointer-events: auto; cursor: pointer; text-align: center;
-    display: flex; flex-direction: column; align-items: center; gap: 6px;
-    padding: 26px 34px; border-radius: 16px;
-    background: rgba(11,25,41,.92); border: 2px solid var(--tier);
-    box-shadow: 0 0 60px color-mix(in srgb, var(--tier) 55%, transparent);
+  .marelo-celebrate.is-lifted { opacity: var(--backdrop-alpha, .55); }
+  /* EXACTLY ONE transition declaration on this element. A :hover or state
+     rule declaring its own would REPLACE this one wholesale (a rule's
+     transition is not additive), which is what makes a motion glide one way
+     and snap the other -- there is deliberately no second rule here, not
+     even for prefers-reduced-motion: the JS already computes --fly-ms as 0
+     in that case (marelocelebrate.js), so the transition already resolves
+     to an instant jump with no CSS override needed. */
+  .marelo-celebrate-card {
+    position: fixed; transform-origin: center center; pointer-events: auto;
+    cursor: pointer;
+    transition: transform var(--fly-ms, 900ms) var(--fly-ease, ease);
   }
-  .rankup-card h2 { margin: 2px 0 0; font-size: 30px; color: var(--tier); }
-  /* Beat 1 (fill): the division bar that visibly reaches the crossing
-     point before the climb begins -- durations here (1.2s/.6s) must stay in
-     lockstep with FILL_MS/FLIP_MS in celebrate.js. */
-  .rankup-fill-track {
-    width: 180px; height: 8px; margin: 4px 0; border-radius: 4px;
-    overflow: hidden; background: rgba(255,255,255,.14);
-  }
-  .rankup-fill-track i { display: block; height: 100%; width: 100%; background: var(--tier); }
-  /* Beat 2 (flip): the cap turning over into each tier gained. */
-  .rankup-cap-flip { display: inline-flex; }
-  @media (prefers-reduced-motion: no-preference) {
-    .rankup { animation: rankup-in .25s ease-out; }
-    .rankup-card.final { animation: rankup-pop .5s cubic-bezier(.2,1.6,.4,1); }
-    @keyframes rankup-in { from { opacity: 0 } to { opacity: 1 } }
-    @keyframes rankup-pop { from { transform: scale(.86) } to { transform: scale(1) } }
-    .rankup-fill-track i { animation: rankup-fill 1.2s linear; }
-    @keyframes rankup-fill { from { width: 0 } to { width: 100% } }
-    .rankup-cap-flip { animation: rankup-flip .6s ease-in-out; }
-    @keyframes rankup-flip {
-      0% { transform: rotateY(0deg); } 50% { transform: rotateY(90deg); } 100% { transform: rotateY(0deg); }
-    }
-  }
-  /* Scope DIVISION-up -- the medium one (celebrate.js DivisionRankUp): the
-     same fixed/pointer-events-off family as .rankup above, but a compact
-     top banner instead of a full centered takeover. A division-up happens
-     often enough during ordinary play that the grand treatment would drown
-     out the tier-up it's tiered against. */
-  .rankup-medium {
-    position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
-    z-index: 205; pointer-events: none;
-  }
-  .rankup-medium-card {
-    pointer-events: auto; cursor: pointer; display: flex; align-items: center;
-    gap: 10px; padding: 8px 16px; border-radius: 8px;
-    background: rgba(11,25,41,.92); border: 1px solid var(--tier);
-    box-shadow: 0 8px 28px color-mix(in srgb, var(--tier) 40%, transparent);
-  }
-  /* Round 5 (addendum, task 8, 2026-07-26): 10px gap vs. a ~14.8px wing
-     spill at size 40 -- real overlap without this. */
-  .rankup-medium-icon { --icon-size: 40px; }
-  .rankup-medium-text { display: flex; flex-direction: column; line-height: 1.2; text-align: left; }
-  .rankup-medium-text b { color: var(--tier); font-size: 1rem; }
-  .rankup-medium-text i { font-style: normal; color: var(--muted); font-size: .72rem; }
-  @media (prefers-reduced-motion: no-preference) {
-    .rankup-medium { animation: rankup-medium-in .28s ease-out; }
-    @keyframes rankup-medium-in {
-      from { opacity: 0; transform: translate(-50%, -12px); }
-      to { opacity: 1; transform: translate(-50%, 0); }
-    }
-  }
-  /* The two ENTITY celebrations that lived here -- an inline glow pop for a
-     division-up and a small in-card toast for a tier-up -- were deleted with
-     task 0012 (2026-07-26). The rank-up is performed by the rank BANNER
-     itself climbing now (ui/rankclimb.js), on the very bar the rank already
-     lives on, so a toast beside it would be two things celebrating one
-     event. Their replacement variables (--climb-flash, --climb-settle-scale,
-     --climb-color) are up beside .rank-progress-track. */
+  /* The header's own card is hidden while its clone is out, so there is
+     never a double image -- and it must not climb, because the clone IS its
+     climb (one event, one thing celebrating it -- the mistake the deleted
+     entity toasts made). */
+  .marelo-slot.is-celebrating { opacity: 0; }
   /* Rank tab (rankpage.js): scope picker + card + chart + breakdown, all
      scaled off ONE scope response — no separate route/course/overall pages.
      --border-soft/--muted mirror the rest of the design system (this file
