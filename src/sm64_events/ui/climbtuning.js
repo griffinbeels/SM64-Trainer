@@ -33,7 +33,7 @@
 export const TUNABLES = {
   // ---- Pace: how long each kind of step lasts (ui/climbcurve.js) ---------
   barSweepFullMs: {
-    group: "Pace", label: "Bar sweep · full division", value: 250,
+    group: "Pace", label: "Bar sweep · full division", value: 900,
     min: 100, max: 4000, step: 10, unit: "ms",
     why: "How long the bar takes to travel a WHOLE division. Shorter sweeps scale by sqrt of the distance.",
   },
@@ -43,7 +43,7 @@ export const TUNABLES = {
     why: "Shortest any bar sweep may be. Below this a few percent of a division reads as a flicker.",
   },
   ladderStepMs: {
-    group: "Pace", label: "Ladder step", value: 220,
+    group: "Pace", label: "Ladder step", value: 100,
     min: 60, max: 1500, step: 10, unit: "ms",
     why: "One rank-up with the bar pinned full — also how long a whole condensed tier gets.",
   },
@@ -53,7 +53,7 @@ export const TUNABLES = {
     why: "Total shared by every ladder step in one climb. A climb with many steps shortens each.",
   },
   ladderStepMinMs: {
-    group: "Pace", label: "Ladder step · floor", value: 220,
+    group: "Pace", label: "Ladder step · floor", value: 100,
     min: 40, max: 800, step: 10, unit: "ms",
     why: "Shortest a ladder step may be squeezed to. Below this a rank-up reads as a stutter.",
   },
