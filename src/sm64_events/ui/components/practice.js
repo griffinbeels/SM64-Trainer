@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { requestTarget } from "../target.js";
+import { hasPracticeContext, practicedHere } from "../stagecontext.js";
 import { ReplayPlayer } from "./replay.js";
 import { StatMenu, DUST_STAT_KEYS } from "./statmenu.js";
 import { Timeline } from "./timeline.js";
@@ -888,14 +889,20 @@ function ResetFilterToggle({ ui }) {
 }
 
 function EmptyPractice({ v, t, ui, unassignedRows, freshIds, openCompare,
-                         hidden, showHidden, setShowHidden, openPicker }) {
+                         hidden, showHidden, setShowHidden, openPicker,
+                         inContext }) {
+  // Two states, two remedies, and the caller owns the words (the emptystate
+  // rule): standing in a course with nothing chosen, the fix is choosing. On
+  // the game's main screen or a hub there is nothing here TO choose, and
+  // "pick one above" would be pointing at the banner's own placeholder.
   return html`<div class="practice-detail-grid is-primary">
     <section class="practice-card objective-card objective-empty">
       <div class="objective-heading">
         <${ObjectiveEyebrow} iconName="target" label="Active objective"
           openPicker=${openPicker} />
         <div class="objective-name">
-          <span class="objective-context">Waiting for a target</span>
+          <span class="objective-context">${inContext
+            ? "Waiting for a target" : "Nothing to practice here"}</span>
           <h2>No active objective</h2>
         </div>
       </div>
@@ -910,8 +917,12 @@ function EmptyPractice({ v, t, ui, unassignedRows, freshIds, openCompare,
         <div><span class="eyebrow">Analysis</span><h3>Attempt history</h3></div>
       </div>
       <${EmptyState} headline="Nothing selected to practice"
-          hint=${"Pick a star or segment above — its timeline, trend and log all "
-               + "fill in here. The session keeps recording either way."} />
+          hint=${inContext
+            ? "Pick a star or segment above — its timeline, trend and log all "
+              + "fill in here. The session keeps recording either way."
+            : "Move into a course and its stars and segments appear above — "
+              + "you practice what you are standing in. The session keeps "
+              + "recording either way."} />
     </section>
     <section class="practice-card attempts-card">
       <div class="card-heading attempts-heading">
@@ -1073,12 +1084,36 @@ export function Practice({ t, openCompare }) {
   // — pin armed > sticky-recent > target-segment as before. (Tied to the
   // server rule: don't reintroduce a frontend "armed beats star" override, or
   // setting a star while a segment is still armed would wrongly hide the star.)
-  const starActive = tgt.kind !== "segment" && tgt.course_id != null;
+  // ...and NEITHER is active where nothing can be practiced. The target
+  // survives a hub on purpose (caveat 12 — the castle is transit, so an
+  // exit-and-re-enter keeps it), but "survives" is not "active": a new session
+  // on the game's main screen drew "No course target available" in the banner
+  // and, directly below it, the PREVIOUS session's Lethal Lava Land star under
+  // an ACTIVE TARGET eyebrow (live report 2026-07-27). Same predicate the
+  // banner uses, asked of `held` so a celebration freezes both together, and
+  // suppressing it here rather than inside the cards is what puts the target's
+  // own section back in the practice index below instead of hiding it twice.
+  //
+  // ...and a pin must also BELONG to the course under your feet, which is a
+  // SECOND rule (`practicedHere`) and not the same as having a context at
+  // all: warping lobby -> Whomp's Fortress -> Hazy Maze Cave left "ACTIVE
+  // SEGMENT LBLJ" on screen in both, each of which has a perfectly good
+  // context of its own (live report 2026-07-27). The server had retired the
+  // TARGET both times; what kept the card up was `lastPinnedSeg`, a sticky
+  // client memory set on arm that no place change ever cleared — hence the
+  // "Recent" tag rather than "Ready".
+  const inContext = hasPracticeContext(held);
+  const here = (sec) => practicedHere(sec, held);
+  const starActive = inContext && tgt.kind !== "segment" && tgt.course_id != null;
   const isActiveStar = (sec) => sec.course_id === tgt.course_id
     && sec.star_id === tgt.star_id;
   const isActiveSeg = (sec) => tgt.kind === "segment"
     && sec.segment_id === tgt.segment_id;
-  const activeStar = starActive ? v.stars.find(isActiveStar) : undefined;
+  // `here` on the star too, which also makes the switch INSTANT: stage_changed
+  // is broadcast-only and moves `t.stage` with no refetch, so between the warp
+  // and the next view the target field still names the star you just left.
+  const activeStar = starActive
+    ? v.stars.find((sec) => isActiveStar(sec) && here(sec)) : undefined;
   const activeSeg = segs.find(isActiveSeg);
   // Pinned segments — presentation only, the target does not move:
   // every currently-ARMED segment is "active now" and pins to the top,
@@ -1093,9 +1128,15 @@ export function Practice({ t, openCompare }) {
   const stickyPin = frozen.lastPinnedSeg != null
     ? segs.find((s) => s.segment_id === frozen.lastPinnedSeg)
     : undefined;
-  const pinnedSegs = starActive ? []
+  // ARMED pins are exempt from BOTH rules — a running timer is visible
+  // wherever it has got to (user rule 2026-07-24), which is also why
+  // `!inContext` can never drop one: armedPins is empty whenever that fires.
+  // The other two must belong here, and a sticky pin that doesn't falls
+  // through to the target rather than emptying the card over it.
+  const pinnedSegs = !inContext || starActive ? []
     : armedPins.length ? armedPins
-    : stickyPin ? [stickyPin] : activeSeg ? [activeSeg] : [];
+    : stickyPin && here(stickyPin) ? [stickyPin]
+    : activeSeg && here(activeSeg) ? [activeSeg] : [];
   // Only one detail surface owns the fixed Objective / Analysis / Attempts
   // tracks. Additional armed segments remain reachable in the stable index
   // below instead of inserting more full cards above the crop.
@@ -1166,6 +1207,7 @@ export function Practice({ t, openCompare }) {
             unassignedRows=${unassignedRows} freshIds=${freshIds}
             openCompare=${openCompare} hidden=${unassignedHidden}
             showHidden=${showUnassignedHidden} openPicker=${openTargetPicker}
+            inContext=${inContext}
             setShowHidden=${setShowUnassignedHidden} />`}
 
     ${routeView

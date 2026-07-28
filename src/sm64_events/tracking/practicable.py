@@ -42,11 +42,20 @@ def practicable_here(stage: dict | None, node: str | None) -> bool:
     the user with no way to pick anything:
       * `node` None — the definition names no place at all (a `reset_game`
         start, an unscoped key grab). "Anywhere" is a real answer, not a gap.
-      * no live stage — the emulator is not attached, or the player is on the
-        title screen. Nothing to compare against, so nothing to refuse; this
-        is also what keeps the target settable while reviewing with the game
-        closed.
+      * the player's place unknown — no stage at all, or a stage naming no
+        level (the service's boot default, before the emulator is attached).
+        Nothing to compare against, so nothing to refuse; this is what keeps
+        the target settable while reviewing with the game closed.
+
+    A stage whose `mode` is None is NOT one of those unknowns, and used to be
+    (fixed 2026-07-27, second round of the same ruling): the file select, the
+    castle grounds, the courtyard and the cap courses all resolve to mode
+    None, so that clause permitted every pick from exactly the places you
+    cannot practice anything in — including setting a Whomp's Fortress target
+    while standing on the grounds, the move this rule exists to stop. A level
+    names a place whether or not the quick-select banner has a row for it.
     """
-    if node is None or not stage or stage.get("mode") is None:
+    here = stage_origin(stage.get("level"), stage.get("area")) if stage else None
+    if node is None or here is None:
         return True
-    return stage_origin(stage.get("level"), stage.get("area")) == node
+    return here == node

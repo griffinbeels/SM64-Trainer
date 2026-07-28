@@ -207,6 +207,7 @@ from sm64_events.memory.addresses import (AREA_LOBBY, BOWSER_STAGE_LEVELS,
                                           CASTLE_REGION_NODES,
                                           CASTLE_SECRET_STAR_AREAS,
                                           COURSE_BY_LEVEL, COURSE_NAMES,
+                                          course_for_level,
                                           DOOR_ACTIONS, LEVEL_CASTLE_INSIDE,
                                           LEVEL_NAMES, node_key, node_label,
                                           region_for_node, star_count,
@@ -750,6 +751,29 @@ def stage_origin(level: int | None, area: int | None = None) -> str | None:
     if level is None:
         return None
     return node_key(level, area if level == LEVEL_CASTLE_INSIDE else None)
+
+
+def origin_course(node: str | None) -> int | None:
+    """The COURSE a world node belongs to, or None for the castle interior,
+    the hubs and the Bowser arenas -- the places that are TRANSIT.
+
+    This is the vocabulary the retirement rule speaks (projection.py caveat
+    12): setting a target needs you standing exactly at its node, but staying
+    on it only needs you not to have walked into a different course, because
+    every course is entered through the castle. So a card may keep showing a
+    castle movement while you walk back to its start, and must stop the moment
+    you are somewhere else entirely -- a segment practiced in the lobby still
+    read "ACTIVE SEGMENT LBLJ" inside Whomp's Fortress and again in Hazy Maze
+    Cave (live report 2026-07-27).
+
+    NOT views.segment_courses, which asks the same question through
+    `start_levels` (= `arm_level`, where a trigger LEAVES Mario) and so
+    answers None for 54 of the 65 seeded definitions -- including every
+    movement that starts in a course. That reader is why this one exists.
+    """
+    if node is None:
+        return None
+    return course_for_level(int(node.partition(":")[0]))
 
 
 def _clause_origin(trig: dict) -> str | None:

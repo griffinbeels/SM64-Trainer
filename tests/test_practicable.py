@@ -33,6 +33,7 @@ SEED = json.loads(bundled_defaults_seed().read_bytes().decode("utf-8"))
 T0 = datetime(2026, 7, 27, 12, 0, 0, tzinfo=timezone.utc)
 
 LEVEL_WF, LEVEL_CCM, LEVEL_SSL, LEVEL_CASTLE = 24, 5, 8, 6
+LEVEL_FILE_SELECT, LEVEL_GROUNDS = 1, 16   # both resolve to mode None
 COURSE_WF, COURSE_CCM = 2, 4
 
 
@@ -86,9 +87,24 @@ def test_a_course_is_one_place_however_many_areas_it_has():
 def test_both_unknowns_permit_the_pick():
     # a definition that names no place at all
     assert practicable_here(stage("stars", COURSE_CCM, LEVEL_CCM), None)
-    # no emulator attached / title screen: nothing to compare, nothing refused
+    # no emulator attached: nothing to compare against, nothing refused
     assert practicable_here(None, "24")
+    # ...including the service's boot default, a stage naming no level yet
     assert practicable_here(stage(None), "24")
+
+
+def test_a_mode_less_place_is_a_place_and_not_an_unknown():
+    """`mode` None is the file select, a hub, a cap course — somewhere real
+    with nothing to practice. It permitted EVERY pick until 2026-07-27 round
+    two, which is the hole this closes: you could set a Whomp's Fortress
+    target while standing on the castle grounds, the exact move the rule
+    exists to stop. The player's PLACE is the question, and a level answers
+    it whether or not the banner has a row for it."""
+    for level in (LEVEL_FILE_SELECT, LEVEL_GROUNDS):
+        here = stage(None, level=level)
+        assert not practicable_here(here, star_origin(COURSE_WF, 0))
+        assert not practicable_here(here, "24")
+        assert practicable_here(here, None)   # a placeless def still may
 
 
 # ---- the reader (this is the layer that was broken) -----------------------
@@ -166,6 +182,18 @@ def test_repicking_the_current_target_elsewhere_still_sets_its_strategy(tmp_path
     asyncio.run(svc.request_target("star", course_id=COURSE_CCM, star_id=5,
                                    strat_tag="Backflip WK"))
     assert svc.strat_by_star[(COURSE_CCM, 5)] == "Backflip WK"
+
+
+def test_a_pick_from_the_file_select_is_refused(tmp_path):
+    """THE live report of 2026-07-27 round two: a new session, the game on its
+    main screen, and the previous session's Lethal Lava Land star still
+    reading ACTIVE TARGET — with a picker that would happily have set
+    another. Nothing is practicable from the file select."""
+    db, svc = make(tmp_path)
+    enter(svc, None, level=LEVEL_FILE_SELECT)
+    with pytest.raises(ValueError, match="standing in"):
+        asyncio.run(svc.request_target("star", course_id=COURSE_WF, star_id=0))
+    assert svc.target is None
 
 
 def test_with_no_emulator_attached_anything_is_settable(tmp_path):

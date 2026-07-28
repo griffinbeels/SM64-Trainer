@@ -150,6 +150,23 @@ INVARIANTS = (
             "requestTarget does the write, puts the server's own sentence on "
             "screen, and returns whether it landed.",
     ),
+    SingleSource(
+        concept="whether the player is standing anywhere practicable",
+        owners=frozenset({"stagecontext.js"}),
+        tokens=("stage.mode", '"stars"', '"bowser_course"', '"arena"',
+                '"castle"'),
+        files=ui_js(),
+        why="The quick-select banner and the Active-target card both ask it, "
+            "and answered it separately until 2026-07-27: a new session on the "
+            "game's main screen drew 'No course target available' AND, "
+            "directly below it, the previous session's Lethal Lava Land star "
+            "wearing an ACTIVE TARGET eyebrow. ui/stagecontext.js owns the "
+            "mode list, the armed-segment clause and the read of stage.mode "
+            "itself; a file reaching for that field is a second surface "
+            "deciding what counts as practicing, which is exactly how those "
+            "two came apart. stagebanner.js keeps a row per mode, pinned to "
+            "the list by tests/test_ui_practice_context.py.",
+    ),
 )
 
 

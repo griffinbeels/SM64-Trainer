@@ -45,7 +45,8 @@ from sm64_events.stats.registry import (DEFAULT_STAT_MENU, REGISTRY,
 from sm64_events.tracking.projection import DEFAULT_MIN_FRAMES, journal_id
 from sm64_events.tracking.routes import route_stats
 from sm64_events.tracking.segments import (arm_level, course_groups,
-                                            origin_view, start_areas,
+                                            origin_course, origin_view,
+                                            segment_origin, start_areas,
                                             start_levels, start_origin,
                                             time_bounds)
 
@@ -1008,6 +1009,10 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     # holds, does not) — a separate lookup keyed the same as seg_defs so
     # each section can stamp its category/seeded without a second db read.
     seg_meta = {r["id"]: r for r in db.segment_defs()}
+    # The user's per-segment origin override (ui_state KV) — the same input
+    # the projector's retirement rule and the picker's availability take, so
+    # re-homing a segment moves where its card stays pinned too.
+    origin_overrides = db.get_state("origin_overrides", {})
     rta_of = lambda a: a.rta_frames
     seg_sections = []
     for seg_id in seen_segs:
@@ -1034,6 +1039,17 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "last_activity": last_id.get(("segment", seg_id), -1),
             "name": d.name if d else f"segment {seg_id} (deleted)",
             "broken": d is None,
+            # The course this segment is practiced IN, or None for the castle
+            # interior, the hubs and the arenas -- the same key a star section
+            # has always carried (rule 11), and the one the practice page
+            # compares against `stage.course_id` to decide whether a pinned
+            # card still belongs where the player is standing. Resolved
+            # through segment_origin, NOT segment_courses: that one reads
+            # `start_levels` and answers None for every movement starting in a
+            # course. A deleted definition has no place, which reads as
+            # "anywhere" and keeps its card, matching the projector.
+            "course_id": origin_course(segment_origin(
+                seg_id, d.start_triggers, origin_overrides)) if d else None,
             "armed": seg_id in armed,
             "category": meta.get("category"),
             "seeded": meta.get("seed_key") is not None,

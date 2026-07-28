@@ -31,6 +31,7 @@ import { h } from "preact";
 import { useEffect } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
+import { armedSegments, hasPracticeContext, practiceMode } from "../stagecontext.js";
 import { requestTarget } from "../target.js";
 import { Icon } from "./icons.js";
 import { PracticeCell } from "./practicecell.js";
@@ -41,30 +42,38 @@ const html = htm.bind(h);
 
 const CASTLE_AREA_NAMES = { 1: "Lobby", 2: "Upstairs", 3: "Basement" };
 
+// One row per PRACTICE_MODES id. The two lists are pinned to each other by
+// tests/test_ui_practice_context.py: a mode missing here would fall through to
+// the armed-only row, and a row whose mode is missing there is unreachable,
+// because the context question below is asked FIRST.
+const STAGE_ROWS = { stars: StarRow, bowser_course: BowserCourseRow,
+                     arena: ArenaRow, castle: SegmentRow };
+
 export function StageBanner({ t }) {
   const v = t.view;
-  const stage = t.stage;
-  if (!v) return html`<${StagePlaceholder} t=${t} />`;
-  let row = null;
-  switch (stage && stage.mode) {
-    case "stars":         row = html`<${StarRow} t=${t} v=${v} stage=${stage} />`; break;
-    case "bowser_course": row = html`<${BowserCourseRow} t=${t} v=${v} stage=${stage} />`; break;
-    case "arena":         row = html`<${ArenaRow} t=${t} v=${v} stage=${stage} />`; break;
-    case "castle":        row = html`<${SegmentRow} t=${t} v=${v} stage=${stage} />`; break;
-  }
-  // No banner for this place (hub, unknown stage) but a timer is live:
-  // show the running segments instead of the empty placeholder.
-  if (!row && armedSegments(t, v).length)
-    row = html`<${ArmedOnlyRow} t=${t} v=${v} />`;
-  return row || html`<${StagePlaceholder} t=${t} />`;
+  // The one door (../stagecontext.js), shared with the Active-target card so
+  // the two cannot say different things about the same place — they did, at
+  // the file select, where this drew its placeholder while the card below
+  // still named a star from the session before.
+  if (!hasPracticeContext(t)) return html`<${StagePlaceholder} t=${t} />`;
+  const Row = STAGE_ROWS[practiceMode(t)];
+  // No row for this place (hub, unknown stage) but a timer is live: show the
+  // running segments — the other half of hasPracticeContext.
+  return Row ? html`<${Row} t=${t} v=${v} stage=${t.stage} />`
+             : html`<${ArmedOnlyRow} t=${t} v=${v} />`;
 }
 
 function StagePlaceholder({ t }) {
   return html`<section class="practice-card selector-card stagebanner selector-empty">
     <div class="selector-empty-symbol" aria-hidden="true">☆</div>
+    ${/* It said "or pick one from the active target card below" until
+         2026-07-27. That stopped being true the day a pick from a place like
+         this started being REFUSED (tracking/practicable.py) — the card is
+         still there, but everything in it would come back with the server's
+         "you can only practice what you are standing in". */""}
     <div><b>No course target available</b>
-      <span class="meta">Move into a course, or pick one from the active
-        target card below.</span></div>
+      <span class="meta">Move into a course — you practice what you are
+        standing in.</span></div>
       </section>`;
 }
 
@@ -91,9 +100,6 @@ function routeSegmentFilter(v) {
 // the Bowser banner shows them so its "no reds" click can enable them.
 const segsForLevel = (v, level) =>
   (v.segment_targets || []).filter((s) => (s.start_levels || []).includes(level));
-
-const armedSegments = (t, v) =>
-  (v.segment_targets || []).filter((s) => t.armedSegs.has(s.segment_id));
 
 // Look flags — flip during the human-audit playtest to taste. Kept as
 // constants (not props) so the cell below stays a single readable line.
