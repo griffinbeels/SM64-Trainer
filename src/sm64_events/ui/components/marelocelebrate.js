@@ -189,7 +189,6 @@ export function MareloCelebration({ celebration, scopeId, marelo, routes,
     `--fly-ease:cubic-bezier(${tune.flyEaseIn},0,${tune.flyEaseOut},1)`,
     `--backdrop-alpha:${tune.backdropOpacity}`,
     `--backdrop-tint:${(tune.backdropTint * 100).toFixed(1)}%`,
-    `--shake-px:${tune.shakePx}px`,
     // The backdrop reads the CLIMB's own colour variable, so it cross-fades
     // with the tier instead of vanishing: "when ranking up, the background
     // gradient disappears? this is wrong ... all the colors should animate

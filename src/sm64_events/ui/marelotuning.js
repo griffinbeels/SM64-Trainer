@@ -74,11 +74,14 @@ export const MARELO_TUNABLES = {
     min: 1, max: 3, step: 0.05, unit: "x",
     why: "Multiplies the climb's own flash, shake and burst for THIS surface only, so the overall rank-up reads as bigger than the star banner running the identical registry.",
   },
-  shakePx: {
-    group: "Intensity", label: "Screen shake", value: 0,
-    min: 0, max: 24, step: 0.5, unit: "px",
-    why: "How far the whole overlay rattles on a tier crossing. 0 is off, which is where it ships until it has been judged live.",
-  },
+  // A `shakePx` row lived here until 2026-07-28 and was DELETED rather than
+  // shipped at 0. It wrote `--shake-px` and no CSS rule read it, so it did
+  // nothing at ANY value -- which is not "off by default", it is a broken
+  // control, and dragging it to 24px would have been indistinguishable from
+  // dragging it to 0. It satisfied `test_every_tunable_is_actually_read`
+  // because that guard only sees the JS side; the CSS-consumer guard beside
+  // it exists because of this row. Screen shake is a real feature someone can
+  // add later, with a frame trace proving it moves.
 };
 
 export const MARELO_DEFAULTS = Object.freeze(Object.fromEntries(

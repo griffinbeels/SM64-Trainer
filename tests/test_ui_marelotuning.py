@@ -80,3 +80,40 @@ def test_the_flight_curve_starts_and_ends_at_rest():
                     "console.log(JSON.stringify(MARELO_TUNABLES));")
     assert "flyEaseIn" in rows and "flyEaseOut" in rows
     assert not [key for key in rows if key.lower().endswith(("y1", "y2"))]
+
+
+CUSTOM_PROPERTY = re.compile(r"`--([a-z-]+):")
+
+
+def test_every_custom_property_the_overlay_writes_is_actually_used():
+    """A tunable that reaches a CSS variable NOTHING READS is still a slider
+    that does nothing -- and `test_every_tunable_is_actually_read_by_the_
+    celebration` above cannot see it, because from the JS side the value IS
+    read: it is interpolated into a style string. The property then lands on
+    the element and no rule ever consults it.
+
+    That shipped once. `shakePx` wrote `--shake-px`, no rule in index.html
+    read it, and it did nothing at any value -- indistinguishable at 24px from
+    its shipped 0, which is why "it ships off by default" was not a defence.
+    The row is gone; this guard is what stops the next one.
+
+    The pair matters: the JS guard proves the registry reaches the code, and
+    this one proves the code reaches a pixel. Neither implies the other."""
+    css = (UI / "index.html").read_text(encoding="utf-8")
+    written = set(CUSTOM_PROPERTY.findall(
+        "\n".join(code_only(path) for path in READERS)))
+    assert written, "no custom properties found -- re-point this guard"
+    dead = sorted(name for name in written if f"var(--{name}" not in css)
+    assert not dead, (
+        f"{dead} written by {[p.name for p in READERS]} but read by no rule in "
+        "index.html. A control that moves a variable nothing consults changes "
+        "nothing on screen.")
+
+
+def test_the_custom_property_guard_can_still_fail():
+    """Mutation proof, both directions: a scan that matches nothing is green
+    forever, and one tripped by a comment is worse than none."""
+    scan = lambda written, css: sorted(
+        name for name in written if f"var(--{name}" not in css)
+    assert scan({"ghost"}, ".x { color: red }") == ["ghost"]
+    assert scan({"live"}, ".x { color: var(--live, red) }") == []
