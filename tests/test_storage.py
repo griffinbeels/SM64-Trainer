@@ -643,12 +643,18 @@ def test_segment_defs_round_trip_match_mode(tmp_path):
         name="x", start_triggers=[{"type": "spawned"}],
         end_triggers=[{"type": "spawned"}], guards=[],
         created_utc="2026-07-28T00:00:00Z")
-    # New rows default to loose — the mode we want people authoring in.
-    assert next(r for r in db.segment_defs() if r["id"] == sid)["match_mode"] \
-        == "loose"
-    db.update_segment_def(sid, match_mode="strict")
+    # A bare insert_segment_def call defaults to strict (fix round, spec
+    # 2026-07-28-multi-step-segments Item 0) — matching the column DEFAULT and
+    # every existing row, so a fresh call at this layer agrees with a
+    # migrated install regardless of when either happened. "Loose" is an
+    # AUTHORING preference for a user-created segment, applied one layer up
+    # (SegmentBody.match_mode / TrackerService.create_segment always passes it
+    # explicitly), never a storage-layer default.
     assert next(r for r in db.segment_defs() if r["id"] == sid)["match_mode"] \
         == "strict"
+    db.update_segment_def(sid, match_mode="loose")
+    assert next(r for r in db.segment_defs() if r["id"] == sid)["match_mode"] \
+        == "loose"
 
 
 def test_existing_rows_migrate_to_strict(tmp_path):

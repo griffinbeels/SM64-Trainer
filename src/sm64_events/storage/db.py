@@ -252,9 +252,17 @@ MIGRATIONS = [
     # deadline passes. DEFAULT 'strict' with no repair UPDATE, deliberately:
     # every existing row keeps matching exactly as it did, and the seeded
     # corpus converts one movement at a time with the BFS corpus test proving
-    # each conversion safe. A NEW definition is created loose — that default
-    # lives in insert_segment_def, not here, because it is an authoring
-    # preference and not a statement about rows that already exist.
+    # each conversion safe. insert_segment_def's OWN Python default is ALSO
+    # 'strict' (fix round, spec 2026-07-28-multi-step-segments Item 0) — it
+    # briefly defaulted to 'loose' on the theory that a fresh row is always
+    # someone AUTHORING a new segment, but reconcile_defaults calls this same
+    # function to SEED the 55 castle movements on a fresh install, which is a
+    # shipped default, not authoring. That made a fresh install's movements
+    # come out loose while every migrated install's came out strict (backfilled
+    # by this very ALTER), two behaviours picked by install date. The one
+    # place "loose" IS the right authoring default is the API layer
+    # (SegmentBody.match_mode / TrackerService.create_segment), which always
+    # passes match_mode explicitly and so never falls back to this default.
     """
     ALTER TABLE segment_defs ADD COLUMN match_mode TEXT NOT NULL DEFAULT 'strict';
     """,
@@ -446,7 +454,7 @@ class Database:
                            category: str | None = None,
                            seed_key: str | None = None,
                            default_strat: str | None = None,
-                           match_mode: str = "loose") -> int:
+                           match_mode: str = "strict") -> int:
         with self._lock:
             cur = self._conn.execute(
                 "INSERT INTO segment_defs (name, enabled, start_triggers,"

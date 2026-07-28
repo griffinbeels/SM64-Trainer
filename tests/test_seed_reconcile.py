@@ -161,6 +161,51 @@ def test_real_bundled_seed_does_not_alter_existing_segment_defs(tmp_path):
                               "waypoints", "guards")})
 
 
+# -- Item 0 fix (spec 2026-07-28-multi-step-segments): a fresh install used to
+# seed 55 loose + 10 strict, split by INSERTION MECHANISM rather than intent
+# (the 10 legacy tricks land through migration SQL -> column DEFAULT 'strict';
+# the 55 movements land through this module calling db.insert_segment_def
+# WITHOUT match_mode -> that function's OWN Python default, which was
+# 'loose'). defaults.seed.json carries match_mode on none of its 65 rows, so
+# nothing is loose until a later task puts one on a specific movement — every
+# row must come out strict today, on ANY install, fresh or migrated.
+
+def test_fresh_install_seeds_every_definition_strict(tmp_path):
+    db = Database(tmp_path / "t.db")
+    seed = json.loads(bundled_defaults_seed().read_bytes().decode("utf-8"))
+    assert reconcile_defaults(db, seed) == []
+    rows = db.segment_defs()
+    assert len(rows) == 65
+    assert {s["match_mode"] for s in rows} == {"strict"}
+
+
+def test_reconcile_carries_match_mode_on_insert_and_refresh(tmp_path):
+    """Sibling of test_reconcile_carries_default_strat_on_insert_and_refresh:
+    once a later task puts match_mode on a seed row, reconcile must apply it
+    on the fresh INSERT and on every REFRESH of an untouched row — not just
+    the insert, or an already-installed row could never pick up a conversion
+    from strict to loose."""
+    db = Database(tmp_path / "t.db")
+    seeded = json.loads(json.dumps(SEED_V1))
+    seeded["segments"][0]["match_mode"] = "loose"
+    reconcile_defaults(db, seeded)
+    seg = next(s for s in db.segment_defs() if s["seed_key"] == "seg:demo")
+    assert seg["match_mode"] == "loose"
+    # a later seed can convert an untouched row...
+    seed2 = json.loads(json.dumps(seeded)); seed2["seed_version"] = 2
+    seed2["segments"][0]["match_mode"] = "strict"
+    reconcile_defaults(db, seed2)
+    assert next(s for s in db.segment_defs()
+                if s["id"] == seg["id"])["match_mode"] == "strict"
+    # ...but a dirtied row keeps its own
+    db.set_seed_dirty("segment_defs", seg["id"], 1)
+    seed3 = json.loads(json.dumps(seeded)); seed3["seed_version"] = 3
+    seed3["segments"][0]["match_mode"] = "loose"
+    reconcile_defaults(db, seed3)
+    assert next(s for s in db.segment_defs()
+                if s["id"] == seg["id"])["match_mode"] == "strict"
+
+
 def test_reconcile_carries_default_strat_on_insert_and_refresh(tmp_path):
     """The 55 movements gain "Standard" purely through the reconcile — they are
     seeded and untouched, so no repair migration is needed (spec §5)."""

@@ -67,7 +67,13 @@ def reconcile_defaults(db, seed: dict) -> list[str]:
                     enabled=srow.get("enabled", True),
                     waypoints=srow.get("waypoints", []),
                     category=srow.get("category"), seed_key=key,
-                    default_strat=srow.get("default_strat"))
+                    default_strat=srow.get("default_strat"),
+                    # A seed row's own match_mode flows through once a later
+                    # task puts one on it (spec 2026-07-28-multi-step-segments
+                    # Item 0); "strict" until then, matching the column
+                    # default and every existing row rather than the insert
+                    # function's own now-gone "loose" default.
+                    match_mode=srow.get("match_mode", "strict"))
             else:
                 key_to_id[key] = existing["id"]
                 if not existing["seed_dirty"]:
@@ -79,7 +85,11 @@ def reconcile_defaults(db, seed: dict) -> list[str]:
                         waypoints=srow.get("waypoints", []),
                         guards=srow.get("guards", []),
                         category=srow.get("category"),
-                        default_strat=srow.get("default_strat"))
+                        default_strat=srow.get("default_strat"),
+                        # Same reasoning as the insert branch above: an
+                        # ALREADY-installed, untouched row must also pick up a
+                        # later seed conversion, not just a fresh install.
+                        match_mode=srow.get("match_mode", "strict"))
         except _SEED_ERRORS as exc:
             problems.append(f"segment {key}: {exc}")
     route_by_key = {r["seed_key"]: r for r in db.routes() if r.get("seed_key")}
