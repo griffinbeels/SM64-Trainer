@@ -161,7 +161,8 @@ def test_card_waiting_for_sentence_is_not_the_editors_voice():
 
 def test_every_trigger_template_resolves_cleanly():
     """Guard for the clause renderer behind waiting_for_sentence AND its
-    Task 6 sibling card_waiting_for_sentence: every TriggerType's template,
+    Task 6 sibling card_waiting_for_sentence: every TriggerType's template
+    (editor AND card, fix round 1: card_template may differ from template),
     filled with every param IT declares, must leave no literal "{token}"
     behind in EITHER voice, and every param name the template mentions must
     be one this trigger actually has in its own `params` dict. Fails the day
@@ -172,6 +173,10 @@ def test_every_trigger_template_resolves_cleanly():
         named = set(re.findall(r"\{(\w+)\}", spec.template))
         assert named <= set(spec.params), \
             f"{spec.key}: template names {named - set(spec.params)}, " \
+            "which is not one of its own params"
+        card_named = set(re.findall(r"\{(\w+)\}", spec.card_template or spec.template))
+        assert card_named <= set(spec.params), \
+            f"{spec.key}: card_template names {card_named - set(spec.params)}, " \
             "which is not one of its own params"
         clause = {"type": spec.key}
         for name, meta in spec.params.items():
@@ -186,6 +191,72 @@ def test_every_trigger_template_resolves_cleanly():
         assert "{" not in card_sentence and "}" not in card_sentence, \
             f"{spec.key}: leftover template token in card phrasing {card_sentence!r}"
         assert spec.card_label in card_sentence
+
+
+def test_every_card_fallback_param_resolves_cleanly_when_unset():
+    """The generic loop above always fills EVERY declared param, so it can
+    never exercise a card_fallbacks entry -- that only fires when a param is
+    LEFT unset. This is the "same probe proving the guard can fail" for
+    card_template's one new mechanism: build a clause omitting exactly the
+    fallback-bearing params (every other declared param still filled), and
+    assert the fallback text appears with no leftover token. Runs for every
+    TriggerType that declares a fallback today (just star_grabbed), so a
+    future type gets the same coverage for free rather than a bespoke test."""
+    kind_samples = {"level": 6, "subarea": 1, "course": 1, "star": 0}
+    fallback_specs = [s for s in TRIGGERS.values() if s.card_fallbacks]
+    assert fallback_specs, "no TriggerType declares card_fallbacks -- update this probe"
+    for spec in fallback_specs:
+        clause = {"type": spec.key}
+        for name, meta in spec.params.items():
+            if name not in spec.card_fallbacks:
+                clause[name] = kind_samples[meta["kind"]]
+        d = SegmentDef(id=1, name="probe", enabled=True, guards=[],
+                       start_triggers=[], end_triggers=[clause])
+        card_sentence = card_waiting_for_sentence(d, 0)
+        assert "{" not in card_sentence and "}" not in card_sentence, \
+            f"{spec.key}: leftover template token with fallback params unset: " \
+            f"{card_sentence!r}"
+        for name, fallback_text in spec.card_fallbacks.items():
+            assert fallback_text in card_sentence, \
+                f"{spec.key}: fallback {fallback_text!r} for {name!r} missing " \
+                f"from {card_sentence!r}"
+
+
+def test_star_grabbed_card_phrase_names_the_star_and_course():
+    # Fix round 1, 2026-07-28: the shared editor template read as a visible
+    # artifact on the card ("Grab the star in Dire, Dire Docks, star Board
+    # Bowser's Sub"). course=9/star=0 is Dire, Dire Docks' "Board Bowser's
+    # Sub" -- the real names, not synthesized for this test.
+    d = SegmentDef(id=1, name="probe", enabled=True, guards=[],
+                   start_triggers=[],
+                   end_triggers=[{"type": "star_grabbed", "course": 9, "star": 0}])
+    assert card_waiting_for_sentence(d, 0) == "Grab Board Bowser's Sub in Dire, Dire Docks"
+    # And the editor's own voice is unchanged by any of this.
+    assert waiting_for_sentence(d, 0) == \
+        "You grab a star in Dire, Dire Docks, star Board Bowser's Sub"
+
+
+def test_star_grabbed_card_phrase_falls_back_when_the_star_is_unset():
+    # Same course, no specific star: the object of the sentence must not
+    # vanish along with the unset param.
+    d = SegmentDef(id=1, name="probe", enabled=True, guards=[],
+                   start_triggers=[],
+                   end_triggers=[{"type": "star_grabbed", "course": 9}])
+    assert card_waiting_for_sentence(d, 0) == "Grab a star in Dire, Dire Docks"
+
+
+def test_card_fallback_is_per_param_not_a_blanket_rule():
+    # The mechanism must be selective (only params LISTED in card_fallbacks
+    # render unconditionally), not "every unset param on a card renders
+    # something" -- course_grabbed's `course` has no fallback entry, so a
+    # star-only clause still prunes it the ordinary way, exactly like the
+    # editor voice.
+    d = SegmentDef(id=1, name="probe", enabled=True, guards=[],
+                   start_triggers=[],
+                   end_triggers=[{"type": "star_grabbed", "star": 0}])
+    sentence = card_waiting_for_sentence(d, 0)
+    assert sentence == "Grab Star 1"   # no course -> generic star name, no "in"
+    assert "in " not in sentence
 
 
 def test_start_level_set_classifies_level_bound_defs():

@@ -358,13 +358,38 @@ class TriggerType:
     key: str
     label: str
     # Card-facing phrasing (spec 2026-07-28-multi-step-segments, Task 6): the
-    # SAME template, read as an imperative step ("Enter" / "Exit" / "Grab the
-    # key") instead of editor voice ("You enter level" / "You exit level" /
-    # "You grab a Bowser key / grand star") -- see card_waiting_for_sentence.
+    # SAME template BY DEFAULT, read as an imperative step ("Enter" / "Exit" /
+    # "Grab the key") instead of editor voice ("You enter level" / "You exit
+    # level" / "You grab a Bowser key / grand star") -- see
+    # card_waiting_for_sentence. A type overrides `card_template` below only
+    # when the editor's own template genuinely reads wrong on a card (fix
+    # round 1, 2026-07-28: star_grabbed's "in {course}, star {star}" produced
+    # "Grab the star in Dire, Dire Docks, star Board Bowser's Sub" -- visibly
+    # a template artifact).
     card_label: str
     params: dict  # name -> {"kind": "level"|"area"|"course"|"star"|"int", "required": bool}
     template: str  # sentence after the type label: "{to} coming from {from}"
     match: Callable[[dict, object, MatchContext], bool]
+    # None = card rendering reuses `template` verbatim (every type but
+    # star_grabbed today). Set only when the shared template's WORD ORDER or
+    # phrasing is wrong for the imperative card voice -- this is still the
+    # SAME registry doing the SAME job one field further, not a second
+    # renderer: it goes through the identical `_render_clause` tokenizer and
+    # `_resolve_param` lookups, just against a different template string.
+    card_template: str | None = None
+    # Per-param FALLBACK TEXT for the card template only, keyed by param
+    # name -- e.g. {"star": "a star"}. The editor's pruning rule drops a
+    # param's whole literal+placeholder segment when its clause value is
+    # unset (an optional `from` renders nothing rather than "coming from ");
+    # that is right for a connector clause but wrong for star_grabbed's
+    # `star` on a card, where dropping it silently would leave "Grab in
+    # Bowser in the Fire Sea" with no object. A param listed here renders
+    # UNCONDITIONALLY on the card, substituting this text when unset, so
+    # "Grab a star in <course>" is what a course-only clause reads instead of
+    # vanishing the word "star" entirely. Never serialized to vocab() (the
+    # builder's own clause form has no fallback-text concept, only real
+    # dropdown values) -- read only by `_render_clause` in card mode.
+    card_fallbacks: dict = field(default_factory=dict)
 
 
 def _real_edge(ev) -> bool:
@@ -488,7 +513,7 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 lambda p, ev, ctx: ev.type == "key_grabbed"
                 and (p.get("level") is None
                      or ev.payload["level"] == p["level"])),
-    TriggerType("star_grabbed", "You grab a star", "Grab the star",
+    TriggerType("star_grabbed", "You grab a star", "Grab",
                 {"course": {"kind": "course", "required": False},
                  "star": {"kind": "star", "required": False}},
                 "in {course}, star {star}",
@@ -496,7 +521,16 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 and (p.get("course") is None
                      or ev.payload["course_id"] == p["course"])
                 and (p.get("star") is None
-                     or ev.payload["star_id"] == p["star"])),
+                     or ev.payload["star_id"] == p["star"]),
+                # Card template leads with the STAR, editor leads with the
+                # course -- "Grab Board Bowser's Sub in Dire, Dire Docks"
+                # reads right; "Grab in Dire, Dire Docks, star Board
+                # Bowser's Sub" is the template artifact this replaces (fix
+                # round 1, 2026-07-28). `star`'s fallback keeps the object of
+                # the sentence present even when the clause names a course
+                # but no specific star ("Grab a star in <course>").
+                card_template="{star} in {course}",
+                card_fallbacks={"star": "a star"}),
     TriggerType("spawned", "You spawn into the game", "Spawn",
                 {"level": {"kind": "level", "required": False}},
                 "in {level}",
@@ -552,13 +586,18 @@ def _resolve_param(kind: str, value, clause: dict) -> str:
 _TEMPLATE_TOKENS = re.compile(r"(\{\w+\})")
 
 
-def _render_clause(clause: dict, label_attr: str = "label") -> str:
+def _render_clause(clause: dict, label_attr: str = "label",
+                    template_attr: str = "template") -> str:
     """One trigger clause -> plain English, through TRIGGERS[type].<label_attr>
-    + .template (spec 2026-07-28-multi-step-segments; waiting_for_sentence and
-    card_waiting_for_sentence below are the only callers, selecting "label"
-    (editor voice) or "card_label" (imperative) respectively — same template,
-    same param-pruning, different leading phrase, which is why this takes
-    WHICH FIELD to read rather than being duplicated per caller.
+    + .<template_attr> (spec 2026-07-28-multi-step-segments; waiting_for_sentence
+    and card_waiting_for_sentence below are the only callers, selecting
+    ("label", "template") for editor voice or ("card_label", "card_template")
+    for the imperative card — same tokenizer and param lookups either way,
+    different leading phrase and (when a type overrides it) a different
+    template string, which is why this takes WHICH FIELDS to read rather
+    than being duplicated per caller. `card_template` is None for every type
+    but star_grabbed today, so `spec.card_template or spec.template` is a
+    genuine no-op there — reusing the editor's template IS the default.
 
     A param the clause leaves unset drops its own SEGMENT of the template —
     the literal words that introduce it, together with the placeholder —
@@ -569,6 +608,15 @@ def _render_clause(clause: dict, label_attr: str = "label") -> str:
     text after the LAST placeholder is unconditional trailing punctuation.
     A required param (the common case) is always present, so this only ever
     prunes an OPTIONAL one the author left blank ("any level" etc).
+
+    A param named in `card_fallbacks` (fix round 1, 2026-07-28) is the ONE
+    exception to that pruning, and ONLY when rendering a card template
+    (`template_attr != "template"` — the editor's own preview must never
+    silently substitute text the author didn't enter): its segment renders
+    unconditionally, using the fallback text in place of a resolved value
+    when the clause leaves it unset. star_grabbed's `star` is the one param
+    that needs this — pruning it the editor's way would leave a course-only
+    card clause reading "Grab in Bowser in the Fire Sea" with no object.
 
     A placeholder naming a param outside its own trigger's `params` (an
     authoring bug in TRIGGERS itself) renders the brace literally instead of
@@ -581,7 +629,8 @@ def _render_clause(clause: dict, label_attr: str = "label") -> str:
     for why that is not a second door."""
     spec = TRIGGERS[clause["type"]]
     label = getattr(spec, label_attr)
-    tokens = _TEMPLATE_TOKENS.split(spec.template)
+    template = getattr(spec, template_attr) or spec.template
+    tokens = _TEMPLATE_TOKENS.split(template)
     parts: list[str] = []
     i = 0
     while i + 1 < len(tokens):
@@ -596,6 +645,9 @@ def _render_clause(clause: dict, label_attr: str = "label") -> str:
             if value is not None:
                 parts.append(literal_before)
                 parts.append(_resolve_param(meta["kind"], value, clause))
+            elif template_attr != "template" and name in spec.card_fallbacks:
+                parts.append(literal_before)
+                parts.append(spec.card_fallbacks[name])
         i += 2
     parts.append(tokens[-1])   # trailing literal after the last placeholder
     return f"{label} {''.join(parts)}".strip()
@@ -626,9 +678,9 @@ def waiting_for_sentence(d: SegmentDef, progress: int) -> str:
 def card_waiting_for_sentence(d: SegmentDef, progress: int) -> str:
     """Card-facing sibling of waiting_for_sentence (spec 2026-07-28-multi-
     step-segments, Task 6): the same next-unconsumed-waypoint-or-end-trigger
-    clause set, rendered through TRIGGERS[type].card_label instead of .label
-    -- "Enter Shifting Sand Land", never editor-voice "You enter level
-    Shifting Sand Land".
+    clause set, rendered through TRIGGERS[type].card_label + .card_template
+    instead of .label + .template -- "Enter Shifting Sand Land", never
+    editor-voice "You enter level Shifting Sand Land".
 
     waiting_for_sentence's output is correct FOR THE BUILDER (it renders
     cleanly against every seeded definition — no leftover tokens, clean
@@ -642,10 +694,14 @@ def card_waiting_for_sentence(d: SegmentDef, progress: int) -> str:
     value in it are different artifacts, and a string trying to serve both
     reads wrong in one of the two places every time. What IS shared is the
     template/param-pruning machinery in _render_clause, since that is the
-    same mechanical substitution for both voices of the same clause."""
+    same mechanical substitution for both voices of the same clause —
+    `card_template` (fix round 1, 2026-07-28) is still that SAME machinery,
+    reading a different template string for the one type (star_grabbed)
+    whose shared template read as a visible artifact on a card
+    ("Grab the star in Dire, Dire Docks, star Board Bowser's Sub")."""
     clause_set = (d.waypoints[progress] if progress < len(d.waypoints)
                  else d.end_triggers)
-    return " or ".join(_render_clause(clause, "card_label")
+    return " or ".join(_render_clause(clause, "card_label", "card_template")
                        for clause in clause_set)
 
 
