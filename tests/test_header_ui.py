@@ -171,3 +171,33 @@ def test_target_picker_resolves_segment_art_like_the_banner_does():
     assert 'from "./entityicons.js"' in PICKER_JS
     assert "iconContext" not in strip_comments(PICKER_JS), \
         "the target picker is back to holding an icon context of its own"
+
+
+def test_the_tuning_page_is_reachable_from_the_app_and_from_the_launcher():
+    """A dev page behind a hand-typed path is a page that does not exist.
+
+    The tuning inspector spent its first day that way and went missing the
+    moment the port moved -- the user had restarted on 8066 while the only
+    written-down URL said 8065 ("I clicked run-test-server.bat and restarted
+    our server on 8066, but I don't see the demo page loading. If I click
+    run-test-server.bat, I would expect any demo pages we have to also work",
+    2026-07-27). Two entry points, so neither the app nor the launcher can be
+    the only one that knows.
+
+    The href must stay ORIGIN-RELATIVE. The server binds 8064 frozen, 8065
+    from source and whatever run-test-server.bat was given, so any absolute
+    URL here is wrong in at least two of the three -- which is the whole bug.
+    """
+    code = strip_comments(HEADER_JS)
+    assert 'href="/ui/tune.html"' in code, \
+        "the settings drawer no longer links to the tuning page"
+    assert not re.search(r'href="https?://[^"]*tune\.html', code), \
+        "the tuning link must be origin-relative, never a hardcoded host/port"
+
+    launcher = (UI.parent.parent.parent / "run-test-server.bat").read_text(
+        encoding="utf-8")
+    assert "/ui/tune.html" in launcher, \
+        "run-test-server.bat must print every dev page it hosts"
+    assert "%SM64_PORT%/ui/tune.html" in launcher, \
+        ("the launcher's URL must interpolate the port it actually chose -- a "
+         "literal port there is the exact failure this test exists for")

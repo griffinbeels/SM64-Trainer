@@ -58,7 +58,12 @@ uv sync
 echo.
 echo ============================================================
 echo   SM64 Trainer  --  TEST server (from source, main)
-echo   URL:   http://127.0.0.1:%SM64_PORT%
+echo   URL:    http://127.0.0.1:%SM64_PORT%
+REM  Every dev/demo page this server hosts gets printed HERE, with the port
+REM  already filled in. The tuning page existed for a day behind a hand-typed
+REM  path and was unreachable the moment this script picked a different port
+REM  (2026-07-27) -- if you add another one, add its line here too.
+echo   Tuning: http://127.0.0.1:%SM64_PORT%/ui/tune.html   (rank-up climb feel)
 echo   The real trainer exe keeps its own port (8064) untouched.
 echo   Press CTRL+C in this window to stop the test server.
 echo ============================================================

@@ -244,6 +244,19 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
           <p class="settings-note">When one PB climbs through a whole rank you
             never stop in, either pop its wings out on the way past or keep the
             wings on and chain the caps together.</p>
+          ${/* An ORIGIN-RELATIVE href, which is the whole point of putting the
+               link here: the server's port moves (8064 frozen, 8065 from
+               source, whatever run-test-server.bat was given), and a written-
+               down URL is wrong the moment it does -- which is exactly how
+               this page went missing on its first day (user, 2026-07-27: "I
+               clicked run-test-server.bat and restarted our server on 8066,
+               but I don't see the demo page loading"). A relative link cannot
+               name the wrong port. */""}
+          <p class="settings-note">
+            <a href="/ui/tune.html" target="_blank" rel="noopener">Open the
+              rank-up tuning page</a> — play any climb, tune every timing,
+            and save the result straight back into the code.
+          </p>
           <label class="settings-field">
             <span>Dust-trick counts</span>
             <input type="checkbox" checked=${t.showDust}
