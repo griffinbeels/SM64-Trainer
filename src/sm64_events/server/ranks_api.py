@@ -361,8 +361,14 @@ def create_ranks_router(service) -> APIRouter:
             return None if ladder is None else scoring.score_for(
                 ladder, classify.display_cs(frames))
 
-        feed = marelo_bridge.successes_for(service.db.attempts(),
-                                           service.ranks.clock_for)
+        # Same source as the RATING, mode for mode (tracking/marelo.py): the
+        # saved pbs in pb mode, every success in the averages. A chart drawn
+        # from a different source than the card above it ends on a different
+        # number, and _decimate always keeps the newest point.
+        feed = (marelo_bridge.pb_feed(service.db.pbs(), service.ranks.clock_for)
+                if classify.RANK_MODES[mode]["order"] is None
+                else marelo_bridge.successes_for(service.db.attempts(),
+                                                 service.ranks.clock_for))
         return {"scope_id": scope_id,
                 "points": history.history_series(feed, groups, scorer, mode)}
 

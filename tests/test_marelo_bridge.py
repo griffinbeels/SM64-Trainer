@@ -1,5 +1,5 @@
 from sm64_events.tracking.marelo import (
-    entity_ladders, entity_scores, successes_for)
+    entity_ladders, entity_scores, pb_feed, successes_for)
 from sm64_events.tracking.projection import Attempt
 
 
@@ -183,3 +183,27 @@ def test_avg_modes_still_grade_unsaved_attempts():
     with_pbs = entity_scores(runs, RANKS, ["star:1:0"], "avg10", [pb()])
     without = entity_scores(runs, RANKS, ["star:1:0"], "avg10", [])
     assert with_pbs == without != {}
+
+
+def clock_of(key):
+    return "rta" if key.startswith("segment:") else "igt"
+
+
+def test_pb_feed_is_chronological_and_shaped_like_successes_for():
+    rows = [pb(id=1, frames=1500, saved_utc="a"),
+            pb(id=2, frames=1350, saved_utc="b")]
+    assert pb_feed(rows, clock_of) == [
+        {"utc": "a", "key": "star:1:0", "strat": "Fast", "frames": 1500},
+        {"utc": "b", "key": "star:1:0", "strat": "Fast", "frames": 1350}]
+
+
+def test_pb_feed_skips_untagged_rows_and_the_wrong_clock():
+    rows = [pb(id=1, strat_tag=None), pb(id=2, timer_mode="rta")]
+    assert pb_feed(rows, clock_of) == []
+
+
+def test_pb_feed_carries_segment_rows_on_rta():
+    rows = [pb(course_id=None, star_id=None, segment_id=5, timer_mode="rta",
+               strat_tag="Standard", frames=300, saved_utc="a")]
+    assert pb_feed(rows, clock_of) == [
+        {"utc": "a", "key": "segment:5", "strat": "Standard", "frames": 300}]

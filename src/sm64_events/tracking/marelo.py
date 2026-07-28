@@ -135,3 +135,27 @@ def successes_for(attempts: list[Attempt],
         feed.append({"utc": attempt.ended_utc, "key": key,
                      "strat": attempt.strat_tag, "frames": frames})
     return feed
+
+
+def pb_feed(pb_rows: list[dict], clock_of: Callable[[str], str]) -> list[dict]:
+    """The chronological feed `ranks.history.history_series` consumes in PB
+    mode -- one entry per SAVED pb, in save order.
+
+    Same shape as `successes_for` so history_series needs no branch of its
+    own. It is a different SOURCE, not a filtered version of that one: an
+    undone save has had its row deleted, so it is simply absent here, which is
+    what makes undoing a PB rewrite the curve as well as the rating (task
+    0034: "If I ever undo a pb, those same marelo points should be taken
+    away").
+
+    `pb_rows` must be id-ordered, which `db.pbs()` is."""
+    feed = []
+    for row in pb_rows:
+        if not row["strat_tag"]:
+            continue
+        key = entity_key(row["course_id"], row["star_id"], row["segment_id"])
+        if row["timer_mode"] != clock_of(key):
+            continue
+        feed.append({"utc": row["saved_utc"], "key": key,
+                     "strat": row["strat_tag"], "frames": row["frames"]})
+    return feed

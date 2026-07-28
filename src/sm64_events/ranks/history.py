@@ -1,10 +1,15 @@
 """MARELO over time, recomputed rather than stored (spec section 6).
 
-Score at a moment is a function of the attempts up to it, so a scope's history
-is a chronological replay: maintain each (entity, strategy)'s frame list, apply
-the active rank mode's window to get that strategy's basis, take the best
-strategy per entity, and re-aggregate after every success. No new storage, and
-every scope gets its own curve for free.
+Score at a moment is a function of the times counted up to it, so a scope's
+history is a chronological replay: maintain each (entity, strategy)'s frame
+list, apply the active rank mode's basis, take the best strategy per entity,
+and re-aggregate after every entry. No new storage, and every scope gets its
+own curve for free.
+
+WHICH times get counted is the caller's choice and mirrors the rating exactly
+(tracking/marelo.py): saved PBs in pb mode, successful attempts in the average
+modes. Feeding successes in pb mode is how the chart used to climb for runs
+the user had never saved (task 0034).
 
 Two consequences the UI must state rather than hide: history is recomputed
 against CURRENT standards (a seed bump reshapes the past), and editing a route
@@ -60,8 +65,13 @@ def history_series(successes: list[dict], groups: list[dict],
 
 def _basis(frames: list[int], mode_def: dict) -> int | None:
     """The frame count this mode grades for one (entity, strategy)."""
-    if mode_def["order"] is None:                      # pb mode: the best ever
-        return min(frames) if frames else None
+    if mode_def["order"] is None:
+        # pb mode: the LATEST saved pb, not the fastest one. The feed is
+        # `marelo.pb_feed`, one entry per SAVE, and the pbs contract is
+        # latest-row-wins -- a deliberate save of a slower run IS the current
+        # PB (which is the whole reason undo_pb exists). min() here would make
+        # the chart's last point disagree with the card above it.
+        return frames[-1] if frames else None
     averaged = average_frames(frames, mode_def["window"], mode_def["order"])
     if averaged is None:
         return None
