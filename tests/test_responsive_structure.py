@@ -28,9 +28,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from css_blocks import (UI_HTML, is_shell, parse_blocks,  # noqa: E402
                         size_blocks, style_block)
 
-# Generated 2026-07-28 from the shipping stylesheet; the command is in
-# docs/superpowers/plans/2026-07-28-responsive-wave1-audit-rig.md, Task 2.
-# Every row is Wave 2 work, not a permanent excuse.
+# Generated 2026-07-28 from the shipping stylesheet.  Every row is Wave 2 work,
+# not a permanent excuse.  Regenerate the whole dict with:
+#
+#   uv run python -c "import sys; sys.path.insert(0, 'tools'); \
+#     from css_blocks import *; \
+#     css = style_block(UI_HTML.read_text(encoding='utf-8')); \
+#     [print(repr(b.condition + ' :: ' + s) + ': \"...\",') \
+#      for b in size_blocks(parse_blocks(css)) if b.kind == 'media' \
+#      for s in b.selectors if not is_shell(s)]"
 LEGACY_VIEWPORT_RULES: dict[str, str] = {
     '(max-width:820px) :: .compare-grid': "pre-existing 2026-07-28; Wave 2",
     '(max-width:820px) :: .compare-col, .compare-center': "pre-existing 2026-07-28; Wave 2",
