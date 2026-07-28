@@ -245,3 +245,30 @@ def test_the_next_step_fade_is_driven_by_the_engine_not_by_a_beat():
     assert "opacity: var(--climb-reveal" in rule.group(1), rule.group(1)
     assert "mask" not in rule.group(1), (
         "the reveal is a fade now, not a wipe -- see the CSS comment")
+
+
+def test_a_banners_flap_never_gates_the_next_banners_climb():
+    """The two ranks on a card climb in turn, and the hand-off is the first
+    one's PLAN ending — never its celebration tail.
+
+    "if the wings are flapping for a while for the strategy rank, it shouldn't
+    block the star rank from starting its level up animation" (user,
+    2026-07-27). Measured before pinning: doubling `wingFlapMs` from 1500 to
+    3000 moved the star's first rank tick by 25ms (frame noise) while the
+    strategy went on animating 1529ms longer, so the two overlap for ~2.1s.
+
+    `tailMs` and `totalMs` sit four lines apart and mean almost the same thing
+    in English, which is exactly how a future edit swaps them: the gap would
+    grow by however long the flap is, and nothing else would look wrong.
+    """
+    from source_scan import strip_comments
+    engine = strip_comments(RANKCLIMB_JS.read_text(encoding="utf-8"))
+    hand_off = re.search(r"const laneEndsAt = ([^;]+);", engine)
+    assert hand_off, "the lane hand-off moved -- this guard cannot see it"
+    assert "totalMs" in hand_off.group(1), hand_off.group(1)
+    assert "tail" not in hand_off.group(1).lower(), (
+        "the lane hand-off waits for the celebration TAIL, so a longer wing "
+        f"flap now delays the next banner: {hand_off.group(1)}")
+    # `tailMs` still has a job -- keeping the loop alive so the flap finishes.
+    assert "tailMs" in engine, (
+        "nothing keeps ticking for the tail; the last flap would freeze mid-beat")
