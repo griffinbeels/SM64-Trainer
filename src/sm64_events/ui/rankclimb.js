@@ -182,7 +182,8 @@ function renderState(level, bar, beats, atMs, tune, reveal = 1, landing = false)
  * site so no surface ever builds icon props itself.
  */
 export function useRankClimb(rank, identity = null,
-                             { lane = null, order = 0, replayKey = null } = {}) {
+                             { lane = null, order = 0, replayKey = null,
+                               tune: tuneOverride = null } = {}) {
   // Level and fill are kept APART from here down. `rankPosition(..., 0)` is
   // exactly the level, and asking for it with a fill of 1 (which ranks.js
   // legitimately sends for a maxed rank) would return 45 — a level that does
@@ -241,7 +242,12 @@ export function useRankClimb(rank, identity = null,
     // mid-flight would retime an animation that is already half-played, and
     // the inspector at /ui/tune.html works by resetting and re-triggering
     // rather than by mutating a running one.
-    const tune = tuning();
+    //
+    // A caller may override it (components/marelocelebrate.js, 2026-07-28):
+    // the overall rank-up runs the SAME registry as the banners but louder,
+    // and amplifying it is a multiplied tuning rather than a second set of
+    // effects. Nothing else passes one.
+    const tune = tuneOverride || tuning();
 
     const identityChanged = identityRef.current !== identity;
     identityRef.current = identity;
@@ -478,7 +484,7 @@ export function useRankClimb(rank, identity = null,
       // not keep its sibling waiting for a slot it will never use.
       if (lane && laneEnds.get(lane) === laneEndsAt) laneEnds.delete(lane);
     };
-  }, [target, identity, lane, order, replayKey]);
+  }, [target, identity, lane, order, replayKey, tuneOverride]);
 
   return state && { ...state, climbing: frameRef.current != null };
 }

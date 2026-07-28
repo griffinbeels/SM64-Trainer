@@ -14,7 +14,7 @@ import { UpdatePopup } from "./components/update.js";
 import { RecordingDot } from "./components/replay.js";
 import { Icon } from "./components/icons.js";
 import { RankPage } from "./components/rankpage.js";
-import { RankUpOverlay } from "./components/celebrate.js";
+import { RankUpCelebration } from "./components/marelocelebrate.js";
 
 const html = htm.bind(h);
 
@@ -188,8 +188,10 @@ function App() {
          the Practice page must still celebrate, and rule 10 (browser<->GUI
          parity) means the desktop window and the browser tab agree on this
          without desktop/ adding a second copy. */""}
-    <${RankUpOverlay} celebration=${t.marelo && t.marelo.celebration}
-      scopeId=${t.marelo && t.marelo.scope_id} onDone=${t.clearMareloCelebration} />
+    <${RankUpCelebration} celebration=${t.marelo && t.marelo.celebration}
+      scopeId=${t.marelo && t.marelo.scope_id} marelo=${t.marelo}
+      routes=${t.routes} activeRouteId=${t.activeRouteId}
+      onDone=${t.clearMareloCelebration} />
   </div>`;
 }
 

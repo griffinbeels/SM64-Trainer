@@ -1,34 +1,81 @@
 # tests/test_ui_celebrate.py
-"""celebrate.js's climb-step effect must key off the celebration's STABLE
-identity (its `key`), not the object itself (spec 2026-07-24-marelo-rank-
-system fix wave, item 4).
+"""The overall rank-up celebration (2026-07-28). Two hand-rolled scope
+overlays (celebrate.js's fill->flip->hold TierRankUp and the DivisionRankUp
+top banner) became one -- components/marelocelebrate.js's `MareloCelebration`
+-- which flies the REAL route rank card to the centre of the screen and hands
+it to ui/rankclimb.js, the same climb engine every rank banner already runs.
 
-Bug: every `/api/marelo` refetch returns a FRESH object with the same `key`
-(REST responses are never memoized). During play, REFRESH_ON events
-(star_collected, attempt_completed, strat_set, target_changed) can arrive
-faster than the 850ms step timer, so a celebration object identity change
-mid-climb restarted the step effect over and over -- stalling the climb and
-deferring `finish()` (which only runs once `step` reaches the end) forever.
-
-The sibling reset effect two lines above already depends on
-`celebration && celebration.key` for exactly this reason; the climb-step
-effect must match it."""
+The climb-step-effect test that used to live here pinned TierRankUp's own
+`useEffect` dependency array; that machinery is deleted along with the rest of
+celebrate.js's two overlays, so there is nothing left of it to retarget."""
 import re
 from pathlib import Path
 
-CELEBRATE_JS = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
-                / "ui" / "components" / "celebrate.js")
+from source_scan import strip_comments
+
+UI = Path(__file__).resolve().parents[1] / "src" / "sm64_events" / "ui"
+CELEBRATE_JS = (UI / "components" / "celebrate.js").read_text(encoding="utf-8")
+MARELO_CELEBRATE_JS = (UI / "components" / "marelocelebrate.js").read_text(encoding="utf-8")
+INDEX_HTML = (UI / "index.html").read_text(encoding="utf-8")
 
 
-def test_climb_step_effect_depends_on_the_celebration_key_not_the_object():
-    source = CELEBRATE_JS.read_text(encoding="utf-8")
-    match = re.search(
-        r"return \(\) => clearTimeout\(nextStepTimer\);\s*\}, (\[[^\]]*\])\);",
-        source)
-    assert match, "the climb-step useEffect not found -- did it move or get restructured?"
-    deps = match.group(1)
-    assert "celebration && celebration.key" in deps, (
-        "the climb-step effect must depend on celebration.key (a stable "
-        "primitive), matching the reset effect above it -- a fresh object "
-        "identity from every /api/marelo refetch (same key) would otherwise "
-        f"restart the step timer mid-climb. Got dependency array: {deps}")
+def test_one_overlay_serves_every_overall_rank_up():
+    """Two hand-rolled treatments (TierRankUp's fill->flip->hold and
+    DivisionRankUp's top banner) became one on 2026-07-28, at the user's call:
+    "Every overall rank-up ... intensity scales with the size of the jump".
+    The intensity difference is ONE tunable, not a second component."""
+    code = strip_comments(CELEBRATE_JS)
+    for gone in ("TierRankUp", "DivisionRankUp", "RankUpOverlay",
+                 "flipStep", "rankup-medium"):
+        assert gone not in code, gone
+
+
+def test_the_overlay_performs_the_climb_rather_than_re_animating_it():
+    """"the rank at the top of the screen ... should be getting the same type
+    of celebration effects as the main rank standards below" (user,
+    2026-07-28). Same type means the SAME registry, so the overlay must not
+    grow keyframes of its own for a beat ui/celebrations.js already owns --
+    it renders the REAL RouteRankCard (components/marelo.js), which is what
+    actually calls useRankClimb, rather than re-implementing the climb here."""
+    code = strip_comments(MARELO_CELEBRATE_JS)
+    assert "RouteRankCard" in code
+    assert "@keyframes" not in code
+    for reinvented in ("sparkle", "squash", "digitRoll", "wingGrow"):
+        assert reinvented not in code, reinvented
+
+
+def test_the_card_is_parked_at_the_before_rank_first():
+    """"I didn't see us animate from BEFORE -> AFTER obviously" (user,
+    2026-07-25). The overlay renders celebration.from until it has reached the
+    centre, then hands the card celebration.to and lets the climb perform it."""
+    code = strip_comments(MARELO_CELEBRATE_JS)
+    assert "celebration.from" in code and "celebration.to" in code
+    assert "beforeHoldMs" in code
+
+
+def test_the_header_card_does_not_also_celebrate():
+    """One event, one thing celebrating it -- the mistake celebrate.js's own
+    header records about the deleted entity toasts. The overlay IS the header
+    card's climb, so the card underneath is hidden and snaps."""
+    assert "is-celebrating" in strip_comments(MARELO_CELEBRATE_JS)
+    assert ".marelo-slot.is-celebrating" in strip_comments(INDEX_HTML)
+
+
+def test_the_overlay_never_eats_a_click_meant_for_the_game():
+    css = strip_comments(INDEX_HTML)
+    found = re.search(r"\.marelo-celebrate\s*\{([^}]*)\}", css)
+    assert found and "pointer-events: none" in found.group(1)
+    card = re.search(r"\.marelo-celebrate-card\s*\{([^}]*)\}", css)
+    assert card and "pointer-events: auto" in card.group(1)
+
+
+def test_the_flight_has_exactly_one_transition_declaration():
+    """A rule's `transition` is not additive: a higher-specificity block
+    declaring its own replaces the base rule's wholesale, which is what makes
+    a motion glide one way and snap the other (2026-07-26). There is no
+    prefers-reduced-motion override here to accidentally duplicate it --
+    marelocelebrate.js computes --fly-ms as 0 in that case, so the ONE
+    declaration already resolves to an instant jump."""
+    css = strip_comments(INDEX_HTML)
+    rules = re.findall(r"\.marelo-celebrate-card[^{]*\{([^}]*)\}", css)
+    assert sum("transition:" in rule for rule in rules) == 1, rules

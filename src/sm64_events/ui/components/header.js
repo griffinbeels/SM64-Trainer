@@ -218,6 +218,11 @@ export function Header({ t, settingsOpen, closeSettings }) {
               rank-up tuning page</a> — play any climb, tune every timing,
             and save the result straight back into the code.
           </p>
+          <p class="settings-note">
+            <a href="/ui/tunemarelo.html" target="_blank" rel="noopener">Open the
+              overall rank-up tuning page</a> — fly the card out, tune the
+            flight and the hold, and save the result straight back into the code.
+          </p>
           <label class="settings-field">
             <span>Dust-trick counts</span>
             <input type="checkbox" checked=${t.showDust}

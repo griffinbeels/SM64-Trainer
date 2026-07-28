@@ -237,6 +237,13 @@ def test_the_tuning_page_is_reachable_from_the_app_and_from_the_launcher():
         "the settings drawer no longer links to the tuning page"
     assert not re.search(r'href="https?://[^"]*tune\.html', code), \
         "the tuning link must be origin-relative, never a hardcoded host/port"
+    # The overall rank-up's own inspector (Wave 3, 2026-07-28) needs the same
+    # guarantee -- a link only the header knows about is a page that does not
+    # exist to a user who has not memorized its path.
+    assert 'href="/ui/tunemarelo.html"' in code, \
+        "the settings drawer no longer links to the overall rank-up tuning page"
+    assert not re.search(r'href="https?://[^"]*tunemarelo\.html', code), \
+        "the tunemarelo.html link must be origin-relative, never a hardcoded host/port"
 
     launcher = (UI.parent.parent.parent / "run-test-server.bat").read_text(
         encoding="utf-8")
