@@ -259,11 +259,13 @@ _DIALOG_ECHO_WINDOW = 30  # frames; the intro IGT re-init lands +1 frame after
 # next F1 — the exact symptom of the 2026-07-24 live report (WF -> SSL stuck
 # running in an unrelated course), reintroduced by design rather than by bug.
 #
-# THESE TWO NUMBERS ARE MEASURED, NOT CHOSEN — Task 9 of the implementation
-# plan replays the real journal through tools/measure_budget.py and records
-# the distribution here. The values below are the pre-measurement starting
-# point: 3 minutes at 30 fps comfortably exceeds any seeded castle movement,
-# and a run six times your own best is not an attempt.
+# THESE TWO NUMBERS ARE A DELIBERATE STARTING POINT, NOT A MEASUREMENT —
+# Task 9 of the implementation plan WILL replay the real journal through
+# tools/measure_budget.py and rewrite them with the distribution; its
+# acceptance criterion is the smallest pair that expires zero real
+# completions. Today's reasoning, ahead of that data: 3 minutes at 30 fps
+# comfortably exceeds any seeded castle movement, and a run six times your
+# own best is not an attempt.
 MIN_BUDGET_FRAMES = 5400   # 3 minutes at 30 fps; the floor for a def with no history
 BUDGET_FACTOR = 6          # multiple of the definition's best success so far
 
