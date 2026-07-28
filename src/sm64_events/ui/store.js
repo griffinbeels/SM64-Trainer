@@ -121,6 +121,68 @@ export function useTracker() {
   // rank banner itself climbing (ui/rankclimb.js, task 0012, 2026-07-26), so
   // there is nothing for a client to ack and nothing to clear.
 
+  // The practice plan: WHICH route the user is practising. Store-owned since
+  // 2026-07-28 because it now has two surfaces -- the header's route rank
+  // card (which is also the picker) and the Practice tab's route focus -- and
+  // a component's useState cannot be reached by a sibling. localStorage is an
+  // optimistic mirror; the journaled route_selected is the source of truth
+  // (spec 2026-07-23 section 5), which is what the reconcile effect below
+  // keeps true across a restart.
+  const [routes, setRoutes] = useState([]);
+  const [activeRouteId, setActiveRouteId] = useState(() => {
+    const s = localStorage.getItem("sm64.activeRoute");
+    return s ? Number(s) : null;
+  });
+  // The practice plan and the Rank tab's scope picker are ONE list, from
+  // ONE endpoint (user, 2026-07-27: "These should be identical lists and
+  // should be the exact same set of options that trigger the exact same
+  // things"). `/api/marelo/scopes` is that list -- the same labels, in the
+  // same order, with "Overall" as the first entry rather than a separate
+  // "All practice" wording for the same thing. Course scopes are dropped
+  // here and only here: a course is a rating you can BROWSE, not a plan
+  // you can practise, since there is no route for the focus to follow.
+  useEffect(() => {
+    getJSON("/api/marelo/scopes")
+      .then((body) => setRoutes((body.scopes || [])
+        .filter((scope) => scope.kind === "route")
+        .map((scope) => ({ id: Number(scope.id.slice("route:".length)),
+                           name: scope.label }))))
+      .catch(() => {});
+  }, []);
+  const pickRoute = (id) => {
+    if (id == null) localStorage.removeItem("sm64.activeRoute");
+    else localStorage.setItem("sm64.activeRoute", String(id));
+    setActiveRouteId(id);
+    // Tell the SERVER too (spec 2026-07-23 §5: localStorage is an optimistic
+    // mirror, the journaled route_selected is the source of truth). Without
+    // this the active route was never journaled, so every seeded castle-
+    // movement segment — all 55 carry the in_active_route guard — could only
+    // ever arm as a standalone target, i.e. the route corpus was inert. It
+    // also feeds active_route.star_keys, which is what lets the selector show
+    // only the route's stars.
+    send("POST", "/api/route/select", { route_id: id })
+      .then(() => refresh())      // pull the new active_route.star_keys
+      .catch(() => {});   // selection still works locally if the write fails
+  };
+  // ...and the line above is exactly why this exists. localStorage is an
+  // optimistic mirror of a JOURNALED decision, the write can fail silently,
+  // and the picker restores from localStorage on mount without ever telling
+  // the server again. The two then stay diverged forever, invisibly here and
+  // very visibly wherever the server DERIVES something from the active route:
+  // the header's route rank card reads "Overall" while the practice plan says
+  // "16 Star — LBLJ", because `/api/marelo`'s default scope IS the server's
+  // active route (live report 2026-07-27).
+  //
+  // Keyed on the two IDS, not on the view object: `view` is a fresh identity
+  // every fetch, so an object dependency here would re-POST on every
+  // WebSocket event for as long as the server kept disagreeing.
+  const serverRouteId = (view && view.active_route && view.active_route.id) ?? null;
+  useEffect(() => {
+    if (activeRouteId == null || serverRouteId === activeRouteId) return;
+    send("POST", "/api/route/select", { route_id: activeRouteId })
+      .then(() => refresh()).catch(() => {});
+  }, [serverRouteId, activeRouteId]);
+
   // server-owned pause truth: {paused, reason: "manual"|"afk"|null}.
   // Polled (5 s) because "afk" flips server-side without any UI action;
   // the POST response updates it instantly on manual toggles.
@@ -347,6 +409,7 @@ export function useTracker() {
            armedSegs, armedOrder, armedNames, lastPinnedSeg, stage,
            run, refreshRun,
            marelo, mareloRev, clearMareloCelebration,
+           routes, activeRouteId, pickRoute,
            update, updateForced, setUpdateForced, updateApplying,
            setUpdateApplying, updateMsg, checkUpdates, applyUpdate, skipUpdate,
            notice, setNotice };
