@@ -23,8 +23,9 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { rankPosition, rankAt, rankColor, DIVISIONS_PER_TIER } from "./components/caps.js";
 import { climbTimings, barEase } from "./climbcurve.js";
 import { buildClimbPlan } from "./climbplan.js";
-import { activeEffects, makeBeat, celebrationTailMs, celebrationsEnabled,
-         climbSkipStyle } from "./celebrations.js";
+import { activeEffects, makeBeat, celebrationTailMs, celebrationsEnabled }
+  from "./celebrations.js";
+import { tuning } from "./climbtuning.js";
 import { prefersReducedMotion } from "./useTween.js";
 
 const now = () => performance.now();
@@ -58,9 +59,9 @@ const laneFirstSeen = new Map();
 // Both banners of a card render in one tick; a banner that appears because a
 // strategy was just picked is seconds away.
 const LANE_MOUNT_GRACE_MS = 400;
-// Enough of a gap that the second climb reads as following the first rather
-// than as the same animation continuing.
-const LANE_GAP_MS = 90;
+// The gap between the two climbs is `laneGapMs` in ui/climbtuning.js — enough
+// that the second reads as following the first rather than as the same
+// animation continuing.
 
 
 // ---- The celebration HOLD ------------------------------------------------
@@ -150,9 +151,9 @@ export function useHeldWhileCelebrating(value) {
 // "position 45 has a fractional part of zero, so a maxed rank empties its own
 // bar" trap outright — a maxed rank is level 44 with `bar` 1, and there is no
 // arithmetic in between to get wrong.
-function renderState(level, bar, beats, atMs) {
+function renderState(level, bar, beats, atMs, tune) {
   const { tier, division } = rankAt(level);
-  const { vars, icon } = activeEffects(beats, atMs);
+  const { vars, icon } = activeEffects(beats, atMs, tune);
   return {
     tier, division, level, fill: bar,
     // The registry's tierColor entry overrides this mid-crossing; the rest of
@@ -230,11 +231,17 @@ export function useRankClimb(rank, identity = null,
   const beatsRef = useRef([]);
   const frameRef = useRef(null);
   const [state, setState] = useState(() =>
-    (targetLevel == null ? null : renderState(targetLevel, targetFill, [], now())));
+    (targetLevel == null ? null : renderState(targetLevel, targetFill, [], now(), tuning())));
 
   useEffect(() => {
     if (frameRef.current != null) cancelAnimationFrame(frameRef.current);
     frameRef.current = null;
+
+    // Read ONCE, here, and carried through the whole climb: a tuning change
+    // mid-flight would retime an animation that is already half-played, and
+    // the inspector at /ui/tune.html works by resetting and re-triggering
+    // rather than by mutating a running one.
+    const tune = tuning();
 
     const identityChanged = identityRef.current !== identity;
     identityRef.current = identity;
@@ -305,7 +312,7 @@ export function useRankClimb(rank, identity = null,
       climbingToRef.current = null;
       shownRef.current = { level: targetLevel, bar: targetFill };
       beatsRef.current = [];
-      setState(renderState(targetLevel, targetFill, [], now()));
+      setState(renderState(targetLevel, targetFill, [], now(), tuning()));
       return undefined;
     }
 
@@ -318,8 +325,8 @@ export function useRankClimb(rank, identity = null,
       fromLevel: startLevel, fromFill: startFill,
       toLevel: targetLevel, toFill: targetFill,
       divisionsPerTier: DIVISIONS_PER_TIER,
-      skipStyle: climbSkipStyle(),
-      timings: climbTimings,
+      skipStyle: tune.skipStyle,
+      timings: (counts) => climbTimings(counts, tune),
     });
     const { anticipateMs, payoffMs, ladderMs } = plan.timings;
     // Totals for the WHOLE climb, stamped onto every beat so an effect can
@@ -334,10 +341,10 @@ export function useRankClimb(rank, identity = null,
     // the banner simply renders the rank it already had -- no special
     // "waiting" state, and the hold below covers the wait as well as the climb.
     const tailSample = { anticipateMs, payoffMs, stepMs: ladderMs };
-    const tailMs = Math.max(celebrationTailMs("division", tailSample),
-                            celebrationTailMs("tierskip", tailSample),
-                            celebrationTailMs("tier", tailSample),
-                            celebrationTailMs("settle", tailSample));
+    const tailMs = Math.max(celebrationTailMs("division", tailSample, tune),
+                            celebrationTailMs("tierskip", tailSample, tune),
+                            celebrationTailMs("tier", tailSample, tune),
+                            celebrationTailMs("settle", tailSample, tune));
     // The next banner starts when this one's POSITION lands, not when its
     // last sparkle fades: waiting out the effect tail as well made the gap
     // read as dead air (live report 2026-07-27, "the timing gap … is too
@@ -347,7 +354,7 @@ export function useRankClimb(rank, identity = null,
     const totalMs = plan.totalMs;
     const laneFreeAt = lane ? (laneEnds.get(lane) || 0) : 0;
     const startedAt = (lane && order > 0)
-      ? Math.max(now(), laneFreeAt + LANE_GAP_MS) : now();
+      ? Math.max(now(), laneFreeAt + tune.laneGapMs) : now();
     const laneEndsAt = startedAt + totalMs;
     if (lane) laneEnds.set(lane, laneEndsAt);
 
@@ -402,7 +409,7 @@ export function useRankClimb(rank, identity = null,
         }));
       }
 
-      setState(renderState(level, bar, beatsRef.current, at));
+      setState(renderState(level, bar, beatsRef.current, at, tune));
 
       // Keep ticking past the landing until the slowest effect has finished,
       // or the last flap would freeze mid-beat.
@@ -418,7 +425,7 @@ export function useRankClimb(rank, identity = null,
         climbingToRef.current = null;
         setClimbing(climbToken.current, false);
         shownRef.current = { level: targetLevel, bar: targetFill };
-        setState(renderState(targetLevel, targetFill, [], at));
+        setState(renderState(targetLevel, targetFill, [], at, tune));
       }
     };
     // The hold opens HERE, with the first frame, and closes in the two

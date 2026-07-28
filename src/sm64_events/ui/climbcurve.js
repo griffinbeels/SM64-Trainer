@@ -14,23 +14,31 @@
 // short-climb law it always had at that end of the range, plus the per-step
 // budgets the plan asks for.
 
+// Every duration below is a ROW in ui/climbtuning.js rather than a constant
+// here, so the inspector at /ui/tune.html can drive them (user, 2026-07-27:
+// "I want to be able to tune all of the variables that determine the
+// animation"). Each function takes its tuning as an argument and defaults to
+// the shipped values, which keeps this module pure and node-testable and
+// means a caller that knows nothing about tuning gets exactly the behaviour
+// that shipped.
+import { DEFAULTS } from "./climbtuning.js";
+
 // ---- Bar sweeps ----------------------------------------------------------
 
-// A sweep of `d` divisions takes SHORT_MS × sqrt(d). Square-root rather than
-// linear because the reward for a bigger move should be a longer sweep, not a
-// proportionally longer one. `d` is at most 1 by construction, so this spans
-// 450ms (a twitch) to 1500ms (a whole empty division filling).
-const SHORT_MS = 1500;
-// Below this a sweep is a few percent of a division and reads as a flicker
-// rather than a move. Also the floor for the arrival of a rank you only just
-// scraped into, where the bar has almost nothing to travel but the moment
-// still has to land.
-const MIN_MS = 450;
-
-/** Wall-clock for a bar sweep of `divisions` (0..1), in ms. */
-export function barSweepMs(divisions) {
+/**
+ * Wall-clock for a bar sweep of `divisions` (0..1), in ms.
+ *
+ * `full × sqrt(d)`: square-root rather than linear because the reward for a
+ * bigger move should be a longer sweep, not a proportionally longer one. `d`
+ * is at most 1 by construction, so at the shipped numbers this spans 450ms (a
+ * twitch) to 1500ms (a whole empty division filling) — and the floor also
+ * covers the arrival of a rank you only just scraped into, where the bar has
+ * almost nothing to travel but the moment still has to land.
+ */
+export function barSweepMs(divisions, tuning = DEFAULTS) {
   const distance = Math.max(0, Math.min(1, divisions || 0));
-  return Math.max(MIN_MS, Math.min(SHORT_MS, SHORT_MS * Math.sqrt(distance)));
+  const full = tuning.barSweepFullMs;
+  return Math.max(tuning.barSweepMinMs, Math.min(full, full * Math.sqrt(distance)));
 }
 
 /**
@@ -55,22 +63,20 @@ export function barEase(fraction) {
 
 // ---- Ladder steps: one rank-up each --------------------------------------
 //
-// Long enough for the wings to grow out and be seen (ui/celebrations.js's
-// wingGrow fills exactly one step — it reads `beat.stepMs`, so these two can
-// never drift apart).
-const LADDER_STEP_MS = 460;
+// A step is long enough for the wings to grow out and be seen (ui/
+// celebrations.js's wingGrow fills exactly one step — it reads `beat.stepMs`,
+// so these two can never drift apart).
+//
 // Steps share a budget the way tier dwells below do. A climb can hold at most
 // 15 of them (≤4 climbing out of the tier you started in, ≤4 into the one you
 // land in, ≤7 whole tiers passed through), and fifteen unhurried ones on top
 // of eight tier dwells is a celebration nobody wants to sit through twice.
-const LADDER_BUDGET_MS = 3400;
-const MIN_LADDER_STEP_MS = 220;
 
 /** How long each of `steps` ladder steps gets. */
-export function ladderStepMs(steps) {
+export function ladderStepMs(steps, tuning = DEFAULTS) {
   if (steps <= 0) return 0;
-  return Math.max(MIN_LADDER_STEP_MS,
-                  Math.min(LADDER_STEP_MS, LADDER_BUDGET_MS / steps));
+  return Math.max(tuning.ladderStepMinMs,
+                  Math.min(tuning.ladderStepMs, tuning.ladderBudgetMs / steps));
 }
 
 // ---- Tier crossings: the climb STOPS ------------------------------------
@@ -85,21 +91,18 @@ export function ladderStepMs(steps) {
 // The pause is BEFORE the boundary, not after, because that is where
 // anticipation belongs — the bar sits full on the last subdivision of the old
 // tier while the pressure builds, and the release IS the crossing.
-const ANTICIPATE_SHARE = 0.56;
-const FULL_DWELL_MS = 1600;
 // A climb through eight tiers must not hold the UI for thirteen seconds, so
 // the dwells share a budget. One crossing gets the full treatment; the rare
 // multi-tier run trades length for pace, down to a floor that still reads as
 // a pause rather than a stutter.
-const DWELL_BUDGET_MS = 5200;
-const MIN_DWELL_MS = 700;
 
 /** `{anticipateMs, payoffMs}` for each of `crossings` tier boundaries. */
-export function tierDwell(crossings) {
+export function tierDwell(crossings, tuning = DEFAULTS) {
   if (crossings <= 0) return { anticipateMs: 0, payoffMs: 0 };
-  const each = Math.max(MIN_DWELL_MS,
-                        Math.min(FULL_DWELL_MS, DWELL_BUDGET_MS / crossings));
-  const anticipateMs = Math.round(each * ANTICIPATE_SHARE);
+  const each = Math.max(tuning.tierDwellMinMs,
+                        Math.min(tuning.tierDwellMs,
+                                 tuning.tierDwellBudgetMs / crossings));
+  const anticipateMs = Math.round(each * tuning.anticipateShare);
   return { anticipateMs, payoffMs: Math.round(each) - anticipateMs };
 }
 
@@ -108,6 +111,10 @@ export function tierDwell(crossings) {
  * for. Called with the counts read off the plan's own structure, so there is
  * no second copy of "how many crossings will this have" to go stale.
  */
-export function climbTimings({ crossings, ladder }) {
-  return { barSweepMs, ladderMs: ladderStepMs(ladder), ...tierDwell(crossings) };
+export function climbTimings({ crossings, ladder }, tuning = DEFAULTS) {
+  return {
+    barSweepMs: (divisions) => barSweepMs(divisions, tuning),
+    ladderMs: ladderStepMs(ladder, tuning),
+    ...tierDwell(crossings, tuning),
+  };
 }

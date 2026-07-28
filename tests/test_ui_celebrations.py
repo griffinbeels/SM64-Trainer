@@ -26,6 +26,7 @@ pytestmark = pytest.mark.skipif(shutil.which("node") is None,
 
 RANKCLIMB_JS = UI / "rankclimb.js"
 CLIMBPLAN_JS = UI / "climbplan.js"
+TUNING_JS = UI / "climbtuning.js"
 
 
 def beat_kinds() -> set[str]:
@@ -49,7 +50,8 @@ def beat_kinds() -> set[str]:
 
 def run_node(body: str):
     script = (f"import {{ CELEBRATIONS, activeEffects, makeBeat }} "
-              f"from {CELEBRATIONS_JS.as_uri()!r};\n{body}")
+              f"from {CELEBRATIONS_JS.as_uri()!r};\n"
+              f"import {{ DEFAULTS }} from {TUNING_JS.as_uri()!r};\n{body}")
     result = subprocess.run(["node", "--input-type=module", "-"],
                             input=script, capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
@@ -168,7 +170,7 @@ def test_an_effect_is_only_active_inside_its_own_window():
     windows = run_node(BEATS_JS + """
 const wingFlap = CELEBRATIONS.wingFlap;
 const beat = beats.find((one) => one.kind === "division");
-const resolve = (value) => (typeof value === "function" ? value(beat) : value);
+const resolve = (value) => (typeof value === "function" ? value(beat, DEFAULTS) : value);
 const delay = resolve(wingFlap.delay), ms = resolve(wingFlap.ms);
 const before = activeEffects(beats, delay - 20);
 const during = activeEffects(beats, delay + ms / 2);

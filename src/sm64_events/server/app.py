@@ -355,6 +355,11 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
         return response
 
     app.mount("/ui", StaticFiles(directory=str(_UI_INDEX.parent)), name="ui")
+    # The climb tuning inspector (/ui/tune.html) saves straight into
+    # ui/climbtuning.js. Mounted unconditionally -- it needs no service, only a
+    # source checkout, and it refuses itself when frozen.
+    from sm64_events.server.tuning_api import create_tuning_router
+    app.include_router(create_tuning_router())
     if service is not None:
         app.include_router(create_api_router(service))
         from sm64_events.server.ranks_api import create_ranks_router

@@ -39,10 +39,13 @@
 // genuinely one-shot and self-contained — the scope overlay's own animations,
 // which this file does not touch.
 import { rankColor, wingTiers, DIVISION_NUMERALS, divisionDigit, CAP } from "./components/caps.js";
+import { DEFAULTS, tuning, setTuning } from "./climbtuning.js";
 
-// A slot reel settles like a slot reel: slightly past, then back.
-const easeOutBack = (fraction) => {
-  const overshoot = 1.9;
+// A slot reel settles like a slot reel: slightly past, then back. `overshoot`
+// is a tunable per caller — the digit and the cap burst want different amounts
+// of bounce, and 0 removes it entirely (which is what a progress BAR must
+// always use; see climbcurve.js::barEase for why that one is not this).
+const easeOutBack = (fraction, overshoot) => {
   const back = fraction - 1;
   return 1 + back * back * ((overshoot + 1) * back + overshoot);
 };
@@ -74,14 +77,24 @@ export const CLIMB_SKIP_STYLES = {
   chain: { label: "Keep the wings, chain the caps" },
 };
 const SKIP_PREF = "sm64.climbSkip";
-export const DEFAULT_SKIP_STYLE = "pop";
+export const DEFAULT_SKIP_STYLE = DEFAULTS.skipStyle;
 export const climbSkipStyle = () => {
   if (typeof localStorage === "undefined") return DEFAULT_SKIP_STYLE;
   const stored = localStorage.getItem(SKIP_PREF);
   return CLIMB_SKIP_STYLES[stored] ? stored : DEFAULT_SKIP_STYLE;
 };
-export const setClimbSkipStyle = (style) =>
-  localStorage.setItem(SKIP_PREF, CLIMB_SKIP_STYLES[style] ? style : DEFAULT_SKIP_STYLE);
+export const setClimbSkipStyle = (style) => {
+  const chosen = CLIMB_SKIP_STYLES[style] ? style : DEFAULT_SKIP_STYLE;
+  localStorage.setItem(SKIP_PREF, chosen);
+  setTuning({ ...tuning(), skipStyle: chosen });
+};
+// The ACTIVE tuning is the single door the climb reads (rankclimb.js), so the
+// stored preference seeds it once at load rather than being consulted as a
+// second opinion mid-climb. Doing it here, beside the pref itself, is what
+// keeps rankclimb.js from having to know a preference exists at all — and the
+// inspector at /ui/tune.html can then override the whole tuning, this key
+// included, without fighting localStorage.
+setTuning({ ...tuning(), skipStyle: climbSkipStyle() });
 
 
 // What the sign field reads at a given rank -- the tier's own glyph where it
@@ -94,9 +107,10 @@ export const CELEBRATIONS = {
   // The crossing itself: a bloom on the bar and the rank name that decays
   // rather than a class that has to be taken off again.
   levelFlash: {
-    on: ["division", "tierskip", "tier"], ms: 360,
-    vars: (beat, progress) => ({
-      "--climb-flash": (1 - progress) ** 2 * (beat.kind === "tier" ? 1 : 0.55),
+    on: ["division", "tierskip", "tier"], ms: (_beat, tune) => tune.levelFlashMs,
+    vars: (beat, progress, tune) => ({
+      "--climb-flash": (1 - progress) ** 2
+        * (beat.kind === "tier" ? tune.levelFlashTier : tune.levelFlashDivision),
     }),
   },
 
@@ -110,11 +124,11 @@ export const CELEBRATIONS = {
   // the next one starts.
   digitRoll: {
     on: ["division", "tierskip", "tier"],
-    ms: (beat) => Math.min(420, beat.stepMs),
-    icon: (beat, progress) => ({
+    ms: (beat, tune) => Math.min(tune.digitRollMs, beat.stepMs),
+    icon: (beat, progress, tune) => ({
       roll: { from: rankGlyph(beat.fromTier, beat.fromDivision),
               to: rankGlyph(beat.tier, beat.division),
-              progress: easeOutBack(progress) },
+              progress: easeOutBack(progress, tune.digitRollOvershoot) },
     }),
   },
 
@@ -132,7 +146,8 @@ export const CELEBRATIONS = {
   // guard makes it a no-op for an ordinary crossing, which SHEDS wings rather
   // than growing them.
   wingGrow: {
-    on: ["division", "tierskip", "tier"], ms: (beat) => beat.stepMs,
+    on: ["division", "tierskip", "tier"],
+    ms: (beat, tune) => beat.stepMs * tune.wingGrowScale,
     when: (beat) => beat.wingsAfter > beat.wingsBefore,
     icon: (beat, progress) => ({
       growWings: beat.wingsAfter - beat.wingsBefore,
@@ -143,7 +158,9 @@ export const CELEBRATIONS = {
   // "it should do a little flap after growing fully" — one cycle, starting
   // where the grow ends, which is why the delay tracks the step length too.
   wingFlap: {
-    on: ["division", "tierskip"], ms: 1100, delay: (beat) => beat.stepMs,
+    on: ["division", "tierskip"],
+    ms: (_beat, tune) => tune.wingFlapMs,
+    delay: (beat, tune) => beat.stepMs * tune.wingFlapDelayScale,
     when: (beat) => beat.wingsAfter > 0,
     icon: (beat, progress) => ({ flapPhase: Math.sin(progress * Math.PI * 2) }),
   },
@@ -160,13 +177,14 @@ export const CELEBRATIONS = {
   // further it compresses, the further it is obviously about to spring.
   tierAnticipate: {
     on: "anticipate", ms: (beat) => beat.anticipateMs,
-    icon: (_beat, progress) => {
-      const squashY = 1 - easeInCubic(progress) * 0.94;
+    icon: (_beat, progress, tune) => {
+      const squashY = 1 - easeInCubic(progress) * tune.anticipateSquash;
       return {
-        squashY, squashX: 1 + (1 - squashY) * 0.5,
-        // p*p in the phase, p^2.2 in the amplitude: it reads as winding up
+        squashY, squashX: 1 + (1 - squashY) * tune.anticipateWiden,
+        // p*p in the phase, p^ramp in the amplitude: it reads as winding up
         // rather than as a constant vibration that happens to get louder.
-        shake: Math.sin(progress * progress * 46) * progress ** 2.2 * 3.2,
+        shake: Math.sin(progress * progress * tune.shakeFrequency)
+          * progress ** tune.shakeRamp * tune.shakeAmplitude,
       };
     },
     vars: (_beat, progress) => ({ "--climb-anticipate": progress.toFixed(3) }),
@@ -178,9 +196,10 @@ export const CELEBRATIONS = {
   // that the climb's own position already made.
   tierBurst: {
     on: "tier", ms: (beat) => beat.payoffMs,
-    icon: (_beat, progress) => {
-      const squashY = 0.06 + 0.94 * easeOutBack(progress);
-      return { squashY, squashX: 1 + (1 - squashY) * 0.5 };
+    icon: (_beat, progress, tune) => {
+      const squashY = tune.burstFloor + (1 - tune.burstFloor)
+        * easeOutBack(progress, tune.burstOvershoot);
+      return { squashY, squashX: 1 + (1 - squashY) * tune.anticipateWiden };
     },
   },
 
@@ -228,22 +247,28 @@ export const CELEBRATIONS = {
   // ellipsises, and the soft edge reads as a fade rather than a curtain.
   // ranks.js holds it at 0 for the rest of the climb.
   nextReveal: {
-    on: "settle", ms: 640,
+    on: "settle", ms: (_beat, tune) => tune.nextRevealMs,
     vars: (_beat, progress) => ({ "--climb-reveal": easeOutCubic(progress).toFixed(3) }),
   },
 
   // The landing. A short settle on the whole surface so a climb ENDS on
   // something rather than just stopping.
   settle: {
-    on: "settle", ms: 520,
+    on: "settle", ms: (_beat, tune) => tune.settleMs,
     vars: (_beat, progress) => ({ "--climb-settle": (1 - progress) ** 2 }),
   },
 };
 
 const kindsOf = (entry) => (Array.isArray(entry.on) ? entry.on : [entry.on]);
 
-const contribution = (value, beat, progress) =>
-  (typeof value === "function" ? value(beat, progress) : value);
+const contribution = (value, beat, progress, tune) =>
+  (typeof value === "function" ? value(beat, progress, tune) : value);
+
+// `ms`, `delay` and `when` see (beat, tuning); `vars` and `icon` see
+// (beat, progress, tuning). Both shapes put the tuning LAST, so an entry that
+// does not care about it simply never declares the parameter.
+const length = (value, beat, tune) =>
+  (typeof value === "function" ? value(beat, tune) : (value || 0));
 
 /**
  * Build one beat from a level crossing. `kind` is "tier" when the crossing
@@ -277,25 +302,25 @@ export function makeBeat({ kind, at, level, from, to, tiersGained, divisionsGain
  * entry wins a key it shares with an earlier one — which is the ordering a
  * reader would guess, and the reason `tierColor` sits after `levelFlash`.
  */
-export function activeEffects(beats, nowMs) {
+export function activeEffects(beats, nowMs, tune = DEFAULTS) {
   const vars = {};
   const icon = {};
   for (const [name, entry] of Object.entries(CELEBRATIONS)) {
     const kinds = kindsOf(entry);
     for (const beat of beats) {
       if (!kinds.includes(beat.kind)) continue;
-      if (entry.when && !entry.when(beat)) continue;
-      // `ms` may be a function of the beat: a tier dwell's length depends
-      // on how many tiers THIS climb crosses (climbcurve.js::tierDwell), so
-      // the effects that fill the dwell cannot be fixed-length constants.
-      const windowMs = typeof entry.ms === "function" ? entry.ms(beat) : entry.ms;
-      const delayMs = typeof entry.delay === "function"
-        ? entry.delay(beat) : (entry.delay || 0);
+      if (entry.when && !entry.when(beat, tune)) continue;
+      // `ms` may be a function of the beat AND the tuning: a tier dwell's
+      // length depends on how many tiers THIS climb crosses
+      // (climbcurve.js::tierDwell), and every length here is a row in
+      // ui/climbtuning.js the inspector can drive.
+      const windowMs = length(entry.ms, beat, tune);
+      const delayMs = length(entry.delay, beat, tune);
       const elapsed = nowMs - beat.at - delayMs;
       if (elapsed < 0 || elapsed > windowMs) continue;
       const progress = windowMs > 0 ? Math.min(1, elapsed / windowMs) : 1;
-      if (entry.vars) Object.assign(vars, contribution(entry.vars, beat, progress));
-      if (entry.icon) Object.assign(icon, contribution(entry.icon, beat, progress));
+      if (entry.vars) Object.assign(vars, contribution(entry.vars, beat, progress, tune));
+      if (entry.icon) Object.assign(icon, contribution(entry.icon, beat, progress, tune));
       // One beat per entry per frame: with several crossings in flight the
       // NEWEST is the one being celebrated, and two flashes fighting over
       // one variable would read as a stutter. `beats` is oldest-first, so
@@ -307,12 +332,13 @@ export function activeEffects(beats, nowMs) {
 
 /** How long after its beat the slowest effect for `kind` is still running. */
 export function celebrationTailMs(kind,
-                                  sample = { anticipateMs: 1600, payoffMs: 1600, stepMs: 460 }) {
+                                  sample = { anticipateMs: 1600, payoffMs: 1600, stepMs: 460 },
+                                  tune = DEFAULTS) {
   let tail = 0;
-  const lengthOf = (value) => (typeof value === "function" ? value(sample) : (value || 0));
   for (const entry of Object.values(CELEBRATIONS)) {
     if (!kindsOf(entry).includes(kind)) continue;
-    tail = Math.max(tail, lengthOf(entry.delay) + lengthOf(entry.ms));
+    tail = Math.max(tail, length(entry.delay, sample, tune)
+                    + length(entry.ms, sample, tune));
   }
   return tail;
 }

@@ -58,7 +58,7 @@ SWEEP_TARGETS = {
 
 def test_the_sweep_duration_targets_hold():
     got = run_node("barSweepMs", "console.log(JSON.stringify("
-                   f"{json.dumps(list(SWEEP_TARGETS))}.map(barSweepMs)))")
+                   f"{json.dumps(list(SWEEP_TARGETS))}.map((d) => barSweepMs(d))))")
     for (distance, want), actual in zip(SWEEP_TARGETS.items(), got):
         assert isclose(actual, want, abs_tol=15), f"{distance} divisions -> {actual}ms"
 
