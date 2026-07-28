@@ -90,6 +90,22 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
   place (no row, unlike this chain's reset row); an off-sequence star/key
   grab or wrong-destination level crossing silently cancels (disarm, no
   row) instead of the plain silent level_changed disarm above
+- LOOSE defs (SegmentDef.match_mode == "loose", spec
+  2026-07-28-multi-step-segments) replace the armed branch AGAIN — regardless
+  of waypoints — with SegmentEngine._feed_loose (see its own docstring for
+  the full precedence): the player says only where a segment starts and
+  where it ends, so a star grab, a key grab, an area change and an off-route
+  level crossing all pass straight through, transparently, where the strict
+  or waypoint chains above would cancel or disarm. That removes every cancel
+  rule that used to bound an arm, so every loose _Arm instead carries a
+  staleness deadline (_Arm.deadline_frame, set at every arm/re-arm site by
+  the one helper _deadline_for) and the deadline is checked FIRST — ahead of
+  even the end trigger and the death/game_reset rows — because an arm that
+  has outlived its budget is presumed abandoned, and a success or failure
+  recorded through it would be a claim about a run the player walked away
+  from. The budget itself (budget_frames) is MIN_BUDGET_FRAMES, or
+  BUDGET_FACTOR times the definition's best success so far if that is
+  larger — a def with history gets a tighter window than a first-timer's.
 - failure rows only on practice_reset/state_loaded (reset), death,
   game_reset (hard_reset); AFK closures (paused >= 150 frames) discard, and
   so do no-op closures (acted_tracking true, mario_acted false — warp/reset
@@ -236,6 +252,30 @@ _DIALOG_ECHO_WINDOW = 30  # frames; the intro IGT re-init lands +1 frame after
 # reason. The intro spawn is fresh-file-only; no human meaningfully L-resets
 # within a second of a textbox, so an eaten borderline reset (segment stays
 # armed) is cheaper than the false ~1-frame reset on every textbox.
+
+# Staleness budget for a LOOSE arm (spec 2026-07-28-multi-step-segments).
+# Loose matching removes every cancel rule that used to bound an arm, so
+# without a deadline a segment the player abandoned reads "Running" until the
+# next F1 — the exact symptom of the 2026-07-24 live report (WF -> SSL stuck
+# running in an unrelated course), reintroduced by design rather than by bug.
+#
+# THESE TWO NUMBERS ARE MEASURED, NOT CHOSEN — Task 9 of the implementation
+# plan replays the real journal through tools/measure_budget.py and records
+# the distribution here. The values below are the pre-measurement starting
+# point: 3 minutes at 30 fps comfortably exceeds any seeded castle movement,
+# and a run six times your own best is not an attempt.
+MIN_BUDGET_FRAMES = 5400   # 3 minutes at 30 fps; the floor for a def with no history
+BUDGET_FACTOR = 6          # multiple of the definition's best success so far
+
+
+def budget_frames(best_success_frames: int | None) -> int:
+    """How long a loose arm may run before it is presumed abandoned. Floored
+    so a definition with no history — or a very fast one — still gets a
+    humane window."""
+    if not best_success_frames:
+        return MIN_BUDGET_FRAMES
+    return max(MIN_BUDGET_FRAMES, BUDGET_FACTOR * best_success_frames)
+
 
 # Segment attempt ids live in a disjoint namespace from star attempt ids
 # (which are raw journal ids): id = arm-event journal id + OFFSET * def_id.
@@ -1263,6 +1303,12 @@ class _Arm:
     # every waypoint is consumed and the def is awaiting its end trigger. 0 for
     # every non-waypoint def (empty d.waypoints never reads this field).
     progress: int = 0
+    # Frame at which a LOOSE arm is presumed abandoned (spec
+    # 2026-07-28-multi-step-segments). None for a strict arm, which is bounded
+    # by its cancel rules instead. Shipped to the view so the UI reads expiry
+    # from the SAME number the matcher does — the engine only notices on the
+    # next event, and a card must not keep saying "Running" until one arrives.
+    deadline_frame: int | None = None
 
 
 def _at_arm_position(arm: _Arm, ctx: MatchContext) -> bool:
@@ -1313,6 +1359,15 @@ class SegmentEngine:
         # to the lobby lands in ACT_WARP_DOOR_SPAWN, so the attempt_anchor reset
         # was door-echo-suppressed and LBLJ never re-armed).
         self._last_area_edge_frame: int | None = None
+        # Best successful rta per definition, as seen SO FAR in this feed
+        # (spec 2026-07-28-multi-step-segments). Deterministic under replay
+        # (same journal -> same answer) and monotonically improving, which is
+        # what makes budget_frames stable. A MINIMUM, so an implausibly slow
+        # success can never inflate a loose def's budget; only an implausibly
+        # fast one could shrink it, and MIN_BUDGET_FRAMES is the floor for
+        # exactly that (the projector may later auto-clear an out-of-range
+        # success the engine counted here — harmless for the same reason).
+        self._best_success: dict[int, int] = {}
 
     def armed_ids(self) -> set[int]:
         return set(self._armed)
@@ -1463,14 +1518,16 @@ class SegmentEngine:
                         jid=ev.id, start_frame=ev.frame,
                         started_utc=ev.wall_time_utc, anchor_type=ev.type,
                         session_id=ev.session_id, level=ctx.level,
-                        area=ctx.area, required_area=req)
+                        area=ctx.area, required_area=req,
+                        deadline_frame=self._deadline_for(d, ev))
                 else:
                     fresh = d.id not in self._armed
                     self._armed[d.id] = _Arm(jid=ev.id, start_frame=ev.frame,
                                              started_utc=ev.wall_time_utc,
                                              anchor_type=ev.type,
                                              session_id=ev.session_id,
-                                             level=ctx.level, area=ctx.area)
+                                             level=ctx.level, area=ctx.area,
+                                             deadline_frame=self._deadline_for(d, ev))
                     if fresh:
                         notices.append({"event": "segment_armed",
                                         "segment_id": d.id, "name": d.name,
@@ -1541,8 +1598,11 @@ class SegmentEngine:
         armed branch can dispatch on SegmentDef.match_mode (spec
         2026-07-28-multi-step-segments). Behaviour is unchanged — the module
         docstring's closure/anchor/echo invariants all describe THIS method.
-        `anchor_is_echo` and `starts` are computed once per event in feed()
-        and passed down rather than recomputed."""
+        `anchor_is_echo` is computed once per EVENT in feed() (before the
+        per-def loop) and passed down; `starts` is computed once per (event,
+        definition) INSIDE that loop, from `d.start_triggers`, and passed
+        down too — both for the uniform handler signature the dispatch table
+        (Task 2) calls through, not because both are event-level facts."""
         closed = []
         if self._matches(d.end_triggers, ev, ctx):
             a = self._close(Attempt, d, arm, ev, "success", None)
@@ -1727,12 +1787,100 @@ class SegmentEngine:
             return closed
         return closed   # transparent
 
+    def _deadline_for(self, d, ev) -> int | None:
+        """The staleness deadline a freshly-armed (or re-armed) _Arm should
+        carry (spec 2026-07-28-multi-step-segments): None for a strict def,
+        bounded by its cancel rules instead; ev.frame + budget_frames(this
+        def's best success so far) for a loose one.
+
+        ONE call site for every place an _Arm enters self._armed/self._pending
+        for a loose def — the pending->armed promotion inherits whatever this
+        returned through `replace()`, for free, so a future arm site that
+        forgets to call this ships a visibly missing call instead of a silent
+        None (the bug this exists to prevent: the deferred destination-
+        subarea path into self._pending was the one the brief for this task
+        missed, and it is where a large share of the seeded castle movements
+        arm)."""
+        if d.match_mode != "loose":
+            return None
+        return ev.frame + budget_frames(self._best_success.get(d.id))
+
     def _feed_loose(self, Attempt, d, arm: _Arm, ev, ctx, notices,
                     anchor_is_echo, starts) -> list:
-        """Not yet implemented (Task 3, spec 2026-07-28-multi-step-segments).
-        Stub only, so Task 2's dispatch table cannot silently change
-        behaviour for any def — nothing is match_mode == "loose" yet."""
-        raise NotImplementedError("Task 3")
+        """Armed-branch matcher for a LOOSE definition (spec
+        2026-07-28-multi-step-segments): the player says where a segment
+        starts and where it ends, and nothing in between is described.
+
+        Precedence, first match wins:
+          staleness deadline > end (once every waypoint is consumed) >
+          death > game_reset > session_started > echo anchor (invisible) >
+          real anchor at the arm position (reset row, re-arm in place) >
+          real anchor elsewhere (silent disarm — relocation) >
+          next waypoint (advance) > EVERYTHING ELSE IS TRANSPARENT.
+
+        That last line is the whole feature: a star grab, a key grab, an area
+        change and an off-route level crossing all pass straight through,
+        where _feed_strict/_feed_waypoint would cancel or disarm.
+
+        The DEADLINE IS CHECKED FIRST, ahead of both the end trigger and the
+        death/reset rows. An arm that has outlived its budget is dead; a
+        success or a failure recorded through it would be a claim about a run
+        the player walked away from.
+
+        Anchors keep _feed_strict's position gate. Mid-sequence the player is
+        legitimately far from where the segment armed, which makes the gate
+        look wrong here — but a DELIBERATE practice-reset or savestate load
+        somewhere else genuinely does mean "I restarted" or "I moved", so the
+        rule stays and costs no new concept."""
+        _ = (anchor_is_echo, starts)   # uniform handler signature (Task 2)
+        closed = []
+        if arm.deadline_frame is not None and ev.frame >= arm.deadline_frame:
+            self._disarm(d, ev, notices)   # silent: no row, stats stay clean
+            return closed
+        complete = arm.progress >= len(d.waypoints)
+        if complete and self._matches(d.end_triggers, ev, ctx):
+            a = self._close(Attempt, d, arm, ev, "success", None)
+            if a:
+                closed.append(a)
+            self._disarm(d, ev, notices)
+            return closed
+        if ev.type == "death":
+            a = self._close(Attempt, d, arm, ev, "death",
+                            ev.payload.get("cause"))
+            if a:
+                closed.append(a)
+            self._disarm(d, ev, notices)
+            return closed
+        if ev.type == "game_reset":
+            a = self._close(Attempt, d, arm, ev, "hard_reset", None)
+            if a:
+                closed.append(a)
+            self._disarm(d, ev, notices)
+            return closed
+        if ev.type == "session_started":
+            self._disarm(d, ev, notices)
+            return closed
+        if ev.type in _ANCHOR_TYPES:
+            if ev.frame == arm.start_frame or self._anchor_echo(ev):
+                return closed          # echo: invisible
+            if not _at_arm_position(arm, ctx):
+                self._disarm(d, ev, notices)   # relocation: silent
+                return closed
+            a = self._close(Attempt, d, arm, ev, "reset", None)
+            if a:
+                closed.append(a)
+            self._armed[d.id] = replace(
+                arm, progress=0, start_frame=ev.frame,
+                started_utc=ev.wall_time_utc, jid=ev.id,
+                anchor_type=ev.type, session_id=ev.session_id,
+                deadline_frame=self._deadline_for(d, ev),
+                level=ctx.level if ctx.level is not None else arm.level,
+                area=ctx.area if ctx.area is not None else arm.area)
+            return closed
+        if not complete and self._matches(d.waypoints[arm.progress], ev, ctx):
+            self._armed[d.id] = replace(arm, progress=arm.progress + 1)
+            return closed
+        return closed   # transparent — the whole feature
 
     def _disarm(self, d, ev, notices) -> None:
         if self._armed.pop(d.id, None) is not None:
@@ -1753,6 +1901,13 @@ class SegmentEngine:
                 if outcome == "success":
                     return None  # genuine anomaly: end before arm (self-heal)
                 rta = None       # backward jump (game_reset boot frame, earlier savestate): row counts, time unknowable
+        if outcome == "success" and rta is not None:
+            # Feeds a loose def's staleness budget (spec 2026-07-28-multi-
+            # step-segments, see _deadline_for/budget_frames): a MINIMUM, so
+            # only ever-faster successes move it, never slower ones.
+            prev = self._best_success.get(d.id)
+            if prev is None or rta < prev:
+                self._best_success[d.id] = rta
         return Attempt(
             id=arm.jid + SEGMENT_ATTEMPT_OFFSET * d.id,
             session_id=arm.session_id, course_id=None, star_id=None,

@@ -5,6 +5,7 @@ import pytest
 
 from sm64_events.memory.addresses import COURSE_NAMES, LEVEL_NAMES
 from sm64_events.storage.db import EventRow
+from sm64_events.tracking import segments as segments_module
 from sm64_events.tracking.segments import (SEGMENT_ATTEMPT_OFFSET,
                                            course_groups, level_groups,
                                            GUARDS, TRIGGERS, MatchContext,
@@ -2532,3 +2533,142 @@ def test_vocab_ships_the_match_modes_for_the_editor():
     modes = vocab()["match_modes"]
     assert [m["key"] for m in modes] == ["loose", "strict"]
     assert all(m["label"] and m["description"] for m in modes)
+
+
+# ---------------------------------------------------------------------------
+# Task 3: SegmentEngine._feed_loose + the staleness deadline (spec
+# 2026-07-28-multi-step-segments). A loose def stays armed through star
+# grabs, key grabs and level crossings until its end trigger fires or a
+# staleness deadline passes — every test below is one row of _feed_loose's
+# precedence table, so a reviewer can check coverage by reading the names.
+# ---------------------------------------------------------------------------
+
+LOOSE = SegmentDef(
+    id=20, name="DDD -> BitFS (loose)", enabled=True,
+    start_triggers=[{"type": "level_exit", "from": 23}],
+    end_triggers=[{"type": "level_enter", "to": 19}],
+    guards=[], match_mode="loose")
+
+
+def loose_arm(engine, jid=10, frame=1000):
+    return engine.feed(jev(jid, "level_changed", frame, {"from": 23, "to": 6}),
+                       ctx(level=6, prev_level=23))
+
+
+def test_loose_survives_a_star_grab_that_would_cancel_a_strict_def():
+    # The rule that made the 100-coin case unwriteable: a strict waypoint def
+    # is silently cancelled by ANY star grab.
+    e = SegmentEngine([LOOSE])
+    loose_arm(e)
+    closed, _ = e.feed(jev(11, "star_collected", 1200,
+                           {"course_id": 15, "star_id": 1, "igt_frames": 900}),
+                       ctx(level=6))
+    assert closed == []
+    assert 20 in e.armed_ids()
+
+
+def test_loose_survives_an_off_route_level_crossing():
+    e = SegmentEngine([LOOSE])
+    loose_arm(e)
+    e.feed(jev(11, "level_changed", 1200, {"from": 6, "to": 8}),
+           ctx(level=8, prev_level=6))
+    assert 20 in e.armed_ids()
+
+
+def test_loose_closes_a_success_on_its_end_trigger():
+    e = SegmentEngine([LOOSE])
+    loose_arm(e)
+    e.feed(jev(11, "star_collected", 1200,
+               {"course_id": 15, "star_id": 1, "igt_frames": 900}),
+           ctx(level=6))
+    closed, _ = e.feed(jev(12, "level_changed", 1500, {"from": 6, "to": 19}),
+                       ctx(level=19, prev_level=6))
+    [a] = closed
+    assert a.outcome == "success" and a.rta_frames == 500
+
+
+def test_loose_expires_after_its_staleness_budget_with_no_row():
+    e = SegmentEngine([LOOSE])
+    loose_arm(e, frame=1000)
+    stale = 1000 + segments_module.MIN_BUDGET_FRAMES + 1
+    closed, notices = e.feed(jev(11, "area_changed", stale, {"to": 3}),
+                             ctx(level=6, area=3))
+    assert closed == []                       # silent: stats stay clean
+    assert 20 not in e.armed_ids()
+    assert [n["event"] for n in notices] == ["segment_disarmed"]
+
+
+def test_an_expired_arm_cannot_still_record_a_success():
+    # Deadline is checked FIRST. An end trigger arriving an hour after the
+    # player walked away is not a run.
+    e = SegmentEngine([LOOSE])
+    loose_arm(e, frame=1000)
+    stale = 1000 + segments_module.MIN_BUDGET_FRAMES + 1
+    closed, _ = e.feed(jev(11, "level_changed", stale, {"from": 6, "to": 19}),
+                       ctx(level=19, prev_level=6))
+    assert closed == []
+
+
+def test_an_expired_arm_cannot_still_record_a_failure():
+    e = SegmentEngine([LOOSE])
+    loose_arm(e, frame=1000)
+    stale = 1000 + segments_module.MIN_BUDGET_FRAMES + 1
+    closed, _ = e.feed(jev(11, "death", stale, {"cause": "fall"}), ctx(level=6))
+    assert closed == []
+
+
+def test_loose_still_records_a_death_inside_the_budget():
+    e = SegmentEngine([LOOSE])
+    loose_arm(e, frame=1000)
+    closed, _ = e.feed(jev(11, "death", 1200, {"cause": "fall"}), ctx(level=6))
+    [a] = closed
+    assert a.outcome == "death"
+
+
+def test_the_budget_tightens_once_the_segment_has_a_best_time():
+    # A definition with history gets FACTOR x its best, not the floor.
+    assert segments_module.budget_frames(None) \
+        == segments_module.MIN_BUDGET_FRAMES
+    assert segments_module.budget_frames(10 ** 6) \
+        == segments_module.BUDGET_FACTOR * 10 ** 6
+    assert segments_module.budget_frames(1) \
+        == segments_module.MIN_BUDGET_FRAMES     # floor wins for a fast one
+
+
+def test_a_loose_def_armed_through_the_deferred_subarea_path_carries_a_deadline():
+    # THE GAP this task's brief missed (see task-3-report.md Item 0/1C): a
+    # destination-subarea start trigger (to_subarea) can't be confirmed on
+    # the level edge — the castle interior loads the transient lobby before
+    # the co-frame settle (module docstring's DESTINATION subarea section) —
+    # so the engine holds a fresh _Arm in self._pending until the settled
+    # area matches, then PROMOTES it via replace(). A loose def armed this
+    # way must still carry a deadline: this deferred path is where a large
+    # share of the seeded castle movements arm (any destination inside the
+    # castle interior — basement, lobby, upstairs), and a def armed through
+    # it with deadline_frame=None would never expire.
+    d = SegmentDef(id=1, name="x", enabled=True, guards=[], waypoints=[],
+                   start_triggers=[{"type": "level_exit", "from": 7, "to": 6,
+                                    "to_subarea": 3}],
+                   end_triggers=[{"type": "spawned"}], match_mode="loose")
+    e = SegmentEngine([d])
+    e.feed(jev(10, "level_changed", 1000, {"from": 7, "to": 6, "from_area": 1}),
+           ctx(level=6))
+    assert e.armed_ids() == set(), "deferred: destination not settled yet"
+    e.feed(jev(12, "area_changed", 1000, {"level": 6, "from": 1, "to": 3}),
+           ctx(level=6, area=3))            # real-edge settle into the basement
+    assert e.armed_ids() == {1}
+    assert e._armed[1].deadline_frame == 1000 + segments_module.MIN_BUDGET_FRAMES
+
+
+def test_a_real_anchor_re_arms_the_loose_def_with_a_fresh_deadline():
+    # Item 1C's third _deadline_for call site: "the re-arm inside
+    # _feed_loose". A real practice_reset/state_loaded AT the arm position is
+    # the practice-retry continuation (closes a "reset" row, re-arms in
+    # place) — the fresh arm must get a NEW deadline counted from the anchor
+    # frame, not keep the stale one from the original arm.
+    e = SegmentEngine([LOOSE])
+    loose_arm(e, frame=1000)
+    closed, _ = e.feed(jev(11, "practice_reset", 4000, {}), ctx(level=6))
+    [a] = closed
+    assert a.outcome == "reset"
+    assert e._armed[20].deadline_frame == 4000 + segments_module.MIN_BUDGET_FRAMES
