@@ -158,6 +158,10 @@ export function climbTimings({ crossings, ladder }, tuning = DEFAULTS) {
     // behaviour instead, which is the safe end of the range.
     finalTierOverlap: Number.isFinite(tuning.finalTierOverlap)
       ? Math.max(0, Math.min(1, tuning.finalTierOverlap)) : 0,
+    // Same shape, same NaN guard, for how far the closing bar sweep reaches
+    // back into the end of the climb.
+    finalBarOverlap: Number.isFinite(tuning.finalBarOverlap)
+      ? Math.max(0, Math.min(1, tuning.finalBarOverlap)) : 0,
     ...tierDwell(crossings, tuning),
   };
 }

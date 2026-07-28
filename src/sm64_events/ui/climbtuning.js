@@ -77,13 +77,18 @@ export const TUNABLES = {
     min: 0, max: 1, step: 0.05, unit: "x",
     why: "When the climb lands in the tier it FINISHES in, how much of that crossing's release the ladder climb plays over the top of. 0 waits for the crossing to finish first; 1 starts the ladder the instant the new cap appears. A tier the climb only passes through is never overlapped — it has no ladder of its own.",
   },
+  finalBarOverlap: {
+    group: "Pace", label: "Final bar · overlap with the ending", value: 1,
+    min: 0, max: 1, step: 0.05, unit: "x",
+    why: "How far back the closing bar sweep (0 → your real progress) reaches into the end of the climb. 0 waits until every rank has finished ticking; 1 starts it on the final tier crossing so the bar fills WHILE the last ranks land. Note this is the one place the bar stops being pinned full early — deliberately.",
+  },
   tierDwellCurve: {
-    group: "Pace", label: "Tier crossing · fall-off curve", value: 1,
+    group: "Pace", label: "Tier crossing · fall-off curve", value: 0.7,
     min: 0.2, max: 4, step: 0.05, unit: "",
     why: "1 is a straight line from long to short. Below 1 shortens hard on the first extra tier and levels off; above 1 stays long and drops late.",
   },
   anticipateShare: {
-    group: "Pace", label: "Build-up share of crossing", value: 0.1,
+    group: "Pace", label: "Build-up share of crossing", value: 0.2,
     min: 0.1, max: 0.9, step: 0.01, unit: "x",
     why: "How much of a tier crossing is the wind-up rather than the release. Anticipation is what makes the release land.",
   },

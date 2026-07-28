@@ -384,17 +384,31 @@ export function useRankClimb(rank, identity = null,
         }));
       }
 
-      // The bar eases across its own step and the rank is simply the step's.
-      // A pinned step has `barFrom === barTo === 1`, so "the bar stays full
-      // while ranks remain" needs no branch here at all -- see climbplan.js.
+      // Level and bar are resolved from DIFFERENT steps, because the closing
+      // bar sweep runs alongside ranks that are still ticking (climbplan.js's
+      // `finalBarOverlap`). The rank comes from the last step that owns one;
+      // the bar from the last step that actually MOVES it, held at that step's
+      // end value once its window closes.
+      //
+      // That "held" rule is what keeps the bar pinned full through the middle
+      // with no branch for it: the approach ends at 1, every step after it is
+      // `barFrom === barTo === 1`, so the last bar-MOVING step is still the
+      // approach and its end value is 1 — the pin falls out of the arithmetic
+      // rather than being a case anyone has to remember.
       let level = startLevel;
       let bar = startFill;
-      if (stepIndex >= 0) {
-        const step = plan.steps[stepIndex];
-        const within = step.ms > 0
-          ? Math.max(0, Math.min(1, (elapsed - step.at) / step.ms)) : 1;
-        level = step.level;
-        bar = step.barFrom + (step.barTo - step.barFrom) * barEase(within);
+      let barStep = null;
+      for (let index = 0; index <= stepIndex; index += 1) {
+        const step = plan.steps[index];
+        if (step.ownsLevel !== false) level = step.level;
+        if (step.barFrom !== step.barTo) barStep = step;
+      }
+      if (barStep) {
+        const within = barStep.ms > 0
+          ? Math.max(0, Math.min(1, (elapsed - barStep.at) / barStep.ms)) : 1;
+        bar = barStep.barFrom + (barStep.barTo - barStep.barFrom) * barEase(within);
+      } else if (stepIndex >= 0) {
+        bar = plan.steps[stepIndex].barFrom;
       }
       shownRef.current = { level, bar };
 

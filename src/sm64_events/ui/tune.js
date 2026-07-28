@@ -133,9 +133,16 @@ function PlanReadout({ values, startLevel, destLevel, destFill }) {
       const { tier, division } = rankAt(step.level);
       const previous = plan.steps[index - 1];
       const over = previous && step.at < previous.at + previous.ms - 0.5;
+      // A step that does not own the level is described by the BAR it moves,
+      // never by a rank: the closing sweep runs while earlier ranks are still
+      // on screen, so printing its destination rank beside a cap that reads
+      // something else would be the readout telling its own small lie.
+      const what = step.ownsLevel === false
+        ? `bar ${Math.round(step.barFrom * 100)}% → ${Math.round(step.barTo * 100)}%`
+        : `${capName(tier)} ${divisionDigit(division)}`;
       return `${String(Math.round(step.at)).padStart(5)}ms  `
-        + `${step.kind.padEnd(11)}${capName(tier)} ${divisionDigit(division)}`
-          .padEnd(28) + `${String(Math.round(step.ms)).padStart(4)}ms`
+        + `${step.kind.padEnd(11)}${what}`.padEnd(28)
+        + `${String(Math.round(step.ms)).padStart(4)}ms`
         + (over ? "  over" : "");
     }).join("\n")}</pre>
   </div>`;

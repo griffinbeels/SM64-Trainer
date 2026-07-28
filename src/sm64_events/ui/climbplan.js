@@ -145,7 +145,15 @@ export function buildClimbPlan({ fromLevel, fromFill, toLevel, toFill,
     //    actually ranking up to the next tier -> animate from empty to our
     //    actual progress" (user, 2026-07-27). No beat — the rank stopped
     //    moving a step ago; this is the bar catching up to it.
+    //
+    //    `ownsLevel: false` because this step exists ONLY to move the bar. Once
+    //    `finalBarOverlap` pulls it back into the end of the climb it runs
+    //    ALONGSIDE ranks that are still ticking, and a step that owned the
+    //    level there would jump the cap straight to the destination — see the
+    //    second pass below, and rankclimb.js, which resolves level and bar from
+    //    different steps for exactly this reason.
     push("arrive", toLevel, 0, toFill);
+    steps[steps.length - 1].ownsLevel = false;
   }
 
   // ---- Second pass: how long each step gets ------------------------------
@@ -153,7 +161,7 @@ export function buildClimbPlan({ fromLevel, fromFill, toLevel, toFill,
   const ladder = steps.filter((step) => LADDER_KINDS.includes(step.kind)).length;
   const resolved = timings({ crossings, ladder });
   const { barSweepMs, ladderMs, anticipateMs, payoffMs,
-          finalTierOverlap = 0 } = resolved;
+          finalTierOverlap = 0, finalBarOverlap = 0 } = resolved;
   let at = 0;
   for (const step of steps) {
     step.ms = step.kind === ANTICIPATE ? anticipateMs
@@ -168,9 +176,37 @@ export function buildClimbPlan({ fromLevel, fromFill, toLevel, toFill,
     step.handoffMs = step.overlapNext ? step.ms * (1 - finalTierOverlap) : step.ms;
     at += step.handoffMs;
   }
+  // ---- Pull the closing bar sweep back into the ending -------------------
+  //
+  // "during the final tier crossing / OR ladder step crossing animation, we
+  // should ALSO be lerping the bar from 0 -> the final position… otherwise
+  // right now the bar happens *after* all of that finishes. Instead, it should
+  // happen WHILE it's finishing the final step." (user, 2026-07-27)
+  //
+  // This is the one place the bar deliberately stops being pinned full while
+  // ranks are still ticking — his own earlier rule, revised by him for the
+  // final stretch only. The ANCHOR is the last tier crossing when the climb has
+  // one (his example names it: "the Toadsworth -> Waluigi threshold"), else the
+  // last rank-changing step, so a climb that never leaves its tier still gets
+  // the same treatment on its own last rung.
+  const arrive = steps.find((step) => step.kind === "arrive");
+  if (arrive && finalBarOverlap > 0) {
+    const endsAt = steps.reduce(
+      (end, step) => (step === arrive ? end : Math.max(end, step.at + step.ms)), 0);
+    const crossings2 = steps.filter((step) => step.kind === TIER);
+    const ranked = steps.filter((step) => step.beat);
+    const anchor = (crossings2.length ? crossings2[crossings2.length - 1]
+      : ranked[ranked.length - 1]);
+    if (anchor) arrive.at = endsAt - (endsAt - anchor.at) * finalBarOverlap;
+  }
+
   // The climb ends when the LAST THING STILL MOVING stops — which is not
   // necessarily the last step to start, once one of them overlaps.
   const totalMs = steps.reduce((end, step) => Math.max(end, step.at + step.ms), 0);
+  // Sorted by START time, because an overlapped step no longer arrives in
+  // construction order and the engine walks this list by `at`. A stable sort,
+  // so steps sharing a start time keep the order they were built in.
+  steps.sort((one, two) => one.at - two.at);
   // `timings` comes back out so the caller never has to resolve it a second
   // time to learn how long a dwell or a ladder step ended up being — the
   // celebration tail is measured against exactly the numbers the plan used.

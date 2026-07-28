@@ -42,6 +42,7 @@ REFERENCE = {
     "ladderStepMs": 460, "ladderBudgetMs": 3400, "ladderStepMinMs": 220,
     "tierDwellMs": 1600, "tierDwellMinMs": 700, "tierDwellMinAt": 7,
     "tierDwellCurve": 1, "anticipateShare": 0.56, "finalTierOverlap": 0,
+    "finalBarOverlap": 0,
 }
 
 
@@ -238,8 +239,8 @@ def test_the_timing_table_answers_in_the_shape_the_plan_asks_for():
         "climbTimings",
         "const t = climbTimings({ crossings: 2, ladder: 3 }, REF);\n"
         "console.log(JSON.stringify([Object.keys(t).sort(), t.ladderMs, t.anticipateMs]));")
-    assert keys == ["anticipateMs", "barSweepMs", "finalTierOverlap",
-                    "ladderMs", "payoffMs"]
+    assert keys == ["anticipateMs", "barSweepMs", "finalBarOverlap",
+                    "finalTierOverlap", "ladderMs", "payoffMs"]
     assert ladder == 460
     assert anticipate > 0
 

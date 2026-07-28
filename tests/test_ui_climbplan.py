@@ -31,7 +31,7 @@ pytestmark = pytest.mark.skipif(shutil.which("node") is None,
 # Deliberately unlike the shipped numbers, and all distinct, so a step that
 # reads the wrong duration shows up as a wrong number rather than blending in.
 FIXED_TIMINGS = ("({ barSweepMs: () => 100, ladderMs: 11,"
-                 " anticipateMs: 22, payoffMs: 33, finalTierOverlap: 0 })")
+                 " anticipateMs: 22, payoffMs: 33, finalTierOverlap: 0, finalBarOverlap: 0 })")
 
 # Iron V is level 0 and each tier is five divisions, so:
 IRON_V, IRON_I = 0, 4
@@ -420,3 +420,87 @@ def test_the_plan_never_ends_before_its_last_animation_does():
             f" anticipateMs: 20, payoffMs: 60, finalTierOverlap: {overlap} }});\n"
             f"console.log(JSON.stringify(plan([{IRON_V}, 0], [{SILVER_I}, 0], 'chain', t).totalMs));")
         assert round(total) == latest, (overlap, total, latest)
+
+
+# ---- The closing bar sweep runs INSIDE the ending -------------------------
+#
+# User, 2026-07-27: "during the final tier crossing / OR ladder step crossing
+# animation, we should *also* be lerping the bar from 0 -> the final position…
+# otherwise right now the bar happens *after* all of that finishes. Instead, it
+# should happen WHILE it's finishing the final step."
+#
+# This is the ONE place the bar deliberately stops being pinned full while ranks
+# are still ticking — his own earlier rule, revised by him for the final stretch.
+
+def ending(to_level, bar_overlap, style="chain"):
+    return run_node(
+        f"const t = () => ({{ barSweepMs: () => 90, ladderMs: 10,"
+        f" anticipateMs: 20, payoffMs: 60, finalTierOverlap: 0,"
+        f" finalBarOverlap: {bar_overlap} }});\n"
+        f"const p = plan([{IRON_V}, 0], [{to_level}, 0.35], {style!r}, t);\n"
+        "console.log(JSON.stringify({ total: Math.round(p.totalMs),\n"
+        "  steps: p.steps.map((s) => [s.kind, Math.round(s.at), Math.round(s.ms),\n"
+        "    s.ownsLevel !== false]) }));")
+
+
+def test_at_zero_the_bar_still_waits_for_every_rank_to_finish():
+    plan = ending(19, 0)
+    arrive = [s for s in plan["steps"] if s[0] == "arrive"][0]
+    others = [s for s in plan["steps"] if s[0] != "arrive"]
+    assert arrive[1] >= max(s[1] + s[2] for s in others), (
+        "at overlap 0 the sweep must start after the last rank has landed")
+    assert plan["steps"][-1][0] == "arrive", "and it is still the last step"
+
+
+def test_at_one_the_bar_starts_on_the_final_tier_crossing():
+    """His own anchor: "the Toadsworth -> Waluigi threshold"."""
+    plan = ending(19, 1)
+    arrive = [s for s in plan["steps"] if s[0] == "arrive"][0]
+    crossings = [s for s in plan["steps"] if s[0] == "tier"]
+    assert arrive[1] == crossings[-1][1], (
+        f"the sweep must begin with the final crossing: {plan['steps']}")
+    # And the ranks after it are still to come — that is the whole point.
+    after = [s for s in plan["steps"] if s[0] == "division" and s[1] > arrive[1]]
+    assert len(after) == 4, ("Waluigi 5->1 must still tick while the bar fills: "
+                             f"{plan['steps']}")
+
+
+def test_the_overlapping_sweep_shortens_the_climb_by_its_own_length():
+    late, early = ending(19, 0)["total"], ending(19, 1)["total"]
+    assert early < late, (early, late)
+    assert late - early == 90, (
+        "the saving is exactly the sweep that no longer runs on its own")
+
+
+def test_the_steps_stay_sorted_by_start_time():
+    """The engine walks this list by `at`, entering each step as its start
+    passes. An out-of-order entry would be skipped or would swallow the ones
+    after it, and the sweep moving earlier is what makes that reachable."""
+    for overlap in (0, 0.5, 1):
+        steps = ending(19, overlap)["steps"]
+        starts = [at for _kind, at, _ms, _owns in steps]
+        assert starts == sorted(starts), (overlap, steps)
+
+
+def test_the_closing_sweep_never_owns_the_rank_being_shown():
+    """It is the ONLY step that does not. Running alongside ranks that are
+    still ticking, a step that owned the level would jump the cap straight to
+    the destination and undo the ladder it is overlapping."""
+    for overlap in (0, 1):
+        steps = ending(19, overlap)["steps"]
+        for kind, _at, _ms, owns in steps:
+            assert owns == (kind != "arrive"), (overlap, kind, owns)
+
+
+def test_a_climb_with_no_tier_crossing_anchors_on_its_last_rung():
+    """Four divisions inside one tier: there is no crossing to anchor to, so
+    the sweep reaches back to the last rank-up instead of doing nothing."""
+    plan = run_node(
+        "const t = () => ({ barSweepMs: () => 90, ladderMs: 10,"
+        " anticipateMs: 20, payoffMs: 60, finalTierOverlap: 0, finalBarOverlap: 1 });\n"
+        f"const p = plan([{BRONZE_V}, 0], [{BRONZE_I}, 0.35], 'chain', t);\n"
+        "console.log(JSON.stringify(p.steps.map((s) => [s.kind, Math.round(s.at)])));")
+    arrive = [s for s in plan if s[0] == "arrive"][0]
+    divisions = [s for s in plan if s[0] == "division"]
+    assert arrive[1] == divisions[-1][1], (
+        f"with no crossing the sweep anchors on the last rung: {plan}")
