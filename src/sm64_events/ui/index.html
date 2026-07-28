@@ -525,6 +525,26 @@
        height at a given pane width, so live mode swaps never move layout
        (OBS stability). */
     --selector-height: clamp(152px, calc(98px + 13.8cqw), 230px);
+    /* MEASURED, not chosen. The Active Target card is a hard height on purpose
+       -- the user streams it in OBS and a card that reflowed mid-run would
+       shift their capture -- but the VALUE must come from what the content
+       needs, not from a guess. The previous 258px was set before the card grew
+       a second rank banner, the moved-in strategy picker and the target-pick
+       eyebrow, and it clipped the "Ready" row by 21px at every width at or
+       below 760 (live report + sweep, 2026-07-28).
+
+       Measured 2026-07-28 by raising this property until NO card on the page
+       overflows: 280px, flat across every width in the narrow range.
+
+       "No card on the PAGE" is the load-bearing part. The Practice page
+       renders an .objective-card per index item as well as the active-target
+       one, and in a fixture with no target selected the FIRST one is empty --
+       no rank banners, 222px. Measuring `querySelector(".objective-card")`
+       therefore answered 194px, twice, while the sweep kept failing at 277:
+       the probe was measuring a different element than the defect. Any
+       re-measure has to take the MAX over all of them.
+       Re-measure with: uv run python tools/responsive_sweep.py  */
+    --objective-card-narrow: 280px;
     --radius: 9px;
   }
   * { box-sizing: border-box; }
@@ -1962,7 +1982,15 @@
   .hint::after {
     content: attr(data-tip); position: absolute; z-index: 40;
     left: 50%; top: calc(100% + 6px); transform: translateX(-50%);
-    width: max-content; max-width: 250px; padding: .4rem .55rem;
+    /* 80cqw floor added 2026-07-28: at 250px flat this tooltip is WIDER than
+       the block it sits in once the pane is under ~312px, and .trend-block
+       clips (`overflow: hidden`). Two consequences, one visible and one not:
+       the hidden tooltip pushed the block's scrollWidth 6px past its client
+       width at the WCAG reflow floor (which is how the sweep found it), and
+       the tooltip would have been CUT OFF when actually shown — a hint that
+       cannot be read. cqw resolves against .practice-page, and at any normal
+       width min() picks the 250px, so nothing changes above ~312px. */
+    width: max-content; max-width: min(250px, 80cqw); padding: .4rem .55rem;
     border: 1px solid #42617e; border-radius: 6px;
     background: #0b1929; color: var(--text);
     font-size: .72rem; font-weight: 400; line-height: 1.4; text-align: left;
@@ -1973,7 +2001,11 @@
   .hint:hover::after, .hint:focus-visible::after { opacity: 1; visibility: visible; }
   .timeline-block { flex: 0 0 112px; }
   .trend-block { flex: 1 1 auto; min-height: 190px; overflow: hidden; }
-  .trend-block svg { max-height: 210px; }
+  /* max-WIDTH as well as max-height: the trend chart carries its own width and
+     hung 6px past the block at the WCAG 1.4.10 reflow floor (320px), where
+     `overflow: hidden` on .trend-block cut its right-hand axis label off
+     rather than scaling it (sweep, 2026-07-28). */
+  .trend-block svg { max-height: 210px; max-width: 100%; }
   /* Only the EMPTY trend block becomes a flex column, so its empty state can
      claim the block's slack and centre in it. Applying this unconditionally
      would stop the graph's own margins collapsing against the h4's and push
@@ -3110,6 +3142,19 @@
       grid-template-columns: minmax(145px,.8fr) minmax(210px,1.35fr)
                              minmax(155px,.9fr) minmax(130px,.65fr);
     }
+    /* Four cards in one row need 684px, and `main.app-main` is only 670px at
+       viewport 761 -- the narrowest window that still carries the 76px rail.
+       So the row overflowed by 14px through the whole 761..775 band and the
+       Grading select hung past the edge (sweep, 2026-07-28). Measured: app-main
+       is viewport - 91 while the rail is present, so 4-across stops fitting
+       below 775. Two-up from there, which is what the sub-760 layout already
+       does once the sidebar goes away entirely.
+       This one legitimately stays a VIEWPORT query: .context-bar is shell, it
+       lives outside .practice-page, and the width it gets is a fact about the
+       shell rather than about any card. */
+    @media (max-width: 775px) {
+      .context-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
     .practice-detail-grid { grid-template-columns: 1fr; }
     .objective-card, .detail-drawer { grid-column: 1; }
     .analysis-card, .attempts-card { height: 480px; min-height: 480px; }
@@ -3189,6 +3234,67 @@
        bleeds swap axis with them. No split to swap any more -- each
        banner paints its own box whichever way they are laid out. */
     .rank-banner::before { left: -16px; right: -16px; border-radius: 0; }
+  }
+
+  /* Objective card, narrow pane.
+     ------------------------------------------------------------------
+     These rules lived in `@media (max-width: 760px)` until 2026-07-28, and
+     moving them here is not a relocation -- it FIXES WHICH CARDS GET THEM.
+
+     Measured on the shipping shell:
+       viewport 760 -> pane 725 -> card 699px    (sidebar gone)
+       viewport 761 -> pane 642 -> card 608px    (76px rail present)
+     The 3-column metrics template needs about 646px. So the 699px card had
+     room for it and was being forced into the cramped 2-column layout with a
+     258px height it overflowed by 21px, while the 608px card -- which cannot
+     fit 646 -- was left on the 3-column template and overflowed sideways by
+     29px. Both reported live (900x1180 and 760x1180, 2026-07-28); both are
+     the same root cause, which is that pane width is not monotonic in window
+     width and no viewport threshold can express "this card is too narrow".
+
+     700px is the pane at which the card stops fitting the wide metrics row,
+     with the sweep's two probe points (642 and 725) either side of it. */
+  @container (max-width: 700px) {
+    .objective-heading {
+      grid-template-columns: 26px 1fr; align-items: start;
+    }
+    .objective-heading .eyebrow { align-self: center; }
+    .objective-name { grid-column: 1 / -1; padding-left: 0; }
+    .objective-name h2 { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical; }
+    .objective-strategy {
+      grid-column: 1 / -1; min-width: 0;
+      grid-template-columns: 70px minmax(0,1fr);
+    }
+    .objective-strategy select { min-width: 0; max-width: 100%; }
+    .objective-metrics {
+      /* PB tag needs ~130-150px, not the ~239px a .7fr share was giving it
+         at typical mobile widths -- rebalanced 2026-07-25 round 4 so the
+         stacked rank banners (now carrying a next: delta and, on longer
+         entity labels like "Segment", tighter margins) get the room. */
+      grid-template-columns: minmax(0,1.7fr) minmax(125px,.55fr); gap: 8px;
+      align-items: center;
+    }
+    /* Two side-by-side banners have no room to breathe in this narrow
+       column (shared with the pbtag column) -- stack them instead. */
+    .rank-slot { min-height: 45px; flex-direction: column; align-items: stretch; gap: .35rem; }
+    /* The strategy header reverts to 2 columns here (above); the
+       fastest-strategy hint would otherwise drop to its own row (a 3rd
+       grid child with only 2 explicit columns) rather than sit inline, so
+       it's dropped at this width instead -- same "least load-bearing text
+       gives way first" rule as round 3's banner crowding fix. */
+    .objective-strategy-fastest { display: none; }
+    .objective-live-state { grid-column: 1; grid-row: 2; border: 0; justify-content: flex-start; }
+    .objective-card .pbtag { grid-column: 2; grid-row: 1 / span 2; align-self: center; white-space: normal; }
+    /* Height is MEASURED, not chosen -- see the generated block below. */
+    .objective-card {
+      height: var(--objective-card-narrow); min-height: var(--objective-card-narrow);
+      overflow: hidden;
+    }
+  }
+  @container (max-width: 400px) {
+    /* Was `@media (max-width: 430px)`; viewport 430 gives the pane 395px. */
+    .objective-metrics { grid-template-columns: 1fr 118px; }
   }
 
   @media (max-width: 760px) {
@@ -3336,41 +3442,13 @@
     .practice-card { padding: 12px; }
     .selector-card { padding: 12px; }
     .selector-card .starrow { height: calc(var(--selector-height) - 54px); }
-    .objective-card { height: 258px; min-height: 258px; overflow: hidden; }
-    .objective-heading {
-      grid-template-columns: 26px 1fr; align-items: start;
-    }
-    .objective-heading .eyebrow { align-self: center; }
-    .objective-name { grid-column: 1 / -1; padding-left: 0; }
-    .objective-name h2 { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2;
-      -webkit-box-orient: vertical; }
-    .objective-strategy {
-      grid-column: 1 / -1; min-width: 0;
-      grid-template-columns: 70px minmax(0,1fr);
-    }
-    .objective-strategy select { min-width: 0; max-width: 100%; }
-    .objective-metrics {
-      /* PB tag needs ~130-150px, not the ~239px a .7fr share was giving it
-         at typical mobile widths -- rebalanced 2026-07-25 round 4 so the
-         stacked rank banners (now carrying a next: delta and, on longer
-         entity labels like "Segment", tighter margins) get the room. */
-      grid-template-columns: minmax(0,1.7fr) minmax(125px,.55fr); gap: 8px;
-      align-items: center;
-    }
-    /* Two side-by-side banners have no room to breathe in this narrow
-       column (shared with the pbtag column) -- stack them instead. The
-       258px card height (below) has the vertical room this budget never
-       had at 122px. */
-    .rank-slot { min-height: 45px; flex-direction: column; align-items: stretch; gap: .35rem; }
-    /* The strategy header reverts to 2 columns here (above); the
-       fastest-strategy hint would otherwise drop to its own row (a 3rd
-       grid child with only 2 explicit columns) rather than sit inline, so
-       it's dropped at this width instead -- same "least load-bearing text
-       gives way first" rule as round 3's banner crowding fix, just applied
-       one level up now that the fastest name lives in the header. */
-    .objective-strategy-fastest { display: none; }
-    .objective-live-state { grid-column: 1; grid-row: 2; border: 0; justify-content: flex-start; }
-    .objective-card .pbtag { grid-column: 2; grid-row: 1 / span 2; align-self: center; white-space: normal; }
+    /* The Active Target card's narrow layout USED to live here, keyed to the
+       viewport. It moved to an @container block (search "objective card,
+       narrow pane") on 2026-07-28 -- and moving it CHANGED WHICH SIDE OF 760
+       gets it, which was the bug. Measured: viewport 760 gives the card 699px
+       (the 3-column metrics need ~646, so they fit fine) while viewport 761
+       gives it 608px (they do not). The narrow layout was being applied to
+       the WIDER card and the wide layout to the narrower one. */
     .analysis-card { height: 520px; min-height: 520px; }
     .attempts-card { height: 560px; min-height: 560px; }
     .sort-control select { max-width: 108px; font-size: .75rem; }
@@ -3406,7 +3484,6 @@
     .mobile-status .status-main { display: none; }
     .mobile-status .recording-status .dot { max-width: none; }
     .context-control > .ui-icon { display: none; }
-    .objective-metrics { grid-template-columns: 1fr 118px; }
     .reset-toggle span { display: none; }
     .attempt-actions button { padding-inline: .32rem; }
     .save-pb-narrow { display: none; } /* icon-only Save on phones */

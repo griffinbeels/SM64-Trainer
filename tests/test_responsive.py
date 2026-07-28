@@ -30,34 +30,14 @@ SKIPPING = os.environ.get("SM64_SKIP_SWEEP") == "1"
 # Everything below is Wave 3 work, recorded here so the suite is green while it
 # is outstanding and so the list of what is broken is the list of what to fix.
 # Each row must name a REASON, and deleting the row is how a fix is signed off.
-KNOWN_DEFECTS: dict[str, str] = {
-    # The reported bug (task 0032, live 2026-07-28). `.objective-card` is
-    # height:258px under @media (max-width:760px) and its content needs 277px,
-    # so 21px -- the "Ready" row -- is guillotined by overflow:hidden. The
-    # height was hand-set before the card grew a second rank banner, the
-    # moved-in strategy picker and the target-pick eyebrow.
-    **{f"{w}x{h} [Practice] clipped :: section.practice-card.objective-card":
-       "Wave 3: fixed height 258px vs 277px of content"
-       for w, h in [(320, 800), (330, 1000), (331, 1000), (430, 1000),
-                    (431, 1000), (500, 1000), (501, 1000), (600, 1000),
-                    (601, 1000), (640, 1000), (641, 1000), (760, 1000),
-                    (760, 1180)]},
-    # Same card, the other axis, at the one width where the rail is still
-    # present but the mobile layout has not taken over.
-    "761x1000 [Practice] clipped :: section.practice-card.objective-card":
-        "Wave 3: 646px of content in a 617px card",
-    "761x1000 [Practice] clipped :: main.app-main":
-        "Wave 3: consequence of the objective card above",
-    # The reported nav dead end (Rank unreachable at all 13 widths <= 760px)
-    # was FIXED 2026-07-28 -- MobileNav and MobileMore now derive from
-    # NAV_GROUPS, so its 13 rows came out of this dict. The stale-exemption
-    # test below is what forced them out rather than leaving them here lying
-    # about a bug that no longer exists. Guarded going forward by
-    # tests/test_ui_nav.py plus this file's unreachable probe.
-    **{f"{w}x{h} [Practice] clipped :: div.analysis-block.trend-block":
-       "Wave 3: 6px of chart past the block at the WCAG reflow floor"
-       for w, h in [(320, 800), (330, 1000), (331, 1000)]},
-}
+#
+# EMPTY as of 2026-07-28: the sweep reports zero defects across all 36
+# viewports.  Both reported bugs are fixed (the Active Target card's clipping
+# and the Rank dead end), along with two the sweep found on its own -- the
+# context bar overflowing `main.app-main` through the 761..775 band, and a
+# hint tooltip wider than the block that clips it.  Every row that used to be
+# here was removed by fixing the thing, not by exempting it.
+KNOWN_DEFECTS: dict[str, str] = {}
 
 
 def test_chrome_is_available_or_the_opt_out_is_explicit():

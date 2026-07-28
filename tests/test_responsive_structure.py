@@ -49,6 +49,7 @@ LEGACY_VIEWPORT_RULES: dict[str, str] = {
     '(max-width: 1180px) :: .recording-status .dot': "pre-existing 2026-07-28; Wave 2",
     '(max-width: 1180px) :: .recording-status .dot::before': "pre-existing 2026-07-28; Wave 2",
     '(max-width: 1180px) :: .recording-status .recording-light': "pre-existing 2026-07-28; Wave 2",
+    '(max-width: 1180px) :: @media (max-width: 775px)': "pre-existing 2026-07-28; Wave 2",
     '(max-width: 1180px) :: .practice-detail-grid': "pre-existing 2026-07-28; Wave 2",
     '(max-width: 1180px) :: .objective-card, .detail-drawer': "pre-existing 2026-07-28; Wave 2",
     '(max-width: 1180px) :: .analysis-card, .attempts-card': "pre-existing 2026-07-28; Wave 2",
@@ -146,18 +147,6 @@ LEGACY_VIEWPORT_RULES: dict[str, str] = {
     '(max-width: 760px) :: .practice-card': "pre-existing 2026-07-28; Wave 2",
     '(max-width: 760px) :: .selector-card': "pre-existing 2026-07-28; Wave 2",
     '(max-width: 760px) :: .selector-card .starrow': "pre-existing 2026-07-28; Wave 2",
-    '(max-width: 760px) :: .objective-card': "pre-existing 2026-07-28; Wave 2",
-    '(max-width: 760px) :: .objective-heading': "pre-existing 2026-07-28; Wave 2",
-    '(max-width: 760px) :: .objective-heading .eyebrow': "pre-existing 2026-07-28; Wave 2",
-    '(max-width: 760px) :: .objective-name': "pre-existing 2026-07-28; Wave 2",
-    '(max-width: 760px) :: .objective-name h2': "pre-existing 2026-07-28; Wave 2",
-    '(max-width: 760px) :: .objective-strategy': "pre-existing 2026-07-28; Wave 2",
-    '(max-width: 760px) :: .objective-strategy select': "pre-existing 2026-07-28; Wave 2",
-    '(max-width: 760px) :: .objective-metrics': "pre-existing 2026-07-28; Wave 2",
-    '(max-width: 760px) :: .rank-slot': "pre-existing 2026-07-28; Wave 2",
-    '(max-width: 760px) :: .objective-strategy-fastest': "pre-existing 2026-07-28; Wave 2",
-    '(max-width: 760px) :: .objective-live-state': "pre-existing 2026-07-28; Wave 2",
-    '(max-width: 760px) :: .objective-card .pbtag': "pre-existing 2026-07-28; Wave 2",
     '(max-width: 760px) :: .analysis-card': "pre-existing 2026-07-28; Wave 2",
     '(max-width: 760px) :: .attempts-card': "pre-existing 2026-07-28; Wave 2",
     '(max-width: 760px) :: .sort-control select': "pre-existing 2026-07-28; Wave 2",
@@ -177,12 +166,12 @@ LEGACY_VIEWPORT_RULES: dict[str, str] = {
     '(max-width: 760px) :: .practice-index-item > summary': "pre-existing 2026-07-28; Wave 2",
     '(max-width: 760px) :: .practice-index-item > summary > .meta': "pre-existing 2026-07-28; Wave 2",
     '(max-width: 760px) :: .settings-actions': "pre-existing 2026-07-28; Wave 2",
-    '(max-width: 430px) :: .objective-metrics': "pre-existing 2026-07-28; Wave 2",
     '(max-width: 430px) :: .reset-toggle span': "pre-existing 2026-07-28; Wave 2",
     '(max-width: 430px) :: .attempt-actions button': "pre-existing 2026-07-28; Wave 2",
     '(max-width: 430px) :: .save-pb-narrow': "pre-existing 2026-07-28; Wave 2",
     '(max-width: 430px) :: .replay-setting-row': "pre-existing 2026-07-28; Wave 2",
-    '(max-width: 430px) :: .replay-setting-controls': "pre-existing 2026-07-28; Wave 2",}
+    '(max-width: 430px) :: .replay-setting-controls': "pre-existing 2026-07-28; Wave 2",
+}
 
 
 def _violations() -> list[str]:
