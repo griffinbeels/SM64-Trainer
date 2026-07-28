@@ -302,28 +302,19 @@ _DIALOG_ECHO_WINDOW = 30  # frames; the intro IGT re-init lands +1 frame after
 #   1800  ->  5-8 expired   2700  ->  3-4 expired   3600  ->  3-4 expired
 #   4500  ->  0 expired     5400  ->  0 expired      7200  ->  0 expired
 #
-# BUDGET_FACTOR = 6 is UNFALSIFIED, not confirmed the same way — say so
-# plainly rather than implying equal footing with the floor above. Only
-# 16 of 67 definitions have even one timed success (11 have five or more);
-# the other 51 have no history and never reach BUDGET_FACTOR at all.
+# BUDGET_FACTOR = 6 is UNFALSIFIED at the floor we ship, not confirmed the
+# same way as MIN_BUDGET_FRAMES above — say so plainly. Only 16 of 67
+# definitions have even one timed success (11 have five or more); the other
+# 51 have no history, so BUDGET_FACTOR never applies to them at all.
 #
-# The factor DOES discriminate below the shipped floor — the 1800/2700/3600
-# rows above show 5-8 expired at FACTOR 3-4 versus 3-5 at FACTOR 6-8, real
-# daylight between the candidates — so this is not a claim that the tested
-# range is inherently unmeasurable. It is a CEILING EFFECT at the floor we
-# actually ship: at 4500 and above, FACTOR 3 (the loosest of the four
-# tested) already reaches zero expired, and nothing can beat zero, so every
-# column collapses to the same result there. Concretely: the largest
-# best-so-far in this corpus is 4244, and even *3 = 12732 frames already
-# clears MIN_BUDGET_FRAMES=5400 by a wide margin — the floor is doing the
-# work, not the factor, for every arm this journal has ever recorded. 6
-# ships because nothing AT THE SHIPPED FLOOR contradicts it, not because 16
-# definitions' worth of data picked it over 3 or 8 — that comparison never
-# actually runs while the floor dominates. Re-run tools/measure_budget.py
-# once the loose-native movements above exist and have their own history —
-# either a longer typical completion (so the factor starts to bind ahead of
-# the floor) or a much larger MIN_BUDGET_FRAMES re-measurement is what would
-# finally let this corpus discriminate BUDGET_FACTOR at the values we ship.
+# Below 4500, the four tested factor values (3/4/6/8) give different expired
+# counts — see the grid above, 3 to 8 expired depending on the pair. At 4500
+# and above, every one of the four gives 0 expired. 6 ships because nothing
+# AT THE SHIPPED FLOOR (5400) contradicts it, not because this journal chose
+# it over 3 or 8 — every tested factor already reads 0 there. Re-run
+# tools/measure_budget.py once the loose-native movements above exist and
+# have their own history; a longer typical completion is what would let the
+# factor discriminate again at the values we ship.
 MIN_BUDGET_FRAMES = 5400   # 3 minutes at 30 fps; the floor for a def with no history
 BUDGET_FACTOR = 6          # multiple of the definition's best success so far
 
