@@ -177,8 +177,29 @@ export function useTracker() {
   // every fetch, so an object dependency here would re-POST on every
   // WebSocket event for as long as the server kept disagreeing.
   const serverRouteId = (view && view.active_route && view.active_route.id) ?? null;
+  // Adopted ONCE, never on every disagreement: the user deliberately picking
+  // "Overall" also makes activeRouteId null, and re-adopting there would bounce
+  // their choice straight back while the POST was still in flight.
+  const adoptedFromServer = useRef(false);
   useEffect(() => {
-    if (activeRouteId == null || serverRouteId === activeRouteId) return;
+    if (activeRouteId == null) {
+      // This client has never written an opinion (fresh browser, cleared
+      // storage, the desktop GUI's first run) -- so take the SERVER's, which
+      // the spec already calls the source of truth with localStorage as its
+      // mirror. Without this the mirror stayed empty forever while the server
+      // rated a route, and the header card labelled itself "Overall" directly
+      // above its own value line reading "16 Star - LBLJ (Standard)".
+      // Caught by RENDER (2026-07-28); no unit test could have seen it,
+      // because each half was individually correct.
+      if (serverRouteId != null && !adoptedFromServer.current) {
+        adoptedFromServer.current = true;
+        localStorage.setItem("sm64.activeRoute", String(serverRouteId));
+        setActiveRouteId(serverRouteId);
+      }
+      return;
+    }
+    adoptedFromServer.current = true;      // the client has an opinion now
+    if (serverRouteId === activeRouteId) return;
     send("POST", "/api/route/select", { route_id: activeRouteId })
       .then(() => refresh()).catch(() => {});
   }, [serverRouteId, activeRouteId]);

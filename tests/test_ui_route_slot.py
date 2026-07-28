@@ -32,3 +32,15 @@ def test_the_route_list_comes_from_the_scopes_endpoint():
     # options that trigger the exact same things"). Course scopes are dropped
     # -- a course is a rating you can browse, not a plan you can practise.
     assert "/api/marelo/scopes" in STORE
+
+
+def test_a_client_with_no_stored_route_adopts_the_servers():
+    """localStorage is the MIRROR; the journaled route_selected is the truth
+    (spec 2026-07-23 section 5). A client holding no opinion must take the
+    server's rather than sit at Overall while the server rates a route.
+
+    Adopted ONCE, guarded by a ref: picking "Overall" deliberately also makes
+    activeRouteId null, and re-adopting there would bounce the user's own
+    choice back while their POST was still in flight."""
+    assert "adoptedFromServer" in STORE
+    assert "useRef(false)" in STORE

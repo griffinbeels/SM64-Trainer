@@ -82,7 +82,14 @@ export function RouteRankCard({ marelo, routes = [], activeRouteId = null,
   // dropped the trailing 'Rank' from both kickers") -- the big rank icon and
   // name right below it already say "rank"; the label only needs to say
   // WHOSE.
-  const cardLabel = activeRouteId == null ? "Overall" : "Route";
+  // Derived from the SAME payload as the value beneath it, never from the
+  // client's own route slot: the label and the rating must answer to one
+  // source or they can disagree, and they did -- "Overall" sitting directly
+  // above "16 Star - LBLJ (Standard)" on any client whose localStorage had
+  // never been written (2026-07-28). `scope_id` is the server's own answer to
+  // "what did I just rate", so there is nothing left to keep in step.
+  const cardLabel = (marelo && marelo.scope_id && marelo.scope_id !== "overall")
+    ? "Route" : "Overall";
   const options = [["", "Overall"],
                    ...routes.map((route) => [String(route.id), route.name])];
 

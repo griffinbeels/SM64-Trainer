@@ -245,3 +245,21 @@ def test_the_tuning_page_is_reachable_from_the_app_and_from_the_launcher():
     assert "%SM64_PORT%/ui/tune.html" in launcher, \
         ("the launcher's URL must interpolate the port it actually chose -- a "
          "literal port there is the exact failure this test exists for")
+
+
+def test_the_card_label_is_derived_from_the_rated_scope_not_the_client_slot():
+    """The label and the rating beneath it must answer to ONE source.
+
+    They did not. `activeRouteId` is the client's localStorage mirror and
+    `marelo` is the server's answer, so any client that had never written that
+    key -- a fresh browser, cleared storage, the desktop GUI's first run --
+    rendered the label "Overall" directly above its own value line reading
+    "16 Star - LBLJ (Standard)". Caught by RENDER on 2026-07-28 and invisible
+    to every unit test in the suite, because each half was individually right.
+    """
+    code = strip_comments(MARELO_JS)
+    found = re.search(r"const cardLabel = (.*?);", code, re.S)
+    assert found, "cardLabel was renamed or removed -- re-point this guard"
+    expression = found.group(1)
+    assert "scope_id" in expression, expression
+    assert "activeRouteId" not in expression, expression
