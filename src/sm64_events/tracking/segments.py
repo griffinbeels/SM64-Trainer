@@ -1059,9 +1059,12 @@ GUARDS: dict[str, GuardType] = {g.key: g for g in [
 ]}
 
 # How forgiving an armed definition is (spec 2026-07-28-multi-step-segments).
-# ONE registry, same role TRIGGERS/GUARDS play: it drives validation, the
-# armed-branch dispatch, and the editor control through vocab(). A third mode
-# is one row here plus one handler.
+# ONE registry, same role TRIGGERS/GUARDS play: it drives validate_definition
+# and the editor control through vocab() today. It is also the registry the
+# armed-branch dispatch WILL select on, once a later task in this spec builds
+# that dispatch — match_mode is plumbed end to end (db column, dataclass,
+# validation, vocab, API models) but does not yet change any matching
+# behaviour. A third mode is one row here plus one handler.
 MATCH_MODES = {
     "loose": {
         "key": "loose",

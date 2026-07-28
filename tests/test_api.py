@@ -1,10 +1,12 @@
 # tests/test_api.py
 import asyncio
+import inspect
 from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
 
 from sm64_events.core.events import Event
+from sm64_events.server.api import SegmentBody, SegmentPatch
 from sm64_events.server.app import create_app
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.server.poller import Poller
@@ -597,6 +599,95 @@ def test_put_segment_persists_a_changed_match_mode(tmp_path):
                           json={"match_mode": "strict"}).status_code == 200
         assert next(s for s in db.segment_defs()
                     if s["id"] == sid)["match_mode"] == "strict"
+
+
+# Fields that legitimately MUST NOT persist through create_segment/
+# update_segment, with a reason per entry. Empty today, deliberately: no
+# field currently on SegmentBody/SegmentPatch is allowed to be accepted and
+# silently dropped. Adding an entry here is a real design decision, not a
+# way to quiet this test.
+_WRITE_PATH_EXEMPT: set[str] = set()
+
+# One realistic, non-None value per field name shared by SegmentBody and
+# SegmentPatch (both models use the same names for the same concepts, so one
+# table serves both write paths below). A field added to either model with
+# no entry here fails this test immediately with a clear message, which is
+# the point — it forces a decision (give it a sample value, or exempt it
+# with a reason) rather than shipping silently.
+_SEGMENT_FIELD_SAMPLES = {
+    "name": "Renamed", "start_triggers": [{"type": "spawned"}],
+    "end_triggers": [{"type": "level_enter", "to": 6}],
+    "guards": [], "enabled": False, "waypoints": [],
+    "category": "Cat", "match_mode": "strict",
+}
+
+
+def test_every_segment_model_field_reaches_its_write_path(tmp_path, monkeypatch):
+    """Guard against the exact shape of bug fix round 1 found (spec
+    2026-07-28-multi-step-segments): match_mode was accepted and validated by
+    SegmentBody/SegmentPatch, then silently dropped because create_segment/
+    update_segment built their db.insert_segment_def/update_segment_def calls
+    from a hand-maintained key list that had drifted out of sync with the
+    model — "remember to update the tuple" cannot fail a build. This reads
+    the model's OWN field names (never a copy of them) and spies on the REAL
+    db call each write path makes when fed every field, so it asserts on
+    behaviour, not on a source-text scan of the allowlist — a scan would
+    happily pass with a name present in the tuple but never actually
+    forwarded to db.*, which is not what "reaches storage" means."""
+    for field in set(SegmentBody.model_fields) | set(SegmentPatch.model_fields):
+        assert field in _SEGMENT_FIELD_SAMPLES or field in _WRITE_PATH_EXEMPT, (
+            f"new model field {field!r} needs a sample value in "
+            "_SEGMENT_FIELD_SAMPLES or a reasoned entry in _WRITE_PATH_EXEMPT")
+
+    client, service, db = make_client(tmp_path)
+    with client:
+        # -- create_segment -> db.insert_segment_def -------------------------
+        insert_sig = inspect.signature(Database.insert_segment_def)
+        real_insert = db.insert_segment_def
+        captured_insert = {}
+
+        def spy_insert(*args, **kwargs):
+            # Deliberately NO apply_defaults(): that would backfill an
+            # OMITTED kwarg with insert_segment_def's own schema default
+            # (e.g. match_mode's "loose"), making the omission invisible —
+            # exactly the failure mode that let this bug through once
+            # already. .arguments un-defaulted holds only what
+            # create_segment ACTUALLY passed.
+            bound = insert_sig.bind(db, *args, **kwargs)
+            captured_insert.update(bound.arguments)
+            return real_insert(*args, **kwargs)
+        monkeypatch.setattr(db, "insert_segment_def", spy_insert)
+
+        body = {f: v for f, v in _SEGMENT_FIELD_SAMPLES.items()
+                if f in SegmentBody.model_fields}
+        asyncio.run(service.create_segment(body))
+        for field in SegmentBody.model_fields:
+            if field in _WRITE_PATH_EXEMPT:
+                continue
+            assert field in captured_insert, (
+                f"{field!r} on SegmentBody never reaches db.insert_segment_def "
+                "— create_segment accepts it and silently drops it")
+        monkeypatch.setattr(db, "insert_segment_def", real_insert)
+
+        # -- update_segment -> db.update_segment_def -------------------------
+        sid = asyncio.run(service.create_segment(body))
+        real_update = db.update_segment_def
+        captured_update = {}
+
+        def spy_update(def_id, **fields):
+            captured_update.update(fields)
+            return real_update(def_id, **fields)
+        monkeypatch.setattr(db, "update_segment_def", spy_update)
+
+        patch = {f: v for f, v in _SEGMENT_FIELD_SAMPLES.items()
+                 if f in SegmentPatch.model_fields}
+        asyncio.run(service.update_segment(sid, patch))
+        for field in SegmentPatch.model_fields:
+            if field in _WRITE_PATH_EXEMPT:
+                continue
+            assert field in captured_update, (
+                f"{field!r} on SegmentPatch never reaches db.update_segment_def "
+                "— update_segment accepts it and silently drops it")
 
 
 def test_reset_segment_endpoint_restores_seeded_definition(tmp_path):
