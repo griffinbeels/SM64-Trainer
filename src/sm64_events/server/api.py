@@ -6,6 +6,7 @@ LookupError -> 404 (no such attempt), ValueError -> 409 (exists but not
 saveable: bad mode, non-success, cleared, missing clock, or — for pb/undo —
 not the current PB), RuntimeError -> 503 (database unavailable / degraded
 mode)."""
+import dataclasses
 import re
 from pathlib import Path
 
@@ -18,7 +19,9 @@ from sm64_events.links import star_links
 from sm64_events.ranks.standards import entity_key
 from sm64_events.stats.registry import (registry_meta, selection_id,
                                         selection_order)
-from sm64_events.tracking.segments import origin_taxonomy, vocab
+from sm64_events.tracking.backtest import backtest
+from sm64_events.tracking.segments import (SegmentDef, origin_taxonomy,
+                                           validate_definition, vocab)
 from sm64_events.tracking.views import (build_entity_ranks,
                                         build_entity_strategies,
                                         build_route_view, build_run_history,
@@ -227,6 +230,23 @@ class SegmentPatch(BaseModel):
     match_mode: str | None = None
 
 
+class BacktestBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Reuses SegmentBody wholesale rather than a second definition shape --
+    # the whole point is previewing exactly what POST/PUT /api/segments would
+    # accept, before committing to it (tracking/backtest.py). Malformed JSON
+    # (wrong types, a missing required field) never reaches the handler at
+    # all: Pydantic 422s on it here, same as it would on the real save.
+    definition: SegmentBody
+    # The segment definition this candidate would REPLACE, if any -- None for
+    # a brand-new, not-yet-saved definition. When set, the response's
+    # pb_before/pb_after/gained/lost compare the candidate against that
+    # definition's own real history (tracking/backtest.py's CANDIDATE_ID
+    # trap: `current`'s id is real and safe to run under directly).
+    replaces: int | None = None
+
+
 class TimeFilterBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -359,6 +379,53 @@ def create_api_router(service) -> APIRouter:
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True, "id": sid}
+
+    @router.post("/segments/backtest")
+    async def backtest_segment(body: BacktestBody):
+        """Replay an UNSAVED candidate definition against the real event
+        journal and report what it would have done -- the whole point is
+        finding out BEFORE saving, rather than live mid-run the way every
+        other SM64 autosplitter works (tracking/backtest.py). Declared
+        BEFORE /segments/{segment_id} -- same declaration-order rule as
+        /segments/vocab above (fastapi-patterns) -- or FastAPI would try to
+        parse 'backtest' as a segment id.
+
+        `definition` validates exactly like POST /segments: a domain-invalid
+        shape (bad trigger type, an empty trigger list, ...) is 409 via the
+        same `validate_definition`/`_http` path every other segment endpoint
+        uses. `replaces` names the segment definition this candidate would
+        replace, if any -- 404 if it names an unknown id. Read-only: no
+        journal entry, no re-projection, no state change of any kind."""
+        if service.db is None:
+            raise HTTPException(503, "database unavailable")
+        definition = body.definition.model_dump()
+        try:
+            validate_definition(definition)
+        except ValueError as e:
+            raise _http(e)
+        # id=0 is a placeholder only -- backtest() ALWAYS stamps its own id
+        # onto the candidate before replaying it (see backtest.py's "THE
+        # TRAP"), so whatever id lands here is discarded either way.
+        candidate = SegmentDef(
+            id=0, name=definition["name"], enabled=definition["enabled"],
+            start_triggers=definition["start_triggers"],
+            end_triggers=definition["end_triggers"],
+            guards=definition["guards"], waypoints=definition["waypoints"],
+            match_mode=definition["match_mode"])
+        current = None
+        if body.replaces is not None:
+            row = next((r for r in service.db.segment_defs()
+                       if r["id"] == body.replaces), None)
+            if row is None:
+                raise HTTPException(404, f"segment {body.replaces} not found")
+            # Same inclusion-list construction TrackerService._load_segment_defs
+            # uses: SegmentDef's own fields, not an exclusion of whatever
+            # extra columns the row happens to carry (seed_key, seed_dirty,
+            # default_strat, created_utc, ...).
+            keys = [f.name for f in dataclasses.fields(SegmentDef)]
+            current = SegmentDef(**{k: row[k] for k in keys})
+        report = backtest(service.db.events(), candidate, current)
+        return dataclasses.asdict(report)
 
     @router.put("/segments/{segment_id}")
     async def update_segment(segment_id: int, body: SegmentPatch):

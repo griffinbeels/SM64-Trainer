@@ -7,6 +7,7 @@ import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
+import { fmtIgt } from "../format.js";
 import { requestTarget } from "../target.js";
 import { Icon } from "./icons.js";
 import { IconPicker } from "./iconpicker.js";
@@ -236,6 +237,36 @@ export function ClauseRow({ clause, types, vocab, tint, onChange, onRemove, t })
 const SAVE_FIELDS = ["name", "enabled", "start_triggers", "end_triggers",
                      "guards"];
 
+// The full definition shape POST /api/segments/backtest validates against
+// (server/api.py's SegmentBody) -- a SUPERSET of SAVE_FIELDS, deliberately:
+// an existing segment's match_mode/waypoints already sit in `d` (spread from
+// the GET row this editor opened with) even though this editor has no
+// control for either one yet, and leaving them out of the preview would
+// silently backtest against the wrong matcher branch for any seeded
+// movement that isn't loose/plain -- not a hypothetical, the 55 castle
+// movements are exactly that shape. A brand-new segment has none of these
+// three keys on `d` yet; `JSON.stringify` drops an undefined-valued key on
+// its own, so the server's own defaults (loose, no waypoints, no category)
+// apply instead of a wrong client-side guess.
+const BACKTEST_FIELDS = [...SAVE_FIELDS, "waypoints", "category", "match_mode"];
+
+// One-line verdict for the backtest panel: distinguishes "never even armed"
+// from "armed and never closed" (the diagnostic this feature exists for --
+// a definition that looks right and never fires) from "fired, here's how
+// often" -- three different remedies, so a single fires-count would blur
+// the two zero-fire cases together.
+function backtestSummary(report) {
+  const n = report.attempts.length;
+  if (report.fires > 0)
+    return `${report.fires} fire${report.fires === 1 ? "" : "s"} out of `
+      + `${n} attempt${n === 1 ? "" : "s"} in your history.`;
+  if (report.unclosed.length > 0)
+    return "Never fired — but it DID arm, and never closed. See below.";
+  if (n > 0)
+    return `Armed ${n} time${n === 1 ? "" : "s"} but never completed successfully.`;
+  return "Never armed anywhere in your history.";
+}
+
 function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load }) {
   const blank = { name: "", enabled: true,
     start_triggers: [{ type: "level_enter" }],
@@ -257,6 +288,12 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load }) {
   const [origin, setOrigin] = useState(
     detected && detected.source === "override" ? detected.key : "");
   const [err, setErr] = useState(null);
+  // Backtest preview state -- reset for free on every open/switch because
+  // Builder remounts (Segments keys it by editing.id/"new"), so a stale
+  // report from a different segment can never bleed through.
+  const [btBusy, setBtBusy] = useState(false);
+  const [btReport, setBtReport] = useState(null);
+  const [btErr, setBtErr] = useState(null);
   const edit = (k, i, clause) => setD({ ...d,
     [k]: d[k].map((c, j) => (j === i ? clause : c)) });
   const add = (k, types) => setD({ ...d, [k]: [...d[k], { type: types[0].key }] });
@@ -288,6 +325,23 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load }) {
       onSaved(savedId);
       return true;
     } catch (e) { setErr(String(e)); return false; }
+  }
+
+  // "Try it against my history" -- the whole point is finding out BEFORE
+  // Save, so this sends whatever is CURRENTLY in the form, unsaved
+  // (tracking/backtest.py). `replaces` is the segment being edited, if any,
+  // so the response can diff the candidate against its own real history.
+  async function runBacktest() {
+    setBtBusy(true); setBtErr(null);
+    try {
+      const definition = Object.fromEntries(
+        BACKTEST_FIELDS.map((field) => [field, d[field]]));
+      const report = await send("POST", "/api/segments/backtest", {
+        definition, replaces: initial && initial.id != null ? initial.id : null,
+      });
+      setBtReport(report);
+    } catch (e) { setBtErr(String(e)); setBtReport(null); }
+    finally { setBtBusy(false); }
   }
 
   async function saveOrigin(nextKey) {
@@ -383,11 +437,39 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load }) {
     ${err && html`<div class="badx">${err}</div>`}
     <div class="builder-actions">
       <span class="meta">Saving automatically recalculates this segment's history.</span>
+      <button onclick=${runBacktest} disabled=${btBusy}>
+        <${Icon} name="play" size=${16} />${" "}${btBusy
+          ? "Testing…" : "Try it against my history"}
+      </button>
       <button onclick=${onCancel}>Cancel</button>
       <button class="primary-button" onclick=${save}>
         <${Icon} name="save" size=${16} /> Save segment
       </button>
     </div>
+    ${btErr && html`<div class="badx backtest-panel">${btErr}</div>`}
+    ${btReport && html`<div class="backtest-panel">
+      <div class="backtest-summary">
+        ${backtestSummary(btReport)}
+        ${btReport.fires > 0 && btReport.pb_after != null
+          ? html` <span class="meta">Fastest: ${fmtIgt(btReport.pb_after)}</span>` : ""}
+        ${initial && initial.id != null ? html` <span class="meta">
+          vs. current definition: +${btReport.gained} / -${btReport.lost} attempts</span>` : ""}
+      </div>
+      ${btReport.unclosed.length > 0 && html`<div class="backtest-unclosed badx">
+        ${btReport.unclosed.map((u, i) => html`<div key=${i}>
+          ⚠ Armed at frame ${u.frame} (step ${u.progress}/${u.total}), ${u.reason}.
+        </div>`)}
+      </div>`}
+      ${btReport.attempts.length > 0 && html`<div class="backtest-attempts">
+        ${btReport.attempts.map((a, i) => html`<div key=${i}
+            class="meta ${a.cleared ? "cleared" : ""}">
+          ${a.outcome === "success" ? "✔" : "✘"}${" "}${a.outcome.replace(/_/g, " ")}
+          ${a.outcome === "success" && a.rta_frames != null
+            ? html` <b>${fmtIgt(a.rta_frames)}</b>` : ""}
+          ${a.cleared && a.cleared_reason ? html` (${a.cleared_reason})` : ""}
+        </div>`)}
+      </div>`}
+    </div>`}
   </div>`;
 }
 

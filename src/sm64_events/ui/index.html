@@ -2326,6 +2326,18 @@
   }
   .builder-actions .meta { margin-right: auto; font-size: .72rem; }
 
+  .backtest-panel {
+    display: grid; gap: .5rem; margin-top: .75rem; padding: .65rem .75rem;
+    border: 1px solid var(--border-soft); border-radius: 8px;
+    background: rgba(8,20,34,.48);
+  }
+  .backtest-summary { display: flex; flex-wrap: wrap; gap: .55rem; align-items: baseline; }
+  .backtest-unclosed { display: grid; gap: .25rem; }
+  .backtest-attempts {
+    display: grid; gap: .2rem; max-height: 220px; overflow-y: auto;
+    padding-right: 2px; scrollbar-width: thin;
+  }
+
   .routes-workshop {
     min-width: 0; display: grid;
     grid-template-columns: minmax(240px,300px) minmax(0,1fr);

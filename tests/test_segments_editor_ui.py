@@ -126,3 +126,29 @@ def test_icons_are_resolved_by_the_call_site():
     # iconFor is the caller's, so the picker stays domain-free.
     assert "iconFor=${" in SEGMENTS_JS_SOURCE
     assert "optionIcon" in SEGMENTS_JS_SOURCE
+
+
+# --- backtest preview (Task 8, spec 2026-07-28-multi-step-segments) --------
+# The whole point of tracking/backtest.py: find out whether a candidate
+# definition would have worked BEFORE saving it, not live mid-run.
+
+def test_editor_offers_a_backtest_preview_beside_save():
+    assert '"/api/segments/backtest"' in SEGMENTS_JS_SOURCE
+    assert "Try it against my history" in SEGMENTS_JS_SOURCE
+
+
+def test_backtest_preview_names_the_unclosed_arm_diagnostic():
+    # THE diagnostic this feature exists for: a definition that looks right
+    # and never fires. Pin the actual distinguishing sentence, not just the
+    # word "unclosed" -- a comment alone would satisfy a bare substring check
+    # (ui-core.md's guard-can-still-fail rule).
+    assert "Never fired — but it DID arm, and never closed" in SEGMENTS_JS_SOURCE
+
+
+def test_backtest_preview_sends_the_full_unsaved_form_not_just_save_fields():
+    # Regression this guards against: sending only SAVE_FIELDS would silently
+    # drop an existing segment's match_mode/waypoints from the preview and
+    # backtest against the wrong matcher branch (every non-plain, non-loose
+    # seeded movement).
+    assert "BACKTEST_FIELDS" in SEGMENTS_JS_SOURCE
+    assert '"waypoints", "category", "match_mode"' in SEGMENTS_JS_SOURCE

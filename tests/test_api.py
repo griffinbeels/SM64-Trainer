@@ -601,6 +601,90 @@ def test_put_segment_persists_a_changed_match_mode(tmp_path):
                     if s["id"] == sid)["match_mode"] == "strict"
 
 
+# -- backtest endpoint (Task 8, spec 2026-07-28-multi-step-segments) --------
+# Contract note: this endpoint's error taxonomy differs from a domain
+# ValueError -> 409, a "definition fails validate_definition" test belongs at
+# 409, NOT 422 -- 422 is reserved for a body Pydantic itself rejects (wrong
+# types, missing required fields), before the handler ever runs. See
+# server/api.py's module docstring / _http.
+
+def test_backtest_endpoint_accepts_an_unsaved_definition(tmp_path):
+    # The whole point: you find out BEFORE you save.
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.post("/api/segments/backtest", json={
+            "definition": {"name": "candidate", "match_mode": "loose",
+                          "start_triggers": [{"type": "level_exit", "from": 23}],
+                          "end_triggers": [{"type": "level_enter", "to": 19}],
+                          "guards": []},
+            "replaces": None})
+        assert r.status_code == 200
+        body = r.json()
+        assert set(body) >= {"fires", "attempts", "unclosed",
+                             "pb_before", "pb_after", "gained", "lost"}
+        # a brand-new candidate has nothing to compare against
+        assert body["pb_before"] is None and body["gained"] == 0
+
+
+def test_backtest_endpoint_rejects_a_domain_invalid_candidate_with_409(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.post("/api/segments/backtest", json={
+            "definition": {"name": "bad", "start_triggers": [{"type": "nope"}],
+                          "end_triggers": [{"type": "spawned"}], "guards": []},
+            "replaces": None})
+        assert r.status_code == 409
+
+
+def test_backtest_endpoint_422s_on_a_malformed_body(tmp_path):
+    # start_triggers wrong TYPE (a string, not a list of clauses) -- Pydantic
+    # rejects this before the handler runs, distinct from the 409 above.
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.post("/api/segments/backtest", json={
+            "definition": {"name": "bad", "start_triggers": "nope",
+                          "end_triggers": [], "guards": []},
+            "replaces": None})
+        assert r.status_code == 422
+
+
+def test_backtest_endpoint_404s_on_an_unknown_replaces_id(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.post("/api/segments/backtest", json={
+            "definition": {"name": "candidate", "match_mode": "loose",
+                          "start_triggers": [{"type": "level_exit", "from": 23}],
+                          "end_triggers": [{"type": "level_enter", "to": 19}],
+                          "guards": []},
+            "replaces": 999999})
+        assert r.status_code == 404
+
+
+def test_backtest_endpoint_counts_real_history(tmp_path):
+    # Drives the real journal, not a fixture -- two DDD-exit-through-the-sub
+    # walks the candidate's loose definition catches.
+    client, service, db = make_client(tmp_path)
+    with client:
+        async def go():
+            await service.publish(Event(type="level_changed", frame=100,
+                                        timestamp_utc=T0,
+                                        payload={"from": 23, "to": 6}))
+            await service.publish(Event(type="level_changed", frame=400,
+                                        timestamp_utc=T0,
+                                        payload={"from": 6, "to": 19}))
+        asyncio.run(go())
+        r = client.post("/api/segments/backtest", json={
+            "definition": {"name": "DDD exit -> BitFS", "match_mode": "loose",
+                          "start_triggers": [{"type": "level_exit", "from": 23}],
+                          "end_triggers": [{"type": "level_enter", "to": 19}],
+                          "guards": []},
+            "replaces": None})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["fires"] == 1
+        assert body["attempts"][0]["rta_frames"] == 300
+
+
 # Fields that legitimately MUST NOT persist through create_segment/
 # update_segment, with a reason per entry. Empty today, deliberately: no
 # field currently on SegmentBody/SegmentPatch is allowed to be accepted and
@@ -920,6 +1004,11 @@ def test_segments_503_when_db_none(tmp_path):
         }).status_code == 503
         assert client.put("/api/segments/1", json={"enabled": False}).status_code == 503
         assert client.delete("/api/segments/1").status_code == 503
+        assert client.post("/api/segments/backtest", json={
+            "definition": {"name": "X", "start_triggers": [{"type": "spawned"}],
+                          "end_triggers": [{"type": "level_enter", "to": 6}]},
+            "replaces": None
+        }).status_code == 503
         # vocab is always 200 — no db dependency
         assert client.get("/api/segments/vocab").status_code == 200
 
