@@ -73,7 +73,7 @@ export const TUNABLES = {
     why: "How many tier crossings it takes to reach the short duration. Anything between one and this interpolates; the ladder tops out at 8.",
   },
   finalTierOverlap: {
-    group: "Pace", label: "Final tier · ladder overlap", value: 0.6,
+    group: "Pace", label: "Final tier · ladder overlap", value: 0.8,
     min: 0, max: 1, step: 0.05, unit: "x",
     why: "When the climb lands in the tier it FINISHES in, how much of that crossing's release the ladder climb plays over the top of. 0 waits for the crossing to finish first; 1 starts the ladder the instant the new cap appears. A tier the climb only passes through is never overlapped — it has no ladder of its own.",
   },
@@ -185,14 +185,9 @@ export const TUNABLES = {
 
   // ---- The landing -------------------------------------------------------
   settleMs: {
-    group: "Landing", label: "Settle", value: 0,
+    group: "Landing", label: "Settle", value: 20,
     min: 0, max: 2500, step: 10, unit: "ms",
     why: "A short settle on the whole surface so a climb ENDS on something rather than just stopping.",
-  },
-  nextRevealMs: {
-    group: "Landing", label: "Next-step wipe-in", value: 0,
-    min: 0, max: 2500, step: 10, unit: "ms",
-    why: "The 'X.XXs to rank up' line wiping in left-to-right once the climb lands.",
   },
 };
 

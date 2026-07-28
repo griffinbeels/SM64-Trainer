@@ -204,3 +204,44 @@ def test_the_climb_holds_the_practice_page_through_a_celebration():
                      practice), (
         "practice.js must hold only the TARGET, letting section data through; "
         "holding the whole view deadlocked the celebration it was protecting")
+
+
+def test_the_next_step_fade_is_driven_by_the_engine_not_by_a_beat():
+    """`--climb-reveal` fades the "X.XXs to rank up" line out as the bar fills
+    at the start of a climb and back in as it fills at the end.
+
+    It must be computed where the BAR is computed (ui/rankclimb.js), off the
+    same step and the same eased progress. It used to be a registry entry fired
+    on the settle beat, and a beat fires at a MOMENT: its timing could only ever
+    be tuned to line up with the bar, never tied to it, and it did not line up
+    — "it looks like the text that appears while we're doing this is totally
+    glitchy… it should finish right when the bar finishes loading. These should
+    be in sync." (user, 2026-07-27).
+
+    So this asserts the OWNERSHIP, which is the part that can silently regress:
+    the day someone adds a `nextReveal` entry back to the registry, the fade
+    stops being a function of the bar and starts being a duration again.
+    """
+    from source_scan import strip_comments
+    registry = strip_comments(CELEBRATIONS_JS.read_text(encoding="utf-8"))
+    engine = strip_comments(RANKCLIMB_JS.read_text(encoding="utf-8"))
+    banner = strip_comments((UI / "components" / "ranks.js").read_text(encoding="utf-8"))
+    assert "--climb-reveal" not in registry, (
+        "ui/celebrations.js writes --climb-reveal again -- a beat cannot be in "
+        "sync with the bar, which is the whole reason this moved to the engine")
+    # The chain, end to end: the engine computes `reveal` beside the bar, and
+    # the banner binds THAT to the variable. Checking only that the variable is
+    # written somewhere would pass on a hardcoded 1.
+    assert "reveal" in engine, "the engine no longer computes a reveal"
+    assert '"--climb-reveal": climb.reveal' in banner, (
+        "the banner must take the fade straight from the climb, or it is back "
+        "to being a number someone matched to the bar by hand")
+
+    # And it fades rather than wiping: a moving mask gradient over text that is
+    # also changing its contents is what read as tearing.
+    stylesheet = strip_comments(INDEX_HTML.read_text(encoding="utf-8"))
+    rule = re.search(r"\.rank-banner-next\s*\{([^}]*)\}", stylesheet)
+    assert rule, ".rank-banner-next lost its rule"
+    assert "opacity: var(--climb-reveal" in rule.group(1), rule.group(1)
+    assert "mask" not in rule.group(1), (
+        "the reveal is a fade now, not a wipe -- see the CSS comment")

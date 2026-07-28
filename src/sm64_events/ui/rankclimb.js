@@ -151,11 +151,11 @@ export function useHeldWhileCelebrating(value) {
 // "position 45 has a fractional part of zero, so a maxed rank empties its own
 // bar" trap outright — a maxed rank is level 44 with `bar` 1, and there is no
 // arithmetic in between to get wrong.
-function renderState(level, bar, beats, atMs, tune) {
+function renderState(level, bar, beats, atMs, tune, reveal = 1, landing = false) {
   const { tier, division } = rankAt(level);
   const { vars, icon } = activeEffects(beats, atMs, tune);
   return {
-    tier, division, level, fill: bar,
+    tier, division, level, fill: bar, reveal, landing,
     // The registry's tierColor entry overrides this mid-crossing; the rest of
     // the time the surface just wears its own tier's colour. One name, so a
     // caller never has to know whether a celebration is running.
@@ -352,6 +352,9 @@ export function useRankClimb(rank, identity = null,
     // settling while the second starts climbing, which is what makes them
     // read as one gesture in two parts rather than two animations.
     const totalMs = plan.totalMs;
+    // Whether this climb ends with a bar sweep at all -- a plain fill
+    // improvement has no rank change, so its next-step line must never fade.
+    const hasArrive = plan.steps.some((step) => step.kind === "arrive");
     const laneFreeAt = lane ? (laneEnds.get(lane) || 0) : 0;
     const startedAt = (lane && order > 0)
       ? Math.max(now(), laneFreeAt + tune.laneGapMs) : now();
@@ -403,13 +406,32 @@ export function useRankClimb(rank, identity = null,
         if (step.ownsLevel !== false) level = step.level;
         if (step.barFrom !== step.barTo) barStep = step;
       }
+      let eased = 1;
       if (barStep) {
         const within = barStep.ms > 0
           ? Math.max(0, Math.min(1, (elapsed - barStep.at) / barStep.ms)) : 1;
-        bar = barStep.barFrom + (barStep.barTo - barStep.barFrom) * barEase(within);
+        eased = barEase(within);
+        bar = barStep.barFrom + (barStep.barTo - barStep.barFrom) * eased;
       } else if (stepIndex >= 0) {
         bar = plan.steps[stepIndex].barFrom;
       }
+      // The "X.XXs to rank up" line fades out as the bar fills at the START and
+      // back in as it fills at the END, off the SAME step and the SAME eased
+      // progress the bar just used -- so "these should be in sync" (user,
+      // 2026-07-27) is structural rather than a duration someone matched by
+      // hand. It used to be a celebration beat fired on settle, which could
+      // only ever be tuned to line up, and did not.
+      //
+      // Between the two it sits at 0 without a rule of its own: mid-climb the
+      // last bar-MOVING step is the finished approach, whose eased progress is
+      // 1, so `1 - eased` is 0. A climb with no approach at all (the bar was
+      // already full) has no bar step to read yet, which is the one case that
+      // needs saying out loud.
+      const arriving = barStep && barStep.kind === "arrive";
+      const reveal = !hasArrive ? 1               // no rank change: never hide it
+        : arriving ? eased                        // fading back in with the bar
+        : (barStep && barStep.kind === "approach") ? 1 - eased
+        : 0;
       shownRef.current = { level, bar };
 
       const landed = elapsed >= totalMs;
@@ -423,7 +445,7 @@ export function useRankClimb(rank, identity = null,
         }));
       }
 
-      setState(renderState(level, bar, beatsRef.current, at, tune));
+      setState(renderState(level, bar, beatsRef.current, at, tune, reveal, !!arriving));
 
       // Keep ticking past the landing until the slowest effect has finished,
       // or the last flap would freeze mid-beat.

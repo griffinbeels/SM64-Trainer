@@ -179,9 +179,32 @@ export function RankBanner({ label, banner, hint = null, identity = null,
   const climbingNext = rankAt(climb.level + 1);
   const atCeiling = climbingNext.tier === climb.tier
     && climbingNext.division === climb.division;
-  const next = climb.climbing ? (atCeiling ? null : climbingNext) : settledNext;
+  // The time is shown from the moment the closing bar sweep STARTS, not when
+  // the climb ends. The line fades back in across that sweep, and a suffix
+  // appearing part-way through a fade is a content jump inside an animation --
+  // half of what "totally glitchy" was (user, 2026-07-27). By `landing` the
+  // rank shown is already the destination, so the number is true when it
+  // appears.
+  // Whether the line should read the FINAL step rather than the one above
+  // whatever rank is on screen this frame. Two cases, and both were visible
+  // in a frame-by-frame trace of the fade:
+  //
+  //  * `landing` -- the closing sweep is running and the line is fading back
+  //    in. The rank is still ticking underneath it (Waluigi 5 -> 4), so
+  //    deriving the label from the CURRENT rank swapped its text at opacity
+  //    0.485, mid-fade. The fade must reveal one settled sentence, not
+  //    animate a changing one.
+  //  * not climbing AND already showing the destination. That second clause
+  //    is what kills the one-frame flash of the destination's own next step:
+  //    the render between the new payload arriving and the effect starting
+  //    the climb still shows the OLD rank, and without it that frame read
+  //    "CAPLESS 5 -> Waluigi 3 - 0.04s to rank up" at full opacity.
+  const showsDestination = ranked && climb.tier === banner.rank
+    && climb.division === banner.division;
+  const settledText = climb.landing || (!climb.climbing && showsDestination);
+  const next = settledText ? settledNext : (atCeiling ? null : climbingNext);
   const nextLabel = next ? `${capName(next.tier)} ${divisionDigit(next.division)}` : null;
-  const gap = (!climb.climbing && ranked && banner.next_gap_cs != null)
+  const gap = (settledText && ranked && banner.next_gap_cs != null)
     ? (banner.next_gap_cs / 100).toFixed(2) : null;
   const fillPct = climb.fill * 100;
   const displayFillPct = Math.round(fillPct);
@@ -215,8 +238,11 @@ export function RankBanner({ label, banner, hint = null, identity = null,
   // hard-cut to the settled one. Set here rather than in the registry because
   // it is the ABSENCE of a celebration that has to hold it hidden, and a
   // registry entry only ever describes something happening.
-  const vars = climb.climbing && climb.vars["--climb-reveal"] === undefined
-    ? { ...climb.vars, "--climb-reveal": 0 } : climb.vars;
+  // `--climb-reveal` comes from the hook now, computed per frame off the very
+  // step the bar is moving on, so the fade and the bar cannot drift apart.
+  // ranks.js used to pin it to 0 for the whole climb and let a settle-triggered
+  // celebration wipe it in; that is what could never be in sync.
+  const vars = { ...climb.vars, "--climb-reveal": climb.reveal };
   return html`<div class=${`rank-banner${climb.climbing ? " is-climbing" : ""}`} style=${vars}>
     <div class="rank-banner-row">
       <!-- At the floor default the sentinel's own wording ("no PB on this

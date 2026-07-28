@@ -246,10 +246,21 @@ export const CELEBRATIONS = {
   // rather than per-word spans: one element, no splitting of a string that
   // ellipsises, and the soft edge reads as a fade rather than a curtain.
   // ranks.js holds it at 0 for the rest of the climb.
-  nextReveal: {
-    on: "settle", ms: (_beat, tune) => tune.nextRevealMs,
-    vars: (_beat, progress) => ({ "--climb-reveal": easeOutCubic(progress).toFixed(3) }),
-  },
+  // `nextReveal` used to live here, wiping the "X.XXs to rank up" line in on
+  // the SETTLE beat. It is gone, and the reason is worth keeping: a beat fires
+  // at a moment, so its timing could only ever be tuned to line up with the
+  // bar, never tied to it — and it did not line up. "it looks like the text
+  // that appears while we're doing this is totally glitchy… While the bar is
+  // loading and filling up, it should be fading away… While the final
+  // animation step is playing, it should be fading back in, and it should
+  // finish right when the bar finishes loading. These should be in sync."
+  // (user, 2026-07-27).
+  //
+  // Being in sync with the bar means being a function of the same thing the
+  // bar is a function of, so `--climb-reveal` is computed by the engine
+  // (ui/rankclimb.js) off the very same step and the very same eased progress.
+  // No registry entry can express that, because no beat knows where the bar
+  // has got to.
 
   // The landing. A short settle on the whole surface so a climb ENDS on
   // something rather than just stopping.

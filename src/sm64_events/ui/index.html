@@ -1031,19 +1031,25 @@
     font-weight: 800; letter-spacing: .4px;
     min-width: 0; overflow: hidden; text-overflow: ellipsis;
   }
-  /* Wipes in left-to-right when a climb settles (`--climb-reveal`, written by
-     ui/celebrations.js). The mask's two stops are 30% of the width apart, so
-     the leading edge is a soft gradient rather than a hard curtain -- "fade in
-     from the left most text to the right most text". Defaults to 1, so every
-     banner that is not mid-climb renders exactly as it always did. */
+  /* FADES with the bar (`--climb-reveal`, written per frame by
+     ui/rankclimb.js off the same eased progress the bar uses): out while the
+     bar fills at the start of a climb, back in while it fills at the end.
+     Defaults to 1, so every banner that is not mid-climb renders exactly as it
+     always did.
+
+     This was a left-to-right MASK wipe until 2026-07-27, fired by a
+     celebration beat when the climb settled. Two things were wrong with that
+     and the user saw both at once -- "it looks like the text that appears
+     while we're doing this is totally glitchy": a beat fires at a moment, so
+     its timing could only be tuned to line up with the bar rather than tied to
+     it, and a moving mask gradient over text that is ALSO changing its
+     contents reads as tearing. Opacity is what he asked for ("just a fade
+     away") and has neither problem. NO `transition` here on purpose -- the
+     value is already animated frame by frame, and a CSS transition on top
+     would lag it back out of sync. */
   .rank-banner-next {
     flex-shrink: 1; overflow: hidden; text-overflow: ellipsis;
-    -webkit-mask-image: linear-gradient(90deg, #000
-        calc(var(--climb-reveal, 1) * 130% - 30%), transparent
-        calc(var(--climb-reveal, 1) * 130%));
-            mask-image: linear-gradient(90deg, #000
-        calc(var(--climb-reveal, 1) * 130% - 30%), transparent
-        calc(var(--climb-reveal, 1) * 130%));
+    opacity: var(--climb-reveal, 1);
   }
   /* Progress toward the next rank: full slot width, never a fixed px bar —
      a 200px bar used to bleed past the card edge (2026-07-24). */
