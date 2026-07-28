@@ -536,13 +536,19 @@ SEG_CONTEXT = """
 const context = {
   courseIcons: {}, starIconsMode: "course", iconOverrides: {},
   courseByLevel: {},
-  segmentLevels: { "1": [6], "3": [16], "5": [17], "20": [6], "99": [6] },
+  segmentLevels: { "1": [6], "3": [16], "5": [17], "20": [6], "99": [6],
+                   "98": [6], "97": [17] },
   segmentMeta: {
     "1":  { seedKey: "seg:lblj",        category: "Tricks" },
     "3":  { seedKey: "seg:lakitu-skip", category: "Tricks" },
     "5":  { seedKey: "seg:bitdw-pipe",  category: "Castle Movement" },
     "20": { seedKey: "seg:bob->wf",     category: "Castle Movement" },
-    "99": { seedKey: null,              category: null },
+    // Hand-built rows, the three shapes that reach the fallback: one that
+    // starts nowhere (no place in the world graph), one that starts in the
+    // basement, and one that starts in a Bowser stage.
+    "99": { seedKey: null, category: null, originRegion: null },
+    "98": { seedKey: null, category: null, originRegion: "6:3" },
+    "97": { seedKey: null, category: null, originRegion: "6:3" },
   },
 };
 """
@@ -574,12 +580,51 @@ def test_a_bowser_pipe_keeps_its_stage_art_despite_its_category():
     assert src == "/ui/assets/star_icons/bitdw.png"
 
 
-def test_a_user_created_segment_has_no_default_and_keeps_the_generic_star():
-    # It carries neither seed_key nor category, and nothing in the UI knows
-    # what it is. The ✎ override is the answer for those, not a guess.
+def test_a_segment_that_starts_nowhere_keeps_the_generic_star():
+    # No seed_key, no category, and no PLACE either — a reset-anchored rule, an
+    # unscoped key grab, a Toad star. Nothing knows what that is, so the ✎
+    # override is the answer for it rather than a guess.
     src = run_node("entityIcon", SEG_CONTEXT
                    + 'console.log(JSON.stringify(entityIcon("segment:99", context)));')
     assert src == "/ui/assets/star_1.png"
+
+
+def test_a_hand_built_segment_that_starts_somewhere_is_a_castle_movement():
+    """The v1.6.0 live report: five hand-made movements predating the corpus
+    drew plain gold stars beside 47 seeded rows wearing castle_movement, which
+    reads as the feature never having shipped. They carry no category, so the
+    fallback reads their origin REGION instead — present for every start with a
+    place in the world graph."""
+    src = run_node("entityIcon", SEG_CONTEXT
+                   + 'console.log(JSON.stringify(entityIcon("segment:98", context)));')
+    assert src == "/ui/assets/star_icons/castle_movement.png"
+
+
+def test_the_start_stage_still_outranks_the_inferred_category():
+    # Same ordering the seeded pipe entries get (LEVEL_ICONS before the
+    # category table) — inferring a category must not move that line.
+    src = run_node("entityIcon", SEG_CONTEXT
+                   + 'console.log(JSON.stringify(entityIcon("segment:97", context)));')
+    assert src == "/ui/assets/star_icons/bitdw.png"
+
+
+def test_the_inferred_category_is_a_key_of_the_icon_table():
+    """One door to the picture. The fallback resolves to a CATEGORY and looks
+    the stem up in SEGMENT_CATEGORY_ICONS like every other row; a constant that
+    named `castle_movement` itself would be a second table pointing at the same
+    art, which is the divergence this module exists to prevent."""
+    answer = run_node(
+        "SEGMENT_CATEGORY_ICONS, UNCATEGORIZED_SEGMENT_CATEGORY, segmentCategory",
+        """
+console.log(JSON.stringify({
+  known: UNCATEGORIZED_SEGMENT_CATEGORY in SEGMENT_CATEGORY_ICONS,
+  corpusWins: segmentCategory("Tricks", "6:3"),
+  inferred: segmentCategory(null, "6:3"),
+  nowhere: segmentCategory(null, null),
+}));
+""")
+    assert answer == {"known": True, "corpusWins": "Tricks",
+                      "inferred": "Castle Movement", "nowhere": None}
 
 
 def test_an_override_still_beats_every_seeded_default():

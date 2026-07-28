@@ -59,12 +59,17 @@ function segmentLevels(t) {
 // /api/segments — `seed_key` survives a rename and is identical on every
 // install, `category` is the seed's classification ("Castle Movement"), not a
 // second one invented in the UI. Both feed the default-art registries in
-// entities.js; a user-created segment has neither and falls through to the
-// generic star, which is correct — nothing knows what it is.
+// entities.js. `origin.region` rides along for the row a user built by hand,
+// which has neither of the first two: it is the castle area that segment's
+// start node is reached through, stamped by the SERVER (views.stamp_origins ->
+// segments.origin_view, honouring the editor's own origin override), so this
+// is still the app's one answer about where a segment begins rather than a
+// second one derived here. entities.js decides what it MEANS.
 function segmentMeta(t) {
   return Object.fromEntries((t.segments || []).map((segment) =>
     [String(segment.id),
-     { seedKey: segment.seed_key || null, category: segment.category || null }]));
+     { seedKey: segment.seed_key || null, category: segment.category || null,
+       originRegion: (segment.origin || {}).region || null }]));
 }
 
 // One-entry memo. The context is derived from six store slots and rebuilding

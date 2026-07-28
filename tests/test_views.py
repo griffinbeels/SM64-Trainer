@@ -20,8 +20,22 @@ def star(frame, course=2, star_id=2, igt=343):
               {"course_id": course, "star_id": star_id, "igt_frames": igt})
 
 
+# The menu these tests probe, stored explicitly rather than inherited from
+# DEFAULT_STAT_MENU. The shipped default is a PRODUCT decision the user changes
+# from his own instance (2026-07-27, when Best/Worst came off it), and four
+# tests here went red for it — asserting a default is how a preference change
+# reads as a broken build. What the default must satisfy is pinned in
+# tests/test_stats.py instead; these tests own the stats they name.
+REFERENCE_STAT_MENU = [
+    {"key": "avg_last_n", "params": {"n": 10}},
+    {"key": "avg_last_n", "params": {"n": 50}},
+    {"key": "best"}, {"key": "worst"}, {"key": "success_rate"},
+]
+
+
 def make(tmp_path):
     db = Database(tmp_path / "t.db")
+    db.set_state("stat_menu", REFERENCE_STAT_MENU)
     svc = TrackerService(db, Broadcaster())
     asyncio.run(svc.start())
     return db, svc

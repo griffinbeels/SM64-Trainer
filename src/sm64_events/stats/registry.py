@@ -103,10 +103,18 @@ REGISTRY: dict[str, StatDef] = {d.key: d for d in [
             _dustless_jump_rate),
 ]}
 
+# The menu a fresh install opens with. THREE averages and a success rate is
+# what the user settled on after months of live use (2026-07-27, copied out of
+# his own instance's `stat_menu` KV) — practising one star is a question about
+# your recent form at three horizons, and Best/Worst were the two chips he
+# dropped: the PB is already on the card's own tag, and a single bad run is not
+# a statistic. A stored `stat_menu` still wins, so this only moves an install
+# that has never touched the chips.
 DEFAULT_STAT_MENU = [
     {"key": "avg_last_n", "params": {"n": 10}},
+    {"key": "avg_last_n", "params": {"n": 25}},
     {"key": "avg_last_n", "params": {"n": 50}},
-    {"key": "best"}, {"key": "worst"}, {"key": "success_rate"},
+    {"key": "success_rate"},
 ]
 
 

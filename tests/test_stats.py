@@ -1,4 +1,6 @@
-from sm64_events.stats.registry import REGISTRY, compute_stat, registry_meta
+from sm64_events.stats.registry import (DEFAULT_STAT_MENU, REGISTRY,
+                                        compute_stat, registry_meta,
+                                        selection_id)
 from sm64_events.tracking.projection import Attempt
 
 
@@ -122,3 +124,25 @@ def test_dust_rate_labels_distinguish_tricks():
     assert meta["dustless_rate"]["label"] == "Dustless rollouts"
     assert meta["dustless_jump_rate"]["label"] == "Dustless jumps"
     assert meta["dustless_jump_rate"]["fmt"] == "percent"
+
+
+# --- the SHIPPED default menu ------------------------------------------------
+# What the fresh-install menu must SATISFY, never what it contains. Its contents
+# are a product decision the user changes from his own instance (2026-07-27:
+# Best and Worst came off it for a third average), and a test naming the chips
+# turns that preference into a red build — the same trap tests/test_ui_climb.py
+# already documents for the tuning registry. Coherence is the checkable part.
+
+def test_the_shipped_default_menu_is_coherent():
+    seen = set()
+    for selection in DEFAULT_STAT_MENU:
+        key = selection["key"]
+        assert key in REGISTRY, f"default menu names an unknown stat: {key}"
+        params = selection.get("params", {})
+        # every selection must actually compute rather than raise, and each
+        # must be a DISTINCT chip — two selections sharing a selection_id
+        # render as visually identical duplicates.
+        compute_stat(key, SAMPLE, {**REGISTRY[key].params, **params}, clock="igt")
+        ident = selection_id(key, params)
+        assert ident not in seen, f"default menu repeats a chip: {ident}"
+        seen.add(ident)

@@ -180,6 +180,33 @@ export const SEGMENT_SEED_ICONS = {
 // use the castle_movement picture").
 export const SEGMENT_CATEGORY_ICONS = { "Castle Movement": "castle_movement" };
 
+// The category a definition the CORPUS does not know falls back to. A segment
+// built by hand carries no `category` at all, so until 2026-07-27 it fell
+// straight through to the generic star on the reasoning that "nothing knows
+// what it is" — which was true of the field and false of the row: five
+// hand-made movements predating the corpus ("Basement -> SSL", "WF ->
+// Basement", …) sat in a v1.6.0 install drawing plain gold stars beside 47
+// seeded rows wearing castle_movement, which reads as the feature not having
+// shipped (live report 2026-07-27). What DOES know is where the segment
+// starts: `origin.region` is the castle area its start node is reached
+// through, present for every node with a place in the world graph and null
+// only for a start with no place at all (a reset, an unscoped key grab, a
+// Toad star). A segment that begins somewhere reachable is a movement between
+// places, which is exactly what the 59 seeded Castle Movement rows are; one
+// that begins nowhere still keeps the generic star and its ✎.
+// This resolves to a CATEGORY, never to a stem: a second table pointing at the
+// same picture is the second door this module exists to prevent, so the answer
+// goes back through SEGMENT_CATEGORY_ICONS above. Pinned as a key of that
+// table by tests/test_ui_entities.py.
+export const UNCATEGORIZED_SEGMENT_CATEGORY = "Castle Movement";
+
+/** A segment's effective category: the corpus's own when it has one, else what
+ *  its start place implies. Exported for the test that pins it against the
+ *  icon table; the chain below is its only production caller. */
+export function segmentCategory(category, originRegion) {
+  return category || (originRegion ? UNCATEGORIZED_SEGMENT_CATEGORY : null);
+}
+
 // Four main courses are not entered through a painting, so the game has NO
 // portrait for them. These are hand-picked stand-ins (user, 2026-07-25) — the
 // star art that reads as that course — rather than a positional star-1
@@ -332,12 +359,14 @@ export function entityIcon(entityKey, context = {}) {
     // it starts in, then what its whole category wears. A Bowser pipe entry is
     // categorised Castle Movement AND starts in a Bowser stage, and the stage
     // is the more useful thing to show, which is why LEVEL_ICONS outranks the
-    // category table.
-    const { seedKey, category } = segmentMeta[String(id)] || {};
+    // category table. A row the corpus never seeded has no category of its
+    // own, so `segmentCategory` infers one from where it starts — see the
+    // registry comments above.
+    const { seedKey, category, originRegion } = segmentMeta[String(id)] || {};
     const stem = SEGMENT_SEED_ICONS[seedKey]
       || (segmentLevels[String(id)] || [])
            .map((level) => LEVEL_ICONS[level]).find(Boolean)
-      || SEGMENT_CATEGORY_ICONS[category];
+      || SEGMENT_CATEGORY_ICONS[segmentCategory(category, originRegion)];
     return stem ? starIconSrc(stem) : genericStar();
   }
   return genericStar(fallbackSlotForEntityKey(entityKey));
