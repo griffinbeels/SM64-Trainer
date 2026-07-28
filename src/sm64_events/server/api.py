@@ -297,19 +297,31 @@ def _http(e: Exception) -> HTTPException:
 
 
 # GET /api/segments/timeline's default "steps" view (the labelling-volume
-# decision -- tracking/eventlabel.py's module docstring works the full
-# arithmetic; this is the four types it names as the answer). The other 5 of
-# eventlabel.LABELLABLE_TYPES's 9 types (practice_reset, area_changed,
-# spawned, state_loaded, game_reset) are real boundary-capable events -- they
-# back real segment start triggers (attempt_anchor/area_enter/spawned/
-# reset_game, tracking/segments.py::TRIGGERS) -- but at 2026-07-28's measured
-# volume they are 76% of the capable set and carry no place at all in three
-# of the five cases, so surfacing them BY DEFAULT would bury the ~10% of rows
-# ("a step I just performed") a human can actually recognise under thousands
-# of bare "Reset the level" rows. `view=all` reaches the full set for the
-# rarer segment that starts on one of those triggers instead.
+# decision -- tracking/eventlabel.py's module docstring works the raw-volume
+# arithmetic; this constant is the answer, corrected once against how the
+# volume trades off against actual usefulness). Weighed by counting what the
+# 65 SEEDED definitions actually use as their first start/end clause
+# (src/sm64_events/data/defaults.seed.json, 2026-07-28):
+#   starts: level_exit 52, level_enter 8, star_grabbed 3, spawned 1, area_enter 1
+#   ends:   level_enter 55, area_enter 4, warp_entered 3, key_grabbed 3
+#
+# level_changed/star_collected/warp_entered/key_grabbed cover 63/65 starts and
+# 61/65 ends (~95%) on their own -- the "a step I just performed" set,
+# eventlabel.py's ~10%-of-volume group. `area_changed` is NOT grouped with
+# them by volume (1,678 of 18,656 events) but IS included here, because
+# hiding it would make a small, real, commonly-practiced class of movement
+# unrecordable through the default view: 4 definitions END on area_enter
+# (BoB/BBH/Bowser 2 -> Basement/Upstairs, SL -> Basement) and 1 STARTS on it
+# (BitS Entry) -- 5 uses, a usefulness-per-volume ratio far above the other
+# high-volume types. Contrast `spawned` (1 def-use, 1,164 events) and the
+# attempt_anchor pair practice_reset/state_loaded (1 def-use combined, 2,829+
+# events just for practice_reset) and `game_reset` (0 def-uses, 7 events):
+# for those four, volume and usefulness point the SAME way (rarely useful,
+# often noisy), so they stay out of the default and are reachable only via
+# `view=all`. `area_changed` is the one type where they point opposite ways.
 _TIMELINE_STEP_TYPES = frozenset(
-    {"level_changed", "star_collected", "warp_entered", "key_grabbed"})
+    {"level_changed", "star_collected", "warp_entered", "key_grabbed",
+     "area_changed"})
 
 
 def create_api_router(service) -> APIRouter:
@@ -411,13 +423,18 @@ def create_api_router(service) -> APIRouter:
         data.
 
         `view` picks which of eventlabel.LABELLABLE_TYPES's 9 types show:
-        "steps" (default) is the ~10% subset (level_changed, star_collected,
-        warp_entered, key_grabbed) a human recognises as a step they just
-        performed; "all" adds the 5 that are real boundaries too but
-        dominate by raw volume or carry no place (practice_reset,
-        area_changed, spawned, state_loaded, game_reset) -- for the rarer
-        segment that starts on one of THOSE triggers. 422 on an
-        unrecognised `view`, matching /api/session's own clock/scope
+        "steps" (default, see `_TIMELINE_STEP_TYPES` above for the full
+        counted rationale) is level_changed/star_collected/warp_entered/
+        key_grabbed (~95% of what the 65 seeded definitions' start/end
+        clauses actually use) PLUS area_changed, kept in despite its raw
+        volume because 5 seeded definitions record their boundary on it
+        (4 castle-region endings, 1 start) and hiding it would make that
+        real class of movement unrecordable through the default view.
+        "all" adds the 4 that are real boundaries too but where volume and
+        usefulness point the SAME way -- rarely load-bearing AND high-volume
+        or placeless (practice_reset, spawned, state_loaded, game_reset) --
+        for the rarer segment that starts on one of THOSE triggers. 422 on
+        an unrecognised `view`, matching /api/session's own clock/scope
         validation. `limit` caps at 500 rows (422 above it) and is applied
         AFTER filtering, to the most recent rows in the selected view.
         503 in degraded mode."""

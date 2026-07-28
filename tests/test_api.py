@@ -605,6 +605,30 @@ def test_timeline_default_view_hides_high_volume_bookkeeping_types(tmp_path):
             ["practice_reset", "star_collected"]
 
 
+def test_timeline_default_view_includes_area_changed(tmp_path):
+    """CORRECTION (team-lead measurement against the real seed corpus,
+    src/sm64_events/data/defaults.seed.json): 4 of the 65 seeded definitions
+    END on area_enter (BoB/BBH/Bowser 2 -> Basement/Upstairs, SL -> Basement)
+    and 1 STARTS on it (BitS Entry) -- a small but real, commonly-practiced
+    class of movement, unlike `spawned`/the attempt_anchor pair/`game_reset`
+    (0-1 def-uses each), where volume and usefulness both point away from
+    the default view. Hiding area_changed the same way those four are hidden
+    would make that class unrecordable through the default flow. Default
+    `view=steps` must therefore include it despite its raw volume (1,678 of
+    18,656 events)."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        async def go():
+            await service.publish(Event(type="area_changed", frame=10,
+                                        timestamp_utc=T0,
+                                        payload={"from": 1, "to": 3}))
+        asyncio.run(go())
+        default_rows = client.get(
+            "/api/segments/timeline?limit=50").json()["rows"]
+        assert [row["type"] for row in default_rows] == ["area_changed"]
+        assert default_rows[0]["label"] == "Moved into the Basement"
+
+
 def test_timeline_rejects_unknown_view(tmp_path):
     client, service, db = make_client(tmp_path)
     with client:
