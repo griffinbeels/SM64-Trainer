@@ -236,5 +236,13 @@ def test_the_active_target_card_asks_the_shared_question():
     # ...and BOTH rules reach every pin the user can see. Armed pins are the
     # one deliberate exemption (a live timer is visible wherever it got to).
     assert re.search(r"isActiveStar\(sec\) && here\(sec\)", body)
-    assert re.search(r"stickyPin && here\(stickyPin\)", body)
-    assert re.search(r"activeSeg && here\(activeSeg\)", body)
+    # Segments get a SECOND exemption stars never do (Task 6, spec
+    # 2026-07-28-multi-step-segments): a section whose own armed_detail is
+    # still non-null overrides the course-match gate, completing "a running
+    # segment is never invisible" (user rule 2026-07-24) on the gate it never
+    # reached -- a loose segment can legitimately be running several courses
+    # away from where it started. Stars have no armed_detail and keep the
+    # plain predicate checked above; deliberately NOT edited into
+    # practicedHere itself, which star sections also call.
+    assert re.search(r"stickyPin && \(stickyPin\.armed_detail \|\| here\(stickyPin\)\)", body)
+    assert re.search(r"activeSeg && \(activeSeg\.armed_detail \|\| here\(activeSeg\)\)", body)

@@ -44,11 +44,11 @@ from sm64_events.stats.registry import (DEFAULT_STAT_MENU, REGISTRY,
                                         selection_order)
 from sm64_events.tracking.projection import DEFAULT_MIN_FRAMES, journal_id
 from sm64_events.tracking.routes import route_stats
-from sm64_events.tracking.segments import (arm_level, course_groups,
-                                            origin_course, origin_view,
-                                            segment_origin, start_areas,
-                                            start_levels, start_origin,
-                                            time_bounds, waiting_for_sentence)
+from sm64_events.tracking.segments import (arm_level, card_waiting_for_sentence,
+                                            course_groups, origin_course,
+                                            origin_view, segment_origin,
+                                            start_areas, start_levels,
+                                            start_origin, time_bounds)
 
 # Timeline markers (per-section event graph): outcomes that plot as points.
 # Adding a marker kind is one row here (+ a style row in ui timeline.js).
@@ -1062,9 +1062,14 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             # carry no such key: a star has no waypoint sequence or
             # staleness deadline to describe (rule 11 asymmetry, same shape
             # as default_strat below -- see
-            # test_star_sections_carry_no_arm_detail).
+            # test_star_sections_carry_no_arm_detail). CARD-facing phrasing
+            # (Task 6), not waiting_for_sentence's editor voice -- this value
+            # renders under the practice card's own "Waiting for" label, and
+            # "Waiting for You enter level Shifting Sand Land" is broken
+            # English where "Waiting for Enter Shifting Sand Land" reads as
+            # the intended imperative step.
             "armed_detail": ({**armed_arms[seg_id],
-                              "waiting_for": waiting_for_sentence(
+                              "waiting_for": card_waiting_for_sentence(
                                   d, armed_arms[seg_id]["progress"])}
                              if d is not None and seg_id in armed_arms
                              else None),

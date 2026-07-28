@@ -730,6 +730,22 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker 
         </div>
         <${PbTag} pb=${sec.pb.rta} mode="rta" rows=${rows} pick=${pick} t=${t} />
       </div>
+      ${/* Progress + what a multi-step arm is waiting for next (Task 6,
+           spec 2026-07-28-multi-step-segments). sec.armed_detail is null
+           while idle, so this row occupies zero height then -- .objective-
+           card's third grid row is "auto" sized and simply collapses.
+           waiting_for is already card-facing (card_waiting_for_sentence,
+           tracking/segments.py) -- an imperative step like "Enter Shifting
+           Sand Land", never the builder's editor-voice sentence, which read
+           as broken English under this label ("Waiting for You enter level
+           Shifting Sand Land"). */""}
+      ${sec.armed_detail && html`<div class="seg-waiting">
+        <span class="seg-waiting-step">Step${" "}
+          ${sec.armed_detail.progress + 1}${" "}of${" "}
+          ${sec.armed_detail.total + 1}</span>
+        <span class="seg-waiting-for">Waiting for${" "}
+          ${sec.armed_detail.waiting_for}</span>
+      </div>`}
     </section>
 
     <section class="practice-card analysis-card">
@@ -1131,12 +1147,23 @@ export function Practice({ t, openCompare }) {
   // ARMED pins are exempt from BOTH rules — a running timer is visible
   // wherever it has got to (user rule 2026-07-24), which is also why
   // `!inContext` can never drop one: armedPins is empty whenever that fires.
-  // The other two must belong here, and a sticky pin that doesn't falls
-  // through to the target rather than emptying the card over it.
+  // The other two must belong here UNLESS they are themselves still armed
+  // (spec 2026-07-28-multi-step-segments, Task 6): armedPins is built from
+  // `frozen.armedOrder`, a client-side push list that is empty on a fresh
+  // page load even while the server already has a loose segment running
+  // several courses into its sequence, so stickyPin/activeSeg are the paths
+  // that catch it. `sec.armed_detail` is SERVER truth, re-derived from the
+  // journal on every view fetch (views.py's armed_arms) — never
+  // `lastPinnedSeg`/armedSegments, which is what let "ACTIVE SEGMENT LBLJ"
+  // survive two course changes after the server had already retired it
+  // (live report 2026-07-27, the comment above `here`'s own definition).
+  // A pin that has genuinely disarmed carries `armed_detail: null` and falls
+  // straight through to the plain `here()` course check, so that fix stays
+  // intact — this only widens the exemption to a pin that is STILL running.
   const pinnedSegs = !inContext || starActive ? []
     : armedPins.length ? armedPins
-    : stickyPin && here(stickyPin) ? [stickyPin]
-    : activeSeg && here(activeSeg) ? [activeSeg] : [];
+    : stickyPin && (stickyPin.armed_detail || here(stickyPin)) ? [stickyPin]
+    : activeSeg && (activeSeg.armed_detail || here(activeSeg)) ? [activeSeg] : [];
   // Only one detail surface owns the fixed Objective / Analysis / Attempts
   // tracks. Additional armed segments remain reachable in the stable index
   // below instead of inserting more full cards above the crop.

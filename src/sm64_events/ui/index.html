@@ -846,10 +846,29 @@
     gap: 12px; min-width: 0;
   }
   .objective-card {
-    grid-column: 1 / -1; height: 122px; min-height: 122px; overflow: visible;
-    display: grid; grid-template-rows: auto 1fr; padding-block: 12px;
+    /* Third row is the segment card's "waiting for" line (Task 6, spec
+       2026-07-28-multi-step-segments) -- "auto" and simply collapses to 0
+       when absent (idle segment, or a star, which never renders one), so
+       ONE height budget serves every state without a resize when a segment
+       arms/disarms (OBS-stable slot). Bumped from 122px (+28) for the room;
+       a star card or an unarmed segment just gets a taller, still-centered
+       metrics row instead of an ugly gap -- measured by CDP geometry diff,
+       see task-6-report.md. */
+    grid-column: 1 / -1; height: 150px; min-height: 150px; overflow: visible;
+    display: grid; grid-template-rows: auto 1fr auto; padding-block: 12px;
   }
   .objective-card.active-star { border-color: rgba(240,189,50,.72); }
+  .seg-waiting {
+    display: flex; align-items: baseline; gap: .5rem; min-width: 0;
+    margin-top: .4rem; font-size: .8rem; color: var(--muted);
+  }
+  .seg-waiting-step {
+    flex: none; color: var(--text); font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  .seg-waiting-for {
+    min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  }
   .objective-heading {
     min-width: 0; display: grid;
     grid-template-columns: 28px auto minmax(180px,1fr) minmax(150px,380px);
@@ -3182,13 +3201,18 @@
     .rank-banner-basis { display: none; }
   }
   @container (max-width: 1100px) {
-    .objective-card { height: 190px; min-height: 190px; overflow: hidden; }
+    .objective-card { height: 216px; min-height: 216px; overflow: hidden; }
     .rank-slot { flex-direction: column; align-items: stretch; gap: .3rem; }
     .objective-strategy-fastest { display: none; }
     /* Stacked here, so each banner's wash is full width and the outer
        bleeds swap axis with them. No split to swap any more -- each
        banner paints its own box whichever way they are laid out. */
     .rank-banner::before { left: -16px; right: -16px; border-radius: 0; }
+    /* Narrow-pane variant of the waiting-for line (Task 6): the stacked
+       rank banners already claim most of the taller card, so this tightens
+       rather than wraps -- .seg-waiting-for still ellipsises instead of
+       growing a second line. */
+    .seg-waiting { font-size: .74rem; gap: .35rem; margin-top: .3rem; }
   }
 
   @media (max-width: 760px) {
@@ -3336,7 +3360,7 @@
     .practice-card { padding: 12px; }
     .selector-card { padding: 12px; }
     .selector-card .starrow { height: calc(var(--selector-height) - 54px); }
-    .objective-card { height: 258px; min-height: 258px; overflow: hidden; }
+    .objective-card { height: 284px; min-height: 284px; overflow: hidden; }
     .objective-heading {
       grid-template-columns: 26px 1fr; align-items: start;
     }

@@ -693,6 +693,12 @@ def test_segment_section_armed_detail_reports_progress_and_waiting_for(tmp_path)
     # WHAT an armed def is waiting for, not just that it is armed. LBLJ (id
     # 1, seeded, no waypoints, strict) is the same fixture the plain "armed"
     # test above uses.
+    #
+    # Task 6 retargeted the stamped sentence from waiting_for_sentence
+    # (editor voice, "You enter level X") to card_waiting_for_sentence
+    # (imperative, "Enter X") -- this value renders under the practice
+    # card's own "Waiting for" label, and the editor's second-person clause
+    # read as broken English there ("Waiting for You enter level X").
     db, svc = make(tmp_path)
     asyncio.run(svc.set_target_segment(1))
     asyncio.run(svc.publish(lvl(1000, 16, 6)))          # arms LBLJ
@@ -701,7 +707,7 @@ def test_segment_section_armed_detail_reports_progress_and_waiting_for(tmp_path)
     assert detail["progress"] == 0 and detail["total"] == 0
     assert detail["start_frame"] == 1000
     assert detail["deadline_frame"] is None             # strict: no budget
-    assert detail["waiting_for"] == "You enter level Bowser in the Dark World"
+    assert detail["waiting_for"] == "Enter Bowser in the Dark World"
     asyncio.run(svc.publish(lvl(1085, 6, 17)))          # closes it
     view2 = build_session_view(db, svc, clock="igt")
     assert seg_section(view2, 1)["armed_detail"] is None

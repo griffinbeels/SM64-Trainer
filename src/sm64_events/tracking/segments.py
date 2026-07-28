@@ -2,10 +2,18 @@
 
 ONE registry: TRIGGERS/GUARDS drive (a) definition validation at the API
 boundary, (b) the matcher, (c) GET /api/segments/vocab that renders the
-builder GUI, and (d) waiting_for_sentence's read-only "waiting for" line on
-an armed practice card (spec 2026-07-28-multi-step-segments). Adding a
-trigger type = one TriggerType row here (label + params + the sentence
-template both the builder AND waiting_for_sentence render from).
+builder GUI, and (d) waiting_for_sentence / card_waiting_for_sentence's
+read-only "waiting for" line on an armed practice card (spec
+2026-07-28-multi-step-segments, Task 6). Adding a trigger type = one
+TriggerType row here (label + card_label + params + the sentence template
+the builder, waiting_for_sentence AND card_waiting_for_sentence all render
+from). `label` is editor voice ("You enter level {to}") for the builder's
+read-only preview; `card_label` is the SAME clause read as an imperative step
+("Enter {to}") for the practice card, which supplies its own "Waiting for"
+frame around it — the builder needs a sentence with a hole in it, the card
+needs a phrase with a value in it, and past experience says collapsing them
+into one string reads wrong in one of the two places every time (see
+card_waiting_for_sentence's docstring).
 
 Matcher invariants (spec §Matcher semantics — tests are the contract):
 - closures (success/failure) process BEFORE arming; one event may close an
@@ -349,6 +357,11 @@ class SegmentDef:
 class TriggerType:
     key: str
     label: str
+    # Card-facing phrasing (spec 2026-07-28-multi-step-segments, Task 6): the
+    # SAME template, read as an imperative step ("Enter" / "Exit" / "Grab the
+    # key") instead of editor voice ("You enter level" / "You exit level" /
+    # "You grab a Bowser key / grand star") -- see card_waiting_for_sentence.
+    card_label: str
     params: dict  # name -> {"kind": "level"|"area"|"course"|"star"|"int", "required": bool}
     template: str  # sentence after the type label: "{to} coming from {from}"
     match: Callable[[dict, object, MatchContext], bool]
@@ -397,7 +410,7 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
     # to_subarea match into _pending, arming once the settled co-frame area
     # matches (SegmentEngine._pending). to_subarea is therefore honoured only on
     # START triggers; on an END trigger the destination subarea is ignored.
-    TriggerType("level_enter", "You enter level",
+    TriggerType("level_enter", "You enter level", "Enter",
                 {"to": {"kind": "level", "required": True,
                         "flow": _DEST_FLOW},
                  "to_subarea": {"kind": "subarea", "required": False,
@@ -414,7 +427,7 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 and (p.get("from") is None or ev.payload["from"] == p["from"])
                 and (p.get("from_subarea") is None
                      or ev.payload.get("from_area") == p["from_subarea"])),
-    TriggerType("level_exit", "You exit level",
+    TriggerType("level_exit", "You exit level", "Exit",
                 {"from": {"kind": "level", "required": True,
                           "flow": _SOURCE_FLOW},
                  "from_subarea": {"kind": "subarea", "required": False,
@@ -444,7 +457,7 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
     # exactly like a genuine lobby walk — from_transient (detectors/area.py)
     # is the discriminator. Legacy events without the key conservatively
     # match (None = unknown -> match, the codebase-wide convention).
-    TriggerType("area_enter", "You enter area",
+    TriggerType("area_enter", "You enter area", "Enter",
                 {"level": {"kind": "level", "required": True,
                            "enum": list(CASTLE_REGION_LEVELS)},
                  "area": {"kind": "subarea", "required": False,
@@ -458,12 +471,13 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 and (p.get("from") is None
                      or (ev.payload["from"] == p["from"]
                          and not ev.payload.get("from_transient", False)))),
-    TriggerType("warp_entered", "You enter a warp/pipe",
+    TriggerType("warp_entered", "You enter a warp/pipe", "Enter the pipe",
                 {"level": {"kind": "level", "required": True}},
                 "in {level}",
                 lambda p, ev, ctx: ev.type == "warp_entered"
                 and ev.payload["level"] == p["level"]),
     TriggerType("key_grabbed", "You grab a Bowser key / grand star",
+                "Grab the key",
                 # key_grabbed claims all three fight-ending grabs: the Bowser
                 # 1/2 keys AND the Bowser 3 grand star (which='grand', level
                 # 34) — the grand star never fires star_collected, so a
@@ -474,7 +488,7 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 lambda p, ev, ctx: ev.type == "key_grabbed"
                 and (p.get("level") is None
                      or ev.payload["level"] == p["level"])),
-    TriggerType("star_grabbed", "You grab a star",
+    TriggerType("star_grabbed", "You grab a star", "Grab the star",
                 {"course": {"kind": "course", "required": False},
                  "star": {"kind": "star", "required": False}},
                 "in {course}, star {star}",
@@ -483,13 +497,14 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                      or ev.payload["course_id"] == p["course"])
                 and (p.get("star") is None
                      or ev.payload["star_id"] == p["star"])),
-    TriggerType("spawned", "You spawn into the game",
+    TriggerType("spawned", "You spawn into the game", "Spawn",
                 {"level": {"kind": "level", "required": False}},
                 "in {level}",
                 lambda p, ev, ctx: ev.type == "spawned"
                 and (p.get("level") is None
                      or ev.payload["level"] == p["level"])),
     TriggerType("attempt_anchor", "Practice reset / savestate load",
+                "Reset or reload",
                 {"level": {"kind": "level", "required": True},
                  "area": {"kind": "subarea", "required": False,
                           "only_when": _only_castle("level")}},
@@ -509,6 +524,7 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 and ctx.level == p["level"]
                 and (p.get("area") is None or ctx.area == p["area"])),
     TriggerType("reset_game", "The game resets (F1 / console reset)",
+                "Reset the game",
                 {}, "on F1 or console reset",
                 lambda p, ev, ctx: ev.type == "game_reset"),
 ]}
@@ -536,10 +552,13 @@ def _resolve_param(kind: str, value, clause: dict) -> str:
 _TEMPLATE_TOKENS = re.compile(r"(\{\w+\})")
 
 
-def _render_clause(clause: dict) -> str:
-    """One trigger clause -> plain English, through TRIGGERS[type].label +
-    .template (spec 2026-07-28-multi-step-segments; waiting_for_sentence
-    below is the only caller).
+def _render_clause(clause: dict, label_attr: str = "label") -> str:
+    """One trigger clause -> plain English, through TRIGGERS[type].<label_attr>
+    + .template (spec 2026-07-28-multi-step-segments; waiting_for_sentence and
+    card_waiting_for_sentence below are the only callers, selecting "label"
+    (editor voice) or "card_label" (imperative) respectively — same template,
+    same param-pruning, different leading phrase, which is why this takes
+    WHICH FIELD to read rather than being duplicated per caller.
 
     A param the clause leaves unset drops its own SEGMENT of the template —
     the literal words that introduce it, together with the placeholder —
@@ -561,6 +580,7 @@ def _render_clause(clause: dict) -> str:
     ui/components/segments.js's — see waiting_for_sentence's own docstring
     for why that is not a second door."""
     spec = TRIGGERS[clause["type"]]
+    label = getattr(spec, label_attr)
     tokens = _TEMPLATE_TOKENS.split(spec.template)
     parts: list[str] = []
     i = 0
@@ -578,7 +598,7 @@ def _render_clause(clause: dict) -> str:
                 parts.append(_resolve_param(meta["kind"], value, clause))
         i += 2
     parts.append(tokens[-1])   # trailing literal after the last placeholder
-    return f"{spec.label} {''.join(parts)}".strip()
+    return f"{label} {''.join(parts)}".strip()
 
 
 def waiting_for_sentence(d: SegmentDef, progress: int) -> str:
@@ -601,6 +621,32 @@ def waiting_for_sentence(d: SegmentDef, progress: int) -> str:
     clause_set = (d.waypoints[progress] if progress < len(d.waypoints)
                  else d.end_triggers)
     return " or ".join(_render_clause(clause) for clause in clause_set)
+
+
+def card_waiting_for_sentence(d: SegmentDef, progress: int) -> str:
+    """Card-facing sibling of waiting_for_sentence (spec 2026-07-28-multi-
+    step-segments, Task 6): the same next-unconsumed-waypoint-or-end-trigger
+    clause set, rendered through TRIGGERS[type].card_label instead of .label
+    -- "Enter Shifting Sand Land", never editor-voice "You enter level
+    Shifting Sand Land".
+
+    waiting_for_sentence's output is correct FOR THE BUILDER (it renders
+    cleanly against every seeded definition — no leftover tokens, clean
+    clause boundaries) and wrong for the practice card: under a "Waiting
+    for" label the editor's second-person clause reads as "Waiting for You
+    enter level Shifting Sand Land", because that string was written to
+    stand alone as a sentence, not to fill a hole in a shorter one. The card
+    supplies its own frame; this only needs to be the imperative STEP that
+    goes in the hole. Deliberately NOT a shared string with
+    waiting_for_sentence — a sentence with a hole in it and a phrase with a
+    value in it are different artifacts, and a string trying to serve both
+    reads wrong in one of the two places every time. What IS shared is the
+    template/param-pruning machinery in _render_clause, since that is the
+    same mechanical substitution for both voices of the same clause."""
+    clause_set = (d.waypoints[progress] if progress < len(d.waypoints)
+                 else d.end_triggers)
+    return " or ".join(_render_clause(clause, "card_label")
+                       for clause in clause_set)
 
 
 def arm_level(trig: dict) -> int | None:

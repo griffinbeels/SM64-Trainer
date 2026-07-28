@@ -7,6 +7,7 @@ from sm64_events.memory.addresses import COURSE_NAMES, LEVEL_NAMES
 from sm64_events.storage.db import EventRow
 from sm64_events.tracking import segments as segments_module
 from sm64_events.tracking.segments import (SEGMENT_ATTEMPT_OFFSET,
+                                           card_waiting_for_sentence,
                                            course_groups, level_groups,
                                            GUARDS, TRIGGERS, MatchContext,
                                            SegmentDef, SegmentEngine,
@@ -131,13 +132,41 @@ def test_waiting_for_sentence_drops_a_dangling_connector_for_an_unset_param():
     assert "coming from" not in sentence
 
 
+# ---------------------------------------------------------------------------
+# card_waiting_for_sentence (Task 6, spec 2026-07-28-multi-step-segments):
+# the SAME clause, read as an imperative step for the practice card's
+# "Waiting for" line instead of waiting_for_sentence's editor voice.
+# ---------------------------------------------------------------------------
+
+def test_card_waiting_for_sentence_reads_the_next_unconsumed_waypoint():
+    sentence = card_waiting_for_sentence(WF_TO_SSL_WAYPOINT, 0)
+    assert sentence == "Enter Castle Inside Basement"
+
+
+def test_card_waiting_for_sentence_falls_back_to_the_end_trigger_once_consumed():
+    sentence = card_waiting_for_sentence(WF_TO_SSL_WAYPOINT, 1)
+    assert sentence == "Enter Shifting Sand Land"
+
+
+def test_card_waiting_for_sentence_is_not_the_editors_voice():
+    # The bug this function exists for: waiting_for_sentence's output shown
+    # under a "Waiting for" label reads as broken English ("Waiting for You
+    # enter level Shifting Sand Land"). The card sentence must never start
+    # with the editor's second-person phrasing.
+    editor = waiting_for_sentence(WF_TO_SSL_WAYPOINT, 1)
+    card = card_waiting_for_sentence(WF_TO_SSL_WAYPOINT, 1)
+    assert editor != card
+    assert not card.startswith("You ")
+
+
 def test_every_trigger_template_resolves_cleanly():
-    """Guard for the clause renderer behind waiting_for_sentence: every
-    TriggerType's template, filled with every param IT declares, must leave
-    no literal "{token}" behind, and every param name the template mentions
-    must be one this trigger actually has in its own `params` dict. Fails
-    the day a new trigger type's template typos a param name, rather than a
-    user seeing a brace on the practice card."""
+    """Guard for the clause renderer behind waiting_for_sentence AND its
+    Task 6 sibling card_waiting_for_sentence: every TriggerType's template,
+    filled with every param IT declares, must leave no literal "{token}"
+    behind in EITHER voice, and every param name the template mentions must
+    be one this trigger actually has in its own `params` dict. Fails the day
+    a new trigger type's template typos a param name, rather than a user
+    seeing a brace on the builder OR the practice card."""
     kind_samples = {"level": 6, "subarea": 1, "course": 1, "star": 0}
     for spec in TRIGGERS.values():
         named = set(re.findall(r"\{(\w+)\}", spec.template))
@@ -153,6 +182,10 @@ def test_every_trigger_template_resolves_cleanly():
         assert "{" not in sentence and "}" not in sentence, \
             f"{spec.key}: leftover template token in {sentence!r}"
         assert spec.label in sentence
+        card_sentence = card_waiting_for_sentence(d, 0)
+        assert "{" not in card_sentence and "}" not in card_sentence, \
+            f"{spec.key}: leftover template token in card phrasing {card_sentence!r}"
+        assert spec.card_label in card_sentence
 
 
 def test_start_level_set_classifies_level_bound_defs():
