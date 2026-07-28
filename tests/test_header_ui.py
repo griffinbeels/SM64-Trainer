@@ -197,6 +197,17 @@ def test_target_picker_resolves_segment_art_like_the_banner_does():
         "the target picker is back to holding an icon context of its own"
 
 
+def test_the_practice_toolbar_is_gone():
+    # Its route select was the SAME control as the header card's (practice.js
+    # said so in a comment), its guidance line described a control that has
+    # moved, and its Stats button now sits beside the chips it configures. A
+    # card holding one leftover sentence reads as unfinished.
+    code = strip_comments(PRACTICE_JS)
+    assert "practice-toolbar" not in code
+    assert "route-focus-control" not in code
+    assert "practice-toolbar" not in strip_comments(INDEX_HTML)
+
+
 def test_the_tuning_page_is_reachable_from_the_app_and_from_the_launcher():
     """A dev page behind a hand-typed path is a page that does not exist.
 

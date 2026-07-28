@@ -18,6 +18,8 @@ actually happened.
 import re
 from pathlib import Path
 
+from source_scan import strip_comments
+
 PRACTICE_JS = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
                / "ui" / "components" / "practice.js")
 VIEWS_PY = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
@@ -123,3 +125,19 @@ def test_two_rank_banners_are_rendered_for_both_kinds():
 def test_both_section_builders_emit_entity_rank():
     source = VIEWS_PY.read_text(encoding="utf-8")
     assert source.count('"entity_rank"') >= 2
+
+
+def test_both_section_kinds_render_the_shared_stat_chips_row():
+    """The Stats menu chooses WHICH stat chips are shown, and those chips
+    render in the detail drawer -- so the control lives there rather than in a
+    toolbar one card away (user, 2026-07-28: "Maybe the stats button itself
+    should just move to the Stats, standards, and practice options section
+    since that's where that info would be stored anyway").
+
+    Shared as ONE component, not pasted twice: adding a control to two copies
+    of markup is precisely the shape that drifts, and rule 11 makes an
+    asymmetry between a star and a segment a bug."""
+    code = strip_comments(PRACTICE_JS.read_text(encoding="utf-8"))
+    assert code.count("<${StatChipsRow}") == 2
+    # ...and no card keeps its own hand-rolled copy of the chips loop.
+    assert code.count("DUST_STAT_KEYS.has") == 1
