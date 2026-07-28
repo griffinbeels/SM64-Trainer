@@ -300,10 +300,21 @@ def test_the_ladder_step_count_is_bounded_without_needing_a_budget(style):
 # ---- Wall clock, with the real timing table -------------------------------
 
 def test_the_worked_example_and_the_worst_case_stay_watchable():
-    """The one place the shipped numbers are asserted. A tuning round is
-    expected to move these deliberately; nothing above depends on them."""
+    """Wall clock, against the REFERENCE tuning rather than the live defaults.
+
+    The defaults in ui/climbtuning.js belong to the user since 2026-07-27 —
+    the inspector writes them back into the repo — so asserting them here would
+    turn the suite red for every tuning session, which is the tool working. The
+    law worth pinning is that the SHAPE stays watchable at the feel this design
+    was drawn around; the live values only have to be in range, which is
+    tests/test_ui_climbtuning.py's job.
+    """
     example_pop, example_chain, worst_pop, worst_chain = run_node(
-        "const real = climbTimings;\n"
+        "const REF = { barSweepFullMs: 1500, barSweepMinMs: 450,\n"
+        "  ladderStepMs: 460, ladderBudgetMs: 3400, ladderStepMinMs: 220,\n"
+        "  tierDwellMs: 1600, tierDwellBudgetMs: 5200, tierDwellMinMs: 700,\n"
+        "  anticipateShare: 0.56 };\n"
+        "const real = (counts) => climbTimings(counts, REF);\n"
         "const ms = (from, to, style) => plan(from, to, style, real).totalMs;\n"
         "console.log(JSON.stringify([\n"
         f"  ms([{IRON_V}, 0.3], [{GOLD_IV}, 0.04], 'pop'),\n"

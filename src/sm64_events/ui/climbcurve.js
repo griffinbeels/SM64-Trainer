@@ -23,6 +23,26 @@
 // that shipped.
 import { DEFAULTS } from "./climbtuning.js";
 
+/**
+ * `wanted`, kept off the floor but never pushed past the ceiling.
+ *
+ * THE bug this exists to kill (live report, 2026-07-27): all three durations
+ * below were written `max(floor, min(ceiling, wanted))`, with the floor
+ * OUTSIDE. That reads as "never shorter than the floor" — but the floor is
+ * there to stop a crowded climb SQUEEZING a step into a stutter, and putting
+ * it outside let it silently override the ceiling the user had just set. With
+ * a ladder step of 100ms against the shipped 220ms floor, the inspector's
+ * slider said 100 and every step ran 220, at every step count; the whole
+ * session had been tuned against a number no control on screen was showing.
+ *
+ * Inside, the floor bounds only the squeeze, and a value can never come out
+ * above what was asked for. At the shipped defaults (floor below ceiling in
+ * all three) the two spellings agree everywhere — asserted, not assumed, in
+ * tests/test_ui_climb.py.
+ */
+const floored = (wanted, floor, ceiling) =>
+  Math.min(ceiling, Math.max(floor, wanted));
+
 // ---- Bar sweeps ----------------------------------------------------------
 
 /**
@@ -38,7 +58,7 @@ import { DEFAULTS } from "./climbtuning.js";
 export function barSweepMs(divisions, tuning = DEFAULTS) {
   const distance = Math.max(0, Math.min(1, divisions || 0));
   const full = tuning.barSweepFullMs;
-  return Math.max(tuning.barSweepMinMs, Math.min(full, full * Math.sqrt(distance)));
+  return floored(full * Math.sqrt(distance), tuning.barSweepMinMs, full);
 }
 
 /**
@@ -75,8 +95,8 @@ export function barEase(fraction) {
 /** How long each of `steps` ladder steps gets. */
 export function ladderStepMs(steps, tuning = DEFAULTS) {
   if (steps <= 0) return 0;
-  return Math.max(tuning.ladderStepMinMs,
-                  Math.min(tuning.ladderStepMs, tuning.ladderBudgetMs / steps));
+  return floored(tuning.ladderBudgetMs / steps,
+                 tuning.ladderStepMinMs, tuning.ladderStepMs);
 }
 
 // ---- Tier crossings: the climb STOPS ------------------------------------
@@ -99,9 +119,8 @@ export function ladderStepMs(steps, tuning = DEFAULTS) {
 /** `{anticipateMs, payoffMs}` for each of `crossings` tier boundaries. */
 export function tierDwell(crossings, tuning = DEFAULTS) {
   if (crossings <= 0) return { anticipateMs: 0, payoffMs: 0 };
-  const each = Math.max(tuning.tierDwellMinMs,
-                        Math.min(tuning.tierDwellMs,
-                                 tuning.tierDwellBudgetMs / crossings));
+  const each = floored(tuning.tierDwellBudgetMs / crossings,
+                       tuning.tierDwellMinMs, tuning.tierDwellMs);
   const anticipateMs = Math.round(each * tuning.anticipateShare);
   return { anticipateMs, payoffMs: Math.round(each) - anticipateMs };
 }

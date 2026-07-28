@@ -22,8 +22,10 @@ import { useEffect, useMemo, useState } from "preact/hooks";
 import htm from "htm";
 import { RankBanner } from "/ui/components/ranks.js";
 import { Icon } from "/ui/components/icons.js";
-import { RANK_NAMES, DIVISION_NUMERALS, capName, divisionDigit, rankAt, rankPosition }
-  from "/ui/components/caps.js";
+import { RANK_NAMES, DIVISION_NUMERALS, DIVISIONS_PER_TIER, capName,
+         divisionDigit, rankAt, rankPosition } from "/ui/components/caps.js";
+import { buildClimbPlan } from "/ui/climbplan.js";
+import { climbTimings } from "/ui/climbcurve.js";
 import { TUNABLES, CHOICES, DEFAULTS, GROUPS, setTuning, encodeTuning,
          decodeTuning, changedFromDefault, withDefaults } from "/ui/climbtuning.js";
 import { celebrationsEnabled } from "/ui/celebrations.js";
@@ -71,6 +73,50 @@ function LevelPicker({ label, level, onChange, min = 0 }) {
       ${DIVISION_NUMERALS.map((one) => html`<option value=${one}
         disabled=${rankPosition(tierKey, one, 0) < min}>${divisionDigit(one)}</option>`)}
     </select>
+  </div>`;
+}
+
+// What the current tuning will ACTUALLY play, step by step.
+//
+// This exists because a slider silently lied for a whole tuning session (user,
+// 2026-07-27: "the output was actually totally different that what I had
+// changed my settings to... probably something to do with floors"). The floors
+// have been fixed so one can no longer override a ceiling, but a budget
+// legitimately still shortens a step on a crowded climb -- and the ONLY honest
+// way to show that is to show the plan. A per-control "effective" badge would
+// have to re-derive the arithmetic that produced the discrepancy, which is the
+// second door this repo keeps learning not to build.
+function PlanReadout({ values, startLevel, destLevel, destFill }) {
+  const plan = useMemo(() => buildClimbPlan({
+    fromLevel: startLevel, fromFill: 0, toLevel: destLevel, toFill: destFill,
+    divisionsPerTier: DIVISIONS_PER_TIER, skipStyle: values.skipStyle,
+    timings: (counts) => climbTimings(counts, values),
+  }), [values, startLevel, destLevel, destFill]);
+
+  // A control whose number is not the number that runs. Named as the pair it
+  // is, so the reader is pointed at the OTHER knob rather than left guessing.
+  const clamps = [
+    ["Ladder step", values.ladderStepMs, plan.timings.ladderMs,
+     "ladder budget / floor"],
+    ["Tier crossing", values.tierDwellMs,
+     plan.timings.anticipateMs + plan.timings.payoffMs,
+     "tier crossing budget / floor"],
+  ].filter(([, set, effective]) => plan.ladder > 0 && Math.abs(set - effective) > 1);
+
+  return html`<div>
+    <h2>What will play · ${(plan.totalMs / 1000).toFixed(2)}s</h2>
+    ${/* The explicit spaces are load-bearing: htm collapses whitespace between
+         a text node and an element, and this line read "but220ms will run"
+         without them -- the same trap the settings-note paragraph hit. */""}
+    ${clamps.map(([label, set, effective, blame]) => html`<p class="tune-warn">
+      <b>${label}</b>${" "}is set to ${Math.round(set)}ms but${" "}
+      <b>${Math.round(effective)}ms</b>${" "}will run — the ${blame} is deciding.
+    </p>`)}
+    <pre class="tune-plan">${plan.steps.map((step) => {
+      const { tier, division } = rankAt(step.level);
+      return `${step.kind.padEnd(11)}${capName(tier)} ${divisionDigit(division)}`
+        .padEnd(30) + `${Math.round(step.ms)}ms`;
+    }).join("\n")}</pre>
   </div>`;
 }
 
@@ -251,6 +297,9 @@ function Inspector() {
         <button class="primary" onclick=${play}>▶ Play</button>
         <button onclick=${() => { setPlaying(false); setStatus(null); }}>Reset</button>
       </div>
+
+      <${PlanReadout} values=${values} startLevel=${startLevel}
+        destLevel=${destLevel} destFill=${destFill} />
 
       ${GROUPS.map((group) => html`<div>
         <h2>${group}</h2>

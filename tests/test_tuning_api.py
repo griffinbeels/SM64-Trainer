@@ -36,9 +36,13 @@ def test_a_number_lands_and_nothing_else_moves(source):
 
 
 def test_a_choice_lands_as_a_quoted_string(source):
-    updated, written = rewrite_defaults(source, {"skipStyle": "chain"})
-    assert written == {"skipStyle": "chain"}
-    assert value_of(updated, "skipStyle") == '"chain"'
+    # Flip to whichever it is NOT: the registry's values belong to the user
+    # (the inspector saves into it), so a test naming one of them is a test
+    # that goes red the first time he picks the other.
+    other = "pop" if value_of(source, "skipStyle") == '"chain"' else "chain"
+    updated, written = rewrite_defaults(source, {"skipStyle": other})
+    assert written == {"skipStyle": other}
+    assert value_of(updated, "skipStyle") == f'"{other}"'
 
 
 def test_writing_the_value_it_already_has_reports_nothing_written(source):

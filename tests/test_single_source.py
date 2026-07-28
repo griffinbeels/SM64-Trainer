@@ -111,7 +111,7 @@ INVARIANTS = (
     SingleSource(
         concept="what a rank-up climb DOES, step by step",
         owners=frozenset({"climbplan.js", "climbcurve.js", "climbtuning.js",
-                          "celebrations.js", "rankclimb.js"}),
+                          "celebrations.js", "rankclimb.js", "tune.js"}),
         tokens=("tierskip", "anticipate"),
         files=ui_js(),
         why="ui/climbplan.js decides the whole sequence -- which ranks get a "

@@ -164,15 +164,22 @@ def test_a_tuning_change_actually_reaches_the_plan():
     has teeth: with the SAME plan and a changed value, the timings must move.
     Without this, a `climbTimings` that ignored its tuning argument entirely
     would pass everything above."""
-    shipped, tuned = run_node(
+    baseline, tuned = run_node(
         "climbTimings",
         f"import {{ buildClimbPlan }} from {PLAN_JS.as_uri()!r};\n"
         f"import {{ DEFAULTS }} from {TUNING_JS.as_uri()!r};\n"
+        # A slow BASELINE built here rather than read from DEFAULTS: the live
+        # defaults are the user's and may already be as fast as this test
+        # wants to tune them, which would make the comparison unfalsifiable.
+        "const SLOW = { ...DEFAULTS, tierDwellMs: 1600, tierDwellMinMs: 700,\n"
+        "  tierDwellBudgetMs: 5200, ladderStepMs: 460, ladderStepMinMs: 220,\n"
+        "  ladderBudgetMs: 3400 };\n"
         "const total = (tuning) => buildClimbPlan({\n"
         "  fromLevel: 0, fromFill: 0.3, toLevel: 16, toFill: 0.04,\n"
         "  divisionsPerTier: 5, skipStyle: 'pop',\n"
         "  timings: (counts) => climbTimings(counts, tuning) }).totalMs;\n"
-        "console.log(JSON.stringify([total(DEFAULTS),\n"
-        "  total({ ...DEFAULTS, tierDwellMs: 400, ladderStepMs: 100 })]));",
+        "console.log(JSON.stringify([total(SLOW),\n"
+        "  total({ ...SLOW, tierDwellMs: 400, tierDwellMinMs: 200,\n"
+        "          ladderStepMs: 100, ladderStepMinMs: 60 })]));",
         module=CURVE_JS)
-    assert tuned < shipped * 0.6, (shipped, tuned)
+    assert tuned < baseline * 0.6, (baseline, tuned)

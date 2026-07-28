@@ -33,22 +33,22 @@
 export const TUNABLES = {
   // ---- Pace: how long each kind of step lasts (ui/climbcurve.js) ---------
   barSweepFullMs: {
-    group: "Pace", label: "Bar sweep · full division", value: 1500,
+    group: "Pace", label: "Bar sweep · full division", value: 250,
     min: 100, max: 4000, step: 10, unit: "ms",
     why: "How long the bar takes to travel a WHOLE division. Shorter sweeps scale by sqrt of the distance.",
   },
   barSweepMinMs: {
-    group: "Pace", label: "Bar sweep · floor", value: 450,
+    group: "Pace", label: "Bar sweep · floor", value: 200,
     min: 0, max: 1500, step: 10, unit: "ms",
     why: "Shortest any bar sweep may be. Below this a few percent of a division reads as a flicker.",
   },
   ladderStepMs: {
-    group: "Pace", label: "Ladder step", value: 460,
+    group: "Pace", label: "Ladder step", value: 220,
     min: 60, max: 1500, step: 10, unit: "ms",
     why: "One rank-up with the bar pinned full — also how long a whole condensed tier gets.",
   },
   ladderBudgetMs: {
-    group: "Pace", label: "Ladder budget", value: 3400,
+    group: "Pace", label: "Ladder budget", value: 1000,
     min: 500, max: 12000, step: 100, unit: "ms",
     why: "Total shared by every ladder step in one climb. A climb with many steps shortens each.",
   },
@@ -58,68 +58,68 @@ export const TUNABLES = {
     why: "Shortest a ladder step may be squeezed to. Below this a rank-up reads as a stutter.",
   },
   tierDwellMs: {
-    group: "Pace", label: "Tier crossing", value: 1600,
+    group: "Pace", label: "Tier crossing", value: 350,
     min: 200, max: 5000, step: 50, unit: "ms",
     why: "Build-up plus payoff for ONE tier crossing — the biggest moment in the feature.",
   },
   tierDwellBudgetMs: {
-    group: "Pace", label: "Tier crossing budget", value: 5200,
+    group: "Pace", label: "Tier crossing budget", value: 3400,
     min: 700, max: 20000, step: 100, unit: "ms",
     why: "Total shared by every tier crossing in one climb, so an eight-tier jump stays watchable.",
   },
   tierDwellMinMs: {
-    group: "Pace", label: "Tier crossing · floor", value: 700,
+    group: "Pace", label: "Tier crossing · floor", value: 350,
     min: 100, max: 2500, step: 50, unit: "ms",
     why: "Shortest a tier crossing may be squeezed to.",
   },
   anticipateShare: {
-    group: "Pace", label: "Build-up share of crossing", value: 0.56,
+    group: "Pace", label: "Build-up share of crossing", value: 0.1,
     min: 0.1, max: 0.9, step: 0.01, unit: "x",
     why: "How much of a tier crossing is the wind-up rather than the release. Anticipation is what makes the release land.",
   },
   laneGapMs: {
-    group: "Pace", label: "Gap between the two banners", value: 90,
+    group: "Pace", label: "Gap between the two banners", value: 0,
     min: 0, max: 1500, step: 10, unit: "ms",
     why: "The strategy rank climbs, then the star's. This is the pause between them.",
   },
 
   // ---- The crossing flash ------------------------------------------------
   levelFlashMs: {
-    group: "Flash", label: "Flash length", value: 360,
+    group: "Flash", label: "Flash length", value: 1500,
     min: 0, max: 1500, step: 10, unit: "ms",
     why: "A bloom on the bar and the rank name that decays rather than a class that has to be taken off again.",
   },
   levelFlashTier: {
-    group: "Flash", label: "Flash · tier crossing", value: 1,
+    group: "Flash", label: "Flash · tier crossing", value: 2,
     min: 0, max: 2, step: 0.05, unit: "x",
     why: "How bright the flash is when a whole new cap is reached.",
   },
   levelFlashDivision: {
-    group: "Flash", label: "Flash · division", value: 0.55,
+    group: "Flash", label: "Flash · division", value: 1,
     min: 0, max: 2, step: 0.05, unit: "x",
     why: "How bright the flash is for an ordinary rank-up inside a tier.",
   },
 
   // ---- The digit reel ----------------------------------------------------
   digitRollMs: {
-    group: "Digit", label: "Digit roll", value: 420,
+    group: "Digit", label: "Digit roll", value: 200,
     min: 0, max: 1500, step: 10, unit: "ms",
     why: "The numeral sliding to the next one. Never longer than the step it belongs to.",
   },
   digitRollOvershoot: {
-    group: "Digit", label: "Digit overshoot", value: 1.9,
+    group: "Digit", label: "Digit overshoot", value: 0,
     min: 0, max: 5, step: 0.05, unit: "x",
     why: "How far past its slot the digit travels before settling — a slot reel, not a slide. 0 removes the bounce.",
   },
 
   // ---- Wings -------------------------------------------------------------
   wingGrowScale: {
-    group: "Wings", label: "Wing grow · share of step", value: 1,
+    group: "Wings", label: "Wing grow · share of step", value: 1.05,
     min: 0.1, max: 3, step: 0.05, unit: "x",
     why: "The grow fills this much of its own step, so it stays in time however hard a long climb compresses things.",
   },
   wingFlapMs: {
-    group: "Wings", label: "Wing flap", value: 1100,
+    group: "Wings", label: "Wing flap", value: 1500,
     min: 0, max: 4000, step: 20, unit: "ms",
     why: "One flap cycle after the wings finish growing.",
   },
@@ -131,27 +131,27 @@ export const TUNABLES = {
 
   // ---- Tier anticipation: the wind-up ------------------------------------
   anticipateSquash: {
-    group: "Wind-up", label: "Squash depth", value: 0.94,
+    group: "Wind-up", label: "Squash depth", value: 0.99,
     min: 0, max: 0.99, step: 0.01, unit: "x",
     why: "How flat the cap gets before it springs. The further it compresses, the further it is obviously about to go.",
   },
   anticipateWiden: {
-    group: "Wind-up", label: "Squash widening", value: 0.5,
+    group: "Wind-up", label: "Squash widening", value: 0.7,
     min: 0, max: 2, step: 0.05, unit: "x",
     why: "How much the cap spreads sideways as it flattens. 0 squashes without bulging.",
   },
   shakeFrequency: {
-    group: "Wind-up", label: "Shake frequency", value: 46,
+    group: "Wind-up", label: "Shake frequency", value: 72,
     min: 0, max: 160, step: 1, unit: "",
     why: "How fast the cap rattles during the wind-up. It accelerates on its own as the build-up progresses.",
   },
   shakeAmplitude: {
-    group: "Wind-up", label: "Shake amplitude", value: 3.2,
+    group: "Wind-up", label: "Shake amplitude", value: 4.4,
     min: 0, max: 20, step: 0.1, unit: "px",
     why: "How far the cap rattles at the very end of the wind-up.",
   },
   shakeRamp: {
-    group: "Wind-up", label: "Shake ramp", value: 2.2,
+    group: "Wind-up", label: "Shake ramp", value: 1.3,
     min: 0.2, max: 6, step: 0.1, unit: "",
     why: "How late the shake gets loud. Higher keeps it quiet longer and then piles it on.",
   },
@@ -163,19 +163,19 @@ export const TUNABLES = {
     why: "How flat the cap is on the first frame of the release. Low means it bursts out of a line.",
   },
   burstOvershoot: {
-    group: "Burst", label: "Burst overshoot", value: 1.9,
+    group: "Burst", label: "Burst overshoot", value: 3.5,
     min: 0, max: 6, step: 0.05, unit: "x",
     why: "How far past full size the cap swells before settling. 0 makes it arrive rather than land.",
   },
 
   // ---- The landing -------------------------------------------------------
   settleMs: {
-    group: "Landing", label: "Settle", value: 520,
+    group: "Landing", label: "Settle", value: 0,
     min: 0, max: 2500, step: 10, unit: "ms",
     why: "A short settle on the whole surface so a climb ENDS on something rather than just stopping.",
   },
   nextRevealMs: {
-    group: "Landing", label: "Next-step wipe-in", value: 640,
+    group: "Landing", label: "Next-step wipe-in", value: 0,
     min: 0, max: 2500, step: 10, unit: "ms",
     why: "The 'X.XXs to rank up' line wiping in left-to-right once the climb lands.",
   },
@@ -184,7 +184,7 @@ export const TUNABLES = {
 /** Non-numeric knobs. Kept apart because they are choices, not amounts. */
 export const CHOICES = {
   skipStyle: {
-    group: "Structure", label: "Skipped ranks", value: "pop",
+    group: "Structure", label: "Skipped ranks", value: "chain",
     options: { pop: "Pop the wings out", chain: "Keep wings, chain the caps" },
     why: "What a tier the climb passes ENTIRELY through looks like.",
   },

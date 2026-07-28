@@ -1,8 +1,15 @@
 """ui/climbcurve.js — how long each part of a level-up climb lasts.
 
-The climb is a PLAN of steps (ui/climbplan.js, tests/test_ui_climbplan.py);
-this file owns only the numbers the plan sizes itself with. Two properties are
-worth a guard rather than a reading:
+**These tests must never assert the shipped defaults.** Since 2026-07-27 the
+values in ui/climbtuning.js are the USER'S: the inspector at /ui/tune.html
+writes them back into the repo, so every tuning session would otherwise turn
+the suite red for doing exactly what the tool exists to do. What is pinned here
+is the LAW — sqrt scaling, floors, shared budgets, monotone easing — exercised
+against an explicit REFERENCE tuning standing for the feel this curve was
+designed around. Whether the registry's own live values are coherent and in
+range is tests/test_ui_climbtuning.py's job, which is where that belongs.
+
+Two properties are worth a guard rather than a reading:
 
 * a bar sweep is monotone AND lands exactly on its target — "we should NEVER
   overshoot in a progress bar. It reads as annoying and an error -- you gave me
@@ -10,8 +17,9 @@ worth a guard rather than a reading:
   the whole sweep, never at the endpoints: both end states already looked
   correct in the ORIGINAL backwards-bar bug, which is exactly how it survived
   review.
-* the per-step budgets stay bounded as a climb gets huge, so the rarest and
-  biggest celebration in the game is still something you sit through once.
+* a floor bounds the budget squeeze and NOTHING else. Putting it outside the
+  ceiling let it silently override a value the user had set — see the bottom of
+  this file for that incident.
 """
 import json
 import shutil
@@ -27,11 +35,22 @@ CLIMB_JS = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
 pytestmark = pytest.mark.skipif(shutil.which("node") is None,
                                 reason="node not on PATH")
 
+# The feel this curve was designed around (spec 2026-07-27-multi-rank-climb).
+# Deliberately NOT read from climbtuning.js — see the module docstring.
+REFERENCE = {
+    "barSweepFullMs": 1500, "barSweepMinMs": 450,
+    "ladderStepMs": 460, "ladderBudgetMs": 3400, "ladderStepMinMs": 220,
+    "tierDwellMs": 1600, "tierDwellBudgetMs": 5200, "tierDwellMinMs": 700,
+    "anticipateShare": 0.56,
+}
+
 
 def run_node(imports: str, body: str):
     """Execute climbcurve.js for real — it is import-free specifically so node
-    can unit-test it, the same convention as ui/climbplan.js and caps.js."""
-    script = f"import {{ {imports} }} from {CLIMB_JS.as_uri()!r};\n{body}"
+    can unit-test it, the same convention as ui/climbplan.js and caps.js.
+    `REF` is in scope for every body below."""
+    script = (f"import {{ {imports} }} from {CLIMB_JS.as_uri()!r};\n"
+              f"const REF = {json.dumps(REFERENCE)};\n{body}")
     result = subprocess.run(["node", "--input-type=module", "-"],
                             input=script, capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stderr
@@ -45,9 +64,6 @@ def run_node(imports: str, body: str):
 # the division you were in", "grow into the one you landed in", and "you
 # improved without ranking up".
 
-# The durations the design targets, in ms. A FEEL decision (spec
-# 2026-07-27-multi-rank-climb), not a derivation — if a tuning round moves
-# them, this table moves with it deliberately.
 SWEEP_TARGETS = {
     0.09: 450,      # floored: a few percent reads as a flicker otherwise
     0.25: 750,
@@ -56,9 +72,10 @@ SWEEP_TARGETS = {
 }
 
 
-def test_the_sweep_duration_targets_hold():
+def test_the_sweep_duration_law_holds():
     got = run_node("barSweepMs", "console.log(JSON.stringify("
-                   f"{json.dumps(list(SWEEP_TARGETS))}.map((d) => barSweepMs(d))))")
+                   f"{json.dumps(list(SWEEP_TARGETS))}"
+                   ".map((d) => barSweepMs(d, REF))))")
     for (distance, want), actual in zip(SWEEP_TARGETS.items(), got):
         assert isclose(actual, want, abs_tol=15), f"{distance} divisions -> {actual}ms"
 
@@ -66,8 +83,8 @@ def test_the_sweep_duration_targets_hold():
 def test_a_sweep_is_floored_and_capped_at_one_division():
     floored, zero, capped = run_node(
         "barSweepMs",
-        "console.log(JSON.stringify([barSweepMs(0.004), barSweepMs(0),"
-        " barSweepMs(4)]))")
+        "console.log(JSON.stringify([barSweepMs(0.004, REF), barSweepMs(0, REF),"
+        " barSweepMs(4, REF)]))")
     assert floored == 450, "a few percent of a division must not read as a flicker"
     assert zero == 450, ("a sweep with nowhere to go still has to LAND -- a "
                          "zero-length step would make the arrival invisible")
@@ -77,8 +94,8 @@ def test_a_sweep_is_floored_and_capped_at_one_division():
 def test_the_sweep_law_is_smooth_in_distance():
     below, at, above = run_node(
         "barSweepMs",
-        "console.log(JSON.stringify([barSweepMs(0.49), barSweepMs(0.5),"
-        " barSweepMs(0.51)]))")
+        "console.log(JSON.stringify([barSweepMs(0.49, REF), barSweepMs(0.5, REF),"
+        " barSweepMs(0.51, REF)]))")
     assert isclose(at, 1500 * sqrt(0.5), abs_tol=1)
     assert isclose(at - below, above - at, rel_tol=0.05)
 
@@ -87,11 +104,13 @@ def test_the_bar_never_overshoots_and_never_goes_backwards():
     """THE guard, and it is two-sided on purpose.
 
     Backwards was the original bug (a rank-up ran the bar .95 -> .05). The
-    overshoot half is the user's own addendum, reported against a preview
-    that eased to 8% and settled back to 4%: "we should NEVER overshoot in a
-    progress bar... you gave me progress and then took it away!!!!" A
-    one-sided monotonicity check passes an `easeOutBack` happily, which is
-    exactly the curve that drew the complaint.
+    overshoot half is the user's own addendum, reported against a preview that
+    eased to 8% and settled back to 4%. A one-sided monotonicity check passes
+    an `easeOutBack` happily, which is exactly the curve that drew that
+    complaint.
+
+    Tuning-independent by construction: `barEase` takes no tuning, because the
+    shape of a progress bar's travel is a style RULE for this app, not a knob.
     """
     samples = run_node(
         "barEase",
@@ -124,7 +143,8 @@ def test_a_sweep_eases_in_and_out_rather_than_starting_at_full_speed():
 # ---- Ladder steps: one rank-up each --------------------------------------
 
 def test_a_lone_rank_up_gets_the_full_step():
-    assert run_node("ladderStepMs", "console.log(JSON.stringify(ladderStepMs(1)))") == 460
+    assert run_node("ladderStepMs",
+                    "console.log(JSON.stringify(ladderStepMs(1, REF)))") == 460
 
 
 def test_the_ladder_steps_share_a_budget_so_a_long_climb_stays_watchable():
@@ -133,7 +153,8 @@ def test_the_ladder_steps_share_a_budget_so_a_long_climb_stays_watchable():
     Fifteen unhurried ones on top of eight tier dwells is a celebration nobody
     wants to sit through twice."""
     totals = run_node("ladderStepMs", "console.log(JSON.stringify("
-                      "[1, 4, 7, 8, 15].map((n) => [n * ladderStepMs(n), ladderStepMs(n)])))")
+                      "[1, 4, 7, 8, 15].map((n) => "
+                      "[n * ladderStepMs(n, REF), ladderStepMs(n, REF)])))")
     per_step = [each for _total, each in totals]
     assert per_step == sorted(per_step, reverse=True), (
         "more steps must never make each one longer")
@@ -141,24 +162,22 @@ def test_the_ladder_steps_share_a_budget_so_a_long_climb_stays_watchable():
         "a step below the floor reads as a stutter, not a rank-up")
     assert max(total for total, _each in totals) <= 3500, (
         "the whole ladder budget must stay bounded")
-    assert run_node("ladderStepMs", "console.log(JSON.stringify(ladderStepMs(0)))") == 0
+    assert run_node("ladderStepMs",
+                    "console.log(JSON.stringify(ladderStepMs(0, REF)))") == 0
 
 
-def test_the_users_own_example_is_not_compressed():
+def test_the_worked_example_is_not_compressed():
     """Capless V -> Waluigi IV in the `pop` style is 4 division steps out of
     Capless, 2 skipped tiers and 1 into Waluigi = 7 ladder steps. That climb is
     the spec's worked example and has to read at full pace."""
-    assert run_node("ladderStepMs", "console.log(JSON.stringify(ladderStepMs(7)))") == 460
+    assert run_node("ladderStepMs",
+                    "console.log(JSON.stringify(ladderStepMs(7, REF)))") == 460
 
 
 # ---- Tier dwells: the climb STOPS at every tier boundary -------------------
-#
-# Cruising through a tier crossing threw away the biggest moment in the feature
-# (live report 2026-07-27: "it needs to feel EXTRA juicy"). The climb halts at
-# each one — anticipation, crossing, then a beat to look at it.
 
 def test_one_tier_crossing_gets_the_full_dwell():
-    dwell = run_node("tierDwell", "console.log(JSON.stringify(tierDwell(1)))")
+    dwell = run_node("tierDwell", "console.log(JSON.stringify(tierDwell(1, REF)))")
     assert dwell["anticipateMs"] + dwell["payoffMs"] == 1600
     assert dwell["anticipateMs"] > dwell["payoffMs"], (
         "the build-up is the longer half -- anticipation is what makes the "
@@ -170,7 +189,7 @@ def test_the_dwells_share_a_budget_so_a_long_climb_stays_watchable():
     thirteen seconds on top of the movement."""
     totals = run_node("tierDwell", "console.log(JSON.stringify("
                       "[1, 2, 4, 8, 20].map((n) => {"
-                      " const d = tierDwell(n);"
+                      " const d = tierDwell(n, REF);"
                       " return [n * (d.anticipateMs + d.payoffMs), d.anticipateMs + d.payoffMs];"
                       "})))")
     per_crossing = [each for _total, each in totals]
@@ -183,7 +202,7 @@ def test_the_dwells_share_a_budget_so_a_long_climb_stays_watchable():
 
 
 def test_no_crossings_means_no_dwell():
-    dwell = run_node("tierDwell", "console.log(JSON.stringify(tierDwell(0)))")
+    dwell = run_node("tierDwell", "console.log(JSON.stringify(tierDwell(0, REF)))")
     assert dwell == {"anticipateMs": 0, "payoffMs": 0}
 
 
@@ -193,8 +212,63 @@ def test_the_timing_table_answers_in_the_shape_the_plan_asks_for():
     clock rather than a wrong-looking animation."""
     keys, ladder, anticipate = run_node(
         "climbTimings",
-        "const t = climbTimings({ crossings: 2, ladder: 3 });\n"
+        "const t = climbTimings({ crossings: 2, ladder: 3 }, REF);\n"
         "console.log(JSON.stringify([Object.keys(t).sort(), t.ladderMs, t.anticipateMs]));")
     assert keys == ["anticipateMs", "barSweepMs", "ladderMs", "payoffMs"]
     assert ladder == 460
     assert anticipate > 0
+
+
+# ---- A floor may never override the ceiling above it ----------------------
+#
+# Live report, 2026-07-27: "the output was actually totally different that what
+# I had changed my settings to... probably something to do with floors / me not
+# realizing values can't be lower than the other floor setting." He was right,
+# and it was worse than a save bug: nothing was mis-saved. All three durations
+# were written `max(floor, min(ceiling, wanted))` with the floor OUTSIDE, so a
+# ladder step of 100ms against the 220ms floor ran at 220 at EVERY step count
+# while the inspector's slider showed 100. A whole tuning session was judged
+# against a number no control on screen was displaying.
+
+def test_no_floor_can_push_a_duration_past_the_ceiling_that_was_asked_for():
+    """The property, over the whole space rather than the one combination that
+    was reported — floors above their ceilings, below them, and equal, at every
+    step count a climb can produce."""
+    bad = run_node(
+        "ladderStepMs, tierDwell, barSweepMs",
+        "const bad = [];\n"
+        "for (const ceiling of [40, 100, 220, 460, 1600])\n"
+        "  for (const floor of [0, 100, 220, 700, 2000])\n"
+        "    for (const budget of [200, 1000, 3400, 12000])\n"
+        "      for (const n of [1, 2, 3, 5, 8, 15]) {\n"
+        "        const tune = { ladderStepMs: ceiling, ladderStepMinMs: floor,\n"
+        "          ladderBudgetMs: budget, tierDwellMs: ceiling,\n"
+        "          tierDwellMinMs: floor, tierDwellBudgetMs: budget,\n"
+        "          anticipateShare: 0.5, barSweepFullMs: ceiling,\n"
+        "          barSweepMinMs: floor };\n"
+        "        const step = ladderStepMs(n, tune);\n"
+        "        if (step > ceiling + 1e-9) bad.push(['ladder', ceiling, floor, budget, n, step]);\n"
+        "        const dwell = tierDwell(n, tune);\n"
+        "        const each = dwell.anticipateMs + dwell.payoffMs;\n"
+        "        if (each > ceiling + 1) bad.push(['dwell', ceiling, floor, budget, n, each]);\n"
+        "        for (const d of [0, 0.04, 0.5, 1]) {\n"
+        "          const sweep = barSweepMs(d, tune);\n"
+        "          if (sweep > ceiling + 1e-9) bad.push(['sweep', ceiling, floor, d, sweep]);\n"
+        "        }\n"
+        "      }\n"
+        "console.log(JSON.stringify(bad.slice(0, 10)));")
+    assert bad == [], (
+        "a floor pushed a duration ABOVE the ceiling it was given -- the "
+        f"inspector's slider would show one number and the climb run another: {bad}")
+
+
+def test_a_floor_still_stops_a_crowded_climb_squeezing_a_step_to_nothing():
+    """The inverse, so the fix above cannot be 'delete the floor'. With room
+    under the ceiling, the floor must still catch the budget squeeze."""
+    roomy, squeezed = run_node(
+        "ladderStepMs",
+        "console.log(JSON.stringify([ladderStepMs(1, REF), ladderStepMs(40, REF)]));")
+    assert roomy == 460, "one step must get the full length asked for"
+    assert squeezed == 220, (
+        "forty steps share a 3400ms budget (85ms each) and must be caught by "
+        "the 220ms floor, not run as a stutter")
