@@ -131,7 +131,21 @@ def _timed_segment_successes(attempts, segment_id: int | None = None) -> list[in
     reached its end trigger. Excluding cleared rows here undercounted the
     real population by exactly 4 and is what first put this tool 4 short of
     the hand-measured 105/106 (confirmed by reproducing the hand count with
-    cleared included, then again with it excluded)."""
+    cleared included, then again with it excluded).
+
+    The SAME reasoning covers projection.py's OTHER clearing path, even
+    though this journal happens not to exercise it today: an out-of-range
+    success auto-clears with a "cleared_reason" starting "auto: " (below a
+    segment's min_time or above its max_time -- `_auto_ignored`). That is
+    also a classification applied AFTER the arm closed, not a claim that the
+    arm was already stale when it reached its end trigger, so it belongs in
+    this population for the same reason a manual clear does. As of this
+    measurement zero of the 67 seeded definitions carry a min_time/max_time
+    guard (confirmed by scanning every corpus file), so the auto-clear path
+    cannot yet be responsible for any of the 4 -- but the day a definition
+    gains one of those guards, some of ITS successes may start arriving here
+    auto-cleared, and a re-run should expect that shift rather than read it
+    as a regression in this tool."""
     return [a.rta_frames for a in attempts
             if a.outcome == "success" and a.rta_frames is not None
             and a.segment_id is not None

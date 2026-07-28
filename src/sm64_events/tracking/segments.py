@@ -305,16 +305,25 @@ _DIALOG_ECHO_WINDOW = 30  # frames; the intro IGT re-init lands +1 frame after
 # BUDGET_FACTOR = 6 is UNFALSIFIED, not confirmed the same way — say so
 # plainly rather than implying equal footing with the floor above. Only
 # 16 of 67 definitions have even one timed success (11 have five or more);
-# the other 51 have no history and never reach BUDGET_FACTOR at all. Worse,
-# for the 16 that do: every one's best-so-far, times ANY of 3/4/6/8, still
-# lands above MIN_BUDGET_FRAMES once it matters (the largest best-so-far is
-# 4244, and even *3 = 12732 frames comfortably clears 5400) — so this
-# journal cannot currently distinguish BUDGET_FACTOR=3 from 8, and the grid
-# above reads identically across every factor column. 6 ships because
-# nothing here contradicts it, not because 16 definitions' worth of data
-# picked it over 3 or 8. Re-run tools/measure_budget.py once the loose-native
-# movements above exist and have their own history — that is the corpus
-# this constant is actually waiting on.
+# the other 51 have no history and never reach BUDGET_FACTOR at all.
+#
+# The factor DOES discriminate below the shipped floor — the 1800/2700/3600
+# rows above show 5-8 expired at FACTOR 3-4 versus 3-5 at FACTOR 6-8, real
+# daylight between the candidates — so this is not a claim that the tested
+# range is inherently unmeasurable. It is a CEILING EFFECT at the floor we
+# actually ship: at 4500 and above, FACTOR 3 (the loosest of the four
+# tested) already reaches zero expired, and nothing can beat zero, so every
+# column collapses to the same result there. Concretely: the largest
+# best-so-far in this corpus is 4244, and even *3 = 12732 frames already
+# clears MIN_BUDGET_FRAMES=5400 by a wide margin — the floor is doing the
+# work, not the factor, for every arm this journal has ever recorded. 6
+# ships because nothing AT THE SHIPPED FLOOR contradicts it, not because 16
+# definitions' worth of data picked it over 3 or 8 — that comparison never
+# actually runs while the floor dominates. Re-run tools/measure_budget.py
+# once the loose-native movements above exist and have their own history —
+# either a longer typical completion (so the factor starts to bind ahead of
+# the floor) or a much larger MIN_BUDGET_FRAMES re-measurement is what would
+# finally let this corpus discriminate BUDGET_FACTOR at the values we ship.
 MIN_BUDGET_FRAMES = 5400   # 3 minutes at 30 fps; the floor for a def with no history
 BUDGET_FACTOR = 6          # multiple of the definition's best success so far
 
