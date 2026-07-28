@@ -211,3 +211,48 @@ pointer to it).
   is not a fallback — a hidden element cannot be hovered. Move the text onto
   an element that is always rendered (the rank banner folds its basis line
   into the progress track's tooltip).
+
+## Responsiveness — the law, and the three tests that hold it
+
+**Component-internal layout gates on `@container` against its own pane.
+`@media` is for the SHELL only** — `.app-shell`, `.app-sidebar`, `.app-brand`,
+`.app-main`, `.app-notice`, `.nav-*`, `.sidebar-*`, `.mobile-*`, `.workspace`,
+`.context-*`, `.view-pane`, `.sheet-*`, plus the `prefers-*` blocks. That list
+lives in ONE place, `tools/css_blocks.py::SHELL_PREFIXES`; widening it widens
+the law and is a reviewed edit, never a way to make a test pass.
+
+The reason is measured, and this file's `@container` section already states it
+for the rank banners: the sidebar is 206px wide above 1180px and a **76px rail
+below it**, so the pane a card lives in is **not monotonic in window width** —
+a 1181px window gives a card a 947px pane, a 1180px window gives it 1076px. No
+viewport threshold can express "this card is too narrow"; every one of them is
+wrong on one side of that jump. The insight was written down on 2026-07-25 and
+applied to two rules; **145 component-internal rules were still viewport-keyed
+on 2026-07-28**, and the Active Target card clipped its own "Ready" row at
+900×1180 as the direct result.
+
+Beware the translation trap: `@media (max-width: 760px)` does **not** become
+`@container (max-width: 760px)`. Below 760px the sidebar is gone, so the pane
+is *wider* than the viewport number suggests. Every threshold is re-derived by
+measurement, never renamed. And note that the shipped 760px block does two
+jobs — "the shell went mobile" (genuinely viewport) and "every card is now
+narrow" (container) — which is why it was invisible: at that width the two
+signals nearly coincide.
+
+Three tests, none of which can be satisfied by a comment:
+
+| Test | Fails when |
+|---|---|
+| `tests/test_responsive_structure.py` | a `@media` rule styles a component selector. `LEGACY_VIEWPORT_RULES` carries the pre-existing debt as one row per rule, so the count is honest; a second test fails when a row outlives its rule |
+| `tests/test_responsive.py::test_every_declared_breakpoint_is_probed_on_both_sides` | a threshold exists in the stylesheet with no probe point at N and N+1 — i.e. a breakpoint nobody checks |
+| `tests/test_responsive.py::test_no_layout_defects_across_the_matrix` | the rendered app overflows, clips inside a fixed-height box, truncates an opted-in element, overlaps a flow sibling, or hides a tab at some size |
+
+Run the sweep directly while working: `uv run python tools/responsive_sweep.py`
+(add `--shots` for a contact sheet). It boots the REAL app offline via
+`tools/ui_fixture.py` — never `python -m sm64_events.main`, which would attach
+to PJ64 and take the recorder lock out from under a live recording.
+
+**What none of it catches:** anything that measures fine and looks wrong — bad
+hierarchy, ugly wrapping, a control that is reachable but awkward. Assertions
+cannot reach that; the contact sheet is for a human eye, and it is a review
+aid, never a gate.
