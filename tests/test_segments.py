@@ -13,7 +13,7 @@ from sm64_events.tracking.segments import (SEGMENT_ATTEMPT_OFFSET,
                                            SegmentDef, SegmentEngine,
                                            origin_taxonomy, origin_view,
                                            start_origin, validate_definition,
-                                           vocab, waiting_for_sentence)
+                                           vocab)
 
 W = "2026-06-11T12:00:00Z"
 
@@ -86,8 +86,12 @@ def test_vocab_ships_connections_and_flow_annotations():
 
 
 # ---------------------------------------------------------------------------
-# waiting_for_sentence (Task 4, spec 2026-07-28-multi-step-segments): plain
-# language for what an armed def is waiting for next.
+# card_waiting_for_sentence (Task 6, spec 2026-07-28-multi-step-segments):
+# plain language for what an armed def is waiting for next, read as an
+# imperative step for the practice card's "Waiting for" line. Its editor-
+# voice twin, waiting_for_sentence, and its four dedicated tests here were
+# deleted Task 7 (2026-07-28) once the function lost its last caller in
+# `src/` — see segments.py's card_waiting_for_sentence docstring.
 # ---------------------------------------------------------------------------
 
 WF_TO_SSL_WAYPOINT = SegmentDef(
@@ -95,48 +99,6 @@ WF_TO_SSL_WAYPOINT = SegmentDef(
     start_triggers=[{"type": "level_exit", "from": 24}],
     waypoints=[[{"type": "area_enter", "level": 6, "area": 3}]],
     end_triggers=[{"type": "level_enter", "to": 8}], guards=[])
-
-
-def test_waiting_for_sentence_reads_the_next_unconsumed_waypoint():
-    sentence = waiting_for_sentence(WF_TO_SSL_WAYPOINT, 0)
-    assert sentence == "You enter area Castle Inside Basement"
-
-
-def test_waiting_for_sentence_falls_back_to_the_end_trigger_once_consumed():
-    # progress == len(waypoints): every waypoint is behind it, so the next
-    # thing the def waits for is its end trigger.
-    sentence = waiting_for_sentence(WF_TO_SSL_WAYPOINT, 1)
-    assert sentence == "You enter level Shifting Sand Land"
-
-
-def test_waiting_for_sentence_joins_an_any_of_clause_set_with_or():
-    d = SegmentDef(id=2, name="beat Bowser", enabled=True, guards=[],
-                   start_triggers=[],
-                   end_triggers=[{"type": "star_grabbed"},
-                                 {"type": "key_grabbed", "level": 17}])
-    sentence = waiting_for_sentence(d, 0)
-    assert sentence == ("You grab a star or "
-                        "You grab a Bowser key / grand star in "
-                        "Bowser in the Dark World")
-
-
-def test_waiting_for_sentence_drops_a_dangling_connector_for_an_unset_param():
-    # LBLJ's real seeded end trigger: {"to": 17} only, no `from`. A naive
-    # literal substitution would leave "...coming from " hanging; the
-    # optional param's own template segment must vanish with it instead.
-    d = SegmentDef(id=1, name="LBLJ", enabled=True, guards=[],
-                   start_triggers=[{"type": "level_enter", "to": 6, "from": 16}],
-                   end_triggers=[{"type": "level_enter", "to": 17}])
-    sentence = waiting_for_sentence(d, 0)
-    assert sentence == "You enter level Bowser in the Dark World"
-    assert "coming from" not in sentence
-
-
-# ---------------------------------------------------------------------------
-# card_waiting_for_sentence (Task 6, spec 2026-07-28-multi-step-segments):
-# the SAME clause, read as an imperative step for the practice card's
-# "Waiting for" line instead of waiting_for_sentence's editor voice.
-# ---------------------------------------------------------------------------
 
 def test_card_waiting_for_sentence_reads_the_next_unconsumed_waypoint():
     sentence = card_waiting_for_sentence(WF_TO_SSL_WAYPOINT, 0)
@@ -149,31 +111,29 @@ def test_card_waiting_for_sentence_falls_back_to_the_end_trigger_once_consumed()
 
 
 def test_card_waiting_for_sentence_is_not_the_editors_voice():
-    # The bug this function exists for: waiting_for_sentence's output shown
-    # under a "Waiting for" label reads as broken English ("Waiting for You
-    # enter level Shifting Sand Land"). The card sentence must never start
-    # with the editor's second-person phrasing.
-    editor = waiting_for_sentence(WF_TO_SSL_WAYPOINT, 1)
+    # The bug this function exists for: editor voice shown under a "Waiting
+    # for" label reads as broken English ("Waiting for You enter level
+    # Shifting Sand Land"). The card sentence must never start with the
+    # editor's second-person phrasing.
     card = card_waiting_for_sentence(WF_TO_SSL_WAYPOINT, 1)
-    assert editor != card
+    assert card == "Enter Shifting Sand Land"
     assert not card.startswith("You ")
 
 
 def test_every_trigger_template_resolves_cleanly():
-    """Guard for the clause renderer behind waiting_for_sentence AND its
-    Task 6 sibling card_waiting_for_sentence: every TriggerType's template
-    (editor AND card, fix round 1: card_template may differ from template),
-    filled with every param IT declares, must leave no literal "{token}"
-    behind in EITHER voice, and every param name the template mentions must
-    be one this trigger actually has in its own `params` dict. Fails the day
-    a new trigger type's template typos a param name, rather than a user
-    seeing a brace on the builder OR the practice card."""
+    """Guard for the clause renderer behind card_waiting_for_sentence: every
+    TriggerType's card_template (or template, its fallback -- fix round 1,
+    2026-07-28: card_template may differ from template), filled with every
+    param IT declares, must leave no literal "{token}" behind, and every
+    param name the template mentions must be one this trigger actually has
+    in its own `params` dict. Fails the day a new trigger type's template
+    typos a param name, rather than a user seeing a brace on the practice
+    card. (This used to also probe the editor-voice template through
+    waiting_for_sentence; deleted Task 7, 2026-07-28, alongside that
+    function -- spec.template's own placeholder names are still checked
+    below since it is card_template's fallback and so still load-bearing.)"""
     kind_samples = {"level": 6, "subarea": 1, "course": 1, "star": 0}
     for spec in TRIGGERS.values():
-        named = set(re.findall(r"\{(\w+)\}", spec.template))
-        assert named <= set(spec.params), \
-            f"{spec.key}: template names {named - set(spec.params)}, " \
-            "which is not one of its own params"
         card_named = set(re.findall(r"\{(\w+)\}", spec.card_template or spec.template))
         assert card_named <= set(spec.params), \
             f"{spec.key}: card_template names {card_named - set(spec.params)}, " \
@@ -183,10 +143,6 @@ def test_every_trigger_template_resolves_cleanly():
             clause[name] = kind_samples[meta["kind"]]
         d = SegmentDef(id=1, name="probe", enabled=True, guards=[],
                        start_triggers=[], end_triggers=[clause])
-        sentence = waiting_for_sentence(d, 0)
-        assert "{" not in sentence and "}" not in sentence, \
-            f"{spec.key}: leftover template token in {sentence!r}"
-        assert spec.label in sentence
         card_sentence = card_waiting_for_sentence(d, 0)
         assert "{" not in card_sentence and "}" not in card_sentence, \
             f"{spec.key}: leftover template token in card phrasing {card_sentence!r}"
@@ -231,9 +187,6 @@ def test_star_grabbed_card_phrase_names_the_star_and_course():
                    start_triggers=[],
                    end_triggers=[{"type": "star_grabbed", "course": 9, "star": 0}])
     assert card_waiting_for_sentence(d, 0) == "Grab Board Bowser's Sub in Dire, Dire Docks"
-    # And the editor's own voice is unchanged by any of this.
-    assert waiting_for_sentence(d, 0) == \
-        "You grab a star in Dire, Dire Docks, star Board Bowser's Sub"
 
 
 def test_star_grabbed_card_phrase_falls_back_when_the_star_is_unset():

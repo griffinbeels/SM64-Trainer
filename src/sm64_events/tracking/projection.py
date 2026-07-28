@@ -409,7 +409,7 @@ class Projector:
         start_frame, deadline_frame}}. `total` is the def's own waypoint
         count (0 for a plain start/end pair), so the UI can read
         "progress of total" without a second lookup. `waiting_for` is NOT
-        computed here — that needs waiting_for_sentence, a segments.py
+        computed here — that needs card_waiting_for_sentence, a segments.py
         concern, and views.py already holds the def for its section loop.
         A def missing from definition() (deleted mid-arm) is skipped rather
         than raised: this engine's _armed can only ever hold ids from its

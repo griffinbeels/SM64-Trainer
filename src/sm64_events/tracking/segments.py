@@ -2,18 +2,26 @@
 
 ONE registry: TRIGGERS/GUARDS drive (a) definition validation at the API
 boundary, (b) the matcher, (c) GET /api/segments/vocab that renders the
-builder GUI, and (d) waiting_for_sentence / card_waiting_for_sentence's
-read-only "waiting for" line on an armed practice card (spec
-2026-07-28-multi-step-segments, Task 6). Adding a trigger type = one
-TriggerType row here (label + card_label + params + the sentence template
-the builder, waiting_for_sentence AND card_waiting_for_sentence all render
-from). `label` is editor voice ("You enter level {to}") for the builder's
-read-only preview; `card_label` is the SAME clause read as an imperative step
+builder GUI (ui/components/segments.js builds its own editor sentence
+straight from the raw label/template vocab() ships — a second, independent
+renderer, not a gap this module needs to fill), and (d)
+card_waiting_for_sentence's read-only "waiting for" line on an armed practice
+card (spec 2026-07-28-multi-step-segments, Task 6). Adding a trigger type =
+one TriggerType row here (label + card_label + params + the sentence
+template the builder and card_waiting_for_sentence both render from). `label`
+is editor voice ("You enter level {to}") for the builder's own read-only
+preview; `card_label` is the SAME clause read as an imperative step
 ("Enter {to}") for the practice card, which supplies its own "Waiting for"
 frame around it — the builder needs a sentence with a hole in it, the card
 needs a phrase with a value in it, and past experience says collapsing them
 into one string reads wrong in one of the two places every time (see
-card_waiting_for_sentence's docstring).
+card_waiting_for_sentence's docstring). This module used to also render an
+editor-voice sentence of its own (`waiting_for_sentence`), until Task 7
+(2026-07-28) found it had no caller left in `src/` — the builder GUI never
+called it (see (c) above) and `card_waiting_for_sentence` had fully
+superseded it for the practice card — and deleted it (YAGNI: a neutral
+clause-text renderer gets re-added WITH a caller if one ever needs it, not
+kept alive by its own tests).
 
 Matcher invariants (spec §Matcher semantics — tests are the contract):
 - closures (success/failure) process BEFORE arming; one event may close an
@@ -586,17 +594,17 @@ def _resolve_param(kind: str, value, clause: dict) -> str:
 _TEMPLATE_TOKENS = re.compile(r"(\{\w+\})")
 
 
-def _render_clause(clause: dict, label_attr: str = "label",
-                    template_attr: str = "template") -> str:
-    """One trigger clause -> plain English, through TRIGGERS[type].<label_attr>
-    + .<template_attr> (spec 2026-07-28-multi-step-segments; waiting_for_sentence
-    and card_waiting_for_sentence below are the only callers, selecting
-    ("label", "template") for editor voice or ("card_label", "card_template")
-    for the imperative card — same tokenizer and param lookups either way,
-    different leading phrase and (when a type overrides it) a different
-    template string, which is why this takes WHICH FIELDS to read rather
-    than being duplicated per caller. `card_template` is None for every type
-    but star_grabbed today, so `spec.card_template or spec.template` is a
+def _render_clause(clause: dict) -> str:
+    """One trigger clause -> plain English for the practice card, through
+    TRIGGERS[type].card_label + .card_template (spec 2026-07-28-multi-step-
+    segments; card_waiting_for_sentence below is the only caller). Until
+    Task 7 (2026-07-28) this also served an editor-voice sibling,
+    waiting_for_sentence, through a pair of (label_attr, template_attr)
+    parameters selecting which fields to read — deleted, along with that
+    function, once it lost its last caller in `src/` (YAGNI: re-add the
+    parameters WITH a second caller if editor voice is ever needed here
+    again, not speculatively). `card_template` is None for every type but
+    star_grabbed today, so `spec.card_template or spec.template` is a
     genuine no-op there — reusing the editor's template IS the default.
 
     A param the clause leaves unset drops its own SEGMENT of the template —
@@ -610,13 +618,11 @@ def _render_clause(clause: dict, label_attr: str = "label",
     prunes an OPTIONAL one the author left blank ("any level" etc).
 
     A param named in `card_fallbacks` (fix round 1, 2026-07-28) is the ONE
-    exception to that pruning, and ONLY when rendering a card template
-    (`template_attr != "template"` — the editor's own preview must never
-    silently substitute text the author didn't enter): its segment renders
-    unconditionally, using the fallback text in place of a resolved value
-    when the clause leaves it unset. star_grabbed's `star` is the one param
-    that needs this — pruning it the editor's way would leave a course-only
-    card clause reading "Grab in Bowser in the Fire Sea" with no object.
+    exception to that pruning: its segment renders unconditionally, using
+    the fallback text in place of a resolved value when the clause leaves
+    it unset. star_grabbed's `star` is the one param that needs this —
+    pruning it would leave a course-only card clause reading "Grab in
+    Bowser in the Fire Sea" with no object.
 
     A placeholder naming a param outside its own trigger's `params` (an
     authoring bug in TRIGGERS itself) renders the brace literally instead of
@@ -625,11 +631,12 @@ def _render_clause(clause: dict, label_attr: str = "label",
     a user seeing the brace.
 
     This tokenizer is deliberately independent of
-    ui/components/segments.js's — see waiting_for_sentence's own docstring
-    for why that is not a second door."""
+    ui/components/segments.js's, which builds its own editor sentence
+    straight from the label/template vocab() ships raw — see
+    card_waiting_for_sentence's docstring for why that is not a second
+    door."""
     spec = TRIGGERS[clause["type"]]
-    label = getattr(spec, label_attr)
-    template = getattr(spec, template_attr) or spec.template
+    template = spec.card_template or spec.template
     tokens = _TEMPLATE_TOKENS.split(template)
     parts: list[str] = []
     i = 0
@@ -645,64 +652,56 @@ def _render_clause(clause: dict, label_attr: str = "label",
             if value is not None:
                 parts.append(literal_before)
                 parts.append(_resolve_param(meta["kind"], value, clause))
-            elif template_attr != "template" and name in spec.card_fallbacks:
+            elif name in spec.card_fallbacks:
                 parts.append(literal_before)
                 parts.append(spec.card_fallbacks[name])
         i += 2
     parts.append(tokens[-1])   # trailing literal after the last placeholder
-    return f"{label} {''.join(parts)}".strip()
+    return f"{spec.card_label} {''.join(parts)}".strip()
 
 
-def waiting_for_sentence(d: SegmentDef, progress: int) -> str:
+def card_waiting_for_sentence(d: SegmentDef, progress: int) -> str:
     """Plain language for what an ARMED definition is waiting for next (spec
-    2026-07-28-multi-step-segments): its next unconsumed waypoint
+    2026-07-28-multi-step-segments, Task 6): its next unconsumed waypoint
     (`d.waypoints[progress]`), or its end trigger once every waypoint is
-    consumed (`progress >= len(d.waypoints)`). A clause-set is an ANY-OF
-    list (see `_matches`) — its members join with " or ".
+    consumed (`progress >= len(d.waypoints)`), rendered through
+    TRIGGERS[type].card_label + .card_template as an imperative STEP —
+    "Enter Shifting Sand Land", never editor-voice "You enter level
+    Shifting Sand Land". A clause-set is an ANY-OF list (see `_matches`) —
+    its members join with " or ".
+
+    Editor voice reads wrong under a "Waiting for" label: a second-person
+    clause written to stand alone as a sentence ("You enter level X") reads
+    as "Waiting for You enter level X", because that string was written to
+    stand alone, not to fill a hole in a shorter one. The card supplies its
+    own frame; this only needs to be the imperative step that goes in the
+    hole — a different artifact from a sentence with a hole in it, not a
+    shorter version of one. (This function had an editor-voice twin,
+    waiting_for_sentence, deleted Task 7/2026-07-28 once it lost its last
+    caller — see _render_clause's docstring.)
 
     Read-only sibling of ui/components/segments.js's ClauseRow, which
     tokenizes the SAME TRIGGERS[type].template into an editable FORM
     (dropdowns interleaved with muted words, entangled with
     setParam/onChange/visible()/allowedIds/vocab.connections). DESIGN
-    QUESTION settled before this was written (progress.md, Task 4): that is
-    a different artifact from a read-only "waiting for X" string, not a
-    second implementation of one thing to unify with. Both consumers read
-    the ONE TRIGGERS registry and the same vocab enums (generated from
-    Python), so neither restates the template — the JS side edits a clause,
-    this side describes one. Do not "helpfully" merge them."""
+    QUESTION settled before waiting_for_sentence was first written
+    (progress.md, Task 4): that is a different artifact from a read-only
+    "waiting for X" string, not a second implementation of one thing to
+    unify with. Both consumers read the ONE TRIGGERS registry and the same
+    vocab enums (generated from Python), so neither restates the template —
+    the JS side edits a clause, this side describes one. Do not "helpfully"
+    merge them.
+
+    What IS shared with the editor voice is the template/param-pruning
+    machinery in _render_clause, since that is the same mechanical
+    substitution regardless of voice — `card_template` (fix round 1,
+    2026-07-28) is still that SAME machinery, reading a different template
+    string for the one type (star_grabbed) whose shared template read as a
+    visible artifact on a card ("Grab the star in Dire, Dire Docks, star
+    Board Bowser's Sub")."""
     clause_set = (d.waypoints[progress] if progress < len(d.waypoints)
                  else d.end_triggers)
     return " or ".join(_render_clause(clause) for clause in clause_set)
-
-
-def card_waiting_for_sentence(d: SegmentDef, progress: int) -> str:
-    """Card-facing sibling of waiting_for_sentence (spec 2026-07-28-multi-
-    step-segments, Task 6): the same next-unconsumed-waypoint-or-end-trigger
-    clause set, rendered through TRIGGERS[type].card_label + .card_template
-    instead of .label + .template -- "Enter Shifting Sand Land", never
-    editor-voice "You enter level Shifting Sand Land".
-
-    waiting_for_sentence's output is correct FOR THE BUILDER (it renders
-    cleanly against every seeded definition — no leftover tokens, clean
-    clause boundaries) and wrong for the practice card: under a "Waiting
-    for" label the editor's second-person clause reads as "Waiting for You
-    enter level Shifting Sand Land", because that string was written to
-    stand alone as a sentence, not to fill a hole in a shorter one. The card
-    supplies its own frame; this only needs to be the imperative STEP that
-    goes in the hole. Deliberately NOT a shared string with
-    waiting_for_sentence — a sentence with a hole in it and a phrase with a
-    value in it are different artifacts, and a string trying to serve both
-    reads wrong in one of the two places every time. What IS shared is the
-    template/param-pruning machinery in _render_clause, since that is the
-    same mechanical substitution for both voices of the same clause —
-    `card_template` (fix round 1, 2026-07-28) is still that SAME machinery,
-    reading a different template string for the one type (star_grabbed)
-    whose shared template read as a visible artifact on a card
-    ("Grab the star in Dire, Dire Docks, star Board Bowser's Sub")."""
-    clause_set = (d.waypoints[progress] if progress < len(d.waypoints)
-                 else d.end_triggers)
-    return " or ".join(_render_clause(clause, "card_label", "card_template")
-                       for clause in clause_set)
 
 
 def arm_level(trig: dict) -> int | None:
