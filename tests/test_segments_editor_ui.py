@@ -17,15 +17,23 @@ that list against the pydantic models, so either side changing breaks loudly:
 import re
 from pathlib import Path
 
+from source_scan import strip_comments
 from sm64_events.server.api import SegmentBody, SegmentPatch
 
 SEGMENTS_JS = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
                / "ui" / "components" / "segments.js")
 
+# Comment-stripped ONCE and shared by every test in this file (source_scan.py)
+# -- a raw substring scan can't tell code from prose, and this file shipped
+# exactly that hole (Task 8 review, 2026-07-28): the runBacktest block
+# comment quotes "Try it against my history" in prose, so a bare check on
+# that phrase against RAW source stayed green after the real <button> was
+# deleted outright. See test_editor_offers_a_backtest_preview_beside_save.
+SEGMENTS_JS_SOURCE = strip_comments(SEGMENTS_JS.read_text(encoding="utf-8"))
+
 
 def _save_fields() -> list[str]:
-    source = SEGMENTS_JS.read_text(encoding="utf-8")
-    match = re.search(r"SAVE_FIELDS\s*=\s*\[([^\]]*)\]", source)
+    match = re.search(r"SAVE_FIELDS\s*=\s*\[([^\]]*)\]", SEGMENTS_JS_SOURCE)
     assert match, "segments.js lost its SAVE_FIELDS allowlist"
     return re.findall(r'"(\w+)"', match.group(1))
 
@@ -45,19 +53,12 @@ def test_editor_allowlist_is_accepted_by_both_server_models():
 
 
 def test_editor_save_never_spreads_the_get_row():
-    source = SEGMENTS_JS.read_text(encoding="utf-8")
-    assert "created_utc: _c, ...body" not in source, (
+    assert "created_utc: _c, ...body" not in SEGMENTS_JS_SOURCE, (
         "the denylist spread is back — GET rows carry db-only columns that "
         "SegmentPatch rejects (see this file's docstring)")
 
 
 # --- grouped library (spec 2026-07-24-segment-origin-categories) -----------
-# Note: SEGMENTS_JS above is the Path (existing tests call .read_text() on
-# it directly) — this reads the source ONCE into its own name rather than
-# reassigning SEGMENTS_JS, which would turn it into a str and break both
-# tests above.
-SEGMENTS_JS_SOURCE = SEGMENTS_JS.read_text(encoding="utf-8")
-
 
 def test_library_groups_by_origin_through_the_shared_primitives():
     assert "buildTree" in SEGMENTS_JS_SOURCE and "GroupedList" in SEGMENTS_JS_SOURCE
@@ -132,9 +133,21 @@ def test_icons_are_resolved_by_the_call_site():
 # The whole point of tracking/backtest.py: find out whether a candidate
 # definition would have worked BEFORE saving it, not live mid-run.
 
+def _has_backtest_button_label(source: str) -> bool:
+    """The real backtest button's ternary, comment-immune (source_scan.py).
+
+    Not a bare "Try it against my history" substring check: the block
+    comment right above runBacktest quotes that exact phrase in prose to
+    explain the feature, so a raw-source check on the phrase alone stayed
+    green after the real <button> element was deleted outright (Task 8
+    review, 2026-07-28) -- see test_the_backtest_button_guard_can_still_fail.
+    """
+    return '"Testing…" : "Try it against my history"' in strip_comments(source)
+
+
 def test_editor_offers_a_backtest_preview_beside_save():
     assert '"/api/segments/backtest"' in SEGMENTS_JS_SOURCE
-    assert "Try it against my history" in SEGMENTS_JS_SOURCE
+    assert _has_backtest_button_label(SEGMENTS_JS.read_text(encoding="utf-8"))
 
 
 def test_backtest_preview_names_the_unclosed_arm_diagnostic():
@@ -152,3 +165,16 @@ def test_backtest_preview_sends_the_full_unsaved_form_not_just_save_fields():
     # seeded movement).
     assert "BACKTEST_FIELDS" in SEGMENTS_JS_SOURCE
     assert '"waypoints", "category", "match_mode"' in SEGMENTS_JS_SOURCE
+
+
+def test_the_backtest_button_guard_can_still_fail():
+    # source_scan.py: a guard a comment can satisfy is no guard at all. Feed
+    # the exact shape that broke this once -- a comment quoting the button's
+    # label in prose, the runBacktest docstring's own opening line -- and
+    # confirm it does NOT pass; then confirm the real ternary does.
+    comment_only = (
+        '// "Try it against my history" -- the whole point is finding out\n'
+        '// BEFORE Save, so this sends whatever is CURRENTLY in the form.\n')
+    assert not _has_backtest_button_label(comment_only)
+    real_code = 'html`${btBusy ? "Testing…" : "Try it against my history"}`'
+    assert _has_backtest_button_label(real_code)
