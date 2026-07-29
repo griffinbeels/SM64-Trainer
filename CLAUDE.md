@@ -25,7 +25,17 @@ uv run python tools/verify_addresses.py              # live gate (needs PJ64 + R
 uv run python tools/dev_cleanup.py                   # kill orphaned dev/harness servers (auto-runs at session start)
 uv run python tools/dedupe_journal.py data/tracker.db  # scan double-journaled events; --fix repairs (server stopped)
 uv run pytest tests/test_responsive.py -q            # render every breakpoint; report layout defects (no PJ64 needed)
+uv run python tools/contact_sheet.py .objective-card # one surface at 1500/1200/900/850, in one image -- LOOK at it
+uv run python tools/measure_objective_card.py        # re-measure the fixed card heights against real content
 ```
+
+**Supported window size: 850px wide minimum, any height** (2026-07-29). One
+number in two places, compared by `tests/test_min_supported_width.py`:
+`desktop/window.py::MIN_WINDOW_WIDTH` enforces it in the shipped app (min_size,
+the default geometry, AND a clamp on restored geometry — the first constrains
+dragging only, and the other two are how an existing install would keep
+reopening at 480px), and `tools/uilab_project.py::min_viewport_width` is where
+the sweep stops measuring. Narrower is not a bug worth filing.
 
 **Server port:** `core/paths.py::server_port()` is the single source — `SM64_PORT`
 env override, else **8064 frozen (the exe), 8065 from source (dev)** so a dev
@@ -189,6 +199,25 @@ Contract changes land on main first, then dependent work fans out. Merge with
   machine-level module (`Desktop/code/uilab`) installed editable — improve the
   instrumentation THERE, not here, and run its `tools/check_consumers.py`
   afterwards
+- **responsiveness is part of the feature, not a pass afterwards.** A UI change
+  is not done at one width. The three habits, in the order they pay:
+  1. **Look at it.** `tools/contact_sheet.py <selector>` — one surface at
+     1500/1200/900/850 in one image. Every expensive failure in this area was
+     obvious on sight and invisible to every assertion; the cheapest moment to
+     see it is while still writing the code, not in review.
+  2. **Ask what state the fixture is in.** The gates are only as good as the
+     page `tools/ui_fixture.py` reaches, and a wrong state does not go red — it
+     reports a clean page nobody is looking at. That has been the root cause
+     three times. If your feature needs data the fixture does not seed, seed it
+     and add a line to `tests/test_fixture_reaches_the_real_page.py`.
+  3. **Give a new surface its own contract test if a probe cannot express it.**
+     A defect probe answers "is something broken"; it cannot answer "does this
+     component draw itself the same way in both layouts"
+     (`test_rank_banner_continuity.py`) or "does the widest value in the corpus
+     fit" (`test_objective_name_fits.py`). Both of those were user-reported
+     bugs that no probe could have caught, in either direction.
+  Prove any new guard by mutation — put the bug back, watch it go red, revert.
+  A guard nobody has seen fail is green forever
 - new memory reads live-verified with the human via the harness
 - rule files / this file updated if modules were added or moved; README
   updated if the consumer-facing surface changed; docs/architecture.md updated

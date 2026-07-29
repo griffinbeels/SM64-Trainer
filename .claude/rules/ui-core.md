@@ -277,7 +277,7 @@ Three tests, none of which can be satisfied by a comment:
 | Test | Fails when |
 |---|---|
 | `test_component_layout_gates_on_the_container` | a `@media` rule styles a component selector |
-| `test_no_layout_defects_across_the_matrix` | the rendered app overflows, clips inside a fixed-height box, truncates an opted-in element, or overlaps a flow sibling at any declared breakpoint |
+| `test_no_layout_defects_across_the_matrix` | the rendered app overflows, clips inside a fixed-height box, truncates an opted-in element, overlaps a flow sibling, **or paints a `::before`/`::after` onto a box it does not own**, at any declared breakpoint |
 | `test_the_known_defect_list_does_not_outlive_its_defects` | a row in `known_defects` describes a defect that no longer occurs |
 
 All three live in `tests/test_responsive.py` and are three lines each, because
@@ -305,6 +305,59 @@ index inside a CLOSED `<details>`; without the wait, the sweep measures the
 loading state. Either one reports a clean page nobody is looking at — which is
 how 26 real defects stayed invisible while a feature built on top of them
 rendered zero times without a single error (2026-07-28).
+
+**Reaching the card is not the same as reaching its CONTENT, and that is one
+level deeper.** The seeded star must have MORE THAN ONE strategy in the bundled
+standards, or the strategy ladder is also the star's best ladder, the two ranks
+are one measure, and the card draws a **single** combined banner
+(`views.py::ranks_share_ladder`). The fixture seeded a one-strategy star until
+2026-07-29, so every sweep ever run measured a one-banner card and the whole
+class of "the two banners crowd each other" defects was *unreachable by the
+gate* — the user reported the stacked washes overlapping three times over two
+days and it could only be measured by hand against his own database. The
+constants and the reason are in `ui_fixture.py::FIXTURE_STAR`; the rule is
+general, so check it whenever a card's layout depends on how many of something
+it holds.
+
+**A defect can be entirely in PAINT, and four of the five probes walk the DOM.**
+A pseudo-element is not in the DOM, so nothing that queries the tree can see
+one. The rank banners' colour wash is a `::before`; it bled sideways onto the
+next grid column and vertically onto the banner stacked beneath it, and three
+consecutive sweeps called the page clean while the user reported the overlap
+three times. Probe class 5 (`decoration`) closes that: it derives an absolutely
+positioned pseudo's rect from its host's padding box and fails when the rect
+covers a box that is neither the host nor inside it. Bleeding into an
+*ancestor's* padding or grid gap stays legal — that is what a bleed is for.
+Declare the genuine exceptions (scrims, focus rings, full-bleed washes) in
+`uilab_project.py::may_bleed`, never by widening the rule. Still invisible to
+it: a *statically* positioned pseudo pushed out of its host by a negative
+margin, which has no derivable geometry.
+
+**A measured constant is only as good as the state the fixture reached.**
+`--objective-card-narrow` was measured honestly and was 39px short at every
+width in its band, because at the time the fixture could only render the
+card's "Nothing to practice here" state. Re-measure after any change to what a
+fixed-height card can contain: `uv run python tools/measure_objective_card.py`.
+
+**The supported minimum width is 850px** (user, 2026-07-29; height is
+unconstrained). One number, in two places that a test compares:
+`desktop/window.py::MIN_WINDOW_WIDTH` — which drives the window's `min_size`,
+its default geometry AND a clamp on restored geometry, because `min_size`
+constrains dragging but not the size a window opens at — and
+`uilab_project.py::min_viewport_width`, which drops narrower widths from the
+matrix. A floor the app does not enforce would not narrow the supported range,
+it would hide defects inside it. What it costs, so nobody rediscovers it: the
+WCAG 320px reflow probe no longer runs, and the mobile shell under `@media
+(max-width: 760px)` is no longer measured while still shipping.
+
+**Take a contact sheet WHILE implementing, not after** — `uv run python
+tools/contact_sheet.py .objective-card` renders one surface at 1500/1200/900/850
+into a single image. Assertions answer "is something broken"; only a picture
+answers "is this the thing you meant". Both of the expensive failures here were
+obvious on sight and invisible to every probe: a fixture drawing ONE rank banner
+where the real card draws two, and two washes overlapping by 15px. "You could
+probably solve a lot of your bugs by simply taking screenshots and going 'oh…
+there's only one rank standard' while you're thinking" (2026-07-29).
 
 **What none of it catches:** anything that measures fine and looks wrong — bad
 hierarchy, ugly wrapping, a control that is reachable but awkward. Assertions

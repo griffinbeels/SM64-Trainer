@@ -15,7 +15,16 @@ import json
 
 import pytest
 
-from sm64_events.desktop.window import _load_geometry, _save_geometry
+from sm64_events.desktop.window import (
+    _DEFAULT, MIN_WINDOW_WIDTH, _load_geometry, _save_geometry)
+
+# Widths here are all ABOVE the supported minimum on purpose. Each of these
+# tests is about position handling, not about width, and they were written with
+# literals like 480 and 600 -- below the floor added 2026-07-29, so the clamp
+# in _load_geometry rewrote the very field they were asserting and six of them
+# went red for a reason unrelated to what they check. The clamp's own behaviour
+# is covered separately, in tests/test_min_supported_width.py.
+WIDE = MIN_WINDOW_WIDTH + 150
 
 
 class _FakeWin:
@@ -119,56 +128,56 @@ def test_save_does_not_overwrite_when_minimized(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_load_missing_file_returns_default(monkeypatch, tmp_path):
-    """No file → returns _DEFAULT dict (w=480, h=900, x=None, y=None)."""
+    """No file → returns _DEFAULT. Compared against _DEFAULT itself, not a copy
+    of its values: the default is a preference someone may retune, and a test
+    naming its contents turns that into a red build."""
     _patch_path(monkeypatch, tmp_path)
-    g = _load_geometry()
-    assert g == {"w": 480, "h": 900, "x": None, "y": None}
+    assert _load_geometry() == _DEFAULT
 
 
 def test_load_corrupt_file_returns_default(monkeypatch, tmp_path):
     """Corrupt JSON → returns defaults without crashing."""
     p = _patch_path(monkeypatch, tmp_path)
     p.write_text("not json {{{")
-    g = _load_geometry()
-    assert g == {"w": 480, "h": 900, "x": None, "y": None}
+    assert _load_geometry() == _DEFAULT
 
 
 def test_load_offscreen_x_resets_position_keeps_size(monkeypatch, tmp_path):
     """Saved x at sentinel → x and y reset to None; w/h kept."""
     p = _patch_path(monkeypatch, tmp_path)
-    p.write_text(json.dumps({"w": 600, "h": 1000, "x": -32000, "y": -32000}))
+    p.write_text(json.dumps({"w": WIDE, "h": 1000, "x": -32000, "y": -32000}))
     g = _load_geometry()
     assert g["x"] is None, "off-screen x must be reset to None"
     assert g["y"] is None, "off-screen y must be reset to None"
-    assert g["w"] == 600, "width must be preserved"
+    assert g["w"] == WIDE, "width must be preserved"
     assert g["h"] == 1000, "height must be preserved"
 
 
 def test_load_offscreen_y_resets_position_keeps_size(monkeypatch, tmp_path):
     """Only y at sentinel → both x and y reset to None; w/h kept."""
     p = _patch_path(monkeypatch, tmp_path)
-    p.write_text(json.dumps({"w": 480, "h": 900, "x": 100, "y": -32000}))
+    p.write_text(json.dumps({"w": WIDE, "h": 900, "x": 100, "y": -32000}))
     g = _load_geometry()
     assert g["x"] is None
     assert g["y"] is None
-    assert g["w"] == 480
+    assert g["w"] == WIDE
     assert g["h"] == 900
 
 
 def test_load_valid_geometry_unchanged(monkeypatch, tmp_path):
     """Valid on-screen geometry is returned as-is."""
     p = _patch_path(monkeypatch, tmp_path)
-    p.write_text(json.dumps({"w": 500, "h": 800, "x": 150, "y": 30}))
+    p.write_text(json.dumps({"w": WIDE, "h": 800, "x": 150, "y": 30}))
     g = _load_geometry()
-    assert g == {"w": 500, "h": 800, "x": 150, "y": 30}
+    assert g == {"w": WIDE, "h": 800, "x": 150, "y": 30}
 
 
 def test_load_partial_save_fills_defaults(monkeypatch, tmp_path):
     """File with only w/h (no x/y) gets x=None, y=None from _DEFAULT."""
     p = _patch_path(monkeypatch, tmp_path)
-    p.write_text(json.dumps({"w": 720, "h": 1080}))
+    p.write_text(json.dumps({"w": WIDE, "h": 1080}))
     g = _load_geometry()
-    assert g["w"] == 720
+    assert g["w"] == WIDE
     assert g["h"] == 1080
     assert g["x"] is None
     assert g["y"] is None
