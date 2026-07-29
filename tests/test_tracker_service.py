@@ -735,6 +735,42 @@ def test_split_segment_creates_two_new_rows_and_keeps_the_original(tmp_path):
     assert any(e.type == "attempts_invalidated" for e in sent)
 
 
+def test_a_refused_split_leaves_no_half_behind(tmp_path):
+    """A 409 must write nothing. It wrote one row until 2026-07-29.
+
+    `split_segment` did two sequential `_insert_definition` calls, each
+    validating its own half at insert time, and `db.insert_segment_def`
+    commits unconditionally. `split_definition` vets both halves only for
+    UNFIREABILITY -- it says nothing about `name`, and `SegmentSplitBody`'s
+    names are plain `str` with no `min_length`. So a blank second name got
+    the first half committed, then raised, then surfaced as a clean 409 with
+    an orphaned row left in the db that nothing would ever clean up.
+
+    Both directions, because the bug is asymmetric by construction: a blank
+    FIRST name always failed before anything was written and so was never
+    the case that hurt. Only the second one could orphan.
+    """
+    db, svc, sent = make_rec(tmp_path)
+    sid = asyncio.run(svc.create_segment({
+        "name": "WF -> SSL", "match_mode": "loose",
+        "start_triggers": [{"type": "level_exit", "from": 24}],
+        "end_triggers": [{"type": "level_enter", "to": 8}]}))
+    mid = [{"type": "area_enter", "level": 6, "area": 3}]
+    before = [d["id"] for d in db.segment_defs()]
+
+    for names in (("A", "   "), ("   ", "B"), ("A", "")):
+        with pytest.raises(ValueError, match="name is required"):
+            asyncio.run(svc.split_segment(sid, mid, names))
+        assert [d["id"] for d in db.segment_defs()] == before, (
+            f"names={names!r} left a row behind")
+
+    # and the original is still intact and splittable with real names
+    first_id, second_id = asyncio.run(
+        svc.split_segment(sid, mid, ("WF -> Basement", "Basement -> SSL")))
+    ids = [d["id"] for d in db.segment_defs()]
+    assert sorted(ids) == sorted(before + [first_id, second_id])
+
+
 def test_split_segment_write_is_immune_to_the_pure_ops_own_aliasing(tmp_path):
     """split_definition/merge_definitions (Task 17, reviewed and closed) copy
     the outer trigger LISTS but not the clause dicts inside them -- a

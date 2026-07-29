@@ -736,14 +736,33 @@ class TrackerService:
         LookupError (-> 404) for an unknown `segment_id`. The pure op's own
         ValueError -- an unfireable half, or more waypoints than the fold can
         preserve -- surfaces unchanged (-> 409 via the same `_http` path
-        every other segment endpoint uses); nothing is inserted in that case,
-        since both halves are validated before either is written."""
+        every other segment endpoint uses), as does a half that fails
+        `validate_definition`; **no input can leave a half-split behind**,
+        because both halves are validated in full before either is written
+        (see the comment at that call -- this claim was false until
+        2026-07-29 and produced a real orphaned row). A db-level failure
+        BETWEEN the two inserts is not covered: that needs a transaction the
+        storage layer does not expose today."""
         db = self._require_db()
         current = next((d for d in self._segment_defs if d.id == segment_id),
                        None)
         if current is None:
             raise LookupError(f"segment {segment_id} not found")
         first, second = split_definition(current, mid, names)
+        # BOTH halves fully validated before EITHER is written. Not redundant
+        # with _insert_definition's own validate: that one runs per-half at
+        # insert time, and db.insert_segment_def commits unconditionally, so
+        # a second half failing validation left the first COMMITTED and
+        # orphaned while the caller got a clean 409 (live-reproduced with
+        # second_name="   ", which validate_definition rejects as "name is
+        # required" -- SegmentSplitBody's names are plain str with no
+        # min_length, so any non-UI client could send it). Hoisting covers
+        # every validate_definition rule, not just the name that found it.
+        # NOT full atomicity: a db-level failure between the two inserts
+        # would still half-write, which needs a transaction the storage layer
+        # does not currently expose. No INPUT can produce a half-split.
+        validate_definition(first)
+        validate_definition(second)
         first_id = self._insert_definition(db, first)
         second_id = self._insert_definition(db, second)
         await self._segments_changed()
