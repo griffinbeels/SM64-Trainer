@@ -1158,11 +1158,19 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .marelo-bar-body > .meta { font-size: .78rem; }
-  /* The rank name under the icon: short by construction (a cap name plus one
-     digit, e.g. "Waluigi 4"), but ellipsised rather than trusted, the same
-     way every other piece of card text in this file is. */
+  /* The rank name under the icon. "Short by construction" is what this said
+     until 2026-07-28 and it was wrong: at the card's 16px/700 the widest name
+     in the registry -- "Toadsworth 1" -- measures 102px against a 78px cap, so
+     it shipped as "Toadsw…" in both the flown card and the resting header.
+     The nine cap names are a fixed, known set, so the size is DERIVED from the
+     widest of them rather than guessed: 13px/700 puts "Toadsworth 1" at 83px,
+     and 96px leaves room for font-metric drift without eating the bar (the
+     column is already 55px of icon, and every pixel here comes off the bar
+     beside it). The ellipsis stays as insurance only --
+     tests/test_ui_rank_name_fits.py measures EVERY name against this rule and
+     fails if one would trip it, so it should never actually fire. */
   .marelo-bar-icon-col > b {
-    max-width: 78px; text-align: center;
+    max-width: 96px; font-size: .82rem; text-align: center;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   /* Round 5 (addendum, task 8, 2026-07-26): `.marelo-bar`'s own gap
