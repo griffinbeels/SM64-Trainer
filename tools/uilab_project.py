@@ -54,6 +54,11 @@ STORIES = [
 PROJECT = Project(
     serve=serve_ui,
     page_path="/ui/index.html",
+    # The shell paints before the session view lands, and a sweep that starts
+    # measuring at that moment reports a page with none of its content on it --
+    # and calls it clean. `.objective-card` exists only once the view has
+    # rendered, so it is the honest "ready" signal.
+    ready_selector=".objective-card",
     stylesheet=REPO / "src" / "sm64_events" / "ui" / "index.html",
     shell_selectors=SHELL_SELECTORS,
     never_truncate=NEVER_TRUNCATE,
@@ -61,12 +66,63 @@ PROJECT = Project(
     # Sizes that earn a place regardless of what the stylesheet declares: the
     # two the user reported, the workspace's max width, and a short window.
     extra_viewports=((900, 1180), (760, 1180), (1500, 900), (1280, 720)),
-    # Owed, not exempted: each row is work, and uilab's stale-exemption gate
-    # deletes the row the moment the defect stops occurring.
+    # OWED, not exempted. Every row is real layout breakage on a POPULATED
+    # practice page -- the state the fixture only started reaching once it
+    # seeded a target and waited for the view to render. uilab's
+    # stale-exemption gate deletes each row the moment its defect stops
+    # occurring, so this list cannot quietly drift into fiction.
     known_defects={
-        f"{w}x{h} [page] overlap :: td.attempt-result.good x td.attempt-delta":
-            "attempt-table grid columns overrun their tracks by 4px at the "
-            "WCAG reflow floor; the result and delta cells collide"
-        for w, h in [(320, 800), (330, 1000), (331, 1000)]
+        '320x800 [page] clipped :: section.practice-card.attempts-card':
+            'scrollWidth 316 > clientWidth 275',
+        '320x800 [page] clipped :: section.practice-card.objective-card':
+            'scrollHeight 285 > clientHeight 278',
+        '320x800 [page] overlap :: td.attempt-result.good x td.attempt-delta':
+            'overlap 4x4px inside tr',
+        '330x1000 [page] clipped :: section.practice-card.attempts-card':
+            'scrollWidth 316 > clientWidth 275',
+        '330x1000 [page] clipped :: section.practice-card.objective-card':
+            'scrollHeight 285 > clientHeight 278',
+        '330x1000 [page] overlap :: td.attempt-result.good x td.attempt-delta':
+            'overlap 4x4px inside tr',
+        '331x1000 [page] clipped :: section.practice-card.attempts-card':
+            'scrollWidth 316 > clientWidth 275',
+        '331x1000 [page] clipped :: section.practice-card.objective-card':
+            'scrollHeight 285 > clientHeight 278',
+        '331x1000 [page] overlap :: td.attempt-result.good x td.attempt-delta':
+            'overlap 4x4px inside tr',
+        '400x1000 [page] clipped :: section.practice-card.objective-card':
+            'scrollHeight 285 > clientHeight 278',
+        '401x1000 [page] clipped :: section.practice-card.objective-card':
+            'scrollHeight 285 > clientHeight 278',
+        '430x1000 [page] clipped :: section.practice-card.objective-card':
+            'scrollHeight 285 > clientHeight 278',
+        '431x1000 [page] clipped :: section.practice-card.objective-card':
+            'scrollHeight 285 > clientHeight 278',
+        '500x1000 [page] clipped :: section.practice-card.objective-card':
+            'scrollHeight 285 > clientHeight 278',
+        '501x1000 [page] clipped :: section.practice-card.objective-card':
+            'scrollHeight 285 > clientHeight 278',
+        '600x1000 [page] clipped :: section.practice-card.objective-card':
+            'scrollHeight 285 > clientHeight 278',
+        '601x1000 [page] clipped :: section.practice-card.objective-card':
+            'scrollHeight 285 > clientHeight 278',
+        '605x1000 [page] clipped :: section.practice-card.objective-card':
+            'scrollHeight 285 > clientHeight 278',
+        '606x1000 [page] clipped :: section.practice-card.objective-card':
+            'scrollHeight 285 > clientHeight 278',
+        '700x1000 [page] clipped :: section.practice-card.objective-card':
+            'scrollHeight 285 > clientHeight 278',
+        '701x1000 [page] clipped :: section.practice-card.objective-card':
+            'scrollHeight 285 > clientHeight 278',
+        '761x1000 [page] clipped :: section.practice-card.objective-card':
+            'scrollHeight 285 > clientHeight 278',
+        '775x1000 [page] clipped :: section.practice-card.objective-card':
+            'scrollHeight 285 > clientHeight 278',
+        '776x1000 [page] clipped :: section.practice-card.objective-card':
+            'scrollHeight 285 > clientHeight 278',
+        '780x1000 [page] clipped :: section.practice-card.objective-card':
+            'scrollHeight 285 > clientHeight 278',
+        '781x1000 [page] clipped :: section.practice-card.objective-card':
+            'scrollHeight 285 > clientHeight 278',
     },
 )

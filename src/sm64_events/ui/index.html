@@ -884,9 +884,12 @@
     display: grid; grid-template-rows: auto 1fr; padding-block: 12px;
   }
   .objective-card.active-star { border-color: rgba(240,189,50,.72); }
+  /* Trailing `auto` track added 2026-07-28 for the collapse toggle. Without
+     it the button becomes an implicit 5th column at the grid's default size
+     and pushes the strategy picker out of the card. */
   .objective-heading {
     min-width: 0; display: grid;
-    grid-template-columns: 28px auto minmax(180px,1fr) minmax(150px,380px);
+    grid-template-columns: 28px auto minmax(180px,1fr) minmax(150px,380px) auto;
     gap: .65rem; align-items: center;
   }
   .objective-symbol {
@@ -3578,6 +3581,118 @@
   @media (max-width: 775px) {
     .context-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
+
+  /* ===================================================================
+     Card collapse
+     ===================================================================
+     Every practice card can be folded to its heading. Requested for ALL
+     layouts, not just narrow ones: at 900x1180 the practice log sits below
+     two tall cards and cannot be reached without scrolling.
+
+     A plain `height` interpolation, because both ends are real numbers --
+     these cards carry hard pixel heights so an OBS capture never reflows
+     mid-run, and collapsing just swaps one fixed height for a smaller one.
+     The contract survives in both states, and the height only changes when
+     the user asks it to.
+
+     ONE `transition` declaration per element, and `.is-collapsed` sets only
+     target VALUES. A second `transition` in the state rule would replace this
+     one wholesale rather than adding to it, which is what produces the
+     "smooth one way, snaps the other" asymmetry.
+
+     The curve starts at y1 = 0 so the first frame actually moves rather than
+     jumping a third of the way, and eases at both ends so nothing arrives
+     still travelling. Timings are custom properties so the Wave 5 motion
+     inspector can drive them instead of a future guess. */
+  :root {
+    --card-collapse-ms: 260ms;
+    --card-collapse-ease: cubic-bezier(.32, 0, .24, 1);
+    --card-collapsed-height: 52px;
+  }
+
+  /* `align-self: start` in BOTH states, so `height` is the only thing that
+     moves and it moves between two real numbers.
+     ------------------------------------------------------------------
+     These cards are grid items sharing a row, and the default
+     `align-items: normal` stretches them to the row's height — which is why a
+     collapsed card sprang straight back to 458px however the rule was written,
+     inline `!important` included. Opting out of the stretch costs nothing
+     visually: every one of these cards already declares an explicit height,
+     so they were the same size stretched or not.
+     `max-height` was the first fix and it SNAPPED, because its open value is
+     `none` and `none -> 52px` is not interpolable. Both ends have to be
+     numbers for a transition to exist at all. */
+  .practice-card {
+    align-self: start;
+    transition: height var(--card-collapse-ms) var(--card-collapse-ease);
+  }
+  /* (0,2,0) beats the bare `.objective-card` / `.analysis-card` height rules
+     in the @container blocks above -- a container query adds no specificity of
+     its own -- and this section sits after them, so it wins on both counts. */
+  /* `max-height`, not `height`, and `align-self: start` with it.
+     ------------------------------------------------------------------
+     These cards are GRID ITEMS. `.practice-detail-grid` puts the analysis card
+     and the practice log in the same row, and a grid item with the default
+     `align-items: normal` stretches to its row — so a collapsed log sharing a
+     row with an open analysis card was stretched straight back to the row's
+     height. Measured: the rule matched, `var()` resolved to 52px, it had the
+     highest specificity and came last, and the computed height stayed 458px.
+     An INLINE `height: 52px !important` was ignored too, which is what finally
+     ruled the cascade out — nothing about specificity can beat the row.
+     `align-self: start` opts the item out of the stretch and `max-height`
+     then binds. */
+  /* UNFINISHED — collapses correctly, but SNAPS. Not merged.
+     `max-height` is what actually binds here (plain `height` is ignored on
+     these cards however it is written, inline !important included — see the
+     note above), and its open value is `none`, which cannot interpolate. The
+     honest fixes are (a) measure the open height in JS and write both ends as
+     definite values, or (b) move the animation off the card and onto a body
+     wrapper using the interpolable `grid-template-rows: 1fr -> 0fr`. Shipping
+     it snapping would break the standing rule that every state change
+     animates, so it stays behind this comment until one of those lands. */
+  .practice-card.is-collapsed {
+    align-self: start;
+    max-height: var(--card-collapsed-height);
+    min-height: 0;
+    overflow: hidden;
+  }
+  /* Everything below the heading fades as the card folds. `visibility` rides
+     the same transition so a collapsed card cannot be tabbed into, while
+     `opacity` alone would leave it focusable and invisible. */
+  .practice-card > *:not(.card-heading):not(.shead):not(.objective-heading) {
+    transition: opacity calc(var(--card-collapse-ms) * .7) var(--card-collapse-ease),
+                visibility var(--card-collapse-ms) step-end;
+  }
+  .practice-card.is-collapsed > *:not(.card-heading):not(.shead):not(.objective-heading) {
+    opacity: 0; visibility: hidden;
+    transition: opacity calc(var(--card-collapse-ms) * .5) var(--card-collapse-ease),
+                visibility var(--card-collapse-ms) step-start;
+  }
+
+  .card-collapse {
+    flex: 0 0 auto; width: 30px; min-width: 30px; height: 30px; min-height: 30px;
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 0; border: 1px solid transparent; border-radius: 7px;
+    background: transparent; color: var(--muted); cursor: pointer;
+    transition: transform var(--card-collapse-ms) var(--card-collapse-ease),
+                background 140ms ease, color 140ms ease;
+  }
+  .card-collapse:hover { background: #16283e; color: var(--text); }
+  /* Points down when open, right when collapsed -- the chevron glyph itself
+     points down, so collapsed is the rotated state. */
+  .practice-card.is-collapsed .card-collapse { transform: rotate(-90deg); }
+
+  /* Stacked layouts: practice log above analysis.
+     The user's hierarchy is selector -> target -> practice log -> analysis
+     ("all the important information is hidden!!!!"). DOM order is unchanged,
+     so the two-column layout keeps the geometry it is sized for -- the log
+     needs the wider column and analysis the narrower one. */
+  @container (max-width: 1060px) {
+    .attempts-card { order: 1; }
+    .analysis-card { order: 2; }
+    .detail-drawer { order: 3; }
+  }
+
 
 </style></head>
 <body>
