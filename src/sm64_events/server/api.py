@@ -233,6 +233,27 @@ class SegmentPatch(BaseModel):
     match_mode: str | None = None
 
 
+class SegmentSplitBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # The shared boundary the two halves meet at -- an any-of clause-set,
+    # same shape as start_triggers/end_triggers (tracking/segments.py::
+    # split_definition's `mid`). Typically the segment's own single waypoint,
+    # promoted to a full stop, but the pure op accepts any clause-set the
+    # caller supplies.
+    mid: list[dict]
+    first_name: str
+    second_name: str
+
+
+class SegmentMergeBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    first_id: int
+    second_id: int
+    name: str
+
+
 class BacktestBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -617,6 +638,29 @@ def create_api_router(service) -> APIRouter:
                 "end_sentence": clause_sentence(end_clause),
                 "name": suggest_name(start_clause, end_clause)}
 
+    @router.post("/segments/merge")
+    async def merge_segments(body: SegmentMergeBody):
+        """Chain two EXISTING definitions into one meeting at their shared
+        boundary, kept as a waypoint (`tracking/segments.py::
+        merge_definitions`) -- non-destructive: both inputs survive
+        untouched, and the merged definition is a brand-new, user-created
+        row (`seed_key=None`, so `reconcile_defaults` never touches it).
+        Declared as a literal path BEFORE /segments/{segment_id} -- same
+        declaration-order rule as /segments/vocab above (fastapi-patterns) --
+        so FastAPI never tries to parse 'merge' as a segment id.
+
+        404 for either unknown id. 409 (the pure op's own "do not meet"
+        ValueError) when the pair shares no boundary -- same `_http` path
+        every other segment endpoint uses; a well-formed request that the
+        matcher's own topology rules refuse is a domain refusal, not a
+        malformed body."""
+        try:
+            new_id = await service.merge_segments(
+                body.first_id, body.second_id, body.name)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True, "id": new_id}
+
     @router.put("/segments/{segment_id}")
     async def update_segment(segment_id: int, body: SegmentPatch):
         try:
@@ -651,6 +695,27 @@ def create_api_router(service) -> APIRouter:
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True}
+
+    @router.post("/segments/{segment_id}/split")
+    async def split_segment(segment_id: int, body: SegmentSplitBody):
+        """Break an EXISTING definition into two new ones meeting at `mid`
+        (`tracking/segments.py::split_definition`) -- non-destructive:
+        `segment_id` itself is left completely untouched (definitions arm in
+        parallel, so the whole and both halves can all record on the same
+        play), and both halves are brand-new, user-created rows
+        (`seed_key=None`).
+
+        404 for an unknown `segment_id`. 409 (the pure op's own ValueError)
+        when a produced half would be unfireable, or `segment_id` carries
+        more than one waypoint (folding several into the single shared
+        `mid` would silently drop the rest) -- same `_http` path every other
+        segment endpoint uses."""
+        try:
+            first_id, second_id = await service.split_segment(
+                segment_id, body.mid, (body.first_name, body.second_name))
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True, "first_id": first_id, "second_id": second_id}
 
     @router.post("/segments/{segment_id}/origin")
     async def set_segment_origin(segment_id: int, body: OriginBody):

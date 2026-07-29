@@ -29,7 +29,8 @@ from sm64_events.storage.db import Database, EventRow
 from sm64_events.tracking import practicable
 from sm64_events.tracking.defaults import resolve_steps
 from sm64_events.tracking.projection import Projector, replay, wipe_matches
-from sm64_events.tracking.segments import (SegmentDef, segment_origin,
+from sm64_events.tracking.segments import (SegmentDef, merge_definitions,
+                                           segment_origin, split_definition,
                                            star_origin, validate_definition)
 from sm64_events.tracking import routes as route_logic
 
@@ -694,6 +695,83 @@ class TrackerService:
             guards=srow.get("guards", []), category=srow.get("category"))
         db.set_seed_dirty("segment_defs", segment_id, 0)
         await self._segments_changed()
+
+    def _insert_definition(self, db: Database, d: dict) -> int:
+        """Insert a definition dict produced by `segments.split_definition` /
+        `segments.merge_definitions` -- validated exactly like create_segment,
+        but through `insert_segment_def` DIRECTLY rather than reusing
+        create_segment itself. That is deliberate, not a missed reuse: a
+        split/merge dict can carry a real `default_strat` inherited from an
+        existing definition (both pure ops' own docstrings document this),
+        while create_segment's dict shape is built from SegmentBody, which has
+        no `default_strat` field at all (the API deliberately never lets a
+        user type one in directly -- it is corpus-authored, applied only by
+        `tracking/defaults.py::reconcile_defaults` calling `update_segment_def`
+        directly). Routing a split/merge result through create_segment would
+        silently drop that field the same way an unreachable SegmentBody field
+        would (the exact class of bug test_every_segment_model_field_
+        reaches_its_write_path guards on the API's own path) -- so this is a
+        second, deliberate bypass of the generic create path, mirroring
+        reconcile's own precedent for the identical reason.
+
+        Never passes `seed_key`: neither pure op's output dict carries one
+        (by design -- a derived definition is not the row it came from), and
+        insert_segment_def's own default is None."""
+        validate_definition(d)
+        return db.insert_segment_def(
+            d["name"], d["start_triggers"], d["end_triggers"], d["guards"],
+            _iso(_now()), enabled=d["enabled"], waypoints=d["waypoints"],
+            default_strat=d.get("default_strat"),
+            match_mode=d.get("match_mode", "loose"))
+
+    async def split_segment(self, segment_id: int, mid: list,
+                            names: tuple[str, str]) -> tuple[int, int]:
+        """Break an existing definition into two new ones meeting at `mid`
+        (`segments.split_definition`) -- **non-destructive**: `segment_id`
+        itself is left completely untouched (definitions arm in parallel, so
+        the whole and both halves can all record on the same play), and both
+        halves are inserted as fresh, user-created rows (`seed_key=None`, so
+        `reconcile_defaults` never refreshes or deletes them).
+
+        LookupError (-> 404) for an unknown `segment_id`. The pure op's own
+        ValueError -- an unfireable half, or more waypoints than the fold can
+        preserve -- surfaces unchanged (-> 409 via the same `_http` path
+        every other segment endpoint uses); nothing is inserted in that case,
+        since both halves are validated before either is written."""
+        db = self._require_db()
+        current = next((d for d in self._segment_defs if d.id == segment_id),
+                       None)
+        if current is None:
+            raise LookupError(f"segment {segment_id} not found")
+        first, second = split_definition(current, mid, names)
+        first_id = self._insert_definition(db, first)
+        second_id = self._insert_definition(db, second)
+        await self._segments_changed()
+        return first_id, second_id
+
+    async def merge_segments(self, first_id: int, second_id: int,
+                             name: str) -> int:
+        """Chain two existing definitions into one meeting at their shared
+        boundary, kept as a waypoint (`segments.merge_definitions`) --
+        **non-destructive**: both inputs survive completely untouched, and
+        the merged definition is inserted as a fresh, user-created row
+        (`seed_key=None`).
+
+        LookupError (-> 404) for either unknown id. The pure op's own "do not
+        meet" ValueError surfaces unchanged (-> 409) when the pair shares no
+        boundary; nothing is inserted in that case."""
+        db = self._require_db()
+        first = next((d for d in self._segment_defs if d.id == first_id), None)
+        if first is None:
+            raise LookupError(f"segment {first_id} not found")
+        second = next((d for d in self._segment_defs if d.id == second_id),
+                      None)
+        if second is None:
+            raise LookupError(f"segment {second_id} not found")
+        merged = merge_definitions(first, second, name)
+        new_id = self._insert_definition(db, merged)
+        await self._segments_changed()
+        return new_id
 
     async def _segments_changed(self) -> None:
         """Definitions changed retroactively: reload, then re-derive every

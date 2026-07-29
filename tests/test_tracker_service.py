@@ -698,6 +698,145 @@ def test_delete_segment_removes_def_and_reprojects(tmp_path):
         asyncio.run(svc.delete_segment(lblj))
 
 
+# -- split_segment / merge_segments (Task 18, spec 2026-07-28-multi-step-
+# segments) ------------------------------------------------------------------
+# tracking/segments.py::split_definition/merge_definitions are pure and
+# already tested directly (tests/test_segments.py, Task 17); these cover the
+# SERVICE plumbing only -- looking an existing def up by id, inserting the
+# result(s) as fresh rows, leaving the original(s) completely untouched, and
+# mapping LookupError/ValueError the same way every other segment command
+# does. Fixtures mirror test_segments.py's own (WF -> SSL / Basement,
+# DDD -> BitFS) so a failure here is known NOT to be a pure-op regression.
+
+def test_split_segment_creates_two_new_rows_and_keeps_the_original(tmp_path):
+    db, svc, sent = make_rec(tmp_path)
+    sid = asyncio.run(svc.create_segment({
+        "name": "WF -> SSL", "match_mode": "loose",
+        "start_triggers": [{"type": "level_exit", "from": 24}],
+        "end_triggers": [{"type": "level_enter", "to": 8}],
+        "waypoints": [[{"type": "area_enter", "level": 6, "area": 3}]]}))
+    before = next(d for d in db.segment_defs() if d["id"] == sid)
+    sent.clear()
+    first_id, second_id = asyncio.run(svc.split_segment(
+        sid, [{"type": "area_enter", "level": 6, "area": 3}],
+        ("WF -> Basement", "Basement -> SSL")))
+    rows = {d["id"]: d for d in db.segment_defs()}
+    assert rows[sid] == before                        # original UNTOUCHED
+    assert rows[first_id]["name"] == "WF -> Basement"
+    assert rows[first_id]["start_triggers"] == before["start_triggers"]
+    assert rows[first_id]["end_triggers"] == [
+        {"type": "area_enter", "level": 6, "area": 3}]
+    assert rows[first_id]["seed_key"] is None
+    assert rows[second_id]["name"] == "Basement -> SSL"
+    assert rows[second_id]["start_triggers"] == [
+        {"type": "area_enter", "level": 6, "area": 3}]
+    assert rows[second_id]["end_triggers"] == before["end_triggers"]
+    assert rows[second_id]["seed_key"] is None
+    assert any(e.type == "attempts_invalidated" for e in sent)
+
+
+def test_split_segment_writes_default_strat_to_both_new_rows(tmp_path):
+    """split_definition's own docstring says default_strat is inherited onto
+    both halves; this pins that the SERVICE actually WRITES it through
+    _insert_definition rather than silently dropping it the way routing
+    through create_segment's own dict-based path would (see
+    _insert_definition's docstring) -- default_strat is corpus-only and
+    create_segment's dict never carries it, which is exactly why a naive
+    reuse of that path would have been a silent regression here."""
+    db, svc, sent = make_rec(tmp_path)
+    sid = asyncio.run(svc.create_segment({
+        "name": "WF -> SSL", "match_mode": "loose",
+        "start_triggers": [{"type": "level_exit", "from": 24}],
+        "end_triggers": [{"type": "level_enter", "to": 8}]}))
+    db.update_segment_def(sid, default_strat="Standard")  # corpus-only field;
+    # written directly like reconcile_defaults does, bypassing the API
+    svc._segment_defs = svc._load_segment_defs()   # pick up the direct write
+    first_id, second_id = asyncio.run(svc.split_segment(
+        sid, [{"type": "area_enter", "level": 6, "area": 3}],
+        ("WF -> Basement", "Basement -> SSL")))
+    rows = {d["id"]: d for d in db.segment_defs()}
+    assert rows[first_id]["default_strat"] == "Standard"
+    assert rows[second_id]["default_strat"] == "Standard"
+
+
+def test_split_segment_unknown_id_raises(tmp_path):
+    db, svc = make(tmp_path)
+    with pytest.raises(LookupError):
+        asyncio.run(svc.split_segment(
+            999, [{"type": "level_enter", "to": 6}], ("a", "b")))
+
+
+def test_split_segment_propagates_the_pure_ops_unfireable_refusal(tmp_path):
+    # Same collision test_segments.py's pure-op test uses: exiting Hazy Maze
+    # Cave (level 7) lands directly in the castle basement in ONE
+    # level_changed, so arming there and closing on a plain level_enter(to=6)
+    # mid-point would arm and close on the same event.
+    db, svc, sent = make_rec(tmp_path)
+    sid = asyncio.run(svc.create_segment({
+        "name": "x", "match_mode": "loose",
+        "start_triggers": [{"type": "level_exit", "from": 7}],
+        "end_triggers": [{"type": "level_enter", "to": 8}]}))
+    before = len(db.segment_defs())
+    with pytest.raises(ValueError, match="unfireable"):
+        asyncio.run(svc.split_segment(
+            sid, [{"type": "level_enter", "to": 6}],
+            ("first half", "second half")))
+    assert len(db.segment_defs()) == before   # nothing inserted on refusal
+
+
+def test_merge_segments_creates_one_new_row_and_keeps_both_inputs(tmp_path):
+    db, svc, sent = make_rec(tmp_path)
+    first_id = asyncio.run(svc.create_segment({
+        "name": "WF -> Basement", "match_mode": "loose",
+        "start_triggers": [{"type": "level_exit", "from": 24}],
+        "end_triggers": [{"type": "area_enter", "level": 6, "area": 3}]}))
+    second_id = asyncio.run(svc.create_segment({
+        "name": "Basement -> SSL", "match_mode": "loose",
+        "start_triggers": [{"type": "area_enter", "level": 6, "area": 3}],
+        "end_triggers": [{"type": "level_enter", "to": 8}]}))
+    before_first = next(d for d in db.segment_defs() if d["id"] == first_id)
+    before_second = next(d for d in db.segment_defs() if d["id"] == second_id)
+    sent.clear()
+    new_id = asyncio.run(svc.merge_segments(first_id, second_id, "WF -> SSL"))
+    rows = {d["id"]: d for d in db.segment_defs()}
+    assert rows[first_id] == before_first     # both inputs UNTOUCHED
+    assert rows[second_id] == before_second
+    merged = rows[new_id]
+    assert merged["name"] == "WF -> SSL"
+    assert merged["start_triggers"] == before_first["start_triggers"]
+    assert merged["end_triggers"] == before_second["end_triggers"]
+    assert merged["waypoints"] == [before_second["start_triggers"]]
+    assert merged["seed_key"] is None
+    assert any(e.type == "attempts_invalidated" for e in sent)
+
+
+def test_merge_segments_unknown_id_raises(tmp_path):
+    db, svc = make(tmp_path)
+    sid = asyncio.run(svc.create_segment({
+        "name": "a", "start_triggers": [{"type": "level_exit", "from": 24}],
+        "end_triggers": [{"type": "area_enter", "level": 6, "area": 3}]}))
+    with pytest.raises(LookupError):
+        asyncio.run(svc.merge_segments(sid, 999, "nope"))
+    with pytest.raises(LookupError):
+        asyncio.run(svc.merge_segments(999, sid, "nope"))
+
+
+def test_merge_segments_propagates_the_pure_ops_do_not_meet_refusal(tmp_path):
+    db, svc = make(tmp_path)
+    first_id = asyncio.run(svc.create_segment({
+        "name": "WF -> Basement", "match_mode": "loose",
+        "start_triggers": [{"type": "level_exit", "from": 24}],
+        "end_triggers": [{"type": "area_enter", "level": 6, "area": 3}]}))
+    second_id = asyncio.run(svc.create_segment({
+        "name": "DDD -> BitFS", "match_mode": "loose",
+        "start_triggers": [{"type": "area_enter", "level": 26}],
+        "end_triggers": [{"type": "level_enter", "to": 19}]}))
+    before = len(db.segment_defs())
+    with pytest.raises(ValueError, match="do not meet"):
+        asyncio.run(svc.merge_segments(first_id, second_id, "nope"))
+    assert len(db.segment_defs()) == before
+
+
 def test_set_target_segment_round_trip(tmp_path):
     db, svc, sent = make_rec(tmp_path)
     lblj = seed_id(db, "LBLJ")

@@ -2388,6 +2388,25 @@
   .segclause input { flex: 0 1 90px; }
   .segclause .clause-remove { flex: 0 0 31px; margin-left: auto; }
   .segment-add-condition { margin-top: .25rem; padding-inline: .25rem; }
+
+  /* Split into two / Merge with another (Task 18, spec 2026-07-28-multi-
+     step-segments) -- boxed panels like .builder-enabled above, one action
+     per box. Grid's default justify-items:stretch would otherwise pull the
+     trailing button full-width, so it alone opts out. */
+  .builder-split, .builder-merge {
+    display: grid; gap: .5rem; margin: .65rem 0; padding: .65rem .75rem;
+    border: 1px solid var(--border-soft); border-radius: 8px;
+    background: rgba(8,20,34,.48);
+  }
+  .builder-split .field-label, .builder-merge .field-label {
+    display: flex; align-items: center; gap: .4rem; margin: 0;
+  }
+  .split-names { display: flex; gap: .5rem; flex-wrap: wrap; }
+  .split-names input { flex: 1 1 160px; min-width: 0; }
+  .merge-body { display: grid; gap: .5rem; }
+  .merge-controls { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+  .merge-controls select { flex: 0 1 160px; }
+  .builder-split > button, .merge-body > button { justify-self: start; }
   .builder-actions {
     min-height: 56px; display: flex; align-items: center; justify-content: flex-end;
     flex-wrap: wrap; gap: .5rem; margin-top: .75rem;

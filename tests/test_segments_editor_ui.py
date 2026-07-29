@@ -418,6 +418,81 @@ def test_fires_and_unclosed_branches_are_unaffected():
         "Never fired — but it DID arm, and never closed. See below.")
 
 
+# --- split / merge (Task 18, spec 2026-07-28-multi-step-segments) ---------
+# tracking/segments.py::split_definition/merge_definitions (Task 17) sit
+# behind two new endpoints; this is their editor UI. Most checks are plain
+# substrings against SEGMENTS_JS_SOURCE (already comment-stripped above,
+# same as the origin-override / topology-filter checks elsewhere in this
+# file) -- a dedicated comment-immune probe is only added for the two wire-
+# level POST calls, matching _saves_as_a_loose_segment's rigor for the
+# equivalent save call in segmenttimeline.js.
+
+def test_split_is_offered_only_for_a_saved_segment_with_one_waypoint():
+    # 0 waypoints has no natural split point to offer; 2+ is refused server-
+    # side anyway (folding several into one shared `mid` would silently drop
+    # the rest) -- this is the one shape split_definition can act on without
+    # asking the author to invent a boundary from nothing.
+    assert ("initial.id != null && (initial.waypoints || []).length === 1"
+            in SEGMENTS_JS_SOURCE)
+
+
+def test_split_sends_the_segments_own_waypoint_as_the_mid_boundary():
+    # Nothing else for the user to author here -- the panel above is only
+    # offered when there is exactly one waypoint, so it IS the boundary.
+    assert "mid: initial.waypoints[0]" in SEGMENTS_JS_SOURCE
+
+
+def test_split_lands_on_the_first_new_half_like_save_lands_on_what_it_saved():
+    assert "onSaved(result.first_id)" in SEGMENTS_JS_SOURCE
+
+
+def test_merge_reuses_the_shared_segment_picker_not_a_new_control():
+    # The SAME picker the Routes tab's step editor already uses for a segment
+    # candidate (entities.js::segmentOptions + EntityPicker) -- not a second,
+    # hand-rolled select built for this one form.
+    assert "segmentOptions(mergeCandidates" in SEGMENTS_JS_SOURCE
+    assert "${EntityPicker} groups=${mergeGroups}" in SEGMENTS_JS_SOURCE
+
+
+def test_merge_excludes_the_segment_being_edited_from_its_own_picker():
+    assert "def.id !== initial.id" in SEGMENTS_JS_SOURCE
+
+
+def test_merge_lands_on_the_new_merged_segment_like_save_lands_on_what_it_saved():
+    assert "onSaved(result.id)" in SEGMENTS_JS_SOURCE
+
+
+def _posts_the_split(source: str) -> bool:
+    stripped = strip_comments(source)
+    return bool(re.search(
+        r'"POST",\s*`/api/segments/\$\{initial\.id\}/split`', stripped))
+
+
+def test_split_posts_to_the_segment_split_endpoint():
+    assert _posts_the_split(SEGMENTS_JS_SOURCE)
+
+
+def _posts_the_merge(source: str) -> bool:
+    stripped = strip_comments(source)
+    return '"POST", "/api/segments/merge"' in stripped
+
+
+def test_merge_posts_to_the_segment_merge_endpoint():
+    assert _posts_the_merge(SEGMENTS_JS_SOURCE)
+
+
+def test_split_and_merge_post_guards_can_still_fail():
+    comment_only = (
+        "// doSplit() posts to `/api/segments/${initial.id}/split` and\n"
+        '// doMerge() posts to "/api/segments/merge".\n')
+    assert not _posts_the_split(comment_only)
+    assert not _posts_the_merge(comment_only)
+    assert _posts_the_split(
+        'await send("POST", `/api/segments/${initial.id}/split`, body)')
+    assert _posts_the_merge(
+        'await send("POST", "/api/segments/merge", body)')
+
+
 def test_the_arm_count_extraction_can_still_fail():
     # Probed in both directions (tests/source_scan.py's rule): the extractor
     # must find the real function and must NOT find a commented-out one.

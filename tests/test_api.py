@@ -1733,3 +1733,141 @@ def test_segment_targets_include_locationless_defs(tmp_path):
         target = next(s for s in client.get("/api/session").json()
                       ["segment_targets"] if s["segment_id"] == sid)
         assert target["start_areas"] == [] and target["start_levels"] == []
+
+
+# -- split/merge endpoints (Task 18, spec 2026-07-28-multi-step-segments) ---
+# tracking/segments.py::split_definition/merge_definitions are pure and
+# already tested directly (tests/test_segments.py, Task 17); these drive the
+# real HTTP surface -- the id lookup, the 404/409 error mapping (ValueError
+# from the pure op is a domain refusal, same convention as every other
+# segment endpoint: _http maps it to 409, never 422 -- 422 stays reserved for
+# a body Pydantic itself rejects), and that both are NON-DESTRUCTIVE end to
+# end (the original row(s) still read back byte-identical afterward).
+
+def test_split_endpoint_creates_two_new_segments_and_keeps_the_original(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.post("/api/segments", json={
+            "name": "WF -> SSL", "match_mode": "loose",
+            "start_triggers": [{"type": "level_exit", "from": 24}],
+            "end_triggers": [{"type": "level_enter", "to": 8}],
+            "waypoints": [[{"type": "area_enter", "level": 6, "area": 3}]]})
+        sid = r.json()["id"]
+        before = next(s for s in db.segment_defs() if s["id"] == sid)
+
+        r = client.post(f"/api/segments/{sid}/split", json={
+            "mid": [{"type": "area_enter", "level": 6, "area": 3}],
+            "first_name": "WF -> Basement", "second_name": "Basement -> SSL"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["ok"] is True
+        first_id, second_id = body["first_id"], body["second_id"]
+        assert len({sid, first_id, second_id}) == 3   # three distinct rows
+
+        rows = {s["id"]: s for s in db.segment_defs()}
+        assert rows[sid] == before                     # original UNTOUCHED
+        assert rows[first_id]["name"] == "WF -> Basement"
+        assert rows[first_id]["start_triggers"] == before["start_triggers"]
+        assert rows[first_id]["end_triggers"] == [
+            {"type": "area_enter", "level": 6, "area": 3}]
+        assert rows[first_id]["seed_key"] is None
+        assert rows[second_id]["name"] == "Basement -> SSL"
+        assert rows[second_id]["start_triggers"] == [
+            {"type": "area_enter", "level": 6, "area": 3}]
+        assert rows[second_id]["end_triggers"] == before["end_triggers"]
+        assert rows[second_id]["seed_key"] is None
+
+
+def test_split_endpoint_404s_on_an_unknown_segment_id(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.post("/api/segments/999999/split", json={
+            "mid": [{"type": "level_enter", "to": 6}],
+            "first_name": "a", "second_name": "b"})
+        assert r.status_code == 404
+
+
+def test_split_endpoint_409s_on_an_unfireable_half(tmp_path):
+    # Same collision test_segments.py's pure-op test uses: exiting Hazy Maze
+    # Cave (level 7) lands directly in the castle basement in ONE
+    # level_changed, so a def arming there and closing on a plain
+    # level_enter(to=6) mid-point would arm and close on the same event.
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.post("/api/segments", json={
+            "name": "x", "match_mode": "loose",
+            "start_triggers": [{"type": "level_exit", "from": 7}],
+            "end_triggers": [{"type": "level_enter", "to": 8}]})
+        sid = r.json()["id"]
+        before = len(db.segment_defs())
+        r = client.post(f"/api/segments/{sid}/split", json={
+            "mid": [{"type": "level_enter", "to": 6}],
+            "first_name": "first half", "second_name": "second half"})
+        assert r.status_code == 409
+        assert "unfireable" in r.json()["detail"]
+        assert len(db.segment_defs()) == before   # nothing inserted on refusal
+
+
+def test_merge_endpoint_creates_one_new_segment_and_keeps_both_inputs(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        first_id = client.post("/api/segments", json={
+            "name": "WF -> Basement", "match_mode": "loose",
+            "start_triggers": [{"type": "level_exit", "from": 24}],
+            "end_triggers": [{"type": "area_enter", "level": 6, "area": 3}],
+        }).json()["id"]
+        second_id = client.post("/api/segments", json={
+            "name": "Basement -> SSL", "match_mode": "loose",
+            "start_triggers": [{"type": "area_enter", "level": 6, "area": 3}],
+            "end_triggers": [{"type": "level_enter", "to": 8}],
+        }).json()["id"]
+        before_first = next(s for s in db.segment_defs() if s["id"] == first_id)
+        before_second = next(s for s in db.segment_defs() if s["id"] == second_id)
+
+        r = client.post("/api/segments/merge", json={
+            "first_id": first_id, "second_id": second_id, "name": "WF -> SSL"})
+        assert r.status_code == 200
+        new_id = r.json()["id"]
+
+        rows = {s["id"]: s for s in db.segment_defs()}
+        assert rows[first_id] == before_first     # both inputs UNTOUCHED
+        assert rows[second_id] == before_second
+        merged = rows[new_id]
+        assert merged["name"] == "WF -> SSL"
+        assert merged["start_triggers"] == before_first["start_triggers"]
+        assert merged["end_triggers"] == before_second["end_triggers"]
+        assert merged["waypoints"] == [before_second["start_triggers"]]
+        assert merged["seed_key"] is None
+
+
+def test_merge_endpoint_404s_on_an_unknown_id(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        sid = client.post("/api/segments", json={
+            "name": "a", "start_triggers": [{"type": "level_exit", "from": 24}],
+            "end_triggers": [{"type": "area_enter", "level": 6, "area": 3}],
+        }).json()["id"]
+        r = client.post("/api/segments/merge", json={
+            "first_id": sid, "second_id": 999999, "name": "nope"})
+        assert r.status_code == 404
+
+
+def test_merge_endpoint_409s_on_a_pair_that_does_not_meet(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        first_id = client.post("/api/segments", json={
+            "name": "WF -> Basement", "match_mode": "loose",
+            "start_triggers": [{"type": "level_exit", "from": 24}],
+            "end_triggers": [{"type": "area_enter", "level": 6, "area": 3}],
+        }).json()["id"]
+        second_id = client.post("/api/segments", json={
+            "name": "DDD -> BitFS", "match_mode": "loose",
+            "start_triggers": [{"type": "area_enter", "level": 26}],
+            "end_triggers": [{"type": "level_enter", "to": 19}],
+        }).json()["id"]
+        before = len(db.segment_defs())
+        r = client.post("/api/segments/merge", json={
+            "first_id": first_id, "second_id": second_id, "name": "nope"})
+        assert r.status_code == 409
+        assert "do not meet" in r.json()["detail"]
+        assert len(db.segment_defs()) == before

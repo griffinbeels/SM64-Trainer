@@ -16,7 +16,7 @@ import { buildTree } from "../group.js";
 import { usePaneCap } from "../viewport.js";
 import { GroupedList, useOpenGroups } from "./grouplist.js";
 import { EntityPicker } from "./entitymodal.js";
-import { courseOptions, levelOptions, parseStarId, starId,
+import { courseOptions, levelOptions, parseStarId, segmentOptions, starId,
          starOptionsFromVocab } from "../entities.js";
 import { entityIconSrc, optionIconSrc } from "./entityicons.js";
 import { SegmentTimeline } from "./segmenttimeline.js";
@@ -285,7 +285,7 @@ function backtestSummary(report) {
   return "Never armed anywhere in your history.";
 }
 
-function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load }) {
+function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs }) {
   const blank = { name: "", enabled: true,
     start_triggers: [{ type: "level_enter" }],
     end_triggers: [{ type: "level_enter" }], guards: [] };
@@ -375,6 +375,70 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load }) {
     } catch (e) { setErr(String(e)); }
   }
 
+  // --- Split into two segments (Task 18, spec 2026-07-28-multi-step-
+  // segments) -- offered only for a SAVED segment carrying exactly one
+  // waypoint. That is the one shape split_definition can act on without
+  // asking the author to invent a boundary from nothing: 0 waypoints has no
+  // natural split point, and 2+ is refused server-side anyway (folding
+  // several into one shared `mid` would silently drop the rest --
+  // tracking/segments.py's own docstring). `mid` is the segment's own
+  // waypoint, verbatim -- there is nothing else for the user to author here.
+  const [splitNames, setSplitNames] = useState(["", ""]);
+  const [splitBusy, setSplitBusy] = useState(false);
+  const [splitErr, setSplitErr] = useState(null);
+
+  async function doSplit() {
+    setSplitBusy(true); setSplitErr(null);
+    try {
+      const result = await send(
+        "POST", `/api/segments/${initial.id}/split`, {
+          mid: initial.waypoints[0],
+          first_name: splitNames[0].trim() || `${initial.name} (1 of 2)`,
+          second_name: splitNames[1].trim() || `${initial.name} (2 of 2)`,
+        });
+      // Land on the first new half, the SAME "stay on what you just did"
+      // rule save()'s own onSaved(savedId) follows (live audit 2026-07-25).
+      onSaved(result.first_id);
+    } catch (e) { setSplitErr(String(e)); }
+    finally { setSplitBusy(false); }
+  }
+
+  // --- Merge with another segment (Task 18) -- the inverse gesture: chain
+  // this segment with any OTHER saved one, in either order, into one new
+  // definition. `mergeGroups` reuses the exact same segment picker the
+  // Routes tab's step editor already offers (entities.js::segmentOptions +
+  // EntityPicker) rather than a second hand-rolled select -- same grouping,
+  // same art, one less pattern in the codebase. Domain refusals (the pair
+  // doesn't meet) surface as the server's own 409 message; this control does
+  // not try to predict that client-side.
+  const [mergeWithId, setMergeWithId] = useState(null);
+  const [mergeOrder, setMergeOrder] = useState("after");   // this seg first, or second
+  const [mergeName, setMergeName] = useState("");
+  const [mergeBusy, setMergeBusy] = useState(false);
+  const [mergeErr, setMergeErr] = useState(null);
+  const mergeCandidates = initial && initial.id != null
+    ? (allDefs || []).filter((def) => def.id !== initial.id) : [];
+  const mergeGroups = segmentOptions(mergeCandidates, vocab.origins || []);
+
+  async function doMerge() {
+    if (mergeWithId == null) return;
+    setMergeBusy(true); setMergeErr(null);
+    try {
+      const otherId = Number(mergeWithId);
+      const other = mergeCandidates.find((def) => def.id === otherId);
+      const otherName = other ? other.name : "?";
+      const [firstId, secondId, defaultName] = mergeOrder === "after"
+        ? [initial.id, otherId, `${initial.name} + ${otherName}`]
+        : [otherId, initial.id, `${otherName} + ${initial.name}`];
+      const result = await send("POST", "/api/segments/merge", {
+        first_id: firstId, second_id: secondId,
+        name: mergeName.trim() || defaultName,
+      });
+      onSaved(result.id);
+    } catch (e) { setMergeErr(String(e)); }
+    finally { setMergeBusy(false); }
+  }
+
   // Expose a save handle + live dirty flag so the parent can offer "save your
   // changes?" when the user clicks edit on a DIFFERENT segment (Segments
   // tryEdit). dirty = the form differs from what we opened with (reverting an
@@ -452,6 +516,54 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load }) {
       ${section("Rules", "Optional checks that keep attempts valid.", "shield",
         "guards", vocab.guards, "seg-guard")}
     </div>
+    ${initial && initial.id != null && (initial.waypoints || []).length === 1 && html`
+      <div class="builder-split">
+        <span class="field-label"><${Icon} name="split" size=${15} /> Split into two segments</span>
+        <p class="meta">This segment already tracks the stop where it splits.
+          Splitting saves two new, independent segments — this one stays
+          exactly as it is.</p>
+        <div class="split-names">
+          <input placeholder="First half name" value=${splitNames[0]}
+              oninput=${(e) => setSplitNames([e.target.value, splitNames[1]])} />
+          <input placeholder="Second half name" value=${splitNames[1]}
+              oninput=${(e) => setSplitNames([splitNames[0], e.target.value])} />
+        </div>
+        ${splitErr && html`<div class="badx">${splitErr}</div>`}
+        <button onclick=${doSplit} disabled=${splitBusy}>
+          <${Icon} name="split" size=${15} />${" "}${splitBusy
+            ? "Splitting…" : "Split into two segments"}
+        </button>
+      </div>`}
+    ${initial && initial.id != null && html`
+      <div class="builder-merge">
+        <span class="field-label"><${Icon} name="merge" size=${15} /> Merge with another segment</span>
+        <p class="meta">Chain this segment with another one that starts where
+          it ends (or ends where it starts) — saved as one new segment; both
+          originals are kept, untouched.</p>
+        ${mergeCandidates.length === 0
+          ? html`<p class="meta">No other segments to merge with yet.</p>`
+          : html`<div class="merge-body">
+              <div class="merge-controls">
+                <select value=${mergeOrder}
+                    onchange=${(e) => setMergeOrder(e.target.value)}>
+                  <option value="after">This segment, then…</option>
+                  <option value="before">…then this segment</option>
+                </select>
+                <${EntityPicker} groups=${mergeGroups} value=${mergeWithId}
+                    depth=${2} title="Choose a segment"
+                    placeholder="— pick a segment —"
+                    iconFor=${(id) => optionIconSrc(t, "segment", id)}
+                    onChange=${(id) => setMergeWithId(id)} />
+              </div>
+              <input placeholder="Merged segment name (optional)"
+                  value=${mergeName} oninput=${(e) => setMergeName(e.target.value)} />
+              ${mergeErr && html`<div class="badx">${mergeErr}</div>`}
+              <button onclick=${doMerge} disabled=${mergeBusy || mergeWithId == null}>
+                <${Icon} name="merge" size=${15} />${" "}${mergeBusy
+                  ? "Merging…" : "Merge into one segment"}
+              </button>
+            </div>`}
+      </div>`}
     ${err && html`<div class="badx">${err}</div>`}
     <div class="builder-actions">
       <span class="meta">Saving automatically recalculates this segment's history.</span>
@@ -688,7 +800,7 @@ export function Segments({ t }) {
         ${editing
           ? html`<${Builder} key=${editing === "new" ? "new" : editing.id}
               vocab=${vocabData} apiRef=${editorRef} t=${t} load=${load}
-              initial=${editing === "new" ? null : editing}
+              allDefs=${defs} initial=${editing === "new" ? null : editing}
               onSaved=${async (savedId) => {
                 // Stay on what you just saved (live audit 2026-07-25): closing
                 // the editor threw the user back to the empty state, and after
