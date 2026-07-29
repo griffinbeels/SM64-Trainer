@@ -16,11 +16,14 @@ from source_scan import code_only
 REPO = Path(__file__).resolve().parents[1]
 UI = REPO / "src" / "sm64_events" / "ui"
 TUNING_JS = UI / "marelotuning.js"
-# marelocelebrate.js reads every row. It was briefly a PAIR with ranktint.js
-# (the ambient tint), which was deleted on 2026-07-28 along with its two rows
-# (which only ever overrides the colour) -- same multi-reader shape
-# climbtuning.js already has (climbcurve/celebrations/rankclimb).
-READERS = (UI / "components" / "marelocelebrate.js",)
+# marelocelebrate.js reads every row EXCEPT the "Swap" group (swapMs/
+# swapSquash/swapExchangeAt), which ui/routeswap.js reads instead -- the
+# FLIGHT overlay for an EARNED rank-up and the EXCHANGE clock for a route pick
+# are two different events, and neither reads the other's rows. Same
+# multi-reader shape climbtuning.js already has (climbcurve/celebrations/
+# rankclimb): a row nobody reads is a slider that does nothing regardless of
+# which file was supposed to read it.
+READERS = (UI / "components" / "marelocelebrate.js", UI / "routeswap.js")
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None,
                                 reason="node not on PATH")

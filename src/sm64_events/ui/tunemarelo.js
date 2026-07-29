@@ -58,12 +58,44 @@ function mareloFor(level, fill = 0.4) {
   };
 }
 
+// A populated route list for the ROUTE SWAP demo (2026-07-28) -- "I think the
+// marelo demo should just be updated to include the full functionality of the
+// button, that is, the fact that we have to drop down and select something
+// else. I'd like to test this feeling" (user). Deliberately spanning both a
+// higher AND a lower rank than a typical mid-ladder start, so picking between
+// them can show a swap that eases DOWN as well as one that goes up -- the
+// case the feature exists to get right ("never a relaxation" of the no-false-
+// celebration rule). Preview numbers only, same "never asserted by a test"
+// contract as `mareloFor` above.
+// Tier values are caps.js::CAP's internal KEYS, not the display names --
+// "Gold" renders as "Waluigi", "Silver" as "Toadsworth", "Bronze" as "Toad"
+// (capName()).
+const DEMO_ROUTES = [
+  { id: 1, name: "16 Star — LBLJ (Standard)", tier: "Gold", division: "II", fill: 0.62 },
+  { id: 2, name: "70 Star (Standard)", tier: "Silver", division: "IV", fill: 0.18 },
+  { id: 3, name: "Any% — BLJless", tier: "Bronze", division: "I", fill: 0.91 },
+];
+
+function mareloForRoute(route) {
+  return {
+    tier: route.tier, division: route.division, division_progress: route.fill,
+    marelo: 62.5, label: route.name, mastery: 71.2, coverage: 0.63,
+    n: 20, practiced: 13, scope_id: `route:${route.id}`,
+  };
+}
+
 // The header's context grid, replicated around the REAL RouteRankCard -- see
 // this file's header comment for why the chrome is a replica and the card is
 // not. Three placeholder cards keep the 4-column grid template's proportions
 // honest; MareloCelebration only ever reads the geometry of ".marelo-slot"
 // itself, not its siblings.
-function HeaderBar({ marelo, identity }) {
+//
+// `routes`/`activeRouteId`/`onPickRoute` make the card's own dropdown a REAL
+// picker (2026-07-28 -- "the fact that we have to drop down and select
+// something else. I'd like to test this feeling") rather than the inert
+// `routes=[]`/`interactive=false` it shipped with: driving it exactly the way
+// the app does is what exercises the swap, not a scripted playback of it.
+function HeaderBar({ marelo, identity, routes, activeRouteId, onPickRoute }) {
   return html`<header class="context-shell">
     <div class="context-bar" aria-label="Practice context (preview)">
       <div class="context-control"><span class="context-control-copy">
@@ -71,8 +103,8 @@ function HeaderBar({ marelo, identity }) {
         <span class="context-value">Preview</span>
       </span></div>
       <div class="marelo-slot">
-        <${RouteRankCard} marelo=${marelo} routes=${[]} activeRouteId=${null}
-          identity=${identity} interactive=${false} />
+        <${RouteRankCard} marelo=${marelo} routes=${routes} activeRouteId=${activeRouteId}
+          onPickRoute=${onPickRoute} identity=${identity} interactive=${true} />
       </div>
       <div class="context-control"><span class="context-control-copy">
         <span class="context-label">Clock</span>
@@ -112,6 +144,13 @@ function Inspector() {
   // different start / end percentages").
   const [fromFill, setFromFill] = useState(0);
   const [toFill, setToFill] = useState(0.4);
+  // The ROUTE SWAP demo's own state (2026-07-28) -- which DEMO_ROUTES entry
+  // the header card's own picker has selected, `null` meaning "Overall".
+  // Separate from fromLevel/toLevel/settled above on purpose: those drive the
+  // Play/Restart CLIMB preview, which stays untouched and always previews
+  // "Overall" regardless of which route is picked here (matching how Play
+  // already behaved before this demo had a working picker at all).
+  const [activeRouteId, setActiveRouteId] = useState(null);
 
   useEffect(() => { localStorage.setItem(STORE_KEY, JSON.stringify(values)); }, [values]);
   // The destination can never be at or below the start: a drop is not a
@@ -151,6 +190,16 @@ function Inspector() {
                      key: Date.now() });
   };
 
+  // Same commit-before-the-effect ordering as `play()` above, for the same
+  // reason: RouteRankCard reads `mareloTuning()` when the swap it triggers
+  // STARTS, not continuously, so a slider drag alone would never reach a
+  // route pick made before the next Play. Committing here is what lets the
+  // "Swap" group's controls actually affect the swap the picker fires.
+  const pickRoute = (id) => {
+    setMareloTuning(values);
+    setActiveRouteId(id);
+  };
+
   async function saveToRepo() {
     setStatus({ kind: "busy", text: "Saving..." });
     try {
@@ -185,7 +234,11 @@ function Inspector() {
       <div class="app-shell">
         <div class="sidebar"></div>
         <div class="practice-page">
-          <${HeaderBar} marelo=${mareloFor(settled ? toLevel : fromLevel, settled ? toFill : fromFill)}
+          <${HeaderBar}
+            marelo=${activeRouteId != null
+              ? mareloForRoute(DEMO_ROUTES.find((route) => route.id === activeRouteId))
+              : mareloFor(settled ? toLevel : fromLevel, settled ? toFill : fromFill)}
+            routes=${DEMO_ROUTES} activeRouteId=${activeRouteId} onPickRoute=${pickRoute}
             identity=${
               /* Report 3 (2026-07-28): "I would expect what I just saw to be
                  what's resting in the header ... The demo restarts the
@@ -200,8 +253,20 @@ function Inspector() {
                  has for "this is a different measurement, nobody earned it"
                  (ui/rankclimb.js); flipping it in the SAME render that
                  flips `settled` is what makes landing SNAP straight to the
-                 earned rank instead of climbing to it a second time. */
-              settled ? "tunemarelo-settled" : "tunemarelo"} />
+                 earned rank instead of climbing to it a second time.
+
+                 A picked ROUTE (2026-07-28) gets its own identity, keyed on
+                 the route id -- it must differ from BOTH "tunemarelo" and
+                 "tunemarelo-settled" and from every other route, or
+                 useRankClimb would read a route swap as the SAME measurement
+                 improving and CLIMB it instead of snapping, which is exactly
+                 the false celebration this whole feature exists to avoid.
+                 The real app gets this for free (header.js's identity
+                 already includes the scope label); the demo has to say it
+                 explicitly because this replica's identity otherwise has
+                 nothing to do with which route is selected. */
+              activeRouteId != null ? `route:${activeRouteId}`
+                : (settled ? "tunemarelo-settled" : "tunemarelo")} />
         </div>
       </div>
     </div>

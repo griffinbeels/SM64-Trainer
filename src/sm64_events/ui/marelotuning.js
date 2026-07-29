@@ -99,6 +99,35 @@ export const MARELO_TUNABLES = {
   // because that guard only sees the JS side; the CSS-consumer guard beside
   // it exists because of this row. Screen shake is a real feature someone can
   // add later, with a frame trace proving it moves.
+
+  // ---- The route SWAP -----------------------------------------------------
+  //
+  // User, 2026-07-28: "when we swap to a different route, since sometimes we
+  // change ranks, we should reuse the squash / pop animation for swapping
+  // between the different routes... This should all happen with the same
+  // timing." A swap is an EXCHANGE, never a climb -- ui/routeswap.js is the
+  // reader (not marelocelebrate.js, which owns the FLIGHT overlay for an
+  // EARNED rank-up, a different event entirely). Only three rows: the squash
+  // depth and the exchange point are this surface's own knobs; the widen/
+  // burst-floor/overshoot shape is borrowed straight from climbtuning.js's
+  // own Wind-up/Burst rows (ui/celebrations.js's tierAnticipate/tierBurst,
+  // called directly) so the swap squashes like the same material rather than
+  // a second hand-tuned version of it -- "no second implementation".
+  swapMs: {
+    group: "Swap", label: "Swap duration", value: 460,
+    min: 120, max: 2000, step: 10, unit: "ms",
+    why: "Total time for the icon to squash down and pop back up as the new route's rank -- the same clock the rank text, route name and progress bar all move on.",
+  },
+  swapSquash: {
+    group: "Swap", label: "Squash depth", value: 0.82,
+    min: 0, max: 0.99, step: 0.01, unit: "x",
+    why: "How flat the icon gets at the midpoint, where it swaps to the new route's rank. Lighter than a tier crossing's own squash -- a scope change is not an achievement.",
+  },
+  swapExchangeAt: {
+    group: "Swap", label: "Exchange point", value: 0.5,
+    min: 0.1, max: 0.9, step: 0.05, unit: "x",
+    why: "How far through the swap the flattest frame lands -- where the icon, the rank text, the route name and the bar all cross from the old route to the new one.",
+  },
 };
 
 export const MARELO_DEFAULTS = Object.freeze(Object.fromEntries(
