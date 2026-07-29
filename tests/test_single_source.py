@@ -298,3 +298,36 @@ def test_the_pb_door_guard_can_still_fail():
                       '# never read row["strat_tag"] off the pbs table here\n')
     assert _STRAT_TAG_SUBSCRIPT.search(real) and "pbs" in real
     assert not _STRAT_TAG_SUBSCRIPT.search(prose)
+
+
+def test_no_file_reads_a_fragment_off_the_h_function():
+    """`h.Fragment` is `undefined` in the vendored Preact, so htm's
+    `<${h.Fragment}>` calls `h(undefined, ...)` and Preact's diff then runs
+    `document.createElement(undefined)` -- a literal `<undefined>` element
+    wrapping everything inside it.
+
+    It is invisible in the common case and fatal in the specific one: it
+    silently breaks any `>` child selector and any flex/grid parent
+    relationship. `.context-select > select` was exactly that, and the header
+    card's whole hit target died until a five-point elementFromPoint sweep
+    caught it (2026-07-28). Three shipped call sites carried the same spelling
+    for months -- entitymodal.js's EntityPicker and strategystep.js's two --
+    which is why this is a scan rather than a comment.
+
+    Import `Fragment` by NAME. Comments naming the broken spelling are fine
+    (contextselect.js explains it), which is why this reads code_only."""
+    offenders = sorted(path.name for path in UI.rglob("*.js")
+                       if "vendor" not in path.parts
+                       and "h.Fragment" in code_only(path))
+    assert not offenders, (
+        f"{offenders} use `h.Fragment`, which is undefined in the vendored "
+        "Preact and renders a literal <undefined> element. Import Fragment "
+        "by name from 'preact' instead.")
+
+
+def test_the_fragment_guard_can_still_fail():
+    """Probed both ways: a comment explaining the bug must not trip it, and
+    real code must."""
+    scan = lambda text: "h.Fragment" in text
+    assert scan("return html`<${h.Fragment}>x<//>`")
+    assert not scan("// never write h dot Fragment here")

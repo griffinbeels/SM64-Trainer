@@ -10,7 +10,7 @@
 // must leave the user's existing target and strategy exactly as they were —
 // the whole point of a three-layer picker is that changing your mind at any
 // layer costs nothing (spec 2026-07-25-target-picker-strategy-step).
-import { h } from "preact";
+import { h, Fragment } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
@@ -79,7 +79,7 @@ export function StrategyStep({ value, option, onBack, onClose, t }) {
     else setSaving(false);
   }
 
-  return html`<${h.Fragment}>
+  return html`<${Fragment}>
     <button type="button" class="entity-back" ref=${focusOnEntry} onclick=${onBack}>
       <${Icon} name="chevron" size=${15} /> Back
     </button>
@@ -112,7 +112,7 @@ export function StrategyStep({ value, option, onBack, onClose, t }) {
 // of that task's seventeen-call-site sweep, just landing one merge late.
 function StrategyCards({ data, saving, commit, onOpenNew }) {
   const { current, allow_blank, strategies } = data;
-  return html`<${h.Fragment}>
+  return html`<${Fragment}>
     <div class="strat-grid">
       ${allow_blank ? html`<button type="button" disabled=${saving}
           class="strat-card ${current == null ? "needs-strat" : ""}"
