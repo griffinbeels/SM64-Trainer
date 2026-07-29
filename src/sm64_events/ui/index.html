@@ -550,6 +550,18 @@
        measured off the empty state was 39px short of holding them. Every
        number in this block is only as good as the state the fixture reached;
        re-measure after any change to what the card can contain.
+
+       Re-measured again 2026-07-29 (final review of spec 2026-07-28-multi-
+       step-segments, finding 2) against the state that review flagged as
+       unreached: `.seg-waiting`, the third row an ARMED segment adds below
+       the metrics row (sec.armed_detail non-null). Neither this fixture nor
+       the sweep could reach it before -- `ui_fixture.py`'s `arm_segment=`
+       arms a real segment (LBLJ) alongside the star target so both cards
+       exist on one page, matching the max-over-every-card rule above. The
+       honest number is UNCHANGED: 327px already holds it (measured content
+       325px, 2px to spare, same margin the base/1100px bands were bumped
+       for), so no bump was needed here -- this line only used to be silent
+       about which states 327px had and had not been checked against.
        Re-measure with:
          uv run python tools/measure_objective_card.py  */
     --objective-card-narrow: 327px;
@@ -1031,6 +1043,20 @@
   }
   .rank-banner:first-child::before { left: -16px; border-radius: 0 0 0 8px; }
   .rank-banner-empty::before { background-image: none; }
+  /* The -12px bottom bleed above (and the stacked band's own :last-child
+     override below) was sized to fade into THE CARD'S OWN bottom padding --
+     safe reasoning while `.objective-metrics` was always the card's last
+     content row. Multi-step segments (this branch) added a THIRD row,
+     `.seg-waiting`, directly below it with no room for a 12px fade to land
+     in, so the wash bled onto real content instead of empty padding --
+     invisible to every instrument until `tools/ui_fixture.py::_arm_segment`
+     could reach an armed segment at all (uilab's decoration probe, which DOES
+     see this class of bug since it derives the pseudo's rect rather than
+     walking the DOM: 243x4px onto div.seg-waiting, 2026-07-29). The fade
+     itself is unchanged for every OTHER state; it only has nothing left to
+     bleed into once there's a real row below it, so it stops at that row's
+     edge instead. */
+  .objective-card:has(.seg-waiting) .rank-banner::before { bottom: 0; }
   .rank-banner {
     min-width: 0; flex: 1 1 0; display: grid; gap: .34rem; align-content: center;
     min-height: 36px;
@@ -2378,6 +2404,19 @@
   .builder-enabled small, .seghead small, .setting-copy span {
     color: var(--muted); font-size: .7rem; font-weight: 400;
   }
+  /* Match-mode control (spec 2026-07-28-multi-step-segments, final-review
+     finding 4) -- boxed like .builder-enabled above; the description wraps
+     to its own full-width row beneath the label+select one so a long
+     sentence never fights the select for horizontal room. */
+  .builder-matchmode {
+    display: flex; flex-wrap: wrap; align-items: center; gap: .55rem;
+    margin: .65rem 0; padding: .65rem .75rem;
+    border: 1px solid var(--border-soft); border-radius: 7px;
+    background: rgba(8,20,34,.55);
+  }
+  .builder-matchmode .field-label { margin: 0; }
+  .builder-matchmode select { min-width: 0; max-width: 20rem; }
+  .builder-matchmode .meta { flex-basis: 100%; }
   .segment-definition-grid {
     display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: .65rem;
   }

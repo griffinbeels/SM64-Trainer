@@ -234,22 +234,29 @@ export function ClauseRow({ clause, types, vocab, tint, onChange, onRemove, t })
 
 // The fields the Builder's save sends — must stay a SUBSET of the server's
 // SegmentBody/SegmentPatch fields (cross-checked by tests/
-// test_segments_editor_ui.py against the pydantic model).
+// test_segments_editor_ui.py against the pydantic model). match_mode joined
+// this list 2026-07-29 (final review of spec 2026-07-28-multi-step-segments,
+// finding 4): the registry, the vocab payload and the write path all existed
+// with no control reading any of it, so every Builder-created segment
+// silently became "loose" (SegmentBody's own default) with no way to see or
+// change it from the editor.
 const SAVE_FIELDS = ["name", "enabled", "start_triggers", "end_triggers",
-                     "guards"];
+                     "guards", "match_mode"];
 
 // The full definition shape POST /api/segments/backtest validates against
 // (server/api.py's SegmentBody) -- a SUPERSET of SAVE_FIELDS, deliberately:
-// an existing segment's match_mode/waypoints already sit in `d` (spread from
-// the GET row this editor opened with) even though this editor has no
-// control for either one yet, and leaving them out of the preview would
-// silently backtest against the wrong matcher branch for any seeded
-// movement that isn't loose/plain -- not a hypothetical, the 55 castle
-// movements are exactly that shape. A brand-new segment has none of these
-// three keys on `d` yet; `JSON.stringify` drops an undefined-valued key on
-// its own, so the server's own defaults (loose, no waypoints, no category)
-// apply instead of a wrong client-side guess.
-const BACKTEST_FIELDS = [...SAVE_FIELDS, "waypoints", "category", "match_mode"];
+// an existing segment's waypoints already sit in `d` (spread from the GET row
+// this editor opened with) even though this editor has no control for
+// authoring them yet, and leaving them out of the preview would silently
+// backtest against the wrong matcher branch for any seeded movement that
+// carries one -- not a hypothetical, the 56 castle movements are exactly
+// that shape. A brand-new segment has neither key on `d` yet; `JSON.
+// stringify` drops an undefined-valued key on its own, so the server's own
+// defaults (no waypoints, no category) apply instead of a wrong client-side
+// guess. match_mode no longer needs the same treatment -- it is a SAVE_FIELDS
+// member now (the editor control below), so it is always present on `d`
+// under its own value, never a guess.
+const BACKTEST_FIELDS = [...SAVE_FIELDS, "waypoints", "category"];
 
 // One-line verdict for the backtest panel: distinguishes "never even armed"
 // from "armed and never closed" (the diagnostic this feature exists for --
@@ -286,9 +293,15 @@ function backtestSummary(report) {
 }
 
 function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs }) {
+  // match_mode's own default mirrors the server's (SegmentBody.match_mode =
+  // "loose") rather than naming "loose" a second time -- vocab.match_modes
+  // is ordered loose-first specifically so a caller that wants "the default"
+  // can read it positionally (tracking/segments.py::vocab's own comment).
   const blank = { name: "", enabled: true,
     start_triggers: [{ type: "level_enter" }],
-    end_triggers: [{ type: "level_enter" }], guards: [] };
+    end_triggers: [{ type: "level_enter" }], guards: [],
+    match_mode: (vocab.match_modes && vocab.match_modes[0]
+                 && vocab.match_modes[0].key) || "loose" };
   const [d, setD] = useState(initial || blank);
   // Icon override (existing segments only — the override is keyed by id, so
   // a not-yet-saved segment has nowhere to hang one). Read live from the
@@ -471,6 +484,18 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs }
     save, dirty: JSON.stringify(d) !== JSON.stringify(initial || blank),
   };
 
+  // Match-mode control (Task 27, spec 2026-07-28-multi-step-segments,
+  // final-review finding 4): vocab.match_modes is the ONLY source for the
+  // label/description text, never a hardcoded copy here (this repo fails
+  // builds over a second door -- tests/test_single_source.py). `blank`
+  // above already seeds a real value, so `d.match_mode` is always set.
+  // `matchModeInfo` may come back undefined for a value vocab no longer
+  // ships -- the CURRENT value stays selectable via the appended option
+  // below rather than rendering blank (a filtered <select> silently losing
+  // its stored value has bitten this app before).
+  const matchModes = vocab.match_modes || [];
+  const matchModeInfo = matchModes.find((mode) => mode.key === d.match_mode);
+
   // One bordered group per side; each alternative clause inside gets its
   // own tinted card (cycling) so "new color = new alternative" reads at a
   // glance even when a wrapped row spans two lines.
@@ -530,6 +555,16 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs }
       <input type="checkbox" checked=${d.enabled}
           onchange=${(e) => setD({ ...d, enabled: e.target.checked })} />
       <span><b>Available for practice</b><small>Show this segment in target pickers.</small></span>
+    </label>
+    <label class="builder-matchmode">
+      <span class="field-label">Matching</span>
+      <select value=${d.match_mode}
+          onchange=${(e) => setD({ ...d, match_mode: e.target.value })}>
+        ${matchModes.map((mode) => html`<option value=${mode.key}>${mode.label}</option>`)}
+        ${!matchModeInfo && d.match_mode
+          ? html`<option value=${d.match_mode}>${d.match_mode}</option>` : null}
+      </select>
+      <span class="meta">${matchModeInfo ? matchModeInfo.description : ""}</span>
     </label>
     <div class="segment-definition-grid">
       ${section("Start", "Arm when any one of these happens.", "play",

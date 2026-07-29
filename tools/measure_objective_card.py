@@ -11,6 +11,13 @@ for, both guarded here:
   * measuring the EMPTY card -- without a stage and a target the card renders
     "Nothing to practice here", which is 39px shorter than the real thing. The
     288px that shipped until 2026-07-29 was measured that way.
+  * measuring only a STAR -- spec 2026-07-28-multi-step-segments put a third
+    grid row (`.seg-waiting`) inside this same card, rendered only while a
+    SEGMENT is armed (`sec.armed_detail` non-null). A star can never reach
+    that state, so ARM_SEGMENT below arms a real segment definition
+    alongside the star target (`ui_fixture.py`'s `_arm_segment`) and this
+    script takes the max across BOTH cards, same as it already does across
+    every card on the page.
 
 Run:  uv run python tools/measure_objective_card.py
 """
@@ -34,6 +41,10 @@ from uilab.driver import get_driver                   # noqa: E402
 # and -29 reports, and the one whose ranks the dev db already holds.
 STAGE = (8, 8)
 TARGET = (8, 0)
+# LBLJ (segment id 1) -- one of the ten legacy tricks the schema migration
+# itself inserts, so it exists even in the dev db snapshot regardless of
+# whatever the defaults corpus currently holds.
+ARM_SEGMENT = 1
 
 WIDTHS = (320, 340, 360, 400, 430, 480, 520, 560, 600, 640, 680, 700,
           720, 740, 759, 761, 790, 820, 900, 1100, 1101, 1400)
@@ -58,13 +69,24 @@ TALLEST = r"""
 })()
 """
 
+# ARM_SEGMENT's card sits inside a closed `<details class="practice-index-
+# item">` (ui/components/practice.js) -- a closed <details>'s content computes
+# `display: none`, which TALLEST above already skips, so an unopened one would
+# silently drop straight out of the "worst" calculation instead of erroring.
+EXPAND_INDEX = """
+document.querySelectorAll('details.practice-index-item:not([open])')
+  .forEach((d) => { d.open = true; });
+"""
+
 
 def main() -> int:
     shortfalls: list[tuple[int, int, int]] = []
-    with serve_ui(from_dev_db=True, stage=STAGE, target=TARGET) as base, \
+    with serve_ui(from_dev_db=True, stage=STAGE, target=TARGET,
+                  arm_segment=ARM_SEGMENT) as base, \
             get_driver().launch() as page:
         page.goto(f"{base}/ui/index.html")
         page.wait_for(".objective-card")
+        page.evaluate(EXPAND_INDEX)
         for width in WIDTHS:
             page.set_viewport(width, 1000)
             page.wait_ms(420)

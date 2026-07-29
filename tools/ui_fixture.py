@@ -171,6 +171,90 @@ def _seed_target(base: str, course_id: int = 2, star_id: int = 0,
         post("/api/pb", {"attempt_id": rows[0]["id"], "timer_mode": "igt"})
 
 
+def _arm_segment(base: str, service, segment_id: int = 1) -> None:
+    """Arm a real segment definition and leave it ARMED -- the only way to
+    reach `sec.armed_detail` non-null (`.seg-waiting`, Task 6, spec
+    2026-07-28-multi-step-segments), which neither the responsive sweep nor
+    `tools/measure_objective_card.py` could reach before this (final review
+    of that spec, finding 2): both only ever seeded a STAR target, and
+    `.seg-waiting` renders only inside `SegmentSection`.
+
+    Defaults to segment id 1, LBLJ -- one of the ten legacy tricks baked
+    directly into the schema MIGRATION itself (storage/db.py's v4 INSERT),
+    so it exists in every fresh `Database` with no defaults-corpus reconcile
+    needed: the fixture never calls `reconcile_defaults` (only `main.py`
+    does, at real startup), so a segment from the 84-def corpus would not
+    exist here at all.
+
+    Does not touch the active target. An armed segment gets its own section
+    (`views.py`'s `seen_segs`: armed OR targeted OR has attempts) and
+    therefore its own `.objective-card` in the practice index regardless of
+    whether it is the target -- so this composes with whatever star target
+    `serve_ui` already seeded rather than replacing it. That card starts
+    inside a closed `<details class="practice-index-item">`
+    (`ui/components/practice.js`); `tools/uilab_project.py`'s `_EXPAND_ALL`
+    opens it before measuring.
+
+    Runs the exact event shape `tests/test_views.py`'s own `lblj_success`/
+    `lvl` helpers use -- real `level_changed` events through the real
+    matcher, not a hand-built row: 16->6 arms LBLJ, 6->17 closes it as a
+    genuine success (giving it a real PB before the card is measured), then
+    16->6 again, left unclosed. The measured card then carries a real rank
+    AND `armed_detail` together -- the actually-crowded combination, the
+    same reasoning `_seed_target`'s own `with_pb` follows for a star.
+    """
+    import urllib.error
+    import urllib.request
+
+    now = datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
+
+    def post(path: str, payload: dict) -> dict:
+        request = urllib.request.Request(
+            f"{base}{path}", data=json.dumps(payload).encode(), method="POST",
+            headers={"Content-Type": "application/json"})
+        try:
+            return json.loads(urllib.request.urlopen(request, timeout=10).read())
+        except urllib.error.HTTPError as error:
+            raise RuntimeError(
+                f"fixture could not POST {path}: {error.code} "
+                f"{error.read()[:200]!r}") from error
+
+    async def arm_and_close() -> None:
+        await service.publish(Event(type="level_changed", frame=5000,
+                                    timestamp_utc=now,
+                                    payload={"from": 16, "to": 6}))
+        await service.publish(Event(type="level_changed", frame=5085,
+                                    timestamp_utc=now,
+                                    payload={"from": 6, "to": 17}))
+
+    async def rearm() -> None:
+        await service.publish(Event(type="level_changed", frame=6000,
+                                    timestamp_utc=now,
+                                    payload={"from": 16, "to": 6}))
+
+    # A strat active BEFORE the closing edge, so the completed attempt's own
+    # strat_tag stamps "Standard" -- LBLJ carries no default_strat (only the
+    # corpus movements do: views.py caveat 17), and an unlabelled attempt
+    # can't become a PB under a strat the rank banners are keyed on.
+    post("/api/strat", {"kind": "segment", "segment_id": segment_id,
+                        "strat_tag": "Standard"})
+    asyncio.run(arm_and_close())
+    # rta_frames == 85 (5085 - 5000), not just outcome == "success": a
+    # from_dev_db=True fixture snapshots the REAL journal, which may already
+    # hold other successful LBLJ attempts from actual play -- the frame delta
+    # this function itself just produced is the only value guaranteed to
+    # name the row it just closed rather than some earlier real one.
+    attempts = json.loads(urllib.request.urlopen(
+        f"{base}/api/session?clock=igt&scope=session", timeout=10).read())
+    rows = [a for sec in attempts.get("segments", [])
+            if sec.get("segment_id") == segment_id
+            for a in sec.get("attempts", [])
+            if a.get("outcome") == "success" and a.get("rta_frames") == 85]
+    if rows:
+        post("/api/pb", {"attempt_id": rows[0]["id"], "timer_mode": "rta"})
+    asyncio.run(rearm())
+
+
 def _free_port() -> int:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
@@ -181,7 +265,8 @@ def _free_port() -> int:
 def serve_ui(db_path: Path | None = None, timeout: float = 30,
               seed: bool = True, from_dev_db: bool = False,
               stage: tuple[int, int] | None = None,
-              target: tuple[int, int] | None = None):
+              target: tuple[int, int] | None = None,
+              arm_segment: int | None = None):
     """Yield the base URL of an offline instance; stop it on the way out.
 
     DETERMINISTIC BY DEFAULT: an empty database plus `seed_practice`, so two
@@ -200,6 +285,11 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
 
     A fresh clone has no dev database at all, so the default also happens to be
     the only mode that works everywhere.
+
+    `arm_segment` additionally arms a real segment definition (see
+    `_arm_segment`) -- additive, not a replacement for `target`: an armed
+    segment gets its own section regardless of which kind is the active
+    target, so a star target and an armed segment coexist on the same page.
     """
     scratch = None
     if db_path is None:
@@ -243,6 +333,19 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
         # at construction time fails silently, which is the worst version.
         base = f"http://127.0.0.1:{port}"
         if seed:
+            # Segment FIRST, star SECOND: `_arm_segment`'s level_changed
+            # events cross real course boundaries (Grounds -> HMC -> BitDW),
+            # and `_dispatch` retires the ACTIVE STAR TARGET the moment such
+            # an event's course differs from the target's own -- a real
+            # product rule (projection.py caveat 12), not a fixture quirk.
+            # Arming before the star target exists means there is nothing yet
+            # for that rule to retire; nothing published afterwards is a
+            # level_changed event that could retire it either, so the star
+            # target set below survives untouched and coexists with the
+            # still-armed segment. Setting a star target itself only journals
+            # `target_set` -- it does not read or touch segment arm state.
+            if arm_segment is not None:
+                _arm_segment(base, service, segment_id=arm_segment)
             course, level = stage or (2, 5)
             seed_practice(service, course_id=course, level=level,
                           attempts=target is None)

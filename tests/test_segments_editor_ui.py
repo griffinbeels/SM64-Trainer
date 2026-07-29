@@ -52,9 +52,12 @@ def test_editor_allowlist_is_accepted_by_both_server_models():
             f"segments.js sends fields {sorted(unknown)} that "
             f"{model.__name__} (extra=forbid) rejects")
     # the editor must send everything it lets the user EDIT — dropping one
-    # of these from a PATCH would silently discard the user's change
+    # of these from a PATCH would silently discard the user's change.
+    # match_mode joined 2026-07-29 (final-review finding 4): the Matching
+    # control now edits it, so its omission here would be the exact silent-
+    # discard bug this test exists to catch.
     assert {"name", "enabled", "start_triggers", "end_triggers",
-            "guards"} <= set(fields)
+            "guards", "match_mode"} <= set(fields)
 
 
 def test_editor_save_never_spreads_the_get_row():
@@ -111,6 +114,82 @@ def test_origin_override_is_offered_only_for_saved_segments():
     assert "id != null" in SEGMENTS_JS_SOURCE
 
 
+# --- match-mode control (final-review finding 4, spec 2026-07-28-multi-step-
+# segments) -------------------------------------------------------------------
+# match_mode was plumbed end to end (db column, dataclass, validation, vocab,
+# API models) with no control reading any of it: every Builder-created segment
+# silently became "loose" (SegmentBody's own default) and no definition's mode
+# could be seen or changed from the editor.
+
+def test_editor_offers_a_matching_control_driven_by_vocab():
+    # The <select>'s options come from vocab.match_modes -- never a hardcoded
+    # list of mode keys, which is exactly the second-door shape this repo
+    # fails builds over (tests/test_single_source.py).
+    assert "vocab.match_modes" in SEGMENTS_JS_SOURCE
+    assert ('matchModes.map((mode) => html`<option value=${mode.key}>'
+            '${mode.label}</option>`)') in SEGMENTS_JS_SOURCE
+
+
+def test_matching_control_writes_match_mode_on_change():
+    assert ('onchange=${(e) => setD({ ...d, match_mode: e.target.value })}'
+            in SEGMENTS_JS_SOURCE)
+
+
+def test_matching_control_shows_the_mode_description():
+    # Two related values (loose vs strict) shown with no explanation read as
+    # a bug even when the underlying behaviour is right (the user's standing
+    # rule on labelled-vs-unlabelled UI) -- the description comes from vocab
+    # too, alongside the label.
+    assert "matchModeInfo ? matchModeInfo.description" in SEGMENTS_JS_SOURCE
+
+
+def test_matching_control_keeps_an_unrecognised_current_value_selectable():
+    # A stored value a filtered/rebuilt <select> drops renders BLANK, not the
+    # value it actually holds -- this app has been bitten by exactly that
+    # shape before (memory: select-value-must-stay-in-options). The appended
+    # fallback option keeps d.match_mode selectable even if vocab somehow
+    # ships no matching entry for it.
+    assert '!matchModeInfo && d.match_mode' in SEGMENTS_JS_SOURCE
+
+
+def test_new_segment_defaults_match_mode_from_vocab_ordering_not_a_literal():
+    # blank.match_mode reads vocab.match_modes[0].key (loose-first by the
+    # server's own ordering) rather than naming "loose" as a first choice --
+    # the "loose" fallback only covers vocab failing to load at all.
+    assert ('match_mode: (vocab.match_modes && vocab.match_modes[0]'
+            in SEGMENTS_JS_SOURCE)
+
+
+def _has_no_hardcoded_match_mode_copy(source: str) -> bool:
+    """True when none of MATCH_MODES' server-authored label/description text
+    (tracking/segments.py) appears in CODE (comments stripped first) -- a
+    second copy here would be exactly the shape tests/test_single_source.py
+    fails builds over elsewhere in this app."""
+    stripped = strip_comments(source)
+    phrases = ("ends only where I said", "cancels if I go off-route",
+               "Stays armed through star grabs",
+               "Cancels the moment anything happens")
+    return not any(phrase in stripped for phrase in phrases)
+
+
+def test_no_hardcoded_match_mode_copy_in_the_editor():
+    assert _has_no_hardcoded_match_mode_copy(SEGMENTS_JS.read_text(encoding="utf-8"))
+
+
+def test_the_match_mode_copy_guard_can_still_fail():
+    # Probed both directions (tests/source_scan.py's rule): a comment quoting
+    # the server's wording to explain the feature must not trip this, and a
+    # real JS copy of the same wording must.
+    comment_only = (
+        '// loose reads "Stays armed through star grabs, key grabs and\n'
+        '// level changes until the end trigger fires" straight off vocab.\n')
+    assert _has_no_hardcoded_match_mode_copy(comment_only)
+    real_code = (
+        'const LOOSE_LABEL = "Stays armed through star grabs and level '
+        'changes";')
+    assert not _has_no_hardcoded_match_mode_copy(real_code)
+
+
 # --- shared entity picker (spec 2026-07-25-shared-entity-picker) -----------
 # Superseded by the icon modal (spec 2026-07-25-entity-picker-icons): the
 # select-based GroupedPicker this section originally pinned is gone, replaced
@@ -165,11 +244,14 @@ def test_backtest_preview_names_the_unclosed_arm_diagnostic():
 
 def test_backtest_preview_sends_the_full_unsaved_form_not_just_save_fields():
     # Regression this guards against: sending only SAVE_FIELDS would silently
-    # drop an existing segment's match_mode/waypoints from the preview and
-    # backtest against the wrong matcher branch (every non-plain, non-loose
-    # seeded movement).
+    # drop an existing segment's waypoints/category from the preview and
+    # backtest against the wrong matcher branch (every seeded movement that
+    # carries one). match_mode needed the same treatment until 2026-07-29,
+    # when it joined SAVE_FIELDS itself (the new Matching control) — it no
+    # longer needs appending here, since BACKTEST_FIELDS spreads SAVE_FIELDS
+    # first and therefore always carries it.
     assert "BACKTEST_FIELDS" in SEGMENTS_JS_SOURCE
-    assert '"waypoints", "category", "match_mode"' in SEGMENTS_JS_SOURCE
+    assert '[...SAVE_FIELDS, "waypoints", "category"]' in SEGMENTS_JS_SOURCE
 
 
 def test_the_backtest_button_guard_can_still_fail():
