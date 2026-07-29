@@ -174,7 +174,7 @@ export const SEGMENT_SEED_ICONS = {
 // Default art for a whole CATEGORY of segment — the corpus's own grouping,
 // persisted on `segment_defs.category` and shipped on every /api/segments row,
 // so this is the seed's classification rather than a second one invented here.
-// 59 of the 65 seeded definitions are Castle Movement; the ones among them
+// 63 of the 84 seeded definitions are Castle Movement; the ones among them
 // that start in a Bowser stage keep that stage's art, because LEVEL_ICONS is
 // consulted first (user, 2026-07-26: "update ALL castle movement segments to
 // use the castle_movement picture").

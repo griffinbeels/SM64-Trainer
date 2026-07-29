@@ -979,13 +979,13 @@ attempt already consumed.
 
 ### Verifying data nobody can eyeball
 
-~700 route steps and 55 definitions were authored against sources, not
+~700 route steps and 56 definitions were authored against sources, not
 observed behaviour, so the gates are behavioural:
 
 - `tests/test_defaults_corpus.py` builds each movement's event stream from an
   **independent** world model — BFS over `addresses.WORLD_EDGES_*`, with the
   definition contributing only its checkpoints — and asserts exactly one
-  success plus silence across all 54 other walks. The walker emits a level
+  success plus silence across all 55 other walks. The walker emits a level
   entry and its establishing `area_changed` on **one frame**, as the real
   detectors do; a frame apart, every arm records `area=None`, the relocation
   rule can never fire, and the whole file passes vacuously.
@@ -1057,7 +1057,7 @@ route may not list.
 
 **Picking a route now tells the SERVER.** Until 2026-07-24 nothing in the UI
 called `POST /api/route/select`, so the journaled active route was permanently
-None — and since all 55 seeded movements carry the `in_active_route` guard,
+None — and since all 56 seeded movements carry the `in_active_route` guard,
 they could only ever arm as a standalone target. The corpus was inert in normal
 practice. `practice.js::pickRoute` writes the selection through; localStorage
 stays the optimistic mirror it was specced as.

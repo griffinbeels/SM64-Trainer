@@ -28,6 +28,7 @@ When it fires, split by path (a narrower `paths:` list), do not summarize:
 `docs/architecture.md` is where cross-cutting knowledge goes, and the four
 `ui-*.md` files are the worked example of the split.
 """
+import json
 import re
 import sys
 from pathlib import Path
@@ -133,13 +134,23 @@ def test_claude_md_names_every_rule_file():
         "somewhere else, which is how the second source of truth starts.")
 
 
-# --- the corpus cardinalities stated in tracking-storage.md ----------------
+# --- corpus cardinalities stated in prose, anywhere in the repo ------------
 #
-# A rule file states counts so a reader knows the SHAPE of the corpus without
-# opening five tool modules. That is worth keeping — but a number in prose is
-# unfalsifiable, and this one drifted by 19 segments and 2 routes without a
-# single red build. Each row below names a regex over the rule file whose
-# groups are counts, and the key each group must equal in `corpus_counts()`.
+# Docstrings and rule files state counts so a reader knows the SHAPE of the
+# corpus without opening five tool modules. That is worth keeping — but a
+# number in prose is unfalsifiable, and these drifted by 19 segments and 2
+# routes without a single red build.
+#
+# This guard covered ONE file when it was written (2026-07-29) and the final
+# whole-branch review found the same drift in six more the same day — which is
+# the actual lesson: a stale count is a CLASS, not an incident, so the registry
+# below spans every file that states one. Each row is (label, path, regex,
+# keys): the regex must match its file EXACTLY once, and its groups must equal
+# those keys in `corpus_counts()`.
+#
+# Adding a count to a docstring means adding a row here. If that feels like
+# friction, the alternative is the number nobody can check — which is what
+# every row in this list used to be.
 
 
 def corpus_counts() -> dict[str, int]:
@@ -170,39 +181,76 @@ def corpus_counts() -> dict[str, int]:
     counts["segments"] = (counts["legacy"] + counts["movements"]
                           + counts["reds"] + counts["hundred_coin"])
     counts["routes"] = counts["routes_main"] + counts["routes_stage"]
+    # Derived views some prose states directly. `castle_movement` is the seed
+    # CATEGORY, which does NOT equal `movements` — four legacy rows and the
+    # three reds-to-pipe are filed under it too, which is exactly why the
+    # docstring above warns against deriving these groups from the JSON.
+    seed = json.loads((REPO / "src" / "sm64_events" / "data"
+                       / "defaults.seed.json").read_text(encoding="utf-8"))
+    counts["castle_movement"] = sum(
+        1 for row in seed["segments"] if row.get("category") == "Castle Movement")
+    # The negative pass walks every OTHER movement, so it is one short.
+    counts["other_walks"] = counts["movements"] - 1
     return counts
 
 
+RULE = ".claude/rules/tracking-storage.md"
+
 CORPUS_CLAIMS = [
-    ("segment corpus",
+    ("rule file: segment corpus", RULE,
      r"(\d+) segments = (\d+) legacy \+ (\d+) movements \+ (\d+) reds-to-pipe"
      r" \+ (\d+) hundred-coin exits",
      ("segments", "legacy", "movements", "reds", "hundred_coin")),
-    ("route corpus",
+    ("rule file: route corpus", RULE,
      r"(\d+) routes = (\d+) main \+ (\d+) Stage RTA",
      ("routes", "routes_main", "routes_stage")),
+    ("defaults.py", "src/sm64_events/tracking/defaults.py",
+     r"corpus is now (\d+) segments and (\d+)", ("segments", "routes")),
+    ("build_defaults_seed.py", "tools/build_defaults_seed.py",
+     r"so (\d+) movement segments", ("movements",)),
+    ("corpus_vocab.py", "tools/corpus_vocab.py",
+     r"so (\d+) movement segments and (\d+)", ("movements", "routes")),
+    ("entities.js", "src/sm64_events/ui/entities.js",
+     r"(\d+) of the (\d+) seeded definitions are Castle Movement",
+     ("castle_movement", "segments")),
+    ("practice.js", "src/sm64_events/ui/components/practice.js",
+     r"all (\d+) carry the in_active_route guard", ("movements",)),
+    ("architecture.md: authored", "docs/architecture.md",
+     r"route steps and (\d+) definitions were authored", ("movements",)),
+    ("architecture.md: negative pass", "docs/architecture.md",
+     r"silence across all (\d+) other walks", ("other_walks",)),
+    ("architecture.md: route scoping", "docs/architecture.md",
+     r"all (\d+) seeded movements carry", ("movements",)),
+    ("ui-practice.md: practicedHere sweep", ".claude/rules/ui-practice.md",
+     r"all (\d+) seeded definitions × \d+ destination levels", ("segments",)),
 ]
 
 
-@pytest.mark.parametrize("label,pattern,keys", CORPUS_CLAIMS,
+@pytest.mark.parametrize("label,path,pattern,keys", CORPUS_CLAIMS,
                          ids=[row[0] for row in CORPUS_CLAIMS])
-def test_the_corpus_counts_stated_here_are_true(label, pattern, keys):
-    text = (RULES / "tracking-storage.md").read_text(encoding="utf-8")
+def test_the_corpus_counts_stated_here_are_true(label, path, pattern, keys):
+    text = (REPO / path).read_text(encoding="utf-8")
     found = re.findall(pattern, text)
     assert len(found) == 1, (
-        f"tracking-storage.md states the {label} {len(found)} times, expected "
-        "once. This guard reads the sentence by shape, so rewording it "
-        "un-pins the numbers — keep the phrasing, or update CORPUS_CLAIMS in "
-        "the same change. Zero matches means the claim is now unchecked.")
+        f"{path} states the {label} {len(found)} times, expected once. This "
+        "guard reads the sentence by shape, so rewording it un-pins the "
+        "numbers — keep the phrasing, or update CORPUS_CLAIMS in the same "
+        "change. Zero matches means the claim is now unchecked.")
+    # re.findall yields a bare string for a ONE-group pattern and a tuple for
+    # several; zipping the string would iterate its characters and compare
+    # digits to counts, so half these rows would silently check nothing.
+    groups = found[0] if isinstance(found[0], tuple) else (found[0],)
+    assert len(groups) == len(keys), (
+        f"{label}: pattern has {len(groups)} groups but {len(keys)} keys")
     truth = corpus_counts()
-    stated = {key: int(value) for key, value in zip(keys, found[0])}
+    stated = {key: int(value) for key, value in zip(keys, groups)}
     wrong = {key: (value, truth[key]) for key, value in stated.items()
              if value != truth[key]}
     assert not wrong, (
-        f"tracking-storage.md's {label} sentence is out of date "
-        f"(stated, actual): {wrong}. The corpus is the authority — fix the "
-        "prose. This is the exact drift that left the file claiming 65 "
-        "segments and 50 routes while it held 84 and 48.")
+        f"{path}'s {label} sentence is out of date (stated, actual): {wrong}. "
+        "The corpus is the authority — fix the prose. This is the exact drift "
+        "that left seven files claiming 65 segments and 50 routes while the "
+        "corpus held 84 and 48.")
 
 
 def test_the_guards_can_still_fail(tmp_path):

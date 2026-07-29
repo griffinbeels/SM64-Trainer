@@ -2,7 +2,7 @@
 
 The JSON is the artifact the app reads (tracking/defaults.reconcile_defaults
 loads it at startup); this tool is how it is AUTHORED. Compact Python tables in
-corpus_*.py expand here into the verbose seed shape, so 55 movement segments
+corpus_*.py expand here into the verbose seed shape, so 56 movement segments
 cannot drift from one another and a route step stays one readable line.
 
 Mirrors tools/scrape_ranks.py -> data/rank_standards.seed.json: generated

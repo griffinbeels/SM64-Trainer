@@ -1,6 +1,6 @@
 """Shared clause + step constructors for the seeded corpus tables.
 
-ONE place that knows the seed JSON shapes, so 55 movement segments and ~50
+ONE place that knows the seed JSON shapes, so 56 movement segments and 48
 routes cannot disagree about them. Ids are the addresses.py id spaces: LEVEL
 ids for triggers, COURSE ids + 0-based star ids for star candidates.
 

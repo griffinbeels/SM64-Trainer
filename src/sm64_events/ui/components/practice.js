@@ -1050,7 +1050,7 @@ export function Practice({ t, openCompare }) {
     // Tell the SERVER too (spec 2026-07-23 §5: localStorage is an optimistic
     // mirror, the journaled route_selected is the source of truth). Without
     // this the active route was never journaled, so every seeded castle-
-    // movement segment — all 55 carry the in_active_route guard — could only
+    // movement segment — all 56 carry the in_active_route guard — could only
     // ever arm as a standalone target, i.e. the route corpus was inert. It
     // also feeds active_route.star_keys, which is what lets the selector show
     // only the route's stars.

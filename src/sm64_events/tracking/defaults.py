@@ -6,7 +6,7 @@ never touched (seed_dirty=0), leaves edited (seed_dirty=1) and user-created
 first so route candidates can resolve seed_key -> local segment_id.
 
 Every row is validated and applied INDIVIDUALLY (hardening 2026-07-24, spec
-2026-07-24-default-routes-corpus §10). The corpus is now ~65 segments and ~50
+2026-07-24-default-routes-corpus §10). The corpus is now 84 segments and 48
 routes, so one malformed row must not cost the whole refresh: a bad row is
 skipped and described in the returned problem list while the good rows still
 land. Reconcile never raises on seed CONTENT — callers log what came back.
