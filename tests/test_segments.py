@@ -2872,6 +2872,80 @@ def test_a_real_anchor_re_arms_the_loose_def_with_a_fresh_deadline():
     assert e._armed[20].deadline_frame == 4000 + segments_module.MIN_BUDGET_FRAMES
 
 
+def test_a_real_anchor_off_the_arm_position_is_transparent_not_a_relocation_disarm():
+    # Live report 2026-07-28: "Bowser 2 -> Upstairs" (loose, arms in the
+    # basement leaving the Bowser 2 fight) vanished mid-run — no attempt row,
+    # no notice, the split just disappeared once the player reached the
+    # castle lobby on the way to Upstairs. _feed_loose had inherited
+    # _feed_strict's anchor-elsewhere RELOCATION disarm, which is backwards
+    # for a loose def: reaching Upstairs from the basement requires passing
+    # BACK through the lobby, so the described route is guaranteed to cross
+    # positions it didn't arm at, and the first practice_reset anywhere along
+    # the way used to kill the attempt silently.
+    #
+    # Sequence synthesized from the real journal's shape (session 167/168,
+    # ids ~19040-19130) rather than read off data/tracker.db, which is
+    # gitignored and absent from a fresh clone (CLAUDE.md). Level 33 =
+    # Bowser 2 Arena, level 6 = Castle Inside, level 19 = Bowser in the Fire
+    # Sea (BitFS); castle areas 1/2/3 = lobby/Upstairs/basement.
+    bowser2_to_upstairs = SegmentDef(
+        id=40, name="Bowser 2 -> Upstairs", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 33}],
+        end_triggers=[{"type": "area_enter", "level": 6, "area": 2}],
+        guards=[], match_mode="loose")
+    bits_entry = SegmentDef(
+        id=41, name="BitS Entry", enabled=True,
+        start_triggers=[{"type": "area_enter", "level": 6, "area": 2}],
+        end_triggers=[{"type": "level_enter", "to": 19}],
+        guards=[], match_mode="strict")
+    e = SegmentEngine([bowser2_to_upstairs, bits_entry])
+
+    # Exit Bowser 2 -> lands in the castle basement; arms the loose movement.
+    e.feed(jev(1, "level_changed", 1000, {"from": 33, "to": 6}),
+           ctx(level=6, prev_level=33))
+    e.feed(jev(2, "area_changed", 1000, {"level": 6, "from": 1, "to": 3}),
+           ctx(level=6, area=3))
+    assert e.armed_ids() == {40}
+
+    # A reset AT the arm position (still standing in the basement) is a
+    # genuine retry — unaffected by this fix, asserted for contrast.
+    closed, _ = e.feed(jev(3, "practice_reset", 1050, {}), ctx(level=6, area=3))
+    [retry] = closed
+    assert retry.outcome == "reset"
+    assert 40 in e.armed_ids()
+
+    # Off into BitFS -- the loose def survives the off-route level crossing
+    # (already covered elsewhere) and a real anchor taken INSIDE BitFS, far
+    # from the basement arm position.
+    e.feed(jev(4, "level_changed", 1200, {"from": 6, "to": 19}),
+           ctx(level=19, prev_level=6))
+    closed, notices = e.feed(jev(5, "practice_reset", 1300, {}), ctx(level=19))
+    assert closed == [], "an anchor elsewhere must not close a row"
+    assert notices == [], "and must not disarm — the old bug's silent kill"
+    assert 40 in e.armed_ids()
+
+    # Back out toward the castle: through the lobby (area 1) -- THE anchor
+    # that used to silently kill the segment.
+    e.feed(jev(6, "level_changed", 1400, {"from": 19, "to": 6}),
+           ctx(level=6, prev_level=19))
+    e.feed(jev(7, "area_changed", 1400, {"level": 6, "from": 3, "to": 1}),
+           ctx(level=6, area=1))
+    closed, notices = e.feed(jev(8, "practice_reset", 1450, {}),
+                             ctx(level=6, area=1))
+    assert closed == []
+    assert notices == [], "the lobby anchor must stay transparent too"
+    assert 40 in e.armed_ids(), "the segment must still be armed here"
+
+    # Finally reach Upstairs: the loose def closes success, and BitS Entry
+    # (idle strict def, unrelated to this fix) arms on the SAME event.
+    closed, notices = e.feed(jev(9, "area_changed", 1500, {"level": 6, "from": 1, "to": 2}),
+                             ctx(level=6, area=2))
+    [success] = closed
+    assert success.outcome == "success" and success.rta_frames == 450
+    assert e.armed_ids() == {41}
+    assert [n["event"] for n in notices] == ["segment_disarmed", "segment_armed"]
+
+
 # --- Task 17: split_definition / merge_definitions --------------------------
 # Two pure operations (spec 2026-07-28-multi-step-segments): "WF -> SSL"
 # expressible either as one definition or as "WF -> Basement" +

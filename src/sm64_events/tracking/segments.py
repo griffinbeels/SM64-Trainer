@@ -48,11 +48,13 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
   showing as ACTIVE SEGMENT ... Running — nothing below disarms a def whose
   player then stays put.  game_reset is exempt (ctx.level is the PRE-reset
   level until the next level_changed).
-- anchor closures are POSITION-GATED (segment swap, live report 2026-06-12).
-  Each _Arm remembers the MatchContext (level, area) where it armed — the
-  segment's start position; a co-frame establishing area_changed pins the
-  area for level_changed arms (ctx.area is stale during the level event —
-  the area detector establishes one event later on the same tick).
+- anchor closures are POSITION-GATED for _feed_strict/_feed_waypoint (segment
+  swap, live report 2026-06-12) — see the LOOSE bullet below for why
+  _feed_loose does NOT inherit the "elsewhere" half of this gate. Each _Arm
+  remembers the MatchContext (level, area) where it armed — the segment's
+  start position; a co-frame establishing area_changed pins the area for
+  level_changed arms (ctx.area is stale during the level event — the area
+  detector establishes one event later on the same tick).
   - Anchor AT the arm position: attempt BOUNDARY, not a state change — a
     real practice_reset/state_loaded closes the current attempt AND re-arms
     the same segment at the anchor frame (practice-loop continuation —
@@ -114,8 +116,14 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
   the full precedence): the player says only where a segment starts and
   where it ends, so a star grab, a key grab, an area change and an off-route
   level crossing all pass straight through, transparently, where the strict
-  or waypoint chains above would cancel or disarm. That removes every cancel
-  rule that used to bound an arm, so every loose _Arm instead carries a
+  or waypoint chains above would cancel or disarm. A real anchor (practice
+  reset/savestate load) NOT at the arm position is transparent too (fixed
+  live report 2026-07-28) — the strict/waypoint relocation disarm does not
+  apply here, because a loose route is free to cross through positions it
+  didn't start at and often must; only an anchor AT the arm position still
+  means something (a genuine retry: reset row, re-arm in place). That
+  removes every cancel rule that used to bound an arm, so every loose _Arm
+  instead carries a
   staleness deadline (_Arm.deadline_frame, set at every arm/re-arm site by
   the one helper _deadline_for) and the deadline is checked FIRST — ahead of
   even the end trigger and the death/game_reset rows — because an arm that
@@ -2374,23 +2382,38 @@ class SegmentEngine:
           staleness deadline > end (once every waypoint is consumed) >
           death > game_reset > session_started > echo anchor (invisible) >
           real anchor at the arm position (reset row, re-arm in place) >
-          real anchor elsewhere (silent disarm — relocation) >
+          real anchor elsewhere (transparent — arm untouched) >
           next waypoint (advance) > EVERYTHING ELSE IS TRANSPARENT.
 
-        That last line is the whole feature: a star grab, a key grab, an area
-        change and an off-route level crossing all pass straight through,
-        where _feed_strict/_feed_waypoint would cancel or disarm.
+        That last line is (most of) the whole feature: a star grab, a key
+        grab, an area change and an off-route level crossing all pass
+        straight through, where _feed_strict/_feed_waypoint would cancel or
+        disarm.
 
         The DEADLINE IS CHECKED FIRST, ahead of both the end trigger and the
         death/reset rows. An arm that has outlived its budget is dead; a
         success or a failure recorded through it would be a claim about a run
         the player walked away from.
 
-        Anchors keep _feed_strict's position gate. Mid-sequence the player is
-        legitimately far from where the segment armed, which makes the gate
-        look wrong here — but a DELIBERATE practice-reset or savestate load
-        somewhere else genuinely does mean "I restarted" or "I moved", so the
-        rule stays and costs no new concept."""
+        A real anchor NOT at the arm position is transparent too (live report
+        2026-07-28, fixed from the `_feed_strict`-inherited relocation disarm
+        this method used to carry): a loose def describes only its start and
+        end, so its route is free to cross through positions it didn't start
+        at, and often MUST — "Bowser 2 -> Upstairs" arms in the basement, and
+        reaching Upstairs requires walking back through the lobby, so the
+        first practice_reset anywhere along the way used to kill the attempt
+        with no row and no notice (the split just vanished mid-run). That is
+        different from _feed_strict/_feed_waypoint, where a route is fully
+        described and an anchor off it genuinely means "the player moved
+        somewhere the described route never goes" — for a loose def there is
+        no described route to have left, so nothing here justifies a silent
+        kill. Only an anchor AT the arm position still means something: the
+        player deliberately returned to the start and pressed reset/reload,
+        which is a genuine retry (reset row, re-arm in place, fresh
+        deadline). Everything that ends a loose attempt is exactly what the
+        module docstring's LOOSE bullet already promises: death, game_reset,
+        session_started, and the staleness deadline — not a relocated
+        anchor."""
         _ = (anchor_is_echo, starts)   # uniform handler signature (Task 2)
         closed = []
         if arm.deadline_frame is not None and ev.frame >= arm.deadline_frame:
@@ -2423,7 +2446,16 @@ class SegmentEngine:
             if ev.frame == arm.start_frame or self._anchor_echo(ev):
                 return closed          # echo: invisible
             if not _at_arm_position(arm, ctx):
-                self._disarm(d, ev, notices)   # relocation: silent
+                # TRANSPARENT, not a relocation disarm (live report 2026-07-28:
+                # Bowser 2 -> Upstairs vanished mid-run — see this method's
+                # docstring). Unlike a strict/waypoint def, a loose def's own
+                # route is guaranteed to cross positions it didn't start at
+                # (Bowser 2's exit lands in the basement; reaching Upstairs
+                # requires passing back through the lobby), so the FIRST
+                # anchor anywhere along that route used to kill the attempt
+                # with no row and no notice. The arm is left completely
+                # untouched — position, start_frame, deadline — exactly like
+                # every other mid-route event this matcher already lets pass.
                 return closed
             a = self._close(Attempt, d, arm, ev, "reset", None)
             if a:
