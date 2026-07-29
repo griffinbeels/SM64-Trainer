@@ -80,6 +80,9 @@ const LANE_MOUNT_GRACE_MS = 400;
 // Same shape as rankicon.js's active-style slot, for the same reason.
 const liveClimbs = new Set();
 const holdListeners = new Set();
+// Notified whenever the NUMBER of live climbs crosses zero, which the hold
+// listeners above cannot report once a gesture has released the hold.
+const runningListeners = new Set();
 let nextClimbToken = 0;
 
 // A frozen practice page is a far worse failure than a clipped animation, so
@@ -90,11 +93,16 @@ const HOLD_CEILING_MS = 20000;
 
 function setClimbing(token, running) {
   const wasHolding = isCelebrating();
+  const wasRunning = liveClimbs.size > 0;
   if (running) liveClimbs.add(token);
   else liveClimbs.delete(token);
   if (!liveClimbs.size) holdReleased = false;   // the release lasts one climb
   const holding = isCelebrating();
   if (wasHolding !== holding) holdListeners.forEach((notify) => notify(holding));
+  const nowRunning = liveClimbs.size > 0;
+  if (wasRunning !== nowRunning) {
+    runningListeners.forEach((notify) => notify(nowRunning));
+  }
 }
 
 /** True while any rank on screen is mid-climb. */
@@ -113,6 +121,30 @@ export function releaseCelebrationHold() {
 }
 
 export const isCelebrating = () => liveClimbs.size > 0 && !holdReleased;
+
+/**
+ * True while ANY rank on screen is mid-climb -- deliberately NOT
+ * `isCelebrating()`, which a user gesture can switch off via
+ * `releaseCelebrationHold()` while the climbs are still running.
+ *
+ * That distinction is the whole reason this exists. The hold answers "may the
+ * page move underneath the player", and a gesture is allowed to win it. This
+ * answers "is a rank still animating", which no gesture changes, and is what
+ * the MARELO overlay waits on so a scope rank-up cannot start while a star's
+ * banners are still climbing (user, 2026-07-29: strategy, THEN star, THEN
+ * marelo -- "Right now, marelo incorrectly displays at the same time").
+ */
+export const climbsRunning = () => liveClimbs.size > 0;
+
+export function useClimbsRunning() {
+  const [running, setRunning] = useState(climbsRunning());
+  useEffect(() => {
+    runningListeners.add(setRunning);
+    setRunning(climbsRunning());
+    return () => runningListeners.delete(setRunning);
+  }, []);
+  return running;
+}
 
 export function useCelebrating() {
   const [celebrating, setCelebrating] = useState(isCelebrating());
@@ -182,7 +214,8 @@ function renderState(level, bar, beats, atMs, tune, reveal = 1, landing = false)
  * site so no surface ever builds icon props itself.
  */
 export function useRankClimb(rank, identity = null,
-                             { lane = null, order = 0, replayKey = null } = {}) {
+                             { lane = null, order = 0, replayKey = null,
+                               tune: tuneOverride = null } = {}) {
   // Level and fill are kept APART from here down. `rankPosition(..., 0)` is
   // exactly the level, and asking for it with a fill of 1 (which ranks.js
   // legitimately sends for a maxed rank) would return 45 — a level that does
@@ -241,7 +274,12 @@ export function useRankClimb(rank, identity = null,
     // mid-flight would retime an animation that is already half-played, and
     // the inspector at /ui/tune.html works by resetting and re-triggering
     // rather than by mutating a running one.
-    const tune = tuning();
+    //
+    // A caller may override it (components/marelocelebrate.js, 2026-07-28):
+    // the overall rank-up runs the SAME registry as the banners but louder,
+    // and amplifying it is a multiplied tuning rather than a second set of
+    // effects. Nothing else passes one.
+    const tune = tuneOverride || tuning();
 
     const identityChanged = identityRef.current !== identity;
     identityRef.current = identity;
@@ -478,7 +516,7 @@ export function useRankClimb(rank, identity = null,
       // not keep its sibling waiting for a slot it will never use.
       if (lane && laneEnds.get(lane) === laneEndsAt) laneEnds.delete(lane);
     };
-  }, [target, identity, lane, order, replayKey]);
+  }, [target, identity, lane, order, replayKey, tuneOverride]);
 
   return state && { ...state, climbing: frameRef.current != null };
 }

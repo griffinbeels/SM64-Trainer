@@ -322,6 +322,15 @@
   .good { color: #a3e0a3; } .badx { color: #e0a3a3; } .cleared { opacity: .45; text-decoration: line-through; }
   .chips { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .35rem; }
   .chip { border: 1px solid #3a4150; border-radius: 999px; padding: .05rem .6rem; font-size: .85em; }
+  /* The Stats trigger (practice.js::StatMenuTrigger, in the practice-log
+     card's header since 2026-07-28) keeps the same pill language as every
+     value chip it configures, plus the affordances a <button> needs that a
+     <span> chip doesn't: a pointer cursor and a hover border. */
+  .chip-button {
+    display: inline-flex; align-items: center; gap: .3rem;
+    background: transparent; color: inherit; cursor: pointer;
+  }
+  .chip-button:hover { border-color: var(--blue); }
   .delta-up { color: #e0a3a3; } .delta-down { color: #a3e0a3; }
   @keyframes pbglow { from { box-shadow: 0 0 3px #ffd75f; } to { box-shadow: 0 0 10px #ffd75f; } }
   .pb-glow { border-color: #ffd75f; color: #ffd75f;
@@ -540,8 +549,13 @@
        the probe was measuring a different element than the defect. Any
        re-measure has to take the MAX over all of them.
 
-       327px, measured 2026-07-29 across 320..790 -- a flat 39px more than the
-       288px this shipped with, at EVERY width in the band. Not a regression:
+       347px, measured 2026-07-29 across 320..790. That is 288 + 39 + 20: the
+       39 was already owed (see below), and the 20 is the widened gap between
+       two STACKED rank washes, which is real space that has to exist. Note
+       the 190px band above 800px absorbed the same 20px without moving,
+       because the card there had exactly that much slack.
+
+       The 39: a flat shortfall at EVERY width in the band. Not a regression:
        288 was itself measured, honestly, against a card the fixture could only
        render as "Nothing to practice here". Once the fixture could stand in a
        stage and hold a target with a strategy and a PB (ui_fixture's `stage=`
@@ -564,7 +578,7 @@
        about which states 327px had and had not been checked against.
        Re-measure with:
          uv run python tools/measure_objective_card.py  */
-    --objective-card-narrow: 327px;
+    --objective-card-narrow: 347px;
     --radius: 9px;
   }
   * { box-sizing: border-box; }
@@ -599,6 +613,15 @@
       radial-gradient(circle at 34% 87%, #b9d9ff 0 1px, transparent 1.3px);
     background-size: 320px 280px, 410px 350px, 370px 300px, 460px 390px;
   }
+  /* There is deliberately NO app-wide rank tint. One shipped on
+     2026-07-28 (a `body::after` layer worn at rest) and was deleted the
+     same day: "It should NOT be tinted by default. It should only tint
+     during the animation. Default background color. During animation,
+     default color -> current rank color -> colors we're ranking up to ->
+     back to default" (user). `.marelo-celebrate-backdrop` already IS that
+     sequence and is the only thing that tints the page. The resting layer
+     was also invisible whenever it would have mattered most: the backdrop
+     is `z-index: 210` and the ambient pseudo-element declared none. */
   button, select, input, textarea { font: inherit; }
   button {
     display: inline-flex; align-items: center; justify-content: center; gap: .42rem;
@@ -782,18 +805,12 @@
     display: block; overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap; font-weight: 650;
   }
-  /* Slot 2 of the context bar: the MARELO rank bar, which took the space the
+  /* Slot 2 of the context bar: the route rank card, which took the space the
      deleted PRACTICE TARGET card used to hold (2026-07-26 — header.js carries
-     the why). The slot exists in its own right because MareloBar renders
-     nothing until /api/marelo lands, and a missing grid child would slide
-     every later card one column left; while empty it wears the neighbouring
-     cards' panel so the bar reads as four cards loading, not three and a
-     hole. */
+     the why). container-type: inline-size is what the card's own @container
+     rules measure against (the sidebar's 1180px step means this column's
+     width is not monotonic in window width). */
   .marelo-slot { min-width: 0; display: grid; container-type: inline-size; }
-  .marelo-slot:empty {
-    border: 1px solid var(--border); border-radius: 7px;
-    background: rgba(11,25,41,.92);
-  }
   .workspace {
     width: 100%; max-width: 1500px; min-width: 0; margin: 0 auto;
     padding: 4px 14px 28px; overflow-x: hidden;
@@ -814,6 +831,16 @@
      which is why the star row's cqw units still resolve against
      `.practice-page` (its own nearer container), not this one. */
   .view-pane { container-type: inline-size; }
+  /* Used by the Rank tab's scope picker (components/rankpage.js). It was
+     shared with the practice toolbar's route select until 2026-07-28;
+     the toolbar is gone (its route pick moved onto the header's route
+     rank card) but this class outlived it, so the rule stays. Deleting
+     it with the toolbar silently unstyled the Rank tab -- caught only at
+     merge time, because no test on either branch rendered that picker. */
+  .route-focus-control {
+    display: flex; align-items: center; gap: .5rem; min-width: 230px;
+  }
+  .route-focus-control select { min-width: 150px; }
   .mobile-appbar, .mobile-nav, .mobile-more-backdrop { display: none; }
   /* THE size container all selector cqw units + @container rules resolve
      against — the pane the star row must fit inside. inline-size only, so
@@ -825,24 +852,23 @@
     background: linear-gradient(180deg, rgba(14,30,48,.98), rgba(10,24,39,.98));
     box-shadow: 0 8px 24px rgba(0,0,0,.08);
   }
-  .practice-toolbar {
-    position: relative; /* anchors the stats popover */
-    min-height: 58px; display: flex; align-items: center; gap: .75rem;
-    padding-block: 9px;
-  }
-  .route-focus-control {
-    display: flex; align-items: center; gap: .5rem; min-width: 230px;
-  }
-  .route-focus-control select { min-width: 150px; }
   .toolbar-note {
     min-width: 0; flex: 1; color: var(--muted); font-size: .78rem;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  /* Out of flow, anchored under the toolbar's Stats button: as a grid child
-     of .practice-page it added a row and shifted every card 12px on open. */
-  .stats-popover {
-    position: absolute; top: calc(100% + 6px); right: 12px; z-index: 30;
-  }
+  /* Out of flow, anchored under the Stats trigger: as a grid child of
+     .practice-page it added a row and shifted every card 12px on open. The
+     trigger now lives in the practice-log card's header (2026-07-28, moved
+     again — "the stats button... inside the practice log, to the left of the
+     sort filter"), and that card is a FIXED-HEIGHT `overflow: hidden` box
+     (.attempts-card) — an `absolute` popover anchored inside it would get cut
+     off the moment its checklist grew past the card's own 458px, the exact
+     trap `.claude/rules/ui-core.md` names for a WRAPPING element. `fixed`
+     instead, with top/right set inline off the trigger's own measured rect
+     (practice.js::StatMenuTrigger) — escapes the card's overflow entirely,
+     since nothing between the trigger and the viewport declares a
+     transform/filter/perspective/contain that would trap it back inside. */
+  .stats-popover { position: fixed; z-index: 30; }
   /* Stats menu: the only popover still on the legacy grey .popover base —
      pull it onto the same navy language as the replay-settings popover so the
      stat picker matches the rest of the shell (statmenu.js renders a bare
@@ -927,9 +953,19 @@
   /* Trailing `auto` track added 2026-07-28 for the collapse toggle. Without
      it the button becomes an implicit 5th column at the grid's default size
      and pushes the strategy picker out of the card. */
+  /* The name column's floor is MEASURED, not chosen: 296px is the widest star
+     name in `memory/addresses.py::STAR_NAMES` rendered at this h2's own font
+     ("Quick Race Through Downtown!", 293px) plus 3px. It was 180px, which is
+     narrower than most of the 97 names, so the star being practised ellipsised
+     mid-word -- "Fall onto the Cag..." at 850 and 900px (live report,
+     2026-07-29). The name is the one thing on this card that says WHAT you are
+     practising; the space comes out of the strategy column, which has a
+     picker's worth of slack and a value the user just chose.
+     `tests/test_objective_name_fits.py` measures every name against the real
+     column at the supported floor, so this number cannot rot as names change. */
   .objective-heading {
     min-width: 0; display: grid;
-    grid-template-columns: 28px auto minmax(180px,1fr) minmax(150px,380px) auto;
+    grid-template-columns: 28px auto minmax(296px,1fr) minmax(150px,380px) auto;
     gap: .65rem; align-items: center;
   }
   .objective-symbol {
@@ -1205,34 +1241,71 @@
      at 44px and does not need to be: it fills a grid cell whose height is set
      by .context-bar's own min-height and its 54px siblings, so a rank-up
      still cannot reflow the OBS capture. */
+  /* .marelo-bar also always carries .context-control and .context-select
+     (marelo.js) -- position: relative and cursor: pointer come from those
+     shared rules, so this block only adds what is genuinely specific to the
+     rank card (the fixed min-height, the gold hover below). */
   .marelo-bar {
-    display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0;
-    min-height: 54px; padding: 0 12px;
+    display: flex; align-items: center; gap: 12px; width: 100%; min-width: 0;
+    min-height: 68px; padding: 8px 12px;
     border: 1px solid var(--border); border-radius: 7px; background: rgba(11,25,41,.92);
-    color: var(--text); cursor: pointer; text-align: left;
+    color: var(--text); text-align: left;
   }
   .marelo-bar:hover { border-color: var(--gold); }
-  /* The bar is now as wide as its column rather than as wide as its contents,
-     so its text has to behave like the context cards' does: the name/label
-     line ellipsises, and the mastery/coverage split — the one part whose
-     information also lives in the bar's own title — is what gives way first
-     when the column narrows. */
-  .marelo-bar .marelo-bar-text { min-width: 0; flex: 1 1 auto; }
-  .marelo-bar .marelo-bar-text > * {
+  /* Round 2 layout (2026-07-28, user's own sketch): a LEFT column pairing the
+     rank icon with the rank NAME directly beneath it, and a RIGHT column
+     stacking the scope name, a FULL-WIDTH progress bar and the points -- the
+     bar is now the dominant element instead of a 96px sliver squeezed beside
+     three lines of text. `flex: 0 0 auto` keeps the icon column exactly as
+     wide as its own content, so the body column gets everything else. */
+  .marelo-bar-icon-col {
+    display: flex; flex-direction: column; align-items: center;
+    flex: 0 0 auto; gap: 3px;
+  }
+  .marelo-bar-body {
+    display: flex; flex-direction: column; justify-content: center;
+    min-width: 0; flex: 1 1 auto; gap: 5px;
+  }
+  /* Both text rows ellipsise -- a fluid, FULL-WIDTH bar between them already
+     gives every column width its own honest amount of room (it just gets
+     thinner), so neither row needs the old 96px track's container-query
+     carve-out to stay legible below it. `.context-value` is a DESCENDANT
+     selector, not a direct child: a route SWAP wraps it in `.marelo-swap-fade`
+     (below) while the crossfade runs, and a child combinator would have
+     silently dropped this rule for that whole window -- the exact trap
+     ui-core.md documents for `.context-select > select`. `.meta` (the points
+     line) never moves during a swap, so it stays the tighter `>` form. */
+  .marelo-bar-body .context-value, .marelo-bar-body > .meta {
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  /* What gives way first as the column narrows, measured rather than guessed
-     (render sweep 2026-07-26): the mastery/coverage split, then the progress
-     track. Both are the bar's least identifying parts and both are restated
-     in its own title, which survives because the title rides the BUTTON — an
-     element that is always rendered, so it can always be hovered (a hidden
-     element's own title is not a fallback). The threshold is a CONTAINER
-     query on the slot, not a viewport media query: the sidebar's 1180px step
-     means this column's width is not monotonic in window width, so a media
-     query gets it wrong on both sides of that step. */
-  @container (max-width: 500px) { .marelo-split { display: none; } }
-  @container (max-width: 330px) { .marelo-track { display: none; } }
-  /* Round 5 (addendum, task 8, 2026-07-26): `.marelo-bar`'s own 10px gap
+  .marelo-bar-body > .meta { font-size: .78rem; }
+  /* Route SWAP crossfade (2026-07-28): the old and new rank text, and the old
+     and new route name, share ONE grid cell -- `grid-area: 1/1` overlays both
+     children instead of stacking them, so a fade never reflows the card, and
+     the track sizes to the WIDER of the two (never the narrower, which would
+     clip whichever text is still fading in). Purely structural, no size
+     threshold of any kind, so it needs no @container gate. */
+  .marelo-swap-fade { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; }
+  .marelo-swap-fade > * { grid-area: 1 / 1; min-width: 0; }
+  /* The rank name under the icon. "Short by construction" is what this said
+     until 2026-07-28 and it was wrong: at the card's 16px/700 the widest name
+     in the registry -- "Toadsworth 1" -- measures 102px against a 78px cap, so
+     it shipped as "Toadsw…" in both the flown card and the resting header.
+     The nine cap names are a fixed, known set, so the size is DERIVED from the
+     widest of them rather than guessed: 13px/700 puts "Toadsworth 1" at 83px,
+     and 96px leaves room for font-metric drift without eating the bar (the
+     column is already 55px of icon, and every pixel here comes off the bar
+     beside it). The ellipsis stays as insurance only --
+     tests/test_ui_rank_name_fits.py measures EVERY name against this rule and
+     fails if one would trip it, so it should never actually fire. */
+  /* Descendant, not `>` -- a route swap wraps this in `.marelo-swap-fade`
+     (above) for the duration of its crossfade, same reasoning as
+     `.marelo-bar-body .context-value`. */
+  .marelo-bar-icon-col b {
+    max-width: 96px; font-size: .82rem; text-align: center;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* Round 5 (addendum, task 8, 2026-07-26): `.marelo-bar`'s own gap
      was already close to this icon's wing spill at size 34 (~12.6px a
      side) -- borderline enough that `.rank-icon-slot` is worth it here
      too, rather than leaving a margin this narrow to fail the moment font
@@ -1491,9 +1564,12 @@
       100% { opacity: 0; transform: scale(1.3); }
     }
   }
-  .marelo-bar-text { display: flex; flex-direction: column; line-height: 1.15; text-align: left; }
+  /* The bar is now the RIGHT column's dominant element (round 2, 2026-07-28)
+     rather than a 96px sliver -- full width of `.marelo-bar-body`, and
+     visibly thicker so it reads as the primary thing on the card, not a
+     footnote beside the text. */
   .marelo-track {
-    width: 96px; height: 6px; border-radius: 3px; background: rgba(255,255,255,.12);
+    width: 100%; height: 10px; border-radius: 5px; background: rgba(255,255,255,.12);
     overflow: hidden; flex: 0 0 auto;
   }
   /* Same three climb variables as the practice card's banners, read the same
@@ -1505,100 +1581,88 @@
                 color-mix(in srgb, var(--climb-color, #3a4250)
                           calc(var(--climb-flash, 0) * 85%), transparent);
   }
-  .marelo-bar-text b {
+  .marelo-bar b {
     text-shadow: 0 0 calc(var(--climb-flash, 0) * 9px)
                  color-mix(in srgb, var(--climb-color, #3a4250)
                            calc(var(--climb-flash, 0) * 90%), transparent);
   }
-  .marelo-split { white-space: nowrap; }
-  /* `@media (max-width: 900px) { .marelo-track, .marelo-split { display: none } }`
-     was here until 2026-07-28. It was a blunter, viewport-keyed duplicate of
-     the two `@container` rules the MARELO bar already has — `.marelo-slot`
-     declares its own `container-type: inline-size`, and hiding the split at
-     500px and the track at 330px says the same thing in terms of the space
-     the bar actually gets. Two rules answering one question is how they end
-     up disagreeing; the container pair wins because the slot's width is the
-     thing that decides whether the bar fits. */
-  /* Scope TIER-up celebration -- the grand one (celebrate.js TierRankUp,
-     task F3): fixed overlay so it can never reflow an OBS capture;
-     pointer-events stay OFF on the overlay and ON only for the card, so it
-     never eats a click meant for the game. The three-beat phase machine
-     (fill -> flip -> hold) is JS state (TierRankUp's `phase`/`flipStep`),
-     not CSS -- CSS only plays each beat's own animation (fade-in, the fill
-     bar, the cap flip, the final pop), which is why those are the only
-     things prefers-reduced-motion needs to gate (same opt-in pattern as
-     .starholder/.page-state above). z-index sits above .modal-backdrop
-     (200): a rank-up can land while a modal is open and must still be seen. */
-  .rankup {
-    position: fixed; inset: 0; z-index: 210; display: flex;
-    align-items: center; justify-content: center; pointer-events: none;
-    background: radial-gradient(closest-side, color-mix(in srgb, var(--tier) 35%, transparent), transparent 70%);
+  /* The overall rank-up (components/marelocelebrate.js, 2026-07-28).
+     Replaces the two hand-rolled scope overlays that used to live here
+     (TierRankUp's fill->flip->hold, DivisionRankUp's top banner) -- a KNOWN
+     DEVIATION flagged since 2026-07-26. This overlay clones the REAL route
+     rank card, flies it to the centre, and hands it to ui/rankclimb.js, the
+     same climb every rank banner runs -- so there is no CSS here for the
+     climb itself (the flash/shake/burst/digit-reel/wing-grow variables are
+     already up beside .rank-progress-track and .rank-banner) and no size
+     @media at all: the card's geometry is MEASURED from the live header at
+     runtime and expressed as a transform, so it is correct at every width by
+     construction (`.marelo-celebrate*` are component selectors --
+     `tests/test_responsive_structure.py` is a red build for a viewport rule
+     on one).
+
+     Fixed so it can never reflow an OBS capture; pointer-events OFF on the
+     wrapper and ON only for the card, so it never eats a click meant for the
+     game. z-index sits above .modal-backdrop (200): a rank-up can land while
+     a modal is open and must still be seen.
+
+     Report 2 (2026-07-28, live report: "it looks like the card briefly
+     becomes invisible" during the fly-out AND the fly-back): `.marelo-celebrate`
+     used to BE the fading backdrop, with `.marelo-celebrate-card` rendered as
+     its CHILD -- a parent's opacity multiplies every child's, so the card sat
+     at effective opacity 0 on the first frame, faded in as it travelled, and
+     faded back out before landing, never reaching 1 even at rest (the tuned
+     `backdropOpacity` is 0.8). The fix is structural, not a value: the
+     backdrop is now `.marelo-celebrate-backdrop`, a SIBLING of the card, not
+     an ancestor -- this wrapper keeps only the shared custom properties
+     (children still need to read them, custom properties flow DOWN the tree)
+     and is never assigned an opacity of its own, so nothing above the card
+     can ever touch its opacity again.
+     `tests/test_ui_celebrate.py::test_the_card_never_has_its_own_opacity_rule`
+     pins this structurally -- no rule may set `opacity` on
+     `.marelo-celebrate-card` or on `.marelo-celebrate` itself (its one
+     remaining ancestor below `.app-shell`). */
+  .marelo-celebrate {
+    position: fixed; inset: 0; z-index: 210; pointer-events: none;
   }
-  .rankup-card {
-    pointer-events: auto; cursor: pointer; text-align: center;
-    display: flex; flex-direction: column; align-items: center; gap: 6px;
-    padding: 26px 34px; border-radius: 16px;
-    background: rgba(11,25,41,.92); border: 2px solid var(--tier);
-    box-shadow: 0 0 60px color-mix(in srgb, var(--tier) 55%, transparent);
+  .marelo-celebrate-backdrop {
+    position: fixed; inset: 0; pointer-events: none;
+    background-color:
+      color-mix(in srgb, var(--climb-color, transparent) var(--backdrop-tint, 0%),
+                rgba(3, 9, 18, 1));
+    opacity: 0;
+    /* TWO properties, ONE declaration (`.claude/rules/ui-core.md`'s rule: a
+       second `transition:` on any state of this element would REPLACE this
+       one wholesale, not add to it). Opacity paces the fly-out/fly-back
+       fade; background-color is the tier cross-fade (report 1, 2026-07-28,
+       "we should ... animate from current background color to capless
+       color, then when we cross from CAPLESS -> TOAD, animate from capless
+       to toad color") -- its own duration, `--tier-fade-ms`, is deliberately
+       NOT `--fly-ms`: a tier crossing can land mid-climb, long after the
+       flight itself finished moving. */
+    transition: opacity var(--fly-ms, 900ms) var(--fly-ease, ease),
+                background-color var(--tier-fade-ms, 500ms) ease;
   }
-  .rankup-card h2 { margin: 2px 0 0; font-size: 30px; color: var(--tier); }
-  /* Beat 1 (fill): the division bar that visibly reaches the crossing
-     point before the climb begins -- durations here (1.2s/.6s) must stay in
-     lockstep with FILL_MS/FLIP_MS in celebrate.js. */
-  .rankup-fill-track {
-    width: 180px; height: 8px; margin: 4px 0; border-radius: 4px;
-    overflow: hidden; background: rgba(255,255,255,.14);
+  .marelo-celebrate-backdrop.is-lifted { opacity: var(--backdrop-alpha, .55); }
+  /* EXACTLY ONE transition declaration on this element. A :hover or state
+     rule declaring its own would REPLACE this one wholesale (a rule's
+     transition is not additive), which is what makes a motion glide one way
+     and snap the other -- there is deliberately no second rule here, not
+     even for prefers-reduced-motion: the JS already computes --fly-ms as 0
+     in that case (marelocelebrate.js), so the transition already resolves
+     to an instant jump with no CSS override needed. */
+  .marelo-celebrate-card {
+    position: fixed; transform-origin: center center; pointer-events: auto;
+    cursor: pointer;
+    transition: transform var(--fly-ms, 900ms) var(--fly-ease, ease);
+    /* NEVER an opacity rule here, and never on `.marelo-celebrate` above --
+       see the comment on `.marelo-celebrate` for why, and the guard test
+       that mutation-proves it. */
   }
-  .rankup-fill-track i { display: block; height: 100%; width: 100%; background: var(--tier); }
-  /* Beat 2 (flip): the cap turning over into each tier gained. */
-  .rankup-cap-flip { display: inline-flex; }
-  @media (prefers-reduced-motion: no-preference) {
-    .rankup { animation: rankup-in .25s ease-out; }
-    .rankup-card.final { animation: rankup-pop .5s cubic-bezier(.2,1.6,.4,1); }
-    @keyframes rankup-in { from { opacity: 0 } to { opacity: 1 } }
-    @keyframes rankup-pop { from { transform: scale(.86) } to { transform: scale(1) } }
-    .rankup-fill-track i { animation: rankup-fill 1.2s linear; }
-    @keyframes rankup-fill { from { width: 0 } to { width: 100% } }
-    .rankup-cap-flip { animation: rankup-flip .6s ease-in-out; }
-    @keyframes rankup-flip {
-      0% { transform: rotateY(0deg); } 50% { transform: rotateY(90deg); } 100% { transform: rotateY(0deg); }
-    }
-  }
-  /* Scope DIVISION-up -- the medium one (celebrate.js DivisionRankUp): the
-     same fixed/pointer-events-off family as .rankup above, but a compact
-     top banner instead of a full centered takeover. A division-up happens
-     often enough during ordinary play that the grand treatment would drown
-     out the tier-up it's tiered against. */
-  .rankup-medium {
-    position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
-    z-index: 205; pointer-events: none;
-  }
-  .rankup-medium-card {
-    pointer-events: auto; cursor: pointer; display: flex; align-items: center;
-    gap: 10px; padding: 8px 16px; border-radius: 8px;
-    background: rgba(11,25,41,.92); border: 1px solid var(--tier);
-    box-shadow: 0 8px 28px color-mix(in srgb, var(--tier) 40%, transparent);
-  }
-  /* Round 5 (addendum, task 8, 2026-07-26): 10px gap vs. a ~14.8px wing
-     spill at size 40 -- real overlap without this. */
-  .rankup-medium-icon { --icon-size: 40px; }
-  .rankup-medium-text { display: flex; flex-direction: column; line-height: 1.2; text-align: left; }
-  .rankup-medium-text b { color: var(--tier); font-size: 1rem; }
-  .rankup-medium-text i { font-style: normal; color: var(--muted); font-size: .72rem; }
-  @media (prefers-reduced-motion: no-preference) {
-    .rankup-medium { animation: rankup-medium-in .28s ease-out; }
-    @keyframes rankup-medium-in {
-      from { opacity: 0; transform: translate(-50%, -12px); }
-      to { opacity: 1; transform: translate(-50%, 0); }
-    }
-  }
-  /* The two ENTITY celebrations that lived here -- an inline glow pop for a
-     division-up and a small in-card toast for a tier-up -- were deleted with
-     task 0012 (2026-07-26). The rank-up is performed by the rank BANNER
-     itself climbing now (ui/rankclimb.js), on the very bar the rank already
-     lives on, so a toast beside it would be two things celebrating one
-     event. Their replacement variables (--climb-flash, --climb-settle-scale,
-     --climb-color) are up beside .rank-progress-track. */
+  /* The header's own card is hidden while its clone is out, so there is
+     never a double image -- and it must not climb, because the clone IS its
+     climb (one event, one thing celebrating it -- the mistake the deleted
+     entity toasts made). */
+  .marelo-slot.is-celebrating { opacity: 0; }
   /* Rank tab (rankpage.js): scope picker + card + chart + breakdown, all
      scaled off ONE scope response — no separate route/course/overall pages.
      --border-soft/--muted mirror the rest of the design system (this file
@@ -2099,6 +2163,28 @@
   /* Practice-log controls, in the card they act on: sort in the heading,
      reset visibility in the footer (the old analysis toolbar is gone). */
   .attempts-tools { display: flex; align-items: center; gap: .7rem; }
+  /* Three controls ("N shown" / Stats / sort) need more width than the two
+     this row used to have, and the row cannot wrap to absorb the difference
+     -- .attempts-card is a fixed-height overflow:hidden box, ui-core.md's
+     WRAPPING trap, here on the header row rather than a sibling. Gated on
+     @container against .practice-page, never @media, for the reason
+     ui-core.md's responsiveness law states: the sidebar's 1180px step makes
+     the pane a card lives in non-monotonic in window width, so no viewport
+     threshold can stand in for "this card is too narrow".
+     Icon-only Stats first (drop the label, the icon + title still say what
+     it does), tighter gaps, THEN the count -- measured against the real
+     fixture at the WCAG 1.4.10 reflow floor (320px), the widest heading text
+     ("Unassigned attempts") and the narrowest ("Recent attempts") both: the
+     count is the one truly recoverable value here (the log below it shows
+     the same number of rows), so it goes last, same principle as
+     .rank-banner-basis dropping before the delta it sits beside. */
+  @container (max-width: 420px) {
+    .stat-menu-label { display: none; }
+    .attempts-tools { gap: .4rem; }
+  }
+  @container (max-width: 340px) {
+    .attempts-tools > .meta { display: none; }
+  }
   .sort-control {
     min-height: 34px; display: inline-flex; align-items: center; gap: .3rem;
     padding: .2rem .3rem .2rem .5rem; border: 1px solid #344b64;
@@ -3452,24 +3538,90 @@
        vertical margin between the bottom of the green rect and the top of the
        white rect" of 2026-07-29, and it is the THIRD report of it.
 
-       So the inner edges get no bleed at all and the flex gap becomes the
-       margin -- visible, and the same distance whichever banner is taller.
-       The outer edges keep theirs: those really are the row's own padding.
-       A lone banner is both :first-child and :last-child, so it is unchanged.
+       That bleed is doing TWO jobs, and only one of them is about the card's
+       edge. It separates the band from the edge, AND it is the band's own
+       internal padding -- the 8px above the medal row and the 12px below the
+       progress bar that give a band its shape side by side. Deleting it on the
+       inner edges took both, so the top band ended flush against its own
+       progress bar while the bottom one kept its room, and the two stopped
+       matching each other (live report 2026-07-29, with the wide layout beside
+       it as the reference: "breaks continuity with how the actual rank
+       standard display is designed").
+
+       So the bleeds are left EXACTLY as they are, and the gap is opened wide
+       enough to clear them: 8px top + 12px bottom + the 8px of margin that is
+       actually wanted between two bands = 28px. Every band is then the same
+       56px tall as it is side by side, with the medal row and the progress bar
+       in the same places inside it, and nothing about the decoration changes
+       between layouts. A lone banner is untouched.
+
+       Two rejected, both tried and measured:
+         - killing the inner bleeds (shipped for one round) -- the band then
+           ends flush against its own progress bar, which is the report above;
+         - converting the inner bleed to real padding -- correct in principle,
+           but `* { box-sizing: border-box }` means the banner's `min-height:
+           36px` ABSORBS that padding rather than growing by it, so the bands
+           came out 44px and 48px instead of 56px and did not even match each
+           other. It needs a matching min-height per case, which is two more
+           numbers to keep in sync with these two.
+       The gap costs 20px of card height either way -- that is the honest
+       price. Side by side the bleeds spend room the card already has above and
+       below the row; stacked, there is no room between two bands to spend, so
+       it has to be made.
 
        Caught by uilab probe class 5 (decoration collisions), added the same
        day. Classes 1-4 all walk the DOM, and a pseudo-element is not in it --
        which is why three sweeps in a row called this page clean while the
        user was looking straight at the defect. */
-    .rank-slot { flex-direction: column; align-items: stretch; gap: .5rem; }
-    .rank-banner::before { left: -16px; top: 0; bottom: 0; border-radius: 0; }
-    .rank-banner:first-child::before { top: -8px; }
-    .rank-banner:last-child::before { bottom: -12px; }
-    /* Narrow-pane variant of the waiting-for line (Task 6, this branch): the
-       stacked rank banners already claim most of the taller card, so this
-       tightens rather than wraps -- .seg-waiting-for still ellipsises instead
-       of growing a second line. */
+    .rank-slot { flex-direction: column; align-items: stretch; gap: 28px; }
+    .rank-banner::before { left: -16px; border-radius: 0; }
+    /* Narrow-pane variant of the waiting-for line (Task 6, this branch):
+       the stacked rank banners already claim most of the taller card, so
+       this tightens rather than wraps -- .seg-waiting-for still ellipsises
+       instead of growing a second line. Kept through the main merge; the
+       rank rules above are main's (42404b7), which fixes the stacked-wash
+       overlap by widening the gap past the bleed rather than zeroing the
+       inner edges as this branch had. */
     .seg-waiting { font-size: .74rem; gap: .35rem; margin-top: .3rem; }
+  }
+
+  /* The tight band: both the star name and the strategy picker want the row.
+     ------------------------------------------------------------------
+     Between 700px (where the heading breaks to two rows and the pressure ends)
+     and 794px, the five-column heading cannot give the widest star name AND
+     the widest strategy their full width at the same time. The arithmetic, all
+     measured on the shipping shell at the 850px supported floor:
+
+       card 731 - 32 padding - 28 icon - 105 eyebrow - 30 chevron - 42 gaps
+         = 494px for the name and the strategy block together
+       widest star name  293px @ 19.2px   ("Quick Race Through Downtown!")
+       widest strategy   194px            ("Ultimate Cycle (Pipe)" + control
+                                            chrome: 8 + 25.6 padding, border)
+       "STRATEGY" label   60px + 6.4 gap
+       -> 293 + 194 + 66 = 553 into 494. Over by 59px.
+
+     Two things give way, in the order of how load-bearing they are:
+
+     1. The label. The word STRATEGY appears again three lines down as the rank
+        banner's own kicker, and the select carries it as a title, so this is
+        the one piece of text here that is genuinely recoverable. Same rule the
+        fastest-strategy hint gives way under, one block up.
+     2. A small type step on the name, 1.2rem -> 1.1rem, which buys 24px on the
+        widest name for a size still comfortably above the card's body text.
+        The user offered this lever explicitly ("we can also slightly decrease
+        font sizes if necessary at smaller widths"); it is used ONLY here, and
+        only as much as the arithmetic needs.
+
+     That leaves 272 for the name (widest becomes 269) and 222 for the select
+     (widest needs 194) -- both fit, with margin on each side rather than the
+     4px a single lever would have left. What does NOT give way is the name
+     itself: it is the one thing on this card that says what you are
+     practising, and ellipsising it mid-word is the bug this fixes. */
+  @container (max-width: 793px) {
+    .objective-heading { grid-template-columns: 28px auto minmax(272px,1fr) minmax(120px,380px) auto; }
+    .objective-name h2 { font-size: 1.1rem; }
+    .objective-strategy { grid-template-columns: minmax(70px,1fr) auto; }
+    .objective-strategy .field-label { display: none; }
   }
 
   /* Objective card, narrow pane.
@@ -3502,6 +3654,12 @@
       grid-column: 1 / -1; min-width: 0;
       grid-template-columns: 70px minmax(0,1fr);
     }
+    /* The label comes BACK here. The block above hides it because the heading
+       is one crowded row; at this width the strategy owns a full row of its
+       own and has the 70px for it. `inline` is the <span> default -- restated
+       rather than `revert`, which would also undo the hide in a UA-sheet
+       sense and is not what is meant. */
+    .objective-strategy .field-label { display: inline; }
     .objective-strategy select { min-width: 0; max-width: 100%; }
     .objective-metrics {
       /* PB tag needs ~130-150px, not the ~239px a .7fr share was giving it
@@ -3513,9 +3671,11 @@
     }
     /* Two side-by-side banners have no room to breathe in this narrow
        column (shared with the pbtag column) -- stack them instead. */
-    /* Same gap as the wider stacked block above -- the separation between two
-       washes should not shrink just because the pane got narrower. */
-    .rank-slot { min-height: 45px; flex-direction: column; align-items: stretch; gap: .5rem; }
+    /* Same 28px as the wider stacked block above, and for the same reason --
+       it is 8 + 12 of bleed plus the 8px of margin that is wanted. Shrinking
+       it here would put the two washes back in contact at exactly the widths
+       where the card is most crowded. */
+    .rank-slot { min-height: 45px; flex-direction: column; align-items: stretch; gap: 28px; }
     /* The strategy header reverts to 2 columns here (above); the
        fastest-strategy hint would otherwise drop to its own row (a 3rd
        grid child with only 2 explicit columns) rather than sit inline, so
@@ -3714,9 +3874,8 @@
     .replay-setting-row {
       grid-template-columns: minmax(150px,1fr) 240px; gap: .6rem;
     }
-    .practice-toolbar { min-height: 56px; padding: 8px 10px; }
     .route-focus-control { min-width: 0; flex: 1; }
-    .route-focus-control .field-label, .toolbar-note { display: none; }
+    .route-focus-control .field-label { display: none; }
     .route-focus-control select { width: 100%; min-width: 0; }
     .practice-card { padding: 12px; }
     .selector-card { padding: 12px; }

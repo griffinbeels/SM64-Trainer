@@ -8,6 +8,8 @@ HEADER_JS = (UI / "components" / "header.js").read_text(encoding="utf-8")
 PICKER_JS = (UI / "components" / "targetpicker.js").read_text(encoding="utf-8")
 PRACTICE_JS = (UI / "components" / "practice.js").read_text(encoding="utf-8")
 INDEX_HTML = (UI / "index.html").read_text(encoding="utf-8")
+MARELO_JS = (UI / "components" / "marelo.js").read_text(encoding="utf-8")
+CONTEXT_JS = (UI / "components" / "contextselect.js").read_text(encoding="utf-8")
 
 
 def context_select_rule(css: str) -> str:
@@ -19,21 +21,52 @@ def context_select_rule(css: str) -> str:
 
 def test_every_context_card_is_one_hit_target():
     # A click ANYWHERE on a context card opens it, and the card highlights as
-    # a unit — the practice-target card did this for free by being a <button>,
-    # the three select cards only reacted on the select itself, and the
-    # mismatch read as a bug (user, 2026-07-25). The fix lives half in JS (the
-    # shared ContextSelect renders the value + chevron and tags the card) and
-    # half in CSS (that select is absolutely stretched over the card). Either
-    # half alone silently restores the small hit target, so pin both.
-    # Three cards today: session, clock, grading. A fourth raises the count
-    # deliberately — it must not appear by growing a hand-rolled one.
+    # a unit (user, 2026-07-25 -- the mismatch between a whole-card <button>
+    # and three select-only cards read as a bug). The fix is half JS (the
+    # stretched <select> plus the value + chevron we draw ourselves) and half
+    # CSS; either half alone silently restores the small hit target.
+    #
+    # FOUR cards since 2026-07-28: session, route rank, clock, grading. The
+    # fourth is the route rank card, and it must go through the SAME
+    # mechanism rather than hand-rolling one -- which is what CardSelect is
+    # for, and why the count below is of CardSelect and not of markup.
     assert strip_comments(HEADER_JS).count("<${ContextSelect}") == 3
+    assert strip_comments(CONTEXT_JS).count("<${CardSelect}") == 1
+    assert strip_comments(MARELO_JS).count("<${CardSelect}") == 1
     rule = context_select_rule(INDEX_HTML)
     assert "position: absolute" in rule and "inset: 0" in rule, rule
     # Hidden by OPACITY, never by transparent colours: Chromium themes a
     # select's popup off its computed background, so a transparent one gets a
     # white list (tests/test_ui_dropdown_theming.py owns that rule).
     assert "opacity: 0" in rule, rule
+
+
+def test_the_rank_card_names_the_scope_it_is_rating():
+    # "the M 25.6 and C 16% feels like worthless AI slop information to me. It
+    # should just be clear that this is the OVERALL RANKING FOR THE ROUTE THAT
+    # I'M PRACTICING" (user, 2026-07-28). Mastery and Coverage keep their real
+    # meters on the Rank tab and the card's own title; the freed line is what
+    # lets the scope name sit under the rank.
+    #
+    # The label reads "Overall"/"Route", not "Overall rank"/"Route rank": the
+    # responsive sweep (tools/responsive_probe.js's NEVER_TRUNCATE, which
+    # `.context-label` is opted into everywhere else it appears -- Session,
+    # Clock, Grading) caught the longer pair genuinely truncating at several
+    # widths, and this codebase already made the identical call for an
+    # identical squeeze (ui-ranks.md: "Round 4 dropped the trailing 'Rank'
+    # from both kickers") -- the big rank icon and name right below the label
+    # already say "rank".
+    code = strip_comments(MARELO_JS)
+    assert "marelo-split" not in code
+    assert '"Overall"' in code and '"Route"' in code
+
+
+def test_the_rank_card_never_renders_nothing():
+    # It hosts the route picker now, so the control has to exist before the
+    # rating does. `.marelo-slot:empty` was the placeholder that covered the
+    # old null render and goes with it.
+    assert "return null" not in strip_comments(MARELO_JS)
+    assert ".marelo-slot:empty" not in strip_comments(INDEX_HTML)
 
 
 def test_the_hit_target_guard_can_still_fail():
@@ -64,10 +97,10 @@ def test_the_header_no_longer_carries_a_practice_target_card():
 
 def test_the_rank_bar_sits_in_the_context_grid_not_a_row_of_its_own():
     body = strip_comments(HEADER_JS)
-    assert body.count("<${MareloBar}") == 1
+    assert body.count("<${RouteRankCard}") == 1
     assert "marelo-row" not in body and "marelo-row" not in strip_comments(INDEX_HTML)
-    # MareloBar renders null until /api/marelo lands. A null grid child is no
-    # child at all, so without a wrapper the clock card would slide into this
+    # The wrapper carries container-type: inline-size for the card's own
+    # @container rules -- without it the clock card would slide into this
     # column and the whole bar would shift left for a beat.
     assert 'class="marelo-slot"' in body
     assert ".marelo-slot" in strip_comments(INDEX_HTML)
@@ -173,6 +206,17 @@ def test_target_picker_resolves_segment_art_like_the_banner_does():
         "the target picker is back to holding an icon context of its own"
 
 
+def test_the_practice_toolbar_is_gone():
+    # Its route select was the SAME control as the header card's (practice.js
+    # said so in a comment), its guidance line described a control that has
+    # moved, and its Stats button now sits beside the chips it configures. A
+    # card holding one leftover sentence reads as unfinished.
+    code = strip_comments(PRACTICE_JS)
+    assert "practice-toolbar" not in code
+    assert "route-focus-control" not in code
+    assert "practice-toolbar" not in strip_comments(INDEX_HTML)
+
+
 def test_the_tuning_page_is_reachable_from_the_app_and_from_the_launcher():
     """A dev page behind a hand-typed path is a page that does not exist.
 
@@ -193,6 +237,13 @@ def test_the_tuning_page_is_reachable_from_the_app_and_from_the_launcher():
         "the settings drawer no longer links to the tuning page"
     assert not re.search(r'href="https?://[^"]*tune\.html', code), \
         "the tuning link must be origin-relative, never a hardcoded host/port"
+    # The overall rank-up's own inspector (Wave 3, 2026-07-28) needs the same
+    # guarantee -- a link only the header knows about is a page that does not
+    # exist to a user who has not memorized its path.
+    assert 'href="/ui/tunemarelo.html"' in code, \
+        "the settings drawer no longer links to the overall rank-up tuning page"
+    assert not re.search(r'href="https?://[^"]*tunemarelo\.html', code), \
+        "the tunemarelo.html link must be origin-relative, never a hardcoded host/port"
 
     launcher = (UI.parent.parent.parent / "run-test-server.bat").read_text(
         encoding="utf-8")
@@ -201,3 +252,21 @@ def test_the_tuning_page_is_reachable_from_the_app_and_from_the_launcher():
     assert "%SM64_PORT%/ui/tune.html" in launcher, \
         ("the launcher's URL must interpolate the port it actually chose -- a "
          "literal port there is the exact failure this test exists for")
+
+
+def test_the_card_label_is_derived_from_the_rated_scope_not_the_client_slot():
+    """The label and the rating beneath it must answer to ONE source.
+
+    They did not. `activeRouteId` is the client's localStorage mirror and
+    `marelo` is the server's answer, so any client that had never written that
+    key -- a fresh browser, cleared storage, the desktop GUI's first run --
+    rendered the label "Overall" directly above its own value line reading
+    "16 Star - LBLJ (Standard)". Caught by RENDER on 2026-07-28 and invisible
+    to every unit test in the suite, because each half was individually right.
+    """
+    code = strip_comments(MARELO_JS)
+    found = re.search(r"const cardLabel = (.*?);", code, re.S)
+    assert found, "cardLabel was renamed or removed -- re-point this guard"
+    expression = found.group(1)
+    assert "scope_id" in expression, expression
+    assert "activeRouteId" not in expression, expression

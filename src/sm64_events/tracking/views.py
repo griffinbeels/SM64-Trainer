@@ -112,12 +112,18 @@ def _current_pbs(pb_rows: list[dict]) -> dict:
     return out
 
 
-def _current_pbs_by_strat(pb_rows: list[dict]) -> dict:
+def current_pbs_by_strat(pb_rows: list[dict]) -> dict:
     """Latest pb row keyed like _current_pbs but with the saving attempt's
     strat_tag appended. THE per-strategy ranking lookup: a strategy is ranked
     ONLY by times achieved WITH that strategy. PBs with no strat_tag can't be
     attributed to a strategy and are skipped (the entity stays unranked on
-    every strat until a strat-tagged PB lands)."""
+    every strat until a strat-tagged PB lands).
+
+    PUBLIC for the same reason `grading_basis` is: `tracking/marelo.py` grades
+    the identical thing in batch, and there is exactly ONE answer to "which of
+    my saved times counts". It went through `min()` over raw attempts until
+    2026-07-28, which paid MARELO out before the user clicked Save as PB
+    (task 0034)."""
     out = {}
     for row in pb_rows:  # ordered by id: later rows win
         strat = row["strat_tag"]
@@ -442,7 +448,7 @@ def _best_strategy_graded(ranks, ek, history, pbs_by_strat, rank_mode,
     order-independent (a later tie only overwrites the running best when its
     name sorts earlier, so iteration order never decides the winner).
     `pb_key_prefix` is `(course_id, star_id)` or `("segment", segment_id)` --
-    `_current_pbs_by_strat`'s key shape minus (clock, strat)."""
+    `current_pbs_by_strat`'s key shape minus (clock, strat)."""
     clock = ranks.clock_for(ek)
     best: tuple[str, dict] | None = None
     for strat in ranks.strategies(ek):
@@ -502,7 +508,7 @@ def build_entity_ranks(db, service) -> dict[str, dict]:
         elif a.course_id is not None:
             attempts_by_star.setdefault((a.course_id, a.star_id), []).append(a)
 
-    pbs_by_strat = _current_pbs_by_strat(db.pbs())
+    pbs_by_strat = current_pbs_by_strat(db.pbs())
     rank_mode = db.get_state("rank_mode", classify.DEFAULT_RANK_MODE)
     if rank_mode not in classify.RANK_MODES:   # forward-safe: junk reads as pb
         rank_mode = classify.DEFAULT_RANK_MODE
@@ -594,7 +600,7 @@ def build_entity_strategies(db, service, ek: str) -> dict:
     rank_mode = db.get_state("rank_mode", classify.DEFAULT_RANK_MODE)
     if rank_mode not in classify.RANK_MODES:   # forward-safe: junk reads as pb
         rank_mode = classify.DEFAULT_RANK_MODE
-    pbs_by_strat = _current_pbs_by_strat(db.pbs())
+    pbs_by_strat = current_pbs_by_strat(db.pbs())
 
     if kind == "star":
         course_id, star_id = ids
@@ -871,7 +877,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     scoped = all_attempts if scope == "lifetime" else session_attempts
     pb_rows = db.pbs()
     pbs = _current_pbs(pb_rows)              # strategy-blind, for DISPLAY only
-    pbs_by_strat = _current_pbs_by_strat(pb_rows)   # per-strategy, for RANKS
+    pbs_by_strat = current_pbs_by_strat(pb_rows)   # per-strategy, for RANKS
     pb_ids = {(r["attempt_id"], r["timer_mode"]) for r in pb_rows}
     sessions_list = db.sessions()
     session_meta = {s["id"]: s for s in sessions_list}

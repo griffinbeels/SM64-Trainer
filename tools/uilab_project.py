@@ -45,8 +45,16 @@ SHELL_SELECTORS = (
 )
 
 # Elements carrying irreducible information: a defect if they ellipsise.
+#
+# `.objective-name h2` is the star (or segment) being practised -- the one
+# thing on that card that says WHAT you are doing, and it ellipsised mid-word
+# at 850 and 900px ("Fall onto the Cag...", 2026-07-29). Note this catches only
+# the star the FIXTURE seeds; the whole corpus is measured against the real
+# column by tests/test_objective_name_fits.py, which is what actually holds the
+# floor. Both, because they fail differently: this one catches a layout change
+# on any page state, that one catches a name nobody thought about.
 NEVER_TRUNCATE = (".rank-banner-kicker", ".context-label", ".nav-item span",
-                  ".field-label")
+                  ".field-label", ".objective-name h2")
 
 # States worth measuring. The Practice page renders EMPTY-state placeholders
 # whenever no target is selected, and a database snapshot taken while nobody is
@@ -134,9 +142,37 @@ PROJECT = Project(
     # noise that gets a probe exemption-listed into uselessness.
     may_clip=(".practice-card.is-collapsed",),
     stories=STORIES,
+    # The narrowest SUPPORTED width (user's call, 2026-07-29: "the minimum
+    # officially supported width we should support is 850px. Height can be any
+    # height, that's fine"). Widths below it leave the matrix.
+    #
+    # This is only legitimate because the shipped app ENFORCES it -- the
+    # desktop window's `min_size`, its default geometry and a clamp on restored
+    # geometry all use `desktop/window.py::MIN_WINDOW_WIDTH`, which is this
+    # number. A floor the product does not hold would just hide defects, and
+    # `tests/test_min_supported_width.py` fails if the two ever disagree.
+    #
+    # What it costs, stated rather than buried: the WCAG 1.4.10 reflow probe at
+    # 320px stops running, and the mobile shell under `@media (max-width:
+    # 760px)` -- bottom nav bar, appbar, the "More" sheet -- is no longer
+    # measured at all. That code still ships. Deleting it is a separate
+    # decision nobody has made.
+    min_viewport_width=850,
     # Sizes that earn a place regardless of what the stylesheet declares: the
-    # two the user reported, the workspace's max width, and a short window.
-    extra_viewports=((900, 1180), (760, 1180), (1500, 900), (1280, 720)),
+    # supported floor and one pixel above it, the width the user reported, the
+    # workspace's max width, and a short window.
+    #
+    # 912/913 are BOTH SIDES of the `@container (max-width: 793px)` tight band,
+    # and they have to be listed by hand because the matrix derives its probe
+    # points in VIEWPORT pixels while that threshold is in CONTAINER pixels.
+    # Measured on the shipping shell, the pane runs 119px narrower than the
+    # window in this range (850 -> 731, 910 -> 791), so a 793px container
+    # threshold flips at a 912px WINDOW -- while the derived points sit at 793
+    # and 794, below the supported floor, where they are dropped entirely. A
+    # container threshold is therefore never self-probing here; whenever you
+    # add one below ~1180, add its window equivalent to this list.
+    extra_viewports=((850, 1180), (851, 1000), (900, 1180), (912, 1000),
+                     (913, 1000), (1500, 900), (1280, 720)),
     # OWED, not exempted. These became VISIBLE on 2026-07-28 when the
     # fixture finally rendered a populated practice page -- a stage, an
     # active target, a strategy and a PB. Everything on the star row and
@@ -214,166 +250,31 @@ PROJECT = Project(
             'scrollHeight 230 > clientHeight 228',
         '1920x1080 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
-        '320x800 [page] clipped :: section.practice-card.selector-card.stagebanner':
-            'scrollHeight 184 > clientHeight 150',
-        '320x800 [page] clipped :: span.starname':
-            'scrollWidth 33 > clientWidth 30',
-        '320x800 [page] overlap :: span.starholder x span.starrank':
-            'overlap 7x2px inside button.starcell',
-        '330x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
-            'scrollHeight 184 > clientHeight 150',
-        '330x1000 [page] clipped :: span.starname':
-            'scrollWidth 33 > clientWidth 30',
-        '330x1000 [page] overlap :: span.starholder x span.starrank':
-            'overlap 7x2px inside button.starcell',
-        '331x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
-            'scrollHeight 184 > clientHeight 150',
-        '331x1000 [page] clipped :: span.starname':
-            'scrollWidth 33 > clientWidth 30',
-        '331x1000 [page] overlap :: span.starholder x span.starrank':
-            'overlap 7x2px inside button.starcell',
-        '400x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
-            'scrollHeight 152 > clientHeight 150',
-        '400x1000 [page] clipped :: span.starname':
-            'scrollHeight 30 > clientHeight 20',
-        '400x1000 [page] overlap :: span.starholder x span.starrank':
-            'overlap 7x2px inside button.starcell',
-        '400x1000 [page] overlap :: td.attempt-result.good x td.attempt-delta':
-            'overlap 4x21px inside tr',
-        # [practice-log] here is unchanged (the star's own attempts table,
-        # `.attempts-card` first match). [page-collapsed] joins at 401/430/431
-        # below, not 400 (2026-07-29): LBLJ armed alongside the star target
-        # (this file's `serve`) sits in the practice index, which `_EXPAND_ALL`
-        # opens so its own .seg-waiting can be measured -- its `<details>`
-        # stays open through [page-collapsed] too (that story's setup only
-        # re-collapses .card-collapse OUTSIDE the practice index, never the
-        # index's own <details> or its cards' internal folds -- see
-        # `_EXPAND_ALL`/`_COLLAPSE_ALL`'s own comment for why: their SHARED,
-        # ungrouped `useCollapsed` key would otherwise cross-toggle against
-        # the star's identically-keyed card, which is what broke
-        # tests/test_ui_collapse_story.py before this exclusion existed).
-        # Same PRE-EXISTING overlap as [page]/[practice-log], a second real
-        # instance of it: LBLJ's own attempts table is a narrower card than
-        # the star's and clears the overlap at a slightly different width.
-        '400x1000 [practice-log] overlap :: td.attempt-result.good x td.attempt-delta':
-            'overlap 4x21px inside tr',
-        # Right at this probe point's own boundary (400 is a derived
-        # threshold), [page-collapsed] catches the same LBLJ overlap only
-        # SOME runs -- reproduced across several `uv run pytest` invocations
-        # but not every one, unlike the stabler 401/430/431 rows below.
-        # Included rather than chased: same selector, same detail, same
-        # underlying defect as its neighbours, and the flakiness reads as
-        # sub-pixel measurement timing at an edge, not a different bug.
-        '400x1000 [page-collapsed] overlap :: td.attempt-result.good x td.attempt-delta':
-            'overlap 4x21px inside tr',
-        '401x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
-            'scrollHeight 152 > clientHeight 150',
-        '401x1000 [page] clipped :: span.starname':
-            'scrollHeight 30 > clientHeight 20',
-        '401x1000 [page] overlap :: span.starholder x span.starrank':
-            'overlap 7x2px inside button.starcell',
-        '401x1000 [page] overlap :: td.attempt-result.good x td.attempt-delta':
-            'overlap 4x21px inside tr',
-        '401x1000 [page-collapsed] overlap :: td.attempt-result.good x td.attempt-delta':
-            'overlap 4x21px inside tr',
-        '401x1000 [practice-log] overlap :: td.attempt-result.good x td.attempt-delta':
-            'overlap 4x21px inside tr',
-        '430x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
-            'scrollHeight 153 > clientHeight 151',
-        '430x1000 [page] clipped :: span.starname':
-            'scrollHeight 30 > clientHeight 19',
-        '430x1000 [page] overlap :: span.starholder x span.starrank':
-            'overlap 7x2px inside button.starcell',
-        # LBLJ's attempts table (see the 400px comment above) needs a little
-        # more room than the star's own before this same overlap clears --
-        # true through 431px, gone by 480px (below).
-        '430x1000 [page] overlap :: td.attempt-result.good x td.attempt-delta':
-            'overlap 4x21px inside tr',
-        '430x1000 [page-collapsed] overlap :: td.attempt-result.good x td.attempt-delta':
-            'overlap 4x21px inside tr',
-        '431x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
-            'scrollHeight 153 > clientHeight 151',
-        '431x1000 [page] clipped :: span.starname':
-            'scrollHeight 30 > clientHeight 19',
-        '431x1000 [page] overlap :: span.starholder x span.starrank':
-            'overlap 7x2px inside button.starcell',
-        '431x1000 [page] overlap :: td.attempt-result.good x td.attempt-delta':
-            'overlap 4x21px inside tr',
-        '431x1000 [page-collapsed] overlap :: td.attempt-result.good x td.attempt-delta':
-            'overlap 4x21px inside tr',
-        '500x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
-            'scrollHeight 162 > clientHeight 160',
-        '500x1000 [page] clipped :: span.starname':
-            'scrollHeight 30 > clientHeight 20',
-        '500x1000 [page] overlap :: span.starholder x span.starrank':
-            'overlap 7x2px inside button.starcell',
-        '501x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
-            'scrollHeight 162 > clientHeight 160',
-        '501x1000 [page] clipped :: span.starname':
-            'scrollHeight 30 > clientHeight 20',
-        '501x1000 [page] overlap :: span.starholder x span.starrank':
-            'overlap 7x2px inside button.starcell',
-        '600x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
-            'scrollHeight 176 > clientHeight 174',
-        '600x1000 [page] overlap :: span.starholder x span.starrank':
-            'overlap 7x2px inside button.starcell',
-        '601x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
-            'scrollHeight 176 > clientHeight 174',
-        '601x1000 [page] overlap :: span.starholder x span.starrank':
-            'overlap 7x2px inside button.starcell',
-        '605x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
-            'scrollHeight 177 > clientHeight 175',
-        '605x1000 [page] overlap :: span.starholder x span.starrank':
-            'overlap 7x2px inside button.starcell',
-        '606x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
-            'scrollHeight 177 > clientHeight 175',
-        '606x1000 [page] overlap :: span.starholder x span.starrank':
-            'overlap 7x2px inside button.starcell',
-        '700x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
-            'scrollHeight 190 > clientHeight 188',
-        '700x1000 [page] overlap :: span.starholder x span.starrank':
-            'overlap 7x2px inside button.starcell',
-        '701x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
-            'scrollHeight 190 > clientHeight 188',
-        '701x1000 [page] overlap :: span.starholder x span.starrank':
-            'overlap 7x2px inside button.starcell',
-        '760x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
-            'scrollHeight 198 > clientHeight 196',
-        '760x1000 [page] clipped :: span.starname':
+        '850x1180 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 199 > clientHeight 197',
+        '850x1180 [page] clipped :: span.starname':
             'scrollHeight 22 > clientHeight 20',
-        '760x1000 [page] overlap :: span.starholder x span.starrank':
+        '850x1180 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
-        '760x1180 [page] clipped :: section.practice-card.selector-card.stagebanner':
-            'scrollHeight 198 > clientHeight 196',
-        '760x1180 [page] clipped :: span.starname':
+        '851x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 199 > clientHeight 197',
+        '851x1000 [page] clipped :: span.starname':
             'scrollHeight 22 > clientHeight 20',
-        '760x1180 [page] overlap :: span.starholder x span.starrank':
-            'overlap 7x2px inside button.starcell',
-        '761x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
-            'scrollHeight 187 > clientHeight 185',
-        '761x1000 [page] clipped :: span.starname':
-            'scrollHeight 20 > clientHeight 18',
-        '761x1000 [page] overlap :: span.starholder x span.starrank':
-            'overlap 7x2px inside button.starcell',
-        '775x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
-            'scrollHeight 189 > clientHeight 187',
-        '775x1000 [page] overlap :: span.starholder x span.starrank':
-            'overlap 7x2px inside button.starcell',
-        '776x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
-            'scrollHeight 189 > clientHeight 187',
-        '776x1000 [page] overlap :: span.starholder x span.starrank':
-            'overlap 7x2px inside button.starcell',
-        '780x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
-            'scrollHeight 189 > clientHeight 187',
-        '780x1000 [page] overlap :: span.starholder x span.starrank':
-            'overlap 7x2px inside button.starcell',
-        '781x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
-            'scrollHeight 189 > clientHeight 187',
-        '781x1000 [page] overlap :: span.starholder x span.starrank':
+        '851x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
         '900x1180 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 206 > clientHeight 204',
         '900x1180 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '912x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 207 > clientHeight 205',
+        '912x1000 [page] clipped :: span.starname':
+            'scrollHeight 24 > clientHeight 22',
+        '912x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '913x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 208 > clientHeight 206',
+        '913x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
     },
 )

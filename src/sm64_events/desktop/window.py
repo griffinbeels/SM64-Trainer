@@ -23,7 +23,21 @@ from sm64_events.core.paths import APP_DISPLAY_NAME, server_port, window_state_p
 from sm64_events.desktop.tray import _asset_path
 
 log = logging.getLogger("sm64.desktop")
-_DEFAULT = {"w": 480, "h": 900, "x": None, "y": None}
+
+# The narrowest window this app is SUPPORTED at (user's call, 2026-07-29:
+# "the minimum officially supported width we should support is 850px. Height
+# can be any height, that's fine").
+#
+# Enforced in three places, and it has to be all three or it is not enforced:
+#   1. `min_size` below, so the frame cannot be dragged narrower;
+#   2. `_DEFAULT`, which was 480 -- a first run opened BELOW the minimum;
+#   3. the clamp in `_load_geometry`, because a window saved at 480px before
+#      this existed would otherwise reopen at 480px forever.
+# The layout gate's matrix floor is the same number
+# (`tools/uilab_project.py`), so what ships and what is measured agree.
+MIN_WINDOW_WIDTH = 850
+
+_DEFAULT = {"w": 900, "h": 900, "x": None, "y": None}
 
 # Windows uses -32000,-32000 as sentinel coordinates when a window is minimized.
 # Any position <= this threshold is off-screen/minimized; skip persisting it.
@@ -41,6 +55,15 @@ def _load_geometry() -> dict:
             log.debug("discarding off-screen/minimized saved position (%s,%s)", x, y)
             g["x"] = None
             g["y"] = None
+        # Clamp UP to the supported minimum. A window saved narrower than this
+        # -- every window saved before 2026-07-29, since the default was 480 --
+        # would otherwise reopen at its old width and land in a layout nothing
+        # tests. `min_size` alone does not do this: it constrains DRAGGING, not
+        # the size a window is created at.
+        if g.get("w") is not None and g["w"] < MIN_WINDOW_WIDTH:
+            log.debug("raising saved width %s to the supported minimum %s",
+                      g["w"], MIN_WINDOW_WIDTH)
+            g["w"] = MIN_WINDOW_WIDTH
         return g
     except Exception:
         return dict(_DEFAULT)
@@ -75,7 +98,7 @@ def create(on_closed) -> "webview.Window":
     win = webview.create_window(
         APP_DISPLAY_NAME, url=f"http://127.0.0.1:{server_port()}/",
         width=g["w"], height=g["h"], x=g["x"], y=g["y"],
-        resizable=True, min_size=(360, 500))
+        resizable=True, min_size=(MIN_WINDOW_WIDTH, 500))
     win.events.resized += lambda *a: _save_geometry(win)
     win.events.moved += lambda *a: _save_geometry(win)
     win.events.closed += lambda: on_closed()

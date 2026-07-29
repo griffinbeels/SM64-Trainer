@@ -18,6 +18,8 @@ actually happened.
 import re
 from pathlib import Path
 
+from source_scan import strip_comments
+
 PRACTICE_JS = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
                / "ui" / "components" / "practice.js")
 VIEWS_PY = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
@@ -123,3 +125,45 @@ def test_two_rank_banners_are_rendered_for_both_kinds():
 def test_both_section_builders_emit_entity_rank():
     source = VIEWS_PY.read_text(encoding="utf-8")
     assert source.count('"entity_rank"') >= 2
+
+
+def test_both_section_kinds_render_the_shared_stat_chips_row():
+    """The Stats menu chooses WHICH stat chips are shown; the chips themselves
+    render in the detail drawer.
+
+    Shared as ONE component, not pasted twice: adding a control to two copies
+    of markup is precisely the shape that drifts, and rule 11 makes an
+    asymmetry between a star and a segment a bug."""
+    code = strip_comments(PRACTICE_JS.read_text(encoding="utf-8"))
+    assert code.count("<${StatChipsRow}") == 2
+    # ...and no card keeps its own hand-rolled copy of the chips loop.
+    assert code.count("DUST_STAT_KEYS.has") == 1
+
+
+def test_every_attempts_tools_row_carries_the_stat_menu_trigger():
+    """The Stats TRIGGER moved out of the chips row and into the practice-log
+    card's header, left of the sort control (user, 2026-07-28: "For the stats
+    button, we should move it to be inside the practice log, to the left of
+    the sort filter"). It must appear in every `.attempts-tools` row --
+    StarSection, SegmentSection, AND EmptyPractice's "Unassigned attempts"
+    card -- from ONE shared component, never pasted: a 1:1 count between the
+    toolbar row and the trigger is what a future practice-log card silently
+    missing it, or a hand-rolled second copy, would both break.
+
+    This is also what makes the trigger reachable when route focus is on with
+    no active target: neither StarSection/SegmentSection's drawer nor
+    RouteFocus renders anything then, and EmptyPractice's log card is the only
+    surface left -- a trigger missing there would mean the Stats menu again
+    has zero access points on the page, the exact gap this move closes."""
+    code = strip_comments(PRACTICE_JS.read_text(encoding="utf-8"))
+    toolbar_rows = code.count('class="attempts-tools"')
+    trigger_uses = code.count("<${StatMenuTrigger}")
+    assert toolbar_rows >= 3, (
+        f"expected at least 3 practice-log toolbar rows (star/segment/"
+        f"unassigned), found {toolbar_rows} -- did one get renamed?")
+    assert trigger_uses == toolbar_rows, (
+        f"{toolbar_rows} '.attempts-tools' row(s) but {trigger_uses} "
+        "StatMenuTrigger use(s) -- every practice-log toolbar must carry "
+        "exactly one shared trigger")
+    # ...and no card keeps its own hand-rolled copy of the trigger button.
+    assert code.count("function StatMenuTrigger") == 1

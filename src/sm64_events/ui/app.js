@@ -14,7 +14,7 @@ import { UpdatePopup } from "./components/update.js";
 import { RecordingDot } from "./components/replay.js";
 import { Icon } from "./components/icons.js";
 import { RankPage } from "./components/rankpage.js";
-import { RankUpOverlay } from "./components/celebrate.js";
+import { RankUpCelebration } from "./components/marelocelebrate.js";
 
 const html = htm.bind(h);
 
@@ -159,6 +159,13 @@ function MobileMore({ open, close, tab, setTab, openSettings }) {
 
 function App() {
   const t = useTracker();
+  // There is deliberately NO app-wide background tint here. One existed for
+  // part of 2026-07-28 (ui/ranktint.js, worn at rest off the store's tier)
+  // and was deleted the same day: "It should NOT be tinted by default. It
+  // should only tint during the animation" (user). The celebration's own
+  // backdrop is the only thing that tints the page, and it already runs the
+  // whole sequence -- default -> the rank you're on -> each tier you climb
+  // through -> back to default.
   const [tab, setTabState] = useState("Practice");
   const [compareIntent, setCompareIntent] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -206,8 +213,10 @@ function App() {
          the Practice page must still celebrate, and rule 10 (browser<->GUI
          parity) means the desktop window and the browser tab agree on this
          without desktop/ adding a second copy. */""}
-    <${RankUpOverlay} celebration=${t.marelo && t.marelo.celebration}
-      scopeId=${t.marelo && t.marelo.scope_id} onDone=${t.clearMareloCelebration} />
+    <${RankUpCelebration} celebration=${t.marelo && t.marelo.celebration}
+      scopeId=${t.marelo && t.marelo.scope_id} marelo=${t.marelo}
+      routes=${t.routes} activeRouteId=${t.activeRouteId}
+      onDone=${t.clearMareloCelebration} />
   </div>`;
 }
 

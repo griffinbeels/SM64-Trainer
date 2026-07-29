@@ -1178,6 +1178,49 @@ class TrackerService:
             watermarks[scope_id] = int(key)
             self.db.set_state("marelo_watermarks", watermarks)
 
+    def absorb_watermark(self, scope_id: str, key: int) -> None:
+        """Raise a watermark WITHOUT celebrating -- the rank a scope already
+        holds when you arrive at it becomes the new baseline.
+
+        The second and last thing allowed to raise one, and deliberately not
+        `ack_celebration`: that one broadcasts, because a raise there means a
+        celebration was shown and the other open client must dismiss the same
+        one. Nothing was shown here, so there is nothing to dismiss.
+
+        Live report, 2026-07-28: "I just swapped the route around at the top
+        over and over again, from a lower rank to a higher rank, and it seems
+        to have triggered the middle-of-screen rank up animation. Swapping
+        between routes like that should never trigger any rank up." Only
+        `ack_celebration` could raise a watermark, so every scope silently
+        accumulated a rank-up it had never displayed and discharged it the
+        first time the user looked at that scope -- and with 48 routes in the
+        library that is a queue of them, one per route. Measured on the live
+        db: 3 of 7 watermarked scopes fired on sight, two of them tier
+        crossings (the full-screen takeover)."""
+        if self.db is None:
+            return
+        watermarks = self.marelo_watermarks()
+        if key > watermarks.get(scope_id, -1):
+            watermarks[scope_id] = int(key)
+            self.db.set_state("marelo_watermarks", watermarks)
+
+    def note_active_scope(self, scope_id: str) -> bool:
+        """Record which scope is active; True if it just CHANGED.
+
+        The one bit that tells "you earned this" from "you navigated here".
+        `_active_scope` is derived from the journaled `route_selected`, so
+        this is the server's own answer rather than something a client has to
+        assert about itself -- and the client already has the mirror of this
+        rule for the in-place bar (`identity` in ui/rankclimb.js: switching
+        scope re-rates against a different set of entities and legitimately
+        produces a higher rank nobody earned)."""
+        if self.db is None:
+            return False
+        if self.db.get_state("marelo_active_scope", None) == scope_id:
+            return False
+        self.db.set_state("marelo_active_scope", scope_id)
+        return True
+
     # There are NO per-ENTITY celebration watermarks (deleted with task 0012,
     # 2026-07-26). A star's or segment's own rank-up used to be held in an
     # `entity_rank_watermarks` KV until a client rendered and acked it; it is

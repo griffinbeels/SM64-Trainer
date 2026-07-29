@@ -19,6 +19,10 @@ for, both guarded here:
     script takes the max across BOTH cards, same as it already does across
     every card on the page.
 
+Uses `serve_ui()`'s own defaults, so it measures exactly the card the layout
+gate measures. Those defaults seed a star with FIVE strategies precisely so
+BOTH rank banners render -- the tallest thing the card ever holds.
+
 Run:  uv run python tools/measure_objective_card.py
 """
 from __future__ import annotations
@@ -37,13 +41,11 @@ if _MISSING:
 from ui_fixture import serve_ui                       # noqa: E402
 from uilab.driver import get_driver                   # noqa: E402
 
-# Shifting Sand Land (course 8, level 8), star 0 -- the card in the 2026-07-28
-# and -29 reports, and the one whose ranks the dev db already holds.
-STAGE = (8, 8)
-TARGET = (8, 0)
 # LBLJ (segment id 1) -- one of the ten legacy tricks the schema migration
 # itself inserts, so it exists even in the dev db snapshot regardless of
-# whatever the defaults corpus currently holds.
+# whatever the defaults corpus currently holds. The STAGE/TARGET constants
+# that sat here are gone: main made serve_ui() seed a deterministic
+# practice state of its own, so naming them again would be a second copy.
 ARM_SEGMENT = 1
 
 WIDTHS = (320, 340, 360, 400, 430, 480, 520, 560, 600, 640, 680, 700,
@@ -81,8 +83,7 @@ document.querySelectorAll('details.practice-index-item:not([open])')
 
 def main() -> int:
     shortfalls: list[tuple[int, int, int]] = []
-    with serve_ui(from_dev_db=True, stage=STAGE, target=TARGET,
-                  arm_segment=ARM_SEGMENT) as base, \
+    with serve_ui(arm_segment=ARM_SEGMENT) as base, \
             get_driver().launch() as page:
         page.goto(f"{base}/ui/index.html")
         page.wait_for(".objective-card")

@@ -10,6 +10,11 @@ const REFRESH_ON = new Set(["attempt_completed", "attempts_invalidated",
 ]);
 const RUN_REFRESH_ON = new Set(["run_started", "run_progress",
   "run_finished", "run_aborted", "game_reset"]);
+// Sentinel for "this client has no pending route pick of its own" -- distinct
+// from `null`, which is the real value for a deliberate "Overall" pick. See
+// pickRoute/flushRouteIntent below (live report 2026-07-28: rapid route
+// switching got permanently stuck).
+const NO_ROUTE_INTENT = Symbol("no-pending-route-intent");
 
 export function useTracker() {
   const [view, setView] = useState(null);
@@ -120,6 +125,140 @@ export function useTracker() {
   // longer a payload to hold and dismiss. They are performed live by the
   // rank banner itself climbing (ui/rankclimb.js, task 0012, 2026-07-26), so
   // there is nothing for a client to ack and nothing to clear.
+
+  // The practice plan: WHICH route the user is practising. Store-owned since
+  // 2026-07-28 because it now has two surfaces -- the header's route rank
+  // card (which is also the picker) and the Practice tab's route focus -- and
+  // a component's useState cannot be reached by a sibling. localStorage is an
+  // optimistic mirror; the journaled route_selected is the source of truth
+  // (spec 2026-07-23 section 5), which is what the reconcile effect below
+  // keeps true across a restart.
+  const [routes, setRoutes] = useState([]);
+  const [activeRouteId, setActiveRouteId] = useState(() => {
+    const s = localStorage.getItem("sm64.activeRoute");
+    return s ? Number(s) : null;
+  });
+  // The practice plan and the Rank tab's scope picker are ONE list, from
+  // ONE endpoint (user, 2026-07-27: "These should be identical lists and
+  // should be the exact same set of options that trigger the exact same
+  // things"). `/api/marelo/scopes` is that list -- the same labels, in the
+  // same order, with "Overall" as the first entry rather than a separate
+  // "All practice" wording for the same thing. Course scopes are dropped
+  // here and only here: a course is a rating you can BROWSE, not a plan
+  // you can practise, since there is no route for the focus to follow.
+  useEffect(() => {
+    getJSON("/api/marelo/scopes")
+      .then((body) => setRoutes((body.scopes || [])
+        .filter((scope) => scope.kind === "route")
+        .map((scope) => ({ id: Number(scope.id.slice("route:".length)),
+                           name: scope.label }))))
+      .catch(() => {});
+  }, []);
+  const setRoute = (id) => {
+    if (id == null) localStorage.removeItem("sm64.activeRoute");
+    else localStorage.setItem("sm64.activeRoute", String(id));
+    setActiveRouteId(id);
+  };
+  // pendingRouteIntent / routeWriteInFlight: THIS client's own unconfirmed
+  // pick, serialised through flushRouteIntent so at most ONE
+  // /api/route/select write is ever on the wire from this client at a time
+  // (live report 2026-07-28: "if I go back and forth and change routes fast
+  // enough… it gets stuck on one of the routes").
+  //
+  // Root cause, found by reproduction (three connected clients, matching
+  // browser-tab + desktop-GUI parity, rule 10): the active route is ONE
+  // practice-wide setting shared by every connected client, but the OLD code
+  // here unconditionally re-POSTed THIS client's remembered `activeRouteId`
+  // whenever the server disagreed — on every client, with no way to tell "the
+  // server drifted, fix it" from "someone else legitimately just changed it a
+  // moment ago". Two clients holding different opinions then fight forever:
+  // each one's own corrective POST is itself a disagreement the OTHER
+  // corrects right back, broadcasting without bound (measured: session-view
+  // GET latency climbing past 400ms as the storm grew, and it never settles
+  // on its own). That is also why the OLD reconcile effect could not repair
+  // it — the effect WAS the fight.
+  //
+  // The fix: only a client with a pending intent of its own may ever WRITE.
+  // Every other disagreement is ADOPTED (see the reconcile effect below),
+  // never re-asserted — so a passive client (or this one, once its own pick
+  // has been sent) simply follows the shared setting instead of contesting
+  // it, and the loop has nothing left to feed on.
+  const pendingRouteIntent = useRef(NO_ROUTE_INTENT);
+  const routeWriteInFlight = useRef(false);
+  const flushRouteIntent = () => {
+    if (routeWriteInFlight.current
+        || pendingRouteIntent.current === NO_ROUTE_INTENT) return;
+    const id = pendingRouteIntent.current;
+    pendingRouteIntent.current = NO_ROUTE_INTENT;
+    routeWriteInFlight.current = true;
+    // Tell the SERVER too (spec 2026-07-23 §5: localStorage is an optimistic
+    // mirror, the journaled route_selected is the source of truth). Without
+    // this the active route was never journaled, so every seeded castle-
+    // movement segment — all 55 carry the in_active_route guard — could only
+    // ever arm as a standalone target, i.e. the route corpus was inert. It
+    // also feeds active_route.star_keys, which is what lets the selector show
+    // only the route's stars.
+    send("POST", "/api/route/select", { route_id: id })
+      .then(() => refresh())      // pull the new active_route.star_keys
+      .catch(() => {
+        // Selection still works locally if the write fails -- but retry on
+        // the next flush unless a newer pick has since superseded this one.
+        if (pendingRouteIntent.current === NO_ROUTE_INTENT) {
+          pendingRouteIntent.current = id;
+        }
+      })
+      .finally(() => {
+        routeWriteInFlight.current = false;
+        flushRouteIntent();   // a newer pick may have queued while this ran
+      });
+  };
+  const pickRoute = (id) => {
+    setRoute(id);
+    pendingRouteIntent.current = id;
+    flushRouteIntent();
+  };
+  // flushRouteIntent's own `.catch` above is exactly why the reconcile effect
+  // below still needs to exist. localStorage is an optimistic mirror of a
+  // JOURNALED decision, the write can fail silently, and the picker restores
+  // from localStorage on mount without ever telling the server again. The two
+  // then stay diverged forever, invisibly here and very visibly wherever the
+  // server DERIVES something from the active route: the header's route rank
+  // card reads "Overall" while the practice plan says "16 Star — LBLJ",
+  // because `/api/marelo`'s default scope IS the server's active route (live
+  // report 2026-07-27).
+  //
+  // Keyed on the two IDS, not on the view object: `view` is a fresh identity
+  // every fetch, so an object dependency here would re-run on every
+  // WebSocket event for as long as the server kept disagreeing.
+  const serverRouteId = (view && view.active_route && view.active_route.id) ?? null;
+  // Reconcile: ADOPT the server's active route whenever this client has no
+  // pending pick of its own in flight -- covers a fresh client (never chosen,
+  // localStorage empty), the desktop GUI's first run, AND a client that just
+  // learned another connected client changed the route. This effect never
+  // itself WRITES; the only write path is flushRouteIntent above, which is
+  // what keeps two connected clients from re-correcting each other forever.
+  useEffect(() => {
+    if (routeWriteInFlight.current
+        || pendingRouteIntent.current !== NO_ROUTE_INTENT) return;
+    if (serverRouteId === activeRouteId) return;
+    setRoute(serverRouteId);
+  }, [serverRouteId, activeRouteId]);
+  // marelo can go stale the same way session view can, for a structural
+  // reason: TrackerService.publish() broadcasts route_selected BEFORE it
+  // journals the change (server/broadcaster.py's await precedes
+  // tracking/service.py's _track), so a refetch triggered by that broadcast
+  // can execute and return before the write it is reacting to has actually
+  // landed. Session view self-heals via the reconcile effect above (it
+  // compares the fetched value against activeRouteId and retries); marelo has
+  // no such check anywhere else, so give it the same one -- if the scope this
+  // client actually just scored doesn't match what it currently wants, the
+  // fetch was stale and gets replayed.
+  useEffect(() => {
+    if (!marelo) return;
+    const wantedScope = activeRouteId == null ? "overall" : `route:${activeRouteId}`;
+    if (marelo.scope_id === wantedScope) return;
+    refreshMarelo();
+  }, [marelo, activeRouteId, refreshMarelo]);
 
   // server-owned pause truth: {paused, reason: "manual"|"afk"|null}.
   // Polled (5 s) because "afk" flips server-side without any UI action;
@@ -347,6 +486,7 @@ export function useTracker() {
            armedSegs, armedOrder, armedNames, lastPinnedSeg, stage,
            run, refreshRun,
            marelo, mareloRev, clearMareloCelebration,
+           routes, activeRouteId, pickRoute,
            update, updateForced, setUpdateForced, updateApplying,
            setUpdateApplying, updateMsg, checkUpdates, applyUpdate, skipUpdate,
            notice, setNotice };

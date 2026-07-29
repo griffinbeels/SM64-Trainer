@@ -213,8 +213,11 @@ CORPUS_CLAIMS = [
     ("entities.js", "src/sm64_events/ui/entities.js",
      r"(\d+) of the (\d+) seeded definitions are Castle Movement",
      ("castle_movement", "segments")),
-    ("practice.js", "src/sm64_events/ui/components/practice.js",
-     r"all (\d+) carry the in_active_route guard", ("movements",)),
+    # practice.js's row is GONE, not moved: main deleted the practice-page
+    # route picker (the gesture now lives in the header's RouteRankCard), and
+    # the sentence stating the count went with it. Removed rather than
+    # re-pointed — the guard's own "zero matches means unchecked" assertion
+    # caught this during the merge, which is the behaviour it was written for.
     ("architecture.md: authored", "docs/architecture.md",
      r"route steps and (\d+) definitions were authored", ("movements",)),
     ("architecture.md: negative pass", "docs/architecture.md",

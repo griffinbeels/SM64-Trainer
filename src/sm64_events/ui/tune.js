@@ -23,19 +23,18 @@ import htm from "htm";
 import { RankBanner } from "/ui/components/ranks.js";
 import { Icon } from "/ui/components/icons.js";
 import { RANK_NAMES, DIVISION_NUMERALS, DIVISIONS_PER_TIER, capName,
-         divisionDigit, rankAt, rankPosition } from "/ui/components/caps.js";
+         divisionDigit, rankAt } from "/ui/components/caps.js";
 import { buildClimbPlan } from "/ui/climbplan.js";
 import { climbTimings } from "/ui/climbcurve.js";
 import { TUNABLES, CHOICES, DEFAULTS, GROUPS, setTuning, encodeTuning,
          decodeTuning, changedFromDefault, withDefaults } from "/ui/climbtuning.js";
 import { celebrationsEnabled } from "/ui/celebrations.js";
 import { prefersReducedMotion } from "/ui/useTween.js";
+import { ControlGroups, LevelPicker } from "/ui/tunecontrols.js";
 
 const html = htm.bind(h);
 const STORE_KEY = "sm64.climbTuneDraft";
 const TOP_LEVEL = RANK_NAMES.length * DIVISION_NUMERALS.length - 1;
-// Bottom-first, so the pickers read Capless -> Mario the way the ladder does.
-const TIERS = [...RANK_NAMES].reverse();
 
 const rankLabel = (level) => {
   const { tier, division } = rankAt(level);
@@ -53,27 +52,6 @@ function bannerFor(level, fill) {
     next_tier: next && next.tier, next_division: next && next.division,
     next_gap_cs: next ? 4 : null, mode: "best", basis: null,
   };
-}
-
-function LevelPicker({ label, level, onChange, min = 0 }) {
-  // Named tierKey, never `tier`: tests/test_ui_cap_names.py forbids putting a
-  // raw tier key on screen, and it reads the identifier rather than the value.
-  // A select's `value` is not on screen, but the guard cannot know that and
-  // a name that reads as displayable is the wrong name here anyway.
-  const { tier: tierKey, division } = rankAt(level);
-  const pick = (nextTier, nextDivision) =>
-    onChange(Math.max(min, rankPosition(nextTier, nextDivision, 0)));
-  return html`<div>
-    <label>${label}</label>
-    <select value=${tierKey} onchange=${(e) => pick(e.target.value, division)}>
-      ${TIERS.map((one) => html`<option value=${one}
-        disabled=${rankPosition(one, "V", 0) + 4 < min}>${capName(one)}</option>`)}
-    </select>
-    <select value=${division} onchange=${(e) => pick(tierKey, e.target.value)}>
-      ${DIVISION_NUMERALS.map((one) => html`<option value=${one}
-        disabled=${rankPosition(tierKey, one, 0) < min}>${divisionDigit(one)}</option>`)}
-    </select>
-  </div>`;
 }
 
 // What the current tuning will ACTUALLY play, step by step.
@@ -145,32 +123,6 @@ function PlanReadout({ values, startLevel, destLevel, destFill }) {
         + `${String(Math.round(step.ms)).padStart(4)}ms`
         + (over ? "  over" : "");
     }).join("\n")}</pre>
-  </div>`;
-}
-
-function Control({ name, row, value, onChange }) {
-  const changed = value !== DEFAULTS[name];
-  const cls = `tune-row${changed ? " is-changed" : ""}`;
-  if (row.options) {
-    return html`<div class=${cls}>
-      <label title=${row.why} for=${name}>${row.label}</label>
-      <select id=${name} value=${value} onchange=${(e) => onChange(e.target.value)}>
-        ${Object.entries(row.options).map(([key, text]) =>
-          html`<option value=${key}>${text}</option>`)}
-      </select>
-    </div>`;
-  }
-  const set = (raw) => {
-    const parsed = Number(raw);
-    if (Number.isFinite(parsed)) onChange(parsed);
-  };
-  return html`<div class=${cls}>
-    <label title=${`${row.why}\nshipped default: ${DEFAULTS[name]}${row.unit}`}
-      for=${name}>${row.label}${row.unit === "ms" ? "" : ` (${row.unit || "n"})`}</label>
-    <input id=${name} type="number" value=${value} min=${row.min} max=${row.max}
-      step=${row.step} onchange=${(e) => set(e.target.value)} />
-    <input type="range" value=${value} min=${row.min} max=${row.max} step=${row.step}
-      oninput=${(e) => set(e.target.value)} />
   </div>`;
 }
 
@@ -329,15 +281,8 @@ function Inspector() {
       <${PlanReadout} values=${values} startLevel=${startLevel}
         destLevel=${destLevel} destFill=${destFill} />
 
-      ${GROUPS.map((group) => html`<div>
-        <h2>${group}</h2>
-        ${Object.entries(CHOICES).filter(([, row]) => row.group === group)
-          .map(([name, row]) => html`<${Control} name=${name} row=${row}
-            value=${values[name]} onChange=${(value) => set(name, value)} />`)}
-        ${Object.entries(TUNABLES).filter(([, row]) => row.group === group)
-          .map(([name, row]) => html`<${Control} name=${name} row=${row}
-            value=${values[name]} onChange=${(value) => set(name, value)} />`)}
-      </div>`)}
+      <${ControlGroups} groups=${GROUPS} rows=${{ ...CHOICES, ...TUNABLES }}
+        values=${values} defaults=${DEFAULTS} onChange=${set} />
 
       <h2>Changed from shipped (${changedKeys.length})</h2>
       <pre class=${`tune-diff${changedKeys.length ? "" : " empty"}`}>${

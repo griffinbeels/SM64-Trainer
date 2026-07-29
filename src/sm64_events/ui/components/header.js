@@ -4,8 +4,10 @@ import htm from "htm";
 import { send } from "../api.js";
 import { RANK_MODE_OPTIONS } from "./ranks.js";
 import { Icon } from "./icons.js";
-import { MareloBar } from "./marelo.js";
+import { ContextSelect } from "./contextselect.js";
+import { RouteRankCard } from "./marelo.js";
 import { ICON_STYLES } from "./rankicon.js";
+import { useMareloTurn } from "../mareloturn.js";
 import { celebrationsEnabled, setCelebrationsEnabled,
          CLIMB_SKIP_STYLES, climbSkipStyle, setClimbSkipStyle } from "./celebrate.js";
 
@@ -13,46 +15,12 @@ const html = htm.bind(h);
 
 const CLOCK_OPTIONS = [["igt", "Usamune IGT"], ["rta", "Anchor → grab"]];
 
-// One context card = one hit target. The practice-target card already
-// highlighted and opened as a whole because it IS a <button>; the three
-// <select> cards only reacted on the select itself, which read as an
-// inconsistency (user, 2026-07-25). Here the native <select> is stretched
-// over the entire card and painted transparent (see .context-select in
-// index.html), so a click anywhere opens the real dropdown — which means the
-// closed-state value and the chevron are drawn by us. Both the value and the
-// <option>s come from the SAME `options` list, so they cannot disagree.
-function ContextSelect({ icon, label, options, value, onChange, id, name,
-                        title, empty }) {
-  const picked = options.find(([optionValue]) => optionValue === value);
-  return html`<div
-      class=${`context-control${options.length ? " context-select" : ""}`}>
-    <${Icon} name=${icon} size=${19} />
-    <span class="context-control-copy">
-      <span class="context-label">${label}</span>
-      <span class="context-value">${picked ? picked[1] : empty}</span>
-    </span>
-    ${options.length ? html`<${Icon} name="chevron" size=${16} />` : null}
-    ${/* title rides the SELECT, not the card: it covers the card anyway, so
-          the tooltip still answers a hover anywhere — and this way it also
-          reaches a screen reader as the combobox's description. */
-      options.length ? html`<select id=${id} name=${name} aria-label=${label}
-        title=${title} value=${value} onchange=${onChange}>
-      ${options.map(([optionValue, optionLabel]) =>
-        html`<option value=${optionValue}>${optionLabel}</option>`)}
-    </select>` : null}
-  </div>`;
-}
-
-export function Header({ t, settingsOpen, closeSettings, setTab }) {
+export function Header({ t, settingsOpen, closeSettings }) {
   const v = t.view;
   const [restarting, setRestarting] = useState(false);
   const [celebrateOn, setCelebrateOn] = useState(celebrationsEnabled());
   const [skipStyle, setSkipStyle] = useState(climbSkipStyle());
-
-  // marelo is store-owned (store.js) -- app.js reads the same object to
-  // decide whether the rank-up overlay is showing, so the header and the
-  // overlay can never disagree about a pending celebration.
-  const openMarelo = () => setTab("Rank");
+  const mareloTurn = useMareloTurn(t.marelo);
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -122,29 +90,30 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
         value=${t.scope === "lifetime" ? "lifetime" : String(active)}
         empty="Loading…" />
 
-      ${/* Slot 2 used to be a PRACTICE TARGET card naming the current target
-            and opening the picker. Removed 2026-07-26 (user): the
-            Active-target card and the quick-select row both name the target
-            already, and its own pick was mostly a dead end -- you cannot
-            practice Shifting Sand Land while loaded into Lethal Lava Land.
-            The picker moved to the Active-target card (targetpicker.js) and
-            the MARELO bar took the space, which is how it comes to sit in the
-            middle of the bar instead of on a second row of its own.
-            The wrapper around it is NOT decoration: MareloBar renders null
-            until the first /api/marelo lands, and a null grid child is no
-            child at all -- the clock card would slide into this column and
-            the whole bar would shift left for a beat. An always-present cell
-            holds the place, wearing its neighbours' panel while empty. */
+      ${/* The wrapper carries `container-type: inline-size` so the card's own
+            @container rules measure THIS COLUMN rather than the viewport --
+            the sidebar's 1180px step means the column's width is not
+            monotonic in window width. It used to also hold the grid cell open
+            while MareloBar rendered null; the card no longer does that,
+            because it now hosts the route picker and the control has to exist
+            before the rating does. */
         null}
       <div class="marelo-slot">
         <!-- The identity prop is what tells a genuine rank RISE apart from
-             the same bar being handed a different measurement: switching the
+             the same card being handed a different measurement: switching the
              active scope re-rates against a different set of entities, and
              changing the grading mode re-grades every one of them. Both can
              legitimately produce a higher rank nobody earned, and neither may
              fire a level-up climb (ui/rankclimb.js). -->
-        <${MareloBar} marelo=${t.marelo} onOpen=${openMarelo}
-            identity=${`${t.marelo ? t.marelo.label : ""}|${v ? v.rank_mode : ""}`} />
+        ${/* The card shows the payload ui/mareloturn.js says it may show --
+             the OLD one while a scope rank-up is still waiting behind the
+             entity banners, so it does not quietly climb to the new rank
+             while they are animating ("it should be as if nothing has
+             changed before then"). The celebration overlay reads the same
+             hook, so the two can never disagree about whose turn it is. */""}
+        <${RouteRankCard} marelo=${mareloTurn.marelo} routes=${t.routes}
+            activeRouteId=${t.activeRouteId} onPickRoute=${t.pickRoute}
+            identity=${`${mareloTurn.marelo ? mareloTurn.marelo.label : ""}|${v ? v.rank_mode : ""}`} />
       </div>
 
       <${ContextSelect} icon="clock" label="Clock" id="clock-select"
@@ -256,6 +225,11 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
             <a href="/ui/tune.html" target="_blank" rel="noopener">Open the
               rank-up tuning page</a> — play any climb, tune every timing,
             and save the result straight back into the code.
+          </p>
+          <p class="settings-note">
+            <a href="/ui/tunemarelo.html" target="_blank" rel="noopener">Open the
+              overall rank-up tuning page</a> — fly the card out, tune the
+            flight and the hold, and save the result straight back into the code.
           </p>
           <label class="settings-field">
             <span>Dust-trick counts</span>
