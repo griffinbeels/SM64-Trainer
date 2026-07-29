@@ -90,9 +90,20 @@ export function MareloCelebration({ celebration, scopeId, marelo, routes,
 
   // Computed here, ABOVE every early return, because rules of hooks require
   // the two effects right below to run on every render regardless: `shown`
-  // is celebration.from until the card is at the centre, then celebration.to
-  // -- the same "before -> after" gate the rest of the file already uses.
-  const atCentre = phase === "climb" || phase === "hold";
+  // is celebration.from during the flight OUT, and celebration.to from the
+  // moment the climb starts -- through the hold AND all the way home.
+  //
+  // "back" belongs on the EARNED side, and leaving it off was a real defect
+  // (found 2026-07-28): the card climbed to Waluigi 4, then flipped to
+  // Capless 5 on the first frame of the fly-home and wore the OLD rank for
+  // the whole trip back. `useRankClimb`'s never-animate-a-regression rule
+  // makes that revert instant, so it reads as the rank-up being taken away
+  // at the exact moment the user is watching it land -- the opposite of "I
+  // should rank up, and then see that new rank settle in the header".
+  //
+  // Only the outbound flight shows the before-state, which is the whole
+  // reason `beforeHoldMs` exists.
+  const atCentre = phase !== "out";
   const shown = celebration ? (atCentre ? celebration.to : celebration.from) : null;
 
   // ---- The app-wide background tint (report 1, 2026-07-28) --------------

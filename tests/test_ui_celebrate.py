@@ -141,3 +141,30 @@ def test_the_flight_has_exactly_one_transition_declaration():
     css = strip_comments(INDEX_HTML)
     rules = re.findall(r"\.marelo-celebrate-card[^{]*\{([^}]*)\}", css)
     assert sum("transition:" in rule for rule in rules) == 1, rules
+
+
+def test_the_card_wears_the_EARNED_rank_all_the_way_home():
+    """Only the outbound flight shows the before-state.
+
+    `atCentre` gated on `"climb" || "hold"` until 2026-07-28, so the frame the
+    fly-back began the card reverted to `celebration.from` -- and
+    useRankClimb's never-animate-a-regression rule makes that revert INSTANT.
+    Measured live: the card climbed to Waluigi 4, then wore Capless 5 for the
+    entire trip home. The rank-up appeared to be taken away at exactly the
+    moment the user was watching it land, which is the opposite of "I should
+    rank up, and then see that new rank settle in the header".
+
+    Asserted on the expression rather than the phase list, because the bug was
+    an omission FROM that list -- a test naming the same three phases would
+    have been written from the same wrong assumption."""
+    code = strip_comments(MARELO_CELEBRATE_JS)
+    found = re.search(r"const atCentre = (.*?);", code, re.S)
+    assert found, "atCentre was renamed or removed -- re-point this guard"
+    expression = found.group(1)
+    assert '"out"' in expression, expression
+    # An allow-list of phases is exactly how this shipped wrong.
+    for earned in ('"climb"', '"hold"', '"back"'):
+        assert earned not in expression, (
+            f"{expression} enumerates {earned}; gate on the ONE phase that "
+            "shows the before-state instead, so a new phase defaults to the "
+            "earned rank rather than silently reverting.")
