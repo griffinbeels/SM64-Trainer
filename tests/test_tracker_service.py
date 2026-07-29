@@ -484,6 +484,36 @@ def test_100_coin_star_pick_redirect_carries_its_strategy(tmp_path):
     assert svc.strat_by_segment[sid] == "Coin Route A"
 
 
+def _create_future_shape_hundred_coin_segment(svc, course_id, course_level,
+                                              other_star=0, enabled=True):
+    """Stand-in for the APPROVED-BUT-NOT-YET-LANDED reshape of this family
+    (user, 2026-07-29): '100-coin span -- it should be the whole course
+    visit. Timing starts on reset -> timer ends after grabbing the final
+    exit-star.' Start becomes course entry, the 100-coin grab MOVES to a
+    waypoint, end is unchanged -- same family, a different span, which is
+    exactly what _hundred_coin_redirect must keep matching."""
+    return asyncio.run(svc.create_segment({
+        "name": f"100c future {course_id}",
+        "start_triggers": [{"type": "attempt_anchor", "level": course_level},
+                          {"type": "level_enter", "to": course_level}],
+        "waypoints": [[{"type": "star_grabbed", "course": course_id, "star": 6}]],
+        "end_triggers": [{"type": "star_grabbed", "course": course_id,
+                          "star": other_star}],
+        "enabled": enabled}))
+
+
+def test_100_coin_star_pick_redirects_to_the_future_reshaped_segment(tmp_path):
+    """The redirect must not be position-specific: once the approved span
+    change lands, the 100-coin grab is a WAYPOINT rather than the start
+    clause, and the redirect must keep finding this family by what its own
+    sequence includes, not by where in that sequence the grab sits."""
+    db, svc = make(tmp_path)
+    sid = _create_future_shape_hundred_coin_segment(svc, course_id=2,
+                                                     course_level=24)
+    asyncio.run(svc.request_target("star", course_id=2, star_id=6))
+    assert svc.target == ("segment", sid)
+
+
 def test_death_event_flows_to_death_attempt(tmp_path):
     db, svc = make(tmp_path)
     asyncio.run(svc.publish(ev("practice_reset", 1000,

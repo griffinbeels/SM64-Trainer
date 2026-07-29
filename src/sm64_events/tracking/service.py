@@ -387,14 +387,27 @@ class TrackerService:
         decode either: SegmentDef (this service's loaded shape) carries no
         seed_key at all -- _load_segment_defs only pulls the dataclass's own
         fields, so seed_key/category exist solely on the raw db row. The only
-        structural fact available on a SegmentDef is its own start_triggers,
-        and for exactly this family (mechanic() in tools/corpus_vocab.py)
-        that is a single star_grabbed(course, 6) clause -- so this asks "what
-        definition actually starts on THIS course's 100-coin grab" rather
-        than reverse-engineering a course abbreviation out of a string. A
-        def a user has hand-edited keeps matching by what it now does, not by
-        its name, and a course with none (deleted, or never seeded) simply
-        returns None so the caller can fall back to the plain star.
+        structural fact available on a SegmentDef is its own trigger clauses,
+        so this asks "does this definition's own sequence include grabbing
+        THIS course's 100-coin star" rather than reverse-engineering a course
+        abbreviation out of a string. A def a user has hand-edited keeps
+        matching by what it now does, not by its name, and a course with none
+        (deleted, or never seeded) simply returns None so the caller can fall
+        back to the plain star.
+
+        SPAN-AGNOSTIC ON PURPOSE (2026-07-29): today (mechanic() in tools/
+        corpus_vocab.py) the 100-coin grab is the definition's SOLE start
+        clause. An approved-but-not-yet-landed reshape moves it to a WAYPOINT
+        instead (start becomes course entry, end stays the exit star) so the
+        segment times the whole course visit rather than just the coin-to-
+        exit leg -- the family's IDENTITY is "this run includes grabbing this
+        course's 100-coin star", not "starts on it", so this searches
+        start_triggers AND every waypoint's own any-of clause-set rather than
+        only the first start clause. A position-specific check (start only)
+        would silently stop matching the instant that reshape lands, with no
+        test failure to announce it -- the user would just quietly stop
+        getting the segment he asked for. NOT end_triggers: the 100-coin
+        grab is never how either shape of this family FINISHES.
 
         Disabled defs are excluded on purpose, unlike an explicit segment
         pick (which api.py's own docstring says may target a disabled def):
@@ -404,11 +417,23 @@ class TrackerService:
         would pin a card that can never record an attempt. Falling back to
         the plain star keeps the click meaningful.
         """
+        def grabs_it(clause: dict) -> bool:
+            return (clause.get("type") == "star_grabbed"
+                    and clause.get("course") == course_id
+                    and clause.get("star") == star_id)
+
+        def sequence(d) -> list:
+            # start_triggers is itself a flat any-of list; each waypoint is
+            # its own any-of clause-set (segments.py's SegmentDef.waypoints
+            # docstring) -- flattening both is what makes "anywhere in the
+            # run" a single search rather than two.
+            clauses = list(d.start_triggers)
+            for waypoint in d.waypoints:
+                clauses.extend(waypoint)
+            return clauses
+
         return next((d.id for d in self._segment_defs
-                     if d.enabled and len(d.start_triggers) == 1
-                     and d.start_triggers[0].get("type") == "star_grabbed"
-                     and d.start_triggers[0].get("course") == course_id
-                     and d.start_triggers[0].get("star") == star_id),
+                     if d.enabled and any(grabs_it(c) for c in sequence(d))),
                     None)
 
     async def request_target(self, kind: str, course_id: int | None = None,
