@@ -109,7 +109,7 @@ MOVEMENTS = [
     movement("seg:bowser2->ddd", "Bowser 2 → DDD",
              exit_level(33), enter_level(23)),
     movement("seg:bowser2->wdw", "Bowser 2 → WDW",
-             exit_level(33), enter_level(11), via=[enter_area(UPSTAIRS)]),
+             exit_level(33), enter_level(11)),
     # The lobby waypoint is load-bearing, not decoration: the castle interior
     # is a LINE (basement <-> lobby <-> upstairs), so this movement crosses TWO
     # area edges. A plain def would be disarmed by the first one before its
