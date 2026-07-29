@@ -266,6 +266,18 @@ def test_the_backtest_button_guard_can_still_fail():
     real_code = 'html`${btBusy ? "Testing…" : "Try it against my history"}`'
     assert _has_backtest_button_label(real_code)
 
+    # The case that makes strip_comments LOAD-BEARING here, and the reason
+    # this block was incomplete until 2026-07-29 (final review, finding 8):
+    # the sample above never contains "Testing…" at all, so the helper
+    # returns False for it whether or not comments are stripped -- the probe
+    # passed while proving nothing about the mechanism it exists to check.
+    # A comment quoting the WHOLE ternary is what a real drift looks like:
+    # someone deletes the button and leaves the docstring that describes it.
+    ternary_in_a_comment = (
+        '/* The button reads html`${btBusy ? "Testing…" : "Try it against '
+        'my history"}` while a backtest is in flight. */\n')
+    assert not _has_backtest_button_label(ternary_in_a_comment)
+
 
 # --- the timeline picker: "record what I just did" (Task 13, spec
 # 2026-07-28-multi-step-segments) -------------------------------------------
