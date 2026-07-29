@@ -109,25 +109,33 @@ export function RouteRankCard({ marelo, routes = [], activeRouteId = null,
   const options = [["", "Overall"],
                    ...routes.map((route) => [String(route.id), route.name])];
 
+  // Round 2 layout (2026-07-28, user's own sketch): a LEFT column pairing
+  // the rank icon with the rank NAME directly beneath it, and a RIGHT
+  // column stacking the scope name, a full-width progress bar, and the
+  // points underneath it -- the bar is the dominant element now, not a
+  // sliver squeezed beside three lines of text. `cardLabel` ("Overall" /
+  // "Route") is no longer painted as its own kicker line -- the scope's own
+  // name (`label`) already answers "for what", the big rank icon and name
+  // answer "what rank" -- but it is still derived the identical scope-aware
+  // way and still rides the card as the picker's accessible name (below),
+  // which is what keeps it a real, live value rather than a dead assignment.
   return html`<div class=${`context-control context-select marelo-bar${
       climb && climb.climbing ? " is-climbing" : ""}`}
       style=${climb ? climb.vars : null}
       title=${label
         ? `${label}: mastery ${fmtScore(mastery)} x coverage ${practiced}/${n}`
         : "Your rating for the practice plan you have selected"}>
-    ${climb ? html`<span class="rank-icon-slot marelo-bar-icon">
-      <${RankIcon} ...${climb.icon} tier=${climb.tier} division=${climb.division} size=${34} />
-    </span>` : html`<span class="rank-icon-slot marelo-bar-icon">–</span>`}
-    <span class="marelo-bar-text">
-      <span class="context-label">${cardLabel}</span>
+    <span class="marelo-bar-icon-col">
+      ${climb ? html`<span class="rank-icon-slot marelo-bar-icon">
+        <${RankIcon} ...${climb.icon} tier=${climb.tier} division=${climb.division} size=${34} />
+      </span>` : html`<span class="rank-icon-slot marelo-bar-icon">–</span>`}
       <b>${climb ? `${capName(climb.tier)} ${divisionDigit(climb.division)}` : "Unranked"}</b>
-      ${/* Points BEFORE the scope name: the card is as wide as its column, so
-           this line ellipsises, and a narrow column must drop the scope name
-           rather than the one part of the line that is a value. */
-        null}
-      <span class="meta">${fmtPoints(score)} pts · ${label || "…"}</span>
     </span>
-    <span class="marelo-track"><i style=${`width:${climb ? climb.fill * 100 : 0}%`}></i></span>
+    <span class="marelo-bar-body">
+      <span class="context-value">${label || "…"}</span>
+      <span class="marelo-track"><i style=${`width:${climb ? climb.fill * 100 : 0}%`}></i></span>
+      <span class="meta">${fmtPoints(score)} pts</span>
+    </span>
     ${interactive && onPickRoute ? html`<${CardSelect} id="route-select"
       name="active_route" label=${cardLabel}
       title="Which route you are practising — this is also what the rank rates"
