@@ -177,6 +177,42 @@ def test_area_enter_on_a_non_castle_level_is_refused_not_mis_filed():
         corpus_from_db.segment_row_source(row)
 
 
+@pytest.mark.parametrize("clause,helper", [
+    ({"type": "star_grabbed"}, "grab_star"),
+    ({"type": "star_grabbed", "course": 9}, "grab_star"),
+    ({"type": "key_grabbed"}, "grab_key"),
+    ({"type": "spawned"}, "spawn"),
+    ({"type": "area_enter", "level": 6}, "enter_area"),
+])
+def test_an_unscoped_clause_is_refused_with_a_reason_not_a_keyerror(clause,
+                                                                    helper):
+    """One unscoped clause used to abort the whole --all-dirty batch.
+
+    `star_grabbed.course`/`.star`, `key_grabbed.level`, `spawned.level` and
+    `area_enter.area` are all OPTIONAL in the TRIGGERS registry, so an
+    unscoped clause is a legitimate definition. The corpus helpers take them
+    positionally and cannot express "any" — but they read them with a bare
+    subscript, and `main` catches only NotExpressible, so a KeyError escaped
+    and killed the run instead of skipping the row. Unreachable from the
+    seeded corpus; reachable from a user-authored definition, since the
+    Builder's `add()` creates a clause as `{"type": ...}` with no params —
+    which is the promotion path this tool exists for. Final review, 2026-07-29.
+    """
+    with pytest.raises(corpus_from_db.NotExpressible, match=helper):
+        corpus_from_db.clause_source(clause)
+
+
+def test_the_scoped_shapes_still_round_trip():
+    """The companion: a refusal that also rejected the VALID shapes would
+    pass the test above forever while making the tool useless."""
+    assert corpus_from_db.clause_source(
+        {"type": "star_grabbed", "course": 9, "star": 0}) == "grab_star(9, 0)"
+    assert corpus_from_db.clause_source({"type": "spawned", "level": 6}) \
+        == "spawn(6)"
+    assert corpus_from_db.clause_source(
+        {"type": "key_grabbed", "level": 17}) == "grab_key(17)"
+
+
 # --- Trap (c): from_subarea/to_subarea ---------------------------------------
 
 def test_a_subarea_pinned_level_exit_is_refused_not_silently_loosened():

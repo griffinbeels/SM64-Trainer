@@ -79,6 +79,28 @@ class NotExpressible(ValueError):
     than crashing the whole batch over one row."""
 
 
+def _require(clause: dict, params: tuple, helper: str) -> None:
+    """Refuse a clause missing a param its corpus helper writes positionally.
+
+    Several TRIGGERS params are OPTIONAL (`star_grabbed.course`/`.star`,
+    `key_grabbed.level`, `spawned.level`, `area_enter.area`) -- an unscoped
+    clause is a legitimate definition -- but `corpus_vocab.py`'s helpers take
+    them as positional arguments and cannot express "any". Reading them with
+    a bare subscript raised KeyError, which `main` does not catch, so ONE
+    unscoped clause aborted an entire `--all-dirty` run instead of skipping
+    its own row. Unreachable from the seeded corpus, and squarely reachable
+    from a user-authored definition -- the Builder's `add()` creates a clause
+    as `{"type": ...}` with no params at all -- which is exactly the promotion
+    path this tool exists to serve. Found by the final whole-branch review.
+    """
+    missing = [name for name in params if clause.get(name) is None]
+    if missing:
+        raise NotExpressible(
+            f"{clause.get('type')} omits {', '.join(missing)} -- "
+            f"{helper}() takes {'it' if len(missing) == 1 else 'them'} "
+            "positionally and cannot express an unscoped clause")
+
+
 def _area_name(area) -> str:
     name = _AREA_NAMES.get(area)
     if name is None:
@@ -133,6 +155,7 @@ def _enter_area_src(c: dict) -> str:
         raise NotExpressible(
             f"area_enter level={c.get('level')!r} is not the castle -- "
             "enter_area() always hardcodes CASTLE and cannot express this")
+    _require(c, ("area",), "enter_area")
     args = [_area_name(c["area"])]
     if c.get("from") is not None:
         args.append(f"frm={_area_name(c['from'])}")
@@ -140,6 +163,10 @@ def _enter_area_src(c: dict) -> str:
 
 
 def _grab_star_src(c: dict) -> str:
+    # `course`/`star` are OPTIONAL in TRIGGERS (an unscoped star_grabbed
+    # matches any star), so a bare subscript aborted the whole --all-dirty
+    # batch instead of skipping one row. Give it the reason it promises.
+    _require(c, ("course", "star"), "grab_star")
     return f"grab_star({c['course']}, {c['star']})"
 
 
@@ -148,6 +175,7 @@ def _enter_warp_src(c: dict) -> str:
 
 
 def _grab_key_src(c: dict) -> str:
+    _require(c, ("level",), "grab_key")
     return f"grab_key({c['level']})"
 
 
@@ -159,6 +187,7 @@ def _anchor_src(c: dict) -> str:
 
 
 def _spawn_src(c: dict) -> str:
+    _require(c, ("level",), "spawn")
     return f"spawn({c['level']})"
 
 
