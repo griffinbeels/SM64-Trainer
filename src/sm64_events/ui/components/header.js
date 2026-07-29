@@ -7,6 +7,7 @@ import { Icon } from "./icons.js";
 import { ContextSelect } from "./contextselect.js";
 import { RouteRankCard } from "./marelo.js";
 import { ICON_STYLES } from "./rankicon.js";
+import { useMareloTurn } from "../mareloturn.js";
 import { celebrationsEnabled, setCelebrationsEnabled,
          CLIMB_SKIP_STYLES, climbSkipStyle, setClimbSkipStyle } from "./celebrate.js";
 
@@ -19,6 +20,7 @@ export function Header({ t, settingsOpen, closeSettings }) {
   const [restarting, setRestarting] = useState(false);
   const [celebrateOn, setCelebrateOn] = useState(celebrationsEnabled());
   const [skipStyle, setSkipStyle] = useState(climbSkipStyle());
+  const mareloTurn = useMareloTurn(t.marelo);
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -103,9 +105,15 @@ export function Header({ t, settingsOpen, closeSettings }) {
              changing the grading mode re-grades every one of them. Both can
              legitimately produce a higher rank nobody earned, and neither may
              fire a level-up climb (ui/rankclimb.js). -->
-        <${RouteRankCard} marelo=${t.marelo} routes=${t.routes}
+        ${/* The card shows the payload ui/mareloturn.js says it may show --
+             the OLD one while a scope rank-up is still waiting behind the
+             entity banners, so it does not quietly climb to the new rank
+             while they are animating ("it should be as if nothing has
+             changed before then"). The celebration overlay reads the same
+             hook, so the two can never disagree about whose turn it is. */""}
+        <${RouteRankCard} marelo=${mareloTurn.marelo} routes=${t.routes}
             activeRouteId=${t.activeRouteId} onPickRoute=${t.pickRoute}
-            identity=${`${t.marelo ? t.marelo.label : ""}|${v ? v.rank_mode : ""}`} />
+            identity=${`${mareloTurn.marelo ? mareloTurn.marelo.label : ""}|${v ? v.rank_mode : ""}`} />
       </div>
 
       <${ContextSelect} icon="clock" label="Clock" id="clock-select"

@@ -210,11 +210,42 @@ def test_the_scope_overlay_waits_for_the_banner_climbs():
     (`releaseCelebrationHold`), and gating on that would let the overlay start
     over the top of them, which is the bug."""
     code = strip_comments(MARELO_CELEBRATE_JS)
-    assert "useClimbsRunning" in code, (
-        "the scope overlay must wait for the banner climbs to finish")
+    header = strip_comments((UI / "components" / "header.js").read_text(encoding="utf-8"))
+    assert "useMareloTurn" in code, (
+        "the scope overlay must wait its turn -- see ui/mareloturn.js")
     assert "useCelebrating" not in code, (
         "useCelebrating is released by a user gesture while climbs still run; "
-        "the overlay must gate on whether anything is ANIMATING")
+        "the turn must depend on whether anything is ANIMATING")
+    # BOTH consumers read the SAME hook. Gating only the overlay left the
+    # header card free to climb to the new rank behind the banners, which is
+    # the half of the report that said "it still animated while the rank
+    # standards were animating".
+    assert "useMareloTurn" in header, (
+        "header.js must show the payload the turn hook allows, or the card "
+        "climbs to the new rank while the banners are still animating")
+    assert "marelo=${t.marelo}" not in header, (
+        "the card must read the HELD payload, not the live one")
+
+
+def test_the_turn_is_latched_so_the_overlay_cannot_revoke_it():
+    """The self-referential loop, guarded.
+
+    Gating on `useClimbsRunning()` alone loops forever: the overlay renders a
+    RouteRankCard, that card runs useRankClimb, and a running climb is the very
+    signal being gated on -- so mounting the overlay made the gate true, which
+    unmounted it, which made the gate false again. Measured 2026-07-29 as the
+    card flashing in and out endlessly.
+
+    Once it is a celebration's turn, nothing that celebration itself does may
+    take the turn away."""
+    turn = strip_comments((UI / "mareloturn.js").read_text(encoding="utf-8"))
+    assert "setReady(false)" in turn and "setReady(true)" in turn
+    # The only place readiness is revoked must be the new-celebration effect,
+    # never the running-climbs one -- otherwise the latch is not a latch.
+    running_effect = turn.split("[key, running]")[0].rsplit("useEffect", 1)[-1]
+    assert "setReady(false)" not in running_effect, (
+        "the running-climbs effect must never revoke the turn; that is the "
+        "loop this test exists for")
 
 
 def test_the_running_signal_is_not_the_hold_signal():
