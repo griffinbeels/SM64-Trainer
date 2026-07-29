@@ -295,6 +295,10 @@ rating.
 
 `marelo_changed` is broadcast-only (no journal entry).
 
+In `pb` grading mode `/api/marelo/history`'s series replays SAVED PBs (`pbs`
+table), not every success — the same times the rating grades. Undoing a PB
+removes its point.
+
 ## Compare (side-by-side video)
 
 **Compare** puts your run side-by-side with a reference video: the left

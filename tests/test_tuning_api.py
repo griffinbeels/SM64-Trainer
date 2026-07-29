@@ -123,3 +123,20 @@ def test_the_registry_file_still_parses_after_a_write(source, tmp_path):
         capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == [275, 0.42, "chain"]
+
+
+def test_a_failed_save_names_the_file_it_was_actually_writing():
+    """The error goes straight onto the inspector's screen, so it has to send
+    the reader to the right file.
+
+    It hardcoded "climbtuning.js" -- correct while that was the only surface,
+    and a lie the moment a second registry was added: a failed save from the
+    overall rank-up inspector pointed at a file it had never touched (live
+    report, 2026-07-28)."""
+    from sm64_events.server.tuning_api import rewrite_defaults
+
+    with pytest.raises(ValueError) as caught:
+        rewrite_defaults("  holdMs: {\n    value: 1,\n  },\n",
+                         {"goneAway": 5}, where="marelotuning.js")
+    assert "marelotuning.js" in str(caught.value)
+    assert "climbtuning.js" not in str(caught.value)

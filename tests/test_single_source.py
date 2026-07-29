@@ -112,7 +112,11 @@ INVARIANTS = (
         concept="what a rank-up climb DOES, step by step",
         owners=frozenset({"climbplan.js", "climbcurve.js", "climbtuning.js",
                           "celebrations.js", "rankclimb.js", "tune.js"}),
-        tokens=("tierskip", "anticipate"),
+        # QUOTED, the same shape the /api/target invariant below uses. A beat
+        # kind only ever appears as a string literal -- in an `on:` list or a
+        # comparison -- so quoting the token is what tells it apart from an
+        # identifier that merely starts with the same letters.
+        tokens=('"tierskip"', '"anticipate"'),
         files=ui_js(),
         why="ui/climbplan.js decides the whole sequence -- which ranks get a "
             "step of their own, which whole tier is condensed into one, and "
@@ -122,7 +126,17 @@ INVARIANTS = (
             "climb happens in. The live risk is real and already written down: "
             "components/celebrate.js's scope overlay still runs its own "
             "hand-rolled fill->flip->hold machine, so it is exactly the file "
-            "that would grow a competing multi-rank sequence.",
+            "that would grow a competing multi-rank sequence.\n"
+            "The tokens are QUOTED for a reason found on 2026-07-28: "
+            "ui/routeswap.js calls CELEBRATIONS.tierAnticipate/.tierBurst "
+            "directly and has to build their `tune` argument using "
+            "climbtuning.js's own `anticipateSquash` FIELD NAME, which a bare "
+            "substring scan read as the beat kind. The first fix was to add "
+            "routeswap.js to `owners` -- which silenced the collision by "
+            "exempting the whole file, so a planted beat-kind list in it went "
+            "undetected. Matching the quoted literal instead keeps the file "
+            "under the guard while letting the tuning vocabulary through: a "
+            "field name is an identifier, a beat kind is always a string.",
     ),
     SingleSource(
         concept="the server's TCP port",
@@ -234,3 +248,100 @@ def test_every_invariant_actually_covers_files():
         assert invariant.owners <= names, (
             f"{invariant.concept} exempts {sorted(invariant.owners - names)}, "
             "which its own file set never scans")
+
+
+import re
+
+# code_only()'s Python branch (source_scan.py::python_code) joins every kept
+# TOKEN with "\n" -- deliberately, so a docstring or comment can never fake an
+# adjacency a formatter didn't put there. The side effect: a literal substring
+# search for `row["strat_tag"]` can never match ANYTHING, real or fake, since
+# that expression is four tokens (`row`, `[`, `"strat_tag"`, `]`) and the
+# joined form always has a newline between them. This regex matches the same
+# SHAPE against the newline-per-token form instead -- any identifier
+# subscripted by the literal key "strat_tag" -- which also means the
+# variable's own name (row, r, entry, ...) never matters, only the pattern.
+_STRAT_TAG_SUBSCRIPT = re.compile(r'\w+\n\[\n"strat_tag"\n\]')
+
+
+def _keys_a_row_by_strat_tag(path: Path) -> bool:
+    return bool(_STRAT_TAG_SUBSCRIPT.search(code_only(path)))
+
+
+def test_only_views_reads_the_pbs_table_for_a_rank():
+    """Which of my saved times a rank grades has exactly ONE answer, and it is
+    `views.current_pbs_by_strat`. It grew a second one in tracking/marelo.py
+    -- min() over raw attempts -- which paid MARELO out before the user
+    clicked Save as PB and survived every test for weeks (task 0034).
+
+    Files allowed to key a pb row by strategy at all: views.py (the door) and
+    marelo.py (which calls it). A third file doing its own latest-row-wins
+    scan is the bug coming back.
+
+    service.py is exempted too, but for a DIFFERENT reason than views/marelo:
+    `undo_pb` reads `row["strat_tag"]` off the ONE row it just deleted, only
+    to echo it back into the `pb_undone` broadcast payload -- there is no
+    scan, no per-strategy keying, nothing this guard is protecting against.
+    Excluding it by name (rather than loosening the pattern) keeps the check
+    honest: a SECOND legitimate reason to touch this field is still only one
+    file wide, and a new one shows up in a diff of this list."""
+    offenders = []
+    for path in (SRC / "tracking").glob("*.py"):
+        if path.name in ("views.py", "marelo.py", "service.py"):
+            continue
+        if _keys_a_row_by_strat_tag(path) and "pbs" in code_only(path):
+            offenders.append(path.name)
+    for path in (SRC / "ranks").glob("*.py"):
+        if _keys_a_row_by_strat_tag(path):
+            offenders.append(path.name)
+    assert not offenders, (
+        f"{offenders} reads pb rows directly. Rank grading goes through "
+        "tracking/views.py::current_pbs_by_strat -- see task 0034.")
+
+
+def test_the_pb_door_guard_can_still_fail():
+    # Probed in both directions, through the SAME code_only() the real guard
+    # uses (tests/source_scan.py's rule) -- a bare substring check on raw text
+    # would trip on a comment mentioning the pattern, which is not what the
+    # guard above actually does, and (as this file's own history shows) a
+    # naive literal substring check against code_only()'s newline-per-token
+    # form can never match real code at all.
+    real = code_only(Path("sample.py"),
+                     'for row in db.pbs():\n    x = row["strat_tag"]\n')
+    prose = code_only(Path("sample.py"),
+                      '# never read row["strat_tag"] off the pbs table here\n')
+    assert _STRAT_TAG_SUBSCRIPT.search(real) and "pbs" in real
+    assert not _STRAT_TAG_SUBSCRIPT.search(prose)
+
+
+def test_no_file_reads_a_fragment_off_the_h_function():
+    """`h.Fragment` is `undefined` in the vendored Preact, so htm's
+    `<${h.Fragment}>` calls `h(undefined, ...)` and Preact's diff then runs
+    `document.createElement(undefined)` -- a literal `<undefined>` element
+    wrapping everything inside it.
+
+    It is invisible in the common case and fatal in the specific one: it
+    silently breaks any `>` child selector and any flex/grid parent
+    relationship. `.context-select > select` was exactly that, and the header
+    card's whole hit target died until a five-point elementFromPoint sweep
+    caught it (2026-07-28). Three shipped call sites carried the same spelling
+    for months -- entitymodal.js's EntityPicker and strategystep.js's two --
+    which is why this is a scan rather than a comment.
+
+    Import `Fragment` by NAME. Comments naming the broken spelling are fine
+    (contextselect.js explains it), which is why this reads code_only."""
+    offenders = sorted(path.name for path in UI.rglob("*.js")
+                       if "vendor" not in path.parts
+                       and "h.Fragment" in code_only(path))
+    assert not offenders, (
+        f"{offenders} use `h.Fragment`, which is undefined in the vendored "
+        "Preact and renders a literal <undefined> element. Import Fragment "
+        "by name from 'preact' instead.")
+
+
+def test_the_fragment_guard_can_still_fail():
+    """Probed both ways: a comment explaining the bug must not trip it, and
+    real code must."""
+    scan = lambda text: "h.Fragment" in text
+    assert scan("return html`<${h.Fragment}>x<//>`")
+    assert not scan("// never write h dot Fragment here")

@@ -1,4 +1,4 @@
-import { h } from "preact";
+import { h, Fragment } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { Modal } from "./modal.js";
@@ -196,7 +196,7 @@ export function EntityPicker({ groups, value, onChange, allow, iconFor,
   const current = visibleGroups(groups, allow, value)
     .flatMap((group) => group.options)
     .find((option) => option.id === value) || null;
-  return html`<${h.Fragment}>
+  return html`<${Fragment}>
     <button type="button" class="entity-trigger" disabled=${disabled}
         aria-haspopup="dialog" onclick=${() => setOpen(true)}>
       ${current
