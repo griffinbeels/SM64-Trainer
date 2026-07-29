@@ -22,7 +22,7 @@
 // compute the squash a tier crossing already uses, called directly with a
 // progress THIS file drives instead of a beat's -- the same squash, reused,
 // never a second implementation of it.
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useLayoutEffect, useRef, useState } from "preact/hooks";
 import { CELEBRATIONS } from "./celebrations.js";
 import { tuning as climbTuning } from "./climbtuning.js";
 import { exchangeFade } from "./climbcurve.js";
@@ -71,7 +71,20 @@ export function useRouteSwap(swapKey, current, tune) {
   const frameRef = useRef(null);
   const [swap, setSwap] = useState(null);
 
-  useEffect(() => {
+  // useLayoutEffect, NOT useEffect. A plain effect runs AFTER the browser
+  // paints, so the render that first carries the NEW route's label painted
+  // once with `swapping` still false -- i.e. the new name flashed on screen
+  // at the OLD rank and OLD points, then vanished as the swap began from the
+  // old state (live report 2026-07-28, frame by frame: "Overall" -> "16 Star
+  // - No LBLJ (Standard)" -> "Overall" -> fade out -> fade in). A layout
+  // effect runs after the DOM mutation but BEFORE paint, so frame 0 of the
+  // swap is committed in the same commit the new marelo arrived in and the
+  // new label never gets a frame of its own.
+  //
+  // Same root cause as the rAF fix already recorded below, one layer up: that
+  // one stopped the FIRST swap frame being skipped, this one stops a frame
+  // being painted before the swap exists at all.
+  useLayoutEffect(() => {
     const prior = priorRef.current;
     const changed = prior.key !== swapKey;
     const from = prior.display;

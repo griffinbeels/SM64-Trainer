@@ -80,3 +80,30 @@ def test_no_card_text_pairs_a_value_with_its_own_complement():
     card = code_only(UI / "components" / "marelo.js")
     assert "opacity: 1 - swapEase" not in card
     assert "swap.fade.out" in card and "swap.fade.in" in card
+
+
+def test_the_swap_commits_its_first_frame_before_paint():
+    """The exchange must not be preceded by a flash of the new text.
+
+    `useRouteSwap` ran in a plain `useEffect`, which fires AFTER the browser
+    paints -- so the render that first carried the new route's label painted
+    once with the swap not yet started, showing the NEW name beside the OLD
+    rank and OLD points, and then reverted as the swap began. Frame by frame
+    (live report, 2026-07-28): "Overall" -> "16 Star - No LBLJ (Standard)" ->
+    "Overall" -> old fades out -> new fades in.
+
+    `useLayoutEffect` runs after the DOM mutation but BEFORE paint, so frame 0
+    of the swap lands in the same commit the new data arrived in.
+
+    Asserted on the import as well as the call: `useEffect` merely being absent
+    is not enough -- what matters is that the layout variant is the one wired
+    up, and a future edit that adds a plain effect back alongside it would
+    still leave this passing if only the call site were checked."""
+    from source_scan import code_only
+    swap = code_only(UI / "routeswap.js")
+    assert "useLayoutEffect" in swap, (
+        "the route swap must commit its first frame before paint, or the new "
+        "label flashes for one frame at the old rank")
+    assert "useEffect" not in swap, (
+        "a plain useEffect in routeswap.js paints before the swap exists -- "
+        "that is the flash this test exists for")
