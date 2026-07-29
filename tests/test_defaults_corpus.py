@@ -412,6 +412,68 @@ def test_bowser_2_to_bits_survives_the_whole_detour():
     assert outcomes == ["success"], (row["seed_key"], outcomes)
 
 
+def test_the_two_step_bowser2_upstairs_then_bits_entry_survives_the_same_detour():
+    """Route regression fix (2026-07-28): Task 20 rewrote the 0/1-star
+    routes' two-step "-> Upstairs" + "Endless Staircase BLJ" tail into a
+    single seg:bowser2->bits movement, so the new movement would have a route
+    referencing it. That silently dropped a named trick split ("Endless
+    Staircase BLJ" has its own timing) from the 0/1-star categories, the most
+    BLJ-heavy runs in the game — and it was never necessary.
+
+    Feeds the IDENTICAL real walk test_bowser_2_to_bits_survives_the_whole_
+    detour uses through the two ORIGINAL segments in one engine instead of
+    the new one: seg:bowser2->upstairs (loose, converted Task 19) survives
+    the whole detour — BitFS re-entry, pause exit to the basement, lobby —
+    transparently, exactly like seg:bowser2->bits does, and closes on
+    reaching Upstairs. seg:bits-entry (legacy, strict, unguarded) then arms
+    on that SAME event ("closures before arming", module docstring) and
+    survives the BLJ with nothing to disarm it, closing on the BitS entry.
+    Both close, so the rewrite bought nothing but the lost split;
+    _LOW_STAR_TAIL was reverted — see its comment in corpus_routes_main.py."""
+    upstairs_row = _seg("seg:bowser2->upstairs")
+    bits_entry_row = _seg("seg:bits-entry")
+    defs = [
+        SegmentDef(id=1, name=upstairs_row["name"], enabled=True,
+                   start_triggers=upstairs_row["start_triggers"],
+                   end_triggers=upstairs_row["end_triggers"],
+                   waypoints=upstairs_row["waypoints"], guards=[],
+                   match_mode=upstairs_row.get("match_mode", "strict")),
+        SegmentDef(id=2, name=bits_entry_row["name"], enabled=True,
+                   start_triggers=bits_entry_row["start_triggers"],
+                   end_triggers=bits_entry_row["end_triggers"],
+                   waypoints=bits_entry_row["waypoints"], guards=[],
+                   match_mode=bits_entry_row.get("match_mode", "strict")),
+    ]
+    engine = SegmentEngine(defs)
+
+    origin = (33, None)
+    walker = _Walker(origin)
+    walker.hop(exit_node(33))    # Bowser 2 exit -> basement
+    walker.hop((19, None))       # re-enter BitFS
+    walker.hop((6, 3))           # pause-exit BitFS -> basement
+    walker.hop((6, 1))           # lobby
+    walker.hop((6, 2))           # upstairs
+    walker.hop((21, None))       # BLJ into BitS
+
+    level, area = origin
+    closed = []
+    for ev in walker.events:
+        prev_level = level
+        if ev.type == "level_changed":
+            level = ev.payload["to"]
+        if ev.type == "area_changed":
+            area = ev.payload["to"]
+        ctx = MatchContext(level=level, prev_level=prev_level, num_stars=0,
+                           area=area)
+        got, _ = engine.feed(ev, ctx)
+        closed.extend(got)
+
+    outcomes = [(a.segment_id, a.outcome) for a in closed]
+    # id 1 = seg:bowser2->upstairs closes first (at Upstairs); id 2 =
+    # seg:bits-entry arms on that same event and closes second (at BitS).
+    assert outcomes == [(1, "success"), (2, "success")], outcomes
+
+
 def test_a_100_coin_star_segment_ends_on_the_star_that_exits_the_level():
     # In a normal stage the 100-coin grab does not exit; the segment ends on
     # a DIFFERENT, named star.

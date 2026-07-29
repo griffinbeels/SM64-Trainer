@@ -584,13 +584,27 @@ ROUTES.append(route(
 
 # --- 0 / 1 Star ------------------------------------------------------------
 
-# Task 20 (spec 2026-07-28-multi-step-segments): the real low-star walk goes
-# straight from Bowser 2's exit to BitS (re-entering BitFS, a pause exit, the
-# lobby/upstairs crossing, a BLJ) rather than stopping at Upstairs first --
-# seg:bowser2->upstairs and seg:bits-entry stay referenced via _16_TAIL below.
+# Task 20 (spec 2026-07-28-multi-step-segments) briefly routed this tail
+# straight through the new seg:bowser2->bits, collapsing the named
+# "-> Upstairs" / "Endless Staircase BLJ" splits into one step -- a real
+# regression for 0/1-star runs (the most BLJ-heavy categories in the game):
+# "Endless Staircase BLJ" is a named trick with its own timing, and losing its
+# split here cost exactly the runs that care about it most. It was never
+# necessary: test_the_two_step_bowser2_upstairs_then_bits_entry_survives_the_
+# same_detour (test_defaults_corpus.py) replays the identical real walk --
+# Bowser 2 exit, BitFS re-entry, pause exit to the basement, lobby, upstairs,
+# BLJ into BitS -- through BOTH original segments and proves seg:bowser2->
+# upstairs (loose) already survives the whole detour transparently and closes
+# at Upstairs, at which point seg:bits-entry (legacy, strict, unguarded) arms
+# on that SAME event and closes on the BitS entry. Reverted 2026-07-28 (route
+# regression fix) to restore the two splits. seg:bowser2->bits itself is kept
+# -- proven correct standalone by test_bowser_2_to_bits_survives_the_whole_
+# detour -- but is not referenced by any route today; see the EXEMPT entry in
+# test_no_movement_is_left_unreferenced for why that is acceptable.
 _LOW_STAR_TAIL = [
     *BOWSER_2,
-    segment("seg:bowser2->bits", "→ BitS"),
+    segment("seg:bowser2->upstairs", "→ Upstairs"),
+    segment("seg:bits-entry", "Endless Staircase BLJ"),
     *BOWSER_3,
 ]
 

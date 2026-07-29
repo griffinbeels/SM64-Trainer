@@ -155,7 +155,18 @@ MOVEMENTS = [
     # loose def (no waypoints) passes them all through transparently, which
     # is the whole reason this is finally expressible (Task 20, spec
     # 2026-07-28-multi-step-segments) -- no via chain needed, same shape as
-    # every other Bowser-arena-exit movement above.
+    # every other Bowser-arena-exit movement above. NOT referenced by any
+    # route (route regression fix, 2026-07-28): the 0/1-star routes' tail
+    # briefly collapsed through this single movement, but that lost the
+    # named "-> Upstairs" / "Endless Staircase BLJ" splits their runners
+    # care about, and a real-walk test proved the ORIGINAL two-step sequence
+    # (seg:bowser2->upstairs + seg:bits-entry) already survives this exact
+    # detour under loose matching -- see _LOW_STAR_TAIL in
+    # corpus_routes_main.py. Kept as a standalone, independently-valid
+    # movement (proven by test_bowser_2_to_bits_survives_the_whole_detour;
+    # exempted from the orphan guard in test_no_movement_is_left_
+    # unreferenced) rather than deleted -- it was requested by name and its
+    # shape is correct regardless of whether a route uses it.
     movement("seg:bowser2->bits", "Bowser 2 → BitS",
              exit_level(33), enter_level(21)),
     # --- upstairs ---------------------------------------------------------

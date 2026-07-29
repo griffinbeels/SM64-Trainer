@@ -106,13 +106,51 @@ def test_every_step_carries_a_label():
             assert step.get("label"), (r["seed_key"], step)
 
 
+# Movements deliberately left unreferenced by every route (seed_key -> why).
+# The default posture is still "unreferenced = dropped route step" — add a
+# row here only when a real-walk test has PROVEN the movement's shape is
+# correct standalone, so an orphan is a documented decision rather than a
+# silent gap (route regression fix, 2026-07-28: test_no_movement_is_left_
+# unreferenced used to be "satisfied" by rewriting a route to use the new
+# movement instead of its two-step predecessor, which quietly dropped a named
+# BLJ split from the 0/1-star routes — see _LOW_STAR_TAIL in
+# corpus_routes_main.py).
+UNREFERENCED_MOVEMENTS_EXEMPT = {
+    "seg:bowser2->bits":
+        "proven correct on its own real walk "
+        "(test_bowser_2_to_bits_survives_the_whole_detour), but every seeded "
+        "route that reaches BitS from Bowser 2 (16-star via _16_TAIL, 0/1-star "
+        "via _LOW_STAR_TAIL) uses the two-step seg:bowser2->upstairs + "
+        "seg:bits-entry sequence instead, because that keeps 'Endless "
+        "Staircase BLJ' as its own named, separately-timed split for the "
+        "BLJ-heavy low-star categories. Kept rather than deleted — requested "
+        "by name, and valid whether or not a route uses it.",
+}
+
+
 def test_no_movement_is_left_unreferenced():
     """Orphan guard: a movement no route uses is dead weight in every user's
     segment list — and usually means a route step was dropped."""
     used = {c["seed_key"] for r in ROUTES for s in r["steps"]
             for c in s["candidates"] if c["type"] == "segment"}
     for row in build_seed.corpus_movements.MOVEMENTS:
+        if row["seed_key"] in UNREFERENCED_MOVEMENTS_EXEMPT:
+            continue
         assert row["seed_key"] in used, row["seed_key"]
+
+
+def test_unreferenced_movements_exemption_is_still_actually_unreferenced():
+    """A stale exemption is a lie about what is orphaned — if a future route
+    edit starts using this movement, the exemption must be deleted, not kept
+    alongside a real reference."""
+    used = {c["seed_key"] for r in ROUTES for s in r["steps"]
+            for c in s["candidates"] if c["type"] == "segment"}
+    known = {row["seed_key"] for row in build_seed.corpus_movements.MOVEMENTS}
+    for seed_key in UNREFERENCED_MOVEMENTS_EXEMPT:
+        assert seed_key in known, f"exempted movement no longer exists: {seed_key}"
+        assert seed_key not in used, (
+            f"{seed_key} is exempted as unreferenced but a route now uses it "
+            "— drop the exemption")
 
 
 def test_movements_sharing_a_start_within_one_route_have_different_ends():

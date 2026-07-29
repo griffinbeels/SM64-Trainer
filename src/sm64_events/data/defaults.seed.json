@@ -10125,12 +10125,22 @@
           ]
         },
         {
-          "label": "→ BitS",
+          "label": "→ Upstairs",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bowser2->bits"
+              "seed_key": "seg:bowser2->upstairs"
+            }
+          ]
+        },
+        {
+          "label": "Endless Staircase BLJ",
+          "need": 1,
+          "candidates": [
+            {
+              "type": "segment",
+              "seed_key": "seg:bits-entry"
             }
           ]
         },
@@ -10235,12 +10245,22 @@
           ]
         },
         {
-          "label": "→ BitS",
+          "label": "→ Upstairs",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bowser2->bits"
+              "seed_key": "seg:bowser2->upstairs"
+            }
+          ]
+        },
+        {
+          "label": "Endless Staircase BLJ",
+          "need": 1,
+          "candidates": [
+            {
+              "type": "segment",
+              "seed_key": "seg:bits-entry"
             }
           ]
         },
