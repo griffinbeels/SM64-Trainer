@@ -38,15 +38,18 @@ _MISSING = find_uilab()
 if _MISSING:
     raise SystemExit(_MISSING)
 
-from ui_fixture import serve_ui                       # noqa: E402
+from ui_fixture import FIXTURE_SEGMENT, serve_ui      # noqa: E402
 from uilab.driver import get_driver                   # noqa: E402
 
-# LBLJ (segment id 1) -- one of the ten legacy tricks the schema migration
-# itself inserts, so it exists even in the dev db snapshot regardless of
-# whatever the defaults corpus currently holds. The STAGE/TARGET constants
+# BitFS Pipe Entry (segment id 6) -- one of the ten legacy tricks the schema
+# migration itself inserts, so it exists even in the dev db snapshot
+# regardless of whatever the defaults corpus currently holds. Not LBLJ
+# (id 1): see `ui_fixture.FIXTURE_SEGMENT`'s own comment -- LBLJ has exactly
+# one bundled strategy, so its ladder IS its best ladder and the card drew a
+# single combined rank banner instead of two. The STAGE/TARGET constants
 # that sat here are gone: main made serve_ui() seed a deterministic
 # practice state of its own, so naming them again would be a second copy.
-ARM_SEGMENT = 1
+ARM_SEGMENT = FIXTURE_SEGMENT
 
 WIDTHS = (320, 340, 360, 400, 430, 480, 520, 560, 600, 640, 680, 700,
           720, 740, 759, 761, 790, 820, 900, 1100, 1101, 1400)

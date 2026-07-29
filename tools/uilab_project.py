@@ -18,7 +18,7 @@ from pathlib import Path
 from uilab import Project, Story
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from ui_fixture import serve_ui  # noqa: E402
+from ui_fixture import FIXTURE_SEGMENT, serve_ui  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -279,13 +279,18 @@ STORIES = [
 ]
 
 PROJECT = Project(
-    # LBLJ (segment id 1) armed alongside the default star target -- additive,
-    # see ui_fixture.py::_arm_segment. It is one of the ten legacy tricks the
-    # schema MIGRATION itself inserts, so it exists in this empty, deterministic
-    # fixture with no defaults-corpus reconcile (that only runs from main.py).
+    # FIXTURE_SEGMENT (BitFS Pipe Entry, id 6) armed alongside the default
+    # star target -- additive, see ui_fixture.py::_arm_segment. It is one of
+    # the ten legacy tricks the schema MIGRATION itself inserts, so it exists
+    # in this empty, deterministic fixture with no defaults-corpus reconcile
+    # (that only runs from main.py). Picked over LBLJ (id 1) specifically for
+    # its four bundled strategies -- see FIXTURE_SEGMENT's own comment: LBLJ
+    # has exactly one, so its strategy ladder IS its best ladder and the
+    # armed-segment card drew a single combined rank banner instead of two.
     # `seed_editor_fixtures=True` additionally seeds the two segments the
     # segments-editor story opens (see `_EDITOR_SETUP` above).
-    serve=functools.partial(serve_ui, arm_segment=1, seed_editor_fixtures=True),
+    serve=functools.partial(serve_ui, arm_segment=FIXTURE_SEGMENT,
+                            seed_editor_fixtures=True),
     page_path="/ui/index.html",
     # The shell paints before the session view lands, and a sweep that starts
     # measuring at that moment reports a page with none of its content on it --

@@ -89,6 +89,24 @@ FIXTURE_LEVEL = 5
 FIXTURE_STAR = 4
 FIXTURE_STRAT = "TJ Owlless"
 
+# The segment the fixture arms, chosen for the SAME reason as FIXTURE_STAR
+# above and caught by the same review the day after: LBLJ (segment:1) has
+# exactly one bundled strategy, so its strategy ladder IS its best ladder
+# (tracking/views.py::ranks_share_ladder) and the armed-segment card drew
+# ONE combined banner -- the two-banner-plus-`.seg-waiting` layout has never
+# been rendered by any instrument, and a CSS fix scoped to "the non-last
+# banner" (index.html) was therefore INERT: with one banner it is both first
+# and last, so `:not(:last-child)` matches nothing.
+#
+# BitFS Pipe Entry (segment:6) has FOUR bundled strategies -- picked over
+# segment:5's two for the same margin-of-safety reason FIXTURE_STAR picked
+# five over LBLJ's one. `FIXTURE_SEGMENT_STRAT` = "Pole Glitch", deliberately
+# NOT the fastest one ("BLJ" is faster at every tier it defines) -- an active
+# strategy that happened to tie the entity's own best ladder would merge the
+# two banners back into one exactly as LBLJ did.
+FIXTURE_SEGMENT = 6
+FIXTURE_SEGMENT_STRAT = "Pole Glitch"
+
 
 def seed_practice(service, course_id: int = FIXTURE_COURSE,
                   star_id: int = FIXTURE_STAR,
@@ -194,7 +212,7 @@ def _seed_target(base: str, course_id: int = FIXTURE_COURSE,
         post("/api/pb", {"attempt_id": rows[0]["id"], "timer_mode": "igt"})
 
 
-def _arm_segment(base: str, service, segment_id: int = 1) -> None:
+def _arm_segment(base: str, service, segment_id: int = FIXTURE_SEGMENT) -> None:
     """Arm a real segment definition and leave it ARMED -- the only way to
     reach `sec.armed_detail` non-null (`.seg-waiting`, Task 6, spec
     2026-07-28-multi-step-segments), which neither the responsive sweep nor
@@ -202,12 +220,13 @@ def _arm_segment(base: str, service, segment_id: int = 1) -> None:
     of that spec, finding 2): both only ever seeded a STAR target, and
     `.seg-waiting` renders only inside `SegmentSection`.
 
-    Defaults to segment id 1, LBLJ -- one of the ten legacy tricks baked
-    directly into the schema MIGRATION itself (storage/db.py's v4 INSERT),
-    so it exists in every fresh `Database` with no defaults-corpus reconcile
-    needed: the fixture never calls `reconcile_defaults` (only `main.py`
-    does, at real startup), so a segment from the 84-def corpus would not
-    exist here at all.
+    Defaults to `FIXTURE_SEGMENT` (BitFS Pipe Entry, segment id 6) -- one of
+    the ten legacy tricks baked directly into the schema MIGRATION itself
+    (storage/db.py's v4 INSERT), so it exists in every fresh `Database` with
+    no defaults-corpus reconcile needed: the fixture never calls
+    `reconcile_defaults` (only `main.py` does, at real startup), so a segment
+    from the 84-def corpus would not exist here at all. See `FIXTURE_SEGMENT`
+    for why THIS one of the ten, specifically -- it is not an arbitrary pick.
 
     Does not touch the active target. An armed segment gets its own section
     (`views.py`'s `seen_segs`: armed OR targeted OR has attempts) and
@@ -218,13 +237,15 @@ def _arm_segment(base: str, service, segment_id: int = 1) -> None:
     (`ui/components/practice.js`); `tools/uilab_project.py`'s `_EXPAND_ALL`
     opens it before measuring.
 
-    Runs the exact event shape `tests/test_views.py`'s own `lblj_success`/
-    `lvl` helpers use -- real `level_changed` events through the real
-    matcher, not a hand-built row: 16->6 arms LBLJ, 6->17 closes it as a
-    genuine success (giving it a real PB before the card is measured), then
-    16->6 again, left unclosed. The measured card then carries a real rank
-    AND `armed_detail` together -- the actually-crowded combination, the
-    same reasoning `_seed_target`'s own `with_pb` follows for a star.
+    Real events through the real matcher, not a hand-built row, matching
+    BitFS Pipe Entry's own shape (storage/db.py's v4 INSERT: start
+    `level_enter(to=19)` OR `attempt_anchor(level=19)`; end
+    `warp_entered(level=19)`): a `level_changed` from 17 (BitDW) to 19 arms
+    it, a `warp_entered(level=19)` closes it as a genuine success (giving it
+    a real PB before the card is measured), then `level_changed` 17->19
+    again, left unclosed. The measured card then carries a real rank AND
+    `armed_detail` together -- the actually-crowded combination, the same
+    reasoning `_seed_target`'s own `with_pb` follows for a star.
     """
     import urllib.error
     import urllib.request
@@ -245,28 +266,29 @@ def _arm_segment(base: str, service, segment_id: int = 1) -> None:
     async def arm_and_close() -> None:
         await service.publish(Event(type="level_changed", frame=5000,
                                     timestamp_utc=now,
-                                    payload={"from": 16, "to": 6}))
-        await service.publish(Event(type="level_changed", frame=5085,
-                                    timestamp_utc=now,
-                                    payload={"from": 6, "to": 17}))
+                                    payload={"from": 17, "to": 19}))
+        await service.publish(Event(type="warp_entered", frame=5085,
+                                    timestamp_utc=now, payload={"level": 19}))
 
     async def rearm() -> None:
         await service.publish(Event(type="level_changed", frame=6000,
                                     timestamp_utc=now,
-                                    payload={"from": 16, "to": 6}))
+                                    payload={"from": 17, "to": 19}))
 
     # A strat active BEFORE the closing edge, so the completed attempt's own
-    # strat_tag stamps "Standard" -- LBLJ carries no default_strat (only the
-    # corpus movements do: views.py caveat 17), and an unlabelled attempt
-    # can't become a PB under a strat the rank banners are keyed on.
+    # strat_tag stamps FIXTURE_SEGMENT_STRAT -- BitFS Pipe Entry carries no
+    # default_strat (only the corpus movements do: views.py caveat 17), and
+    # an unlabelled attempt can't become a PB under a strat the rank banners
+    # are keyed on.
     post("/api/strat", {"kind": "segment", "segment_id": segment_id,
-                        "strat_tag": "Standard"})
+                        "strat_tag": FIXTURE_SEGMENT_STRAT})
     asyncio.run(arm_and_close())
     # rta_frames == 85 (5085 - 5000), not just outcome == "success": a
     # from_dev_db=True fixture snapshots the REAL journal, which may already
-    # hold other successful LBLJ attempts from actual play -- the frame delta
-    # this function itself just produced is the only value guaranteed to
-    # name the row it just closed rather than some earlier real one.
+    # hold other successful attempts for this segment from actual play -- the
+    # frame delta this function itself just produced is the only value
+    # guaranteed to name the row it just closed rather than some earlier
+    # real one.
     attempts = json.loads(urllib.request.urlopen(
         f"{base}/api/session?clock=igt&scope=session", timeout=10).read())
     rows = [a for sec in attempts.get("segments", [])

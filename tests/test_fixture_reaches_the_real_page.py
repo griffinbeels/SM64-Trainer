@@ -54,12 +54,22 @@ PRIMARY = ".practice-detail-grid.is-primary "
 _BY_NAME = {story.name: story for story in STORIES}
 
 
-@pytest.fixture(scope="module")
-def page():
+# Two viewports, not one: 1500x1000 (comfortably wide, side-by-side rank
+# banners) and 850x1180 (the supported floor, min_viewport_width -- stacked
+# banners, the narrow objective-card band). Reach had only ever been proven
+# at the first. Every test in this module runs once per viewport via this
+# one parametrized fixture, so a surface that only reaches its populated
+# state at one width (a real, previously-hit failure class -- the star
+# fixture's own history above) cannot pass here by accident of which size
+# happened to be checked.
+@pytest.fixture(scope="module", params=[(1500, 1000), (850, 1180)],
+                ids=["1500x1000", "850x1180"])
+def page(request):
+    width, height = request.param
     with PROJECT.open() as url, get_driver().launch() as opened:
         opened.goto(url)
         opened.wait_for(PROJECT.ready_selector)
-        opened.set_viewport(1500, 1000)
+        opened.set_viewport(width, height)
         opened.wait_ms(500)
         yield opened
 
@@ -117,6 +127,34 @@ def test_neither_banner_is_the_sentinel_variant(page):
     different, shorter box, and swept in place of the graded one it under-
     reports every height on the card."""
     assert count(page, PRIMARY + ".rank-banner-empty") == 0
+
+
+def test_the_armed_segment_card_draws_two_rank_banners(page):
+    """This branch's OWN instance of the exact bug the star's test above
+    exists to catch. LBLJ (segment id 1) -- the segment `_arm_segment` used
+    until 2026-07-29 -- has exactly one bundled strategy, so its ladder IS
+    its best ladder (views.py::ranks_share_ladder) and the armed-segment
+    card drew ONE combined banner. The two-banner-plus-`.seg-waiting`
+    layout, and the CSS fix scoped to the non-last banner (index.html), had
+    never been rendered by any instrument until the armed segment moved to
+    ui_fixture.FIXTURE_SEGMENT (four bundled strategies)."""
+    card = ".objective-card:has(.seg-waiting)"
+    banners = count(page, f"{card} .rank-banner")
+    assert banners == 2, (
+        f"{banners} rank banner(s) on the armed-segment card, expected 2. "
+        "If this is 1, the armed segment has one strategy active and its "
+        "ladder merged with its best -- pick a segment with several, see "
+        "ui_fixture.py::FIXTURE_SEGMENT. If 0, there is no strategy or no "
+        "PB on it yet.")
+
+
+def test_the_armed_segment_card_has_the_seg_waiting_row(page):
+    """`.seg-waiting` is this branch's own new grid row (Task 6) -- the whole
+    reason `--objective-card-narrow` needed re-measuring and the reason the
+    `.rank-banner::before` bleed fix above exists at all. Absent from every
+    star card by construction (rule 11: a star has no waypoint sequence or
+    staleness deadline to describe)."""
+    assert count(page, ".seg-waiting") == 1
 
 
 def test_the_pb_tag_and_strategy_picker_are_present(page):
