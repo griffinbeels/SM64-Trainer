@@ -44,8 +44,16 @@ SHELL_SELECTORS = (
 )
 
 # Elements carrying irreducible information: a defect if they ellipsise.
+#
+# `.objective-name h2` is the star (or segment) being practised -- the one
+# thing on that card that says WHAT you are doing, and it ellipsised mid-word
+# at 850 and 900px ("Fall onto the Cag...", 2026-07-29). Note this catches only
+# the star the FIXTURE seeds; the whole corpus is measured against the real
+# column by tests/test_objective_name_fits.py, which is what actually holds the
+# floor. Both, because they fail differently: this one catches a layout change
+# on any page state, that one catches a name nobody thought about.
 NEVER_TRUNCATE = (".rank-banner-kicker", ".context-label", ".nav-item span",
-                  ".field-label")
+                  ".field-label", ".objective-name h2")
 
 # States worth measuring. The Practice page renders EMPTY-state placeholders
 # whenever no target is selected, and a database snapshot taken while nobody is
@@ -119,8 +127,18 @@ PROJECT = Project(
     # Sizes that earn a place regardless of what the stylesheet declares: the
     # supported floor and one pixel above it, the width the user reported, the
     # workspace's max width, and a short window.
-    extra_viewports=((850, 1180), (851, 1000), (900, 1180), (1500, 900),
-                     (1280, 720)),
+    #
+    # 912/913 are BOTH SIDES of the `@container (max-width: 793px)` tight band,
+    # and they have to be listed by hand because the matrix derives its probe
+    # points in VIEWPORT pixels while that threshold is in CONTAINER pixels.
+    # Measured on the shipping shell, the pane runs 119px narrower than the
+    # window in this range (850 -> 731, 910 -> 791), so a 793px container
+    # threshold flips at a 912px WINDOW -- while the derived points sit at 793
+    # and 794, below the supported floor, where they are dropped entirely. A
+    # container threshold is therefore never self-probing here; whenever you
+    # add one below ~1180, add its window equivalent to this list.
+    extra_viewports=((850, 1180), (851, 1000), (900, 1180), (912, 1000),
+                     (913, 1000), (1500, 900), (1280, 720)),
     # OWED, not exempted. These became VISIBLE on 2026-07-28 when the
     # fixture finally rendered a populated practice page -- a stage, an
     # active target, a strategy and a PB. Everything on the star row and
@@ -213,6 +231,16 @@ PROJECT = Project(
         '900x1180 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 206 > clientHeight 204',
         '900x1180 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '912x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 207 > clientHeight 205',
+        '912x1000 [page] clipped :: span.starname':
+            'scrollHeight 24 > clientHeight 22',
+        '912x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '913x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 208 > clientHeight 206',
+        '913x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
     },
 )

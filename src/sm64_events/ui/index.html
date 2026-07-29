@@ -901,9 +901,19 @@
   /* Trailing `auto` track added 2026-07-28 for the collapse toggle. Without
      it the button becomes an implicit 5th column at the grid's default size
      and pushes the strategy picker out of the card. */
+  /* The name column's floor is MEASURED, not chosen: 296px is the widest star
+     name in `memory/addresses.py::STAR_NAMES` rendered at this h2's own font
+     ("Quick Race Through Downtown!", 293px) plus 3px. It was 180px, which is
+     narrower than most of the 97 names, so the star being practised ellipsised
+     mid-word -- "Fall onto the Cag..." at 850 and 900px (live report,
+     2026-07-29). The name is the one thing on this card that says WHAT you are
+     practising; the space comes out of the strategy column, which has a
+     picker's worth of slack and a value the user just chose.
+     `tests/test_objective_name_fits.py` measures every name against the real
+     column at the supported floor, so this number cannot rot as names change. */
   .objective-heading {
     min-width: 0; display: grid;
-    grid-template-columns: 28px auto minmax(180px,1fr) minmax(150px,380px) auto;
+    grid-template-columns: 28px auto minmax(296px,1fr) minmax(150px,380px) auto;
     gap: .65rem; align-items: center;
   }
   .objective-symbol {
@@ -3346,6 +3356,45 @@
     .rank-banner::before { left: -16px; border-radius: 0; }
   }
 
+  /* The tight band: both the star name and the strategy picker want the row.
+     ------------------------------------------------------------------
+     Between 700px (where the heading breaks to two rows and the pressure ends)
+     and 794px, the five-column heading cannot give the widest star name AND
+     the widest strategy their full width at the same time. The arithmetic, all
+     measured on the shipping shell at the 850px supported floor:
+
+       card 731 - 32 padding - 28 icon - 105 eyebrow - 30 chevron - 42 gaps
+         = 494px for the name and the strategy block together
+       widest star name  293px @ 19.2px   ("Quick Race Through Downtown!")
+       widest strategy   194px            ("Ultimate Cycle (Pipe)" + control
+                                            chrome: 8 + 25.6 padding, border)
+       "STRATEGY" label   60px + 6.4 gap
+       -> 293 + 194 + 66 = 553 into 494. Over by 59px.
+
+     Two things give way, in the order of how load-bearing they are:
+
+     1. The label. The word STRATEGY appears again three lines down as the rank
+        banner's own kicker, and the select carries it as a title, so this is
+        the one piece of text here that is genuinely recoverable. Same rule the
+        fastest-strategy hint gives way under, one block up.
+     2. A small type step on the name, 1.2rem -> 1.1rem, which buys 24px on the
+        widest name for a size still comfortably above the card's body text.
+        The user offered this lever explicitly ("we can also slightly decrease
+        font sizes if necessary at smaller widths"); it is used ONLY here, and
+        only as much as the arithmetic needs.
+
+     That leaves 272 for the name (widest becomes 269) and 222 for the select
+     (widest needs 194) -- both fit, with margin on each side rather than the
+     4px a single lever would have left. What does NOT give way is the name
+     itself: it is the one thing on this card that says what you are
+     practising, and ellipsising it mid-word is the bug this fixes. */
+  @container (max-width: 793px) {
+    .objective-heading { grid-template-columns: 28px auto minmax(272px,1fr) minmax(120px,380px) auto; }
+    .objective-name h2 { font-size: 1.1rem; }
+    .objective-strategy { grid-template-columns: minmax(70px,1fr) auto; }
+    .objective-strategy .field-label { display: none; }
+  }
+
   /* Objective card, narrow pane.
      ------------------------------------------------------------------
      These rules lived in `@media (max-width: 760px)` until 2026-07-28, and
@@ -3376,6 +3425,12 @@
       grid-column: 1 / -1; min-width: 0;
       grid-template-columns: 70px minmax(0,1fr);
     }
+    /* The label comes BACK here. The block above hides it because the heading
+       is one crowded row; at this width the strategy owns a full row of its
+       own and has the 70px for it. `inline` is the <span> default -- restated
+       rather than `revert`, which would also undo the hide in a UA-sheet
+       sense and is not what is meant. */
+    .objective-strategy .field-label { display: inline; }
     .objective-strategy select { min-width: 0; max-width: 100%; }
     .objective-metrics {
       /* PB tag needs ~130-150px, not the ~239px a .7fr share was giving it
