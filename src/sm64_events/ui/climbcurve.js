@@ -165,3 +165,31 @@ export function climbTimings({ crossings, ladder }, tuning = DEFAULTS) {
     ...tierDwell(crossings, tuning),
   };
 }
+
+/**
+ * Two opacities for swapping one piece of text for another: `{out, in}`.
+ *
+ * THE rule for any text exchange in this app, and it is SEQUENTIAL, never a
+ * crossfade — the outgoing text is fully gone before the incoming one starts.
+ * User, 2026-07-28, on the route swap showing "70 Star (Standard)" written
+ * over "16 Star — No LBLJ (Standard)": "there's a brief overlap between the
+ * two route names. It seems like we aren't fading in / out sequentially, which
+ * causes a brief glitch. The current name should fully fade out before the new
+ * name fades in… same for all text here, and generally just for how fades
+ * should work in general."
+ *
+ * A simultaneous crossfade (`out = 1 - p`, `in = p`) puts BOTH at 0.5 across
+ * the middle of its run. Two different strings stacked in one grid cell at
+ * half opacity do not read as a blend; they read as a rendering fault, and no
+ * duration fixes it because the overlap is the shape of the curve rather than
+ * its speed.
+ *
+ * `at` is where the exchange happens, 0..1 — pass the same value the rest of
+ * the transition pivots on so every part swaps on one frame instead of each
+ * choosing its own moment.
+ */
+export function exchangeFade(progress, at = 0.5) {
+  const pivot = Math.min(0.99, Math.max(0.01, at));
+  if (progress <= pivot) return { out: 1 - progress / pivot, in: 0 };
+  return { out: 0, in: (progress - pivot) / (1 - pivot) };
+}

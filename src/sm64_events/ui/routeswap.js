@@ -25,6 +25,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { CELEBRATIONS } from "./celebrations.js";
 import { tuning as climbTuning } from "./climbtuning.js";
+import { exchangeFade } from "./climbcurve.js";
 import { prefersReducedMotion } from "./useTween.js";
 
 // tierAnticipate/tierBurst's `icon` functions both ignore their `beat`
@@ -106,6 +107,12 @@ export function useRouteSwap(swapKey, current, tune) {
       setSwap({
         progress, crossed: progress >= exchangeAt, from, to: current,
         icon: swapIcon(progress, exchangeAt, squashTune),
+        // Computed HERE, off this hook's own `exchangeAt`, so the icon, the
+        // rank text and the route name all cross on the SAME frame. A caller
+        // deriving its own pair from `progress` would be a second opinion
+        // about when the exchange happens, and the two would drift the moment
+        // swapExchangeAt was tuned.
+        fade: exchangeFade(progress, exchangeAt),
       });
       if (progress < 1) {
         frameRef.current = requestAnimationFrame(tick);
@@ -124,7 +131,8 @@ export function useRouteSwap(swapKey, current, tune) {
     // updates in the same batch, so the very first thing ever painted is the
     // swap's own start, not the climb's resting end.
     setSwap({ progress: 0, crossed: false, from, to: current,
-      icon: swapIcon(0, exchangeAt, squashTune) });
+      icon: swapIcon(0, exchangeAt, squashTune),
+      fade: exchangeFade(0, exchangeAt) });
     frameRef.current = requestAnimationFrame(tick);
     return () => {
       if (frameRef.current != null) cancelAnimationFrame(frameRef.current);

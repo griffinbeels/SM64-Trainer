@@ -194,15 +194,15 @@ export function RouteRankCard({ marelo, routes = [], activeRouteId = null,
         <${RankIcon} ...${iconProps} tier=${iconTier} division=${iconDivision} size=${34} />
       </span>` : html`<span class="rank-icon-slot marelo-bar-icon">–</span>`}
       ${swapping ? html`<span class="marelo-swap-fade">
-          <b style=${{ opacity: 1 - swapEase }}>${rankLabelText(swap.from)}</b>
-          <b style=${{ opacity: swapEase }}>${rankLabelText(swap.to)}</b>
+          <b style=${{ opacity: swap.fade.out }}>${rankLabelText(swap.from)}</b>
+          <b style=${{ opacity: swap.fade.in }}>${rankLabelText(swap.to)}</b>
         </span>`
         : html`<b>${climb ? rankLabelText(climb) : "Unranked"}</b>`}
     </span>
     <span class="marelo-bar-body">
       ${swapping ? html`<span class="marelo-swap-fade">
-          <span class="context-value" style=${{ opacity: 1 - swapEase }}>${swap.from.label || "…"}</span>
-          <span class="context-value" style=${{ opacity: swapEase }}>${swap.to.label || "…"}</span>
+          <span class="context-value" style=${{ opacity: swap.fade.out }}>${swap.from.label || "…"}</span>
+          <span class="context-value" style=${{ opacity: swap.fade.in }}>${swap.to.label || "…"}</span>
         </span>`
         : html`<span class="context-value">${label || "…"}</span>`}
       <span class="marelo-track"><i style=${`width:${barFillFraction * 100}%`}></i></span>

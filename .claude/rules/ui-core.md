@@ -207,6 +207,22 @@ pointer to it).
   Express the check as a function of source text so a probe test can feed it a
   comment-only sample and a real-code sample — `test_the_guards_can_still_fail`
   in `tests/test_ui_picker_parity.py` is the pattern.
+- **Swapping one piece of text for another is SEQUENTIAL, never a crossfade.**
+  The outgoing string reaches 0 before the incoming one leaves it.
+  `climbcurve.js::exchangeFade(progress, at)` returns the `{out, in}` pair and
+  is THE way to do it — import-free, so `tests/test_ui_text_exchange.py` drives
+  it directly at three exchange points and asserts no frame renders both.
+  A simultaneous crossfade (`opacity: 1 - p` beside `opacity: p`) puts BOTH at
+  0.5 across the middle of its run, and two different strings stacked in one
+  grid cell at half opacity do not read as a blend — they read as a rendering
+  fault ("70 Star (Standard)" written across "16 Star — No LBLJ (Standard)",
+  live report 2026-07-28). **No duration fixes it**: the overlap is the shape
+  of the curve, not its speed, which is why the guard samples the whole run
+  rather than one frame. The user's rule is general — "same for all text here,
+  and generally just for how fades should work in general". Pass the SAME
+  pivot the rest of the transition turns on (the route swap hands it its own
+  `swapExchangeAt`, computed once in `routeswap.js`) so the icon, the rank name
+  and the scope name all exchange on one frame instead of each choosing its own.
 - When a `@container`/media rule `display:none`s an element, its own `title`
   is not a fallback — a hidden element cannot be hovered. Move the text onto
   an element that is always rendered (the rank banner folds its basis line
