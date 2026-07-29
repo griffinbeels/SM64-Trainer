@@ -570,12 +570,32 @@
        unreached: `.seg-waiting`, the third row an ARMED segment adds below
        the metrics row (sec.armed_detail non-null). Neither this fixture nor
        the sweep could reach it before -- `ui_fixture.py`'s `arm_segment=`
-       arms a real segment (LBLJ) alongside the star target so both cards
-       exist on one page, matching the max-over-every-card rule above. The
-       honest number is UNCHANGED: 327px already holds it (measured content
-       325px, 2px to spare, same margin the base/1100px bands were bumped
-       for), so no bump was needed here -- this line only used to be silent
-       about which states 327px had and had not been checked against.
+       arms a real segment alongside the star target so both cards exist on
+       one page, matching the max-over-every-card rule above. That round
+       measured 327px as sufficient and said so here -- which then read as a
+       contradiction against the 347px declared two lines down, because the
+       two numbers came from different places: 327 was this branch measuring
+       a ONE-banner armed card, 347 was main's own independent +20 for the
+       widened stacked-wash gap. Both were right; neither said which state it
+       had seen. Hence this paragraph.
+
+       Where it stands 2026-07-29, after the main merge:
+         - the armed segment is now a TWO-banner definition (ui_fixture's
+           FIXTURE_SEGMENT), because a one-strategy entity collapses its two
+           measures into a single banner and the crowded layout stops
+           existing -- the same hole main closed for the star card;
+         - this band is `@container (max-width: 700px)`, and main made 850px
+           the supported minimum. At 850 the pane is ~774px (850 less the
+           76px rail), so **this block is not reached at any supported
+           width** -- it is graceful degradation for a narrower browser, not
+           a shipped layout. `measure_objective_card.py` filters its widths
+           by `PROJECT.min_viewport_width` for exactly that reason: measured
+           below the floor, the two-banner card wants 360px here, and
+           chasing that would grow a fixed-height card for widths nothing
+           claims.
+       So 347px stands, unmeasured against the two-banner card ON PURPOSE.
+       If the supported floor ever drops below ~790px viewport, this number
+       becomes live again and must be re-measured first.
        Re-measure with:
          uv run python tools/measure_objective_card.py  */
     --objective-card-narrow: 347px;
