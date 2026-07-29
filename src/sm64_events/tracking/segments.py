@@ -1343,12 +1343,18 @@ GUARDS: dict[str, GuardType] = {g.key: g for g in [
 ]}
 
 # How forgiving an armed definition is (spec 2026-07-28-multi-step-segments).
-# ONE registry, same role TRIGGERS/GUARDS play: it drives validate_definition
-# and the editor control through vocab() today. It is also the registry the
-# armed-branch dispatch WILL select on, once a later task in this spec builds
-# that dispatch — match_mode is plumbed end to end (db column, dataclass,
-# validation, vocab, API models) but does not yet change any matching
-# behaviour. A third mode is one row here plus one handler.
+# ONE registry, same role TRIGGERS/GUARDS play: it drives validate_definition,
+# the editor control through vocab(), AND `SegmentEngine.feed`'s armed-branch
+# dispatch — `_feed_strict` / `_feed_waypoint` / `_feed_loose`, selected by
+# this key. A third mode is one row here plus one handler.
+#
+# This comment said "does not yet change any matching behaviour" until
+# 2026-07-29, describing the one task in the spec where that was true. By then
+# loose matching WAS the branch's headline feature and 74 of 84 seeded
+# definitions shipped with it. Five tasks and two controller commits touched
+# this file after the dispatch landed and none of them corrected the sentence,
+# which is how a future session reads live machinery as inert plumbing and
+# deletes it.
 MATCH_MODES = {
     "loose": {
         "key": "loose",
