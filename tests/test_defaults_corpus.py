@@ -199,7 +199,7 @@ def run_engine(seed_row, events, level, area):
     movement is assumed to be in the active route.
 
     match_mode is threaded from the seed row itself (Task 19) rather than
-    left at SegmentDef's "strict" default -- since all 55 movements now ship
+    left at SegmentDef's "strict" default -- since all 56 movements now ship
     match_mode="loose", this is the line that actually puts the independent
     world-model walk through the loose matcher instead of quietly continuing
     to simulate the old strict one."""
@@ -345,7 +345,7 @@ def test_a_menu_warp_into_a_course_arms_no_movement():
 
 
 def test_a_movement_only_fires_on_a_walk_that_reaches_its_endpoint():
-    """Negative pass over all 55x54 pairs. A movement may legitimately
+    """Negative pass over all 56x55 pairs. A movement may legitimately
     complete on another's walk when it is a PREFIX of it — walking BBH -> DDD
     really does pass through the basement, so BBH -> Basement completing there
     is correct, not a false positive. What must never happen is completing on

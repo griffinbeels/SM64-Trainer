@@ -197,21 +197,75 @@ SEGMENT_TIMELINE_JS_SOURCE = strip_comments(
     SEGMENT_TIMELINE_JS.read_text(encoding="utf-8"))
 
 
+def _fetches_the_timeline_with_the_view(source: str) -> bool:
+    """The endpoint AND the view param, in one interpolated call.
+
+    A bare `"/api/segments/timeline" in source` passes while the component
+    fetches a hard-coded `view=steps` forever — which is precisely the
+    concern the toggle below exists to answer, so the two must be pinned
+    together or the pair can drift apart silently.
+    """
+    stripped = strip_comments(source)
+    return bool(re.search(r"/api/segments/timeline\?[^`\"']*view=\$\{view\}",
+                          stripped))
+
+
+def _a_row_click_sets_each_end(source: str) -> bool:
+    stripped = strip_comments(source)
+    return "setStartRow(row)" in stripped and "setEndRow(row)" in stripped
+
+
+def _offers_a_view_toggle(source: str) -> bool:
+    """A control that WRITES the view, not two loose string literals.
+
+    Task 11's own carried concern: the default (`view=steps`) hides the
+    rarer reset/spawn-triggered starts, reachable only one query param away
+    with nothing in the picker offering it. `'"all"' in source` would stay
+    green if both words survived anywhere for any reason — including in the
+    fetch URL this component already builds.
+    """
+    stripped = strip_comments(source)
+    return bool(re.search(r'setView\([^)]*"all"[^)]*"steps"[^)]*\)', stripped))
+
+
 def test_the_timeline_component_fetches_the_recent_journal():
-    assert "/api/segments/timeline" in SEGMENT_TIMELINE_JS_SOURCE
+    assert _fetches_the_timeline_with_the_view(SEGMENT_TIMELINE_JS_SOURCE)
 
 
 def test_a_row_click_sets_the_start_or_the_end():
-    assert "setStartRow(row)" in SEGMENT_TIMELINE_JS_SOURCE
-    assert "setEndRow(row)" in SEGMENT_TIMELINE_JS_SOURCE
+    assert _a_row_click_sets_each_end(SEGMENT_TIMELINE_JS_SOURCE)
 
 
 def test_the_view_toggle_reaches_view_all():
-    # Task 11's own carried concern: without a control the rarer reset/
-    # spawn-triggered starts are only reachable one query param away and
-    # nothing in the picker offers it.
-    assert '"all"' in SEGMENT_TIMELINE_JS_SOURCE
-    assert '"steps"' in SEGMENT_TIMELINE_JS_SOURCE
+    assert _offers_a_view_toggle(SEGMENT_TIMELINE_JS_SOURCE)
+
+
+def test_the_timeline_guards_can_still_fail():
+    """The three guards above shipped as bare substring checks (Task 13).
+    Probed here in both directions, the rule source_scan.py states: a
+    comment-only sample must NOT satisfy them, a real-code sample must.
+    """
+    comment_only = (
+        '// Fetches /api/segments/timeline?limit=200&view=steps and lets a\n'
+        '// row click call setStartRow(row) / setEndRow(row); the toggle\n'
+        '// flips setView between "all" and "steps".\n')
+    assert not _fetches_the_timeline_with_the_view(comment_only)
+    assert not _a_row_click_sets_each_end(comment_only)
+    assert not _offers_a_view_toggle(comment_only)
+
+    assert _fetches_the_timeline_with_the_view(
+        'getJSON(`/api/segments/timeline?limit=200&view=${view}`)')
+    assert _a_row_click_sets_each_end(
+        'onclick=${() => { setStartRow(row); setEndRow(row); }}')
+    assert _offers_a_view_toggle(
+        'onchange=${(e) => setView(e.target.checked ? "all" : "steps")}')
+
+    # The specific weakness each replacement closes: the OLD assertions all
+    # pass against these, the new ones must not.
+    assert not _fetches_the_timeline_with_the_view(
+        'getJSON("/api/segments/timeline?limit=200&view=steps")')
+    assert not _offers_a_view_toggle(
+        'const LABELS = { all: "all", steps: "steps" };')
 
 
 def _saves_as_a_loose_segment(source: str) -> bool:
