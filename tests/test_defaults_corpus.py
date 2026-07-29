@@ -361,3 +361,32 @@ def test_a_movement_only_fires_on_a_walk_that_reaches_its_endpoint():
                 continue          # the player genuinely passed through it
             assert not fired, (row["seed_key"], "wrongly completed on",
                                other["seed_key"])
+
+
+# --- layer 3: Task 20's four real walks (spec 2026-07-28-multi-step-segments)
+# These four shapes do not fit movement_walk's generic BFS-shortest-path
+# model: two of them (100c->exit, reds->pipe) start or end on a
+# star_grabbed/warp_entered clause clause_node cannot resolve, and all four
+# replay a SPECIFIC real walk from a task report rather than the shortest
+# one. Hand-built via _Walker directly instead of movement_walk.
+
+def _seg(seed_key):
+    return next(s for s in SEGMENTS if s["seed_key"] == seed_key)
+
+
+def test_bowser_1_to_wf_survives_the_bitdw_reentry_detour():
+    """Real walk: "Bowser 1 -> re-enter BitDW -> exit course to Lobby ->
+    WF." Proves the EXISTING seg:bowser1->wf (a plain, waypoint-less loose
+    def, unchanged by Task 20) survives the detour without any shape
+    change -- every intermediate step is transparent to a loose def with no
+    waypoints."""
+    row = _seg("seg:bowser1->wf")
+    origin = (30, None)
+    walker = _Walker(origin)
+    walker.hop(exit_node(30))    # Bowser 1 exit -> lobby
+    walker.hop((17, None))       # re-enter BitDW
+    walker.hop((6, 1))           # pause-exit BitDW -> lobby
+    walker.hop((24, None))       # walk into WF
+    closed = run_engine(row, walker.events, origin[0], origin[1])
+    outcomes = [a.outcome for a in closed]
+    assert outcomes == ["success"], (row["seed_key"], outcomes)
