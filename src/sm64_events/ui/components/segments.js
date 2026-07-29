@@ -312,6 +312,29 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs }
   const [btBusy, setBtBusy] = useState(false);
   const [btReport, setBtReport] = useState(null);
   const [btErr, setBtErr] = useState(null);
+  // Author-time lint (Task 16, spec 2026-07-28-multi-step-segments) --
+  // re-checked automatically on every edit (debounced, unlike the backtest
+  // panel above which is button-triggered) so findings sit beside Save
+  // without a click. `segment_id` is `initial`'s own id, if any, so the
+  // duplicate rule excludes THIS row from its own comparison (server/api.py's
+  // LintBody docstring) -- without it, opening an existing segment and
+  // changing nothing would report it as a duplicate of itself.
+  const [lintFindings, setLintFindings] = useState([]);
+  const [lintErr, setLintErr] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      const definition = Object.fromEntries(
+        BACKTEST_FIELDS.map((field) => [field, d[field]]));
+      send("POST", "/api/segments/lint", {
+        definition, segment_id: initial && initial.id != null ? initial.id : null,
+      }).then((result) => {
+        if (!cancelled) { setLintFindings(result.warnings); setLintErr(null); }
+      }).catch((e) => { if (!cancelled) setLintErr(String(e)); });
+    }, 400);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [d]);
+  const lintHasError = lintFindings.some((f) => f.severity === "error");
   const edit = (k, i, clause) => setD({ ...d,
     [k]: d[k].map((c, j) => (j === i ? clause : c)) });
   const add = (k, types) => setD({ ...d, [k]: [...d[k], { type: types[0].key }] });
@@ -564,6 +587,14 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs }
               </button>
             </div>`}
       </div>`}
+    ${lintErr && html`<div class="badx">${lintErr}</div>`}
+    ${lintFindings.length > 0 && html`<div class="lint-panel">
+      ${lintFindings.map((finding, i) => html`<div key=${i}
+          class="lint-finding lint-${finding.severity}">
+        <${Icon} name=${finding.severity === "error" ? "close" : "shield"} size=${14} />
+        ${" "}${finding.message}
+      </div>`)}
+    </div>`}
     ${err && html`<div class="badx">${err}</div>`}
     <div class="builder-actions">
       <span class="meta">Saving automatically recalculates this segment's history.</span>
@@ -572,7 +603,8 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs }
           ? "Testing…" : "Try it against my history"}
       </button>
       <button onclick=${onCancel}>Cancel</button>
-      <button class="primary-button" onclick=${save}>
+      <button class="primary-button" onclick=${save} disabled=${lintHasError}
+          title=${lintHasError ? "Fix the error above before saving" : ""}>
         <${Icon} name="save" size=${16} /> Save segment
       </button>
     </div>

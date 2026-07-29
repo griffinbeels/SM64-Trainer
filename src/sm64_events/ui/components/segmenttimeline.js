@@ -80,6 +80,12 @@ export function SegmentTimeline({ onSaved, onCancel }) {
   const [name, setName] = useState("");
   const [btReport, setBtReport] = useState(null);
   const [btErr, setBtErr] = useState(null);
+  // Author-time lint (Task 16, spec 2026-07-28-multi-step-segments) --
+  // the recorder is where lint pays best: it's what explains a backtest that
+  // came back arms=0/fires=0 rather than leaving the user at a dead end.
+  // `segment_id: null` always -- this flow only ever CREATES.
+  const [lintFindings, setLintFindings] = useState([]);
+  const [lintErr, setLintErr] = useState(null);
   const [saveErr, setSaveErr] = useState(null);
   const [saving, setSaving] = useState(false);
 
@@ -92,7 +98,8 @@ export function SegmentTimeline({ onSaved, onCancel }) {
 
   function resetDownstream() {
     setSynth(null); setSynthErr(null);
-    setBtReport(null); setBtErr(null); setSaveErr(null);
+    setBtReport(null); setBtErr(null);
+    setLintFindings([]); setLintErr(null); setSaveErr(null);
   }
 
   function pickStart(row) {
@@ -112,6 +119,22 @@ export function SegmentTimeline({ onSaved, onCancel }) {
     } catch (err) { setBtErr(String(err)); }
   }
 
+  // match_mode: "loose" explicitly -- this mirrors exactly what save() below
+  // sends (recorded segments are always loose), not the backtest body's
+  // implicit server-default "loose", so a def whose lint findings would
+  // differ by match_mode (start_looser_than_waypoint is exempt for loose)
+  // is checked under the shape it will actually be saved as.
+  async function runLint(synthBody) {
+    const definition = { name: synthBody.name, enabled: true,
+      start_triggers: [synthBody.start_clause],
+      end_triggers: [synthBody.end_clause], guards: [], match_mode: "loose" };
+    try {
+      const result = await send("POST", "/api/segments/lint",
+        { definition, segment_id: null });
+      setLintFindings(result.warnings);
+    } catch (err) { setLintErr(String(err)); }
+  }
+
   async function pickEnd(row) {
     setEndRow(row);
     resetDownstream();
@@ -122,6 +145,7 @@ export function SegmentTimeline({ onSaved, onCancel }) {
       setSynth(body);
       setName(body.name);
       runBacktest(body);
+      runLint(body);
     } catch (err) { setSynthErr(String(err)); }
   }
 
@@ -151,6 +175,9 @@ export function SegmentTimeline({ onSaved, onCancel }) {
 
   const later = startRow
     ? (rows || []).filter((row) => row.id > startRow.id) : [];
+  // Same name/shape as segments.js's Builder -- an "error" severity finding
+  // disables Save there too; a "warning" one does not.
+  const lintHasError = lintFindings.some((finding) => finding.severity === "error");
 
   return html`<${Modal} title="Record a segment" icon="segments" size="large"
       onClose=${onCancel}
@@ -208,6 +235,14 @@ export function SegmentTimeline({ onSaved, onCancel }) {
         ${!btReport && !btErr
           && html`<p class="meta">Testing against your history…</p>`}
         ${btReport && html`<p class="meta">${recordingSummary(btReport)}</p>`}
+        ${lintErr && html`<p class="badx">${lintErr}</p>`}
+        ${lintFindings.length > 0 && html`<div class="lint-panel">
+          ${lintFindings.map((finding, i) => html`<div key=${i}
+              class="lint-finding lint-${finding.severity}">
+            <${Icon} name=${finding.severity === "error" ? "close" : "shield"} size=${14} />
+            ${" "}${finding.message}
+          </div>`)}
+        </div>`}
       </div>`}
     </div>`}
 
@@ -215,7 +250,7 @@ export function SegmentTimeline({ onSaved, onCancel }) {
     <div class="builder-actions">
       <button onclick=${onCancel}>Cancel</button>
       ${step === "review" && html`<button class="primary-button"
-          disabled=${!btReport || saving} onclick=${save}>
+          disabled=${!btReport || saving || lintHasError} onclick=${save}>
         <${Icon} name="save" size=${16} />${" "}${saving ? "Saving…" : "Save segment"}
       </button>`}
     </div>

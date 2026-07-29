@@ -2414,6 +2414,20 @@
   }
   .builder-actions .meta { margin-right: auto; font-size: .72rem; }
 
+  /* Author-time lint findings (Task 16, spec 2026-07-28-multi-step-segments)
+     -- one row per tracking/lint.py finding, beside Save. Errors and warnings
+     share one box (no severity grouping): they're few enough per definition
+     that a second layout tier would be more chrome than content. */
+  .lint-panel {
+    display: grid; gap: .4rem; margin-top: .75rem; padding: .55rem .7rem;
+    border: 1px solid var(--border-soft); border-radius: 8px;
+    background: rgba(8,20,34,.48);
+  }
+  .lint-finding { display: flex; align-items: flex-start; gap: .4rem; font-size: .82rem; }
+  .lint-finding svg { flex: 0 0 auto; margin-top: .15rem; }
+  .lint-error { color: #e79a9a; }
+  .lint-warning { color: #d8b77f; }
+
   .backtest-panel {
     display: grid; gap: .5rem; margin-top: .75rem; padding: .65rem .75rem;
     border: 1px solid var(--border-soft); border-radius: 8px;

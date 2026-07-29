@@ -122,21 +122,38 @@ def _one_event_could_satisfy_both(start_clause: dict, next_clause: dict) -> bool
     """Could ONE level_changed event match both `start_clause` (a level_exit)
     and `next_clause` (a level_enter)? Only these two types combine into a
     single level_changed; every other trigger type fires on a different event
-    kind entirely and so can never collide with a level_exit this way."""
+    kind entirely and so can never collide with a level_exit this way.
+
+    `from` (required by validate_definition) and `to` (level_enter's own
+    required destination) are read with `.get`, not `[...]` -- Task 16 found
+    this raising `KeyError` when either is still unset: `POST /api/segments/
+    lint` runs this rule against the editor's CURRENT, possibly in-progress
+    form on every edit (server/api.py's own docstring says so explicitly),
+    and a just-added clause with no level picked yet is exactly that shape,
+    not a hypothetical. An unset required param here is unknowable, not
+    absent-on-purpose, so it is treated the same as every other "can't prove
+    a collision" case in this module: rescue the definition (return False)
+    rather than crash."""
     if start_clause.get("type") != "level_exit" \
             or next_clause.get("type") != "level_enter":
+        return False
+    next_to = next_clause.get("to")
+    if next_to is None:
         return False
     to = start_clause.get("to")
     if to is not None:
         # The exit clause already pins its own destination (e.g. MIPS Clip) --
         # no topology needed, the match lambdas require ev.payload["to"] to be
         # exactly this value, so compare it directly.
-        if to != next_clause["to"]:
+        if to != next_to:
             return False
         to_subarea = next_clause.get("to_subarea")
         return to_subarea is None or start_clause.get("to_subarea") == to_subarea
-    return _direct_edge(start_clause["from"], start_clause.get("from_subarea"),
-                        next_clause["to"], next_clause.get("to_subarea"))
+    from_level = start_clause.get("from")
+    if from_level is None:
+        return False
+    return _direct_edge(from_level, start_clause.get("from_subarea"),
+                        next_to, next_clause.get("to_subarea"))
 
 
 def _rule_unfireable(d, all_defs) -> list[dict]:

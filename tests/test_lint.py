@@ -124,6 +124,34 @@ def test_flags_a_duplicate_of_an_existing_definition():
                for w in findings), findings
 
 
+def test_an_in_progress_level_exit_with_no_from_yet_does_not_crash():
+    # Task 16 regression: POST /api/segments/lint runs this rule against the
+    # editor's CURRENT form on every edit, including a just-added clause with
+    # no level picked yet -- {"type": "level_exit"} with no "from" at all.
+    # _one_event_could_satisfy_both used to read start_clause["from"] with a
+    # bare subscript and raised KeyError the first time a live in-progress
+    # form reached this rule (found by rendering the editor, not by a test).
+    d = SegmentDef(id=1, name="x", enabled=True,
+                   start_triggers=[{"type": "level_exit"}],
+                   end_triggers=[{"type": "level_enter"}],
+                   guards=[])
+    findings = lint_definition(d, [])   # must not raise
+    assert not any(w["rule"] == "unfireable" for w in findings), findings
+
+
+def test_a_level_exit_with_from_but_no_to_on_the_next_clause_does_not_crash():
+    # The second half of the same bug: `next_clause["to"]` subscripted
+    # unconditionally once `start_clause["from"]` no longer crashed first --
+    # a level_exit with `from` picked but its level_enter partner still
+    # showing the "any level" placeholder (to=None).
+    d = SegmentDef(id=1, name="x", enabled=True,
+                   start_triggers=[{"type": "level_exit", "from": 7}],
+                   end_triggers=[{"type": "level_enter"}],
+                   guards=[])
+    findings = lint_definition(d, [])   # must not raise
+    assert not any(w["rule"] == "unfireable" for w in findings), findings
+
+
 def test_a_clean_definition_produces_no_warnings():
     # WF -> SSL's real shape: exiting WF lands in the lobby (a real edge),
     # which is NOT SSL, so start and end can't coincide; the lobby is also a

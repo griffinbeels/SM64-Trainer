@@ -21,6 +21,7 @@ from sm64_events.stats.registry import (registry_meta, selection_id,
                                         selection_order)
 from sm64_events.tracking.backtest import backtest
 from sm64_events.tracking.eventlabel import label_event
+from sm64_events.tracking.lint import lint_definition
 from sm64_events.tracking.segments import (SegmentDef, clause_sentence,
                                            origin_taxonomy,
                                            validate_definition, vocab)
@@ -269,6 +270,24 @@ class BacktestBody(BaseModel):
     # definition's own real history (tracking/backtest.py's CANDIDATE_ID
     # trap: `current`'s id is real and safe to run under directly).
     replaces: int | None = None
+
+
+class LintBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Same shape POST /api/segments validates against -- reused wholesale,
+    # like BacktestBody, rather than inventing a second definition shape.
+    definition: SegmentBody
+    # The definition being EDITED, if any -- None for a brand-new,
+    # not-yet-saved definition. lint_definition's `duplicate` rule excludes a
+    # definition from the comparison BY ID (tracking/lint.py), so without this
+    # an in-progress edit that hasn't changed its start/end/waypoints/guards
+    # yet would report itself as a duplicate of its OWN on-disk row on every
+    # keystroke. Unlike backtest's `replaces`, this is never used to fetch
+    # anything (lint_definition's only use of `d.id` is the equality check
+    # above) -- so an id naming no real definition doesn't 404, it just fails
+    # to exclude anything, which is harmless.
+    segment_id: int | None = None
 
 
 class TimeFilterBody(BaseModel):
@@ -579,6 +598,48 @@ def create_api_router(service) -> APIRouter:
         report = backtest(service.db.events(), candidate, current)
         return dataclasses.asdict(report)
 
+    @router.post("/segments/lint")
+    def lint_segment(body: LintBody):
+        """Author-time findings for a NOT-YET-SAVED definition
+        (`tracking/lint.py`, Task 15/16) -- advisory, checked before Save,
+        never at runtime: a saved definition must keep matching whatever the
+        Usamune warp menu invents forever (`tracking/segments.py`'s own
+        docstring), so a finding here never gates a MATCH, only the editor's
+        Save button. Declared BEFORE /segments/{segment_id} -- same
+        declaration-order rule as /segments/vocab above (fastapi-patterns).
+
+        Unlike POST /segments/backtest, this does NOT run `validate_definition`
+        first and never 409s on a domain-invalid shape (an unknown trigger
+        type, a clause missing a required param): the editor calls this on
+        every edit, including the many in-progress states a form passes
+        through before it is complete (a just-added clause with no level
+        picked yet), and every rule in `lint.py` already tolerates that (an
+        unrecognised type or an unset param reads as "unknown", never a
+        crash -- see that module's docstring). Domain-shape problems still
+        surface at Save time (POST/PUT /api/segments' own `validate_definition`,
+        409) -- that check is unchanged and this endpoint doesn't repeat it.
+
+        `all_defs` is `service.segment_defs` -- the REAL current library,
+        never `[]` (passing `[]` would silently drop the `duplicate` rule
+        with no symptom -- `tracking/lint.py`'s own documented trap).
+        `segment_id` names the definition being edited, if any, so the
+        `duplicate` rule's self-exclusion (by id) excludes the definition's
+        own on-disk row instead of reporting an unmodified edit as a
+        duplicate of itself; omit (or null) for a brand-new definition, where
+        there is no on-disk row yet to exclude. 503 in degraded mode (no
+        definition list to lint against)."""
+        if service.db is None:
+            raise HTTPException(503, "database unavailable")
+        definition = body.definition.model_dump()
+        candidate = SegmentDef(
+            id=body.segment_id if body.segment_id is not None else 0,
+            name=definition["name"], enabled=definition["enabled"],
+            start_triggers=definition["start_triggers"],
+            end_triggers=definition["end_triggers"],
+            guards=definition["guards"], waypoints=definition["waypoints"],
+            match_mode=definition["match_mode"])
+        return {"warnings": lint_definition(candidate, service.segment_defs)}
+
     @router.get("/segments/synthesize")
     def synthesize_from_timeline(start_id: int, end_id: int):
         """Turn two picked `GET /api/segments/timeline` row ids into the
@@ -653,13 +714,29 @@ def create_api_router(service) -> APIRouter:
         ValueError) when the pair shares no boundary -- same `_http` path
         every other segment endpoint uses; a well-formed request that the
         matcher's own topology rules refuse is a domain refusal, not a
-        malformed body."""
+        malformed body.
+
+        Response also carries `warnings` -- `tracking/lint.py` findings for
+        the merged result, against the real post-merge library. INFORMATIONAL
+        ONLY, never a refusal: `merge_definitions`' own "do not meet" check
+        (above) is the only thing this endpoint blocks on. Measured against
+        the real 84-def corpus before deciding this (Task 16, spec
+        2026-07-28-multi-step-segments): of 6,345 topologically-legal merge
+        pairs, 789 come back with an `unrunnable_arm_position` "error" finding
+        and 6 with `unfireable` -- overwhelmingly a retry-in-place trick
+        (LBLJ, MIPS Clip) merged with an unrelated movement whose concrete arm
+        position genuinely can't reach the combined end by this heuristic.
+        Refusing on that would block a large fraction of merges
+        `merge_definitions` itself already treats as legitimate, so lint
+        stays advisory here rather than a second gate."""
         try:
             new_id = await service.merge_segments(
                 body.first_id, body.second_id, body.name)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
-        return {"ok": True, "id": new_id}
+        merged = next(d for d in service.segment_defs if d.id == new_id)
+        return {"ok": True, "id": new_id,
+                "warnings": lint_definition(merged, service.segment_defs)}
 
     @router.put("/segments/{segment_id}")
     async def update_segment(segment_id: int, body: SegmentPatch):
@@ -709,13 +786,29 @@ def create_api_router(service) -> APIRouter:
         when a produced half would be unfireable, or `segment_id` carries
         more than one waypoint (folding several into the single shared
         `mid` would silently drop the rest) -- same `_http` path every other
-        segment endpoint uses."""
+        segment endpoint uses.
+
+        Response also carries `warnings` -- `{first: [...], second: [...]}`,
+        `tracking/lint.py` findings for each new half against the real
+        post-split library. INFORMATIONAL ONLY: see `POST /segments/merge`'s
+        own docstring for why lint stays advisory here rather than a second
+        gate (measured against the real corpus before deciding this).
+        `split_definition` already refuses `unfireable` itself (reusing
+        `lint_definition`'s own rule, `tracking/segments.py`), so that
+        finding can never appear in either half's list here -- only
+        `start_looser_than_waypoint`/`unrunnable_arm_position`/`duplicate`
+        are possible in practice."""
         try:
             first_id, second_id = await service.split_segment(
                 segment_id, body.mid, (body.first_name, body.second_name))
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
-        return {"ok": True, "first_id": first_id, "second_id": second_id}
+        current = {d.id: d for d in service.segment_defs}
+        return {"ok": True, "first_id": first_id, "second_id": second_id,
+                "warnings": {
+                    "first": lint_definition(current[first_id], service.segment_defs),
+                    "second": lint_definition(current[second_id], service.segment_defs),
+                }}
 
     @router.post("/segments/{segment_id}/origin")
     async def set_segment_origin(segment_id: int, body: OriginBody):

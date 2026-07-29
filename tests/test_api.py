@@ -898,6 +898,144 @@ def test_backtest_endpoint_counts_real_history(tmp_path):
         assert body["attempts"][0]["rta_frames"] == 300
 
 
+# --- POST /api/segments/lint (Task 16, spec 2026-07-28-multi-step-segments)
+# -- author-time findings for a not-yet-saved definition, tracking/lint.py's
+# four rules wired up behind an endpoint for the first time. Positive-control
+# fixtures for unfireable/unrunnable_arm_position are the SAME ones
+# tests/test_lint.py already uses (this file drives them through the API,
+# tests/test_lint.py drives lint_definition directly -- a failure here that
+# passes there means the WIRING is wrong, not the rule).
+
+def test_lint_endpoint_returns_no_findings_for_a_clean_definition(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.post("/api/segments/lint", json={
+            "definition": {"name": "clean", "match_mode": "loose",
+                          "start_triggers": [{"type": "level_exit", "from": 24}],
+                          "end_triggers": [{"type": "level_enter", "to": 8}],
+                          "guards": []},
+            "segment_id": None})
+        assert r.status_code == 200
+        assert r.json()["warnings"] == []
+
+
+def test_lint_endpoint_flags_an_unfireable_definition(tmp_path):
+    # Exiting Hazy Maze Cave (level 7) lands directly in the castle basement
+    # in ONE level_changed -- same fixture as
+    # tests/test_lint.py::test_flags_a_definition_whose_start_and_end_are_
+    # the_same_event.
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.post("/api/segments/lint", json={
+            "definition": {"name": "bad", "match_mode": "loose",
+                          "start_triggers": [{"type": "level_exit", "from": 7}],
+                          "end_triggers": [{"type": "level_enter", "to": 6}],
+                          "guards": []},
+            "segment_id": None})
+        assert r.status_code == 200
+        findings = r.json()["warnings"]
+        assert any(f["rule"] == "unfireable" and f["severity"] == "error"
+                   for f in findings), findings
+
+
+def test_lint_endpoint_flags_an_unrunnable_arm_position(tmp_path):
+    # Same fixture as tests/test_lint.py::test_flags_a_definition_that_can_
+    # never_arm_anywhere_it_can_be_run_from -- reset in the castle lobby,
+    # then "enter the castle" can never be completed.
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.post("/api/segments/lint", json={
+            "definition": {"name": "bad", "match_mode": "loose",
+                          "start_triggers": [{"type": "attempt_anchor",
+                                              "level": 6, "area": 1}],
+                          "end_triggers": [{"type": "level_enter", "to": 6}],
+                          "guards": []},
+            "segment_id": None})
+        assert r.status_code == 200
+        findings = r.json()["warnings"]
+        assert any(f["rule"] == "unrunnable_arm_position"
+                   and f["severity"] == "error" for f in findings), findings
+
+
+def test_lint_endpoint_flags_a_duplicate_against_the_real_library(tmp_path):
+    # THE TRAP (brief's own words): all_defs must be the REAL saved library,
+    # never []. Passing [] would silently drop this rule with no symptom --
+    # this test fails immediately if the endpoint ever does that (verified by
+    # mutation: temporarily changing the handler's `service.segment_defs` to
+    # `[]` turns this red and leaves every other lint test green).
+    client, service, db = make_client(tmp_path)
+    with client:
+        original = client.post("/api/segments", json={
+            "name": "Original", "match_mode": "loose",
+            "start_triggers": [{"type": "level_exit", "from": 24}],
+            "end_triggers": [{"type": "level_enter", "to": 8}]}).json()["id"]
+        r = client.post("/api/segments/lint", json={
+            "definition": {"name": "A near-duplicate", "match_mode": "loose",
+                          "start_triggers": [{"type": "level_exit", "from": 24}],
+                          "end_triggers": [{"type": "level_enter", "to": 8}],
+                          "guards": []},
+            "segment_id": None})
+        assert r.status_code == 200
+        findings = r.json()["warnings"]
+        dup = [f for f in findings if f["rule"] == "duplicate"]
+        assert dup and dup[0]["severity"] == "warning", findings
+        assert str(original) in dup[0]["message"]
+
+
+def test_lint_endpoint_excludes_the_definition_being_edited_from_its_own_duplicate_check(tmp_path):
+    # The self-exclusion half of the same trap: editing an EXISTING segment
+    # without changing its start/end/waypoints/guards must not report it as
+    # a duplicate of its own on-disk row. lint_definition's duplicate rule
+    # excludes by id (tracking/lint.py) -- `segment_id` is what supplies it.
+    client, service, db = make_client(tmp_path)
+    with client:
+        sid = client.post("/api/segments", json={
+            "name": "Original", "match_mode": "loose",
+            "start_triggers": [{"type": "level_exit", "from": 24}],
+            "end_triggers": [{"type": "level_enter", "to": 8}]}).json()["id"]
+        r = client.post("/api/segments/lint", json={
+            "definition": {"name": "Original", "match_mode": "loose",
+                          "start_triggers": [{"type": "level_exit", "from": 24}],
+                          "end_triggers": [{"type": "level_enter", "to": 8}],
+                          "guards": []},
+            "segment_id": sid})
+        assert r.status_code == 200
+        assert r.json()["warnings"] == []
+
+
+def test_lint_endpoint_tolerates_a_domain_invalid_shape_without_409ing(tmp_path):
+    # Deliberate deviation from backtest's contract: the editor calls this on
+    # EVERY edit, including the in-progress states a form passes through
+    # before it's complete (an unknown-to-Pydantic-but-well-typed clause is
+    # not reachable from the vocab-driven UI, but an unrecognised trigger
+    # TYPE is exactly what lint.py's own rules are written to tolerate --
+    # see server/api.py's lint_segment docstring). No validate_definition
+    # call here, so this never 409s the way POST /api/segments would.
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.post("/api/segments/lint", json={
+            "definition": {"name": "in-progress", "match_mode": "loose",
+                          "start_triggers": [{"type": "nope"}],
+                          "end_triggers": [{"type": "spawned"}],
+                          "guards": []},
+            "segment_id": None})
+        assert r.status_code == 200
+        assert r.json()["warnings"] == []
+
+
+def test_lint_endpoint_422s_on_a_malformed_body(tmp_path):
+    # start_triggers wrong TYPE (a string, not a list of clauses) -- Pydantic
+    # rejects this before the handler runs, same convention as backtest's own
+    # 422 test.
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.post("/api/segments/lint", json={
+            "definition": {"name": "bad", "start_triggers": "nope",
+                          "end_triggers": [], "guards": []},
+            "segment_id": None})
+        assert r.status_code == 422
+
+
 # --- GET /api/segments/synthesize (Task 13, spec 2026-07-28-multi-step-
 # segments) -- two picked timeline-row ids -> the clause pair + name a new
 # segment would be defined by. The picker only ever holds row IDS (never the
@@ -1333,6 +1471,11 @@ def test_segments_503_when_db_none(tmp_path):
             "definition": {"name": "X", "start_triggers": [{"type": "spawned"}],
                           "end_triggers": [{"type": "level_enter", "to": 6}]},
             "replaces": None
+        }).status_code == 503
+        assert client.post("/api/segments/lint", json={
+            "definition": {"name": "X", "start_triggers": [{"type": "spawned"}],
+                          "end_triggers": [{"type": "level_enter", "to": 6}]},
+            "segment_id": None
         }).status_code == 503
         # vocab is always 200 — no db dependency
         assert client.get("/api/segments/vocab").status_code == 200
@@ -1871,3 +2014,49 @@ def test_merge_endpoint_409s_on_a_pair_that_does_not_meet(tmp_path):
         assert r.status_code == 409
         assert "do not meet" in r.json()["detail"]
         assert len(db.segment_defs()) == before
+
+
+# --- split/merge responses carry lint warnings (Task 16, spec 2026-07-28-
+# multi-step-segments) -- Task 18's own save/create paths, covered here per
+# the Task 16 dispatch: informational only (see server/api.py's own
+# docstrings for why this doesn't refuse -- measured against the real corpus,
+# gating on `unrunnable_arm_position` would have blocked ~12% of otherwise
+# topologically-legal merges).
+
+def test_split_endpoint_response_carries_lint_warnings_for_both_halves(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        sid = client.post("/api/segments", json={
+            "name": "WF -> SSL", "match_mode": "loose",
+            "start_triggers": [{"type": "level_exit", "from": 24}],
+            "end_triggers": [{"type": "level_enter", "to": 8}],
+            "waypoints": [[{"type": "area_enter", "level": 6, "area": 3}]],
+        }).json()["id"]
+        r = client.post(f"/api/segments/{sid}/split", json={
+            "mid": [{"type": "area_enter", "level": 6, "area": 3}],
+            "first_name": "WF -> Basement", "second_name": "Basement -> SSL"})
+        assert r.status_code == 200
+        # This exact split is clean (test_lint.py-style reasoning: neither
+        # half's start collides with its own next required step, and neither
+        # arms somewhere it can't run from) -- both lists are empty, not just
+        # present.
+        assert r.json()["warnings"] == {"first": [], "second": []}
+
+
+def test_merge_endpoint_response_carries_lint_warnings(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        first_id = client.post("/api/segments", json={
+            "name": "WF -> Basement", "match_mode": "loose",
+            "start_triggers": [{"type": "level_exit", "from": 24}],
+            "end_triggers": [{"type": "area_enter", "level": 6, "area": 3}],
+        }).json()["id"]
+        second_id = client.post("/api/segments", json={
+            "name": "Basement -> SSL", "match_mode": "loose",
+            "start_triggers": [{"type": "area_enter", "level": 6, "area": 3}],
+            "end_triggers": [{"type": "level_enter", "to": 8}],
+        }).json()["id"]
+        r = client.post("/api/segments/merge", json={
+            "first_id": first_id, "second_id": second_id, "name": "WF -> SSL"})
+        assert r.status_code == 200
+        assert r.json()["warnings"] == []

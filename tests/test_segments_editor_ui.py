@@ -504,3 +504,96 @@ def test_the_arm_count_extraction_can_still_fail():
     extracted = _extract_function(commented, "backtestSummary")
     assert "OLD" not in extracted
     assert "return report.arms;" in extracted
+
+
+# --- author-time lint (Task 16, spec 2026-07-28-multi-step-segments) -------
+# tracking/lint.py (Task 15) had no server endpoint and no reference under
+# ui/ until this task -- POST /api/segments/lint plus these two wire-ups are
+# what actually ships it. Two surfaces: the Builder (re-checks on every edit,
+# unlike the button-triggered backtest above) and the recorder's review step
+# (alongside its own backtest, since lint is what explains an arms=0/fires=0
+# result rather than leaving the user at a dead end).
+
+def _lints_on_every_edit(source: str) -> bool:
+    """The real lint POST, comment-immune -- a docstring describing "lints on
+    every edit" would satisfy a bare substring check just as easily as the
+    real call. Pin the wire-level call itself, same rigor as
+    _posts_the_split/_posts_the_merge above."""
+    return '"POST", "/api/segments/lint"' in strip_comments(source)
+
+
+def test_editor_lints_on_every_edit():
+    assert _lints_on_every_edit(SEGMENTS_JS_SOURCE)
+    # Debounced on the FORM itself (not button-triggered like backtest) --
+    # the one useEffect in this file keyed on `d` alone.
+    assert "}, [d]);" in SEGMENTS_JS_SOURCE
+
+
+def test_editor_lint_guard_can_still_fail():
+    comment_only = ('// The lint effect posts "POST", "/api/segments/lint"\n'
+                    '// on every edit, debounced.\n')
+    assert not _lints_on_every_edit(comment_only)
+    assert _lints_on_every_edit(
+        'send("POST", "/api/segments/lint", { definition, segment_id })')
+
+
+def test_editor_lint_call_excludes_the_definition_being_edited():
+    # lint_definition's `duplicate` rule excludes by id (tracking/lint.py) --
+    # without sending the definition's OWN id here, an unmodified edit of an
+    # existing segment would report itself as a duplicate of its own row.
+    assert ("segment_id: initial && initial.id != null ? initial.id : null"
+            in SEGMENTS_JS_SOURCE)
+
+
+def _save_disabled_on_lint_error(source: str) -> bool:
+    return "disabled=${lintHasError}" in strip_comments(source)
+
+
+def test_editor_save_is_disabled_on_a_lint_error():
+    assert _save_disabled_on_lint_error(SEGMENTS_JS_SOURCE)
+    # Gated on SEVERITY, not mere presence -- a warning must not block Save.
+    assert 'lintFindings.some((f) => f.severity === "error")' in SEGMENTS_JS_SOURCE
+
+
+def test_editor_save_disable_guard_can_still_fail():
+    comment_only = ('// Save is disabled=${lintHasError} whenever an error-\n'
+                    '// severity finding exists.\n')
+    assert not _save_disabled_on_lint_error(comment_only)
+    assert _save_disabled_on_lint_error(
+        'onclick=${save} disabled=${lintHasError}')
+
+
+def _lints_alongside_the_recorder_backtest(source: str) -> bool:
+    stripped = strip_comments(source)
+    return '"POST", "/api/segments/lint"' in stripped and "runLint(body)" in stripped
+
+
+def test_the_recorder_lints_alongside_its_backtest():
+    assert _lints_alongside_the_recorder_backtest(SEGMENT_TIMELINE_JS_SOURCE)
+    # Always a brand-new definition in this flow -- nothing on disk to exclude.
+    assert "segment_id: null" in SEGMENT_TIMELINE_JS_SOURCE
+
+
+def test_the_recorder_lint_guard_can_still_fail():
+    comment_only = ('// runLint(body) posts "POST", "/api/segments/lint"\n'
+                    '// right beside runBacktest(body) in pickEnd.\n')
+    assert not _lints_alongside_the_recorder_backtest(comment_only)
+    real_code = 'runBacktest(body);\nrunLint(body);\nsend("POST", "/api/segments/lint", body)'
+    assert _lints_alongside_the_recorder_backtest(real_code)
+
+
+def _recorder_save_waits_for_lint(source: str) -> bool:
+    return ("disabled=${!btReport || saving || lintHasError}"
+            in strip_comments(source))
+
+
+def test_the_recorder_save_is_disabled_on_a_lint_error():
+    assert _recorder_save_waits_for_lint(SEGMENT_TIMELINE_JS_SOURCE)
+
+
+def test_the_recorder_save_disable_guard_can_still_fail():
+    comment_only = ('// Save is disabled=${!btReport || saving || lintHasError}\n'
+                    '// once the review step lands.\n')
+    assert not _recorder_save_waits_for_lint(comment_only)
+    assert _recorder_save_waits_for_lint(
+        'disabled=${!btReport || saving || lintHasError} onclick=${save}')
