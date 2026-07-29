@@ -161,12 +161,24 @@ def test_picking_the_same_row_for_both_ends_is_refused_as_unfireable():
     assert synthesize(row, row) is None
 
 
-def test_two_different_rows_with_the_same_shape_are_not_refused():
+def test_two_different_rows_are_not_refused_by_the_identity_check_alone():
     # Mutation-proof for the check above: it must read ROW IDENTITY, not
-    # clause content. Two DIFFERENT journal ids -- two distinct occurrences
-    # of "left level 7 into level 6" -- are a normal, fireable pair even
-    # though their payloads happen to match; an implementation that compared
-    # the built CLAUSES instead of the ids would wrongly refuse this too.
+    # clause content. Two DIFFERENT journal ids are never refused by THIS
+    # check regardless of what their payloads say -- an implementation that
+    # compared the built CLAUSES instead of the ids would wrongly refuse this
+    # pair too, since both rows record the same from=7/to=6 transition.
+    #
+    # NOT a claim that this derived pair is actually fireable in the real
+    # world. level 7 (Hazy Maze Cave) <-> level 6 castle basement IS a direct
+    # two-way edge (WORLD_EDGES_TWO_WAY, memory/addresses.py), so ANY
+    # level_changed(7,6) event -- whichever occurrence produced it --
+    # satisfies level_exit{from:7} (unpinned `to`) AND level_enter{to:6}
+    # simultaneously, which is the same unfireable shape synthesize()'s own
+    # docstring names. synthesize() does not catch this (by design -- its
+    # docstring says so): the row-identity refusal is deliberately narrower
+    # than a topology check. This test proves only that narrower property --
+    # two distinct rows pass the identity gate -- not that the resulting def
+    # would actually run.
     start_row = jev(10, "level_changed", 0, {"from": 7, "to": 6})
     end_row = jev(11, "level_changed", 500, {"from": 7, "to": 6})
     assert synthesize(start_row, end_row) == (
