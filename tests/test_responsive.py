@@ -5,9 +5,19 @@ derivation and the gates — shared with every project on this machine and
 improved in one place. What is left here is this project's own POLICY, which is
 `tools/uilab_project.py`, plus the defects we have agreed to owe.
 
-Why the sweep may not skip itself: a gate that goes green when its dependency is
-missing is green forever and indistinguishable from one that passed. UILAB_SKIP=1
-turns it off as a visible decision someone made.
+Why the sweep may not skip itself once uilab IS installed: a gate that goes
+green when its dependency is missing is green forever and indistinguishable
+from one that passed. UILAB_SKIP=1 turns it off as a visible decision someone
+made.
+
+uilab NOT BEING INSTALLED AT ALL is a different case, and it is the one a
+stranger hits. It is an optional machine-level dev module installed from a
+local checkout, so `uv sync` on a fresh clone cannot supply it — and a bare
+`import uilab` at module scope does not fail this file, it ABORTS COLLECTION
+for the whole suite. Measured on a clean clone of c098b4a: `uv run pytest -q`
+ran zero of 2,682 tests and exited on `ModuleNotFoundError: No module named
+'uilab'`. Skipping this module instead costs a contributor nothing and gives
+them the other 2,678 tests.
 """
 import os
 import sys
@@ -17,10 +27,59 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
-from uilab.pytest_plugin import (  # noqa: E402
+def _find_uilab() -> str | None:
+    """Make uilab importable, or return why it is not.
+
+    An editable install alone is NOT enough, and that is the whole reason this
+    function exists. uilab is not in this project's lockfile — it cannot be,
+    since it is installed from a local checkout — so `uv sync`, which `uv run`
+    performs implicitly, PRUNES it. Measured 2026-07-28: `import uilab`
+    succeeded, then a later `uv run pytest` removed the package and the layout
+    gate silently became a skip. A gate that disappears when a package manager
+    tidies up is exactly the green-forever failure the rest of this file is
+    written to avoid.
+
+    So resolve it by PATH, which no sync can undo: an installed copy if one is
+    there, else a sibling checkout, else `UILAB_PATH`. A stranger with none of
+    those gets a clean skip and the other 2,678 tests.
+    """
+    import importlib.util
+
+    if importlib.util.find_spec("uilab") is not None:
+        return None
+    candidates = []
+    if os.environ.get("UILAB_PATH"):
+        candidates.append(Path(os.environ["UILAB_PATH"]))
+    candidates.append(Path(__file__).resolve().parents[2] / "uilab")
+    for candidate in candidates:
+        if (candidate / "uilab" / "__init__.py").exists():
+            sys.path.insert(0, str(candidate))
+            return None
+    return (
+        "uilab not found. It is an optional dev module shared across this "
+        "machine's projects (https://github.com/griffinbeels/uilab); a fresh "
+        "clone will not have it, and everything except the rendered layout "
+        "gates runs without it. To enable them, clone it beside this repo (or "
+        "set UILAB_PATH) and install its browser:\n"
+        "    git clone https://github.com/griffinbeels/uilab\n"
+        "    uv run python -m playwright install chromium\n"
+        f"looked in: {', '.join(str(c) for c in candidates)}")
+
+
+_MISSING = _find_uilab()
+if _MISSING:
+    pytest.skip(_MISSING, allow_module_level=True)
+
+from uilab.pytest_plugin import (  # noqa: E402,F401
     assert_components_use_container_queries, assert_no_new_defects,
-    assert_no_stale_exemptions)
+    assert_no_stale_exemptions, uilab_sweep)
 from uilab_project import PROJECT  # noqa: E402
+
+# `uilab_sweep` is IMPORTED, not inherited from the pytest11 entry point, and
+# that is deliberate: an entry point only exists for an installed package, and
+# `uv sync` prunes the editable install because it is absent from the lockfile.
+# Importing the fixture makes the gate depend on uilab being on sys.path and
+# nothing else, which is the one property a package manager cannot revoke.
 
 # The plugin's `uilab_sweep` fixture reads this off the module.
 uilab_project = PROJECT

@@ -20,7 +20,16 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8.0", "httpx>=0.27", "pyinstaller>=6.0"]
+dev = ["pytest>=8.0", "httpx>=0.27", "pyinstaller>=6.0", "playwright>=1.49"]
+
+# playwright is declared HERE, not inherited from uilab, and that is on purpose.
+# uilab is resolved by PATH (see tests/test_responsive.py) because `uv sync`
+# prunes an editable install absent from the lockfile -- but a path only
+# supplies uilab's own modules, never its dependencies. Naming the browser
+# driver as this project's dev dependency is also just true: the layout gate
+# renders the app in a browser, with or without uilab supplying the harness.
+# The browser BINARY is a separate ~110MB download, deliberately not automatic:
+#   uv run python -m playwright install chromium
 
 [build-system]
 requires = ["hatchling"]
