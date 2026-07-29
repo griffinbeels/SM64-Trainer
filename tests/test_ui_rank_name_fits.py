@@ -20,6 +20,7 @@ caps.js::CAP, which is exactly when this should fail. It reads them from the
 registry rather than restating them -- a restated list is a second copy, and
 a new tier would not be in it.
 """
+import contextlib
 import json
 import shutil
 import subprocess
@@ -33,6 +34,26 @@ sys.path.insert(0, str(REPO / "tools"))
 
 pytestmark = pytest.mark.skipif(
     shutil.which("node") is None, reason="node not on PATH")
+
+# uilab replaced tools/cdp.py (deleted on main when the layout rig was
+# extracted). Its Page protocol offers the three verbs this test needs, and
+# resolving uilab BY PATH is what stops `uv sync` pruning the gate into a
+# silent skip -- see tests/uilab_guard.py.
+from uilab_guard import find_uilab  # noqa: E402
+
+_MISSING = find_uilab()
+if _MISSING:
+    pytest.skip(_MISSING, allow_module_level=True)
+
+from uilab import driver  # noqa: E402
+
+
+@contextlib.contextmanager
+def chrome_session(url: str):
+    """tools/cdp.py's old shape, over uilab's driver."""
+    with driver.get_driver().launch(headless=True) as page:
+        page.goto(url)
+        yield page
 
 
 def _cap_names() -> list[str]:
@@ -61,7 +82,6 @@ MEASURE = """(() => {
 
 def test_every_rank_name_fits_the_card_without_ellipsis():
     from ui_fixture import serve_ui                       # noqa: E402
-    from cdp import chrome_session                        # noqa: E402
 
     # A division digit is always appended, and "Unranked" is the sentinel the
     # card shows before a rank exists -- both are real strings this element
