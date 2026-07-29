@@ -73,12 +73,19 @@ def _numeric_bounds(body: str) -> tuple[float, float] | None:
     return float(low.group(1)), float(high.group(1))
 
 
-def rewrite_defaults(source: str, values: dict[str, object]) -> tuple[str, dict]:
+def rewrite_defaults(source: str, values: dict[str, object],
+                     where: str = "the tuning registry") -> tuple[str, dict]:
     """Return `(new_source, written)` with each named row's `value:` replaced.
 
     Raises ValueError with a sentence naming the offending key -- the inspector
     puts it straight on screen, so it has to read as an explanation rather than
     a traceback.
+
+    `where` is the file being edited, named in those sentences. It used to be
+    the hardcoded string "climbtuning.js", which was right for the only surface
+    that existed when this was written and became a lie the moment a second one
+    was registered: a failed save from the OVERALL RANK-UP inspector sent the
+    user to a file it had never touched (2026-07-28).
     """
     written: dict[str, object] = {}
     for key, wanted in values.items():
@@ -88,7 +95,7 @@ def rewrite_defaults(source: str, values: dict[str, object]) -> tuple[str, dict]
         matches = list(pattern.finditer(source))
         if len(matches) != 1:
             raise ValueError(
-                f"{key!r} matched {len(matches)} rows in climbtuning.js; "
+                f"{key!r} matched {len(matches)} rows in {where}; "
                 "it must match exactly one")
         match = matches[0]
         row_body = match.group("row")
@@ -152,7 +159,8 @@ def create_tuning_router() -> APIRouter:
             raise HTTPException(503, f"{target} is missing")
         source = target.read_text(encoding="utf-8")
         try:
-            updated, written = rewrite_defaults(source, dict(body.values))
+            updated, written = rewrite_defaults(
+                source, dict(body.values), where=target.name)
         except ValueError as error:
             raise HTTPException(409, str(error)) from error
         if written:

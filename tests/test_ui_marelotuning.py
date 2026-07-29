@@ -148,3 +148,29 @@ def test_the_custom_property_regex_catches_both_writer_shapes():
     # the same comment-vs-code trap tests/source_scan.py exists to avoid.
     assert CUSTOM_PROPERTY.findall(
         "the --some-future-var property is read by a rule below") == []
+
+
+def test_a_stale_draft_cannot_resurrect_a_deleted_tunable():
+    """A localStorage draft written BEFORE a row was deleted must not carry
+    that row back.
+
+    The inspector persists its working values, so a browser that had touched
+    the page before `tintStrength`/`tintCrossfadeMs` were removed kept them in
+    its draft. They survived the spread, showed up in the changed-from-shipped
+    list as "undefined -> 0.14", and rode along on the next SAVE -- where the
+    server correctly refused a key the file no longer has, so an unrelated
+    one-value save failed naming a tunable the user had never set
+    (live report, 2026-07-28).
+
+    climbtuning.js's `decodeTuning` already stated this rule -- "unknown keys
+    are DROPPED, they are either a typo or a tunable that has since been
+    codified away" -- and this registry shipped without it."""
+    data = run_node(
+        "withMareloDefaults",
+        "console.log(JSON.stringify(withMareloDefaults("
+        '{ tintStrength: 0.14, tintCrossfadeMs: 900, holdMs: 1234 })));',
+        module=TUNING_JS)
+    assert "tintStrength" not in data
+    assert "tintCrossfadeMs" not in data
+    # ...while a key the registry DOES have still comes through.
+    assert data["holdMs"] == 1234

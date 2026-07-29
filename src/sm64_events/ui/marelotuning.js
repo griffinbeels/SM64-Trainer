@@ -109,8 +109,25 @@ export const MARELO_GROUPS = [...new Set(
 
 // A tunable a caller did not name falls back to the shipped default rather
 // than to undefined: a NaN duration is an animation that never ends.
+// Unknown keys are DROPPED, never carried through -- the same rule
+// climbtuning.js's `decodeTuning` already states: "they are either a typo or a
+// tunable that has since been codified away, and both want the current default
+// rather than a value nothing reads."
+//
+// This registry did not have it, and the omission shipped a real bug the day
+// two rows were deleted (2026-07-28). The inspector persists its working draft
+// to localStorage, so a browser that had touched the page BEFORE the deletion
+// kept `tintStrength`/`tintCrossfadeMs` in that draft forever. They survived
+// the spread, were reported as "undefined -> 0.14" in the changed-from-shipped
+// list, and then went to the server on SAVE, where rewrite_defaults correctly
+// refused a key that no longer exists in the file -- so an unrelated,
+// legitimate one-value save failed with an error naming a tunable the user had
+// never heard of. Filtering here fixes it for every consumer at once rather
+// than only on the load path, since the draft is re-read on every mount.
 export const withMareloDefaults = (values) =>
-  ({ ...MARELO_DEFAULTS, ...(values || {}) });
+  ({ ...MARELO_DEFAULTS,
+     ...Object.fromEntries(Object.entries(values || {})
+       .filter(([key]) => key in MARELO_DEFAULTS)) });
 
 let active = withMareloDefaults(null);
 export const mareloTuning = () => active;
