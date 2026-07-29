@@ -1703,6 +1703,726 @@
       "category": "Castle Movement",
       "default_strat": "Standard",
       "match_mode": "loose"
+    },
+    {
+      "seed_key": "seg:100c->exit:bob",
+      "name": "BoB — 100 Coins → Exit",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 1,
+          "star": 6
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 1,
+          "star": 0
+        },
+        {
+          "type": "star_grabbed",
+          "course": 1,
+          "star": 1
+        },
+        {
+          "type": "star_grabbed",
+          "course": 1,
+          "star": 2
+        },
+        {
+          "type": "star_grabbed",
+          "course": 1,
+          "star": 3
+        },
+        {
+          "type": "star_grabbed",
+          "course": 1,
+          "star": 4
+        },
+        {
+          "type": "star_grabbed",
+          "course": 1,
+          "star": 5
+        }
+      ],
+      "waypoints": [],
+      "guards": [],
+      "category": "100 Coin Exit",
+      "match_mode": "loose"
+    },
+    {
+      "seed_key": "seg:100c->exit:wf",
+      "name": "WF — 100 Coins → Exit",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 2,
+          "star": 6
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 2,
+          "star": 0
+        },
+        {
+          "type": "star_grabbed",
+          "course": 2,
+          "star": 1
+        },
+        {
+          "type": "star_grabbed",
+          "course": 2,
+          "star": 2
+        },
+        {
+          "type": "star_grabbed",
+          "course": 2,
+          "star": 3
+        },
+        {
+          "type": "star_grabbed",
+          "course": 2,
+          "star": 4
+        },
+        {
+          "type": "star_grabbed",
+          "course": 2,
+          "star": 5
+        }
+      ],
+      "waypoints": [],
+      "guards": [],
+      "category": "100 Coin Exit",
+      "match_mode": "loose"
+    },
+    {
+      "seed_key": "seg:100c->exit:jrb",
+      "name": "JRB — 100 Coins → Exit",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 3,
+          "star": 6
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 3,
+          "star": 0
+        },
+        {
+          "type": "star_grabbed",
+          "course": 3,
+          "star": 1
+        },
+        {
+          "type": "star_grabbed",
+          "course": 3,
+          "star": 2
+        },
+        {
+          "type": "star_grabbed",
+          "course": 3,
+          "star": 3
+        },
+        {
+          "type": "star_grabbed",
+          "course": 3,
+          "star": 4
+        },
+        {
+          "type": "star_grabbed",
+          "course": 3,
+          "star": 5
+        }
+      ],
+      "waypoints": [],
+      "guards": [],
+      "category": "100 Coin Exit",
+      "match_mode": "loose"
+    },
+    {
+      "seed_key": "seg:100c->exit:ccm",
+      "name": "CCM — 100 Coins → Exit",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 4,
+          "star": 6
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 4,
+          "star": 0
+        },
+        {
+          "type": "star_grabbed",
+          "course": 4,
+          "star": 1
+        },
+        {
+          "type": "star_grabbed",
+          "course": 4,
+          "star": 2
+        },
+        {
+          "type": "star_grabbed",
+          "course": 4,
+          "star": 3
+        },
+        {
+          "type": "star_grabbed",
+          "course": 4,
+          "star": 4
+        },
+        {
+          "type": "star_grabbed",
+          "course": 4,
+          "star": 5
+        }
+      ],
+      "waypoints": [],
+      "guards": [],
+      "category": "100 Coin Exit",
+      "match_mode": "loose"
+    },
+    {
+      "seed_key": "seg:100c->exit:bbh",
+      "name": "BBH — 100 Coins → Exit",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 5,
+          "star": 6
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 5,
+          "star": 0
+        },
+        {
+          "type": "star_grabbed",
+          "course": 5,
+          "star": 1
+        },
+        {
+          "type": "star_grabbed",
+          "course": 5,
+          "star": 2
+        },
+        {
+          "type": "star_grabbed",
+          "course": 5,
+          "star": 3
+        },
+        {
+          "type": "star_grabbed",
+          "course": 5,
+          "star": 4
+        },
+        {
+          "type": "star_grabbed",
+          "course": 5,
+          "star": 5
+        }
+      ],
+      "waypoints": [],
+      "guards": [],
+      "category": "100 Coin Exit",
+      "match_mode": "loose"
+    },
+    {
+      "seed_key": "seg:100c->exit:hmc",
+      "name": "HMC — 100 Coins → Exit",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 6,
+          "star": 6
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 6,
+          "star": 0
+        },
+        {
+          "type": "star_grabbed",
+          "course": 6,
+          "star": 1
+        },
+        {
+          "type": "star_grabbed",
+          "course": 6,
+          "star": 2
+        },
+        {
+          "type": "star_grabbed",
+          "course": 6,
+          "star": 3
+        },
+        {
+          "type": "star_grabbed",
+          "course": 6,
+          "star": 4
+        },
+        {
+          "type": "star_grabbed",
+          "course": 6,
+          "star": 5
+        }
+      ],
+      "waypoints": [],
+      "guards": [],
+      "category": "100 Coin Exit",
+      "match_mode": "loose"
+    },
+    {
+      "seed_key": "seg:100c->exit:lll",
+      "name": "LLL — 100 Coins → Exit",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 7,
+          "star": 6
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 7,
+          "star": 0
+        },
+        {
+          "type": "star_grabbed",
+          "course": 7,
+          "star": 1
+        },
+        {
+          "type": "star_grabbed",
+          "course": 7,
+          "star": 2
+        },
+        {
+          "type": "star_grabbed",
+          "course": 7,
+          "star": 3
+        },
+        {
+          "type": "star_grabbed",
+          "course": 7,
+          "star": 4
+        },
+        {
+          "type": "star_grabbed",
+          "course": 7,
+          "star": 5
+        }
+      ],
+      "waypoints": [],
+      "guards": [],
+      "category": "100 Coin Exit",
+      "match_mode": "loose"
+    },
+    {
+      "seed_key": "seg:100c->exit:ssl",
+      "name": "SSL — 100 Coins → Exit",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 8,
+          "star": 6
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 8,
+          "star": 0
+        },
+        {
+          "type": "star_grabbed",
+          "course": 8,
+          "star": 1
+        },
+        {
+          "type": "star_grabbed",
+          "course": 8,
+          "star": 2
+        },
+        {
+          "type": "star_grabbed",
+          "course": 8,
+          "star": 3
+        },
+        {
+          "type": "star_grabbed",
+          "course": 8,
+          "star": 4
+        },
+        {
+          "type": "star_grabbed",
+          "course": 8,
+          "star": 5
+        }
+      ],
+      "waypoints": [],
+      "guards": [],
+      "category": "100 Coin Exit",
+      "match_mode": "loose"
+    },
+    {
+      "seed_key": "seg:100c->exit:ddd",
+      "name": "DDD — 100 Coins → Exit",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 9,
+          "star": 6
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 9,
+          "star": 0
+        },
+        {
+          "type": "star_grabbed",
+          "course": 9,
+          "star": 1
+        },
+        {
+          "type": "star_grabbed",
+          "course": 9,
+          "star": 2
+        },
+        {
+          "type": "star_grabbed",
+          "course": 9,
+          "star": 3
+        },
+        {
+          "type": "star_grabbed",
+          "course": 9,
+          "star": 4
+        },
+        {
+          "type": "star_grabbed",
+          "course": 9,
+          "star": 5
+        }
+      ],
+      "waypoints": [],
+      "guards": [],
+      "category": "100 Coin Exit",
+      "match_mode": "loose"
+    },
+    {
+      "seed_key": "seg:100c->exit:sl",
+      "name": "SL — 100 Coins → Exit",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 10,
+          "star": 6
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 10,
+          "star": 0
+        },
+        {
+          "type": "star_grabbed",
+          "course": 10,
+          "star": 1
+        },
+        {
+          "type": "star_grabbed",
+          "course": 10,
+          "star": 2
+        },
+        {
+          "type": "star_grabbed",
+          "course": 10,
+          "star": 3
+        },
+        {
+          "type": "star_grabbed",
+          "course": 10,
+          "star": 4
+        },
+        {
+          "type": "star_grabbed",
+          "course": 10,
+          "star": 5
+        }
+      ],
+      "waypoints": [],
+      "guards": [],
+      "category": "100 Coin Exit",
+      "match_mode": "loose"
+    },
+    {
+      "seed_key": "seg:100c->exit:wdw",
+      "name": "WDW — 100 Coins → Exit",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 11,
+          "star": 6
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 11,
+          "star": 0
+        },
+        {
+          "type": "star_grabbed",
+          "course": 11,
+          "star": 1
+        },
+        {
+          "type": "star_grabbed",
+          "course": 11,
+          "star": 2
+        },
+        {
+          "type": "star_grabbed",
+          "course": 11,
+          "star": 3
+        },
+        {
+          "type": "star_grabbed",
+          "course": 11,
+          "star": 4
+        },
+        {
+          "type": "star_grabbed",
+          "course": 11,
+          "star": 5
+        }
+      ],
+      "waypoints": [],
+      "guards": [],
+      "category": "100 Coin Exit",
+      "match_mode": "loose"
+    },
+    {
+      "seed_key": "seg:100c->exit:ttm",
+      "name": "TTM — 100 Coins → Exit",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 12,
+          "star": 6
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 12,
+          "star": 0
+        },
+        {
+          "type": "star_grabbed",
+          "course": 12,
+          "star": 1
+        },
+        {
+          "type": "star_grabbed",
+          "course": 12,
+          "star": 2
+        },
+        {
+          "type": "star_grabbed",
+          "course": 12,
+          "star": 3
+        },
+        {
+          "type": "star_grabbed",
+          "course": 12,
+          "star": 4
+        },
+        {
+          "type": "star_grabbed",
+          "course": 12,
+          "star": 5
+        }
+      ],
+      "waypoints": [],
+      "guards": [],
+      "category": "100 Coin Exit",
+      "match_mode": "loose"
+    },
+    {
+      "seed_key": "seg:100c->exit:thi",
+      "name": "THI — 100 Coins → Exit",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 13,
+          "star": 6
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 13,
+          "star": 0
+        },
+        {
+          "type": "star_grabbed",
+          "course": 13,
+          "star": 1
+        },
+        {
+          "type": "star_grabbed",
+          "course": 13,
+          "star": 2
+        },
+        {
+          "type": "star_grabbed",
+          "course": 13,
+          "star": 3
+        },
+        {
+          "type": "star_grabbed",
+          "course": 13,
+          "star": 4
+        },
+        {
+          "type": "star_grabbed",
+          "course": 13,
+          "star": 5
+        }
+      ],
+      "waypoints": [],
+      "guards": [],
+      "category": "100 Coin Exit",
+      "match_mode": "loose"
+    },
+    {
+      "seed_key": "seg:100c->exit:ttc",
+      "name": "TTC — 100 Coins → Exit",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 14,
+          "star": 6
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 14,
+          "star": 0
+        },
+        {
+          "type": "star_grabbed",
+          "course": 14,
+          "star": 1
+        },
+        {
+          "type": "star_grabbed",
+          "course": 14,
+          "star": 2
+        },
+        {
+          "type": "star_grabbed",
+          "course": 14,
+          "star": 3
+        },
+        {
+          "type": "star_grabbed",
+          "course": 14,
+          "star": 4
+        },
+        {
+          "type": "star_grabbed",
+          "course": 14,
+          "star": 5
+        }
+      ],
+      "waypoints": [],
+      "guards": [],
+      "category": "100 Coin Exit",
+      "match_mode": "loose"
+    },
+    {
+      "seed_key": "seg:100c->exit:rr",
+      "name": "RR — 100 Coins → Exit",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 15,
+          "star": 6
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 15,
+          "star": 0
+        },
+        {
+          "type": "star_grabbed",
+          "course": 15,
+          "star": 1
+        },
+        {
+          "type": "star_grabbed",
+          "course": 15,
+          "star": 2
+        },
+        {
+          "type": "star_grabbed",
+          "course": 15,
+          "star": 3
+        },
+        {
+          "type": "star_grabbed",
+          "course": 15,
+          "star": 4
+        },
+        {
+          "type": "star_grabbed",
+          "course": 15,
+          "star": 5
+        }
+      ],
+      "waypoints": [],
+      "guards": [],
+      "category": "100 Coin Exit",
+      "match_mode": "loose"
     }
   ],
   "routes": [

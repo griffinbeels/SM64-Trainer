@@ -28,6 +28,13 @@ def sub(top: str, name: str) -> str:
 CASTLE_MOVEMENT = "Castle Movement"
 TRICKS = "Tricks"
 BOWSER_FIGHTS = "Bowser Fights"
+# The 100-coin "grab a different star to actually leave" pattern (Task 20,
+# spec 2026-07-28-multi-step-segments) deliberately ENDS on star_grabbed --
+# see mechanic()'s docstring for why that disqualifies it from Castle
+# Movement. Its own category keeps it out of corpus_movements.MOVEMENTS
+# (and therefore out of every test built on "a movement never ends on a
+# star grab").
+HUNDRED_COIN_EXIT = "100 Coin Exit"
 
 ROUTE_SCOPED = [{"type": "in_active_route"}]
 
@@ -200,3 +207,25 @@ def movement(seed_key, name, start, end, via=(), match_mode=None):
     if match_mode is not None:
         row["match_mode"] = match_mode
     return row
+
+
+def mechanic(seed_key, name, start, end, category, match_mode="loose"):
+    """A non-route segment describing an intrinsic game mechanic (Task 20,
+    spec 2026-07-28-multi-step-segments) -- starting with the "100 coins
+    doesn't end the level, a different star does" pattern. Two differences
+    from movement()/`_movement_row`:
+
+    (1) `end` may be a genuine any-of LIST of clauses (the 100-coin case
+        needs six alternative stars, since the vocabulary has no "any star
+        but this one" clause) -- movement() assumes exactly one clause per
+        side, full seed shape here instead of a compact row `_movement_row`
+        expands later.
+    (2) UNGUARDED (guards=[]), like the ten legacy segments, not route-scoped
+        like the 56 castle movements: there is exactly one way to do it (some
+        other star), so there is no route ambiguity to scope against -- the
+        same reason seg:bowser-1/seg:bitdw-pipe/etc. stay always-armed."""
+    return {"seed_key": seed_key, "name": name, "enabled": True,
+            "start_triggers": [start],
+            "end_triggers": end if isinstance(end, list) else [end],
+            "waypoints": [], "guards": [], "category": category,
+            "match_mode": match_mode}

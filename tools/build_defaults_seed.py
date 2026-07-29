@@ -54,6 +54,9 @@ def build() -> dict:
     candidates' seed_key -> local segment_id in that order)."""
     segments = list(corpus_legacy.SEGMENTS)
     segments += [_movement_row(row) for row in corpus_movements.MOVEMENTS]
+    # Task 20 (spec 2026-07-28-multi-step-segments): already a full seed-shape
+    # dict (mechanic(), not the compact movement() row), appended verbatim.
+    segments += list(corpus_movements.HUNDRED_COIN_EXITS)
     routes = list(corpus_routes_main.ROUTES) + list(corpus_routes_stage.ROUTES)
     return {"seed_version": SEED_VERSION, "segments": segments,
             "routes": routes}

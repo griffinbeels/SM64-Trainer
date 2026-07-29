@@ -34,8 +34,9 @@ Two invariants survive untouched, because they hold for every match mode:
 Read spec §4.1/§4.2 for the retired strict-mode rules above if a future row
 ever opts back into match_mode="strict"; none do today.
 """
-from corpus_vocab import (BASEMENT, LOBBY, UPSTAIRS, enter_area, enter_level,
-                          exit_level, grab_star, movement)
+from corpus_vocab import (BASEMENT, HUNDRED_COIN_EXIT, LOBBY, UPSTAIRS,
+                          enter_area, enter_level, exit_level, grab_star,
+                          mechanic, movement)
 
 MOVEMENTS = [
     # --- lobby ------------------------------------------------------------
@@ -160,4 +161,37 @@ MOVEMENTS = [
     movement("seg:ttc->rr", "TTC → RR", exit_level(14), enter_level(15)),
     movement("seg:rr->bits", "RR → BitS", exit_level(15), enter_level(21)),
     movement("seg:ttc->bits", "TTC → BitS", exit_level(14), enter_level(21)),
+]
+
+# --- 100-coin star -> the star that actually exits (Task 20) ---------------
+# "In normal stages, you don't exit the stage when you grab a 100 coins
+# star, you can keep playing and must find another star to actually exit
+# the level." This is the one seeded shape that DELIBERATELY ends on
+# star_grabbed. The rule it looks like it breaks -- a movement may start on
+# a star grab but must never end on one -- exists because RunTracker
+# (runs.py::_apply) only ever considers the CURRENT route step and
+# projection.py closes stars-then-segments within one event, so a
+# misordered ROUTE STEP stalls a run permanently and silently. That is a
+# property of being a route step: nothing here is one (no seeded route
+# references any of these seed_keys, and they carry no guard), so there is
+# no run to stall. Hence its own category (HUNDRED_COIN_EXIT) rather than
+# Castle Movement -- it never enters corpus_movements.MOVEMENTS, so it never
+# reaches the tests built on "a movement never ends on star_grabbed"
+# (test_no_movement_starts_and_ends_on_the_SAME_event and friends).
+# Every main course (1-15) has six numbered stars (0-5) plus 100 Coins at
+# star_id 6 (addresses.star_count/star_name own that rule); end_triggers
+# lists the six alternatives explicitly since the vocabulary has no "any
+# star but this one" clause.
+_MAIN_COURSES = [
+    (1, "BoB"), (2, "WF"), (3, "JRB"), (4, "CCM"), (5, "BBH"), (6, "HMC"),
+    (7, "LLL"), (8, "SSL"), (9, "DDD"), (10, "SL"), (11, "WDW"), (12, "TTM"),
+    (13, "THI"), (14, "TTC"), (15, "RR"),
+]
+
+HUNDRED_COIN_EXITS = [
+    mechanic(f"seg:100c->exit:{abbrev.lower()}", f"{abbrev} — 100 Coins → Exit",
+             grab_star(course, 6),
+             [grab_star(course, star_id) for star_id in range(6)],
+             HUNDRED_COIN_EXIT)
+    for course, abbrev in _MAIN_COURSES
 ]

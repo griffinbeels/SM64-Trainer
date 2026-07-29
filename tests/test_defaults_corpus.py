@@ -363,12 +363,12 @@ def test_a_movement_only_fires_on_a_walk_that_reaches_its_endpoint():
                                other["seed_key"])
 
 
-# --- layer 3: Task 20's four real walks (spec 2026-07-28-multi-step-segments)
-# These four shapes do not fit movement_walk's generic BFS-shortest-path
-# model: two of them (100c->exit, reds->pipe) start or end on a
-# star_grabbed/warp_entered clause clause_node cannot resolve, and all four
-# replay a SPECIFIC real walk from a task report rather than the shortest
-# one. Hand-built via _Walker directly instead of movement_walk.
+# --- layer 3: Task 20's real walks (spec 2026-07-28-multi-step-segments)
+# These shapes do not fit movement_walk's generic BFS-shortest-path model:
+# 100c->exit starts AND ends on star_grabbed clauses clause_node cannot
+# resolve, and every one of them replays a SPECIFIC real walk from a task
+# report rather than the shortest one. Hand-built via _Walker directly
+# instead of movement_walk.
 
 def _seg(seed_key):
     return next(s for s in SEGMENTS if s["seed_key"] == seed_key)
@@ -409,3 +409,45 @@ def test_bowser_2_to_bits_survives_the_whole_detour():
     closed = run_engine(row, walker.events, origin[0], origin[1])
     outcomes = [a.outcome for a in closed]
     assert outcomes == ["success"], (row["seed_key"], outcomes)
+
+
+def test_a_100_coin_star_segment_ends_on_the_star_that_exits_the_level():
+    # In a normal stage the 100-coin grab does not exit; the segment ends on
+    # a DIFFERENT, named star.
+    row = _seg("seg:100c->exit:wf")
+    hundred_coins_only = [
+        Ev(1, "star_collected", 101,
+           {"course_id": 2, "star_id": 6, "num_stars": 0}),
+    ]
+    closed = run_engine(row, hundred_coins_only, 24, None)
+    assert closed == [], "the 100-coin grab alone must not exit the level"
+
+    events = hundred_coins_only + [
+        Ev(2, "star_collected", 250,
+           {"course_id": 2, "star_id": 2, "num_stars": 1}),
+    ]
+    closed = run_engine(row, events, 24, None)
+    outcomes = [a.outcome for a in closed]
+    assert outcomes == ["success"], (row["seed_key"], outcomes)
+
+
+def test_hundred_coin_exit_count_and_shape():
+    """Structural guard, mutation-provable: 15 rows (one per main course),
+    each starting on that course's 100-coin star and ending on any of its
+    six OTHER stars -- never the 100-coin star itself, and never unguarded
+    into some other course's stars."""
+    rows = [s for s in SEGMENTS if s["category"] == "100 Coin Exit"]
+    assert len(rows) == 15
+    seen_courses = set()
+    for row in rows:
+        start = row["start_triggers"][0]
+        assert start["type"] == "star_grabbed" and start["star"] == 6
+        seen_courses.add(start["course"])
+        ends = row["end_triggers"]
+        assert len(ends) == 6
+        assert all(e["type"] == "star_grabbed"
+                   and e["course"] == start["course"]
+                   and e["star"] != 6 for e in ends)
+        assert row["guards"] == []            # no route ambiguity -- always on
+        assert row["match_mode"] == "loose"
+    assert seen_courses == set(range(1, 16))  # every main course, no gaps
