@@ -5,12 +5,21 @@
 import { h } from "preact";
 import { useEffect } from "preact/hooks";
 import htm from "htm";
-import { capName, divisionDigit } from "./caps.js";
+import { capName, divisionDigit, rankColor } from "./caps.js";
 import { RankIcon } from "./rankicon.js";
 import { useTween } from "../useTween.js";
 import { useRankClimb } from "../rankclimb.js";
+import { useRouteSwap } from "../routeswap.js";
+import { mareloTuning } from "../marelotuning.js";
+import { barEase } from "../climbcurve.js";
 import { CardSelect } from "./contextselect.js";
 const html = htm.bind(h);
+
+// The rank name under the icon, and the SWAP's from/to text -- one place so
+// the resting label and the two halves of a crossfade can never disagree
+// about what "Unranked" means or how a division prints.
+const rankLabelText = (entry) => (entry && entry.tier
+  ? `${capName(entry.tier)} ${divisionDigit(entry.division)}` : "Unranked");
 
 export const fmtScore = (n) => (n == null ? "–" : n.toFixed(1));
 
@@ -88,6 +97,25 @@ export function RouteRankCard({ marelo, routes = [], activeRouteId = null,
 
   const { label = null, mastery = null, coverage = null,
           n = 0, practiced = 0 } = marelo || {};
+
+  // ---- The route SWAP -----------------------------------------------------
+  // "when we swap to a different route... we should reuse the squash / pop
+  // animation" (user, 2026-07-28) -- an EXCHANGE, never a climb; see
+  // ui/routeswap.js's header for why it is a separate clock layered on top
+  // of useRankClimb's existing snap-on-identity-change rather than a
+  // relaxation of it. Scoped to the ONE caller with a real route to swap
+  // between: the celebration overlay always passes `rank` explicitly (never
+  // `undefined`), so `routeSwapKey` stays `null` there and this never fires
+  // mid-flight. `marelo.scope_id` (not `activeRouteId`) is the swap key for
+  // the same reason it already drives `cardLabel` above -- it is the
+  // server's own answer to "what did I just rate", so a route pick and the
+  // swap it triggers can never disagree about which scope actually landed.
+  const routeSwapKey = rank !== undefined ? null
+    : (marelo ? (marelo.scope_id || "overall") : null);
+  const swap = useRouteSwap(routeSwapKey,
+    { tier: shown && shown.tier, division: shown && shown.division,
+      fill: shown ? shown.fill : 0, label },
+    mareloTuning());
   // Named for what the card is RATING, so "Overall" never reads as a route
   // that happens to be called Overall (user, 2026-07-28). ".context-label"
   // is opted into tools/responsive_probe.js's NEVER_TRUNCATE list (it is
@@ -109,6 +137,42 @@ export function RouteRankCard({ marelo, routes = [], activeRouteId = null,
   const options = [["", "Overall"],
                    ...routes.map((route) => [String(route.id), route.name])];
 
+  // Everything below drives off `swap.progress` alone -- the icon squash,
+  // both crossfades and the bar lerp share ONE clock, which is the "this
+  // should all happen with the same timing" requirement as a number rather
+  // than four durations someone matched by hand. `barEase` (climbcurve.js)
+  // is THE easing this codebase uses for any progress bar -- monotone,
+  // lands exactly on target, never overshoots -- reused here for the two
+  // text crossfades too so nothing in the swap fights the bar's own motion
+  // language. The icon alone uses CELEBRATIONS' own squash curve (routeswap.js),
+  // which is allowed to overshoot: a cap springing is a physical object, a
+  // bar or a fade is a value, and only the first may ever pass its target.
+  const swapping = !!swap;
+  const swapEase = swapping ? barEase(swap.progress) : 0;
+  const iconTier = swapping ? (swap.crossed ? swap.to.tier : swap.from.tier)
+    : (climb ? climb.tier : null);
+  const iconDivision = swapping ? (swap.crossed ? swap.to.division : swap.from.division)
+    : (climb ? climb.division : null);
+  const iconProps = swapping ? swap.icon : (climb ? climb.icon : null);
+  const haveIcon = swapping || !!climb;
+  const barFillFraction = swapping
+    ? swap.from.fill + (swap.to.fill - swap.from.fill) * swapEase
+    : (climb ? climb.fill : 0);
+  // The track's OWN colour crosses over on the same clock -- otherwise the
+  // bar would lerp smoothly while its fill colour snapped straight to the
+  // new route's tier, which is exactly the "a surface that goes away
+  // mid-transition is a second bug" trap this codebase has already paid for
+  // once (ui/celebrations.js's tierColor, same color-mix shape, reused here
+  // rather than re-derived). `climb.vars` is safe to spread underneath --
+  // useRankClimb has already SNAPPED by the time a swap is showing (the
+  // identity gate fired), so it carries only its own resting `--climb-color`
+  // and no leftover effect variables.
+  const cardStyle = swapping
+    ? { ...(climb ? climb.vars : {}),
+        "--climb-color": `color-mix(in srgb, ${rankColor(swap.to.tier)} `
+          + `${(swapEase * 100).toFixed(1)}%, ${rankColor(swap.from.tier)})` }
+    : (climb ? climb.vars : null);
+
   // Round 2 layout (2026-07-28, user's own sketch): a LEFT column pairing
   // the rank icon with the rank NAME directly beneath it, and a RIGHT
   // column stacking the scope name, a full-width progress bar, and the
@@ -120,20 +184,28 @@ export function RouteRankCard({ marelo, routes = [], activeRouteId = null,
   // way and still rides the card as the picker's accessible name (below),
   // which is what keeps it a real, live value rather than a dead assignment.
   return html`<div class=${`context-control context-select marelo-bar${
-      climb && climb.climbing ? " is-climbing" : ""}`}
-      style=${climb ? climb.vars : null}
+      climb && climb.climbing ? " is-climbing" : ""}${swapping ? " is-swapping" : ""}`}
+      style=${cardStyle}
       title=${label
         ? `${label}: mastery ${fmtScore(mastery)} x coverage ${practiced}/${n}`
         : "Your rating for the practice plan you have selected"}>
     <span class="marelo-bar-icon-col">
-      ${climb ? html`<span class="rank-icon-slot marelo-bar-icon">
-        <${RankIcon} ...${climb.icon} tier=${climb.tier} division=${climb.division} size=${34} />
+      ${haveIcon ? html`<span class="rank-icon-slot marelo-bar-icon">
+        <${RankIcon} ...${iconProps} tier=${iconTier} division=${iconDivision} size=${34} />
       </span>` : html`<span class="rank-icon-slot marelo-bar-icon">–</span>`}
-      <b>${climb ? `${capName(climb.tier)} ${divisionDigit(climb.division)}` : "Unranked"}</b>
+      ${swapping ? html`<span class="marelo-swap-fade">
+          <b style=${{ opacity: 1 - swapEase }}>${rankLabelText(swap.from)}</b>
+          <b style=${{ opacity: swapEase }}>${rankLabelText(swap.to)}</b>
+        </span>`
+        : html`<b>${climb ? rankLabelText(climb) : "Unranked"}</b>`}
     </span>
     <span class="marelo-bar-body">
-      <span class="context-value">${label || "…"}</span>
-      <span class="marelo-track"><i style=${`width:${climb ? climb.fill * 100 : 0}%`}></i></span>
+      ${swapping ? html`<span class="marelo-swap-fade">
+          <span class="context-value" style=${{ opacity: 1 - swapEase }}>${swap.from.label || "…"}</span>
+          <span class="context-value" style=${{ opacity: swapEase }}>${swap.to.label || "…"}</span>
+        </span>`
+        : html`<span class="context-value">${label || "…"}</span>`}
+      <span class="marelo-track"><i style=${`width:${barFillFraction * 100}%`}></i></span>
       <span class="meta">${fmtPoints(score)} pts</span>
     </span>
     ${interactive && onPickRoute ? html`<${CardSelect} id="route-select"

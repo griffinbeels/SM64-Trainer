@@ -111,7 +111,8 @@ INVARIANTS = (
     SingleSource(
         concept="what a rank-up climb DOES, step by step",
         owners=frozenset({"climbplan.js", "climbcurve.js", "climbtuning.js",
-                          "celebrations.js", "rankclimb.js", "tune.js"}),
+                          "celebrations.js", "rankclimb.js", "tune.js",
+                          "routeswap.js"}),
         tokens=("tierskip", "anticipate"),
         files=ui_js(),
         why="ui/climbplan.js decides the whole sequence -- which ranks get a "
@@ -122,7 +123,15 @@ INVARIANTS = (
             "climb happens in. The live risk is real and already written down: "
             "components/celebrate.js's scope overlay still runs its own "
             "hand-rolled fill->flip->hold machine, so it is exactly the file "
-            "that would grow a competing multi-rank sequence.",
+            "that would grow a competing multi-rank sequence.\n"
+            "routeswap.js is a narrower case, added 2026-07-28: the route "
+            "SWAP calls CELEBRATIONS.tierAnticipate/.tierBurst DIRECTLY "
+            "(never through a beat or an `on:` list) and builds their `tune` "
+            "argument by copying climbtuning.js's own `anticipateSquash` "
+            "FIELD NAME so the borrowed functions read the value meant for "
+            "them -- it is the tuning-registry vocabulary colliding with the "
+            "beat-kind string \"anticipate\", not a second opinion about "
+            "step order. It names no beat kind and builds no plan.",
     ),
     SingleSource(
         concept="the server's TCP port",

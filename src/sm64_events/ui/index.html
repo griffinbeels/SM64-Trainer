@@ -1145,11 +1145,24 @@
   /* Both text rows ellipsise -- a fluid, FULL-WIDTH bar between them already
      gives every column width its own honest amount of room (it just gets
      thinner), so neither row needs the old 96px track's container-query
-     carve-out to stay legible below it. */
-  .marelo-bar-body > .context-value, .marelo-bar-body > .meta {
+     carve-out to stay legible below it. `.context-value` is a DESCENDANT
+     selector, not a direct child: a route SWAP wraps it in `.marelo-swap-fade`
+     (below) while the crossfade runs, and a child combinator would have
+     silently dropped this rule for that whole window -- the exact trap
+     ui-core.md documents for `.context-select > select`. `.meta` (the points
+     line) never moves during a swap, so it stays the tighter `>` form. */
+  .marelo-bar-body .context-value, .marelo-bar-body > .meta {
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .marelo-bar-body > .meta { font-size: .78rem; }
+  /* Route SWAP crossfade (2026-07-28): the old and new rank text, and the old
+     and new route name, share ONE grid cell -- `grid-area: 1/1` overlays both
+     children instead of stacking them, so a fade never reflows the card, and
+     the track sizes to the WIDER of the two (never the narrower, which would
+     clip whichever text is still fading in). Purely structural, no size
+     threshold of any kind, so it needs no @container gate. */
+  .marelo-swap-fade { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; }
+  .marelo-swap-fade > * { grid-area: 1 / 1; min-width: 0; }
   /* The rank name under the icon. "Short by construction" is what this said
      until 2026-07-28 and it was wrong: at the card's 16px/700 the widest name
      in the registry -- "Toadsworth 1" -- measures 102px against a 78px cap, so
@@ -1161,7 +1174,10 @@
      beside it). The ellipsis stays as insurance only --
      tests/test_ui_rank_name_fits.py measures EVERY name against this rule and
      fails if one would trip it, so it should never actually fire. */
-  .marelo-bar-icon-col > b {
+  /* Descendant, not `>` -- a route swap wraps this in `.marelo-swap-fade`
+     (above) for the duration of its crossfade, same reasoning as
+     `.marelo-bar-body .context-value`. */
+  .marelo-bar-icon-col b {
     max-width: 96px; font-size: .82rem; text-align: center;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
