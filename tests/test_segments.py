@@ -2946,6 +2946,60 @@ def test_a_real_anchor_off_the_arm_position_is_transparent_not_a_relocation_disa
     assert [n["event"] for n in notices] == ["segment_disarmed", "segment_armed"]
 
 
+def test_a_plain_loose_defs_own_start_trigger_refiring_while_armed_restarts_visibly():
+    # Live audit 2026-07-29 (following up on the finding in the anchor-
+    # relocation report above): replaying the user's real session found 13
+    # refires of a plain loose def's own start trigger while it was still
+    # armed -- e.g. an EARLIER, abandoned Bowser 2 exit had armed the
+    # movement, and a later real exit refired the same start trigger,
+    # restarting it. The restart is the correct arithmetic (the stale arm
+    # hadn't hit its staleness deadline yet) -- what was wrong is that it was
+    # completely SILENT: `fresh` is False (the def never left self._armed),
+    # so no notice fired and the discarded in-flight arm vanished with no
+    # trace. The restart stays; only the silence is fixed.
+    e = SegmentEngine([LOOSE])
+    loose_arm(e, jid=10, frame=1000)
+    # transparent mid-route travel, exactly like any other loose def
+    e.feed(jev(11, "star_collected", 1200,
+               {"course_id": 15, "star_id": 1, "igt_frames": 900}), ctx(level=6))
+    assert 20 in e.armed_ids()
+    # the def's OWN start trigger fires again while still armed
+    closed, notices = e.feed(jev(12, "level_changed", 5000, {"from": 23, "to": 6}),
+                             ctx(level=6, prev_level=23))
+    assert closed == [], "no row for the discarded partial"
+    assert [n["event"] for n in notices] == ["segment_disarmed", "segment_armed"]
+    assert e._armed[20].start_frame == 5000, "restarted from the refire, not the original arm"
+    assert e._armed[20].deadline_frame == 5000 + segments_module.MIN_BUDGET_FRAMES
+
+
+def test_a_waypoint_bearing_defs_refire_while_armed_stays_silent():
+    # The boundary the fix above must not cross: a waypoint-bearing def (loose
+    # or not) owns its own re-arm through _feed_waypoint's/`_feed_loose`'s own
+    # `progress` counter, and the generic re-arm phase must keep skipping it
+    # ENTIRELY while armed -- the pre-existing
+    # `not (d.waypoints and d.id in self._armed)` guard, which this task was
+    # told not to touch. Built LOOSE (not strict) specifically because that
+    # guard reads `d.waypoints`, not match_mode, so a loose def carrying
+    # waypoints is the sharper boundary case -- _feed_loose owns its armed
+    # branch for it exactly as for a plain loose def, but the outer re-arm
+    # phase must still treat "has waypoints" as untouchable while armed.
+    wp_def = SegmentDef(
+        id=45, name="wp", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 23}],
+        end_triggers=[{"type": "level_enter", "to": 19}],
+        waypoints=[[{"type": "area_enter", "level": 6, "area": 3}]],
+        guards=[], match_mode="loose")
+    e = SegmentEngine([wp_def])
+    e.feed(jev(10, "level_changed", 1000, {"from": 23, "to": 6}),
+           ctx(level=6, prev_level=23))
+    assert 45 in e.armed_ids()
+    closed, notices = e.feed(jev(11, "level_changed", 5000, {"from": 23, "to": 6}),
+                             ctx(level=6, prev_level=23))
+    assert closed == []
+    assert notices == [], "still silent -- waypoints own their own re-arm"
+    assert e._armed[45].start_frame == 1000, "untouched by the refire"
+
+
 # --- Task 17: split_definition / merge_definitions --------------------------
 # Two pure operations (spec 2026-07-28-multi-step-segments): "WF -> SSL"
 # expressible either as one definition or as "WF -> Basement" +

@@ -98,7 +98,14 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
   a refire whose guards FAIL leaves the existing arm untouched (the old
   start_frame keeps running).  PLAYER ACTIONS ONLY: an echo anchor matching
   an attempt_anchor start trigger neither arms nor re-arms (see load-echo
-  rule — echo invisibility)
+  rule — echo invisibility).  For a plain (waypoint-free) def this refire-
+  while-armed is otherwise SILENT (no notices — `fresh` is False, since the
+  def never left `self._armed`) EXCEPT for a plain LOOSE def, which emits the
+  ordinary segment_disarmed+segment_armed pair (live audit 2026-07-29): a
+  loose def survives everything short of death/game_reset/staleness, so it
+  is the one mode where the player can genuinely still be mid-attempt when
+  its own start condition happens again, and the restart needs to be VISIBLE
+  rather than a silent re-timing under them.
 - level_changed matching neither start nor end disarms silently (no row);
   area_changed and session_started never record rows
 - WAYPOINT-BEARING defs (SegmentDef.waypoints non-empty, spec
@@ -2089,13 +2096,42 @@ class SegmentEngine:
                         deadline_frame=self._deadline_for(d, ev))
                 else:
                     fresh = d.id not in self._armed
+                    # A plain LOOSE def's own start trigger can genuinely
+                    # refire while it is still armed and mid-route (live
+                    # audit 2026-07-29: 13 refires in the user's real
+                    # session, restarting Bowser 2/1 movements that had gone
+                    # stale under an earlier abandoned exit). The restart is
+                    # the honest read — the start condition genuinely
+                    # happened again, so the fresh arm times the real
+                    # attempt, and the old in-flight arm's elapsed time was
+                    # never a completed attempt worth a row. But `fresh` is
+                    # False here (d.id was already armed), so this used to be
+                    # completely SILENT — no notice, no trace, same class of
+                    # defect as the anchor-relocation bug this def's docstring
+                    # describes, just structurally adjacent to _feed_loose
+                    # rather than inside it. Surface it with the ordinary
+                    # disarm+arm notice pair instead. `not d.waypoints` is
+                    # belt-and-suspenders here, not load-bearing: the outer
+                    # `not (d.waypoints and d.id in self._armed)` guard above
+                    # already makes `d.waypoints` false whenever `not fresh`
+                    # is true (a waypoint-bearing def that's already armed
+                    # never reaches this branch at all — see the AUTHORING
+                    # CAVEAT in _feed_waypoint's docstring), so this can never
+                    # widen to the waypoint case; it names the invariant for
+                    # a reader who doesn't want to re-derive it.
+                    loose_plain_refire = (not fresh and d.match_mode == "loose"
+                                          and not d.waypoints)
+                    if loose_plain_refire:
+                        self._disarm(d, ev, notices)  # visible: no row for
+                        # the discarded partial, same as every other no-row
+                        # disarm on this branch
                     self._armed[d.id] = _Arm(jid=ev.id, start_frame=ev.frame,
                                              started_utc=ev.wall_time_utc,
                                              anchor_type=ev.type,
                                              session_id=ev.session_id,
                                              level=ctx.level, area=ctx.area,
                                              deadline_frame=self._deadline_for(d, ev))
-                    if fresh:
+                    if fresh or loose_plain_refire:
                         notices.append({"event": "segment_armed",
                                         "segment_id": d.id, "name": d.name,
                                         "frame": ev.frame})
