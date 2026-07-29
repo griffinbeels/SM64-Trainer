@@ -3276,7 +3276,25 @@
     /* Stacked here, so each banner's wash is full width and the outer
        bleeds swap axis with them. No split to swap any more -- each
        banner paints its own box whichever way they are laid out. */
-    .rank-banner::before { left: -16px; right: -16px; border-radius: 0; }
+    /* Bleed LEFT only once the banners are stacked.
+       ------------------------------------------------------------------
+       Side by side, a banner owns one outer edge of the card and the -16px
+       bleed carries its wash cleanly into the card's padding. Stacked, the
+       rank slot is only the FIRST COLUMN of `.objective-metrics` — the live
+       state and the PB tag sit to its right — so a right-hand bleed runs the
+       coloured band 16px past the slot and across the divider into them.
+       Measured at three widths: slot ends 972, wash reached 988, the live
+       state's divider starts at 984. That 4px is the "rank standards are
+       overlapping" the user reported and kept reporting, and no probe here
+       could see it: `::before` is a pseudo-element, absent from the DOM, so
+       every geometry sweep read the card as clean (2026-07-28).
+       The left bleed stays: that edge really is the card's. */
+    .rank-banner::before { left: -16px; right: 0; border-radius: 0; }
+    /* `:last-child` re-applies the right bleed at higher specificity (0,2,0
+       against 0,1,0), so the rule above only reached the FIRST banner and the
+       second kept crossing the divider — half a fix, which measured as an
+       improvement and still looked wrong. */
+    .rank-banner:last-child::before { right: 0; }
   }
 
   /* Objective card, narrow pane.

@@ -103,5 +103,246 @@ PROJECT = Project(
     # Sizes that earn a place regardless of what the stylesheet declares: the
     # two the user reported, the workspace's max width, and a short window.
     extra_viewports=((900, 1180), (760, 1180), (1500, 900), (1280, 720)),
-    known_defects={},
+    # OWED, not exempted. These became VISIBLE on 2026-07-28 when the
+    # fixture finally rendered a populated practice page -- a stage, an
+    # active target, a strategy and a PB. Everything on the star row and
+    # the stage banner only exists once a course is loaded, so no earlier
+    # sweep could see any of it. uilab's stale-exemption gate deletes each
+    # row the moment its defect stops occurring.
+    known_defects={
+        '1060x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 228 > clientHeight 226',
+        '1060x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1061x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 228 > clientHeight 226',
+        '1061x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1100x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 230 > clientHeight 228',
+        '1100x1000 [page] clipped :: span.starname':
+            'scrollHeight 29 > clientHeight 27',
+        '1100x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1101x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 230 > clientHeight 228',
+        '1101x1000 [page] clipped :: span.starname':
+            'scrollHeight 29 > clientHeight 27',
+        '1101x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1180x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 230 > clientHeight 228',
+        '1180x1000 [page] clipped :: span.starname':
+            'scrollHeight 29 > clientHeight 27',
+        '1180x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1181x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 227 > clientHeight 225',
+        '1181x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1250x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 230 > clientHeight 228',
+        '1250x1000 [page] clipped :: span.starname':
+            'scrollHeight 29 > clientHeight 27',
+        '1250x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1251x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 230 > clientHeight 228',
+        '1251x1000 [page] clipped :: span.starname':
+            'scrollHeight 29 > clientHeight 27',
+        '1251x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1280x720 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 230 > clientHeight 228',
+        '1280x720 [page] clipped :: span.starname':
+            'scrollHeight 29 > clientHeight 27',
+        '1280x720 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1400x760 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 230 > clientHeight 228',
+        '1400x760 [page] clipped :: span.starname':
+            'scrollHeight 29 > clientHeight 27',
+        '1400x760 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1400x761 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 230 > clientHeight 228',
+        '1400x761 [page] clipped :: span.starname':
+            'scrollHeight 29 > clientHeight 27',
+        '1400x761 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1500x900 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 230 > clientHeight 228',
+        '1500x900 [page] clipped :: span.starname':
+            'scrollHeight 29 > clientHeight 27',
+        '1500x900 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1920x1080 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 230 > clientHeight 228',
+        '1920x1080 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '320x800 [page] clipped :: section.practice-card.objective-card.active-star':
+            'scrollHeight 290 > clientHeight 286',
+        '320x800 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 184 > clientHeight 150',
+        '320x800 [page] clipped :: span.starname':
+            'scrollWidth 33 > clientWidth 30',
+        '320x800 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '330x1000 [page] clipped :: section.practice-card.objective-card.active-star':
+            'scrollHeight 290 > clientHeight 286',
+        '330x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 184 > clientHeight 150',
+        '330x1000 [page] clipped :: span.starname':
+            'scrollWidth 33 > clientWidth 30',
+        '330x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '331x1000 [page] clipped :: section.practice-card.objective-card.active-star':
+            'scrollHeight 290 > clientHeight 286',
+        '331x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 184 > clientHeight 150',
+        '331x1000 [page] clipped :: span.starname':
+            'scrollWidth 33 > clientWidth 30',
+        '331x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '400x1000 [page] clipped :: section.practice-card.objective-card.active-star':
+            'scrollHeight 290 > clientHeight 286',
+        '400x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 152 > clientHeight 150',
+        '400x1000 [page] clipped :: span.starname':
+            'scrollHeight 30 > clientHeight 20',
+        '400x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '400x1000 [page] overlap :: td.attempt-result.good x td.attempt-delta':
+            'overlap 4x21px inside tr',
+        '400x1000 [practice-log] overlap :: td.attempt-result.good x td.attempt-delta':
+            'overlap 4x21px inside tr',
+        '401x1000 [page] clipped :: section.practice-card.objective-card.active-star':
+            'scrollHeight 290 > clientHeight 286',
+        '401x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 152 > clientHeight 150',
+        '401x1000 [page] clipped :: span.starname':
+            'scrollHeight 30 > clientHeight 20',
+        '401x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '401x1000 [page] overlap :: td.attempt-result.good x td.attempt-delta':
+            'overlap 4x21px inside tr',
+        '401x1000 [practice-log] overlap :: td.attempt-result.good x td.attempt-delta':
+            'overlap 4x21px inside tr',
+        '430x1000 [page] clipped :: section.practice-card.objective-card.active-star':
+            'scrollHeight 290 > clientHeight 286',
+        '430x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 153 > clientHeight 151',
+        '430x1000 [page] clipped :: span.starname':
+            'scrollHeight 30 > clientHeight 19',
+        '430x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '431x1000 [page] clipped :: section.practice-card.objective-card.active-star':
+            'scrollHeight 290 > clientHeight 286',
+        '431x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 153 > clientHeight 151',
+        '431x1000 [page] clipped :: span.starname':
+            'scrollHeight 30 > clientHeight 19',
+        '431x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '500x1000 [page] clipped :: section.practice-card.objective-card.active-star':
+            'scrollHeight 290 > clientHeight 286',
+        '500x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 162 > clientHeight 160',
+        '500x1000 [page] clipped :: span.starname':
+            'scrollHeight 30 > clientHeight 20',
+        '500x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '501x1000 [page] clipped :: section.practice-card.objective-card.active-star':
+            'scrollHeight 290 > clientHeight 286',
+        '501x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 162 > clientHeight 160',
+        '501x1000 [page] clipped :: span.starname':
+            'scrollHeight 30 > clientHeight 20',
+        '501x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '600x1000 [page] clipped :: section.practice-card.objective-card.active-star':
+            'scrollHeight 290 > clientHeight 286',
+        '600x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 176 > clientHeight 174',
+        '600x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '601x1000 [page] clipped :: section.practice-card.objective-card.active-star':
+            'scrollHeight 290 > clientHeight 286',
+        '601x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 176 > clientHeight 174',
+        '601x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '605x1000 [page] clipped :: section.practice-card.objective-card.active-star':
+            'scrollHeight 290 > clientHeight 286',
+        '605x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 177 > clientHeight 175',
+        '605x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '606x1000 [page] clipped :: section.practice-card.objective-card.active-star':
+            'scrollHeight 290 > clientHeight 286',
+        '606x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 177 > clientHeight 175',
+        '606x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '700x1000 [page] clipped :: section.practice-card.objective-card.active-star':
+            'scrollHeight 290 > clientHeight 286',
+        '700x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 190 > clientHeight 188',
+        '700x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '701x1000 [page] clipped :: section.practice-card.objective-card.active-star':
+            'scrollHeight 290 > clientHeight 286',
+        '701x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 190 > clientHeight 188',
+        '701x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '760x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 198 > clientHeight 196',
+        '760x1000 [page] clipped :: span.starname':
+            'scrollHeight 22 > clientHeight 20',
+        '760x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '760x1180 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 198 > clientHeight 196',
+        '760x1180 [page] clipped :: span.starname':
+            'scrollHeight 22 > clientHeight 20',
+        '760x1180 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '761x1000 [page] clipped :: section.practice-card.objective-card.active-star':
+            'scrollHeight 290 > clientHeight 286',
+        '761x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 187 > clientHeight 185',
+        '761x1000 [page] clipped :: span.starname':
+            'scrollHeight 20 > clientHeight 18',
+        '761x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '775x1000 [page] clipped :: section.practice-card.objective-card.active-star':
+            'scrollHeight 290 > clientHeight 286',
+        '775x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 189 > clientHeight 187',
+        '775x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '776x1000 [page] clipped :: section.practice-card.objective-card.active-star':
+            'scrollHeight 290 > clientHeight 286',
+        '776x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 189 > clientHeight 187',
+        '776x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '780x1000 [page] clipped :: section.practice-card.objective-card.active-star':
+            'scrollHeight 290 > clientHeight 286',
+        '780x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 189 > clientHeight 187',
+        '780x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '781x1000 [page] clipped :: section.practice-card.objective-card.active-star':
+            'scrollHeight 290 > clientHeight 286',
+        '781x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 189 > clientHeight 187',
+        '781x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '900x1180 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 206 > clientHeight 204',
+        '900x1180 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+    },
 )

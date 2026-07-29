@@ -69,7 +69,8 @@ def snapshot_db(source: Path, destination: Path) -> Path:
     return destination
 
 
-def seed_practice(service) -> None:
+def seed_practice(service, course_id: int = 2, star_id: int = 0,
+                  level: int = 5, attempts: bool = True) -> None:
     """Give the fixture an ACTIVE TARGET and a few attempts.
 
     Without this the Practice page renders only its empty states -- the
@@ -88,8 +89,20 @@ def seed_practice(service) -> None:
     now = datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
 
     async def go() -> None:
-        for index, (course_id, star_id, frames) in enumerate(
-                [(2, 2, 343), (2, 2, 361), (2, 2, 352)]):
+        # Put the player IN the course first. Without this the Active Target
+        # card renders "Nothing to practice here" no matter what the target is
+        # — you may only practice what you are standing in front of, and with
+        # no emulator attached the service's stage is empty. Every sweep before
+        # this measured the EMPTY card while the user was reporting a bug on
+        # the populated one, which is the third time this fixture has been the
+        # thing that was wrong (2026-07-28).
+        await service.publish(Event(
+            type="stage_changed", frame=900, timestamp_utc=now,
+            payload={"course_id": course_id, "level": level, "area": 1,
+                     "mode": "stars"}))
+        if not attempts:
+            return
+        for index, frames in enumerate([343, 361, 352]):
             await service.publish(Event(
                 type="practice_reset", frame=1000 + index * 1000,
                 timestamp_utc=now, payload={"igt_frames_before": 0}))
@@ -102,7 +115,8 @@ def seed_practice(service) -> None:
     asyncio.run(go())
 
 
-def _seed_target(base: str) -> None:
+def _seed_target(base: str, course_id: int = 2, star_id: int = 0,
+                 with_pb: bool = True) -> None:
     """Make the seeded star the ACTIVE target.
 
     Seeding attempts is not enough, and the difference is the whole page. With
@@ -123,18 +137,38 @@ def _seed_target(base: str) -> None:
     import urllib.error
     import urllib.request
 
-    body = json.dumps({"course_id": 2, "star_id": 2}).encode()
-    request = urllib.request.Request(
-        f"{base}/api/target", data=body, method="POST",
-        headers={"Content-Type": "application/json"})
-    try:
-        urllib.request.urlopen(request, timeout=10).read()
-    except urllib.error.HTTPError as error:
-        # Loud, not silent: a fixture that quietly fails to set a target is a
-        # fixture that measures the empty page and calls it clean.
-        raise RuntimeError(
-            f"fixture could not set the practice target: {error.code} "
-            f"{error.read()[:200]!r}") from error
+    def post(path: str, payload: dict) -> dict:
+        request = urllib.request.Request(
+            f"{base}{path}", data=json.dumps(payload).encode(), method="POST",
+            headers={"Content-Type": "application/json"})
+        try:
+            return json.loads(urllib.request.urlopen(request, timeout=10).read())
+        except urllib.error.HTTPError as error:
+            # Loud, not silent: a fixture that quietly fails to reach a state
+            # is a fixture that measures a different page and calls it clean.
+            raise RuntimeError(
+                f"fixture could not POST {path}: {error.code} "
+                f"{error.read()[:200]!r}") from error
+
+    post("/api/target", {"course_id": course_id, "star_id": star_id})
+    if not with_pb:
+        return          # the dev db already has its own strat and PB
+    # A strategy AND a saved PB, because without them the card renders
+    # "pick a strat to see your rank" and the two RANK BANNERS never mount --
+    # and the banners are the part the user reports crowding. A fixture that
+    # stops at "a target is set" measures a card with the interesting row
+    # missing (2026-07-28).
+    # star:2:0 with strategy "Standard" is chosen because it HAS rank
+    # standards. Pick one that does not and both banners stay null, which is
+    # how a fixture ends up measuring a card with its most crowded row absent.
+    post("/api/strat", {"course_id": course_id, "star_id": star_id,
+                        "strat_tag": "Standard"})
+    attempts = json.loads(urllib.request.urlopen(
+        f"{base}/api/session?clock=igt&scope=session", timeout=10).read())
+    rows = [a for star in attempts.get("stars", [])
+            for a in star.get("attempts", []) if a.get("outcome") == "success"]
+    if rows:
+        post("/api/pb", {"attempt_id": rows[0]["id"], "timer_mode": "igt"})
 
 
 def _free_port() -> int:
@@ -145,7 +179,9 @@ def _free_port() -> int:
 
 @contextlib.contextmanager
 def serve_ui(db_path: Path | None = None, timeout: float = 30,
-              seed: bool = True, from_dev_db: bool = False):
+              seed: bool = True, from_dev_db: bool = False,
+              stage: tuple[int, int] | None = None,
+              target: tuple[int, int] | None = None):
     """Yield the base URL of an offline instance; stop it on the way out.
 
     DETERMINISTIC BY DEFAULT: an empty database plus `seed_practice`, so two
@@ -207,8 +243,11 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
         # at construction time fails silently, which is the worst version.
         base = f"http://127.0.0.1:{port}"
         if seed:
-            seed_practice(service)
-            _seed_target(base)
+            course, level = stage or (2, 5)
+            seed_practice(service, course_id=course, level=level,
+                          attempts=target is None)
+            _seed_target(base, *(target or (2, 0)),
+                         with_pb=target is None)
         yield base
     finally:
         server.should_exit = True
