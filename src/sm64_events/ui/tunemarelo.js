@@ -50,10 +50,10 @@ const changedFromMareloDefault = (values) =>
 // have SOMETHING to show, never asserted by a test (the shipped-default rule
 // this codebase already enforces for tuning pages: no test may assert a
 // default's or a preview's CONTENTS).
-function mareloFor(level) {
+function mareloFor(level, fill = 0.4) {
   const { tier, division } = rankAt(level);
   return {
-    tier, division, division_progress: 0.4, marelo: 62.5, label: "Standard",
+    tier, division, division_progress: fill, marelo: 62.5, label: "Standard",
     mastery: 71.2, coverage: 0.63, n: 20, practiced: 13, scope_id: "overall",
   };
 }
@@ -104,6 +104,14 @@ function Inspector() {
   // hides `.marelo-slot` for the duration via a live DOM query, which this
   // page's own `.marelo-slot` wrapper below is subject to as well.
   const [settled, setSettled] = useState(false);
+  // Where the BAR sits at each end, as 0..1. Demo inputs, not marelotuning.js
+  // rows: in the app this value comes from the server (division_progress),
+  // so a tuning default would be a shipped lie. Here they exist so both ends
+  // can be judged at any percentage (user, 2026-07-28: "We should probably
+  // add a demo tuning option for this, to test what it looks like at
+  // different start / end percentages").
+  const [fromFill, setFromFill] = useState(0);
+  const [toFill, setToFill] = useState(0.4);
 
   useEffect(() => { localStorage.setItem(STORE_KEY, JSON.stringify(values)); }, [values]);
   // The destination can never be at or below the start: a drop is not a
@@ -177,7 +185,7 @@ function Inspector() {
       <div class="app-shell">
         <div class="sidebar"></div>
         <div class="practice-page">
-          <${HeaderBar} marelo=${mareloFor(settled ? toLevel : fromLevel)}
+          <${HeaderBar} marelo=${mareloFor(settled ? toLevel : fromLevel, settled ? toFill : fromFill)}
             identity=${
               /* Report 3 (2026-07-28): "I would expect what I just saw to be
                  what's resting in the header ... The demo restarts the
@@ -222,6 +230,24 @@ function Inspector() {
                of its own -- there is no lint for this, only a render. */""}
           <div class="tune-showing">${rankLabel(fromLevel)}${" "}→${" "}${rankLabel(toLevel)}</div>
         </div>
+        <div class="tune-row">
+          <label for="fromfill" title="Where the bar sits on the rank you HAD, 0-100%.">Bar at start (%)</label>
+          <input id="fromfill" type="number" min="0" max="100" step="1"
+            value=${Math.round(fromFill * 100)}
+            onchange=${(e) => setFromFill(Math.min(1, Math.max(0, Number(e.target.value) / 100)))} />
+          <input type="range" min="0" max="100" step="1"
+            value=${Math.round(fromFill * 100)}
+            oninput=${(e) => setFromFill(Number(e.target.value) / 100)} />
+        </div>
+        <div class="tune-row">
+          <label for="tofill" title="Where the bar lands on the rank you EARNED. This is division_progress in the app, and it is what the header shows once the card settles.">Bar at end (%)</label>
+          <input id="tofill" type="number" min="0" max="100" step="1"
+            value=${Math.round(toFill * 100)}
+            onchange=${(e) => setToFill(Math.min(1, Math.max(0, Number(e.target.value) / 100)))} />
+          <input type="range" min="0" max="100" step="1"
+            value=${Math.round(toFill * 100)}
+            oninput=${(e) => setToFill(Number(e.target.value) / 100)} />
+        </div>
       </div>
       <div class="tune-actions" style="margin-top:10px">
         <button class="primary" onclick=${play}>▶ Play</button>
@@ -251,7 +277,9 @@ function Inspector() {
          a stale `phase` state surviving a prop change is exactly what a
          REMOUNT (Preact's own `key` reconciliation) exists to prevent. */""}
     ${celebration && html`<${MareloCelebration} key=${celebration.key}
-      celebration=${celebration} scopeId="tune" marelo=${mareloFor(fromLevel)}
+      celebration=${celebration} scopeId="tune"
+      marelo=${mareloFor(toLevel, toFill)}
+      fromFill=${fromFill} toFill=${toFill}
       routes=${[]} activeRouteId=${null}
       onDone=${() => { setCelebration(null); setSettled(true); }} />`}
   </div>`;

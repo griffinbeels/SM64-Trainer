@@ -54,8 +54,19 @@ async function ackScope(scopeId, key, onDone) {
 // "out" -> "climb" -> "hold" -> "back". The card is at the BEFORE rank until
 // `climb`, which is what gives the level-up something to animate FROM (user,
 // 2026-07-25: "I didn't see us animate from BEFORE -> AFTER obviously").
+// `fromFill`/`toFill` are 0..1 positions of the BAR at each end. They default
+// to the truth the app has: nothing carries the progress the user held BEFORE
+// the rank-up (the celebration payload is tiers and divisions only), so the
+// outbound park starts empty; the destination is `marelo.division_progress`,
+// the very value the header card will show once this lands. The inspector
+// overrides both so the two ends can be judged at any percentage -- they are
+// DEMO INPUTS like the from/to rank pickers, deliberately NOT rows in
+// marelotuning.js: a tuning row is a shipped default, and this value belongs
+// to the server, not to taste.
 export function MareloCelebration({ celebration, scopeId, marelo, routes,
-                                    activeRouteId, onDone }) {
+                                    activeRouteId, onDone,
+                                    fromFill = 0,
+                                    toFill = (marelo && marelo.division_progress) || 0 }) {
   const tune = mareloTuning();
   const isTierUp = celebration && celebration.from.tier !== celebration.to.tier;
   // ONE named difference between a division-up and a tier-up.
@@ -219,8 +230,22 @@ export function MareloCelebration({ celebration, scopeId, marelo, routes,
   // showing to the one it is given. `identity` never changes across the
   // sequence — a change would make it SNAP, which is exactly what we do not
   // want here (ui/rankclimb.js's identity gate).
+  //
+  // The destination FILL is the real `division_progress`, not 1. It was
+  // hardcoded to 1 until 2026-07-28, so the flown card always landed with a
+  // FULL bar while the header it flew home to showed the true progress into
+  // the new division -- 40% in the demo (user: "in the middle of the screen,
+  // it looks like we fill the entire bar, but when it lands, it's like 40%
+  // filled... Whatever it ends on at the end in the middle is what I should
+  // have in the header once it settles").
+  //
+  // The climb engine already does the right thing once it is told the truth:
+  // it fills to 1 at each crossing, holds full through the ladder, then
+  // resets 1 -> 0 once entering the arrival and sweeps to this value
+  // (ui/climbplan.js). Handing it 1 short-circuited that final sweep, which
+  // is why the bar never moved off full.
   const rank = { tier: shown.tier, division: shown.division,
-                 fill: atCentre ? 1 : 0 };
+                 fill: atCentre ? toFill : fromFill };
 
   // The FLIP's last half. One transform on one element: no layout, and the
   // header's four-column grid cannot reflow behind it (the OBS rule).

@@ -168,3 +168,25 @@ def test_the_card_wears_the_EARNED_rank_all_the_way_home():
             f"{expression} enumerates {earned}; gate on the ONE phase that "
             "shows the before-state instead, so a new phase defaults to the "
             "earned rank rather than silently reverting.")
+
+
+def test_the_flown_card_lands_on_the_real_progress_not_a_full_bar():
+    """The bar the celebration ends on IS the bar the header keeps.
+
+    `fill` was hardcoded `atCentre ? 1 : 0` until 2026-07-28, so the flown card
+    always finished with a FULL bar and then flew home to a header showing the
+    true progress into the new division -- 40% in the demo. "Whatever it ends
+    on at the end in the middle is what I should have in the header once it
+    settles."
+
+    It also short-circuited the climb engine's own ending: climbplan.js resets
+    the bar 1 -> 0 once entering the arrival and sweeps to the destination
+    fill, and handing it 1 meant that final sweep had nowhere to go."""
+    code = strip_comments(MARELO_CELEBRATE_JS)
+    found = re.search(r"fill: (.*?)\s*\}", code, re.S)
+    assert found, "the rank object's fill was renamed -- re-point this guard"
+    expression = found.group(1)
+    assert "toFill" in expression and "fromFill" in expression, expression
+    assert re.search(r"\b1\b", expression) is None, (
+        f"{expression} still hardcodes a full bar; the destination fill is "
+        "marelo.division_progress, which is what the header will show.")
