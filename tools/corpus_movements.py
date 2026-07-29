@@ -50,7 +50,7 @@ MOVEMENTS = [
     movement("seg:bowser1->ddd", "Bowser 1 → DDD (Crackslide)",
              exit_level(30), enter_level(23)),
     movement("seg:bowser1->bitfs", "Bowser 1 → BitFS (SBLJ / DDD Skip)",
-             exit_level(30), enter_level(19), via=[enter_area(BASEMENT)]),
+             exit_level(30), enter_level(19)),
     # --- courtyard (BBH exits to level 26, not to the castle interior) ----
     movement("seg:bbh->basement", "BBH → Basement",
              exit_level(4), enter_area(BASEMENT), via=[enter_level(6)]),
