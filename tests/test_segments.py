@@ -3104,6 +3104,65 @@ def test_merge_refuses_a_pair_that_does_not_meet():
         merge_definitions(wf_to_basement, ddd_to_bitfs, "nope")
 
 
+def test_merge_refuses_a_pair_meeting_only_by_level_not_subarea():
+    """The castle interior is ONE level (6) holding three subareas on a line
+    (basement 3 <-> lobby 1 <-> upstairs 2), so a level-only meet check
+    accepts seams that do not exist. This pair is drawn from the shipped
+    corpus's own shape: three seeded definitions end at area_enter(6, 3) and
+    one starts at area_enter(6, 2), so a merge button would offer it.
+    """
+    ends_in_basement = SegmentDef(
+        id=201, name="WF -> Basement", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 24}],
+        end_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+        guards=[], match_mode="loose")
+    starts_upstairs = SegmentDef(
+        id=202, name="Upstairs -> BitS", enabled=True,
+        start_triggers=[{"type": "area_enter", "level": 6, "area": 2}],
+        end_triggers=[{"type": "level_enter", "to": 21}],
+        guards=[], match_mode="loose")
+    with pytest.raises(ValueError, match="do not meet"):
+        merge_definitions(ends_in_basement, starts_upstairs, name="nope")
+
+
+def test_merge_accepts_a_pair_meeting_in_the_same_subarea():
+    """The companion to the refusal above — a subarea check that rejected
+    every castle seam would pass its own negative test forever, and the
+    castle is where nearly every seeded movement meets."""
+    ends_in_basement = SegmentDef(
+        id=203, name="WF -> Basement", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 24}],
+        end_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+        guards=[], match_mode="loose")
+    starts_in_basement = SegmentDef(
+        id=204, name="Basement -> HMC", enabled=True,
+        start_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+        end_triggers=[{"type": "level_enter", "to": 7}],
+        guards=[], match_mode="loose")
+    merged = merge_definitions(ends_in_basement, starts_in_basement,
+                               name="WF -> HMC")
+    assert merged["start_triggers"] == ends_in_basement.start_triggers
+    assert merged["end_triggers"] == starts_in_basement.end_triggers
+
+
+def test_merge_permits_a_seam_whose_subarea_is_unknown_on_one_side():
+    """Unknown means yes, the convention can_run_from already uses at
+    runtime: `level_enter to=6` pins no subarea, so it could land anywhere in
+    the castle and must not be refused against an Upstairs start."""
+    ends_in_castle = SegmentDef(
+        id=205, name="BitDW -> Castle", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 17}],
+        end_triggers=[{"type": "level_enter", "to": 6}],
+        guards=[], match_mode="loose")
+    starts_upstairs = SegmentDef(
+        id=206, name="Upstairs -> BitS", enabled=True,
+        start_triggers=[{"type": "area_enter", "level": 6, "area": 2}],
+        end_triggers=[{"type": "level_enter", "to": 21}],
+        guards=[], match_mode="loose")
+    merged = merge_definitions(ends_in_castle, starts_upstairs, name="ok")
+    assert merged["waypoints"][0] == starts_upstairs.start_triggers
+
+
 def test_merge_permits_an_unknown_arm_position_on_either_side():
     # "unknown means yes", the SAME convention can_run_from already takes at
     # runtime for the identical question: most seeded level_exit clauses omit

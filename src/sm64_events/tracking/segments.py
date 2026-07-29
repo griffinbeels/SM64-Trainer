@@ -1660,6 +1660,44 @@ def _meeting_levels(triggers: list) -> set[int]:
     return set(start_levels(triggers))
 
 
+def _pinned_subareas(triggers: list, level: int) -> set[int] | None:
+    """The subareas this clause-set pins WITHIN `level`, or None when any
+    clause reaching that level pins no subarea at all.
+
+    None means "unknown", never "none of them" -- one area-less clause
+    landing in the level is enough to make the subarea question unanswerable
+    for the whole set, and an unknown position is permitted everywhere else
+    in this module (can_run_from's own convention). Reuses `start_areas`'
+    derivation clause by clause rather than reading `area`/`to_subarea`
+    again, so a new subarea-bearing trigger type is one edit there."""
+    pinned: set[int] = set()
+    for trig in triggers:
+        if arm_level(trig) != level:
+            continue
+        areas = [area for lv, area in start_areas([trig]) if lv == level]
+        if not areas:
+            return None
+        pinned.update(areas)
+    return pinned or None
+
+
+def _subareas_can_meet(end_triggers: list, start_triggers: list,
+                       level: int) -> bool:
+    """Could a player finishing `end_triggers` be standing where
+    `start_triggers` needs them, given both agree on `level`?
+
+    The castle interior is ONE level (6) holding three subareas on a line
+    (basement 3 <-> lobby 1 <-> upstairs 2), so a level-only answer accepts
+    seams that do not exist: the shipped corpus has three definitions ending
+    in the basement and one starting Upstairs, and merging any of those pairs
+    passed a level-only check while the chain was broken."""
+    ends = _pinned_subareas(end_triggers, level)
+    starts = _pinned_subareas(start_triggers, level)
+    if ends is None or starts is None:
+        return True
+    return bool(ends & starts)
+
+
 def merge_definitions(first: SegmentDef, second: SegmentDef,
                       name: str) -> dict:
     """Chain two definitions into one spanning both, with `second`'s start
@@ -1690,6 +1728,16 @@ def merge_definitions(first: SegmentDef, second: SegmentDef,
     already takes for the identical question at runtime; only a CONCRETE,
     non-overlapping pair is refused, e.g. `first` ending in the Castle
     Inside basement and `second` starting in the castle courtyard.
+
+    The check runs at SUBAREA resolution too, not level alone. The castle
+    interior is one level (6) holding three subareas on a line (basement 3
+    <-> lobby 1 <-> Upstairs 2), so "same level" is not a seam there -- and
+    the shipped corpus reaches that case by itself: three seeded definitions
+    end at `area_enter(6, 3)` and one starts at `area_enter(6, 2)`, a pair a
+    merge button would happily offer. Refused only when BOTH sides pin a
+    subarea in every shared level and none coincide; one area-less clause
+    reaching that level (`level_enter to=6` pins nothing) makes the question
+    unanswerable and so permits it, same convention as above.
 
     `match_mode`: inherited when both inputs agree; when they DISAGREE,
     "loose" -- not "first wins", which would silently apply a stricter
@@ -1729,6 +1777,22 @@ def merge_definitions(first: SegmentDef, second: SegmentDef,
             f"{first.name!r} ends at level(s) {sorted(first_end_levels)}, "
             f"{second.name!r} starts at level(s) "
             f"{sorted(second_start_levels)}")
+    shared_levels = first_end_levels & second_start_levels
+    if shared_levels and not any(
+            _subareas_can_meet(first.end_triggers, second.start_triggers,
+                               level)
+            for level in shared_levels):
+        detail = "; ".join(
+            f"level {level}: ends in subarea(s) "
+            f"{sorted(_pinned_subareas(first.end_triggers, level) or [])}, "
+            f"starts in "
+            f"{sorted(_pinned_subareas(second.start_triggers, level) or [])}"
+            for level in sorted(shared_levels))
+        raise ValueError(
+            f"{first.name!r} and {second.name!r} do not meet: they share "
+            f"level(s) {sorted(shared_levels)} but no subarea within them "
+            f"({detail}) -- the castle interior is one level holding "
+            "basement, lobby and Upstairs, so sharing it is not a seam")
     match_mode = (first.match_mode if first.match_mode == second.match_mode
                  else "loose")
     default_strat = (first.default_strat
