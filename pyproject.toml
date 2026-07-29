@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8.0", "httpx>=0.27", "pyinstaller>=6.0"]
+dev = ["pytest>=8.0", "httpx>=0.27", "pyinstaller>=6.0", "uilab"]
 
 [build-system]
 requires = ["hatchling"]
@@ -28,3 +28,22 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sm64_events"]
+
+# uilab is a machine-level module shared with the other projects here, installed
+# EDITABLE from one source tree rather than copied. That is what makes "always
+# the newest instrumentation" true by construction: site-packages holds a .pth
+# and a path finder, not a copy, so an improvement over there is live here on
+# the next run with no reinstall and no version to pin. The cost is the other
+# half of the same coin — a breaking change there breaks this immediately, which
+# is what uilab's own tools/check_consumers.py exists to tell you.
+#
+# It is named as an ordinary dependency with NO [tool.uv.sources] entry, because
+# every form that entry can take is wrong: an absolute path is one machine's home
+# directory in a public repo, a relative path cannot serve both this checkout and
+# a worktree under .claude/worktrees/<slug> four levels deeper, and a git URL
+# installs a copy and ends the live-edit property the arrangement exists for.
+#
+# The checkout is supplied on the command line instead, once, at setup:
+#
+#   uv pip install --python ".venv\Scripts\python.exe" -e <uilab> -e . pytest
+#   .venv\Scripts\python.exe -m playwright install chromium

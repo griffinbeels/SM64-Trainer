@@ -24,8 +24,7 @@ uv run python -m sm64_events.main                    # run from repo root (data/
 uv run python tools/verify_addresses.py              # live gate (needs PJ64 + ROM)
 uv run python tools/dev_cleanup.py                   # kill orphaned dev/harness servers (auto-runs at session start)
 uv run python tools/dedupe_journal.py data/tracker.db  # scan double-journaled events; --fix repairs (server stopped)
-uv run python tools/responsive_sweep.py              # render 30 viewports; report layout defects (no PJ64 needed)
-uv run python tools/responsive_sweep.py --shots      # + a contact sheet, for a human eye
+uv run pytest tests/test_responsive.py -q            # render every breakpoint; report layout defects (no PJ64 needed)
 ```
 
 **Server port:** `core/paths.py::server_port()` is the single source — `SM64_PORT`
@@ -183,10 +182,13 @@ Contract changes land on main first, then dependent work fans out. Merge with
 ## Definition of done — every merge
 
 - `uv run pytest -q` passes; new behavior has tests
-- **responsive sweep clean** (`uv run python tools/responsive_sweep.py`) — a new
-  defect is fixed or exempted in `tests/test_responsive.py::KNOWN_DEFECTS` with
-  a reason. Component layout gates on `@container`, never `@media`; the law and
-  why are in `.claude/rules/ui-core.md`
+- **responsive sweep clean** (`uv run pytest tests/test_responsive.py -q`) — a
+  new defect is fixed, or owed in `tools/uilab_project.py::known_defects` with a
+  reason. Component layout gates on `@container`, never `@media`; the law and
+  why are in `.claude/rules/ui-core.md`. The rig itself is **uilab**, a shared
+  machine-level module (`Desktop/code/uilab`) installed editable — improve the
+  instrumentation THERE, not here, and run its `tools/check_consumers.py`
+  afterwards
 - new memory reads live-verified with the human via the harness
 - rule files / this file updated if modules were added or moved; README
   updated if the consumer-facing surface changed; docs/architecture.md updated
