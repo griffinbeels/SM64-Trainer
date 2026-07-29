@@ -3,6 +3,7 @@
 // caps.js (Task 1, 2026-07-25-mario-cap-rank-icons) — this file never keeps
 // its own copy, it imports rankColor same as every other consumer.
 import { h } from "preact";
+import { useEffect } from "preact/hooks";
 import htm from "htm";
 import { capName, divisionDigit } from "./caps.js";
 import { RankIcon } from "./rankicon.js";
@@ -59,7 +60,7 @@ export const fmtPoints = (score) => (score == null ? "–" : String(toPoints(sco
 export function RouteRankCard({ marelo, routes = [], activeRouteId = null,
                                onPickRoute = null, identity = null,
                                rank = undefined, interactive = true,
-                               tune = null }) {
+                               tune = null, onClimbTier = null }) {
   // Hooks run unconditionally (rules of hooks) — `null` passes straight
   // through both with no animation.
   const shown = rank !== undefined ? rank
@@ -68,6 +69,21 @@ export function RouteRankCard({ marelo, routes = [], activeRouteId = null,
            fill: marelo.division_progress || 0 }
        : null);
   const climb = useRankClimb(shown, identity, { tune });
+  // Relay the climb's own PER-FRAME tier to a caller that must walk it in
+  // lockstep (components/marelocelebrate.js, report 1, 2026-07-28): the
+  // celebration backdrop and the app-wide ambient tint used to read
+  // `celebration.from`/`.to` directly, a TWO-STATE snapshot, so the
+  // background jumped straight to the destination tier's colour the instant
+  // the climb began instead of walking Capless -> Toad -> ... -> Waluigi
+  // alongside the card actually doing that on screen. `climb.tier` is
+  // exactly the value painted right now -- this hands it out rather than
+  // making a second caller re-derive it. Keyed on the tier value alone, not
+  // on `climb` itself (a fresh object every animation frame via
+  // rankclimb.js's `renderState`) -- this must fire once per tier crossing,
+  // never once per frame of fill movement.
+  useEffect(() => {
+    if (onClimbTier) onClimbTier(climb ? climb.tier : null);
+  }, [climb && climb.tier]);
   const score = useTween(marelo ? marelo.marelo : null);
 
   const { label = null, mastery = null, coverage = null,
@@ -93,25 +109,33 @@ export function RouteRankCard({ marelo, routes = [], activeRouteId = null,
   const options = [["", "Overall"],
                    ...routes.map((route) => [String(route.id), route.name])];
 
+  // Round 2 layout (2026-07-28, user's own sketch): a LEFT column pairing
+  // the rank icon with the rank NAME directly beneath it, and a RIGHT
+  // column stacking the scope name, a full-width progress bar, and the
+  // points underneath it -- the bar is the dominant element now, not a
+  // sliver squeezed beside three lines of text. `cardLabel` ("Overall" /
+  // "Route") is no longer painted as its own kicker line -- the scope's own
+  // name (`label`) already answers "for what", the big rank icon and name
+  // answer "what rank" -- but it is still derived the identical scope-aware
+  // way and still rides the card as the picker's accessible name (below),
+  // which is what keeps it a real, live value rather than a dead assignment.
   return html`<div class=${`context-control context-select marelo-bar${
       climb && climb.climbing ? " is-climbing" : ""}`}
       style=${climb ? climb.vars : null}
       title=${label
         ? `${label}: mastery ${fmtScore(mastery)} x coverage ${practiced}/${n}`
         : "Your rating for the practice plan you have selected"}>
-    ${climb ? html`<span class="rank-icon-slot marelo-bar-icon">
-      <${RankIcon} ...${climb.icon} tier=${climb.tier} division=${climb.division} size=${34} />
-    </span>` : html`<span class="rank-icon-slot marelo-bar-icon">–</span>`}
-    <span class="marelo-bar-text">
-      <span class="context-label">${cardLabel}</span>
+    <span class="marelo-bar-icon-col">
+      ${climb ? html`<span class="rank-icon-slot marelo-bar-icon">
+        <${RankIcon} ...${climb.icon} tier=${climb.tier} division=${climb.division} size=${34} />
+      </span>` : html`<span class="rank-icon-slot marelo-bar-icon">–</span>`}
       <b>${climb ? `${capName(climb.tier)} ${divisionDigit(climb.division)}` : "Unranked"}</b>
-      ${/* Points BEFORE the scope name: the card is as wide as its column, so
-           this line ellipsises, and a narrow column must drop the scope name
-           rather than the one part of the line that is a value. */
-        null}
-      <span class="meta">${fmtPoints(score)} pts · ${label || "…"}</span>
     </span>
-    <span class="marelo-track"><i style=${`width:${climb ? climb.fill * 100 : 0}%`}></i></span>
+    <span class="marelo-bar-body">
+      <span class="context-value">${label || "…"}</span>
+      <span class="marelo-track"><i style=${`width:${climb ? climb.fill * 100 : 0}%`}></i></span>
+      <span class="meta">${fmtPoints(score)} pts</span>
+    </span>
     ${interactive && onPickRoute ? html`<${CardSelect} id="route-select"
       name="active_route" label=${cardLabel}
       title="Which route you are practising — this is also what the rank rates"

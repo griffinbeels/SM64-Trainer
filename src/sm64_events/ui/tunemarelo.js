@@ -63,7 +63,7 @@ function mareloFor(level) {
 // not. Three placeholder cards keep the 4-column grid template's proportions
 // honest; MareloCelebration only ever reads the geometry of ".marelo-slot"
 // itself, not its siblings.
-function HeaderBar({ marelo }) {
+function HeaderBar({ marelo, identity }) {
   return html`<header class="context-shell">
     <div class="context-bar" aria-label="Practice context (preview)">
       <div class="context-control"><span class="context-control-copy">
@@ -72,7 +72,7 @@ function HeaderBar({ marelo }) {
       </span></div>
       <div class="marelo-slot">
         <${RouteRankCard} marelo=${marelo} routes=${[]} activeRouteId=${null}
-          identity="tunemarelo" interactive=${false} />
+          identity=${identity} interactive=${false} />
       </div>
       <div class="context-control"><span class="context-control-copy">
         <span class="context-label">Clock</span>
@@ -177,7 +177,23 @@ function Inspector() {
       <div class="app-shell">
         <div class="sidebar"></div>
         <div class="practice-page">
-          <${HeaderBar} marelo=${mareloFor(settled ? toLevel : fromLevel)} />
+          <${HeaderBar} marelo=${mareloFor(settled ? toLevel : fromLevel)}
+            identity=${
+              /* Report 3 (2026-07-28): "I would expect what I just saw to be
+                 what's resting in the header ... The demo restarts the
+                 animation once it lands." This card's `identity` never
+                 changed across a Play, so once `settled` flips true its
+                 `marelo` prop jumps straight from the from-rank to the
+                 destination and useRankClimb reads that as the SAME
+                 measurement legitimately improving -- a climb, not a snap --
+                 and replays the whole multi-tier animation in the replica
+                 header exactly where the user is looking right after the
+                 overlay lands. `identity` is the mechanism this hook already
+                 has for "this is a different measurement, nobody earned it"
+                 (ui/rankclimb.js); flipping it in the SAME render that
+                 flips `settled` is what makes landing SNAP straight to the
+                 earned rank instead of climbing to it a second time. */
+              settled ? "tunemarelo-settled" : "tunemarelo"} />
         </div>
       </div>
     </div>

@@ -106,18 +106,40 @@ export function MareloCelebration({ celebration, scopeId, marelo, routes,
   const atCentre = phase !== "out";
   const shown = celebration ? (atCentre ? celebration.to : celebration.from) : null;
 
+  // ---- The tier the card is ACTUALLY showing, right now -----------------
+  // `shown` above is a TWO-STATE snapshot (celebration.from for the whole
+  // "out" phase, celebration.to for every phase after) -- reading it for the
+  // backdrop or the ambient tint made both jump straight to the destination
+  // tier's colour the instant the climb began, while the card itself was
+  // still visibly walking Capless -> Toad -> ... -> Waluigi underneath (user,
+  // 2026-07-28: "we're ALREADY purple (for Waluigi) in the capless tier.
+  // This doesn't make any sense, because we're on capless"). `climbTier` is
+  // relayed up from the REAL card's own climb (marelo.js's `onClimbTier`,
+  // fired once per tier crossing) via the card rendered below, so it is
+  // exactly the value painted on screen at every instant -- during "out" the
+  // card is parked at the FROM rank with a static prop and has not started
+  // climbing, so this initializes to that same value; during "climb" it
+  // walks every intermediate tier in step with the card; during "hold" and
+  // "back" the climb has already landed on `celebration.to` and stays there,
+  // which is what lets the backdrop fade OUT (opacity, below) while showing
+  // the EARNED colour rather than reverting to anything else mid-fade.
+  //
+  // Safe as a one-time initializer: RankUpCelebration returns null with no
+  // celebration prop, so MareloCelebration only ever exists while one is
+  // truthy -- a fresh celebration is always a fresh mount.
+  const [climbTier, setClimbTier] = useState(() => celebration.from.tier);
+
   // ---- The app-wide background tint (report 1, 2026-07-28) --------------
   // Temporarily drives ui/ranktint.js's SAME `--rank-tint-color` property
   // while this overlay is mounted, using the exact formula this file's OWN
-  // backdrop already paints with below (`rankColor(shown.tier)`) -- so the
+  // backdrop already paints with below (`rankColor(climbTier)`) -- so the
   // app-wide tint is always in step with the card and the backdrop, never a
   // second source that could disagree with the first. Gated on the TIER
   // value alone so it does not re-fire on every unrelated re-render.
   useEffect(() => {
-    if (!shown) return undefined;
-    setRankTintColor(rankColor(shown.tier));
+    setRankTintColor(rankColor(climbTier));
     return undefined;
-  }, [shown && shown.tier]);
+  }, [climbTier]);
 
   // Handed back to the RESTING value on unmount -- read off a ref, not the
   // `marelo` prop directly, since a cleanup with an empty dependency array
@@ -228,11 +250,17 @@ export function MareloCelebration({ celebration, scopeId, marelo, routes,
     `--fly-ease:cubic-bezier(${tune.flyEaseIn},0,${tune.flyEaseOut},1)`,
     `--backdrop-alpha:${tune.backdropOpacity}`,
     `--backdrop-tint:${(tune.backdropTint * 100).toFixed(1)}%`,
+    // How long the backdrop's OWN colour takes to ease into a new tier on a
+    // crossing -- separate from --fly-ms, which paces the flight and can be
+    // long finished by the time a mid-climb crossing happens.
+    `--tier-fade-ms:${prefersReducedMotion() ? 0 : tune.tierFadeMs}ms`,
     // The backdrop reads the CLIMB's own colour variable, so it cross-fades
     // with the tier instead of vanishing: "when ranking up, the background
     // gradient disappears? this is wrong ... all the colors should animate
     // from the original coloring to the new coloring" (user, 2026-07-27).
-    `--climb-color:${rankColor(shown.tier)}`,
+    // `climbTier`, not `shown.tier` -- see that state's own comment above;
+    // this is report 1's actual fix; `shown.tier` only ever holds two values.
+    `--climb-color:${rankColor(climbTier)}`,
   ].join(";");
   const cardStyle = [
     `left:${origin.left}px`, `top:${origin.top}px`,
@@ -253,7 +281,7 @@ export function MareloCelebration({ celebration, scopeId, marelo, routes,
       <${RouteRankCard} marelo=${marelo} routes=${routes}
         activeRouteId=${activeRouteId} interactive=${false}
         rank=${rank} identity="marelo-celebration"
-        tune=${climbTune} />
+        tune=${climbTune} onClimbTier=${setClimbTier} />
     </div>
   </div>`;
 }

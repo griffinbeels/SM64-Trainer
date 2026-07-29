@@ -67,6 +67,17 @@ export const MARELO_TUNABLES = {
     min: 0, max: 1, step: 0.02, unit: "x",
     why: "How much of the rank's own colour is mixed into the backdrop. It cross-fades with the tier during the climb and must never vanish -- a surface that goes away mid-transition is a second bug, not a fix for the first.",
   },
+  // Report 1 (2026-07-28): the backdrop's OWN colour transition, separate
+  // from --fly-ms -- that variable paces the FLIGHT (the card's transform,
+  // the backdrop's opacity), and a tier crossing can land mid-climb, long
+  // after the flight itself has finished moving. Reusing --fly-ms would tie
+  // "how fast a colour crosses over" to "how fast the card travels" for no
+  // reason other than the numbers happening to be similar today.
+  tierFadeMs: {
+    group: "Backdrop", label: "Tier colour cross-fade", value: 500,
+    min: 100, max: 2000, step: 20, unit: "ms",
+    why: "How long the backdrop takes to ease into a new tier's colour when the climb crosses one, so a crossing eases rather than cuts.",
+  },
 
   // ---- Ambient tint (report 1, 2026-07-28) --------------------------------
   // Worn AT REST, all the time -- not only while a celebration is on screen
