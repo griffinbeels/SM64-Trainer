@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import socket
 import sqlite3
 import tempfile
@@ -101,6 +102,41 @@ def seed_practice(service) -> None:
     asyncio.run(go())
 
 
+def _seed_target(base: str) -> None:
+    """Make the seeded star the ACTIVE target.
+
+    Seeding attempts is not enough, and the difference is the whole page. With
+    attempts but no target the Practice page renders "No active objective" and
+    files the populated star into the practice index -- inside a CLOSED
+    <details>. Everything interesting is then off-screen: the Active Target
+    card is an empty state, and any control living in a StarSection is present
+    in the DOM and genuinely not visible. A browser driver that refuses to
+    click an invisible element reports that honestly; one that dispatches the
+    event anyway hides it (2026-07-28).
+
+    POST /api/target is allowed to refuse -- you may only practice what you are
+    standing in front of -- but not here: with no emulator attached the
+    player's place is unknown, and practicable_here() treats an unknown place
+    as "nothing to compare against, so nothing to refuse". That clause exists
+    precisely so a target stays settable while reviewing with the game closed.
+    """
+    import urllib.error
+    import urllib.request
+
+    body = json.dumps({"course_id": 2, "star_id": 2}).encode()
+    request = urllib.request.Request(
+        f"{base}/api/target", data=body, method="POST",
+        headers={"Content-Type": "application/json"})
+    try:
+        urllib.request.urlopen(request, timeout=10).read()
+    except urllib.error.HTTPError as error:
+        # Loud, not silent: a fixture that quietly fails to set a target is a
+        # fixture that measures the empty page and calls it clean.
+        raise RuntimeError(
+            f"fixture could not set the practice target: {error.code} "
+            f"{error.read()[:200]!r}") from error
+
+
 def _free_port() -> int:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
@@ -156,9 +192,11 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
         # three events in and `db.attempts()` still empty. tests/test_api.py
         # has always seeded inside `with client:` for the same reason; doing it
         # at construction time fails silently, which is the worst version.
+        base = f"http://127.0.0.1:{port}"
         if seed:
             seed_practice(service)
-        yield f"http://127.0.0.1:{port}"
+            _seed_target(base)
+        yield base
     finally:
         server.should_exit = True
         thread.join(timeout=15)
