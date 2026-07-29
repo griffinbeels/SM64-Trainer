@@ -49,9 +49,14 @@ KNOWN_DEFECTS: dict[str, str] = {
         "Wave 3: consequence of the objective card above",
     # The reported nav dead end (task 0032). Rank is in app.js's NAV_GROUPS and
     # in NEITHER hardcoded mobile list, so below 760px it cannot be reached.
+    # 340/341/420/421 are the practice-log Stats-trigger breakpoints added for
+    # the "move the Stats button into the practice log" report (2026-07-28) --
+    # new PROBE POINTS in the same already-broken sub-760px range, not a new
+    # defect; the cause and the fix are identical to every other row here.
     **{f"{w}x{h} [shell] unreachable :: Rank":
        "Wave 3: MobileNav/MobileMore hardcode their own lists"
-       for w, h in [(320, 800), (330, 1000), (331, 1000), (430, 1000),
+       for w, h in [(320, 800), (330, 1000), (331, 1000), (340, 1000),
+                    (341, 1000), (420, 1000), (421, 1000), (430, 1000),
                     (431, 1000), (500, 1000), (501, 1000), (600, 1000),
                     (601, 1000), (640, 1000), (641, 1000), (760, 1000),
                     (760, 1180)]},
