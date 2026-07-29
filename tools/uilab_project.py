@@ -66,12 +66,23 @@ PROJECT = Project(
     # Sizes that earn a place regardless of what the stylesheet declares: the
     # two the user reported, the workspace's max width, and a short window.
     extra_viewports=((900, 1180), (760, 1180), (1500, 900), (1280, 720)),
+    # CAVEAT: these rows are keyed on exact viewport + selector, and the
+    # fixture renders a SNAPSHOT of the dev database -- so the set shifts a
+    # little as real play changes the data. Two rows appeared here that a
+    # worktree run did not produce. The durable fix is a deterministic fixture
+    # database rather than a snapshot of the live one; until then, expect the
+    # occasional new row of an already-known defect class.
+    #
     # OWED, not exempted. Every row is real layout breakage on a POPULATED
     # practice page -- the state the fixture only started reaching once it
     # seeded a target and waited for the view to render. uilab's
     # stale-exemption gate deletes each row the moment its defect stops
     # occurring, so this list cannot quietly drift into fiction.
     known_defects={
+        '400x1000 [page] overlap :: td.attempt-result.good x td.attempt-delta':
+            'attempt-table cells collide at narrow widths',
+        '401x1000 [page] overlap :: td.attempt-result.good x td.attempt-delta':
+            'attempt-table cells collide at narrow widths',
         '320x800 [page] clipped :: section.practice-card.attempts-card':
             'scrollWidth 316 > clientWidth 275',
         '320x800 [page] clipped :: section.practice-card.objective-card':

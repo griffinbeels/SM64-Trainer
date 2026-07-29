@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8.0", "httpx>=0.27", "pyinstaller>=6.0", "uilab"]
+dev = ["pytest>=8.0", "httpx>=0.27", "pyinstaller>=6.0"]
 
 [build-system]
 requires = ["hatchling"]
@@ -37,7 +37,15 @@ packages = ["src/sm64_events"]
 # half of the same coin — a breaking change there breaks this immediately, which
 # is what uilab's own tools/check_consumers.py exists to tell you.
 #
-# It is named as an ordinary dependency with NO [tool.uv.sources] entry, because
+# It is deliberately NOT listed in [project] dependencies at all. Naming it
+# there breaks `uv run pytest -q` -- this project's documented command -- because
+# uv re-resolves declared dependencies against an index and uilab is not
+# published. An editable install lives as a .pth that uv does not prune, so the
+# import keeps working without the declaration. The setup command below is the
+# only thing that has to be run.
+#
+# The related trap, for whoever adds the declaration back: NO [tool.uv.sources]
+# entry works either, because
 # every form that entry can take is wrong: an absolute path is one machine's home
 # directory in a public repo, a relative path cannot serve both this checkout and
 # a worktree under .claude/worktrees/<slug> four levels deeper, and a git URL
