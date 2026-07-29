@@ -110,15 +110,8 @@ MOVEMENTS = [
              exit_level(33), enter_level(23)),
     movement("seg:bowser2->wdw", "Bowser 2 → WDW",
              exit_level(33), enter_level(11)),
-    # The lobby waypoint is load-bearing, not decoration: the castle interior
-    # is a LINE (basement <-> lobby <-> upstairs), so this movement crosses TWO
-    # area edges. A plain def would be disarmed by the first one before its
-    # `area_enter upstairs` end could ever match — caught by
-    # tests/test_defaults_corpus.py's simulation, which is the whole reason
-    # that layer exists.
     movement("seg:bowser2->upstairs", "Bowser 2 → Upstairs",
-             exit_level(33), enter_area(UPSTAIRS),
-             via=[enter_area(LOBBY)]),
+             exit_level(33), enter_area(UPSTAIRS)),
     # --- upstairs ---------------------------------------------------------
     movement("seg:wdw->thi", "WDW → THI", exit_level(11), enter_level(13)),
     movement("seg:thi->ttm", "THI → TTM", exit_level(13), enter_level(36)),

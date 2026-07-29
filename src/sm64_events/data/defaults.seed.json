@@ -1381,15 +1381,7 @@
           "area": 2
         }
       ],
-      "waypoints": [
-        [
-          {
-            "type": "area_enter",
-            "level": 6,
-            "area": 1
-          }
-        ]
-      ],
+      "waypoints": [],
       "guards": [
         {
           "type": "in_active_route"
