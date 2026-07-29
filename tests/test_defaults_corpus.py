@@ -195,12 +195,19 @@ def run_engine(seed_row, events, level, area):
     """Feed `events` to a one-def engine, tracking level/area exactly as the
     projector does, and return the closed attempts. Guards are dropped: the
     in_active_route arm gate is proven in test_segments.py, and here every
-    movement is assumed to be in the active route."""
+    movement is assumed to be in the active route.
+
+    match_mode is threaded from the seed row itself (Task 19) rather than
+    left at SegmentDef's "strict" default -- since all 55 movements now ship
+    match_mode="loose", this is the line that actually puts the independent
+    world-model walk through the loose matcher instead of quietly continuing
+    to simulate the old strict one."""
     definition = SegmentDef(
         id=1, name=seed_row["name"], enabled=True,
         start_triggers=seed_row["start_triggers"],
         end_triggers=seed_row["end_triggers"],
-        waypoints=seed_row["waypoints"], guards=[])
+        waypoints=seed_row["waypoints"], guards=[],
+        match_mode=seed_row.get("match_mode", "strict"))
     engine = SegmentEngine([definition])
     closed = []
     for ev in events:
@@ -314,7 +321,8 @@ def test_a_menu_warp_into_a_course_arms_no_movement():
         SegmentDef(id=index, name=row["name"], enabled=True,
                    start_triggers=row["start_triggers"],
                    end_triggers=row["end_triggers"],
-                   waypoints=row["waypoints"], guards=[])
+                   waypoints=row["waypoints"], guards=[],
+                   match_mode=row.get("match_mode", "strict"))
         for index, row in enumerate(MOVEMENTS, start=1)])
     sources = sorted({row["start_triggers"][0]["from"] for row in MOVEMENTS
                       if row["start_triggers"][0]["type"] == "level_exit"})

@@ -24,8 +24,8 @@ import corpus_legacy        # noqa: E402
 import corpus_movements     # noqa: E402
 import corpus_routes_main   # noqa: E402
 import corpus_routes_stage  # noqa: E402
-from corpus_vocab import (CASTLE_MOVEMENT, ROUTE_SCOPED,  # noqa: E402
-                          STANDARD_STRAT)
+from corpus_vocab import (CASTLE_MOVEMENT, DEFAULT_MOVEMENT_MATCH_MODE,  # noqa: E402
+                          ROUTE_SCOPED, STANDARD_STRAT)
 
 SEED_VERSION = 2
 OUT = (Path(__file__).resolve().parent.parent
@@ -36,13 +36,17 @@ def _movement_row(row: dict) -> dict:
     """Expand a compact movement into a seed segment. Every movement is
     route-scoped, Castle Movement, and practiced "Standard" by construction —
     that uniformity is the whole reason this table is generated rather than
-    hand-written."""
+    hand-written. match_mode is the one field that ISN'T purely uniform: it
+    stamps DEFAULT_MOVEMENT_MATCH_MODE on every row, but `movement()`'s own
+    per-row override (a promoted recording that must keep its own mode) wins
+    when present (Task 19, spec 2026-07-28-multi-step-segments)."""
     return {"seed_key": row["seed_key"], "name": row["name"], "enabled": True,
             "start_triggers": [row["start"]],
             "end_triggers": [row["end"]],
             "waypoints": [[clause] for clause in row["via"]],
             "guards": ROUTE_SCOPED, "category": CASTLE_MOVEMENT,
-            "default_strat": STANDARD_STRAT}
+            "default_strat": STANDARD_STRAT,
+            "match_mode": row.get("match_mode") or DEFAULT_MOVEMENT_MATCH_MODE}
 
 
 def build() -> dict:

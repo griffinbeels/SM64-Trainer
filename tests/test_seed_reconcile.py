@@ -161,22 +161,28 @@ def test_real_bundled_seed_does_not_alter_existing_segment_defs(tmp_path):
                               "waypoints", "guards")})
 
 
-# -- Item 0 fix (spec 2026-07-28-multi-step-segments): a fresh install used to
-# seed 55 loose + 10 strict, split by INSERTION MECHANISM rather than intent
-# (the 10 legacy tricks land through migration SQL -> column DEFAULT 'strict';
-# the 55 movements land through this module calling db.insert_segment_def
-# WITHOUT match_mode -> that function's OWN Python default, which was
-# 'loose'). defaults.seed.json carries match_mode on none of its 65 rows, so
-# nothing is loose until a later task puts one on a specific movement — every
-# row must come out strict today, on ANY install, fresh or migrated.
+# -- Item 0 fix (spec 2026-07-28-multi-step-segments) landed a match_mode
+# column with no seed content behind it yet, so a fresh install used to seed
+# all 65 rows strict regardless of the split the plan actually wanted (55
+# loose + 10 strict, by INTENT rather than insertion mechanism). Task 19 is
+# the later task that puts match_mode on the 55 movements (tools/corpus_vocab
+# .py::movement / build_defaults_seed.py::_movement_row) — this test now pins
+# the split it actually produces, through the same reconcile path proven
+# above.
 
-def test_fresh_install_seeds_every_definition_strict(tmp_path):
+def test_fresh_install_seeds_the_converted_corpus(tmp_path):
+    """The 55 movements now ship match_mode="loose"; the ten legacy tricks
+    carry no match_mode key (corpus_legacy.py's _seg() never stamps one) and
+    so reconcile still applies the column default, "strict", to them —
+    unchanged by this conversion."""
     db = Database(tmp_path / "t.db")
     seed = json.loads(bundled_defaults_seed().read_bytes().decode("utf-8"))
     assert reconcile_defaults(db, seed) == []
     rows = db.segment_defs()
     assert len(rows) == 65
-    assert {s["match_mode"] for s in rows} == {"strict"}
+    loose = [r for r in rows if r["match_mode"] == "loose"]
+    strict = [r for r in rows if r["match_mode"] == "strict"]
+    assert len(loose) == 55 and len(strict) == 10
 
 
 def test_reconcile_carries_match_mode_on_insert_and_refresh(tmp_path):

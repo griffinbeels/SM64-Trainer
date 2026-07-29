@@ -40,6 +40,16 @@ ROUTE_SCOPED = [{"type": "in_active_route"}]
 # competing strategies. Spec 2026-07-24-segment-default-strat-design.md.
 STANDARD_STRAT = "Standard"
 
+# Every movement ships match_mode="loose" (spec 2026-07-28-multi-step-segments,
+# Task 19): the whole reason the strict matcher's waypoint-cancellation rules
+# forced so many `via=[...]` chains in the first place is gone once nothing
+# in between start and end can silently disarm the def. `movement()`'s own
+# match_mode= parameter overrides this per row -- the case that matters is a
+# recording promoted through tools/corpus_from_db.py, which must carry
+# whatever mode it was recorded and verified with rather than silently
+# reconciling back to this default.
+DEFAULT_MOVEMENT_MATCH_MODE = "loose"
+
 
 # --- trigger clauses -------------------------------------------------------
 
@@ -175,8 +185,18 @@ def route(seed_key, name, category, steps, start_condition=None):
             "steps": group_visits(steps)}
 
 
-def movement(seed_key, name, start, end, via=()):
+def movement(seed_key, name, start, end, via=(), match_mode=None):
     """A castle-movement segment. `via` is a FLAT list of clauses; each becomes
-    a single-clause waypoint (no corpus movement needs an any-of waypoint)."""
-    return {"seed_key": seed_key, "name": name, "start": start,
-            "via": list(via), "end": end}
+    a single-clause waypoint (no corpus movement needs an any-of waypoint).
+
+    `match_mode=None` (the default) means "use the corpus default" --
+    `_movement_row` (tools/build_defaults_seed.py) stamps
+    DEFAULT_MOVEMENT_MATCH_MODE on every row that doesn't say otherwise. Pass
+    an explicit value to override it for ONE movement; `corpus_from_db.py`
+    prints this argument back out whenever a live def's mode differs from the
+    default, so the override round-trips instead of silently reconciling away."""
+    row = {"seed_key": seed_key, "name": name, "start": start,
+           "via": list(via), "end": end}
+    if match_mode is not None:
+        row["match_mode"] = match_mode
+    return row

@@ -74,6 +74,24 @@ def test_shipped_seed_reconciles_into_a_fresh_db_cleanly(tmp_path):
     assert broken == []
 
 
+def test_every_movement_defaults_to_loose_match_mode():
+    """Task 19 (spec 2026-07-28-multi-step-segments): every movement ships
+    match_mode="loose" -- stamped in _movement_row, so the 55 rows cannot
+    disagree with each other, and Task 13's recorder (which always posts
+    "loose" for a recorded segment) round-trips into a shipped default that
+    means the same thing rather than reconciling back to "strict".
+
+    The ten legacy tricks carry no match_mode key at all, unchanged -- they
+    keep meaning "strict" through reconcile's own default, exactly as before
+    this conversion."""
+    seed = build_seed.build()
+    movements = [s for s in seed["segments"] if s["guards"]]
+    legacy = [s for s in seed["segments"] if not s["guards"]]
+    assert len(movements) == 55 and len(legacy) == 10
+    assert {s["match_mode"] for s in movements} == {"loose"}
+    assert [s["seed_key"] for s in legacy if "match_mode" in s] == []
+
+
 def test_every_movement_defaults_to_the_standard_strategy():
     """There is basically one way to do a castle movement, so every movement
     ships with "Standard" already picked (spec 2026-07-24-segment-default-strat).
