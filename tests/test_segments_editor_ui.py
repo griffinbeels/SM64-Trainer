@@ -14,8 +14,13 @@ that list against the pydantic models, so either side changing breaks loudly:
   (instead of a 422 in the running app);
 - the denylist pattern creeping back -> caught by the no-spread assertion.
 """
+import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from source_scan import strip_comments
 from sm64_events.server.api import SegmentBody, SegmentPatch
@@ -255,3 +260,118 @@ def test_the_save_disabled_guard_can_still_fail():
     assert not _save_button_waits_for_the_backtest(comment_only)
     real_code = 'disabled=${!btReport || saving} onclick=${save}'
     assert _save_button_waits_for_the_backtest(real_code)
+
+
+# --- backtestSummary's arm count (live-audit regression, 2026-07-28) --------
+# Attempts are only written when an arm CLOSES (tracking/backtest.py's
+# BacktestReport.arms docstring: "THE AMBIGUITY BacktestReport.arms closes").
+# backtestSummary used to count report.attempts.length as the arm count, so a
+# definition that arms and is silently disarmed every time understated its own
+# arm count -- and, whenever EVERY arm ended that way (attempts.length == 0),
+# fell through to the flatly false "Never armed anywhere in your history."
+# These tests run the REAL function (extracted from source and evaluated by
+# node — the same technique tests/test_cross_language_parity.py uses for a
+# component that pulls in Preact), not a restatement of its logic, because a
+# regex over the source text can confirm a literal is present but cannot
+# confirm what number actually comes out for a given report.
+
+pytestmark_node = pytest.mark.skipif(
+    shutil.which("node") is None, reason="node not on PATH")
+
+
+def _extract_function(source: str, name: str) -> str:
+    """The source text of one top-level `function NAME(...) { ... }`,
+    brace-matched -- unlike the `const NAME = ...;` declarations
+    tests/test_cross_language_parity.py extracts, a function declaration has
+    no trailing `;` to anchor on, and its body may itself contain braces
+    (object literals, template `${}` blocks). Comments are stripped first so
+    a commented-out older version of the function is never the one picked up
+    (tests/source_scan.py)."""
+    stripped = strip_comments(source)
+    start_match = re.search(rf"function\s+{name}\s*\([^)]*\)\s*\{{", stripped)
+    assert start_match, f"no `function {name}(...) {{` found in source"
+    depth = 0
+    for index in range(start_match.end() - 1, len(stripped)):
+        if stripped[index] == "{":
+            depth += 1
+        elif stripped[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return stripped[start_match.start():index + 1]
+    raise AssertionError(f"unbalanced braces extracting function {name}")
+
+
+def _run_backtest_summary(reports: list[dict]) -> list[str]:
+    fn_source = _extract_function(
+        SEGMENTS_JS.read_text(encoding="utf-8"), "backtestSummary")
+    script = (f"{fn_source}\n"
+              f"const reports = {json.dumps(reports)};\n"
+              "console.log(JSON.stringify(reports.map(backtestSummary)));")
+    result = subprocess.run(["node", "--input-type=module", "-"], input=script,
+                            capture_output=True, text=True, timeout=60,
+                            encoding="utf-8")
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+@pytestmark_node
+def test_arms_greater_than_zero_never_reads_as_never_armed():
+    # The live-measured shape from the bug report: 67 arms, 0 fires, 29
+    # CLOSED attempts (all non-success -- so attempts.length undercounts arms
+    # rather than reading zero), 0 unclosed.
+    live_shape = {"fires": 0, "attempts": [{}] * 29, "unclosed": [], "arms": 67}
+    never_armed = {"fires": 0, "attempts": [], "unclosed": [], "arms": 0}
+    [live_message, never_armed_message] = _run_backtest_summary(
+        [live_shape, never_armed])
+    assert "never armed" not in live_message.lower(), (
+        f"a definition that armed 67 times must not read as never armed: "
+        f"{live_message!r}")
+    assert "never armed" in never_armed_message.lower()
+
+
+@pytestmark_node
+def test_the_shown_arm_count_is_report_arms_not_attempts_length():
+    # Same live-measured shape: the count shown must be 67 (arms), never 29
+    # (attempts.length) -- the bug this whole task exists to close.
+    report = {"fires": 0, "attempts": [{}] * 29, "unclosed": [], "arms": 67}
+    [message] = _run_backtest_summary([report])
+    assert "67" in message, f"expected the arm count 67 in {message!r}"
+    assert "29" not in message, (
+        f"attempts.length (29) leaked into the arm-count sentence: {message!r}")
+
+
+@pytestmark_node
+def test_arms_with_no_completion_avoids_the_wiped_data_false_claim():
+    # Unlike the recorder (segmenttimeline.js only ever backtests
+    # replaces: null), the Builder backtests a real `replaces` when editing
+    # an existing segment, so arms>0/fires=0/unclosed=[] here can ALSO mean
+    # "it fired, and those attempts were wiped" (backtest.py replays
+    # journaled data_wiped clears against `current`) -- not only "it never
+    # completed". "never completed successfully" would be false in that case.
+    report = {"fires": 0, "attempts": [], "unclosed": [], "arms": 3}
+    [message] = _run_backtest_summary([report])
+    assert "never completed successfully" not in message
+    assert "no completion is recorded" in message
+
+
+@pytestmark_node
+def test_fires_and_unclosed_branches_are_unaffected():
+    fired = {"fires": 2, "attempts": [{}, {}, {}], "unclosed": [], "arms": 5}
+    unclosed = {"fires": 0, "attempts": [], "unclosed": [{}], "arms": 4}
+    [fired_message, unclosed_message] = _run_backtest_summary([fired, unclosed])
+    assert fired_message == "2 fires out of 3 attempts in your history."
+    assert unclosed_message == (
+        "Never fired — but it DID arm, and never closed. See below.")
+
+
+def test_the_arm_count_extraction_can_still_fail():
+    # Probed in both directions (tests/source_scan.py's rule): the extractor
+    # must find the real function and must NOT find a commented-out one.
+    real = _extract_function(SEGMENTS_JS.read_text(encoding="utf-8"),
+                              "backtestSummary")
+    assert "report.arms" in real
+    commented = ("// function backtestSummary(report) { return 'OLD'; }\n"
+                 "function backtestSummary(report) { return report.arms; }\n")
+    extracted = _extract_function(commented, "backtestSummary")
+    assert "OLD" not in extracted
+    assert "return report.arms;" in extracted

@@ -256,6 +256,13 @@ const BACKTEST_FIELDS = [...SAVE_FIELDS, "waypoints", "category", "match_mode"];
 // a definition that looks right and never fires) from "fired, here's how
 // often" -- three different remedies, so a single fires-count would blur
 // the two zero-fire cases together.
+//
+// The arm count is report.arms, NEVER attempts.length -- attempts are only
+// written when an arm CLOSES (tracking/backtest.py, BacktestReport.arms'
+// docstring), so a def that arms and is silently disarmed every time writes
+// no attempt row at all. attempts.length then reads 0 even after dozens of
+// arms, which used to fall all the way through to the false "Never armed
+// anywhere in your history" below for a def that plainly did arm.
 function backtestSummary(report) {
   const n = report.attempts.length;
   if (report.fires > 0)
@@ -263,8 +270,18 @@ function backtestSummary(report) {
       + `${n} attempt${n === 1 ? "" : "s"} in your history.`;
   if (report.unclosed.length > 0)
     return "Never fired — but it DID arm, and never closed. See below.";
-  if (n > 0)
-    return `Armed ${n} time${n === 1 ? "" : "s"} but never completed successfully.`;
+  if (report.arms > 0)
+    // "no completion is recorded", not "never completed successfully": unlike
+    // segmenttimeline.js's recordingSummary (which only ever backtests
+    // replaces: null, a brand-new recording), this Builder backtests a real
+    // `replaces` when editing an existing segment -- so arms>0/fires=0 here
+    // can ALSO mean "it fired, and those attempts were wiped"
+    // (tracking/backtest.py replays journaled data_wiped clears against
+    // `current`), not only "it never completed". Both readings make this
+    // sentence true; only one of them makes "never completed successfully" a
+    // lie.
+    return `Armed ${report.arms} time${report.arms === 1 ? "" : "s"} in your `
+      + "history, but no completion is recorded.";
   return "Never armed anywhere in your history.";
 }
 
