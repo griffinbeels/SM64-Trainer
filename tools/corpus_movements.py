@@ -80,7 +80,7 @@ MOVEMENTS = [
     movement("seg:mips2->vcutm", "MIPS (2nd) → VCUtM",
              grab_star(0, 4), enter_level(18)),
     movement("seg:vcutm->ccm", "VCUtM → CCM",
-             exit_level(18), enter_level(5), via=[enter_level(6)]),
+             exit_level(18), enter_level(5)),
     # Started on the star that opens the sub until 2026-07-27, on the premise
     # that BitFS is entered DIRECTLY from DDD (23 -> 19) — which would make
     # `level_exit from=23` and `level_enter to=19` the same event, arming a def
