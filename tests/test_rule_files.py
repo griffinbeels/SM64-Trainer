@@ -15,6 +15,12 @@
      reviewer checks. It was split four ways on 2026-07-28; the BUDGET below is
      what stops it reassembling itself one appended row at a time.
 
+  3. **A rule file states a number that has quietly stopped being true.**
+     `tracking-storage.md` claimed "65 segments … 50 routes" while the corpus
+     held 84 and 48 (found 2026-07-28). Prose cannot fail a build, so the
+     cardinalities it states are parsed back out and checked against the
+     corpus modules below — see CORPUS_CLAIMS.
+
 The budget is deliberately generous — these files carry hard-won evidence and
 the answer to crowding is another sub-zone file, not deletion. It fails only
 when a file has grown past the point where a reader would still scan it whole.
@@ -23,12 +29,14 @@ When it fires, split by path (a narrower `paths:` list), do not summarize:
 `ui-*.md` files are the worked example of the split.
 """
 import re
+import sys
 from pathlib import Path
 
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 RULES = REPO / ".claude" / "rules"
+TOOLS = REPO / "tools"
 
 # Chars, not tokens (~4 chars/token). 80k ≈ 20k tokens: comfortably above every
 # current file, far below the 103k that made ui.md unreadable.
@@ -123,6 +131,78 @@ def test_claude_md_names_every_rule_file():
         f"CLAUDE.md's zone table does not name {missing}. The table IS the "
         "index — a session that cannot see a rule file writes the knowledge "
         "somewhere else, which is how the second source of truth starts.")
+
+
+# --- the corpus cardinalities stated in tracking-storage.md ----------------
+#
+# A rule file states counts so a reader knows the SHAPE of the corpus without
+# opening five tool modules. That is worth keeping — but a number in prose is
+# unfalsifiable, and this one drifted by 19 segments and 2 routes without a
+# single red build. Each row below names a regex over the rule file whose
+# groups are counts, and the key each group must equal in `corpus_counts()`.
+
+
+def corpus_counts() -> dict[str, int]:
+    """The authoritative cardinalities, from the modules the generator composes.
+
+    `build_defaults_seed._build` IS `corpus_legacy.SEGMENTS + MOVEMENTS +
+    REDS_TO_PIPE + HUNDRED_COIN_EXITS` and `corpus_routes_main.ROUTES +
+    corpus_routes_stage.ROUTES`, so these lengths are the corpus itself rather
+    than a second tally kept beside it. Read the seed JSON instead and the
+    four segment groups are no longer distinguishable — the categories do not
+    partition the same way (four legacy rows are filed Castle Movement).
+    """
+    if str(TOOLS) not in sys.path:
+        sys.path.insert(0, str(TOOLS))
+    import corpus_legacy
+    import corpus_movements
+    import corpus_routes_main
+    import corpus_routes_stage
+
+    counts = {
+        "legacy": len(corpus_legacy.SEGMENTS),
+        "movements": len(corpus_movements.MOVEMENTS),
+        "reds": len(corpus_movements.REDS_TO_PIPE),
+        "hundred_coin": len(corpus_movements.HUNDRED_COIN_EXITS),
+        "routes_main": len(corpus_routes_main.ROUTES),
+        "routes_stage": len(corpus_routes_stage.ROUTES),
+    }
+    counts["segments"] = (counts["legacy"] + counts["movements"]
+                          + counts["reds"] + counts["hundred_coin"])
+    counts["routes"] = counts["routes_main"] + counts["routes_stage"]
+    return counts
+
+
+CORPUS_CLAIMS = [
+    ("segment corpus",
+     r"(\d+) segments = (\d+) legacy \+ (\d+) movements \+ (\d+) reds-to-pipe"
+     r" \+ (\d+) hundred-coin exits",
+     ("segments", "legacy", "movements", "reds", "hundred_coin")),
+    ("route corpus",
+     r"(\d+) routes = (\d+) main \+ (\d+) Stage RTA",
+     ("routes", "routes_main", "routes_stage")),
+]
+
+
+@pytest.mark.parametrize("label,pattern,keys", CORPUS_CLAIMS,
+                         ids=[row[0] for row in CORPUS_CLAIMS])
+def test_the_corpus_counts_stated_here_are_true(label, pattern, keys):
+    text = (RULES / "tracking-storage.md").read_text(encoding="utf-8")
+    found = re.findall(pattern, text)
+    assert len(found) == 1, (
+        f"tracking-storage.md states the {label} {len(found)} times, expected "
+        "once. This guard reads the sentence by shape, so rewording it "
+        "un-pins the numbers — keep the phrasing, or update CORPUS_CLAIMS in "
+        "the same change. Zero matches means the claim is now unchecked.")
+    truth = corpus_counts()
+    stated = {key: int(value) for key, value in zip(keys, found[0])}
+    wrong = {key: (value, truth[key]) for key, value in stated.items()
+             if value != truth[key]}
+    assert not wrong, (
+        f"tracking-storage.md's {label} sentence is out of date "
+        f"(stated, actual): {wrong}. The corpus is the authority — fix the "
+        "prose. This is the exact drift that left the file claiming 65 "
+        "segments and 50 routes while it held 84 and 48.")
 
 
 def test_the_guards_can_still_fail(tmp_path):
