@@ -2696,8 +2696,8 @@ def test_segmentdef_defaults_to_strict_match_mode():
     assert d.match_mode == "strict"
 
 
-def test_validate_accepts_both_match_modes():
-    for mode in ("strict", "loose"):
+def test_validate_accepts_all_match_modes():
+    for mode in ("strict", "loose", "exclusive"):
         validate_definition({"name": "x", "match_mode": mode,
                              "start_triggers": [{"type": "spawned"}],
                              "end_triggers": [{"type": "spawned"}],
@@ -2714,7 +2714,10 @@ def test_validate_rejects_an_unknown_match_mode():
 
 def test_vocab_ships_the_match_modes_for_the_editor():
     modes = vocab()["match_modes"]
-    assert [m["key"] for m in modes] == ["loose", "strict"]
+    # loose stays position 0 -- segments.js seeds a new definition's default
+    # from match_modes[0].key; exclusive (strict plus one more cancel rule)
+    # is the most specialized of the three, so it's appended last.
+    assert [m["key"] for m in modes] == ["loose", "strict", "exclusive"]
     assert all(m["label"] and m["description"] for m in modes)
 
 
@@ -2998,6 +3001,98 @@ def test_a_waypoint_bearing_defs_refire_while_armed_stays_silent():
     assert closed == []
     assert notices == [], "still silent -- waypoints own their own re-arm"
     assert e._armed[45].start_frame == 1000, "untouched by the refire"
+
+
+# ---------------------------------------------------------------------------
+# Third match_mode: "exclusive" (spec 2026-07-28-multi-step-segments). A
+# plain (waypoint-free) def that is otherwise Strict, but silently cancels on
+# a star or Bowser-key grab -- the shape a pipe-entry skip needs ("enter the
+# pipe without going for the 8-red-coin star"), which a plain start/end pair
+# can't express through _feed_waypoint without inventing a fake waypoint.
+# `_feed_strict` runs both modes; these tests cover its one new branch and
+# the contrast against plain Strict that makes the mode meaningful.
+# ---------------------------------------------------------------------------
+
+EXCLUSIVE_PIPE = SegmentDef(
+    id=31, name="BitDW Pipe Entry (exclusive)", enabled=True,
+    start_triggers=[{"type": "level_enter", "to": 17}],
+    end_triggers=[{"type": "warp_entered", "level": 17}],
+    waypoints=[], guards=[], match_mode="exclusive")
+
+STRICT_PIPE = SegmentDef(
+    id=32, name="BitDW Pipe Entry (strict)", enabled=True,
+    start_triggers=[{"type": "level_enter", "to": 17}],
+    end_triggers=[{"type": "warp_entered", "level": 17}],
+    waypoints=[], guards=[], match_mode="strict")
+
+
+def _arm_pipe(engine, jid=10, frame=1000):
+    return engine.feed(jev(jid, "level_changed", frame, {"from": 6, "to": 17}),
+                       ctx(level=17, prev_level=6))
+
+
+def test_exclusive_closes_normally_on_its_end_trigger_with_no_star_grab():
+    e = SegmentEngine([EXCLUSIVE_PIPE])
+    _arm_pipe(e)
+    closed, _ = e.feed(jev(11, "warp_entered", 1200,
+                           {"level": 17, "area": 1, "action": 0x1300}),
+                       ctx(level=17))
+    [a] = closed
+    assert a.outcome == "success" and a.segment_id == 31
+
+
+def test_exclusive_cancels_silently_on_a_star_grab_mid_route():
+    # The whole point: grabbing the 8-red-coin star along the way means the
+    # attempt wasn't a skip run. No ATTEMPT row -- but the segment_disarmed
+    # notice DOES fire, same as every other silent cancel in this file (e.g.
+    # test_waypoint_session_started_disarms_silently above): "silent" means
+    # no row, not no notice at all.
+    e = SegmentEngine([EXCLUSIVE_PIPE])
+    _arm_pipe(e)
+    closed, notices = e.feed(jev(11, "star_collected", 1150,
+                                 {"course_id": 17, "star_id": 6,
+                                  "num_stars": 1}),
+                             ctx(level=17, num_stars=1))
+    assert closed == []
+    assert 31 not in e.armed_ids()
+    assert notices == [{"event": "segment_disarmed", "segment_id": 31,
+                        "name": "BitDW Pipe Entry (exclusive)", "frame": 1150}]
+
+
+def test_exclusive_cancels_silently_on_a_key_grab_mid_route():
+    e = SegmentEngine([EXCLUSIVE_PIPE])
+    _arm_pipe(e)
+    closed, _ = e.feed(jev(11, "key_grabbed", 1150, {"level": 17}),
+                       ctx(level=17))
+    assert closed == []
+    assert 31 not in e.armed_ids()
+
+
+def test_strict_survives_a_star_grab_that_would_cancel_an_exclusive_def():
+    # The contrast that makes "exclusive" meaningful: the identical shape
+    # under plain Strict does NOT cancel on a star grab. _feed_strict has no
+    # branch matching star_collected/key_grabbed at all outside the new
+    # match_mode == "exclusive" gate, so the event falls through the whole
+    # chain untouched and the def stays armed.
+    e = SegmentEngine([STRICT_PIPE])
+    _arm_pipe(e)
+    closed, _ = e.feed(jev(11, "star_collected", 1150,
+                           {"course_id": 17, "star_id": 6, "num_stars": 1}),
+                       ctx(level=17, num_stars=1))
+    assert closed == []
+    assert 32 in e.armed_ids()
+
+
+def test_exclusive_still_disarms_on_an_off_route_level_crossing_like_strict():
+    # EXCLUSIVE's one addition is the star/key-grab branch above -- every
+    # other Strict rule (here: the plain silent disarm on a level_changed
+    # matching neither start nor end) is untouched.
+    e = SegmentEngine([EXCLUSIVE_PIPE])
+    _arm_pipe(e)
+    closed, _ = e.feed(jev(11, "level_changed", 1150, {"from": 17, "to": 6}),
+                       ctx(level=6, prev_level=17))
+    assert closed == []
+    assert 31 not in e.armed_ids()
 
 
 # --- Task 17: split_definition / merge_definitions --------------------------

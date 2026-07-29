@@ -139,6 +139,22 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
   from. The budget itself (budget_frames) is MIN_BUDGET_FRAMES, or
   BUDGET_FACTOR times the definition's best success so far if that is
   larger — a def with history gets a tighter window than a first-timer's.
+- EXCLUSIVE defs (SegmentDef.match_mode == "exclusive", spec
+  2026-07-28-multi-step-segments, third match_mode) share _feed_strict with
+  plain STRICT defs — same method, one extra gated branch, not a new
+  handler: a star or Bowser-key grab that isn't the def's own end trigger
+  silently cancels it (no row), exactly as a waypoint-bearing def's
+  major-action cancel already does. Everything else — relocation, echoes,
+  a real anchor at/off the arm position, death, game_reset, an off-route
+  level crossing — is identical to STRICT. This mode exists for a plain
+  two-endpoint span with no natural intermediate waypoint (e.g. "enter a
+  Bowser pipe without going for its 8-red-coin star"), where inventing a
+  fake waypoint just to reach _feed_waypoint would be a lie in the corpus.
+  A def that combines this mode WITH waypoints still routes to
+  _feed_waypoint like any other non-loose waypoint-bearing def (dispatch
+  precedence is unchanged) — _feed_waypoint already cancels on the same
+  star/key-grab rule as part of its own design, so that combination needs
+  no special case.
 - failure rows only on practice_reset/state_loaded (reset), death,
   game_reset (hard_reset); AFK closures (paused >= 150 frames) discard, and
   so do no-op closures (acted_tracking true, mario_acted false — warp/reset
@@ -1361,7 +1377,15 @@ GUARDS: dict[str, GuardType] = {g.key: g for g in [
 # ONE registry, same role TRIGGERS/GUARDS play: it drives validate_definition,
 # the editor control through vocab(), AND `SegmentEngine.feed`'s armed-branch
 # dispatch — `_feed_strict` / `_feed_waypoint` / `_feed_loose`, selected by
-# this key. A third mode is one row here plus one handler.
+# this key. A third mode ("exclusive", below) turned out to be one row here
+# plus one GATED BRANCH inside an existing handler, not a new function —
+# `_feed_strict` already ran unconditionally for any non-loose, waypoint-free
+# def, so "exclusive" reaches it through the same `else` in feed()'s dispatch
+# with zero dispatch-table changes; only a def that ALSO carries waypoints
+# needed a look, and `_feed_waypoint` already cancels on a star/key grab as
+# part of its own design, so that combination needed nothing either. A fourth
+# mode may not be this cheap — check whether the shared handler it would ride
+# already does what's needed before writing a new one.
 #
 # This comment said "does not yet change any matching behaviour" until
 # 2026-07-29, describing the one task in the spec where that was true. By then
@@ -1385,6 +1409,18 @@ MATCH_MODES = {
         "description": ("Cancels the moment anything happens that is not the "
                         "next expected step. Use this when a stray star grab "
                         "means the attempt is over."),
+    },
+    "exclusive": {
+        "key": "exclusive",
+        "label": "Exclusive — cancels if I grab a star or key",
+        "description": ("Behaves exactly like Strict, but also cancels the "
+                        "instant I grab a star or Bowser key that isn't this "
+                        "segment's own end trigger — dying or leaving the "
+                        "route still ends the attempt the same way Strict "
+                        "does. Use this for a segment that only counts if "
+                        "grabbing something else along the way means you "
+                        "weren't really doing it — like entering a Bowser "
+                        "pipe without going for its 8-red-coin star."),
     },
 }
 
@@ -1513,8 +1549,15 @@ def vocab() -> dict:
                     "template": g.template, "phase": g.phase}
                    for g in GUARDS.values()],
         # Ordered for the editor control (spec 2026-07-28-multi-step-segments):
-        # loose first — it is the default and the one we want read first.
-        "match_modes": [MATCH_MODES["loose"], MATCH_MODES["strict"]],
+        # loose first — it is the default and the one we want read first, and
+        # a new definition in the builder seeds match_mode from THIS list's
+        # position 0 (ui/components/segments.js), not from any dict order —
+        # exclusive is appended last, deliberately, rather than inserted
+        # before strict: it's strict PLUS one more cancel rule (a star/key
+        # grab), the most specialized of the three, so it reads last and
+        # position 0 stays loose.
+        "match_modes": [MATCH_MODES["loose"], MATCH_MODES["strict"],
+                        MATCH_MODES["exclusive"]],
         "levels": {str(k): v for k, v in sorted(LEVEL_NAMES.items())},
         "castle_areas": {str(k): v for k, v in CASTLE_AREA_NAMES.items()},
         "courses": {str(k): v for k, v in COURSE_NAMES.items()},
@@ -2199,13 +2242,22 @@ class SegmentEngine:
                      anchor_is_echo: bool, starts: bool) -> list:
         """Today's armed-branch chain, extracted verbatim from feed() so the
         armed branch can dispatch on SegmentDef.match_mode (spec
-        2026-07-28-multi-step-segments). Behaviour is unchanged — the module
-        docstring's closure/anchor/echo invariants all describe THIS method.
-        `anchor_is_echo` is computed once per EVENT in feed() (before the
-        per-def loop) and passed down; `starts` is computed once per (event,
-        definition) INSIDE that loop, from `d.start_triggers`, and passed
-        down too — both for the uniform handler signature the dispatch table
-        (Task 2) calls through, not because both are event-level facts."""
+        2026-07-28-multi-step-segments). Behaviour for a STRICT def is
+        unchanged — the module docstring's closure/anchor/echo invariants all
+        describe THIS method. `anchor_is_echo` is computed once per EVENT in
+        feed() (before the per-def loop) and passed down; `starts` is
+        computed once per (event, definition) INSIDE that loop, from
+        `d.start_triggers`, and passed down too — both for the uniform
+        handler signature the dispatch table (Task 2) calls through, not
+        because both are event-level facts.
+
+        Also handles EXCLUSIVE defs (the third match_mode, same spec, one
+        gated branch below): a plain waypoint-free def reaches this same
+        method through the same `else` in feed()'s dispatch (only "loose"
+        and "carries waypoints" divert elsewhere), so the shared chain above
+        — end/relocation/echo/anchor/death/game_reset/off-route level — is
+        identical for both modes; EXCLUSIVE adds exactly one more way to
+        cancel: a star or Bowser-key grab that isn't the end trigger."""
         closed = []
         if self._matches(d.end_triggers, ev, ctx):
             a = self._close(Attempt, d, arm, ev, "success", None)
@@ -2302,6 +2354,29 @@ class SegmentEngine:
             a = self._close(Attempt, d, arm, ev, "hard_reset", None)
             if a:
                 closed.append(a)
+            self._disarm(d, ev, notices)
+        elif d.match_mode == "exclusive" and ev.type in _MAJOR_EVENT_TYPES:
+            # EXCLUSIVE's one addition over Strict (third match_mode, spec
+            # 2026-07-28-multi-step-segments): a star or Bowser-key grab that
+            # isn't this def's own end trigger (already checked at the top of
+            # this chain) means the attempt wasn't exclusively this segment —
+            # cancel silently, no row, same as every other abandon above.
+            # Gated on match_mode so a plain STRICT def is untouched: today it
+            # falls through this whole chain on a star/key grab and stays
+            # armed (no branch here matches ev.type in _MAJOR_EVENT_TYPES) —
+            # see this module's `_feed_waypoint`, which already cancels a
+            # WAYPOINT-bearing def on the same star/key grab; a plain def had
+            # no way to express that until this branch.
+            # `level_changed` real-edge crossings are deliberately NOT
+            # included here (unlike `_is_major_action`, which folds them in
+            # for the waypoint matcher): the elif below already disarms an
+            # off-route level crossing for every mode, including this one,
+            # gated on `not starts` so a refire of this def's OWN start
+            # trigger keeps re-arming instead of cancelling. Reusing
+            # `_is_major_action` here, unconditional on `starts`, would take
+            # that refire exemption away from exclusive-mode defs only —
+            # nothing about "exclusive" needs a level crossing to behave any
+            # differently than Strict already does.
             self._disarm(d, ev, notices)
         elif ev.type in ("level_changed", "session_started") \
                 and not starts:
