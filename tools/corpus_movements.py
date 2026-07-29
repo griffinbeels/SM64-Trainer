@@ -37,8 +37,7 @@ MOVEMENTS = [
     movement("seg:pss->bitdw", "PSS → BitDW", exit_level(27), enter_level(17)),
     movement("seg:pss->bob", "PSS → BoB", exit_level(27), enter_level(9)),
     movement("seg:ccm->bitdw", "CCM → BitDW", exit_level(5), enter_level(17)),
-    movement("seg:ccm->bbh", "CCM → BBH", exit_level(5), enter_level(4),
-             via=[enter_level(26)]),
+    movement("seg:ccm->bbh", "CCM → BBH", exit_level(5), enter_level(4)),
     # --- out of the Bowser 1 arena (its exit lands in the lobby) ----------
     movement("seg:bowser1->bob", "Bowser 1 → BoB",
              exit_level(30), enter_level(9)),
