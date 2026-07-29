@@ -145,18 +145,31 @@ def _free_port() -> int:
 
 @contextlib.contextmanager
 def serve_ui(db_path: Path | None = None, timeout: float = 30,
-              seed: bool = True):
+              seed: bool = True, from_dev_db: bool = False):
     """Yield the base URL of an offline instance; stop it on the way out.
 
-    `db_path=None` means "a throwaway snapshot of the dev db if there is one,
-    otherwise an empty database" -- the sweep wants realistic content, and a
-    fresh clone must still work.
+    DETERMINISTIC BY DEFAULT: an empty database plus `seed_practice`, so two
+    runs a week apart measure the same page.
+
+    It used to snapshot the dev database, for realism, and that realism cost
+    more than it bought: the content changes every time the user plays, so the
+    defect set drifted underneath the gate. Two rows appeared in one checkout
+    that a worktree run minutes earlier had not produced -- not a regression,
+    just different data. A gate whose expected set moves on its own trains you
+    to ignore it, and `known_defects` rows keyed on viewport + selector cannot
+    survive that.
+
+    `from_dev_db=True` still snapshots, for exploratory work where you want
+    whatever is really in there. Never for a gate.
+
+    A fresh clone has no dev database at all, so the default also happens to be
+    the only mode that works everywhere.
     """
     scratch = None
     if db_path is None:
         scratch = tempfile.TemporaryDirectory(prefix="sm64-fixture-")
         db_path = Path(scratch.name) / "fixture.db"
-        if DEV_DB.exists():
+        if from_dev_db and DEV_DB.exists():
             snapshot_db(DEV_DB, db_path)
 
     database = Database(db_path)
