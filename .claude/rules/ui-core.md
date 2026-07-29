@@ -323,6 +323,26 @@ width in its band, because at the time the fixture could only render the
 card's "Nothing to practice here" state. Re-measure after any change to what a
 fixed-height card can contain: `uv run python tools/measure_objective_card.py`.
 
+**The supported minimum width is 850px** (user, 2026-07-29; height is
+unconstrained). One number, in two places that a test compares:
+`desktop/window.py::MIN_WINDOW_WIDTH` — which drives the window's `min_size`,
+its default geometry AND a clamp on restored geometry, because `min_size`
+constrains dragging but not the size a window opens at — and
+`uilab_project.py::min_viewport_width`, which drops narrower widths from the
+matrix. A floor the app does not enforce would not narrow the supported range,
+it would hide defects inside it. What it costs, so nobody rediscovers it: the
+WCAG 320px reflow probe no longer runs, and the mobile shell under `@media
+(max-width: 760px)` is no longer measured while still shipping.
+
+**Take a contact sheet WHILE implementing, not after** — `uv run python
+tools/contact_sheet.py .objective-card` renders one surface at 1500/1200/900/850
+into a single image. Assertions answer "is something broken"; only a picture
+answers "is this the thing you meant". Both of the expensive failures here were
+obvious on sight and invisible to every probe: a fixture drawing ONE rank banner
+where the real card draws two, and two washes overlapping by 15px. "You could
+probably solve a lot of your bugs by simply taking screenshots and going 'oh…
+there's only one rank standard' while you're thinking" (2026-07-29).
+
 **What none of it catches:** anything that measures fine and looks wrong — bad
 hierarchy, ugly wrapping, a control that is reachable but awkward. Assertions
 cannot reach that; the contact sheet is for a human eye, and it is a review
