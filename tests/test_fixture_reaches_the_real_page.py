@@ -206,6 +206,32 @@ def test_the_matching_control_is_on_the_open_definition(page):
     assert count(page, ".builder-matchmode select") == 1
 
 
+def test_the_matching_control_shows_the_definition_s_STORED_mode(page):
+    """Presence is not correctness, and this is the link no other test covers.
+
+    Every other guard on this control is a source scan; the one above counts
+    the element. The mutation that passes all of them: drop `match_mode` from
+    `db.segment_defs()`'s row dict. `d.match_mode` becomes undefined, the
+    `!matchModeInfo && d.match_mode` fallback is falsy, and EVERY strict
+    definition silently displays "Loose" — the exact class of bug this
+    control was added to end. The editor fixture's definitions are seeded
+    `"match_mode": "strict"`, so reading the value closes it.
+    (Delta review, finding 7.)
+    """
+    reach(page, "segments-editor")
+    # `return`, not a bare expression: evaluate() wraps its argument as a
+    # function BODY, so a bare expression yields None — which reads as "the
+    # control is missing" rather than "the probe is broken". Exactly the trap
+    # `count()` below documents, walked into anyway on the first attempt.
+    value = page.evaluate(
+        "return document.querySelector('.builder-matchmode select').value")
+    assert value == "strict", (
+        f"the Matching control reads {value!r} for a definition stored as "
+        "'strict'. If this is 'loose', the stored mode is not reaching the "
+        "editor — check that db.segment_defs() still carries match_mode and "
+        "that segments.js still seeds the select from `initial`.")
+
+
 def test_the_lint_panel_has_a_real_finding(page):
     """A definition with NO lint finding renders no `.lint-panel` at all
     (`${lintFindings.length > 0 && html...}` in segments.js) -- so opening a
@@ -276,6 +302,14 @@ def test_the_recorder_review_step_has_run_its_backtest(page):
     reach(page, "recorder-review")
     assert count(page, ".record-review:has-text('Working it out')") == 0
     assert count(page, ".record-review:has-text('Testing against your history')") == 0
+    # Absence of a placeholder is not presence of content. `segmenttimeline.js`
+    # renders "Working it out…" only while `!synth && !synthErr` — a FAILED
+    # synthesize clears the placeholder and renders `.badx` instead, so both
+    # this test and the dense-review-step one above pass green on an error
+    # state, measuring the layout of an error box. (Delta review, finding 6.)
+    assert count(page, ".record-review .badx") == 0, (
+        "the review step rendered an error, not a synthesized definition — "
+        "the placeholder assertions above cannot tell those apart")
 
 
 def test_the_page_story_returns_to_practice_after_the_segments_tab(page):
