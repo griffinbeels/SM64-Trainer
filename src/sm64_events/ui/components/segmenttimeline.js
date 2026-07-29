@@ -40,6 +40,13 @@ function recordingSummary(report) {
   if (report.unclosed.length > 0)
     return `It started ${report.arms} time${report.arms === 1 ? "" : "s"} `
       + "before, and is still running as of your most recent history.";
+  // "Never finished" is accurate here ONLY because runBacktest() below
+  // always sends replaces: null (recording only ever CREATES) -- with a
+  // real `replaces`, arms>0/fires=0/unclosed=[] can also mean "it fired,
+  // and those attempts were manually wiped" (backtest.py replays journaled
+  // clears). If a later flow reuses this component to back an EDIT
+  // (split/merge is the shape that would), this wording needs the same
+  // hedge backtestSummary would need for that case.
   return `It started ${report.arms} time${report.arms === 1 ? "" : "s"} `
     + "before and never finished — your END may be wrong, or unreachable "
     + "from there.";
