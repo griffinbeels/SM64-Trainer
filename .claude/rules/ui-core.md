@@ -227,9 +227,26 @@ below it**, so the pane a card lives in is **not monotonic in window width** —
 a 1181px window gives a card a 947px pane, a 1180px window gives it 1076px. No
 viewport threshold can express "this card is too narrow"; every one of them is
 wrong on one side of that jump. The insight was written down on 2026-07-25 and
-applied to two rules; **145 component-internal rules were still viewport-keyed
-on 2026-07-28**, and the Active Target card clipped its own "Ready" row at
-900×1180 as the direct result.
+applied to two rules; 145 component-internal rules were still viewport-keyed
+three days later, and the Active Target card clipped its own "Ready" row at
+900×1180 as the direct result. **All 145 were converted on 2026-07-28 and
+`LEGACY_VIEWPORT_RULES` is empty** — a new one is now a red build with no
+precedent to point at.
+
+Two placement rules the conversion paid for, both of which produced a fix that
+read as correct and did nothing:
+
+1. **A converted block goes AFTER the rules it overrides**, not where its old
+   `@media` block sat. Relocating changes cascade position, and the Compare
+   rules landed 2,200 lines above `.compare-transport .primary-transport` —
+   identical specificity (0,2,0), later wins, so the base rule kept its 92px
+   min-width and the sweep reported the identical overlap through the fix.
+   The converted blocks are therefore one section at the END of the stylesheet,
+   ordered wide→narrow.
+2. **A shell element cannot be gated on a container it is not inside.**
+   `.context-bar` lives in the header, outside `.view-pane`, so when the
+   conversion swept its rule into `@container (max-width: 1060px)` the query
+   could never match and the overflow came back on all seven tabs at once.
 
 Beware the translation trap: `@media (max-width: 760px)` does **not** become
 `@container (max-width: 760px)`. Below 760px the sidebar is gone, so the pane
