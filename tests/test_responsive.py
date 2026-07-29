@@ -42,15 +42,30 @@ def _find_uilab() -> str | None:
     So resolve it by PATH, which no sync can undo: an installed copy if one is
     there, else a sibling checkout, else `UILAB_PATH`. A stranger with none of
     those gets a clean skip and the other 2,678 tests.
+
+    "Sibling" has to be computed from the REPO, not from this file, because
+    this project's own rule is that every branch is a git worktree under
+    `.claude/worktrees/<slug>` — two levels deeper, where the sibling of the
+    tree is `.claude/worktrees/uilab` and does not exist. Resolving from the
+    file alone made the gate skip in every worktree while passing in the
+    primary checkout: the same green-forever failure this function was written
+    to fix, one directory level along (measured 2026-07-28).
     """
     import importlib.util
 
     if importlib.util.find_spec("uilab") is not None:
         return None
+    here = Path(__file__).resolve()
+    repo = here.parents[1]
+    # Climb out of `.claude/worktrees/<slug>` to the checkout it belongs to.
+    for parent in repo.parents:
+        if parent.name == "worktrees" and parent.parent.name == ".claude":
+            repo = parent.parent.parent
+            break
     candidates = []
     if os.environ.get("UILAB_PATH"):
         candidates.append(Path(os.environ["UILAB_PATH"]))
-    candidates.append(Path(__file__).resolve().parents[2] / "uilab")
+    candidates.append(repo.parent / "uilab")
     for candidate in candidates:
         if (candidate / "uilab" / "__init__.py").exists():
             sys.path.insert(0, str(candidate))

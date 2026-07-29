@@ -53,12 +53,34 @@ NEVER_TRUNCATE = (".rank-banner-kicker", ".context-label", ".nav-item span",
 # reported the page clean while 23 real defects sat behind a populated card.
 # serve_ui() seeds a target for exactly that reason; these stories then scope
 # the probes to the cards that matter.
+# Collapsing every card is a LAYOUT the user asked to be held to, not a nicety:
+# "we should evaluate what the actual UI looks like when vertical (like 900x1180
+# when everything's collapsed)… we are ALWAYS testing our development process
+# against both the horizontal design and the collapsed design" (2026-07-28).
+# Nothing measured the collapsed page until these two stories existed.
+#
+# Both setups are IDEMPOTENT and order-independent: each clicks only the
+# toggles that are in the wrong state, judged by `aria-expanded`. A setup that
+# blindly clicked every toggle would invert the page when the previous story
+# left it collapsed, and the sweep visits stories in a loop without reloading.
+_EXPAND_ALL = """
+document.querySelectorAll('.card-collapse[aria-expanded="false"]')
+  .forEach((b) => b.click());
+"""
+_COLLAPSE_ALL = """
+document.querySelectorAll('.card-collapse[aria-expanded="true"]')
+  .forEach((b) => b.click());
+"""
+
 STORIES = [
-    Story(name="page", at=""),
+    Story(name="page", at="", setup=_EXPAND_ALL),
     Story(name="active-target", at=".objective-card",
           skip_if="!document.querySelector('.objective-card')"),
     Story(name="practice-log", at=".attempts-card",
           skip_if="!document.querySelector('.attempts-card')"),
+    # Last, so it does not leave the page folded for the stories above.
+    Story(name="page-collapsed", at="", setup=_COLLAPSE_ALL,
+          skip_if="!document.querySelector('.card-collapse')"),
 ]
 
 PROJECT = Project(
@@ -72,6 +94,11 @@ PROJECT = Project(
     stylesheet=REPO / "src" / "sm64_events" / "ui" / "index.html",
     shell_selectors=SHELL_SELECTORS,
     never_truncate=NEVER_TRUNCATE,
+    # A collapsed card hides its content BY DEFINITION -- that is the feature,
+    # not a defect. Without this the collapsed sweep reported 108 clipping
+    # "defects", every one of them correct behaviour, which is exactly the
+    # noise that gets a probe exemption-listed into uselessness.
+    may_clip=(".practice-card.is-collapsed",),
     stories=STORIES,
     # Sizes that earn a place regardless of what the stylesheet declares: the
     # two the user reported, the workspace's max width, and a short window.
