@@ -532,9 +532,6 @@
        eyebrow, and it clipped the "Ready" row by 21px at every width at or
        below 760 (live report + sweep, 2026-07-28).
 
-       Measured 2026-07-28 by raising this property until NO card on the page
-       overflows: 280px, flat across every width in the narrow range.
-
        "No card on the PAGE" is the load-bearing part. The Practice page
        renders an .objective-card per index item as well as the active-target
        one, and in a fixture with no target selected the FIRST one is empty --
@@ -542,8 +539,20 @@
        therefore answered 194px, twice, while the sweep kept failing at 277:
        the probe was measuring a different element than the defect. Any
        re-measure has to take the MAX over all of them.
-       Re-measure with: uv run python tools/responsive_sweep.py  */
-    --objective-card-narrow: 288px;
+
+       327px, measured 2026-07-29 across 320..790 -- a flat 39px more than the
+       288px this shipped with, at EVERY width in the band. Not a regression:
+       288 was itself measured, honestly, against a card the fixture could only
+       render as "Nothing to practice here". Once the fixture could stand in a
+       stage and hold a target with a strategy and a PB (ui_fixture's `stage=`
+       and `target=`), the card grew the two rank banners, the strategy select
+       and the PB tag it always had in the real app -- and the constant
+       measured off the empty state was 39px short of holding them. Every
+       number in this block is only as good as the state the fixture reached;
+       re-measure after any change to what the card can contain.
+       Re-measure with:
+         uv run python tools/measure_objective_card.py  */
+    --objective-card-narrow: 327px;
     --radius: 9px;
   }
   * { box-sizing: border-box; }
@@ -974,11 +983,20 @@
      between two banners IS the DOM boundary between them, at every width and
      in the stacked layout, with nothing to keep in sync.
 
-     Bleeds match what the wrapper had: -8px top / -12px bottom on every
-     banner, and -16px on whichever OUTER edge a banner actually owns (a lone
-     banner is both first and last, so it keeps the full-width wash it always
-     had). A second banner ramps in over its first 8% so the seam reads as
-     shading rather than two flat colours abutting. An unranked banner has no
+     Bleeds: -8px top / -12px bottom, and -16px LEFT only. The left edge of
+     the rank slot really is the card's own edge, so that bleed lands in the
+     card's padding. The right edge never is -- `.rank-slot` is column ONE of
+     `.objective-metrics`, with the live state and the PB tag in columns two
+     and three -- so the matching `:last-child { right: -16px }` this rule
+     shipped with crossed the 12px grid gap and painted 4px onto the live
+     state, at EVERY width (measured 4x32px at 1920 and 1400). It read as
+     harmless only because the gradient is `transparent 88%` and had faded out
+     by the time it got there; the same rule with a colour still in it is what
+     produced the reported overlap once the banners stacked. Deleted 2026-07-29
+     rather than re-tuned: an edge a box does not own has no correct bleed.
+
+     A second banner ramps in over its first 8% so the seam reads as shading
+     rather than two flat colours abutting. An unranked banner has no
      `--climb-color` and paints nothing, which is what it did before. */
   .rank-banner::before {
     content: ""; position: absolute; z-index: -1; pointer-events: none;
@@ -993,7 +1011,6 @@
       transparent 90%);
   }
   .rank-banner:first-child::before { left: -16px; border-radius: 0 0 0 8px; }
-  .rank-banner:last-child::before { right: -16px; border-radius: 0 0 8px 0; }
   .rank-banner-empty::before { background-image: none; }
   .rank-banner {
     min-width: 0; flex: 1 1 0; display: grid; gap: .34rem; align-content: center;
@@ -3271,30 +3288,33 @@
   }
   @container (max-width: 1100px) {
     .objective-card { height: 190px; min-height: 190px; overflow: hidden; }
-    .rank-slot { flex-direction: column; align-items: stretch; gap: .3rem; }
     .objective-strategy-fastest { display: none; }
-    /* Stacked here, so each banner's wash is full width and the outer
-       bleeds swap axis with them. No split to swap any more -- each
-       banner paints its own box whichever way they are laid out. */
-    /* Bleed LEFT only once the banners are stacked.
+    /* Stacked: the two washes must not touch, let alone overlap.
        ------------------------------------------------------------------
-       Side by side, a banner owns one outer edge of the card and the -16px
-       bleed carries its wash cleanly into the card's padding. Stacked, the
-       rank slot is only the FIRST COLUMN of `.objective-metrics` — the live
-       state and the PB tag sit to its right — so a right-hand bleed runs the
-       coloured band 16px past the slot and across the divider into them.
-       Measured at three widths: slot ends 972, wash reached 988, the live
-       state's divider starts at 984. That 4px is the "rank standards are
-       overlapping" the user reported and kept reporting, and no probe here
-       could see it: `::before` is a pseudo-element, absent from the DOM, so
-       every geometry sweep read the card as clean (2026-07-28).
-       The left bleed stays: that edge really is the card's. */
-    .rank-banner::before { left: -16px; right: 0; border-radius: 0; }
-    /* `:last-child` re-applies the right bleed at higher specificity (0,2,0
-       against 0,1,0), so the rule above only reached the FIRST banner and the
-       second kept crossing the divider — half a fix, which measured as an
-       improvement and still looked wrong. */
-    .rank-banner:last-child::before { right: 0; }
+       Side by side, the -8px/-12px vertical bleeds carry each wash into the
+       metrics row's own padding, above and below a single band. Stacked, they
+       point at EACH OTHER: 20px of bleed across a 4.8px gap, so the top
+       banner's wash ran 7.2px into the bottom banner's box and the bottom
+       one's ran 3.2px back into the top -- 15.2px of overlap, identical at
+       1100, 900, 760 and 420. The second banner paints last, so it covered the
+       first one's lower edge and the two colours met with no seam. That is
+       the "rank standards are still overlapping ... there needs to be some
+       vertical margin between the bottom of the green rect and the top of the
+       white rect" of 2026-07-29, and it is the THIRD report of it.
+
+       So the inner edges get no bleed at all and the flex gap becomes the
+       margin -- visible, and the same distance whichever banner is taller.
+       The outer edges keep theirs: those really are the row's own padding.
+       A lone banner is both :first-child and :last-child, so it is unchanged.
+
+       Caught by uilab probe class 5 (decoration collisions), added the same
+       day. Classes 1-4 all walk the DOM, and a pseudo-element is not in it --
+       which is why three sweeps in a row called this page clean while the
+       user was looking straight at the defect. */
+    .rank-slot { flex-direction: column; align-items: stretch; gap: .5rem; }
+    .rank-banner::before { left: -16px; top: 0; bottom: 0; border-radius: 0; }
+    .rank-banner:first-child::before { top: -8px; }
+    .rank-banner:last-child::before { bottom: -12px; }
   }
 
   /* Objective card, narrow pane.
@@ -3338,7 +3358,9 @@
     }
     /* Two side-by-side banners have no room to breathe in this narrow
        column (shared with the pbtag column) -- stack them instead. */
-    .rank-slot { min-height: 45px; flex-direction: column; align-items: stretch; gap: .35rem; }
+    /* Same gap as the wider stacked block above -- the separation between two
+       washes should not shrink just because the pane got narrower. */
+    .rank-slot { min-height: 45px; flex-direction: column; align-items: stretch; gap: .5rem; }
     /* The strategy header reverts to 2 columns here (above); the
        fastest-strategy hint would otherwise drop to its own row (a 3rd
        grid child with only 2 explicit columns) rather than sit inline, so

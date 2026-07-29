@@ -27,61 +27,12 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
-def _find_uilab() -> str | None:
-    """Make uilab importable, or return why it is not.
+# The resolver lives in `tools/find_uilab.py` — `tools/measure_objective_card.py`
+# needs the identical logic, and two copies of "where is uilab" would drift into
+# one of them skipping while the other runs.
+from find_uilab import find_uilab  # noqa: E402
 
-    An editable install alone is NOT enough, and that is the whole reason this
-    function exists. uilab is not in this project's lockfile — it cannot be,
-    since it is installed from a local checkout — so `uv sync`, which `uv run`
-    performs implicitly, PRUNES it. Measured 2026-07-28: `import uilab`
-    succeeded, then a later `uv run pytest` removed the package and the layout
-    gate silently became a skip. A gate that disappears when a package manager
-    tidies up is exactly the green-forever failure the rest of this file is
-    written to avoid.
-
-    So resolve it by PATH, which no sync can undo: an installed copy if one is
-    there, else a sibling checkout, else `UILAB_PATH`. A stranger with none of
-    those gets a clean skip and the other 2,678 tests.
-
-    "Sibling" has to be computed from the REPO, not from this file, because
-    this project's own rule is that every branch is a git worktree under
-    `.claude/worktrees/<slug>` — two levels deeper, where the sibling of the
-    tree is `.claude/worktrees/uilab` and does not exist. Resolving from the
-    file alone made the gate skip in every worktree while passing in the
-    primary checkout: the same green-forever failure this function was written
-    to fix, one directory level along (measured 2026-07-28).
-    """
-    import importlib.util
-
-    if importlib.util.find_spec("uilab") is not None:
-        return None
-    here = Path(__file__).resolve()
-    repo = here.parents[1]
-    # Climb out of `.claude/worktrees/<slug>` to the checkout it belongs to.
-    for parent in repo.parents:
-        if parent.name == "worktrees" and parent.parent.name == ".claude":
-            repo = parent.parent.parent
-            break
-    candidates = []
-    if os.environ.get("UILAB_PATH"):
-        candidates.append(Path(os.environ["UILAB_PATH"]))
-    candidates.append(repo.parent / "uilab")
-    for candidate in candidates:
-        if (candidate / "uilab" / "__init__.py").exists():
-            sys.path.insert(0, str(candidate))
-            return None
-    return (
-        "uilab not found. It is an optional dev module shared across this "
-        "machine's projects (https://github.com/griffinbeels/uilab); a fresh "
-        "clone will not have it, and everything except the rendered layout "
-        "gates runs without it. To enable them, clone it beside this repo (or "
-        "set UILAB_PATH) and install its browser:\n"
-        "    git clone https://github.com/griffinbeels/uilab\n"
-        "    uv run python -m playwright install chromium\n"
-        f"looked in: {', '.join(str(c) for c in candidates)}")
-
-
-_MISSING = _find_uilab()
+_MISSING = find_uilab()
 if _MISSING:
     pytest.skip(_MISSING, allow_module_level=True)
 
