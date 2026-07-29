@@ -371,6 +371,46 @@ class TrackerService:
         return self.db.get_state("origin_overrides", {}) \
             if self.db is not None else {}
 
+    def _hundred_coin_redirect(self, course_id: int, star_id: int) -> int | None:
+        """The segment that practices star (course_id, 100 Coins) end to end,
+        or None when there isn't one (user ruling 2026-07-28, spec
+        2026-07-28-multi-step-segments): "For each of the 100 coins stars, it
+        should assume that we will approach it like that -- that is, we got
+        the 100 coins star AND we get some other star... Nobody times just
+        the 100 star grab, it's always with something else." request_target
+        below redirects the pick here instead of committing a plain star
+        target for star_id 6.
+
+        Deliberately NOT a hand-written course->segment table (tools/
+        corpus_movements.py::HUNDRED_COIN_EXITS is exactly that table, but it
+        lives in the corpus authoring tool, not here) and NOT a seed_key
+        decode either: SegmentDef (this service's loaded shape) carries no
+        seed_key at all -- _load_segment_defs only pulls the dataclass's own
+        fields, so seed_key/category exist solely on the raw db row. The only
+        structural fact available on a SegmentDef is its own start_triggers,
+        and for exactly this family (mechanic() in tools/corpus_vocab.py)
+        that is a single star_grabbed(course, 6) clause -- so this asks "what
+        definition actually starts on THIS course's 100-coin grab" rather
+        than reverse-engineering a course abbreviation out of a string. A
+        def a user has hand-edited keeps matching by what it now does, not by
+        its name, and a course with none (deleted, or never seeded) simply
+        returns None so the caller can fall back to the plain star.
+
+        Disabled defs are excluded on purpose, unlike an explicit segment
+        pick (which api.py's own docstring says may target a disabled def):
+        this redirect is a CONVENIENCE standing in for a star click, and the
+        matching engine never arms a disabled def at all (segments.py's
+        `_defs = [d for d in defs if d.enabled]`) -- redirecting into one
+        would pin a card that can never record an attempt. Falling back to
+        the plain star keeps the click meaningful.
+        """
+        return next((d.id for d in self._segment_defs
+                     if d.enabled and len(d.start_triggers) == 1
+                     and d.start_triggers[0].get("type") == "star_grabbed"
+                     and d.start_triggers[0].get("course") == course_id
+                     and d.start_triggers[0].get("star") == star_id),
+                    None)
+
     async def request_target(self, kind: str, course_id: int | None = None,
                              star_id: int | None = None,
                              segment_id: int | None = None,
@@ -384,8 +424,19 @@ class TrackerService:
         what is ALREADY the target always succeeds: only its strategy can
         differ, and refusing a strategy edit because the player has since
         walked off would be a second bug wearing the first one's clothes.
+
+        A star pick of (course, 6) -- the 100-coin star -- is redirected to
+        that course's 100-coin-exit SEGMENT before anything else runs (see
+        `_hundred_coin_redirect`), so every caller (the quick-select banner,
+        the target picker, a route candidate) inherits the swap for free:
+        the "already the target"/practicability/commit logic below all run
+        against the SEGMENT, exactly as if the caller had picked it directly.
         """
         self._require_db()
+        if kind == "star" and course_id is not None and star_id == 6:
+            redirect_id = self._hundred_coin_redirect(course_id, star_id)
+            if redirect_id is not None:
+                kind, segment_id = "segment", redirect_id
         if kind == "segment":
             if segment_id is None:
                 raise ValueError("segment target needs segment_id")

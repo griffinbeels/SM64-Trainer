@@ -421,6 +421,69 @@ def test_set_target_registers_strategy(tmp_path):
     assert svc.strat_by_star[(2, 4)] == "owlless"
 
 
+def _create_hundred_coin_segment(svc, course_id, other_star=0, enabled=True):
+    """A minimal stand-in for one of the seeded HUNDRED_COIN_EXITS rows
+    (tools/corpus_movements.py) -- same shape (a single star_grabbed(course,
+    6) start clause) without needing the whole bundled corpus reconciled."""
+    return asyncio.run(svc.create_segment({
+        "name": f"100c {course_id}",
+        "start_triggers": [{"type": "star_grabbed", "course": course_id, "star": 6}],
+        "end_triggers": [{"type": "star_grabbed", "course": course_id,
+                          "star": other_star}],
+        "enabled": enabled}))
+
+
+def test_100_coin_star_pick_redirects_to_its_segment(tmp_path):
+    """User ruling 2026-07-28: '...that is, we got the 100 coins star AND we
+    get some other star... Nobody times just the 100 star grab, it's always
+    with something else.' A star pick of (course, 6) must commit the
+    course's 100-coin-exit SEGMENT as the target, not the plain star."""
+    db, svc = make(tmp_path)
+    sid = _create_hundred_coin_segment(svc, course_id=2)
+    asyncio.run(svc.request_target("star", course_id=2, star_id=6))
+    assert svc.target == ("segment", sid)
+
+
+def test_numbered_star_picks_are_never_redirected(tmp_path):
+    """Only star_id 6 (100 Coins) redirects -- the other six stars in the
+    same course must commit as plain stars even though a matching 100-coin
+    segment exists for that course."""
+    db, svc = make(tmp_path)
+    _create_hundred_coin_segment(svc, course_id=2)
+    asyncio.run(svc.request_target("star", course_id=2, star_id=0))
+    assert svc.target == ("star", 2, 0)
+
+
+def test_100_coin_star_pick_falls_back_to_plain_star_without_a_segment(tmp_path):
+    """Degrade honestly: a course with no matching segment (never seeded, or
+    user-deleted) must still let the plain 100-coin star be practiced rather
+    than erroring or silently doing nothing."""
+    db, svc = make(tmp_path)
+    asyncio.run(svc.request_target("star", course_id=2, star_id=6))
+    assert svc.target == ("star", 2, 6)
+
+
+def test_100_coin_star_pick_ignores_a_disabled_segment(tmp_path):
+    """A disabled def never arms (segments.py's own `_defs = [d for d in defs
+    if d.enabled]`), so redirecting into one would pin a card that can never
+    record an attempt -- fall back to the plain star instead."""
+    db, svc = make(tmp_path)
+    _create_hundred_coin_segment(svc, course_id=2, enabled=False)
+    asyncio.run(svc.request_target("star", course_id=2, star_id=6))
+    assert svc.target == ("star", 2, 6)
+
+
+def test_100_coin_star_pick_redirect_carries_its_strategy(tmp_path):
+    """A strategy passed alongside the star pick must land on the SEGMENT
+    the pick redirected to, not be silently dropped."""
+    db, svc = make(tmp_path)
+    sid = _create_hundred_coin_segment(svc, course_id=2)
+    asyncio.run(svc.request_target("star", course_id=2, star_id=6,
+                                   strat_tag="Coin Route A"))
+    assert svc.target == ("segment", sid)
+    assert svc.strat_by_segment[sid] == "Coin Route A"
+
+
 def test_death_event_flows_to_death_attempt(tmp_path):
     db, svc = make(tmp_path)
     asyncio.run(svc.publish(ev("practice_reset", 1000,

@@ -151,6 +151,20 @@ def test_a_pick_from_the_course_you_are_in_commits(tmp_path):
     assert svc.target == ("star", COURSE_CCM, 5)
 
 
+def test_the_100_coin_star_redirects_to_its_seeded_segment(tmp_path):
+    """Against the REAL bundled corpus, not a hand-built stand-in: picking
+    the 100-coin star as a STAR must commit the course's seeded
+    100-coin-exit SEGMENT (tracking/service.py::_hundred_coin_redirect,
+    user ruling 2026-07-28) -- and the practicability gate reads it exactly
+    like any other segment pick from this course (both resolve through
+    star_origin(course, ...), so standing in WF must be sufficient)."""
+    db, svc = make(tmp_path)
+    wf_100c = seed_id(db, "WF — 100 Coins → Exit")
+    enter(svc, "stars", COURSE_WF, LEVEL_WF)
+    asyncio.run(svc.request_target("star", course_id=COURSE_WF, star_id=6))
+    assert svc.target == ("segment", wf_100c)
+
+
 def test_a_movement_is_settable_from_the_course_it_starts_in(tmp_path):
     """The half that would be lost if the rule used the old reader: with
     `start_levels` answering nothing for WF -> SSL, "only what's here" would
