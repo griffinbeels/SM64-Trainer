@@ -69,8 +69,30 @@ def snapshot_db(source: Path, destination: Path) -> Path:
     return destination
 
 
-def seed_practice(service, course_id: int = 2, star_id: int = 0,
-                  level: int = 5, attempts: bool = True) -> None:
+# The star the fixture practises, chosen for a reason that is very easy to lose
+# in a default argument. `star:2:4` has FIVE strategies in the bundled
+# standards, so whichever one is active is not the entity's best ladder and
+# BOTH rank banners render (tracking/views.py::ranks_share_ladder).
+#
+# Until 2026-07-29 this was `star:2:0`, which has exactly one strategy. One
+# strategy means the strategy ladder IS the star's best, the two measures are
+# one measure, and the card draws a SINGLE banner labelled "Strategy · Star".
+# So every sweep ever run measured a one-banner card -- and the entire class of
+# "the two banners crowd each other" defects was unreachable by the gate. The
+# user reported the stacked washes overlapping three times over two days; it
+# could only ever be measured by hand, against his own database.
+#
+# Whomp's Fortress, "Fall onto the Caged Island", TJ Owlless -- the same card
+# he sent a screenshot of.
+FIXTURE_COURSE = 2
+FIXTURE_LEVEL = 5
+FIXTURE_STAR = 4
+FIXTURE_STRAT = "TJ Owlless"
+
+
+def seed_practice(service, course_id: int = FIXTURE_COURSE,
+                  star_id: int = FIXTURE_STAR,
+                  level: int = FIXTURE_LEVEL, attempts: bool = True) -> None:
     """Give the fixture an ACTIVE TARGET and a few attempts.
 
     Without this the Practice page renders only its empty states -- the
@@ -115,8 +137,8 @@ def seed_practice(service, course_id: int = 2, star_id: int = 0,
     asyncio.run(go())
 
 
-def _seed_target(base: str, course_id: int = 2, star_id: int = 0,
-                 with_pb: bool = True) -> None:
+def _seed_target(base: str, course_id: int = FIXTURE_COURSE,
+                 star_id: int = FIXTURE_STAR, with_pb: bool = True) -> None:
     """Make the seeded star the ACTIVE target.
 
     Seeding attempts is not enough, and the difference is the whole page. With
@@ -158,11 +180,12 @@ def _seed_target(base: str, course_id: int = 2, star_id: int = 0,
     # and the banners are the part the user reports crowding. A fixture that
     # stops at "a target is set" measures a card with the interesting row
     # missing (2026-07-28).
-    # star:2:0 with strategy "Standard" is chosen because it HAS rank
-    # standards. Pick one that does not and both banners stay null, which is
-    # how a fixture ends up measuring a card with its most crowded row absent.
+    # The strategy must exist in the bundled standards for THIS star, or both
+    # banners stay null and the fixture measures a card with its most crowded
+    # row absent. See FIXTURE_STRAT for why this particular one -- it is not
+    # the star's best ladder, which is what makes the SECOND banner render.
     post("/api/strat", {"course_id": course_id, "star_id": star_id,
-                        "strat_tag": "Standard"})
+                        "strat_tag": FIXTURE_STRAT})
     attempts = json.loads(urllib.request.urlopen(
         f"{base}/api/session?clock=igt&scope=session", timeout=10).read())
     rows = [a for star in attempts.get("stars", [])
@@ -243,10 +266,11 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
         # at construction time fails silently, which is the worst version.
         base = f"http://127.0.0.1:{port}"
         if seed:
-            course, level = stage or (2, 5)
+            course, level = stage or (FIXTURE_COURSE, FIXTURE_LEVEL)
             seed_practice(service, course_id=course, level=level,
+                          star_id=(target or (0, FIXTURE_STAR))[1],
                           attempts=target is None)
-            _seed_target(base, *(target or (2, 0)),
+            _seed_target(base, *(target or (FIXTURE_COURSE, FIXTURE_STAR)),
                          with_pb=target is None)
         yield base
     finally:

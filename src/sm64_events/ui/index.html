@@ -540,8 +540,13 @@
        the probe was measuring a different element than the defect. Any
        re-measure has to take the MAX over all of them.
 
-       327px, measured 2026-07-29 across 320..790 -- a flat 39px more than the
-       288px this shipped with, at EVERY width in the band. Not a regression:
+       347px, measured 2026-07-29 across 320..790. That is 288 + 39 + 20: the
+       39 was already owed (see below), and the 20 is the widened gap between
+       two STACKED rank washes, which is real space that has to exist. Note
+       the 190px band above 800px absorbed the same 20px without moving,
+       because the card there had exactly that much slack.
+
+       The 39: a flat shortfall at EVERY width in the band. Not a regression:
        288 was itself measured, honestly, against a card the fixture could only
        render as "Nothing to practice here". Once the fixture could stand in a
        stage and hold a target with a strategy and a PB (ui_fixture's `stage=`
@@ -552,7 +557,7 @@
        re-measure after any change to what the card can contain.
        Re-measure with:
          uv run python tools/measure_objective_card.py  */
-    --objective-card-narrow: 327px;
+    --objective-card-narrow: 347px;
     --radius: 9px;
   }
   * { box-sizing: border-box; }
@@ -3302,19 +3307,43 @@
        vertical margin between the bottom of the green rect and the top of the
        white rect" of 2026-07-29, and it is the THIRD report of it.
 
-       So the inner edges get no bleed at all and the flex gap becomes the
-       margin -- visible, and the same distance whichever banner is taller.
-       The outer edges keep theirs: those really are the row's own padding.
-       A lone banner is both :first-child and :last-child, so it is unchanged.
+       That bleed is doing TWO jobs, and only one of them is about the card's
+       edge. It separates the band from the edge, AND it is the band's own
+       internal padding -- the 8px above the medal row and the 12px below the
+       progress bar that give a band its shape side by side. Deleting it on the
+       inner edges took both, so the top band ended flush against its own
+       progress bar while the bottom one kept its room, and the two stopped
+       matching each other (live report 2026-07-29, with the wide layout beside
+       it as the reference: "breaks continuity with how the actual rank
+       standard display is designed").
+
+       So the bleeds are left EXACTLY as they are, and the gap is opened wide
+       enough to clear them: 8px top + 12px bottom + the 8px of margin that is
+       actually wanted between two bands = 28px. Every band is then the same
+       56px tall as it is side by side, with the medal row and the progress bar
+       in the same places inside it, and nothing about the decoration changes
+       between layouts. A lone banner is untouched.
+
+       Two rejected, both tried and measured:
+         - killing the inner bleeds (shipped for one round) -- the band then
+           ends flush against its own progress bar, which is the report above;
+         - converting the inner bleed to real padding -- correct in principle,
+           but `* { box-sizing: border-box }` means the banner's `min-height:
+           36px` ABSORBS that padding rather than growing by it, so the bands
+           came out 44px and 48px instead of 56px and did not even match each
+           other. It needs a matching min-height per case, which is two more
+           numbers to keep in sync with these two.
+       The gap costs 20px of card height either way -- that is the honest
+       price. Side by side the bleeds spend room the card already has above and
+       below the row; stacked, there is no room between two bands to spend, so
+       it has to be made.
 
        Caught by uilab probe class 5 (decoration collisions), added the same
        day. Classes 1-4 all walk the DOM, and a pseudo-element is not in it --
        which is why three sweeps in a row called this page clean while the
        user was looking straight at the defect. */
-    .rank-slot { flex-direction: column; align-items: stretch; gap: .5rem; }
-    .rank-banner::before { left: -16px; top: 0; bottom: 0; border-radius: 0; }
-    .rank-banner:first-child::before { top: -8px; }
-    .rank-banner:last-child::before { bottom: -12px; }
+    .rank-slot { flex-direction: column; align-items: stretch; gap: 28px; }
+    .rank-banner::before { left: -16px; border-radius: 0; }
   }
 
   /* Objective card, narrow pane.
@@ -3358,9 +3387,11 @@
     }
     /* Two side-by-side banners have no room to breathe in this narrow
        column (shared with the pbtag column) -- stack them instead. */
-    /* Same gap as the wider stacked block above -- the separation between two
-       washes should not shrink just because the pane got narrower. */
-    .rank-slot { min-height: 45px; flex-direction: column; align-items: stretch; gap: .5rem; }
+    /* Same 28px as the wider stacked block above, and for the same reason --
+       it is 8 + 12 of bleed plus the 8px of margin that is wanted. Shrinking
+       it here would put the two washes back in contact at exactly the widths
+       where the card is most crowded. */
+    .rank-slot { min-height: 45px; flex-direction: column; align-items: stretch; gap: 28px; }
     /* The strategy header reverts to 2 columns here (above); the
        fastest-strategy hint would otherwise drop to its own row (a 3rd
        grid child with only 2 explicit columns) rather than sit inline, so

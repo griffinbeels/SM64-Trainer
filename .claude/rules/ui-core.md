@@ -290,6 +290,19 @@ loading state. Either one reports a clean page nobody is looking at — which is
 how 26 real defects stayed invisible while a feature built on top of them
 rendered zero times without a single error (2026-07-28).
 
+**Reaching the card is not the same as reaching its CONTENT, and that is one
+level deeper.** The seeded star must have MORE THAN ONE strategy in the bundled
+standards, or the strategy ladder is also the star's best ladder, the two ranks
+are one measure, and the card draws a **single** combined banner
+(`views.py::ranks_share_ladder`). The fixture seeded a one-strategy star until
+2026-07-29, so every sweep ever run measured a one-banner card and the whole
+class of "the two banners crowd each other" defects was *unreachable by the
+gate* — the user reported the stacked washes overlapping three times over two
+days and it could only be measured by hand against his own database. The
+constants and the reason are in `ui_fixture.py::FIXTURE_STAR`; the rule is
+general, so check it whenever a card's layout depends on how many of something
+it holds.
+
 **A defect can be entirely in PAINT, and four of the five probes walk the DOM.**
 A pseudo-element is not in the DOM, so nothing that queries the tree can see
 one. The rank banners' colour wash is a `::before`; it bled sideways onto the
