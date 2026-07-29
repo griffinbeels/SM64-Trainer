@@ -1170,20 +1170,7 @@
           "to": 15
         }
       ],
-      "waypoints": [
-        [
-          {
-            "type": "level_enter",
-            "to": 7
-          }
-        ],
-        [
-          {
-            "type": "level_exit",
-            "from": 7
-          }
-        ]
-      ],
+      "waypoints": [],
       "guards": [
         {
           "type": "in_active_route"
