@@ -46,7 +46,7 @@ MOVEMENTS = [
     movement("seg:bowser1->ccm", "Bowser 1 → CCM",
              exit_level(30), enter_level(5)),
     movement("seg:bowser1->ssl", "Bowser 1 → SSL",
-             exit_level(30), enter_level(8), via=[enter_area(BASEMENT)]),
+             exit_level(30), enter_level(8)),
     movement("seg:bowser1->ddd", "Bowser 1 → DDD (Crackslide)",
              exit_level(30), enter_level(23), via=[enter_area(BASEMENT)]),
     movement("seg:bowser1->bitfs", "Bowser 1 → BitFS (SBLJ / DDD Skip)",

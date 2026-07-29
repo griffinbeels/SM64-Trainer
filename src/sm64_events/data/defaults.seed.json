@@ -849,15 +849,7 @@
           "to": 8
         }
       ],
-      "waypoints": [
-        [
-          {
-            "type": "area_enter",
-            "level": 6,
-            "area": 3
-          }
-        ]
-      ],
+      "waypoints": [],
       "guards": [
         {
           "type": "in_active_route"
