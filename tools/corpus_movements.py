@@ -78,7 +78,7 @@ MOVEMENTS = [
     movement("seg:mips2->hmc", "MIPS (2nd) → HMC",
              grab_star(0, 4), enter_level(7)),
     movement("seg:mips2->vcutm", "MIPS (2nd) → VCUtM",
-             grab_star(0, 4), enter_level(18), via=[enter_level(16)]),
+             grab_star(0, 4), enter_level(18)),
     movement("seg:vcutm->ccm", "VCUtM → CCM",
              exit_level(18), enter_level(5), via=[enter_level(6)]),
     # Started on the star that opens the sub until 2026-07-27, on the premise
