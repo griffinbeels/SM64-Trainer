@@ -296,32 +296,81 @@ def _http(e: Exception) -> HTTPException:
     return HTTPException(503, str(e))  # RuntimeError: degraded mode
 
 
-# GET /api/segments/timeline's default "steps" view (the labelling-volume
-# decision -- tracking/eventlabel.py's module docstring works the raw-volume
-# arithmetic; this constant is the answer, corrected once against how the
-# volume trades off against actual usefulness). Weighed by counting what the
-# 65 SEEDED definitions actually use as their first start/end clause
-# (src/sm64_events/data/defaults.seed.json, 2026-07-28):
-#   starts: level_exit 52, level_enter 8, star_grabbed 3, spawned 1, area_enter 1
-#   ends:   level_enter 55, area_enter 4, warp_entered 3, key_grabbed 3
+# GET /api/segments/timeline's default "steps" view membership rule: a type
+# clears the bar if it is ever a SEEDED segment definition's ONLY route in or
+# out -- the definition has no other trigger clause that could record it, so
+# excluding the type would make that definition unrecordable through the
+# default view. "Sole" is a PER-DEFINITION property, not a raw use-count: a
+# type that backs several definitions but always as one of several
+# OR-alternative start/end clauses is not sole for any of them, because the
+# alternative already covers it.
 #
-# level_changed/star_collected/warp_entered/key_grabbed cover 63/65 starts and
-# 61/65 ends (~95%) on their own -- the "a step I just performed" set,
-# eventlabel.py's ~10%-of-volume group. `area_changed` is NOT grouped with
-# them by volume (1,678 of 18,656 events) but IS included here, because
-# hiding it would make a small, real, commonly-practiced class of movement
-# unrecordable through the default view: 4 definitions END on area_enter
-# (BoB/BBH/Bowser 2 -> Basement/Upstairs, SL -> Basement) and 1 STARTS on it
-# (BitS Entry) -- 5 uses, a usefulness-per-volume ratio far above the other
-# high-volume types. Contrast `spawned` (1 def-use, 1,164 events) and the
-# attempt_anchor pair practice_reset/state_loaded (1 def-use combined, 2,829+
-# events just for practice_reset) and `game_reset` (0 def-uses, 7 events):
-# for those four, volume and usefulness point the SAME way (rarely useful,
-# often noisy), so they stay out of the default and are reachable only via
-# `view=all`. `area_changed` is the one type where they point opposite ways.
+# Measured directly against all 65 definitions in src/sm64_events/data/
+# defaults.seed.json (2026-07-28; re-derived independently twice after an
+# earlier pass miscounted by reading only each definition's FIRST start/end
+# clause and missing OR-alternatives -- attempt_anchor is never first, so
+# that method undercounted it as 0/1 instead of the 7 real uses below):
+#
+#   trigger type     sole START for     sole END for
+#   area_enter       1 (BitS Entry)     4 (BoB/BBH/SL -> Basement,
+#                                           Bowser 2 -> Upstairs)
+#   attempt_anchor   0                  0  -- all 7 uses (LBLJ, the 3 pipe
+#                                           entries, Bowser 1/2/3) are the
+#                                           SECOND start clause behind a
+#                                           level_enter; every one of those
+#                                           definitions is already reachable
+#                                           by entering the level normally,
+#                                           so attempt_anchor is an F1-retry
+#                                           echo, never the only way in
+#   spawned          1 (Lakitu Skip)    0
+#
+# level_changed/star_collected/warp_entered/key_grabbed (the base four) cover
+# 63/65 starts and 61/65 ends (~95%) on their own and are never excluded
+# regardless of this table -- they are the foundation this rule sits on top
+# of, not a case it decides.
+#
+# area_changed clears the bar (5 sole uses) despite dominating raw volume
+# (1,678 of 18,656 real events, 2026-07-28) and is unconditionally included --
+# every area_changed row is a real castle-region crossing.
+#
+# spawned also clears the bar (Lakitu Skip's only start), but the raw type is
+# 1,164 events, almost all ordinary respawns after a death or reset that no
+# definition needs. Lakitu Skip's clause (`{"type": "spawned", "level": 16}`)
+# does not itself distinguish them, but every spawned event also carries a
+# `kind` the matcher doesn't check (detectors/spawn.py): "intro" (edge out of
+# the file-select cutscene) or "spawn" (an ordinary respawn-in). Measured
+# against the real journal (2026-07-28): of 1,164 spawned events, 28 are
+# kind="intro" and 1,136 are kind="spawn"; of the 27 kind="intro" spawns at
+# level 16 -- exactly what Lakitu Skip's clause matches -- ALL 27 are
+# kind="intro", never an ordinary respawn. So the default view includes a
+# spawned row only when kind == "intro" (`_is_default_timeline_row` below),
+# not the raw type -- narrower than the type-level criterion strictly asks
+# for, but it is what the criterion's own need actually is.
+#
+# attempt_anchor (practice_reset/state_loaded) and game_reset (0 sole uses
+# each) stay excluded, reachable only via `view=all`.
+#
+# Property this rule protects: no seeded definition in defaults.seed.json is
+# unrecordable from the default view. tests/test_api.py derives the
+# sole-route table above straight from the seed file (never hard-codes it)
+# and fails in EITHER direction: a future corpus edit that makes an excluded
+# type sole-route without this file being updated, or this file including a
+# type the corpus doesn't back.
 _TIMELINE_STEP_TYPES = frozenset(
     {"level_changed", "star_collected", "warp_entered", "key_grabbed",
      "area_changed"})
+
+
+def _is_default_timeline_row(row) -> bool:
+    """Default (`view=steps`) membership predicate -- see the comment above
+    _TIMELINE_STEP_TYPES for the sole-route criterion this encodes. Every
+    type in _TIMELINE_STEP_TYPES qualifies unconditionally; `spawned` only
+    qualifies when payload `kind == "intro"` (a fresh-file spawn) -- the
+    narrow subset Lakitu Skip's clause actually needs. An ordinary respawn
+    (`kind == "spawn"`) stays out even though the raw type clears the bar."""
+    if row.type in _TIMELINE_STEP_TYPES:
+        return True
+    return row.type == "spawned" and row.payload.get("kind") == "intro"
 
 
 def create_api_router(service) -> APIRouter:
@@ -423,21 +472,20 @@ def create_api_router(service) -> APIRouter:
         data.
 
         `view` picks which of eventlabel.LABELLABLE_TYPES's 9 types show:
-        "steps" (default, see `_TIMELINE_STEP_TYPES` above for the full
-        counted rationale) is level_changed/star_collected/warp_entered/
-        key_grabbed (~95% of what the 65 seeded definitions' start/end
-        clauses actually use) PLUS area_changed, kept in despite its raw
-        volume because 5 seeded definitions record their boundary on it
-        (4 castle-region endings, 1 start) and hiding it would make that
-        real class of movement unrecordable through the default view.
-        "all" adds the 4 that are real boundaries too but where volume and
-        usefulness point the SAME way -- rarely load-bearing AND high-volume
-        or placeless (practice_reset, spawned, state_loaded, game_reset) --
-        for the rarer segment that starts on one of THOSE triggers. 422 on
-        an unrecognised `view`, matching /api/session's own clock/scope
-        validation. `limit` caps at 500 rows (422 above it) and is applied
-        AFTER filtering, to the most recent rows in the selected view.
-        503 in degraded mode."""
+        "steps" (default, see `_TIMELINE_STEP_TYPES`/`_is_default_timeline_
+        row` above for the full sole-route rationale) is level_changed/
+        star_collected/warp_entered/key_grabbed (~95% of what the 65 seeded
+        definitions' start/end clauses actually use) PLUS area_changed (5
+        seeded definitions have no other route in/out) PLUS spawned rows
+        where kind == "intro" (Lakitu Skip's only start, narrowed to the
+        fresh-file-spawn subset it actually needs -- see the comment above
+        _TIMELINE_STEP_TYPES). "all" adds the rest -- practice_reset/
+        state_loaded (the attempt_anchor pair), spawned rows with kind ==
+        "spawn", and game_reset -- no seeded definition needs any of those as
+        its ONLY route in or out. 422 on an unrecognised `view`, matching
+        /api/session's own clock/scope validation. `limit` caps at 500 rows
+        (422 above it) and is applied AFTER filtering, to the most recent
+        rows in the selected view. 503 in degraded mode."""
         if view not in ("steps", "all"):
             raise HTTPException(422, "view must be steps or all")
         if service.db is None:
@@ -447,7 +495,7 @@ def create_api_router(service) -> APIRouter:
             label = label_event(row)
             if label is None:
                 continue
-            if view == "steps" and row.type not in _TIMELINE_STEP_TYPES:
+            if view == "steps" and not _is_default_timeline_row(row):
                 continue
             rows.append({"id": row.id, "frame": row.frame, "type": row.type,
                         "label": label, "wall_time_utc": row.wall_time_utc})

@@ -1,6 +1,8 @@
 from sm64_events.memory.addresses import COURSE_NAMES, LEVEL_NAMES
 from sm64_events.storage.db import EventRow
-from sm64_events.tracking.eventlabel import LABELLABLE_TYPES, label_event
+from sm64_events.tracking.eventlabel import (LABELLABLE_TYPES,
+                                             TRIGGER_JOURNAL_TYPES,
+                                             label_event)
 from sm64_events.tracking.segments import TRIGGERS
 
 W = "2026-06-11T12:00:00Z"
@@ -135,10 +137,11 @@ def test_every_labellable_type_produces_a_clean_sentence():
 
 def test_every_trigger_type_has_a_labellable_event_shape():
     """A trigger the timeline cannot produce is a segment the user cannot
-    record. Maps each TriggerType KEY (segments.py's matcher vocabulary:
-    level_enter/level_exit/area_enter/...) to the journal event TYPE(S) that
-    can actually fire it (read off each TriggerType's own match lambda in
-    TRIGGERS), then asserts every one of those journal types is labellable.
+    record. TRIGGER_JOURNAL_TYPES maps each TriggerType KEY (segments.py's
+    matcher vocabulary: level_enter/level_exit/area_enter/...) to the journal
+    event TYPE(S) that can actually fire it (read off each TriggerType's own
+    match lambda in TRIGGERS by hand); this test asserts every one of those
+    journal types is labellable.
 
     This is deliberately NOT the brief's literal sketch
     `set(LABELLABLE_TYPES) >= {t.key for t in TRIGGERS.values()}` -- trigger
@@ -147,22 +150,16 @@ def test_every_trigger_type_has_a_labellable_event_shape():
     string like "level_enter" or "reset_game", only on real event types like
     "level_changed" or "game_reset". Comparing them directly would demand
     LABELLABLE_TYPES literally contain trigger keys it does not and never
-    will. The mapping below is the correction, and the `set(...) ==
+    will. TRIGGER_JOURNAL_TYPES is the correction, and the `set(...) ==
     set(TRIGGERS)` line keeps IT complete: a new TriggerType with no entry
-    here fails this test immediately, same guarantee the brief's sketch
+    there fails this test immediately, same guarantee the brief's sketch
     wanted, checked against the real vocabulary instead of a mismatched one.
-    """
-    trigger_journal_types = {
-        "level_enter": {"level_changed"},
-        "level_exit": {"level_changed"},
-        "area_enter": {"area_changed"},
-        "warp_entered": {"warp_entered"},
-        "key_grabbed": {"key_grabbed"},
-        "star_grabbed": {"star_collected"},
-        "spawned": {"spawned"},
-        "attempt_anchor": {"practice_reset", "state_loaded"},
-        "reset_game": {"game_reset"},
-    }
-    assert set(trigger_journal_types) == set(TRIGGERS)
-    for trigger_key, journal_types in trigger_journal_types.items():
+
+    TRIGGER_JOURNAL_TYPES lives in eventlabel.py, not here, ONE DOOR shared
+    with test_api.py's default-view sole-route test — a second hand-written
+    copy of this exact mapping is how the task-11 revision's wrong
+    `attempt_anchor` def-use count first got in (hand-copied from a
+    docstring instead of re-derived against the corpus)."""
+    assert set(TRIGGER_JOURNAL_TYPES) == set(TRIGGERS)
+    for trigger_key, journal_types in TRIGGER_JOURNAL_TYPES.items():
         assert journal_types <= LABELLABLE_TYPES, trigger_key

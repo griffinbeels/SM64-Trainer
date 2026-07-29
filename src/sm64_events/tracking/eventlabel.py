@@ -200,6 +200,31 @@ _LABELERS: dict[str, Callable[[dict], str | None]] = {
 # building lambda introspection to close it.
 LABELLABLE_TYPES = frozenset(_LABELERS)
 
+# Maps each TriggerType KEY (segments.py's matcher vocabulary: level_enter/
+# level_exit/area_enter/...) to the journal event TYPE(S) that can actually
+# fire it — read off each TriggerType's own match lambda in TRIGGERS by hand
+# (see THE GUARD'S BLIND SPOT above: this is that hand-written literal).
+# Trigger KEYS and journal event TYPES are two different vocabularies (the
+# matcher vocabulary vs. the wire format); label_event never dispatches on a
+# string like "level_enter" or "reset_game", only on real event types like
+# "level_changed" or "game_reset". ONE DOOR — test_eventlabel.py's
+# completeness guard and test_api.py's default-view sole-route test both
+# read this same constant rather than each carrying their own copy (a second
+# hand-written copy is exactly how the task-11 revision's wrong `attempt_
+# anchor` count first got in: it was hand-copied from a docstring instead of
+# re-derived).
+TRIGGER_JOURNAL_TYPES: dict[str, frozenset[str]] = {
+    "level_enter": frozenset({"level_changed"}),
+    "level_exit": frozenset({"level_changed"}),
+    "area_enter": frozenset({"area_changed"}),
+    "warp_entered": frozenset({"warp_entered"}),
+    "key_grabbed": frozenset({"key_grabbed"}),
+    "star_grabbed": frozenset({"star_collected"}),
+    "spawned": frozenset({"spawned"}),
+    "attempt_anchor": frozenset({"practice_reset", "state_loaded"}),
+    "reset_game": frozenset({"game_reset"}),
+}
+
 
 def label_event(row) -> str | None:
     """row: an EventRow (storage/db.py) — .type and .payload are read; .id,

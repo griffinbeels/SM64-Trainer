@@ -1,16 +1,20 @@
 # tests/test_api.py
 import asyncio
 import inspect
+import json
 from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
 
 from sm64_events.core.events import Event
+from sm64_events.core.paths import bundled_defaults_seed
 from sm64_events.server.api import SegmentBody, SegmentPatch
 from sm64_events.server.app import create_app
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.server.poller import Poller
 from sm64_events.storage.db import Database
+from sm64_events.tracking.eventlabel import TRIGGER_JOURNAL_TYPES
+from sm64_events.tracking.segments import TRIGGERS
 from sm64_events.tracking.service import TrackerService
 
 T0 = datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
@@ -606,16 +610,19 @@ def test_timeline_default_view_hides_high_volume_bookkeeping_types(tmp_path):
 
 
 def test_timeline_default_view_includes_area_changed(tmp_path):
-    """CORRECTION (team-lead measurement against the real seed corpus,
-    src/sm64_events/data/defaults.seed.json): 4 of the 65 seeded definitions
-    END on area_enter (BoB/BBH/Bowser 2 -> Basement/Upstairs, SL -> Basement)
-    and 1 STARTS on it (BitS Entry) -- a small but real, commonly-practiced
-    class of movement, unlike `spawned`/the attempt_anchor pair/`game_reset`
-    (0-1 def-uses each), where volume and usefulness both point away from
-    the default view. Hiding area_changed the same way those four are hidden
-    would make that class unrecordable through the default flow. Default
-    `view=steps` must therefore include it despite its raw volume (1,678 of
-    18,656 events)."""
+    """Measurement against the real seed corpus (src/sm64_events/data/
+    defaults.seed.json): 4 of the 65 seeded definitions END on area_enter
+    (BoB/BBH/Bowser 2 -> Basement/Upstairs, SL -> Basement) and 1 STARTS on
+    it (BitS Entry) -- 5 definitions with NO OTHER route in/out, unlike
+    `spawned`'s raw type (1 sole use, but only its kind="intro" subset --
+    see test_timeline_default_view_includes_intro_spawn_but_not_ordinary_
+    respawn below), the attempt_anchor pair (0 sole uses -- always an
+    OR-alternative behind level_enter), and `game_reset` (0 sole uses).
+    Hiding area_changed the same way those are hidden would make that class
+    unrecordable through the default flow. Default `view=steps` must
+    therefore include it despite its raw volume (1,678 of 18,656 events).
+    See test_timeline_default_view_membership_matches_seed_corpus_sole_
+    route_types below for the general rule this is one case of."""
     client, service, db = make_client(tmp_path)
     with client:
         async def go():
@@ -634,6 +641,114 @@ def test_timeline_rejects_unknown_view(tmp_path):
     with client:
         assert client.get(
             "/api/segments/timeline?view=bogus").status_code == 422
+
+
+def test_timeline_default_view_includes_intro_spawn_but_not_ordinary_respawn(tmp_path):
+    """Lakitu Skip's only start trigger is `{"type": "spawned", "level": 16}`
+    (defaults.seed.json) -- sole-route for the raw `spawned` type, by the
+    same criterion that earns area_changed its spot. But 1,136 of 1,164 real
+    spawned events (2026-07-28) are ordinary respawns after a death or reset
+    that no definition needs -- the corpus need is narrower than the type.
+    detectors/spawn.py's payload `kind` distinguishes them ("intro" = edge
+    out of the file-select cutscene, "spawn" = an ordinary respawn-in), and
+    every kind="intro" spawn at level 16 (what Lakitu Skip's clause matches)
+    is measured to be a fresh-file start, never an ordinary respawn. Default
+    view therefore shows kind="intro" spawns only; `view=all` still reaches
+    both -- proving the filter is narrower than raw-type membership, not just
+    documenting it (see the comment above _TIMELINE_STEP_TYPES in api.py)."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        async def go():
+            await service.publish(Event(type="spawned", frame=10,
+                                        timestamp_utc=T0,
+                                        payload={"level": 16, "kind": "spawn"}))
+            await service.publish(Event(type="spawned", frame=20,
+                                        timestamp_utc=T0,
+                                        payload={"level": 16, "kind": "intro"}))
+        asyncio.run(go())
+        default_rows = client.get(
+            "/api/segments/timeline?limit=50").json()["rows"]
+        assert [row["label"] for row in default_rows] == \
+            ["Started the file in Castle Grounds"]
+        all_rows = client.get(
+            "/api/segments/timeline?limit=50&view=all").json()["rows"]
+        assert [row["label"] for row in all_rows] == \
+            ["Spawned into Castle Grounds", "Started the file in Castle Grounds"]
+
+
+def _sole_route_trigger_types(segments: list[dict]) -> tuple[frozenset, frozenset]:
+    """Every trigger-clause TYPE that is some seeded definition's ONLY start
+    (or end) route -- the definition has no OR-alternative clause that could
+    record it instead. "Sole" means start_triggers (or end_triggers) has
+    exactly one clause; a type that's always one of SEVERAL OR-alternatives
+    for every definition it appears in (attempt_anchor's shape: always
+    paired with a level_enter) is never sole, no matter how many definitions
+    use it. Pure, derived fresh from data/defaults.seed.json every run --
+    never a hard-coded list, which is exactly what went wrong in the
+    reviewed revision (a hand-copied "1 def-use" that was actually 7)."""
+    sole_start, sole_end = set(), set()
+    for seg in segments:
+        starts, ends = seg["start_triggers"], seg["end_triggers"]
+        if len(starts) == 1:
+            sole_start.add(starts[0]["type"])
+        if len(ends) == 1:
+            sole_end.add(ends[0]["type"])
+    return frozenset(sole_start), frozenset(sole_end)
+
+
+def test_timeline_default_view_membership_matches_seed_corpus_sole_route_types(tmp_path):
+    """The default view's four MARGINAL types -- area_changed (area_enter),
+    practice_reset/state_loaded (attempt_anchor), spawned, game_reset
+    (reset_game) -- are included IFF the seed corpus says the trigger type is
+    some definition's ONLY route in or out. The base four (level_changed/
+    star_collected/warp_entered/key_grabbed) are the endpoint's foundation
+    and are never in question here; this test only re-derives the marginal
+    ones, straight from data/defaults.seed.json via _sole_route_trigger_types
+    and TRIGGER_JOURNAL_TYPES (the same shared mapping test_eventlabel.py's
+    completeness guard uses -- ONE DOOR, not a third hand-written copy).
+
+    This fails in EITHER direction: if a future corpus edit makes an
+    excluded type (attempt_anchor, game_reset) sole-route for a new
+    definition and nobody promotes it into the default view, or if
+    _TIMELINE_STEP_TYPES/_is_default_timeline_row is changed to include one
+    of these four without the corpus backing it up -- exactly the defect
+    task-11-rev-review found: a hand-copied, wrong def-use count that made
+    the module comment's own justification incoherent."""
+    seed = json.loads(bundled_defaults_seed().read_bytes().decode("utf-8"))
+    sole_start, sole_end = _sole_route_trigger_types(seed["segments"])
+
+    # trigger key -> a representative PAYLOAD that (a) satisfies label_event
+    # (never labels None) and (b) for "spawned" specifically, lands in the
+    # kind="intro" subset -- the dedicated test above proves kind="spawn" is
+    # excluded even though the raw type clears the bar. The journal TYPE
+    # itself is NOT repeated here -- it comes from the shared
+    # TRIGGER_JOURNAL_TYPES (eventlabel.py), the same mapping test_
+    # eventlabel.py's completeness guard reads, so there is exactly one
+    # place in the whole test suite naming "attempt_anchor -> practice_reset/
+    # state_loaded" etc.
+    marginal_payloads = {
+        "area_enter": {"from": 1, "to": 3},
+        "attempt_anchor": {},
+        "spawned": {"level": 16, "kind": "intro"},
+        "reset_game": {},
+    }
+    assert set(marginal_payloads) <= set(TRIGGERS)  # no stale/renamed key
+
+    client, service, db = make_client(tmp_path)
+    with client:
+        for trigger_key, payload in marginal_payloads.items():
+            journal_type = sorted(TRIGGER_JOURNAL_TYPES[trigger_key])[0]
+            is_sole_route = trigger_key in sole_start or trigger_key in sole_end
+
+            async def go(jt=journal_type, p=payload):
+                await service.publish(Event(type=jt, frame=1,
+                                            timestamp_utc=T0, payload=p))
+            asyncio.run(go())
+
+            default_types = {row["type"] for row in client.get(
+                "/api/segments/timeline?limit=500").json()["rows"]}
+            assert (journal_type in default_types) == is_sole_route, \
+                trigger_key
 
 
 def test_post_invalid_segment_is_409(tmp_path):
