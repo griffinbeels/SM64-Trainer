@@ -19,6 +19,7 @@ from sm64_events.memory.addresses import (COURSE_BY_LEVEL,
                                           LEVEL_CASTLE_INSIDE,
                                           WORLD_EDGES_ONE_WAY,
                                           WORLD_EDGES_TWO_WAY)
+from sm64_events.tracking.lint import lint_definition
 from sm64_events.tracking.segments import (MatchContext, SegmentDef,
                                            SegmentEngine, validate_definition)
 
@@ -480,3 +481,31 @@ def test_reds_to_pipe_count_and_shape():
         assert row["end_triggers"][0]["type"] == "warp_entered"
         assert row["guards"] == []
         assert row["category"] == "Castle Movement"
+
+
+# --- lint gate (Task 15, tracking/lint.py) ----------------------------------
+
+def seeded_definitions() -> list:
+    """Every seeded segment as a real SegmentDef, id-stable within one call
+    (1-based index into SEGMENTS, matching the id scheme every other builder
+    in this file uses) -- the shape tracking/lint.py's lint_definition reads,
+    for the corpus-clean gate below."""
+    return [
+        SegmentDef(id=index, name=row["name"], enabled=row["enabled"],
+                   start_triggers=row["start_triggers"],
+                   end_triggers=row["end_triggers"],
+                   waypoints=row["waypoints"], guards=row["guards"],
+                   match_mode=row.get("match_mode", "strict"))
+        for index, row in enumerate(SEGMENTS, start=1)]
+
+
+def test_no_seeded_definition_trips_a_known_trap():
+    """These four traps (tracking/lint.py's module docstring carries each
+    one's live report) each cost a live report already. The corpus must
+    never regress into one -- error severity only: a warning
+    (start_looser_than_waypoint, duplicate) is advisory, not a broken def,
+    and this is a behavioral gate, not a style one."""
+    defs = seeded_definitions()
+    for d in defs:
+        errors = [w for w in lint_definition(d, defs) if w["severity"] == "error"]
+        assert errors == [], (d.name, errors)
