@@ -1,3 +1,4 @@
+import dataclasses
 import re
 from dataclasses import replace
 
@@ -11,7 +12,8 @@ from sm64_events.tracking.segments import (SEGMENT_ATTEMPT_OFFSET,
                                            clause_sentence,
                                            course_groups, level_groups,
                                            GUARDS, TRIGGERS, MatchContext,
-                                           SegmentDef, SegmentEngine,
+                                           merge_definitions, SegmentDef,
+                                           SegmentEngine, split_definition,
                                            origin_taxonomy, origin_view,
                                            start_origin, validate_definition,
                                            vocab)
@@ -2868,3 +2870,264 @@ def test_a_real_anchor_re_arms_the_loose_def_with_a_fresh_deadline():
     [a] = closed
     assert a.outcome == "reset"
     assert e._armed[20].deadline_frame == 4000 + segments_module.MIN_BUDGET_FRAMES
+
+
+# --- Task 17: split_definition / merge_definitions --------------------------
+# Two pure operations (spec 2026-07-28-multi-step-segments): "WF -> SSL"
+# expressible either as one definition or as "WF -> Basement" +
+# "Basement -> SSL", chained at the shared boundary. Both are
+# non-destructive -- neither mutates its inputs, and split_definition never
+# removes the original (definitions arm in PARALLEL, so the whole and its
+# halves can all record on the same play).
+
+def test_split_produces_two_chained_definitions():
+    wf_ssl = SegmentDef(
+        id=1, name="WF -> SSL", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 24}],
+        end_triggers=[{"type": "level_enter", "to": 8}],
+        waypoints=[[{"type": "area_enter", "level": 6, "area": 3}]],
+        guards=[], match_mode="loose")
+    first, second = split_definition(
+        wf_ssl, mid=[{"type": "area_enter", "level": 6, "area": 3}],
+        names=("WF -> Basement", "Basement -> SSL"))
+    assert first["name"] == "WF -> Basement"
+    assert second["name"] == "Basement -> SSL"
+    assert first["start_triggers"] == wf_ssl.start_triggers
+    assert first["end_triggers"] == [{"type": "area_enter", "level": 6, "area": 3}]
+    assert second["start_triggers"] == [{"type": "area_enter", "level": 6, "area": 3}]
+    assert second["end_triggers"] == wf_ssl.end_triggers
+    assert first["waypoints"] == [] and second["waypoints"] == []
+
+
+def test_split_does_not_touch_the_original():
+    # Non-destructive by design: definitions arm in parallel, so the whole and
+    # its halves can all be armed on one play and all record. Nothing is
+    # orphaned by an edit.
+    wf_ssl = SegmentDef(
+        id=1, name="WF -> SSL", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 24}],
+        end_triggers=[{"type": "level_enter", "to": 8}],
+        waypoints=[[{"type": "area_enter", "level": 6, "area": 3}]],
+        guards=[], match_mode="loose")
+    before = dataclasses.asdict(wf_ssl)
+    split_definition(wf_ssl, mid=[{"type": "area_enter", "level": 6, "area": 3}],
+                     names=("a", "b"))
+    assert dataclasses.asdict(wf_ssl) == before
+
+
+def test_a_split_half_carries_no_seed_key():
+    # A new definition derived from a seeded one is NOT that seeded row;
+    # inheriting seed_key would make reconcile overwrite it at next startup.
+    # (SegmentDef itself carries no seed_key field at all -- only the raw db
+    # row dict does -- so there is nothing to accidentally inherit; this
+    # pins the OUTPUT contract regardless.)
+    wf_ssl = SegmentDef(
+        id=1, name="WF -> SSL", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 24}],
+        end_triggers=[{"type": "level_enter", "to": 8}],
+        waypoints=[[{"type": "area_enter", "level": 6, "area": 3}]],
+        guards=[], match_mode="loose")
+    first, second = split_definition(
+        wf_ssl, mid=[{"type": "area_enter", "level": 6, "area": 3}],
+        names=("a", "b"))
+    assert first["seed_key"] is None and second["seed_key"] is None
+
+
+def test_split_inherits_guards_default_strat_match_mode_and_enabled():
+    # Deliberate design choice (see split_definition's docstring): unlike
+    # merge_definitions, inheriting guards onto a split half is harmless -- a
+    # half's rta can only be SHORTER than the whole's, so a time bound copied
+    # from the whole can only ever be looser than necessary, never wrong in a
+    # way that rejects a valid completion.
+    d = SegmentDef(
+        id=3, name="WF -> SSL", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 24}],
+        end_triggers=[{"type": "level_enter", "to": 8}],
+        waypoints=[[{"type": "area_enter", "level": 6, "area": 3}]],
+        guards=[{"type": "max_time", "frames": 1000}],
+        default_strat="Standard", match_mode="strict")
+    first, second = split_definition(
+        d, mid=[{"type": "area_enter", "level": 6, "area": 3}],
+        names=("WF -> Basement", "Basement -> SSL"))
+    for half in (first, second):
+        assert half["guards"] == [{"type": "max_time", "frames": 1000}]
+        assert half["default_strat"] == "Standard"
+        assert half["match_mode"] == "strict"    # inherited, not forced loose
+        assert half["enabled"] is True
+
+
+def test_split_refuses_when_the_first_half_is_unfireable():
+    # Reuses lint.py's own proven fixture (tests/test_lint.py): exiting Hazy
+    # Maze Cave (level 7) lands directly in the castle basement in ONE
+    # level_changed (world_connections()['7'] == [[6, 3], [28, None]]), so a
+    # def start=level_exit(from=7) / end=level_enter(to=6) arms and closes on
+    # the SAME event and can never legitimately fire. Splitting anything at
+    # exactly that mid point produces a first half shaped like it.
+    d = SegmentDef(
+        id=2, name="HMC -> somewhere", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 7}],
+        end_triggers=[{"type": "level_enter", "to": 8}],
+        guards=[], match_mode="loose")
+    with pytest.raises(ValueError, match="unfireable"):
+        split_definition(d, mid=[{"type": "level_enter", "to": 6}],
+                         names=("first half", "second half"))
+
+
+def test_split_refuses_when_the_second_half_is_unfireable():
+    # The mirror of the case above -- proves BOTH halves get checked, not
+    # just the one the live report happened to name. Here the FIRST half is
+    # harmless (attempt_anchor can't collide with a level_exit mid clause);
+    # the SECOND half reproduces the exact HMC-exit/castle-basement collision.
+    d = SegmentDef(
+        id=4, name="x", enabled=True,
+        start_triggers=[{"type": "attempt_anchor", "level": 26}],
+        end_triggers=[{"type": "level_enter", "to": 6}],
+        guards=[], match_mode="loose")
+    with pytest.raises(ValueError, match="unfireable"):
+        split_definition(d, mid=[{"type": "level_exit", "from": 7}],
+                         names=("first half", "second half"))
+
+
+def test_merge_spans_both_and_keeps_the_seam_as_a_waypoint():
+    wf_to_basement = SegmentDef(
+        id=101, name="WF -> Basement", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 24}],
+        end_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+        guards=[], match_mode="loose")
+    basement_to_ssl = SegmentDef(
+        id=102, name="Basement -> SSL", enabled=True,
+        start_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+        end_triggers=[{"type": "level_enter", "to": 8}],
+        guards=[], match_mode="loose")
+    merged = merge_definitions(wf_to_basement, basement_to_ssl, "WF -> SSL")
+    assert merged["name"] == "WF -> SSL"
+    assert merged["start_triggers"] == wf_to_basement.start_triggers
+    assert merged["end_triggers"] == basement_to_ssl.end_triggers
+    assert merged["waypoints"] == [basement_to_ssl.start_triggers]
+    assert merged["match_mode"] == "loose"
+    assert merged["seed_key"] is None
+    assert merged["guards"] == []
+
+
+def test_merge_does_not_touch_either_input():
+    wf_to_basement = SegmentDef(
+        id=101, name="WF -> Basement", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 24}],
+        end_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+        guards=[], match_mode="loose")
+    basement_to_ssl = SegmentDef(
+        id=102, name="Basement -> SSL", enabled=True,
+        start_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+        end_triggers=[{"type": "level_enter", "to": 8}],
+        guards=[], match_mode="loose")
+    before_first = dataclasses.asdict(wf_to_basement)
+    before_second = dataclasses.asdict(basement_to_ssl)
+    merge_definitions(wf_to_basement, basement_to_ssl, "WF -> SSL")
+    assert dataclasses.asdict(wf_to_basement) == before_first
+    assert dataclasses.asdict(basement_to_ssl) == before_second
+
+
+def test_merge_preserves_each_inputs_own_waypoints_too():
+    # The general inverse of split_definition: merging two definitions that
+    # are THEMSELVES already multi-step chains must not drop either one's own
+    # internal waypoints -- only the new seam is added, in the middle.
+    a_to_b = SegmentDef(
+        id=1, name="A->B", enabled=True,
+        start_triggers=[{"type": "attempt_anchor", "level": 6, "area": 1}],
+        end_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+        waypoints=[[{"type": "area_enter", "level": 6, "area": 2}]],
+        guards=[], match_mode="loose")
+    b_to_c = SegmentDef(
+        id=2, name="B->C", enabled=True,
+        start_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+        end_triggers=[{"type": "level_enter", "to": 8}],
+        waypoints=[[{"type": "warp_entered", "level": 6}]],
+        guards=[], match_mode="loose")
+    merged = merge_definitions(a_to_b, b_to_c, "A->C")
+    assert merged["waypoints"] == [
+        [{"type": "area_enter", "level": 6, "area": 2}],   # a_to_b's own step
+        [{"type": "area_enter", "level": 6, "area": 3}],   # the new seam
+        [{"type": "warp_entered", "level": 6}],            # b_to_c's own step
+    ]
+
+
+def test_merge_refuses_a_pair_that_does_not_meet():
+    wf_to_basement = SegmentDef(
+        id=101, name="WF -> Basement", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 24}],
+        end_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+        guards=[], match_mode="loose")
+    ddd_to_bitfs = SegmentDef(
+        id=103, name="DDD -> BitFS", enabled=True,
+        start_triggers=[{"type": "area_enter", "level": 26}],
+        end_triggers=[{"type": "level_enter", "to": 19}],
+        guards=[], match_mode="loose")
+    with pytest.raises(ValueError, match="do not meet"):
+        merge_definitions(wf_to_basement, ddd_to_bitfs, "nope")
+
+
+def test_merge_permits_an_unknown_arm_position_on_either_side():
+    # "unknown means yes", the SAME convention can_run_from already takes at
+    # runtime for the identical question: most seeded level_exit clauses omit
+    # `to` (arm_level -> None), which must not be misread as "provably
+    # unrelated" -- only a CONCRETE, non-overlapping pair is refused.
+    unpinned_exit = SegmentDef(
+        id=104, name="unpinned exit", enabled=True,
+        start_triggers=[{"type": "attempt_anchor", "level": 6, "area": 1}],
+        end_triggers=[{"type": "level_exit", "from": 24}],  # arm_level: None
+        guards=[], match_mode="loose")
+    ssl_entry = SegmentDef(
+        id=105, name="ssl entry", enabled=True,
+        start_triggers=[{"type": "level_enter", "to": 8}],
+        end_triggers=[{"type": "spawned"}],
+        guards=[], match_mode="loose")
+    merge_definitions(unpinned_exit, ssl_entry, "ok")  # no raise
+
+
+def test_merge_falls_back_to_loose_when_match_modes_disagree():
+    strict_half = SegmentDef(
+        id=106, name="strict half", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 24}],
+        end_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+        guards=[], match_mode="strict")
+    loose_half = SegmentDef(
+        id=107, name="loose half", enabled=True,
+        start_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+        end_triggers=[{"type": "level_enter", "to": 8}],
+        guards=[], match_mode="loose")
+    merged = merge_definitions(strict_half, loose_half, "mixed")
+    assert merged["match_mode"] == "loose"
+    # Agreement is preserved verbatim -- proves the disagreement case above
+    # isn't just "always coerce to loose" but a real fallback.
+    both_strict_second = replace(strict_half, id=109,
+                                 start_triggers=loose_half.start_triggers,
+                                 end_triggers=loose_half.end_triggers)
+    agree = merge_definitions(strict_half, both_strict_second, "agree")
+    assert agree["match_mode"] == "strict"
+
+
+def test_merge_default_strat_agrees_or_falls_back_to_none():
+    a = SegmentDef(id=108, name="a", enabled=True,
+                   start_triggers=[{"type": "level_exit", "from": 24}],
+                   end_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+                   guards=[], match_mode="loose", default_strat="Standard")
+    b_same = SegmentDef(id=109, name="b", enabled=True,
+                        start_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+                        end_triggers=[{"type": "level_enter", "to": 8}],
+                        guards=[], match_mode="loose", default_strat="Standard")
+    b_diff = replace(b_same, default_strat="Alternate")
+    assert merge_definitions(a, b_same, "x")["default_strat"] == "Standard"
+    assert merge_definitions(a, b_diff, "y")["default_strat"] is None
+
+
+def test_merge_requires_both_inputs_enabled():
+    a = SegmentDef(id=110, name="a", enabled=True,
+                   start_triggers=[{"type": "level_exit", "from": 24}],
+                   end_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+                   guards=[], match_mode="loose")
+    b_disabled = SegmentDef(
+        id=111, name="b", enabled=False,
+        start_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+        end_triggers=[{"type": "level_enter", "to": 8}],
+        guards=[], match_mode="loose")
+    assert merge_definitions(a, b_disabled, "z")["enabled"] is False

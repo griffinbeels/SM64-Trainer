@@ -1516,6 +1516,222 @@ def vocab() -> dict:
     }
 
 
+# --- Split & merge: two pure, non-destructive authoring operations --------
+# (spec 2026-07-28-multi-step-segments, Task 17; user ask: "in the editor,
+# it should really just be broken down into the two splits we would expect
+# here... I guess this is a valid option and way to do it and should be
+# supported (any combination like this)" -- WF -> SSL should be expressible
+# either as one definition or as WF -> Basement + Basement -> SSL.)
+#
+# Both return plain dicts shaped for tracking/service.py's create_segment
+# (a later task wires the API/UI on top of these; nothing here touches a db
+# row or a route). NEITHER mutates its inputs, and NEITHER is destructive:
+# the original passed to split_definition keeps existing, unedited --
+# definitions arm in PARALLEL (SegmentEngine.feed loops every enabled def
+# independently, each with its own _Arm), so a whole movement and its two
+# halves can all be armed on the same play and all record their own
+# attempt. That is the direct answer to "either one split or a series of
+# steps": both, at once, with nothing to migrate and no history orphaned by
+# the edit.
+def split_definition(d: SegmentDef, mid: list[dict],
+                     names: tuple[str, str]) -> tuple[dict, dict]:
+    """Break `d` into two chained definitions meeting at `mid` -- an any-of
+    clause-set the caller supplies as the shared boundary (typically one of
+    `d.waypoints`' own steps, promoted to a full stop; e.g. splitting WF ->
+    SSL at its one waypoint, "enter the Castle Inside basement", produces
+    WF -> Basement and Basement -> SSL).
+
+        first  = d.start_triggers -> mid
+        second = mid              -> d.end_triggers
+
+    Both halves ship `waypoints=[]` regardless of what `d.waypoints` held --
+    every waypoint-bearing definition shipped today carries exactly ONE
+    waypoint, which IS the split point, so consuming it into the new shared
+    boundary is the whole operation; a def with several waypoints and a
+    split at just one of them is a real future case but not one the brief,
+    a test, or a live definition exercises yet (YAGNI -- generalizing it now
+    would be guessing at a shape nothing here can verify).
+
+    `match_mode` is INHERITED from `d` for both halves, not forced to
+    "loose": flattening away the split's one waypoint says nothing by
+    itself about how tolerant either half should be of an off-route event --
+    a strict `d` split into two plain 2-endpoint defs just runs
+    SegmentEngine._feed_strict for each half, exactly the handler a plain
+    strict def with no waypoints has always run, so this is a shape
+    degradation, not a silent semantics change the author never asked for.
+
+    Neither half carries a `seed_key` -- there is nothing TO inherit
+    (`SegmentDef` itself has no such field; only the raw db row dict does),
+    which is also the right answer: a definition derived from a seeded one
+    is not that seeded row, and a `seed_key` surviving into it would make
+    `reconcile_defaults` overwrite it at the next startup
+    (tracking/defaults.py).
+
+    guards/default_strat/enabled are inherited unchanged onto both halves --
+    a time guard on the original describes the WHOLE movement's duration and
+    so is now looser than either half strictly needs, but never wrong in a
+    way that could reject a valid completion (a half's rta can only be
+    SHORTER than the whole's), unlike merge_definitions below, where keeping
+    either input's bound verbatim would misrepresent the combined span in
+    the harmful direction (see its own docstring).
+
+    Refuses (`ValueError`) rather than warns when a produced half comes out
+    UNFIREABLE -- reusing `tracking.lint.lint_definition`'s own "unfireable"
+    rule (never reimplementing the world-topology check it owns) rather than
+    lint's advisory RUNTIME posture. A saved definition must keep matching
+    whatever a Usamune warp menu invents forever, which is why a lint
+    finding never blocks a MATCH -- but this runs at author time, before
+    anything is saved, "unfireable" is lint's own "error" severity ("the
+    definition CANNOT work"), and merge_definitions below takes the same
+    posture for a pair that doesn't meet: a pure constructor should not hand
+    back data it already knows is dead on arrival. Checked on BOTH halves,
+    not just the one the live report happened to name -- either side of an
+    arbitrary split point can collide with its own next required step.
+    """
+    from sm64_events.tracking.lint import lint_definition  # cycle-free at
+    # call time -- lint.py imports THIS module at its own top level, so the
+    # reverse import must stay deferred to the function body (same trick
+    # feed() uses for tracking.projection.Attempt, a few hundred lines down).
+
+    mid_clauses = list(mid)
+    first_name, second_name = names
+    first = {
+        "name": first_name,
+        "enabled": d.enabled,
+        "start_triggers": list(d.start_triggers),
+        "end_triggers": list(mid_clauses),
+        "waypoints": [],
+        "guards": list(d.guards),
+        "default_strat": d.default_strat,
+        "match_mode": d.match_mode,
+        "seed_key": None,
+    }
+    second = {
+        "name": second_name,
+        "enabled": d.enabled,
+        "start_triggers": list(mid_clauses),
+        "end_triggers": list(d.end_triggers),
+        "waypoints": [],
+        "guards": list(d.guards),
+        "default_strat": d.default_strat,
+        "match_mode": d.match_mode,
+        "seed_key": None,
+    }
+    for half in (first, second):
+        probe = SegmentDef(id=-1, name=half["name"], enabled=half["enabled"],
+                           start_triggers=half["start_triggers"],
+                           end_triggers=half["end_triggers"],
+                           guards=half["guards"], waypoints=half["waypoints"],
+                           match_mode=half["match_mode"])
+        unfireable = [f for f in lint_definition(probe, [])
+                     if f["rule"] == "unfireable"]
+        if unfireable:
+            raise ValueError(
+                f"{half['name']!r} would be unfireable: "
+                f"{unfireable[0]['message']}")
+    return first, second
+
+
+def _meeting_levels(triggers: list) -> set[int]:
+    """The concrete arm-position levels a clause-set could land you in,
+    reusing `start_levels`'s own `arm_level` derivation (never a second
+    reading of the same param names) -- empty when every clause's arm
+    position is unknowable (e.g. a course exit that omits `to`, which is
+    most seeded `level_exit` clauses; see arm_level's own docstring). Shared
+    by merge_definitions' "do these two definitions actually meet" check
+    below; it is not itself a matcher concept, so it lives beside the
+    authoring operation that needs it rather than inside SegmentEngine."""
+    return set(start_levels(triggers))
+
+
+def merge_definitions(first: SegmentDef, second: SegmentDef,
+                      name: str) -> dict:
+    """Chain two definitions into one spanning both, with `second`'s start
+    clause-set kept as a WAYPOINT in the middle -- so the merged definition
+    still requires the route to pass through the seam, not merely to begin
+    at `first`'s start and end at `second`'s end (which would match a
+    strictly WIDER set of play than either input did, e.g. a direct A->C
+    warp that never touched B).
+
+        merged.start_triggers = first.start_triggers
+        merged.end_triggers   = second.end_triggers
+        merged.waypoints      = first.waypoints + [second.start_triggers]
+                                + second.waypoints
+
+    Preserving each input's OWN waypoints (not just the new seam) is what
+    keeps this the general inverse of split_definition: merging two
+    definitions that are themselves already multi-step chains produces one
+    definition visiting every one of their steps in order, not just the two
+    that used to be split_definition's mid clause.
+
+    Refuses (`ValueError`, message containing "do not meet") when `first`'s
+    end and `second`'s start describe unrelated places -- reusing
+    `start_levels`/`arm_level`'s own derivation (never a second reading of
+    the same trigger param names) rather than inventing a fresh "where does
+    this clause point" concept. An UNKNOWN arm position on either side
+    (empty result -- most seeded `level_exit` clauses omit `to`) passes,
+    matching the codebase-wide "unknown means yes" convention `can_run_from`
+    already takes for the identical question at runtime; only a CONCRETE,
+    non-overlapping pair is refused, e.g. `first` ending in the Castle
+    Inside basement and `second` starting in the castle courtyard.
+
+    `match_mode`: inherited when both inputs agree; when they DISAGREE,
+    "loose" -- not "first wins", which would silently apply a stricter
+    handler to the OTHER half's own steps than that half's own author chose,
+    an accident just as real as forgetting the seam. "loose" is the mode
+    built for "anything that crosses courses or takes several steps"
+    (MATCH_MODES' own description) -- exactly the shape a merge always
+    produces, no matter which input contributed which end.
+
+    `default_strat`: inherited when both agree, else `None` -- a merged
+    movement spanning two different practiced techniques has no single
+    obvious default, and `None` ("no default") is already the codebase-wide
+    meaning of "not decided", not a new state.
+
+    `enabled`: both must be enabled, or the merge is not -- a merge should
+    not silently resurrect a definition its author deliberately disabled.
+
+    `guards=[]` -- deliberately dropped, not unioned. A `min_time`/`max_time`
+    guard describes ITS OWN input's duration; concatenating them (or letting
+    "later wins", `time_bounds`'s own rule, pick one) would apply a bound
+    that is now too TIGHT for the combined span (unlike split_definition's
+    inherited guards, which can only end up too LOOSE -- see its docstring
+    for why that direction is harmless and this one is not). The merged
+    whole's actual bounds are a question only the author can answer, not one
+    this pure function should guess at.
+
+    Never carries a `seed_key`, for the same reason as split_definition: a
+    merged definition is a brand-new row, never either input, so it always
+    gets `seed_key=None`.
+    """
+    first_end_levels = _meeting_levels(first.end_triggers)
+    second_start_levels = _meeting_levels(second.start_triggers)
+    if first_end_levels and second_start_levels \
+            and not (first_end_levels & second_start_levels):
+        raise ValueError(
+            f"{first.name!r} and {second.name!r} do not meet: "
+            f"{first.name!r} ends at level(s) {sorted(first_end_levels)}, "
+            f"{second.name!r} starts at level(s) "
+            f"{sorted(second_start_levels)}")
+    match_mode = (first.match_mode if first.match_mode == second.match_mode
+                 else "loose")
+    default_strat = (first.default_strat
+                     if first.default_strat == second.default_strat
+                     else None)
+    return {
+        "name": name,
+        "enabled": first.enabled and second.enabled,
+        "start_triggers": list(first.start_triggers),
+        "end_triggers": list(second.end_triggers),
+        "waypoints": (list(first.waypoints) + [list(second.start_triggers)]
+                     + list(second.waypoints)),
+        "guards": [],
+        "default_strat": default_strat,
+        "match_mode": match_mode,
+        "seed_key": None,
+    }
+
+
 @dataclass(frozen=True)
 class _Arm:
     jid: int            # journal id of the arming event -> attempt id
