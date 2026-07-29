@@ -191,6 +191,18 @@ def corpus_counts() -> dict[str, int]:
         1 for row in seed["segments"] if row.get("category") == "Castle Movement")
     # The negative pass walks every OTHER movement, so it is one short.
     counts["other_walks"] = counts["movements"] - 1
+    # Clause-shape facts that prose states as the REASON a rule works, which is
+    # what makes them live claims rather than trivia. `arm_level` is None for
+    # an exit that omits `to`, and that single number is why start_origin
+    # exists at all — five files say it in five phrasings.
+    exits = [trigger for row in seed["segments"]
+             for trigger in row["start_triggers"]
+             if trigger.get("type") == "level_exit"]
+    counts["exits_total"] = len(exits)
+    counts["exits_omitting_to"] = sum(1 for t in exits if "to" not in t)
+    counts["ends_on_area_enter"] = sum(
+        1 for row in seed["segments"]
+        if any(t.get("type") == "area_enter" for t in row["end_triggers"]))
     return counts
 
 
@@ -226,6 +238,42 @@ CORPUS_CLAIMS = [
      r"all (\d+) seeded movements carry", ("movements",)),
     ("ui-practice.md: practicedHere sweep", ".claude/rules/ui-practice.md",
      r"all (\d+) seeded definitions × \d+ destination levels", ("segments",)),
+    # --- the "exits omitting `to`" family. Five files, five phrasings, one
+    # fact: it is the reason start_origin exists, so each states it as live
+    # rather than as history. The delta review found them all still on the
+    # pre-branch number while the rule file had been corrected — files
+    # DISAGREEING is worse than files being stale, because each looks
+    # authoritative on its own.
+    ("segments.py: exits omitting to", "src/sm64_events/tracking/segments.py",
+     r"(\d+) of the (\d+) seeded `level_exit` clauses omit `to`, so the",
+     ("exits_omitting_to", "exits_total")),
+    ("segments.py: arm-position rule", "src/sm64_events/tracking/segments.py",
+     r"\((\d+) of the (\d+) seeded exits omit `to`",
+     ("exits_omitting_to", "exits_total")),
+    ("synthesize.py", "src/sm64_events/tracking/synthesize.py",
+     r"(\d+) of the (\d+) seeded `level_exit` clauses omit `to` because",
+     ("exits_omitting_to", "exits_total")),
+    ("test_synthesize.py", "tests/test_synthesize.py",
+     r"(\d+) of the (\d+) seeded level_exit clauses omit `to`",
+     ("exits_omitting_to", "exits_total")),
+    ("practicable.py", "src/sm64_events/tracking/practicable.py",
+     r"(\d+) of the (\d+) seeded exits omit\n",
+     ("exits_omitting_to", "exits_total")),
+    # --- the rest of the delta review's finding 5
+    ("db.py: default_strat seed", "src/sm64_events/storage/db.py",
+     r"The (\d+) castle movements get", ("movements",)),
+    ("db.py: reconcile note", "src/sm64_events/storage/db.py",
+     r"SEED the (\d+) castle movements", ("movements",)),
+    ("api.py: sole-route table", "src/sm64_events/server/api.py",
+     r"against all (\d+) definitions in", ("segments",)),
+    ("api.py: timeline coverage", "src/sm64_events/server/api.py",
+     r"what the (\d+) seeded", ("segments",)),
+    ("test_api.py: area_enter ends", "tests/test_api.py",
+     r"(\d+) of the (\d+) seeded definitions END on area_enter",
+     ("ends_on_area_enter", "segments")),
+    ("ui-practice.md: castle-movement share", ".claude/rules/ui-practice.md",
+     r"(\d+) of (\d+) seeded rows being Castle Movement",
+     ("castle_movement", "segments")),
 ]
 
 

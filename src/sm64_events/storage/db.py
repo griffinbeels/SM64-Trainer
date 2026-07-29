@@ -216,7 +216,7 @@ MIGRATIONS = [
     UPDATE segment_defs SET seed_key='seg:bowser-3'      WHERE name='Bowser 3'        AND seed_key IS NULL;
     """,
     # v13 — a definition's own strategy (spec 2026-07-24-segment-default-strat).
-    # NULL = no default, today's behaviour. The 55 castle movements get
+    # NULL = no default, today's behaviour. The 56 castle movements get
     # 'Standard' through the bundled seed, not from here: they are seeded rows
     # with seed_dirty=0, so reconcile_defaults refreshes them at startup. No
     # repair UPDATE, deliberately — writing through a dirtied row is the one
@@ -256,7 +256,7 @@ MIGRATIONS = [
     # 'strict' (fix round, spec 2026-07-28-multi-step-segments Item 0) — it
     # briefly defaulted to 'loose' on the theory that a fresh row is always
     # someone AUTHORING a new segment, but reconcile_defaults calls this same
-    # function to SEED the 55 castle movements on a fresh install, which is a
+    # function to SEED the 56 castle movements on a fresh install, which is a
     # shipped default, not authoring. That made a fresh install's movements
     # come out loose while every migrated install's came out strict (backfilled
     # by this very ALTER), two behaviours picked by install date. The one

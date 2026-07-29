@@ -20,7 +20,7 @@ the OLD readers wrong — see below).
 
 WHY THE OLD READERS WERE WRONG, since it is the whole bug: `start_levels` /
 `start_areas` derive from `arm_level`, which answers "where does this trigger
-LEAVE Mario" — the DESTINATION of a level_exit. 50 of the 51 seeded exits omit
+LEAVE Mario" — the DESTINATION of a level_exit. 52 of the 53 seeded exits omit
 `to`, so those answer None and **54 of the 65 seeded definitions resolved to no
 place at all**. Every consumer inherited that blind spot at once: the
 quick-select banner never offered a castle movement, `belongs_to_stage` said

@@ -611,7 +611,7 @@ def test_timeline_default_view_hides_high_volume_bookkeeping_types(tmp_path):
 
 def test_timeline_default_view_includes_area_changed(tmp_path):
     """Measurement against the real seed corpus (src/sm64_events/data/
-    defaults.seed.json): 4 of the 65 seeded definitions END on area_enter
+    defaults.seed.json): 4 of the 84 seeded definitions END on area_enter
     (BoB/BBH/Bowser 2 -> Basement/Upstairs, SL -> Basement) and 1 STARTS on
     it (BitS Entry) -- 5 definitions with NO OTHER route in/out, unlike
     `spawned`'s raw type (1 sole use, but only its kind="intro" subset --

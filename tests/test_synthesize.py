@@ -28,7 +28,7 @@ def test_a_level_change_becomes_an_exit_at_the_start_and_an_entry_at_the_end():
 
 
 def test_a_start_exit_is_unpinned_so_it_matches_every_real_exit():
-    # 50 of the 51 seeded level_exit clauses omit `to` because every real
+    # 52 of the 53 seeded level_exit clauses omit `to` because every real
     # course exit lands in the castle; pinning it here would make a recorded
     # movement match one landing only.
     assert "to" not in clause_for(jev(1, "level_changed", 0,

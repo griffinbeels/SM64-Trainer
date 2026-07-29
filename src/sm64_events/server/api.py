@@ -347,7 +347,7 @@ def _http(e: Exception) -> HTTPException:
 # OR-alternative start/end clauses is not sole for any of them, because the
 # alternative already covers it.
 #
-# Measured directly against all 65 definitions in src/sm64_events/data/
+# Measured directly against all 84 definitions in src/sm64_events/data/
 # defaults.seed.json (2026-07-28; re-derived independently twice after an
 # earlier pass miscounted by reading only each definition's FIRST start/end
 # clause and missing OR-alternatives -- attempt_anchor is never first, so
@@ -516,7 +516,7 @@ def create_api_router(service) -> APIRouter:
         `view` picks which of eventlabel.LABELLABLE_TYPES's 9 types show:
         "steps" (default, see `_TIMELINE_STEP_TYPES`/`_is_default_timeline_
         row` above for the full sole-route rationale) is level_changed/
-        star_collected/warp_entered/key_grabbed (~95% of what the 65 seeded
+        star_collected/warp_entered/key_grabbed (~95% of what the 84 seeded
         definitions' start/end clauses actually use) PLUS area_changed (5
         seeded definitions have no other route in/out) PLUS spawned rows
         where kind == "intro" (Lakitu Skip's only start, narrowed to the

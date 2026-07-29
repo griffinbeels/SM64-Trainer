@@ -20,7 +20,7 @@ by the SAME event arms on the event that should close it and can never record
 an attempt). A single `level_changed {from, to}` journal event means a
 DIFFERENT clause depending which end of the definition it is filling:
   - as a START it becomes `level_exit{from}` with `to` DELIBERATELY UNPINNED
-    -- 50 of the 51 seeded `level_exit` clauses omit `to` because every real
+    -- 52 of the 53 seeded `level_exit` clauses omit `to` because every real
     course exit lands in the castle, and pinning it here would make a
     recorded movement match only the one landing this particular exit
     happened to have.
