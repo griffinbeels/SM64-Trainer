@@ -21,8 +21,10 @@ from sm64_events.stats.registry import (registry_meta, selection_id,
                                         selection_order)
 from sm64_events.tracking.backtest import backtest
 from sm64_events.tracking.eventlabel import label_event
-from sm64_events.tracking.segments import (SegmentDef, origin_taxonomy,
+from sm64_events.tracking.segments import (SegmentDef, clause_sentence,
+                                           origin_taxonomy,
                                            validate_definition, vocab)
+from sm64_events.tracking.synthesize import clause_for, suggest_name, synthesize
 from sm64_events.tracking.views import (build_entity_ranks,
                                         build_entity_strategies,
                                         build_route_view, build_run_history,
@@ -555,6 +557,65 @@ def create_api_router(service) -> APIRouter:
             current = SegmentDef(**{k: row[k] for k in keys})
         report = backtest(service.db.events(), candidate, current)
         return dataclasses.asdict(report)
+
+    @router.get("/segments/synthesize")
+    def synthesize_from_timeline(start_id: int, end_id: int):
+        """Turn two picked `GET /api/segments/timeline` row ids into the
+        (start_clause, end_clause) pair a new segment would be defined by,
+        plus a suggested name and a plain-English sentence for each end --
+        the hinge behind "record what I just did" (`tracking/synthesize.py`,
+        Task 12) wired up for the timeline picker (Task 13). Declared BEFORE
+        /segments/{segment_id} -- same declaration-order rule as
+        /segments/vocab above (fastapi-patterns).
+
+        Looks the two ids up directly in the journal (`service.db.events()`,
+        the SAME source `/segments/timeline` reads) rather than trusting a
+        client-supplied payload -- the picker only ever holds row IDS, never
+        the raw event. 404 when either id names no journal event.
+
+        409 when the pair can't become a segment, naming WHICH problem:
+        picking the SAME event for both ends (it would arm and close on the
+        identical tick -- segments.py's documented COROLLARY), or a row
+        whose type carries no synthesis rule for the role it was picked for
+        (`attempt_anchor`'s `practice_reset`/`state_loaded` source carries no
+        level/course at all -- the matcher resolves that from live
+        MatchContext, never the event, so a bare row can't supply it -- see
+        synthesize.py's module docstring). `synthesize()` itself can't say
+        which of the two failure shapes occurred (both return `None`), so on
+        failure this re-checks with `clause_for` to report the specific one --
+        diagnosis, not a second decision.
+
+        Read-only: no journal entry, no state change of any kind.
+
+        `start_sentence`/`end_sentence` render through `clause_sentence` --
+        the SAME card_label/card_template machinery
+        `card_waiting_for_sentence` uses for an armed segment's "waiting for"
+        line, so a synthesized-but-unsaved clause reads in the identical
+        voice a saved one would, not a second renderer built for this
+        endpoint."""
+        if service.db is None:
+            raise HTTPException(503, "database unavailable")
+        rows_by_id = {row.id: row for row in service.db.events()}
+        start_row, end_row = rows_by_id.get(start_id), rows_by_id.get(end_id)
+        if start_row is None or end_row is None:
+            raise HTTPException(404, "unknown timeline event id")
+        result = synthesize(start_row, end_row)
+        if result is None:
+            if start_row.id == end_row.id:
+                raise HTTPException(409,
+                    "That's the same moment for both start and end — a "
+                    "segment can't arm and finish on the same event. Pick "
+                    "two different moments.")
+            role = "start" if clause_for(start_row, "start") is None else "end"
+            raise HTTPException(409,
+                f"That moment can't be this segment's {role} — it doesn't "
+                "carry enough information to define a trigger from (for "
+                "example, a reset with no recorded place).")
+        start_clause, end_clause = result
+        return {"start_clause": start_clause, "end_clause": end_clause,
+                "start_sentence": clause_sentence(start_clause),
+                "end_sentence": clause_sentence(end_clause),
+                "name": suggest_name(start_clause, end_clause)}
 
     @router.put("/segments/{segment_id}")
     async def update_segment(segment_id: int, body: SegmentPatch):

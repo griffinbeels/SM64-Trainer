@@ -8,6 +8,7 @@ from sm64_events.storage.db import EventRow
 from sm64_events.tracking import segments as segments_module
 from sm64_events.tracking.segments import (SEGMENT_ATTEMPT_OFFSET,
                                            card_waiting_for_sentence,
+                                           clause_sentence,
                                            course_groups, level_groups,
                                            GUARDS, TRIGGERS, MatchContext,
                                            SegmentDef, SegmentEngine,
@@ -210,6 +211,30 @@ def test_card_fallback_is_per_param_not_a_blanket_rule():
     sentence = card_waiting_for_sentence(d, 0)
     assert sentence == "Grab Star 1"   # no course -> generic star name, no "in"
     assert "in " not in sentence
+
+
+# ---------------------------------------------------------------------------
+# clause_sentence (Task 13, spec 2026-07-28-multi-step-segments): a public
+# entry point onto _render_clause for callers OUTSIDE tracking/ (the
+# synthesize-preview API endpoint behind the timeline picker). Same
+# card_label/card_template rendering card_waiting_for_sentence uses, so a
+# synthesized-but-unsaved clause reads in the identical voice a saved one
+# would -- one line, no second template walk.
+# ---------------------------------------------------------------------------
+
+def test_clause_sentence_matches_card_waiting_for_sentence_for_the_same_clause():
+    # Pin the two against EACH OTHER, not just against a hardcoded string --
+    # a future divergence (clause_sentence growing its own branch) shows up
+    # here rather than only in a stale literal.
+    clause = {"type": "level_exit", "from": 23}
+    d = SegmentDef(id=1, name="probe", enabled=True, guards=[],
+                   start_triggers=[], end_triggers=[clause])
+    assert clause_sentence(clause) == card_waiting_for_sentence(d, 0)
+
+
+def test_clause_sentence_renders_a_pinned_level_enter():
+    assert clause_sentence({"type": "level_enter", "to": 19}) \
+        == "Enter Bowser in the Fire Sea"
 
 
 def test_start_level_set_classifies_level_bound_defs():

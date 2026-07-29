@@ -2160,10 +2160,24 @@
      inside stable slots instead of reflowing the whole page. */
   .workshop-page { min-width: 0; display: grid; gap: 12px; }
   .workshop-hero {
-    min-height: 82px; display: flex; align-items: center;
-    justify-content: space-between; gap: 1rem;
+    /* flex-wrap + margin-right:auto on the title (below), not
+       justify-content:space-between with a fixed 2-child assumption --
+       segments.js grew a SECOND hero action (Task 13, "Record a segment"
+       beside "New segment") and space-between distributes a 3rd child into
+       the horizontal CENTER of the row rather than grouping it with the
+       other button. The auto-margin trick generalises to any number of
+       trailing action children while rendering byte-identical for the
+       existing single-button case (routes.js's own hero) -- title flush
+       left, the trailing button(s) flush right, same gap. Self-responsive:
+       wraps onto a second line rather than clipping if the hero ever gets
+       too narrow for both buttons, no @container/@media needed. */
+    min-height: 82px; display: flex; align-items: center; flex-wrap: wrap;
+    justify-content: flex-start; gap: 1rem;
   }
-  .workshop-title { min-width: 0; display: flex; align-items: center; gap: .75rem; }
+  .workshop-title {
+    min-width: 0; display: flex; align-items: center; gap: .75rem;
+    margin-right: auto;
+  }
   .workshop-title-icon, .workshop-empty-icon {
     width: 42px; height: 42px; flex: 0 0 auto;
     display: inline-flex; align-items: center; justify-content: center;
@@ -2337,6 +2351,36 @@
     display: grid; gap: .2rem; max-height: 220px; overflow-y: auto;
     padding-right: 2px; scrollbar-width: thin;
   }
+
+  /* "Record a segment" timeline picker (Task 13, spec 2026-07-28-multi-
+     step-segments) -- ui/components/segmenttimeline.js. Self-responsive
+     (flex-wrap + a capped, scrollable row list), like iconpicker.js's
+     .icongrid above: this renders inside a Modal, which is NOT nested in
+     .practice-page (the only element with container-type: inline-size), so
+     there is no @container to gate against here -- and nothing below needs
+     a breakpoint anyway. */
+  .record-steps { display: flex; gap: .5rem; margin-bottom: .75rem; }
+  .record-step {
+    padding: .25rem .65rem; border-radius: 999px; font-size: .78rem;
+    color: var(--muted); background: rgba(255,255,255,.04);
+  }
+  .record-step.on { color: var(--text); background: rgba(255,196,84,.16); }
+  .record-view-toggle {
+    display: flex; align-items: center; gap: .4rem;
+    margin-bottom: .65rem; font-size: .82rem; color: var(--muted);
+  }
+  .record-rows {
+    display: flex; flex-direction: column; gap: 4px;
+    max-height: 45vh; overflow-y: auto; padding-right: 4px;
+  }
+  .record-row {
+    min-width: 0; text-align: left; padding: .5rem .65rem;
+    border: 1px solid var(--border-soft); border-radius: 7px;
+    background: rgba(8,20,34,.48); color: var(--text); cursor: pointer;
+  }
+  .record-row:hover { background: rgba(255,255,255,.06); }
+  .record-picked { display: flex; align-items: center; gap: .5rem; }
+  .record-review { display: flex; flex-direction: column; gap: .5rem; }
 
   .routes-workshop {
     min-width: 0; display: grid;

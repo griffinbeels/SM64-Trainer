@@ -898,6 +898,117 @@ def test_backtest_endpoint_counts_real_history(tmp_path):
         assert body["attempts"][0]["rta_frames"] == 300
 
 
+# --- GET /api/segments/synthesize (Task 13, spec 2026-07-28-multi-step-
+# segments) -- two picked timeline-row ids -> the clause pair + name a new
+# segment would be defined by. The picker only ever holds row IDS (never the
+# raw event), so the endpoint re-reads the real journal by id rather than
+# trusting anything the client says about the row's shape.
+#
+# Real ids are never hardcoded here: `make_client` journals a `session_started`
+# event of its own before any test publishes anything (id 1 on a fresh db),
+# and session_started isn't LABELLABLE at all -- so it never appears via
+# GET /api/segments/timeline, but it DOES shift every id a hardcoded 1/2 test
+# would have assumed. Reading the real ids back through the timeline endpoint
+# (view=all, so practice_reset rows are included too) is robust to that and
+# to any future bookkeeping event landing before the ones under test.
+
+def _timeline_ids(client):
+    rows = client.get("/api/segments/timeline?limit=50&view=all").json()["rows"]
+    return [row["id"] for row in rows]
+
+
+def test_synthesize_endpoint_builds_a_clause_pair_a_name_and_sentences(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        async def go():
+            await service.publish(Event(type="level_changed", frame=100,
+                                        timestamp_utc=T0,
+                                        payload={"from": 23, "to": 6}))
+            await service.publish(Event(type="level_changed", frame=500,
+                                        timestamp_utc=T0,
+                                        payload={"from": 6, "to": 19}))
+        asyncio.run(go())
+        start_id, end_id = _timeline_ids(client)
+        r = client.get(
+            f"/api/segments/synthesize?start_id={start_id}&end_id={end_id}")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["start_clause"] == {"type": "level_exit", "from": 23}
+        assert body["end_clause"] == {"type": "level_enter", "to": 19}
+        assert body["start_sentence"] == "Exit Dire, Dire Docks"
+        assert body["end_sentence"] == "Enter Bowser in the Fire Sea"
+        assert body["name"] == "Dire, Dire Docks → Bowser in the Fire Sea"
+
+
+def test_synthesize_endpoint_404s_on_an_unknown_event_id(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.get("/api/segments/synthesize?start_id=999998&end_id=999999")
+        assert r.status_code == 404
+
+
+def test_synthesize_endpoint_409s_on_the_same_event_for_both_ends(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        async def go():
+            await service.publish(Event(type="level_changed", frame=100,
+                                        timestamp_utc=T0,
+                                        payload={"from": 7, "to": 6}))
+        asyncio.run(go())
+        [only_id] = _timeline_ids(client)
+        r = client.get(
+            f"/api/segments/synthesize?start_id={only_id}&end_id={only_id}")
+        assert r.status_code == 409
+        assert "same moment" in r.json()["detail"]
+
+
+def test_synthesize_endpoint_409s_when_the_start_row_has_no_synthesis_rule(tmp_path):
+    # practice_reset never synthesizes -- attempt_anchor's position lives in
+    # live MatchContext, not the payload (tracking/synthesize.py's
+    # _NOT_SYNTHESIZABLE).
+    client, service, db = make_client(tmp_path)
+    with client:
+        async def go():
+            await service.publish(Event(type="practice_reset", frame=10,
+                                        timestamp_utc=T0,
+                                        payload={"igt_frames_before": 0}))
+            await service.publish(Event(type="level_changed", frame=500,
+                                        timestamp_utc=T0,
+                                        payload={"from": 6, "to": 19}))
+        asyncio.run(go())
+        start_id, end_id = _timeline_ids(client)
+        r = client.get(
+            f"/api/segments/synthesize?start_id={start_id}&end_id={end_id}")
+        assert r.status_code == 409
+        assert "start" in r.json()["detail"]
+
+
+def test_synthesize_endpoint_409s_when_the_end_row_has_no_synthesis_rule(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        async def go():
+            await service.publish(Event(type="level_changed", frame=100,
+                                        timestamp_utc=T0,
+                                        payload={"from": 23, "to": 6}))
+            await service.publish(Event(type="practice_reset", frame=500,
+                                        timestamp_utc=T0,
+                                        payload={"igt_frames_before": 0}))
+        asyncio.run(go())
+        start_id, end_id = _timeline_ids(client)
+        r = client.get(
+            f"/api/segments/synthesize?start_id={start_id}&end_id={end_id}")
+        assert r.status_code == 409
+        assert "end" in r.json()["detail"]
+
+
+def test_synthesize_endpoint_503s_in_degraded_mode(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        service.db = None
+        r = client.get("/api/segments/synthesize?start_id=1&end_id=2")
+        assert r.status_code == 503
+
+
 # Fields that legitimately MUST NOT persist through create_segment/
 # update_segment, with a reason per entry. Empty today, deliberately: no
 # field currently on SegmentBody/SegmentPatch is allowed to be accepted and

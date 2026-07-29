@@ -690,6 +690,17 @@ def _render_clause(clause: dict) -> str:
     return f"{spec.card_label} {''.join(parts)}".strip()
 
 
+def clause_sentence(clause: dict) -> str:
+    """Public entry point onto `_render_clause`, for callers OUTSIDE
+    `tracking/` (Task 13's synthesize-preview API endpoint, behind the
+    "record what I just did" timeline picker). Same card_label/card_template
+    rendering `card_waiting_for_sentence` uses for an armed segment's
+    "waiting for" line, so a synthesized-but-unsaved clause reads in the
+    IDENTICAL voice a saved one would -- a one-line alias, not a second
+    template walk."""
+    return _render_clause(clause)
+
+
 def card_waiting_for_sentence(d: SegmentDef, progress: int) -> str:
     """Plain language for what an ARMED definition is waiting for next (spec
     2026-07-28-multi-step-segments, Task 6): its next unconsumed waypoint

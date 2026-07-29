@@ -19,6 +19,7 @@ import { EntityPicker } from "./entitymodal.js";
 import { courseOptions, levelOptions, parseStarId, starId,
          starOptionsFromVocab } from "../entities.js";
 import { entityIconSrc, optionIconSrc } from "./entityicons.js";
+import { SegmentTimeline } from "./segmenttimeline.js";
 
 const html = htm.bind(h);
 
@@ -516,6 +517,7 @@ export function Segments({ t }) {
   const [query, setQuery] = useState("");
   const [vocabData, setVocabData] = useState(null);
   const [editing, setEditing] = useState(null);   // null | "new" | def object
+  const [recording, setRecording] = useState(false);   // the timeline picker
   const editorRef = useRef(null);   // the open Builder's {save, dirty} handle
   const [openGroups, toggleGroup] = useOpenGroups("sm64.segOriginsOpen");
   // Panes cap themselves to the space actually left below them (ui/viewport.js)
@@ -590,10 +592,24 @@ export function Segments({ t }) {
           <p>Define repeatable sections once, then practice and rank them like stars.</p>
         </div>
       </div>
+      <button class="quiet-button" onclick=${() => setRecording(true)}>
+        <${Icon} name="bookmark" size=${16} /> Record a segment
+      </button>
       <button class="primary-button" onclick=${() => setEditing("new")}>
         <${Icon} name="plus" size=${17} /> New segment
       </button>
     </header>
+    ${recording && html`<${SegmentTimeline}
+        onCancel=${() => setRecording(false)}
+        onSaved=${async (savedId) => {
+          // Same "stay on what you just saved" rule the Builder's own
+          // onSaved follows (live audit 2026-07-25): land on the new
+          // segment's own editor rather than the empty state.
+          setRecording(false);
+          const rowsList = await load();
+          setEditing(rowsList.find((row) => row.id === savedId) || null);
+          t.refresh();
+        }} />`}
 
     <div class="segments-workshop" ref=${workshopRef}>
       <aside class="practice-card workshop-card segment-library">

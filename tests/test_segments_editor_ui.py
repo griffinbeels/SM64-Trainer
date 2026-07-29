@@ -178,3 +178,80 @@ def test_the_backtest_button_guard_can_still_fail():
     assert not _has_backtest_button_label(comment_only)
     real_code = 'html`${btBusy ? "Testing…" : "Try it against my history"}`'
     assert _has_backtest_button_label(real_code)
+
+
+# --- the timeline picker: "record what I just did" (Task 13, spec
+# 2026-07-28-multi-step-segments) -------------------------------------------
+# Three states in one modal (pick start -> pick end -> review): the user
+# points at what they just did instead of hand-authoring TRIGGERS clauses.
+# Consumes Task 8 (backtest), Task 11 (timeline), Task 12 (synthesize).
+
+SEGMENT_TIMELINE_JS = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
+                       / "ui" / "components" / "segmenttimeline.js")
+SEGMENT_TIMELINE_JS_SOURCE = strip_comments(
+    SEGMENT_TIMELINE_JS.read_text(encoding="utf-8"))
+
+
+def test_the_timeline_component_fetches_the_recent_journal():
+    assert "/api/segments/timeline" in SEGMENT_TIMELINE_JS_SOURCE
+
+
+def test_a_row_click_sets_the_start_or_the_end():
+    assert "setStartRow(row)" in SEGMENT_TIMELINE_JS_SOURCE
+    assert "setEndRow(row)" in SEGMENT_TIMELINE_JS_SOURCE
+
+
+def test_the_view_toggle_reaches_view_all():
+    # Task 11's own carried concern: without a control the rarer reset/
+    # spawn-triggered starts are only reachable one query param away and
+    # nothing in the picker offers it.
+    assert '"all"' in SEGMENT_TIMELINE_JS_SOURCE
+    assert '"steps"' in SEGMENT_TIMELINE_JS_SOURCE
+
+
+def _saves_as_a_loose_segment(source: str) -> bool:
+    """The real save call, comment-immune (source_scan.py) -- a docstring or
+    comment describing "saves as a loose segment" would satisfy a bare
+    substring check just as easily as the real POST body. Pin the ACTUAL
+    call site: the method+path pair and the match_mode literal both present
+    in the same COMMENT-STRIPPED source (the function strips it itself, so
+    a caller can feed it either raw or already-stripped text)."""
+    stripped = strip_comments(source)
+    return ('"POST", "/api/segments"' in stripped
+            and 'match_mode: "loose"' in stripped)
+
+
+def test_save_posts_the_recorded_definition_as_a_loose_segment():
+    assert _saves_as_a_loose_segment(SEGMENT_TIMELINE_JS_SOURCE)
+
+
+def test_the_save_loose_guard_can_still_fail():
+    comment_only = (
+        '// save() POSTs the recording to "/api/segments" as a\n'
+        '// match_mode: "loose" definition once the backtest has returned.\n')
+    assert not _saves_as_a_loose_segment(comment_only)
+    real_code = ('await send("POST", "/api/segments", '
+                 '{ ...body, match_mode: "loose" });')
+    assert _saves_as_a_loose_segment(real_code)
+
+
+def _save_button_waits_for_the_backtest(source: str) -> bool:
+    """Save's own disabled expression, comment-immune (strips it itself, so
+    a caller can feed either raw or already-stripped text). Not a bare
+    "btReport" substring check -- that would stay green even if the button
+    were unconditionally enabled and btReport were merely READ somewhere
+    else on the page (e.g. rendered in the summary line)."""
+    return "disabled=${!btReport" in strip_comments(source)
+
+
+def test_the_backtest_result_renders_before_save_is_enabled():
+    assert _save_button_waits_for_the_backtest(SEGMENT_TIMELINE_JS_SOURCE)
+
+
+def test_the_save_disabled_guard_can_still_fail():
+    comment_only = (
+        '// Save is disabled=${!btReport || saving} until the backtest\n'
+        '// has returned -- see runBacktest above.\n')
+    assert not _save_button_waits_for_the_backtest(comment_only)
+    real_code = 'disabled=${!btReport || saving} onclick=${save}'
+    assert _save_button_waits_for_the_backtest(real_code)
