@@ -20,6 +20,25 @@ _spec.loader.exec_module(build_seed)
 ROUTES = build_seed.corpus_routes_main.ROUTES
 BY_KEY = {r["seed_key"]: r for r in ROUTES}
 
+# The two orphan tests below ask a CORPUS-WIDE question — "does any seeded
+# route use this movement" — so they read every route, not just the 13 main
+# ones the rest of this file is scoped to. Main-only is wrong in the dangerous
+# direction: a movement referenced solely by a Stage RTA route would read as an
+# orphan, and the tempting fix for a false orphan is to rewrite a route to
+# reference it — which is exactly the regression of 2026-07-28 (see
+# UNREFERENCED_MOVEMENTS_EXEMPT). Stage routes happen to reference no segments
+# today, so this changes no current answer; what it changes is that the
+# exemption's "nothing uses this" is now true of the whole corpus rather than
+# true by luck. Deliberately NOT pinned with an "and stage routes reference
+# zero segments" assertion — that would fail the day someone legitimately adds
+# one, which is a shipped default's contents, not a law.
+ALL_ROUTES = ROUTES + build_seed.corpus_routes_stage.ROUTES
+
+
+def _segments_used_by(routes) -> set[str]:
+    return {c["seed_key"] for r in routes for s in r["steps"]
+            for c in s["candidates"] if c["type"] == "segment"}
+
 EXPECTED_STARS = {
     "route:16-no-lblj-standard": 16,
     "route:16-no-lblj-beginner": 16,
@@ -131,8 +150,7 @@ UNREFERENCED_MOVEMENTS_EXEMPT = {
 def test_no_movement_is_left_unreferenced():
     """Orphan guard: a movement no route uses is dead weight in every user's
     segment list — and usually means a route step was dropped."""
-    used = {c["seed_key"] for r in ROUTES for s in r["steps"]
-            for c in s["candidates"] if c["type"] == "segment"}
+    used = _segments_used_by(ALL_ROUTES)
     for row in build_seed.corpus_movements.MOVEMENTS:
         if row["seed_key"] in UNREFERENCED_MOVEMENTS_EXEMPT:
             continue
@@ -143,8 +161,7 @@ def test_unreferenced_movements_exemption_is_still_actually_unreferenced():
     """A stale exemption is a lie about what is orphaned — if a future route
     edit starts using this movement, the exemption must be deleted, not kept
     alongside a real reference."""
-    used = {c["seed_key"] for r in ROUTES for s in r["steps"]
-            for c in s["candidates"] if c["type"] == "segment"}
+    used = _segments_used_by(ALL_ROUTES)
     known = {row["seed_key"] for row in build_seed.corpus_movements.MOVEMENTS}
     for seed_key in UNREFERENCED_MOVEMENTS_EXEMPT:
         assert seed_key in known, f"exempted movement no longer exists: {seed_key}"
