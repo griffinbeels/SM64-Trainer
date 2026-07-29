@@ -322,10 +322,10 @@
   .good { color: #a3e0a3; } .badx { color: #e0a3a3; } .cleared { opacity: .45; text-decoration: line-through; }
   .chips { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .35rem; }
   .chip { border: 1px solid #3a4150; border-radius: 999px; padding: .05rem .6rem; font-size: .85em; }
-  /* The Stats trigger moved into the chips row it configures (2026-07-28,
-     from the deleted practice-toolbar) -- same pill language as every other
-     chip, plus the affordances a <button> needs that a <span> chip doesn't:
-     a pointer cursor and a hover border. */
+  /* The Stats trigger (practice.js::StatMenuTrigger, in the practice-log
+     card's header since 2026-07-28) keeps the same pill language as every
+     value chip it configures, plus the affordances a <button> needs that a
+     <span> chip doesn't: a pointer cursor and a hover border. */
   .chip-button {
     display: inline-flex; align-items: center; gap: .3rem;
     background: transparent; color: inherit; cursor: pointer;
@@ -786,14 +786,19 @@
     min-width: 0; flex: 1; color: var(--muted); font-size: .78rem;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  /* Out of flow, anchored under the Stats chip: as a grid child of
-     .practice-page it added a row and shifted every card 12px on open.
-     Re-anchored onto .stat-chips (2026-07-28) when the trigger moved out of
-     the deleted practice-toolbar and into the chips row it configures. */
-  .stat-chips { position: relative; }
-  .stats-popover {
-    position: absolute; top: calc(100% + 6px); right: 12px; z-index: 30;
-  }
+  /* Out of flow, anchored under the Stats trigger: as a grid child of
+     .practice-page it added a row and shifted every card 12px on open. The
+     trigger now lives in the practice-log card's header (2026-07-28, moved
+     again — "the stats button... inside the practice log, to the left of the
+     sort filter"), and that card is a FIXED-HEIGHT `overflow: hidden` box
+     (.attempts-card) — an `absolute` popover anchored inside it would get cut
+     off the moment its checklist grew past the card's own 458px, the exact
+     trap `.claude/rules/ui-core.md` names for a WRAPPING element. `fixed`
+     instead, with top/right set inline off the trigger's own measured rect
+     (practice.js::StatMenuTrigger) — escapes the card's overflow entirely,
+     since nothing between the trigger and the viewport declares a
+     transform/filter/perspective/contain that would trap it back inside. */
+  .stats-popover { position: fixed; z-index: 30; }
   /* Stats menu: the only popover still on the legacy grey .popover base —
      pull it onto the same navy language as the replay-settings popover so the
      stat picker matches the rest of the shell (statmenu.js renders a bare
@@ -2007,6 +2012,28 @@
   /* Practice-log controls, in the card they act on: sort in the heading,
      reset visibility in the footer (the old analysis toolbar is gone). */
   .attempts-tools { display: flex; align-items: center; gap: .7rem; }
+  /* Three controls ("N shown" / Stats / sort) need more width than the two
+     this row used to have, and the row cannot wrap to absorb the difference
+     -- .attempts-card is a fixed-height overflow:hidden box, ui-core.md's
+     WRAPPING trap, here on the header row rather than a sibling. Gated on
+     @container against .practice-page, never @media, for the reason
+     ui-core.md's responsiveness law states: the sidebar's 1180px step makes
+     the pane a card lives in non-monotonic in window width, so no viewport
+     threshold can stand in for "this card is too narrow".
+     Icon-only Stats first (drop the label, the icon + title still say what
+     it does), tighter gaps, THEN the count -- measured against the real
+     fixture at the WCAG 1.4.10 reflow floor (320px), the widest heading text
+     ("Unassigned attempts") and the narrowest ("Recent attempts") both: the
+     count is the one truly recoverable value here (the log below it shows
+     the same number of rows), so it goes last, same principle as
+     .rank-banner-basis dropping before the delta it sits beside. */
+  @container (max-width: 420px) {
+    .stat-menu-label { display: none; }
+    .attempts-tools { gap: .4rem; }
+  }
+  @container (max-width: 340px) {
+    .attempts-tools > .meta { display: none; }
+  }
   .sort-control {
     min-height: 34px; display: inline-flex; align-items: center; gap: .3rem;
     padding: .2rem .3rem .2rem .5rem; border: 1px solid #344b64;

@@ -501,35 +501,64 @@ function ObjectiveEyebrow({ iconName, label, openPicker }) {
   </button>`;
 }
 
-// The stat chips plus the control that chooses them. ONE component for both
-// section kinds (rule 11) — the chips loop was pasted into StarSection and
-// SegmentSection identically, and adding a control to two copies of markup is
-// how the two drift.
+// The stat chips. ONE component for both section kinds (rule 11) — the chips
+// loop was pasted into StarSection and SegmentSection identically, and a
+// second copy is how the two drift.
 //
-// The trigger moved here from the practice toolbar on 2026-07-28: StatMenu
-// picks WHICH chips are shown, and this row is the only place they appear, so
-// the control sat one card away from the only thing it changed. The popover
-// anchors on this row, which is why the row is position: relative.
-//
-// Consequence, stated rather than hidden: with no target there is no detail
-// drawer, so there are no chips and no trigger. That is coherent — there is
-// nothing to configure — but it is a change from a button that was always
-// present.
+// The CONTROL that chooses which chips show is a separate component,
+// StatMenuTrigger below — moved into the practice-log card's header on
+// 2026-07-28 (user: "For the stats button, we should move it to be inside
+// the practice log, to the left of the sort filter"), leaving the chips
+// themselves here, unmoved.
 function StatChipsRow({ sec, t }) {
-  const [menuOpen, setMenuOpen] = useState(false);
   return html`<div class="chips stat-chips">
     ${sec.stats.filter((stat) => t.showDust || !DUST_STAT_KEYS.has(stat.key))
       .map((stat) => html`
       <span class="chip" title=${stat.key}>${stat.label} ${stat.display ?? "–"}</span>`)}
-    <button type="button" class="chip chip-button"
-        onclick=${() => setMenuOpen(!menuOpen)}
-        title="Choose which stats appear here">
-      <${Icon} name="feed" size=${14} />${" "}Stats
+  </div>`;
+}
+
+// The trigger + popover for the stat menu — ONE shared component (rule 11:
+// a control pasted into both cards is exactly the shape that drifts), placed
+// in the practice-log card's header, left of the sort control, in BOTH
+// StarSection and SegmentSection.
+//
+// `.attempts-card` is a fixed-height `overflow: hidden` box (`.claude/rules/
+// ui-core.md`: "an element that WRAPS inside a fixed-height card costs
+// nothing visible and clips its sibling" — the same trap here would clip the
+// popover itself rather than a sibling). A `position: absolute` popover
+// anchored inside that card would be cut off the instant it grew past the
+// card's own 458px, which the stat-menu checklist easily does. Fixed
+// positioning, anchored off the trigger's own measured rect, escapes that
+// clip entirely — nothing between the trigger and the viewport declares a
+// transform/filter/perspective/contain that would trap a `position: fixed`
+// descendant back inside an ancestor's overflow (verified against
+// index.html: none of `.attempts-card`, `.practice-detail-grid`,
+// `.practice-page`, `.view-pane`, `.workspace`, `.app-main`, `.app-shell`
+// declare one).
+function StatMenuTrigger({ t }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [anchor, setAnchor] = useState(null);
+  const buttonRef = useRef(null);
+
+  const toggle = () => {
+    if (!menuOpen && buttonRef.current) {
+      const box = buttonRef.current.getBoundingClientRect();
+      setAnchor({ top: box.bottom + 6, right: window.innerWidth - box.right });
+    }
+    setMenuOpen((open) => !open);
+  };
+
+  return html`<span class="stat-menu-trigger">
+    <button ref=${buttonRef} type="button" class="chip chip-button"
+        onclick=${toggle} title="Choose which stats appear on the practice log">
+      <${Icon} name="feed" size=${14} />${" "}<span class="stat-menu-label">Stats</span>
     </button>
-    ${menuOpen && html`<div class="stats-popover">
+    ${menuOpen && anchor && html`<div class="stats-popover"
+        style=${`top:${anchor.top}px; right:${anchor.right}px`}>
       <${StatMenu} t=${t} close=${() => setMenuOpen(false)} />
     </div>`}
-  </div>`;
+  </span>`;
 }
 
 function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) {
@@ -628,6 +657,7 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
         <div><span class="eyebrow">Practice log</span><h3>Recent attempts</h3></div>
         <div class="attempts-tools">
           <span class="meta">${rows.length} shown</span>
+          <${StatMenuTrigger} t=${t} />
           <${SortControl} ui=${ui} />
         </div>
       </div>
@@ -784,6 +814,7 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker 
         <div><span class="eyebrow">Practice log</span><h3>Recent attempts</h3></div>
         <div class="attempts-tools">
           <span class="meta">${rows.length} shown</span>
+          <${StatMenuTrigger} t=${t} />
           <${SortControl} ui=${ui} />
         </div>
       </div>
@@ -952,6 +983,7 @@ function EmptyPractice({ v, t, ui, unassignedRows, freshIds, openCompare,
         <div><span class="eyebrow">Practice log</span><h3>Unassigned attempts</h3></div>
         <div class="attempts-tools">
           <span class="meta">${unassignedRows.length} shown</span>
+          <${StatMenuTrigger} t=${t} />
           <${SortControl} ui=${ui} />
         </div>
       </div>

@@ -39,8 +39,15 @@ def test_a_client_with_no_stored_route_adopts_the_servers():
     (spec 2026-07-23 section 5). A client holding no opinion must take the
     server's rather than sit at Overall while the server rates a route.
 
-    Adopted ONCE, guarded by a ref: picking "Overall" deliberately also makes
-    activeRouteId null, and re-adopting there would bounce the user's own
-    choice back while their POST was still in flight."""
-    assert "adoptedFromServer" in STORE
-    assert "useRef(false)" in STORE
+    Guarded by a pending-intent ref, not a one-shot "adopted once" flag (that
+    older design, `adoptedFromServer`, is what let two connected clients each
+    holding a different pick fight over the active route forever -- live
+    report 2026-07-28, ".claude/rules/ui-practice.md"): a client only ever
+    WRITES its own pending pick, and adopts the server's value for every OTHER
+    disagreement, including one that shows up after the client already had an
+    opinion -- e.g. the desktop GUI adopting a route the browser tab just
+    picked. Picking "Overall" still can't be bounced back mid-flight: it sets
+    a real (non-sentinel) pending intent, which the same guard blocks the
+    reconcile effect on until the write resolves."""
+    assert "pendingRouteIntent" in STORE and "routeWriteInFlight" in STORE
+    assert "NO_ROUTE_INTENT" in STORE
