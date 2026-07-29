@@ -903,7 +903,15 @@ def fires_from(trig: dict, level: int) -> bool:
         # single exclusion is what stops a fabricated WF -> CCM warp arming
         # "WF -> CCM" inside CCM, where it could only ever hang armed.
         source = trig.get("from")
-        return level == source if source is not None else level != trig["to"]
+        # `.get("to")`, not `trig["to"]`: this was the last bare subscript in
+        # the function, and it was safe only while every caller fed VALIDATED
+        # definitions. Task 16's lint endpoint is the first that feeds
+        # in-progress editor state, where a just-added clause is bare
+        # `{"type": "level_enter"}` -- and this raised KeyError -> 500 while
+        # the editor rendered the error beside Save. An unknown destination
+        # excludes nothing, so `level != None` is True: fires from anywhere,
+        # which is this module's own unknown-means-yes convention.
+        return level == source if source is not None else level != trig.get("to")
     if kind == "star_grabbed":
         # A star grab happens in its course's level; course 0 (the castle
         # secret stars) and an unscoped clause name no level of their own.

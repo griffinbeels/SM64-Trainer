@@ -152,6 +152,33 @@ def test_a_level_exit_with_from_but_no_to_on_the_next_clause_does_not_crash():
     assert not any(w["rule"] == "unfireable" for w in findings), findings
 
 
+def test_a_known_arm_position_with_a_bare_next_clause_does_not_crash():
+    """The THIRD bare subscript, and the one the two tests above cannot reach.
+
+    Both of those start with `level_exit`, whose `arm_level` is None -- so
+    `_rule_unrunnable_arm_position` short-circuits before it ever calls
+    `fires_from`, and the crash inside it survived Task 16's fix untouched.
+    A start clause with a KNOWN arm position (any `area_enter` with a level)
+    is what reaches it, and that is an ordinary editor state: pick the start
+    clause's level, leave the end clause at the Builder's bare
+    `{"type": "level_enter"}` default, wait for the debounced lint POST.
+
+    `fires_from` read `trig["to"]` and raised KeyError -> 500, which the
+    editor then rendered raw beside Save -- so lint was silently absent while
+    displaying an error, which is worse than either state on its own.
+    """
+    d = SegmentDef(id=1, name="x", enabled=True,
+                   start_triggers=[{"type": "area_enter", "level": 6,
+                                    "area": 1}],
+                   end_triggers=[{"type": "level_enter"}],
+                   guards=[])
+    findings = lint_definition(d, [])   # must not raise
+    # An unknown destination excludes nothing, so the arm position is
+    # runnable rather than refused -- unknown-means-yes, as everywhere else.
+    assert not any(w["rule"] == "unrunnable_arm_position" for w in findings), \
+        findings
+
+
 def test_a_clean_definition_produces_no_warnings():
     # WF -> SSL's real shape: exiting WF lands in the lobby (a real edge),
     # which is NOT SSL, so start and end can't coincide; the lobby is also a

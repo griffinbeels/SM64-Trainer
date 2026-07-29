@@ -613,9 +613,18 @@ def create_api_router(service) -> APIRouter:
         type, a clause missing a required param): the editor calls this on
         every edit, including the many in-progress states a form passes
         through before it is complete (a just-added clause with no level
-        picked yet), and every rule in `lint.py` already tolerates that (an
-        unrecognised type or an unset param reads as "unknown", never a
-        crash -- see that module's docstring). Domain-shape problems still
+        picked yet). Every rule in `lint.py` tolerates that -- an unrecognised
+        type or an unset param reads as "unknown", never a crash (see that
+        module's docstring). **The rules were not the whole story**: two of
+        them call `segments.can_run_from`, and its `fires_from` helper kept a
+        bare `trig["to"]` that raised KeyError -> 500 on an ordinary
+        in-progress form (start clause with its level picked, end clause still
+        the Builder's bare `{"type": "level_enter"}`). Fixed 2026-07-29, with
+        the regression test that actually REACHES it -- the two written when
+        this endpoint shipped both start with `level_exit`, whose `arm_level`
+        is None, so they short-circuit before that rule ever runs. Anything
+        this endpoint calls, not just the four rules, must tolerate partial
+        input. Domain-shape problems still
         surface at Save time (POST/PUT /api/segments' own `validate_definition`,
         409) -- that check is unchanged and this endpoint doesn't repeat it.
 
