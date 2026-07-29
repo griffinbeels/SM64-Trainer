@@ -1486,20 +1486,7 @@
           "area": 3
         }
       ],
-      "waypoints": [
-        [
-          {
-            "type": "level_enter",
-            "to": 10
-          }
-        ],
-        [
-          {
-            "type": "level_exit",
-            "from": 10
-          }
-        ]
-      ],
+      "waypoints": [],
       "guards": [
         {
           "type": "in_active_route"
