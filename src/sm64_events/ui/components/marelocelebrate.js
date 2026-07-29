@@ -30,7 +30,6 @@ import { celebrationsEnabled } from "../celebrations.js";
 import { tuning } from "../climbtuning.js";
 import { mareloTuning } from "../marelotuning.js";
 import { prefersReducedMotion } from "../useTween.js";
-import { setRankTintColor, restingTintColor } from "../ranktint.js";
 
 const html = htm.bind(h);
 
@@ -140,26 +139,15 @@ export function MareloCelebration({ celebration, scopeId, marelo, routes,
   // truthy -- a fresh celebration is always a fresh mount.
   const [climbTier, setClimbTier] = useState(() => celebration.from.tier);
 
-  // ---- The app-wide background tint (report 1, 2026-07-28) --------------
-  // Temporarily drives ui/ranktint.js's SAME `--rank-tint-color` property
-  // while this overlay is mounted, using the exact formula this file's OWN
-  // backdrop already paints with below (`rankColor(climbTier)`) -- so the
-  // app-wide tint is always in step with the card and the backdrop, never a
-  // second source that could disagree with the first. Gated on the TIER
-  // value alone so it does not re-fire on every unrelated re-render.
-  useEffect(() => {
-    setRankTintColor(rankColor(climbTier));
-    return undefined;
-  }, [climbTier]);
-
-  // Handed back to the RESTING value on unmount -- read off a ref, not the
-  // `marelo` prop directly, since a cleanup with an empty dependency array
-  // closes over whatever `marelo` was on the render that scheduled it, and
-  // the app root can re-render (a fresh /api/marelo poll) many times while
-  // this overlay stays mounted.
-  const restingTierRef = useRef(marelo && marelo.tier);
-  restingTierRef.current = marelo && marelo.tier;
-  useEffect(() => () => setRankTintColor(restingTintColor(restingTierRef.current)), []);
+  // There is NO app-wide ambient tint. One existed briefly on 2026-07-28
+  // and was deleted the same day at the user's call: "It should NOT be
+  // tinted by default. It should only tint during the animation. Default
+  // background color. During animation, default color -> current rank
+  // color -> colors we're ranking up to -> back to default." The BACKDROP
+  // below already is that sequence -- it fades up from nothing holding the
+  // from-tier, walks each crossing, and fades back out -- so a second
+  // always-on layer was both unwanted and invisible while this one was up
+  // (`.marelo-celebrate` is z-index 210; the ambient layer had none).
 
   // Measure the LIVE header card before the clone is placed — this is the
   // FIRST half of a FLIP, and it must run before paint or the clone appears

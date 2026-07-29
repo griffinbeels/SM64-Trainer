@@ -79,23 +79,11 @@ export const MARELO_TUNABLES = {
     why: "How long the backdrop takes to ease into a new tier's colour when the climb crosses one, so a crossing eases rather than cuts.",
   },
 
-  // ---- Ambient tint (report 1, 2026-07-28) --------------------------------
-  // Worn AT REST, all the time -- not only while a celebration is on screen
-  // (user: "If we're still ticking up within Capless, that's the color we
-  // display everywhere"). Read by ui/ranktint.js, the resting owner of
-  // `--rank-tint-color`; marelocelebrate.js only ever overrides the COLOUR
-  // itself while mounted, never these two -- how strong the tint is and how
-  // long a change takes do not depend on whether a celebration is running.
-  tintStrength: {
-    group: "Ambient tint", label: "Tint strength", value: 0.14,
-    min: 0, max: 0.6, step: 0.02, unit: "x",
-    why: "How much of the current rank's colour is mixed into the app's own background, all the time -- not only during a celebration.",
-  },
-  tintCrossfadeMs: {
-    group: "Ambient tint", label: "Tint cross-fade", value: 900,
-    min: 200, max: 3000, step: 50, unit: "ms",
-    why: "How long the app background takes to cross-fade to a new colour -- a tier change, or a celebration starting or ending.",
-  },
+  // An "Ambient tint" group (tintStrength / tintCrossfadeMs) lived here for
+  // part of 2026-07-28, backing an always-on `body::after` layer, and was
+  // deleted the same day: "It should NOT be tinted by default. It should only
+  // tint during the animation" (user). The page's only tint is the
+  // celebration BACKDROP, whose own colour walk is `tierFadeMs` above.
 
   // ---- Intensity ---------------------------------------------------------
   tierAmplify: {
