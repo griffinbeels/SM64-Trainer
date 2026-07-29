@@ -19,6 +19,15 @@
             "command": "python .claude/hooks/no-app-server.py"
           }
         ]
+      },
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/hooks/no-merge-dirty-worktree.py"
+          }
+        ]
       }
     ],
     "PostToolUse": [
