@@ -961,14 +961,7 @@
           "to": 23
         }
       ],
-      "waypoints": [
-        [
-          {
-            "type": "level_enter",
-            "to": 6
-          }
-        ]
-      ],
+      "waypoints": [],
       "guards": [
         {
           "type": "in_active_route"

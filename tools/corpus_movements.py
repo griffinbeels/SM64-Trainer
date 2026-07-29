@@ -63,7 +63,7 @@ MOVEMENTS = [
     movement("seg:bbh->basement", "BBH → Basement",
              exit_level(4), enter_area(BASEMENT), via=[enter_level(6)]),
     movement("seg:bbh->ddd", "BBH → DDD",
-             exit_level(4), enter_level(23), via=[enter_level(6)]),
+             exit_level(4), enter_level(23)),
     # --- basement ---------------------------------------------------------
     movement("seg:mips1->ssl", "MIPS (1st) → SSL",
              grab_star(0, 3), enter_level(8)),
