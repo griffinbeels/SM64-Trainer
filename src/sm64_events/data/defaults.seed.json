@@ -1392,6 +1392,32 @@
       "match_mode": "loose"
     },
     {
+      "seed_key": "seg:bowser2->bits",
+      "name": "Bowser 2 → BitS",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "level_exit",
+          "from": 33
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "level_enter",
+          "to": 21
+        }
+      ],
+      "waypoints": [],
+      "guards": [
+        {
+          "type": "in_active_route"
+        }
+      ],
+      "category": "Castle Movement",
+      "default_strat": "Standard",
+      "match_mode": "loose"
+    },
+    {
       "seed_key": "seg:wdw->thi",
       "name": "WDW → THI",
       "enabled": true,
@@ -9313,22 +9339,12 @@
           ]
         },
         {
-          "label": "→ Upstairs",
+          "label": "→ BitS",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bowser2->upstairs"
-            }
-          ]
-        },
-        {
-          "label": "Endless Staircase BLJ",
-          "need": 1,
-          "candidates": [
-            {
-              "type": "segment",
-              "seed_key": "seg:bits-entry"
+              "seed_key": "seg:bowser2->bits"
             }
           ]
         },
@@ -9433,22 +9449,12 @@
           ]
         },
         {
-          "label": "→ Upstairs",
+          "label": "→ BitS",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bowser2->upstairs"
-            }
-          ]
-        },
-        {
-          "label": "Endless Staircase BLJ",
-          "need": 1,
-          "candidates": [
-            {
-              "type": "segment",
-              "seed_key": "seg:bits-entry"
+              "seed_key": "seg:bowser2->bits"
             }
           ]
         },

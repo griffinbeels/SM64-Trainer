@@ -231,7 +231,7 @@ def test_every_seeded_segment_validates():
 
 
 def test_every_movement_is_route_scoped():
-    assert len(MOVEMENTS) == 55
+    assert len(MOVEMENTS) == 56          # 55 + seg:bowser2->bits (Task 20)
     for row in MOVEMENTS:
         assert row["guards"] == [{"type": "in_active_route"}], row["seed_key"]
 
@@ -387,6 +387,25 @@ def test_bowser_1_to_wf_survives_the_bitdw_reentry_detour():
     walker.hop((17, None))       # re-enter BitDW
     walker.hop((6, 1))           # pause-exit BitDW -> lobby
     walker.hop((24, None))       # walk into WF
+    closed = run_engine(row, walker.events, origin[0], origin[1])
+    outcomes = [a.outcome for a in closed]
+    assert outcomes == ["success"], (row["seed_key"], outcomes)
+
+
+def test_bowser_2_to_bits_survives_the_whole_detour():
+    # Task 0017: finish Bowser 2 -> back into BitFS -> pause exit to the
+    # basement -> lobby -> upstairs -> BLJs -> BitS. Every one of those steps
+    # cancels a strict definition; loose passes them all through
+    # transparently -- this is the whole reason Task 19 exists.
+    row = _seg("seg:bowser2->bits")
+    origin = (33, None)
+    walker = _Walker(origin)
+    walker.hop(exit_node(33))    # Bowser 2 exit -> basement
+    walker.hop((19, None))       # re-enter BitFS
+    walker.hop((6, 3))           # pause-exit BitFS -> basement
+    walker.hop((6, 1))           # lobby
+    walker.hop((6, 2))           # upstairs
+    walker.hop((21, None))       # BLJ into BitS
     closed = run_engine(row, walker.events, origin[0], origin[1])
     outcomes = [a.outcome for a in closed]
     assert outcomes == ["success"], (row["seed_key"], outcomes)

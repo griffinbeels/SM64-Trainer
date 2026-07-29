@@ -584,10 +584,13 @@ ROUTES.append(route(
 
 # --- 0 / 1 Star ------------------------------------------------------------
 
+# Task 20 (spec 2026-07-28-multi-step-segments): the real low-star walk goes
+# straight from Bowser 2's exit to BitS (re-entering BitFS, a pause exit, the
+# lobby/upstairs crossing, a BLJ) rather than stopping at Upstairs first --
+# seg:bowser2->upstairs and seg:bits-entry stay referenced via _16_TAIL below.
 _LOW_STAR_TAIL = [
     *BOWSER_2,
-    segment("seg:bowser2->upstairs", "→ Upstairs"),
-    segment("seg:bits-entry", "Endless Staircase BLJ"),
+    segment("seg:bowser2->bits", "→ BitS"),
     *BOWSER_3,
 ]
 

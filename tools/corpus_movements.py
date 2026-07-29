@@ -138,6 +138,15 @@ MOVEMENTS = [
              exit_level(33), enter_level(11)),
     movement("seg:bowser2->upstairs", "Bowser 2 → Upstairs",
              exit_level(33), enter_area(UPSTAIRS)),
+    # Real walk (Task 0017, live report): finish Bowser 2 -> back into BitFS
+    # -> pause exit to the basement -> lobby -> upstairs -> BLJs -> BitS.
+    # Every one of those steps would cancel a STRICT definition; a plain
+    # loose def (no waypoints) passes them all through transparently, which
+    # is the whole reason this is finally expressible (Task 20, spec
+    # 2026-07-28-multi-step-segments) -- no via chain needed, same shape as
+    # every other Bowser-arena-exit movement above.
+    movement("seg:bowser2->bits", "Bowser 2 → BitS",
+             exit_level(33), enter_level(21)),
     # --- upstairs ---------------------------------------------------------
     movement("seg:wdw->thi", "WDW → THI", exit_level(11), enter_level(13)),
     movement("seg:thi->ttm", "THI → TTM", exit_level(13), enter_level(36)),
