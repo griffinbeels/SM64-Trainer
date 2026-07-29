@@ -830,7 +830,27 @@ def wipe_matches(a: Attempt, p: dict) -> bool:
 
 
 def replay(events, segments=None, time_filters=None,
-           origin_overrides=None) -> tuple[list[Attempt], Projector]:
+           origin_overrides=None, on_notices=None) -> tuple[list[Attempt], Projector]:
+    """`on_notices`, default None (spec 2026-07-28-multi-step-segments, the
+    backtest arm-count gap): an optional callback invoked with
+    `proj.segment_notices` after every fed event, for a caller that needs
+    more than the final-state snapshot `Projector` exposes.
+
+    `Projector.segment_notices` is OVERWRITTEN every `feed()` call — it is a
+    live-broadcast queue `service.py` drains once per tick, not a log — so a
+    replay caller that wants the full history (e.g. every `segment_armed`
+    across the whole journal, not just the last event's) has no other way to
+    see it after the fact. Rather than have `replay()` itself accumulate
+    (this is the LIVE projection path too — service.py's own re-projection
+    calls it, and widening its return value would ripple into every
+    existing caller) or give the caller a second event loop that duplicates
+    the `data_wiped` retroactive-suppression branch below, this is the one
+    seam: a caller passes a callback, sees every event's notices exactly
+    once, and every existing caller (on_notices=None) is byte-for-byte
+    unaffected. `tracking/backtest.py::_run` is the one consumer so far,
+    counting `segment_armed` notices to distinguish "never armed" from
+    "armed and never closed" — two candidates `unclosed` alone cannot tell
+    apart, since it only reports what's STILL armed at the journal's end."""
     proj = Projector(cleared_ids(events), segments=segments,
                      time_filters=time_filters, touched=touched_ids(events),
                      strat_overrides=strat_overrides(events),
@@ -842,10 +862,14 @@ def replay(events, segments=None, time_filters=None,
             # drop everything accumulated so far that falls in scope; attempts
             # closed AFTER the wipe accumulate fresh. The event never reaches
             # the projector — an in-flight open attempt deliberately survives
-            # (it closes after the wipe, so it is post-wipe data).
+            # (it closes after the wipe, so it is post-wipe data). Never
+            # reaches proj.feed(), so on_notices is correctly never called
+            # for it either -- there are no notices to report.
             attempts = [a for a in attempts if not wipe_matches(a, ev.payload)]
             continue
         attempts.extend(proj.feed(ev))
+        if on_notices is not None:
+            on_notices(proj.segment_notices)
     return attempts, proj
 
 

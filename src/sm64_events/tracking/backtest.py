@@ -37,6 +37,22 @@ carry:
   "these attempts changed" rather than "everything is new AND everything is
   gone" (`current` is real, persisted data, so its own id is already safe;
   only the not-yet-saved `candidate` ever needs a stand-in id at all).
+
+THE AMBIGUITY `BacktestReport.arms` closes: `unclosed` is derived from
+`proj.armed_arms()`, the projector's END-STATE armed set — at most one entry,
+"still armed when the journal ended". A candidate that armed fifty times and
+was silently disarmed fifty times (an off-route detour, a misrouted waypoint,
+a start trigger paired with an unfireable end) reports `unclosed: []` —
+IDENTICAL, on `fires`/`unclosed` alone, to a candidate whose start trigger
+never matched anything in the whole journal. Both read `fires=0, unclosed=[]`;
+one names a broken END (or an unfireable pair), the other names a broken
+START. `arms` is every `segment_armed` notice the candidate's engine emitted
+across the replay (segments.py's two arm sites, both `notices.append(...)`
+under the SAME "event": "segment_armed" key), collected through
+`projection.replay()`'s `on_notices` hook rather than a second event loop —
+see that function's docstring for why. `arms == 0` -> the start trigger is
+wrong; `arms > 0, fires == 0` -> the pair is unfireable or the end is wrong;
+`unclosed` non-empty is the third, already-solved case (still running).
 """
 from dataclasses import dataclass, replace
 
@@ -62,6 +78,17 @@ class BacktestReport:
                                     # would be a fabricated fact rather than a
                                     # documented deviation -- progress/total
                                     # are the real fields it does carry.
+    arms: int                       # how many times CANDIDATE'S start trigger
+                                    # armed over the whole replay (every
+                                    # `segment_armed` notice, projection.replay's
+                                    # on_notices hook) — see module docstring
+                                    # "THE AMBIGUITY". unclosed alone cannot
+                                    # tell "never armed" apart from "armed and
+                                    # was silently disarmed every single time":
+                                    # both report unclosed=[] AND fires=0.
+                                    # `current`'s arm count isn't tracked --
+                                    # this field diagnoses the CANDIDATE, the
+                                    # thing being tested.
     pb_before: int | None           # fastest non-cleared success under
                                     # `current`; None when it wasn't supplied
     pb_after: int | None            # fastest non-cleared success under `candidate`
@@ -83,11 +110,26 @@ def _describe(a: Attempt) -> dict:
 
 def _run(events, definition: SegmentDef, time_filters):
     """One replay scoped to a single definition: its attempts, its still-
-    armed-at-the-end detail (if any), and its fastest non-cleared success --
-    all off the SAME replay so the three can never disagree about what this
-    definition would have done."""
+    armed-at-the-end detail (if any), its arm count, and its fastest
+    non-cleared success -- all off the SAME replay so the four can never
+    disagree about what this definition would have done.
+
+    Arm count: `replay()`'s `on_notices` hook (see its docstring) is called
+    with `proj.segment_notices` after every fed event; `segment_notices` is
+    the engine's raw notice list for THAT event only, mixing every armed def
+    together (a backtest only ever replays one), so filtering on
+    `definition.id` here is a formality, not a real disambiguation need --
+    kept anyway so a future multi-def replay through this same hook can't
+    silently over-count."""
+    arms = 0
+
+    def _count_arms(notices):
+        nonlocal arms
+        arms += sum(1 for n in notices if n["event"] == "segment_armed"
+                    and n["segment_id"] == definition.id)
+
     attempts, proj = replay(events, segments=[definition],
-                            time_filters=time_filters)
+                            time_filters=time_filters, on_notices=_count_arms)
     mine = [a for a in attempts if a.segment_id == definition.id]
     unclosed: list[dict] = []
     arm = proj.armed_arms().get(definition.id)
@@ -99,7 +141,7 @@ def _run(events, definition: SegmentDef, time_filters):
     pb = min((a.rta_frames for a in mine
              if a.outcome == "success" and not a.cleared
              and a.rta_frames is not None), default=None)
-    return mine, unclosed, pb
+    return mine, unclosed, arms, pb
 
 
 def backtest(events, candidate: SegmentDef, current: SegmentDef | None = None,
@@ -117,12 +159,12 @@ def backtest(events, candidate: SegmentDef, current: SegmentDef | None = None,
     second filter layered on top."""
     run_id = current.id if current is not None else CANDIDATE_ID
     candidate = replace(candidate, id=run_id)  # THE TRAP — see module docstring
-    attempts, unclosed, pb_after = _run(events, candidate, time_filters)
+    attempts, unclosed, arms, pb_after = _run(events, candidate, time_filters)
     fires = sum(1 for a in attempts if a.outcome == "success" and not a.cleared)
 
     pb_before = gained = lost = None
     if current is not None:
-        current_attempts, _, pb_before = _run(events, current, time_filters)
+        current_attempts, _, _, pb_before = _run(events, current, time_filters)
         mine_keys = {(a.started_utc, a.rta_frames) for a in attempts}
         current_keys = {(a.started_utc, a.rta_frames) for a in current_attempts}
         gained = len(mine_keys - current_keys)
@@ -130,5 +172,5 @@ def backtest(events, candidate: SegmentDef, current: SegmentDef | None = None,
 
     return BacktestReport(
         fires=fires, attempts=[_describe(a) for a in attempts],
-        unclosed=unclosed, pb_before=pb_before, pb_after=pb_after,
+        unclosed=unclosed, arms=arms, pb_before=pb_before, pb_after=pb_after,
         gained=gained or 0, lost=lost or 0)
