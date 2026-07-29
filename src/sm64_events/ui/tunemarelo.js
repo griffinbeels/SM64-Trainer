@@ -216,8 +216,11 @@ function Inspector() {
       <div class="tune-pickers" style="margin-top:8px">
         <div>
           <label>Showing</label>
-          <div class="tune-showing">${rankLabel(fromLevel)} →
-            ${rankLabel(toLevel)}</div>
+          ${/* htm COLLAPSES the whitespace between running text and an
+               interpolation, so "→" against ${rankLabel(toLevel)} renders as
+               "→Waluigi 4". The space has to be written as an interpolation
+               of its own -- there is no lint for this, only a render. */""}
+          <div class="tune-showing">${rankLabel(fromLevel)}${" "}→${" "}${rankLabel(toLevel)}</div>
         </div>
       </div>
       <div class="tune-actions" style="margin-top:10px">
