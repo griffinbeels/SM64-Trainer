@@ -38,10 +38,10 @@ sys.path.insert(0, str(REPO / "tools"))
 from ui_fixture import serve_ui  # noqa: E402
 
 # uilab replaced tools/cdp.py (deleted on main when the layout rig was
-# extracted). Its Page protocol offers the three verbs this test needs, and
-# resolving uilab BY PATH is what stops `uv sync` pruning the gate into a
-# silent skip -- see tests/uilab_guard.py.
-from uilab_guard import find_uilab  # noqa: E402
+# extracted). Its Page protocol offers the verbs this test needs, and resolving
+# uilab BY PATH is what stops `uv sync` pruning the gate into a silent skip --
+# the reasoning is in tools/find_uilab.py, which is the ONE door for it.
+from find_uilab import find_uilab  # noqa: E402
 
 _MISSING = find_uilab()
 if _MISSING:
@@ -49,36 +49,34 @@ if _MISSING:
 
 from uilab import driver  # noqa: E402
 
-# SKIPPED, and the reason is a uilab gap rather than a defect here.
+# This test was SKIPPED for two days on two claims about uilab, both of which
+# turned out to be false when finally measured (2026-07-29):
 #
-# The livelock this test exists for needs THREE clients connected at once (one
-# client never reproduced it: 25 trials, 0 failures; three clients, 13 of 20
-# stuck). uilab's Driver protocol yields ONE Page per `launch()`, and nesting
-# three sync-Playwright contexts is what Playwright itself refuses -- "Sync API
-# inside the asyncio loop". So the scenario cannot be expressed against the
-# shared rig today.
+#   "launch() yields ONE Page and nesting sync-Playwright contexts raises Sync
+#   API inside the asyncio loop"  -- it does not. The driver reference-counts
+#   one Playwright instance across nested launches precisely so a second
+#   browser can stand beside a live one; three concurrent clients measured
+#   working.
 #
-# It ran green against tools/cdp.py before main moved that module into uilab
-# (10/10 trials, and 7/10 FAILING against the pre-fix store, which is what
-# established it has teeth). Re-adding a local CDP client to keep it running
-# would be precisely the local reimplementation the shared-module rule exists
-# to prevent, so the fix belongs in uilab: a way to open N pages against one
-# launch. Until then this is a KNOWN, NAMED coverage gap rather than a silent
-# one -- the behaviour it guards is still exercised by hand, and store.js
-# carries the reasoning at the reconcile site.
-pytest.skip("needs multi-page support in uilab's driver; see the note above",
-            allow_module_level=True)
+#   "evaluate does not await a Promise"  -- it does. The real fault was uilab's
+#   own evaluate WRAPPER, which chose its form by `startswith("(")` and so
+#   dropped the `return` from every plain expression, returning None for all of
+#   them. Fixed in uilab; the settle waits below (`new Promise(r =>
+#   setTimeout(...))`) depend on the awaiting that was said to be absent.
+#
+# Neither claim was ever tested. A named coverage gap is better than a silent
+# one, but a named gap resting on an unmeasured cause is how a passing test
+# stays off for no reason -- so the reason a skip cites now gets measured before
+# it is written down. The livelock needs THREE clients (one client: 25 trials, 0
+# failures; three: 13 of 20 stuck), which is why it is worth this much fuss.
 
 
 @contextlib.contextmanager
 def chrome_session(url: str):
-    """tools/cdp.py's old shape, over uilab's driver."""
+    """One connected client -- a browser tab, or the desktop GUI (rule 10)."""
     with driver.get_driver().launch(headless=True) as page:
         page.goto(url)
         yield page
-
-pytestmark = pytest.mark.skipif(
-    False, reason="uilab resolves the browser; see tests/uilab_guard.py")
 
 # Two confusingly-similar names, matching the live report, plus two more so
 # "switch through several routes" is a real cycle rather than a toggle.

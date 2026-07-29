@@ -36,10 +36,10 @@ pytestmark = pytest.mark.skipif(
     shutil.which("node") is None, reason="node not on PATH")
 
 # uilab replaced tools/cdp.py (deleted on main when the layout rig was
-# extracted). Its Page protocol offers the three verbs this test needs, and
-# resolving uilab BY PATH is what stops `uv sync` pruning the gate into a
-# silent skip -- see tests/uilab_guard.py.
-from uilab_guard import find_uilab  # noqa: E402
+# extracted). Its Page protocol offers the verbs this test needs, and resolving
+# uilab BY PATH is what stops `uv sync` pruning the gate into a silent skip --
+# the reasoning is in tools/find_uilab.py, which is the ONE door for it.
+from find_uilab import find_uilab  # noqa: E402
 
 _MISSING = find_uilab()
 if _MISSING:

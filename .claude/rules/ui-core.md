@@ -207,6 +207,59 @@ pointer to it).
   Express the check as a function of source text so a probe test can feed it a
   comment-only sample and a real-code sample — `test_the_guards_can_still_fail`
   in `tests/test_ui_picker_parity.py` is the pattern.
+- **Before debugging a UI report, ask what code the page is actually running.**
+  Two rounds of this branch went into a bug that was already fixed: the server
+  was serving an older worktree. It is one request —
+  `fetch('/ui/<file>.js').then(r => r.text()).then(t => t.includes('<a symbol
+  the fix introduced>'))` — and it is the FIRST thing to run when a report
+  survives a fix you have verified, ahead of any hypothesis about the code.
+  UI files are served `no-cache` with ETags, so a page reload always
+  revalidates; a stale page therefore means a stale SERVER, not a stale
+  browser. `run-test-server.bat` prints the commit it is running for the same
+  reason, but that is on the console and this is queryable.
+
+- **uilab is the shared rig; a limit you hit in it is a bug to FIX there, and
+  two of the three "limits" written here were never real (2026-07-29).** Both
+  false ones were written from a symptom without measuring the cause, and both
+  then justified a workaround. What is actually true:
+  1. **`evaluate` DOES await a Promise, and a bare expression DOES return.**
+     This file previously said the opposite of each. The real fault was uilab's
+     `evaluate` wrapper choosing its form by `startswith("(")`, so every plain
+     expression became `() => { expr }` with no `return` and came back `None` —
+     silently, which is indistinguishable from a page that has nothing. Fixed
+     in the driver and pinned by
+     `uilab/tests/test_driver_conformance.py::test_evaluate_returns_a_plain_expression`.
+     Do not hand-roll a Python sampling loop: **`uilab.trace.record()`** records
+     at the page's own frame rate and answers the questions directly
+     (`starts_at_rest`, `comes_to_rest`, `monotone`, `overlaps`, `together`),
+     with correlated screenshots via `film()`.
+  2. **Several simultaneous clients ARE expressible.** `get_driver()` used to
+     mint a fresh driver per call, which made the Playwright driver's
+     reference-counted `sync_playwright()` per-object and produced "Sync API
+     inside the asyncio loop" on the second `launch()` — an error naming asyncio
+     nobody wrote, which read as a hard library limit. `get_driver()` caches one
+     instance per name now, pinned by
+     `test_driver_conformance.py::test_three_clients_can_be_open_at_once`.
+     `tests/test_ui_route_switch.py` was skipped for two days on that
+     misreading; it is live again and mutation-proved (5/10 trials fail against
+     the pre-fix reconcile, with the reported symptom exactly: the select shows
+     the picked route while the card says "Overall" and `active_route` is
+     `None`).
+  3. **`tools/ui_fixture.py::serve_ui()` degrades SILENTLY to an empty
+     database** whenever `data/tracker.db` is absent — which is every worktree,
+     since `data/` is gitignored. An empty fixture renders no target, no
+     practice log and no detail drawer, so a sweep over it reports clean and a
+     render check proves nothing. Always `snapshot_db(LIVE, scratch)` from the
+     primary checkout and pass `db_path=`; never hand it the live path, which
+     it opens read-write.
+
+  The transferable part is not any of the three. It is that **a skip's stated
+  reason is a claim, and an unmeasured one rots into permanent lost coverage
+  while looking like diligence** — a named gap reads as honest bookkeeping, so
+  nobody re-checks it. Measure the limit before writing it down, and prefer a
+  one-line probe against the rig to any reasoning about what the library
+  "cannot" do.
+
 - **Swapping one piece of text for another is SEQUENTIAL, never a crossfade.**
   The outgoing string reaches 0 before the incoming one leaves it.
   `climbcurve.js::exchangeFade(progress, at)` returns the `{out, in}` pair and
