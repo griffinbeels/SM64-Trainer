@@ -85,16 +85,159 @@ NEVER_TRUNCATE = (".rank-banner-kicker", ".context-label", ".nav-item span",
 # begin with (that story only ever asserted on the ONE primary card), and
 # their own useCollapsed state is a real, separate product question this
 # project's file ownership does not cover (ui/components/collapsible.js).
-_EXPAND_ALL = """
+# `Story.setup` is wrapped `() => { return (EXPR); }` when it starts with "("
+# (uilab's PlaywrightPage.evaluate) -- an async IIFE therefore has its Promise
+# AWAITED by Playwright automatically, which is what lets a setup click
+# through a multi-step flow (open a tab, open a modal, wait for a fetch to
+# land) as ONE atomic, ordered script instead of guessing a fixed delay.
+# Required here because a `.click()` and the DOM read that follows it in the
+# SAME script do NOT observe each other -- measured directly (2026-07-29):
+# clicking a toggle and reading its `aria-expanded` in one evaluate() call
+# still reports the PRE-click value; only a real await (a timer tick, letting
+# Preact flush) sees the change.
+_ASYNC_HELPERS = """
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const waitFor = async (pred, maxMs = 3000, stepMs = 40) => {
+  const start = Date.now();
+  while (Date.now() - start < maxMs) {
+    if (pred()) return true;
+    await sleep(stepMs);
+  }
+  return false;
+};
+"""
+
+
+def _script(body: str) -> str:
+    """One idempotent, awaited setup script, `_ASYNC_HELPERS` included."""
+    return "(async () => {" + _ASYNC_HELPERS + body + "})()"
+
+
+# `app.js`'s tabs UNMOUNT the page they leave (a ternary chain, not a
+# display:none stack -- Compare is the one deliberate exception), so a story
+# on the Segments tab leaves nothing of the Practice page behind. That is
+# good for isolation and bad for the SWEEP LOOP: stories share one page
+# across the whole matrix with no reload, so if the last story of a
+# viewport's pass left the app on Segments, the NEXT viewport's "page" story
+# would silently measure the Segments tab under the Practice page's name.
+# Returning here, first, makes "page" self-healing regardless of what ran
+# immediately before it.
+_EXPAND_ALL = _script("""
+const practiceBtn = document.querySelector('button.nav-item[title="Practice"]');
+if (practiceBtn && practiceBtn.getAttribute('aria-current') !== 'page') {
+  practiceBtn.click();
+  await waitFor(() => !!document.querySelector('.objective-card, .objective-empty'));
+}
 document.querySelectorAll('.card-collapse[aria-expanded="false"]')
   .forEach((b) => { if (!b.closest('.practice-index-item')) b.click(); });
 document.querySelectorAll('details.practice-index-item:not([open])')
   .forEach((d) => { d.open = true; });
-"""
+""")
 _COLLAPSE_ALL = """
 document.querySelectorAll('.card-collapse[aria-expanded="true"]')
   .forEach((b) => { if (!b.closest('.practice-index-item')) b.click(); });
 """
+
+# This branch's OWN surfaces (spec 2026-07-28-multi-step-segments) were never
+# in this file at all until 2026-07-29 -- every one of `page`/`active-target`/
+# `armed-segment`/`practice-log`/`page-collapsed` is Practice-page state
+# inherited from main, and `ready_selector` never leaves it. So the recorder
+# modal (segmenttimeline.js, three states, the feature this whole branch
+# exists for), the segments editor (which now also carries the match-mode
+# select, the lint panel, the backtest panel and the split/merge panels) and
+# the split/merge panels themselves had been rendered by this gate exactly
+# zero times, at any breakpoint, the whole time this branch has existed --
+# `tests/test_fixture_reaches_the_real_page.py`'s own lesson, applied to a
+# fourth instance of the same failure it names three of.
+#
+# `_seed_editor_fixtures()` (ui_fixture.py) POSTs two saved, byte-identical
+# segments purpose-built for this: opening either one shows a REAL `duplicate`
+# lint finding (a definition with no finding renders NO lint panel at all --
+# `${lintFindings.length > 0 && ...}` -- so a quiet definition sweeps an
+# invisible one) and a split panel (needs exactly one waypoint, which neither
+# LBLJ nor any of the ten legacy tricks carries).
+_EDITOR_SETUP = _script("""
+const segBtn = document.querySelector('button.nav-item[title="Segments"]');
+if (segBtn && segBtn.getAttribute('aria-current') !== 'page') {
+  segBtn.click();
+  await waitFor(() => !!document.querySelector('.segments-page'));
+}
+if (!document.querySelector('.segbuilder')) {
+  const search = document.querySelector('.library-search');
+  if (search) {
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype, 'value').set;
+    setter.call(search, 'Editor Fixture A');
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    await waitFor(() => !!document.querySelector('.segment-row-main'));
+  }
+  const row = document.querySelector('.segment-row-main');
+  if (row) { row.click(); await waitFor(() => !!document.querySelector('.segbuilder')); }
+}
+// The lint effect is DEBOUNCED 400ms from mount; waited for explicitly and
+// BEFORE the backtest click below, or the two waits race and this one
+// sometimes loses (measured: waiting only on the backtest panel left lint
+// at 0 findings often enough to be the first thing this story's own
+// mutation proof caught).
+await waitFor(() => document.querySelectorAll('.lint-panel .lint-finding').length > 0, 1500);
+const btBtn = Array.from(document.querySelectorAll('.builder-actions button'))
+  .find((b) => b.textContent.includes('Try it against my history'));
+if (btBtn && !document.querySelector('.backtest-panel')) {
+  btBtn.click();
+  await waitFor(() => !!document.querySelector('.backtest-panel'), 3000);
+}
+""")
+
+
+def _recorder_setup(target_step: int) -> str:
+    """Idempotent, order-independent: walks the "record a segment" modal
+    (segmenttimeline.js) FORWARD from wherever it currently is to
+    `target_step` (0 start / 1 end / 2 review), backing up to "start" first
+    if it is already further along. Each forward click picks the FIRST
+    currently-listed `.record-row` -- any row synthesizes into a segment
+    (any level_changed/star_collected pair works), and picking the first
+    (oldest) one at every step guarantees rows remain for the step after it;
+    picking the LAST (most recent) one at "start" was tried and left nothing
+    later to pick for "end" (measured, not assumed)."""
+    return _script(f"""
+const segBtn = document.querySelector('button.nav-item[title="Segments"]');
+if (segBtn && segBtn.getAttribute('aria-current') !== 'page') {{
+  segBtn.click();
+  await waitFor(() => !!document.querySelector('.segments-page'));
+}}
+if (!document.querySelector('.record-steps')) {{
+  const openBtn = Array.from(document.querySelectorAll('button'))
+    .find((b) => b.textContent.includes('Record a segment'));
+  if (openBtn) {{
+    openBtn.click();
+    await waitFor(() => !!document.querySelector('.record-steps'));
+  }}
+}}
+const stepIndex = () => {{
+  const el = document.querySelector('.record-step.on');
+  if (!el) return -1;
+  const label = el.textContent.trim();
+  return label.startsWith('1') ? 0 : label.startsWith('2') ? 1 : 2;
+}};
+if (stepIndex() > {target_step}) {{
+  // The FIRST `.record-picked` "Change" is always Start's -- one back-click
+  // from either "end" or "review" returns to "start" (segmenttimeline.js's
+  // own backTo("start") clears endRow too).
+  const back = document.querySelector('.record-picked button');
+  if (back) {{ back.click(); await waitFor(() => stepIndex() <= {target_step}); }}
+}}
+let guard = 0;   // bounded: at most two forward steps ever needed
+while (stepIndex() >= 0 && stepIndex() < {target_step} && guard < 5) {{
+  guard++;
+  const before = stepIndex();
+  await waitFor(() => document.querySelectorAll('.record-row').length > 0, 3000);
+  const rows = document.querySelectorAll('.record-row');
+  if (!rows.length) break;
+  rows[0].click();
+  await waitFor(() => stepIndex() !== before, 2000);
+}}
+""")
+
 
 STORIES = [
     Story(name="page", at="", setup=_EXPAND_ALL),
@@ -116,9 +259,23 @@ STORIES = [
           skip_if="!document.querySelector('.seg-waiting')"),
     Story(name="practice-log", at=".attempts-card",
           skip_if="!document.querySelector('.attempts-card')"),
-    # Last, so it does not leave the page folded for the stories above.
+    # Last of the PRACTICE-page stories, so it does not leave the page folded
+    # for the ones above.
     Story(name="page-collapsed", at="", setup=_COLLAPSE_ALL,
           skip_if="!document.querySelector('.card-collapse')"),
+    # The four SEGMENTS-tab stories below are last on purpose: `_EXPAND_ALL`
+    # (the "page" story's own setup, which runs first on every viewport) is
+    # what returns the app to Practice for the next pass, so nothing after
+    # these needs to.
+    # No `skip_if` on these four: unlike `.attempts-card`/`.seg-waiting`
+    # (server-seeded state that may or may not exist before any setup runs),
+    # reaching a segment/the recorder is ENTIRELY the setup's own job --
+    # `skip_if` runs BEFORE `setup` (uilab's sweep loop), so gating on the
+    # state setup is meant to create would skip every single time.
+    Story(name="segments-editor", at=".segbuilder", setup=_EDITOR_SETUP),
+    Story(name="recorder-start", at=".modal", setup=_recorder_setup(0)),
+    Story(name="recorder-end", at=".modal", setup=_recorder_setup(1)),
+    Story(name="recorder-review", at=".modal", setup=_recorder_setup(2)),
 ]
 
 PROJECT = Project(
@@ -126,7 +283,9 @@ PROJECT = Project(
     # see ui_fixture.py::_arm_segment. It is one of the ten legacy tricks the
     # schema MIGRATION itself inserts, so it exists in this empty, deterministic
     # fixture with no defaults-corpus reconcile (that only runs from main.py).
-    serve=functools.partial(serve_ui, arm_segment=1),
+    # `seed_editor_fixtures=True` additionally seeds the two segments the
+    # segments-editor story opens (see `_EDITOR_SETUP` above).
+    serve=functools.partial(serve_ui, arm_segment=1, seed_editor_fixtures=True),
     page_path="/ui/index.html",
     # The shell paints before the session view lands, and a sweep that starts
     # measuring at that moment reports a page with none of its content on it --

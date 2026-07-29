@@ -278,6 +278,53 @@ def _arm_segment(base: str, service, segment_id: int = 1) -> None:
     asyncio.run(rearm())
 
 
+# Two user-authored segments, byte-identical to each other, for the segments-
+# editor Story/tests (uilab_project.py, test_fixture_reaches_the_real_page.py)
+# -- opening either one must show a REAL `duplicate` lint finding (the lint
+# panel renders NOTHING at all when `lintFindings` is empty:
+# `${lintFindings.length > 0 && html...}` in segments.js, so a definition with
+# no finding sweeps an invisible panel), a split panel (needs exactly one
+# waypoint) and a merge panel (needs another segment to offer, which the
+# other of this pair, plus the ten legacy tricks, already supplies).
+#
+# Levels 12/13/14/15 (Jolly Roger Bay / Tiny-Huge Island / Tick Tock Clock /
+# Rainbow Ride) are deliberately INERT: none of `_arm_segment`'s events (16,
+# 6, 17) ever touch them, so neither fixture arms and neither adds an
+# unplanned `.objective-card` to the practice index -- these two exist purely
+# to be opened in the editor, never to be practiced.
+_EDITOR_FIXTURE_DEFINITION = {
+    "start_triggers": [{"type": "level_enter", "to": 13, "from": 12}],
+    "end_triggers": [{"type": "level_enter", "to": 14}],
+    "guards": [], "enabled": True,
+    "waypoints": [[{"type": "level_enter", "to": 15}]],
+    "match_mode": "strict",
+}
+
+
+def _seed_editor_fixtures(base: str) -> None:
+    """POST the two `_EDITOR_FIXTURE_DEFINITION` segments (see its own
+    comment). Read-only for everything else: no target, no arming, nothing
+    published through `service` -- just two ordinary saved definitions the
+    library can list and the editor can open."""
+    import urllib.error
+    import urllib.request
+
+    def post(path: str, payload: dict) -> dict:
+        request = urllib.request.Request(
+            f"{base}{path}", data=json.dumps(payload).encode(), method="POST",
+            headers={"Content-Type": "application/json"})
+        try:
+            return json.loads(urllib.request.urlopen(request, timeout=10).read())
+        except urllib.error.HTTPError as error:
+            raise RuntimeError(
+                f"fixture could not POST {path}: {error.code} "
+                f"{error.read()[:200]!r}") from error
+
+    for suffix in ("A", "B"):
+        post("/api/segments",
+             {"name": f"Editor Fixture {suffix}", **_EDITOR_FIXTURE_DEFINITION})
+
+
 def _free_port() -> int:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
@@ -289,7 +336,8 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
               seed: bool = True, from_dev_db: bool = False,
               stage: tuple[int, int] | None = None,
               target: tuple[int, int] | None = None,
-              arm_segment: int | None = None):
+              arm_segment: int | None = None,
+              seed_editor_fixtures: bool = False):
     """Yield the base URL of an offline instance; stop it on the way out.
 
     DETERMINISTIC BY DEFAULT: an empty database plus `seed_practice`, so two
@@ -313,6 +361,13 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
     `_arm_segment`) -- additive, not a replacement for `target`: an armed
     segment gets its own section regardless of which kind is the active
     target, so a star target and an armed segment coexist on the same page.
+
+    `seed_editor_fixtures` additionally POSTs two saved, byte-identical
+    segments purpose-built for opening in the Segments editor (see
+    `_seed_editor_fixtures`) -- this branch's authoring surfaces (lint,
+    backtest, split, merge) have never been rendered by any gate, because
+    reaching them needs a definition on disk to open, which no earlier
+    fixture state provided.
     """
     scratch = None
     if db_path is None:
@@ -369,6 +424,8 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
             # `target_set` -- it does not read or touch segment arm state.
             if arm_segment is not None:
                 _arm_segment(base, service, segment_id=arm_segment)
+            if seed_editor_fixtures:
+                _seed_editor_fixtures(base)
             course, level = stage or (FIXTURE_COURSE, FIXTURE_LEVEL)
             seed_practice(service, course_id=course, level=level,
                           star_id=(target or (0, FIXTURE_STAR))[1],
