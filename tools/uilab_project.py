@@ -31,6 +31,16 @@ SHELL_SELECTORS = (
     "app-shell", "app-sidebar", "app-brand", "app-main", "app-notice",
     "nav-", "sidebar-", "mobile-", "workspace", "context-", "view-pane",
     "sheet-",
+    # The sidebar's status block. Added 2026-07-28 after its absence caused a
+    # real bug: the Wave 2 conversion read `.recording-status` as
+    # component-internal and moved its rail rules into a @container query, but
+    # the sidebar is not inside `.view-pane`, so the query could never match
+    # and nothing styled the block at all -- the user's "the recording section
+    # is clearly too big and the dot is not sized properly when the sidebar is
+    # small". The test for "is this shell" is not what a name looks like, it is
+    # whether the element lives inside a size container. Nothing in the sidebar
+    # or the header does.
+    "recording-", "connection-", "status-",
 )
 
 # Elements carrying irreducible information: a defect if they ellipsise.
@@ -66,74 +76,5 @@ PROJECT = Project(
     # Sizes that earn a place regardless of what the stylesheet declares: the
     # two the user reported, the workspace's max width, and a short window.
     extra_viewports=((900, 1180), (760, 1180), (1500, 900), (1280, 720)),
-    # CAVEAT: these rows are keyed on exact viewport + selector, and the
-    # fixture renders a SNAPSHOT of the dev database -- so the set shifts a
-    # little as real play changes the data. Two rows appeared here that a
-    # worktree run did not produce. The durable fix is a deterministic fixture
-    # database rather than a snapshot of the live one; until then, expect the
-    # occasional new row of an already-known defect class.
-    #
-    # OWED, not exempted. Every row is real layout breakage on a POPULATED
-    # practice page -- the state the fixture only started reaching once it
-    # seeded a target and waited for the view to render. uilab's
-    # stale-exemption gate deletes each row the moment its defect stops
-    # occurring, so this list cannot quietly drift into fiction.
-    known_defects={
-        '400x1000 [page] overlap :: td.attempt-result.good x td.attempt-delta':
-            'attempt-table cells collide at narrow widths',
-        '401x1000 [page] overlap :: td.attempt-result.good x td.attempt-delta':
-            'attempt-table cells collide at narrow widths',
-        '320x800 [page] clipped :: section.practice-card.attempts-card':
-            'scrollWidth 316 > clientWidth 275',
-        '320x800 [page] clipped :: section.practice-card.objective-card':
-            'scrollHeight 285 > clientHeight 278',
-        '320x800 [page] overlap :: td.attempt-result.good x td.attempt-delta':
-            'overlap 4x4px inside tr',
-        '330x1000 [page] clipped :: section.practice-card.attempts-card':
-            'scrollWidth 316 > clientWidth 275',
-        '330x1000 [page] clipped :: section.practice-card.objective-card':
-            'scrollHeight 285 > clientHeight 278',
-        '330x1000 [page] overlap :: td.attempt-result.good x td.attempt-delta':
-            'overlap 4x4px inside tr',
-        '331x1000 [page] clipped :: section.practice-card.attempts-card':
-            'scrollWidth 316 > clientWidth 275',
-        '331x1000 [page] clipped :: section.practice-card.objective-card':
-            'scrollHeight 285 > clientHeight 278',
-        '331x1000 [page] overlap :: td.attempt-result.good x td.attempt-delta':
-            'overlap 4x4px inside tr',
-        '400x1000 [page] clipped :: section.practice-card.objective-card':
-            'scrollHeight 285 > clientHeight 278',
-        '401x1000 [page] clipped :: section.practice-card.objective-card':
-            'scrollHeight 285 > clientHeight 278',
-        '430x1000 [page] clipped :: section.practice-card.objective-card':
-            'scrollHeight 285 > clientHeight 278',
-        '431x1000 [page] clipped :: section.practice-card.objective-card':
-            'scrollHeight 285 > clientHeight 278',
-        '500x1000 [page] clipped :: section.practice-card.objective-card':
-            'scrollHeight 285 > clientHeight 278',
-        '501x1000 [page] clipped :: section.practice-card.objective-card':
-            'scrollHeight 285 > clientHeight 278',
-        '600x1000 [page] clipped :: section.practice-card.objective-card':
-            'scrollHeight 285 > clientHeight 278',
-        '601x1000 [page] clipped :: section.practice-card.objective-card':
-            'scrollHeight 285 > clientHeight 278',
-        '605x1000 [page] clipped :: section.practice-card.objective-card':
-            'scrollHeight 285 > clientHeight 278',
-        '606x1000 [page] clipped :: section.practice-card.objective-card':
-            'scrollHeight 285 > clientHeight 278',
-        '700x1000 [page] clipped :: section.practice-card.objective-card':
-            'scrollHeight 285 > clientHeight 278',
-        '701x1000 [page] clipped :: section.practice-card.objective-card':
-            'scrollHeight 285 > clientHeight 278',
-        '761x1000 [page] clipped :: section.practice-card.objective-card':
-            'scrollHeight 285 > clientHeight 278',
-        '775x1000 [page] clipped :: section.practice-card.objective-card':
-            'scrollHeight 285 > clientHeight 278',
-        '776x1000 [page] clipped :: section.practice-card.objective-card':
-            'scrollHeight 285 > clientHeight 278',
-        '780x1000 [page] clipped :: section.practice-card.objective-card':
-            'scrollHeight 285 > clientHeight 278',
-        '781x1000 [page] clipped :: section.practice-card.objective-card':
-            'scrollHeight 285 > clientHeight 278',
-    },
+    known_defects={},
 )

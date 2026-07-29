@@ -543,7 +543,7 @@
        the probe was measuring a different element than the defect. Any
        re-measure has to take the MAX over all of them.
        Re-measure with: uv run python tools/responsive_sweep.py  */
-    --objective-card-narrow: 280px;
+    --objective-card-narrow: 288px;
     --radius: 9px;
   }
   * { box-sizing: border-box; }
@@ -3186,6 +3186,40 @@
     .nav-item { justify-content: center; padding-inline: 0; }
     .nav-item.on { box-shadow: inset 2px 0 0 #76b5f5; }
     .sidebar-status { justify-items: center; padding: .55rem .3rem; }
+
+    /* The rail's connection + recording block.
+       ----------------------------------------------------------------
+       These are SIDEBAR chrome, and they belong in a viewport query: the
+       sidebar's width is a fact about the shell, and the sidebar is not
+       inside `.view-pane`, so it has no size container to ask.
+
+       They spent a few hours inside `@container (max-width: 1060px)`, where
+       they could never match — the Wave 2 conversion classified
+       `.recording-status` as component-internal because SHELL_SELECTORS did
+       not list it. The result is exactly what the user reported: "the
+       recording section is clearly too big and the dot is not sized properly
+       when the sidebar is small". Nothing was styling it at all. Same shape as
+       the `.context-bar` rule that came back on all seven tabs at once.
+
+       In the rail the label collapses to a dot: `font-size: 0` hides the text
+       (which has no room) and `::before` draws the indicator, CENTRED rather
+       than left-aligned in a full-width box, with the border and padding
+       dropped so the block is a dot and not a panel containing one. */
+    .connection-line { display: block; }
+    .recording-status {
+      width: 100%; display: flex; justify-content: center;
+      border-top: 0; padding-top: .35rem;
+    }
+    .recording-status > span, .recording-status .dot {
+      display: flex; align-items: center; justify-content: center;
+    }
+    .recording-status .dot { font-size: 0; overflow: visible; }
+    .recording-status .dot::before {
+      content: ""; display: block; width: 10px; height: 10px;
+      border-radius: 50%; background: currentColor;
+    }
+    .recording-status .recording-light { display: none; }
+
     .context-bar {
       grid-template-columns: minmax(145px,.8fr) minmax(210px,1.35fr)
                              minmax(155px,.9fr) minmax(130px,.65fr);
@@ -3387,14 +3421,6 @@
 
   /* Was @media (max-width: 1180px). Viewport 1180 gives the pane 1061px and viewport 1181 gives it 932px, so these never reached the NARROWER of the two. */
   @container (max-width: 1060px) {
-    .connection-line { display: block; }
-    .recording-status { width: 100%; text-align: center; }
-    .recording-status .dot { font-size: 0; overflow: visible; }
-    .recording-status .dot::before {
-      content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%;
-      background: currentColor;
-    }
-    .recording-status .recording-light { display: none; }
     .practice-detail-grid { grid-template-columns: 1fr; }
     .objective-card, .detail-drawer { grid-column: 1; }
     .analysis-card, .attempts-card { height: 480px; min-height: 480px; }
@@ -3548,6 +3574,38 @@
     .save-pb-narrow { display: none; } /* icon-only Save on phones */
     .replay-setting-row { grid-template-columns: 1fr; gap: .35rem; }
     .replay-setting-controls { width: 100%; }
+  }
+
+  /* The attempt row at the reflow floor.
+     ------------------------------------------------------------------
+     Measured at a 300px pane: the six-column row hands `attempt-strategy`
+     67px and `attempt-actions` 108px as fixed tracks, which leaves the two
+     cells carrying the actual RESULT — the time and the delta — six pixels
+     each. They then overrun their tracks and overlap by 4px.
+
+     The strategy select gives way, on the same "least load-bearing text goes
+     first" rule the rank banners use: the strategy is named on the card's own
+     picker directly above, so the row is repeating it, while the time and the
+     delta appear nowhere else. Dropping it returns ~70px to the two columns
+     that had none. */
+  @container (max-width: 330px) {
+    .attempt-table .attempt-strategy { display: none; }
+    .attempt-table tr:not(.replay-row) {
+      grid-template-columns: 26px 24px minmax(0,1fr) max-content max-content;
+    }
+    .attempt-delta { width: auto; min-width: 0; }
+
+    /* The practice log's HEADING overflows here too, and separately: its tools
+       row measured 235px inside a 275px card, the sort control alone 144px of
+       that. It cannot be allowed to wrap -- this card is a fixed height, so a
+       second heading line comes straight out of the table's rows under
+       `overflow: hidden`, where a screenshot of either end state looks fine.
+       So the two recoverable things go instead: the "N shown" count, which the
+       rows themselves answer, and the sort control's width, which still shows
+       its current option. */
+    .attempts-heading .attempts-tools > .meta { display: none; }
+    .attempts-heading .sort-control { padding-left: .3rem; }
+    .attempts-heading .sort-control select { max-width: 76px; }
   }
 
   /* Was @media (max-width: 900px); viewport 900 gives the pane 781px. */
