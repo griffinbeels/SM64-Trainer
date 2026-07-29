@@ -1,12 +1,38 @@
 """The shared castle-movement segments (spec 2026-07-24 §4.4).
 
-Shapes are FORCED by the frozen matcher, not chosen. Read spec §4.1/§4.2
-before editing ANY row:
-  * a plain (via=[]) def is disarmed by any area_changed away from its arm
-    position, and by any level_changed matching neither start nor end;
-  * a waypoint-bearing def is SILENTLY CANCELLED by any star grab;
+Converted to match_mode="loose" 2026-07-28 (Task 19, spec
+2026-07-28-multi-step-segments) -- every row here now ships loose, and most
+of these shapes are no longer FORCED the way this docstring used to say.
+Before the conversion, 14 of the 55 rows carried a `via=[...]` chain whose
+only job was surviving the STRICT matcher's cancellation rules:
+  * a plain (via=[]) def used to be disarmed by any area_changed away from
+    its arm position, and by any level_changed matching neither start nor
+    end;
+  * a waypoint-bearing def used to be SILENTLY CANCELLED by any star grab.
+Loose matching passes all of that through transparently (only the deadline,
+death/game_reset, session_started, and a real anchor still act on an armed
+def — see SegmentEngine._feed_loose's docstring), so re-running
+tests/test_defaults_corpus.py after deleting each `via` proved 13 of the 14
+were dodging exactly those two rules and nothing else. One survived:
+
+  * `seg:bbh->basement` keeps its waypoint because of a rule that has
+    NOTHING to do with match_mode -- can_run_from (segments.py), the
+    arm-position gate every match mode shares, refuses to arm a def whose
+    very next required step (waypoint[0], or the end trigger when there are
+    no waypoints) can't fire from wherever the start trigger actually landed
+    Mario. BBH's exit lands in the courtyard (level 26), and a plain
+    `area_enter(level=6, area=BASEMENT)` end is simply unfireable from
+    there; see the comment on that row for the mechanism.
+
+Two invariants survive untouched, because they hold for every match mode:
   * a movement may START on a star_grabbed clause but must NEVER end on one
-    (run-ordering trap — spec §5.2).
+    (run-ordering trap — spec §5.2);
+  * a def whose start and end are satisfiable by the SAME event is
+    UNFIREABLE (the direct-edge trap — spec §5.1), guarded by
+    test_no_movement_starts_and_ends_on_the_SAME_event.
+
+Read spec §4.1/§4.2 for the retired strict-mode rules above if a future row
+ever opts back into match_mode="strict"; none do today.
 """
 from corpus_vocab import (BASEMENT, LOBBY, UPSTAIRS, enter_area, enter_level,
                           exit_level, grab_star, movement)
