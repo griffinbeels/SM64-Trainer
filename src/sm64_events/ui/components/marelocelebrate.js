@@ -229,8 +229,14 @@ export function MareloCelebration({ celebration, scopeId, marelo, routes,
     `transform:${transform}`,
   ].join(";");
 
-  return html`<div class=${`marelo-celebrate${lifted ? " is-lifted" : ""}`}
-      role="status" style=${wrapperStyle}>
+  // Report 2 (2026-07-28): the backdrop is a SIBLING of the card, never an
+  // ancestor -- a parent's opacity multiplies every child's, which is what
+  // made the card sit invisible on the first frame of every flight and fade
+  // back out before landing. This wrapper carries the shared custom
+  // properties ONLY (children still need to inherit them) and is never
+  // itself given an opacity; only `.marelo-celebrate-backdrop` fades.
+  return html`<div class="marelo-celebrate" role="status" style=${wrapperStyle}>
+    <div class=${`marelo-celebrate-backdrop${lifted ? " is-lifted" : ""}`}></div>
     <div ref=${cardRef} class="marelo-celebrate-card" style=${cardStyle}
         onclick=${() => setPhase("back")}>
       <${RouteRankCard} marelo=${marelo} routes=${routes}
