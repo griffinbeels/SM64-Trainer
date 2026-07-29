@@ -735,6 +735,76 @@ def test_split_segment_creates_two_new_rows_and_keeps_the_original(tmp_path):
     assert any(e.type == "attempts_invalidated" for e in sent)
 
 
+def test_split_segment_write_is_immune_to_the_pure_ops_own_aliasing(tmp_path):
+    """split_definition/merge_definitions (Task 17, reviewed and closed) copy
+    the outer trigger LISTS but not the clause dicts inside them -- a
+    returned half's start_triggers[0] is the SAME dict object as the live,
+    resident SegmentDef's. Confirmed here as the test's own premise (line
+    below), not assumed.
+
+    That aliasing is harmless PROVIDED the write path serializes before
+    anything can mutate the shared object -- true for create_segment/
+    update_segment (verified by the Task 17 reviewer against source) and
+    proven HERE for split_segment's own call chain specifically
+    (split_segment -> split_definition -> _insert_definition ->
+    db.insert_segment_def's json.dumps), not merely by analogy: mutate the
+    shared clause object AFTER split_segment has returned, then confirm the
+    already-committed row is unaffected -- it was serialized to an
+    independent JSON string at insert time, before this mutation ever ran.
+    Guards against a future _insert_definition change that captured the
+    dict and serialized it lazily instead of immediately."""
+    db, svc, sent = make_rec(tmp_path)
+    sid = asyncio.run(svc.create_segment({
+        "name": "WF -> SSL", "match_mode": "loose",
+        "start_triggers": [{"type": "level_exit", "from": 24}],
+        "end_triggers": [{"type": "level_enter", "to": 8}]}))
+    current = next(d for d in svc._segment_defs if d.id == sid)
+    first_id, second_id = asyncio.run(svc.split_segment(
+        sid, [{"type": "area_enter", "level": 6, "area": 3}],
+        ("WF -> Basement", "Basement -> SSL")))
+    # PREMISE: the aliasing genuinely exists at this call site -- the first
+    # half's start_triggers came from `list(d.start_triggers)` in
+    # split_definition, a new LIST holding the SAME dict as `current`'s.
+    rows = {d["id"]: d for d in db.segment_defs()}
+    assert rows[first_id]["start_triggers"] == current.start_triggers
+    # Mutate the shared object IN PLACE, after split_segment has already
+    # returned and already committed both rows to the db.
+    current.start_triggers[0]["from"] = 999999
+    # The already-committed rows (both the split half AND the untouched
+    # original) must show the ORIGINAL value -- proving the mutation above
+    # arrived too late to reach either one.
+    rows_after = {d["id"]: d for d in db.segment_defs()}
+    assert rows_after[first_id]["start_triggers"] == [
+        {"type": "level_exit", "from": 24}]
+    assert rows_after[sid]["start_triggers"] == [
+        {"type": "level_exit", "from": 24}]
+
+
+def test_merge_segments_write_is_immune_to_the_pure_ops_own_aliasing(tmp_path):
+    """Mirror of the split-side proof above, for merge_definitions: the
+    merged row's start_triggers is `list(first.start_triggers)` -- the SAME
+    dict objects as `first`'s own live, resident SegmentDef."""
+    db, svc, sent = make_rec(tmp_path)
+    first_id = asyncio.run(svc.create_segment({
+        "name": "WF -> Basement", "match_mode": "loose",
+        "start_triggers": [{"type": "level_exit", "from": 24}],
+        "end_triggers": [{"type": "area_enter", "level": 6, "area": 3}]}))
+    second_id = asyncio.run(svc.create_segment({
+        "name": "Basement -> SSL", "match_mode": "loose",
+        "start_triggers": [{"type": "area_enter", "level": 6, "area": 3}],
+        "end_triggers": [{"type": "level_enter", "to": 8}]}))
+    resident_first = next(d for d in svc._segment_defs if d.id == first_id)
+    new_id = asyncio.run(svc.merge_segments(first_id, second_id, "WF -> SSL"))
+    rows = {d["id"]: d for d in db.segment_defs()}
+    assert rows[new_id]["start_triggers"] == resident_first.start_triggers
+    resident_first.start_triggers[0]["from"] = 999999
+    rows_after = {d["id"]: d for d in db.segment_defs()}
+    assert rows_after[new_id]["start_triggers"] == [
+        {"type": "level_exit", "from": 24}]
+    assert rows_after[first_id]["start_triggers"] == [
+        {"type": "level_exit", "from": 24}]
+
+
 def test_split_segment_writes_default_strat_to_both_new_rows(tmp_path):
     """split_definition's own docstring says default_strat is inherited onto
     both halves; this pins that the SERVICE actually WRITES it through
