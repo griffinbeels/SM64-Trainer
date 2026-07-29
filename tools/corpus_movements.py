@@ -33,10 +33,20 @@ Two invariants survive untouched, because they hold for every match mode:
 
 Read spec §4.1/§4.2 for the retired strict-mode rules above if a future row
 ever opts back into match_mode="strict"; none do today.
+
+Task 20 (spec 2026-07-28-multi-step-segments) adds three shapes loose
+matching finally makes expressible: `seg:bowser2->bits` (a plain movement
+surviving a long real detour -- BitFS re-entry, a pause exit, a lobby/
+upstairs crossing, a BLJ), `REDS_TO_PIPE` (Bowser-stage reds star -> pipe,
+still ends on a real edge so it stays Castle Movement, just UNGUARDED like
+the legacy pipe-entry trio -- see mechanic()'s docstring) and
+`HUNDRED_COIN_EXITS` (its own category, `HUNDRED_COIN_EXIT`, because it
+DELIBERATELY ends on star_grabbed -- see the section comment above it for
+why the run-ordering trap does not apply).
 """
-from corpus_vocab import (BASEMENT, HUNDRED_COIN_EXIT, LOBBY, UPSTAIRS,
-                          enter_area, enter_level, exit_level, grab_star,
-                          mechanic, movement)
+from corpus_vocab import (BASEMENT, CASTLE_MOVEMENT, HUNDRED_COIN_EXIT, LOBBY,
+                          UPSTAIRS, enter_area, enter_level, enter_warp,
+                          exit_level, grab_star, mechanic, movement)
 
 MOVEMENTS = [
     # --- lobby ------------------------------------------------------------
@@ -161,6 +171,25 @@ MOVEMENTS = [
     movement("seg:ttc->rr", "TTC → RR", exit_level(14), enter_level(15)),
     movement("seg:rr->bits", "RR → BitS", exit_level(15), enter_level(21)),
     movement("seg:ttc->bits", "TTC → BitS", exit_level(14), enter_level(21)),
+]
+
+# --- Bowser-stage reds -> pipe (Task 20, spec 2026-07-28-multi-step-segments)
+# "8 red coins levels in bowser stages. When you get this star, the level
+# doesn't end -- you have to go into the pipe to finish the level." -- the
+# reference autosplitter's own default (it waits for pipe entry), and the
+# case its issue tracker shows it repeatedly getting wrong. Ends on
+# warp_entered, not star_grabbed, so this does NOT trip the run-ordering
+# trap and could be filed as a plain Castle Movement -- it stays UNGUARDED
+# instead (see mechanic()'s docstring): there is exactly one pipe per stage,
+# no route to scope against, matching the existing pipe-entry trio's
+# always-armed shape more closely than the 56 route-scoped movements'.
+REDS_TO_PIPE = [
+    mechanic("seg:reds->pipe:bitdw", "BitDW — 8 Red Coins → Pipe",
+             grab_star(16, 0), enter_warp(17), CASTLE_MOVEMENT),
+    mechanic("seg:reds->pipe:bitfs", "BitFS — 8 Red Coins → Pipe",
+             grab_star(17, 0), enter_warp(19), CASTLE_MOVEMENT),
+    mechanic("seg:reds->pipe:bits", "BitS — 8 Red Coins → Pipe",
+             grab_star(18, 0), enter_warp(21), CASTLE_MOVEMENT),
 ]
 
 # --- 100-coin star -> the star that actually exits (Task 20) ---------------

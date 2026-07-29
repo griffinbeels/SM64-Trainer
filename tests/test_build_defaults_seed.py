@@ -51,10 +51,10 @@ def test_legacy_segments_are_carried_forward_verbatim():
 def test_shipped_seed_has_the_whole_corpus():
     seed = json.loads(build_seed.OUT.read_bytes().decode("utf-8"))
     assert seed["seed_version"] == 2
-    # 10 legacy + 56 movements + 15 hundred-coin exits (Task 20)
-    assert len(seed["segments"]) == 81
+    # 10 legacy + 56 movements + 3 reds->pipe + 15 hundred-coin exits (Task 20)
+    assert len(seed["segments"]) == 84
     assert len(seed["routes"]) == 48            # 13 main + 35 stage
-    assert len({s["seed_key"] for s in seed["segments"]}) == 81
+    assert len({s["seed_key"] for s in seed["segments"]}) == 84
     assert len({r["seed_key"] for r in seed["routes"]}) == 48
 
 
@@ -66,7 +66,7 @@ def test_shipped_seed_reconciles_into_a_fresh_db_cleanly(tmp_path):
     db = Database(tmp_path / "t.db")
     seed = json.loads(build_seed.OUT.read_bytes().decode("utf-8"))
     assert reconcile_defaults(db, seed) == []
-    assert len(db.segment_defs()) == 81
+    assert len(db.segment_defs()) == 84
     routes = db.routes()
     assert len(routes) == 48
     broken = [(r["name"], c) for r in routes for s in r["steps"]
@@ -95,7 +95,7 @@ def test_every_movement_defaults_to_loose_match_mode():
               if not s["guards"] and "match_mode" not in s]
     mechanics = [s for s in seed["segments"]
                  if not s["guards"] and "match_mode" in s]
-    assert len(movements) == 56 and len(legacy) == 10 and len(mechanics) == 15
+    assert len(movements) == 56 and len(legacy) == 10 and len(mechanics) == 18
     assert {s["match_mode"] for s in movements} == {"loose"}
     assert {s["match_mode"] for s in mechanics} == {"loose"}
     assert [s["seed_key"] for s in legacy if "match_mode" in s] == []
@@ -108,13 +108,13 @@ def test_every_movement_defaults_to_the_standard_strategy():
 
     The ten hand-written legacy rows deliberately carry NO default: several of
     them (the Bowser fights, LBLJ) have real competing strategies in the rank
-    standards, and forcing one would be a lie. Task 20's 15 unguarded 100-coin
-    rows follow the same no-default precedent -- ONE check over everything
-    unguarded covers both groups."""
+    standards, and forcing one would be a lie. Task 20's 18 unguarded mechanic
+    rows (reds->pipe, 100c->exit) follow the same no-default precedent -- ONE
+    check over everything unguarded covers both groups."""
     seed = build_seed.build()
     movements = [s for s in seed["segments"] if s["guards"]]
     non_movements = [s for s in seed["segments"] if not s["guards"]]
-    assert len(movements) == 56 and len(non_movements) == 25
+    assert len(movements) == 56 and len(non_movements) == 28
     assert {s["default_strat"] for s in movements} == {"Standard"}
     assert [s["seed_key"] for s in non_movements
             if s.get("default_strat")] == []

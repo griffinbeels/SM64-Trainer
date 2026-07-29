@@ -174,18 +174,18 @@ def test_fresh_install_seeds_the_converted_corpus(tmp_path):
     """The 56 movements now ship match_mode="loose"; the ten legacy tricks
     carry no match_mode key (corpus_legacy.py's _seg() never stamps one) and
     so reconcile still applies the column default, "strict", to them —
-    unchanged by this conversion. Task 20's 15 unguarded 100-coin-exit rows
-    ship explicit match_mode="loose" too, so they join the movements on the
-    loose side of the split rather than the legacy side their guards=[]
-    shape would otherwise suggest."""
+    unchanged by this conversion. Task 20's 18 unguarded mechanic rows
+    (reds->pipe, 100c->exit) ship explicit match_mode="loose" too, so they
+    join the movements on the loose side of the split rather than the
+    legacy side their guards=[] shape would otherwise suggest."""
     db = Database(tmp_path / "t.db")
     seed = json.loads(bundled_defaults_seed().read_bytes().decode("utf-8"))
     assert reconcile_defaults(db, seed) == []
     rows = db.segment_defs()
-    assert len(rows) == 81
+    assert len(rows) == 84
     loose = [r for r in rows if r["match_mode"] == "loose"]
     strict = [r for r in rows if r["match_mode"] == "strict"]
-    assert len(loose) == 71 and len(strict) == 10
+    assert len(loose) == 74 and len(strict) == 10
 
 
 def test_reconcile_carries_match_mode_on_insert_and_refresh(tmp_path):

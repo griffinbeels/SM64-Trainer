@@ -211,9 +211,10 @@ def movement(seed_key, name, start, end, via=(), match_mode=None):
 
 def mechanic(seed_key, name, start, end, category, match_mode="loose"):
     """A non-route segment describing an intrinsic game mechanic (Task 20,
-    spec 2026-07-28-multi-step-segments) -- starting with the "100 coins
-    doesn't end the level, a different star does" pattern. Two differences
-    from movement()/`_movement_row`:
+    spec 2026-07-28-multi-step-segments): the "100 coins doesn't end the
+    level, a different star does" pattern and the Bowser-stage "the reds
+    star doesn't end it, the pipe does" pattern. Two differences from
+    movement()/`_movement_row`:
 
     (1) `end` may be a genuine any-of LIST of clauses (the 100-coin case
         needs six alternative stars, since the vocabulary has no "any star
@@ -221,9 +222,10 @@ def mechanic(seed_key, name, start, end, category, match_mode="loose"):
         side, full seed shape here instead of a compact row `_movement_row`
         expands later.
     (2) UNGUARDED (guards=[]), like the ten legacy segments, not route-scoped
-        like the 56 castle movements: there is exactly one way to do it (some
-        other star), so there is no route ambiguity to scope against -- the
-        same reason seg:bowser-1/seg:bitdw-pipe/etc. stay always-armed."""
+        like the 56 castle movements: there is exactly ONE way to do either
+        (one pipe per Bowser stage, "some other star" for the 100-coin
+        case), so there is no route ambiguity to scope against -- the same
+        reason seg:bowser-1/seg:bitdw-pipe/etc. stay always-armed."""
     return {"seed_key": seed_key, "name": name, "enabled": True,
             "start_triggers": [start],
             "end_triggers": end if isinstance(end, list) else [end],

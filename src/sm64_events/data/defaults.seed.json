@@ -1705,6 +1705,72 @@
       "match_mode": "loose"
     },
     {
+      "seed_key": "seg:reds->pipe:bitdw",
+      "name": "BitDW — 8 Red Coins → Pipe",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 16,
+          "star": 0
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "warp_entered",
+          "level": 17
+        }
+      ],
+      "waypoints": [],
+      "guards": [],
+      "category": "Castle Movement",
+      "match_mode": "loose"
+    },
+    {
+      "seed_key": "seg:reds->pipe:bitfs",
+      "name": "BitFS — 8 Red Coins → Pipe",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 17,
+          "star": 0
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "warp_entered",
+          "level": 19
+        }
+      ],
+      "waypoints": [],
+      "guards": [],
+      "category": "Castle Movement",
+      "match_mode": "loose"
+    },
+    {
+      "seed_key": "seg:reds->pipe:bits",
+      "name": "BitS — 8 Red Coins → Pipe",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 18,
+          "star": 0
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "warp_entered",
+          "level": 21
+        }
+      ],
+      "waypoints": [],
+      "guards": [],
+      "category": "Castle Movement",
+      "match_mode": "loose"
+    },
+    {
       "seed_key": "seg:100c->exit:bob",
       "name": "BoB — 100 Coins → Exit",
       "enabled": true,

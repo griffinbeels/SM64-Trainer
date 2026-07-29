@@ -1572,14 +1572,14 @@ def test_reclassified_attempt_regrades_its_medal(tmp_path):
 
 
 def test_the_seeded_corpus_does_not_bloat_the_session_view(tmp_path):
-    """81 seeded segments must NOT become 81 practice cards.
+    """84 seeded segments must NOT become 84 practice cards.
 
     Segment sections are scoped to segments with activity (plus the target and
     anything armed), so shipping the route corpus leaves a fresh install's
     practice page empty. This was implicit while only 10 segments existed;
-    with 56 route-scoped movements (+15 unguarded 100-coin-exit rows,
-    Task 20) added it is load-bearing, and iterating service.segment_defs
-    here instead would flood the page for every user.
+    with 56 route-scoped movements (+18 unguarded mechanic rows, Task 20)
+    added it is load-bearing, and iterating service.segment_defs here
+    instead would flood the page for every user.
     """
     import json
 
@@ -1589,7 +1589,7 @@ def test_the_seeded_corpus_does_not_bloat_the_session_view(tmp_path):
     db, svc = make(tmp_path)
     seed_data = json.loads(bundled_defaults_seed().read_bytes().decode("utf-8"))
     assert reconcile_defaults(db, seed_data) == []
-    assert len(db.segment_defs()) == 81
+    assert len(db.segment_defs()) == 84
 
     view = build_session_view(db, svc, clock="igt")
     assert view["segments"] == []

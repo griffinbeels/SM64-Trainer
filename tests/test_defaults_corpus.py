@@ -363,12 +363,12 @@ def test_a_movement_only_fires_on_a_walk_that_reaches_its_endpoint():
                                other["seed_key"])
 
 
-# --- layer 3: Task 20's real walks (spec 2026-07-28-multi-step-segments)
-# These shapes do not fit movement_walk's generic BFS-shortest-path model:
-# 100c->exit starts AND ends on star_grabbed clauses clause_node cannot
-# resolve, and every one of them replays a SPECIFIC real walk from a task
-# report rather than the shortest one. Hand-built via _Walker directly
-# instead of movement_walk.
+# --- layer 3: Task 20's four real walks (spec 2026-07-28-multi-step-segments)
+# These four shapes do not fit movement_walk's generic BFS-shortest-path
+# model: two of them (100c->exit, reds->pipe) start or end on a
+# star_grabbed/warp_entered clause clause_node cannot resolve, and all four
+# replay a SPECIFIC real walk from a task report rather than the shortest
+# one. Hand-built via _Walker directly instead of movement_walk.
 
 def _seg(seed_key):
     return next(s for s in SEGMENTS if s["seed_key"] == seed_key)
@@ -451,3 +451,32 @@ def test_hundred_coin_exit_count_and_shape():
         assert row["guards"] == []            # no route ambiguity -- always on
         assert row["match_mode"] == "loose"
     assert seen_courses == set(range(1, 16))  # every main course, no gaps
+
+
+def test_a_bowser_reds_segment_ends_on_the_pipe_not_the_star():
+    # The reference autosplitter's own default (it waits for pipe entry),
+    # and the case its issue tracker shows it repeatedly getting wrong.
+    row = _seg("seg:reds->pipe:bitdw")
+    reds_only = [
+        Ev(1, "star_collected", 101,
+           {"course_id": 16, "star_id": 0, "num_stars": 0}),
+    ]
+    closed = run_engine(row, reds_only, 17, None)
+    assert closed == [], "the reds star alone must not finish the level"
+
+    events = reds_only + [
+        Ev(2, "warp_entered", 250, {"level": 17}),
+    ]
+    closed = run_engine(row, events, 17, None)
+    outcomes = [a.outcome for a in closed]
+    assert outcomes == ["success"], (row["seed_key"], outcomes)
+
+
+def test_reds_to_pipe_count_and_shape():
+    rows = [s for s in SEGMENTS if s["seed_key"].startswith("seg:reds->pipe:")]
+    assert len(rows) == 3
+    for row in rows:
+        assert row["start_triggers"][0]["type"] == "star_grabbed"
+        assert row["end_triggers"][0]["type"] == "warp_entered"
+        assert row["guards"] == []
+        assert row["category"] == "Castle Movement"
