@@ -51,6 +51,15 @@ if errorlevel 1 (
   echo.
 )
 
+REM --- say WHICH CODE this is, every run, success or not ---
+REM  The warning above only fires when `git pull` FAILS, so the common bad case
+REM  is silent: a window opened before the fix landed, or a browser serving
+REM  cached files, looks exactly like a working checkout. That cost a whole
+REM  round on 2026-07-28 -- a fix already on main was reported as "still
+REM  broken", twice, and proving otherwise took a live re-measure. One line
+REM  makes "am I running the fix?" answerable at a glance.
+for /f "delims=" %%C in ('git log -1 --format^="%%h %%ad %%s" --date^=short') do set "SM64_HEAD=%%C"
+
 REM --- make sure dependencies match the lockfile ---
 echo Syncing dependencies...
 uv sync
@@ -58,7 +67,9 @@ uv sync
 echo.
 echo ============================================================
 echo   SM64 Trainer  --  TEST server (from source, main)
+echo   Code:   %SM64_BRANCH% @ %SM64_HEAD%
 echo   URL:    http://127.0.0.1:%SM64_PORT%
+echo           (hard-refresh with CTRL+SHIFT+R -- the browser caches ui/)
 REM  Every dev/demo page this server hosts gets printed HERE, with the port
 REM  already filled in. The tuning page existed for a day behind a hand-typed
 REM  path and was unreachable the moment this script picked a different port

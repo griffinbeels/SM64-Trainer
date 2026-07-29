@@ -5,9 +5,19 @@ derivation and the gates — shared with every project on this machine and
 improved in one place. What is left here is this project's own POLICY, which is
 `tools/uilab_project.py`, plus the defects we have agreed to owe.
 
-Why the sweep may not skip itself: a gate that goes green when its dependency is
-missing is green forever and indistinguishable from one that passed. UILAB_SKIP=1
-turns it off as a visible decision someone made.
+Why the sweep may not skip itself once uilab IS installed: a gate that goes
+green when its dependency is missing is green forever and indistinguishable
+from one that passed. UILAB_SKIP=1 turns it off as a visible decision someone
+made.
+
+uilab NOT BEING INSTALLED AT ALL is a different case, and it is the one a
+stranger hits. It is an optional machine-level dev module installed from a
+local checkout, so `uv sync` on a fresh clone cannot supply it — and a bare
+`import uilab` at module scope does not fail this file, it ABORTS COLLECTION
+for the whole suite. Measured on a clean clone of c098b4a: `uv run pytest -q`
+ran zero of 2,682 tests and exited on `ModuleNotFoundError: No module named
+'uilab'`. Skipping this module instead costs a contributor nothing and gives
+them the other 2,678 tests.
 """
 import os
 import sys
@@ -17,10 +27,25 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
-from uilab.pytest_plugin import (  # noqa: E402
+# The resolver lives in `tools/find_uilab.py` — `tools/measure_objective_card.py`
+# needs the identical logic, and two copies of "where is uilab" would drift into
+# one of them skipping while the other runs.
+from find_uilab import find_uilab  # noqa: E402
+
+_MISSING = find_uilab()
+if _MISSING:
+    pytest.skip(_MISSING, allow_module_level=True)
+
+from uilab.pytest_plugin import (  # noqa: E402,F401
     assert_components_use_container_queries, assert_no_new_defects,
-    assert_no_stale_exemptions)
+    assert_no_stale_exemptions, uilab_sweep)
 from uilab_project import PROJECT  # noqa: E402
+
+# `uilab_sweep` is IMPORTED, not inherited from the pytest11 entry point, and
+# that is deliberate: an entry point only exists for an installed package, and
+# `uv sync` prunes the editable install because it is absent from the lockfile.
+# Importing the fixture makes the gate depend on uilab being on sys.path and
+# nothing else, which is the one property a package manager cannot revoke.
 
 # The plugin's `uilab_sweep` fixture reads this off the module.
 uilab_project = PROJECT

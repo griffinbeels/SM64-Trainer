@@ -261,7 +261,7 @@ Three tests, none of which can be satisfied by a comment:
 | Test | Fails when |
 |---|---|
 | `test_component_layout_gates_on_the_container` | a `@media` rule styles a component selector |
-| `test_no_layout_defects_across_the_matrix` | the rendered app overflows, clips inside a fixed-height box, truncates an opted-in element, or overlaps a flow sibling at any declared breakpoint |
+| `test_no_layout_defects_across_the_matrix` | the rendered app overflows, clips inside a fixed-height box, truncates an opted-in element, overlaps a flow sibling, **or paints a `::before`/`::after` onto a box it does not own**, at any declared breakpoint |
 | `test_the_known_defect_list_does_not_outlive_its_defects` | a row in `known_defects` describes a defect that no longer occurs |
 
 All three live in `tests/test_responsive.py` and are three lines each, because
@@ -289,6 +289,26 @@ index inside a CLOSED `<details>`; without the wait, the sweep measures the
 loading state. Either one reports a clean page nobody is looking at — which is
 how 26 real defects stayed invisible while a feature built on top of them
 rendered zero times without a single error (2026-07-28).
+
+**A defect can be entirely in PAINT, and four of the five probes walk the DOM.**
+A pseudo-element is not in the DOM, so nothing that queries the tree can see
+one. The rank banners' colour wash is a `::before`; it bled sideways onto the
+next grid column and vertically onto the banner stacked beneath it, and three
+consecutive sweeps called the page clean while the user reported the overlap
+three times. Probe class 5 (`decoration`) closes that: it derives an absolutely
+positioned pseudo's rect from its host's padding box and fails when the rect
+covers a box that is neither the host nor inside it. Bleeding into an
+*ancestor's* padding or grid gap stays legal — that is what a bleed is for.
+Declare the genuine exceptions (scrims, focus rings, full-bleed washes) in
+`uilab_project.py::may_bleed`, never by widening the rule. Still invisible to
+it: a *statically* positioned pseudo pushed out of its host by a negative
+margin, which has no derivable geometry.
+
+**A measured constant is only as good as the state the fixture reached.**
+`--objective-card-narrow` was measured honestly and was 39px short at every
+width in its band, because at the time the fixture could only render the
+card's "Nothing to practice here" state. Re-measure after any change to what a
+fixed-height card can contain: `uv run python tools/measure_objective_card.py`.
 
 **What none of it catches:** anything that measures fine and looks wrong — bad
 hierarchy, ugly wrapping, a control that is reachable but awkward. Assertions
