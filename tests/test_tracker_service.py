@@ -771,24 +771,34 @@ def test_a_refused_split_leaves_no_half_behind(tmp_path):
     assert sorted(ids) == sorted(before + [first_id, second_id])
 
 
-def test_split_segment_write_is_immune_to_the_pure_ops_own_aliasing(tmp_path):
-    """split_definition/merge_definitions (Task 17, reviewed and closed) copy
-    the outer trigger LISTS but not the clause dicts inside them -- a
-    returned half's start_triggers[0] is the SAME dict object as the live,
-    resident SegmentDef's. Confirmed here as the test's own premise (line
-    below), not assumed.
+def test_a_committed_split_row_is_independent_of_the_callers_objects(tmp_path):
+    """Once `split_segment` returns, nothing the caller does to its own live
+    objects can reach the persisted rows.
 
-    That aliasing is harmless PROVIDED the write path serializes before
-    anything can mutate the shared object -- true for create_segment/
-    update_segment (verified by the Task 17 reviewer against source) and
-    proven HERE for split_segment's own call chain specifically
-    (split_segment -> split_definition -> _insert_definition ->
-    db.insert_segment_def's json.dumps), not merely by analogy: mutate the
-    shared clause object AFTER split_segment has returned, then confirm the
-    already-committed row is unaffected -- it was serialized to an
-    independent JSON string at insert time, before this mutation ever ran.
-    Guards against a future _insert_definition change that captured the
-    dict and serialized it lazily instead of immediately."""
+    **What this does NOT prove, despite an earlier name and docstring that
+    claimed it** (Task 18 review addendum, 2026-07-29): it says nothing about
+    whether `split_definition` aliases the caller's clause dicts or
+    deep-copies them. It passes identically either way -- verified by
+    mutation: replacing `list(d.start_triggers)` with
+    `[dict(c) for c in d.start_triggers]` throughout the pure op, i.e.
+    removing the aliasing outright, leaves this green. The assertion reads
+    `db.segment_defs()`, a fresh SELECT + json.loads of a SQLite TEXT column
+    that `insert_segment_def` wrote synchronously before this test line ever
+    ran, so it sits downstream of a boundary EVERY implementation has already
+    crossed. It was also carrying a "PREMISE" assertion using `==`, which
+    proves value equality and not the shared identity it claimed.
+
+    The aliasing question is settled STATICALLY and cannot be black-box
+    tested: `_insert_definition`'s docstring plus the review's own sweep
+    (zero in-place clause mutations anywhere in `src/`, and the JS editor
+    replaces rather than mutates). An identity assertion would be worse than
+    nothing here -- it would FAIL the day someone deep-copies, punishing the
+    safest implementation.
+
+    Kept because the weaker property is real and cheap to hold: it fails if
+    the write path ever defers serialization (an async or batched insert
+    holding the dict and dumping later), which is the one realistic way a
+    committed row could start tracking a caller's later edits."""
     db, svc, sent = make_rec(tmp_path)
     sid = asyncio.run(svc.create_segment({
         "name": "WF -> SSL", "match_mode": "loose",
@@ -798,13 +808,8 @@ def test_split_segment_write_is_immune_to_the_pure_ops_own_aliasing(tmp_path):
     first_id, second_id = asyncio.run(svc.split_segment(
         sid, [{"type": "area_enter", "level": 6, "area": 3}],
         ("WF -> Basement", "Basement -> SSL")))
-    # PREMISE: the aliasing genuinely exists at this call site -- the first
-    # half's start_triggers came from `list(d.start_triggers)` in
-    # split_definition, a new LIST holding the SAME dict as `current`'s.
-    rows = {d["id"]: d for d in db.segment_defs()}
-    assert rows[first_id]["start_triggers"] == current.start_triggers
-    # Mutate the shared object IN PLACE, after split_segment has already
-    # returned and already committed both rows to the db.
+    # Mutate the caller's own resident clause dict in place, after
+    # split_segment has returned and both rows are already committed.
     current.start_triggers[0]["from"] = 999999
     # The already-committed rows (both the split half AND the untouched
     # original) must show the ORIGINAL value -- proving the mutation above
@@ -816,10 +821,11 @@ def test_split_segment_write_is_immune_to_the_pure_ops_own_aliasing(tmp_path):
         {"type": "level_exit", "from": 24}]
 
 
-def test_merge_segments_write_is_immune_to_the_pure_ops_own_aliasing(tmp_path):
-    """Mirror of the split-side proof above, for merge_definitions: the
-    merged row's start_triggers is `list(first.start_triggers)` -- the SAME
-    dict objects as `first`'s own live, resident SegmentDef."""
+def test_a_committed_merge_row_is_independent_of_the_callers_objects(tmp_path):
+    """Mirror of the split-side test above, with the same honest limits --
+    read its docstring before trusting this one's name. It proves the merged
+    row is durable and independent once `merge_segments` returns; it does not
+    prove anything about whether `merge_definitions` aliases or copies."""
     db, svc, sent = make_rec(tmp_path)
     first_id = asyncio.run(svc.create_segment({
         "name": "WF -> Basement", "match_mode": "loose",
@@ -831,8 +837,6 @@ def test_merge_segments_write_is_immune_to_the_pure_ops_own_aliasing(tmp_path):
         "end_triggers": [{"type": "level_enter", "to": 8}]}))
     resident_first = next(d for d in svc._segment_defs if d.id == first_id)
     new_id = asyncio.run(svc.merge_segments(first_id, second_id, "WF -> SSL"))
-    rows = {d["id"]: d for d in db.segment_defs()}
-    assert rows[new_id]["start_triggers"] == resident_first.start_triggers
     resident_first.start_triggers[0]["from"] = 999999
     rows_after = {d["id"]: d for d in db.segment_defs()}
     assert rows_after[new_id]["start_triggers"] == [
