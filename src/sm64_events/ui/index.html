@@ -568,6 +568,28 @@
       radial-gradient(circle at 34% 87%, #b9d9ff 0 1px, transparent 1.3px);
     background-size: 320px 280px, 410px 350px, 370px 300px, 460px 390px;
   }
+  /* The app-wide rank tint (report 1, 2026-07-28) -- worn AT REST, not only
+     during a celebration: "the background tint of the app should transition
+     from the default background of the site -> the background of the
+     current rank" (user). This element only PAINTS the property; ONE owner
+     writes `--rank-tint-color` at a time -- ui/ranktint.js at rest,
+     components/marelocelebrate.js while a celebration overlay is mounted
+     (see ranktint.js's header for why that hand-off is safe). Sits behind
+     `.app-shell` for free: that element's explicit `z-index: 1` always
+     outranks this pseudo-element's implicit `z-index: auto`, regardless of
+     DOM order, so no z-index is declared here at all. `color-mix` bakes the
+     STRENGTH into the colour itself so exactly one property
+     (`background-color`) needs a transition -- two independently
+     transitioning channels (opacity + colour) would not necessarily land on
+     the same frame, and a colour transition alone can never pass through
+     "no tint" mid-flight the way an opacity fade to/from 0 would. */
+  body::after {
+    content: ""; position: fixed; inset: 0; pointer-events: none;
+    background-color: color-mix(in srgb,
+      var(--rank-tint-color, transparent)
+      calc(var(--rank-tint-strength, 0) * 100%), transparent);
+    transition: background-color var(--rank-tint-ms, 900ms) ease;
+  }
   button, select, input, textarea { font: inherit; }
   button {
     display: inline-flex; align-items: center; justify-content: center; gap: .42rem;
@@ -1451,15 +1473,35 @@
      Fixed so it can never reflow an OBS capture; pointer-events OFF on the
      wrapper and ON only for the card, so it never eats a click meant for the
      game. z-index sits above .modal-backdrop (200): a rank-up can land while
-     a modal is open and must still be seen. */
+     a modal is open and must still be seen.
+
+     Report 2 (2026-07-28, live report: "it looks like the card briefly
+     becomes invisible" during the fly-out AND the fly-back): `.marelo-celebrate`
+     used to BE the fading backdrop, with `.marelo-celebrate-card` rendered as
+     its CHILD -- a parent's opacity multiplies every child's, so the card sat
+     at effective opacity 0 on the first frame, faded in as it travelled, and
+     faded back out before landing, never reaching 1 even at rest (the tuned
+     `backdropOpacity` is 0.8). The fix is structural, not a value: the
+     backdrop is now `.marelo-celebrate-backdrop`, a SIBLING of the card, not
+     an ancestor -- this wrapper keeps only the shared custom properties
+     (children still need to read them, custom properties flow DOWN the tree)
+     and is never assigned an opacity of its own, so nothing above the card
+     can ever touch its opacity again.
+     `tests/test_ui_celebrate.py::test_the_card_never_has_its_own_opacity_rule`
+     pins this structurally -- no rule may set `opacity` on
+     `.marelo-celebrate-card` or on `.marelo-celebrate` itself (its one
+     remaining ancestor below `.app-shell`). */
   .marelo-celebrate {
     position: fixed; inset: 0; z-index: 210; pointer-events: none;
+  }
+  .marelo-celebrate-backdrop {
+    position: fixed; inset: 0; pointer-events: none;
     background:
       color-mix(in srgb, var(--climb-color, transparent) var(--backdrop-tint, 0%),
                 rgba(3, 9, 18, 1));
     opacity: 0; transition: opacity var(--fly-ms, 900ms) var(--fly-ease, ease);
   }
-  .marelo-celebrate.is-lifted { opacity: var(--backdrop-alpha, .55); }
+  .marelo-celebrate-backdrop.is-lifted { opacity: var(--backdrop-alpha, .55); }
   /* EXACTLY ONE transition declaration on this element. A :hover or state
      rule declaring its own would REPLACE this one wholesale (a rule's
      transition is not additive), which is what makes a motion glide one way
@@ -1471,6 +1513,9 @@
     position: fixed; transform-origin: center center; pointer-events: auto;
     cursor: pointer;
     transition: transform var(--fly-ms, 900ms) var(--fly-ease, ease);
+    /* NEVER an opacity rule here, and never on `.marelo-celebrate` above --
+       see the comment on `.marelo-celebrate` for why, and the guard test
+       that mutation-proves it. */
   }
   /* The header's own card is hidden while its clone is out, so there is
      never a double image -- and it must not climb, because the clone IS its

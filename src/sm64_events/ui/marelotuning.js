@@ -68,6 +68,24 @@ export const MARELO_TUNABLES = {
     why: "How much of the rank's own colour is mixed into the backdrop. It cross-fades with the tier during the climb and must never vanish -- a surface that goes away mid-transition is a second bug, not a fix for the first.",
   },
 
+  // ---- Ambient tint (report 1, 2026-07-28) --------------------------------
+  // Worn AT REST, all the time -- not only while a celebration is on screen
+  // (user: "If we're still ticking up within Capless, that's the color we
+  // display everywhere"). Read by ui/ranktint.js, the resting owner of
+  // `--rank-tint-color`; marelocelebrate.js only ever overrides the COLOUR
+  // itself while mounted, never these two -- how strong the tint is and how
+  // long a change takes do not depend on whether a celebration is running.
+  tintStrength: {
+    group: "Ambient tint", label: "Tint strength", value: 0.14,
+    min: 0, max: 0.6, step: 0.02, unit: "x",
+    why: "How much of the current rank's colour is mixed into the app's own background, all the time -- not only during a celebration.",
+  },
+  tintCrossfadeMs: {
+    group: "Ambient tint", label: "Tint cross-fade", value: 900,
+    min: 200, max: 3000, step: 50, unit: "ms",
+    why: "How long the app background takes to cross-fade to a new colour -- a tier change, or a celebration starting or ending.",
+  },
+
   // ---- Intensity ---------------------------------------------------------
   tierAmplify: {
     group: "Intensity", label: "Tier beats amplified", value: 1.2,

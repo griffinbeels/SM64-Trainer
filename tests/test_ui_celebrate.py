@@ -69,6 +69,68 @@ def test_the_overlay_never_eats_a_click_meant_for_the_game():
     assert card and "pointer-events: auto" in card.group(1)
 
 
+# A selector token that IS `.marelo-celebrate-card` or `.marelo-celebrate`
+# (optionally with a pseudo-class/combinator tail), never a DIFFERENT class
+# that merely starts with the same characters -- `.marelo-celebrate-backdrop`
+# is a sibling of the card and is SUPPOSED to carry an opacity rule, so the
+# lookahead excludes anything followed by a further word character or hyphen.
+CARD_OR_ANCESTOR = re.compile(r"\.marelo-celebrate-card(?![\w-])|\.marelo-celebrate(?![\w-])")
+
+
+def opacity_rules_on_card_or_ancestor(css: str) -> list[str]:
+    """Every CSS rule whose selector touches `.marelo-celebrate-card` or its
+    one remaining ancestor below `.app-shell` (`.marelo-celebrate`) and also
+    declares `opacity`. A parent's opacity multiplies every child's, which is
+    exactly the report-2 bug (2026-07-28): the card sat at effective opacity
+    0 on the first frame of every flight because its ANCESTOR was the thing
+    fading. `.marelo-celebrate-backdrop` -- the sibling that fades now -- is
+    deliberately excluded by the regex above, not by name-listing it here."""
+    found = []
+    for selectors, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css):
+        if CARD_OR_ANCESTOR.search(selectors) and re.search(r"\bopacity\s*:", body):
+            found.append(selectors.strip())
+    return found
+
+
+def test_the_card_never_has_its_own_opacity_rule():
+    """"It should never become invisible at any point, never change the
+    opacity here. That breaks the immersion of the effect" (user, 2026-07-28).
+    Root cause: `.marelo-celebrate` used to BE the fading backdrop with
+    `.marelo-celebrate-card` as its CHILD, so the card's EFFECTIVE opacity was
+    always its own (always 1) multiplied by its ancestor's (0 at the start of
+    every flight) -- invisible on the first frame, fading in as it travelled,
+    fading back out before landing, never reaching 1 even at rest (the tuned
+    `backdropOpacity` is 0.8, never 1). The fix is structural: the backdrop
+    (`.marelo-celebrate-backdrop`) is a SIBLING of the card now, not an
+    ancestor, so there is nowhere left for an opacity rule to hide that would
+    reach it. This pins that no rule in the stylesheet does."""
+    assert opacity_rules_on_card_or_ancestor(strip_comments(INDEX_HTML)) == []
+
+
+def test_the_opacity_guard_can_still_fail():
+    """Mutation proof, both directions (tests/source_scan.py's own rule: a
+    scan that matches nothing is green forever, and a comment mentioning the
+    forbidden word must not trip it either)."""
+    # The exact bug, reintroduced, on the card itself and on its ancestor:
+    assert opacity_rules_on_card_or_ancestor(
+        ".marelo-celebrate-card { opacity: 0; }") == [".marelo-celebrate-card"]
+    assert opacity_rules_on_card_or_ancestor(
+        ".marelo-celebrate { opacity: .5; }") == [".marelo-celebrate"]
+    # The SIBLING backdrop is allowed to fade -- it is not an ancestor.
+    assert opacity_rules_on_card_or_ancestor(
+        ".marelo-celebrate-backdrop.is-lifted { opacity: .55; }") == []
+    # A comment mentioning "opacity:" inside the rule body must not trip it --
+    # which is exactly why the real test above scans STRIPPED source, not raw
+    # (tests/source_scan.py's own trap: five guards were rewritten in one
+    # session for reacting to a comment rather than code).
+    raw = (".marelo-celebrate-card { /* opacity: intentionally never set */ "
+           "transform: none; }")
+    assert opacity_rules_on_card_or_ancestor(raw) != [], (
+        "the probe sample should trip on RAW text -- if it doesn't, this "
+        "probe no longer demonstrates why stripping comments matters")
+    assert opacity_rules_on_card_or_ancestor(strip_comments(raw)) == []
+
+
 def test_the_flight_has_exactly_one_transition_declaration():
     """A rule's `transition` is not additive: a higher-specificity block
     declaring its own replaces the base rule's wholesale, which is what makes

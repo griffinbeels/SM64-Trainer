@@ -16,7 +16,12 @@ from source_scan import code_only
 REPO = Path(__file__).resolve().parents[1]
 UI = REPO / "src" / "sm64_events" / "ui"
 TUNING_JS = UI / "marelotuning.js"
-READERS = (UI / "components" / "marelocelebrate.js",)
+# marelocelebrate.js reads every row that shapes the FLIGHT. ranktint.js
+# (report 1, 2026-07-28) is a second, legitimate reader -- the ambient tint's
+# strength/duration are read there, at rest, never by the celebration itself
+# (which only ever overrides the colour) -- same multi-reader shape
+# climbtuning.js already has (climbcurve/celebrations/rankclimb).
+READERS = (UI / "components" / "marelocelebrate.js", UI / "ranktint.js")
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None,
                                 reason="node not on PATH")
@@ -82,7 +87,16 @@ def test_the_flight_curve_starts_and_ends_at_rest():
     assert not [key for key in rows if key.lower().endswith(("y1", "y2"))]
 
 
-CUSTOM_PROPERTY = re.compile(r"`--([a-z-]+):")
+# Two shapes write a custom property in this pair of files: marelocelebrate.js
+# builds a wrapper-style STRING (`` `--fly-ms:${x}` ``), ranktint.js calls
+# `style.setProperty("--rank-tint-color", x)` directly (report 1,
+# 2026-07-28) -- a plain literal at the call site rather than an interpolated
+# string, since there is only ever one value to set, not a joined style
+# attribute. Both are real ways to write a property; the guard below must see
+# either or it is blind to exactly the kind of dead control that shipped once
+# already (shakePx, deleted from marelotuning.js the same session this file
+# was added).
+CUSTOM_PROPERTY = re.compile(r'(?:`|setProperty\(\s*")--([a-z-]+)[:"]')
 
 
 def test_every_custom_property_the_overlay_writes_is_actually_used():
@@ -117,3 +131,20 @@ def test_the_custom_property_guard_can_still_fail():
         name for name in written if f"var(--{name}" not in css)
     assert scan({"ghost"}, ".x { color: red }") == ["ghost"]
     assert scan({"live"}, ".x { color: var(--live, red) }") == []
+
+
+def test_the_custom_property_regex_catches_both_writer_shapes():
+    """The ambient tint (ranktint.js, report 1, 2026-07-28) writes its
+    property via `style.setProperty("--name", ...)` rather than the
+    wrapper-style backtick string marelocelebrate.js's own flight variables
+    use -- a second, equally real way to write a custom property. Probed
+    directly so a future edit that narrows the regex back to one shape fails
+    here rather than silently going blind to the other."""
+    assert CUSTOM_PROPERTY.findall("`--fly-ms:${x}ms`") == ["fly-ms"]
+    assert CUSTOM_PROPERTY.findall(
+        'document.documentElement.style.setProperty("--rank-tint-color", x)'
+    ) == ["rank-tint-color"]
+    # A prose mention (no backtick, no setProperty call) must not trip it --
+    # the same comment-vs-code trap tests/source_scan.py exists to avoid.
+    assert CUSTOM_PROPERTY.findall(
+        "the --rank-tint-color property is read by body::after") == []

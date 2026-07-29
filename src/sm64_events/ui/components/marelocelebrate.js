@@ -30,6 +30,7 @@ import { celebrationsEnabled } from "../celebrations.js";
 import { tuning } from "../climbtuning.js";
 import { mareloTuning } from "../marelotuning.js";
 import { prefersReducedMotion } from "../useTween.js";
+import { setRankTintColor, restingTintColor } from "../ranktint.js";
 
 const html = htm.bind(h);
 
@@ -86,6 +87,35 @@ export function MareloCelebration({ celebration, scopeId, marelo, routes,
   // dependency array (rankclimb.js's `tuneOverride`), that would restart the
   // whole climb on every unrelated re-render instead of letting it run.
   const climbTune = useMemo(() => celebrationTuning(tune), [tune]);
+
+  // Computed here, ABOVE every early return, because rules of hooks require
+  // the two effects right below to run on every render regardless: `shown`
+  // is celebration.from until the card is at the centre, then celebration.to
+  // -- the same "before -> after" gate the rest of the file already uses.
+  const atCentre = phase === "climb" || phase === "hold";
+  const shown = celebration ? (atCentre ? celebration.to : celebration.from) : null;
+
+  // ---- The app-wide background tint (report 1, 2026-07-28) --------------
+  // Temporarily drives ui/ranktint.js's SAME `--rank-tint-color` property
+  // while this overlay is mounted, using the exact formula this file's OWN
+  // backdrop already paints with below (`rankColor(shown.tier)`) -- so the
+  // app-wide tint is always in step with the card and the backdrop, never a
+  // second source that could disagree with the first. Gated on the TIER
+  // value alone so it does not re-fire on every unrelated re-render.
+  useEffect(() => {
+    if (!shown) return undefined;
+    setRankTintColor(rankColor(shown.tier));
+    return undefined;
+  }, [shown && shown.tier]);
+
+  // Handed back to the RESTING value on unmount -- read off a ref, not the
+  // `marelo` prop directly, since a cleanup with an empty dependency array
+  // closes over whatever `marelo` was on the render that scheduled it, and
+  // the app root can re-render (a fresh /api/marelo poll) many times while
+  // this overlay stays mounted.
+  const restingTierRef = useRef(marelo && marelo.tier);
+  restingTierRef.current = marelo && marelo.tier;
+  useEffect(() => () => setRankTintColor(restingTintColor(restingTierRef.current)), []);
 
   // Measure the LIVE header card before the clone is placed — this is the
   // FIRST half of a FLIP, and it must run before paint or the clone appears
@@ -152,8 +182,6 @@ export function MareloCelebration({ celebration, scopeId, marelo, routes,
 
   if (!celebration || origin == null) return null;
 
-  const atCentre = phase === "climb" || phase === "hold";
-  const shown = atCentre ? celebration.to : celebration.from;
   // The card is handed a rank, so the climb inside it runs from the one it was
   // showing to the one it is given. `identity` never changes across the
   // sequence — a change would make it SNAP, which is exactly what we do not
@@ -201,8 +229,14 @@ export function MareloCelebration({ celebration, scopeId, marelo, routes,
     `transform:${transform}`,
   ].join(";");
 
-  return html`<div class=${`marelo-celebrate${lifted ? " is-lifted" : ""}`}
-      role="status" style=${wrapperStyle}>
+  // Report 2 (2026-07-28): the backdrop is a SIBLING of the card, never an
+  // ancestor -- a parent's opacity multiplies every child's, which is what
+  // made the card sit invisible on the first frame of every flight and fade
+  // back out before landing. This wrapper carries the shared custom
+  // properties ONLY (children still need to inherit them) and is never
+  // itself given an opacity; only `.marelo-celebrate-backdrop` fades.
+  return html`<div class="marelo-celebrate" role="status" style=${wrapperStyle}>
+    <div class=${`marelo-celebrate-backdrop${lifted ? " is-lifted" : ""}`}></div>
     <div ref=${cardRef} class="marelo-celebrate-card" style=${cardStyle}
         onclick=${() => setPhase("back")}>
       <${RouteRankCard} marelo=${marelo} routes=${routes}

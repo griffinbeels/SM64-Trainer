@@ -95,6 +95,15 @@ function Inspector() {
   const [toLevel, setToLevel] = useState(16);              // Waluigi IV
   const [celebration, setCelebration] = useState(null);
   const [status, setStatus] = useState(null);
+  // Report 3 (2026-07-28): "after ranking up, it should stay at that new
+  // rank ... I should rank up, and then see that new rank settle in the
+  // header." `settled` is what the replica HeaderBar reads to decide which
+  // rank it shows -- false is the from-rank (before Play, or after Restart),
+  // true is the destination (once the celebration has landed and acked).
+  // Nothing about the REAL app changes for this: MareloCelebration already
+  // hides `.marelo-slot` for the duration via a live DOM query, which this
+  // page's own `.marelo-slot` wrapper below is subject to as well.
+  const [settled, setSettled] = useState(false);
 
   useEffect(() => { localStorage.setItem(STORE_KEY, JSON.stringify(values)); }, [values]);
   // The destination can never be at or below the start: a drop is not a
@@ -102,16 +111,30 @@ function Inspector() {
   useEffect(() => {
     if (toLevel <= fromLevel) setToLevel(Math.min(TOP_LEVEL, fromLevel + 1));
   }, [fromLevel, toLevel]);
+  // Picking a different rank-up to preview makes the LAST one's destination
+  // stale -- without this, changing "Start" after a completed Play would
+  // keep showing the previous run's landed rank instead of the new from-rank.
+  useEffect(() => { setSettled(false); }, [fromLevel, toLevel]);
 
   const changed = changedFromMareloDefault(values);
   const changedKeys = Object.keys(changed);
   const set = (name, value) => setValues((prior) => ({ ...prior, [name]: value }));
 
+  // Restart: cancel any in-flight celebration and show the from-rank again --
+  // the state a fresh Play begins from. Play performs the exact same restore
+  // (a stale `settled` from a PRIOR run must not leak into a new one) before
+  // it starts a new flight.
+  const restart = () => {
+    setCelebration(null);
+    setSettled(false);
+    setStatus(null);
+  };
+
   // Committed to the module-level tuning slot BEFORE the celebration mounts
   // (marelocelebrate.js reads it once, mareloTuning()), the same ordering
   // tune.js's own play() uses for the climb registry.
   const play = () => {
-    setStatus(null);
+    restart();
     setMareloTuning(values);
     const from = rankAt(fromLevel);
     const to = rankAt(toLevel);
@@ -154,7 +177,7 @@ function Inspector() {
       <div class="app-shell">
         <div class="sidebar"></div>
         <div class="practice-page">
-          <${HeaderBar} marelo=${mareloFor(fromLevel)} />
+          <${HeaderBar} marelo=${mareloFor(settled ? toLevel : fromLevel)} />
         </div>
       </div>
     </div>
@@ -183,7 +206,7 @@ function Inspector() {
       </div>
       <div class="tune-actions" style="margin-top:10px">
         <button class="primary" onclick=${play}>▶ Play</button>
-        <button onclick=${() => { setCelebration(null); setStatus(null); }}>Reset</button>
+        <button onclick=${restart}>Restart</button>
       </div>
 
       <${ControlGroups} groups=${MARELO_GROUPS} rows=${MARELO_TUNABLES}
@@ -211,7 +234,7 @@ function Inspector() {
     ${celebration && html`<${MareloCelebration} key=${celebration.key}
       celebration=${celebration} scopeId="tune" marelo=${mareloFor(fromLevel)}
       routes=${[]} activeRouteId=${null}
-      onDone=${() => setCelebration(null)} />`}
+      onDone=${() => { setCelebration(null); setSettled(true); }} />`}
   </div>`;
 }
 
