@@ -104,8 +104,7 @@ MOVEMENTS = [
     movement("seg:ddd->bitfs", "DDD → BitFS (sub)",
              exit_level(23), enter_level(19)),
     movement("seg:ddd->wdw", "DDD → WDW (BitFS re-entry, pause exit)",
-             exit_level(23), enter_level(11),
-             via=[enter_level(19), exit_level(19)]),
+             exit_level(23), enter_level(11)),
     # --- out of the Bowser 2 arena (its exit lands in the basement) -------
     movement("seg:bowser2->ddd", "Bowser 2 → DDD",
              exit_level(33), enter_level(23)),
