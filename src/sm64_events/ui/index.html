@@ -487,13 +487,12 @@
   .cd-url input { flex:1 1 180px; min-width:0; }
   .cd-url button { flex:0 0 auto; }
 
-  /* narrow screens: stack (video / controls / video) with a horizontal control row */
-  @media (max-width:820px){
-    .compare-grid { flex-direction:column; }
-    .compare-col, .compare-center { width:100%; flex:none; }
-    .compare-center { padding-top:.4rem; }
-    .compare-transport { flex-direction:row; flex-wrap:wrap; justify-content:center; }
-  }
+  /* narrow screens: the responsive Compare rules live BELOW the base ones —
+     see "Compare, narrow pane" further down. They were briefly up here, where
+     the old @media block sat, and lost to `.compare-transport
+     .primary-transport` at line ~2700 on source order alone: same specificity
+     (0,2,0), later rule wins, so the button kept its 92px and the sweep kept
+     reporting the same overlap through a fix that looked correct. */
 
   /* ---------------------------------------------------------------------
      Practice Index shell — calm observatory, fixed live-state tracks
@@ -779,6 +778,21 @@
     padding: 4px 14px 28px; overflow-x: hidden;
   }
   .view-pane, .practice-page { min-width: 0; max-width: 100%; }
+  /* Every page gets a size container, not just Practice.
+     ------------------------------------------------------------------
+     `.practice-page` has declared `container-type: inline-size` since the
+     rank-banner fix; the other five pages (Run, Compare, Routes, Segments,
+     Live feed) had none, so their layout had no choice but to key on the
+     viewport -- which in this shell is the wrong signal, because the sidebar
+     steps make pane width non-monotonic in window width (1181px window -> a
+     932px pane; 1180px window -> 1061px).
+
+     inline-size only: the block axis is untouched, so nothing that depends on
+     content height changes. Note the containment this imposes means a child
+     cannot measure the container with cqw and BE the thing that sizes it --
+     which is why the star row's cqw units still resolve against
+     `.practice-page` (its own nearer container), not this one. */
+  .view-pane { container-type: inline-size; }
   .mobile-appbar, .mobile-nav, .mobile-more-backdrop { display: none; }
   /* THE size container all selector cqw units + @container rules resolve
      against — the pane the star row must fit inside. inline-size only, so
@@ -1432,7 +1446,14 @@
                            calc(var(--climb-flash, 0) * 90%), transparent);
   }
   .marelo-split { white-space: nowrap; }
-  @media (max-width: 900px) { .marelo-track, .marelo-split { display: none; } }
+  /* `@media (max-width: 900px) { .marelo-track, .marelo-split { display: none } }`
+     was here until 2026-07-28. It was a blunter, viewport-keyed duplicate of
+     the two `@container` rules the MARELO bar already has — `.marelo-slot`
+     declares its own `container-type: inline-size`, and hiding the split at
+     500px and the track at 330px says the same thing in terms of the space
+     the bar actually gets. Two rules answering one question is how they end
+     up disagreeing; the container pair wins because the slot's width is the
+     thing that decides whether the bar fits. */
   /* Scope TIER-up celebration -- the grand one (celebrate.js TierRankUp,
      task F3): fixed overlay so it can never reflow an OBS capture;
      pointer-events stay OFF on the overlay and ON only for the card, so it
@@ -1955,7 +1976,6 @@
      take from the name column, and shrinks its type rather than reflow at
      narrow widths (swept 900px in the harness, see task-c-report.md). */
   .rank-cell-next { white-space: nowrap; font-size: 12px; }
-  @media (max-width: 640px) { .rank-cell-next { font-size: 11px; } }
   .objective-live-state {
     min-width: 0; min-height: 32px; display: flex; align-items: center; justify-content: center;
     gap: .4rem; color: var(--muted); border-inline: 1px solid var(--border-soft);
@@ -2673,6 +2693,39 @@
   .compare-transport .primary-transport {
     min-width: 92px; color: #171407; background: var(--gold); border-color: var(--gold-soft); font-weight: 750;
   }
+
+  /* Compare, narrow pane. Was `@media (max-width:820px)` plus a second half in
+     `@media (max-width:760px)` until 2026-07-28. Viewport 820 gives the pane
+     701px and viewport 760 gives it 725px, so the pair were applying their
+     "narrower" treatment to a WIDER pane — the same inversion the Active
+     Target card had. One threshold, on the pane, replaces both.
+
+     Placed HERE, immediately after the base rules, and that is load-bearing:
+     these first went in where the old @media block sat near the top of the
+     stylesheet and silently lost to `.primary-transport` above on source
+     order — identical specificity (0,2,0), later rule wins. The sweep kept
+     reporting the identical overlap through a fix that read as correct. */
+  @container (max-width: 700px) {
+    .compare-grid { flex-direction: column; }
+    .compare-col, .compare-center { width: 100%; flex: none; }
+    .compare-center { padding-top: .4rem; }
+    .compare-transport { flex-direction: row; flex-wrap: wrap; justify-content: center; }
+    .compare-transport-card { align-items: stretch; flex-direction: column; }
+  }
+  /* Four transport buttons across, once wrapping them is worse than shrinking
+     them. `.primary-transport` is named EXPLICITLY rather than relying on the
+     neighbouring `.compare-transport button` reset: that reset is (0,1,1) and
+     the 92px min-width above is (0,2,0), so the button stayed 92px wide inside
+     a ~64px grid cell and overlapped its neighbour by 22px at 320px. Found by
+     the sweep the first time secondary tabs were measured at more than three
+     viewports — the old coverage never looked at Compare below 760. */
+  @container (max-width: 430px) {
+    .compare-transport { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); }
+    .compare-transport button,
+    .compare-transport .primary-transport {
+      min-width: 0; padding-inline: .28rem; font-size: .7rem;
+    }
+  }
   .compare-grid {
     min-width: 0; display: grid; grid-template-columns: repeat(2,minmax(0,1fr));
     gap: 12px; align-items: start;
@@ -3130,59 +3183,12 @@
     .nav-item { justify-content: center; padding-inline: 0; }
     .nav-item.on { box-shadow: inset 2px 0 0 #76b5f5; }
     .sidebar-status { justify-items: center; padding: .55rem .3rem; }
-    .connection-line { display: block; }
-    .recording-status { width: 100%; text-align: center; }
-    .recording-status .dot { font-size: 0; overflow: visible; }
-    .recording-status .dot::before {
-      content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%;
-      background: currentColor;
-    }
-    .recording-status .recording-light { display: none; }
     .context-bar {
       grid-template-columns: minmax(145px,.8fr) minmax(210px,1.35fr)
                              minmax(155px,.9fr) minmax(130px,.65fr);
     }
-    /* Four cards in one row need 684px, and `main.app-main` is only 670px at
-       viewport 761 -- the narrowest window that still carries the 76px rail.
-       So the row overflowed by 14px through the whole 761..775 band and the
-       Grading select hung past the edge (sweep, 2026-07-28). Measured: app-main
-       is viewport - 91 while the rail is present, so 4-across stops fitting
-       below 775. Two-up from there, which is what the sub-760 layout already
-       does once the sidebar goes away entirely.
-       This one legitimately stays a VIEWPORT query: .context-bar is shell, it
-       lives outside .practice-page, and the width it gets is a fact about the
-       shell rather than about any card. */
-    @media (max-width: 775px) {
-      .context-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    }
-    .practice-detail-grid { grid-template-columns: 1fr; }
-    .objective-card, .detail-drawer { grid-column: 1; }
-    .analysis-card, .attempts-card { height: 480px; min-height: 480px; }
-    .practice-index-item > .practice-detail-grid { display: grid; }
-    .segments-workshop { grid-template-columns: minmax(280px,320px) minmax(0,1fr); }
-    .routes-workshop { grid-template-columns: minmax(220px,260px) minmax(0,1fr); }
-    .segment-definition-grid { grid-template-columns: 1fr; }
-    .segsection.seg-guard { grid-column: 1; }
-    .routepick { grid-template-columns: minmax(80px,.55fr) minmax(120px,1fr) minmax(120px,1fr); }
-    .routepick > button { grid-column: 1 / -1; justify-self: end; }
-    .compare-stage-card { min-height: 520px; }
-    .cf-row { grid-template-columns: 85px 110px minmax(0,1fr) auto 18px; }
   }
 
-  @media (max-width: 900px) {
-    .segments-workshop, .routes-workshop { grid-template-columns: 1fr; }
-    .segment-editor { order: 1; }
-    .segment-library { order: 2; }
-    .segment-library, .segment-editor, .route-library, .route-empty-card { min-height: 0; }
-    .segment-library, .route-library { position: static; max-height: none; }
-    .segment-list, .route-list { max-height: 340px; }
-    .runbar { grid-template-columns: minmax(0,1fr) auto; align-items: end; }
-    .run-pb-slot { grid-column: 1 / -1; grid-row: 2; justify-items: start; }
-    .run-clock-row { grid-template-columns: 1fr; padding-block: 1rem; }
-    .run-clock-note { padding: .7rem 0 0; border-left: 0; border-top: 1px solid var(--border-soft); }
-    .compare-grid { grid-template-columns: 1fr; }
-    .compare-stage-card { min-height: 0; }
-  }
 
   /* Rank-banner crowding, keyed on the PANE and not the viewport.
      ------------------------------------------------------------------
@@ -3334,6 +3340,74 @@
     .context-label { font-size: .6rem; }
     .context-value { font-size: .78rem; }
     .workspace { padding: 4px 10px 94px; }
+    .mobile-nav {
+      position: fixed; z-index: 30; left: 8px; right: 8px; bottom: 8px;
+      display: grid; grid-template-columns: repeat(4,minmax(0,1fr));
+      padding: 6px; border: 1px solid var(--border); border-radius: 10px;
+      background: rgba(10,23,38,.97); box-shadow: 0 12px 35px rgba(0,0,0,.4);
+    }
+    .mobile-nav .nav-item {
+      width: auto; min-width: 0; min-height: 52px;
+      display: flex; flex-direction: column; gap: .18rem;
+      font-size: .68rem; padding: .3rem .1rem;
+    }
+    .mobile-nav .nav-item span { display: inline; }
+    .mobile-nav .nav-item.on { box-shadow: inset 0 -2px 0 #76b5f5; }
+    .mobile-more-backdrop { display: flex; }
+  }
+
+  @media (max-width: 430px) {
+    .mobile-brand span { font-size: .86rem; }
+    .mobile-status .status-main { display: none; }
+    .mobile-status .recording-status .dot { max-width: none; }
+    .context-control > .ui-icon { display: none; }
+  }
+
+  /* Short windows: the sidebar compresses instead of growing a scrollbar
+     (pairs with the non-scrolling .sidebar-nav above). */
+  @media (max-height: 760px) {
+    .app-brand { min-height: 52px; }
+    .app-brand img { width: 52px; height: 46px; }
+    .nav-item { min-height: 36px; padding-block: .32rem; }
+    .nav-group { padding-block: .4rem; }
+    .sidebar-footer { gap: .4rem; }
+    .sidebar-status { padding: .5rem .6rem; gap: .4rem; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      scroll-behavior: auto !important;
+      animation-duration: .01ms !important; animation-iteration-count: 1 !important;
+      transition-duration: .01ms !important;
+    }
+  }
+
+  /* Was @media (max-width: 1180px). Viewport 1180 gives the pane 1061px and viewport 1181 gives it 932px, so these never reached the NARROWER of the two. */
+  @container (max-width: 1060px) {
+    .connection-line { display: block; }
+    .recording-status { width: 100%; text-align: center; }
+    .recording-status .dot { font-size: 0; overflow: visible; }
+    .recording-status .dot::before {
+      content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+      background: currentColor;
+    }
+    .recording-status .recording-light { display: none; }
+    .practice-detail-grid { grid-template-columns: 1fr; }
+    .objective-card, .detail-drawer { grid-column: 1; }
+    .analysis-card, .attempts-card { height: 480px; min-height: 480px; }
+    .practice-index-item > .practice-detail-grid { display: grid; }
+    .segments-workshop { grid-template-columns: minmax(280px,320px) minmax(0,1fr); }
+    .routes-workshop { grid-template-columns: minmax(220px,260px) minmax(0,1fr); }
+    .segment-definition-grid { grid-template-columns: 1fr; }
+    .segsection.seg-guard { grid-column: 1; }
+    .routepick { grid-template-columns: minmax(80px,.55fr) minmax(120px,1fr) minmax(120px,1fr); }
+    .routepick > button { grid-column: 1 / -1; justify-self: end; }
+    .compare-stage-card { min-height: 520px; }
+    .cf-row { grid-template-columns: 85px 110px minmax(0,1fr) auto 18px; }
+  }
+
+  /* Was @media (max-width: 760px). Viewport 760 gives the pane 725px and viewport 761 gives it 642px -- the mobile block was styling the WIDER pane. 700px splits them the right way round. */
+  @container (max-width: 700px) {
     .workshop-hero { min-height: 76px; padding: 11px 12px; }
     .workshop-title-icon { width: 36px; height: 36px; }
     .workshop-title p { display: none; }
@@ -3368,11 +3442,6 @@
     .run-history-row { grid-template-columns: minmax(0,1fr) auto 20px; }
     .run-history-date { grid-column: 1 / -1; }
     .run-history-splits { padding-left: .45rem; }
-    .compare-transport-card { align-items: stretch; flex-direction: column; }
-    .compare-transport { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); }
-    .compare-transport button {
-      min-width: 0; padding-inline: .28rem; font-size: .7rem;
-    }
     .cf-head { align-items: end; }
     .cf-head select { min-width: 0; max-width: 48%; }
     .cf-row {
@@ -3421,20 +3490,6 @@
     .replay-setting-row {
       grid-template-columns: minmax(150px,1fr) 240px; gap: .6rem;
     }
-    .mobile-nav {
-      position: fixed; z-index: 30; left: 8px; right: 8px; bottom: 8px;
-      display: grid; grid-template-columns: repeat(4,minmax(0,1fr));
-      padding: 6px; border: 1px solid var(--border); border-radius: 10px;
-      background: rgba(10,23,38,.97); box-shadow: 0 12px 35px rgba(0,0,0,.4);
-    }
-    .mobile-nav .nav-item {
-      width: auto; min-width: 0; min-height: 52px;
-      display: flex; flex-direction: column; gap: .18rem;
-      font-size: .68rem; padding: .3rem .1rem;
-    }
-    .mobile-nav .nav-item span { display: inline; }
-    .mobile-nav .nav-item.on { box-shadow: inset 0 -2px 0 #76b5f5; }
-    .mobile-more-backdrop { display: flex; }
     .practice-toolbar { min-height: 56px; padding: 8px 10px; }
     .route-focus-control { min-width: 0; flex: 1; }
     .route-focus-control .field-label, .toolbar-note { display: none; }
@@ -3479,11 +3534,12 @@
     .settings-actions { grid-template-columns: 1fr; }
   }
 
-  @media (max-width: 430px) {
-    .mobile-brand span { font-size: .86rem; }
-    .mobile-status .status-main { display: none; }
-    .mobile-status .recording-status .dot { max-width: none; }
-    .context-control > .ui-icon { display: none; }
+  /* Was @media (max-width: 640px); viewport 640 gives the pane 605px. */
+  @container (max-width: 605px) { .rank-cell-next { font-size: 11px; }
+  }
+
+  /* Was @media (max-width: 430px); viewport 430 gives the pane 395px. */
+  @container (max-width: 400px) {
     .reset-toggle span { display: none; }
     .attempt-actions button { padding-inline: .32rem; }
     .save-pb-narrow { display: none; } /* icon-only Save on phones */
@@ -3491,24 +3547,38 @@
     .replay-setting-controls { width: 100%; }
   }
 
-  /* Short windows: the sidebar compresses instead of growing a scrollbar
-     (pairs with the non-scrolling .sidebar-nav above). */
-  @media (max-height: 760px) {
-    .app-brand { min-height: 52px; }
-    .app-brand img { width: 52px; height: 46px; }
-    .nav-item { min-height: 36px; padding-block: .32rem; }
-    .nav-group { padding-block: .4rem; }
-    .sidebar-footer { gap: .4rem; }
-    .sidebar-status { padding: .5rem .6rem; gap: .4rem; }
+  /* Was @media (max-width: 900px); viewport 900 gives the pane 781px. */
+  @container (max-width: 780px) {
+    .segments-workshop, .routes-workshop { grid-template-columns: 1fr; }
+    .segment-editor { order: 1; }
+    .segment-library { order: 2; }
+    .segment-library, .segment-editor, .route-library, .route-empty-card { min-height: 0; }
+    .segment-library, .route-library { position: static; max-height: none; }
+    .segment-list, .route-list { max-height: 340px; }
+    .runbar { grid-template-columns: minmax(0,1fr) auto; align-items: end; }
+    .run-pb-slot { grid-column: 1 / -1; grid-row: 2; justify-items: start; }
+    .run-clock-row { grid-template-columns: 1fr; padding-block: 1rem; }
+    .run-clock-note { padding: .7rem 0 0; border-left: 0; border-top: 1px solid var(--border-soft); }
+    .compare-grid { grid-template-columns: 1fr; }
+    .compare-stage-card { min-height: 0; }
   }
 
-  @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after {
-      scroll-behavior: auto !important;
-      animation-duration: .01ms !important; animation-iteration-count: 1 !important;
-      transition-duration: .01ms !important;
-    }
+  /* Context bar: four cards in one row need 684px, and `main.app-main` is only
+     670px at viewport 761 -- the narrowest window that still carries the 76px
+     rail. The row overflowed by 14px through the whole 761..775 band and the
+     Grading select hung past the edge. Measured: app-main is viewport - 91
+     while the rail is present, so four-across stops fitting below 775.
+
+     A VIEWPORT query on purpose, and it has to be at TOP LEVEL. `.context-bar`
+     lives in the header, OUTSIDE `.view-pane`, so it has no size container
+     above it -- when the Wave 2 conversion swept this rule into
+     `@container (max-width: 1060px)` the query could never match and the same
+     overflow came back on all seven tabs at once (2026-07-28). A shell element
+     cannot be gated on a container it is not inside. */
+  @media (max-width: 775px) {
+    .context-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
+
 </style></head>
 <body>
 <div id="app"></div>
