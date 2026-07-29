@@ -1406,9 +1406,21 @@ MATCH_MODES = {
     "strict": {
         "key": "strict",
         "label": "Strict — cancels if I go off-route",
-        "description": ("Cancels the moment anything happens that is not the "
-                        "next expected step. Use this when a stray star grab "
-                        "means the attempt is over."),
+        # The old text said "use this when a stray star grab means the attempt
+        # is over", which was never true of a plain two-point strict def --
+        # `_feed_strict` has no star/key branch at all, so it stays armed
+        # through one (pinned by test_strict_survives_a_star_grab_that_would_
+        # cancel_an_exclusive_def). It IS true of a strict def carrying
+        # waypoints, which runs `_feed_waypoint` and cancels on a major action.
+        # Harmless prose until 2026-07-29, actively misleading after: it
+        # described Exclusive's whole purpose while sitting on Strict, in a
+        # control the user reads to choose between the two.
+        "description": ("Cancels the moment you go off-route — a level change "
+                        "that is not the next expected step, or leaving the "
+                        "area it armed in. A multi-step segment also cancels "
+                        "on a stray star or key grab; a plain two-point one "
+                        "stays armed through those (pick Exclusive if it "
+                        "should not)."),
     },
     "exclusive": {
         "key": "exclusive",
