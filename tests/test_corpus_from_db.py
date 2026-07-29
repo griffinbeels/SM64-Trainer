@@ -81,10 +81,58 @@ def test_the_printed_source_round_trips_through_the_corpus_builder():
     assert expanded["end_triggers"] == row["end_triggers"]
     assert expanded["waypoints"] == row["waypoints"]
     assert produced["name"] == row["name"]
-    # match_mode is NOT part of movement()'s shape at all (see the module
-    # docstring's "WHAT segment_row_source DOES NOT CARRY") -- every real
-    # seeded row in this db is "strict", the only value reconcile ever
-    # assigns a corpus_movements.py row, so nothing is lost by this row.
+    # match_mode DOES round-trip (Task 19, spec 2026-07-28-multi-step-
+    # segments) -- this row's "strict" differs from
+    # corpus_vocab.DEFAULT_MOVEMENT_MATCH_MODE ("loose"), so
+    # segment_row_source prints an explicit match_mode= override and
+    # _movement_row picks it up over the corpus default.
+    assert expanded["match_mode"] == "strict"
+
+
+def test_a_match_mode_matching_the_default_is_omitted():
+    """The 55 shipped movements are ALL "loose" -- corpus_vocab
+    .DEFAULT_MOVEMENT_MATCH_MODE -- so printing match_mode= unconditionally
+    would put a redundant argument on every one of them. Only a mode that
+    DIFFERS from the default earns the argument; test_a_live_definition_
+    prints_as_pasteable_corpus_source above already covers this (its row's
+    match_mode is "loose", and the expected source has no match_mode= at
+    all) -- this test names the omission as its own behaviour."""
+    src = corpus_from_db.segment_row_source({
+        "name": "Bowser 1 → WF", "seed_key": "seg:bowser1->wf",
+        "match_mode": "loose",
+        "start_triggers": [{"type": "level_exit", "from": 30}],
+        "end_triggers": [{"type": "level_enter", "to": 24}],
+        "waypoints": []})
+    assert "match_mode" not in src
+
+
+def test_a_match_mode_differing_from_the_default_is_printed():
+    """The exact gap Task 13's recorder created: it always posts
+    match_mode: "loose" for a freshly-recorded segment, so a live def
+    demoted back to "strict" (or any future third mode) must print the
+    override or a promotion through this tool would silently lose it and
+    reconcile back to "loose" on the next seed refresh."""
+    src = corpus_from_db.segment_row_source({
+        "name": "Bowser 1 → WF", "seed_key": "seg:bowser1->wf",
+        "match_mode": "strict",
+        "start_triggers": [{"type": "level_exit", "from": 30}],
+        "end_triggers": [{"type": "level_enter", "to": 24}],
+        "waypoints": []})
+    assert src == ('movement("seg:bowser1->wf", "Bowser 1 → WF",\n'
+                   '         exit_level(30), enter_level(24),\n'
+                   '         match_mode="strict"),')
+
+
+def test_via_and_a_differing_match_mode_print_on_the_same_trailing_line():
+    row = {"name": "WF → SSL", "seed_key": "seg:wf->ssl",
+           "match_mode": "strict",
+           "start_triggers": [{"type": "level_exit", "from": 24}],
+           "end_triggers": [{"type": "level_enter", "to": 8}],
+           "waypoints": [[{"type": "area_enter", "level": 6, "area": 3}]]}
+    src = corpus_from_db.segment_row_source(row)
+    assert src == ('movement("seg:wf->ssl", "WF → SSL",\n'
+                   '         exit_level(24), enter_level(8),\n'
+                   '         via=[enter_area(BASEMENT)], match_mode="strict"),')
 
 
 def test_via_waypoint_prints_a_second_line_with_named_constants():
@@ -290,6 +338,7 @@ def test_every_real_seeded_definition_round_trips_or_is_explicitly_refused():
     refused, round_tripped = [], []
     for r in rows:
         defn = {"id": r["id"], "name": r["name"], "seed_key": r["seed_key"],
+                "match_mode": r["match_mode"],
                 "start_triggers": json.loads(r["start_triggers"]),
                 "end_triggers": json.loads(r["end_triggers"]),
                 "waypoints": json.loads(r["waypoints"])}
@@ -302,6 +351,7 @@ def test_every_real_seeded_definition_round_trips_or_is_explicitly_refused():
         assert produced["start_triggers"] == defn["start_triggers"], defn["seed_key"]
         assert produced["end_triggers"] == defn["end_triggers"], defn["seed_key"]
         assert produced["waypoints"] == defn["waypoints"], defn["seed_key"]
+        assert produced["match_mode"] == defn["match_mode"], defn["seed_key"]
         round_tripped.append(defn["seed_key"])
 
     print(f"\n{len(round_tripped)}/{len(rows)} round-tripped; "

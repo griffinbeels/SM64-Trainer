@@ -15,19 +15,31 @@ to the db, `data/defaults.seed.json`, or `corpus_movements.py` itself. It only
 ever emits TEXT for a human to paste and review; `build_defaults_seed.py
 --check` remains the only guard on what actually ships.
 
-WHAT segment_row_source DOES NOT CARRY: `guards`, `category`, `default_strat`
-and `match_mode` are not part of a `movement(...)` call at all -- every entry
-in corpus_movements.py::MOVEMENTS gets those four stamped UNIFORMLY by
+WHAT segment_row_source DOES NOT CARRY: `guards`, `category` and
+`default_strat` are not part of a `movement(...)` call at all -- every entry
+in corpus_movements.py::MOVEMENTS gets those three stamped UNIFORMLY by
 build_defaults_seed.py::_movement_row (ROUTE_SCOPED guards, "Castle Movement",
-"Standard", the match_mode column's own default), regardless of what the
-tuple contains. So a live def whose guards/category/default_strat/match_mode
-happen to differ from those constants is not something this tool can (or
-should try to) preserve -- there is nowhere in corpus_movements.py's row shape
-to put a per-row override. If a def genuinely needs one of those to differ
-(a real "loose"-matched recording, say), the paste is still correct for
-start/end/via and the four constant fields need setting BY HAND in the UI
-after the corpus round-trips it back in -- flagged here, not solved here,
-because corpus_vocab.py/build_defaults_seed.py are out of scope for this tool.
+"Standard"), regardless of what the tuple contains. So a live def whose
+guards/category/default_strat happen to differ from those constants is not
+something this tool can (or should try to) preserve -- there is nowhere in
+corpus_movements.py's row shape to put a per-row override for any of the
+three. If a def genuinely needs one of them to differ, the paste is still
+correct for start/end/via and the three constant fields need setting BY HAND
+in the UI after the corpus round-trips it back in -- flagged here, not
+solved here, because corpus_vocab.py/build_defaults_seed.py are out of scope
+for this tool.
+
+match_mode is DIFFERENT (Task 19, spec 2026-07-28-multi-step-segments,
+closing the exact gap the paragraph above used to describe for it too):
+`movement()` takes an optional per-row match_mode= override, so
+`segment_row_source` DOES carry it -- whenever a live def's mode differs
+from corpus_vocab.DEFAULT_MOVEMENT_MATCH_MODE ("loose"), the printed line
+gets a trailing `match_mode="..."` argument. This is the fix for Task 13's
+recorder always posting match_mode: "loose" for a freshly-recorded segment:
+without it, promoting a "strict"-demoted or otherwise non-default recording
+through this tool silently lost the mode on the way into
+corpus_movements.py, and it would have reconciled back to the corpus
+default on the next seed refresh.
 
 Two traps found pre-verifying the inversion (see NotExpressible call sites):
   (a) `enter_area(area)` always hardcodes `level=CASTLE`. A def whose
@@ -55,7 +67,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from corpus_vocab import BASEMENT, CASTLE, LOBBY, UPSTAIRS  # noqa: E402
+from corpus_vocab import (BASEMENT, CASTLE, DEFAULT_MOVEMENT_MATCH_MODE,  # noqa: E402
+                          LOBBY, UPSTAIRS)
 
 _AREA_NAMES = {LOBBY: "LOBBY", UPSTAIRS: "UPSTAIRS", BASEMENT: "BASEMENT"}
 
@@ -202,7 +215,11 @@ def segment_row_source(defn: dict) -> str:
     tools/corpus_movements.py's MOVEMENTS list, trailing comma included (so
     it can be pasted straight into the list, and so the round-trip test can
     `.rstrip(",")` it back into one bare call). Raises NotExpressible when the
-    row's shape has no movement() equivalent."""
+    row's shape has no movement() equivalent.
+
+    `defn["match_mode"]`, if present, is compared against
+    corpus_vocab.DEFAULT_MOVEMENT_MATCH_MODE and printed as an explicit
+    match_mode= argument only when it differs (module docstring)."""
     starts, ends = defn["start_triggers"], defn["end_triggers"]
     if len(starts) != 1 or len(ends) != 1:
         raise NotExpressible(
@@ -225,10 +242,18 @@ def segment_row_source(defn: dict) -> str:
     seed_key = defn.get("seed_key") or _slugify(defn["name"])
     header = f"movement({_lit(seed_key)}, {_lit(defn['name'])},"
     clauses = f"{_INDENT}{start_src}, {end_src}"
-    if not via_srcs:
+
+    # match_mode round-trips ONLY when it differs from the corpus default --
+    # printing it unconditionally would make every one of the 55 existing
+    # movement() calls grow a redundant argument the next time someone
+    # regenerates corpus_movements.py by hand (Task 19 gap fix).
+    mode = defn.get("match_mode")
+    trailing = [f"via=[{', '.join(via_srcs)}]"] if via_srcs else []
+    if mode is not None and mode != DEFAULT_MOVEMENT_MATCH_MODE:
+        trailing.append(f"match_mode={_lit(mode)}")
+    if not trailing:
         return f"{header}\n{clauses}),"
-    return (f"{header}\n{clauses},\n"
-           f"{_INDENT}via=[{', '.join(via_srcs)}]),")
+    return f"{header}\n{clauses},\n{_INDENT}{', '.join(trailing)}),"
 
 
 # --- CLI ---------------------------------------------------------------------
@@ -243,7 +268,7 @@ def _load_definitions(db_path: Path) -> list[dict]:
     rows = conn.execute("SELECT * FROM segment_defs ORDER BY id").fetchall()
     conn.close()
     return [{"id": r["id"], "name": r["name"], "seed_key": r["seed_key"],
-             "seed_dirty": r["seed_dirty"],
+             "seed_dirty": r["seed_dirty"], "match_mode": r["match_mode"],
              "start_triggers": json.loads(r["start_triggers"]),
              "end_triggers": json.loads(r["end_triggers"]),
              "waypoints": json.loads(r["waypoints"])} for r in rows]
