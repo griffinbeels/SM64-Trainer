@@ -1496,10 +1496,21 @@
   }
   .marelo-celebrate-backdrop {
     position: fixed; inset: 0; pointer-events: none;
-    background:
+    background-color:
       color-mix(in srgb, var(--climb-color, transparent) var(--backdrop-tint, 0%),
                 rgba(3, 9, 18, 1));
-    opacity: 0; transition: opacity var(--fly-ms, 900ms) var(--fly-ease, ease);
+    opacity: 0;
+    /* TWO properties, ONE declaration (`.claude/rules/ui-core.md`'s rule: a
+       second `transition:` on any state of this element would REPLACE this
+       one wholesale, not add to it). Opacity paces the fly-out/fly-back
+       fade; background-color is the tier cross-fade (report 1, 2026-07-28,
+       "we should ... animate from current background color to capless
+       color, then when we cross from CAPLESS -> TOAD, animate from capless
+       to toad color") -- its own duration, `--tier-fade-ms`, is deliberately
+       NOT `--fly-ms`: a tier crossing can land mid-climb, long after the
+       flight itself finished moving. */
+    transition: opacity var(--fly-ms, 900ms) var(--fly-ease, ease),
+                background-color var(--tier-fade-ms, 500ms) ease;
   }
   .marelo-celebrate-backdrop.is-lifted { opacity: var(--backdrop-alpha, .55); }
   /* EXACTLY ONE transition declaration on this element. A :hover or state

@@ -3,6 +3,7 @@
 // caps.js (Task 1, 2026-07-25-mario-cap-rank-icons) — this file never keeps
 // its own copy, it imports rankColor same as every other consumer.
 import { h } from "preact";
+import { useEffect } from "preact/hooks";
 import htm from "htm";
 import { capName, divisionDigit } from "./caps.js";
 import { RankIcon } from "./rankicon.js";
@@ -59,7 +60,7 @@ export const fmtPoints = (score) => (score == null ? "–" : String(toPoints(sco
 export function RouteRankCard({ marelo, routes = [], activeRouteId = null,
                                onPickRoute = null, identity = null,
                                rank = undefined, interactive = true,
-                               tune = null }) {
+                               tune = null, onClimbTier = null }) {
   // Hooks run unconditionally (rules of hooks) — `null` passes straight
   // through both with no animation.
   const shown = rank !== undefined ? rank
@@ -68,6 +69,21 @@ export function RouteRankCard({ marelo, routes = [], activeRouteId = null,
            fill: marelo.division_progress || 0 }
        : null);
   const climb = useRankClimb(shown, identity, { tune });
+  // Relay the climb's own PER-FRAME tier to a caller that must walk it in
+  // lockstep (components/marelocelebrate.js, report 1, 2026-07-28): the
+  // celebration backdrop and the app-wide ambient tint used to read
+  // `celebration.from`/`.to` directly, a TWO-STATE snapshot, so the
+  // background jumped straight to the destination tier's colour the instant
+  // the climb began instead of walking Capless -> Toad -> ... -> Waluigi
+  // alongside the card actually doing that on screen. `climb.tier` is
+  // exactly the value painted right now -- this hands it out rather than
+  // making a second caller re-derive it. Keyed on the tier value alone, not
+  // on `climb` itself (a fresh object every animation frame via
+  // rankclimb.js's `renderState`) -- this must fire once per tier crossing,
+  // never once per frame of fill movement.
+  useEffect(() => {
+    if (onClimbTier) onClimbTier(climb ? climb.tier : null);
+  }, [climb && climb.tier]);
   const score = useTween(marelo ? marelo.marelo : null);
 
   const { label = null, mastery = null, coverage = null,
