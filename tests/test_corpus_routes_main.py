@@ -170,6 +170,40 @@ def test_unreferenced_movements_exemption_is_still_actually_unreferenced():
             "— drop the exemption")
 
 
+def test_a_definition_that_ends_on_a_star_grab_is_in_no_route():
+    """The run-ordering trap, turned from latent into a red build.
+
+    `runs.py::RunTracker._apply` only ever considers `steps[current]`, and
+    `projection.py` builds `closed` **stars-then-segments** within ONE event.
+    So a segment closing on the same event as a star closes AFTER that star has
+    already advanced the run past the segment's own step — and the run stalls
+    permanently and silently. That is why the corpus rule is "a movement may
+    start on a star grab but must NEVER end on one".
+
+    The 15 hundred-coin exits DO end on a star grab, and that is the feature,
+    not a mistake: 100 coins, then a different star to actually leave the level
+    — the user asked for exactly this shape by name. They are safe purely
+    because no route references them (measured: 0 of 15). This asserts that
+    stays true, so the day someone routes one it fails here with the reason
+    instead of stalling a run in front of a player.
+
+    Deliberately DERIVED, not a hardcoded list: any definition ending on a star
+    grab is caught, including ones nobody has written yet.
+    """
+    segments = build_seed.build()["segments"]
+    used = _segments_used_by(ALL_ROUTES)
+    offenders = sorted(
+        row["seed_key"] for row in segments
+        if any(t.get("type") == "star_grabbed" for t in row["end_triggers"])
+        and row["seed_key"] in used)
+    assert not offenders, (
+        f"{offenders} end on a star grab AND are referenced by a route. "
+        "projection.py closes stars before segments within one event, so the "
+        "star advances the run past this step and the segment's own closure "
+        "arrives too late — the run stalls silently. Either give the segment a "
+        "non-star end trigger, or keep it out of routes.")
+
+
 def test_movements_sharing_a_start_within_one_route_have_different_ends():
     """A route that visits a stage twice (70 Star's two BoB trips, 120 Star's
     two DDD trips) contains movements with the SAME start clause, so exiting
