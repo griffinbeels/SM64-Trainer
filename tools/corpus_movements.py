@@ -52,6 +52,14 @@ MOVEMENTS = [
     movement("seg:bowser1->bitfs", "Bowser 1 → BitFS (SBLJ / DDD Skip)",
              exit_level(30), enter_level(19)),
     # --- courtyard (BBH exits to level 26, not to the castle interior) ----
+    # Load-bearing under loose matching too (2026-07-28, Task 19): removing
+    # this waypoint makes tests/test_defaults_corpus.py's own-walk test fail
+    # to arm at all -- can_run_from (segments.py) is unconditional regardless
+    # of match_mode, and area_enter(level=6, area=BASEMENT)'s precondition
+    # only fires from level 6. BBH's exit lands at level 26 (the courtyard),
+    # so a plain end trigger is simply unfireable from the arm position; the
+    # waypoint's level_enter(6) has no `from`, so it fires from anywhere but
+    # its own destination and gets the arm past the courtyard.
     movement("seg:bbh->basement", "BBH → Basement",
              exit_level(4), enter_area(BASEMENT), via=[enter_level(6)]),
     movement("seg:bbh->ddd", "BBH → DDD",
