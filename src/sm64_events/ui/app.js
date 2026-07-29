@@ -15,6 +15,7 @@ import { RecordingDot } from "./components/replay.js";
 import { Icon } from "./components/icons.js";
 import { RankPage } from "./components/rankpage.js";
 import { RankUpCelebration } from "./components/marelocelebrate.js";
+import { useRankTint } from "./ranktint.js";
 
 const html = htm.bind(h);
 
@@ -141,6 +142,12 @@ function MobileMore({ open, close, tab, setTab, openSettings }) {
 
 function App() {
   const t = useTracker();
+  // The app-wide background tint (ui/ranktint.js) -- worn AT REST off the
+  // store's OWN tier, so it tracks whatever's actually on screen (ticking up
+  // within a tier keeps that tier's colour) rather than only appearing once
+  // a celebration fires. Gated on the tier value alone inside the hook, so
+  // this line does not itself cause any extra work on unrelated re-renders.
+  useRankTint(t.marelo && t.marelo.tier);
   const [tab, setTabState] = useState("Practice");
   const [compareIntent, setCompareIntent] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);

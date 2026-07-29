@@ -568,6 +568,28 @@
       radial-gradient(circle at 34% 87%, #b9d9ff 0 1px, transparent 1.3px);
     background-size: 320px 280px, 410px 350px, 370px 300px, 460px 390px;
   }
+  /* The app-wide rank tint (report 1, 2026-07-28) -- worn AT REST, not only
+     during a celebration: "the background tint of the app should transition
+     from the default background of the site -> the background of the
+     current rank" (user). This element only PAINTS the property; ONE owner
+     writes `--rank-tint-color` at a time -- ui/ranktint.js at rest,
+     components/marelocelebrate.js while a celebration overlay is mounted
+     (see ranktint.js's header for why that hand-off is safe). Sits behind
+     `.app-shell` for free: that element's explicit `z-index: 1` always
+     outranks this pseudo-element's implicit `z-index: auto`, regardless of
+     DOM order, so no z-index is declared here at all. `color-mix` bakes the
+     STRENGTH into the colour itself so exactly one property
+     (`background-color`) needs a transition -- two independently
+     transitioning channels (opacity + colour) would not necessarily land on
+     the same frame, and a colour transition alone can never pass through
+     "no tint" mid-flight the way an opacity fade to/from 0 would. */
+  body::after {
+    content: ""; position: fixed; inset: 0; pointer-events: none;
+    background-color: color-mix(in srgb,
+      var(--rank-tint-color, transparent)
+      calc(var(--rank-tint-strength, 0) * 100%), transparent);
+    transition: background-color var(--rank-tint-ms, 900ms) ease;
+  }
   button, select, input, textarea { font: inherit; }
   button {
     display: inline-flex; align-items: center; justify-content: center; gap: .42rem;
