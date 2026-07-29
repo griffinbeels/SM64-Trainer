@@ -190,3 +190,40 @@ def test_the_flown_card_lands_on_the_real_progress_not_a_full_bar():
     assert re.search(r"\b1\b", expression) is None, (
         f"{expression} still hardcodes a full bar; the destination fill is "
         "marelo.division_progress, which is what the header will show.")
+
+
+def test_the_scope_overlay_waits_for_the_banner_climbs():
+    """Order of operations after a PB: strategy, THEN star, THEN marelo.
+
+    User, 2026-07-29: "Strategy THEN star THEN marelo. Three parts. If
+    strategy/star are combined then it's strategy/star THEN marelo. Right now,
+    marelo incorrectly displays at the same time."
+
+    The two entity banners already take turns via rankclimb.js's lane
+    (practice.js passes `lane` + `order` 0/1, and a combined one-ladder card is
+    one banner in that lane). The MARELO overlay passes NO lane -- deliberately,
+    it is a different rank, not a third banner in some star's queue -- so it
+    started immediately and played over the top.
+
+    Gated on `useClimbsRunning`, NOT `useCelebrating`: a user gesture releases
+    the celebration hold while climbs are still running
+    (`releaseCelebrationHold`), and gating on that would let the overlay start
+    over the top of them, which is the bug."""
+    code = strip_comments(MARELO_CELEBRATE_JS)
+    assert "useClimbsRunning" in code, (
+        "the scope overlay must wait for the banner climbs to finish")
+    assert "useCelebrating" not in code, (
+        "useCelebrating is released by a user gesture while climbs still run; "
+        "the overlay must gate on whether anything is ANIMATING")
+
+
+def test_the_running_signal_is_not_the_hold_signal():
+    """They differ by exactly one thing and it matters here.
+
+    `isCelebrating()` is `liveClimbs.size > 0 && !holdReleased`; `climbsRunning`
+    drops the hold term. A guard reading only the export names would pass on a
+    future edit that aliased one to the other, so this reads the expressions."""
+    climb = strip_comments((UI / "rankclimb.js").read_text(encoding="utf-8"))
+    found = re.search(r"export const climbsRunning = \(\) =>(.*?);", climb, re.S)
+    assert found, "climbsRunning was renamed -- re-point this guard"
+    assert "holdReleased" not in found.group(1), found.group(1)

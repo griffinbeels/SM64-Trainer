@@ -30,6 +30,7 @@ import { celebrationsEnabled } from "../celebrations.js";
 import { tuning } from "../climbtuning.js";
 import { mareloTuning } from "../marelotuning.js";
 import { prefersReducedMotion } from "../useTween.js";
+import { useClimbsRunning } from "../rankclimb.js";
 
 const html = htm.bind(h);
 
@@ -304,10 +305,33 @@ export function MareloCelebration({ celebration, scopeId, marelo, routes,
 // "Celebrate rank-ups" pref off the celebration is acked WITHOUT being shown,
 // so the watermark does not re-fire on the next load.
 export function RankUpCelebration(props) {
+  // Called before every early return below, because the rules of hooks do not
+  // care that the returns are conditional.
+  const banners = useClimbsRunning();
+
   if (!props.celebration) return null;
   if (!celebrationsEnabled()) {
     ackScope(props.scopeId, props.celebration.key, props.onDone);
     return null;
   }
+  // THE ORDER IS strategy, THEN star, THEN marelo (user, 2026-07-29: "Right
+  // now, marelo incorrectly displays at the same time"). The two entity
+  // banners already take turns between themselves via rankclimb.js's lane
+  // (practice.js passes `lane` + `order` 0 and 1, and a combined one-ladder
+  // card is simply one banner in that lane) -- but the MARELO side passes NO
+  // lane, by design, so it started immediately and ran on top of them.
+  //
+  // Waiting on `useClimbsRunning` rather than joining the lane keeps that
+  // design: the overlay is not a third banner in some star's queue, it is a
+  // different rank entirely, and the rule it actually obeys is "nothing else
+  // is still animating". That also means it needs no knowledge of WHICH
+  // entity climbed, how many banners it had, or whether they were merged.
+  //
+  // Nothing is lost by waiting: the celebration is server-held until acked,
+  // so a payload that arrives mid-climb simply mounts once the climbs end.
+  // Deliberately NOT `useCelebrating()` -- a user gesture releases that hold
+  // while the climbs are still running (releaseCelebrationHold), and the
+  // overlay would then start over the top of them, which is the bug.
+  if (banners) return null;
   return html`<${MareloCelebration} ...${props} />`;
 }
