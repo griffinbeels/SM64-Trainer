@@ -43,7 +43,12 @@ Rules:
       WARNING, not an error: the happy path (the player actually takes the
       waypoint's specific route) never triggers it, so a def with this shape
       still works most of the time — it just silently swallows one class of
-      misroute instead of recording it as abandoned.
+      misroute instead of recording it as abandoned. Exempt when
+      `d.match_mode == "loose"`: `feed()` routes a loose def to `_feed_loose`
+      regardless of waypoints, and `_feed_loose` has no major-action cancel at
+      all — an off-sequence event is transparent, not a disarm-and-re-arm —
+      so the race this rule warns about cannot occur there (see the guard in
+      `_rule_start_looser_than_waypoint` below).
 
   unrunnable_arm_position (error) — `can_run_from` is False at EVERY start
       trigger's own `arm_level`. Live report 2026-07-27: a Usamune menu warp
@@ -157,6 +162,17 @@ def _rule_unfireable(d, all_defs) -> list[dict]:
 
 
 def _rule_start_looser_than_waypoint(d, all_defs) -> list[dict]:
+    # A loose def never runs _feed_waypoint -- feed() routes match_mode ==
+    # "loose" to _feed_loose regardless of waypoints (segments.py's own
+    # docstring: "a loose def owns its own waypoint progression... whether or
+    # not it carries waypoints"). _feed_loose has no major-action cancel: an
+    # off-sequence star/key grab or level crossing is fully transparent (no
+    # disarm, no re-arm) -- "EVERYTHING ELSE IS TRANSPARENT... the whole
+    # feature". The cancel-and-re-arm race this rule warns about is specific
+    # to _feed_waypoint's silent-cancel branch, which a loose def can never
+    # reach, so warning on one here would cite a mechanism that cannot fire.
+    if d.match_mode == "loose":
+        return []
     findings = []
     for step in d.waypoints:
         for waypoint_clause in step:

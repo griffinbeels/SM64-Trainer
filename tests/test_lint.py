@@ -58,6 +58,40 @@ def test_flags_a_start_trigger_looser_than_a_colliding_waypoint():
                and w["severity"] == "warning" for w in findings), findings
 
 
+def test_loose_definition_with_the_same_colliding_shape_is_not_flagged():
+    # Same start/waypoint shape as test_flags_a_start_trigger_looser_than_a_
+    # colliding_waypoint above, but match_mode="loose". feed() routes a loose
+    # def to _feed_loose regardless of waypoints (segments.py), and
+    # _feed_loose has no major-action cancel -- an off-sequence event is
+    # fully transparent, never a disarm-and-re-arm -- so the race this rule
+    # warns about (a misroute cancelling _feed_waypoint's sequence, then
+    # re-arming on a too-loose start trigger in the same tick) cannot occur
+    # for a loose def. Warning here would cite a mechanism that can't fire.
+    d = SegmentDef(id=1, name="x", enabled=True,
+                   start_triggers=[{"type": "level_exit", "from": 23}],
+                   end_triggers=[{"type": "level_enter", "to": 8}],
+                   waypoints=[[{"type": "level_exit", "from": 23, "to": 6}]],
+                   guards=[], match_mode="loose")
+    findings = lint_definition(d, [])
+    assert not any(w["rule"] == "start_looser_than_waypoint"
+                   for w in findings), findings
+
+
+def test_strict_definition_with_the_same_colliding_shape_is_still_flagged():
+    # The guard must exempt ONLY loose defs -- a strict def with the
+    # identical shape (match_mode defaults to "strict") still runs
+    # _feed_waypoint and so still carries the real race; the rule must not
+    # be neutered for the mode it's actually written for.
+    d = SegmentDef(id=1, name="x", enabled=True,
+                   start_triggers=[{"type": "level_exit", "from": 23}],
+                   end_triggers=[{"type": "level_enter", "to": 8}],
+                   waypoints=[[{"type": "level_exit", "from": 23, "to": 6}]],
+                   guards=[])
+    findings = lint_definition(d, [])
+    assert any(w["rule"] == "start_looser_than_waypoint"
+               and w["severity"] == "warning" for w in findings), findings
+
+
 def test_flags_a_definition_that_can_never_arm_anywhere_it_can_be_run_from():
     # can_run_from false at the ONLY level this start trigger can concretely
     # arm at (attempt_anchor's arm_level is deterministic: exactly its own
