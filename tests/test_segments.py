@@ -2988,6 +2988,44 @@ def test_split_refuses_when_the_second_half_is_unfireable():
                          names=("first half", "second half"))
 
 
+def test_split_refuses_a_definition_carrying_more_than_one_waypoint():
+    """Silent data loss is the failure mode here, not a wrong answer.
+
+    split_definition folds the original's waypoints into the single shared
+    boundary `mid`. With 0 or 1 that is exact — and every seeded def is one of
+    those (83 with none, 1 with one). But nothing caps the count:
+    validate_definition accepts any-length waypoint lists, so a user-authored
+    definition can carry several, and the halves would come back missing the
+    ones that were not the split point, with nothing raised and nothing said.
+    Refuse instead of guessing which side each survivor belongs on.
+    """
+    d = SegmentDef(
+        id=7, name="three-legged trip", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 9}],
+        end_triggers=[{"type": "level_enter", "to": 8}],
+        waypoints=[[{"type": "area_enter", "level": 6, "area": 1}],
+                   [{"type": "area_enter", "level": 6, "area": 3}]],
+        guards=[], match_mode="loose")
+    with pytest.raises(ValueError, match="waypoints"):
+        split_definition(d, mid=[{"type": "area_enter", "level": 6, "area": 1}],
+                         names=("first half", "second half"))
+
+
+def test_split_still_accepts_the_zero_and_one_waypoint_shapes():
+    """The refusal above must not have swallowed the cases that DO work —
+    a guard that rejects everything passes its own negative test forever."""
+    for waypoints in ([], [[{"type": "area_enter", "level": 6, "area": 1}]]):
+        d = SegmentDef(
+            id=8, name="WF -> SSL", enabled=True,
+            start_triggers=[{"type": "level_exit", "from": 24}],
+            end_triggers=[{"type": "level_enter", "to": 8}],
+            waypoints=waypoints, guards=[], match_mode="loose")
+        first, second = split_definition(
+            d, mid=[{"type": "area_enter", "level": 6, "area": 1}],
+            names=("WF -> Basement", "Basement -> SSL"))
+        assert first["end_triggers"] == second["start_triggers"]
+
+
 def test_merge_spans_both_and_keeps_the_seam_as_a_waypoint():
     wf_to_basement = SegmentDef(
         id=101, name="WF -> Basement", enabled=True,

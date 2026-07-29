@@ -1544,13 +1544,18 @@ def split_definition(d: SegmentDef, mid: list[dict],
         first  = d.start_triggers -> mid
         second = mid              -> d.end_triggers
 
-    Both halves ship `waypoints=[]` regardless of what `d.waypoints` held --
-    every waypoint-bearing definition shipped today carries exactly ONE
-    waypoint, which IS the split point, so consuming it into the new shared
-    boundary is the whole operation; a def with several waypoints and a
-    split at just one of them is a real future case but not one the brief,
-    a test, or a live definition exercises yet (YAGNI -- generalizing it now
-    would be guessing at a shape nothing here can verify).
+    Both halves ship `waypoints=[]`: every waypoint-bearing definition
+    shipped today carries exactly ONE waypoint, which IS the split point, so
+    consuming it into the new shared boundary is the whole operation (the
+    seeded corpus is 83 defs with none and 1 with one).
+
+    A def carrying SEVERAL waypoints, split at just one of them, is refused
+    (`ValueError`) rather than served -- generalizing it now would be
+    guessing which side each survivor belongs on, but returning halves with
+    the others quietly missing is silent data loss, and nothing caps the
+    count: `validate_definition` accepts any-length waypoint lists, so a
+    user-authored definition really can reach here. Refusing keeps the YAGNI
+    without making the caller pay for it in lost clauses.
 
     `match_mode` is INHERITED from `d` for both halves, not forced to
     "loose": flattening away the split's one waypoint says nothing by
@@ -1592,6 +1597,17 @@ def split_definition(d: SegmentDef, mid: list[dict],
     # call time -- lint.py imports THIS module at its own top level, so the
     # reverse import must stay deferred to the function body (same trick
     # feed() uses for tracking.projection.Attempt, a few hundred lines down).
+
+    if len(d.waypoints or []) > 1:
+        raise ValueError(
+            f"cannot split {d.name!r}: it carries {len(d.waypoints)} "
+            "waypoints, and this operation folds ALL of them into the one "
+            "shared boundary `mid` -- the rest would be dropped silently. "
+            "Nothing caps the count (validate_definition accepts any-length "
+            "waypoint lists), so a user-authored definition reaches here even "
+            "though the seeded corpus is 83 defs with none and 1 with one. "
+            "Refusing beats guessing which side each surviving waypoint "
+            "belongs on; implement that when a real definition needs it.")
 
     mid_clauses = list(mid)
     first_name, second_name = names
