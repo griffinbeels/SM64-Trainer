@@ -12,6 +12,7 @@ import { Progress, hasProgressPoints } from "./progress.js";
 import { StageBanner } from "./stagebanner.js";
 import { RankBanner, rankColor } from "./ranks.js";
 import { useHeldWhileCelebrating } from "../rankclimb.js";
+import { CollapseToggle, cardClass, useCollapsed } from "./collapsible.js";
 import { RankIcon } from "./rankicon.js";
 import { StandardsPanel } from "./standards.js";
 import { StratPicker } from "./stratpicker.js";
@@ -504,6 +505,9 @@ function ObjectiveEyebrow({ iconName, label, openPicker }) {
 function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) {
   const [showHidden, setShowHidden] = useState(false);
   const [visible, setVisible] = useState(10);
+  const [foldTarget, toggleTarget] = useCollapsed("objective");
+  const [foldAnalysis, toggleAnalysis] = useCollapsed("analysis");
+  const [foldLog, toggleLog] = useCollapsed("attempts");
   const pb = sec.pb[t.clock];
   const base = showHidden ? sec.attempts
     : sec.attempts.filter((a) => !a.cleared && a.outcome !== "abandoned");
@@ -532,7 +536,7 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
   }
 
   return html`<div class="practice-detail-grid ${pinned ? "is-primary" : ""}">
-    <section class="practice-card objective-card ${pinned ? "active-star" : ""}">
+    <section class="practice-card objective-card ${pinned ? "active-star" : ""} ${cardClass(foldTarget)}">
       <div class="objective-heading">
         <${ObjectiveEyebrow} iconName="target" openPicker=${openPicker}
           label=${pinned ? "Active target" : "Star practice"} />
@@ -548,6 +552,8 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
               onChanged=${t.refresh} />
           <${StrategyFastestHint} sec=${sec} />
         </div>
+        <${CollapseToggle} collapsed=${foldTarget} toggle=${toggleTarget}
+          label="the active target card" />
       </div>
       <div class="objective-metrics">
           <div class="rank-slot">
@@ -574,9 +580,11 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
       </div>
     </section>
 
-    <section class="practice-card analysis-card">
+    <section class="practice-card analysis-card ${cardClass(foldAnalysis)}">
       <div class="card-heading">
         <div><span class="eyebrow">Analysis</span><h3>Attempt history</h3></div>
+        <${CollapseToggle} collapsed=${foldAnalysis} toggle=${toggleAnalysis}
+          label="the analysis card" />
       </div>
       <div class="analysis-block timeline-block">
         <h4>Attempt timeline <span class="hint" tabindex="0"
@@ -592,10 +600,12 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
       </div>
     </section>
 
-    <section class="practice-card attempts-card">
+    <section class="practice-card attempts-card ${cardClass(foldLog)}">
       <div class="card-heading attempts-heading">
         <div><span class="eyebrow">Practice log</span><h3>Recent attempts</h3></div>
         <div class="attempts-tools">
+          <${CollapseToggle} collapsed=${foldLog} toggle=${toggleLog}
+            label="the practice log" />
           <span class="meta">${rows.length} shown</span>
           <${SortControl} ui=${ui} />
         </div>
@@ -660,6 +670,9 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
 function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) {
   const [showHidden, setShowHidden] = useState(false);
   const [visible, setVisible] = useState(10);
+  const [foldTarget, toggleTarget] = useCollapsed("objective");
+  const [foldAnalysis, toggleAnalysis] = useCollapsed("analysis");
+  const [foldLog, toggleLog] = useCollapsed("attempts");
   // armedSegs is the single live source: WS notices are instant, every view
   // fetch reconciles it so it cannot stay stale — see store.js refresh().
   const armed = t.armedSegs.has(sec.segment_id);
@@ -693,7 +706,7 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker 
 
   const pinTag = armed ? "Running" : isTarget ? "Ready" : "Recent";
   return html`<div class="practice-detail-grid ${pinned ? "is-primary" : ""}">
-    <section class="practice-card objective-card ${pinned ? "active-star" : ""}">
+    <section class="practice-card objective-card ${pinned ? "active-star" : ""} ${cardClass(foldTarget)}">
       <div class="objective-heading">
         <${ObjectiveEyebrow} iconName="segments" openPicker=${openPicker}
           label=${pinned ? "Active segment" : "Segment practice"} />
@@ -712,6 +725,8 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker 
             : html`<span class="meta">Definition deleted</span>`}
           <${StrategyFastestHint} sec=${sec} />
         </div>
+        <${CollapseToggle} collapsed=${foldTarget} toggle=${toggleTarget}
+          label="the active target card" />
       </div>
       <div class="objective-metrics">
           <div class="rank-slot">
@@ -748,9 +763,11 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker 
       </div>`}
     </section>
 
-    <section class="practice-card analysis-card">
+    <section class="practice-card analysis-card ${cardClass(foldAnalysis)}">
       <div class="card-heading">
         <div><span class="eyebrow">Analysis</span><h3>Attempt history</h3></div>
+        <${CollapseToggle} collapsed=${foldAnalysis} toggle=${toggleAnalysis}
+          label="the analysis card" />
       </div>
       <div class="analysis-block timeline-block">
         <h4>Attempt timeline <span class="hint" tabindex="0"
@@ -768,10 +785,12 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker 
       </div>
     </section>
 
-    <section class="practice-card attempts-card">
+    <section class="practice-card attempts-card ${cardClass(foldLog)}">
       <div class="card-heading attempts-heading">
         <div><span class="eyebrow">Practice log</span><h3>Recent attempts</h3></div>
         <div class="attempts-tools">
+          <${CollapseToggle} collapsed=${foldLog} toggle=${toggleLog}
+            label="the practice log" />
           <span class="meta">${rows.length} shown</span>
           <${SortControl} ui=${ui} />
         </div>

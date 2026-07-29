@@ -30,6 +30,7 @@
 import { h } from "preact";
 import { useEffect } from "preact/hooks";
 import htm from "htm";
+import { CollapseToggle, cardClass, useCollapsed } from "./collapsible.js";
 import { send } from "../api.js";
 import { armedSegments, hasPracticeContext, practiceMode } from "../stagecontext.js";
 import { requestTarget } from "../target.js";
@@ -180,6 +181,7 @@ const armedExtraCells = (t, v, shownIds, setPicking, keep = () => true) =>
 const startsInLevel = (level) => (s) => (s.start_levels || []).includes(level);
 
 function StarRow({ t, v, stage }) {
+  const [fold, toggleFold] = useCollapsed("selector");
   // hooks first — the early return below must never change the hook count
   const [setPicking, pickerModal] = useIconPicking(t);
   const course = v.catalog.courses.find((c) => c.id === stage.course_id);
@@ -212,11 +214,13 @@ function StarRow({ t, v, stage }) {
     .map((name, i) => ({ name, i }))
     .filter(({ i }) => !routeStars || routeStars.has(`${stage.course_id}:${i}`));
 
-  return html`<section class="practice-card selector-card stagebanner">
-    <div class="shead"><b>▸ ${course.name}</b>
+  return html`<section class="practice-card selector-card stagebanner ${cardClass(fold)}">
+    <div class="shead"><b>${course.name}</b>
       <span class="meta">${routeStars
         ? html`showing this route's stars · tap to practice`
-        : "tap a star to practice"}</span></div>
+        : "tap a star to practice"}</span>
+      <${CollapseToggle} collapsed=${fold} toggle=${toggleFold}
+        label="the course selector" /></div>
     <div class="starrow">
       ${shown.map(({ name, i }) => html`<${PracticeCell} dimIdle=${STAR_DIM_IDLE}
         key=${`${stage.course_id}:${i}`}
@@ -237,6 +241,7 @@ function StarRow({ t, v, stage }) {
 // BitDW/BitFS/BitS: the "reds" 8-coin star + the level's "no reds" pipe-entry
 // segment(s). Picking flips the pipe segment's enabled flag (mutual exclusion).
 function BowserCourseRow({ t, v, stage }) {
+  const [fold, toggleFold] = useCollapsed("selector");
   // hooks first (useIconPicking + the restore useEffect below) — the early
   // return must never change the hook count between renders
   const [setPicking, pickerModal] = useIconPicking(t);
@@ -291,10 +296,12 @@ function BowserCourseRow({ t, v, stage }) {
 
   if (!course) return html`<${StagePlaceholder} t=${t} />`;
 
-  return html`<section class="practice-card selector-card stagebanner">
-    <div class="shead"><b>▸ ${course.name}</b>
+  return html`<section class="practice-card selector-card stagebanner ${cardClass(fold)}">
+    <div class="shead"><b>${course.name}</b>
       <span class="meta">reds (8-coin star) · or the pipe-entry skip (no reds)</span>
-      </div>
+      
+      <${CollapseToggle} collapsed=${fold} toggle=${toggleFold}
+        label="the course selector" /></div>
     <div class="starrow segcells">
       <${PracticeCell} dimIdle=${STAR_DIM_IDLE}
         active=${redsActive}
@@ -322,6 +329,7 @@ function BowserCourseRow({ t, v, stage }) {
 
 // Bowser 1/2/3 arena: the single fight segment, auto-selected on entry.
 function ArenaRow({ t, v, stage }) {
+  const [fold, toggleFold] = useCollapsed("selector");
   const [setPicking, pickerModal] = useIconPicking(t);
   const tgt = v.target || {};
   const fights = segsForLevel(v, stage.level);
@@ -345,10 +353,12 @@ function ArenaRow({ t, v, stage }) {
     t, v, new Set(fights.map((s) => s.segment_id)), setPicking);
   if (!fights.length && !extras.length) return html`<${StagePlaceholder} t=${t} />`;
 
-  return html`<section class="practice-card selector-card stagebanner">
-    <div class="shead"><b>▸ Bowser Fight</b>
+  return html`<section class="practice-card selector-card stagebanner ${cardClass(fold)}">
+    <div class="shead"><b>Bowser Fight</b>
       <span class="meta">auto-selected — tap to re-arm</span>
-      </div>
+      
+      <${CollapseToggle} collapsed=${fold} toggle=${toggleFold}
+        label="the course selector" /></div>
     <div class="starrow segcells">
       ${fights.map((s) => html`<${StandardSegmentCell}
         key=${`seg:${s.segment_id}`} t=${t} s=${s} setPicking=${setPicking} />`)}
@@ -359,6 +369,7 @@ function ArenaRow({ t, v, stage }) {
 }
 
 function SegmentRow({ t, v, stage }) {
+  const [fold, toggleFold] = useCollapsed("selector");
   const [setPicking, pickerModal] = useIconPicking(t);
   // Route focus narrows the castle's segment offer the same way it narrows the
   // star selector. Deliberately NOT applied to the Bowser/arena rows above:
@@ -375,10 +386,12 @@ function SegmentRow({ t, v, stage }) {
     t, v, new Set(segs.map((s) => s.segment_id)), setPicking);
   if (!segs.length && !extras.length) return html`<${StagePlaceholder} t=${t} />`;
 
-  return html`<section class="practice-card selector-card stagebanner">
-    <div class="shead"><b>▸ Castle ${CASTLE_AREA_NAMES[stage.area]}</b>
+  return html`<section class="practice-card selector-card stagebanner ${cardClass(fold)}">
+    <div class="shead"><b>Castle ${CASTLE_AREA_NAMES[stage.area]}</b>
       <span class="meta">tap a segment to practice</span>
-      </div>
+      
+      <${CollapseToggle} collapsed=${fold} toggle=${toggleFold}
+        label="the course selector" /></div>
     <div class="starrow segcells">
       ${segs.map((s) => html`<${StandardSegmentCell}
         key=${`seg:${s.segment_id}`} t=${t} s=${s} setPicking=${setPicking} />`)}
@@ -391,11 +404,14 @@ function SegmentRow({ t, v, stage }) {
 // No stage-specific banner (hub level, unknown mode) but a segment timer is
 // live: keep it visible here instead of the placeholder.
 function ArmedOnlyRow({ t, v }) {
+  const [fold, toggleFold] = useCollapsed("selector");
   const [setPicking, pickerModal] = useIconPicking(t);
-  return html`<section class="practice-card selector-card stagebanner">
-    <div class="shead"><b>▸ Running</b>
+  return html`<section class="practice-card selector-card stagebanner ${cardClass(fold)}">
+    <div class="shead"><b>Running</b>
       <span class="meta">a segment timer is live</span>
-      </div>
+      
+      <${CollapseToggle} collapsed=${fold} toggle=${toggleFold}
+        label="the course selector" /></div>
     <div class="starrow segcells">
       ${armedSegments(t, v).map((s) => html`<${StandardSegmentCell}
         key=${`seg:${s.segment_id}`} t=${t} s=${s} setPicking=${setPicking} />`)}

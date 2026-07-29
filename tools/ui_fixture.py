@@ -18,16 +18,20 @@ like corrupt data rather than a bad copy.
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import json
 import socket
 import sqlite3
 import tempfile
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import uvicorn
 
+from sm64_events.core.events import Event
 from sm64_events.core.paths import bundled_rank_standards, rank_standards_path
 from sm64_events.ranks.standards import RankStandards
 from sm64_events.server.app import create_app
@@ -65,6 +69,74 @@ def snapshot_db(source: Path, destination: Path) -> Path:
     return destination
 
 
+def seed_practice(service) -> None:
+    """Give the fixture an ACTIVE TARGET and a few attempts.
+
+    Without this the Practice page renders only its empty states -- the
+    no-target `objective-empty` card and the `selector-empty` banner -- because
+    a db snapshot taken while nobody is playing has no session sections and no
+    target. Anything that only exists on a POPULATED card is then invisible to
+    the rig, which is how a whole feature (the per-card collapse toggles) got
+    built, served correctly, and rendered zero times without a single error
+    (2026-07-28).
+
+    Publishes real events through the real service rather than writing rows, so
+    the view is built by the same code path the app uses. Same shape as the
+    `seed` helper tests/test_api.py has always had -- kept separate rather than
+    imported so tools/ and tests/ do not depend on each other's helpers.
+    """
+    now = datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
+
+    async def go() -> None:
+        for index, (course_id, star_id, frames) in enumerate(
+                [(2, 2, 343), (2, 2, 361), (2, 2, 352)]):
+            await service.publish(Event(
+                type="practice_reset", frame=1000 + index * 1000,
+                timestamp_utc=now, payload={"igt_frames_before": 0}))
+            await service.publish(Event(
+                type="star_collected", frame=1350 + index * 1000,
+                timestamp_utc=now,
+                payload={"course_id": course_id, "star_id": star_id,
+                         "igt_frames": frames}))
+
+    asyncio.run(go())
+
+
+def _seed_target(base: str) -> None:
+    """Make the seeded star the ACTIVE target.
+
+    Seeding attempts is not enough, and the difference is the whole page. With
+    attempts but no target the Practice page renders "No active objective" and
+    files the populated star into the practice index -- inside a CLOSED
+    <details>. Everything interesting is then off-screen: the Active Target
+    card is an empty state, and any control living in a StarSection is present
+    in the DOM and genuinely not visible. A browser driver that refuses to
+    click an invisible element reports that honestly; one that dispatches the
+    event anyway hides it (2026-07-28).
+
+    POST /api/target is allowed to refuse -- you may only practice what you are
+    standing in front of -- but not here: with no emulator attached the
+    player's place is unknown, and practicable_here() treats an unknown place
+    as "nothing to compare against, so nothing to refuse". That clause exists
+    precisely so a target stays settable while reviewing with the game closed.
+    """
+    import urllib.error
+    import urllib.request
+
+    body = json.dumps({"course_id": 2, "star_id": 2}).encode()
+    request = urllib.request.Request(
+        f"{base}/api/target", data=body, method="POST",
+        headers={"Content-Type": "application/json"})
+    try:
+        urllib.request.urlopen(request, timeout=10).read()
+    except urllib.error.HTTPError as error:
+        # Loud, not silent: a fixture that quietly fails to set a target is a
+        # fixture that measures the empty page and calls it clean.
+        raise RuntimeError(
+            f"fixture could not set the practice target: {error.code} "
+            f"{error.read()[:200]!r}") from error
+
+
 def _free_port() -> int:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
@@ -72,7 +144,8 @@ def _free_port() -> int:
 
 
 @contextlib.contextmanager
-def serve_ui(db_path: Path | None = None, timeout: float = 30):
+def serve_ui(db_path: Path | None = None, timeout: float = 30,
+              seed: bool = True):
     """Yield the base URL of an offline instance; stop it on the way out.
 
     `db_path=None` means "a throwaway snapshot of the dev db if there is one,
@@ -114,7 +187,16 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30):
         if not server.started:
             raise RuntimeError("fixture server failed to start within "
                                f"{timeout}s (port {port})")
-        yield f"http://127.0.0.1:{port}"
+        # AFTER startup, never before: publishing on a service whose app
+        # lifespan has not run creates nothing at all — measured 2026-07-28,
+        # three events in and `db.attempts()` still empty. tests/test_api.py
+        # has always seeded inside `with client:` for the same reason; doing it
+        # at construction time fails silently, which is the worst version.
+        base = f"http://127.0.0.1:{port}"
+        if seed:
+            seed_practice(service)
+            _seed_target(base)
+        yield base
     finally:
         server.should_exit = True
         thread.join(timeout=15)

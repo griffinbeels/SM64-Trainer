@@ -218,8 +218,8 @@ pointer to it).
 `@media` is for the SHELL only** — `.app-shell`, `.app-sidebar`, `.app-brand`,
 `.app-main`, `.app-notice`, `.nav-*`, `.sidebar-*`, `.mobile-*`, `.workspace`,
 `.context-*`, `.view-pane`, `.sheet-*`, plus the `prefers-*` blocks. That list
-lives in ONE place, `tools/css_blocks.py::SHELL_PREFIXES`; widening it widens
-the law and is a reviewed edit, never a way to make a test pass.
+lives in ONE place, `tools/uilab_project.py::SHELL_SELECTORS`; widening it
+widens the law and is a reviewed edit, never a way to make a test pass.
 
 The reason is measured, and this file's `@container` section already states it
 for the rank banners: the sidebar is 206px wide above 1180px and a **76px rail
@@ -227,9 +227,26 @@ below it**, so the pane a card lives in is **not monotonic in window width** —
 a 1181px window gives a card a 947px pane, a 1180px window gives it 1076px. No
 viewport threshold can express "this card is too narrow"; every one of them is
 wrong on one side of that jump. The insight was written down on 2026-07-25 and
-applied to two rules; **145 component-internal rules were still viewport-keyed
-on 2026-07-28**, and the Active Target card clipped its own "Ready" row at
-900×1180 as the direct result.
+applied to two rules; 145 component-internal rules were still viewport-keyed
+three days later, and the Active Target card clipped its own "Ready" row at
+900×1180 as the direct result. **All 145 were converted on 2026-07-28 and
+`LEGACY_VIEWPORT_RULES` is empty** — a new one is now a red build with no
+precedent to point at.
+
+Two placement rules the conversion paid for, both of which produced a fix that
+read as correct and did nothing:
+
+1. **A converted block goes AFTER the rules it overrides**, not where its old
+   `@media` block sat. Relocating changes cascade position, and the Compare
+   rules landed 2,200 lines above `.compare-transport .primary-transport` —
+   identical specificity (0,2,0), later wins, so the base rule kept its 92px
+   min-width and the sweep reported the identical overlap through the fix.
+   The converted blocks are therefore one section at the END of the stylesheet,
+   ordered wide→narrow.
+2. **A shell element cannot be gated on a container it is not inside.**
+   `.context-bar` lives in the header, outside `.view-pane`, so when the
+   conversion swept its rule into `@container (max-width: 1060px)` the query
+   could never match and the overflow came back on all seven tabs at once.
 
 Beware the translation trap: `@media (max-width: 760px)` does **not** become
 `@container (max-width: 760px)`. Below 760px the sidebar is gone, so the pane
@@ -243,14 +260,35 @@ Three tests, none of which can be satisfied by a comment:
 
 | Test | Fails when |
 |---|---|
-| `tests/test_responsive_structure.py` | a `@media` rule styles a component selector. `LEGACY_VIEWPORT_RULES` carries the pre-existing debt as one row per rule, so the count is honest; a second test fails when a row outlives its rule |
-| `tests/test_responsive.py::test_every_declared_breakpoint_is_probed_on_both_sides` | a threshold exists in the stylesheet with no probe point at N and N+1 — i.e. a breakpoint nobody checks |
-| `tests/test_responsive.py::test_no_layout_defects_across_the_matrix` | the rendered app overflows, clips inside a fixed-height box, truncates an opted-in element, overlaps a flow sibling, or hides a tab at some size |
+| `test_component_layout_gates_on_the_container` | a `@media` rule styles a component selector |
+| `test_no_layout_defects_across_the_matrix` | the rendered app overflows, clips inside a fixed-height box, truncates an opted-in element, or overlaps a flow sibling at any declared breakpoint |
+| `test_the_known_defect_list_does_not_outlive_its_defects` | a row in `known_defects` describes a defect that no longer occurs |
 
-Run the sweep directly while working: `uv run python tools/responsive_sweep.py`
-(add `--shots` for a contact sheet). It boots the REAL app offline via
-`tools/ui_fixture.py` — never `python -m sm64_events.main`, which would attach
-to PJ64 and take the recorder lock out from under a live recording.
+All three live in `tests/test_responsive.py` and are three lines each, because
+the machinery is **uilab** — a machine-level module at `Desktop/code/uilab`,
+installed editable and shared with every project here. `tools/cdp.py`,
+`tools/css_blocks.py`, `tools/responsive_probe.js` and
+`tools/responsive_sweep.py` were deleted on 2026-07-28 when it was extracted;
+improve the instrumentation THERE, then run its `tools/check_consumers.py`.
+
+What stays local is `tools/uilab_project.py`: how to boot the app, where the
+stylesheet is, the shell list, what must never truncate, the component STATES
+worth measuring, and the defects currently owed. If it grows past a screen,
+something generic has leaked back into it.
+
+Run it while working: `uv run pytest tests/test_responsive.py -q`. It boots the
+REAL app offline via `tools/ui_fixture.py` — never the app's own entry point,
+which would attach to PJ64 and take the recorder lock out from under a live
+recording.
+
+**The fixture must reach the page you think it is measuring.** It seeds
+attempts AND sets an active target, and declares a `ready_selector` so uilab
+waits for the view to render before measuring. Without the target the practice
+page shows "No active objective" and files the populated star into the practice
+index inside a CLOSED `<details>`; without the wait, the sweep measures the
+loading state. Either one reports a clean page nobody is looking at — which is
+how 26 real defects stayed invisible while a feature built on top of them
+rendered zero times without a single error (2026-07-28).
 
 **What none of it catches:** anything that measures fine and looks wrong — bad
 hierarchy, ugly wrapping, a control that is reachable but awkward. Assertions

@@ -1,13 +1,13 @@
-"""Render the real app across the matrix; fail on any layout defect.
+"""Render the real app across every declared breakpoint; fail on any defect.
 
-Chrome missing FAILS rather than skips.  A skipped test is green forever, and
-this is the only render-based gate in the suite -- the only thing standing
-between a stylesheet edit and the Active Target card silently guillotining its
-own "Ready" row again.  SM64_SKIP_SWEEP=1 opts out explicitly, so opting out is
-a visible decision someone made rather than an accident of a missing binary.
+The machinery lives in `uilab` now — the driver, the probes, the matrix
+derivation and the gates — shared with every project on this machine and
+improved in one place. What is left here is this project's own POLICY, which is
+`tools/uilab_project.py`, plus the defects we have agreed to owe.
 
-Runtime is ~40s for 30 viewports.  That is the price of the only test here that
-can see the difference between a card that fits and a card that is cut off.
+Why the sweep may not skip itself: a gate that goes green when its dependency is
+missing is green forever and indistinguishable from one that passed. UILAB_SKIP=1
+turns it off as a visible decision someone made.
 """
 import os
 import sys
@@ -17,125 +17,33 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
-from cdp import CHROME  # noqa: E402
-from css_blocks import (UI_HTML, parse_blocks, size_blocks,  # noqa: E402
-                        style_block, thresholds)
-from responsive_sweep import derived_matrix, run_sweep  # noqa: E402
+from uilab.pytest_plugin import (  # noqa: E402
+    assert_components_use_container_queries, assert_no_new_defects,
+    assert_no_stale_exemptions)
+from uilab_project import PROJECT  # noqa: E402
 
-SKIPPING = os.environ.get("SM64_SKIP_SWEEP") == "1"
-
-# Reviewed, dated exemptions: "<w>x<h> [tab] <class> :: <selector>" -> why.
-#
-# Everything below is Wave 3 work, recorded here so the suite is green while it
-# is outstanding and so the list of what is broken is the list of what to fix.
-# Each row must name a REASON, and deleting the row is how a fix is signed off.
-KNOWN_DEFECTS: dict[str, str] = {
-    # Same card, the other axis, at the one width where the rail is still
-    # present but the mobile layout has not taken over. Not fixed by Task 6's
-    # height bump (this is a WIDTH clip, not a height one): 646px of content
-    # in a 617px-wide card.
-    "761x1000 [Practice] clipped :: section.practice-card.objective-card":
-        "Wave 3: 646px of content in a 617px card",
-    "761x1000 [Practice] clipped :: main.app-main":
-        "Wave 3: consequence of the objective card above",
-    # The reported nav dead end (task 0032). Rank is in app.js's NAV_GROUPS and
-    # in NEITHER hardcoded mobile list, so below 760px it cannot be reached.
-    **{f"{w}x{h} [shell] unreachable :: Rank":
-       "Wave 3: MobileNav/MobileMore hardcode their own lists"
-       for w, h in [(320, 800), (330, 1000), (331, 1000), (430, 1000),
-                    (431, 1000), (500, 1000), (501, 1000), (600, 1000),
-                    (601, 1000), (640, 1000), (641, 1000), (760, 1000),
-                    (760, 1180)]},
-    **{f"{w}x{h} [Practice] clipped :: div.analysis-block.trend-block":
-       "Wave 3: 6px of chart past the block at the WCAG reflow floor"
-       for w, h in [(320, 800), (330, 1000), (331, 1000)]},
-}
+# The plugin's `uilab_sweep` fixture reads this off the module.
+uilab_project = PROJECT
 
 
-def test_chrome_is_available_or_the_opt_out_is_explicit():
-    if SKIPPING:
-        pytest.skip("SM64_SKIP_SWEEP=1 — sweep deliberately disabled")
-    assert CHROME is not None, (
-        "Chrome not found. The responsive sweep is the only render-based gate "
-        "in this suite; install Chrome, or set SM64_SKIP_SWEEP=1 to opt out "
-        "deliberately.")
+def test_the_sweep_is_not_silently_disabled():
+    """UILAB_SKIP is for a machine without a browser, and saying so out loud is
+    the point — the alternative is a suite that quietly stops checking."""
+    if os.environ.get("UILAB_SKIP") == "1":
+        pytest.skip("UILAB_SKIP=1 — layout sweep deliberately disabled")
 
 
-def test_every_size_block_declares_a_threshold_the_matrix_understands():
-    """The mechanism that stops this suite quietly going out of date.
-
-    NOT "is every threshold in the matrix" -- that version was TAUTOLOGICAL and
-    shipped green: `derived_matrix()` builds its points BY READING the same
-    stylesheet, so it can never disagree with it, and a deliberately injected
-    `@media (max-width: 543px)` passed the check it was supposed to fail
-    (measured 2026-07-28, which is the only reason it was caught).  A guard
-    that cannot fail is a guard that is not there.
-
-    What can actually go wrong is a condition `thresholds()` does not
-    UNDERSTAND: `40em`, `30rem`, `(orientation: portrait)`, an aspect ratio.
-    Those parse to nothing, generate no probe points, and the block is then
-    swept at no relevant size at all -- silently, while everything looks
-    covered.  So the assertion is that every size block yields at least one
-    px threshold, and that each one lands in the matrix on both sides.
-
-    Needs no browser, so it runs even when the sweep is skipped.
-    """
-    matrix = derived_matrix()
-    widths = {v.width for v in matrix}
-    heights = {v.height for v in matrix}
-    css = style_block(UI_HTML.read_text(encoding="utf-8"))
-
-    unparsed, unprobed = [], []
-    for block in size_blocks(parse_blocks(css)):
-        found = thresholds(block)
-        if not found:
-            unparsed.append(f"@{block.kind} {block.condition} "
-                            f"(style line {block.line})")
-            continue
-        for name, value in found:
-            probed = widths if name.endswith("width") else heights
-            if value not in probed or value + 1 not in probed:
-                unprobed.append(f"@{block.kind} {block.condition} "
-                                f"(style line {block.line})")
-
-    assert not unparsed, (
-        "These size blocks declare no px threshold that derived_matrix() can "
-        "read, so NOTHING probes either side of them. Express the condition in "
-        "px, or teach tools/css_blocks.py::thresholds the unit:\n  "
-        + "\n  ".join(unparsed))
-    assert not unprobed, (
-        "Declared but not probed on both sides — the matrix was hand-edited "
-        "away from the stylesheet:\n  " + "\n  ".join(unprobed))
+def test_no_layout_defects_across_the_matrix(uilab_sweep):
+    assert_no_new_defects(PROJECT, uilab_sweep)
 
 
-@pytest.fixture(scope="module")
-def sweep():
-    """One sweep for the whole module — it costs ~40s and both tests read it."""
-    if SKIPPING:
-        pytest.skip("SM64_SKIP_SWEEP=1")
-    return run_sweep()
+def test_the_known_defect_list_does_not_outlive_its_defects(uilab_sweep):
+    """A stale exemption is a lie about what is broken, and the list stops
+    meaning anything the moment one is allowed to sit there."""
+    assert_no_stale_exemptions(PROJECT, uilab_sweep)
 
 
-def test_no_layout_defects_across_the_matrix(sweep):
-    result = sweep
-    new = {key: detail for key, detail in result["defects"].items()
-           if key not in KNOWN_DEFECTS}
-    assert not new, (
-        f"{len(new)} NEW layout defect(s). Run `uv run python "
-        f"tools/responsive_sweep.py` for the full table:\n  "
-        + "\n  ".join(f"{k}\n      {v}" for k, v in sorted(new.items())[:25]))
-    assert not result["errors"], (
-        f"{len(result['errors'])} page exception(s) during the sweep — the app "
-        f"threw while rendering:\n  " + "\n  ".join(result["errors"][:5]))
-
-
-def test_the_known_defect_list_does_not_outlive_its_defects(sweep):
-    """A stale exemption is a lie about what is broken.
-
-    Without this, Wave 3 could fix the card and leave 13 rows claiming it is
-    still cut off -- and the next person would trust the list.
-    """
-    stale = [key for key in KNOWN_DEFECTS if key not in sweep["defects"]]
-    assert not stale, (
-        f"Fixed, but still exempted — delete {len(stale)} row(s) from "
-        f"KNOWN_DEFECTS: {stale[:8]}")
+def test_component_layout_gates_on_the_container():
+    """`@media` is for the shell; component layout gates on `@container` against
+    its own pane. Needs no browser, so it runs even when the sweep is off."""
+    assert_components_use_container_queries(PROJECT)
