@@ -3575,6 +3575,24 @@
        user was looking straight at the defect. */
     .rank-slot { flex-direction: column; align-items: stretch; gap: 28px; }
     .rank-banner::before { left: -16px; border-radius: 0; }
+    /* Give the NON-LAST banner its bottom bleed back when `.seg-waiting` is
+       present. The base rule up at `.objective-card:has(.seg-waiting)` zeroes
+       every banner's bottom, which is right side by side — there both banners
+       sit directly above `.seg-waiting` and both would bleed onto it. Stacked,
+       only the LAST one faces that row; the others face the 28px gap, which
+       already clears a 12px bleed by 16px.
+       Zeroing them anyway takes the bleed's SECOND job with it: it is also the
+       band's own internal padding below the progress bar (the comment above
+       this block explains why, and it is the rejected alternative that shipped
+       for one round — "the top band ended flush against its own progress bar
+       while the bottom one kept its room"). Note the decoration probe cannot
+       catch this direction: no probe class fails on too LITTLE bleed, which is
+       why this arrived by review rather than by the sweep. `:not(:last-child)`
+       and not `:last-child` — side by side that would name the RIGHT banner
+       and leave the left one bleeding onto the row. */
+    .objective-card:has(.seg-waiting) .rank-banner:not(:last-child)::before {
+      bottom: -12px;
+    }
     /* Narrow-pane variant of the waiting-for line (Task 6, this branch):
        the stacked rank banners already claim most of the taller card, so
        this tightens rather than wraps -- .seg-waiting-for still ellipsises
