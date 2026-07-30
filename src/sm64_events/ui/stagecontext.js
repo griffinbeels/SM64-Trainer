@@ -78,3 +78,43 @@ export function hasPracticeContext(t) {
   // screen and pinned.
   return armedSegments(t, view).length > 0;
 }
+
+// "Just completed" a segment (practice.js's pinned-card gate, spec
+// 2026-07-28-multi-step-segments): true only when the segment's own most-
+// recent attempt (by id — a section's attempts are not guaranteed newest-
+// first) landed as a FRESH success. `freshIds` is practice.js's own
+// attempt-id recency Set (useFreshAttemptIds). Shared here rather than
+// defined per call site, so a segment that arms AMBIENTLY (arms_ambiently)
+// but was just deliberately completed still gets its brief "just finished"
+// grace period instead of vanishing from the pin the instant it disarms.
+export const justCompletedSegment = (v, freshIds, segmentId) => {
+  if (!freshIds || !freshIds.size) return false;
+  const sec = (v.segments || []).find((s) => s.segment_id === segmentId);
+  if (!sec || !sec.attempts.length) return false;
+  const latest = sec.attempts.reduce((a, b) => (a.id > b.id ? a : b));
+  return latest.outcome === "success" && freshIds.has(latest.id);
+};
+
+// Does a ladder EXIST for this entity, whatever this player has run on it?
+//
+// `rank` is null both when nothing can be graded and when the player simply has
+// no time yet, and those must draw differently: with standards, an unranked
+// entity shows the ladder FLOOR (caps.js's RANK_FLOOR — Capless 5 today) so it
+// reads as "bottom of the ladder"; without them it still shows nothing, because
+// there is no ladder for a floor to be the bottom of. User, 2026-07-30: "for
+// every star/segment that we don't have a rank for, but there exist rank
+// standards for, instead of displaying a '-' we should display the Capless 5
+// icon in its place".
+//
+// Memoised on the view's own array identity — every cell in a row asks this,
+// the view is a fresh object per fetch, and rebuilding a ~200-entry Set per
+// cell per render is the kind of cost that only shows up on the Rank tab's
+// coverage strip.
+let _standardsSet = null;
+let _standardsSrc = null;
+export const hasStandardsFor = (view, entityKey) => {
+  const eks = (view || {}).standards_eks;
+  if (!eks || !eks.length || !entityKey) return false;
+  if (_standardsSrc !== eks) { _standardsSrc = eks; _standardsSet = new Set(eks); }
+  return _standardsSet.has(entityKey);
+};

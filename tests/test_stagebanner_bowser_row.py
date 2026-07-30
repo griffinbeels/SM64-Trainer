@@ -68,15 +68,35 @@ def test_bowser_row_never_writes_the_enabled_flag_to_the_OTHER_segment():
         f"toggle may have come back: {body!r}"[:400])
 
 
-def test_bowser_row_no_longer_restores_a_last_pick():
-    """The useEffect that re-derived 'which one was picked' from the enabled
-    flag and auto-re-picked it is gone -- the toggle's displayed selection is
-    DERIVED from the current target every render, nothing to restore."""
+def test_bowser_row_never_restores_a_pick_from_the_enabled_flag():
+    """The retired mutual exclusion, and ONLY that.
+
+    This banned `useEffect` outright until 2026-07-30, reasoning that the
+    toggle's selection was derived from the target every render so there was
+    nothing to restore. The user then asked for the opposite -- "We need to
+    remember the option that the user selected ... the last time they visited a
+    bowser stage. Currently we do not remember this correctly" -- so a
+    restore-on-entry effect is now REQUIRED, and a blanket ban would forbid the
+    feature it is meant to protect.
+
+    What the ban was actually guarding is still forbidden and still checked. The
+    old mechanism derived "which one was picked" from `segment_defs.enabled` and
+    WROTE that flag to enforce the choice; that is what stranded two of the
+    user's definitions at `enabled=0` and cost him two recorded runs (migration
+    v16). The memory is now localStorage keyed by level and touches no server
+    state -- so `enabledPipe` and any write of `enabled: false` stay banned
+    while the effect itself is allowed.
+    """
     body = _bowser_row_body()
-    assert "useEffect" not in body, \
-        "BowserCourseRow still has a restore-on-entry effect -- the toggle's " \
-        "selection is derived from the target, nothing to restore"
-    assert "enabledPipe" not in body
+    assert "enabledPipe" not in body, (
+        "the enabled-flag-derived memory is back -- that flag is server state "
+        "and using it as a preference stranded real definitions (v16)")
+    assert "enabled: false" not in body and "enabled:false" not in body, (
+        "BowserCourseRow must never DISABLE a segment; all options track "
+        "together since 912466d")
+    assert "bowserModeFor" in body, (
+        "the row no longer restores the remembered star/pipe mode on entry "
+        "(user, 2026-07-30)")
 
 
 def test_bowser_row_renders_the_no_reds_cell_through_standard_segment_cell():
@@ -158,3 +178,64 @@ def test_the_guards_can_still_fail():
     stripped_code = strip_comments(real_code)
     assert "send(" not in stripped_comment and "useEffect" not in stripped_comment
     assert "send(" in stripped_code
+
+
+# --- 2026-07-30 live feedback: memory, card click, labels, floor rank -------
+
+def test_the_selected_mode_is_explicit_state_not_derived_from_the_target():
+    """The bug behind "it incorrectly SWAPS OVER TO STAR MODE".
+
+    While the mode was `!starActive`, grabbing the reds star mid-run made that
+    star the most recent thing the app had seen, the derived value went true, and
+    the Star button lit ITSELF while the user was timing to the pipe. Explicit
+    state cannot be moved by anything that happens in the level -- only a click
+    moves it. Pipe therefore never auto-swaps to Star, which is the asymmetry he
+    asked for ("But pipe mode should not swap to star mode").
+    """
+    body = _bowser_row_body()
+    assert "const pipeMode = !starActive" not in body, (
+        "pipeMode is derived from the target again -- a star grab will relight "
+        "the Star button mid-run (user, 2026-07-30)")
+    assert "useState(() => bowserModeFor(stage.level))" in body, (
+        "the mode is no longer explicit per-level state")
+
+
+def test_the_whole_reds_card_is_a_click_target():
+    """User drew a box round the entire cell: "if we just click on the card
+    itself normally, it should activate it (with whatever pipe/star mode we have
+    selected already)". The two toggle buttons remain their own targets."""
+    body = _reds_cell_body()
+    assert 'role="button"' in body, "the Reds card is not clickable as a whole"
+    assert "onPickCard" in body, "the card click does not select in the current mode"
+
+
+def test_the_reds_cell_names_which_family_is_on_the_clock():
+    """'When Pipe is selected, it should be displayed as "8 Red Coins (Pipe)",
+    and when Star is selected ... "8 Red Coins (Star)"'. The two are graded
+    against different ladders, so a medal that changes with no label to explain
+    it reads as a rendering fault."""
+    body = _reds_cell_body()
+    assert '(${pipeMode ? "Pipe" : "Star"})' in body, (
+        "the Reds cell no longer spells out which family is being timed")
+
+
+def test_the_no_reds_cell_is_labelled_no_reds():
+    """"For all bowser stages, it's Reds or No Reds." The corpus name stays
+    "BitDW Pipe Entry" -- right in the library and in a route, where "No Reds"
+    would name nothing -- so this is a row-local short label, exactly as the
+    star is shown as "Reds" rather than its own name."""
+    body = _bowser_row_body()
+    assert 'nameOverride="No Reds"' in body, (
+        "the pipe-entry cell shows its corpus name again instead of 'No Reds'")
+
+
+def test_an_unranked_but_rankable_reds_cell_draws_the_ladder_floor():
+    """"instead of displaying a '-' we should display the Capless 5 icon in its
+    place (or, generically, the default lowest rank icon)". Generic: RANK_FLOOR
+    is derived from RANK_NAMES/DIVISION_NUMERALS, so this must not name a tier."""
+    body = _reds_cell_body()
+    assert "RANK_FLOOR" in body or "floorRank" in body, (
+        "the Reds cell shows a bare dash for an unranked-but-rankable entity")
+    assert '"Iron"' not in body and '"Capless"' not in body, (
+        "the floor is hardcoded here -- it must come from caps.js's RANK_FLOOR, "
+        "which derives it from the ladder registries")

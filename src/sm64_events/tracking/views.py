@@ -1374,6 +1374,17 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                     rank_mode, pbs_by_strat.get((c, s, "igt", live_strat)),
                     attempts_by_star.get((c, s), []), live_strat, "igt")))},
         "rank_mode": rank_mode,
+        # Entity keys that HAVE a ladder, whether or not this player has a time
+        # on them. `rank_by_star`/`segment_targets[].rank` are None in both the
+        # "no standards exist" and "standards exist, no time of mine" cases, and
+        # the UI has to draw those differently: the second shows the ladder
+        # FLOOR (Capless 5 today) instead of a bare "–", so an unranked-but-
+        # rankable thing reads as "bottom of the ladder" rather than "not a
+        # thing you can rank" (user, 2026-07-30). One list, membership-tested
+        # client-side, rather than widening two payload shapes that several
+        # consumers already destructure.
+        "standards_eks": sorted(service.ranks.graded_entities())
+                          if service.ranks is not None else [],
         "stage": service.current_stage,
         # Segments that start in a known subarea OR level, for the quick-select
         # banner (filtered client-side by the current subarea/level). `enabled`

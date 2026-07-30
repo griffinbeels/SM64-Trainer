@@ -1,7 +1,7 @@
 import { h } from "preact";
 import htm from "htm";
 import { RankIcon } from "./rankicon.js";
-import { capName } from "./caps.js";
+import { RANK_FLOOR, capName } from "./caps.js";
 import { fallbackToGenericStar, isGenericArt } from "./entityicons.js";
 
 const html = htm.bind(h);
@@ -51,8 +51,20 @@ const html = htm.bind(h);
  *            picker has no per-cell icon override — that lives on the banner)
  */
 export function PracticeCell({ active, armed, iconSrc, fallbackSlot = 0,
-                              rank, strat, name, sub, title, dimIdle = false,
+                              rank, hasStandards = false, strat, name, sub,
+                              title, dimIdle = false,
                               rankBadge = false, onPick, onEdit }) {
+  // Unranked but RANKABLE draws the ladder floor rather than a bare "-",
+  // so it reads as "bottom of the ladder" instead of "not a thing that
+  // ranks" (user, 2026-07-30). Unranked with no standards at all still
+  // draws nothing: there is no ladder for a floor to be the bottom of.
+  // Only the in-flow `.starrank` row uses this -- `rankBadge` (the picker
+  // grid) deliberately renders NOTHING when unranked, because an in-flow
+  // placeholder per grid row is most of what made that grid scroll, and a
+  // floor icon on every unpracticed cell would reinstate exactly that.
+  const rankOrFloor = rank
+    || (hasStandards ? { rank: RANK_FLOOR.tier, division: RANK_FLOOR.division }
+                     : null);
   const editKey = (keyEvent) => {
     if (keyEvent.key !== "Enter" && keyEvent.key !== " ") return;
     keyEvent.preventDefault(); keyEvent.stopPropagation(); onEdit();
@@ -80,7 +92,10 @@ export function PracticeCell({ active, armed, iconSrc, fallbackSlot = 0,
     ${rankBadge
       ? (rank ? html`<span class="starrank-badge"><${RankIcon} tier=${rank.rank} division=${rank.division} title=${badgeTitle} size=${16} /></span>` : null)
       : html`<span class="starrank">
-      ${rank ? html`<${RankIcon} tier=${rank.rank} division=${rank.division} size=${16} />` : "–"}</span>`}
+      ${rankOrFloor
+        ? html`<${RankIcon} tier=${rankOrFloor.rank} division=${rankOrFloor.division}
+            size=${16} />`
+        : "–"}</span>`}
     <span class="starname">${name}</span>
     <span class="starsub">${sub}</span>
     ${onEdit ? html`<span class="editicon" role="button" tabindex="0"

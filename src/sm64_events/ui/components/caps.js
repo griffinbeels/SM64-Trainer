@@ -86,6 +86,29 @@ export const divisionDigit = (numeral) => DIGITS[numeral] || "";
 export const DIVISION_NUMERALS = Object.keys(DIGITS);
 export const DIVISIONS_PER_TIER = DIVISION_NUMERALS.length;
 
+// The bottom of the ladder — what an entity that HAS standards but no time of
+// its own shows, instead of a bare "–" (user, 2026-07-30: "for every
+// star/segment that we don't have a rank for, but there exist rank standards
+// for, instead of displaying a '-' we should display the Capless 5 icon in its
+// place (or, generically, the default lowest rank icon, which right now is
+// Capless 5)").
+//
+// DERIVED from the two registries, never the literals "Iron"/"V": he said
+// "generically" and named today's value as the example, so hardcoding it is the
+// one reading he ruled out. RANK_NAMES is hardest-first, DIVISION_NUMERALS is
+// bottom-of-tier-first, so the floor is the last tier and the first numeral —
+// add a tier or a division and this follows for free.
+//
+// Declared HERE, below DIVISION_NUMERALS, and not up beside rankColor where it
+// reads more naturally: a `const` referencing a later `const` is a temporal
+// dead zone, `node --check` returns 0 on it, and the page dies at import with
+// an unrelated-looking ReferenceError (.claude/rules/ui-core.md records this
+// costing a session).
+export const RANK_FLOOR = {
+  tier: RANK_NAMES[RANK_NAMES.length - 1],
+  division: DIVISION_NUMERALS[0],
+};
+
 // THE ladder coordinate, and the reason the rank bars can animate at all.
 //
 // A rank is drawn from three values that move together -- tier, division, and

@@ -119,6 +119,22 @@ class RankStandards:
     def strategies(self, ek) -> list:
         return list(self.ladders(ek).keys())
 
+    def graded_entities(self) -> list:
+        """Every entity key that has at least one ladder.
+
+        The distinction the UI needs is "has standards but no time of mine"
+        versus "has no standards at all": the first shows the ladder FLOOR
+        (user, 2026-07-30 — "instead of displaying a '-' we should display the
+        Capless 5 icon"), the second still shows nothing, because there is no
+        ladder for a floor to be the bottom of. `_strat_rank` collapses both to
+        None, so the view cannot tell them apart without this.
+
+        A ladder with no thresholds in it does not count -- an entity present
+        in the file with an empty strategies dict has standards in name only.
+        """
+        return [ek for ek, entity in self._data.get("entities", {}).items()
+                if any(entity.get("strategies", {}).values())]
+
     def videos(self, ek) -> dict:
         return self._entity(ek).get("videos", {})
 

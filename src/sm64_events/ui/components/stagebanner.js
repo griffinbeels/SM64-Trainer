@@ -41,17 +41,19 @@
 // enable/disable) -- the same endpoints the rest of the UI uses, so the normal
 // target_changed flow updates the header, the pinned section, and this.
 import { h } from "preact";
-import { useEffect } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { CollapseToggle, cardClass, useCollapsed } from "./collapsible.js";
 import { send } from "../api.js";
-import { armedSegments, hasPracticeContext, practiceMode } from "../stagecontext.js";
+import { armedSegments, hasPracticeContext, hasStandardsFor,
+         practiceMode } from "../stagecontext.js";
 import { requestTarget } from "../target.js";
 import { Icon } from "./icons.js";
 import { PracticeCell } from "./practicecell.js";
 import { iconIdentityForKey, useIconPicking } from "./iconpicker.js";
 import { entityIconSrc, fallbackToGenericStar, genericStarSrc } from "./entityicons.js";
 import { RankIcon } from "./rankicon.js";
+import { RANK_FLOOR } from "./caps.js";
 import { useRouteSwap } from "../routeswap.js";
 import { mareloTuning } from "../marelotuning.js";
 
@@ -135,6 +137,40 @@ const STAR_DIM_IDLE = true;  // false = every star equally bright
 // different one from the same entity. The start-level lookup now happens once,
 // inside entityicons.js's iconContext; the Bowser/cap courses this row had no
 // branch for resolve there too (2026-07-26).
+// Which half of a Bowser Reds run the player is timing, REMEMBERED per level
+// (user, 2026-07-30: "We need to remember the option that the user selected ...
+// the last time they visited a bowser stage. Currently we do not remember
+// this").
+//
+// It used to be DERIVED from the target (`pipeMode = !starActive`), and that is
+// exactly why it could not be remembered AND why it flipped on its own: grabbing
+// the reds star makes that star the thing the app last saw you do, the derived
+// value went true, and the Star button lit itself mid-run. Explicit state cannot
+// be flipped by something you did in the level.
+//
+// localStorage, keyed by LEVEL, alongside the other per-client look/preference
+// keys (`sm64.starIcons`, `sm64.runFocus`, `sm64.activeRoute`). Not server state:
+// it selects which of two real entities you are pointed at, and the pointing
+// itself is already server state via the target.
+const BOWSER_MODE_KEY = "sm64.bowserMode";
+const BOWSER_MODES = ["pipe", "star"];
+const DEFAULT_BOWSER_MODE = "pipe";   // "By default, the PIPE should be selected"
+
+function readBowserModes() {
+  try { return JSON.parse(localStorage.getItem(BOWSER_MODE_KEY)) || {}; }
+  catch { return {}; }
+}
+export function bowserModeFor(level) {
+  const stored = readBowserModes()[String(level)];
+  return BOWSER_MODES.includes(stored) ? stored : DEFAULT_BOWSER_MODE;
+}
+function writeBowserMode(level, mode) {
+  if (!BOWSER_MODES.includes(mode)) return;
+  const all = readBowserModes();
+  all[String(level)] = mode;
+  try { localStorage.setItem(BOWSER_MODE_KEY, JSON.stringify(all)); } catch { /* full */ }
+}
+
 const segKey = (s) => `segment:${s.segment_id}`;
 const starKey = (courseId, slot) => `star:${courseId}:${slot}`;
 
@@ -155,7 +191,15 @@ const stratSub = (strat) =>
 // The standard segment cell (castle/arena rows, armed extras): name, strat
 // sub (running chip while armed), rank medal, resolved icon; click targets
 // it (enabling first if needed — a no-op for already-enabled segments).
-function StandardSegmentCell({ t, s, setPicking }) {
+// `nameOverride` exists for the Bowser row alone: its two cells are the pair
+// "Reds" / "No Reds" (user, 2026-07-30: "For all bowser stages, it's Reds or No
+// Reds"), while the corpus name of the second is "BitDW Pipe Entry" -- which is
+// right in the segment library and in a route, where "No Reds" would name
+// nothing. So the SHORT label is this row's, not a corpus rename: renaming the
+// definition would rewrite what every other surface calls it, and the row
+// already shows the star as "Reds" rather than its real name for the same
+// reason.
+function StandardSegmentCell({ t, s, setPicking, nameOverride }) {
   const tgt = ((t.view || {}).target) || {};
   const armed = t.armedSegs.has(s.segment_id);
   async function pick() {
@@ -167,7 +211,8 @@ function StandardSegmentCell({ t, s, setPicking }) {
     active=${tgt.kind === "segment" && tgt.segment_id === s.segment_id}
     armed=${armed}
     iconSrc=${entityIconSrc(t, segKey(s))}
-    rank=${s.rank} name=${s.name}
+    rank=${s.rank} hasStandards=${hasStandardsFor(t.view, segKey(s))}
+    name=${nameOverride || s.name}
     sub=${armed ? runningChip : stratSub(s.strat)}
     onPick=${pick}
     onEdit=${() => setPicking(iconIdentityForKey(segKey(s)))} />`;
@@ -302,25 +347,47 @@ function BowserCourseRow({ t, v, stage }) {
 
   const starActive = tgt.kind !== "segment"
     && tgt.course_id === stage.course_id && tgt.star_id === 0;
-  const pipeMode = !starActive;   // default PIPE: anything but an explicit star pick
-  const pipeTargeted = pipeMode && !!pipeSeg
+  const pipeTargeted = !!pipeSeg
     && tgt.kind === "segment" && tgt.segment_id === pipeSeg.segment_id;
   const redsActive = starActive || pipeTargeted;
+
+  // EXPLICIT, remembered per level -- never derived from the target. Deriving it
+  // is what made the Star button light itself the moment you grabbed the reds
+  // star while timing to the pipe (user, 2026-07-30: "it incorrectly SWAPS OVER
+  // TO STAR MODE ... despite me being in pipe mode"). Nothing that happens in
+  // the level moves this now; only a click does.
+  const [mode, setModeState] = useState(() => bowserModeFor(stage.level));
+  const setMode = (next) => { writeBowserMode(stage.level, next); setModeState(next); };
+  // Re-read on level change: one mounted row serves BitDW, BitFS and BitS in
+  // turn, so without this the first stage's choice would follow you into the
+  // next one and read as the memory being broken rather than shared.
+  useEffect(() => { setModeState(bowserModeFor(stage.level)); }, [stage.level]);
 
   const routeStars = routeStarFilter(v, stage.course_id);
   const routeSegs = routeSegmentFilter(v);
   const forcedPipe = !!((routeStars && routeStars.has(`${stage.course_id}:0`))
     || (routeSegs && pipeSeg && routeSegs.has(pipeSeg.segment_id)));
+  // A route always times Reds to the pipe -- you cannot stop at the star grab
+  // (user, 2026-07-27) -- so the remembered choice is overridden, not consulted.
+  const pipeMode = forcedPipe || mode === "pipe";
 
   async function pickStar() {
+    setMode("star");
     await requestTarget(t, { course_id: stage.course_id, star_id: 0 });
   }
   async function pickPipe() {
+    setMode("pipe");
     if (!pipeSeg) return;
     if (!pipeSeg.enabled)
       await send("PUT", `/api/segments/${pipeSeg.segment_id}`, { enabled: true });
     await requestTarget(t, { kind: "segment", segment_id: pipeSeg.segment_id });
   }
+  // Clicking the CARD selects it in whatever mode is already chosen (user,
+  // 2026-07-30, with a mock-up box drawn round the whole cell: "if we just click
+  // on the card itself normally, it should activate it (with whatever pipe/star
+  // mode we have selected already)"). The two toggle buttons stay their own
+  // targets and stopPropagation, so this never double-fires.
+  const pickCard = () => (pipeMode ? pickPipe() : pickStar());
 
   if (!course) return html`<${StagePlaceholder} t=${t} />`;
 
@@ -339,9 +406,10 @@ function BowserCourseRow({ t, v, stage }) {
       <${RedsCell} t=${t} v=${v} stage=${stage} course=${course}
         redsActive=${redsActive} pipeMode=${pipeMode} forcedPipe=${forcedPipe}
         pipeSeg=${pipeSeg} onPickStar=${pickStar} onPickPipe=${pickPipe}
-        setPicking=${setPicking} />
+        onPickCard=${pickCard} setPicking=${setPicking} />
       ${noRedsSeg ? html`<${StandardSegmentCell}
-        key=${`seg:${noRedsSeg.segment_id}`} t=${t} s=${noRedsSeg} setPicking=${setPicking} />`
+        key=${`seg:${noRedsSeg.segment_id}`} t=${t} s=${noRedsSeg}
+        nameOverride="No Reds" setPicking=${setPicking} />`
         : null}
       ${armedExtraCells(t, v, shownIds, setPicking)}
     </div>
@@ -375,10 +443,17 @@ function redsSwapEntry(rank) {
 // pipe_icon.png is a new, single-purpose glyph with no other consumer, so it
 // is named directly here rather than adding a second door for one call site.
 function RedsCell({ t, v, stage, course, redsActive, pipeMode, forcedPipe,
-                   pipeSeg, onPickStar, onPickPipe, setPicking }) {
+                   pipeSeg, onPickStar, onPickPipe, onPickCard, setPicking }) {
   const starRank = (v.rank_by_star || {})[`${stage.course_id}:0`];
   const pipeRank = pipeSeg ? pipeSeg.rank : null;
   const shownRank = pipeMode ? pipeRank : starRank;
+  // Unranked but rankable shows the ladder FLOOR rather than "-". Both
+  // families live on the STAR entity (the pipe segment has no ladder of its
+  // own -- views.py pairs it to the star's ek), so the standards question is
+  // asked of the star for either mode.
+  const floorRank = !shownRank
+      && hasStandardsFor(v, starKey(stage.course_id, 0))
+    ? { rank: RANK_FLOOR.tier, division: RANK_FLOOR.division } : null;
 
   // Squash/pop between families on every toggle -- REUSE of marelo.js's own
   // route-swap hook, not a second hand-tuned curve (user named the
@@ -400,7 +475,18 @@ function RedsCell({ t, v, stage, course, redsActive, pipeMode, forcedPipe,
     setPicking(iconIdentityForKey(starKey(stage.course_id, 0)));
   }
 
-  return html`<div class="starcell reds-cell ${redsActive ? "active-star" : ""}">
+  // The whole card is a click target, in the mode already selected. Kept a
+  // <div role="button"> rather than a real <button>: this cell nests two
+  // buttons and the ✎, and a <button> may not contain a button.
+  const cardKey = (keyEvent) => {
+    if (keyEvent.key !== "Enter" && keyEvent.key !== " ") return;
+    keyEvent.preventDefault(); onPickCard();
+  };
+  return html`<div class="starcell reds-cell ${redsActive ? "active-star" : ""}"
+      role="button" tabindex="0"
+      title=${pipeMode ? "Practice Reds, timed to the pipe"
+                       : "Practice Reds, timed to the star grab"}
+      onclick=${() => onPickCard()} onkeydown=${cardKey}>
     <span class="starholder">
       <img class="starimg ${redsActive ? "" : "dim"}"
            src=${entityIconSrc(t, starKey(stage.course_id, 0))}
@@ -434,11 +520,21 @@ function RedsCell({ t, v, stage, course, redsActive, pipeMode, forcedPipe,
     </span>
     <span class="starrank">
       ${iconTier ? html`<${RankIcon} ...${iconProps} tier=${iconTier}
-          division=${iconDivision} size=${16} />` : "–"}
+          division=${iconDivision} size=${16} />`
+        : (floorRank ? html`<${RankIcon} tier=${floorRank.rank}
+            division=${floorRank.division} size=${16} />` : "–")}
     </span>
     <span class="starname">Reds</span>
+    ${/* The FAMILY, spelled out, because the two are graded against different
+         ladders and a medal that changes with no label to explain it reads as a
+         rendering fault (user, 2026-07-30: 'When Pipe is selected, it should be
+         displayed as "8 Red Coins (Pipe)", and when Star is selected, it\'s
+         displayed as "8 Red Coins (Star)"'). The star's own corpus name leads,
+         so this still says what you are practising; the suffix says which half
+         is on the clock. `Reds`/`No Reds` stay the cell NAMES, which is the
+         pair he asked for one item later. */""}
     <span class="starsub"><span class="strat">
-      ${pipeMode ? "Reds → Pipe" : (course.stars[0] || "8 Red Coins")}
+      ${`${course.stars[0] || "8 Red Coins"} (${pipeMode ? "Pipe" : "Star"})`}
     </span></span>
     <span class="editicon" role="button" tabindex="0"
         title="Choose icon…" aria-label="Choose icon"
