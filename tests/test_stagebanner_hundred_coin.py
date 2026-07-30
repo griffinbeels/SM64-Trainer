@@ -62,12 +62,26 @@ def test_hundred_coin_segment_is_identified_structurally_not_by_name():
 
 def test_just_completed_reuses_freshids_not_a_second_recency_notion():
     """Pins the recency check to freshIds (practice.js's useFreshAttemptIds
-    Set) rather than a second timer/Date.now invented locally on this file."""
+    Set) rather than a second timer/Date.now invented locally.
+
+    Moved to stagecontext.js 2026-07-30 (live report: the pinned-card gate
+    needed the IDENTICAL recency notion this cell already used, not a second
+    one) -- this row now IMPORTS it rather than defining it, which is the
+    point: only one file may ever define what "just completed" means."""
     source = strip_comments(BANNER.read_text(encoding="utf-8"))
-    assert "justCompletedSegment" in source
+    assert re.search(r'import \{[^}]*justCompletedSegment[^}]*\} '
+                     r'from "\.\./stagecontext\.js";', source), \
+        "stagebanner.js no longer imports justCompletedSegment from " \
+        "stagecontext.js -- has a second definition come back?"
+    assert "const justCompletedSegment = " not in source, \
+        "stagebanner.js has its OWN justCompletedSegment again -- " \
+        "practice.js's pinned-card gate would silently diverge from it"
+
+    stagecontext_source = strip_comments(
+        (UI / "stagecontext.js").read_text(encoding="utf-8"))
     definition = re.search(
-        r"const justCompletedSegment = \(v, freshIds, segmentId\) => \{.*?\n\};\n",
-        source, re.S)
+        r"export const justCompletedSegment = \(v, freshIds, segmentId\) => \{.*?\n\};\n",
+        stagecontext_source, re.S)
     assert definition, "justCompletedSegment's definition changed shape"
     body = definition.group(0)
     assert "freshIds.has(" in body, \

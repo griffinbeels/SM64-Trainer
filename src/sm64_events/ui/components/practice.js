@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { requestTarget } from "../target.js";
-import { hasPracticeContext, practicedHere } from "../stagecontext.js";
+import { hasPracticeContext, justCompletedSegment,
+        practicedHere } from "../stagecontext.js";
 import { ReplayPlayer } from "./replay.js";
 import { StatMenu, DUST_STAT_KEYS } from "./statmenu.js";
 import { Timeline } from "./timeline.js";
@@ -1160,9 +1161,27 @@ export function Practice({ t, openCompare }) {
   // segment being practiced (an accidental exit disarms — correct timing
   // semantics — but the section stays put until a different segment arms);
   // before anything has ever armed, the target segment pins.
+  // HUNDRED_COIN_EXIT segments (tools/corpus_vocab.py's own category string;
+  // "WF — 100 Coins → Exit" and its 14 siblings) arm on entering ANY course
+  // with a 100-coin star, not on a deliberate pick or a step in a run — the
+  // exact reason stagebanner.js's StarRow (4e5b34a) only glows the "100
+  // Coins" cell for a deliberate pick or a just-landed success, never merely
+  // because it is armed. The pinned card needs the SAME gate (live report
+  // 2026-07-30, user: "it's confusing if it's marked as active unless I
+  // selected it or it was previously done"): for this family only, being
+  // armed is not itself evidence of intent, since it is armed on every
+  // visit to its course. `armed_detail`/`here()` stay the exemption for
+  // every OTHER segment (a real multi-step movement genuinely mid-run) —
+  // narrowing this one case must never weaken that (live report 2026-07-27).
+  const HUNDRED_COIN_EXIT_CATEGORY = "100 Coin Exit";
+  const isAmbientlyArmed = (sec) => sec != null
+    && sec.category === HUNDRED_COIN_EXIT_CATEGORY
+    && !(tgt.kind === "segment" && tgt.segment_id === sec.segment_id)
+    && !justCompletedSegment(v, freshIds, sec.segment_id);
   const armedPins = [...frozen.armedOrder].reverse()
     .map((id) => segs.find((s) => s.segment_id === id))
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter((sec) => !isAmbientlyArmed(sec));
   const stickyPin = frozen.lastPinnedSeg != null
     ? segs.find((s) => s.segment_id === frozen.lastPinnedSeg)
     : undefined;
@@ -1184,8 +1203,10 @@ export function Practice({ t, openCompare }) {
   // intact — this only widens the exemption to a pin that is STILL running.
   const pinnedSegs = !inContext || starActive ? []
     : armedPins.length ? armedPins
-    : stickyPin && (stickyPin.armed_detail || here(stickyPin)) ? [stickyPin]
-    : activeSeg && (activeSeg.armed_detail || here(activeSeg)) ? [activeSeg] : [];
+    : stickyPin && !isAmbientlyArmed(stickyPin)
+      && (stickyPin.armed_detail || here(stickyPin)) ? [stickyPin]
+    : activeSeg && !isAmbientlyArmed(activeSeg)
+      && (activeSeg.armed_detail || here(activeSeg)) ? [activeSeg] : [];
   // Only one detail surface owns the fixed Objective / Analysis / Attempts
   // tracks. Additional armed segments remain reachable in the stable index
   // below instead of inserting more full cards above the crop.

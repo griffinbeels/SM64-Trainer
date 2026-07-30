@@ -244,5 +244,33 @@ def test_the_active_target_card_asks_the_shared_question():
     # away from where it started. Stars have no armed_detail and keep the
     # plain predicate checked above; deliberately NOT edited into
     # practicedHere itself, which star sections also call.
-    assert re.search(r"stickyPin && \(stickyPin\.armed_detail \|\| here\(stickyPin\)\)", body)
-    assert re.search(r"activeSeg && \(activeSeg\.armed_detail \|\| here\(activeSeg\)\)", body)
+    assert re.search(
+        r"stickyPin && !isAmbientlyArmed\(stickyPin\)\s*"
+        r"&& \(stickyPin\.armed_detail \|\| here\(stickyPin\)\)", body)
+    assert re.search(
+        r"activeSeg && !isAmbientlyArmed\(activeSeg\)\s*"
+        r"&& \(activeSeg\.armed_detail \|\| here\(activeSeg\)\)", body)
+
+
+def test_ambiently_armed_segments_get_a_third_exemption_none_of_the_above_reach():
+    """HUNDRED_COIN_EXIT segments (live report 2026-07-30) arm on entering ANY
+    course with a 100-coin star, not on a deliberate pick -- `armed_detail`
+    alone is a false positive for exactly this family, unlike a real
+    multi-step movement genuinely mid-run. `isAmbientlyArmed` gates all
+    THREE pin candidates (armedPins/stickyPin/activeSeg), reusing
+    justCompletedSegment (moved to stagecontext.js FROM stagebanner.js,
+    4e5b34a) rather than a second recency notion."""
+    body = (UI / "components" / "practice.js").read_text(encoding="utf-8")
+    assert re.search(r'import \{[^}]*justCompletedSegment[^}]*\} '
+                     r'from "\.\./stagecontext\.js";', body)
+    assert 'sec.category === HUNDRED_COIN_EXIT_CATEGORY' in body
+    assert re.search(
+        r"!\(tgt\.kind === \"segment\" && tgt\.segment_id === sec\.segment_id\)\s*"
+        r"&& !justCompletedSegment\(v, freshIds, sec\.segment_id\)", body)
+    # armedPins is filtered too -- the unconditional priority branch
+    # (`armedPins.length ? armedPins : ...`) is what actually surfaced the
+    # bug: the 100-coin segment arms (pushing onto frozen.armedOrder) and
+    # store.js's segment_armed handler ALSO sticks it as lastPinnedSeg, on
+    # every course entry, with no gate at all before this fix.
+    assert re.search(
+        r"\.filter\(\(sec\) => !isAmbientlyArmed\(sec\)\)", body)

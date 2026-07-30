@@ -44,7 +44,8 @@ import { useEffect } from "preact/hooks";
 import htm from "htm";
 import { CollapseToggle, cardClass, useCollapsed } from "./collapsible.js";
 import { send } from "../api.js";
-import { armedSegments, hasPracticeContext, practiceMode } from "../stagecontext.js";
+import { armedSegments, hasPracticeContext, justCompletedSegment,
+        practiceMode } from "../stagecontext.js";
 import { requestTarget } from "../target.js";
 import { Icon } from "./icons.js";
 import { PracticeCell } from "./practicecell.js";
@@ -216,18 +217,9 @@ const startsInLevel = (level) => (s) => (s.start_levels || []).includes(level);
 const hundredCoinSegmentFor = (v, level) =>
   (v.segment_targets || []).find((s) => s.enabled && startsInLevel(level)(s));
 
-// "Just completed" reuses practice.js's freshIds — the SAME attempt-id
-// recency Set the attempt-table row blink already reads (useFreshAttemptIds)
-// — rather than inventing a second notion of "recent" for this cell. True
-// only when the segment's own most-recent attempt (by id — a section's
-// attempts are not guaranteed newest-first) landed as a FRESH success.
-const justCompletedSegment = (v, freshIds, segmentId) => {
-  if (!freshIds || !freshIds.size) return false;
-  const sec = (v.segments || []).find((s) => s.segment_id === segmentId);
-  if (!sec || !sec.attempts.length) return false;
-  const latest = sec.attempts.reduce((a, b) => (a.id > b.id ? a : b));
-  return latest.outcome === "success" && freshIds.has(latest.id);
-};
+// "Just completed" — moved to stagecontext.js (2026-07-30, live report: the
+// pinned card needed the IDENTICAL recency notion, not a second one) so both
+// this cell and practice.js's pinned-card gate import the same function.
 
 function StarRow({ t, v, stage, freshIds }) {
   const [fold, toggleFold] = useCollapsed("selector");
