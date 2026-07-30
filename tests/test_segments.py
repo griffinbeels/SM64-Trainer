@@ -12,6 +12,7 @@ from sm64_events.tracking.segments import (SEGMENT_ATTEMPT_OFFSET,
                                            clause_sentence,
                                            course_groups, level_groups,
                                            GUARDS, TRIGGERS, MatchContext,
+                                           hundred_coin_entity,
                                            merge_definitions, SegmentDef,
                                            SegmentEngine, split_definition,
                                            origin_taxonomy, origin_view,
@@ -2461,6 +2462,40 @@ def test_start_origin_is_none_when_the_rules_carry_no_place():
     assert start_origin([{"type": "key_grabbed"}]) is None
     assert start_origin([{"type": "star_grabbed", "course": 0, "star": 0}]) is None
     assert start_origin([]) is None
+
+
+def test_hundred_coin_entity_finds_the_grab_as_a_start_clause():
+    # The pre-reshape shape (the grab itself IS the start trigger).
+    assert hundred_coin_entity(
+        [{"type": "star_grabbed", "course": 2, "star": 6}], []) == (2, 6)
+
+
+def test_hundred_coin_entity_finds_the_grab_as_a_waypoint():
+    # The reshaped, currently-seeded shape (course entry starts it, the
+    # 100-coin grab is a waypoint mid-sequence) -- SPAN-AGNOSTIC on purpose,
+    # same reasoning as the retired _hundred_coin_redirect.
+    start_triggers = [{"type": "level_enter", "to": 24},
+                      {"type": "attempt_anchor", "level": 24}]
+    waypoints = [[{"type": "star_grabbed", "course": 2, "star": 6}]]
+    assert hundred_coin_entity(start_triggers, waypoints) == (2, 6)
+
+
+def test_hundred_coin_entity_ignores_a_different_star():
+    # A def whose sequence grabs an ORDINARY star (not the 100-coin one)
+    # is not part of this family, whatever else it does.
+    assert hundred_coin_entity(
+        [{"type": "star_grabbed", "course": 2, "star": 3}], []) is None
+
+
+def test_hundred_coin_entity_is_none_for_a_plain_movement():
+    assert hundred_coin_entity([{"type": "level_exit", "from": 8}], []) is None
+
+
+def test_hundred_coin_entity_reads_the_course_off_the_matching_clause():
+    # Not a hand-written course table -- the (course, 6) pair comes straight
+    # off whichever clause matched, so a DDD def answers 9, not 2.
+    assert hundred_coin_entity(
+        [{"type": "star_grabbed", "course": 9, "star": 6}], []) == (9, 6)
 
 
 def test_origin_view_carries_the_region_and_its_labels():

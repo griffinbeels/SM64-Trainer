@@ -1520,6 +1520,138 @@ def test_auto_ignored_segment_success_does_not_follow_target():
     assert proj.target is None
 
 
+# -- the 100-coin star IS the segment (spec 2026-07-28-multi-step-segments) --
+# The seg:100c->exit:* family's currently-seeded shape: arms on course entry
+# (level_enter/attempt_anchor), the 100-coin grab is a WAYPOINT, the end is
+# any of the course's other six stars, strict (tools/corpus_movements.py).
+
+def _hc_def(course=2, level=24, match_mode="strict", enabled=True):
+    return SegmentDef(
+        id=100, name=f"course {course} 100 Coins -> Exit", enabled=enabled,
+        start_triggers=[{"type": "level_enter", "to": level},
+                        {"type": "attempt_anchor", "level": level}],
+        end_triggers=[{"type": "star_grabbed", "course": course, "star": s}
+                      for s in range(6)],
+        waypoints=[[{"type": "star_grabbed", "course": course, "star": 6}]],
+        guards=[], match_mode=match_mode)
+
+
+def test_hundred_coin_grab_alone_creates_no_star_attempt():
+    # Enter the course (arms the engine), grab 100 coins (waypoint advance,
+    # silent). No exit star yet -- nothing should be recorded at all: the
+    # grab used to close its own star-6 attempt, and must not any more.
+    attempts = project([
+        jev(1, "level_changed", 900, {"from": 16, "to": 24}),
+        star(2, 1000, course=2, star_id=6, igt=1000),
+    ], segments=[_hc_def()])
+    assert attempts == []
+
+
+def test_hundred_coin_completion_attributes_to_the_star_not_the_segment():
+    # Enter, grab 100 coins, grab the exit star -- the ENGINE's own
+    # completion is what closes the 100-coin star's attempt (measured
+    # shape: STAR course-6 success + the exit star's own success, one run).
+    attempts = project([
+        jev(1, "level_changed", 900, {"from": 16, "to": 24}),
+        star(2, 1000, course=2, star_id=6, igt=1000),
+        star(3, 1200, course=2, star_id=3, igt=1200),
+    ], segments=[_hc_def()])
+    hundred = [a for a in attempts if a.course_id == 2 and a.star_id == 6]
+    exit_star = [a for a in attempts if a.course_id == 2 and a.star_id == 3]
+    assert len(hundred) == 1
+    assert hundred[0].segment_id is None
+    assert hundred[0].outcome == "success"
+    # decision #1: the exit star keeps its OWN attempt too -- a real grab,
+    # never suppressed by this change (only star 6 changes).
+    assert len(exit_star) == 1 and exit_star[0].segment_id is None
+
+
+def test_hundred_coin_strat_tag_comes_from_the_star_not_the_segment():
+    _, proj = replay([
+        jev(1, "strat_set", 0, {"course_id": 2, "star_id": 6,
+                                "strat_tag": "Coin Route A"}),
+        jev(2, "level_changed", 900, {"from": 16, "to": 24}),
+        star(3, 1000, course=2, star_id=6, igt=1000),
+    ], segments=[_hc_def()])
+    closed = proj.feed(star(4, 1200, course=2, star_id=3, igt=1200))
+    hundred = next(a for a in closed if a.course_id == 2 and a.star_id == 6)
+    assert hundred.strat_tag == "Coin Route A"
+
+
+def test_hundred_coin_engine_death_also_attributes_to_the_star():
+    # decision #3: what happens with no exit star. death is a hard fail
+    # WITH a row (_feed_waypoint precedence, unchanged by this change) and
+    # must attribute the same way a success does.
+    attempts = project([
+        jev(1, "level_changed", 900, {"from": 16, "to": 24}),
+        star(2, 1000, course=2, star_id=6, igt=1000),
+        jev(3, "death", 1100, {"cause": "fell"}),
+    ], segments=[_hc_def()])
+    hundred = [a for a in attempts if a.course_id == 2 and a.star_id == 6]
+    assert len(hundred) == 1
+    assert hundred[0].outcome == "death" and hundred[0].segment_id is None
+
+
+def test_leaving_without_the_exit_star_records_nothing_confirmed_sane():
+    # decision #3: leaving the course before the exit star is a SILENT
+    # CANCEL under strict/waypoint dispatch (a real-edge level_changed that
+    # isn't the next waypoint) -- no row at all, unchanged by this task and
+    # confirmed here rather than assumed.
+    attempts = project([
+        jev(1, "level_changed", 900, {"from": 16, "to": 24}),
+        star(2, 1000, course=2, star_id=6, igt=1000),
+        jev(3, "level_changed", 1100, {"from": 24, "to": 19}),  # leave for BitFS
+    ], segments=[_hc_def()])
+    assert attempts == []
+
+
+def test_hundred_coin_falls_back_to_a_plain_star_attempt_with_no_engine():
+    # No HUNDRED_COIN_EXIT-shaped def at all (deleted, never seeded) -- the
+    # grab still records a plain star attempt, same fallback philosophy the
+    # retired star->segment TARGET redirect used ("falling back to the
+    # plain star keeps the click meaningful").
+    attempts = project([star(1, 1000, course=2, star_id=6, igt=1000)])
+    assert len(attempts) == 1
+    assert attempts[0].course_id == 2 and attempts[0].star_id == 6
+    assert attempts[0].segment_id is None
+
+
+def test_hundred_coin_falls_back_when_the_engine_is_disabled():
+    attempts = project([star(1, 1000, course=2, star_id=6, igt=1000)],
+                       segments=[_hc_def(enabled=False)])
+    assert len(attempts) == 1
+    assert attempts[0].course_id == 2 and attempts[0].star_id == 6
+
+
+def test_hundred_coin_target_survives_entering_its_own_course():
+    # The star-target model this change relies on: target = ("star", 2, 6)
+    # must not be wiped the instant its OWN engine arms on course entry
+    # (feed()'s "a segment armed retires a star target" rule would
+    # otherwise fire on every single visit).
+    _, proj = replay([
+        jev(1, "target_set", 0, {"kind": "star", "course_id": 2, "star_id": 6}),
+    ], segments=[_hc_def()])
+    assert proj.target == ("star", 2, 6)
+    proj.feed(jev(2, "level_changed", 900, {"from": 16, "to": 24}))
+    assert proj.target == ("star", 2, 6)
+
+
+def test_hundred_coin_arm_still_retires_a_different_stars_target():
+    # The exemption is scoped to the MATCHING star only -- a target for a
+    # different star in a DIFFERENT course is still retired when some
+    # unrelated segment arms (this rule, unchanged for every other case).
+    other = SegmentDef(id=200, name="unrelated", enabled=True,
+                       start_triggers=[{"type": "level_enter", "to": 8}],
+                       end_triggers=[{"type": "level_enter", "to": 6}],
+                       guards=[])
+    _, proj = replay([
+        jev(1, "target_set", 0, {"kind": "star", "course_id": 5, "star_id": 1}),
+    ], segments=[other])
+    assert proj.target == ("star", 5, 1)
+    proj.feed(jev(2, "level_changed", 900, {"from": 6, "to": 8}))  # arms `other`
+    assert proj.target is None
+
+
 def test_star_success_with_no_clock_at_all_is_not_flagged():
     # grab-only attempt (no anchor -> rta None) with no igt_frames in the
     # payload: _auto_ignored's "no clock -> no flag" branch — nothing to

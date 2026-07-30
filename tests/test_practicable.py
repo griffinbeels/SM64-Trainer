@@ -151,18 +151,19 @@ def test_a_pick_from_the_course_you_are_in_commits(tmp_path):
     assert svc.target == ("star", COURSE_CCM, 5)
 
 
-def test_the_100_coin_star_redirects_to_its_seeded_segment(tmp_path):
+def test_the_100_coin_star_commits_as_a_plain_star(tmp_path):
     """Against the REAL bundled corpus, not a hand-built stand-in: picking
-    the 100-coin star as a STAR must commit the course's seeded
-    100-coin-exit SEGMENT (tracking/service.py::_hundred_coin_redirect,
-    user ruling 2026-07-28) -- and the practicability gate reads it exactly
-    like any other segment pick from this course (both resolve through
-    star_origin(course, ...), so standing in WF must be sufficient)."""
+    the 100-coin star as a STAR commits as a PLAIN star target (spec
+    2026-07-28-multi-step-segments, "the 100-coin star IS the segment" --
+    superseding the retired _hundred_coin_redirect, user ruling 2026-07-28).
+    The practicability gate is unaffected either way: it resolves through
+    star_origin(course, star), same as any other star, so standing in WF is
+    sufficient regardless of what the underlying engine does."""
     db, svc = make(tmp_path)
-    wf_100c = seed_id(db, "WF — 100 Coins → Exit")
+    seed_id(db, "WF — 100 Coins → Exit")  # confirms the seeded def exists
     enter(svc, "stars", COURSE_WF, LEVEL_WF)
     asyncio.run(svc.request_target("star", course_id=COURSE_WF, star_id=6))
-    assert svc.target == ("segment", wf_100c)
+    assert svc.target == ("star", COURSE_WF, 6)
 
 
 def test_a_movement_is_settable_from_the_course_it_starts_in(tmp_path):

@@ -1682,18 +1682,60 @@ def test_star_sections_carry_no_default_strategy(tmp_path):
     assert "default_strat" not in view["stars"][0]
 
 
-def test_star_sections_carry_no_arm_detail(tmp_path):
+def test_star_sections_carry_no_arm_detail_except_the_100_coin_star(tmp_path):
     """Deliberate star/segment asymmetry (Task 4, spec 2026-07-28-multi-
-    step-segments): armed_detail describes a SEGMENT DEFINITION's waypoint
-    sequence and staleness deadline — a star has no armed-branch matcher, no
-    waypoints, and no deadline to report, so it never gets the key at all
-    (same shape as default_strat above, not a copy of its reasoning: a star
-    can be a practice TARGET without ever being "armed" the way a segment
-    is — arming is a segment-matcher concept end to end)."""
+    step-segments): armed_detail describes an armed-branch matcher's
+    waypoint sequence and staleness deadline — an ORDINARY star has no
+    armed-branch matcher, no waypoints, and no deadline to report, so its
+    section carries the key with value None (same shape as default_strat's
+    asymmetry, not a copy of its reasoning: a star can be a practice TARGET
+    without ever being "armed" the way a segment is).
+
+    Star 6 is the ONE documented exception (spec 2026-07-28-multi-step-
+    segments, "the 100-coin star IS the segment") — its HUNDRED_COIN_EXIT
+    engine has a real waypoint sequence, so its own section CAN carry a
+    populated armed_detail; see
+    test_the_100_coin_star_section_carries_its_engines_armed_detail for the
+    positive case."""
     db, svc = make(tmp_path)
     seed(svc)
     view = build_session_view(db, svc, clock="igt")
-    assert "armed_detail" not in view["stars"][0]
+    assert view["stars"][0]["star_id"] == 2   # seed()'s star, not star 6
+    assert view["stars"][0]["armed_detail"] is None
+
+
+def test_the_100_coin_star_section_carries_its_engines_armed_detail(tmp_path):
+    """The progress line survives the presentation change and reads as the
+    STAR's own progress (spec 2026-07-28-multi-step-segments, decision #2 —
+    the user's own reason: "i like the idea of knowing for sure the system
+    is aware of me grabbing that first star, proven by it progressing to
+    the next step"). Must visibly ADVANCE on the 100-coin grab, while still
+    in the level, before the exit star — that transition IS the feature."""
+    db, svc = make(tmp_path)
+    asyncio.run(svc.create_segment({
+        "name": "WF 100 Coins -> Exit",
+        "start_triggers": [{"type": "level_enter", "to": 24},
+                          {"type": "attempt_anchor", "level": 24}],
+        "waypoints": [[{"type": "star_grabbed", "course": 2, "star": 6}]],
+        "end_triggers": [{"type": "star_grabbed", "course": 2, "star": s}
+                        for s in range(6)],
+        "match_mode": "strict"}))
+    asyncio.run(svc.publish(ev("level_changed", 900, {"from": 16, "to": 24})))
+    view = build_session_view(db, svc, clock="igt")
+    sec = next(s for s in view["stars"]
+              if s["course_id"] == 2 and s["star_id"] == 6)
+    assert sec["armed_detail"] is not None
+    assert sec["armed_detail"]["progress"] == 0
+    assert sec["armed_detail"]["total"] == 1
+    # grab the 100-coin star -- progress must visibly advance while still
+    # in the level, before the exit star
+    asyncio.run(svc.publish(star(1000, course=2, star_id=6, igt=1000)))
+    view2 = build_session_view(db, svc, clock="igt")
+    sec2 = next(s for s in view2["stars"]
+               if s["course_id"] == 2 and s["star_id"] == 6)
+    assert sec2["armed_detail"]["progress"] == 1
+    # and the segment itself never surfaces as its own section
+    assert view2["segments"] == []
 
 
 def test_catalog_carries_the_same_course_groups_as_vocab():

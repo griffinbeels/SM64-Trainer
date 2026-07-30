@@ -241,36 +241,23 @@ def test_the_active_target_card_asks_the_shared_question():
     # still non-null overrides the course-match gate, completing "a running
     # segment is never invisible" (user rule 2026-07-24) on the gate it never
     # reached -- a loose segment can legitimately be running several courses
-    # away from where it started. Stars have no armed_detail and keep the
-    # plain predicate checked above; deliberately NOT edited into
-    # practicedHere itself, which star sections also call.
+    # away from where it started. An ordinary star has no armed_detail and
+    # keeps the plain predicate checked above; the 100-coin star DOES carry
+    # one (spec 2026-07-28-multi-step-segments, tested in test_views.py), but
+    # that is read on the STAR side of the same "OR" via `activeStar`/`here`
+    # above -- deliberately NOT edited into practicedHere itself, which star
+    # sections also call.
     assert re.search(
-        r"stickyPin && !isAmbientlyArmed\(stickyPin\)\s*"
-        r"&& \(stickyPin\.armed_detail \|\| here\(stickyPin\)\)", body)
+        r"stickyPin && \(stickyPin\.armed_detail \|\| here\(stickyPin\)\)", body)
     assert re.search(
-        r"activeSeg && !isAmbientlyArmed\(activeSeg\)\s*"
-        r"&& \(activeSeg\.armed_detail \|\| here\(activeSeg\)\)", body)
+        r"activeSeg && \(activeSeg\.armed_detail \|\| here\(activeSeg\)\)", body)
 
-
-def test_ambiently_armed_segments_get_a_third_exemption_none_of_the_above_reach():
-    """HUNDRED_COIN_EXIT segments (live report 2026-07-30) arm on entering ANY
-    course with a 100-coin star, not on a deliberate pick -- `armed_detail`
-    alone is a false positive for exactly this family, unlike a real
-    multi-step movement genuinely mid-run. `isAmbientlyArmed` gates all
-    THREE pin candidates (armedPins/stickyPin/activeSeg), reusing
-    justCompletedSegment (moved to stagecontext.js FROM stagebanner.js,
-    4e5b34a) rather than a second recency notion."""
-    body = (UI / "components" / "practice.js").read_text(encoding="utf-8")
-    assert re.search(r'import \{[^}]*justCompletedSegment[^}]*\} '
-                     r'from "\.\./stagecontext\.js";', body)
-    assert 'sec.category === HUNDRED_COIN_EXIT_CATEGORY' in body
-    assert re.search(
-        r"!\(tgt\.kind === \"segment\" && tgt\.segment_id === sec\.segment_id\)\s*"
-        r"&& !justCompletedSegment\(v, freshIds, sec\.segment_id\)", body)
-    # armedPins is filtered too -- the unconditional priority branch
-    # (`armedPins.length ? armedPins : ...`) is what actually surfaced the
-    # bug: the 100-coin segment arms (pushing onto frozen.armedOrder) and
-    # store.js's segment_armed handler ALSO sticks it as lastPinnedSeg, on
-    # every course entry, with no gate at all before this fix.
-    assert re.search(
-        r"\.filter\(\(sec\) => !isAmbientlyArmed\(sec\)\)", body)
+# A third exemption (`isAmbientlyArmed`) briefly existed here (live report
+# 2026-07-30) to stop a HUNDRED_COIN_EXIT segment's ambient course-entry arm
+# from pinning an "ACTIVE SEGMENT" card. Spec 2026-07-28-multi-step-segments
+# ("the 100-coin star IS the segment") DISSOLVED the problem instead of
+# narrowing it further: that family never surfaces as a segment section any
+# more (views.py excludes it from `segments`/`segment_targets` entirely), so
+# `segs.find(...)` above can never find one to pin in the first place --
+# isAmbientlyArmed had no input left to act on and was removed rather than
+# kept as a guard against a state that cannot occur.

@@ -433,85 +433,47 @@ def _create_hundred_coin_segment(svc, course_id, other_star=0, enabled=True):
         "enabled": enabled}))
 
 
-def test_100_coin_star_pick_redirects_to_its_segment(tmp_path):
-    """User ruling 2026-07-28: '...that is, we got the 100 coins star AND we
-    get some other star... Nobody times just the 100 star grab, it's always
-    with something else.' A star pick of (course, 6) must commit the
-    course's 100-coin-exit SEGMENT as the target, not the plain star."""
+def test_100_coin_star_pick_commits_as_a_plain_star_target(tmp_path):
+    """spec 2026-07-28-multi-step-segments, 'the 100-coin star IS the
+    segment': star_id 6 no longer redirects to a segment target on pick --
+    it commits exactly like any other star. The retired redirect
+    (`_hundred_coin_redirect`) existed only so the practice card could show
+    the family's real attempts/strat/rank, which lived on the segment; those
+    now attribute directly to this star (tracking/projection.py's
+    seg_closed reattribution, segments.hundred_coin_entity), so a plain
+    star target already shows the same thing with no indirection."""
     db, svc = make(tmp_path)
-    sid = _create_hundred_coin_segment(svc, course_id=2)
     asyncio.run(svc.request_target("star", course_id=2, star_id=6))
-    assert svc.target == ("segment", sid)
+    assert svc.target == ("star", 2, 6)
 
 
-def test_numbered_star_picks_are_never_redirected(tmp_path):
-    """Only star_id 6 (100 Coins) redirects -- the other six stars in the
-    same course must commit as plain stars even though a matching 100-coin
-    segment exists for that course."""
+def test_100_coin_star_pick_stays_plain_even_with_a_matching_segment(tmp_path):
+    """A HUNDRED_COIN_EXIT-shaped def existing (enabled or not, either the
+    old grab-starts shape or the reshaped waypoint one) must not change
+    target-PICKING at all any more -- only attempt ATTRIBUTION reads the
+    def's shape now, and that happens in projection.py, not here."""
+    db, svc = make(tmp_path)
+    _create_hundred_coin_segment(svc, course_id=2)
+    asyncio.run(svc.request_target("star", course_id=2, star_id=6))
+    assert svc.target == ("star", 2, 6)
+
+
+def test_numbered_star_picks_are_plain_stars_too(tmp_path):
+    """Stars 0-5 are untouched by this family end to end, same as before."""
     db, svc = make(tmp_path)
     _create_hundred_coin_segment(svc, course_id=2)
     asyncio.run(svc.request_target("star", course_id=2, star_id=0))
     assert svc.target == ("star", 2, 0)
 
 
-def test_100_coin_star_pick_falls_back_to_plain_star_without_a_segment(tmp_path):
-    """Degrade honestly: a course with no matching segment (never seeded, or
-    user-deleted) must still let the plain 100-coin star be practiced rather
-    than erroring or silently doing nothing."""
+def test_100_coin_star_pick_strategy_lands_on_the_star(tmp_path):
+    """A strategy passed alongside the pick lands on the star's OWN memory
+    (strat_by_star) -- there is no segment redirect left to carry it to."""
     db, svc = make(tmp_path)
-    asyncio.run(svc.request_target("star", course_id=2, star_id=6))
-    assert svc.target == ("star", 2, 6)
-
-
-def test_100_coin_star_pick_ignores_a_disabled_segment(tmp_path):
-    """A disabled def never arms (segments.py's own `_defs = [d for d in defs
-    if d.enabled]`), so redirecting into one would pin a card that can never
-    record an attempt -- fall back to the plain star instead."""
-    db, svc = make(tmp_path)
-    _create_hundred_coin_segment(svc, course_id=2, enabled=False)
-    asyncio.run(svc.request_target("star", course_id=2, star_id=6))
-    assert svc.target == ("star", 2, 6)
-
-
-def test_100_coin_star_pick_redirect_carries_its_strategy(tmp_path):
-    """A strategy passed alongside the star pick must land on the SEGMENT
-    the pick redirected to, not be silently dropped."""
-    db, svc = make(tmp_path)
-    sid = _create_hundred_coin_segment(svc, course_id=2)
     asyncio.run(svc.request_target("star", course_id=2, star_id=6,
                                    strat_tag="Coin Route A"))
-    assert svc.target == ("segment", sid)
-    assert svc.strat_by_segment[sid] == "Coin Route A"
-
-
-def _create_future_shape_hundred_coin_segment(svc, course_id, course_level,
-                                              other_star=0, enabled=True):
-    """Stand-in for the APPROVED-BUT-NOT-YET-LANDED reshape of this family
-    (user, 2026-07-29): '100-coin span -- it should be the whole course
-    visit. Timing starts on reset -> timer ends after grabbing the final
-    exit-star.' Start becomes course entry, the 100-coin grab MOVES to a
-    waypoint, end is unchanged -- same family, a different span, which is
-    exactly what _hundred_coin_redirect must keep matching."""
-    return asyncio.run(svc.create_segment({
-        "name": f"100c future {course_id}",
-        "start_triggers": [{"type": "attempt_anchor", "level": course_level},
-                          {"type": "level_enter", "to": course_level}],
-        "waypoints": [[{"type": "star_grabbed", "course": course_id, "star": 6}]],
-        "end_triggers": [{"type": "star_grabbed", "course": course_id,
-                          "star": other_star}],
-        "enabled": enabled}))
-
-
-def test_100_coin_star_pick_redirects_to_the_future_reshaped_segment(tmp_path):
-    """The redirect must not be position-specific: once the approved span
-    change lands, the 100-coin grab is a WAYPOINT rather than the start
-    clause, and the redirect must keep finding this family by what its own
-    sequence includes, not by where in that sequence the grab sits."""
-    db, svc = make(tmp_path)
-    sid = _create_future_shape_hundred_coin_segment(svc, course_id=2,
-                                                     course_level=24)
-    asyncio.run(svc.request_target("star", course_id=2, star_id=6))
-    assert svc.target == ("segment", sid)
+    assert svc.target == ("star", 2, 6)
+    assert svc.strat_by_star[(2, 6)] == "Coin Route A"
 
 
 def test_death_event_flows_to_death_attempt(tmp_path):

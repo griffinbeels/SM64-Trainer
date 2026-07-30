@@ -1280,6 +1280,29 @@ def test_segments_list_stamps_the_derived_origin(tmp_path):
         assert lblj["origin"]["source"] == "derived"
 
 
+def test_segments_list_stamps_the_hundred_coin_engine_flag(tmp_path):
+    """spec 2026-07-28-multi-step-segments: GET /api/segments must tell the
+    target picker which rows are a 100-coin star's own engine (never
+    pickable as a segment any more), without the client re-deriving the
+    structural clause-search itself -- one door
+    (tracking.segments.hundred_coin_entity), stamped once here."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        created = client.post("/api/segments", json={
+            "name": "100c course 2", "match_mode": "strict",
+            "start_triggers": [{"type": "level_enter", "to": 24},
+                              {"type": "attempt_anchor", "level": 24}],
+            "waypoints": [[{"type": "star_grabbed", "course": 2, "star": 6}]],
+            "end_triggers": [{"type": "star_grabbed", "course": 2, "star": s}
+                            for s in range(6)]})
+        assert created.status_code == 200
+        rows = client.get("/api/segments").json()
+        hc_row = next(r for r in rows if r["id"] == created.json()["id"])
+        lblj_row = next(r for r in rows if r["name"] == "LBLJ")
+        assert hc_row["is_hundred_coin_engine"] is True
+        assert lblj_row["is_hundred_coin_engine"] is False
+
+
 def test_origin_override_wins_and_can_be_cleared(tmp_path):
     client, service, db = make_client(tmp_path)
     with client:

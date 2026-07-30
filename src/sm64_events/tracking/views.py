@@ -45,7 +45,8 @@ from sm64_events.stats.registry import (DEFAULT_STAT_MENU, REGISTRY,
 from sm64_events.tracking.projection import DEFAULT_MIN_FRAMES, journal_id
 from sm64_events.tracking.routes import route_stats
 from sm64_events.tracking.segments import (arm_level, card_waiting_for_sentence,
-                                            course_groups, origin_course,
+                                            course_groups, hundred_coin_entity,
+                                            origin_course,
                                             origin_view, segment_origin,
                                             start_areas, start_levels,
                                             start_origin, time_bounds)
@@ -852,7 +853,22 @@ def stamp_origins(rows: list[dict], overrides: dict) -> list[dict]:
         stamped.append({**row,
                         "origin": {**origin_view(node),
                                    "source": "override" if override
-                                             else "derived"}})
+                                             else "derived"},
+                        # The picker's exclusion signal (spec 2026-07-28-
+                        # multi-step-segments, "the 100-coin star IS the
+                        # segment"): GET /api/segments backs BOTH the
+                        # Segments library/editor (which must still show
+                        # this row for editing) and the target picker's
+                        # course-union grid (ui/components/targetpicker.js),
+                        # which must NOT offer it beside the star it now IS.
+                        # Stamped here rather than left for the client to
+                        # re-derive, since the same structural clause-search
+                        # (segments.hundred_coin_entity) already answers
+                        # "which entity owns this def's attempts" for
+                        # projection.py -- one door, not a second heuristic
+                        # keyed on category/seed_key.
+                        "is_hundred_coin_engine": hundred_coin_entity(
+                            row["start_triggers"], row["waypoints"]) is not None})
     return stamped
 
 
@@ -934,6 +950,21 @@ def entity_label(db, ek: str) -> str:
     return f"{course_name(cid)} — {star_name(cid, sid)}"
 
 
+def _armed_detail_for(d, seg_id: int, armed_arms: dict) -> dict | None:
+    """{progress, total, start_frame, deadline_frame, waiting_for} for an
+    armed definition, or None while idle / deleted (Task 4/6, spec
+    2026-07-28-multi-step-segments). Shared by segment sections and the
+    100-coin star's section (spec 2026-07-28-multi-step-segments, "the
+    100-coin star IS the segment") -- a HUNDRED_COIN_EXIT engine's arm state
+    describes the STAR's own progress now, and this is the one place that
+    turns an armed_arms() entry into the card-facing shape either way."""
+    if d is None or seg_id not in armed_arms:
+        return None
+    return {**armed_arms[seg_id],
+            "waiting_for": card_waiting_for_sentence(
+                d, armed_arms[seg_id]["progress"])}
+
+
 def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     all_attempts = db.attempts()
     session_attempts = [a for a in all_attempts
@@ -958,6 +989,24 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     # Bowser reds/pipe pairing is known before the star loop needs it.
     seg_rows = db.segment_defs()
     reds_pipe_by_course, reds_pipe_grading_ek = _reds_pipe_segments(seg_rows)
+    # {segment_id} for EVERY def (enabled or not) whose own sequence includes
+    # grabbing a main course's 100-coin star, plus {(course_id, 6): the
+    # FIRST such def} (spec 2026-07-28-multi-step-segments, "the 100-coin
+    # star IS the segment"): the star entity IS the practiced thing now, so
+    # this family never gets a segment section, a segment_targets row, or a
+    # picker entry -- only its arm state backs the star section's own
+    # armed_detail below. `hundred_coin_ids` hides EVERY matching def (a
+    # disabled one included -- it is still this star's engine, just not
+    # currently able to arm); `hundred_coin_engine_for_star` keeps only the
+    # first match per star, same as the retired _hundred_coin_redirect did.
+    hundred_coin_ids: set[int] = set()
+    hundred_coin_engine_for_star: dict[tuple[int, int], object] = {}
+    for d in service.segment_defs:
+        hc = hundred_coin_entity(d.start_triggers, d.waypoints)
+        if hc is None:
+            continue
+        hundred_coin_ids.add(d.id)
+        hundred_coin_engine_for_star.setdefault(hc, d)
 
     # ONE pass over all_attempts → per-entity lifetime histories (id order
     # preserved). Shared by the section builders and every rank-mode average;
@@ -999,7 +1048,13 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     # compare by underlying journal recency.
     last_id: dict = {}
     for a in scoped:
-        if a.segment_id is not None:   # segment attempts have course_id None
+        # HUNDRED_COIN_EXIT-family attempts never carry segment_id any more
+        # (tracking/projection.py reattributes them to the star at close
+        # time) -- the `not in hundred_coin_ids` guard is therefore
+        # defensive, not load-bearing, and kept for the same reason
+        # `armed`'s filter below is: a def a user re-enables/re-edits must
+        # never resurface as a segment section through this path either.
+        if a.segment_id is not None and a.segment_id not in hundred_coin_ids:
             seen_segs[a.segment_id] = None  # ...but are NEVER unassigned
             last_id[("segment", a.segment_id)] = journal_id(a.id)
         elif a.course_id is None:
@@ -1014,7 +1069,8 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     if service.target and service.target[0] == "star" \
             and service.target[1:] not in seen:
         seen[service.target[1:]] = None
-    if service.target and service.target[0] == "segment":
+    if service.target and service.target[0] == "segment" \
+            and service.target[1] not in hundred_coin_ids:
         seen_segs.setdefault(service.target[1], None)
     # armed segments are "active now" by the same philosophy as the target
     # pin: their sections render even with zero attempts, so the armed
@@ -1026,7 +1082,20 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     # `armed` above, read once here rather than per section.
     armed_arms = service.armed_arms
     for sid in sorted(armed):
-        seen_segs.setdefault(sid, None)
+        # A HUNDRED_COIN_EXIT engine arms ambiently on every entry to its
+        # course -- excluded here so it never grows a segment section of
+        # its own; its arm state instead backs the STAR section's
+        # armed_detail (the star loop below, via hundred_coin_engine_for_star).
+        if sid not in hundred_coin_ids:
+            seen_segs.setdefault(sid, None)
+    # Same "armed is active now" philosophy, for the 100-coin star's OWN
+    # section (spec 2026-07-28-multi-step-segments): a HUNDRED_COIN_EXIT
+    # engine arming must surface star 6's card even with zero attempts yet
+    # (the arm's own progress/waiting-for is the reason the card is showing
+    # at all), exactly as an armed segment surfaces its own section above.
+    for (course_id, star_id), hc_def in hundred_coin_engine_for_star.items():
+        if hc_def.id in armed:
+            seen.setdefault((course_id, star_id), None)
 
     scoped_set = set(scoped)
     igt_of = lambda a: a.igt_frames
@@ -1062,6 +1131,11 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         # showing a Pipe-ladder medal on a grab-only time.
         pipe_seg_id = reds_pipe_by_course.get(course_id) if star_id == 0 else None
         family_reject = PIPE_FAMILY_SUFFIX if pipe_seg_id is not None else None
+        # The def whose completed attempts BECOME this star's, when star_id
+        # is 6 and an engine covers this course (spec 2026-07-28-multi-step-
+        # segments) -- None for every other star, always.
+        hc_engine = (hundred_coin_engine_for_star.get((course_id, star_id))
+                    if star_id == 6 else None)
         star_strat = masked(service.strat_by_star.get((course_id, star_id)),
                             ek, family_reject)
         rank_clock = service.ranks.clock_for(ek) if service.ranks else clock
@@ -1104,6 +1178,18 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "entity_rank": entity_rank(
                 service.ranks, ek, star_basis and star_basis["frames"]),
             "one_ladder": ranks_share_ladder(service.ranks, ek, star_strat),
+            # armed_detail is a documented rule-11 ASYMMETRY, not its
+            # absence: every star but the 100-coin one carries no such key
+            # (test_star_sections_carry_no_arm_detail) because an ordinary
+            # star is a single atomic grab with nothing to be part-way
+            # through. Star 6 is the one exception, on purpose (spec
+            # 2026-07-28-multi-step-segments) -- its HUNDRED_COIN_EXIT
+            # engine has a real waypoint sequence, and this is that engine's
+            # arm state re-expressed as the star's own progress. None for
+            # every other star AND for star 6 when no engine covers this
+            # course or it isn't currently armed.
+            "armed_detail": _armed_detail_for(hc_engine, hc_engine.id, armed_arms)
+                           if hc_engine is not None else None,
         })
     sections.sort(key=lambda s: last_id.get((s["course_id"], s["star_id"]), -1),
                   reverse=True)
@@ -1172,21 +1258,18 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             # Arm progress/deadline detail plus the plain-language "waiting
             # for" line (spec 2026-07-28-multi-step-segments) -- None while
             # idle. A deleted definition (`d is None`) has no detail even if
-            # somehow still armed (armed_arms() already excludes it). Stars
-            # carry no such key: a star has no waypoint sequence or
-            # staleness deadline to describe (rule 11 asymmetry, same shape
-            # as default_strat below -- see
-            # test_star_sections_carry_no_arm_detail). CARD-facing phrasing
-            # (Task 6), not waiting_for_sentence's editor voice -- this value
-            # renders under the practice card's own "Waiting for" label, and
-            # "Waiting for You enter level Shifting Sand Land" is broken
-            # English where "Waiting for Enter Shifting Sand Land" reads as
-            # the intended imperative step.
-            "armed_detail": ({**armed_arms[seg_id],
-                              "waiting_for": card_waiting_for_sentence(
-                                  d, armed_arms[seg_id]["progress"])}
-                             if d is not None and seg_id in armed_arms
-                             else None),
+            # somehow still armed (armed_arms() already excludes it). Every
+            # star but the 100-coin one carries no such key: an ordinary
+            # star has no waypoint sequence or staleness deadline to
+            # describe (rule 11 asymmetry, same shape as default_strat
+            # below -- see test_star_sections_carry_no_arm_detail, which
+            # names star 6's engine as the documented exception). CARD-
+            # facing phrasing (Task 6), not waiting_for_sentence's editor
+            # voice -- this value renders under the practice card's own
+            # "Waiting for" label, and "Waiting for You enter level Shifting
+            # Sand Land" is broken English where "Waiting for Enter
+            # Shifting Sand Land" reads as the intended imperative step.
+            "armed_detail": _armed_detail_for(d, seg_id, armed_arms),
             "category": meta.get("category"),
             "seeded": meta.get("seed_key") is not None,
             # The definition's own strategy, or None. The card reads this to
@@ -1323,13 +1406,18 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                      rank_mode,
                      pbs_by_strat.get(("segment", d.id, "rta", seg_strat)),
                      attempts_by_seg.get(d.id, []), seg_strat, "rta"))}
-            # EVERY def is included — a fully location-less start (e.g.
-            # reset_game) gets empty start_areas/start_levels, which the
-            # banner's area/level filters treat as no match, but the
-            # armed-segment union (stagebanner.js armedExtraCells) can still
-            # surface it: a RUNNING segment must never be invisible (spec
-            # addendum 2026-07-24).
+            # EVERY def is included except the HUNDRED_COIN_EXIT family
+            # (spec 2026-07-28-multi-step-segments) — a fully location-less
+            # start (e.g. reset_game) gets empty start_areas/start_levels,
+            # which the banner's area/level filters treat as no match, but
+            # the armed-segment union (stagebanner.js armedExtraCells) can
+            # still surface it: a RUNNING segment must never be invisible
+            # (spec addendum 2026-07-24). The 100-coin family is the one
+            # exception on purpose — it never surfaces as a segment at all
+            # any more, so it has nothing to contribute here; the star
+            # section's own armed_detail carries its arm state instead.
             for d in service.segment_defs
+            if d.id not in hundred_coin_ids
             for areas, levels in ((start_areas(d.start_triggers),
                                    start_levels(d.start_triggers)),)],
         # user-picked selector icons: entity_key -> icon stem (ui_state KV,

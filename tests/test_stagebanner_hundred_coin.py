@@ -1,30 +1,28 @@
 # tests/test_stagebanner_hundred_coin.py
-"""The "100 Coins" star cell represents its redirect segment on the star
-row, rather than duplicating it as an eighth cell (live report 2026-07-29).
-Detection is untouched by this fix -- these tests are about DISPLAY only.
+"""The "100 Coins" star cell is a PLAIN star cell, full stop (spec
+2026-07-28-multi-step-segments, "the 100-coin star IS the segment").
 
-Background: a star pick of (course, 6) already redirects server-side to that
-course's 100-coin-exit SEGMENT (tracking/service.py::_hundred_coin_redirect,
-"nobody times just the 100 star grab, it's always with something else" --
-user 2026-07-24). The corpus reshape that arms this segment on COURSE ENTRY
-(corpus_movements.py, 2026-07-29) made it armed on every visit, which exposed
-two display defects:
-
-1. It rendered as an EXTRA cell (armedExtraCells) beside the seven real
-   stars, instead of overwriting the existing "100 Coins" cell.
-2. It read as ACTIVE (glow + the running chip) merely because it is armed,
-   even though nothing was deliberately chosen -- confusing, since it now
-   arms in the background on every course visit rather than on a genuine
-   pick. This narrows the "a running segment is never invisible" rule
-   (2026-07-24) for this auto-armed case: the segment still tracks silently,
-   it just no longer LOOKS chosen until it is.
+Superseded history, for context: a star pick of (course, 6) used to redirect
+server-side to that course's 100-coin-exit SEGMENT
+(tracking/service.py::_hundred_coin_redirect, retired by this change), and
+this row used to borrow that segment's rank/strat/armed state onto the star
+cell (`hundredCoinSegmentFor`, live report 2026-07-29) with an
+`isAmbientlyArmed` gate added 2026-07-30 to stop it glowing merely because
+the engine ambiently arms on course entry. Both mechanisms are GONE now, not
+narrowed further: the engine's completed attempts attribute directly to the
+star (tracking/projection.py, segments.hundred_coin_entity), so views.py
+excludes this family from `segment_targets`/`segments` entirely and there is
+nothing left for this row to borrow -- the star's own rank_by_star/
+last_strat_by_star already carry the real data. Confirmed by rendering
+(tools/ui_fixture.py-style offline server, real corpus reconciled, a real
+level_changed entering the course): the "100 Coins" cell shows a normal star
+cell, and the Active Target card shows "Running" / "Step 1 of 2" on the
+STAR's own card, never a second "ACTIVE SEGMENT" card.
 
 stagebanner.js is not import-free (it pulls in preact/htm), so -- the same
 approach tests/test_star_icons.py already takes for this file -- these are
-SOURCE-SCAN assertions against the stripped-comment text, pinning the
-structural facts a mutation would break. The rendered behaviour itself was
-verified against the real app (chrome-devtools MCP over tools/ui_fixture.py
-with the real corpus reconciled); see this task's own report for that half.
+SOURCE-SCAN assertions against the stripped-comment text: absence of the
+retired special-casing, and that a "100 Coins" star is otherwise ordinary.
 """
 import re
 from pathlib import Path
@@ -41,114 +39,61 @@ def _function_body(name: str, source: str) -> str:
     return match.group(0)
 
 
-def test_hundred_coin_segment_is_identified_structurally_not_by_name():
-    """Found the same way armedExtraCells already filters extras for this
-    row -- startsInLevel(stage.level) -- never a hand-written seed_key/name
-    table (this row never imports the corpus). Disabled degrades to the
-    plain star, matching _hundred_coin_redirect's own fallback."""
+def test_the_redirect_borrowing_mechanism_is_gone():
+    """None of the retired names may reappear -- their reintroduction would
+    mean the star/segment merge regressed back into a borrowing hack."""
     source = strip_comments(BANNER.read_text(encoding="utf-8"))
-    assert "hundredCoinSegmentFor" in source
-    definition = re.search(
-        r"const hundredCoinSegmentFor = \(v, level\) =>.*?;\n", source, re.S)
-    assert definition, "hundredCoinSegmentFor's definition changed shape"
-    body = definition.group(0)
-    assert "startsInLevel(level)" in body, \
-        "hundredCoinSegmentFor no longer reuses startsInLevel's own criterion"
-    assert "s.enabled" in body, \
-        "a disabled 100-coin segment must degrade to the plain star"
-    assert '"100' not in body and "seed_key" not in body, \
-        "hundredCoinSegmentFor should not hand-match a name/seed_key table"
+    for retired in ("hundredCoinSegmentFor", "isHundredCoins", "hcTargeted",
+                    "hcJustCompleted", "hcShowSegment", "hcRunning"):
+        assert retired not in source, \
+            f"{retired} reappeared -- the star/segment merge regressed"
 
 
-def test_just_completed_reuses_freshids_not_a_second_recency_notion():
-    """Pins the recency check to freshIds (practice.js's useFreshAttemptIds
-    Set) rather than a second timer/Date.now invented locally.
-
-    Moved to stagecontext.js 2026-07-30 (live report: the pinned-card gate
-    needed the IDENTICAL recency notion this cell already used, not a second
-    one) -- this row now IMPORTS it rather than defining it, which is the
-    point: only one file may ever define what "just completed" means."""
+def test_star_row_never_branches_on_which_star_it_is():
+    """StarRow renders every star identically -- no per-star special case,
+    which is the structural guarantee that "only star 6 changes" (upstream,
+    in projection.py/views.py) needed no companion special case here too."""
     source = strip_comments(BANNER.read_text(encoding="utf-8"))
-    assert re.search(r'import \{[^}]*justCompletedSegment[^}]*\} '
-                     r'from "\.\./stagecontext\.js";', source), \
-        "stagebanner.js no longer imports justCompletedSegment from " \
-        "stagecontext.js -- has a second definition come back?"
-    assert "const justCompletedSegment = " not in source, \
-        "stagebanner.js has its OWN justCompletedSegment again -- " \
-        "practice.js's pinned-card gate would silently diverge from it"
-
-    stagecontext_source = strip_comments(
-        (UI / "stagecontext.js").read_text(encoding="utf-8"))
-    definition = re.search(
-        r"export const justCompletedSegment = \(v, freshIds, segmentId\) => \{.*?\n\};\n",
-        stagecontext_source, re.S)
-    assert definition, "justCompletedSegment's definition changed shape"
-    body = definition.group(0)
-    assert "freshIds.has(" in body, \
-        "justCompletedSegment no longer checks membership in freshIds"
-    assert "outcome === \"success\"" in body, \
-        "justCompletedSegment no longer requires a SUCCESS outcome"
-    assert "setTimeout" not in body and "Date.now" not in body, \
-        "justCompletedSegment invented its own recency clock instead of " \
-        "reusing freshIds' existing window"
+    body = _function_body("StarRow", source)
+    assert "100 Coins" not in body, \
+        "StarRow names the 100-coin star specifically -- it must treat " \
+        "every star in `shown` the same way"
+    # The cell's active/armed/rank/sub props read the PLAIN star fields
+    # unconditionally (rankFor/lastStratFor), never a segment's.
+    assert "active=${tgt.kind !== \"segment\"" in body
+    assert "armed=${false}" in body
+    assert "rank=${rankFor(i)}" in body
+    assert "sub=${stratSub(lastStratFor(i))}" in body
 
 
-def test_star_row_reads_and_forwards_freshids():
+def test_star_row_no_longer_threads_freshids():
+    """freshIds existed solely to feed the retired justCompletedSegment
+    check -- StarRow/StageBanner take one fewer prop now that it has no use
+    for it (a stale, unused prop thread is the thing to catch here)."""
     source = strip_comments(BANNER.read_text(encoding="utf-8"))
-    assert "function StarRow({ t, v, stage, freshIds })" in source, \
-        "StarRow no longer accepts freshIds"
-    assert "function StageBanner({ t, freshIds })" in source, \
-        "StageBanner no longer accepts freshIds"
+    assert "function StarRow({ t, v, stage })" in source
+    assert "function StageBanner({ t })" in source
     banner_body = _function_body("StageBanner", source)
-    assert "freshIds=${freshIds}" in banner_body, \
-        "StageBanner no longer forwards freshIds to its Row"
+    assert "freshIds" not in banner_body
 
 
-def test_hundred_coin_segment_is_excluded_from_the_extra_cells():
-    """Defect 1: it must not ALSO render as a duplicate armedExtraCells
-    entry -- the existing "100 Coins" star cell already represents it."""
+def test_hundred_coin_star_gets_no_extra_cell():
+    """armedExtraCells' shownIds no longer special-cases anything for this
+    row -- the 100-coin engine is excluded from segment_targets server-side
+    (views.py), so armedSegments(t, v) can never surface it here regardless
+    of what this row passes."""
     source = strip_comments(BANNER.read_text(encoding="utf-8"))
     body = _function_body("StarRow", source)
     call = re.search(r"armedExtraCells\(t, v,(.*?),\s*setPicking", body, re.S)
     assert call, "StarRow no longer calls armedExtraCells"
-    assert "hundredCoinSeg" in call.group(1), (
-        "armedExtraCells' shownIds argument no longer excludes the "
-        f"hundred-coin segment: {call.group(1)!r}")
-
-
-def test_hundred_coin_cell_active_state_requires_a_pick_or_a_completion():
-    """Defect 2: must not glow/run merely because the segment is armed."""
-    source = strip_comments(BANNER.read_text(encoding="utf-8"))
-    body = _function_body("StarRow", source)
-    assert "hcTargeted" in body and "hcJustCompleted" in body
-    assert "hcShowSegment = hcTargeted || hcJustCompleted;" in body, \
-        "the cell's active state is no longer exactly (targeted OR just " \
-        "completed) -- it must never be driven by armed state alone"
-    assert "hcRunning = hcTargeted &&" in body, \
-        "the running chip/armed border must require the DELIBERATE target, " \
-        "not merely that the segment happens to be armed"
-    assert "active=${isHundredCoins ? hcShowSegment" in body
-    assert "armed=${isHundredCoins ? hcRunning : false}" in body
-
-
-def test_hundred_coin_cell_keeps_the_stars_own_name_and_art():
-    """The user asked for the star row KEPT: the cell's identity (name,
-    icon) always stays the star's, even while it represents the segment's
-    rank/strat/running state."""
-    source = strip_comments(BANNER.read_text(encoding="utf-8"))
-    body = _function_body("StarRow", source)
-    # Both are unconditional in the cell's JSX -- never swapped for the
-    # segment's own name/art the way rank/sub are.
-    assert "iconSrc=${entityIconSrc(t, starKey(stage.course_id, i))}" in body
-    assert "name=${name}" in body
+    assert call.group(1).strip() == "new Set()"
 
 
 def test_the_guards_can_still_fail():
     """A raw substring search cannot tell code from prose (ui-core.md's own
-    verification norm) -- probe both directions against a comment-only and a
-    real-code sample so a future edit to this file can't trip these checks
-    on a docstring alone."""
-    comment_only = "// hcShowSegment = hcTargeted || hcJustCompleted (see below)\n"
-    real_code = "  const hcShowSegment = hcTargeted || hcJustCompleted;\n"
-    assert "hcShowSegment = hcTargeted || hcJustCompleted" in strip_comments(real_code)
-    assert "hcShowSegment = hcTargeted || hcJustCompleted" not in strip_comments(comment_only)
+    verification norm) -- a comment merely naming a retired identifier must
+    not itself satisfy "the identifier is gone"."""
+    comment_only = "// hundredCoinSegmentFor used to live here (retired)\n"
+    assert "hundredCoinSegmentFor" not in strip_comments(comment_only)
+    real_code = "const hundredCoinSegmentFor = (v, level) => null;\n"
+    assert "hundredCoinSegmentFor" in strip_comments(real_code)

@@ -3,18 +3,19 @@
 // and dispatched on its `mode`:
 //   "stars"         : a main course 1-15 -> that course's stars (name +
 //                     last-strategy subtext); click sets the star target.
-//                     The "100 Coins" cell is special: the server always
-//                     redirects that pick to the course's own 100-coin-exit
-//                     SEGMENT (tracking/service.py::_hundred_coin_redirect —
-//                     "nobody times just the 100 star grab, it's always with
-//                     something else", user 2026-07-24), and since that
-//                     segment now arms on course ENTRY (corpus reshape
-//                     2026-07-29) it is armed on every visit. This row shows
-//                     the segment's own rank/strat ON the star cell rather
-//                     than appending a duplicate extra cell, and only glows
-//                     the cell active for a deliberate pick or a just-landed
-//                     success — never merely because it is silently tracking
-//                     (live report 2026-07-29, see hundredCoinSegmentFor).
+//                     The "100 Coins" cell is a PLAIN star cell like the
+//                     other six (spec 2026-07-28-multi-step-segments, "the
+//                     100-coin star IS the segment") — its rank/strat/pb
+//                     come from the star's OWN section like any other star,
+//                     because its underlying HUNDRED_COIN_EXIT engine's
+//                     completed attempts attribute directly to this star now
+//                     (tracking/projection.py, segments.hundred_coin_entity),
+//                     rather than to a separate segment this row used to
+//                     borrow display data from. The engine still arms on
+//                     course entry and matches independently of the target;
+//                     its progress surfaces on the Active Target card
+//                     (practice.js's armed_detail row), never as a second
+//                     cell here or a borrowed rank on this one.
 //   "bowser_course" : BitDW/BitFS/BitS -> TWO targets: the "reds" 8-coin star
 //                     AND the level's "no reds" pipe-entry segment. Picking one
 //                     flips the pipe segment's `enabled` (mutual exclusion):
@@ -44,8 +45,7 @@ import { useEffect } from "preact/hooks";
 import htm from "htm";
 import { CollapseToggle, cardClass, useCollapsed } from "./collapsible.js";
 import { send } from "../api.js";
-import { armedSegments, hasPracticeContext, justCompletedSegment,
-        practiceMode } from "../stagecontext.js";
+import { armedSegments, hasPracticeContext, practiceMode } from "../stagecontext.js";
 import { requestTarget } from "../target.js";
 import { Icon } from "./icons.js";
 import { PracticeCell } from "./practicecell.js";
@@ -66,7 +66,7 @@ const CASTLE_AREA_NAMES = { 1: "Lobby", 2: "Upstairs", 3: "Basement" };
 const STAGE_ROWS = { stars: StarRow, bowser_course: BowserCourseRow,
                      arena: ArenaRow, castle: SegmentRow };
 
-export function StageBanner({ t, freshIds }) {
+export function StageBanner({ t }) {
   const v = t.view;
   // The one door (../stagecontext.js), shared with the Active-target card so
   // the two cannot say different things about the same place — they did, at
@@ -74,11 +74,7 @@ export function StageBanner({ t, freshIds }) {
   // still named a star from the session before.
   if (!hasPracticeContext(t)) return html`<${StagePlaceholder} t=${t} />`;
   const Row = STAGE_ROWS[practiceMode(t)];
-  // freshIds is practice.js's own attempt-id recency Set (useFreshAttemptIds)
-  // — threaded through so StarRow can tell a just-landed 100-coin success
-  // apart from mere background tracking without inventing a second notion of
-  // "recent". Only StarRow reads it; the other rows ignore the extra prop.
-  return Row ? html`<${Row} t=${t} v=${v} stage=${t.stage} freshIds=${freshIds} />`
+  return Row ? html`<${Row} t=${t} v=${v} stage=${t.stage} />`
              : html`<${ArmedOnlyRow} t=${t} v=${v} />`;
 }
 
@@ -198,30 +194,7 @@ const armedExtraCells = (t, v, shownIds, setPicking, keep = () => true) =>
 // course row is not invisible.
 const startsInLevel = (level) => (s) => (s.start_levels || []).includes(level);
 
-// The 100-coin star (star_id 6, addresses.py's own special case) is
-// redirected server-side to that course's 100-coin-exit SEGMENT before any
-// target write lands (tracking/service.py::_hundred_coin_redirect). Since the
-// corpus reshape that arms this segment on course ENTRY (corpus_movements.py,
-// 2026-07-29) it is armed on every visit, which used to append it as an
-// eighth cell next to the seven stars via armedExtraCells — the same thing
-// shown twice under two different names (live report 2026-07-29).
-//
-// Identified here the same way armedExtraCells already filters extras for
-// this row — startsInLevel(stage.level) — because that IS this segment's
-// distinguishing fact: this row's own comment on startsInLevel notes a plain
-// course's only other segments are castle movements, which start on a
-// level_exit or a star grab and carry no start level, so no other
-// segment_targets entry can match a main course's OWN level. A disabled
-// segment degrades to the plain star, mirroring _hundred_coin_redirect's own
-// fallback — the enabled filter keeps the two in agreement.
-const hundredCoinSegmentFor = (v, level) =>
-  (v.segment_targets || []).find((s) => s.enabled && startsInLevel(level)(s));
-
-// "Just completed" — moved to stagecontext.js (2026-07-30, live report: the
-// pinned card needed the IDENTICAL recency notion, not a second one) so both
-// this cell and practice.js's pinned-card gate import the same function.
-
-function StarRow({ t, v, stage, freshIds }) {
+function StarRow({ t, v, stage }) {
   const [fold, toggleFold] = useCollapsed("selector");
   // hooks first — the early return below must never change the hook count
   const [setPicking, pickerModal] = useIconPicking(t);
@@ -235,23 +208,6 @@ function StarRow({ t, v, stage, freshIds }) {
   // refreshes the view and swaps the medal automatically — see views.py.
   const rankFor = (i) =>
     (v.rank_by_star || {})[`${stage.course_id}:${i}`];
-
-  // The "100 Coins" cell overwrites itself with the segment it redirects to
-  // — see hundredCoinSegmentFor's comment above. Active/armed styling is
-  // gated tighter than a normal segment cell (defect 2026-07-29): this
-  // segment now arms on every course entry, so it must track SILENTLY and
-  // only glow when the player actually chose it or it just paid off — never
-  // merely because it happens to be running in the background.
-  const hundredCoinSeg = hundredCoinSegmentFor(v, stage.level);
-  const hcTargeted = !!hundredCoinSeg && tgt.kind === "segment"
-    && tgt.segment_id === hundredCoinSeg.segment_id;
-  const hcJustCompleted = !!hundredCoinSeg
-    && justCompletedSegment(v, freshIds, hundredCoinSeg.segment_id);
-  const hcShowSegment = hcTargeted || hcJustCompleted;
-  // Only true while it is BOTH the deliberate target AND actually running —
-  // a just-completed segment has already disarmed, so this stays false there
-  // and the cell glows on `active` alone (a plain success highlight).
-  const hcRunning = hcTargeted && t.armedSegs.has(hundredCoinSeg.segment_id);
 
   async function pick(i) {
     await requestTarget(t, {
@@ -281,28 +237,20 @@ function StarRow({ t, v, stage, freshIds }) {
         label="the course selector" /></div>
     <div class="starrow">
       ${shown.map(({ name, i }) => {
-        // "100 Coins" is star_name's own special case (addresses.py) — the
-        // one cell that may represent the segment instead of the plain star.
-        const isHundredCoins = !!hundredCoinSeg && name === "100 Coins";
         return html`<${PracticeCell} dimIdle=${STAR_DIM_IDLE}
           key=${`${stage.course_id}:${i}`}
-          active=${isHundredCoins ? hcShowSegment
-            : tgt.kind !== "segment"
-              && tgt.course_id === stage.course_id && tgt.star_id === i}
-          armed=${isHundredCoins ? hcRunning : false}
+          active=${tgt.kind !== "segment"
+            && tgt.course_id === stage.course_id && tgt.star_id === i}
+          armed=${false}
           iconSrc=${entityIconSrc(t, starKey(stage.course_id, i))}
           fallbackSlot=${i}
-          rank=${isHundredCoins ? hundredCoinSeg.rank : rankFor(i)}
+          rank=${rankFor(i)}
           name=${name}
-          sub=${isHundredCoins
-            ? (hcRunning ? runningChip : stratSub(hundredCoinSeg.strat))
-            : stratSub(lastStratFor(i))}
+          sub=${stratSub(lastStratFor(i))}
           onPick=${() => pick(i)}
           onEdit=${() => setPicking(iconIdentityForKey(starKey(stage.course_id, i)))} />`;
       })}
-      ${armedExtraCells(t, v,
-                        hundredCoinSeg ? new Set([hundredCoinSeg.segment_id]) : new Set(),
-                        setPicking, startsInLevel(stage.level))}
+      ${armedExtraCells(t, v, new Set(), setPicking, startsInLevel(stage.level))}
     </div>
     ${pickerModal}
   </section>`;

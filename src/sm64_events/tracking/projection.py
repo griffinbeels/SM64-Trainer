@@ -181,8 +181,8 @@ from sm64_events.memory.addresses import CASTLE_LEVELS, course_for_level
 # module-level import cannot cycle (see SegmentEngine.feed).
 from sm64_events.tracking.runs import RunTracker
 from sm64_events.tracking.segments import (
-    SEGMENT_ATTEMPT_OFFSET, MatchContext, SegmentEngine, segment_origin,
-    stage_origin, time_bounds)
+    SEGMENT_ATTEMPT_OFFSET, MatchContext, SegmentEngine, hundred_coin_entity,
+    segment_origin, stage_origin, time_bounds)
 
 
 @dataclass(frozen=True)
@@ -327,6 +327,20 @@ class Projector:
         self._seg_origins = {
             d.id: segment_origin(d.id, d.start_triggers, origin_overrides)
             for d in (segments or [])}
+        # {(course_id, 6)} whose whole course-visit span is timed by an
+        # ENABLED engine (spec 2026-07-28-multi-step-segments, "the 100-coin
+        # star IS the segment"): _close_by_grab reads this to suppress the
+        # plain star-6 attempt it would otherwise record on the grab itself,
+        # since that engine's own completion (at the exit star) is what
+        # closes it instead (see the seg_closed loop in feed()). Filtered to
+        # d.enabled like _seg_origins is NOT — a disabled/deleted def never
+        # arms at all, so it must never suppress anything; the plain star
+        # attempt is the fallback that keeps the grab meaningful, same
+        # philosophy the retired _hundred_coin_redirect used.
+        self._hundred_coin_engines: set[tuple[int, int]] = {
+            hc for d in (segments or []) if d.enabled
+            and (hc := hundred_coin_entity(d.start_triggers, d.waypoints))
+            is not None}
         self.segment_notices: list[dict] = []  # live-broadcast queue, drained by service
         self._runs = RunTracker()
         self.run_notices: list[dict] = []   # live-broadcast queue, drained by service
@@ -403,6 +417,23 @@ class Projector:
         d = self._segments.definition(segment_id)
         return d is not None and d.match_mode == "loose"
 
+    def _is_own_hundred_coin_arm(self, segment_id: int) -> bool:
+        """True when `segment_id`'s def represents the SAME star the current
+        target already names (spec 2026-07-28-multi-step-segments) — the
+        exception feed()'s "a segment armed retires a star target" rule
+        needs: a HUNDRED_COIN_EXIT engine arms ambiently on every entry to
+        its own course, which is the star:6 target's OWN engine coming
+        alive, not a different activity starting. Scoped to exactly the
+        matching star, not "any hundred-coin engine" or "any armed segment
+        in this course" — a genuinely different segment arming (or this
+        course's engine arming while some OTHER star in it is the target)
+        must still retire the target, unchanged."""
+        if not (self.target and self.target[0] == "star"):
+            return False
+        d = self._segments.definition(segment_id)
+        return d is not None and hundred_coin_entity(
+            d.start_triggers, d.waypoints) == self.target[1:]
+
     def armed_arms(self) -> dict[int, dict]:
         """Per-armed-id detail for the view's "waiting for" card (spec
         2026-07-28-multi-step-segments): {segment_id: {progress, total,
@@ -476,13 +507,44 @@ class Projector:
                            target_segment=target_seg)
         seg_closed, self.segment_notices = self._segments.feed(ev, ctx)
         for a in seg_closed:
-            # same first-event-id cleared keying as _build (caveat 2/11)
-            a = replace(a,
-                        strat_tag=self._strat_overrides.get(
-                            a.id, self.strat_by_segment.get(a.segment_id)),
-                        cleared=a.id in self._cleared,
-                        cleared_reason=self._cleared.get(a.id))
+            # The 100-coin star IS this segment when its def's own sequence
+            # includes grabbing that course's 100-coin star (spec 2026-07-28-
+            # multi-step-segments, hundred_coin_entity): EVERY outcome —
+            # success, death, hard_reset — attributes to the star entity
+            # (course_id/star_id, segment_id cleared), not the segment. The
+            # segment stops existing as a visible practiced thing at all,
+            # only as the timing engine. Reattribute BEFORE strat/cleared/
+            # auto_ignored so every downstream rule (validity bounds, strat
+            # memory) takes the SAME path an ordinary star_collected closure
+            # would — _auto_ignored dispatches purely on
+            # `segment_id is not None` (caveat 14).
+            seg_def = self._segments.definition(a.segment_id)
+            hc = (hundred_coin_entity(seg_def.start_triggers, seg_def.waypoints)
+                 if seg_def is not None else None)
+            if hc is not None:
+                a = replace(a, course_id=hc[0], star_id=hc[1], segment_id=None)
+                a = replace(a,
+                            strat_tag=self._strat_overrides.get(
+                                a.id, self.strat_by_star.get(hc)),
+                            cleared=a.id in self._cleared,
+                            cleared_reason=self._cleared.get(a.id))
+            else:
+                # same first-event-id cleared keying as _build (caveat 2/11)
+                a = replace(a,
+                            strat_tag=self._strat_overrides.get(
+                                a.id, self.strat_by_segment.get(a.segment_id)),
+                            cleared=a.id in self._cleared,
+                            cleared_reason=self._cleared.get(a.id))
             a = self._auto_ignored(a)
+            if not a.cleared and hc is not None:
+                # last-star memory (caveat 15): the grab-time suppression in
+                # _close_by_grab skips this update for the SAME reason a
+                # star grab records it, so give it here instead — the
+                # physical fact ("this star just closed") must not depend on
+                # which code path recorded it.
+                self._last_star_attempted = hc
+                if a.outcome == "success":
+                    self._last_star_grabbed = hc
             if a.outcome == "success" and not a.cleared:
                 # A segment that COMPLETES by entering a star stage (the
                 # closing event is a level_changed into a course-bearing level)
@@ -491,10 +553,15 @@ class Projector:
                 # onto the just-finished segment (MIPS ends by entering DDD;
                 # LBLJ by entering BITDW — 2026-06-12). Completions that do NOT
                 # enter a stage (a star grab, a mid-course end, an exit to the
-                # hub) still auto-follow onto the segment.
+                # hub) still auto-follow onto the segment — or, for a
+                # reattributed HUNDRED_COIN_EXIT closure, onto the star it now
+                # IS, exactly as a plain star grab auto-follows.
                 entered_stage = (ev.type == "level_changed"
                                  and course_for_level(ev.payload["to"]) is not None)
-                self.target = None if entered_stage else ("segment", a.segment_id)
+                if hc is not None:
+                    self.target = None if entered_stage else ("star", *hc)
+                else:
+                    self.target = None if entered_stage else ("segment", a.segment_id)
                 self._suspended_star = None  # finished a segment: moved on (caveat 13)
             closed.append(a)
         # A segment going ARMED means a segment run just started, so a star we
@@ -503,8 +570,19 @@ class Projector:
         # star target; a segment target (set just above on a success) IS the
         # new focus and must stay. service._track auto-broadcasts
         # target_changed off this in-feed change.
+        #
+        # EXCEPTION (spec 2026-07-28-multi-step-segments): a HUNDRED_COIN_EXIT
+        # engine arms ambiently on every entry to its own course — it is not
+        # "a segment run just started" in the sense this rule means, it is
+        # the star:6 target's OWN engine coming alive. Clearing a star:6
+        # target the instant its course is entered would make the "star
+        # target" model this change relies on unusable. Scoped to exactly
+        # the matching star: a genuinely different segment arming (or this
+        # same engine arming while some OTHER star in the course is the
+        # target) still retires it, unchanged.
         if self.target and self.target[0] == "star" \
                 and any(n["event"] == "segment_armed"
+                        and not self._is_own_hundred_coin_arm(n["segment_id"])
                         for n in self.segment_notices):
             self._suspended_star = self.target[1:]  # resume on re-entry (caveat 13)
             self.target = None
@@ -708,6 +786,26 @@ class Projector:
     def _close_by_grab(self, ev) -> list[Attempt]:
         grabbed = (ev.payload["course_id"], ev.payload["star_id"])
         first = self._open if self._open is not None else ev
+        if grabbed[1] == 6 and grabbed in self._hundred_coin_engines:
+            # The 100-coin star never gets its OWN attempt when an engine is
+            # timing the whole course visit (spec 2026-07-28-multi-step-
+            # segments): its eventual completion (at the exit star) is
+            # reattributed to this same entity in feed()'s seg_closed loop
+            # instead. "Nobody times just the 100 star grab" (user ruling,
+            # the retired star->segment TARGET redirect's own reasoning)
+            # now applies to ATTRIBUTION too, not just target-picking.
+            # _last_star_grabbed/_last_star_attempted still update directly
+            # here (caveat 15: "the grab happened physically" even when no
+            # attempt records it) -- no seeded guard reads star 6 today, but
+            # a future one should see this exactly as it would any other
+            # grab. Falls back to the plain star attempt below when no
+            # engine covers this course (deleted/disabled def), same
+            # fallback _hundred_coin_redirect used, so the click stays
+            # meaningful.
+            self._last_star_attempted = grabbed
+            self._last_star_grabbed = grabbed
+            self._open = None
+            return []
         strat = self.strat_by_star.get(grabbed)
         attempt = self._build(
             first=first, close=ev, outcome="success", outcome_detail=None,

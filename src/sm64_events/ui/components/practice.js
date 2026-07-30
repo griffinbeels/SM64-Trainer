@@ -4,8 +4,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { requestTarget } from "../target.js";
-import { hasPracticeContext, justCompletedSegment,
-        practicedHere } from "../stagecontext.js";
+import { hasPracticeContext, practicedHere } from "../stagecontext.js";
 import { ReplayPlayer } from "./replay.js";
 import { StatMenu, DUST_STAT_KEYS } from "./statmenu.js";
 import { Timeline } from "./timeline.js";
@@ -632,13 +631,34 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
              asymmetry once the heading icon moved into ObjectiveEyebrow --
              tests/test_ui_section_parity.py went red, correctly: the two
              cards are meant to be siblings, and ONLY_IN_* staying empty is
-             the property worth keeping. A star has nothing to arm, so its
-             word is constant where the segment's varies. */""}
-        <div class="objective-live-state" aria-label="Practice state">
-          <${Icon} name="clock" size=${17} /><span>Ready</span>
+             the property worth keeping. An ordinary star has nothing to arm,
+             so its word stays constant -- except the 100-coin star (spec
+             2026-07-28-multi-step-segments), whose armed_detail is SERVER
+             truth (re-derived every view fetch, same reasoning the segment
+             card's pin logic already trusts it for) rather than the
+             client-pushed armedSegs set a segment_id would key into. */""}
+        <div class="objective-live-state ${sec.armed_detail ? "running" : ""}"
+            aria-label="Practice state">
+          <${Icon} name="clock" size=${17} /><span>${sec.armed_detail ? "Running" : "Ready"}</span>
         </div>
         <${PbTag} pb=${pb} mode=${t.clock} rows=${rows} pick=${pick} t=${t} />
       </div>
+      ${/* Progress + what the 100-coin star's own engine is waiting for next
+           (spec 2026-07-28-multi-step-segments) -- the SAME row
+           SegmentSection renders below, shared markup and shared meaning:
+           null while idle (every star but 100 Coins, always), so this row
+           occupies zero height then. The user's own reason for keeping it:
+           "i like the idea of knowing for sure the system is aware of me
+           grabbing that first star, proven by it progressing to the next
+           step" -- it must survive the presentation change and read as the
+           STAR's own progress, not a segment's. */""}
+      ${sec.armed_detail && html`<div class="seg-waiting">
+        <span class="seg-waiting-step">Step${" "}
+          ${sec.armed_detail.progress + 1}${" "}of${" "}
+          ${sec.armed_detail.total + 1}</span>
+        <span class="seg-waiting-for">Waiting for${" "}
+          ${sec.armed_detail.waiting_for}</span>
+      </div>`}
     </section>
 
     <section class="practice-card analysis-card ${cardClass(foldAnalysis)}">
@@ -1161,27 +1181,23 @@ export function Practice({ t, openCompare }) {
   // segment being practiced (an accidental exit disarms — correct timing
   // semantics — but the section stays put until a different segment arms);
   // before anything has ever armed, the target segment pins.
-  // HUNDRED_COIN_EXIT segments (tools/corpus_vocab.py's own category string;
-  // "WF — 100 Coins → Exit" and its 14 siblings) arm on entering ANY course
-  // with a 100-coin star, not on a deliberate pick or a step in a run — the
-  // exact reason stagebanner.js's StarRow (4e5b34a) only glows the "100
-  // Coins" cell for a deliberate pick or a just-landed success, never merely
-  // because it is armed. The pinned card needs the SAME gate (live report
-  // 2026-07-30, user: "it's confusing if it's marked as active unless I
-  // selected it or it was previously done"): for this family only, being
-  // armed is not itself evidence of intent, since it is armed on every
-  // visit to its course. `armed_detail`/`here()` stay the exemption for
-  // every OTHER segment (a real multi-step movement genuinely mid-run) —
-  // narrowing this one case must never weaken that (live report 2026-07-27).
-  const HUNDRED_COIN_EXIT_CATEGORY = "100 Coin Exit";
-  const isAmbientlyArmed = (sec) => sec != null
-    && sec.category === HUNDRED_COIN_EXIT_CATEGORY
-    && !(tgt.kind === "segment" && tgt.segment_id === sec.segment_id)
-    && !justCompletedSegment(v, freshIds, sec.segment_id);
+  // HUNDRED_COIN_EXIT segments (tools/corpus_vocab.py's own category string)
+  // used to arm on entering ANY course with a 100-coin star and pin a
+  // "Segment · WF — 100 Coins → Exit" card the moment you walked in, with no
+  // gate at all (live report 2026-07-30) -- an isAmbientlyArmed exemption
+  // narrowed that here. Spec 2026-07-28-multi-step-segments ("the 100-coin
+  // star IS the segment") DISSOLVES the problem outright instead of merely
+  // gating it: this family never surfaces as a segment section any more
+  // (views.py excludes it from `segments`/`segment_targets` entirely, and
+  // its attempts attribute to the STAR), so `segs.find(...)` below can never
+  // find one to pin in the first place -- confirmed by removing
+  // isAmbientlyArmed and rendering (no card appears on course entry, the
+  // star's own card shows "Running"/"Step 1 of 2" instead). `armed_detail`/
+  // `here()` remain the exemption for every OTHER segment (a real
+  // multi-step movement genuinely mid-run), unchanged.
   const armedPins = [...frozen.armedOrder].reverse()
     .map((id) => segs.find((s) => s.segment_id === id))
-    .filter(Boolean)
-    .filter((sec) => !isAmbientlyArmed(sec));
+    .filter(Boolean);
   const stickyPin = frozen.lastPinnedSeg != null
     ? segs.find((s) => s.segment_id === frozen.lastPinnedSeg)
     : undefined;
@@ -1203,10 +1219,8 @@ export function Practice({ t, openCompare }) {
   // intact — this only widens the exemption to a pin that is STILL running.
   const pinnedSegs = !inContext || starActive ? []
     : armedPins.length ? armedPins
-    : stickyPin && !isAmbientlyArmed(stickyPin)
-      && (stickyPin.armed_detail || here(stickyPin)) ? [stickyPin]
-    : activeSeg && !isAmbientlyArmed(activeSeg)
-      && (activeSeg.armed_detail || here(activeSeg)) ? [activeSeg] : [];
+    : stickyPin && (stickyPin.armed_detail || here(stickyPin)) ? [stickyPin]
+    : activeSeg && (activeSeg.armed_detail || here(activeSeg)) ? [activeSeg] : [];
   // Only one detail surface owns the fixed Objective / Analysis / Attempts
   // tracks. Additional armed segments remain reachable in the stable index
   // below instead of inserting more full cards above the crop.
@@ -1231,7 +1245,7 @@ export function Practice({ t, openCompare }) {
     .sort(comparator(sort, t.clock));
 
   return html`<div class="practice-page">
-    <${StageBanner} t=${held} freshIds=${freshIds} />
+    <${StageBanner} t=${held} />
 
     ${/* ONE picker for the page, not one per section: only the primary card
          offers the trigger, and mounting a dialog's state inside every card

@@ -78,17 +78,3 @@ export function hasPracticeContext(t) {
   // screen and pinned.
   return armedSegments(t, view).length > 0;
 }
-
-// "Just completed" a segment — moved here from stagebanner.js (4e5b34a) so
-// practice.js's pinned card can reuse the EXACT same recency notion the
-// banner cell already uses, rather than inventing a second one. `freshIds`
-// is practice.js's own attempt-id recency Set (useFreshAttemptIds); true
-// only when the segment's own most-recent attempt (by id — a section's
-// attempts are not guaranteed newest-first) landed as a FRESH success.
-export const justCompletedSegment = (v, freshIds, segmentId) => {
-  if (!freshIds || !freshIds.size) return false;
-  const sec = (v.segments || []).find((s) => s.segment_id === segmentId);
-  if (!sec || !sec.attempts.length) return false;
-  const latest = sec.attempts.reduce((a, b) => (a.id > b.id ? a : b));
-  return latest.outcome === "success" && freshIds.has(latest.id);
-};

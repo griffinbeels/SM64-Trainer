@@ -1163,6 +1163,43 @@ def segment_origin(segment_id: int, start_triggers: list,
     return override if override else start_origin(start_triggers)
 
 
+def hundred_coin_entity(start_triggers: list,
+                       waypoints: list) -> tuple[int, int] | None:
+    """(course_id, 6) when a definition's own sequence -- start_triggers or
+    any waypoint's clause-set -- includes grabbing a main course's 100-coin
+    star, else None (spec 2026-07-28-multi-step-segments, "the 100-coin star
+    IS the segment"). THE resolver for "which entity does this definition's
+    completed attempt belong to" -- projection.py reattributes a closed
+    HUNDRED_COIN_EXIT-family attempt to this star (course_id/star_id,
+    segment_id cleared) instead of the segment itself, and views.py uses the
+    same answer to keep that family off the segment sections/segment_
+    targets/picker union entirely: the star IS the practiced thing now, the
+    segment is only its timing engine.
+
+    Takes raw trigger LISTS, not a whole SegmentDef -- same convention as its
+    neighbours `start_origin`/`segment_origin` above, and the reason: a raw
+    `/api/segments` row (a dict, not a SegmentDef) needs the same answer for
+    the picker's exclusion (views.stamp_origins), so this must not require
+    constructing a dataclass a caller may not have.
+
+    Same structural clause-search tracking/service.py::_hundred_coin_redirect
+    used for the star->segment TARGET redirect this change retires, run in
+    reverse (segment -> its star, not star -> its segment): identity, not
+    ingredients, and deliberately NOT a category/seed_key lookup -- Task 20's
+    HUNDRED_COIN_EXIT category and seed_key naming are corpus-authoring
+    facts, and a def a user has reshaped, renamed, or built from scratch
+    keeps matching by what it now DOES. Only star_id 6 counts (addresses.py's
+    own "100 Coins is star 6 on every main course" rule) -- stars 0-5 are
+    untouched by this family end to end."""
+    clauses = list(start_triggers)
+    for waypoint in waypoints:
+        clauses.extend(waypoint)
+    for clause in clauses:
+        if clause.get("type") == "star_grabbed" and clause.get("star") == 6:
+            return clause.get("course"), 6
+    return None
+
+
 def origin_view(node: str | None) -> dict:
     """{key, label, region, region_label} for one origin node — the shape the
     API stamps on a segment row and the UI groups by. None = "Anywhere"."""

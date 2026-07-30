@@ -29,7 +29,8 @@ from sm64_events.storage.db import Database, EventRow
 from sm64_events.tracking import practicable
 from sm64_events.tracking.defaults import resolve_steps
 from sm64_events.tracking.projection import Projector, replay, wipe_matches
-from sm64_events.tracking.segments import (SegmentDef, merge_definitions,
+from sm64_events.tracking.segments import (SegmentDef, hundred_coin_entity,
+                                           merge_definitions,
                                            segment_origin, split_definition,
                                            star_origin, validate_definition)
 from sm64_events.tracking import routes as route_logic
@@ -371,71 +372,6 @@ class TrackerService:
         return self.db.get_state("origin_overrides", {}) \
             if self.db is not None else {}
 
-    def _hundred_coin_redirect(self, course_id: int, star_id: int) -> int | None:
-        """The segment that practices star (course_id, 100 Coins) end to end,
-        or None when there isn't one (user ruling 2026-07-28, spec
-        2026-07-28-multi-step-segments): "For each of the 100 coins stars, it
-        should assume that we will approach it like that -- that is, we got
-        the 100 coins star AND we get some other star... Nobody times just
-        the 100 star grab, it's always with something else." request_target
-        below redirects the pick here instead of committing a plain star
-        target for star_id 6.
-
-        Deliberately NOT a hand-written course->segment table (tools/
-        corpus_movements.py::HUNDRED_COIN_EXITS is exactly that table, but it
-        lives in the corpus authoring tool, not here) and NOT a seed_key
-        decode either: SegmentDef (this service's loaded shape) carries no
-        seed_key at all -- _load_segment_defs only pulls the dataclass's own
-        fields, so seed_key/category exist solely on the raw db row. The only
-        structural fact available on a SegmentDef is its own trigger clauses,
-        so this asks "does this definition's own sequence include grabbing
-        THIS course's 100-coin star" rather than reverse-engineering a course
-        abbreviation out of a string. A def a user has hand-edited keeps
-        matching by what it now does, not by its name, and a course with none
-        (deleted, or never seeded) simply returns None so the caller can fall
-        back to the plain star.
-
-        SPAN-AGNOSTIC ON PURPOSE (2026-07-29): today (mechanic() in tools/
-        corpus_vocab.py) the 100-coin grab is the definition's SOLE start
-        clause. An approved-but-not-yet-landed reshape moves it to a WAYPOINT
-        instead (start becomes course entry, end stays the exit star) so the
-        segment times the whole course visit rather than just the coin-to-
-        exit leg -- the family's IDENTITY is "this run includes grabbing this
-        course's 100-coin star", not "starts on it", so this searches
-        start_triggers AND every waypoint's own any-of clause-set rather than
-        only the first start clause. A position-specific check (start only)
-        would silently stop matching the instant that reshape lands, with no
-        test failure to announce it -- the user would just quietly stop
-        getting the segment he asked for. NOT end_triggers: the 100-coin
-        grab is never how either shape of this family FINISHES.
-
-        Disabled defs are excluded on purpose, unlike an explicit segment
-        pick (which api.py's own docstring says may target a disabled def):
-        this redirect is a CONVENIENCE standing in for a star click, and the
-        matching engine never arms a disabled def at all (segments.py's
-        `_defs = [d for d in defs if d.enabled]`) -- redirecting into one
-        would pin a card that can never record an attempt. Falling back to
-        the plain star keeps the click meaningful.
-        """
-        def grabs_it(clause: dict) -> bool:
-            return (clause.get("type") == "star_grabbed"
-                    and clause.get("course") == course_id
-                    and clause.get("star") == star_id)
-
-        def sequence(d) -> list:
-            # start_triggers is itself a flat any-of list; each waypoint is
-            # its own any-of clause-set (segments.py's SegmentDef.waypoints
-            # docstring) -- flattening both is what makes "anywhere in the
-            # run" a single search rather than two.
-            clauses = list(d.start_triggers)
-            for waypoint in d.waypoints:
-                clauses.extend(waypoint)
-            return clauses
-
-        return next((d.id for d in self._segment_defs
-                     if d.enabled and any(grabs_it(c) for c in sequence(d))),
-                    None)
-
     async def request_target(self, kind: str, course_id: int | None = None,
                              star_id: int | None = None,
                              segment_id: int | None = None,
@@ -450,18 +386,33 @@ class TrackerService:
         differ, and refusing a strategy edit because the player has since
         walked off would be a second bug wearing the first one's clothes.
 
-        A star pick of (course, 6) -- the 100-coin star -- is redirected to
-        that course's 100-coin-exit SEGMENT before anything else runs (see
-        `_hundred_coin_redirect`), so every caller (the quick-select banner,
-        the target picker, a route candidate) inherits the swap for free:
-        the "already the target"/practicability/commit logic below all run
-        against the SEGMENT, exactly as if the caller had picked it directly.
+        A star pick of (course, 6) -- the 100-coin star -- commits as a
+        PLAIN star target like any other (spec 2026-07-28-multi-step-
+        segments, "the 100-coin star IS the segment"): it no longer redirects
+        to a segment target. The retired `_hundred_coin_redirect` existed so
+        the practice card would show the family's real attempts/strat/rank,
+        which lived on the segment; now that the engine's own completed
+        attempts attribute directly to this star (tracking/projection.py's
+        seg_closed reattribution via segments.hundred_coin_entity), a plain
+        star target already shows the same thing with no indirection. The
+        underlying HUNDRED_COIN_EXIT engine still arms and matches on its own
+        world-state rules regardless of what the target is set to -- arming
+        was always target-independent, and this target ONLY decides what the
+        practice card highlights.
         """
         self._require_db()
-        if kind == "star" and course_id is not None and star_id == 6:
-            redirect_id = self._hundred_coin_redirect(course_id, star_id)
-            if redirect_id is not None:
-                kind, segment_id = "segment", redirect_id
+        if kind == "segment" and segment_id is not None:
+            found = next((d for d in self._segment_defs if d.id == segment_id),
+                        None)
+            hc = (hundred_coin_entity(found.start_triggers, found.waypoints)
+                 if found is not None else None)
+            if hc is not None:
+                # This def IS a star now (spec 2026-07-28-multi-step-
+                # segments) -- an explicit segment pick (a route candidate,
+                # a direct API call) must land on the star it represents,
+                # never on the segment itself, which no longer surfaces
+                # anywhere a pick could originate from.
+                kind, course_id, star_id, segment_id = "star", hc[0], hc[1], None
         if kind == "segment":
             if segment_id is None:
                 raise ValueError("segment target needs segment_id")
