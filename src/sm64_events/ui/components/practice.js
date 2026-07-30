@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { requestTarget } from "../target.js";
-import { hasPracticeContext, practicedHere } from "../stagecontext.js";
+import { hasPracticeContext, justCompletedSegment,
+        practicedHere } from "../stagecontext.js";
 import { ReplayPlayer } from "./replay.js";
 import { StatMenu, DUST_STAT_KEYS } from "./statmenu.js";
 import { Timeline } from "./timeline.js";
@@ -1181,23 +1182,33 @@ export function Practice({ t, openCompare }) {
   // segment being practiced (an accidental exit disarms — correct timing
   // semantics — but the section stays put until a different segment arms);
   // before anything has ever armed, the target segment pins.
-  // HUNDRED_COIN_EXIT segments (tools/corpus_vocab.py's own category string)
-  // used to arm on entering ANY course with a 100-coin star and pin a
-  // "Segment · WF — 100 Coins → Exit" card the moment you walked in, with no
-  // gate at all (live report 2026-07-30) -- an isAmbientlyArmed exemption
-  // narrowed that here. Spec 2026-07-28-multi-step-segments ("the 100-coin
-  // star IS the segment") DISSOLVES the problem outright instead of merely
-  // gating it: this family never surfaces as a segment section any more
-  // (views.py excludes it from `segments`/`segment_targets` entirely, and
-  // its attempts attribute to the STAR), so `segs.find(...)` below can never
-  // find one to pin in the first place -- confirmed by removing
-  // isAmbientlyArmed and rendering (no card appears on course entry, the
-  // star's own card shows "Running"/"Step 1 of 2" instead). `armed_detail`/
-  // `here()` remain the exemption for every OTHER segment (a real
-  // multi-step movement genuinely mid-run), unchanged.
+  // HUNDRED_COIN_EXIT segments used to arm on entering ANY course with a
+  // 100-coin star and pin a "Segment · WF — 100 Coins → Exit" card the
+  // moment you walked in, with no gate at all (live report 2026-07-30) --
+  // a category-keyed isAmbientlyArmed exemption narrowed that here. Spec
+  // 2026-07-28-multi-step-segments ("the 100-coin star IS the segment")
+  // DISSOLVES that ONE family's problem outright: it never surfaces as a
+  // segment section any more (views.py excludes it from `segments`/
+  // `segment_targets` entirely, and its attempts attribute to the STAR),
+  // so `segs.find(...)` below can never find one to pin for that family.
+  //
+  // But the SAME ambient-arm shape is not unique to it -- Bowser's
+  // seg:reds->pipe:<abbrev> and the legacy exclusive pipe-entry trio arm
+  // the identical way (course/stage entry) and DO still have segment
+  // sections, so they still need the gate; the category string could never
+  // have covered them (seg:reds->pipe:*'s own category is "Castle
+  // Movement", indistinguishable from an ordinary movement). `sec.
+  // arms_ambiently` (views.py, segments.arms_ambiently) is the GENERAL,
+  // server-derived answer -- "does this def's own def arm on mere presence
+  // rather than a deliberate action" -- so this gate now covers whatever
+  // arms ambiently next with no JS-side enumeration to keep in step.
+  const isAmbientlyArmed = (sec) => sec != null && sec.arms_ambiently
+    && !(tgt.kind === "segment" && tgt.segment_id === sec.segment_id)
+    && !justCompletedSegment(v, freshIds, sec.segment_id);
   const armedPins = [...frozen.armedOrder].reverse()
     .map((id) => segs.find((s) => s.segment_id === id))
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter((sec) => !isAmbientlyArmed(sec));
   const stickyPin = frozen.lastPinnedSeg != null
     ? segs.find((s) => s.segment_id === frozen.lastPinnedSeg)
     : undefined;
@@ -1219,8 +1230,10 @@ export function Practice({ t, openCompare }) {
   // intact — this only widens the exemption to a pin that is STILL running.
   const pinnedSegs = !inContext || starActive ? []
     : armedPins.length ? armedPins
-    : stickyPin && (stickyPin.armed_detail || here(stickyPin)) ? [stickyPin]
-    : activeSeg && (activeSeg.armed_detail || here(activeSeg)) ? [activeSeg] : [];
+    : stickyPin && !isAmbientlyArmed(stickyPin)
+      && (stickyPin.armed_detail || here(stickyPin)) ? [stickyPin]
+    : activeSeg && !isAmbientlyArmed(activeSeg)
+      && (activeSeg.armed_detail || here(activeSeg)) ? [activeSeg] : [];
   // Only one detail surface owns the fixed Objective / Analysis / Attempts
   // tracks. Additional armed segments remain reachable in the stable index
   // below instead of inserting more full cards above the crop.

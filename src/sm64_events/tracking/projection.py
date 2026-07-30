@@ -182,7 +182,7 @@ from sm64_events.memory.addresses import CASTLE_LEVELS, course_for_level
 from sm64_events.tracking.runs import RunTracker
 from sm64_events.tracking.segments import (
     SEGMENT_ATTEMPT_OFFSET, MatchContext, SegmentEngine, hundred_coin_entity,
-    segment_origin, stage_origin, time_bounds)
+    origin_course, segment_origin, stage_origin, time_bounds)
 
 
 @dataclass(frozen=True)
@@ -417,22 +417,44 @@ class Projector:
         d = self._segments.definition(segment_id)
         return d is not None and d.match_mode == "loose"
 
-    def _is_own_hundred_coin_arm(self, segment_id: int) -> bool:
-        """True when `segment_id`'s def represents the SAME star the current
-        target already names (spec 2026-07-28-multi-step-segments) — the
-        exception feed()'s "a segment armed retires a star target" rule
-        needs: a HUNDRED_COIN_EXIT engine arms ambiently on every entry to
-        its own course, which is the star:6 target's OWN engine coming
-        alive, not a different activity starting. Scoped to exactly the
-        matching star, not "any hundred-coin engine" or "any armed segment
-        in this course" — a genuinely different segment arming (or this
-        course's engine arming while some OTHER star in it is the target)
-        must still retire the target, unchanged."""
+    def _clears_star_target(self, segment_id: int) -> bool:
+        """True when `segment_id` just arming should retire the CURRENT star
+        target (feed()'s "a segment armed retires a star target" rule,
+        2026-06-12) — false when arming it is the ambient side effect of
+        standing in the SAME course the target already names, not a
+        different activity starting.
+
+        GENERALIZED (spec 2026-07-28-multi-step-segments) from an earlier,
+        narrower version scoped to "only star 6, only its own
+        HUNDRED_COIN_EXIT engine" — that fix was correct as far as it went
+        but left the regression it was patched against reachable for every
+        OTHER star: the reshape that made `seg:100c->exit:*` arm on mere
+        course ENTRY (b9c72f3/ccf989b) means walking into ANY of the 15 main
+        courses while practicing a DIFFERENT star in that course silently
+        wiped the target — confirmed live (`target_set` star (2,3), feed a
+        level_changed into WF, `proj.target` came back None) — and Bowser's
+        `seg:reds->pipe:*`/legacy pipe-entry trio share the identical arm
+        shape (never surfaced the same bug only because a Bowser course has
+        exactly one star to collide with).
+
+        The real distinguishing question is not "which family is this" but
+        "is the arming def practiced FROM the same course the target star
+        lives in" — `segments.origin_course(segment_origin(...))`, the SAME
+        reader the segment-target half of this rule already uses two
+        branches below, applied here to the star half for the first time.
+        Arming from a DIFFERENT course (or the castle/a hub — origin None)
+        still retires the target unchanged: a movement leaving the target's
+        own course already retires it via the course-change rule in
+        _dispatch (which runs BEFORE this, on the SAME level_changed), so
+        this branch is only ever reached with a star target for course-
+        neutral arms — exactly the ambient case this exists for."""
         if not (self.target and self.target[0] == "star"):
             return False
         d = self._segments.definition(segment_id)
-        return d is not None and hundred_coin_entity(
-            d.start_triggers, d.waypoints) == self.target[1:]
+        if d is None:
+            return True
+        seg_course = origin_course(self._seg_origins.get(segment_id))
+        return seg_course is None or seg_course != self.target[1]
 
     def armed_arms(self) -> dict[int, dict]:
         """Per-armed-id detail for the view's "waiting for" card (spec
@@ -522,7 +544,25 @@ class Projector:
             hc = (hundred_coin_entity(seg_def.start_triggers, seg_def.waypoints)
                  if seg_def is not None else None)
             if hc is not None:
-                a = replace(a, course_id=hc[0], star_id=hc[1], segment_id=None)
+                # A segment's own igt_frames is always None -- segments are
+                # RTA-only by design (views.py: "segments have no igt
+                # clock"). A reattributed attempt IS a star now, and stars
+                # display/grade on IGT (his clock: Usamune IGT) -- without
+                # this it renders with no time at all and cannot be graded
+                # (live report: WF exit-star grab closed BOTH this attempt
+                # and the ordinary star_id 3 one on the SAME event, and only
+                # the star_id 3 row carried the real igt_frames the game
+                # reported). The closing event's own payload is the
+                # authoritative source -- exactly what _close_by_grab/
+                # _close_by_death already read for an ordinary star, never a
+                # value derived from rta_frames (a frame-delta, not the
+                # Usamune IGT this project's own rule requires). Not every
+                # closing event type carries the key (game_reset closures
+                # pass igt_frames=None even on the star side, caveat
+                # unaffected) -- .get() falls through to None exactly as the
+                # star path already does for those.
+                a = replace(a, course_id=hc[0], star_id=hc[1], segment_id=None,
+                            igt_frames=ev.payload.get("igt_frames"))
                 a = replace(a,
                             strat_tag=self._strat_overrides.get(
                                 a.id, self.strat_by_star.get(hc)),
@@ -571,18 +611,19 @@ class Projector:
         # new focus and must stay. service._track auto-broadcasts
         # target_changed off this in-feed change.
         #
-        # EXCEPTION (spec 2026-07-28-multi-step-segments): a HUNDRED_COIN_EXIT
-        # engine arms ambiently on every entry to its own course — it is not
-        # "a segment run just started" in the sense this rule means, it is
-        # the star:6 target's OWN engine coming alive. Clearing a star:6
-        # target the instant its course is entered would make the "star
-        # target" model this change relies on unusable. Scoped to exactly
-        # the matching star: a genuinely different segment arming (or this
-        # same engine arming while some OTHER star in the course is the
-        # target) still retires it, unchanged.
+        # EXCEPTION, GENERALIZED (spec 2026-07-28-multi-step-segments): a def
+        # that arms ambiently on mere course entry (HUNDRED_COIN_EXIT,
+        # reds->pipe, the legacy pipe-entry trio — segments.arms_ambiently)
+        # is not "a segment run just started" in the sense this rule means,
+        # when it is practiced FROM the SAME course the target star lives in
+        # — it is that course's engine coming alive, not a different
+        # activity. See _clears_star_target's own docstring for why the
+        # comparison is by COURSE, not by family or by exact star, and for
+        # the live regression this closes (any star 0-5 losing its target on
+        # entry to its own course, not just star 6).
         if self.target and self.target[0] == "star" \
                 and any(n["event"] == "segment_armed"
-                        and not self._is_own_hundred_coin_arm(n["segment_id"])
+                        and self._clears_star_target(n["segment_id"])
                         for n in self.segment_notices):
             self._suspended_star = self.target[1:]  # resume on re-entry (caveat 13)
             self.target = None

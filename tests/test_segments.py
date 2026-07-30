@@ -8,6 +8,7 @@ from sm64_events.memory.addresses import COURSE_NAMES, LEVEL_NAMES
 from sm64_events.storage.db import EventRow
 from sm64_events.tracking import segments as segments_module
 from sm64_events.tracking.segments import (SEGMENT_ATTEMPT_OFFSET,
+                                           arms_ambiently,
                                            card_waiting_for_sentence,
                                            clause_sentence,
                                            course_groups, level_groups,
@@ -2496,6 +2497,47 @@ def test_hundred_coin_entity_reads_the_course_off_the_matching_clause():
     # off whichever clause matched, so a DDD def answers 9, not 2.
     assert hundred_coin_entity(
         [{"type": "star_grabbed", "course": 9, "star": 6}], []) == (9, 6)
+
+
+def test_arms_ambiently_is_true_for_a_course_entry_start():
+    assert arms_ambiently([{"type": "level_enter", "to": 24},
+                          {"type": "attempt_anchor", "level": 24}]) is True
+
+
+def test_arms_ambiently_is_true_for_an_anchor_alone():
+    assert arms_ambiently([{"type": "attempt_anchor", "level": 17}]) is True
+
+
+def test_arms_ambiently_is_false_for_the_castle_interior():
+    # LBLJ's own shape -- level 6 has no course (course_for_level -> None),
+    # so entering/anchoring the castle interior is not "a stage".
+    assert arms_ambiently([{"type": "level_enter", "to": 6, "from": 16},
+                          {"type": "attempt_anchor", "level": 6}]) is False
+
+
+def test_arms_ambiently_is_false_for_a_leaving_or_grabbing_start():
+    assert arms_ambiently([{"type": "level_exit", "from": 8}]) is False
+    assert arms_ambiently(
+        [{"type": "star_grabbed", "course": 0, "star": 3}]) is False
+
+
+def test_arms_ambiently_matches_exactly_the_three_families_in_the_real_corpus():
+    # Measured, not assumed: 21 of 84 seeded defs (15 hundred-coin + 3
+    # reds->pipe + 3 legacy pipe-entry), and specifically NOT LBLJ or any
+    # Bowser fight (arms the same way but auto-selects on entry by design --
+    # stagebanner.js's ArenaRow -- so an ambient pin there is not a bug).
+    import json
+    from sm64_events.core.paths import bundled_defaults_seed
+    seed = json.loads(bundled_defaults_seed().read_bytes().decode("utf-8"))
+    flagged = {s["name"] for s in seed["segments"]
+              if arms_ambiently(s["start_triggers"])}
+    assert len(flagged) == 21
+    assert "LBLJ" not in flagged
+    assert "Bowser 1" not in flagged and "Bowser 2" not in flagged \
+        and "Bowser 3" not in flagged
+    assert "BitDW Pipe Entry" in flagged
+    assert "BitDW — 8 Red Coins → Pipe" in flagged
+    assert "WF — 100 Coins → Exit" in flagged
 
 
 def test_origin_view_carries_the_region_and_its_labels():

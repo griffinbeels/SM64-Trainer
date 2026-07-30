@@ -1200,6 +1200,49 @@ def hundred_coin_entity(start_triggers: list,
     return None
 
 
+def arms_ambiently(start_triggers: list) -> bool:
+    """True when a definition arms merely by the player being present in a
+    star-bearing stage -- entering it, or already standing in it via an
+    `attempt_anchor` -- rather than by a deliberate action (leaving
+    somewhere, grabbing a star, a menu reset). THE resolver for "does an
+    armed instance of this def mean intent, or is it an ambient side
+    effect of standing where the player already is" -- the property
+    practice.js's pinned-card gate needs, and the property the retired
+    `isAmbientlyArmed` (live report 2026-07-30) approximated by checking
+    `category === "100 Coin Exit"`, which cannot see the OTHER two families
+    sharing the identical shape (spec 2026-07-28-multi-step-segments): a
+    Bowser stage's `seg:reds->pipe:<abbrev>` and the legacy exclusive
+    `seg:<abbrev>-pipe` pipe-entry trio BOTH arm via the same
+    `[level_enter, attempt_anchor]` idiom into their own course and BOTH
+    exhibit the identical bug (confirmed by rendering: entering BitDW with
+    nothing targeted pins "BitDW -- 8 Red Coins -> Pipe"), yet neither
+    carries the "100 Coin Exit" category -- `seg:reds->pipe:*`'s own
+    category is `Castle Movement`, same as an ordinary movement. Measured
+    against the real bundled corpus rather than assumed: exactly 21 of 84
+    seeded defs match (the 15 100-coin exits + 3 reds->pipe + 3 legacy
+    pipe-entry), and NEITHER LBLJ (arms entering the CASTLE interior, not a
+    course -- `course_for_level` answers None there) NOR any of the 56
+    route-scoped movements (none starts on `level_enter`/`attempt_anchor`
+    at all -- they start on `level_exit`/`star_grabbed`, per
+    `tools/build_defaults_seed.py::_movement_row`) NOR the Bowser fights
+    (arm the same way, but auto-select on entry BY DESIGN -- stagebanner.js's
+    ArenaRow -- so an ambient pin is not a bug there, it is the point) is
+    flagged. The 100-coin family no longer HAS a segment section to gate
+    (views.py excludes it entirely -- its star section needs no such flag),
+    so this predicate is only ever True on a SECTION for the remaining six."""
+    for clause in start_triggers:
+        kind = clause.get("type")
+        if kind == "level_enter":
+            level = clause.get("to")
+        elif kind == "attempt_anchor":
+            level = clause.get("level")
+        else:
+            continue
+        if level is not None and COURSE_BY_LEVEL.get(level) is not None:
+            return True
+    return False
+
+
 def origin_view(node: str | None) -> dict:
     """{key, label, region, region_label} for one origin node — the shape the
     API stamps on a segment row and the UI groups by. None = "Anywhere"."""

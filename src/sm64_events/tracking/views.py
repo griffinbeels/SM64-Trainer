@@ -44,7 +44,8 @@ from sm64_events.stats.registry import (DEFAULT_STAT_MENU, REGISTRY,
                                         selection_order)
 from sm64_events.tracking.projection import DEFAULT_MIN_FRAMES, journal_id
 from sm64_events.tracking.routes import route_stats
-from sm64_events.tracking.segments import (arm_level, card_waiting_for_sentence,
+from sm64_events.tracking.segments import (arm_level, arms_ambiently,
+                                            card_waiting_for_sentence,
                                             course_groups, hundred_coin_entity,
                                             origin_course,
                                             origin_view, segment_origin,
@@ -1255,6 +1256,15 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "course_id": origin_course(segment_origin(
                 seg_id, d.start_triggers, origin_overrides)) if d else None,
             "armed": seg_id in armed,
+            # arms merely by the player being present (course/stage entry
+            # or an attempt_anchor there), not by a deliberate action --
+            # spec 2026-07-28-multi-step-segments, segments.arms_ambiently.
+            # practice.js's pinned-card gate reads this (never a category
+            # string) to stop an ambient arm from reading as "the user
+            # chose this" -- true today for reds->pipe and the legacy
+            # pipe-entry trio; the 100-coin family needs no such flag,
+            # since it has no segment section left to gate.
+            "arms_ambiently": arms_ambiently(d.start_triggers) if d else False,
             # Arm progress/deadline detail plus the plain-language "waiting
             # for" line (spec 2026-07-28-multi-step-segments) -- None while
             # idle. A deleted definition (`d is None`) has no detail even if

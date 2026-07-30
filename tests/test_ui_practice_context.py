@@ -246,18 +246,47 @@ def test_the_active_target_card_asks_the_shared_question():
     # one (spec 2026-07-28-multi-step-segments, tested in test_views.py), but
     # that is read on the STAR side of the same "OR" via `activeStar`/`here`
     # above -- deliberately NOT edited into practicedHere itself, which star
-    # sections also call.
+    # sections also call. A THIRD exemption, isAmbientlyArmed, gates all
+    # three pin candidates -- see the dedicated test below.
     assert re.search(
-        r"stickyPin && \(stickyPin\.armed_detail \|\| here\(stickyPin\)\)", body)
+        r"stickyPin && !isAmbientlyArmed\(stickyPin\)\s*"
+        r"&& \(stickyPin\.armed_detail \|\| here\(stickyPin\)\)", body)
     assert re.search(
-        r"activeSeg && \(activeSeg\.armed_detail \|\| here\(activeSeg\)\)", body)
+        r"activeSeg && !isAmbientlyArmed\(activeSeg\)\s*"
+        r"&& \(activeSeg\.armed_detail \|\| here\(activeSeg\)\)", body)
 
-# A third exemption (`isAmbientlyArmed`) briefly existed here (live report
-# 2026-07-30) to stop a HUNDRED_COIN_EXIT segment's ambient course-entry arm
-# from pinning an "ACTIVE SEGMENT" card. Spec 2026-07-28-multi-step-segments
-# ("the 100-coin star IS the segment") DISSOLVED the problem instead of
-# narrowing it further: that family never surfaces as a segment section any
-# more (views.py excludes it from `segments`/`segment_targets` entirely), so
-# `segs.find(...)` above can never find one to pin in the first place --
-# isAmbientlyArmed had no input left to act on and was removed rather than
-# kept as a guard against a state that cannot occur.
+
+def test_ambiently_armed_segments_get_a_third_exemption_generalized():
+    """A segment that arms merely by the player being present (course/stage
+    entry) rather than by a deliberate action must not read as "the user
+    chose this" -- `armed_detail` alone is a false positive for exactly that
+    shape, unlike a real multi-step movement genuinely mid-run.
+
+    GENERALIZED (spec 2026-07-28-multi-step-segments) from a category-keyed
+    version (`sec.category === "100 Coin Exit"`, live report 2026-07-30):
+    that family dissolved outright (it no longer has a segment section to
+    gate at all -- views.py excludes it from `segments` entirely), but the
+    IDENTICAL ambient-arm shape is not unique to it -- Bowser's seg:reds->
+    pipe:<abbrev> and the legacy pipe-entry trio share it and still have
+    sections, and neither carries the "100 Coin Exit" category (reds->pipe's
+    own category is "Castle Movement", indistinguishable from an ordinary
+    movement by name alone). `sec.arms_ambiently` (views.py, segments.
+    arms_ambiently) is the server-derived, structural answer -- a flag on
+    the SECTION, not a JS enumeration of categories -- so this gate covers
+    whatever arms ambiently next with no second door to keep in step."""
+    body = (UI / "components" / "practice.js").read_text(encoding="utf-8")
+    assert re.search(r'import \{[^}]*justCompletedSegment[^}]*\} '
+                     r'from "\.\./stagecontext\.js";', body)
+    assert "sec.category" not in body, \
+        "the retired category-string check reappeared -- use sec.arms_ambiently"
+    assert re.search(
+        r"isAmbientlyArmed = \(sec\) => sec != null && sec\.arms_ambiently\s*"
+        r"&& !\(tgt\.kind === \"segment\" && tgt\.segment_id === sec\.segment_id\)\s*"
+        r"&& !justCompletedSegment\(v, freshIds, sec\.segment_id\)", body)
+    # armedPins is filtered too -- the unconditional priority branch
+    # (`armedPins.length ? armedPins : ...`) is what actually surfaced the
+    # bug: an ambiently-arming segment pushes onto frozen.armedOrder and
+    # store.js's segment_armed handler ALSO sticks it as lastPinnedSeg, on
+    # every course/stage entry, with no gate at all before this fix.
+    assert re.search(
+        r"\.filter\(\(sec\) => !isAmbientlyArmed\(sec\)\)", body)

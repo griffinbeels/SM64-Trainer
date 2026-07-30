@@ -1561,9 +1561,17 @@ def test_hundred_coin_completion_attributes_to_the_star_not_the_segment():
     assert len(hundred) == 1
     assert hundred[0].segment_id is None
     assert hundred[0].outcome == "success"
+    # Live report: a segment's own igt_frames is always None (RTA-only by
+    # design), but the reattributed attempt IS a star now and stars
+    # display/grade on IGT -- without this it renders with no time and
+    # cannot be graded. The closing star_collected event's OWN igt_frames
+    # (the same value the exit star's own attempt gets, since one event
+    # closes both) is the authoritative source, never rta_frames.
+    assert hundred[0].igt_frames == 1200
     # decision #1: the exit star keeps its OWN attempt too -- a real grab,
     # never suppressed by this change (only star 6 changes).
     assert len(exit_star) == 1 and exit_star[0].segment_id is None
+    assert exit_star[0].igt_frames == 1200
 
 
 def test_hundred_coin_strat_tag_comes_from_the_star_not_the_segment():
@@ -1585,11 +1593,15 @@ def test_hundred_coin_engine_death_also_attributes_to_the_star():
     attempts = project([
         jev(1, "level_changed", 900, {"from": 16, "to": 24}),
         star(2, 1000, course=2, star_id=6, igt=1000),
-        jev(3, "death", 1100, {"cause": "fell"}),
+        jev(3, "death", 1100, {"cause": "fell", "igt_frames": 1267}),
     ], segments=[_hc_def()])
     hundred = [a for a in attempts if a.course_id == 2 and a.star_id == 6]
     assert len(hundred) == 1
     assert hundred[0].outcome == "death" and hundred[0].segment_id is None
+    # Live report's other example ("42.23 death"): a death closure carries
+    # igt_frames exactly like a star death does (_close_by_death reads the
+    # same key) -- must be stamped too, not just the success path.
+    assert hundred[0].igt_frames == 1267
 
 
 def test_leaving_without_the_exit_star_records_nothing_confirmed_sane():
@@ -1636,10 +1648,10 @@ def test_hundred_coin_target_survives_entering_its_own_course():
     assert proj.target == ("star", 2, 6)
 
 
-def test_hundred_coin_arm_still_retires_a_different_stars_target():
-    # The exemption is scoped to the MATCHING star only -- a target for a
-    # different star in a DIFFERENT course is still retired when some
-    # unrelated segment arms (this rule, unchanged for every other case).
+def test_hundred_coin_arm_still_retires_a_different_courses_star_target():
+    # A target for a different star in a DIFFERENT course is still retired
+    # when some unrelated segment arms (this rule, unchanged for every
+    # other case) -- level 8 (SSL, course 8) vs a course-5 target.
     other = SegmentDef(id=200, name="unrelated", enabled=True,
                        start_triggers=[{"type": "level_enter", "to": 8}],
                        end_triggers=[{"type": "level_enter", "to": 6}],
@@ -1650,6 +1662,39 @@ def test_hundred_coin_arm_still_retires_a_different_stars_target():
     assert proj.target == ("star", 5, 1)
     proj.feed(jev(2, "level_changed", 900, {"from": 6, "to": 8}))  # arms `other`
     assert proj.target is None
+
+
+def test_ambient_arm_exemption_generalizes_to_every_star_in_the_course():
+    # THE regression this generalization fixes: not just star 6 -- ANY star
+    # practiced in WF must survive the SAME course's ambient 100-coin engine
+    # arming. Before the generalization this wiped the target on every
+    # single course entry (confirmed live against the real seeded def).
+    _, proj = replay([
+        jev(1, "target_set", 0, {"kind": "star", "course_id": 2, "star_id": 3}),
+    ], segments=[_hc_def()])
+    assert proj.target == ("star", 2, 3)
+    proj.feed(jev(2, "level_changed", 900, {"from": 16, "to": 24}))
+    assert proj.target == ("star", 2, 3)
+
+
+def test_ambient_arm_exemption_covers_the_reds_to_pipe_family_too():
+    # Bowser's seg:reds->pipe:<abbrev> shares the identical ambient shape
+    # (arms on stage entry) and never surfaced this bug only because a
+    # Bowser course has exactly one star to collide with -- a target for
+    # THAT star must still survive its own pipe engine arming.
+    reds_pipe = SegmentDef(
+        id=201, name="BitDW — 8 Red Coins → Pipe", enabled=True,
+        start_triggers=[{"type": "level_enter", "to": 17},
+                        {"type": "attempt_anchor", "level": 17}],
+        end_triggers=[{"type": "warp_entered", "level": 17}],
+        waypoints=[[{"type": "star_grabbed", "course": 16, "star": 0}]],
+        guards=[], match_mode="strict")
+    _, proj = replay([
+        jev(1, "target_set", 0, {"kind": "star", "course_id": 16, "star_id": 0}),
+    ], segments=[reds_pipe])
+    assert proj.target == ("star", 16, 0)
+    proj.feed(jev(2, "level_changed", 900, {"from": 6, "to": 17}))
+    assert proj.target == ("star", 16, 0)
 
 
 def test_star_success_with_no_clock_at_all_is_not_flagged():

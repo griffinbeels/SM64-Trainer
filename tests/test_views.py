@@ -713,6 +713,25 @@ def test_segment_section_armed_detail_reports_progress_and_waiting_for(tmp_path)
     assert seg_section(view2, 1)["armed_detail"] is None
 
 
+def test_segment_section_arms_ambiently_flag(tmp_path):
+    # spec 2026-07-28-multi-step-segments: the flag practice.js's pinned-
+    # card gate reads instead of a category string. LBLJ arms entering the
+    # CASTLE interior (no course) -- false. A def shaped like reds->pipe /
+    # the legacy pipe-entry trio (course-entry + attempt_anchor into a real
+    # course) -- true.
+    db, svc = make(tmp_path)
+    pipe_id = asyncio.run(svc.create_segment({
+        "name": "BitDW Pipe Entry stand-in",
+        "start_triggers": [{"type": "level_enter", "to": 17},
+                          {"type": "attempt_anchor", "level": 17}],
+        "end_triggers": [{"type": "warp_entered", "level": 17}]}))
+    asyncio.run(svc.publish(lvl(1000, 16, 6)))          # arms LBLJ (id 1)
+    asyncio.run(svc.publish(lvl(1000, 6, 17)))          # arms the pipe stand-in
+    view = build_session_view(db, svc, clock="igt")
+    assert seg_section(view, 1)["arms_ambiently"] is False
+    assert seg_section(view, pipe_id)["arms_ambiently"] is True
+
+
 def test_segment_sections_order_by_journal_recency_not_raw_id(tmp_path):
     # segment attempt ids carry def_id * 1e10, so a higher def id always
     # raw-sorts above a lower one; recency must compare journal_id(...).
