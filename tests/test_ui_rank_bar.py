@@ -209,6 +209,42 @@ def reaches_bar_fill(expression: str, source: str, depth: int = 4) -> bool:
 PLAN_FILL_ARG = re.compile(r"(?:from|to)Fill:\s*([^,\n}]+)")
 
 
+LADDER_FILL = re.compile(
+    r'class="rank-band-fill"\s+style=\$\{`width:\$\{([^}]*)\}')
+LADDER_MARKER = re.compile(
+    r'class="rank-ladder-mark is-you"\s+style=\$\{`left:\$\{([^}]*)\}')
+
+
+def test_the_rank_tab_ladder_is_never_anchored():
+    """The ONE rank-shaped bar that must stay literally true.
+
+    "The RANK PAGE bar should NOT be a lie. It should truly show your exact
+    position in the entire ecosystem of tiers. That is deliberate." (user,
+    2026-07-29.) An INVERSE guard, because the plausible failure here is not
+    someone forgetting the rule -- it is someone applying it: reading "every
+    rank bar is anchored at its midpoint" and making this one consistent.
+
+    Two concrete costs if they did. Anchoring every band lights all eight
+    tiers you have NOT reached to half, which is the exact inverse of the
+    complaint that shipped the current treatment ("the dimmed bars should be
+    way less dimmed... show a little bit of color", round 10). Anchoring only
+    the band you are standing in desynchronises the fill from the YOU marker,
+    which lives in the SAME element and the same coordinate space -- so both
+    expressions are pinned, not just the fill."""
+    source = code_only(UI / "components" / "rankpage.js")
+    for what, pattern in (("band fill", LADDER_FILL), ("YOU marker", LADDER_MARKER)):
+        found = pattern.findall(source)
+        assert found, (
+            f"the ladder's {what} expression is gone or renamed -- this guard "
+            "silently stops guarding the moment it stops matching, so fix the "
+            "pattern rather than deleting the test")
+        for expression in found:
+            assert not reaches_bar_fill(expression, source), (
+                f"the ladder's {what} now resolves through caps.js::barFill. "
+                "That bar is a MAP of the whole ladder, not a goal gauge, and "
+                "anchoring it makes it lie about where you actually stand.")
+
+
 def test_the_climb_anchors_the_bar_it_hands_out():
     """`climb.bar` is only safe to paint unconverted because the hook feeds
     the plan DRAWN widths. Both endpoints, because the closing sweep's
@@ -228,14 +264,24 @@ def ui_js():
     return sorted([*UI.glob("*.js"), *(UI / "components").glob("*.js")])
 
 
+# What a rank bar is made OF. A new surface reaching for any of these is
+# drawing progress-toward-your-next-rank, whatever it calls its own variable:
+# `fill` is the section banner's field, `division_progress` is the MARELO
+# card's, and `climb.bar` is the hook's already-converted output. Naming the
+# INGREDIENTS rather than one variable spelling is the difference between a
+# guard and a coincidence -- the first version tripped only on "fill", so a
+# bar written straight off `division_progress` would have sailed through.
+RANK_BAR_INGREDIENTS = ("fill", "division_progress")
+
+
 @pytest.mark.parametrize("path", ui_js(), ids=lambda p: p.name)
 def test_no_width_is_ever_drawn_from_a_raw_fill(path):
     """The check is not "is barFill imported" -- that passes happily while a
     second path exists beside it. It is: can a bar's width be written from a
-    raw `fill` at all."""
+    raw rank progress value at all."""
     source = code_only(path)
     for expression in WIDTH_EXPR.findall(source):
-        if "fill" not in expression.lower():
+        if not any(name in expression.lower() for name in RANK_BAR_INGREDIENTS):
             continue
         assert reaches_bar_fill(expression, source), (
             f"{path.name} draws a width from `{expression.strip()}` without "

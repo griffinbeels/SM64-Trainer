@@ -249,6 +249,36 @@ def test_only_the_owner_may_derive_it(invariant):
         f"and these files build their own: {found}\n{invariant.why}")
 
 
+def test_every_ingredient_can_actually_match_code():
+    """A token that never appears in its OWN owner cannot catch anyone.
+
+    Found the hard way on 2026-07-29, adding the `score_for` row: it shipped
+    as `"score_for("`, and `code_only` TOKENIZES and joins with newlines, so a
+    name and its opening paren are never adjacent in the text being scanned.
+    The row read as a guard, went green, and stayed green with the violation
+    planted in `tracking/marelo.py` — a guard nobody has seen fail is green
+    forever, and this one could never have failed at all.
+
+    Mutation-proving a row catches THAT row, and only if someone remembers.
+    This catches the class, on every run, for every row ever added. Tokens
+    must be bare identifiers (`score_for`, `FILL_ANCHOR`, `stage.mode`) or
+    quoted string literals (`'"tierskip"'`) — a paren belongs to nobody."""
+    for invariant in INVARIANTS:
+        owned = [path for path in invariant.files
+                 if path.name in invariant.owners]
+        assert owned, (
+            f"{invariant.concept}: none of {sorted(invariant.owners)} is in "
+            "the scanned file set, so the row exempts a file that is not "
+            "there and scans everything else for ingredients nobody owns")
+        bodies = "\n".join(code_only(path) for path in owned)
+        dead = [token for token in invariant.tokens if token not in bodies]
+        assert not dead, (
+            f"{invariant.concept}: {dead} never appear in "
+            f"{sorted(invariant.owners)} as `code_only` sees them, so no "
+            "other file can be caught naming them either. Use a bare "
+            "identifier or a quoted literal — never a name carrying a paren.")
+
+
 def test_the_guards_can_still_fail():
     """Probed in both directions (tests/source_scan.py's rule): a comment
     naming an ingredient must not trip a guard, and real code must."""

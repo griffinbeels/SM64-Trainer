@@ -372,6 +372,23 @@ constants and the reason are in `ui_fixture.py::FIXTURE_STAR`; the rule is
 general, so check it whenever a card's layout depends on how many of something
 it holds.
 
+**One level deeper again: those two banners both render at the Capless V
+FLOOR.** `seed_practice` publishes its attempts BEFORE `_seed_target` posts
+`/api/strat`, so every attempt is tagged with no strategy, the saved PB is
+keyed with no strategy, and a banner grading under `FIXTURE_STRAT` honestly
+reports `unranked` — which draws the floor default. Every sweep and every
+contact sheet therefore measures a card whose bars are EMPTY and whose
+next-step lines read `→ Capless 4`, so anything that only appears on a GRADED
+rank is invisible to the rig. That is the *third* instance of this one root
+cause, after the missing target and the one-strategy star: on 2026-07-29 the
+whole rank-bar anchoring change rendered byte-identically before and after, and
+had to be measured against a hand-built fixture instead. To reach a graded
+rank the order is stage → attempts → `POST /api/target` (it refuses until
+attempts have landed and the player has a place) → `POST /api/strat` →
+attempts AGAIN → `POST /api/pb` on a strat-TAGGED success. Fixing the shipped
+fixture is OWED, not done: it changes what the entire matrix measures, so it
+belongs in its own change with its own `known_defects` reckoning.
+
 **A defect can be entirely in PAINT, and four of the five probes walk the DOM.**
 A pseudo-element is not in the DOM, so nothing that queries the tree can see
 one. The rank banners' colour wash is a `::before`; it bled sideways onto the
