@@ -11,6 +11,7 @@ If this file grows past a screen, something generic has leaked into it.
 """
 from __future__ import annotations
 
+import dataclasses
 import functools
 import sys
 from pathlib import Path
@@ -439,6 +440,259 @@ PROJECT = Project(
         '913x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 208 > clientHeight 206',
         '913x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+    },
+)
+
+
+# --- The Bowser banner row (task-bowser-sweep) ------------------------------
+# stagebanner.js dispatches on stage.mode via STAGE_ROWS, and none of the
+# stories above ever puts the stage in "bowser_course" -- so BowserCourseRow
+# (three cells since 912466d rewrote it from two: the "reds" 8-coin star plus
+# BOTH BitDW pipe segments, each now a full StandardSegmentCell with its own
+# name, rank and strategy sub-line, and the longest name in the app, "BitDW —
+# 8 Red Coins → Pipe") had never been rendered by this gate, at any
+# breakpoint, before OR after that rewrite.
+#
+# `stage` is SERVER state, seeded once when the fixture starts
+# (ui_fixture.py::serve_ui(bowser_stage=...)). All of PROJECT's stories share
+# ONE page and ONE server, and `Story` carries only name/at/setup — no story
+# above can move the app into bowser_course mid-sweep. uilab's sweep fixture
+# reads `uilab_project` off the TEST MODULE, though (pytest_plugin.py), so a
+# second test module gets its OWN sweep with its OWN Project — that is the
+# seam, and no uilab change is needed.
+#
+# BitDW is course 16 / level 17 (memory/addresses.py's COURSE_BY_LEVEL,
+# `17: 16` — confirmed against detectors/stage.py's own docstring, which
+# names the identical course/level pair for BitDW). Picked over BitFS/BitS
+# arbitrarily; all three render through the same BowserCourseRow.
+BOWSER_COURSE = 16
+BOWSER_LEVEL = 17
+
+BOWSER_STORIES = [
+    # `page` FIRST, mirroring PROJECT's own story list, and for the same
+    # reason: uilab's probe scopes its DOM walk to `root.querySelectorAll("*")`
+    # (uilab/probes.js), which never includes the scope root ITSELF — only
+    # its descendants. A story scoped to `.stagebanner` (below) therefore
+    # cannot see `.stagebanner`'s OWN clipping (measured directly, 2026-07-29:
+    # scrollHeight 230 > clientHeight 228 at 1100x1000 — the identical
+    # fixed-height-card shortfall PROJECT's own known_defects already owes for
+    # the star row, now also true of this row, invisible to "bowser-row"
+    # alone). Without this story that would be a SECOND blind spot introduced
+    # by this very task, in exactly the shape CLAUDE.md warns about ("reaching
+    # the card is not the same as reaching its content").
+    Story(name="page", at="", setup=_EXPAND_ALL),
+    # No setup needed for this one: the app's default tab is Practice
+    # (app.js), the fixture seeds the stage server-side before the page ever
+    # loads, and StageBanner is mounted unconditionally at the top of
+    # .practice-page — not inside a collapsible <details>, unlike the
+    # practice index below it. Scoped to the row itself so probes and
+    # screenshots target it rather than the whole page.
+    Story(name="bowser-row", at=".stagebanner"),
+]
+
+# dataclasses.replace, not a second hand-written Project: the shell selector
+# list, may_bleed, the viewport matrix and min_viewport_width are the LAW
+# (`.claude/rules/ui-core.md`), not this project's to restate — a second
+# hand-authored config is exactly the second door CLAUDE.md's "one door" rule
+# exists to prevent for values that must stay in lockstep.
+BOWSER_PROJECT = dataclasses.replace(
+    PROJECT,
+    serve=functools.partial(serve_ui, reconcile_full_corpus=True,
+                            bowser_stage=(BOWSER_COURSE, BOWSER_LEVEL)),
+    stories=BOWSER_STORIES,
+    # Its own list, not PROJECT's: even though every row below is the SAME
+    # underlying, already-owed defect class PROJECT's own known_defects
+    # tracks for the star row (the `.stagebanner` card's own fixed-height
+    # shortfall, and `.starcell`'s starholder/starrank overlap — identical
+    # detail strings, same widths, same component, just never measured on
+    # THIS row before), the keys are story-scoped ("[page]"/"[bowser-row]")
+    # and this project's own stories produce a different set than PROJECT's
+    # -- inheriting PROJECT's dict verbatim would fail
+    # test_the_known_defect_list_does_not_outlive_its_defects on the first
+    # run (its ~40 rows are keyed against selectors/stories this project's
+    # own sweep also produces, but not identically -- e.g. PROJECT has no
+    # "[bowser-row]" story and this project's "[page]" story never sees a
+    # 7-star StarRow, so `span.starname` clips at slightly different widths).
+    # Every row below was taken VERBATIM from this project's own sweep
+    # output (task-bowser-sweep), not hand-typed, to guarantee the keys
+    # match byte-for-byte.
+    known_defects={
+        # `.stagebanner`'s own fixed-height card shortfall -- PROJECT's
+        # identical, long-owed "scrollHeight > clientHeight" defect for the
+        # SAME card, now visible on this row too now that anything ever
+        # measures it. Only the "page" story can see it: uilab's probe never
+        # checks its OWN scope root (root.querySelectorAll("*") excludes
+        # root), so "bowser-row" (at=".stagebanner") structurally cannot.
+        '1060x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 228 > clientHeight 226',
+        '1061x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 228 > clientHeight 226',
+        '1100x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 230 > clientHeight 228',
+        '1101x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 230 > clientHeight 228',
+        '1180x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 230 > clientHeight 228',
+        '1181x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 227 > clientHeight 225',
+        '1250x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 230 > clientHeight 228',
+        '1251x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 230 > clientHeight 228',
+        '1280x720 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 230 > clientHeight 228',
+        '1400x760 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 230 > clientHeight 228',
+        '1400x761 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 230 > clientHeight 228',
+        '1500x900 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 230 > clientHeight 228',
+        '1920x1080 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 230 > clientHeight 228',
+        '850x1180 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 199 > clientHeight 197',
+        '851x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 199 > clientHeight 197',
+        '900x1180 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 206 > clientHeight 204',
+        '912x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 207 > clientHeight 205',
+        '913x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 208 > clientHeight 206',
+
+        # `span.starname` clipping by ~2px -- PROJECT's identical, long-owed
+        # defect for the star row's OWN name span, now ALSO true of the one
+        # cell on this row with a long enough name to hit it: "BitDW — 8 Red
+        # Coins → Pipe" (seg:reds->pipe:bitdw, corpus_movements.py Task 20).
+        # The OTHER two cells on this row ("Reds", "BitDW Pipe Entry") do
+        # NOT clip at any of these widths (measured directly) -- this is the
+        # same 2px shortfall the star row already owes, triggered here by
+        # text length rather than by which row renders it.
+        '1100x1000 [page] clipped :: span.starname':
+            'scrollHeight 29 > clientHeight 27',
+        '1100x1000 [bowser-row] clipped :: span.starname':
+            'scrollHeight 29 > clientHeight 27',
+        '1101x1000 [page] clipped :: span.starname':
+            'scrollHeight 29 > clientHeight 27',
+        '1101x1000 [bowser-row] clipped :: span.starname':
+            'scrollHeight 29 > clientHeight 27',
+        '1180x1000 [page] clipped :: span.starname':
+            'scrollHeight 29 > clientHeight 27',
+        '1180x1000 [bowser-row] clipped :: span.starname':
+            'scrollHeight 29 > clientHeight 27',
+        '1250x1000 [page] clipped :: span.starname':
+            'scrollHeight 29 > clientHeight 27',
+        '1250x1000 [bowser-row] clipped :: span.starname':
+            'scrollHeight 29 > clientHeight 27',
+        '1251x1000 [page] clipped :: span.starname':
+            'scrollHeight 29 > clientHeight 27',
+        '1251x1000 [bowser-row] clipped :: span.starname':
+            'scrollHeight 29 > clientHeight 27',
+        '1280x720 [page] clipped :: span.starname':
+            'scrollHeight 29 > clientHeight 27',
+        '1280x720 [bowser-row] clipped :: span.starname':
+            'scrollHeight 29 > clientHeight 27',
+        '1400x760 [page] clipped :: span.starname':
+            'scrollHeight 29 > clientHeight 27',
+        '1400x760 [bowser-row] clipped :: span.starname':
+            'scrollHeight 29 > clientHeight 27',
+        '1400x761 [page] clipped :: span.starname':
+            'scrollHeight 29 > clientHeight 27',
+        '1400x761 [bowser-row] clipped :: span.starname':
+            'scrollHeight 29 > clientHeight 27',
+        '1500x900 [page] clipped :: span.starname':
+            'scrollHeight 29 > clientHeight 27',
+        '1500x900 [bowser-row] clipped :: span.starname':
+            'scrollHeight 29 > clientHeight 27',
+        '850x1180 [page] clipped :: span.starname':
+            'scrollHeight 22 > clientHeight 20',
+        '850x1180 [bowser-row] clipped :: span.starname':
+            'scrollHeight 22 > clientHeight 20',
+        '851x1000 [page] clipped :: span.starname':
+            'scrollHeight 22 > clientHeight 20',
+        '851x1000 [bowser-row] clipped :: span.starname':
+            'scrollHeight 22 > clientHeight 20',
+        '912x1000 [page] clipped :: span.starname':
+            'scrollHeight 24 > clientHeight 22',
+        '912x1000 [bowser-row] clipped :: span.starname':
+            'scrollHeight 24 > clientHeight 22',
+
+        # `.starholder` x `.starrank` overlap inside `.starcell` -- PROJECT's
+        # identical, long-owed 7x2px overlap, at every viewport a cell
+        # renders at all (all three cells on this row share it; the probe
+        # reports one row per colliding SELECTOR pair, not per cell).
+        '1060x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1060x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1061x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1061x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1100x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1100x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1101x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1101x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1180x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1180x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1181x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1181x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1250x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1250x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1251x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1251x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1280x720 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1280x720 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1400x760 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1400x760 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1400x761 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1400x761 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1500x900 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1500x900 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1920x1080 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1920x1080 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '850x1180 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '850x1180 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '851x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '851x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '900x1180 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '900x1180 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '912x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '912x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '913x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '913x1000 [bowser-row] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
     },
 )

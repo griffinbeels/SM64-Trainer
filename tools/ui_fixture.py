@@ -32,12 +32,14 @@ from pathlib import Path
 import uvicorn
 
 from sm64_events.core.events import Event
-from sm64_events.core.paths import bundled_rank_standards, rank_standards_path
+from sm64_events.core.paths import (bundled_defaults_seed, bundled_rank_standards,
+                                    rank_standards_path)
 from sm64_events.ranks.standards import RankStandards
 from sm64_events.server.app import create_app
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.server.poller import Poller
 from sm64_events.storage.db import Database
+from sm64_events.tracking.defaults import reconcile_defaults
 from sm64_events.tracking.service import TrackerService
 
 REPO = Path(__file__).resolve().parents[1]
@@ -300,6 +302,36 @@ def _arm_segment(base: str, service, segment_id: int = FIXTURE_SEGMENT) -> None:
     asyncio.run(rearm())
 
 
+def _publish_bowser_stage(service, course_id: int, level: int) -> None:
+    """Publish a `stage_changed` naming a Bowser-course PIPE stage (BitDW/
+    BitFS/BitS) -- the one `mode` `seed_practice`'s own stage_changed call can
+    never produce, since that call hardcodes `mode="stars"` (see its own
+    comment). Without this, `t.stage.mode` is never anything but "stars" or
+    whatever `seed_practice` was given, and `stagebanner.js::BowserCourseRow`
+    -- three cells since 912466d rewrote it from two -- had never been
+    rendered by any gate, before OR after that rewrite (task-bowser-sweep).
+
+    Additive, like `_arm_segment`: does not touch the star target `_seed_
+    target` sets. `stage_changed` is broadcast-only and retires nothing on
+    its own (detectors/stage.py's own docstring) -- only a JOURNALED
+    `level_changed` retires an active star target on a real course change
+    (projection.py caveat 12), and this publishes no such event. So a page
+    can carry an ordinary star target (Whomp's, say) for the Active Target
+    card while the quick-select banner above it shows a completely different
+    course's Bowser row -- the same "coexist" shape `_arm_segment` already
+    relies on for the armed-segment card.
+    """
+    now = datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
+
+    async def go() -> None:
+        await service.publish(Event(
+            type="stage_changed", frame=5200, timestamp_utc=now,
+            payload={"course_id": course_id, "level": level, "area": 1,
+                     "mode": "bowser_course"}))
+
+    asyncio.run(go())
+
+
 # Two user-authored segments, byte-identical to each other, for the segments-
 # editor Story/tests (uilab_project.py, test_fixture_reaches_the_real_page.py)
 # -- opening either one must show a REAL `duplicate` lint finding (the lint
@@ -359,7 +391,9 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
               stage: tuple[int, int] | None = None,
               target: tuple[int, int] | None = None,
               arm_segment: int | None = None,
-              seed_editor_fixtures: bool = False):
+              seed_editor_fixtures: bool = False,
+              reconcile_full_corpus: bool = False,
+              bowser_stage: tuple[int, int] | None = None):
     """Yield the base URL of an offline instance; stop it on the way out.
 
     DETERMINISTIC BY DEFAULT: an empty database plus `seed_practice`, so two
@@ -390,6 +424,24 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
     backtest, split, merge) have never been rendered by any gate, because
     reaching them needs a definition on disk to open, which no earlier
     fixture state provided.
+
+    `reconcile_full_corpus` additionally applies the bundled 84-segment
+    default corpus (`tracking/defaults.reconcile_defaults` against `data/
+    defaults.seed.json`) to a FRESH db, the same call `main.py` makes at real
+    startup and this fixture otherwise never makes (see the module docstring
+    on `FIXTURE_SEGMENT` -- "the fixture never calls reconcile_defaults...
+    so a segment from the 84-def corpus would not exist here at all"). Needed
+    for anything that depends on a corpus-only row rather than one of the ten
+    legacy tricks baked into the schema migration itself -- e.g. the Bowser
+    "reds -> pipe" segments (`seg:reds->pipe:*`, Task 20), which coexist with
+    the legacy `seg:*-pipe` trio only once this has run.
+
+    `bowser_stage` additionally publishes a `stage_changed` naming a Bowser
+    course's pipe stage -- `(course_id, level)`, e.g. `(16, 17)` for BitDW --
+    with `mode="bowser_course"` (see `_publish_bowser_stage`). Without it
+    `t.stage.mode` can never be anything but "stars", the mode `seed_practice`
+    hardcodes, and `stagebanner.js::BowserCourseRow` is unreachable by this
+    fixture no matter what `stage`/`target` are given.
     """
     scratch = None
     if db_path is None:
@@ -399,6 +451,17 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
             snapshot_db(DEV_DB, db_path)
 
     database = Database(db_path)
+    if reconcile_full_corpus:
+        # Before the server starts: reconcile is a plain db-level operation
+        # (mirrors main.py's own startup call), and doing it early means every
+        # request the fixture makes afterwards already sees the full corpus.
+        seed_path = bundled_defaults_seed()
+        if seed_path is not None:
+            seed_data = json.loads(seed_path.read_text(encoding="utf-8"))
+            problems = reconcile_defaults(database, seed_data)
+            if problems:
+                raise RuntimeError(
+                    f"fixture's reconcile_defaults skipped rows: {problems}")
     broadcaster = Broadcaster()
     # `ranks=` is NOT optional here, whatever the signature says. Omit it and
     # every rank builder short-circuits to empty -- /api/ranks/standards starts
@@ -454,6 +517,12 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
                           attempts=target is None)
             _seed_target(base, *(target or (FIXTURE_COURSE, FIXTURE_STAR)),
                          with_pb=target is None)
+            if bowser_stage is not None:
+                # AFTER _seed_target, not instead of it: broadcast-only and
+                # retires nothing (see _publish_bowser_stage), so the star
+                # target set above survives untouched underneath a Bowser
+                # quick-select banner from a different course entirely.
+                _publish_bowser_stage(service, *bowser_stage)
         yield base
     finally:
         server.should_exit = True
