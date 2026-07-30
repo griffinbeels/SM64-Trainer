@@ -171,13 +171,18 @@ def test_real_bundled_seed_does_not_alter_existing_segment_defs(tmp_path):
 # above.
 
 def test_fresh_install_seeds_the_converted_corpus(tmp_path):
-    """The 56 movements now ship match_mode="loose"; the ten legacy tricks
-    carry no match_mode key (corpus_legacy.py's _seg() never stamps one) and
-    so reconcile still applies the column default, "strict", to them —
-    unchanged by this conversion. Task 20's 18 unguarded mechanic rows
-    (reds->pipe, 100c->exit) ship explicit match_mode="loose" too, so they
-    join the movements on the loose side of the split rather than the
-    legacy side their guards=[] shape would otherwise suggest."""
+    """The 56 movements now ship match_mode="loose"; 7 of the ten legacy
+    tricks carry no match_mode key (corpus_legacy.py's _seg() never stamps
+    one on those) and so reconcile still applies the column default,
+    "strict", to them — unchanged by this conversion. The other 3 legacy rows
+    (the Bowser pipe-entry trio) ship explicit match_mode="exclusive" since
+    the 2026-07-29 corpus reshape (spec 2026-07-28-multi-step-segments, live
+    report). Of Task 20's 18 unguarded mechanic rows (reds->pipe, 100c->exit),
+    the 15 100c->exit rows ship "loose" (join the movements) and the 3
+    reds->pipe rows ship "strict" (a single-star course makes the strict
+    cancellation rules safe again — see corpus_movements.py's own comment) —
+    so match_mode no longer splits cleanly along the guards=[] boundary at
+    all; it takes all four values independently of it."""
     db = Database(tmp_path / "t.db")
     seed = json.loads(bundled_defaults_seed().read_bytes().decode("utf-8"))
     assert reconcile_defaults(db, seed) == []
@@ -185,7 +190,8 @@ def test_fresh_install_seeds_the_converted_corpus(tmp_path):
     assert len(rows) == 84
     loose = [r for r in rows if r["match_mode"] == "loose"]
     strict = [r for r in rows if r["match_mode"] == "strict"]
-    assert len(loose) == 74 and len(strict) == 10
+    exclusive = [r for r in rows if r["match_mode"] == "exclusive"]
+    assert len(loose) == 71 and len(strict) == 10 and len(exclusive) == 3
 
 
 def test_reconcile_carries_match_mode_on_insert_and_refresh(tmp_path):

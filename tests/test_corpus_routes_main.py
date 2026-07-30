@@ -10,6 +10,11 @@ from pathlib import Path
 
 from sm64_events.tracking.routes import validate_route
 
+# tests/ has no __init__.py, but pytest prepends the test file's own directory
+# to sys.path, so this sibling import works the way test_defaults_corpus_
+# routes.py already relies on.
+from test_defaults_corpus import Ev, run_engine
+
 TOOLS = Path(__file__).resolve().parent.parent / "tools"
 sys.path.insert(0, str(TOOLS))
 _spec = importlib.util.spec_from_file_location(
@@ -202,6 +207,101 @@ def test_a_definition_that_ends_on_a_star_grab_is_in_no_route():
         "star advances the run past this step and the segment's own closure "
         "arrives too late — the run stalls silently. Either give the segment a "
         "non-star end trigger, or keep it out of routes.")
+
+
+_BOWSER_REDS_STAR = {"seg:bitdw-pipe": (16, 0), "seg:reds->pipe:bitdw": (16, 0),
+                     "seg:bitfs-pipe": (17, 0), "seg:reds->pipe:bitfs": (17, 0),
+                     "seg:bits-pipe": (18, 0), "seg:reds->pipe:bits": (18, 0)}
+
+
+def _route_collects_star(route, course, star_id) -> bool:
+    return any(c["type"] == "star" and c["course"] == course
+               and c["star"] == star_id
+               for step in route["steps"] for c in step["candidates"])
+
+
+def test_a_route_collecting_a_bowser_reds_star_never_uses_the_exclusive_pipe_entry():
+    """Real regression, found live-testing the 2026-07-29 corpus reshape by
+    simulating a real route: seg:bitdw-pipe/bitfs-pipe/bits-pipe carry
+    match_mode="exclusive" since that reshape (corpus_legacy.py) — they
+    cancel the instant a star or key is grabbed that isn't their own end
+    trigger, which is exactly right for STANDALONE "pipe entry without going
+    for the reds" practice. But `star(16/17/18, 0, ...)` is itself an
+    earlier route STEP in every route that wants that stage's reds star
+    (16/70/120-Star), and grabbing it is precisely the event that would
+    cancel an exclusive seg:X-pipe armed since course entry — silently, with
+    the segment never recording success. Per this file's own rule (steps
+    must close in completion-event order or the run stalls PERMANENTLY),
+    that stalls the run at the Bowser step forever the moment the runner
+    does exactly what the route requires. Proven live with SegmentEngine
+    directly (armed at course entry, star_collected disarms it with no row,
+    the later warp_entered then does nothing).
+
+    The fix (corpus_routes_main.py, BOWSER_1_REDS/2_REDS/3_REDS) swaps the
+    route-step CANDIDATE to seg:reds->pipe:* wherever that course's reds
+    star is ALSO a route requirement — strict, with the star as its own
+    WAYPOINT, so grabbing it is the expected next step instead of a cancel.
+    This test is DERIVED, not a hardcoded route list: any route that ever
+    pairs a reds star with the exclusive segment fails here, including one
+    nobody has written yet."""
+    exclusive_keys = {"seg:bitdw-pipe", "seg:bitfs-pipe", "seg:bits-pipe"}
+    used = _segments_used_by(ROUTES)
+    for route in ROUTES:
+        for step in route["steps"]:
+            for cand in step["candidates"]:
+                if cand["type"] != "segment" or cand["seed_key"] not in exclusive_keys:
+                    continue
+                course, star_id = _BOWSER_REDS_STAR[cand["seed_key"]]
+                assert not _route_collects_star(route, course, star_id), (
+                    route["seed_key"], cand["seed_key"], "also collects",
+                    (course, star_id), "-- use seg:reds->pipe:* instead")
+    # And the converse: reds->pipe should only appear where the swap was
+    # actually warranted -- an UNUSED reds->pipe route reference would mean
+    # this test is vacuously trivial for that stage.
+    for reds_key in ("seg:reds->pipe:bitdw", "seg:reds->pipe:bitfs",
+                     "seg:reds->pipe:bits"):
+        assert reds_key in used, (
+            reds_key, "expected at least one route to reference this "
+            "(otherwise the exclusive-vs-strict distinction above is untested)")
+
+
+def test_the_bowser_reds_route_step_actually_closes_through_the_real_matcher():
+    """The structural test above cannot prove the fix WORKS, only that the
+    wrong pairing is absent -- it never runs an event through SegmentEngine.
+    This does: replays "enter BitDW -> grab the reds star -> enter the pipe"
+    -- the exact sequence route:16-lblj requires -- through whichever
+    segment that route ACTUALLY references, using the real matcher.
+
+    Mutation-proved inline: feeding the SAME events through the segment this
+    route step used to reference (seg:bitdw-pipe, exclusive) reproduces the
+    stall this fix was for -- star_collected cancels it, so it never closes,
+    which is the bug report this test exists to keep fixed."""
+    route = BY_KEY["route:16-lblj"]
+    seg_keys = [c["seed_key"] for step in route["steps"]
+                for c in step["candidates"]
+                if c["type"] == "segment" and c["seed_key"] in
+                ("seg:bitdw-pipe", "seg:reds->pipe:bitdw")]
+    assert seg_keys == ["seg:reds->pipe:bitdw"], seg_keys
+
+    segments = {s["seed_key"]: s for s in build_seed.build()["segments"]}
+    events = [
+        Ev(1, "level_changed", 100, {"from": 16, "to": 17}),
+        Ev(2, "star_collected", 150, {"course_id": 16, "star_id": 0, "num_stars": 0}),
+        Ev(3, "warp_entered", 250, {"level": 17}),
+    ]
+
+    fixed_row = segments["seg:reds->pipe:bitdw"]
+    closed = run_engine(fixed_row, events, 16, None)
+    assert [a.outcome for a in closed] == ["success"], (
+        "the route's actual candidate must close on this real sequence")
+
+    old_row = segments["seg:bitdw-pipe"]      # what the route used to reference
+    closed_old = run_engine(old_row, events, 16, None)
+    assert closed_old == [], (
+        "sanity check on the bug this fixes: the OLD (exclusive) reference "
+        "must NOT close on the same sequence -- if it does, the regression "
+        "this test guards no longer reproduces and the test should be "
+        "revisited")
 
 
 def test_movements_sharing_a_start_within_one_route_have_different_ends():

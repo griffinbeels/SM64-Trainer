@@ -21,7 +21,8 @@ from sm64_events.memory.addresses import (COURSE_BY_LEVEL,
                                           WORLD_EDGES_TWO_WAY)
 from sm64_events.tracking.lint import lint_definition
 from sm64_events.tracking.segments import (MatchContext, SegmentDef,
-                                           SegmentEngine, validate_definition)
+                                           SegmentEngine, budget_frames,
+                                           validate_definition)
 
 SEED = json.loads(bundled_defaults_seed().read_bytes().decode("utf-8"))
 SEGMENTS = SEED["segments"]
@@ -475,41 +476,56 @@ def test_the_two_step_bowser2_upstairs_then_bits_entry_survives_the_same_detour(
 
 
 def test_a_100_coin_star_segment_ends_on_the_star_that_exits_the_level():
-    # In a normal stage the 100-coin grab does not exit; the segment ends on
-    # a DIFFERENT, named star.
+    # Reshaped 2026-07-29 (live report): the segment now arms on STAGE ENTRY,
+    # not the 100-coin grab itself, so it can be offered before the grab and
+    # times the whole course visit. The 100-coin grab is a WAYPOINT; in a
+    # normal stage it does not exit, the segment ends on a DIFFERENT, named
+    # star.
     row = _seg("seg:100c->exit:wf")
-    hundred_coins_only = [
-        Ev(1, "star_collected", 101,
+    stage_entry = [
+        Ev(1, "level_changed", 100, {"from": 6, "to": 24}),
+    ]
+    closed = run_engine(row, stage_entry, 6, None)
+    assert closed == [], "stage entry alone must not exit the level"
+
+    hundred_coins_only = stage_entry + [
+        Ev(2, "star_collected", 150,
            {"course_id": 2, "star_id": 6, "num_stars": 0}),
     ]
-    closed = run_engine(row, hundred_coins_only, 24, None)
+    closed = run_engine(row, hundred_coins_only, 6, None)
     assert closed == [], "the 100-coin grab alone must not exit the level"
 
     events = hundred_coins_only + [
-        Ev(2, "star_collected", 250,
+        Ev(3, "star_collected", 250,
            {"course_id": 2, "star_id": 2, "num_stars": 1}),
     ]
-    closed = run_engine(row, events, 24, None)
+    closed = run_engine(row, events, 6, None)
     outcomes = [a.outcome for a in closed]
     assert outcomes == ["success"], (row["seed_key"], outcomes)
 
 
 def test_hundred_coin_exit_count_and_shape():
     """Structural guard, mutation-provable: 15 rows (one per main course),
-    each starting on that course's 100-coin star and ending on any of its
-    six OTHER stars -- never the 100-coin star itself, and never unguarded
-    into some other course's stars."""
+    each arming on that course's stage entry, waypointing through its
+    100-coin star, and ending on any of its six OTHER stars -- never the
+    100-coin star itself, and never unguarded into some other course's
+    stars."""
     rows = [s for s in SEGMENTS if s["category"] == "100 Coin Exit"]
     assert len(rows) == 15
     seen_courses = set()
     for row in rows:
-        start = row["start_triggers"][0]
-        assert start["type"] == "star_grabbed" and start["star"] == 6
-        seen_courses.add(start["course"])
+        starts = {t["type"] for t in row["start_triggers"]}
+        assert starts == {"level_enter", "attempt_anchor"}
+        levels = {t.get("to", t.get("level")) for t in row["start_triggers"]}
+        assert len(levels) == 1, "start clauses disagree on which level"
+        assert len(row["waypoints"]) == 1 and len(row["waypoints"][0]) == 1
+        waypoint = row["waypoints"][0][0]
+        assert waypoint["type"] == "star_grabbed" and waypoint["star"] == 6
+        seen_courses.add(waypoint["course"])
         ends = row["end_triggers"]
         assert len(ends) == 6
         assert all(e["type"] == "star_grabbed"
-                   and e["course"] == start["course"]
+                   and e["course"] == waypoint["course"]
                    and e["star"] != 6 for e in ends)
         assert row["guards"] == []            # no route ambiguity -- always on
         assert row["match_mode"] == "loose"
@@ -517,20 +533,30 @@ def test_hundred_coin_exit_count_and_shape():
 
 
 def test_a_bowser_reds_segment_ends_on_the_pipe_not_the_star():
-    # The reference autosplitter's own default (it waits for pipe entry),
-    # and the case its issue tracker shows it repeatedly getting wrong.
+    # Reshaped 2026-07-29 (live report): the segment now arms on STAGE ENTRY,
+    # not the reds-star grab itself, so it can be offered before the grab and
+    # times the whole stage (previously it measured only star->pipe -- his
+    # log showed 237/378-frame "successes"). The reference autosplitter's own
+    # default (it waits for pipe entry), and the case its issue tracker shows
+    # it repeatedly getting wrong.
     row = _seg("seg:reds->pipe:bitdw")
-    reds_only = [
-        Ev(1, "star_collected", 101,
+    stage_entry = [
+        Ev(1, "level_changed", 100, {"from": 16, "to": 17}),
+    ]
+    closed = run_engine(row, stage_entry, 16, None)
+    assert closed == [], "stage entry alone must not finish the level"
+
+    reds_only = stage_entry + [
+        Ev(2, "star_collected", 150,
            {"course_id": 16, "star_id": 0, "num_stars": 0}),
     ]
-    closed = run_engine(row, reds_only, 17, None)
+    closed = run_engine(row, reds_only, 16, None)
     assert closed == [], "the reds star alone must not finish the level"
 
     events = reds_only + [
-        Ev(2, "warp_entered", 250, {"level": 17}),
+        Ev(3, "warp_entered", 250, {"level": 17}),
     ]
-    closed = run_engine(row, events, 17, None)
+    closed = run_engine(row, events, 16, None)
     outcomes = [a.outcome for a in closed]
     assert outcomes == ["success"], (row["seed_key"], outcomes)
 
@@ -539,10 +565,58 @@ def test_reds_to_pipe_count_and_shape():
     rows = [s for s in SEGMENTS if s["seed_key"].startswith("seg:reds->pipe:")]
     assert len(rows) == 3
     for row in rows:
-        assert row["start_triggers"][0]["type"] == "star_grabbed"
+        starts = {t["type"] for t in row["start_triggers"]}
+        assert starts == {"level_enter", "attempt_anchor"}
+        levels = {t.get("to", t.get("level")) for t in row["start_triggers"]}
+        assert len(levels) == 1, "start clauses disagree on which level"
+        assert len(row["waypoints"]) == 1 and len(row["waypoints"][0]) == 1
+        waypoint = row["waypoints"][0][0]
+        assert waypoint["type"] == "star_grabbed" and waypoint["star"] == 0
         assert row["end_triggers"][0]["type"] == "warp_entered"
         assert row["guards"] == []
         assert row["category"] == "Castle Movement"
+        assert row["match_mode"] == "strict"
+
+
+def test_a_slow_first_hundred_coin_run_can_expire_the_staleness_budget():
+    """KNOWN LIMITATION, found live-testing the 2026-07-29 corpus reshape by
+    replaying the user's real 659-event session: the ONLY genuine
+    100c->exit completion anywhere in that journal (WF -- stage entry, three
+    practice_resets before ever grabbing the 100-coin star, 185.4s total
+    course-visit time) was silently swallowed by the loose-mode staleness
+    deadline (segments.py::budget_frames), which floors at
+    MIN_BUDGET_FRAMES for any def with no prior recorded success -- a
+    constant measured (Task 9) against castle MOVEMENTS (max observed
+    completion 141.5s, chosen for a 27% margin over that), not against
+    100-coin hunts, which are a slower, more exploratory activity likely to
+    routinely exceed it on a def's very first-ever completion.
+
+    This is NOT something the corpus reshape can fix -- the floor is a
+    segments.py constant shared by all 71 loose defs, out of this task's
+    touch-set, and re-measuring it needs this family's OWN history the way
+    Task 9 used the movements'. This test documents the behavior as it ships
+    today (a completion past budget records NOTHING, not even a failure) so
+    it is visible and testable rather than only living in a report, and so a
+    future re-measurement that changes the floor shows up here as a
+    deliberate decision instead of an unnoticed side effect.
+
+    Derives the just-past-budget elapsed time from budget_frames() itself,
+    not a literal frame count, so a re-measurement moves this test's
+    timeline with it instead of the test silently going stale."""
+    row = _seg("seg:100c->exit:wf")
+    floor = budget_frames(None)
+    events = [
+        Ev(1, "level_changed", 100, {"from": 6, "to": 24}),
+        Ev(2, "star_collected", 100 + floor - 30,
+           {"course_id": 2, "star_id": 6, "num_stars": 0}),
+        Ev(3, "star_collected", 100 + floor + 30,
+           {"course_id": 2, "star_id": 2, "num_stars": 1}),
+    ]
+    closed = run_engine(row, events, 6, None)
+    assert closed == [], (
+        "documents the known limitation above: a genuine completion whose "
+        "TOTAL course-visit time exceeds the no-history staleness floor "
+        "records nothing at all, success or otherwise")
 
 
 # --- lint gate (Task 15, tracking/lint.py) ----------------------------------

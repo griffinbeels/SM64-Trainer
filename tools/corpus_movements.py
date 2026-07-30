@@ -31,8 +31,11 @@ Two invariants survive untouched, because they hold for every match mode:
     UNFIREABLE (the direct-edge trap — spec §5.1), guarded by
     test_no_movement_starts_and_ends_on_the_SAME_event.
 
-Read spec §4.1/§4.2 for the retired strict-mode rules above if a future row
-ever opts back into match_mode="strict"; none do today.
+Read spec §4.1/§4.2 for the retired strict-mode rules above for MOVEMENTS
+specifically; none of the 56 opt back into match_mode="strict" today. That is
+no longer true of the module as a whole -- REDS_TO_PIPE below does, and its
+own comment explains why a single-star course makes the strict cancellation
+rules safe again.
 
 Task 20 (spec 2026-07-28-multi-step-segments) adds three shapes loose
 matching finally makes expressible: `seg:bowser2->bits` (a plain movement
@@ -43,9 +46,17 @@ the legacy pipe-entry trio -- see mechanic()'s docstring) and
 `HUNDRED_COIN_EXITS` (its own category, `HUNDRED_COIN_EXIT`, because it
 DELIBERATELY ends on star_grabbed -- see the section comment above it for
 why the run-ordering trap does not apply).
-"""
+
+RESHAPED 2026-07-29 (same spec, live report): both `REDS_TO_PIPE` and
+`HUNDRED_COIN_EXITS` originally started on the grab itself (the star or the
+100 coins), which the user found unselectable before the grab and mistimed
+(measuring only grab->end instead of the whole stage/course). Both now start
+on stage/course entry and make the grab a WAYPOINT (mechanic()'s new `via`
+parameter) -- see each section's own comment for the match_mode reasoning,
+which differs between them (a Bowser stage has exactly one star; a main
+course has six)."""
 from corpus_vocab import (BASEMENT, CASTLE_MOVEMENT, HUNDRED_COIN_EXIT, LOBBY,
-                          UPSTAIRS, enter_area, enter_level, enter_warp,
+                          UPSTAIRS, anchor, enter_area, enter_level, enter_warp,
                           exit_level, grab_star, mechanic, movement)
 
 MOVEMENTS = [
@@ -184,7 +195,8 @@ MOVEMENTS = [
     movement("seg:ttc->bits", "TTC → BitS", exit_level(14), enter_level(21)),
 ]
 
-# --- Bowser-stage reds -> pipe (Task 20, spec 2026-07-28-multi-step-segments)
+# --- Bowser-stage reds -> pipe (Task 20, spec 2026-07-28-multi-step-segments;
+# RESHAPED 2026-07-29, same spec, live report -- see module docstring below)
 # "8 red coins levels in bowser stages. When you get this star, the level
 # doesn't end -- you have to go into the pipe to finish the level." -- the
 # reference autosplitter's own default (it waits for pipe entry), and the
@@ -194,44 +206,93 @@ MOVEMENTS = [
 # instead (see mechanic()'s docstring): there is exactly one pipe per stage,
 # no route to scope against, matching the existing pipe-entry trio's
 # always-armed shape more closely than the 56 route-scoped movements'.
+#
+# Starting on the star grab (as this shipped originally) was the live-reported
+# bug: it could not be OFFERED before the grab, and it timed star->pipe (his
+# log: successes at 237/378 frames, 7.9s/12.6s) instead of the whole stage.
+# The reshape starts on stage entry -- the SAME any-of idiom
+# corpus_legacy.py's seg:bitdw-pipe/etc. already use ([level_enter, anchor],
+# copied rather than invented) -- and makes the reds star a WAYPOINT: the
+# span the user actually wants is stage entry -> reds star -> pipe. This is
+# also what makes both (1) the star grab alone and (2) this segment armed
+# from the SAME event, satisfying his rule "if 1 is armed, 2 should always be
+# armed" with no picker involved.
+#
+# match_mode="strict" (not the corpus's usual "loose"), because every Bowser
+# course has EXACTLY ONE collectible star (STAR_NAMES[16/17/18] == ("8 Red
+# Coins",), addresses.py) -- so the only star_grabbed event reachable before
+# the pipe IS this def's own waypoint, and _feed_waypoint's major-action
+# cancel (segments.py) can never misfire on an incidental OTHER star the way
+# it would in a main course (see HUNDRED_COIN_EXITS below, which stays loose
+# for exactly that reason). Strict also means leaving the stage via the pause
+# menu without reaching the pipe -- a real level_changed matching neither the
+# waypoint nor the end -- genuinely cancels the attempt instead of leaving it
+# armed for an unrelated later visit, matching the legacy pipe-entry trio's
+# own (now Exclusive) idiom more closely than "loose" would.
 REDS_TO_PIPE = [
     mechanic("seg:reds->pipe:bitdw", "BitDW — 8 Red Coins → Pipe",
-             grab_star(16, 0), enter_warp(17), CASTLE_MOVEMENT),
+             [enter_level(17), anchor(17)], enter_warp(17), CASTLE_MOVEMENT,
+             match_mode="strict", via=[grab_star(16, 0)]),
     mechanic("seg:reds->pipe:bitfs", "BitFS — 8 Red Coins → Pipe",
-             grab_star(17, 0), enter_warp(19), CASTLE_MOVEMENT),
+             [enter_level(19), anchor(19)], enter_warp(19), CASTLE_MOVEMENT,
+             match_mode="strict", via=[grab_star(17, 0)]),
     mechanic("seg:reds->pipe:bits", "BitS — 8 Red Coins → Pipe",
-             grab_star(18, 0), enter_warp(21), CASTLE_MOVEMENT),
+             [enter_level(21), anchor(21)], enter_warp(21), CASTLE_MOVEMENT,
+             match_mode="strict", via=[grab_star(18, 0)]),
 ]
 
-# --- 100-coin star -> the star that actually exits (Task 20) ---------------
+# --- 100-coin star -> the star that actually exits (Task 20; RESHAPED
+# 2026-07-29, same spec, live report -- see module docstring below) ---------
 # "In normal stages, you don't exit the stage when you grab a 100 coins
 # star, you can keep playing and must find another star to actually exit
-# the level." This is the one seeded shape that DELIBERATELY ends on
-# star_grabbed. The rule it looks like it breaks -- a movement may start on
-# a star grab but must never end on one -- exists because RunTracker
-# (runs.py::_apply) only ever considers the CURRENT route step and
-# projection.py closes stars-then-segments within one event, so a
-# misordered ROUTE STEP stalls a run permanently and silently. That is a
-# property of being a route step: nothing here is one (no seeded route
-# references any of these seed_keys, and they carry no guard), so there is
-# no run to stall. Hence its own category (HUNDRED_COIN_EXIT) rather than
-# Castle Movement -- it never enters corpus_movements.MOVEMENTS, so it never
-# reaches the tests built on "a movement never ends on star_grabbed"
-# (test_no_movement_starts_and_ends_on_the_SAME_event and friends).
+# the level." The end trigger DELIBERATELY ends on star_grabbed. The rule it
+# looks like it breaks -- a movement may start on a star grab but must never
+# end on one -- exists because RunTracker (runs.py::_apply) only ever
+# considers the CURRENT route step and projection.py closes stars-then-
+# segments within one event, so a misordered ROUTE STEP stalls a run
+# permanently and silently. That is a property of being a route step:
+# nothing here is one (no seeded route references any of these seed_keys,
+# and they carry no guard), so there is no run to stall. Hence its own
+# category (HUNDRED_COIN_EXIT) rather than Castle Movement -- it never enters
+# corpus_movements.MOVEMENTS, so it never reaches the tests built on "a
+# movement never ends on star_grabbed" (test_no_movement_starts_and_ends_on_
+# the_SAME_event and friends).
+#
+# The START used to be the 100-coin grab itself, which is the SAME live-
+# reported bug as reds->pipe (2026-07-29): unselectable before the grab, and
+# it timed 100-coins->exit rather than "the whole course visit" the user
+# asked for ("Timing starts on reset -> timer ends after grabbing the final
+# exit-star"). The reshape starts on stage entry (the same
+# [level_enter, attempt_anchor] any-of idiom every movement/legacy row uses)
+# and makes the 100-coin grab a WAYPOINT instead.
+#
+# match_mode STAYS "loose" here, unlike reds->pipe's "strict" -- a main
+# course has SIX other named stars (star ids 0-5) a player may incidentally
+# grab while hunting for coins, in no fixed order, and _feed_waypoint's
+# major-action cancel (segments.py) treats ANY star grab that isn't the next
+# expected waypoint as a silent cancel. Under strict dispatch, grabbing an
+# ordinary star before the 100-coin star would cancel this def on nearly
+# every real attempt; loose lets every incidental star grab (and any transit
+# through the course topology) pass through transparently, exactly matching
+# a Bowser stage's single-star case being safe under strict.
+#
 # Every main course (1-15) has six numbered stars (0-5) plus 100 Coins at
 # star_id 6 (addresses.star_count/star_name own that rule); end_triggers
 # lists the six alternatives explicitly since the vocabulary has no "any
-# star but this one" clause.
+# star but this one" clause. The level column is COURSE_BY_LEVEL's inverse
+# (addresses.py) -- the level the def arms in and the 100-coin waypoint's
+# star_grabbed fires from (segments.py::fires_from's course->level check).
 _MAIN_COURSES = [
-    (1, "BoB"), (2, "WF"), (3, "JRB"), (4, "CCM"), (5, "BBH"), (6, "HMC"),
-    (7, "LLL"), (8, "SSL"), (9, "DDD"), (10, "SL"), (11, "WDW"), (12, "TTM"),
-    (13, "THI"), (14, "TTC"), (15, "RR"),
+    (1, "BoB", 9), (2, "WF", 24), (3, "JRB", 12), (4, "CCM", 5),
+    (5, "BBH", 4), (6, "HMC", 7), (7, "LLL", 22), (8, "SSL", 8),
+    (9, "DDD", 23), (10, "SL", 10), (11, "WDW", 11), (12, "TTM", 36),
+    (13, "THI", 13), (14, "TTC", 14), (15, "RR", 15),
 ]
 
 HUNDRED_COIN_EXITS = [
     mechanic(f"seg:100c->exit:{abbrev.lower()}", f"{abbrev} — 100 Coins → Exit",
-             grab_star(course, 6),
+             [enter_level(level), anchor(level)],
              [grab_star(course, star_id) for star_id in range(6)],
-             HUNDRED_COIN_EXIT)
-    for course, abbrev in _MAIN_COURSES
+             HUNDRED_COIN_EXIT, via=[grab_star(course, 6)])
+    for course, abbrev, level in _MAIN_COURSES
 ]

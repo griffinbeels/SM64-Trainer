@@ -80,25 +80,54 @@ def test_every_movement_defaults_to_loose_match_mode():
     match_mode="loose" -- stamped in _movement_row, so the 56 rows cannot
     disagree with each other, and Task 13's recorder (which always posts
     "loose" for a recorded segment) round-trips into a shipped default that
-    means the same thing rather than reconciling back to "strict".
-
-    The ten legacy tricks carry no match_mode key at all, unchanged -- they
-    keep meaning "strict" through reconcile's own default, exactly as before
-    this conversion. Task 20 adds a THIRD group -- unguarded like legacy (no
-    route ambiguity to scope against), but with an explicit "loose"
-    match_mode like the movements (mechanic(), corpus_movements.py) -- so
-    "guards" alone no longer tells legacy and mechanics apart; the presence
-    of the match_mode key does."""
+    means the same thing rather than reconciling back to "strict"."""
     seed = build_seed.build()
     movements = [s for s in seed["segments"] if s["guards"]]
-    legacy = [s for s in seed["segments"]
-              if not s["guards"] and "match_mode" not in s]
-    mechanics = [s for s in seed["segments"]
-                 if not s["guards"] and "match_mode" in s]
-    assert len(movements) == 56 and len(legacy) == 10 and len(mechanics) == 18
+    assert len(movements) == 56
     assert {s["match_mode"] for s in movements} == {"loose"}
-    assert {s["match_mode"] for s in mechanics} == {"loose"}
-    assert [s["seed_key"] for s in legacy if "match_mode" in s] == []
+
+
+def test_every_non_movement_defs_match_mode():
+    """The taxonomy match_mode actually takes, after the 2026-07-29 corpus
+    reshape (spec 2026-07-28-multi-step-segments, live report) split what
+    used to be one clean "guards=[] -> legacy, has match_mode -> mechanic"
+    boundary (Task 20) into four groups that no longer align with guards at
+    all:
+
+      * 7 legacy tricks/movements (LBLJ, MIPS Clip, Lakitu Skip, BitS Entry,
+        the three Bowser fights) carry NO match_mode key -- unchanged, they
+        keep meaning "strict" through reconcile's own column default.
+      * 3 legacy Bowser pipe-entry rows (seg:bitdw/bitfs/bits-pipe) now carry
+        match_mode="exclusive" -- "the pipe without going for the reds star"
+        is what they mean since the reshape (corpus_legacy.py's own comment).
+      * 3 reds->pipe mechanics (seg:reds->pipe:*) carry match_mode="strict" --
+        a Bowser stage's single collectible star makes the strict
+        cancellation rules safe again (corpus_movements.py's own comment).
+      * 15 100c->exit mechanics carry match_mode="loose" -- a main course's
+        six OTHER stars would falsely cancel a strict waypoint def.
+
+    So "guards" alone no longer tells any of these groups apart; only
+    (guards, waypoints, match_mode, seed_key prefix) together do. This test
+    pins the actual counts, not a `not s["guards"]` catch-all, so a future
+    row landing in the wrong bucket fails here by COUNT instead of silently
+    joining whichever assertion still happens to pass."""
+    seed = build_seed.build()
+    by_key = {s["seed_key"]: s for s in seed["segments"]}
+    legacy_plain = ["seg:lblj", "seg:mips-clip", "seg:lakitu-skip",
+                    "seg:bits-entry", "seg:bowser-1", "seg:bowser-2",
+                    "seg:bowser-3"]
+    legacy_pipe = ["seg:bitdw-pipe", "seg:bitfs-pipe", "seg:bits-pipe"]
+    reds_to_pipe = [k for k in by_key if k.startswith("seg:reds->pipe:")]
+    hundred_coin = [k for k in by_key if k.startswith("seg:100c->exit:")]
+    assert len(legacy_plain) == 7 and len(legacy_pipe) == 3
+    assert len(reds_to_pipe) == 3 and len(hundred_coin) == 15
+    assert [k for k in legacy_plain if "match_mode" in by_key[k]] == []
+    assert {by_key[k]["match_mode"] for k in legacy_pipe} == {"exclusive"}
+    assert {by_key[k]["match_mode"] for k in reds_to_pipe} == {"strict"}
+    assert {by_key[k]["match_mode"] for k in hundred_coin} == {"loose"}
+    # every non-movement def stays unguarded, whichever mode it carries
+    assert all(by_key[k]["guards"] == []
+               for k in legacy_plain + legacy_pipe + reds_to_pipe + hundred_coin)
 
 
 def test_every_movement_defaults_to_the_standard_strategy():

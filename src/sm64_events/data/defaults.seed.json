@@ -111,7 +111,8 @@
       ],
       "waypoints": [],
       "guards": [],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "match_mode": "exclusive"
     },
     {
       "seed_key": "seg:bitfs-pipe",
@@ -135,7 +136,8 @@
       ],
       "waypoints": [],
       "guards": [],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "match_mode": "exclusive"
     },
     {
       "seed_key": "seg:bits-pipe",
@@ -159,7 +161,8 @@
       ],
       "waypoints": [],
       "guards": [],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "match_mode": "exclusive"
     },
     {
       "seed_key": "seg:bowser-1",
@@ -1710,9 +1713,12 @@
       "enabled": true,
       "start_triggers": [
         {
-          "type": "star_grabbed",
-          "course": 16,
-          "star": 0
+          "type": "level_enter",
+          "to": 17
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 17
         }
       ],
       "end_triggers": [
@@ -1721,10 +1727,18 @@
           "level": 17
         }
       ],
-      "waypoints": [],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 16,
+            "star": 0
+          }
+        ]
+      ],
       "guards": [],
       "category": "Castle Movement",
-      "match_mode": "loose"
+      "match_mode": "strict"
     },
     {
       "seed_key": "seg:reds->pipe:bitfs",
@@ -1732,9 +1746,12 @@
       "enabled": true,
       "start_triggers": [
         {
-          "type": "star_grabbed",
-          "course": 17,
-          "star": 0
+          "type": "level_enter",
+          "to": 19
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 19
         }
       ],
       "end_triggers": [
@@ -1743,10 +1760,18 @@
           "level": 19
         }
       ],
-      "waypoints": [],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 17,
+            "star": 0
+          }
+        ]
+      ],
       "guards": [],
       "category": "Castle Movement",
-      "match_mode": "loose"
+      "match_mode": "strict"
     },
     {
       "seed_key": "seg:reds->pipe:bits",
@@ -1754,9 +1779,12 @@
       "enabled": true,
       "start_triggers": [
         {
-          "type": "star_grabbed",
-          "course": 18,
-          "star": 0
+          "type": "level_enter",
+          "to": 21
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 21
         }
       ],
       "end_triggers": [
@@ -1765,10 +1793,18 @@
           "level": 21
         }
       ],
-      "waypoints": [],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 18,
+            "star": 0
+          }
+        ]
+      ],
       "guards": [],
       "category": "Castle Movement",
-      "match_mode": "loose"
+      "match_mode": "strict"
     },
     {
       "seed_key": "seg:100c->exit:bob",
@@ -1776,9 +1812,12 @@
       "enabled": true,
       "start_triggers": [
         {
-          "type": "star_grabbed",
-          "course": 1,
-          "star": 6
+          "type": "level_enter",
+          "to": 9
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 9
         }
       ],
       "end_triggers": [
@@ -1813,7 +1852,15 @@
           "star": 5
         }
       ],
-      "waypoints": [],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 1,
+            "star": 6
+          }
+        ]
+      ],
       "guards": [],
       "category": "100 Coin Exit",
       "match_mode": "loose"
@@ -1824,9 +1871,12 @@
       "enabled": true,
       "start_triggers": [
         {
-          "type": "star_grabbed",
-          "course": 2,
-          "star": 6
+          "type": "level_enter",
+          "to": 24
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 24
         }
       ],
       "end_triggers": [
@@ -1861,7 +1911,15 @@
           "star": 5
         }
       ],
-      "waypoints": [],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 2,
+            "star": 6
+          }
+        ]
+      ],
       "guards": [],
       "category": "100 Coin Exit",
       "match_mode": "loose"
@@ -1872,9 +1930,12 @@
       "enabled": true,
       "start_triggers": [
         {
-          "type": "star_grabbed",
-          "course": 3,
-          "star": 6
+          "type": "level_enter",
+          "to": 12
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 12
         }
       ],
       "end_triggers": [
@@ -1909,7 +1970,15 @@
           "star": 5
         }
       ],
-      "waypoints": [],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 3,
+            "star": 6
+          }
+        ]
+      ],
       "guards": [],
       "category": "100 Coin Exit",
       "match_mode": "loose"
@@ -1920,9 +1989,12 @@
       "enabled": true,
       "start_triggers": [
         {
-          "type": "star_grabbed",
-          "course": 4,
-          "star": 6
+          "type": "level_enter",
+          "to": 5
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 5
         }
       ],
       "end_triggers": [
@@ -1957,7 +2029,15 @@
           "star": 5
         }
       ],
-      "waypoints": [],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 4,
+            "star": 6
+          }
+        ]
+      ],
       "guards": [],
       "category": "100 Coin Exit",
       "match_mode": "loose"
@@ -1968,9 +2048,12 @@
       "enabled": true,
       "start_triggers": [
         {
-          "type": "star_grabbed",
-          "course": 5,
-          "star": 6
+          "type": "level_enter",
+          "to": 4
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 4
         }
       ],
       "end_triggers": [
@@ -2005,7 +2088,15 @@
           "star": 5
         }
       ],
-      "waypoints": [],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 5,
+            "star": 6
+          }
+        ]
+      ],
       "guards": [],
       "category": "100 Coin Exit",
       "match_mode": "loose"
@@ -2016,9 +2107,12 @@
       "enabled": true,
       "start_triggers": [
         {
-          "type": "star_grabbed",
-          "course": 6,
-          "star": 6
+          "type": "level_enter",
+          "to": 7
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 7
         }
       ],
       "end_triggers": [
@@ -2053,7 +2147,15 @@
           "star": 5
         }
       ],
-      "waypoints": [],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 6,
+            "star": 6
+          }
+        ]
+      ],
       "guards": [],
       "category": "100 Coin Exit",
       "match_mode": "loose"
@@ -2064,9 +2166,12 @@
       "enabled": true,
       "start_triggers": [
         {
-          "type": "star_grabbed",
-          "course": 7,
-          "star": 6
+          "type": "level_enter",
+          "to": 22
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 22
         }
       ],
       "end_triggers": [
@@ -2101,7 +2206,15 @@
           "star": 5
         }
       ],
-      "waypoints": [],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 7,
+            "star": 6
+          }
+        ]
+      ],
       "guards": [],
       "category": "100 Coin Exit",
       "match_mode": "loose"
@@ -2112,9 +2225,12 @@
       "enabled": true,
       "start_triggers": [
         {
-          "type": "star_grabbed",
-          "course": 8,
-          "star": 6
+          "type": "level_enter",
+          "to": 8
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 8
         }
       ],
       "end_triggers": [
@@ -2149,7 +2265,15 @@
           "star": 5
         }
       ],
-      "waypoints": [],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 8,
+            "star": 6
+          }
+        ]
+      ],
       "guards": [],
       "category": "100 Coin Exit",
       "match_mode": "loose"
@@ -2160,9 +2284,12 @@
       "enabled": true,
       "start_triggers": [
         {
-          "type": "star_grabbed",
-          "course": 9,
-          "star": 6
+          "type": "level_enter",
+          "to": 23
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 23
         }
       ],
       "end_triggers": [
@@ -2197,7 +2324,15 @@
           "star": 5
         }
       ],
-      "waypoints": [],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 9,
+            "star": 6
+          }
+        ]
+      ],
       "guards": [],
       "category": "100 Coin Exit",
       "match_mode": "loose"
@@ -2208,9 +2343,12 @@
       "enabled": true,
       "start_triggers": [
         {
-          "type": "star_grabbed",
-          "course": 10,
-          "star": 6
+          "type": "level_enter",
+          "to": 10
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 10
         }
       ],
       "end_triggers": [
@@ -2245,7 +2383,15 @@
           "star": 5
         }
       ],
-      "waypoints": [],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 10,
+            "star": 6
+          }
+        ]
+      ],
       "guards": [],
       "category": "100 Coin Exit",
       "match_mode": "loose"
@@ -2256,9 +2402,12 @@
       "enabled": true,
       "start_triggers": [
         {
-          "type": "star_grabbed",
-          "course": 11,
-          "star": 6
+          "type": "level_enter",
+          "to": 11
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 11
         }
       ],
       "end_triggers": [
@@ -2293,7 +2442,15 @@
           "star": 5
         }
       ],
-      "waypoints": [],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 11,
+            "star": 6
+          }
+        ]
+      ],
       "guards": [],
       "category": "100 Coin Exit",
       "match_mode": "loose"
@@ -2304,9 +2461,12 @@
       "enabled": true,
       "start_triggers": [
         {
-          "type": "star_grabbed",
-          "course": 12,
-          "star": 6
+          "type": "level_enter",
+          "to": 36
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 36
         }
       ],
       "end_triggers": [
@@ -2341,7 +2501,15 @@
           "star": 5
         }
       ],
-      "waypoints": [],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 12,
+            "star": 6
+          }
+        ]
+      ],
       "guards": [],
       "category": "100 Coin Exit",
       "match_mode": "loose"
@@ -2352,9 +2520,12 @@
       "enabled": true,
       "start_triggers": [
         {
-          "type": "star_grabbed",
-          "course": 13,
-          "star": 6
+          "type": "level_enter",
+          "to": 13
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 13
         }
       ],
       "end_triggers": [
@@ -2389,7 +2560,15 @@
           "star": 5
         }
       ],
-      "waypoints": [],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 13,
+            "star": 6
+          }
+        ]
+      ],
       "guards": [],
       "category": "100 Coin Exit",
       "match_mode": "loose"
@@ -2400,9 +2579,12 @@
       "enabled": true,
       "start_triggers": [
         {
-          "type": "star_grabbed",
-          "course": 14,
-          "star": 6
+          "type": "level_enter",
+          "to": 14
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 14
         }
       ],
       "end_triggers": [
@@ -2437,7 +2619,15 @@
           "star": 5
         }
       ],
-      "waypoints": [],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 14,
+            "star": 6
+          }
+        ]
+      ],
       "guards": [],
       "category": "100 Coin Exit",
       "match_mode": "loose"
@@ -2448,9 +2638,12 @@
       "enabled": true,
       "start_triggers": [
         {
-          "type": "star_grabbed",
-          "course": 15,
-          "star": 6
+          "type": "level_enter",
+          "to": 15
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 15
         }
       ],
       "end_triggers": [
@@ -2485,7 +2678,15 @@
           "star": 5
         }
       ],
-      "waypoints": [],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 15,
+            "star": 6
+          }
+        ]
+      ],
       "guards": [],
       "category": "100 Coin Exit",
       "match_mode": "loose"
@@ -2620,12 +2821,12 @@
           ]
         },
         {
-          "label": "BitDW Pipe Entry",
+          "label": "BitDW — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitdw-pipe"
+              "seed_key": "seg:reds->pipe:bitdw"
             }
           ]
         },
@@ -3252,12 +3453,12 @@
           ]
         },
         {
-          "label": "BitDW Pipe Entry",
+          "label": "BitDW — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitdw-pipe"
+              "seed_key": "seg:reds->pipe:bitdw"
             }
           ]
         },
@@ -3488,12 +3689,12 @@
           ]
         },
         {
-          "label": "BitDW Pipe Entry",
+          "label": "BitDW — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitdw-pipe"
+              "seed_key": "seg:reds->pipe:bitdw"
             }
           ]
         },
@@ -3926,12 +4127,12 @@
           ]
         },
         {
-          "label": "BitDW Pipe Entry",
+          "label": "BitDW — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitdw-pipe"
+              "seed_key": "seg:reds->pipe:bitdw"
             }
           ]
         },
@@ -4184,12 +4385,12 @@
           ]
         },
         {
-          "label": "BitFS Pipe Entry",
+          "label": "BitFS — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitfs-pipe"
+              "seed_key": "seg:reds->pipe:bitfs"
             }
           ]
         },
@@ -4730,12 +4931,12 @@
           ]
         },
         {
-          "label": "BitDW Pipe Entry",
+          "label": "BitDW — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitdw-pipe"
+              "seed_key": "seg:reds->pipe:bitdw"
             }
           ]
         },
@@ -4988,12 +5189,12 @@
           ]
         },
         {
-          "label": "BitFS Pipe Entry",
+          "label": "BitFS — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitfs-pipe"
+              "seed_key": "seg:reds->pipe:bitfs"
             }
           ]
         },
@@ -5534,12 +5735,12 @@
           ]
         },
         {
-          "label": "BitDW Pipe Entry",
+          "label": "BitDW — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitdw-pipe"
+              "seed_key": "seg:reds->pipe:bitdw"
             }
           ]
         },
@@ -5792,12 +5993,12 @@
           ]
         },
         {
-          "label": "BitFS Pipe Entry",
+          "label": "BitFS — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitfs-pipe"
+              "seed_key": "seg:reds->pipe:bitfs"
             }
           ]
         },
@@ -6343,12 +6544,12 @@
           ]
         },
         {
-          "label": "BitDW Pipe Entry",
+          "label": "BitDW — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitdw-pipe"
+              "seed_key": "seg:reds->pipe:bitdw"
             }
           ]
         },
@@ -6580,12 +6781,12 @@
           ]
         },
         {
-          "label": "BitFS Pipe Entry",
+          "label": "BitFS — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitfs-pipe"
+              "seed_key": "seg:reds->pipe:bitfs"
             }
           ]
         },
@@ -7126,12 +7327,12 @@
           ]
         },
         {
-          "label": "BitDW Pipe Entry",
+          "label": "BitDW — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitdw-pipe"
+              "seed_key": "seg:reds->pipe:bitdw"
             }
           ]
         },
@@ -7431,12 +7632,12 @@
           ]
         },
         {
-          "label": "BitFS Pipe Entry",
+          "label": "BitFS — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitfs-pipe"
+              "seed_key": "seg:reds->pipe:bitfs"
             }
           ]
         },
@@ -7992,12 +8193,12 @@
           ]
         },
         {
-          "label": "BitDW Pipe Entry",
+          "label": "BitDW — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitdw-pipe"
+              "seed_key": "seg:reds->pipe:bitdw"
             }
           ]
         },
@@ -8451,12 +8652,12 @@
           ]
         },
         {
-          "label": "BitFS Pipe Entry",
+          "label": "BitFS — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitfs-pipe"
+              "seed_key": "seg:reds->pipe:bitfs"
             }
           ]
         },
@@ -8872,12 +9073,12 @@
           ]
         },
         {
-          "label": "BitS Pipe Entry",
+          "label": "BitS — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bits-pipe"
+              "seed_key": "seg:reds->pipe:bits"
             }
           ]
         },
@@ -8933,12 +9134,12 @@
           ]
         },
         {
-          "label": "BitDW Pipe Entry",
+          "label": "BitDW — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitdw-pipe"
+              "seed_key": "seg:reds->pipe:bitdw"
             }
           ]
         },
@@ -9583,12 +9784,12 @@
           ]
         },
         {
-          "label": "BitFS Pipe Entry",
+          "label": "BitFS — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitfs-pipe"
+              "seed_key": "seg:reds->pipe:bitfs"
             }
           ]
         },
@@ -10004,12 +10205,12 @@
           ]
         },
         {
-          "label": "BitS Pipe Entry",
+          "label": "BitS — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bits-pipe"
+              "seed_key": "seg:reds->pipe:bits"
             }
           ]
         },

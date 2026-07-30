@@ -209,25 +209,37 @@ def movement(seed_key, name, start, end, via=(), match_mode=None):
     return row
 
 
-def mechanic(seed_key, name, start, end, category, match_mode="loose"):
+def mechanic(seed_key, name, start, end, category, match_mode="loose", via=()):
     """A non-route segment describing an intrinsic game mechanic (Task 20,
     spec 2026-07-28-multi-step-segments): the "100 coins doesn't end the
     level, a different star does" pattern and the Bowser-stage "the reds
-    star doesn't end it, the pipe does" pattern. Two differences from
+    star doesn't end it, the pipe does" pattern. Differences from
     movement()/`_movement_row`:
 
-    (1) `end` may be a genuine any-of LIST of clauses (the 100-coin case
-        needs six alternative stars, since the vocabulary has no "any star
-        but this one" clause) -- movement() assumes exactly one clause per
-        side, full seed shape here instead of a compact row `_movement_row`
-        expands later.
-    (2) UNGUARDED (guards=[]), like the ten legacy segments, not route-scoped
+    (1) `start`/`end` may each be a genuine any-of LIST of clauses (the
+        100-coin case needs six alternative stars, since the vocabulary has
+        no "any star but this one" clause; the corpus reshape (2026-07-29,
+        same spec) put the whole-course/whole-stage span's arm on the
+        `[level_enter, attempt_anchor]` any-of idiom `_seg()` already uses,
+        so `start` needed the same list-or-single flexibility `end` already
+        had) -- movement() assumes exactly one clause per side, full seed
+        shape here instead of a compact row `_movement_row` expands later.
+    (2) `via` is a FLAT list of clauses, same convention as movement()'s --
+        each becomes a single-clause waypoint. Added 2026-07-29 so the reds-
+        star grab (reds->pipe) and the 100-coin grab (100c->exit) could
+        become the WAYPOINT between stage-entry and the real end, instead of
+        being the start trigger itself -- starting on the grab is what made
+        both families unselectable before the grab and (for reds->pipe) what
+        timed only star->pipe instead of the whole stage (live report
+        2026-07-29). `[[clause] for clause in via]` mirrors `_movement_row`.
+    (3) UNGUARDED (guards=[]), like the ten legacy segments, not route-scoped
         like the 56 castle movements: there is exactly ONE way to do either
         (one pipe per Bowser stage, "some other star" for the 100-coin
         case), so there is no route ambiguity to scope against -- the same
         reason seg:bowser-1/seg:bitdw-pipe/etc. stay always-armed."""
     return {"seed_key": seed_key, "name": name, "enabled": True,
-            "start_triggers": [start],
+            "start_triggers": start if isinstance(start, list) else [start],
             "end_triggers": end if isinstance(end, list) else [end],
-            "waypoints": [], "guards": [], "category": category,
+            "waypoints": [[clause] for clause in via],
+            "guards": [], "category": category,
             "match_mode": match_mode}
