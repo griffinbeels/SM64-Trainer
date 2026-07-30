@@ -206,8 +206,15 @@ export function RankBanner({ label, banner, hint = null, identity = null,
   const nextLabel = next ? `${capName(next.tier)} ${divisionDigit(next.division)}` : null;
   const gap = (settledText && ranked && banner.next_gap_cs != null)
     ? (banner.next_gap_cs / 100).toFixed(2) : null;
-  const fillPct = climb.fill * 100;
-  const displayFillPct = Math.round(fillPct);
+  // `climb.bar` is a DRAWN width, already anchored at the track's midpoint
+  // and already carrying the closing sweep's restart from empty
+  // (ui/rankclimb.js converts at the plan's boundary; caps.js::barFill owns
+  // where empty is). The tooltip instead reports the TRUE within-division
+  // progress of the rank being LANDED ON -- the number that answers "how
+  // close am I", which the anchoring deliberately stops the bar from telling,
+  // and a settled statement rather than one that ticks every frame of a climb.
+  const fillPct = climb.bar * 100;
+  const displayFillPct = Math.round(graded.fill * 100);
   // The mode name (e.g. "Avg 10") is dropped from the VISIBLE basis text —
   // round 4, 2026-07-25: it's global app state already shown in the
   // header's Rank Mode picker, not something this row needs to repeat, and

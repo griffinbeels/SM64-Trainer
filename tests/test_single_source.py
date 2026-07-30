@@ -139,6 +139,50 @@ INVARIANTS = (
             "field name is an identifier, a beat kind is always a string.",
     ),
     SingleSource(
+        concept="turning a TIME into a rank",
+        owners=frozenset({"scoring.py"}),
+        # A BARE identifier, not `score_for(`: `code_only` tokenizes and joins
+        # with newlines, so a name and its opening paren are never adjacent in
+        # the scanned text and a token carrying one matches nothing, forever.
+        # `time_for_score` does not contain this substring, so the sibling
+        # function is not swept up by it.
+        tokens=("score_for",),
+        files=python_sources(),
+        why="`score_for` is the raw curve and answers with a SCORE against an "
+            "exact band edge. A production caller holding a real time wants "
+            "`scoring.progress_for_time`, which additionally applies the "
+            "ladder's displayed-centisecond boundary rule -- the one that "
+            "stopped a banner reading '0.00s to rank up' (2026-07-29). The "
+            "two disagree by at most half a centisecond, and that is exactly "
+            "the size of divergence nobody notices in review: three call "
+            "sites graded times through the raw curve (tracking/marelo.py's "
+            "two score paths, the history chart's scorer in "
+            "server/ranks_api.py) while the section banner went through the "
+            "rule, so the Rank tab could name a division the practice card "
+            "had already awarded. That is the same shape as the Platinum "
+            "II/Diamond V split docs/architecture.md records. `score_for` "
+            "stays exported -- the invariant test and the curve's own tests "
+            "grade with it deliberately, and tests are not scanned here.",
+    ),
+    SingleSource(
+        concept="where a rank progress bar's empty is",
+        owners=frozenset({"caps.js"}),
+        tokens=("FILL_ANCHOR",),
+        files=ui_js(),
+        why="Every rank bar starts HALF full and scales the current "
+            "division across the remaining half, except at the ladder floor "
+            "where it starts empty (user, 2026-07-29: 'the intention is to "
+            "anchor the user towards feeling like they ALWAYS are making "
+            "progress'). caps.js::barFill is the door and takes IDENTITY — "
+            "tier, division, fill — so a caller has no ingredients to "
+            "assemble differently. A second file naming the anchor is a "
+            "second surface deciding where empty is, and two bars on one "
+            "screen disagreeing about that is not a subtle bug.\n"
+            "tests/test_ui_rank_bar.py carries the other half, and it is the "
+            "half that actually bites: a bar drawn from a RAW fill names no "
+            "ingredient at all, so this row cannot see it.",
+    ),
+    SingleSource(
         concept="the server's TCP port",
         owners=frozenset({"paths.py"}),
         tokens=("8064", "8065"),

@@ -20,7 +20,8 @@
 //   caps.js             WHICH RANK a level is (import-free, pinned to Python)
 // This file owns only the loop and the bookkeeping between them.
 import { useEffect, useRef, useState } from "preact/hooks";
-import { rankPosition, rankAt, rankColor, DIVISIONS_PER_TIER } from "./components/caps.js";
+import { barFill, rankPosition, rankAt, rankColor, DIVISIONS_PER_TIER }
+  from "./components/caps.js";
 import { climbTimings, barEase } from "./climbcurve.js";
 import { buildClimbPlan } from "./climbplan.js";
 import { activeEffects, makeBeat, celebrationTailMs, celebrationsEnabled }
@@ -183,11 +184,17 @@ export function useHeldWhileCelebrating(value) {
 // "position 45 has a fractional part of zero, so a maxed rank empties its own
 // bar" trap outright — a maxed rank is level 44 with `bar` 1, and there is no
 // arithmetic in between to get wrong.
+//
+// `bar` is a DRAWN width — the fraction of the track to paint — never the
+// server's raw within-division `fill`. See the conversion at the plan's
+// boundary below for why that distinction lives here rather than at the two
+// call sites. A surface wanting the honest progress figure reads it from the
+// rank it was handed, not from this.
 function renderState(level, bar, beats, atMs, tune, reveal = 1, landing = false) {
   const { tier, division } = rankAt(level);
   const { vars, icon } = activeEffects(beats, atMs, tune);
   return {
-    tier, division, level, fill: bar, reveal, landing,
+    tier, division, level, bar, reveal, landing,
     // The registry's tierColor entry overrides this mid-crossing; the rest of
     // the time the surface just wears its own tier's colour. One name, so a
     // caller never has to know whether a celebration is running.
@@ -223,12 +230,38 @@ export function useRankClimb(rank, identity = null,
   // rather than clamped.
   const targetLevel = rank && rank.tier
     ? rankPosition(rank.tier, rank.division, 0) : null;
-  const targetFill = targetLevel == null
-    ? 0 : Math.max(0, Math.min(1, rank.fill || 0));
+  // THE BAR IS A DRAWN WIDTH FROM HERE DOWN, converted ONCE, here at the
+  // plan's boundary. Every rank bar is anchored at the track's midpoint
+  // except at the ladder floor (caps.js::barFill), and converting at the
+  // boundary rather than at the two call sites is what makes the closing
+  // sweep correct with no rule of its own:
+  //
+  //   "when we fill up the meter on the final beat of the animation, it
+  //    STARTS AT 50% visually, which is wrong. It should START AT 0%
+  //    visually, and move to the destination %… but ALWAYS END PAST 50%"
+  //    (user, 2026-07-29)
+  //
+  // climbplan.js already builds that step as `arrive: barFrom 0 -> barTo`.
+  // With raw fills going in, `0` meant "the bottom of this division", which
+  // the anchoring then painted half full — the reported bug. With drawn
+  // widths going in, `0` means EMPTY, and `barTo` is the destination's own
+  // anchored width, so the sweep runs 0 -> past the middle by construction.
+  // Same reasoning climbplan's header gives for expressing the mid-climb pin
+  // as `barFrom === barTo === 1` rather than as a case the walker remembers.
+  //
+  // It also makes a sweep's DURATION match the distance it actually travels
+  // on screen (`climbcurve.js::barSweepMs` scales with `|barTo - barFrom|`),
+  // which it did not while the two spaces disagreed.
+  const targetBar = targetLevel == null
+    ? 0 : barFill(rank.tier, rank.division, rank.fill);
   // One number for the comparisons that only ever ask "is this the same
   // measurement / is it higher": the effect's dependency, the retarget check,
-  // and the never-animate-a-regression guard.
-  const target = targetLevel == null ? null : targetLevel + targetFill;
+  // and the never-animate-a-regression guard. Built from the DRAWN bar so it
+  // shares one space with `startPosition` below, which comes off a previously
+  // shown frame; `level + drawn` is still strictly monotone in (level, fill),
+  // including across the floor seam (level 0 at full draws 1.0, level 1 at
+  // empty draws 1.5), which is all these comparisons need.
+  const target = targetLevel == null ? null : targetLevel + targetBar;
 
   const climbToken = useRef(0);
   if (climbToken.current === 0) climbToken.current = ++nextClimbToken;
@@ -264,7 +297,7 @@ export function useRankClimb(rank, identity = null,
   const beatsRef = useRef([]);
   const frameRef = useRef(null);
   const [state, setState] = useState(() =>
-    (targetLevel == null ? null : renderState(targetLevel, targetFill, [], now(), tuning())));
+    (targetLevel == null ? null : renderState(targetLevel, targetBar, [], now(), tuning())));
 
   useEffect(() => {
     if (frameRef.current != null) cancelAnimationFrame(frameRef.current);
@@ -339,8 +372,8 @@ export function useRankClimb(rank, identity = null,
     // different measurement.
     const continuing = climbingToRef.current === target;
     const startLevel = earnedFirstRank ? 0 : (from ? from.level : null);
-    const startFill = earnedFirstRank ? 0 : (from ? from.bar : 0);
-    const startPosition = startLevel == null ? null : startLevel + startFill;
+    const startBar = earnedFirstRank ? 0 : (from ? from.bar : 0);
+    const startPosition = startLevel == null ? null : startLevel + startBar;
     const snap = (from == null && !earnedFirstRank)   // nothing to climb from
       || (!earnedFirstRank && !continuing && identityChanged)  // a different measurement
       || (startPosition != null && target <= startPosition)   // never a regression
@@ -348,20 +381,20 @@ export function useRankClimb(rank, identity = null,
       || prefersReducedMotion();
     if (snap) {
       climbingToRef.current = null;
-      shownRef.current = { level: targetLevel, bar: targetFill };
+      shownRef.current = { level: targetLevel, bar: targetBar };
       beatsRef.current = [];
-      setState(renderState(targetLevel, targetFill, [], now(), tuning()));
+      setState(renderState(targetLevel, targetBar, [], now(), tuning()));
       return undefined;
     }
 
     // A climb already in flight retargets from where it IS (`shownRef` is
     // updated every tick), never from where the last one began -- two
     // attempts landing close together must not snap back before continuing.
-    // (`startLevel`/`startFill` are resolved above, so a first-ever rank
+    // (`startLevel`/`startBar` are resolved above, so a first-ever rank
     // starts at the floor rather than at nothing.)
     const plan = buildClimbPlan({
-      fromLevel: startLevel, fromFill: startFill,
-      toLevel: targetLevel, toFill: targetFill,
+      fromLevel: startLevel, fromFill: startBar,
+      toLevel: targetLevel, toFill: targetBar,
       divisionsPerTier: DIVISIONS_PER_TIER,
       skipStyle: tune.skipStyle,
       timings: (counts) => climbTimings(counts, tune),
@@ -437,7 +470,7 @@ export function useRankClimb(rank, identity = null,
       // approach and its end value is 1 — the pin falls out of the arithmetic
       // rather than being a case anyone has to remember.
       let level = startLevel;
-      let bar = startFill;
+      let bar = startBar;
       let barStep = null;
       for (let index = 0; index <= stepIndex; index += 1) {
         const step = plan.steps[index];
@@ -498,8 +531,8 @@ export function useRankClimb(rank, identity = null,
         frameRef.current = null;
         climbingToRef.current = null;
         setClimbing(climbToken.current, false);
-        shownRef.current = { level: targetLevel, bar: targetFill };
-        setState(renderState(targetLevel, targetFill, [], at, tune));
+        shownRef.current = { level: targetLevel, bar: targetBar };
+        setState(renderState(targetLevel, targetBar, [], at, tune));
       }
     };
     // The hold opens HERE, with the first frame, and closes in the two

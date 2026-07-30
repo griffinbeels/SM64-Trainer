@@ -11,7 +11,8 @@ import pytest
 
 from sm64_events.ranks.classify import rank_for
 from sm64_events.ranks.scoring import (
-    best_ladder, defined_tiers, score_for, tier_from_score)
+    DIVISIONS_PER_TIER, best_ladder, defined_tiers, progress_for_time,
+    score_for, tier_band, tier_from_score, time_for_score)
 
 SEED = Path(__file__).resolve().parents[1] / "src" / "sm64_events" / "data" / \
     "rank_standards.seed.json"
@@ -56,3 +57,36 @@ def test_every_seeded_entity_yields_a_usable_best_ladder():
         assert best, key
         times = [best[r] for r in defined_tiers(best)]
         assert times == sorted(times), f"{key} best ladder is not monotone"
+
+
+def _edge_probes(ladder):
+    """Every division edge on this ladder, at its own displayed centisecond
+    and one either side. These are exactly the times a hand-written fixture
+    never picks and a player lands on constantly."""
+    defined = defined_tiers(ladder)
+    for tier in defined:
+        low, high = tier_band(tier, defined)
+        width = (high - low) / DIVISIONS_PER_TIER
+        for index in range(DIVISIONS_PER_TIER + 1):
+            edge_cs = time_for_score(ladder, low + index * width)
+            if edge_cs is None:
+                continue
+            for probe in (edge_cs - 1, edge_cs, edge_cs + 1):
+                if probe > 0:
+                    yield probe
+
+
+@pytest.mark.parametrize("name,ladder", list(_ladders()))
+def test_no_shipped_ladder_can_owe_zero_centiseconds(name, ladder):
+    """"We should never be displaying 0.00s to rank up -- we should just rank
+    up" (user, 2026-07-29).
+
+    A division edge falls at a FRACTIONAL centisecond and `time_for_score`
+    rounds it to report it, so a run within half a centisecond of one used to
+    be told it owed exactly 0.00s. Measured before the fix: 3,656 (ladder,
+    time) pairs across these 278 ladders hit it -- it was not an edge case,
+    it was every ladder, several times over."""
+    for time_cs in _edge_probes(ladder):
+        gap = progress_for_time(ladder, time_cs)["next_gap_cs"]
+        assert gap is None or gap >= 1, \
+            f"{name} at {time_cs}cs owes {gap}cs to its next rank"

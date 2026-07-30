@@ -124,6 +124,40 @@ export function rankAt(position) {
            division: DIVISION_NUMERALS[level % DIVISIONS_PER_TIER] };
 }
 
+// ---- How full a rank bar is DRAWN ---------------------------------------
+//
+// A rank progress bar does not start empty. It starts HALF FULL and scales
+// the division's own progress across the remaining half (user, 2026-07-29:
+// "All rank displays (MARELO, Rank Standards, etc) should start from the
+// MIDDLE OF THE BAR… The intention is to anchor the user towards feeling
+// like they ALWAYS are making progress to the next rank"). The rank-up
+// climb inherits this for free, which is the other half of the same
+// request — the closing sweep runs from the anchor rather than from nothing,
+// so "whenever we end the rank up animation, it always should fill back up
+// to AT LEAST the middle of the bar" needs no rule of its own.
+//
+// ONE exception, and it is the ladder FLOOR rather than a tier by name:
+// "the Capless 5 case — we've literally never practiced this thing, so it
+// should be empty. Once we level up to Capless 4, it should start at least
+// from the middle, hence forth for the remainder of the ranks." Position 0
+// is exactly that floor (a strategy with a ladder and no time grades there,
+// ranks.js's `atFloor`), and asking `rankPosition` for it keeps this derived
+// from the ladder rather than from a `tier === "Iron"` literal that a
+// registry swap would silently strand.
+//
+// DISPLAY only. `fill` stays the server's true within-division progress
+// everywhere it is reasoned about — the climb plan's steps, and the
+// progress track's own tooltip, which still reports the honest percentage.
+// Only the width painted on screen passes through here.
+export const FILL_ANCHOR = 0.5;
+
+export function barFill(tier, numeral, fill) {
+  const within = Math.max(0, Math.min(1, fill || 0));
+  const position = rankPosition(tier, numeral, 0);
+  if (position == null) return 0;
+  return position === 0 ? within : FILL_ANCHOR + (1 - FILL_ANCHOR) * within;
+}
+
 // There used to be a `rankFrame(position)` here, turning one ladder position
 // into {tier, division, fill} for the climb to draw. It existed to survive a
 // specific trap -- a maxed rank is position 45, whose FRACTIONAL PART is zero,

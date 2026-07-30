@@ -342,19 +342,20 @@ def _graded_progress(ladder: dict, time_cs: int) -> dict:
     `gap_cs` classify.band used to carry (spec 2026-07-25 round 3: the user
     asked for the time delta back once the bar itself became
     division-scoped) — None exactly when `next_tier` is None (maxed, no
-    step to chase)."""
-    score = scoring.score_for(ladder, time_cs)
-    progress = scoring.division_progress(score, scoring.defined_tiers(ladder))
-    next_gap_cs = None
-    if progress["next_at"] is not None:
-        target_cs = scoring.time_for_score(ladder, progress["next_at"])
-        if target_cs is not None:
-            next_gap_cs = time_cs - target_cs
-    return {"score": score, "rank": progress["tier"],
+    step to chase), and never 0 (`scoring.progress_for_time` owns why).
+
+    This is an ADAPTER now, not a computation: the chain moved into
+    `scoring.progress_for_time` when the displayed-centisecond boundary rule
+    landed (2026-07-29), because that rule is knowledge about the curve's own
+    rounding and belongs beside `time_for_score`, which does the rounding.
+    All this still owns is the `rank` key — every consumer of these payloads
+    calls a tier a rank."""
+    progress = scoring.progress_for_time(ladder, time_cs)
+    return {"score": progress["score"], "rank": progress["tier"],
             "division": progress["division"], "fill": progress["fill"],
             "next_tier": progress["next_tier"],
             "next_division": progress["next_division"],
-            "next_gap_cs": next_gap_cs}
+            "next_gap_cs": progress["next_gap_cs"]}
 
 
 def _fastest_strategy(ranks, ek, best_ladder_cs: dict) -> str | None:

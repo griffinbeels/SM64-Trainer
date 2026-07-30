@@ -785,6 +785,50 @@ the tier, the numeral, the fill WITHIN the current division, and the next step
 tier. The UI never computes this: server-side only, `views.py::_graded_progress`
 is the one place a ladder + a time become the whole banner payload.
 
+**A division edge is a DISPLAYED-centisecond cutoff, and reaching it is
+inclusive** (`scoring.progress_for_time`, 2026-07-29). A tier cutoff comes
+straight off the ladder in centiseconds and `classify.rank_for` awards it on
+`<=`; a division edge is *interpolated*, so it lands at a fractional
+centisecond that `time_for_score` rounds to report. Comparing SCORE against
+the exact edge while reporting the ROUNDED time therefore told a run within
+half a centisecond of the edge that it owed exactly `0.00s to rank up` — a gap
+nobody can chase, and not even reachable, since IGT advances a whole frame
+(~3.33cs) at a time. Measured before the fix: **3,656 (ladder, time) pairs
+across the 278 shipped ladders** produced a zero gap, i.e. every ladder,
+several times over. `progress_for_time` walks the steps whose own displayed
+cutoff the time has reached and raises `score` with them, so the payload stays
+self-consistent and `next_gap_cs` is `>= 1` whenever a next step exists. The
+widening is at most half a centisecond and can never move a TIER on its own: a
+tier edge IS an anchor, `time_for_score` returns an anchor's cutoff exactly, so
+a time equal to one already scores at or above it. Guarded over every seeded
+ladder by `tests/test_ranks_scoring_seed.py`.
+
+**The rank BAR is anchored at its midpoint, and only the ladder floor is
+empty** (`ui/components/caps.js::barFill`, user 2026-07-29: "the intention is
+to anchor the user towards feeling like they ALWAYS are making progress to the
+next rank"). Every bar draws `0.5 + 0.5 × fill`, except at Capless V — where a
+strategy nobody has practiced sits — which draws its true fill and so reads as
+empty. This is a DISPLAY scale layered over the payload above: `fill` stays the
+real within-division progress everywhere it is reasoned about, including the
+progress track's own tooltip, which still reports the honest percentage.
+
+**The climb converts ONCE, at the plan's boundary** (`ui/rankclimb.js`), so
+every bar value inside `ui/climbplan.js` is already a drawn width. That is what
+makes the closing sweep right with no rule of its own: the plan already builds
+it as `arrive: barFrom 0 → barTo`, and with drawn widths going in, `0` means
+EMPTY rather than "the bottom of this division". Converting at the two call
+sites instead was shipped first and was wrong in exactly one place — the
+reported bug: *"when we fill up the meter on the final beat of the animation, it
+STARTS AT 50% visually… It should START AT 0% visually, and move to the
+destination %, but ALWAYS END PAST 50%"* (2026-07-29). Same reasoning
+climbplan's header already gives for expressing the mid-climb pin as
+`barFrom === barTo === 1` rather than as a case the walker remembers. It also
+makes a sweep's DURATION match the distance it actually travels on screen
+(`climbcurve.js::barSweepMs` scales with `|barTo − barFrom|`), which it did not
+while the two spaces disagreed. Verified by frame-sampling a live
+Capless 3 → Toad 3 climb: resting 0.717 → pinned 1.0 through the rank ticks →
+sweep restarting at **0.000** and easing to **0.681**, at rest at both ends.
+
 **Scope = a derived SET, not a registry.** `scopes.entity_groups(scope_id)`
 resolves `overall`, `route:<id>` or `course:<id>` into GROUPS
 (`{"need": k, "candidates": [...]}`), so a route's K-of-N step contributes k
