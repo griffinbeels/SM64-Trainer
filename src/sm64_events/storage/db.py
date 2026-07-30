@@ -11,7 +11,7 @@ import threading
 from pathlib import Path
 
 from sm64_events.core.events import Event
-from sm64_events.tracking.projection import Attempt
+from sm64_events.tracking.projection import Attempt, journal_id
 
 MIGRATIONS = [
     # v1
@@ -466,10 +466,27 @@ class Database:
             self._conn.commit()
 
     def attempts(self) -> list[Attempt]:
+        # Chronological by JOURNAL id, not the raw `id` column (spec
+        # 2026-07-28-multi-step-segments, live report): a reattributed
+        # 100-coin attempt keeps its SEGMENT-namespace id (arm.jid +
+        # SEGMENT_ATTEMPT_OFFSET * def_id, caveat 2/11 in projection.py) —
+        # a huge number that sorts permanently above every native
+        # star-namespace attempt for the same entity regardless of when it
+        # actually happened, which is exactly the bug (his practice log:
+        # two reattributed successes stuck at the top forever while newer
+        # resets piled up underneath, ordinal labels climbing under them).
+        # `journal_id()` is the SAME resolver views.py already uses to
+        # order SEGMENT SECTIONS by recency -- applied here to every
+        # attempt, not just section ordering, so every consumer of this
+        # list (grading's `valid_frames`, whose own docstring already
+        # claims "journal-id ordered, so chronological" -- a claim this
+        # makes true rather than merely documented) gets the correct order
+        # for free, with no second sort to remember downstream.
         with self._lock:
-            rows = self._conn.execute("SELECT * FROM attempts ORDER BY id").fetchall()
-            return [Attempt(**{**{k: r[k] for k in _ATTEMPT_COLS},
-                               "cleared": bool(r["cleared"])}) for r in rows]
+            rows = self._conn.execute("SELECT * FROM attempts").fetchall()
+            out = [Attempt(**{**{k: r[k] for k in _ATTEMPT_COLS},
+                              "cleared": bool(r["cleared"])}) for r in rows]
+        return sorted(out, key=lambda a: journal_id(a.id))
 
     # -- segment definitions -------------------------------------------------
     def segment_defs(self) -> list[dict]:

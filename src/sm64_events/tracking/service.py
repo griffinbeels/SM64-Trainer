@@ -28,7 +28,8 @@ from sm64_events.ranks.standards import entity_key
 from sm64_events.storage.db import Database, EventRow
 from sm64_events.tracking import practicable
 from sm64_events.tracking.defaults import resolve_steps
-from sm64_events.tracking.projection import Projector, replay, wipe_matches
+from sm64_events.tracking.projection import (Projector, journal_id, replay,
+                                             wipe_matches)
 from sm64_events.tracking.segments import (SegmentDef, hundred_coin_entity,
                                            merge_definitions,
                                            segment_origin, split_definition,
@@ -610,17 +611,30 @@ class TrackerService:
 
     @staticmethod
     def _newest_attempt_id(db, attempt) -> int | None:
-        """Max-id non-cleared attempt of `attempt`'s entity — the top row of
+        """Newest non-cleared attempt of `attempt`'s entity — the top row of
         that section's practice log (cleared rows are hidden from it, so a
-        hidden newer row never counts)."""
+        hidden newer row never counts).
+
+        Compares by `journal_id()`, NOT the raw `id` (spec 2026-07-28-multi-
+        step-segments, live report): a reattributed 100-coin attempt keeps
+        its SEGMENT-namespace id (a huge number, projection.py caveat 2/11),
+        which would win a raw `max()` over every native star-namespace
+        attempt for the same entity regardless of which actually happened
+        last -- silently breaking "reclassifying the newest attempt updates
+        the active strategy" for exactly the entities this change created.
+        Returns the WINNING ROW's real `id` (still needed by the caller to
+        compare against `attempt.id`), just chosen by the chronological key."""
         def same_entity(row):
             if attempt.segment_id is not None:
                 return row.segment_id == attempt.segment_id
             return (row.segment_id is None
                     and row.course_id == attempt.course_id
                     and row.star_id == attempt.star_id)
-        return max((row.id for row in db.attempts()
-                    if same_entity(row) and not row.cleared), default=None)
+        candidates = [row for row in db.attempts()
+                     if same_entity(row) and not row.cleared]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda row: journal_id(row.id)).id
 
     async def set_time_filter(self, course_id: int, star_id: int,
                               min_frames: int, max_frames: int | None) -> None:

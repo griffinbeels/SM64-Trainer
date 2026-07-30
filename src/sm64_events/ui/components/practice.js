@@ -37,13 +37,23 @@ const SORT_OPTIONS = [
 function rowTime(a, clock) {
   return clock === "igt" ? a.igt_frames : a.rta_frames;
 }
+// "newest"/"oldest" sort by journal_id, NOT the raw id (spec 2026-07-28-
+// multi-step-segments, live report): a reattributed 100-coin attempt keeps
+// its SEGMENT-namespace id (a huge number, tracking/projection.py caveat
+// 2/11), which permanently outranks every native star-namespace attempt
+// for the same entity under a plain numeric sort regardless of when it
+// actually happened -- his practice log showed two real successes stuck
+// at the top forever while newer resets piled up underneath them.
+// journal_id (views.py::_attempt_json, the SAME resolver segment-section
+// recency already used) strips the namespace offset back to the
+// chronological journal id both kinds share.
 function comparator(sort, clock) {
-  if (sort === "oldest") return (a, b) => a.id - b.id;
+  if (sort === "oldest") return (a, b) => a.journal_id - b.journal_id;
   if (sort === "fastest")
     return (a, b) => (rowTime(a, clock) ?? Infinity) - (rowTime(b, clock) ?? Infinity);
   if (sort === "slowest")
     return (a, b) => (rowTime(b, clock) ?? -Infinity) - (rowTime(a, clock) ?? -Infinity);
-  return (a, b) => b.id - a.id; // newest (default)
+  return (a, b) => b.journal_id - a.journal_id; // newest (default)
 }
 
 // New-entry blink: attempt ids first seen AFTER the initial view load get

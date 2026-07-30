@@ -158,7 +158,19 @@ def _attempt_json(a, pbs, clock, ranks=None, rank_clock=None, rank_ek=None):
     # clock, a display choice.
     rank_clock = clock if rank_clock is None else rank_clock
     rank_frames = a.igt_frames if rank_clock == "igt" else a.rta_frames
-    return {"id": a.id, "outcome": a.outcome, "outcome_detail": a.outcome_detail,
+    return {"id": a.id,
+            # Recency-comparable across BOTH id namespaces (spec 2026-07-28-
+            # multi-step-segments, live report): a reattributed 100-coin
+            # attempt keeps its SEGMENT-namespace `id` (caveat 2/11), a huge
+            # number next to a native star attempt's plain journal id, so
+            # sorting rows by raw `id` (practice.js's "newest"/"oldest"
+            # comparator) stuck two real successes at the top of the
+            # practice log forever while newer resets piled up underneath.
+            # `journal_id()` is the SAME resolver views.py already used for
+            # SEGMENT SECTION recency -- stamped per-attempt here so the
+            # client sorts by it instead of `id` directly.
+            "journal_id": journal_id(a.id),
+            "outcome": a.outcome, "outcome_detail": a.outcome_detail,
             "anchor_type": a.anchor_type, "strat_tag": a.strat_tag,
             "igt_frames": a.igt_frames,
             "igt": format_igt(a.igt_frames) if a.igt_frames is not None else None,

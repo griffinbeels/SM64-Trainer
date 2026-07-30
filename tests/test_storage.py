@@ -250,6 +250,37 @@ def test_attempts_roundtrip_preserves_segment_id(tmp_path):
     assert db.attempts()[0].segment_id == 3
 
 
+def test_attempts_order_chronologically_across_both_id_namespaces(tmp_path):
+    """Live report, spec 2026-07-28-multi-step-segments: a reattributed
+    100-coin attempt keeps its SEGMENT-namespace id (jid + 10**10 * def_id,
+    tracking/projection.py caveat 2/11) even though it is now a plain star
+    attempt (segment_id=None) -- a huge number next to a native star
+    attempt's small journal id for the SAME entity. Sorting by the raw `id`
+    column stuck two real successes at the top of the practice log
+    FOREVER while newer resets piled up underneath them (his own report).
+
+    This is the shape no existing test could have covered: one entity
+    (course 2, star 6) with BOTH a reattributed attempt (segment-namespace
+    id, EARLIER in wall-clock/journal terms) and a native one (plain
+    journal id, LATER) — db.attempts() must return them in JOURNAL order,
+    not raw-id order, which for this pair is the OPPOSITE of numeric id
+    order."""
+    db = make_db(tmp_path)
+    # Reattributed: journal id 22218, segment-namespaced as def_id=75 would
+    # produce (75 * 10**10 + 22218) -- EARLIER in time, BIGGER raw id.
+    reattributed = make_attempt(id=75 * 10**10 + 22218, course_id=2, star_id=6,
+                                segment_id=None, rta_frames=2983, igt_frames=2983)
+    # Native: journal id 22272 -- LATER in time, SMALLER raw id.
+    native = make_attempt(id=22272, course_id=2, star_id=6, segment_id=None,
+                          outcome="reset", rta_frames=None, igt_frames=None)
+    db.replace_attempts([reattributed, native])
+    ordered = db.attempts()
+    assert [a.id for a in ordered] == [reattributed.id, native.id], (
+        "db.attempts() must sort by journal_id (strips the segment "
+        "namespace offset), not the raw id column -- raw-id order would "
+        "put these in the OPPOSITE (wrong) sequence")
+
+
 def test_pb_accepts_segment_keying_and_null_course(tmp_path):
     db = make_db(tmp_path)
     db.insert_pb(course_id=None, star_id=None, strat_tag=None,

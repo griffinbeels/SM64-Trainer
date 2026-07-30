@@ -1870,6 +1870,69 @@ def test_set_attempt_strat_reclassifies_segment_attempt_and_registers(tmp_path):
     assert svc.strat_by_segment[lblj] == "no bljs"
 
 
+def test_newest_attempt_id_ignores_the_segment_namespace_offset(tmp_path):
+    """Spec 2026-07-28-multi-step-segments, live report (practice-log
+    ordering): a reattributed 100-coin attempt keeps its SEGMENT-namespace id
+    (arm.jid + SEGMENT_ATTEMPT_OFFSET*def_id, projection.py caveat 2/11) --
+    a huge number that would win a raw max(row.id) over every NATIVE
+    star-namespace attempt for the same entity regardless of which actually
+    happened last. `_newest_attempt_id` must compare by journal_id instead,
+    or reclassifying an OLD reattributed attempt would wrongly promote it to
+    the active strategy while a genuinely newer reset sits unnoticed.
+
+    Builds the mixed shape for real, through the actual reattribution engine
+    (a HUNDRED_COIN_EXIT-shaped def for course 2, mirroring
+    tests/test_projection.py's own `_hc_def`) rather than hand-inserting rows
+    -- this is the one shape no existing test could have covered, since every
+    other set_attempt_strat test seeds attempts from a single namespace."""
+    db = Database(tmp_path / "t.db")
+    db.insert_segment_def(
+        "course 2 100 Coins -> Exit",
+        start_triggers=[{"type": "level_enter", "to": 24},
+                        {"type": "attempt_anchor", "level": 24}],
+        end_triggers=[{"type": "star_grabbed", "course": 2, "star": s}
+                      for s in range(6)],
+        guards=[], waypoints=[[{"type": "star_grabbed", "course": 2, "star": 6}]],
+        created_utc="2026-07-28T00:00:00Z")
+    svc = TrackerService(db, Broadcaster())
+    asyncio.run(svc.start())
+
+    # Arm the 100-coin engine, grab the 100 coins (waypoint advance, silent),
+    # then an exit star -- closes the engine, reattributing a SUCCESS to star
+    # (2, 6) under a SEGMENT-namespace id. This is the OLDER event.
+    asyncio.run(svc.publish(ev("level_changed", 900, {"from": 16, "to": 24})))
+    asyncio.run(svc.publish(star(1000, course=2, star_id=6, igt=1000)))
+    asyncio.run(svc.publish(star(1200, course=2, star_id=3, igt=1200)))
+    hundred = next(a for a in db.attempts()
+                   if a.course_id == 2 and a.star_id == 6 and a.segment_id is None)
+    assert hundred.id >= 10**10, "must be the SEGMENT-namespace reattributed row"
+
+    # A genuinely LATER native reset on the same star entity, via the plain
+    # target/practice_reset path (test_set_target_and_attribution's own
+    # shape) -- a plain int id, chronologically newer but numerically
+    # smaller than the reattributed row above.
+    asyncio.run(svc.set_target(2, 6, strat_tag="Cannonless"))
+    asyncio.run(svc.publish(ev("practice_reset", 1400, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(ev("practice_reset", 1500, {"igt_frames_before": 100})))
+    native_reset = next(a for a in db.attempts()
+                        if a.course_id == 2 and a.star_id == 6 and a.outcome == "reset")
+    assert native_reset.id < 10**10, "must be the plain journal-namespace row"
+    assert native_reset.id < hundred.id          # raw id: reset LOOKS older
+    from sm64_events.tracking.projection import journal_id
+    assert journal_id(hundred.id) < journal_id(native_reset.id)  # actually isn't
+
+    # Reclassifying the OLDER (reattributed) row must NOT move the active
+    # strategy -- the reset that happened after it is still the top of the
+    # log, exactly test_set_attempt_strat_on_older_attempt_keeps_active_strat's
+    # rule, just with one row from each namespace.
+    asyncio.run(svc.set_attempt_strat(hundred.id, "Slide Kick"))
+    assert svc.strat_by_star[(2, 6)] == "Cannonless"
+
+    # Reclassifying the actually-newest row (the native reset) DOES move it.
+    asyncio.run(svc.set_attempt_strat(native_reset.id, "Slide Kick"))
+    assert svc.strat_by_star[(2, 6)] == "Slide Kick"
+
+
 def test_purge_refuses_a_segments_default_strategy(tmp_path):
     """Same protection a community-seeded strat gets, one layer down: the card
     for a defaulted segment hides its "no strategy" option, so tombstoning the
