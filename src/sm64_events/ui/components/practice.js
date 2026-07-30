@@ -1208,7 +1208,7 @@ export function Practice({ t, openCompare }) {
     .sort(comparator(sort, t.clock));
 
   return html`<div class="practice-page">
-    <${StageBanner} t=${held} />
+    <${StageBanner} t=${held} freshIds=${freshIds} />
 
     ${/* ONE picker for the page, not one per section: only the primary card
          offers the trigger, and mounting a dialog's state inside every card
