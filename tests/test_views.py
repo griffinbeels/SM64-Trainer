@@ -2035,3 +2035,225 @@ def test_section_pb_display_stays_on_the_view_clock_after_the_grading_fix(tmp_pa
         sec = build_session_view(db, svc, clock=clock)["stars"][0]
         assert sec["pb"]["igt"]["frames"] == 343
         assert sec["pb"]["rta"]["frames"] == 350
+
+
+# -- Bowser Reds star/pipe toggle (spec 2026-07-28-multi-step-segments) ------
+#
+# star:16:0 practices as two things worth timing (measured,
+# data/rank_standards.seed.json): the reds grab alone (" (Star)" strategies)
+# or the whole reds-then-pipe run (" (Pipe)"), and BOTH ladders live on the
+# star -- the seg:reds->pipe:<abbrev> segment that actually records the Pipe
+# family's attempts has no rank entity of its own. _reds_pipe_segments is the
+# resolver; every grading call site below borrows the star's entity_key
+# through it rather than the segment's own (empty) one.
+
+def _reds_pipe_def(db, course_id=16, level=17):
+    """A seg:reds->pipe:<abbrev>-shaped definition: start on entering the
+    level, waypoint on the course's reds grab, end on the pipe warp -- the
+    exact shape of the real corpus row (measured against
+    data/defaults.seed.json's seg:reds->pipe:bitdw), built directly rather
+    than via reconcile_defaults so these tests stay fast and don't depend on
+    the bundled corpus's other 83 rows."""
+    return db.insert_segment_def(
+        "Reds -> Pipe", [{"type": "level_enter", "to": level}],
+        [{"type": "warp_entered", "level": level}], [],
+        "2026-07-30T00:00:00Z",
+        waypoints=[[{"type": "star_grabbed", "course": course_id, "star": 0}]],
+        seed_key="seg:reds->pipe:bitdw")
+
+
+def _bowser_ranks(tmp_path, mario_cutoff=45.0):
+    """star:16:0 with ONE paired Star/Pipe strategy, each carrying only a
+    Mario cutoff -- independent of any seeded run's actual time
+    (_run_reds_pipe_sequence's 43.00s star grab beats it, its 70.00s segment
+    run does not), so a test can assert on which FAMILY a grade came from
+    rather than merely that a grade exists."""
+    import json
+    from sm64_events.ranks.standards import RankStandards
+    p = tmp_path / "bowser_rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "star:16:0": {"clock": "igt", "strategies": {
+            "Tsuki (Star)": {"Mario": mario_cutoff},
+            "Salt Flip (Pipe)": {"Mario": mario_cutoff}}}}}))
+    ranks = RankStandards(p); ranks.load()
+    return ranks
+
+
+def _make_with_def(tmp_path, insert):
+    """make()'s shape, but with `insert(db)` run BEFORE svc.start() -- a
+    segment inserted after start is invisible to service.segment_defs, which
+    is populated once at start time (test_active_route_star_keys_dedupe_and_
+    ignore_segments and friends insert before construction for the same
+    reason)."""
+    db = Database(tmp_path / "t.db")
+    db.set_state("stat_menu", REFERENCE_STAT_MENU)
+    seg_id = insert(db)
+    svc = TrackerService(db, Broadcaster())
+    asyncio.run(svc.start())
+    return db, svc, seg_id
+
+
+def _run_reds_pipe_sequence(svc, star_id=0, course_id=16, level=17,
+                            arm_from=26, star_igt=1290, close_frame=3100):
+    """level_enter(to=level) arms the segment; star_collected satisfies its
+    waypoint AND independently closes a star attempt (the SAME grab feeds
+    both, exactly as in-game); warp_entered(level) closes the segment.
+    star_igt=1290 -> 43.00s displayed; a 2100-frame (70.00s) segment run."""
+    asyncio.run(svc.publish(lvl(1000, arm_from, level)))
+    asyncio.run(svc.publish(ev("star_collected", 1300,
+                               {"course_id": course_id, "star_id": star_id,
+                                "igt_frames": star_igt})))
+    asyncio.run(svc.publish(ev("warp_entered", close_frame, {"level": level})))
+
+
+def test_reds_pipe_segments_pairs_by_seed_key_prefix_and_level():
+    """Pure unit test of the resolver (views._reds_pipe_segments): matches a
+    seg:reds->pipe:* row to its course via start_levels/COURSE_BY_LEVEL, and
+    -- mutation-proved -- a row at the SAME level with a DIFFERENT seed_key
+    (the legacy exclusive 'no reds' pipe segment shares this level and must
+    never be mistaken for the reds->pipe one) is not paired."""
+    from sm64_events.tracking.views import _reds_pipe_segments
+
+    reds_pipe_row = {"id": 67, "seed_key": "seg:reds->pipe:bitdw",
+                     "start_triggers": [{"type": "level_enter", "to": 17}]}
+    legacy_pipe_row = {"id": 5, "seed_key": "seg:bitdw-pipe",
+                       "start_triggers": [{"type": "level_enter", "to": 17}]}
+    unrelated_row = {"id": 1, "seed_key": None,
+                     "start_triggers": [{"type": "level_enter", "to": 6}]}
+
+    by_course, grading_ek = _reds_pipe_segments(
+        [reds_pipe_row, legacy_pipe_row, unrelated_row])
+    assert by_course == {16: 67}
+    assert grading_ek == {67: "star:16:0"}
+
+    # Mutation: rename the reds->pipe row's seed_key to look like the legacy
+    # one -- the level-based match alone would still find IT (same level),
+    # proving the prefix check, not the level, is what tells them apart.
+    renamed = {**reds_pipe_row, "seed_key": "seg:bitdw-pipe-v2"}
+    by_course2, grading_ek2 = _reds_pipe_segments([renamed, legacy_pipe_row])
+    assert by_course2 == {} and grading_ek2 == {}
+
+
+def test_pipe_segment_grades_against_the_paired_star_ladder(tmp_path):
+    """The core wiring: seg:reds->pipe:bitdw has no rank entity of its own,
+    yet its section grades a real tier -- borrowed from star:16:0's " (Pipe)"
+    ladder, using the SEGMENT's own (rta) attempt as the basis. The star's
+    OWN section grades independently, off its own (igt) attempt, against the
+    " (Star)" half of the SAME ladder."""
+    db, svc, seg_id = _make_with_def(tmp_path, _reds_pipe_def)
+    svc.ranks = _bowser_ranks(tmp_path)
+    asyncio.run(svc.set_strat(16, 0, "Tsuki (Star)"))
+    asyncio.run(svc.set_strat_segment(seg_id, "Salt Flip (Pipe)"))
+    _run_reds_pipe_sequence(svc)
+
+    session = build_session_view(db, svc, clock="igt")
+    star_attempt = next(a for a in session["stars"][0]["attempts"]
+                        if a["outcome"] == "success")
+    seg_attempt = next(a for a in seg_section(session, seg_id)["attempts"]
+                       if a["outcome"] == "success")
+    asyncio.run(svc.save_pb(star_attempt["id"], "igt"))
+    asyncio.run(svc.save_pb(seg_attempt["id"], "rta"))
+
+    view = build_session_view(db, svc, clock="igt")
+    star_sec = next(s for s in view["stars"] if s["course_id"] == 16)
+    seg_sec = seg_section(view, seg_id)
+
+    # 43.00s beats Tsuki (Star)'s Mario cutoff (45.0s, _bowser_ranks default)
+    assert star_sec["rank"]["rank"] == "Mario"
+    assert star_sec["pipe_segment_id"] == seg_id
+    # 70.00s misses Salt Flip (Pipe)'s Mario cutoff (45.0s, the only tier
+    # this minimal ladder defines) -- Iron, the unbounded floor
+    # (ranks/classify.py), proving this graded a REAL ladder (not merely
+    # "any truthy rank") and that it is the PIPE cutoff, not e.g. silently
+    # reusing the star's own attempt/basis.
+    assert seg_sec["rank"]["rank"] == "Iron"
+    assert seg_sec["entity_rank"] is not None
+    assert seg_sec["pipe_star_entity"] == "star:16:0"
+
+
+def test_star_and_segment_sections_offer_only_their_own_family(tmp_path):
+    """The dropdown/table on each side must never offer the OTHER family's
+    name -- picking a " (Pipe)" strategy for the star's own (grab-only) time
+    would grade a short time against a ladder timed to the pipe."""
+    db, svc, seg_id = _make_with_def(tmp_path, _reds_pipe_def)
+    svc.ranks = _bowser_ranks(tmp_path)
+    # A real attempt each (rather than just setting the target) -- a target
+    # only pins ONE of the two at a time (the star/segment kinds are mutually
+    # exclusive foci), while an attempt keeps a section "seen" regardless of
+    # which is currently pinned, so both sections exist to assert on here.
+    _run_reds_pipe_sequence(svc)
+
+    view = build_session_view(db, svc, clock="igt")
+    star_sec = next(s for s in view["stars"] if s["course_id"] == 16)
+    seg_sec = seg_section(view, seg_id)
+
+    # ranks.strategies(star:16:0) carries BOTH family names regardless of any
+    # attempt or active pick -- the filter is what keeps each side down to
+    # its own half, not "nothing to filter yet".
+    assert star_sec["strategies"] == ["Tsuki (Star)"]
+    assert seg_sec["strategies"] == ["Salt Flip (Pipe)"]
+
+
+def test_a_star_strat_from_the_other_family_is_masked_not_graded(tmp_path):
+    """Pre-toggle data safety: before this feature existed nothing stopped
+    picking a " (Pipe)" name as the star's own active strat. That must now
+    read as unranked (no_strat) rather than grading a grab-only time against
+    a Pipe-timed cutoff -- self-healing on the next pick from the now
+    family-filtered dropdown, no migration."""
+    db, svc, seg_id = _make_with_def(tmp_path, _reds_pipe_def)
+    svc.ranks = _bowser_ranks(tmp_path)
+    asyncio.run(svc.set_target(16, 0, strat_tag="Salt Flip (Pipe)"))
+
+    view = build_session_view(db, svc, clock="igt")
+    star_sec = next(s for s in view["stars"] if s["course_id"] == 16)
+    assert star_sec["last_strat"] is None
+    assert view["last_strat_by_star"].get("16:0") is None
+    assert star_sec["rank"]["reason"] == "no_strat"
+
+
+def test_ordinary_segments_are_unaffected_by_the_reds_pipe_pairing(tmp_path):
+    """Regression guard: the substitution is scoped to seg:reds->pipe:* only
+    -- LBLJ (segment 1, no pairing) must keep grading against its OWN
+    segment:1 entity exactly as before."""
+    import json
+    from sm64_events.ranks.standards import RankStandards
+    db, svc, seg_id = _make_with_def(tmp_path, _reds_pipe_def)
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "segment:1": {"clock": "rta", "strategies": {
+            "hyperspeed": {"Mario": 3.0}}}}}))
+    svc.ranks = RankStandards(p); svc.ranks.load()
+    asyncio.run(svc.set_strat_segment(1, "hyperspeed"))
+    lblj_success(svc, rta=85)                   # 2.83s, beats Mario's 3.0s cutoff
+    aid = next(a.id for a in db.attempts() if a.segment_id == 1)
+    asyncio.run(svc.save_pb(aid, "rta"))
+
+    view = build_session_view(db, svc, clock="igt")
+    sec = seg_section(view, 1)
+    assert sec["rank"]["rank"] == "Mario"
+    assert sec["pipe_star_entity"] is None
+    assert sec["strategies"] == ["hyperspeed"]   # no borrowed star names leaked in
+
+
+def test_route_candidate_ranks_the_reds_pipe_segment_against_the_star_ladder(tmp_path):
+    """Every seeded Bowser Reds route step names seg:reds->pipe:<abbrev>,
+    never the bare star (routes already assume Pipe timing throughout) --
+    build_route_view's candidate rank must follow the same star-ladder
+    substitution the session view uses, or a route step showing this
+    segment would always read unranked."""
+    db, svc, seg_id = _make_with_def(tmp_path, _reds_pipe_def)
+    svc.ranks = _bowser_ranks(tmp_path)
+    asyncio.run(svc.set_strat_segment(seg_id, "Salt Flip (Pipe)"))
+    _run_reds_pipe_sequence(svc)
+    seg_attempt = next(a for a in seg_section(
+        build_session_view(db, svc, clock="igt"), seg_id)["attempts"]
+        if a["outcome"] == "success")
+    asyncio.run(svc.save_pb(seg_attempt["id"], "rta"))
+
+    from sm64_events.tracking.views import build_route_view
+    rid = asyncio.run(svc.create_route({"name": "R", "steps": [
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": seg_id}]},
+    ]}))
+    route = build_route_view(db, svc, rid)
+    assert route["steps"][0]["rank"] is not None
+    assert route["steps"][0]["rank"]["rank"] == "Iron"   # see the docstring above

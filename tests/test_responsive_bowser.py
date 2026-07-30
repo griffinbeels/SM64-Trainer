@@ -80,17 +80,31 @@ def test_the_known_defect_list_does_not_outlive_its_defects(uilab_sweep):
 # stand-in the `at=".stagebanner"` selector matched anyway. This is that
 # other half, expressed the way test_fixture_reaches_the_real_page.py's own
 # tests are: open the real fixture, count the real cells.
-def test_the_stage_is_actually_in_bowser_course_mode_with_three_cells():
+def test_the_stage_is_actually_in_bowser_course_mode_with_two_cells():
     """Prove the story reaches the row, not just SOME row.
 
-    Mutation-proved (task-bowser-sweep): with `BOWSER_PROJECT`'s
-    `reconcile_full_corpus=True` removed, the corpus's `seg:reds->pipe:bitdw`
-    row never exists and this drops to 2 cells; with `bowser_stage` removed
+    Two cells since 2026-07-30 (spec 2026-07-28-multi-step-segments, "the
+    Bowser Reds star/pipe toggle"): "No Reds" (the legacy exclusive
+    seg:<abbrev>-pipe, seeded by the schema migration itself, present with
+    or without `reconcile_full_corpus`) and "Reds", which folds the
+    star/segment-time toggle that used to be a third cell
+    (seg:reds->pipe:<abbrev>, corpus-only) INTO the Reds cell itself —
+    `.starcell` counts 2, not 3, because the reds->pipe segment no longer
+    renders its own StandardSegmentCell at all.
+
+    This is why `reconcile_full_corpus=True` no longer changes the CELL
+    COUNT the way it did for the old three-cell row (empirically checked,
+    `/api/session`: segment 5 "BitDW Pipe Entry" exists either way; segment
+    67 "BitDW — 8 Red Coins → Pipe" exists only with reconcile) — removing
+    it leaves the Reds cell's pipe toggle with nothing to target
+    (`pipeSeg` undefined, its onclick a no-op) but the cell is still drawn,
+    so this specific test can no longer distinguish "reconcile ran" from
+    "it didn't." What it still mutation-proves: with `bowser_stage` removed
     entirely, `t.stage.mode` stays "stars" (`seed_practice`'s own hardcoded
     default — see its comment in `ui_fixture.py`) and `.stagebanner` renders
     `StarRow` instead, so `.starcell` still exists but the count is 7 (six
-    named stars + 100 Coins), never 3. Both were run by hand against this
-    test before it was trusted.
+    named stars + 100 Coins), never 2 — run by hand against this test
+    before it was trusted.
     """
     with BOWSER_PROJECT.open() as url, get_driver().launch() as page:
         page.goto(url)
@@ -98,10 +112,8 @@ def test_the_stage_is_actually_in_bowser_course_mode_with_three_cells():
         assert page.count(".stagebanner") == 1, (
             "no stage banner reached bowser_course context at all — "
             "hasPracticeContext/practiceMode returned no row for it")
-        assert page.count(".stagebanner .starcell") == 3, (
-            "expected 3 cells on the Bowser row (the 'reds' star + both "
-            "BitDW pipe segments). If this is 2, reconcile_full_corpus did "
-            "not run and only the legacy seg:bitdw-pipe exists (the "
-            "corpus's seg:reds->pipe:bitdw is missing); if this is 7, the "
-            "stage never reached bowser_course mode and StarRow rendered "
-            "instead")
+        assert page.count(".stagebanner .starcell") == 2, (
+            "expected 2 cells on the Bowser row ('No Reds' + 'Reds', the "
+            "latter folding the star/pipe toggle inside itself). If this is "
+            "7, the stage never reached bowser_course mode and StarRow "
+            "rendered instead")

@@ -708,6 +708,7 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
       <${StandardsPanel} entity=${`star:${sec.course_id}:${sec.star_id}`}
           activeStrat=${sec.last_strat} strategies=${sec.strategies}
           sectionRank=${sec.rank} sectionPb=${sec.pb}
+          family=${sec.pipe_segment_id != null ? "Star" : null}
           onChanged=${t.refresh} defaultOpen=${true} />
       <${FailureCompilation} identity=${{ course_id: sec.course_id, star_id: sec.star_id }}
           defaultOpen=${true} />
@@ -885,9 +886,10 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker 
             : "Wipe this segment's data in the current session"}>Clear data</button>
       </div>
       <${StatChipsRow} sec=${sec} t=${t} />
-      <${StandardsPanel} entity=${`segment:${sec.segment_id}`}
+      <${StandardsPanel} entity=${sec.pipe_star_entity || `segment:${sec.segment_id}`}
           activeStrat=${sec.last_strat} strategies=${sec.strategies}
           sectionRank=${sec.rank} sectionPb=${sec.pb}
+          family=${sec.pipe_star_entity ? "Pipe" : null}
           onChanged=${t.refresh} defaultOpen=${true} />
       <${FailureCompilation} identity=${{ segment_id: sec.segment_id }}
           defaultOpen=${true} />

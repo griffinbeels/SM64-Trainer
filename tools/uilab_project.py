@@ -516,7 +516,12 @@ BOWSER_PROJECT = dataclasses.replace(
     # 7-star StarRow, so `span.starname` clips at slightly different widths).
     # Every row below was taken VERBATIM from this project's own sweep
     # output (task-bowser-sweep), not hand-typed, to guarantee the keys
-    # match byte-for-byte.
+    # match byte-for-byte. RE-DERIVED 2026-07-30 (spec 2026-07-28-multi-
+    # step-segments, "the Bowser Reds star/pipe toggle"): the row went from
+    # three cells to two, which dropped the `span.starname` clipping class
+    # entirely (24 rows) and left the other two classes' own numbers
+    # unchanged (measured, not assumed -- both were re-run against the
+    # sweep's own output, not edited by hand).
     known_defects={
         # `.stagebanner`'s own fixed-height card shortfall -- PROJECT's
         # identical, long-owed "scrollHeight > clientHeight" defect for the
@@ -561,66 +566,19 @@ BOWSER_PROJECT = dataclasses.replace(
         '913x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 208 > clientHeight 206',
 
-        # `span.starname` clipping by ~2px -- PROJECT's identical, long-owed
-        # defect for the star row's OWN name span, now ALSO true of the one
-        # cell on this row with a long enough name to hit it: "BitDW — 8 Red
-        # Coins → Pipe" (seg:reds->pipe:bitdw, corpus_movements.py Task 20).
-        # The OTHER two cells on this row ("Reds", "BitDW Pipe Entry") do
-        # NOT clip at any of these widths (measured directly) -- this is the
-        # same 2px shortfall the star row already owes, triggered here by
-        # text length rather than by which row renders it.
-        '1100x1000 [page] clipped :: span.starname':
-            'scrollHeight 29 > clientHeight 27',
-        '1100x1000 [bowser-row] clipped :: span.starname':
-            'scrollHeight 29 > clientHeight 27',
-        '1101x1000 [page] clipped :: span.starname':
-            'scrollHeight 29 > clientHeight 27',
-        '1101x1000 [bowser-row] clipped :: span.starname':
-            'scrollHeight 29 > clientHeight 27',
-        '1180x1000 [page] clipped :: span.starname':
-            'scrollHeight 29 > clientHeight 27',
-        '1180x1000 [bowser-row] clipped :: span.starname':
-            'scrollHeight 29 > clientHeight 27',
-        '1250x1000 [page] clipped :: span.starname':
-            'scrollHeight 29 > clientHeight 27',
-        '1250x1000 [bowser-row] clipped :: span.starname':
-            'scrollHeight 29 > clientHeight 27',
-        '1251x1000 [page] clipped :: span.starname':
-            'scrollHeight 29 > clientHeight 27',
-        '1251x1000 [bowser-row] clipped :: span.starname':
-            'scrollHeight 29 > clientHeight 27',
-        '1280x720 [page] clipped :: span.starname':
-            'scrollHeight 29 > clientHeight 27',
-        '1280x720 [bowser-row] clipped :: span.starname':
-            'scrollHeight 29 > clientHeight 27',
-        '1400x760 [page] clipped :: span.starname':
-            'scrollHeight 29 > clientHeight 27',
-        '1400x760 [bowser-row] clipped :: span.starname':
-            'scrollHeight 29 > clientHeight 27',
-        '1400x761 [page] clipped :: span.starname':
-            'scrollHeight 29 > clientHeight 27',
-        '1400x761 [bowser-row] clipped :: span.starname':
-            'scrollHeight 29 > clientHeight 27',
-        '1500x900 [page] clipped :: span.starname':
-            'scrollHeight 29 > clientHeight 27',
-        '1500x900 [bowser-row] clipped :: span.starname':
-            'scrollHeight 29 > clientHeight 27',
-        '850x1180 [page] clipped :: span.starname':
-            'scrollHeight 22 > clientHeight 20',
-        '850x1180 [bowser-row] clipped :: span.starname':
-            'scrollHeight 22 > clientHeight 20',
-        '851x1000 [page] clipped :: span.starname':
-            'scrollHeight 22 > clientHeight 20',
-        '851x1000 [bowser-row] clipped :: span.starname':
-            'scrollHeight 22 > clientHeight 20',
-        '912x1000 [page] clipped :: span.starname':
-            'scrollHeight 24 > clientHeight 22',
-        '912x1000 [bowser-row] clipped :: span.starname':
-            'scrollHeight 24 > clientHeight 22',
-
+        # `span.starname` clipping is GONE (re-derived 2026-07-30, spec
+        # 2026-07-28-multi-step-segments, "the Bowser Reds star/pipe
+        # toggle"): the row dropped from three cells to two -- "Reds" (which
+        # now carries the star/pipe toggle instead of the longest name in the
+        # app, "BitDW — 8 Red Coins → Pipe") and "No Reds" -- so each
+        # remaining cell gets more width per cell at every viewport and
+        # neither name clips any more. Removing this task's own toggle later
+        # without re-running the sweep would leave this comment as the only
+        # record that the class existed at all.
+        #
         # `.starholder` x `.starrank` overlap inside `.starcell` -- PROJECT's
         # identical, long-owed 7x2px overlap, at every viewport a cell
-        # renders at all (all three cells on this row share it; the probe
+        # renders at all (both cells on this row share it; the probe
         # reports one row per colliding SELECTOR pair, not per cell).
         '1060x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',

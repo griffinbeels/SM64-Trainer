@@ -57,8 +57,22 @@ function displayCs(frames) {
   return Math.floor(frames / 30) * 100 + Math.floor(((frames % 30) * 100) / 30);
 }
 
+// A Bowser Reds star and its paired seg:reds->pipe:<abbrev> segment share
+// ONE rank-standards entity (the star's -- views.py's _reds_pipe_segments)
+// but must never show each other's half: `family` ("Star" | "Pipe" | null)
+// filters the COLUMN list to names ending " (<family>)" -- the fetched
+// `data.strategies` is the community store's raw entity data (every
+// strategy on that entity, both families mixed), unlike `sec.strategies`,
+// which views.py already family-filters server-side for the session view.
+// A plain string suffix check, not a second "which times count" resolver
+// (that stays server-side, grading_basis/valid_frames) -- there is nothing
+// here to disagree with.
+function inFamily(name, family) {
+  return !family || name.endsWith(` (${family})`);
+}
+
 export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
-    defaultOpen = false, sectionRank = null, sectionPb = null }) {
+    defaultOpen = false, sectionRank = null, sectionPb = null, family = null }) {
   const [open, setOpen] = useState(defaultOpen);
   const [data, setData] = useState(null);
   const [editing, setEditing] = useState(false);
@@ -127,8 +141,9 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
   // `in`): a strat named e.g. "constructor" must not vanish via the proto
   // chain.
   const strats = data
-    ? [...Object.keys(data.strategies),
-       ...(strategies || []).filter((s) => !Object.hasOwn(data.strategies, s))]
+    ? [...Object.keys(data.strategies).filter((s) => inFamily(s, family)),
+       ...(strategies || []).filter((s) => inFamily(s, family)
+         && !Object.hasOwn(data.strategies, s))]
     : [];
   // "You are here": the grading basis under the ACTIVE strategy. Avg rank
   // modes carry it on sectionRank.basis; pb mode carries none (the same

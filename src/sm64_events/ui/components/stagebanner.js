@@ -49,7 +49,10 @@ import { requestTarget } from "../target.js";
 import { Icon } from "./icons.js";
 import { PracticeCell } from "./practicecell.js";
 import { iconIdentityForKey, useIconPicking } from "./iconpicker.js";
-import { entityIconSrc, genericStarSrc } from "./entityicons.js";
+import { entityIconSrc, fallbackToGenericStar, genericStarSrc } from "./entityicons.js";
+import { RankIcon } from "./rankicon.js";
+import { useRouteSwap } from "../routeswap.js";
+import { mareloTuning } from "../marelotuning.js";
 
 const html = htm.bind(h);
 
@@ -313,68 +316,196 @@ function StarRow({ t, v, stage, freshIds }) {
   </section>`;
 }
 
-// BitDW/BitFS/BitS: THREE independently-tracked things — the "reds" 8-coin
-// star, grabbing reds then taking the pipe, and taking the pipe without reds.
-// No mutual exclusion (retired 2026-07-29, live report): the corpus reshape
-// that arms the pipe-entry segments on stage ENTRY gives each Bowser level
-// TWO segment_targets entries sharing the same start_levels — one STRICT with
-// a waypoint on the reds grab ("seg:reds->pipe:*"), one EXCLUSIVE and
-// cancelled the moment any star is grabbed ("seg:<abbrev>-pipe", the legacy
-// row) — so the matcher itself already keeps whichever of the two applies
-// armed in parallel with the reds star, with no picker involved: "if 1 is
-// armed, 2 should always be armed. If 2 is armed, then 1 should also always
-// be armed" (user). This row used to ENFORCE a choice by writing the pipe
-// segment's `enabled` flag — the SAME toggle now fights the matcher's own
-// bookkeeping, so it is gone; clicking a cell only sets the target, same as
-// every other segment cell. StandardSegmentCell is reused here for BOTH pipe
-// cells, so each shows its OWN honest name/rank/strat instead of a shared
-// "No reds" label. There is no server field distinguishing "the reds->pipe
-// segment" from "the pipe-only segment" (segment_targets carries no
-// waypoints/match_mode), so the two rely on the corpus's own names already
-// being distinct ("<Abbrev> — 8 Red Coins → Pipe" vs "<Abbrev> Pipe Entry") —
-// flagged in this task's report, since a future rename could make them read
-// alike again with no guard here to catch it.
+// BitDW/BitFS/BitS: TWO cells since 2026-07-30 (spec 2026-07-28-multi-step-
+// segments, "the Bowser Reds star/pipe toggle") — "No Reds" (the legacy
+// EXCLUSIVE pipe-only segment, "seg:<abbrev>-pipe", cancelled the moment any
+// star is grabbed) and "Reds", which folds what used to be a THIRD cell
+// (the STRICT "seg:reds->pipe:<abbrev>" segment, a waypoint on the reds grab
+// then the pipe entry) into a star/pipe TOGGLE inside the Reds cell itself:
+// a reds run is ONE practiced thing worth timing two ways -- the grab alone
+// or the whole run to the pipe -- never three separate cells (user's own
+// words: "the third cell goes away... what replaces it is a toggle inside
+// the Reds cell").
+//
+// `is_reds_pipe` (views.py's segment_targets) is the server-provided
+// discriminator between the two Bowser segments sharing a level -- replacing
+// the by-NAME guess this row's own docstring used to flag as a future-rename
+// risk ("<Abbrev> — 8 Red Coins → Pipe" vs "<Abbrev> Pipe Entry", no other
+// signal to tell them apart).
+//
+// Clicking the STAR icon targets the star (ends at the grab, grades the
+// " (Star)" strategies); clicking the PIPE icon targets seg:reds->pipe:
+// <abbrev> (stage entry -> grab -> pipe, grades " (Pipe)") -- both feed the
+// SAME requestTarget every other cell uses, so the normal target_changed
+// flow updates everything else. The displayed selection is DERIVED from the
+// current target (star vs the paired segment), never stored client-side --
+// the same "memory can't disagree with what's tracking" reasoning the
+// retired mutual-exclusion memory used, and default PIPE (user's mock-up)
+// falls out for free as "anything but an explicit star pick".
+//
+// Route override (user: "you can't just stop at the star grab for reds, you
+// HAVE to do the pipe timing... it should always be using the Pipe timing").
+// Every seeded Bowser Reds route step already names seg:reds->pipe:<abbrev>,
+// never the bare star (tools/corpus_routes_*), so this makes an assumption
+// the corpus already relies on VISIBLE rather than leaving a control the
+// player can move that then silently does not apply: forced-but-offered
+// would read as a real choice, so the star half is disabled with its own
+// title instead.
 function BowserCourseRow({ t, v, stage }) {
   const [fold, toggleFold] = useCollapsed("selector");
   const [setPicking, pickerModal] = useIconPicking(t);
   const course = v.catalog.courses.find((c) => c.id === stage.course_id);
   const tgt = v.target || {};
-  const pipes = segsForLevel(v, stage.level);
-  const redsActive = tgt.kind !== "segment"
-    && tgt.course_id === stage.course_id && tgt.star_id === 0;
+  const segs = segsForLevel(v, stage.level);
+  const pipeSeg = segs.find((s) => s.is_reds_pipe);
+  const noRedsSeg = segs.find((s) => !s.is_reds_pipe);
 
-  // "reds" — practice the 8-coin star. No longer disables anything: the
-  // matcher's own EXCLUSIVE mode already cancels the pipe-only segment the
-  // moment a star is grabbed, and the reds->pipe segment WANTS the reds grab
-  // (it is that segment's own waypoint).
-  async function pickReds() {
+  const starActive = tgt.kind !== "segment"
+    && tgt.course_id === stage.course_id && tgt.star_id === 0;
+  const pipeMode = !starActive;   // default PIPE: anything but an explicit star pick
+  const pipeTargeted = pipeMode && !!pipeSeg
+    && tgt.kind === "segment" && tgt.segment_id === pipeSeg.segment_id;
+  const redsActive = starActive || pipeTargeted;
+
+  const routeStars = routeStarFilter(v, stage.course_id);
+  const routeSegs = routeSegmentFilter(v);
+  const forcedPipe = !!((routeStars && routeStars.has(`${stage.course_id}:0`))
+    || (routeSegs && pipeSeg && routeSegs.has(pipeSeg.segment_id)));
+
+  async function pickStar() {
     await requestTarget(t, { course_id: stage.course_id, star_id: 0 });
+  }
+  async function pickPipe() {
+    if (!pipeSeg) return;
+    if (!pipeSeg.enabled)
+      await send("PUT", `/api/segments/${pipeSeg.segment_id}`, { enabled: true });
+    await requestTarget(t, { kind: "segment", segment_id: pipeSeg.segment_id });
   }
 
   if (!course) return html`<${StagePlaceholder} t=${t} />`;
 
+  const shownIds = new Set([pipeSeg, noRedsSeg].filter(Boolean)
+    .map((s) => s.segment_id));
+
   return html`<section class="practice-card selector-card stagebanner ${cardClass(fold)}">
     <div class="shead"><b>${course.name}</b>
-      <span class="meta">all three track together — tap one to pin it</span>
+      <span class="meta">${forcedPipe
+        ? "route active — Reds always times to the pipe"
+        : "tap Star or Pipe to pin the reds run"}</span>
 
       <${CollapseToggle} collapsed=${fold} toggle=${toggleFold}
         label="the course selector" /></div>
     <div class="starrow segcells">
-      <${PracticeCell} dimIdle=${STAR_DIM_IDLE}
-        active=${redsActive}
-        iconSrc=${entityIconSrc(t, starKey(stage.course_id, 0))}
-        rank=${(v.rank_by_star || {})[`${stage.course_id}:0`]}
-        name="Reds" title=${course.stars[0] || "8 Red Coins"}
-        sub=${html`<span class="strat">${course.stars[0] || "8 Red Coins"}</span>`}
-        onPick=${pickReds}
-        onEdit=${() => setPicking(iconIdentityForKey(starKey(stage.course_id, 0)))} />
-      ${pipes.map((s) => html`<${StandardSegmentCell}
-        key=${`seg:${s.segment_id}`} t=${t} s=${s} setPicking=${setPicking} />`)}
-      ${armedExtraCells(t, v, new Set(pipes.map((s) => s.segment_id)),
-                        setPicking)}
+      <${RedsCell} t=${t} v=${v} stage=${stage} course=${course}
+        redsActive=${redsActive} pipeMode=${pipeMode} forcedPipe=${forcedPipe}
+        pipeSeg=${pipeSeg} onPickStar=${pickStar} onPickPipe=${pickPipe}
+        setPicking=${setPicking} />
+      ${noRedsSeg ? html`<${StandardSegmentCell}
+        key=${`seg:${noRedsSeg.segment_id}`} t=${t} s=${noRedsSeg} setPicking=${setPicking} />`
+        : null}
+      ${armedExtraCells(t, v, shownIds, setPicking)}
     </div>
     ${pickerModal}
   </section>`;
+}
+
+// The Reds cell's own rank badge -- shaped {tier, division, fill, label} for
+// useRouteSwap, which only ever reads tier/division/fill numerically; label
+// is unused here (no text crossfade in this compact cell, unlike the route
+// rank card) but kept non-null so two different ranks in the same tier still
+// count as "changed enough to know which one is shown" is unnecessary --
+// useRouteSwap keys off tier/division/fill itself, this is just the shape it
+// expects.
+function redsSwapEntry(rank) {
+  return { tier: rank ? rank.rank : null, division: rank ? rank.division : null,
+           fill: 0, label: "" };
+}
+
+// Reds cell: the star's own art as the base (same entityIconSrc chain every
+// other cell uses -- user overrides / course-icon mode apply here exactly as
+// anywhere else), with the star/pipe toggle OVERLAID at the bottom-centre
+// (mock-up: "star_3.png ... overlaid on top of the Reds segment icon in the
+// bottom center"). Not a <button> itself (unlike PracticeCell) -- the two
+// toggle icons ARE the only interactive surface here (mock-up: "Both icons
+// should be a button"), and a <button> cannot legally nest two more.
+// star_3.png is entities.js's own GENERIC_STAR_SLOTS asset (slot 2,
+// genericStarSrc) rather than a literal path -- tests/test_single_source.py
+// guards "/ui/assets/star_" to entities.js/entityicons.js only, since three
+// surfaces once each derived their own star-art stem and disagreed.
+// pipe_icon.png is a new, single-purpose glyph with no other consumer, so it
+// is named directly here rather than adding a second door for one call site.
+function RedsCell({ t, v, stage, course, redsActive, pipeMode, forcedPipe,
+                   pipeSeg, onPickStar, onPickPipe, setPicking }) {
+  const starRank = (v.rank_by_star || {})[`${stage.course_id}:0`];
+  const pipeRank = pipeSeg ? pipeSeg.rank : null;
+  const shownRank = pipeMode ? pipeRank : starRank;
+
+  // Squash/pop between families on every toggle -- REUSE of marelo.js's own
+  // route-swap hook, not a second hand-tuned curve (user named the
+  // reference explicitly: "like how we do it identically in the route
+  // change MARELO transition"). Keyed on course + which family is shown, so
+  // switching courses never carries a stale swap over.
+  const swap = useRouteSwap(`${stage.course_id}:${pipeMode ? "pipe" : "star"}`,
+    redsSwapEntry(shownRank), mareloTuning());
+  const swapping = !!swap;
+  const iconTier = swapping ? (swap.crossed ? swap.to.tier : swap.from.tier)
+    : (shownRank ? shownRank.rank : null);
+  const iconDivision = swapping ? (swap.crossed ? swap.to.division : swap.from.division)
+    : (shownRank ? shownRank.division : null);
+  const iconProps = swapping ? swap.icon : null;
+
+  function editKey(keyEvent) {
+    if (keyEvent.key !== "Enter" && keyEvent.key !== " ") return;
+    keyEvent.preventDefault(); keyEvent.stopPropagation();
+    setPicking(iconIdentityForKey(starKey(stage.course_id, 0)));
+  }
+
+  return html`<div class="starcell reds-cell ${redsActive ? "active-star" : ""}">
+    <span class="starholder">
+      <img class="starimg ${redsActive ? "" : "dim"}"
+           src=${entityIconSrc(t, starKey(stage.course_id, 0))}
+           onerror=${(errorEvent) => fallbackToGenericStar(errorEvent, 0)}
+           alt="" draggable="false" />
+      <span class="reds-toggle">
+        <button type="button" class="reds-toggle-btn ${!pipeMode ? "is-selected" : ""}"
+            disabled=${forcedPipe}
+            aria-pressed=${!pipeMode}
+            title=${forcedPipe
+              ? "This route always times Reds to the pipe"
+              : "Track the star grab alone"}
+            onclick=${(clickEvent) => { clickEvent.stopPropagation();
+              if (!forcedPipe) onPickStar(); }}>
+          <img src=${genericStarSrc(2)} alt="Star" draggable="false" />
+        </button>
+        <span class="reds-toggle-clock" aria-hidden="true">
+          <${Icon} name="clock" size=${12} />
+        </span>
+        <button type="button" class="reds-toggle-btn ${pipeMode ? "is-selected" : ""}"
+            aria-pressed=${pipeMode}
+            title="Track the run to the pipe"
+            onclick=${(clickEvent) => { clickEvent.stopPropagation(); onPickPipe(); }}>
+          <img src="/ui/assets/pipe_icon.png" alt="Pipe" draggable="false" />
+        </button>
+      </span>
+      <span class="reds-arrows" aria-hidden="true">
+        <span class="reds-arrow left ${!pipeMode ? "is-lit" : ""}">◀</span>
+        <span class="reds-arrow right ${pipeMode ? "is-lit" : ""}">▶</span>
+      </span>
+    </span>
+    <span class="starrank">
+      ${iconTier ? html`<${RankIcon} ...${iconProps} tier=${iconTier}
+          division=${iconDivision} size=${16} />` : "–"}
+    </span>
+    <span class="starname">Reds</span>
+    <span class="starsub"><span class="strat">
+      ${pipeMode ? "Reds → Pipe" : (course.stars[0] || "8 Red Coins")}
+    </span></span>
+    <span class="editicon" role="button" tabindex="0"
+        title="Choose icon…" aria-label="Choose icon"
+        onclick=${(clickEvent) => { clickEvent.stopPropagation();
+          setPicking(iconIdentityForKey(starKey(stage.course_id, 0))); }}
+        onkeydown=${editKey}>✎</span>
+  </div>`;
 }
 
 // Bowser 1/2/3 arena: the single fight segment, auto-selected on entry.

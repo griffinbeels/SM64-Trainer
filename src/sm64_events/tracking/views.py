@@ -34,8 +34,8 @@ Contract (the UI builds against ALL of this):
   active_route_id(), never a service-only field (see select_route)."""
 from sm64_events.core.timefmt import format_igt
 from sm64_events.links import star_links
-from sm64_events.memory.addresses import (COURSE_NAMES, course_name,
-                                          star_count, star_name)
+from sm64_events.memory.addresses import (COURSE_BY_LEVEL, COURSE_NAMES,
+                                          course_name, star_count, star_name)
 from sm64_events.ranks import classify
 from sm64_events.ranks import scoring
 from sm64_events.ranks.standards import entity_key
@@ -136,7 +136,7 @@ def current_pbs_by_strat(pb_rows: list[dict]) -> dict:
     return out
 
 
-def _attempt_json(a, pbs, clock, ranks=None, rank_clock=None):
+def _attempt_json(a, pbs, clock, ranks=None, rank_clock=None, rank_ek=None):
     pb = pbs.get(("segment", a.segment_id, clock) if a.segment_id is not None
                  else (a.course_id, a.star_id, clock))
     frames = a.igt_frames if clock == "igt" else a.rta_frames
@@ -172,7 +172,7 @@ def _attempt_json(a, pbs, clock, ranks=None, rank_clock=None):
             "rollouts_dustless": a.rollouts_dustless,
             "jumps_total": a.jumps_total,
             "jumps_dustless": a.jumps_dustless,
-            "rank": _attempt_rank(a, rank_frames, ranks),
+            "rank": _attempt_rank(a, rank_frames, ranks, rank_ek),
             "segment_id": a.segment_id}
 
 
@@ -217,7 +217,8 @@ def _strategies_for(registered: dict, attempts, course_id: int, star_id: int,
 
 
 def _seg_strategies(registered: dict, history, seg_id: int, ranks=None,
-                    deleted=(), default_strat=None) -> list:
+                    deleted=(), default_strat=None, standards_ek=None,
+                    family_suffix=None) -> list:
     """Segment sibling of _strategies_for: the definition's own default_strat
     first, then registered strats (ui_state, keyed "seg:{id}" — see
     service._strategies_key), then observed-on-attempts (sorted), then
@@ -227,7 +228,14 @@ def _seg_strategies(registered: dict, history, seg_id: int, ranks=None,
     would put it in the list on a segment that has never been run.
     `deleted` filters the segment's tombstoned names, same as _strategies_for;
     a default can never be among them — service.purge_strategy refuses to
-    delete one, the same protection community strats get."""
+    delete one, the same protection community strats get.
+
+    `standards_ek`/`family_suffix` are the Bowser reds/pipe pairing's escape
+    hatch: `seg:reds->pipe:<abbrev>` has no rank-standards entity of its own
+    (the ladder lives on the paired star, `_reds_pipe_segments`) — passing
+    the star's entity_key here pulls candidate names from THERE instead of
+    this segment's own (empty) list, then `family_suffix` keeps only the
+    " (Pipe)"-suffixed half so the segment never offers a Star-family name."""
     out = [default_strat] if default_strat else []
     for strat in registered.get(f"seg:{seg_id}", []):
         if strat not in out:
@@ -236,23 +244,32 @@ def _seg_strategies(registered: dict, history, seg_id: int, ranks=None,
         if strat not in out:
             out.append(strat)
     if ranks is not None:
-        for strat in ranks.strategies(entity_key(None, None, seg_id)):
+        names = ranks.strategies(standards_ek or entity_key(None, None, seg_id))
+        if family_suffix:
+            names = [n for n in names if n.endswith(family_suffix)]
+        for strat in names:
             if strat not in out:
                 out.append(strat)
     return [s for s in out if s not in deleted]
 
 
-def _attempt_rank(a, frames, ranks) -> dict | None:
+def _attempt_rank(a, frames, ranks, ek=None) -> dict | None:
     """{"rank", "division"} for one attempt's own medal, or None when
     ungradeable. Routed through `_graded_progress` -- the SAME curve
     `_section_banner` grades through -- rather than a second computation
     (`classify.rank_for` used to answer this directly, off the raw ladder,
     with no division of its own; addendum, task 8, 2026-07-26: an attempt
     medal must never disagree with the section banner about which division a
-    tier is at)."""
+    tier is at).
+
+    `ek` overrides the entity derived from the attempt's own identity -- the
+    Bowser reds/pipe pairing grades a `seg:reds->pipe:<abbrev>` attempt
+    against the paired STAR's ladder (`_reds_pipe_segments`), never the
+    segment's own (nonexistent) one, so a per-row medal can't disagree with
+    that section's banner."""
     if ranks is None or frames is None or a.outcome != "success" or not a.strat_tag:
         return None
-    ek = entity_key(a.course_id, a.star_id, a.segment_id)
+    ek = ek or entity_key(a.course_id, a.star_id, a.segment_id)
     ladder = ranks.ladder_cs(ek, a.strat_tag)
     if not ladder:
         return None
@@ -440,7 +457,8 @@ def ranks_share_ladder(ranks, ek, strat) -> bool:
 
 
 def _best_strategy_graded(ranks, ek, history, pbs_by_strat, rank_mode,
-                          deleted, pb_key_prefix) -> tuple[str, dict] | None:
+                          deleted, pb_key_prefix, strategies=None,
+                          clock=None) -> tuple[str, dict] | None:
     """The (strategy, _graded_progress) pair with the HIGHEST score among
     `ranks.strategies(ek)`, skipping tombstoned names (`deleted`) and
     strategies with no ladder or nothing gradeable. Ties break on
@@ -448,10 +466,17 @@ def _best_strategy_graded(ranks, ek, history, pbs_by_strat, rank_mode,
     order-independent (a later tie only overwrites the running best when its
     name sorts earlier, so iteration order never decides the winner).
     `pb_key_prefix` is `(course_id, star_id)` or `("segment", segment_id)` --
-    `current_pbs_by_strat`'s key shape minus (clock, strat)."""
-    clock = ranks.clock_for(ek)
+    `current_pbs_by_strat`'s key shape minus (clock, strat).
+
+    `strategies`/`clock` override the entity's own `ranks.strategies(ek)` /
+    `ranks.clock_for(ek)` -- the Bowser reds/pipe toggle grades a
+    family-filtered subset of the STAR's ladders against the PAIRED
+    segment's own (rta) history this way, reusing this loop rather than a
+    second one (`_reds_pipe_segments`)."""
+    if clock is None:
+        clock = ranks.clock_for(ek)
     best: tuple[str, dict] | None = None
-    for strat in ranks.strategies(ek):
+    for strat in (strategies if strategies is not None else ranks.strategies(ek)):
         if strat in deleted:
             continue
         ladder = ranks.ladder_cs(ek, strat)
@@ -848,6 +873,47 @@ def segment_courses(db) -> dict:
     return out
 
 
+# Bowser Reds/Pipe families (spec 2026-07-28-multi-step-segments, Bowser Reds
+# star/pipe toggle): the (Star)/(Pipe) suffixed strategies in
+# data/rank_standards.seed.json are a real, load-bearing naming convention,
+# not decoration -- see the two constants and _reds_pipe_segments below.
+STAR_FAMILY_SUFFIX = " (Star)"
+PIPE_FAMILY_SUFFIX = " (Pipe)"
+_REDS_PIPE_SEED_PREFIX = "seg:reds->pipe:"
+
+
+def _reds_pipe_segments(seg_rows: list[dict]) -> tuple[dict[int, int], dict[int, str]]:
+    """A Bowser course's 8-Red-Coins star practices as two things worth timing
+    -- the grab alone (" (Star)" strategies) or the whole reds-then-pipe run
+    (" (Pipe)" strategies) -- and BOTH ladders live on the star entity
+    (measured, `rank_standards.seed.json`: star:16/17/18:0 carry paired
+    "X (Star)"/"X (Pipe)" strategy names; the `seg:reds->pipe:<abbrev>`
+    definition that actually records the Pipe-family attempts has no rank
+    entity of its own). So grading the Pipe family means pairing the STAR's
+    ladder with the SEGMENT's own (rta) history -- this is the resolver every
+    grading call site borrows the star's entity_key from instead of the
+    segment's, and the ONLY place that decides which segment that is.
+
+    Returns (course_id -> segment_id, segment_id -> star's entity_key).
+    Matched by seed_key prefix, never start_levels alone: the legacy
+    exclusive "no reds" pipe-only segment (`seg:<abbrev>-pipe`) starts in the
+    SAME level and would be indistinguishable otherwise (stagebanner.js's own
+    docstring flagged this exact ambiguity as a future risk when it could
+    only tell the two apart by name)."""
+    by_course: dict[int, int] = {}
+    grading_ek: dict[int, str] = {}
+    for row in seg_rows:
+        if not (row.get("seed_key") or "").startswith(_REDS_PIPE_SEED_PREFIX):
+            continue
+        for level in start_levels(row["start_triggers"]):
+            course = COURSE_BY_LEVEL.get(level)
+            if course is not None:
+                by_course[course] = row["id"]
+                grading_ek[row["id"]] = entity_key(course, 0)
+                break
+    return by_course, grading_ek
+
+
 def entity_label(db, ek: str) -> str:
     """Human name for an entity key, for the MARELO breakdown list.
 
@@ -888,6 +954,10 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     rank_mode = db.get_state("rank_mode", classify.DEFAULT_RANK_MODE)
     if rank_mode not in classify.RANK_MODES:   # forward-safe: junk reads as pb
         rank_mode = classify.DEFAULT_RANK_MODE
+    # Fetched once here (rather than again beside seg_meta below) so the
+    # Bowser reds/pipe pairing is known before the star loop needs it.
+    seg_rows = db.segment_defs()
+    reds_pipe_by_course, reds_pipe_grading_ek = _reds_pipe_segments(seg_rows)
 
     # ONE pass over all_attempts → per-entity lifetime histories (id order
     # preserved). Shared by the section builders and every rank-mode average;
@@ -904,10 +974,21 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
 
     deleted_strats = db.get_state("deleted_strats", {})
 
-    def masked(strat, ek):
+    def masked(strat, ek, reject_suffix=None):
         """A tombstoned (fully deleted) strat must never surface as an
-        active/last strat — the dropdowns no longer offer it."""
-        return None if strat and strat in deleted_strats.get(ek, []) else strat
+        active/last strat — the dropdowns no longer offer it.
+
+        `reject_suffix` additionally drops a name from the OTHER Bowser
+        reds/pipe family (e.g. a star's own active strat ending " (Pipe)")
+        -- both suffixes share one rank-standards entity (the star's), so
+        nothing stopped a pre-2026-07-30 pick from landing on the wrong side
+        before this toggle existed to keep them apart. Self-heals on the next
+        pick from the now family-filtered dropdown; no data migration."""
+        if strat and strat in deleted_strats.get(ek, []):
+            return None
+        if reject_suffix and strat and strat.endswith(reject_suffix):
+            return None
+        return strat
 
     sections, unassigned = [], []
     seen: dict[tuple[int, int], None] = {}
@@ -973,11 +1054,24 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         # standards are loaded at all, since there is then no ladder clock
         # to defer to. The displayed PB (sec["pb"] below) is unaffected --
         # that stays a display choice tied to the view clock.
-        star_strat = masked(service.strat_by_star.get((course_id, star_id)), ek)
+        # A Bowser Reds star (the only kind carrying paired " (Star)"/
+        # " (Pipe)" strategies, _reds_pipe_segments) must never grade or
+        # offer the Pipe half here -- that half belongs to the paired
+        # segment's own section below, which grades against THIS ek instead
+        # of its own. reject_suffix keeps a pre-toggle stray pick from
+        # showing a Pipe-ladder medal on a grab-only time.
+        pipe_seg_id = reds_pipe_by_course.get(course_id) if star_id == 0 else None
+        family_reject = PIPE_FAMILY_SUFFIX if pipe_seg_id is not None else None
+        star_strat = masked(service.strat_by_star.get((course_id, star_id)),
+                            ek, family_reject)
         rank_clock = service.ranks.clock_for(ek) if service.ranks else clock
         star_basis = grading_basis(
             rank_mode, pbs_by_strat.get((course_id, star_id, rank_clock, star_strat)),
             history, star_strat, rank_clock)
+        star_strategies = _strategies_for(registered, all_attempts, course_id, star_id,
+                                          service.ranks, deleted_strats.get(ek, []))
+        if family_reject is not None:
+            star_strategies = [s for s in star_strategies if not s.endswith(family_reject)]
         # Note: star sections intentionally omit "kind". The UI branches on
         # sec.kind being undefined for stars (SegmentSection vs StarSection),
         # so adding kind="star" here would silently break that check. Do not
@@ -992,9 +1086,13 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "attempts": [_attempt_json(a, pbs, clock, service.ranks, rank_clock)
                         for a in in_section],
             "stats": _stats_for(history, stat_menu, clock),
-            "strategies": _strategies_for(registered, all_attempts, course_id, star_id,
-                                         service.ranks, deleted_strats.get(ek, [])),
-            "last_strat": masked(service.strat_by_star.get((course_id, star_id)), ek),
+            "strategies": star_strategies,
+            "last_strat": star_strat,
+            # The paired seg:reds->pipe:<abbrev> segment id, or None for every
+            # star but a Bowser course's Reds -- the star/pipe toggle's escape
+            # hatch into the OTHER half of this same practiced thing (its own
+            # section is below, in the segment loop).
+            "pipe_segment_id": pipe_seg_id,
             "timeline": _timeline(in_section, igt_of),
             "markers_by_strat": _markers_for(markers_state, course_id, star_id),
             "time_filter": _time_filter_json(
@@ -1018,7 +1116,9 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     # db rows carry category/seed_key (SegmentDef, the dataclass seg_defs
     # holds, does not) — a separate lookup keyed the same as seg_defs so
     # each section can stamp its category/seeded without a second db read.
-    seg_meta = {r["id"]: r for r in db.segment_defs()}
+    # Reuses seg_rows (fetched above for reds_pipe_by_course/grading_ek)
+    # rather than a second db.segment_defs() call.
+    seg_meta = {r["id"]: r for r in seg_rows}
     # The user's per-segment origin override (ui_state KV) — the same input
     # the projector's retirement rule and the picker's availability take, so
     # re-homing a segment moves where its card stays pinned too.
@@ -1039,7 +1139,15 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         # (segments have no igt clock), but that's a coincidence of the
         # standards data, not a rule; one grading-clock rule beats a rule
         # for stars and a coincidence for segments.
-        seg_strat = masked(service.strat_by_segment.get(seg_id), seg_ek)
+        # seg:reds->pipe:<abbrev> has no rank-standards entity of its own --
+        # its ladder lives on the paired star (_reds_pipe_segments). Every
+        # LADDER lookup below reads grading_ek instead of this segment's own
+        # seg_ek; identity (name/id/pb-store key) stays seg_ek throughout,
+        # since the PBs are genuinely this segment's own times.
+        pipe_star_ek = reds_pipe_grading_ek.get(seg_id)
+        grading_ek = pipe_star_ek or seg_ek
+        seg_strat = masked(service.strat_by_segment.get(seg_id), seg_ek,
+                           STAR_FAMILY_SUFFIX if pipe_star_ek else None)
         seg_rank_clock = service.ranks.clock_for(seg_ek) if service.ranks else "rta"
         seg_basis = grading_basis(
             rank_mode, pbs_by_strat.get(("segment", seg_id, seg_rank_clock, seg_strat)),
@@ -1094,15 +1202,28 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                             "display": format_igt(pb_row["frames"]),
                             "attempt_id": pb_row["attempt_id"]}
                            if pb_row else None)},
-            "attempts": [_attempt_json(a, pbs, "rta", service.ranks, seg_rank_clock)
+            "attempts": [_attempt_json(a, pbs, "rta", service.ranks, seg_rank_clock,
+                                       rank_ek=grading_ek)
                         for a in in_section],
             "stats": _stats_for(history, stat_menu, "rta"),
-            # registered ∪ observed-on-attempts ∪ rank-standard strategies
+            # registered ∪ observed-on-attempts ∪ rank-standard strategies --
+            # for the reds/pipe pairing, "rank-standard strategies" means the
+            # star's " (Pipe)"-suffixed half (standards_ek/family_suffix).
             "strategies": _seg_strategies(registered, history, seg_id,
                                           service.ranks,
                                           deleted_strats.get(seg_ek, []),
-                                          meta.get("default_strat")),
-            "last_strat": masked(service.strat_by_segment.get(seg_id), seg_ek),
+                                          meta.get("default_strat"),
+                                          standards_ek=pipe_star_ek,
+                                          family_suffix=(PIPE_FAMILY_SUFFIX
+                                                        if pipe_star_ek else None)),
+            "last_strat": seg_strat,
+            # The paired star's entity_key ("star:<course>:0") when this IS
+            # the seg:reds->pipe:<abbrev> half of a Bowser Reds pairing, else
+            # None -- the practice card's escape hatch into fetching THAT
+            # entity's standards (this segment's own has none) and filtering
+            # the table to the Pipe family (the star's own section carries
+            # the inverse, `pipe_segment_id`).
+            "pipe_star_entity": pipe_star_ek,
             "timeline": _timeline(in_section, rta_of),
             "markers_by_strat": _markers_for(markers_state, "seg", seg_id),
             "time_filter": _time_filter_json(
@@ -1110,10 +1231,10 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "progress": _progress(in_section, pb_ids, session_meta, rta_of,
                                   service.ranks, "rta", seg_rank_clock),
             "rank": _section_banner(
-                service.ranks, seg_ek, seg_strat, seg_basis, rank_mode),
+                service.ranks, grading_ek, seg_strat, seg_basis, rank_mode),
             "entity_rank": entity_rank(
-                service.ranks, seg_ek, seg_basis and seg_basis["frames"]),
-            "one_ladder": ranks_share_ladder(service.ranks, seg_ek, seg_strat),
+                service.ranks, grading_ek, seg_basis and seg_basis["frames"]),
+            "one_ladder": ranks_share_ladder(service.ranks, grading_ek, seg_strat),
         })
     seg_sections.sort(
         key=lambda s: last_id.get(("segment", s["segment_id"]), -1),
@@ -1145,8 +1266,11 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         "active_route": service.active_route(),
         "unassigned": unassigned,
         "strategies": registered,
-        "last_strat_by_star": {f"{c}:{s}": masked(v, entity_key(c, s))
-                               for (c, s), v in service.strat_by_star.items()},
+        "last_strat_by_star": {
+            f"{c}:{s}": masked(
+                v, entity_key(c, s),
+                PIPE_FAMILY_SUFFIX if s == 0 and c in reds_pipe_by_course else None)
+            for (c, s), v in service.strat_by_star.items()},
         # Parallel to last_strat_by_star: each star's {rank, division} under
         # its ACTIVE strat, graded on the PB achieved WITH that strat
         # (per-strategy ranking — pbs_by_strat, never the strategy-blind
@@ -1158,7 +1282,9 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         "rank_by_star": {
             f"{c}:{s}": rank
             for (c, s), strat in service.strat_by_star.items()
-            if (live_strat := masked(strat, entity_key(c, s)))
+            if (live_strat := masked(
+                strat, entity_key(c, s),
+                PIPE_FAMILY_SUFFIX if s == 0 and c in reds_pipe_by_course else None))
             and (rank := _strat_rank(
                 service.ranks, entity_key(c, s), live_strat,
                 grading_basis(
@@ -1174,15 +1300,25 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         "segment_targets": [
             {"segment_id": d.id, "name": d.name, "enabled": d.enabled,
              "start_areas": areas, "start_levels": levels,
+             # True for the seg:reds->pipe:<abbrev> half of a Bowser Reds
+             # pairing -- the discriminator stagebanner.js needs to tell it
+             # apart from the legacy exclusive "no reds" pipe-only segment,
+             # which shares the SAME start_levels and used to be told apart
+             # only by the corpus's names happening to differ (flagged as a
+             # future-rename risk when that was still the only signal).
+             "is_reds_pipe": d.id in reds_pipe_grading_ek,
              # active strat + its medal for the banner cell, graded by THE
              # shared path (_strat_rank/grading_basis, same as rank_by_star
              # and the route medals) so a cell can never disagree with the
-             # section banner for the same strat.
+             # section banner for the same strat. seg:reds->pipe:<abbrev>
+             # grades against the paired STAR's ladder (_reds_pipe_segments)
+             # -- it has none of its own.
              "strat": (seg_strat := masked(
                  service.strat_by_segment.get(d.id),
-                 (seg_ek := entity_key(None, None, d.id)))),
+                 (seg_ek := entity_key(None, None, d.id)),
+                 STAR_FAMILY_SUFFIX if d.id in reds_pipe_grading_ek else None)),
              "rank": _strat_rank(
-                 service.ranks, seg_ek, seg_strat,
+                 service.ranks, reds_pipe_grading_ek.get(d.id, seg_ek), seg_strat,
                  grading_basis(
                      rank_mode,
                      pbs_by_strat.get(("segment", d.id, "rta", seg_strat)),
@@ -1304,7 +1440,7 @@ def build_run_history(db, route_id: int | None = None) -> dict:
 
 
 def _candidate_rank(db, service, c, mode, by_star, by_seg,
-                    deleted_strats: dict) -> dict | None:
+                    deleted_strats: dict, pipe_grading_ek: dict | None = None) -> dict | None:
     """{"rank", "division"} for one route candidate under its active strat,
     graded by the rank-mode basis (per-strategy: another strat's times never
     count) — a thin dispatch straight into `_strat_rank`, so it carries the
@@ -1314,11 +1450,18 @@ def _candidate_rank(db, service, c, mode, by_star, by_seg,
     `deleted_strats` is the deleted_strats KV (read once per route view build,
     by the caller) — a tombstoned active strat is masked to None here before
     grading, same rule as build_session_view's `masked` helper, so a deleted
-    strategy can't keep showing a route medal."""
+    strategy can't keep showing a route medal.
+
+    `pipe_grading_ek` (`_reds_pipe_segments`'s segment_id -> star's
+    entity_key map) grades a `seg:reds->pipe:<abbrev>` route candidate
+    (every seeded Bowser Reds route step names this one, never the bare
+    star — the corpus already assumes Pipe timing throughout a route) against
+    the paired star's ladder instead of the segment's own (nonexistent) one."""
     if service.ranks is None:
         return None  # skip the lookups entirely when nothing can be graded
     if c["type"] == "segment":
         ek = entity_key(None, None, c["segment_id"])
+        grading_ek = (pipe_grading_ek or {}).get(c["segment_id"], ek)
         strat = service.strat_by_segment.get(c["segment_id"])
         clock = "rta"
         history = by_seg.get(c["segment_id"], [])
@@ -1327,7 +1470,7 @@ def _candidate_rank(db, service, c, mode, by_star, by_seg,
         pb = (db.current_pb(None, None, "rta", segment_id=c["segment_id"],
                             strat_tag=strat) if strat else None)
     else:
-        ek = entity_key(c["course"], c["star"])
+        ek = grading_ek = entity_key(c["course"], c["star"])
         strat = service.strat_by_star.get((c["course"], c["star"]))
         clock = "igt"
         history = by_star.get((c["course"], c["star"]), [])
@@ -1335,7 +1478,7 @@ def _candidate_rank(db, service, c, mode, by_star, by_seg,
             strat = None
         pb = (db.current_pb(c["course"], c["star"], "igt", strat_tag=strat)
               if strat else None)
-    return _strat_rank(service.ranks, ek, strat,
+    return _strat_rank(service.ranks, grading_ek, strat,
                        grading_basis(mode, pb, history, strat, clock))
 
 
@@ -1356,7 +1499,9 @@ def build_route_view(db, service, route_id: int) -> dict:
     rank_mode = db.get_state("rank_mode", classify.DEFAULT_RANK_MODE)
     if rank_mode not in classify.RANK_MODES:   # forward-safe: junk reads as pb
         rank_mode = classify.DEFAULT_RANK_MODE
-    seg_names = {d["id"]: d["name"] for d in db.segment_defs()}
+    seg_rows = db.segment_defs()
+    seg_names = {d["id"]: d["name"] for d in seg_rows}
+    _, pipe_grading_ek = _reds_pipe_segments(seg_rows)
     deleted_strats = db.get_state("deleted_strats", {})
     stats = route_stats(route["steps"], attempts)
     # one-pass groupings for _candidate_rank (same shape as the session
@@ -1385,7 +1530,7 @@ def build_route_view(db, service, route_id: int) -> dict:
                               "display": star_name(c["course"], c["star"]),
                               "course_name": course_name(c["course"])})
         ranks_here = [_candidate_rank(db, service, c, rank_mode, by_star,
-                                      by_seg, deleted_strats)
+                                      by_seg, deleted_strats, pipe_grading_ek)
                       for c in step["candidates"]]
         # best is a {rank, division} dict (or None) -- the WINNING
         # candidate's own graded division rides along, so the step's medal
