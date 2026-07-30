@@ -528,7 +528,7 @@ def test_hundred_coin_exit_count_and_shape():
                    and e["course"] == waypoint["course"]
                    and e["star"] != 6 for e in ends)
         assert row["guards"] == []            # no route ambiguity -- always on
-        assert row["match_mode"] == "loose"
+        assert row["match_mode"] == "strict"
     assert seen_courses == set(range(1, 16))  # every main course, no gaps
 
 
@@ -578,45 +578,145 @@ def test_reds_to_pipe_count_and_shape():
         assert row["match_mode"] == "strict"
 
 
-def test_a_slow_first_hundred_coin_run_can_expire_the_staleness_budget():
-    """KNOWN LIMITATION, found live-testing the 2026-07-29 corpus reshape by
-    replaying the user's real 659-event session: the ONLY genuine
-    100c->exit completion anywhere in that journal (WF -- stage entry, three
-    practice_resets before ever grabbing the 100-coin star, 185.4s total
-    course-visit time) was silently swallowed by the loose-mode staleness
-    deadline (segments.py::budget_frames), which floors at
-    MIN_BUDGET_FRAMES for any def with no prior recorded success -- a
-    constant measured (Task 9) against castle MOVEMENTS (max observed
-    completion 141.5s, chosen for a 27% margin over that), not against
-    100-coin hunts, which are a slower, more exploratory activity likely to
-    routinely exceed it on a def's very first-ever completion.
+def test_a_slow_hundred_coin_run_no_longer_has_a_staleness_budget():
+    """SUPERSEDES the loose-mode limitation this test used to document
+    (2026-07-29): replaying the user's real 659-event session found the
+    ONLY genuine 100c->exit completion in the whole journal (WF, three
+    practice_resets before ever grabbing the 100-coin star, 185.4s total)
+    silently swallowed by the loose-mode staleness deadline
+    (segments.py::budget_frames -- MIN_BUDGET_FRAMES, measured against
+    castle MOVEMENTS' much shorter completions, not 100-coin hunts).
 
-    This is NOT something the corpus reshape can fix -- the floor is a
-    segments.py constant shared by all 71 loose defs, out of this task's
-    touch-set, and re-measuring it needs this family's OWN history the way
-    Task 9 used the movements'. This test documents the behavior as it ships
-    today (a completion past budget records NOTHING, not even a failure) so
-    it is visible and testable rather than only living in a report, and so a
-    future re-measurement that changes the floor shows up here as a
-    deliberate decision instead of an unnoticed side effect.
-
-    Derives the just-past-budget elapsed time from budget_frames() itself,
-    not a literal frame count, so a re-measurement moves this test's
-    timeline with it instead of the test silently going stale."""
+    The SAME-DAY match_mode fix (loose -> strict, live report: a segment
+    stayed "running" after the player left the course) removes this as a
+    side effect: `_deadline_for` (segments.py) returns None for any
+    non-loose def, so a strict/waypoint dispatch never computes a budget at
+    all. This test now proves the opposite of what it used to: a completion
+    taking far longer than the OLD floor still records success, because
+    there is no floor to exceed any more. `budget_frames(None)` is still the
+    reference point (not a literal frame count) so this stays meaningful if
+    a future def in this family ever reverts to loose."""
     row = _seg("seg:100c->exit:wf")
     floor = budget_frames(None)
     events = [
         Ev(1, "level_changed", 100, {"from": 6, "to": 24}),
-        Ev(2, "star_collected", 100 + floor - 30,
+        Ev(2, "star_collected", 100 + floor + 3000,   # well past the old floor
            {"course_id": 2, "star_id": 6, "num_stars": 0}),
-        Ev(3, "star_collected", 100 + floor + 30,
+        Ev(3, "star_collected", 100 + floor + 6000,
            {"course_id": 2, "star_id": 2, "num_stars": 1}),
     ]
     closed = run_engine(row, events, 6, None)
-    assert closed == [], (
-        "documents the known limitation above: a genuine completion whose "
-        "TOTAL course-visit time exceeds the no-history staleness floor "
-        "records nothing at all, success or otherwise")
+    assert [a.outcome for a in closed] == ["success"], (
+        "a strict/waypoint def has no staleness deadline -- this must "
+        "succeed regardless of how long the course visit actually took")
+
+
+def test_leaving_the_course_deactivates_the_hundred_coin_segment():
+    """Live report (2026-07-29), the fix this whole mode change is for: he
+    left DDD for BitFS mid-visit and "DDD -- 100 Coins -> Exit" still read
+    RUNNING -- loose is transparent to level_changed by design, so it never
+    disarmed. Strict routes to _feed_waypoint (segments.py), whose
+    major-action cancel treats a real-edge level_changed that isn't the next
+    waypoint as "the player switched tasks or misrouted" -- exactly
+    "deactivate when I leave the stage". No row, no success: a silent
+    cancel, same as any other abandoned attempt.
+
+    Checks `engine.armed_ids()`, not just the closed-attempts list: a silent
+    cancel and "still armed, nothing has closed YET" both produce an empty
+    `closed` list, so asserting on `closed` alone cannot tell the fixed
+    behaviour apart from the exact bug being fixed here -- the segment must
+    actually leave the armed set."""
+    row = _seg("seg:100c->exit:ddd")
+    d = SegmentDef(id=1, name=row["name"], enabled=True,
+                   start_triggers=row["start_triggers"],
+                   end_triggers=row["end_triggers"],
+                   waypoints=row["waypoints"], guards=[],
+                   match_mode=row["match_mode"])
+    engine = SegmentEngine([d])
+    events = [
+        Ev(1, "level_changed", 100, {"from": 6, "to": 23}),   # enter DDD
+        Ev(2, "level_changed", 150, {"from": 23, "to": 19}),  # leave for BitFS
+    ]
+    level = 6
+    for ev in events:
+        prev_level = level
+        level = ev.payload["to"]
+        ctx = MatchContext(level=level, prev_level=prev_level, num_stars=0, area=None)
+        closed, _ = engine.feed(ev, ctx)
+        assert closed == []
+    assert engine.armed_ids() == set(), (
+        "leaving the course must disarm the segment -- it must not still "
+        "read as running")
+
+
+def test_a_courses_own_subarea_stays_transparent_mid_hundred_coin_run():
+    """The other half of the same fix, checked so the level-change cancel
+    above doesn't overcorrect: a course's OWN subareas (DDD's submarine bay
+    is the live-reported example) must NOT cancel a visit that legitimately
+    crosses them -- `_feed_waypoint` treats `area_changed` as transparent
+    (it is not in `_MAJOR_EVENT_TYPES` and is not a `level_changed`), so
+    moving between subareas of the SAME course changes nothing, and the run
+    can still complete afterward."""
+    row = _seg("seg:100c->exit:ddd")
+    events = [
+        Ev(1, "level_changed", 100, {"from": 6, "to": 23}),      # enter DDD
+        Ev(2, "area_changed", 120, {"level": 23, "from": 1, "to": 2}),  # into the sub
+        Ev(3, "star_collected", 150,
+           {"course_id": 9, "star_id": 6, "num_stars": 0}),      # 100 coins
+        Ev(4, "area_changed", 180, {"level": 23, "from": 2, "to": 1}),  # back out
+        Ev(5, "star_collected", 250,
+           {"course_id": 9, "star_id": 0, "num_stars": 1}),      # exit star
+    ]
+    closed = run_engine(row, events, 6, None)
+    assert [a.outcome for a in closed] == ["success"], (
+        "area_changed within the same course must stay transparent")
+
+
+def test_grabbing_an_ordinary_star_first_cancels_the_hundred_coin_attempt():
+    """The consequence the brief asked to have confirmed rather than
+    assumed: `_feed_waypoint`'s major-action cancel fires on ANY
+    star_collected that isn't the next expected waypoint, so grabbing an
+    ordinary star (not the 100-coin one) before the 100-coin grab ends the
+    attempt -- silently, no row.
+
+    This is CORRECT, not a false positive, checked against actual SM64
+    behaviour rather than assumed: grabbing any star except the 100-coin one
+    triggers the star-grab cutscene and returns Mario to the castle -- the
+    very asymmetry this family exists to express ("you don't exit the stage
+    when you grab a 100 coins star... you must find another star to
+    actually exit the level"). There is no real sequence where an ordinary
+    star is grabbed and the player keeps playing in the same course visit,
+    so cancelling here is not stricter than reality, it is reality arriving
+    slightly before the level_changed that would have cancelled it anyway.
+
+    Checks `armed_ids()`, not just `closed` -- under the OLD "loose" mode
+    this same sequence ALSO produces an empty `closed` list (loose has no
+    major-action cancel branch at all, so it stays transparently armed
+    instead), so `closed == []` alone cannot tell "cancelled" apart from
+    "still running and just hasn't ended yet"."""
+    row = _seg("seg:100c->exit:wf")
+    d = SegmentDef(id=1, name=row["name"], enabled=True,
+                   start_triggers=row["start_triggers"],
+                   end_triggers=row["end_triggers"],
+                   waypoints=row["waypoints"], guards=[],
+                   match_mode=row["match_mode"])
+    engine = SegmentEngine([d])
+    events = [
+        Ev(1, "level_changed", 100, {"from": 6, "to": 24}),
+        Ev(2, "star_collected", 150,
+           {"course_id": 2, "star_id": 2, "num_stars": 0}),  # an ORDINARY star
+    ]
+    level = 6
+    for ev in events:
+        prev_level = level
+        if ev.type == "level_changed":
+            level = ev.payload["to"]
+        ctx = MatchContext(level=level, prev_level=prev_level, num_stars=0, area=None)
+        closed, _ = engine.feed(ev, ctx)
+        assert closed == [], "an ordinary star grab before the 100-coin one must cancel, no row"
+    assert engine.armed_ids() == set(), (
+        "an ordinary star grab must actually cancel the attempt (leave the "
+        "armed set), not merely fail to close it yet")
 
 
 # --- lint gate (Task 15, tracking/lint.py) ----------------------------------

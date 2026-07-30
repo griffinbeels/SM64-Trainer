@@ -1863,7 +1863,7 @@
       ],
       "guards": [],
       "category": "100 Coin Exit",
-      "match_mode": "loose"
+      "match_mode": "strict"
     },
     {
       "seed_key": "seg:100c->exit:wf",
@@ -1922,7 +1922,7 @@
       ],
       "guards": [],
       "category": "100 Coin Exit",
-      "match_mode": "loose"
+      "match_mode": "strict"
     },
     {
       "seed_key": "seg:100c->exit:jrb",
@@ -1981,7 +1981,7 @@
       ],
       "guards": [],
       "category": "100 Coin Exit",
-      "match_mode": "loose"
+      "match_mode": "strict"
     },
     {
       "seed_key": "seg:100c->exit:ccm",
@@ -2040,7 +2040,7 @@
       ],
       "guards": [],
       "category": "100 Coin Exit",
-      "match_mode": "loose"
+      "match_mode": "strict"
     },
     {
       "seed_key": "seg:100c->exit:bbh",
@@ -2099,7 +2099,7 @@
       ],
       "guards": [],
       "category": "100 Coin Exit",
-      "match_mode": "loose"
+      "match_mode": "strict"
     },
     {
       "seed_key": "seg:100c->exit:hmc",
@@ -2158,7 +2158,7 @@
       ],
       "guards": [],
       "category": "100 Coin Exit",
-      "match_mode": "loose"
+      "match_mode": "strict"
     },
     {
       "seed_key": "seg:100c->exit:lll",
@@ -2217,7 +2217,7 @@
       ],
       "guards": [],
       "category": "100 Coin Exit",
-      "match_mode": "loose"
+      "match_mode": "strict"
     },
     {
       "seed_key": "seg:100c->exit:ssl",
@@ -2276,7 +2276,7 @@
       ],
       "guards": [],
       "category": "100 Coin Exit",
-      "match_mode": "loose"
+      "match_mode": "strict"
     },
     {
       "seed_key": "seg:100c->exit:ddd",
@@ -2335,7 +2335,7 @@
       ],
       "guards": [],
       "category": "100 Coin Exit",
-      "match_mode": "loose"
+      "match_mode": "strict"
     },
     {
       "seed_key": "seg:100c->exit:sl",
@@ -2394,7 +2394,7 @@
       ],
       "guards": [],
       "category": "100 Coin Exit",
-      "match_mode": "loose"
+      "match_mode": "strict"
     },
     {
       "seed_key": "seg:100c->exit:wdw",
@@ -2453,7 +2453,7 @@
       ],
       "guards": [],
       "category": "100 Coin Exit",
-      "match_mode": "loose"
+      "match_mode": "strict"
     },
     {
       "seed_key": "seg:100c->exit:ttm",
@@ -2512,7 +2512,7 @@
       ],
       "guards": [],
       "category": "100 Coin Exit",
-      "match_mode": "loose"
+      "match_mode": "strict"
     },
     {
       "seed_key": "seg:100c->exit:thi",
@@ -2571,7 +2571,7 @@
       ],
       "guards": [],
       "category": "100 Coin Exit",
-      "match_mode": "loose"
+      "match_mode": "strict"
     },
     {
       "seed_key": "seg:100c->exit:ttc",
@@ -2630,7 +2630,7 @@
       ],
       "guards": [],
       "category": "100 Coin Exit",
-      "match_mode": "loose"
+      "match_mode": "strict"
     },
     {
       "seed_key": "seg:100c->exit:rr",
@@ -2689,7 +2689,7 @@
       ],
       "guards": [],
       "category": "100 Coin Exit",
-      "match_mode": "loose"
+      "match_mode": "strict"
     }
   ],
   "routes": [

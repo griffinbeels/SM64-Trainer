@@ -33,9 +33,10 @@ Two invariants survive untouched, because they hold for every match mode:
 
 Read spec §4.1/§4.2 for the retired strict-mode rules above for MOVEMENTS
 specifically; none of the 56 opt back into match_mode="strict" today. That is
-no longer true of the module as a whole -- REDS_TO_PIPE below does, and its
-own comment explains why a single-star course makes the strict cancellation
-rules safe again.
+no longer true of the module as a whole -- REDS_TO_PIPE and HUNDRED_COIN_
+EXITS below both do, and each one's own comment explains why the strict
+cancellation rules are not just safe but the CORRECT behaviour for a def
+confined to one course/stage visit, unlike a movement that crosses several.
 
 Task 20 (spec 2026-07-28-multi-step-segments) adds three shapes loose
 matching finally makes expressible: `seg:bowser2->bits` (a plain movement
@@ -52,9 +53,15 @@ RESHAPED 2026-07-29 (same spec, live report): both `REDS_TO_PIPE` and
 100 coins), which the user found unselectable before the grab and mistimed
 (measuring only grab->end instead of the whole stage/course). Both now start
 on stage/course entry and make the grab a WAYPOINT (mechanic()'s new `via`
-parameter) -- see each section's own comment for the match_mode reasoning,
-which differs between them (a Bowser stage has exactly one star; a main
-course has six)."""
+parameter) and both ship match_mode="strict" -- see each section's own
+comment for why (a Bowser stage having exactly one collectible star, vs. a
+main course's other stars each ending the course same as they would in real
+play). `HUNDRED_COIN_EXITS` shipped "loose" for a few hours the same day on a
+reasoning that turned out to be wrong (checked against actual game behaviour,
+not assumed) and was reshaped a second time, later the same day, on a live
+report that loose's transparency to level_changed left it reading RUNNING
+after the player had physically left the course -- see its own comment for
+the corrected reasoning."""
 from corpus_vocab import (BASEMENT, CASTLE_MOVEMENT, HUNDRED_COIN_EXIT, LOBBY,
                           UPSTAIRS, anchor, enter_area, enter_level, enter_warp,
                           exit_level, grab_star, mechanic, movement)
@@ -266,15 +273,36 @@ REDS_TO_PIPE = [
 # [level_enter, attempt_anchor] any-of idiom every movement/legacy row uses)
 # and makes the 100-coin grab a WAYPOINT instead.
 #
-# match_mode STAYS "loose" here, unlike reds->pipe's "strict" -- a main
-# course has SIX other named stars (star ids 0-5) a player may incidentally
-# grab while hunting for coins, in no fixed order, and _feed_waypoint's
-# major-action cancel (segments.py) treats ANY star grab that isn't the next
-# expected waypoint as a silent cancel. Under strict dispatch, grabbing an
-# ordinary star before the 100-coin star would cancel this def on nearly
-# every real attempt; loose lets every incidental star grab (and any transit
-# through the course topology) pass through transparently, exactly matching
-# a Bowser stage's single-star case being safe under strict.
+# match_mode is "strict" (RESHAPED AGAIN 2026-07-29, later the same day, live
+# report): shipped "loose" first, on the reasoning that a main course's six
+# OTHER named stars would falsely cancel a strict/waypoint dispatch if
+# grabbed incidentally while hunting for coins. That reasoning was WRONG --
+# checked, not assumed, against actual SM64 behaviour: grabbing ANY star
+# EXITS the course (the star-grab cutscene returns Mario to the castle),
+# except the 100-coin star specifically, which is the one star SM64 lets you
+# keep playing through -- literally the asymmetry this family is named for
+# ("you don't exit the stage when you grab a 100 coins star... you must find
+# another star to actually exit the level"). So there is no real scenario
+# where an ordinary star is grabbed WITHOUT the course also ending; a strict
+# waypoint def's major-action cancel on that star grab is not a false
+# positive, it is the correct rule arriving slightly before the level_changed
+# that would have cancelled it anyway.
+#
+# "Loose" was ALSO the wrong span for a different reason, found live: a
+# loose def is transparent to level_changed by design (the whole point of
+# the mode), so leaving the course never disarmed it -- a player who left
+# DDD for BitFS still saw "DDD -- 100 Coins -> Exit" reading RUNNING,
+# tracking a course visit that had become physically impossible to finish.
+# "Strict" (which _feed_waypoint dispatches to, same as reds->pipe) fixes
+# both: `area_changed` stays transparent (a course's OWN subareas, like
+# DDD's submarine bay, must not cancel a visit that legitimately crosses
+# them), while a real-edge `level_changed` that isn't the next waypoint
+# cancels -- "deactivate when I leave the stage", verbatim. It also removes
+# the loose-mode staleness deadline for this family entirely
+# (segments.py::_deadline_for returns None for any non-loose def) -- a real
+# 100-coin hunt has no natural time limit the way a castle movement does, so
+# this family never needed a budget check to begin with, and the earlier
+# concern about a slow completion expiring one no longer applies.
 #
 # Every main course (1-15) has six numbered stars (0-5) plus 100 Coins at
 # star_id 6 (addresses.star_count/star_name own that rule); end_triggers
@@ -293,6 +321,6 @@ HUNDRED_COIN_EXITS = [
     mechanic(f"seg:100c->exit:{abbrev.lower()}", f"{abbrev} — 100 Coins → Exit",
              [enter_level(level), anchor(level)],
              [grab_star(course, star_id) for star_id in range(6)],
-             HUNDRED_COIN_EXIT, via=[grab_star(course, 6)])
+             HUNDRED_COIN_EXIT, match_mode="strict", via=[grab_star(course, 6)])
     for course, abbrev, level in _MAIN_COURSES
 ]

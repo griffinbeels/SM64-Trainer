@@ -178,11 +178,14 @@ def test_fresh_install_seeds_the_converted_corpus(tmp_path):
     (the Bowser pipe-entry trio) ship explicit match_mode="exclusive" since
     the 2026-07-29 corpus reshape (spec 2026-07-28-multi-step-segments, live
     report). Of Task 20's 18 unguarded mechanic rows (reds->pipe, 100c->exit),
-    the 15 100c->exit rows ship "loose" (join the movements) and the 3
-    reds->pipe rows ship "strict" (a single-star course makes the strict
-    cancellation rules safe again — see corpus_movements.py's own comment) —
-    so match_mode no longer splits cleanly along the guards=[] boundary at
-    all; it takes all four values independently of it."""
+    ALL 18 now ship "strict" — reds->pipe from the first reshape (a
+    single-star course makes the strict cancellation rules safe), 100c->exit
+    from a SECOND reshape the same day (shipped "loose" first, reshaped again
+    on a live report that loose's transparency to level_changed left a
+    segment reading RUNNING after the player left the course — see
+    corpus_movements.py's own comment for the corrected reasoning) — so
+    match_mode no longer splits along the guards=[] boundary at all; it
+    takes all three values (loose/strict/exclusive) independently of it."""
     db = Database(tmp_path / "t.db")
     seed = json.loads(bundled_defaults_seed().read_bytes().decode("utf-8"))
     assert reconcile_defaults(db, seed) == []
@@ -191,7 +194,7 @@ def test_fresh_install_seeds_the_converted_corpus(tmp_path):
     loose = [r for r in rows if r["match_mode"] == "loose"]
     strict = [r for r in rows if r["match_mode"] == "strict"]
     exclusive = [r for r in rows if r["match_mode"] == "exclusive"]
-    assert len(loose) == 71 and len(strict) == 10 and len(exclusive) == 3
+    assert len(loose) == 56 and len(strict) == 25 and len(exclusive) == 3
 
 
 def test_reconcile_carries_match_mode_on_insert_and_refresh(tmp_path):
