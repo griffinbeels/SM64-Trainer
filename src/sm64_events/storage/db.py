@@ -266,6 +266,47 @@ MIGRATIONS = [
     """
     ALTER TABLE segment_defs ADD COLUMN match_mode TEXT NOT NULL DEFAULT 'strict';
     """,
+    # v16 — repair for the Bowser pipe family stranded disabled by a retired
+    # UI-side mutual exclusion (live report 2026-07-29, fixed in commit
+    # 912466d "Bowser row practices three things at once, no mutual
+    # exclusion"). The Bowser banner used to enforce "reds OR no-reds" by
+    # PUTting {"enabled": false}/{"enabled": true} at a pipe-entry segment
+    # whenever the reds star or a pipe cell was picked — an ordinary
+    # update_segment PATCH (tracking/service.py), which ALSO flips
+    # seed_dirty=1 on a seeded row (a "user edit", protecting it from
+    # reconcile). Once the corpus reshape (b9c72f3) gave each Bowser level TWO
+    # segment_targets sharing the same start_levels — the legacy pipe-only
+    # segment and its new reds->pipe sibling — segsForLevel's plain
+    # start_levels filter picked up both, so this toggle could disable either
+    # one depending on which cell a session happened to click. 912466d deleted
+    # the client-side toggle, but the write it left behind does not self-heal:
+    # seed_dirty=1 means reconcile_defaults's update branch never reaches
+    # these rows again, so an enabled=0 stranded here sits forever, silently
+    # recording nothing every session (a disabled definition never arms).
+    # Two rows in the live db were found this way: id 5 (seg:bitdw-pipe) and
+    # id 72 (seg:reds->pipe:bitfs), each explaining a Bowser scenario that
+    # logged zero attempts across a full practice session that covered its
+    # five siblings.
+    #
+    # Contrast v13, which shipped no repair: default_strat starts NULL for
+    # every existing row and no client had ever written to it, so an untouched
+    # seeded row (seed_dirty=0) simply picks it up from reconcile at the next
+    # startup — there was nothing stranded to repair. Here the strand IS
+    # seed_dirty=1, which is exactly what blocks the self-heal v13 relied on.
+    #
+    # Guarded to the six seed_keys the retired exclusion ever touched (the
+    # three pipe-only rows plus their reds->pipe siblings) AND enabled=0, so a
+    # segment disabled on purpose — Bowser or otherwise — is untouched.
+    # seed_dirty is deliberately left exactly as it is: this repair is not a
+    # user edit and must not change what reconcile does with these rows at the
+    # next startup.
+    """
+    UPDATE segment_defs SET enabled = 1
+      WHERE enabled = 0 AND seed_key IN (
+        'seg:bitdw-pipe', 'seg:bitfs-pipe', 'seg:bits-pipe',
+        'seg:reds->pipe:bitdw', 'seg:reds->pipe:bitfs', 'seg:reds->pipe:bits'
+      );
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",

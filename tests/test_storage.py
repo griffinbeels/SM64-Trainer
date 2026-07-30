@@ -667,3 +667,96 @@ def test_existing_rows_migrate_to_strict(tmp_path):
     db._conn.commit()
     assert next(r for r in db.segment_defs()
                 if r["name"] == "legacy")["match_mode"] == "strict"
+
+
+# -- migration v16: repair the Bowser pipe family stranded disabled ----------
+
+_PIPE_FAMILY_SEED_KEYS = ("seg:bitdw-pipe", "seg:bitfs-pipe", "seg:bits-pipe",
+                          "seg:reds->pipe:bitdw", "seg:reds->pipe:bitfs",
+                          "seg:reds->pipe:bits")
+
+
+def _v15_db_with_disabled_segments(tmp_path, *, dirty_pipe_family=True):
+    """A db one version behind (v15, post the legacy-seed v12 seed_key
+    backfill so the three pipe-only rows already carry their seed_key), with
+    two of the pipe-family rows and one UNRELATED row left disabled the way
+    the retired Bowser-banner exclusion (912466d) could have stranded them —
+    a plain enabled=0 write that also dirties a seeded row. The reds->pipe
+    siblings never come from a raw migration (they are bundled-seed content,
+    reconcile_defaults's job) so they are inserted by hand here with their
+    seed_key already set, matching what a reconciled real db looks like."""
+    import sqlite3
+    path = tmp_path / "t.db"
+    conn = sqlite3.connect(str(path))
+    for script in MIGRATIONS[:15]:          # bring the db up to v15
+        conn.executescript(script)
+    conn.execute("UPDATE segment_defs SET enabled=0"
+                 + (", seed_dirty=1" if dirty_pipe_family else "")
+                 + " WHERE seed_key='seg:bitdw-pipe'")
+    conn.execute("INSERT INTO segment_defs (name, enabled, start_triggers,"
+                 " end_triggers, waypoints, guards, created_utc, seed_key,"
+                 " seed_dirty) VALUES (?,0,'[]','[]','[]','[]',?,?,?)",
+                 ("BitFS — 8 Red Coins → Pipe", "2026-07-24T00:00:00Z",
+                  "seg:reds->pipe:bitfs", 1 if dirty_pipe_family else 0))
+    # An unrelated segment the user disabled on purpose (LBLJ, seeded and
+    # untouched by the retired mechanism) — must survive the repair.
+    conn.execute("UPDATE segment_defs SET enabled=0, seed_dirty=1"
+                 " WHERE seed_key='seg:lblj'")
+    conn.execute("PRAGMA user_version = 15")
+    conn.commit()
+    conn.close()
+    return path
+
+
+def test_v16_reenables_stranded_pipe_family_rows(tmp_path):
+    """The two rows the retired exclusion left disabled (912466d, live report
+    2026-07-29 — a disabled definition never arms, so both scenarios recorded
+    silently nothing across a full practice session) come back enabled."""
+    path = _v15_db_with_disabled_segments(tmp_path)
+    db = Database(path)
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
+    rows = {r["seed_key"]: r for r in db.segment_defs()
+            if r["seed_key"] in _PIPE_FAMILY_SEED_KEYS}
+    assert rows["seg:bitdw-pipe"]["enabled"] is True
+    assert rows["seg:reds->pipe:bitfs"]["enabled"] is True
+    # seed_dirty is left exactly as found — this repair is not a user edit
+    # and must not change what reconcile does with these rows next startup.
+    assert rows["seg:bitdw-pipe"]["seed_dirty"] == 1
+    assert rows["seg:reds->pipe:bitfs"]["seed_dirty"] == 1
+
+
+def test_v16_leaves_an_unrelated_disabled_segment_disabled(tmp_path):
+    """A user may have disabled something outside the Bowser pipe family on
+    purpose (LBLJ here) — the repair must not silently re-enable their own
+    choice just because it also carries seed_dirty=1."""
+    path = _v15_db_with_disabled_segments(tmp_path)
+    db = Database(path)
+    lblj = next(r for r in db.segment_defs() if r["seed_key"] == "seg:lblj")
+    assert lblj["enabled"] is False
+    assert lblj["seed_dirty"] == 1
+
+
+def test_v16_is_idempotent(tmp_path):
+    """Re-running the migration set (a fresh Database() open against an
+    already-migrated file) must not toggle anything a second time."""
+    path = _v15_db_with_disabled_segments(tmp_path)
+    Database(path).close()
+    db = Database(path)          # re-open: v16's UPDATE runs again on replay?
+    rows = {r["seed_key"]: r for r in db.segment_defs()
+            if r["seed_key"] in _PIPE_FAMILY_SEED_KEYS}
+    assert rows["seg:bitdw-pipe"]["enabled"] is True
+    assert rows["seg:reds->pipe:bitfs"]["enabled"] is True
+
+
+def test_fresh_install_has_no_stranded_rows_to_repair(tmp_path):
+    """A brand-new db never runs an old mutual-exclusion write, so every
+    pipe-family row starts (and stays) enabled — v16 has nothing to do on a
+    fresh install, unlike a migrated one."""
+    db = make_db(tmp_path)
+    pipe_family = [r for r in db.segment_defs()
+                   if r["seed_key"] in _PIPE_FAMILY_SEED_KEYS]
+    # The legacy v4 seed only carries the three pipe-only rows; the
+    # reds->pipe siblings are bundled-seed content that only exists once
+    # reconcile_defaults has run, which is out of scope for the storage layer
+    # alone — assert what IS seeded here stays enabled.
+    assert pipe_family and all(r["enabled"] for r in pipe_family)
