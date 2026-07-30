@@ -419,3 +419,44 @@ def test_the_fragment_guard_can_still_fail():
     scan = lambda text: "h.Fragment" in text
     assert scan("return html`<${h.Fragment}>x<//>`")
     assert not scan("// never write h dot Fragment here")
+
+
+_PBS_SQL = re.compile(r"(?i)(from|into|update)\s+pbs\b")
+
+
+def test_only_the_storage_layer_queries_the_pbs_table():
+    """"Which saved PBs count" is answered in SQL, once, by
+    `storage/db.py::_VISIBLE_PB`: a row whose attempt is HIDDEN does not count,
+    because a pb row carries its own `frames` and grades with it. Both readers
+    (`pbs`, `current_pb`) carry the clause; a query written anywhere else would
+    silently not, which is the bug it was added for (a star graded MARIO 1 off
+    an attempt the practice log no longer showed, 2026-07-29).
+
+    So the door is the TABLE, not a function: no file outside storage/db.py may
+    name `pbs` in SQL at all. That is stricter than "call db.pbs()" and it is
+    the version with teeth — a second query is exactly what cannot be written,
+    rather than something a reviewer has to notice. db.py's own delete/repair
+    statements see every row deliberately (an orphan must be collectable, and a
+    manual hide deletes outright)."""
+    offenders = sorted(path.relative_to(SRC).as_posix()
+                       for path in SRC.rglob("*.py")
+                       if path != SRC / "storage" / "db.py"
+                       and _PBS_SQL.search(code_only(path)))
+    assert not offenders, (
+        f"{offenders} query the pbs table directly and so skip db.py's "
+        "_VISIBLE_PB clause — a PB on a hidden attempt would grade again. "
+        "Read through db.pbs()/db.current_pb() instead.")
+
+
+def test_the_pbs_table_guard_can_still_fail():
+    """Both directions, through the same code_only() the guard uses: real SQL
+    trips it, prose about the table does not. The `pbs_v2` migration table must
+    not trip it either — `\\b` after `pbs` is what makes that true, and it is
+    the one spelling that already exists in the file being excluded."""
+    real = code_only(Path("sample.py"),
+                     'rows = conn.execute("SELECT * FROM pbs ORDER BY id")\n')
+    prose = code_only(Path("sample.py"),
+                      '# never SELECT from pbs outside the storage layer\n')
+    assert _PBS_SQL.search(real)
+    assert not _PBS_SQL.search(prose)
+    assert not _PBS_SQL.search('x = "INSERT INTO pbs_v2 (id) VALUES (1)"')

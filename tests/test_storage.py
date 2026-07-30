@@ -100,6 +100,50 @@ def test_current_pb_filters_by_strategy(tmp_path):
     assert db.current_pb(2, 2, "igt", strat_tag="C") is None
 
 
+def test_a_pb_on_a_hidden_attempt_does_not_count(tmp_path):
+    """A pb row carries its own frames, so one whose attempt is hidden keeps
+    GRADING unless a reader skips it. Both readers do, and the rule is a read
+    filter rather than a delete because hiding is reversible: the projector
+    auto-clears a success outside its star's validity bounds, and re-widening
+    the bounds must bring the save back with the attempt."""
+    from sm64_events.tracking.projection import Attempt
+    db = make_db(tmp_path)
+
+    def attempt(aid, igt, cleared):
+        return Attempt(id=aid, session_id=1, course_id=2, star_id=2,
+                       strat_tag="fast", anchor_type="practice_reset",
+                       anchor_frame=500, outcome="success", outcome_detail=None,
+                       igt_frames=igt, rta_frames=igt + 7,
+                       started_utc="2026-06-10T12:00:00Z",
+                       ended_utc="2026-06-10T12:00:12Z",
+                       cleared=cleared, cleared_reason="auto: too fast" if cleared else None)
+
+    db.replace_attempts([attempt(10, 350, False), attempt(11, 343, False)])
+    for aid, frames in ((10, 350), (11, 343)):
+        db.insert_pb(course_id=2, star_id=2, strat_tag="fast", timer_mode="igt",
+                     frames=frames, attempt_id=aid,
+                     saved_utc="2026-06-10T12:01:00Z")
+    assert db.current_pb(2, 2, "igt")["frames"] == 343         # latest save wins
+    assert [r["frames"] for r in db.pbs()] == [350, 343]
+
+    # hide attempt 11: its save stops counting, 10's is current again
+    db.replace_attempts([attempt(10, 350, False), attempt(11, 343, True)])
+    assert db.current_pb(2, 2, "igt")["frames"] == 350
+    assert db.current_pb(2, 2, "igt", strat_tag="fast")["frames"] == 350
+    assert [r["frames"] for r in db.pbs()] == [350]
+    # ...and the row is still THERE, which is what makes it reversible
+    assert len(db._conn.execute("SELECT id FROM pbs").fetchall()) == 2
+
+    # un-hide it (a widened time filter, applied by the next reprojection)
+    db.replace_attempts([attempt(10, 350, False), attempt(11, 343, False)])
+    assert db.current_pb(2, 2, "igt")["frames"] == 343
+    # a row that was never tied to an attempt always counts
+    db.replace_attempts([])
+    db.insert_pb(course_id=8, star_id=1, strat_tag=None, timer_mode="igt",
+                 frames=400, attempt_id=None, saved_utc="2026-06-10T12:02:00Z")
+    assert db.current_pb(8, 1, "igt")["frames"] == 400
+
+
 def test_sessions_returns_newest_first_with_attempt_counts(tmp_path):
     from sm64_events.tracking.projection import Attempt
     db = make_db(tmp_path)
