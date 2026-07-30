@@ -313,12 +313,29 @@ function StarRow({ t, v, stage, freshIds }) {
   </section>`;
 }
 
-// BitDW/BitFS/BitS: the "reds" 8-coin star + the level's "no reds" pipe-entry
-// segment(s). Picking flips the pipe segment's enabled flag (mutual exclusion).
+// BitDW/BitFS/BitS: THREE independently-tracked things — the "reds" 8-coin
+// star, grabbing reds then taking the pipe, and taking the pipe without reds.
+// No mutual exclusion (retired 2026-07-29, live report): the corpus reshape
+// that arms the pipe-entry segments on stage ENTRY gives each Bowser level
+// TWO segment_targets entries sharing the same start_levels — one STRICT with
+// a waypoint on the reds grab ("seg:reds->pipe:*"), one EXCLUSIVE and
+// cancelled the moment any star is grabbed ("seg:<abbrev>-pipe", the legacy
+// row) — so the matcher itself already keeps whichever of the two applies
+// armed in parallel with the reds star, with no picker involved: "if 1 is
+// armed, 2 should always be armed. If 2 is armed, then 1 should also always
+// be armed" (user). This row used to ENFORCE a choice by writing the pipe
+// segment's `enabled` flag — the SAME toggle now fights the matcher's own
+// bookkeeping, so it is gone; clicking a cell only sets the target, same as
+// every other segment cell. StandardSegmentCell is reused here for BOTH pipe
+// cells, so each shows its OWN honest name/rank/strat instead of a shared
+// "No reds" label. There is no server field distinguishing "the reds->pipe
+// segment" from "the pipe-only segment" (segment_targets carries no
+// waypoints/match_mode), so the two rely on the corpus's own names already
+// being distinct ("<Abbrev> — 8 Red Coins → Pipe" vs "<Abbrev> Pipe Entry") —
+// flagged in this task's report, since a future rename could make them read
+// alike again with no guard here to catch it.
 function BowserCourseRow({ t, v, stage }) {
   const [fold, toggleFold] = useCollapsed("selector");
-  // hooks first (useIconPicking + the restore useEffect below) — the early
-  // return must never change the hook count between renders
   const [setPicking, pickerModal] = useIconPicking(t);
   const course = v.catalog.courses.find((c) => c.id === stage.course_id);
   const tgt = v.target || {};
@@ -326,55 +343,20 @@ function BowserCourseRow({ t, v, stage }) {
   const redsActive = tgt.kind !== "segment"
     && tgt.course_id === stage.course_id && tgt.star_id === 0;
 
-  // "reds" — practice the 8-coin star: disable any pipe-entry segment so it
-  // stops tracking, then target the star.
+  // "reds" — practice the 8-coin star. No longer disables anything: the
+  // matcher's own EXCLUSIVE mode already cancels the pipe-only segment the
+  // moment a star is grabbed, and the reds->pipe segment WANTS the reds grab
+  // (it is that segment's own waypoint).
   async function pickReds() {
-    for (const s of pipes)
-      if (s.enabled)
-        await send("PUT", `/api/segments/${s.segment_id}`, { enabled: false });
     await requestTarget(t, { course_id: stage.course_id, star_id: 0 });
   }
-
-  // "no reds" — practice the pipe-entry skip: enable that segment so it tracks,
-  // then target it.
-  async function pickNoReds(s) {
-    if (!s.enabled)
-      await send("PUT", `/api/segments/${s.segment_id}`, { enabled: true });
-    await requestTarget(t, { kind: "segment", segment_id: s.segment_id });
-  }
-
-  // Restore the LEVEL'S last selection on entry — walking into BitDW while you
-  // were practicing reds there means you are practicing reds, so don't make the
-  // player re-pick (request 2026-07-23).
-  //
-  // The memory is DERIVED, not stored: the mutual exclusion above already
-  // records the pick in the pipe segment's `enabled` flag (reds disables it,
-  // no reds enables it), and that lives in the db per definition — so the
-  // memory is automatically per level, survives restarts, and can never
-  // disagree with what the segment is actually tracking. Any pipe enabled ->
-  // "no reds"; none (or none defined) -> "reds".
-  //
-  // Same shape as ArenaRow: it re-applies the SAME functions the buttons call
-  // (one behavior, one implementation), no-ops when that choice is already the
-  // target, and is keyed on the level so a manual pick mid-level sticks until
-  // you leave and come back. The enabled-pipe key makes it converge when the
-  // flag is flipped elsewhere (the Segments tab).
-  const enabledPipe = pipes.find((s) => s.enabled) || null;
-  useEffect(() => {
-    if (enabledPipe) {
-      if (!(tgt.kind === "segment" && tgt.segment_id === enabledPipe.segment_id))
-        pickNoReds(enabledPipe);
-    } else if (!redsActive) {
-      pickReds();
-    }
-  }, [stage.level, enabledPipe && enabledPipe.segment_id]);
 
   if (!course) return html`<${StagePlaceholder} t=${t} />`;
 
   return html`<section class="practice-card selector-card stagebanner ${cardClass(fold)}">
     <div class="shead"><b>${course.name}</b>
-      <span class="meta">reds (8-coin star) · or the pipe-entry skip (no reds)</span>
-      
+      <span class="meta">all three track together — tap one to pin it</span>
+
       <${CollapseToggle} collapsed=${fold} toggle=${toggleFold}
         label="the course selector" /></div>
     <div class="starrow segcells">
@@ -386,15 +368,8 @@ function BowserCourseRow({ t, v, stage }) {
         sub=${html`<span class="strat">${course.stars[0] || "8 Red Coins"}</span>`}
         onPick=${pickReds}
         onEdit=${() => setPicking(iconIdentityForKey(starKey(stage.course_id, 0)))} />
-      ${pipes.map((s) => html`<${PracticeCell} dimIdle=${STAR_DIM_IDLE} key=${`seg:${s.segment_id}`}
-        active=${tgt.kind === "segment" && tgt.segment_id === s.segment_id}
-        armed=${t.armedSegs.has(s.segment_id)}
-        iconSrc=${entityIconSrc(t, segKey(s))}
-        rank=${s.rank} name="No reds" title=${s.name}
-        sub=${t.armedSegs.has(s.segment_id) ? runningChip
-          : html`<span class="strat">${s.name}</span>`}
-        onPick=${() => pickNoReds(s)}
-        onEdit=${() => setPicking(iconIdentityForKey(segKey(s)))} />`)}
+      ${pipes.map((s) => html`<${StandardSegmentCell}
+        key=${`seg:${s.segment_id}`} t=${t} s=${s} setPicking=${setPicking} />`)}
       ${armedExtraCells(t, v, new Set(pipes.map((s) => s.segment_id)),
                         setPicking)}
     </div>
