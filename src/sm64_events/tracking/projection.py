@@ -173,6 +173,23 @@ Caveats (hard-won — keep these current):
     re-derives on every replay. Stars have no equivalent: a default needs a
     seeded definition row and stars have none (CLAUDE.md rule 11 asymmetry,
     recorded in the spec).
+
+18. Grab-steals-the-target exemption (spec 2026-07-28-multi-step-segments
+    round 2, live report 2026-07-30): _close_by_grab’s "last VALID grab
+    moves the practice target" rule normally fires on every star grab,
+    unconditionally. feed() now restores the pre-event target when: it was
+    already a SEGMENT target, that segment was already armed BEFORE this
+    star_collected event, it is STILL armed AFTER the segment engine has
+    processed the very same event without closing it, and the definition
+    carries waypoints under strict/exclusive matching (never loose, which
+    stays armed through any grab by design and so "still armed" carries no
+    information there). This is what stops a Bowser Reds->Pipe run’s own
+    mid-sequence star grab from handing the target to the star for the rest
+    of the run — the star attempt itself still records exactly as before
+    (caveat 6’s memory, caveat 15’s last-star tracking), only the TARGET
+    move is suppressed. See feed()’s own comment for the full reasoning and
+    why a genuinely unrelated grab can never trigger this (the matcher’s
+    own major-action cancel already disarms a def that doesn’t expect it).
 """
 from dataclasses import dataclass, replace
 
@@ -493,6 +510,13 @@ class Projector:
 
     def feed(self, ev) -> list[Attempt]:
         prev_level = self._level  # _dispatch may move it (level_changed)
+        # Snapshotted BEFORE _dispatch (which runs _close_by_grab for a
+        # star_collected event) so the grab-steals-the-target restore below
+        # can tell "this segment was already my pinned, running focus" from
+        # "I just now grabbed a star with nothing else going on" — see that
+        # restore's own comment for the bug it exists for.
+        target_before = self.target
+        armed_before = self.armed_segment_ids()
         closed = self._dispatch(ev)
         for a in closed:
             if a.segment_id is None and a.course_id is not None:
@@ -604,6 +628,58 @@ class Projector:
                     self.target = None if entered_stage else ("segment", a.segment_id)
                 self._suspended_star = None  # finished a segment: moved on (caveat 13)
             closed.append(a)
+        # A star grab that is really a WAYPOINT of the segment already
+        # pinned as the active target must not steal the target away to the
+        # star (round-2 live report, 2026-07-30: with Bowser's Reds "Pipe"
+        # segment (seg:reds->pipe:<abbrev>) explicitly targeted, grabbing
+        # the reds star -- that segment's OWN mid-sequence waypoint, on the
+        # way to the pipe -- flashed the star's own practice card (rank
+        # standards + practice log) over the segment's for the rest of the
+        # run. Root cause: _close_by_grab's "last VALID grab moves the
+        # practice target" rule (caveat: every star grab moves the target,
+        # unconditionally) has no way to know a grab was consumed by an
+        # in-progress segment rather than being a deliberate star pick --
+        # the star attempt it records is CORRECT and must still happen (the
+        # user's own words: "the practice log should still exist for star
+        # mode in the history, just that we don't see it"), only the
+        # target move is wrong here.
+        #
+        # Restore the pinned segment when: it was already the target AND
+        # already armed BEFORE this event (an established, running focus —
+        # not something that merely happens to arm on this same tick), and
+        # it is STILL armed AFTER the segment engine has processed this
+        # very event without closing (i.e. this event ADVANCED it — a
+        # waypoint consumed or an anchor rewind — rather than ending or
+        # cancelling the sequence). A def that does NOT expect this grab is
+        # silently CANCELLED by the matcher's own "major action" rule on
+        # this same event (segments.py's _feed_waypoint precedence), which
+        # drops it out of armed_segment_ids() — so this restore can never
+        # fire for a genuinely unrelated grab; the FSM's own precedence
+        # already does that disambiguation, this doesn't re-derive it.
+        #
+        # Scoped to WAYPOINT defs only (`d.waypoints`, and not `loose` —
+        # loose owns its progression via _feed_loose instead and, by
+        # design, "stays armed through star grabs... until the end trigger
+        # fires" regardless of relevance). A PLAIN strict/exclusive def has
+        # no star/key branch at all (MATCH_MODES's own "strict" doc
+        # comment) and stays armed through ANY grab whether or not it has
+        # anything to do with that def — so for a plain def, "still armed
+        # after" carries no information about whether THIS grab was
+        # actually part of its sequence, and applying the restore there
+        # would blanket-protect every plain armed target from every
+        # unrelated grab forever, a far bigger behavior change than this
+        # bug asks for. Only a waypoint-bearing strict/exclusive def's
+        # "still armed, not closed" reliably means "the matcher's own
+        # major-action rule just confirmed this event was the expected next
+        # step" — that rule is what does the disambiguation, not this one.
+        if (ev.type == "star_collected" and target_before is not None
+                and target_before[0] == "segment"
+                and target_before[1] in armed_before
+                and target_before[1] in self.armed_segment_ids()
+                and not any(a.segment_id == target_before[1] for a in seg_closed)):
+            d = self._segments.definition(target_before[1])
+            if d is not None and d.waypoints and d.match_mode != "loose":
+                self.target = target_before
         # A segment going ARMED means a segment run just started, so a star we
         # were practicing is no longer the active focus (active-star and
         # segment are mutually exclusive in the UI — 2026-06-12). Clear ONLY a

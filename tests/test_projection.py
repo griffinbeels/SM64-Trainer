@@ -1697,6 +1697,114 @@ def test_ambient_arm_exemption_covers_the_reds_to_pipe_family_too():
     assert proj.target == ("star", 16, 0)
 
 
+def _reds_pipe_segment_def():
+    """The real seg:reds->pipe:<abbrev> shape (matches
+    test_ambient_arm_exemption_covers_the_reds_to_pipe_family_too and
+    tests/test_views.py::_reds_pipe_def): starts on stage entry, waypoints
+    on the course's reds grab, ends on the pipe warp."""
+    from sm64_events.tracking.segments import SegmentDef
+    return SegmentDef(
+        id=201, name="BitDW — 8 Red Coins → Pipe", enabled=True,
+        start_triggers=[{"type": "level_enter", "to": 17},
+                        {"type": "attempt_anchor", "level": 17}],
+        end_triggers=[{"type": "warp_entered", "level": 17}],
+        waypoints=[[{"type": "star_grabbed", "course": 16, "star": 0}]],
+        guards=[], match_mode="strict")
+
+
+def test_grabbing_a_waypoint_star_does_not_steal_an_armed_segments_target():
+    # THE FLASH bug (live report 2026-07-30, round 2): with the Pipe segment
+    # explicitly targeted, grabbing the reds star is merely THIS segment's
+    # own waypoint on the way to the pipe, not a deliberate "practice the
+    # star alone" pick -- practice.js's pinned card was flashing to the
+    # star's own (Star Section) rank standards + practice log for the rest
+    # of the run because the server's target flipped to the star the
+    # instant the grab closed, even though the run never stopped being a
+    # Pipe run. Reproduces the exact live shape: target the segment while
+    # armed, then feed the waypoint grab.
+    p = Projector(segments=[_reds_pipe_segment_def()])
+    p.feed(jev(1, "level_changed", 900, {"from": 6, "to": 17}))   # arms ambiently
+    p.feed(jev(2, "target_set", 950, {"kind": "segment", "segment_id": 201}))
+    assert p.target == ("segment", 201)
+    closed = p.feed(jev(3, "star_collected", 1500,
+                        {"course_id": 16, "star_id": 0, "igt_frames": 500}))
+    # The grab still records its own star attempt -- the Star family's
+    # history must keep existing even while its card is not shown (user's
+    # own words: "the practice log should still exist for star mode in the
+    # history, just that we don't see it").
+    assert [a.segment_id for a in closed] == [None]
+    assert (closed[0].course_id, closed[0].star_id) == (16, 0)
+    assert closed[0].outcome == "success"
+    # ...but the target must stay on the still-running segment, not flash
+    # over to the star it merely stepped through.
+    assert p.target == ("segment", 201)
+    assert 201 in p.armed_segment_ids()          # mid-sequence, not closed
+    closed2 = p.feed(jev(4, "warp_entered", 2200, {"level": 17}))
+    assert [a.segment_id for a in closed2] == [201]
+    assert closed2[0].outcome == "success"
+    assert p.target == ("segment", 201)          # unaffected by the fix
+
+
+def test_grabbing_a_star_still_moves_the_target_with_nothing_pinned_there():
+    # Regression guard the other direction: the fix must not blanket-protect
+    # every armed segment from every grab -- only one that is BOTH the
+    # current explicit target and mid-sequence. With no target set yet (the
+    # ambient arm alone, no explicit pick), the ordinary "last valid grab
+    # moves the target" rule must still apply.
+    p = Projector(segments=[_reds_pipe_segment_def()])
+    p.feed(jev(1, "level_changed", 900, {"from": 6, "to": 17}))   # arms ambiently
+    assert p.target is None
+    p.feed(jev(2, "star_collected", 1500,
+                {"course_id": 16, "star_id": 0, "igt_frames": 500}))
+    assert p.target == ("star", 16, 0)
+
+
+def test_grabbing_a_star_still_moves_the_target_away_from_an_unrelated_waypoint_segment():
+    # A DIFFERENT armed, targeted STRICT waypoint segment that does NOT
+    # expect a star grab next is silently CANCELLED by the matcher's own
+    # major-action rule on this very event (segments.py's _feed_waypoint
+    # precedence) -- the restore only ever fires for a segment the grab
+    # genuinely advanced, never one it broke.
+    from sm64_events.tracking.segments import SegmentDef
+    unrelated = SegmentDef(
+        id=55, name="unrelated waypoint movement", enabled=True,
+        start_triggers=[{"type": "level_enter", "to": 6}],
+        waypoints=[[{"type": "level_enter", "to": 10}]],
+        end_triggers=[{"type": "level_enter", "to": 17}],
+        guards=[], match_mode="strict")
+    p = Projector(segments=[unrelated])
+    p.feed(jev(1, "level_changed", 900, {"from": 16, "to": 6}))
+    p.feed(jev(2, "target_set", 950, {"kind": "segment", "segment_id": 55}))
+    assert p.target == ("segment", 55)
+    assert 55 in p.armed_segment_ids()
+    p.feed(jev(3, "star_collected", 1500,
+                {"course_id": 9, "star_id": 2, "igt_frames": 500}))
+    assert 55 not in p.armed_segment_ids()   # cancelled: major-action mismatch
+    assert p.target == ("star", 9, 2)
+
+
+def test_grabbing_a_star_still_moves_the_target_away_from_a_plain_armed_segment():
+    # A PLAIN (waypoint-free) armed segment has no notion of "this grab was
+    # my own next step" at all -- _feed_strict has no star/key branch and
+    # stays armed through any grab regardless of relevance (MATCH_MODES's
+    # own "strict" doc comment). The restore is scoped to waypoint defs
+    # ONLY for exactly this reason: applying it here too would blanket-
+    # protect every plain armed target from every unrelated grab forever, a
+    # far bigger behavior change than the reported bug asks for.
+    from sm64_events.tracking.segments import SegmentDef
+    plain = SegmentDef(id=77, name="plain movement", enabled=True,
+                       start_triggers=[{"type": "level_enter", "to": 6}],
+                       end_triggers=[{"type": "level_enter", "to": 17}],
+                       guards=[])
+    p = Projector(segments=[plain])
+    p.feed(jev(1, "level_changed", 900, {"from": 16, "to": 6}))
+    p.feed(jev(2, "target_set", 950, {"kind": "segment", "segment_id": 77}))
+    p.feed(jev(3, "star_collected", 1500,
+                {"course_id": 9, "star_id": 2, "igt_frames": 500}))
+    assert 77 in p.armed_segment_ids()   # unaffected: still armed either way
+    assert p.target == ("star", 9, 2)    # target still moves: no waypoint to protect
+
+
 def test_star_success_with_no_clock_at_all_is_not_flagged():
     # grab-only attempt (no anchor -> rta None) with no igt_frames in the
     # payload: _auto_ignored's "no clock -> no flag" branch — nothing to
