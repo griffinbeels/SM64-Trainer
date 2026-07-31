@@ -398,6 +398,19 @@ contain only GIL-releasing syscalls — anything heavier goes out of process.
   Per-process WASAPI loopback (`proctap`) is the primary source; device
   loopback stays as the fallback because no audio is worse than too much,
   and `audio_mode` says which one is live.
+- **What was rejected, and why** (2026-07-31, so it is not re-litigated):
+  *A user setting for desktop-vs-game audio* — the report was unambiguous
+  ("It should only ever be the actual PJ64 gameplay audio, never the audio
+  from other sources"), so a toggle is a knob nobody asked for. *Telling
+  users to route PJ64 to a virtual output* (Wave Link, VB-Cable) — that is
+  the setup that hid the bug here for six weeks; it is a workaround needing
+  third-party software, not a fix. *Shipping Microsoft's ApplicationLoopback
+  C++ sample as a helper exe* — the right shape if the Python binding ever
+  fails, but it needs MSVC in the build and the binding demonstrably works.
+  *Downgrading to device loopback when the tap goes deaf mid-session* — that
+  reintroduces the reported bug invisibly, so the watchdog REOPENS the tap
+  instead; the only sanctioned downgrade is at start(), where it is logged
+  and visible as `audio_mode`.
 - **Prove an audio path with a tone whose SOURCE PROCESS you chose.**
   proctap was retired on 2026-06-11 for "delivering all-zero PCM — couldn't
   hear a beep from its own process". A `winsound.Beep` is emitted by the
