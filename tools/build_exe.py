@@ -26,8 +26,12 @@ REPO = Path(__file__).resolve().parents[1]
 SEP = ";" if os.name == "nt" else ":"
 # Native/binary deps whose data files or submodules PyInstaller's auto
 # analysis can miss — collect everything for each.
-COLLECT = ["av", "windows_capture", "pyaudiowpatch", "pycaw", "comtypes",
-           "pymem", "webview", "pystray", "numpy", "yt_dlp"]
+# proctap in particular: its backend is chosen by name at runtime and its
+# WASAPI process-loopback code is a .pyd inside the package, so static
+# analysis finds neither — without collecting it the shipped exe silently
+# falls back to device-wide loopback (i.e. records the whole desktop).
+COLLECT = ["av", "windows_capture", "proctap", "pyaudiowpatch", "pycaw",
+           "comtypes", "pymem", "webview", "pystray", "numpy", "yt_dlp"]
 
 
 def needs_reexec(environ) -> bool:

@@ -1,26 +1,49 @@
 """Audio sources -> recorder AudioSource protocol.
 
-Primary (wired in main.py): SystemAudioSource with PID TARGETING — it asks
+Primary (wired in main.py): ProcessAudioSource — WASAPI *process* loopback
+via proctap, which taps only the target process's own render stream. A
+replay therefore carries the game and nothing else: no Discord call, no
+music, no browser tab. That is the whole point of preferring it (user
+report 2026-07-30: "only capture the audio of the game and not of the
+entire desktop… very convenient for uploading xcams that don't have calls
+and streams and music in the background").
+
+Fallback: SystemAudioSource, DEVICE loopback with PID TARGETING — it asks
 Core Audio which render ENDPOINT hosts the target process's audio session
 and loopback-captures THAT device. Live-audit finding (2026-06-11): the
 machine's default output is "System (Elgato Wave:XLR)" but PJ64's session
 lives on "Game (Elgato Wave:XLR)" (Wave Link virtual outputs) — capturing
 the default endpoint recorded pure silence while the user heard the game
 fine. Per-app endpoint routing makes "capture the default device" wrong.
+It records whatever else shares that endpoint, which is the bug above; it
+stays as the fallback because no audio at all is worse, and `audio_mode`
+in /api/replay/status says which one is live.
 
-proctap (ProcessAudioSource) is RETIRED from the wiring: per-process
-loopback start()s successfully but delivers all-zero PCM on this machine —
-it could not capture a beep played by its own process (false-healthy,
-undetectable). Kept only for future re-evaluation.
+proctap was RETIRED on 2026-06-11 for delivering all-zero PCM ("could not
+capture a beep played by its own process"). That verdict was wrong, and
+the way it was reached is the lesson: a `winsound.Beep` is emitted by the
+kernel's beep path, not by the calling process's audio session, so process
+loopback is *correct* to return silence for it — the test could not pass.
+Re-measured 2026-07-31 with two ffplay children playing 440 Hz and 880 Hz
+simultaneously, capturing only the 440 Hz process: 440 Hz present at
+exactly the amplitude device loopback saw, 880 Hz at literally zero, full
+48 kHz delivery. Device loopback on the same machine heard both at 1.0x.
+Prove an audio path with a tone whose SOURCE PROCESS you chose.
 
-proctap API notes (introspected from installed v0.x):
+proctap API notes (installed 1.0.3):
 - AudioCallback = Callable[[bytes, int], None]  — (pcm_bytes, num_frames)
   num_frames is always -1 in the current implementation (TODO in source).
 - on_data is passed to ProcessAudioCapture.__init__(), NOT to start().
-- Output is always float32, 48000 Hz, 2-channel (stereo), values in [-1, 1]."""
+- Output is always float32, 48000 Hz, 2-channel (stereo), values in [-1, 1],
+  delivered CONTINUOUSLY — silence arrives as zeros rather than as a gap,
+  unlike device loopback, which delivers nothing while the endpoint idles."""
 import logging
+import threading
+import time
 
 import numpy as np
+
+from sm64_events.replay._system_audio import AudioPump
 
 log = logging.getLogger("sm64.replay")
 
@@ -79,33 +102,6 @@ def f32_to_s16(pcm_f32: np.ndarray) -> np.ndarray:
     return (np.clip(flat, -1.0, 1.0) * 32767.0).astype(np.int16)
 
 
-class ProcessAudioSource:
-    mode = "process"
-
-    def __init__(self, pid: int):
-        self._pid = pid
-        self._tap = None
-
-    def start(self, on_pcm) -> None:
-        import proctap
-
-        def _on_data(pcm_bytes: bytes, num_frames: int) -> None:
-            # pcm_bytes: raw float32 stereo 48kHz; num_frames is -1 (unused)
-            on_pcm(f32_to_s16(np.frombuffer(pcm_bytes, dtype=np.float32)))
-
-        # on_data is passed to __init__, not start(); start() takes no args
-        self._tap = proctap.ProcessAudioCapture(pid=self._pid, on_data=_on_data)
-        self._tap.start()
-
-    def stop(self) -> None:
-        if self._tap is not None:
-            try:
-                self._tap.stop()
-            except Exception:
-                log.exception("proctap stop failed")
-            self._tap = None
-
-
 def session_peak_for_pid(pid: int) -> float:
     """Instantaneous meter peak of the pid's audio session (0.0-1.0), or
     -1.0 when no session exists. Used by the silence watchdog to tell
@@ -142,28 +138,153 @@ def session_peak_for_pid(pid: int) -> float:
     return -1.0
 
 
-class SystemAudioSource:
-    """Device loopback capture with SELF-HEALING. With a pid, captures the
-    endpoint that actually HOSTS that process's audio session (per-app
-    routing aware); without one, the default output.
+class DeafStreamWatchdog:
+    """Content-liveness guard shared by both capture paths.
 
-    Watchdog: a WASAPI loopback stream goes silently deaf when the world
-    changes under it — the target app restarts (new session), the endpoint
-    re-enumerates (Wave Link restart leaves a zombie device with an
-    IDENTICAL name), or routing moves. No error is ever raised; the stream
-    just delivers dither forever (live: PJ64 restarted mid-session, its new
-    session was ACTIVE at peak 0.35 on the Game endpoint while our stream
-    recorded silence). Every few seconds the watchdog compares 'has the
-    stream heard anything loud?' against the session's own meter; sustained
-    deafness while the app is audibly emitting triggers a full re-resolve
-    and stream reopen. The pump persists across reopens; ffmpeg's wall-clock
-    stamping + aresample bridge the reopen gap so the timeline stays
-    continuous."""
+    Every capture path here can go silently deaf: no error is ever raised,
+    the stream simply delivers dither forever. Device loopback does it when
+    the world changes under it — the target app restarts (new session), the
+    endpoint re-enumerates (a Wave Link restart leaves a zombie device with
+    an IDENTICAL name), or routing moves (live: PJ64 restarted mid-session,
+    its new session ACTIVE at peak 0.35 on the Game endpoint while our
+    stream recorded silence). So STATUS proves nothing and CONTENT proves
+    everything: every couple of seconds, compare 'has the stream heard
+    anything loud?' against the pid's own session meter, and reopen when the
+    app is audibly emitting into silence on our side.
+
+    Reopening keeps the pump, so ffmpeg's wall-clock stamping + aresample
+    bridge the gap and the timeline stays continuous."""
+
+    def __init__(self, pid: int | None, heard_at, reopen, label: str,
+                 deaf_after_s: float = 5.0, check_every_s: float = 2.0):
+        self._pid = pid
+        self._heard_at = heard_at        # () -> monotonic time of last loud pkt
+        self._reopen = reopen            # () -> None, raises on failure
+        self._label = label
+        self._deaf_after_s = deaf_after_s
+        self._check_every_s = check_every_s
+        self._grace_t = 0.0
+        self._stop_evt = threading.Event()
+        self._thread = threading.Thread(
+            target=self._watch, name="audio-watchdog", daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def _watch(self) -> None:
+        while not self._stop_evt.wait(self._check_every_s):
+            heard = time.monotonic() - max(self._heard_at(), self._grace_t)
+            if heard < self._deaf_after_s or self._pid is None:
+                continue
+            peak = session_peak_for_pid(self._pid)
+            if peak < 0.02:
+                continue  # app genuinely quiet (or gone) — nothing to heal
+            log.warning("audio watchdog: %s deaf %.0f s while the app's "
+                        "session peaks at %.2f — reopening",
+                        self._label, heard, peak)
+            try:
+                self._reopen()
+                self._grace_t = time.monotonic()
+            except Exception:
+                log.exception("%s reopen failed — will retry", self._label)
+
+    def stop(self) -> None:
+        self._stop_evt.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=5)
+
+
+class ProcessAudioSource:
+    """Per-process WASAPI loopback (proctap): captures ONLY the target
+    process's render stream, so nothing else playing on the machine can
+    bleed into a replay. THE primary source — see the module docstring for
+    the measurement that says it works and the bad test that once retired
+    it.
+
+    proctap hands PCM to us on its own reader thread, not on a WASAPI
+    real-time callback, but it still must not block: the same AudioPump
+    stands between it and the recorder, so a wedged writer drops packets
+    instead of stalling the tap."""
+
+    mode = "process"
+
+    def __init__(self, pid: int, rate: int = 48000):
+        self._pid = pid
+        self._rate = rate
+        self._tap = None
+        self._pump = None
+        self._watchdog = None
+
+    def _open_tap(self) -> None:
+        """(Re)open the per-process tap feeding the existing pump. Raises on
+        failure; caller handles cleanup/retry."""
+        import proctap
+
+        pump_feed = self._pump.feed
+
+        def _on_data(pcm_bytes: bytes, num_frames: int) -> None:
+            # pcm_bytes: raw float32 stereo 48kHz; num_frames is -1 (unused).
+            # The pump speaks int16 — the one format on the wire to the sink —
+            # so convert here, off both the recorder and the native drain.
+            pump_feed(f32_to_s16(
+                np.frombuffer(pcm_bytes, dtype=np.float32)).tobytes(), 0)
+
+        # on_data is passed to __init__, not start(); start() takes no args.
+        # proctap also queues every chunk into an internal 100-slot async
+        # queue nobody drains in callback mode; it fills once and then drops,
+        # so it costs a bounded ~400 KB and never grows.
+        # Assign BEFORE start() so a tap that constructs and then fails to
+        # start is still ours to release.
+        self._tap = proctap.ProcessAudioCapture(pid=self._pid, on_data=_on_data)
+        self._tap.start()
+        log.info("audio: per-process loopback attached to pid %d", self._pid)
+
+    def _close_tap(self) -> None:
+        if self._tap is not None:
+            try:
+                self._tap.stop()
+            except Exception:
+                log.exception("proctap stop failed")
+            self._tap = None
+
+    def start(self, on_pcm) -> None:
+        self._pump = AudioPump(self._rate, on_pcm)
+        try:
+            self._open_tap()
+        except Exception:
+            # The recorder only stop()s sources whose start() succeeded —
+            # release everything ourselves on partial failure.
+            self._pump.stop()
+            self._pump = None
+            self._close_tap()
+            raise
+        self._watchdog = DeafStreamWatchdog(
+            self._pid, lambda: self._pump.last_loud_t,
+            self._reopen, "process tap")
+        self._watchdog.start()
+
+    def _reopen(self) -> None:
+        self._close_tap()
+        self._open_tap()
+
+    def stop(self) -> None:
+        if self._watchdog is not None:
+            self._watchdog.stop()
+            self._watchdog = None
+        self._close_tap()
+        if self._pump is not None:
+            self._pump.stop()
+            self._pump = None
+
+
+class SystemAudioSource:
+    """Device loopback capture — the FALLBACK, used when the per-process tap
+    cannot start. With a pid, captures the endpoint that actually HOSTS that
+    process's audio session (per-app routing aware); without one, the default
+    output. Everything else sharing that endpoint lands in the recording,
+    which is why it is no longer primary. Self-heals via DeafStreamWatchdog."""
 
     mode = "system"
-
-    _DEAF_AFTER_S = 5.0
-    _CHECK_EVERY_S = 2.0
 
     def __init__(self, rate: int = 48000, pid: int | None = None):
         self._rate = rate
@@ -172,7 +293,6 @@ class SystemAudioSource:
         self._pa = None
         self._pump = None
         self._watchdog = None
-        self._stop_evt = None
 
     def _open_stream(self) -> None:
         """(Re)resolve the endpoint and open the loopback stream feeding the
@@ -228,10 +348,6 @@ class SystemAudioSource:
             self._pa = None
 
     def start(self, on_pcm) -> None:
-        import threading
-
-        from sm64_events.replay._system_audio import AudioPump
-
         # The pump is a pure RT-safe handoff now (no wall-clock epoch): it
         # forwards device PCM straight to on_pcm and the single ffmpeg mux
         # stamps + aresample-locks it. No audio origin to align here.
@@ -245,37 +361,18 @@ class SystemAudioSource:
             self._pump = None
             self._close_stream()
             raise
-
-        self._stop_evt = threading.Event()
-        self._watchdog = threading.Thread(
-            target=self._watch, name="audio-watchdog", daemon=True)
+        self._watchdog = DeafStreamWatchdog(
+            self._pid, lambda: self._pump.last_loud_t,
+            self._reopen, "device loopback")
         self._watchdog.start()
 
-    def _watch(self) -> None:
-        import time as _time
-        while not self._stop_evt.wait(self._CHECK_EVERY_S):
-            heard = _time.monotonic() - self._pump.last_loud_t
-            if heard < self._DEAF_AFTER_S:
-                continue
-            if self._pid is None:
-                continue
-            peak = session_peak_for_pid(self._pid)
-            if peak < 0.02:
-                continue  # app genuinely quiet (or gone) — nothing to heal
-            log.warning("audio watchdog: stream deaf %.0f s while the app's "
-                        "session peaks at %.2f — reopening loopback", heard, peak)
-            try:
-                self._close_stream()
-                self._open_stream()
-                self._pump.last_loud_t = _time.monotonic()  # grace period
-            except Exception:
-                log.exception("loopback reopen failed — will retry")
+    def _reopen(self) -> None:
+        self._close_stream()
+        self._open_stream()
 
     def stop(self) -> None:
-        if self._stop_evt is not None:
-            self._stop_evt.set()
         if self._watchdog is not None:
-            self._watchdog.join(timeout=5)
+            self._watchdog.stop()
             self._watchdog = None
         self._close_stream()
         if self._pump is not None:

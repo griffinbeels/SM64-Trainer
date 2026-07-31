@@ -74,14 +74,16 @@ class FakeAvSink:
 
 
 def make_recorder(tmp_path, video, audio, found=WIN, fallback=None,
-                  recorder_lock_factory=None, video_sink_factory=None):
+                  recorder_lock_factory=None, video_sink_factory=None,
+                  fallback_factory=None):
     cfg = ReplayConfig(scratch_dir=tmp_path / "buf", attach_poll_s=0.01, fps=30)
     return ReplayRecorder(
         cfg=cfg,
         window_finder=lambda title: found,
         video_factory=lambda win: video,
         audio_factory=lambda pid: audio,
-        fallback_audio_factory=(lambda rate: fallback) if fallback else None,
+        fallback_audio_factory=(
+            fallback_factory or ((lambda pid: fallback) if fallback else None)),
         clock_factory=lambda: CaptureClock(anchor_qpc_100ns=0, anchor_utc=T0),
         codec="libx264",
         video_sink_factory=video_sink_factory,
@@ -193,6 +195,25 @@ def test_audio_start_failure_falls_back_to_system(tmp_path):
     assert wait_for(lambda: video.on_frame is not None)
     assert wait_for(lambda: rec.status()["audio_mode"] == "system")
     rec.stop()
+
+
+def test_fallback_audio_source_is_handed_the_window_pid(tmp_path):
+    """The fallback needs the pid exactly as much as the primary does — it
+    targets the endpoint hosting THAT app's session. It was handed the sample
+    RATE until 2026-07-31, and both are ints, so nothing ever complained."""
+    seen = []
+    sysaudio = SystemFakeAudioSource()
+
+    def fallback_factory(pid):
+        seen.append(pid)
+        return sysaudio
+
+    rec = make_recorder(tmp_path, FakeVideoSource(), FailingAudioSource(),
+                        fallback_factory=fallback_factory)
+    rec.start()
+    assert wait_for(lambda: seen)
+    rec.stop()
+    assert seen == [WIN.pid]
 
 
 def test_audio_total_failure_records_video_only(tmp_path):

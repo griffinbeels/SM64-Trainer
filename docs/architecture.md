@@ -388,11 +388,27 @@ contain only GIL-releasing syscalls — anything heavier goes out of process.
   session lives on "Game (Elgato Wave:XLR)", not the default "System"
   endpoint — silence while the user hears the game. Target the endpoint
   hosting the pid's session.
-- Liveness must be proven by CONTENT, not status: proctap start()s fine
-  and delivers all-zero PCM (couldn't hear a beep from its own process);
-  WASAPI loopback goes silently deaf when the target app restarts or
-  endpoints re-enumerate. The deaf-stream watchdog compares pump loudness
-  against the pid's session peak and reopens the stream.
+- Liveness must be proven by CONTENT, not status: WASAPI loopback goes
+  silently deaf when the target app restarts or endpoints re-enumerate,
+  raising nothing. The deaf-stream watchdog compares pump loudness against
+  the pid's session peak and reopens the stream; both capture paths use it.
+- **Capture the PROCESS, not the endpoint.** Device loopback records
+  everything sharing PJ64's output endpoint — a Discord call, music, a
+  browser tab — which a viewer hears in the clip (user report 2026-07-30).
+  Per-process WASAPI loopback (`proctap`) is the primary source; device
+  loopback stays as the fallback because no audio is worse than too much,
+  and `audio_mode` says which one is live.
+- **Prove an audio path with a tone whose SOURCE PROCESS you chose.**
+  proctap was retired on 2026-06-11 for "delivering all-zero PCM — couldn't
+  hear a beep from its own process". A `winsound.Beep` is emitted by the
+  kernel's beep path, not by the calling process's audio session, so process
+  loopback is CORRECT to return silence for it: the test could not pass, and
+  its failure was read as the library being broken. Re-measured 2026-07-31
+  with two ffplay children playing 440 Hz and 880 Hz at once and only the
+  440 Hz process captured: 440 present at exactly the amplitude device
+  loopback saw, 880 at literally zero, full 48 kHz delivery. The generalisable
+  half is the fixture, not the verdict — one sound proves nothing about
+  isolation, two sounds from two processes prove everything.
 - WASAPI loopback delivers nothing while the endpoint is idle: place PCM
   by wall clock; never assume a continuous stream.
 - AAC consumes EXACT 1024-sample frames: feeding rate//fps blocks (800 at

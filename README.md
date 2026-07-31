@@ -89,7 +89,9 @@ Focus mode, and a saved run history with a PB-progression graph.
 
 **Instant replay.** The PJ64 window and game audio are always being recorded
 into a rolling buffer, so you can watch the video of any attempt right after
-it happens — and save the ones worth keeping, forever.
+it happens — and save the ones worth keeping, forever. Audio is captured from
+Project64 alone, so a Discord call, music or a video playing in the background
+never ends up in a clip you upload.
 
 **Compare.** Put your run beside a reference video — pulled from YouTube, a
 local file, or a browser upload — with one frame-accurate transport driving

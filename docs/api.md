@@ -200,8 +200,11 @@ operation (bad timer mode, already cleared, non-success outcome, missing clock, 
 
 While the server runs it records the PJ64 window (DWM shared-surface
 capture — modern window capture sees frozen content for PJ64's D3D8, and
-GDI stalls on its window lock) plus game audio (loopback of the endpoint
-hosting PJ64's audio session) into `data/replay_buffer/` (scratch, wiped on
+GDI stalls on its window lock) plus game audio — per-process WASAPI
+loopback of PJ64 alone, so a clip carries the game and nothing else on the
+desktop; `audio_mode` in `/api/replay/status` reads `process` when that is
+live and `system` when it fell back to capturing PJ64's whole output
+endpoint — into `data/replay_buffer/` (scratch, wiped on
 startup). Video encoding runs in an `ffmpeg` subprocess when ffmpeg is on
 PATH — recommended; the in-process fallback encoder stutters under load
 (why: docs/architecture.md → Replay capture). Retention defaults to the
