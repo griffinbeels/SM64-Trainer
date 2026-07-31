@@ -231,7 +231,14 @@ def test_the_active_target_card_asks_the_shared_question():
     body = (UI / "components" / "practice.js").read_text(encoding="utf-8")
     assert re.search(r'import \{[^}]*hasPracticeContext[^}]*practicedHere[^}]*\} '
                      r'from "\.\./stagecontext\.js";', body)
-    assert re.search(r"const starActive = inContext &&", body)
+    # The star card asks `starPracticableHere`, NOT `hasPracticeContext`, and
+    # the difference is a live bug (2026-07-30): the latter's final clause is
+    # "some segment is armed", so an armed castle movement in the Castle Lobby
+    # kept a Whomp's Fortress star rendering as ACTIVE TARGET on the same
+    # screen as the banner's own "No course target available". Still a call
+    # into the shared module — which is what this test is really guarding —
+    # just the narrower of the two questions it offers.
+    assert re.search(r"const starActive = starPracticableHere\(held\)", body)
     assert re.search(r"const pinnedSegs = !inContext \|\|", body)
     # ...and BOTH rules reach every pin the user can see. Armed pins are the
     # one deliberate exemption (a live timer is visible wherever it got to).

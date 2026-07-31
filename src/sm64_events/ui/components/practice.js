@@ -5,7 +5,7 @@ import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { requestTarget } from "../target.js";
 import { hasPracticeContext, justCompletedSegment,
-        practicedHere } from "../stagecontext.js";
+        practicedHere, starPracticableHere } from "../stagecontext.js";
 import { ReplayPlayer } from "./replay.js";
 import { StatMenu, DUST_STAT_KEYS } from "./statmenu.js";
 import { Timeline } from "./timeline.js";
@@ -1174,7 +1174,15 @@ export function Practice({ t, openCompare }) {
   // "Recent" tag rather than "Ready".
   const inContext = hasPracticeContext(held);
   const here = (sec) => practicedHere(sec, held);
-  const starActive = inContext && tgt.kind !== "segment" && tgt.course_id != null;
+  // `starPracticableHere`, NOT `inContext`: the latter's last clause is "some
+  // segment is armed", which is about segments keeping themselves visible. In
+  // the Castle Lobby a castle movement is armed, so `inContext` was true and a
+  // Whomp's Fortress star still rendered as ACTIVE TARGET beside the banner's
+  // own "No course target available" (live report 2026-07-30). The TARGET is
+  // deliberately kept — the castle is transit and walking back in restores the
+  // card — this only stops it claiming to be active where it cannot be run.
+  const starActive = starPracticableHere(held)
+    && tgt.kind !== "segment" && tgt.course_id != null;
   const isActiveStar = (sec) => sec.course_id === tgt.course_id
     && sec.star_id === tgt.star_id;
   const isActiveSeg = (sec) => tgt.kind === "segment"
