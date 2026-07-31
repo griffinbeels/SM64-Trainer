@@ -2232,6 +2232,33 @@ def test_pipe_segment_grades_against_the_paired_star_ladder(tmp_path):
     assert seg_sec["pipe_star_entity"] == "star:16:0"
 
 
+def test_pipe_segment_carries_the_paired_stars_own_display_names(tmp_path):
+    """Round 2, item 4 (live report 2026-07-30): the pinned card used to
+    read "Segment · BitDW — 8 Red Coins → Pipe" (the raw corpus name) while
+    the cell that selected it already read "8 Red Coins (Pipe)" — the card
+    needs the star's own course/star names to agree with the cell instead
+    of exposing the segment's own identity. Asserted against the SAME
+    canonical source (memory.addresses.course_name/star_name) rather than a
+    hardcoded string, so a course/star rename can't silently desync this
+    from the star section's own course_name/star_name fields."""
+    from sm64_events.memory.addresses import course_name, star_name
+    db, svc, seg_id = _make_with_def(tmp_path, _reds_pipe_def)
+    _run_reds_pipe_sequence(svc)
+
+    view = build_session_view(db, svc, clock="igt")
+    seg_sec = seg_section(view, seg_id)
+    assert seg_sec["pipe_star_course_name"] == course_name(16)
+    assert seg_sec["pipe_star_name"] == star_name(16, 0)
+
+    # An ordinary segment (no pairing) carries neither — same guard as
+    # pipe_star_entity, so a caller can gate on any of the three together.
+    lblj_success(svc, rta=85)
+    view2 = build_session_view(db, svc, clock="igt")
+    sec2 = seg_section(view2, 1)
+    assert sec2["pipe_star_course_name"] is None
+    assert sec2["pipe_star_name"] is None
+
+
 def test_star_and_segment_sections_offer_only_their_own_family(tmp_path):
     """The dropdown/table on each side must never offer the OTHER family's
     name -- picking a " (Pipe)" strategy for the star's own (grab-only) time

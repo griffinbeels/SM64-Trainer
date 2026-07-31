@@ -239,3 +239,124 @@ def test_an_unranked_but_rankable_reds_cell_draws_the_ladder_floor():
     assert '"Iron"' not in body and '"Capless"' not in body, (
         "the floor is hardcoded here -- it must come from caps.js's RANK_FLOOR, "
         "which derives it from the ladder registries")
+
+
+# --- 2026-07-30 round 2 live feedback: 5 more reports ------------------------
+#
+# The unifying idea across all five: an EXPLICIT CHOICE outranks background
+# truth. Three of them share ONE missing signal -- attempt recency inside
+# StageBanner (freshIds, practice.js's useFreshAttemptIds) -- which this round
+# finally threads down (see test_stagebanner_hundred_coin.py's own updated
+# test for the StageBanner-level half of that wiring).
+
+def test_no_reds_suppresses_running_when_reds_is_the_explicit_target():
+    """Item 1: "When I select reds, I would expect the 'no reds' option to
+    not say 'running' (even if it's true in the background)... because in
+    this case I deliberately chose Reds." This REVERSES an earlier ruling
+    (the same chip was once "technically wrong but not wrong" and left
+    alone) -- his explicit pick is now the stronger signal. Driven purely by
+    the LIVE target (`redsActive`), not a separate memory: with the round-2
+    projection.py fix protecting an explicitly-targeted, running Pipe
+    segment's target from being stolen by its own mid-sequence star grab,
+    `redsActive` already stays true for the whole span of a Reds run."""
+    body = _bowser_row_body()
+    assert re.search(r"suppressRunning=\$\{redsActive\}", body), (
+        "the No Reds cell no longer suppresses its running chip off the "
+        "live redsActive signal")
+    # NOT arms_ambiently -- adjacent question, not the same one (that flag
+    # says a segment armed without the user asking; this says the user
+    # asked for something ELSE). Overloading it would be the wrong door.
+    assert "suppressRunning=${sec.arms_ambiently}" not in body
+
+
+def test_standard_segment_cell_suppresses_both_the_chip_and_the_glow():
+    """Showing the running CHIP text without the `.armed` glow (or vice
+    versa) would read as a rendering fault, not a deliberately calm cell --
+    both must go together."""
+    source = strip_comments(BANNER.read_text(encoding="utf-8"))
+    body = _function_body("StandardSegmentCell", source)
+    assert "suppressRunning = false" in body, \
+        "StandardSegmentCell no longer defaults suppressRunning off"
+    assert re.search(
+        r"const armed = t\.armedSegs\.has\(s\.segment_id\) && !suppressRunning;",
+        body), "suppressRunning no longer gates the cell's own `armed` flag"
+    # `sub` still derives from the SAME (already-suppressed) `armed` local,
+    # not a second unsuppressed read -- one variable, one door.
+    assert "sub=${armed ? runningChip : stratSub(s.strat)}" in body
+
+
+def test_bowser_row_detects_completions_via_freshids_not_only_clicks():
+    """Item 2: "if I successfully complete a Star Reds / Pipe Reds run, then
+    we should highlight the Reds card... if I enter the pipe without
+    grabbing the star, then we chose to do No Reds." The star half must be
+    gated on `starActive` -- projection.py's _close_by_grab records a real
+    star attempt on EVERY reds grab, pipe run or not, so a fresh success
+    alone can't tell a stand-alone Star pick apart from a mid-Pipe-run
+    waypoint grab; only the CURRENT target (protected from that grab by the
+    round-2 projection.py fix) can."""
+    body = _bowser_row_body()
+    assert re.search(
+        r"const starJustDone = starActive\s*"
+        r"&& justCompletedStar\(v, freshIds, stage\.course_id, 0\);", body), (
+        "the star completion check is missing or no longer gated on "
+        "starActive -- a mid-Pipe-run grab would relight Star mode")
+    assert re.search(
+        r"const pipeJustDone = !!pipeSeg\s*"
+        r"&& justCompletedSegment\(v, freshIds, pipeSeg\.segment_id\);", body)
+    assert re.search(
+        r"const noRedsJustDone = !!noRedsSeg\s*"
+        r"&& justCompletedSegment\(v, freshIds, noRedsSeg\.segment_id\);", body)
+    assert "writeBowserFamily(stage.level, \"reds\")" in body
+    assert "writeBowserFamily(stage.level, \"no_reds\")" in body
+
+
+def test_bowser_row_reads_freshids_from_its_own_prop():
+    """The detection above is dead code without the prop actually arriving
+    -- pins the row's OWN signature, complementing
+    test_stagebanner_hundred_coin.py's StageBanner-level assertion."""
+    assert "function BowserCourseRow({ t, v, stage, freshIds })" \
+        in strip_comments(BANNER.read_text(encoding="utf-8"))
+
+
+def test_returning_to_a_bowser_stage_retargets_the_remembered_family():
+    """Item 5: "If I have selected reds (or no reds) and leave a bowser
+    stage, and come back, I would expect that same selection to persist to
+    my next session" -- read as RE-TARGETING (his own words), not merely
+    pre-selecting a toggle nobody has clicked. Must never fire while either
+    of this row's own things is already the target (an explicit pick just
+    made, including this effect's own write, must not be clobbered)."""
+    body = _bowser_row_body()
+    retarget = re.search(
+        r"useEffect\(\(\) => \{\s*"
+        r"const family = bowserFamilyFor\(stage\.level\);.*?\n  \}, \[stage\.level\]\);",
+        body, re.S)
+    assert retarget, "the auto-retarget-on-return effect is missing"
+    effect = retarget.group(0)
+    assert "if (!family) return;" in effect
+    assert "if (redsActive) return;" in effect
+    assert "noRedsSeg.segment_id) return;" in effect
+    assert "pickPipe();" in effect and "pickStar();" in effect
+    assert "pickNoReds();" in effect
+
+
+def test_bowser_family_memory_has_no_default_unlike_the_star_pipe_submode():
+    """Unlike bowserModeFor (which needs SOME visual default even before a
+    pick -- DEFAULT_BOWSER_MODE), bowserFamilyFor must return null with
+    nothing chosen: a default here would invent a "the user chose Reds/No
+    Reds" fact for a level the player has never touched, and retarget on
+    that fiction."""
+    source = strip_comments(BANNER.read_text(encoding="utf-8"))
+    body = _function_body("bowserFamilyFor", source)
+    assert "return BOWSER_FAMILIES.includes(stored) ? stored : null;" in body
+
+
+def test_the_family_and_submode_memories_stay_two_separate_keys():
+    """bowserFamilyFor (Reds vs No Reds) must not collapse into
+    bowserModeFor (star vs pipe WITHIN Reds) -- they answer different
+    questions and a level can have one without the other (e.g. "no_reds"
+    chosen, star/pipe sub-mode irrelevant)."""
+    source = strip_comments(BANNER.read_text(encoding="utf-8"))
+    assert 'const BOWSER_MODE_KEY = "sm64.bowserMode";' in source
+    assert 'const BOWSER_FAMILY_KEY = "sm64.bowserFamily";' in source
+    assert source.count('const BOWSER_MODE_KEY') == 1
+    assert source.count('const BOWSER_FAMILY_KEY') == 1

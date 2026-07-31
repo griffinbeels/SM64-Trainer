@@ -1251,6 +1251,12 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         seg_basis = grading_basis(
             rank_mode, pbs_by_strat.get(("segment", seg_id, seg_rank_clock, seg_strat)),
             history, seg_strat, seg_rank_clock)
+        # Computed once and reused below (the "course_id" field AND the
+        # pipe-pairing display names) rather than re-derived twice — a
+        # deleted definition has no place, which reads as "anywhere" and
+        # keeps its card, matching the projector.
+        seg_course_id = origin_course(segment_origin(
+            seg_id, d.start_triggers, origin_overrides)) if d else None
         seg_sections.append({
             "kind": "segment", "segment_id": seg_id,
             "last_activity": last_id.get(("segment", seg_id), -1),
@@ -1265,8 +1271,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             # `start_levels` and answers None for every movement starting in a
             # course. A deleted definition has no place, which reads as
             # "anywhere" and keeps its card, matching the projector.
-            "course_id": origin_course(segment_origin(
-                seg_id, d.start_triggers, origin_overrides)) if d else None,
+            "course_id": seg_course_id,
             "armed": seg_id in armed,
             # arms merely by the player being present (course/stage entry
             # or an attempt_anchor there), not by a deliberate action --
@@ -1329,6 +1334,24 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             # the table to the Pipe family (the star's own section carries
             # the inverse, `pipe_segment_id`).
             "pipe_star_entity": pipe_star_ek,
+            # The paired star's OWN display names, for the pinned card's
+            # heading (round 2, item 4, live report 2026-07-30): the card
+            # used to read "Segment · BitDW — 8 Red Coins → Pipe" (the
+            # eyebrow's "Segment" context plus this def's raw corpus name)
+            # while the banner cell it was selected FROM already reads
+            # "8 Red Coins (Pipe)" — the card should agree with the cell
+            # rather than expose the segment's own identity, same shape as
+            # the 100-coin star's own fix (b6640ee, "the card stopped
+            # presenting a segment and presented the star"), applied to
+            # naming only: this section still IS the segment (its own
+            # attempts/strategies/PB stay exactly as they are), only the
+            # HEADING borrows the star's course + name. None when this
+            # isn't the paired half (same guard as pipe_star_entity, so a
+            # caller can gate on either).
+            "pipe_star_course_name": (course_name(seg_course_id)
+                                      if pipe_star_ek else None),
+            "pipe_star_name": (star_name(seg_course_id, 0)
+                              if pipe_star_ek else None),
             "timeline": _timeline(in_section, rta_of),
             "markers_by_strat": _markers_for(markers_state, "seg", seg_id),
             "time_filter": _time_filter_json(

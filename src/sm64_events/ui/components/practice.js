@@ -795,14 +795,29 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker 
   }
 
   const pinTag = armed ? "Running" : isTarget ? "Ready" : "Recent";
+  // A Bowser reds->pipe segment is presented in the FAMILY VOICE the cell
+  // that selects it already shows ("8 Red Coins (Pipe)"), not its raw
+  // corpus identity ("BitDW — 8 Red Coins → Pipe") -- round 2, item 4 (live
+  // report 2026-07-30: "Segment · BitDW — 8 Red Coins → Pipe" beside a cell
+  // already reading "8 Red Coins (Pipe)"). Same fix SHAPE as the 100-coin
+  // star's own card (b6640ee, "the card stopped presenting a segment and
+  // presented the star"), applied to NAMING only: this section still IS
+  // the segment (its own attempts/strategies/PB are untouched), only the
+  // heading borrows the star's course + name so the card agrees with the
+  // cell that pinned it. `sec.pipe_star_entity`/`_name`/`_course_name`
+  // travel together (views.py), so null-guarding on any one covers all
+  // three.
+  const familyName = sec.pipe_star_entity
+    ? `${sec.pipe_star_name || "Reds"} (Pipe)` : null;
   return html`<div class="practice-detail-grid ${pinned ? "is-primary" : ""}">
     <section class="practice-card objective-card ${pinned ? "active-star" : ""} ${cardClass(foldTarget)}">
       <div class="objective-heading">
         <${ObjectiveEyebrow} iconName="segments" openPicker=${openPicker}
           label=${pinned ? "Active segment" : "Segment practice"} />
-        <div class="objective-name" title=${sec.name}>
-          <span class="objective-context">${sec.broken ? "History only" : "Segment"}</span>
-          <h2>${sec.name}</h2>
+        <div class="objective-name" title=${familyName || sec.name}>
+          <span class="objective-context">${sec.broken ? "History only"
+            : familyName ? sec.pipe_star_course_name : "Segment"}</span>
+          <h2>${familyName || sec.name}</h2>
         </div>
         <div class="objective-strategy">
           <span class="field-label">Strategy</span>
@@ -1276,7 +1291,7 @@ export function Practice({ t, openCompare }) {
     .sort(comparator(sort, t.clock));
 
   return html`<div class="practice-page">
-    <${StageBanner} t=${held} />
+    <${StageBanner} t=${held} freshIds=${freshIds} />
 
     ${/* ONE picker for the page, not one per section: only the primary card
          offers the trigger, and mounting a dialog's state inside every card

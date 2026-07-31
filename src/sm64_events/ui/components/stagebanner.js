@@ -46,6 +46,7 @@ import htm from "htm";
 import { CollapseToggle, cardClass, useCollapsed } from "./collapsible.js";
 import { send } from "../api.js";
 import { armedSegments, hasPracticeContext, hasStandardsFor,
+         justCompletedSegment, justCompletedStar,
          practiceMode } from "../stagecontext.js";
 import { requestTarget } from "../target.js";
 import { Icon } from "./icons.js";
@@ -68,7 +69,12 @@ const CASTLE_AREA_NAMES = { 1: "Lobby", 2: "Upstairs", 3: "Basement" };
 const STAGE_ROWS = { stars: StarRow, bowser_course: BowserCourseRow,
                      arena: ArenaRow, castle: SegmentRow };
 
-export function StageBanner({ t }) {
+// `freshIds` is practice.js's own attempt-id recency Set (useFreshAttemptIds),
+// threaded all the way down from there (spec 2026-07-28-multi-step-segments
+// round 2) so a row can tell a FRESH completion apart from mere history --
+// today only BowserCourseRow reads it (the Reds row's detection-driven family
+// memory, items 2/5), every other row simply ignores the prop.
+export function StageBanner({ t, freshIds }) {
   const v = t.view;
   // The one door (../stagecontext.js), shared with the Active-target card so
   // the two cannot say different things about the same place — they did, at
@@ -76,7 +82,7 @@ export function StageBanner({ t }) {
   // still named a star from the session before.
   if (!hasPracticeContext(t)) return html`<${StagePlaceholder} t=${t} />`;
   const Row = STAGE_ROWS[practiceMode(t)];
-  return Row ? html`<${Row} t=${t} v=${v} stage=${t.stage} />`
+  return Row ? html`<${Row} t=${t} v=${v} stage=${t.stage} freshIds=${freshIds} />`
              : html`<${ArmedOnlyRow} t=${t} v=${v} />`;
 }
 
@@ -171,6 +177,36 @@ function writeBowserMode(level, mode) {
   try { localStorage.setItem(BOWSER_MODE_KEY, JSON.stringify(all)); } catch { /* full */ }
 }
 
+// WHICH of the two top-level cells (Reds vs No Reds) was last explicitly
+// practiced, remembered per level — the sibling of BOWSER_MODE_KEY above
+// (that one is the star/pipe TOGGLE *within* Reds; this is the choice
+// between Reds and No Reds itself). Round 2, item 5 (user, 2026-07-30: "If I
+// have selected reds (or no reds) and leave a bowser stage, and come back, I
+// would expect that same selection to persist to my next session. This is
+// different than a normal stage, we generally are swapping between the two
+// different approaches while practicing"). No default value: an unset level
+// means "nothing chosen yet", which the auto-retarget effect below reads as
+// "don't retarget" — unlike the star/pipe sub-toggle, which needs SOME
+// visual default even before a pick, there is nothing to default this to
+// without inventing a choice the player never made.
+const BOWSER_FAMILY_KEY = "sm64.bowserFamily";
+const BOWSER_FAMILIES = ["reds", "no_reds"];
+
+function readBowserFamilies() {
+  try { return JSON.parse(localStorage.getItem(BOWSER_FAMILY_KEY)) || {}; }
+  catch { return {}; }
+}
+function bowserFamilyFor(level) {
+  const stored = readBowserFamilies()[String(level)];
+  return BOWSER_FAMILIES.includes(stored) ? stored : null;
+}
+function writeBowserFamily(level, family) {
+  if (!BOWSER_FAMILIES.includes(family)) return;
+  const all = readBowserFamilies();
+  all[String(level)] = family;
+  try { localStorage.setItem(BOWSER_FAMILY_KEY, JSON.stringify(all)); } catch { /* full */ }
+}
+
 const segKey = (s) => `segment:${s.segment_id}`;
 const starKey = (courseId, slot) => `star:${courseId}:${slot}`;
 
@@ -188,6 +224,16 @@ const runningChip = html`<span class="chip good">⏱ running</span>`;
 const stratSub = (strat) =>
   html`<span class="strat ${strat ? "" : "none"}">${strat || "—"}</span>`;
 
+// Enable-if-needed + target the segment -- the write every plain segment
+// pick makes, extracted so BOTH StandardSegmentCell's own click AND
+// BowserCourseRow's auto-retarget effect (item 5, below) go through ONE
+// place rather than growing a second inline copy.
+async function pickSegmentTarget(t, s) {
+  if (!s.enabled)
+    await send("PUT", `/api/segments/${s.segment_id}`, { enabled: true });
+  await requestTarget(t, { kind: "segment", segment_id: s.segment_id });
+}
+
 // The standard segment cell (castle/arena rows, armed extras): name, strat
 // sub (running chip while armed), rank medal, resolved icon; click targets
 // it (enabling first if needed — a no-op for already-enabled segments).
@@ -199,13 +245,26 @@ const stratSub = (strat) =>
 // definition would rewrite what every other surface calls it, and the row
 // already shows the star as "Reds" rather than its real name for the same
 // reason.
-function StandardSegmentCell({ t, s, setPicking, nameOverride }) {
+// `suppressRunning` (Bowser's "No Reds" cell only, round 2, item 1): the
+// segment CAN be armed (arms_ambiently -- mere course presence, not a
+// deliberate pick) while the player has explicitly chosen the OTHER family
+// instead. "Technically armed" is background truth; an explicit pick
+// outranks it (user, 2026-07-30, reversing an earlier ruling that left this
+// chip alone: "even though the segment is technically possible and armed,
+// it shouldn't say running... because in this case I deliberately chose
+// Reds"). Suppresses BOTH the running chip text AND the cell's own `.armed`
+// glow -- showing one without the other would read as a rendering fault,
+// not a deliberately calm cell. `onPicked` fires after a successful
+// explicit pick so a caller can remember "the user chose THIS family"
+// (Bowser's own writeBowserFamily); every other caller omits it and nothing
+// changes for them.
+function StandardSegmentCell({ t, s, setPicking, nameOverride,
+                              suppressRunning = false, onPicked }) {
   const tgt = ((t.view || {}).target) || {};
-  const armed = t.armedSegs.has(s.segment_id);
+  const armed = t.armedSegs.has(s.segment_id) && !suppressRunning;
   async function pick() {
-    if (!s.enabled)
-      await send("PUT", `/api/segments/${s.segment_id}`, { enabled: true });
-    await requestTarget(t, { kind: "segment", segment_id: s.segment_id });
+    await pickSegmentTarget(t, s);
+    if (onPicked) onPicked();
   }
   return html`<${PracticeCell} dimIdle=${STAR_DIM_IDLE}
     active=${tgt.kind === "segment" && tgt.segment_id === s.segment_id}
@@ -336,7 +395,7 @@ function StarRow({ t, v, stage }) {
 // player can move that then silently does not apply: forced-but-offered
 // would read as a real choice, so the star half is disabled with its own
 // title instead.
-function BowserCourseRow({ t, v, stage }) {
+function BowserCourseRow({ t, v, stage, freshIds }) {
   const [fold, toggleFold] = useCollapsed("selector");
   const [setPicking, pickerModal] = useIconPicking(t);
   const course = v.catalog.courses.find((c) => c.id === stage.course_id);
@@ -373,10 +432,12 @@ function BowserCourseRow({ t, v, stage }) {
 
   async function pickStar() {
     setMode("star");
+    writeBowserFamily(stage.level, "reds");
     await requestTarget(t, { course_id: stage.course_id, star_id: 0 });
   }
   async function pickPipe() {
     setMode("pipe");
+    writeBowserFamily(stage.level, "reds");
     if (!pipeSeg) return;
     if (!pipeSeg.enabled)
       await send("PUT", `/api/segments/${pipeSeg.segment_id}`, { enabled: true });
@@ -388,6 +449,75 @@ function BowserCourseRow({ t, v, stage }) {
   // mode we have selected already)"). The two toggle buttons stay their own
   // targets and stopPropagation, so this never double-fires.
   const pickCard = () => (pipeMode ? pickPipe() : pickStar());
+  // The "No Reds" cell's own explicit pick -- StandardSegmentCell's onPicked
+  // prop (below) already covers the CLICK path; this is the same write for
+  // the auto-retarget effect (item 5), which has no cell click to hang off.
+  async function pickNoReds() {
+    if (!noRedsSeg) return;
+    await pickSegmentTarget(t, noRedsSeg);
+    writeBowserFamily(stage.level, "no_reds");
+  }
+
+  // DETECTION drives the remembered choice too, not only a click (item 2,
+  // round 2, user 2026-07-30: "if I successfully complete a Star Reds / Pipe
+  // Reds run, then we should highlight the Reds card... Same can be said in
+  // the inverse; if I enter the pipe without grabbing the star, then we
+  // chose to do No Reds"). `freshIds` is practice.js's own attempt-id
+  // recency Set (useFreshAttemptIds), threaded down through StageBanner for
+  // exactly this -- both an earlier session on this branch and the sibling
+  // that shipped the 100-coin star independently found they needed it here
+  // and declined to half-build the plumbing; this finishes it.
+  //
+  // The star half is gated on `starActive` (the CURRENT target really is
+  // this star) specifically to tell "a stand-alone Star-timed run just
+  // finished" apart from "the reds star was merely GRABBED as this Pipe
+  // segment's own waypoint" -- projection.py's _close_by_grab always
+  // records a real star attempt on every reds grab, pipe run or not, so a
+  // fresh success alone can't tell the two apart. What can: projection.py
+  // now protects an explicitly-targeted, still-armed segment's target from
+  // being stolen by its own mid-sequence grab (the round-2 flash fix, item
+  // 3), so while a Pipe run is genuinely in progress the target never
+  // becomes the star at all and `starActive` stays false throughout --
+  // only a real stand-alone star pick ever satisfies this guard. A flip on
+  // the wrong event would be worse than the manual toggle it replaces.
+  const starJustDone = starActive
+    && justCompletedStar(v, freshIds, stage.course_id, 0);
+  const pipeJustDone = !!pipeSeg
+    && justCompletedSegment(v, freshIds, pipeSeg.segment_id);
+  const noRedsJustDone = !!noRedsSeg
+    && justCompletedSegment(v, freshIds, noRedsSeg.segment_id);
+  useEffect(() => {
+    if (starJustDone) { setMode("star"); writeBowserFamily(stage.level, "reds"); }
+    else if (pipeJustDone) { setMode("pipe"); writeBowserFamily(stage.level, "reds"); }
+    else if (noRedsJustDone) { writeBowserFamily(stage.level, "no_reds"); }
+  }, [starJustDone, pipeJustDone, noRedsJustDone]);
+
+  // Returning to a Bowser stage RE-TARGETS the remembered family (item 5,
+  // round 2: "If I have selected reds (or no reds) and leave a bowser
+  // stage, and come back, I would expect that same selection to persist to
+  // my next session" -- read as re-targeting, not merely pre-selecting a
+  // toggle nobody has clicked). Only fires when NEITHER of this row's two
+  // things is already the target -- an explicit pick made just now
+  // (including this very effect's own write, on the next render) must
+  // never be clobbered, and a level with no remembered family is left
+  // exactly as the row already renders it (no target, both cells idle).
+  // The remembered star/pipe SUB-mode is read fresh off localStorage here
+  // rather than off `mode` state: this effect and the mode-refresh effect
+  // above both fire off the same [stage.level] change, and a `setState`
+  // call doesn't update its own variable inside the same commit -- reading
+  // bowserModeFor directly sidesteps that ordering question entirely.
+  useEffect(() => {
+    const family = bowserFamilyFor(stage.level);
+    if (!family) return;
+    if (redsActive) return;
+    if (noRedsSeg && tgt.kind === "segment"
+        && tgt.segment_id === noRedsSeg.segment_id) return;
+    if (family === "reds") {
+      if (bowserModeFor(stage.level) === "pipe") pickPipe(); else pickStar();
+    } else if (noRedsSeg) {
+      pickNoReds();
+    }
+  }, [stage.level]);
 
   if (!course) return html`<${StagePlaceholder} t=${t} />`;
 
@@ -409,7 +539,9 @@ function BowserCourseRow({ t, v, stage }) {
         onPickCard=${pickCard} setPicking=${setPicking} />
       ${noRedsSeg ? html`<${StandardSegmentCell}
         key=${`seg:${noRedsSeg.segment_id}`} t=${t} s=${noRedsSeg}
-        nameOverride="No Reds" setPicking=${setPicking} />`
+        nameOverride="No Reds" setPicking=${setPicking}
+        suppressRunning=${redsActive}
+        onPicked=${() => writeBowserFamily(stage.level, "no_reds")} />`
         : null}
       ${armedExtraCells(t, v, shownIds, setPicking)}
     </div>

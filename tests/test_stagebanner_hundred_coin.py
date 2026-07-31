@@ -66,15 +66,24 @@ def test_star_row_never_branches_on_which_star_it_is():
     assert "sub=${stratSub(lastStratFor(i))}" in body
 
 
-def test_star_row_no_longer_threads_freshids():
-    """freshIds existed solely to feed the retired justCompletedSegment
-    check -- StarRow/StageBanner take one fewer prop now that it has no use
-    for it (a stale, unused prop thread is the thing to catch here)."""
+def test_star_row_has_no_use_for_freshids_but_stagebanner_threads_it_again():
+    """freshIds was retired at the StageBanner level in THIS merge (its only
+    use here was the retired justCompletedSegment check onto the star cell,
+    which this file's other tests confirm stays gone). Round 2 (spec
+    2026-07-28-multi-step-segments) reintroduced it at StageBanner for a
+    real, different consumer -- BowserCourseRow's detection-driven family
+    memory (items 2/5) -- so this test's OWN claim ("one fewer prop, full
+    stop") stopped being true; what stays true is that StarRow itself has no
+    use for it. StageBanner threads it down to every row uniformly (simpler
+    than special-casing the one row that reads it) rather than each row
+    declaring its own need."""
     source = strip_comments(BANNER.read_text(encoding="utf-8"))
     assert "function StarRow({ t, v, stage })" in source
-    assert "function StageBanner({ t })" in source
-    banner_body = _function_body("StageBanner", source)
-    assert "freshIds" not in banner_body
+    assert "function StageBanner({ t, freshIds })" in source
+    star_body = _function_body("StarRow", source)
+    assert "freshIds" not in star_body
+    bowser_body = _function_body("BowserCourseRow", source)
+    assert "freshIds" in bowser_body
 
 
 def test_hundred_coin_star_gets_no_extra_cell():
