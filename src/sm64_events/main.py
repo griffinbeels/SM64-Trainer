@@ -58,6 +58,34 @@ def _bootstrap_cleanup_arg(argv=None) -> "str | None":
     return None
 
 
+def build_detectors() -> list:
+    """THE detector chain, in THE order. Extracted from build() 2026-07-31 so
+    a test can drive the real one end to end (tests/test_segment_igt.py plays
+    snapshots through this list and projects what comes out) — a test that
+    listed the detectors itself would keep passing with one of them unwired,
+    which is the whole failure mode it exists to catch.
+
+    Order is load-bearing for attempt state: level changes abandon stale
+    attempts BEFORE the same tick's igt-reset anchor opens the next one;
+    resets before grabs (see projection.py docstring on the same-tick race);
+    dust tricks before grabs so a same-tick rollout/jump attaches to the
+    attempt the grab closes.  New primitives slot between level and anchors:
+    area follows level (same establishing discipline); key/spawn are stateless
+    edges — key_grabbed and star_collected cannot co-emit on the same level
+    (star_grab.py guards KEY_GRAB_LEVELS directly), so their relative order is
+    informational only.  Warp is no longer stateless (it carries an IgtClock
+    of its own since 2026-07-31), but it still emits on a pure action edge, so
+    its position is informational for the same reason.
+    area_changed reads CURR_AREA (gCurrAreaIndex, live-pinned 2026-06-12);
+    castle areas: 1=lobby, 2=upstairs, 3=basement — see addresses.py.
+    """
+    detectors = [GameResetDetector(), LevelChangeDetector(),
+                 AreaChangeDetector(), StageChangeDetector(), AnchorDetector(),
+                 DeathDetector(), DustTrickDetector(), WarpDetector(),
+                 KeyGrabDetector(), SpawnDetector(), StarGrabDetector()]
+    return detectors
+
+
 def build():
     global _instance_lock
     configure_logging()
@@ -189,21 +217,7 @@ def build():
             builder=CompilationBuilder(extractor=replay.extractor, codec=codec,
                                        fps=replay_cfg.fps),
             out_dir=compilations_dir())
-    # Order is load-bearing for attempt state: level changes abandon stale
-    # attempts BEFORE the same tick's igt-reset anchor opens the next one;
-    # resets before grabs (see projection.py docstring on the same-tick race);
-    # dust tricks before grabs so a same-tick rollout/jump attaches to the
-    # attempt the grab closes.  New primitives slot between level and anchors:
-    # area follows level (same establishing discipline); warp/key/spawn are
-    # stateless edges — key_grabbed and star_collected cannot co-emit on the
-    # same level (star_grab.py guards KEY_GRAB_LEVELS directly), so their
-    # relative order is informational only.
-    # area_changed reads CURR_AREA (gCurrAreaIndex, live-pinned 2026-06-12);
-    # castle areas: 1=lobby, 2=upstairs, 3=basement — see addresses.py.
-    detectors = [GameResetDetector(), LevelChangeDetector(),
-                 AreaChangeDetector(), StageChangeDetector(), AnchorDetector(),
-                 DeathDetector(), DustTrickDetector(), WarpDetector(),
-                 KeyGrabDetector(), SpawnDetector(), StarGrabDetector()]
+    detectors = build_detectors()
     if replay is not None:
         # Poll-thread tap (emits no events): tells the recorder the player
         # is providing input so the buffer pauses while idle (activity.py).

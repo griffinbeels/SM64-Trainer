@@ -166,19 +166,38 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
   SUCCESS discards the attempt (end before arm is a genuine anomaly —
   self-heal, domain rule 4), but failure closures record the row with
   rta_frames=None (game_reset's boot-range frame makes this the ONLY way
-  hard_reset rows exist).  EXCEPTION — grab closes carry Usamune's IGT: a
-  close event with an authoritative igt_frames in its payload (key_grabbed /
-  star_collected) records THAT as the time instead of the wall-frame delta,
-  so a fight segment matches Usamune's display exactly and stays pause-safe
-  (the delta is one display-tick short and counts paused frames; live report
-  2026-06-12, Bowser 3 read 0'46"23 vs Usamune 0'46"26).  The grand star
-  never fires star_collected (detectors/key.py) — key.py stamps the igt via
-  the shared clock (detectors/igt_clock.py).  Valid because every grab-closed
-  segment today arms at the level/area load where Usamune resets IGT, so its
-  igt IS the segment elapsed; a segment armed mid-level and closed on a grab
-  would record Usamune's since-load time, not the since-arm delta (none
-  exists; revisit if one is created).  igt_frames on the Attempt stays None —
-  segments remain RTA-only to the UI/PB layer; only the rta VALUE changes.
+  hard_reset rows exist).  EXCEPTION — a close event carrying Usamune's own
+  IGT records THAT as the time instead of the wall-frame delta, so the
+  segment matches Usamune's display exactly and stays pause-safe (live report
+  2026-06-12, Bowser 3 read 0'46"23 vs Usamune 0'46"26).  The events that
+  carry one are key_grabbed, star_collected and — since 2026-07-31 —
+  warp_entered, each stamped from the shared clock (detectors/igt_clock.py;
+  the grand star never fires star_collected, so key.py stamps it), plus
+  death, whose payload carries the raw counter.
+  WHY THE DELTA IS NOT THE IGT (live report 2026-07-31: BitDW "No Reds"
+  displayed 0'35"90 where Usamune showed 0'35"96, the report that put the
+  igt on warp_entered).  Two independent errors, neither a constant:
+  (a) start_frame is the frame the ANCHOR DETECTOR OBSERVED Usamune's counter
+  drop, which is the zero frame or one frame after it depending on which
+  60 Hz poll caught the 30 Hz drop; (b) the delta counts paused frames and
+  Usamune's counter does not.  Measured over 626 grab-closed, anchor-armed
+  star attempts in the user's own journal — the one shape where the SAME
+  attempt records both numbers — Usamune's display minus the delta was +1 on
+  57%, +2 on 21%, -1 on 10%, 0 on 2%, with a long negative tail wherever the
+  player paused.  So `rta` and `igt` never coincided; they agreed within a
+  frame or two whenever nobody paused, which reads the same until it doesn't.
+  WHEN THE PAYLOAD IGT IS THE SEGMENT'S TIME: only when Usamune's counter was
+  zeroed on the very frame the segment armed AND has not been zeroed since —
+  `SegmentEngine._last_igt_zero_frame == arm.start_frame`, checked in _close
+  rather than assumed.  This used to be an assumption ("every grab-closed
+  segment today arms at the level/area load where Usamune resets IGT... none
+  exists; revisit if one is created"), and it was already false in one place:
+  a def spanning a DOOR (seg:100c->exit:bbh) crosses an IGT reset the matcher
+  deliberately ignores as an echo, and would have banked the since-the-door
+  time as its own.  A def armed mid-level and closed on a grab is the other
+  shape.  Both now fall back to the delta, which at least spans the right two
+  moments.  igt_frames on the Attempt stays None — segments remain RTA-only
+  to the UI/PB layer; only the rta VALUE changes.
 - load-echo rule: Usamune resets IGT on every level/area load, so the
   anchor detector emits a synthetic practice_reset on the same global-timer
   frame as the triggering transition.  Echo classification uses ORDERED shapes
@@ -2031,6 +2050,26 @@ def _is_major_action(ev) -> bool:
             or (ev.type == "level_changed" and _real_edge(ev)))
 
 
+def _zeroes_usamune_igt(ev) -> bool:
+    """Did this event put Usamune's overall IGT counter back to zero?
+
+    Usamune resets it on every level load, every area load, every practice
+    reset / savestate load, and every console reset — which is the whole
+    reason the anchor detector exists and the whole reason the load-echo
+    shapes in this module's docstring exist. `SegmentEngine._last_igt_zero_
+    frame` is that frame, and `_close` compares it against the arm to decide
+    whether a closing event's `igt_frames` measures THIS segment (see there).
+
+    Deliberately blind to whether the anchor was an ECHO: a door crossing is
+    invisible to the matcher because the player did not choose it, but
+    Usamune zeroed its counter all the same, and the counter is what this
+    answers about. `spawned` is absent because it is not itself a reset — the
+    load or anchor that produced it already fired, on its own frame."""
+    if ev.type in _ANCHOR_TYPES or ev.type == "game_reset":
+        return True
+    return ev.type in ("level_changed", "area_changed") and _real_edge(ev)
+
+
 class SegmentEngine:
     """One IDLE<->ARMED FSM per enabled definition. Pure over journal
     events + MatchContext: same code path live and in replay."""
@@ -2058,6 +2097,14 @@ class SegmentEngine:
         # to the lobby lands in ACT_WARP_DOOR_SPAWN, so the attempt_anchor reset
         # was door-echo-suppressed and LBLJ never re-armed).
         self._last_area_edge_frame: int | None = None
+        # Frame on which Usamune's overall IGT counter was last put back to
+        # zero (_zeroes_usamune_igt). THE precondition for reading a closing
+        # event's own igt_frames as the segment's time — see _close. None
+        # until the first such event, which conservatively means "no segment
+        # may claim an IGT basis yet"; reset at a session boundary, since
+        # global_timer restarts there and a stale frame number could otherwise
+        # collide with a fresh arm's.
+        self._last_igt_zero_frame: int | None = None
         # Best successful rta per definition, as seen SO FAR in this feed
         # (spec 2026-07-28-multi-step-segments). Deterministic under replay
         # (same journal -> same answer) and monotonically improving, which is
@@ -2100,6 +2147,16 @@ class SegmentEngine:
         # processing so the echo guard below can test both echo shapes.
         if ev.type in ("level_changed", "area_changed"):
             self._last_transition_frame = ev.frame
+        # Same discipline for Usamune's own clock origin: _close reads this to
+        # decide whether a closing event's igt_frames measures the segment, so
+        # it has to be current for the closures that run below on THIS event.
+        # Every event that both zeroes the IGT and closes an attempt does so
+        # with a payload carrying no igt_frames (a reset/level edge), so
+        # updating first can never let an event validate its own close.
+        if ev.type == "session_started":
+            self._last_igt_zero_frame = None
+        elif _zeroes_usamune_igt(ev):
+            self._last_igt_zero_frame = ev.frame
         if ev.type == "area_changed":
             if _real_edge(ev):
                 self._last_area_edge_frame = ev.frame  # cross-area relocation
@@ -2711,12 +2768,18 @@ class SegmentEngine:
                             "name": d.name, "frame": ev.frame})
 
     def _close(self, Attempt, d, arm: _Arm, ev, outcome, detail):
-        # A grab close carries Usamune's authoritative IGT — use it verbatim
-        # (pause-safe, display-tick aligned; see the module docstring's
-        # rta_frames clause). Non-grab closes (level/warp/reset/death) have no
-        # igt_frames -> the wall-frame delta with its negative self-heal.
+        # A close event carrying Usamune's own IGT (star/key grab, pipe touch,
+        # death) is used verbatim — pause-safe, display-tick aligned, and free
+        # of the arm-frame alignment error the wall-frame delta carries; see
+        # the module docstring's rta_frames clause. VALID ONLY when Usamune's
+        # counter was zeroed on the very frame this segment armed and has not
+        # been zeroed since, which is exactly what _last_igt_zero_frame ==
+        # arm.start_frame says: otherwise that number counts from a load the
+        # segment does not begin at (a def armed mid-level, or a BBH door
+        # crossed mid-run), and the wall-frame delta — which at least spans
+        # the right two moments — is the honest fallback.
         igt = ev.payload.get("igt_frames")
-        if igt is not None:
+        if igt is not None and self._last_igt_zero_frame == arm.start_frame:
             rta = igt
         else:
             rta = ev.frame - arm.start_frame
