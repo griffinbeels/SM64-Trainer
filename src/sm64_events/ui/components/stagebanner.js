@@ -346,7 +346,7 @@ function StarRow({ t, v, stage }) {
             && tgt.course_id === stage.course_id && tgt.star_id === i}
           iconSrc=${entityIconSrc(t, starKey(stage.course_id, i))}
           fallbackSlot=${i}
-          rank=${rankFor(i)}
+          rank=${rankFor(i)} hasStandards=${hasStandardsFor(v, starKey(stage.course_id, i))}
           name=${name}
           sub=${stratSub(lastStratFor(i))}
           onPick=${() => pick(i)}
