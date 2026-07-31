@@ -57,6 +57,7 @@ import { RankIcon } from "./rankicon.js";
 import { RANK_FLOOR } from "./caps.js";
 import { useRouteSwap } from "../routeswap.js";
 import { mareloTuning } from "../marelotuning.js";
+import { familyLabel } from "../redsfamily.js";
 
 const html = htm.bind(h);
 
@@ -218,9 +219,18 @@ const starKey = (courseId, slot) => `star:${courseId}:${slot}`;
 // practice it. The banner passes dimIdle (its own look) and onEdit (the ✎
 // icon override, which only exists here).
 
-// The armed sub-line: the running chip replaces the strat while the
-// segment's start condition is met (timer live NOW).
-const runningChip = html`<span class="chip good">⏱ running</span>`;
+// The sub-line: the active strategy's name, same for every cell regardless
+// of kind (round 2, 2026-07-30 -- "we should reuse the same exact system...
+// for segments, we should remove the 'armed'/'running' display... Instead,
+// it should use the same visual display as the stars, i.e., replace the
+// 'running' with the strategy name"). A segment cell used to swap this for
+// a "⏱ running" chip while armed, with its own green `.armed` highlight
+// fighting `active-star`'s gold one whenever a segment was both armed and
+// targeted -- redundant besides, since the pinned SegmentSection card
+// already carries its own "Running"/"Ready" live-state line; repeating it
+// on the quick-select cell was a second place for one fact, not a second
+// fact. Deleted outright (PracticeCell's `armed` prop is gone) rather than
+// merely unused, so there is nothing left here to diverge back into.
 const stratSub = (strat) =>
   html`<span class="strat ${strat ? "" : "none"}">${strat || "—"}</span>`;
 
@@ -235,8 +245,11 @@ async function pickSegmentTarget(t, s) {
 }
 
 // The standard segment cell (castle/arena rows, armed extras): name, strat
-// sub (running chip while armed), rank medal, resolved icon; click targets
-// it (enabling first if needed — a no-op for already-enabled segments).
+// sub, rank medal, resolved icon; click targets it (enabling first if
+// needed — a no-op for already-enabled segments). Byte-for-byte the SAME
+// PracticeCell call shape StarRow makes (round 2 unification, above) — no
+// `armed` prop, no running chip; a segment cell and a star cell differ only
+// in which entity's data they carry, never in how that data is drawn.
 // `nameOverride` exists for the Bowser row alone: its two cells are the pair
 // "Reds" / "No Reds" (user, 2026-07-30: "For all bowser stages, it's Reds or No
 // Reds"), while the corpus name of the second is "BitDW Pipe Entry" -- which is
@@ -244,35 +257,21 @@ async function pickSegmentTarget(t, s) {
 // nothing. So the SHORT label is this row's, not a corpus rename: renaming the
 // definition would rewrite what every other surface calls it, and the row
 // already shows the star as "Reds" rather than its real name for the same
-// reason.
-// `suppressRunning` (Bowser's "No Reds" cell only, round 2, item 1): the
-// segment CAN be armed (arms_ambiently -- mere course presence, not a
-// deliberate pick) while the player has explicitly chosen the OTHER family
-// instead. "Technically armed" is background truth; an explicit pick
-// outranks it (user, 2026-07-30, reversing an earlier ruling that left this
-// chip alone: "even though the segment is technically possible and armed,
-// it shouldn't say running... because in this case I deliberately chose
-// Reds"). Suppresses BOTH the running chip text AND the cell's own `.armed`
-// glow -- showing one without the other would read as a rendering fault,
-// not a deliberately calm cell. `onPicked` fires after a successful
-// explicit pick so a caller can remember "the user chose THIS family"
-// (Bowser's own writeBowserFamily); every other caller omits it and nothing
-// changes for them.
-function StandardSegmentCell({ t, s, setPicking, nameOverride,
-                              suppressRunning = false, onPicked }) {
+// reason. `onPicked` fires after a successful explicit pick so a caller can
+// remember "the user chose THIS family" (Bowser's own writeBowserFamily);
+// every other caller omits it and nothing changes for them.
+function StandardSegmentCell({ t, s, setPicking, nameOverride, onPicked }) {
   const tgt = ((t.view || {}).target) || {};
-  const armed = t.armedSegs.has(s.segment_id) && !suppressRunning;
   async function pick() {
     await pickSegmentTarget(t, s);
     if (onPicked) onPicked();
   }
   return html`<${PracticeCell} dimIdle=${STAR_DIM_IDLE}
     active=${tgt.kind === "segment" && tgt.segment_id === s.segment_id}
-    armed=${armed}
     iconSrc=${entityIconSrc(t, segKey(s))}
     rank=${s.rank} hasStandards=${hasStandardsFor(t.view, segKey(s))}
     name=${nameOverride || s.name}
-    sub=${armed ? runningChip : stratSub(s.strat)}
+    sub=${stratSub(s.strat)}
     onPick=${pick}
     onEdit=${() => setPicking(iconIdentityForKey(segKey(s)))} />`;
 }
@@ -345,7 +344,6 @@ function StarRow({ t, v, stage }) {
           key=${`${stage.course_id}:${i}`}
           active=${tgt.kind !== "segment"
             && tgt.course_id === stage.course_id && tgt.star_id === i}
-          armed=${false}
           iconSrc=${entityIconSrc(t, starKey(stage.course_id, i))}
           fallbackSlot=${i}
           rank=${rankFor(i)}
@@ -540,7 +538,6 @@ function BowserCourseRow({ t, v, stage, freshIds }) {
       ${noRedsSeg ? html`<${StandardSegmentCell}
         key=${`seg:${noRedsSeg.segment_id}`} t=${t} s=${noRedsSeg}
         nameOverride="No Reds" setPicking=${setPicking}
-        suppressRunning=${redsActive}
         onPicked=${() => writeBowserFamily(stage.level, "no_reds")} />`
         : null}
       ${armedExtraCells(t, v, shownIds, setPicking)}
@@ -664,9 +661,12 @@ function RedsCell({ t, v, stage, course, redsActive, pipeMode, forcedPipe,
          displayed as "8 Red Coins (Star)"'). The star's own corpus name leads,
          so this still says what you are practising; the suffix says which half
          is on the clock. `Reds`/`No Reds` stay the cell NAMES, which is the
-         pair he asked for one item later. */""}
+         pair he asked for one item later. familyLabel (../redsfamily.js) is
+         the ONE place the " (Star)"/" (Pipe)" suffix is spelled -- the pinned
+         card (practice.js) composes the SAME literal through the same call,
+         never a second copy (round 2, item 4's star half). */""}
     <span class="starsub"><span class="strat">
-      ${`${course.stars[0] || "8 Red Coins"} (${pipeMode ? "Pipe" : "Star"})`}
+      ${familyLabel(course.stars[0] || "8 Red Coins", pipeMode)}
     </span></span>
     <span class="editicon" role="button" tabindex="0"
         title="Choose icon…" aria-label="Choose icon"

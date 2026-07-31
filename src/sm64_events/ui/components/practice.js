@@ -22,6 +22,7 @@ import { FailureCompilation } from "./failcomp.js";
 import { Icon } from "./icons.js";
 import { PageState } from "./states.js";
 import { EmptyState } from "./emptystate.js";
+import { familyLabel } from "../redsfamily.js";
 
 const html = htm.bind(h);
 
@@ -606,14 +607,27 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
     t.refresh();
   }
 
+  // The STAR half of item 4 (round 2 part 2, live report 2026-07-31): with
+  // Star mode selected on the Reds cell, the pinned card read a bare
+  // "8 Red Coins" -- the Pipe half already reads "8 Red Coins (Pipe)"
+  // (above), and the cell itself always spells out which family is on the
+  // clock, so the star card disagreeing with its own cell is the same bug
+  // one surface later. `sec.pipe_segment_id` is ALREADY the exact
+  // discriminator (views.py: non-null only for a Bowser course's star 0,
+  // the paired reds->pipe segment's escape hatch back to this section) --
+  // no new server field, and familyLabel (../redsfamily.js) is the SAME
+  // module the Pipe half and the cell's own toggle already call, so the
+  // three can never spell the suffix three different ways.
+  const starDisplayName = sec.pipe_segment_id != null
+    ? familyLabel(sec.star_name, false) : sec.star_name;
   return html`<div class="practice-detail-grid ${pinned ? "is-primary" : ""}">
     <section class="practice-card objective-card ${pinned ? "active-star" : ""} ${cardClass(foldTarget)}">
       <div class="objective-heading">
         <${ObjectiveEyebrow} iconName="target" openPicker=${openPicker}
           label=${pinned ? "Active target" : "Star practice"} />
-        <div class="objective-name" title=${`${sec.course_name} · ${sec.star_name}`}>
+        <div class="objective-name" title=${`${sec.course_name} · ${starDisplayName}`}>
           <span class="objective-context">${sec.course_name}</span>
-          <h2>${sec.star_name}</h2>
+          <h2>${starDisplayName}</h2>
         </div>
         <div class="objective-strategy">
           <span class="field-label">Strategy</span>
@@ -807,8 +821,26 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker 
   // cell that pinned it. `sec.pipe_star_entity`/`_name`/`_course_name`
   // travel together (views.py), so null-guarding on any one covers all
   // three.
+  //
+  // The legacy "no reds" pipe-only segment gets the SAME treatment (round
+  // 2 part 2, live report 2026-07-30: "the pinned card still says 'BitDW
+  // Pipe Entry', not 'No Reds'" -- the earlier fix reached the reds->pipe
+  // family and not this sibling). It has no paired star to borrow a name
+  // FROM, so its display name is the exact literal stagebanner.js's own
+  // row already uses ("No Reds") -- `sec.is_no_reds_pipe` is a bare
+  // boolean, never a second copy of that string server-side. The course
+  // context resolves off the segment's OWN `course_id` (already stamped on
+  // every section, rule 11) through the session's own `catalog.courses` --
+  // no second course-name field for a fact the client already has.
+  const noRedsCourse = sec.is_no_reds_pipe
+    ? ((t.view.catalog || {}).courses || []).find((c) => c.id === sec.course_id)
+    : null;
   const familyName = sec.pipe_star_entity
-    ? `${sec.pipe_star_name || "Reds"} (Pipe)` : null;
+    ? familyLabel(sec.pipe_star_name || "Reds", true)
+    : noRedsCourse ? "No Reds" : null;
+  const familyCourseName = sec.pipe_star_entity
+    ? sec.pipe_star_course_name
+    : noRedsCourse ? noRedsCourse.name : null;
   return html`<div class="practice-detail-grid ${pinned ? "is-primary" : ""}">
     <section class="practice-card objective-card ${pinned ? "active-star" : ""} ${cardClass(foldTarget)}">
       <div class="objective-heading">
@@ -816,7 +848,7 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker 
           label=${pinned ? "Active segment" : "Segment practice"} />
         <div class="objective-name" title=${familyName || sec.name}>
           <span class="objective-context">${sec.broken ? "History only"
-            : familyName ? sec.pipe_star_course_name : "Segment"}</span>
+            : familyName ? familyCourseName : "Segment"}</span>
           <h2>${familyName || sec.name}</h2>
         </div>
         <div class="objective-strategy">

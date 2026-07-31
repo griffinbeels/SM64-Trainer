@@ -943,6 +943,33 @@ def _reds_pipe_segments(seg_rows: list[dict]) -> tuple[dict[int, int], dict[int,
     return by_course, grading_ek
 
 
+# The legacy EXCLUSIVE "no reds" pipe-only segments (seg:bitdw-pipe /
+# seg:bitfs-pipe / seg:bits-pipe -- storage/db.py's own v4 schema INSERT,
+# predating the corpus). Round 2, item 4's missing half (live report
+# 2026-07-30): the naming fix that gave seg:reds->pipe:* the star's own
+# family voice ("8 Red Coins (Pipe)") never reached this sibling family, so
+# the pinned card still read the raw corpus name ("BitDW Pipe Entry") while
+# the banner cell that selects it already reads "No Reds"
+# (stagebanner.js's own row-local nameOverride, unrelated to this field --
+# that one is JS-side and this row's own; the two must now AGREE, which is
+# the whole point).
+_LEGACY_NO_REDS_SEED_SUFFIX = "-pipe"
+
+
+def _legacy_no_reds_segments(seg_rows: list[dict]) -> set[int]:
+    """Segment ids for the legacy "no reds" family. Matched by seed_key
+    SUFFIX alone -- unlike _reds_pipe_segments' own prefix match, this needs
+    no exclusion clause for its Bowser sibling: `seg:reds->pipe:<abbrev>`
+    ends in the course abbreviation ("...bitdw"), never literally "-pipe",
+    so the two families' seed_keys are already suffix-disjoint by
+    construction, not by a defensive extra check. Verified against the
+    bundled corpus: exactly these three seed_keys end "-pipe" (no other
+    segment does), so this is the actual, exhaustive set, not a
+    coincidental generalization."""
+    return {row["id"] for row in seg_rows
+            if (row.get("seed_key") or "").endswith(_LEGACY_NO_REDS_SEED_SUFFIX)}
+
+
 def entity_label(db, ek: str) -> str:
     """Human name for an entity key, for the MARELO breakdown list.
 
@@ -1002,6 +1029,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     # Bowser reds/pipe pairing is known before the star loop needs it.
     seg_rows = db.segment_defs()
     reds_pipe_by_course, reds_pipe_grading_ek = _reds_pipe_segments(seg_rows)
+    legacy_no_reds_ids = _legacy_no_reds_segments(seg_rows)
     # {segment_id} for EVERY def (enabled or not) whose own sequence includes
     # grabbing a main course's 100-coin star, plus {(course_id, 6): the
     # FIRST such def} (spec 2026-07-28-multi-step-segments, "the 100-coin
@@ -1352,6 +1380,20 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                                       if pipe_star_ek else None),
             "pipe_star_name": (star_name(seg_course_id, 0)
                               if pipe_star_ek else None),
+            # The reds->pipe fix's missing half (round 2, item 4, live
+            # report 2026-07-30): the legacy EXCLUSIVE "no reds" pipe-only
+            # segment (seg:bitdw-pipe/seg:bitfs-pipe/seg:bits-pipe) needs
+            # the SAME family-voice treatment, but has no paired star to
+            # borrow a name FROM -- its display name is the constant "No
+            # Reds" (stagebanner.js's own row-local nameOverride already
+            # uses this exact string; a boolean here is what lets the
+            # pinned card agree with it, rather than a second server field
+            # repeating a literal the client already owns). The card
+            # resolves its course context from `course_id` (already stamped
+            # below, on every segment) through the session's own
+            # `catalog.courses` -- no new course-name field needed for a
+            # fact the client already has.
+            "is_no_reds_pipe": seg_id in legacy_no_reds_ids,
             "timeline": _timeline(in_section, rta_of),
             "markers_by_strat": _markers_for(markers_state, "seg", seg_id),
             "time_filter": _time_filter_json(

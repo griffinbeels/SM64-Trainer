@@ -114,9 +114,12 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
   docstring for the full precedence): the def's own start-trigger refire is
   suppressed while armed (progress owns re-arming, not the generic re-arm
   path); a real anchor mid-sequence REWINDS progress to 0 and re-arms in
-  place (no row, unlike this chain's reset row); an off-sequence star/key
-  grab or wrong-destination level crossing silently cancels (disarm, no
-  row) instead of the plain silent level_changed disarm above
+  place, recording a reset row exactly like this chain's own (round 2, live
+  report 2026-07-30 — this used to record no row at all, the open VERIFY
+  item _feed_waypoint's own docstring named until the user settled it); an
+  off-sequence star/key grab or wrong-destination level crossing silently
+  cancels (disarm, no row) instead of the plain silent level_changed disarm
+  above
 - LOOSE defs (SegmentDef.match_mode == "loose", spec
   2026-07-28-multi-step-segments) replace the armed branch AGAIN — regardless
   of waypoints — with SegmentEngine._feed_loose (see its own docstring for
@@ -2486,10 +2489,17 @@ class SegmentEngine:
         silently, no row, regardless of progress — an armed segment must not
         survive across sessions) > echo (invisible, exactly like the plain
         chain) > real anchor (rewinds the sequence to its first waypoint and
-        re-arms IN PLACE at the anchor — the practice-retry loop; no row,
-        unlike the plain chain's reset row — precise relocation-vs-
-        continuation nuance is a live-gate VERIFY item, rewind-in-place is
-        the conservative default) > next waypoint (advance `progress`) >
+        re-arms IN PLACE at the anchor — the practice-retry loop — AND
+        records a RESET row for the attempt that ends there, exactly like
+        the plain chain's own anchor-refire reset, subject to the SAME AFK/
+        unacted discard. This used to record no row at all, flagged as a
+        live-gate VERIFY item ("precise relocation-vs-continuation nuance");
+        the user has since settled it (round 2, live report 2026-07-30) — he
+        expects the reset row, since the practice log is how he sees his own
+        retries and a whole class of segment silently omitting them makes it
+        lie about what he did. The rewind-in-place relocation itself was
+        never in question, only the missing row) > next waypoint (advance
+        `progress`) >
         major action (a star/key grab or a real level crossing that ISN'T
         the next waypoint — the player switched tasks or misrouted — silent
         cancel, no row, mirrors the plain chain's silent level_changed
@@ -2539,9 +2549,28 @@ class SegmentEngine:
             return closed
         if ev.type in _ANCHOR_TYPES:
             # echo (arm-frame or event-level) is invisible; a real anchor
-            # rewinds the sequence and re-arms in place (retry loop).
+            # rewinds the sequence and re-arms IN PLACE (retry loop) --
+            # recording a RESET row for the attempt that ends here, exactly
+            # like the plain chain's own anchor-refire reset (round 2, live
+            # report 2026-07-30: this branch recorded NO row at all, so the
+            # practice log silently omitted every retry of a waypoint-
+            # bearing segment -- this settles the "live-gate VERIFY item"
+            # this method's own docstring used to name; the rewind-in-place
+            # relocation itself was never in question, only the missing
+            # row). Same AFK/unacted discard the plain chain applies
+            # (mirrors the star-side discard in projection.py's
+            # _close_by_reset) -- a true no-op anchor refire still records
+            # nothing.
             if ev.frame == arm.start_frame or self._anchor_echo(ev):
                 return closed
+            afk = ev.payload.get("paused_frames_before", 0) \
+                >= _AFK_PAUSE_FRAMES
+            unacted = ev.payload.get("acted_tracking", False) \
+                and not ev.payload.get("mario_acted", False)
+            if not afk and not unacted:
+                a = self._close(Attempt, d, arm, ev, "reset", None)
+                if a:
+                    closed.append(a)
             self._armed[d.id] = replace(
                 arm, progress=0, start_frame=ev.frame,
                 started_utc=ev.wall_time_utc, jid=ev.id,

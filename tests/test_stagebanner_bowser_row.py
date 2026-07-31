@@ -213,10 +213,13 @@ def test_the_reds_cell_names_which_family_is_on_the_clock():
     """'When Pipe is selected, it should be displayed as "8 Red Coins (Pipe)",
     and when Star is selected ... "8 Red Coins (Star)"'. The two are graded
     against different ladders, so a medal that changes with no label to explain
-    it reads as a rendering fault."""
+    it reads as a rendering fault. Round 2 part 2: composed through the
+    shared familyLabel (../redsfamily.js), not a second inline template --
+    see tests/test_single_source.py for the guard banning a third one."""
     body = _reds_cell_body()
-    assert '(${pipeMode ? "Pipe" : "Star"})' in body, (
-        "the Reds cell no longer spells out which family is being timed")
+    assert "familyLabel(course.stars[0] || \"8 Red Coins\", pipeMode)" in body, (
+        "the Reds cell no longer spells out which family is being timed "
+        "via the shared familyLabel composer")
 
 
 def test_the_no_reds_cell_is_labelled_no_reds():
@@ -249,40 +252,89 @@ def test_an_unranked_but_rankable_reds_cell_draws_the_ladder_floor():
 # finally threads down (see test_stagebanner_hundred_coin.py's own updated
 # test for the StageBanner-level half of that wiring).
 
-def test_no_reds_suppresses_running_when_reds_is_the_explicit_target():
-    """Item 1: "When I select reds, I would expect the 'no reds' option to
-    not say 'running' (even if it's true in the background)... because in
-    this case I deliberately chose Reds." This REVERSES an earlier ruling
-    (the same chip was once "technically wrong but not wrong" and left
-    alone) -- his explicit pick is now the stronger signal. Driven purely by
-    the LIVE target (`redsActive`), not a separate memory: with the round-2
-    projection.py fix protecting an explicitly-targeted, running Pipe
-    segment's target from being stolen by its own mid-sequence star grab,
-    `redsActive` already stays true for the whole span of a Reds run."""
-    body = _bowser_row_body()
-    assert re.search(r"suppressRunning=\$\{redsActive\}", body), (
-        "the No Reds cell no longer suppresses its running chip off the "
-        "live redsActive signal")
-    # NOT arms_ambiently -- adjacent question, not the same one (that flag
-    # says a segment armed without the user asking; this says the user
-    # asked for something ELSE). Overloading it would be the wrong door.
-    assert "suppressRunning=${sec.arms_ambiently}" not in body
+# --- 2026-07-30 round 2, part 2: four more live reports ---------------------
+#
+# Item 1's `suppressRunning` fix (immediately above/below in history) is
+# SUPERSEDED by item 3's unification, not layered under it: the running
+# chip/glow it suppressed no longer exists at all, so there is nothing left
+# to suppress. These tests replace the retired `test_no_reds_suppresses_
+# running_when_reds_is_the_explicit_target` /
+# `test_standard_segment_cell_suppresses_both_the_chip_and_the_glow`.
 
-
-def test_standard_segment_cell_suppresses_both_the_chip_and_the_glow():
-    """Showing the running CHIP text without the `.armed` glow (or vice
-    versa) would read as a rendering fault, not a deliberately calm cell --
-    both must go together."""
+def test_standard_segment_cell_has_no_armed_or_running_concept_at_all():
+    """Item 3 (user, 2026-07-30): "for segments, we should remove the
+    'armed' or 'running' display... it should use the same visual display
+    as the stars, i.e., replace the 'running' with the strategy name... The
+    color of the highlight should also be yellow for the segments, not
+    green. Basically, we unify this design." `StandardSegmentCell` must
+    read neither `t.armedSegs` nor pass an `armed` prop, and its `sub` must
+    be the plain strategy sub-line unconditionally -- the identical PROPS a
+    star cell passes, so this is one call shape, not two that happen to
+    look alike."""
     source = strip_comments(BANNER.read_text(encoding="utf-8"))
     body = _function_body("StandardSegmentCell", source)
-    assert "suppressRunning = false" in body, \
-        "StandardSegmentCell no longer defaults suppressRunning off"
-    assert re.search(
-        r"const armed = t\.armedSegs\.has\(s\.segment_id\) && !suppressRunning;",
-        body), "suppressRunning no longer gates the cell's own `armed` flag"
-    # `sub` still derives from the SAME (already-suppressed) `armed` local,
-    # not a second unsuppressed read -- one variable, one door.
-    assert "sub=${armed ? runningChip : stratSub(s.strat)}" in body
+    assert "armedSegs" not in body, \
+        "StandardSegmentCell still reads live-armed state for its own display"
+    assert "suppressRunning" not in body, \
+        "the retired running-suppression mechanism reappeared"
+    assert "armed=" not in body, \
+        "StandardSegmentCell still passes an armed prop to PracticeCell"
+    assert "sub=${stratSub(s.strat)}" in body, \
+        "the cell no longer shows the strategy name unconditionally"
+
+
+def test_every_segment_cell_renders_through_standard_segment_cell():
+    """Item 3 reaches EVERY segment cell, not just the Bowser row (user,
+    2026-07-31, on hitting it again in the Bowser 1 arena: "when we're in
+    bowser 1, it's displaying as 'running' -- again, I want to replace this
+    in EVERY circumstance... No 'Running' because we're already
+    highlighting the card"). ArenaRow, SegmentRow (castle) and ArmedOnlyRow
+    all render their segment cells through the SAME StandardSegmentCell --
+    none may grow a second, hand-rolled cell that reads t.armedSegs itself,
+    or the unification above would be true for Bowser alone."""
+    source = strip_comments(BANNER.read_text(encoding="utf-8"))
+    for row_name in ("ArenaRow", "SegmentRow", "ArmedOnlyRow"):
+        body = _function_body(row_name, source)
+        assert "<${StandardSegmentCell}" in body, \
+            f"{row_name} no longer renders its segment cells through " \
+            "StandardSegmentCell"
+        # ArmedOnlyRow's OWN row heading legitimately says "Running" (a
+        # segment timer is live is the row's whole reason for existing) --
+        # that is prose on the SECTION, not a per-cell state, so this only
+        # guards against a hand-rolled cell reading armed state itself.
+        assert "t.armedSegs.has(" not in body, \
+            f"{row_name} reads armed state for its own cell rendering"
+
+
+def test_practice_cell_has_no_armed_prop_left_to_diverge_into():
+    """The unification is only real if the SHARED component itself carries
+    no such prop -- pinning this here (not just at the call site) is what
+    stops a future segment-only tweak from reintroducing a second look."""
+    source = strip_comments(
+        (UI / "components" / "practicecell.js").read_text(encoding="utf-8"))
+    assert "armed" not in source, \
+        "PracticeCell's armed prop (or its .armed class) came back"
+
+
+def test_star_row_and_standard_segment_cell_make_the_identical_practicecell_call():
+    """Not "two call sites that happen to look alike" (user's own standing
+    rule, 2026-07-26) -- both must pass the SAME prop set, in the SAME
+    order, modulo the fields that are genuinely per-kind (iconSrc/rank/name/
+    onPick/onEdit identify WHICH entity; dimIdle/fallbackSlot are look
+    constants). If a future PracticeCell prop is added to one cell and not
+    the other, this fails."""
+    source = strip_comments(BANNER.read_text(encoding="utf-8"))
+    star_body = _function_body("StarRow", source)
+    seg_body = _function_body("StandardSegmentCell", source)
+    # `hasStandards` is NOT in this set -- StarRow's own cells don't pass it
+    # today (a pre-existing asymmetry this task didn't touch: only the Reds
+    # cell's own floor-rank logic exists for stars, addendum 2026-07-30).
+    # Listed here only so a future "share it" fix has one line to update.
+    shared_props = {"dimIdle", "active", "iconSrc", "rank",
+                    "name", "sub", "onPick", "onEdit"}
+    for prop in shared_props:
+        assert f"{prop}=" in star_body, f"StarRow no longer passes {prop}"
+        assert f"{prop}=" in seg_body, f"StandardSegmentCell no longer passes {prop}"
 
 
 def test_bowser_row_detects_completions_via_freshids_not_only_clicks():

@@ -750,10 +750,14 @@ def test_v16_reenables_stranded_pipe_family_rows(tmp_path):
             if r["seed_key"] in _PIPE_FAMILY_SEED_KEYS}
     assert rows["seg:bitdw-pipe"]["enabled"] is True
     assert rows["seg:reds->pipe:bitfs"]["enabled"] is True
-    # seed_dirty is left exactly as found — this repair is not a user edit
-    # and must not change what reconcile does with these rows next startup.
-    assert rows["seg:bitdw-pipe"]["seed_dirty"] == 1
-    assert rows["seg:reds->pipe:bitfs"]["seed_dirty"] == 1
+    # v16 ITSELF left seed_dirty exactly as found (that repair was not a user
+    # edit and was not supposed to change what reconcile does with these rows
+    # next startup) -- but through the FULL migration chain to the current
+    # version, v17 (below) now deliberately clears it: leaving it standing is
+    # what froze these same six rows against every LATER corpus change, round
+    # 2 item 5's own bug. A db landing on today's code sees BOTH repairs.
+    assert rows["seg:bitdw-pipe"]["seed_dirty"] == 0
+    assert rows["seg:reds->pipe:bitfs"]["seed_dirty"] == 0
 
 
 def test_v16_leaves_an_unrelated_disabled_segment_disabled(tmp_path):
@@ -791,3 +795,108 @@ def test_fresh_install_has_no_stranded_rows_to_repair(tmp_path):
     # reconcile_defaults has run, which is out of scope for the storage layer
     # alone — assert what IS seeded here stays enabled.
     assert pipe_family and all(r["enabled"] for r in pipe_family)
+
+
+# -- migration v17: unfreeze the Bowser pipe family's seed_dirty flag --------
+#
+# Round 2, item 5, live report 2026-07-30/31: v16 repaired `enabled` on these
+# six rows but, on explicit instruction, deliberately left seed_dirty=1
+# standing. That instruction was right about not disguising a repair as a
+# user edit and wrong about the consequence -- seed_dirty=1 blocks
+# reconcile_defaults's update branch UNCONDITIONALLY, so these six rows were
+# frozen against every future corpus change, not just v16's own field.
+# seg:bitdw-pipe is the one that actually drifted (match_mode stuck at
+# 'strict' instead of the seed's 'exclusive' -- the shape that lets grabbing
+# the reds star cancel a no-reds attempt, which plain 'strict' cannot do).
+
+def _v16_db_with_frozen_pipe_family(tmp_path):
+    """A db at v16 with all SIX Bowser pipe-family rows carrying seed_dirty=1
+    (as the retired mutual-exclusion toggle could have left any of them) and
+    seg:bitdw-pipe's OWN match_mode stuck at the pre-v15 default 'strict' --
+    reconcile never reached it to bring it to the seed's 'exclusive', exactly
+    the live drift measured against this branch's own dev db (never the live
+    file). The legacy three (seg:*-pipe) already exist from the v4/v12
+    migrations; the reds->pipe siblings are bundled-seed-only content
+    (reconcile_defaults's job), so they are inserted by hand here with their
+    seed_key already set, matching what a reconciled real db looks like."""
+    import sqlite3
+    path = tmp_path / "t.db"
+    conn = sqlite3.connect(str(path))
+    for script in MIGRATIONS[:16]:          # bring the db up to v16
+        conn.executescript(script)
+    for abbrev, level, name in (("bitdw", 17, "BitDW — 8 Red Coins → Pipe"),
+                                 ("bitfs", 19, "BitFS — 8 Red Coins → Pipe"),
+                                 ("bits", 21, "BitS — 8 Red Coins → Pipe")):
+        conn.execute(
+            "INSERT INTO segment_defs (name, enabled, start_triggers,"
+            " end_triggers, waypoints, guards, created_utc, seed_key,"
+            " seed_dirty, match_mode) VALUES (?,1,?,?,'[]','[]',?,?,1,?)",
+            (name, f'[{{"type":"level_enter","to":{level}}}]',
+             f'[{{"type":"warp_entered","level":{level}}}]',
+             "2026-07-24T00:00:00Z", f"seg:reds->pipe:{abbrev}", "strict"))
+    conn.execute("UPDATE segment_defs SET seed_dirty=1, match_mode='strict'"
+                 " WHERE seed_key IN ('seg:bitdw-pipe', 'seg:bitfs-pipe', 'seg:bits-pipe')")
+    conn.execute("PRAGMA user_version = 16")
+    conn.commit()
+    conn.close()
+    return path
+
+
+def test_v17_clears_seed_dirty_on_exactly_the_six_pipe_family_rows(tmp_path):
+    path = _v16_db_with_frozen_pipe_family(tmp_path)
+    db = Database(path)
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
+    rows = {r["seed_key"]: r for r in db.segment_defs()
+            if r["seed_key"] in _PIPE_FAMILY_SEED_KEYS}
+    for key in _PIPE_FAMILY_SEED_KEYS:
+        assert rows[key]["seed_dirty"] == 0, f"{key} still frozen"
+
+
+def test_v17_leaves_an_unrelated_dirtied_segment_alone(tmp_path):
+    """A user may have deliberately edited something outside the Bowser pipe
+    family (LBLJ here) -- clearing ITS seed_dirty would silently discard a
+    real edit at the next reconcile, exactly the risk the flag exists to
+    prevent. Scoped to the six named seed_keys only."""
+    import sqlite3
+    path = _v16_db_with_frozen_pipe_family(tmp_path)
+    conn = sqlite3.connect(str(path))
+    conn.execute("UPDATE segment_defs SET seed_dirty=1 WHERE seed_key='seg:lblj'")
+    conn.commit()
+    conn.close()
+    db = Database(path)
+    lblj = next(r for r in db.segment_defs() if r["seed_key"] == "seg:lblj")
+    assert lblj["seed_dirty"] == 1
+
+
+def test_v17_unfreezes_reconcile_and_repairs_the_drifted_match_mode(tmp_path):
+    """The consequence, not just the flag: once seed_dirty is cleared, the
+    NEXT reconcile_defaults call (every real startup runs one) must bring
+    seg:bitdw-pipe's match_mode to the seed's 'exclusive' -- proving the
+    unfreeze actually reaches the field that was silently wrong, not merely
+    that the flag itself flipped."""
+    from sm64_events.tracking.defaults import reconcile_defaults
+    path = _v16_db_with_frozen_pipe_family(tmp_path)
+    db = Database(path)
+    seed = {"segments": [
+        {"seed_key": "seg:bitdw-pipe", "name": "BitDW Pipe Entry",
+         "start_triggers": [{"type": "level_enter", "to": 17}],
+         "end_triggers": [{"type": "warp_entered", "level": 17}],
+         "match_mode": "exclusive"},
+    ]}
+    problems = reconcile_defaults(db, seed)
+    assert problems == []
+    row = next(r for r in db.segment_defs() if r["seed_key"] == "seg:bitdw-pipe")
+    assert row["match_mode"] == "exclusive"
+
+
+def test_v17_is_idempotent(tmp_path):
+    """Re-running the migration set a second time must not error or toggle
+    anything further -- seed_dirty is already 0, and setting 0 to 0 again is
+    a no-op."""
+    path = _v16_db_with_frozen_pipe_family(tmp_path)
+    Database(path).close()
+    db = Database(path)
+    rows = {r["seed_key"]: r for r in db.segment_defs()
+            if r["seed_key"] in _PIPE_FAMILY_SEED_KEYS}
+    for key in _PIPE_FAMILY_SEED_KEYS:
+        assert rows[key]["seed_dirty"] == 0

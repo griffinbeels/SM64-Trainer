@@ -19,8 +19,18 @@ const html = htm.bind(h);
 // stem and owns the shared onerror; entities.js owns the pure tables both it
 // and the picker's icon chain read. This file only renders.
 /**
- * active     this is the current target (glow + bob)
- * armed      a segment whose timer is running now
+ * active     this is the current target (glow + bob) — the ONLY highlight
+ *            state a cell has (round 2, 2026-07-30: "we should reuse the
+ *            same exact system... unify this design" — a segment cell used
+ *            to ALSO carry an `armed`/"running" state with its own green
+ *            glow, which fought `active-star`'s gold one whenever a segment
+ *            was both armed and targeted, and read as redundant besides —
+ *            the pinned SegmentSection card already shows "Running" as its
+ *            own live-state line, and a quick-select cell repeating that is
+ *            not a second fact, just a second place the first one is
+ *            drawn. Deleted outright, not merely defaulted off, so there is
+ *            nothing left for a segment cell to diverge back into: stars
+ *            and segments now make the IDENTICAL PracticeCell call)
  * iconSrc    resolved art URL — always from entityicons.js's entityIconSrc /
  *            entityIcon chain, never derived at a call site (2026-07-26)
  * rank       optional {rank, division} -> RankIcon; renders "–" when absent
@@ -34,7 +44,11 @@ const html = htm.bind(h);
  *            Naming it is what stops the medal changing after you pick from
  *            reading as a rendering fault (spec §3 risk 1; final review I2,
  *            2026-07-25/26)
- * sub        sub-line node (strat name, running chip, or nothing)
+ * sub        sub-line node — the active strategy's name, or nothing; the
+ *            SAME content for every cell regardless of kind (round 2: a
+ *            segment cell used to swap this for a "⏱ running" chip while
+ *            armed, which is the other half of the armed/active unification
+ *            above)
  * dimIdle    dim non-active cells — the BANNER's look; the picker grid passes
  *            false, since a grid of dim cells reads as disabled
  * rankBadge  the picker grid's look (task 4, 2026-07-25): draws `rank` as an
@@ -50,7 +64,7 @@ const html = htm.bind(h);
  * onEdit     optional; omit and the ✎ affordance is not rendered at all (the
  *            picker has no per-cell icon override — that lives on the banner)
  */
-export function PracticeCell({ active, armed, iconSrc, fallbackSlot = 0,
+export function PracticeCell({ active, iconSrc, fallbackSlot = 0,
                               rank, hasStandards = false, strat, name, sub,
                               title, dimIdle = false,
                               rankBadge = false, onPick, onEdit }) {
@@ -81,7 +95,7 @@ export function PracticeCell({ active, armed, iconSrc, fallbackSlot = 0,
     ? (strat ? `${capName(rank.rank)} · best on ${strat}` : capName(rank.rank))
     : null;
   return html`<button
-      class="starcell ${active ? "active-star" : ""} ${armed ? "armed" : ""}"
+      class="starcell ${active ? "active-star" : ""}"
       title=${title || name} onclick=${onPick}>
     <span class="starholder">
       <img class="starimg ${isGenericArt(iconSrc) ? "" : "courseicon"} ${dimIdle && !active ? "dim" : ""}"

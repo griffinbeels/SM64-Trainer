@@ -56,8 +56,13 @@
   .starcell:hover { background: #20242b; }
   .starcell:focus-visible { outline: 2px solid #6fa8ff; outline-offset: 2px; }
   .starcell.active-star { border-color: #e0c36a; background: #211f14; }
-  /* a segment cell whose start condition is met — the timer is running NOW */
-  .starcell.armed { border-color: #3f8a5f; background: #16241c; }
+  /* Round 2 (2026-07-30): a segment cell used to ALSO carry its own
+     `.armed` green highlight for "the timer is running now", which fought
+     this gold one whenever a segment was both armed and targeted -- the
+     user asked to unify the two cell kinds ("the color of the highlight
+     should also be yellow for the segments, not green"), so `.armed` and
+     its glow are deleted rather than reconciled. A cell now has exactly
+     ONE highlight state, active-star, for every kind. */
   /* hover ✎ -> icon picker; revealed on cell hover or keyboard focus */
   /* The ✎ icon-override affordance. ONE rule for both surfaces that offer it
      — the banner's practice cells and the Rank tab's coverage tiles — with

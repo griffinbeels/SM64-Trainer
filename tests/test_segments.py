@@ -2309,11 +2309,18 @@ def test_waypoint_death_still_fatal():
     assert len(closed) == 1 and closed[0].outcome == "death"
 
 
-def test_waypoint_anchor_rewinds_progress_and_rearms():
+def test_waypoint_anchor_rewinds_progress_and_records_a_reset_row():
     """A real anchor (not an echo) mid-attempt rewinds `progress` to 0 and
-    re-arms IN PLACE at the anchor frame — the practice-retry loop. No row
-    is recorded for the rewind itself; the eventual completion times from
-    the anchor, not the original arm."""
+    re-arms IN PLACE at the anchor frame — the practice-retry loop — AND now
+    records a RESET row for the attempt that ends there, exactly like the
+    plain chain's own anchor-refire reset (round 2, live report 2026-07-30:
+    this branch used to record NO row at all — a documented, deliberate,
+    but explicitly-unverified gap ("precise relocation-vs-continuation
+    nuance is a live-gate VERIFY item") — so the practice log silently
+    omitted every retry of a Pipe-mode Bowser run; the user has since
+    settled it: he expects the row). The eventual completion still times
+    from the anchor, not the original arm — the rewind-in-place relocation
+    itself is unchanged, only the missing row is fixed."""
     e = SegmentEngine([_sl_hmc_def()])
     e.feed(jev(10, "level_changed", 1000, {"from": 10, "to": 16}),
            ctx(level=16, prev_level=10))                        # arm
@@ -2321,7 +2328,9 @@ def test_waypoint_anchor_rewinds_progress_and_rearms():
     closed, _ = e.feed(
         jev(11, "practice_reset", 1300, {"action": 0x0C400201}),
         ctx(level=16))
-    assert closed == [], "waypoint rewind records no row"
+    assert len(closed) == 1
+    assert closed[0].outcome == "reset" and closed[0].segment_id == 99
+    assert closed[0].rta_frames == 300, "timed from the original arm to the rewind"
     assert e.armed_ids() == {99}
     assert e._armed[99].progress == 0
     assert e._armed[99].start_frame == 1300
@@ -2337,6 +2346,33 @@ def test_waypoint_anchor_rewinds_progress_and_rearms():
     assert len(closed) == 1
     assert closed[0].outcome == "success"
     assert closed[0].rta_frames == 300, "timed from the rewind, not the arm"
+
+
+def test_waypoint_afk_anchor_rebases_without_row():
+    """AFK discard (paused_frames_before >= 150) applies to the waypoint
+    matcher's own reset row exactly as it does to the plain chain's
+    (test_afk_anchor_rebases_without_row) -- a long menu pause immediately
+    before the anchor means the player went AFK, not that they retried, so
+    no row even though the rewind-in-place still happens."""
+    e = SegmentEngine([_sl_hmc_def()])
+    e.feed(jev(10, "level_changed", 1000, {"from": 10, "to": 16}),
+           ctx(level=16, prev_level=10))                        # arm
+    closed_afk, _ = e.feed(
+        jev(11, "practice_reset", 1500,
+            {"paused_frames_before": 200, "action": 0x0C400201}),
+        ctx(level=16))
+    assert closed_afk == [], "AFK anchor must not record a row"
+    assert e.armed_ids() == {99}, "segment must stay armed after AFK anchor"
+    assert e._armed[99].progress == 0 and e._armed[99].start_frame == 1500
+    # replay from the AFK anchor -- confirms the rewind itself still happened
+    closed, _ = e.feed(jev(12, "level_changed", 1600, {"from": 16, "to": 10}),
+                       ctx(level=10, prev_level=16))             # waypoint 1
+    closed, _ = e.feed(jev(13, "level_changed", 1700, {"from": 10, "to": 16}),
+                       ctx(level=16, prev_level=10))             # waypoint 2
+    closed, _ = e.feed(jev(14, "level_changed", 1800, {"from": 16, "to": 7}),
+                       ctx(level=7, prev_level=16))              # end
+    assert len(closed) == 1
+    assert closed[0].outcome == "success" and closed[0].rta_frames == 300
 
 
 def test_waypoint_session_started_disarms_silently():

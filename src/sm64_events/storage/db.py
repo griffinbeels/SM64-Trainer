@@ -307,6 +307,45 @@ MIGRATIONS = [
         'seg:reds->pipe:bitdw', 'seg:reds->pipe:bitfs', 'seg:reds->pipe:bits'
       );
     """,
+    # v17 — v16 repaired `enabled` on the Bowser pipe family but, on explicit
+    # instruction, deliberately left seed_dirty=1 standing (spec 2026-07-28-
+    # multi-step-segments round 2, item 5, live report 2026-07-30/31: "if the
+    # user grabbed the reds star in a bowser level, [the No Reds attempt]
+    # shouldn't be added to the practice log" -- EXCLUSIVE mode's entire job,
+    # yet seg:bitdw-pipe kept recording one anyway). That instruction was
+    # right about not disguising a repair as a user edit, and wrong about the
+    # consequence: seed_dirty=1 blocks reconcile_defaults's update branch
+    # UNCONDITIONALLY (tracking/defaults.py: "if not existing['seed_dirty']"),
+    # so those rows are frozen against every future corpus refresh, not just
+    # v16's own field. Confirmed against a sqlite3.Connection.backup of this
+    # branch's own dev db (never the live file): seg:bitdw-pipe was the ONE
+    # row actually drifted (match_mode 'strict' in the db, 'exclusive' in the
+    # bundled seed -- the shape that lets grabbing the reds star cancel a
+    # no-reds attempt silently, which plain 'strict' cannot do); the other
+    # five of the six already happened to match their seed value on every
+    # field, by the coincidence of when their own retired-toggle write last
+    # fired relative to when match_mode (v15) was introduced -- they were
+    # equally frozen, just not yet visibly wrong.
+    #
+    # This does NOT set match_mode directly (that would repair one field and
+    # leave these six rows frozen against the NEXT corpus change too, exactly
+    # v16's own mistake one field later) -- it clears the flag that is
+    # blocking reconcile, so reconcile's own existing update path (which
+    # already runs at every startup) brings match_mode and anything else
+    # current, then KEEPS it current from here on.
+    #
+    # Scoped to the exact six seed_keys v16 already named (the only rows the
+    # retired mutual-exclusion toggle ever wrote to) -- never a broader
+    # "clear every stale seed_dirty flag" sweep, which would silently discard
+    # a genuine user edit elsewhere and is precisely the risk this flag
+    # exists to prevent.
+    """
+    UPDATE segment_defs SET seed_dirty = 0
+      WHERE seed_key IN (
+        'seg:bitdw-pipe', 'seg:bitfs-pipe', 'seg:bits-pipe',
+        'seg:reds->pipe:bitdw', 'seg:reds->pipe:bitfs', 'seg:reds->pipe:bits'
+      );
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",

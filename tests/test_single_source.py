@@ -181,6 +181,27 @@ INVARIANTS = (
             "two came apart. stagebanner.js keeps a row per mode, pinned to "
             "the list by tests/test_ui_practice_context.py.",
     ),
+    SingleSource(
+        concept="the Bowser Reds star/pipe family suffix",
+        owners=frozenset({"redsfamily.js"}),
+        tokens=('" (Star)"', '" (Pipe)"'),
+        files=ui_js(),
+        why="Round 2, item 4's star half (live report 2026-07-31): the pinned "
+            "card's Star-mode heading read a bare '8 Red Coins' while its own "
+            "Pipe-mode sibling already read '8 Red Coins (Pipe)', and the "
+            "banner cell's own toggle spelled the suffix a THIRD way inline -- "
+            "the exact 'three surfaces each grow their own honest way and "
+            "disagree' shape the icon-art incident (2026-07-26) already paid "
+            "for. ui/redsfamily.js::familyLabel(baseName, isPipe) is the one "
+            "call; stagebanner.js's RedsCell, practice.js's StarSection and "
+            "SegmentSection all pass identity (the star's own name + which "
+            "half) through it rather than composing the string themselves. "
+            "Python owns the SAME two literals independently "
+            "(tracking/views.py::STAR_FAMILY_SUFFIX/PIPE_FAMILY_SUFFIX, "
+            "load-bearing there for strategy-family filtering) -- "
+            "tests/test_cross_language_parity.py compares the two real "
+            "constants rather than either restating the other.",
+    ),
 )
 
 

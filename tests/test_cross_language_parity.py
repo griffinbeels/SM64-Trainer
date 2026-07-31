@@ -51,6 +51,7 @@ CAPS_JS = UI / "components" / "caps.js"
 FORMAT_JS = UI / "format.js"
 RANKS_JS = UI / "components" / "ranks.js"
 STATMENU_JS = UI / "components" / "statmenu.js"
+REDSFAMILY_JS = UI / "redsfamily.js"
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None,
                                 reason="node not on PATH")
@@ -194,6 +195,36 @@ def test_the_default_stat_menu_is_addressable_by_both():
     assert len(set(python)) == len(python), (
         f"DEFAULT_STAT_MENU has two entries with the same identity: {python}. "
         "They render as two chips that one checkbox toggles together.")
+
+
+# --- 5. the Bowser Reds star/pipe family suffix (round 2, item 4) ----------
+
+def test_reds_family_suffix_agrees():
+    """views.py::STAR_FAMILY_SUFFIX/PIPE_FAMILY_SUFFIX and
+    redsfamily.js's own constants must name the identical two literals --
+    they select which half of a Bowser Reds star's strategies a section may
+    grade or offer (Python) and which suffix the pinned card/cell show
+    (JS); disagreeing would mean a strategy named " (Pipe)" server-side that
+    the client never recognises as the Pipe family, or a card suffix that
+    doesn't match any strategy the server will actually grade against."""
+    from sm64_events.tracking.views import PIPE_FAMILY_SUFFIX, STAR_FAMILY_SUFFIX
+
+    js = run_node(
+        f"import {{ STAR_FAMILY_SUFFIX, PIPE_FAMILY_SUFFIX, familyLabel }} "
+        f"from {REDSFAMILY_JS.as_uri()!r};\n"
+        "console.log(JSON.stringify({\n"
+        "  star: STAR_FAMILY_SUFFIX, pipe: PIPE_FAMILY_SUFFIX,\n"
+        "  labelled: [familyLabel('8 Red Coins', false),\n"
+        "             familyLabel('8 Red Coins', true)],\n"
+        "}));")
+    assert js["star"] == STAR_FAMILY_SUFFIX, (
+        f"star suffix disagrees: views.py={STAR_FAMILY_SUFFIX!r} "
+        f"redsfamily.js={js['star']!r}")
+    assert js["pipe"] == PIPE_FAMILY_SUFFIX, (
+        f"pipe suffix disagrees: views.py={PIPE_FAMILY_SUFFIX!r} "
+        f"redsfamily.js={js['pipe']!r}")
+    assert js["labelled"] == [f"8 Red Coins{STAR_FAMILY_SUFFIX}",
+                              f"8 Red Coins{PIPE_FAMILY_SUFFIX}"]
 
 
 # --- the guards themselves --------------------------------------------------

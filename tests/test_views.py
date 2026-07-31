@@ -2123,6 +2123,18 @@ def _reds_pipe_def(db, course_id=16, level=17):
         seed_key="seg:reds->pipe:bitdw")
 
 
+def _legacy_no_reds_def(db, level=17):
+    """A seg:<abbrev>-pipe-shaped definition -- the legacy EXCLUSIVE 'no
+    reds' pipe-only segment (storage/db.py's own v4 schema INSERT,
+    predating the corpus): start on entering the level, end on the pipe
+    warp, no waypoints (cancelled the moment any star is grabbed in real
+    play -- irrelevant to these tests, which never grab one)."""
+    return db.insert_segment_def(
+        "BitDW Pipe Entry", [{"type": "level_enter", "to": level}],
+        [{"type": "warp_entered", "level": level}], [],
+        "2026-07-30T00:00:00Z", seed_key="seg:bitdw-pipe")
+
+
 def _bowser_ranks(tmp_path, mario_cutoff=45.0):
     """star:16:0 with ONE paired Star/Pipe strategy, each carrying only a
     Mario cutoff -- independent of any seeded run's actual time
@@ -2257,6 +2269,53 @@ def test_pipe_segment_carries_the_paired_stars_own_display_names(tmp_path):
     sec2 = seg_section(view2, 1)
     assert sec2["pipe_star_course_name"] is None
     assert sec2["pipe_star_name"] is None
+
+
+def test_legacy_no_reds_segments_matched_by_seed_key_suffix():
+    """Pure unit test of the resolver (views._legacy_no_reds_segments):
+    matches the seg:<abbrev>-pipe suffix. Its Bowser sibling
+    (seg:reds->pipe:<abbrev>, sharing the exact same level) is NOT swept in
+    -- not via an extra exclusion clause, but because that seed_key ends in
+    the course abbreviation ("...bitdw"), never literally "-pipe"; the
+    mutation proves this is the actual reason, not a level-based accident:
+    a row at the SAME level but a DIFFERENT seed_key shape is excluded, and
+    a row with the reds->pipe seed_key RENAMED to end in "-pipe" would be
+    (wrongly) swept in, which is exactly why _reds_pipe_segments' own
+    prefix must never change shape without re-checking this resolver too."""
+    from sm64_events.tracking.views import _legacy_no_reds_segments
+
+    legacy_row = {"id": 5, "seed_key": "seg:bitdw-pipe",
+                 "start_triggers": [{"type": "level_enter", "to": 17}]}
+    reds_pipe_row = {"id": 67, "seed_key": "seg:reds->pipe:bitdw",
+                     "start_triggers": [{"type": "level_enter", "to": 17}]}
+    unrelated_row = {"id": 1, "seed_key": None,
+                     "start_triggers": [{"type": "level_enter", "to": 6}]}
+
+    assert _legacy_no_reds_segments(
+        [legacy_row, reds_pipe_row, unrelated_row]) == {5}
+
+
+def test_legacy_no_reds_segment_is_flagged_for_the_pinned_cards_naming(tmp_path):
+    """Round 2, item 4's missing half (live report 2026-07-30): "the pinned
+    card still says 'BitDW Pipe Entry', not 'No Reds'... all three read 'No
+    Reds', on the card as well as the cell." `is_no_reds_pipe` is the flag
+    practice.js reads to swap in that literal; an ordinary segment (no
+    pairing at all) must not carry it. Made "seen" (a section needs to be
+    armed, targeted, or have attempts) by running a genuine no-reds
+    completion -- enter the level, warp out with no star grab in between."""
+    db, svc, seg_id = _make_with_def(tmp_path, _legacy_no_reds_def)
+    asyncio.run(svc.publish(lvl(1000, 26, 17)))
+    asyncio.run(svc.publish(ev("warp_entered", 2000, {"level": 17})))
+    view = build_session_view(db, svc, clock="igt")
+    sec = seg_section(view, seg_id)
+    assert sec["is_no_reds_pipe"] is True
+    assert sec["pipe_star_entity"] is None, \
+        "the legacy no-reds segment must not also claim a star pairing"
+
+    lblj_success(svc, rta=85)
+    view2 = build_session_view(db, svc, clock="igt")
+    sec2 = seg_section(view2, 1)
+    assert sec2["is_no_reds_pipe"] is False
 
 
 def test_star_and_segment_sections_offer_only_their_own_family(tmp_path):

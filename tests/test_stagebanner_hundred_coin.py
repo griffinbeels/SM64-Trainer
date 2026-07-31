@@ -58,10 +58,11 @@ def test_star_row_never_branches_on_which_star_it_is():
     assert "100 Coins" not in body, \
         "StarRow names the 100-coin star specifically -- it must treat " \
         "every star in `shown` the same way"
-    # The cell's active/armed/rank/sub props read the PLAIN star fields
-    # unconditionally (rankFor/lastStratFor), never a segment's.
+    # The cell's active/rank/sub props read the PLAIN star fields
+    # unconditionally (rankFor/lastStratFor), never a segment's. No `armed`
+    # prop at all since round 2's cell unification (PracticeCell dropped it
+    # outright) -- see test_stagebanner_bowser_row.py's own guard.
     assert "active=${tgt.kind !== \"segment\"" in body
-    assert "armed=${false}" in body
     assert "rank=${rankFor(i)}" in body
     assert "sub=${stratSub(lastStratFor(i))}" in body
 
