@@ -12,10 +12,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 from sm64_events.detectors.igt_clock import IgtClock          # noqa: E402
-from verify_death_clock import (PAUSE_FRAMES, candidates,     # noqa: E402
+from verify_death_clock import (PAUSE_FRAMES, TIMER_SETTINGS,  # noqa: E402
+                                candidates,
                                 counter_tracked_cleanly,
                                 death_report, is_paused,
-                                pause_prompt)
+                                pause_prompt, settings_prompt,
+                                star_report)
 
 
 def running(start_frame, start_counter, n, stall=0):
@@ -122,3 +124,51 @@ def test_the_pause_prompt_offers_exactly_two_labelled_answers():
     # and says what each one costs, so the human is not just reading digits
     assert "death.py is right as it stands" in text
     assert "death.py should use the shared clock" in text
+
+
+def test_the_pause_prompt_says_which_timer_to_read():
+    """REALTMR is its own GRAB/XCAM switch, so a second timer can be on screen
+    beside the IGT one. 'Usamune's timer' alone is ambiguous, and the two are
+    not the same clock — an answer read off the wrong one is worse than none."""
+    text = pause_prompt(1, 1077)
+    assert "SECTION timer" in text
+    assert "real-time" in text
+
+
+def test_the_settings_prompt_asks_for_all_five_timer_switches():
+    """STOP/DISPLAY/REALTMR are INDEPENDENT switches (live report 2026-08-01:
+    two screenshots of one scene differing only in STOP), so a prompt that
+    asked only about the suspicious one would collect an uninterpretable
+    reading."""
+    text = settings_prompt()
+    for name in ("STOP", "DISPLAY", "REALTMR", "PSSRACE", "FADETMR"):
+        assert f"{name}=" in text, name
+    assert TIMER_SETTINGS == ("STOP", "DISPLAY", "REALTMR", "PSSRACE",
+                              "FADETMR")
+
+
+def test_the_settings_prompt_is_honest_that_nothing_reads_them_from_memory():
+    """No settings block is in the address registry. Saying so stops the next
+    reader assuming the probe already classifies by configuration."""
+    assert "not being hunted" in settings_prompt() or \
+           "none is being hunted" in settings_prompt()
+
+
+def test_the_star_report_distinguishes_usamunes_value_from_our_own_moment():
+    """The whole XCAM question turns on this: `result` is what Usamune WROTE
+    when it stopped and may honour STOP for free; `counter` is our own
+    action-edge moment and cannot. A report that read the same for both would
+    make the measurement worthless."""
+    from_result = star_report(1, "Whomp's Fortress", "Chip Off", 370, "result")
+    from_counter = star_report(1, "Whomp's Fortress", "Chip Off", 370, "counter")
+    assert "Usamune's OWN written value" in from_result
+    assert "cannot" in from_counter and "OUR action-edge moment" in from_counter
+    assert from_result != from_counter
+
+
+def test_the_star_report_asks_for_the_size_of_the_gap_not_just_its_existence():
+    """'They differ' does not size the exposure; the gap in frames is what a
+    later fix would have to reproduce."""
+    text = star_report(1, "Whomp's Fortress", "Chip Off", 370, "result")
+    assert "SIZE of the gap" in text
+    assert '0\'12"33' in text and "370 frames" in text
