@@ -5,6 +5,13 @@
 
 Read-only: no database, no server, no recorder lock. Safe while recording.
 
+ANSWERED 2026-08-01 — yes, and `detectors/star_grab.py` now ships it: the
+x-cam moment is the star-DANCE entry and Usamune's number is that frame's
+overall counter + `IgtClock.DISPLAY_TICK`. So this is now a REGRESSION GATE
+first and a derivation second — the summary scores what we actually journal
+against Usamune's own answer and prints GATE PASSED / GATE FAILED, alongside
+the same candidate table that found the derivation in the first place.
+
 ## Why this matters more than the last two probes
 
 X-cam is not a display preference, it is a LEGALITY rule. Usamune's manual:
@@ -52,14 +59,13 @@ If nothing comes back CONSTANT, that is a real finding too and it means x-cam
 is not a Mario-action transition — say so rather than picking the closest.
 """
 import time
+from collections import deque
 
 from sm64_events.core.snapshot import SnapshotReader
 from sm64_events.core.timefmt import format_igt
 from sm64_events.detectors.star_grab import StarGrabDetector
 from sm64_events.memory.addresses import (ACT_FALL_AFTER_STAR_GRAB,
-                                          ACT_STAR_DANCE_EXIT,
-                                          ACT_STAR_DANCE_NO_EXIT,
-                                          ACT_STAR_DANCE_WATER)
+                                          STAR_DANCE_ACTIONS)
 from sm64_events.memory.pj64 import Pj64Memory
 
 POLL_HZ = 60
@@ -68,11 +74,14 @@ SETTLE_FRAMES = 240   # 8 s; the longest observed result write was +39
 # "Mario touches the ground after star-grab" — the dance is what he enters
 # when he gets there. A midair grab goes ACT_FALL_AFTER_STAR_GRAB first and
 # only reaches a dance on landing (live 2026-08-01: a WF caged-island grab
-# settled +39 frames after the touch, which is the fall).
-DANCE_ACTIONS = frozenset({ACT_STAR_DANCE_EXIT, ACT_STAR_DANCE_WATER,
-                           ACT_STAR_DANCE_NO_EXIT})
+# settled +39 frames after the touch, which is the fall). The action ids live
+# in addresses.py because star_grab.py now ships this derivation.
+DANCE_ACTIONS = STAR_DANCE_ACTIONS
 
 FRAME, ACTION, OVERALL, RESULT = 0, 1, 2, 3
+
+# The candidate that is the shipped code, scored beside the hypotheses.
+JOURNALED = "what we journal"
 
 
 # --- pure core (tests/test_derive_xcam.py drives these) ---------------------
@@ -182,8 +191,28 @@ def summary(scored: list[dict[str, int]]) -> str:
         lines.append(f"  {verdict:<18} {name:<22} errors: "
                      + ", ".join(f"{value:+d}" for value in values))
     lines.append("")
+    shipped = scores.get(JOURNALED)
+    if shipped is not None:
+        values, supported = shipped
+        if supported == 0:
+            lines.append(f"  GATE PASSED — '{JOURNALED}' matched Usamune on "
+                         f"all {len(values)} scoreable grab(s).")
+        elif supported is not None:
+            lines.append(f"  GATE FAILED — '{JOURNALED}' is off by a CONSTANT "
+                         f"{supported:+d}. A constant is a calibration bug, "
+                         f"not a wrong")
+            lines.append("  moment: check IgtClock.DISPLAY_TICK. An offset of "
+                         "one frame over few grabs")
+            lines.append("  can still be our own read skew — take more before "
+                         "changing anything.")
+        else:
+            lines.append(f"  GATE FAILED — '{JOURNALED}' VARIES, so we are "
+                         f"still choosing the wrong MOMENT,")
+            lines.append("  not merely the wrong offset. That is the same "
+                         "shape as the original bug.")
+        lines.append("")
     winners = [(name, supported) for name, (_, supported) in scores.items()
-               if supported is not None]
+               if supported is not None and name != JOURNALED]
     if winners:
         name, supported = winners[0]
         lines.append(f"  '{name}' is the x-cam moment, and Usamune's number is "
@@ -230,7 +259,10 @@ def grab_report(index: int, course_name: str, star_name: str,
     truth_frames, truth_at = truth
     lines.append(f"  Usamune's answer   {format_igt(truth_frames):>9}  "
                  f"({truth_frames}f, written +{truth_at - touch_frame})")
-    scored = {}
+    # What we SHIP is a candidate like any other, and since 2026-08-01 it is
+    # the interesting one: star_grab.py now derives the x-cam itself, so this
+    # row is the regression gate. A CONSTANT +0 here is the whole answer.
+    scored = {JOURNALED: journaled_frames - truth_frames}
     for name, (frame, counter) in priced.items():
         error = counter - truth_frames
         scored[name] = error
@@ -242,9 +274,15 @@ def grab_report(index: int, course_name: str, star_name: str,
 # --- live shell ------------------------------------------------------------
 
 class PendingGrab:
-    def __init__(self, index: int, event, touch_frame: int):
+    def __init__(self, index: int, event, touch_frame: int,
+                 seed: list[tuple[int, int, int, int]] | None = None):
         self.index, self.event, self.touch_frame = index, event, touch_frame
-        self.samples: list[tuple[int, int, int, int]] = []
+        # Seeded from the shell's rolling buffer, because star_grab.py emits at
+        # the X-CAM now, not at the grab: by the time the event arrives Mario
+        # has already landed, and both the grab edge and Usamune's own write
+        # under STOP=XCAM are in the past. Watching only forward from the event
+        # would see no write at all and silently score nothing.
+        self.samples: list[tuple[int, int, int, int]] = list(seed or [])
 
     def observe(self, snap) -> None:
         # ONE sample per game frame. The poll runs at 60 Hz over a 30 fps game,
@@ -286,15 +324,22 @@ def main() -> None:
     detector = StarGrabDetector()
     pending: list[PendingGrab] = []
     scored: list[dict[str, int]] = []
+    recent: deque[tuple[int, int, int, int]] = deque(maxlen=SETTLE_FRAMES * 2)
     prev = None
     grabs = 0
     try:
         while True:
             curr = reader.read()
+            if not recent or curr.global_timer > recent[-1][FRAME]:
+                recent.append((curr.global_timer, curr.mario_action,
+                               curr.igt_overall, curr.igt_result))
             if prev is not None:
                 for event in detector.process(prev, curr):
                     grabs += 1
-                    pending.append(PendingGrab(grabs, event, event.frame))
+                    touch = event.payload["grab_frame"]
+                    pending.append(PendingGrab(
+                        grabs, event, touch,
+                        [s for s in recent if s[FRAME] >= touch]))
             for grab in pending:
                 grab.observe(curr)
             still_open = []

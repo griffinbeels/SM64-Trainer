@@ -98,15 +98,25 @@ ACT_FALL_AFTER_STAR_GRAB = 0x00001904  # midair grabs; live-verified 2026-06-10
 # at frame 12160 (third replication of gLastCompleted* staying unrelated).
 ACT_JUMBO_STAR_CUTSCENE = 0x00001909
 
-STAR_GRAB_ACTIONS = frozenset({
+# THE X-CAM MOMENT. Usamune's manual defines Xcam as "Mario touches the ground
+# after star-grab", and a star dance is what he enters when he gets there —
+# measured 2026-08-01 (tools/derive_xcam.py, four midair grabs scored against
+# Usamune's own settled result: the dance-entry counter + IgtClock.DISPLAY_TICK
+# came back within one frame every time, against -4/-11/-23/-39 for the grab
+# frame). A GROUND grab enters a dance on the grab frame itself, which is why
+# grab and x-cam coincide there ("I just simply ran into the star… grabbing and
+# xcam is identical", 2026-08-01); only a MIDAIR grab separates the two.
+STAR_DANCE_ACTIONS = frozenset({
     ACT_STAR_DANCE_EXIT,
     ACT_STAR_DANCE_WATER,
     ACT_STAR_DANCE_NO_EXIT,
-    ACT_FALL_AFTER_STAR_GRAB,
-    # ACT_JUMBO_STAR_CUTSCENE is intentionally NOT in this set — adding it
-    # would make star_grab.py suppress a hypothetical real star-dance in B3.
-    # The key detector uses it directly via FIGHT_END_LEVELS instead.
 })
+
+# The grab moment: a dance (ground) or the fall that precedes one (midair).
+# ACT_JUMBO_STAR_CUTSCENE is intentionally NOT in this set — adding it
+# would make star_grab.py suppress a hypothetical real star-dance in B3.
+# The key detector uses it directly via FIGHT_END_LEVELS instead.
+STAR_GRAB_ACTIONS = STAR_DANCE_ACTIONS | frozenset({ACT_FALL_AFTER_STAR_GRAB})
 
 # Post-star "SAVE & CONTINUE?" course-complete screen. Exiting a course WITH a
 # star lands Mario in ACT_EXIT_LAND_SAVE_DIALOG; the save-options menu

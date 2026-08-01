@@ -24,7 +24,7 @@ uv run python -m sm64_events.main                    # run from repo root (data/
 uv run python tools/verify_addresses.py              # live gate (needs PJ64 + ROM)
 uv run python tools/verify_death_clock.py            # live gate, ANSWERED 2026-08-01 (raw counter); re-run only to re-check
 uv run python tools/verify_star_stop.py              # live gate, ANSWERED 2026-08-01: the screen is Usamune's RESULT store once it SETTLES (10/10)
-uv run python tools/derive_xcam.py                   # live gate: x-cam = star-dance entry + DISPLAY_TICK (scores itself; just play, MIDAIR grabs only)
+uv run python tools/derive_xcam.py                   # live gate, ANSWERED + now the REGRESSION gate: scores what we journal against Usamune (just play; MIDAIR grabs are the ones that measure)
 uv run python tools/dev_cleanup.py                   # kill orphaned dev/harness servers (auto-runs at session start)
 uv run python tools/dedupe_journal.py data/tracker.db  # scan double-journaled events; --fix repairs (server stopped)
 uv run pytest tests/test_responsive.py -q            # render every breakpoint; report layout defects (no PJ64 needed)

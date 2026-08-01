@@ -189,14 +189,34 @@ lockstep.
 ## Why there are three timers (history, not derivable from code)
 
 Usamune keeps a SECTION counter (resets on every area warp inside a level),
-a running OVERALL star-time counter, and a final-result store written at
-the grab. The section counter lives in object-pool behavior data and was
-our first IGT source — it validated perfectly on single-area stars (where
-section == overall) and failed on "Inside the Ancient Pyramid" (multi-area).
-The overall counter and result store are static expansion-RAM globals and
-are what events use now. Lesson encoded here: validation scenarios must
-break the degeneracy between candidate interpretations, not just confirm
-values match.
+a running OVERALL star-time counter, and a final-result store. The section
+counter lives in object-pool behavior data and was our first IGT source — it
+validated perfectly on single-area stars (where section == overall) and failed
+on "Inside the Ancient Pyramid" (multi-area). The overall counter and result
+store are static expansion-RAM globals and are what events use now. Lesson
+encoded here: validation scenarios must break the degeneracy between candidate
+interpretations, not just confirm values match.
+
+**Corrected 2026-08-01 — the result store is NOT "written at the grab"; it is
+written whenever the player's `STOP` setting says Usamune's timer stops**, and
+that is a leaderboard-legality rule rather than a display preference. *Grab*
+writes once at the star touch; *Xcam* writes once when Mario lands afterwards;
+*GrabX* writes TWICE, at the touch and again at the landing; *None* never
+writes. Measured 10/10 across three TIMER presets (`tools/verify_star_stop.py`)
+and again automatically against that ground truth (`tools/derive_xcam.py`).
+Two consequences that are not local to one detector:
+
+- **The OVERALL counter never stops** — the manual says so and it held under
+  every setting, running on 40–79 frames past every grab, all the way to the
+  star-select screen. That is what lets us derive the legal x-cam time from
+  Mario's own actions rather than from the player's menu, which is what
+  `detectors/star_grab.py` now does.
+- **A grab-time and an x-cam time are different QUANTITIES**, not the same
+  quantity measured with different precision. They coincide only when Mario
+  grabs the star on the ground. Everything holding a star time from before
+  2026-08-01 holds the grab quantity and cannot be back-derived: the journal
+  keeps no post-grab frames, so the fix is forward-only and old rows can be
+  marked, never repaired.
 
 ## Memory hunting playbook
 

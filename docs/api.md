@@ -38,17 +38,28 @@ Every WebSocket message is a versioned envelope:
              "star_id": 1, "star_name": "Shining Atop the Pyramid",
              "already_collected": true,
              "igt_frames": 595, "igt": "0'19\"83",
-             "igt_source": "result", "igt_reconstructed": false}}
+             "igt_source": "result", "igt_reconstructed": false,
+             "igt_timed_at": "xcam", "grab_frame": 594}}
 ```
 
 - `seq`: monotonic per server run (gap = missed events)
-- `frame`: game-frame stamp (30 fps), back-computed to the exact touch frame
+- `frame`: game-frame stamp (30 fps), back-computed to the exact moment the
+  time describes — for `star_collected` that is the **x-cam** frame (see
+  `igt_timed_at`), which on a midair grab is later than `grab_frame`
 - `star_id`: 0-based within the course (6 = 100-coin star)
 - `igt`: Usamune's overall star time — the number shown on screen, correct
   across multi-area levels; `igt_frames` is the same in raw frames
 - `igt_source`: `result` (Usamune's own stored final time — exact),
   `counter` (running overall counter, back-computed), `reconstructed` (see
   Behavior notes)
+- `igt_timed_at` *(star_collected only, added 2026-08-01)*: `xcam` — the time
+  is the leaderboard-legal one, taken when Mario landed after the grab — or
+  `grab`, the fallback for a grab that never reached a star dance (savestate
+  load, level change, or the 300-frame backstop). Usamune's own `STOP` setting
+  does not enter into it: the x-cam moment is derived from Mario's actions, so
+  the number is legal whatever the TIMER menu says
+- `grab_frame` *(star_collected only, added 2026-08-01)*: the frame Mario
+  touched the star. Equal to `frame` on a ground grab, earlier on a midair one
 
 **Breaking change (phase 1):** `game_reset` now fires **only** on backward
 timer jumps into the boot range (console reset / ROM reload). Savestate and
@@ -381,3 +392,5 @@ Deleting the file resets all history.
   its `already_collected` flag may be wrong. Savestates saved outside a
   dance are safe. Usamune section states are typically safe.
 - Bowser-stage fight-ending grabs all emit `key_grabbed`: Bowser 1/2 keys (star-dance actions in arenas 30/33) and the B3 grand star (`ACT_JUMBO_STAR_CUTSCENE` in arena 34, live-verified 2026-06-12). The grand star never emits `star_collected` — it is not a collectable star.
+- `key_grabbed` and `warp_entered` are timed at the TOUCH, not at an x-cam. For a pipe there is no x-cam; for the grand star, whether Usamune's `STOP` moves the number is unmeasured, and `ACT_JUMBO_STAR_CUTSCENE` has no fall/dance pair to derive one from. So a Bowser-3 time is not known to be leaderboard-legal the way a star time now is.
+- Star times recorded before 2026-08-01 are grab-frame times, which under `STOP` of Grab or GrabX is a different quantity from the x-cam time and is not leaderboard-legal. They cannot be repaired: the journal keeps no frames after the grab, so the derivation has nothing to run on. Forward-only fix.

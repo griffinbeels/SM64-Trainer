@@ -202,6 +202,23 @@ INVARIANTS = (
             "tests/test_cross_language_parity.py compares the two real "
             "constants rather than either restating the other.",
     ),
+    SingleSource(
+        concept="which Mario actions are the x-cam moment",
+        owners=frozenset({"addresses.py"}),
+        tokens=("ACT_STAR_DANCE_EXIT", "ACT_STAR_DANCE_WATER",
+                "ACT_STAR_DANCE_NO_EXIT"),
+        files=python_sources(),
+        why="The x-cam moment -- Usamune's own stop condition, and the "
+            "difference between a leaderboard-legal star time and an invalid "
+            "one -- is 'Mario entered a star dance'. addresses.py::"
+            "STAR_DANCE_ACTIONS is that set, and STAR_GRAB_ACTIONS is derived "
+            "from it so the two can never drift apart. Naming a MEMBER outside "
+            "the registry means assembling a second set by hand, which is what "
+            "tools/derive_xcam.py did while the derivation was being found "
+            "(2026-08-01): a fourth dance action added to the registry would "
+            "have reached the detector and not the probe that validates it, "
+            "and the probe would have gone on reporting GATE PASSED.",
+    ),
 )
 
 

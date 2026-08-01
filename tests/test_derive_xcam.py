@@ -15,8 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 from sm64_events.memory.addresses import (ACT_FALL_AFTER_STAR_GRAB,  # noqa: E402
                                           ACT_STAR_DANCE_EXIT)
-from derive_xcam import (ACTION, DANCE_ACTIONS, FRAME, OVERALL,     # noqa: E402
-                         RESULT, SAMPLING_SKEW, SETTLE_FRAMES,
+from derive_xcam import (ACTION, DANCE_ACTIONS, FRAME, JOURNALED,   # noqa: E402
+                         OVERALL, RESULT, SAMPLING_SKEW, SETTLE_FRAMES,
                          PendingGrab, candidates, errors,
                          first_sample_in, grab_report, settled_result,
                          summary, was_midair)
@@ -220,3 +220,51 @@ def test_the_sample_tuple_layout_is_what_every_helper_assumes():
     """Four indices shared by six functions and the live loop. A silent
     reorder would make every reading wrong and every test still pass."""
     assert (FRAME, ACTION, OVERALL, RESULT) == (0, 1, 2, 3)
+
+
+# --- the gate on the SHIPPED derivation ------------------------------------
+#
+# star_grab.py derives the x-cam itself since 2026-08-01, so the probe's first
+# job is no longer "which candidate is the moment" but "is the code right".
+# That row has to be scored like any other candidate, or the probe answers a
+# question nobody is asking any more.
+
+def test_what_we_journal_is_scored_against_usamune():
+    samples = stream(600, 60, dance_at=39, fall_until=39,
+                     result_at=39, result_value=639, stale_result=452)
+    _, scored = grab_report(1, "Whomp's Fortress", "Fall onto the Caged Island",
+                            639, "counter", TOUCH, samples)
+    assert scored[JOURNALED] == 0
+
+
+def test_the_gate_passes_only_on_an_exact_match():
+    text = summary([{JOURNALED: 0}, {JOURNALED: 0}, {JOURNALED: 0}])
+    assert "GATE PASSED" in text
+    assert "GATE FAILED" not in text
+
+
+def test_a_constant_offset_is_reported_as_a_calibration_bug():
+    text = summary([{JOURNALED: 1}, {JOURNALED: 1}])
+    assert "GATE FAILED" in text
+    assert "DISPLAY_TICK" in text
+    assert "read skew" in text          # one frame may still be ours
+
+
+def test_a_varying_error_is_reported_as_the_wrong_moment():
+    """The distinction is the whole diagnosis: a constant is arithmetic, a
+    spread is the original bug wearing new numbers."""
+    text = summary([{JOURNALED: 0}, {JOURNALED: -9}, {JOURNALED: -28}])
+    assert "GATE FAILED" in text
+    assert "wrong MOMENT" in text
+    assert "DISPLAY_TICK" not in text
+
+
+def test_a_pending_grab_keeps_the_samples_taken_before_the_event():
+    """star_grab.py emits at the LANDING now, so by the time the event
+    arrives the grab edge — and under STOP=XCAM, Usamune's own write — are
+    already in the past. A window that only watched forward would score
+    nothing and say so in a way that reads like a clean run."""
+    before = stream(600, 10, fall_until=10)
+    grab = PendingGrab(1, None, TOUCH, before)
+    assert grab.samples[0][FRAME] == TOUCH
+    assert len(grab.samples) == 10
