@@ -532,9 +532,28 @@ class TrackerService:
                                      payload=self.target_payload()))
 
     async def clear_attempt(self, attempt_id: int, reason: str | None = None) -> None:
+        """Hide one attempt, and UNDO any PB it saved.
+
+        Hiding is "that run was a mistake", so the save it set is a mistake
+        too. A pb row carries its own `frames`, so one left behind does not sit
+        there inertly — it keeps GRADING: deleting a PB'd attempt left the star
+        reading MARIO 1 off a row hidden from the log (live report 2026-07-29),
+        and a cleared row shows no Undo PB button, so the only way back out was
+        restore → Undo PB → delete again. `delete_pbs_for_attempts` is the same
+        door session wipes and session deletion use, with the same consequence:
+        the previous save (latest remaining row) becomes current again, or the
+        entity simply has no PB. RESTORING does not bring the save back — the
+        row is gone — and Save as PB on the restored row is one click.
+
+        The pb delete runs BEFORE the journal write, for the reason
+        set_attempt_strat's retag runs first: it is the half with no self-heal
+        path. Failing after the journal write strands exactly the bug above,
+        invisibly and unreachably; failing after the delete leaves a visible
+        row with its own Save as PB button."""
         db = self._require_db()
         if not any(a.id == attempt_id for a in db.attempts()):
             raise LookupError(f"no attempt {attempt_id}")
+        db.delete_pbs_for_attempts([attempt_id])
         await self.publish(Event(type="attempt_cleared", frame=0,
                                  timestamp_utc=_now(),
                                  payload={"attempt_id": attempt_id, "reason": reason}))

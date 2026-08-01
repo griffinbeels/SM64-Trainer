@@ -881,6 +881,38 @@ class Database:
                 for r in rows]
 
     # -- pbs -----------------------------------------------------------------
+    # A saved PB whose attempt is HIDDEN does not count. Both readers below
+    # carry this clause and nothing else in the codebase reads the table, so
+    # there is one answer to "which saved times count" and no call site can
+    # forget it (tests/test_single_source.py pins that).
+    #
+    # Deleting the row is the wrong tool for the hidden-by-a-RULE case, which
+    # is why this is a read filter and not another cleanup: a success outside
+    # its star's validity bounds is auto-cleared by the projector
+    # (projection.py), the bounds are editable, and re-widening them brings the
+    # attempt back — so its save has to come back with it. A row deleted on
+    # reprojection could not. `clear_attempt` still deletes outright, because a
+    # MANUAL hide is a judgement about the run and the user asked for it to
+    # undo the save for good.
+    #
+    # Retroactive by construction: an install whose db already holds a pb row
+    # on a hidden attempt (every one from before 2026-07-29) stops grading it
+    # on the next read, with no migration.
+    #
+    # `attempt_id IS NULL` rows were never tied to an attempt and always count
+    # — the same rule delete_orphaned_pbs applies, and it falls out of NOT
+    # EXISTS for free (`attempts.id = NULL` matches nothing), so it is pinned by
+    # a test rather than spelled out in the SQL.
+    #
+    # NOT EXISTS against the attempts PRIMARY KEY, deliberately, not
+    # `NOT IN (SELECT id FROM attempts WHERE cleared=1)`: that form re-scans all
+    # ~2k attempts on every call and took current_pb from 4 to 66 us (measured
+    # against the live db). One rowid lookup per candidate row instead gives
+    # current_pb back for free — 4.5 us, and it is called once per route
+    # candidate per view build.
+    _VISIBLE_PB = (" NOT EXISTS (SELECT 1 FROM attempts"
+                   " WHERE attempts.id = pbs.attempt_id AND attempts.cleared=1)")
+
     def insert_pb(self, course_id: int | None, star_id: int | None,
                   strat_tag: str | None, timer_mode: str, frames: int,
                   attempt_id: int | None, saved_utc: str,
@@ -896,8 +928,16 @@ class Database:
             return cur.lastrowid
 
     def pbs(self) -> list[dict]:
+        """Every saved PB that still counts, id-ordered (later saves win).
+
+        Rows on hidden attempts are filtered out — see _VISIBLE_PB. This is
+        the GRADING view of the table, which is what every caller wants; the
+        delete/repair paths (delete_orphaned_pbs, delete_pbs_for_*) speak SQL
+        directly and see every row."""
         with self._lock:
-            rows = self._conn.execute("SELECT * FROM pbs ORDER BY id").fetchall()
+            rows = self._conn.execute(
+                "SELECT * FROM pbs WHERE" + self._VISIBLE_PB
+                + " ORDER BY id").fetchall()
             return [dict(r) for r in rows]
 
     def current_pb(self, course_id: int | None, star_id: int | None,
@@ -910,17 +950,23 @@ class Database:
 
         When strat_tag is given, restricts to PBs achieved WITH that
         strategy — the per-strategy ranking lookup (only a strategy's own
-        times count toward its rank; the overall/strat-blind PB never does)."""
+        times count toward its rank; the overall/strat-blind PB never does).
+
+        Rows on hidden attempts are skipped (see _VISIBLE_PB), so hiding the
+        current PB's run resolves to the previous save exactly as undoing it
+        by hand does."""
         strat_clause = " AND strat_tag=?" if strat_tag is not None else ""
         strat_param = (strat_tag,) if strat_tag is not None else ()
         if segment_id is not None:
             q = ("SELECT * FROM pbs WHERE segment_id=? AND timer_mode=?"
-                 + strat_clause + " ORDER BY id DESC LIMIT 1")
+                 + strat_clause + " AND" + self._VISIBLE_PB
+                 + " ORDER BY id DESC LIMIT 1")
             params = (segment_id, timer_mode) + strat_param
         else:
             q = ("SELECT * FROM pbs WHERE course_id=? AND star_id=?"
                  " AND segment_id IS NULL AND timer_mode=?"
-                 + strat_clause + " ORDER BY id DESC LIMIT 1")
+                 + strat_clause + " AND" + self._VISIBLE_PB
+                 + " ORDER BY id DESC LIMIT 1")
             params = (course_id, star_id, timer_mode) + strat_param
         with self._lock:
             row = self._conn.execute(q, params).fetchone()

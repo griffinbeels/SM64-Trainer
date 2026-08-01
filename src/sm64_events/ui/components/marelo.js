@@ -5,7 +5,7 @@
 import { h } from "preact";
 import { useEffect } from "preact/hooks";
 import htm from "htm";
-import { capName, divisionDigit, rankColor } from "./caps.js";
+import { barFill, capName, divisionDigit, rankColor } from "./caps.js";
 import { RankIcon } from "./rankicon.js";
 import { useTween } from "../useTween.js";
 import { useRankClimb } from "../rankclimb.js";
@@ -155,9 +155,18 @@ export function RouteRankCard({ marelo, routes = [], activeRouteId = null,
     : (climb ? climb.division : null);
   const iconProps = swapping ? swap.icon : (climb ? climb.icon : null);
   const haveIcon = swapping || !!climb;
+  // The swap carries RAW fills (routeswap.js snapshots the payload, not the
+  // climb), so it converts here, and it lerps the two DRAWN widths rather
+  // than the two fills: the bar is anchored at its midpoint for every rank
+  // except the ladder floor (caps.js::barFill), so two routes at different
+  // rungs do not share one scale — anchoring after the lerp would jump the
+  // bar on the exact frame the exchange swaps which rank it is measuring.
+  // The resting path needs no conversion: `climb.bar` is already drawn.
+  const drawnFill = (entry) => (entry
+    ? barFill(entry.tier, entry.division, entry.fill) : 0);
   const barFillFraction = swapping
-    ? swap.from.fill + (swap.to.fill - swap.from.fill) * swapEase
-    : (climb ? climb.fill : 0);
+    ? drawnFill(swap.from) + (drawnFill(swap.to) - drawnFill(swap.from)) * swapEase
+    : (climb ? climb.bar : 0);
   // The track's OWN colour crosses over on the same clock -- otherwise the
   // bar would lerp smoothly while its fill colour snapped straight to the
   // new route's tier, which is exactly the "a surface that goes away

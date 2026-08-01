@@ -139,6 +139,50 @@ INVARIANTS = (
             "field name is an identifier, a beat kind is always a string.",
     ),
     SingleSource(
+        concept="turning a TIME into a rank",
+        owners=frozenset({"scoring.py"}),
+        # A BARE identifier, not `score_for(`: `code_only` tokenizes and joins
+        # with newlines, so a name and its opening paren are never adjacent in
+        # the scanned text and a token carrying one matches nothing, forever.
+        # `time_for_score` does not contain this substring, so the sibling
+        # function is not swept up by it.
+        tokens=("score_for",),
+        files=python_sources(),
+        why="`score_for` is the raw curve and answers with a SCORE against an "
+            "exact band edge. A production caller holding a real time wants "
+            "`scoring.progress_for_time`, which additionally applies the "
+            "ladder's displayed-centisecond boundary rule -- the one that "
+            "stopped a banner reading '0.00s to rank up' (2026-07-29). The "
+            "two disagree by at most half a centisecond, and that is exactly "
+            "the size of divergence nobody notices in review: three call "
+            "sites graded times through the raw curve (tracking/marelo.py's "
+            "two score paths, the history chart's scorer in "
+            "server/ranks_api.py) while the section banner went through the "
+            "rule, so the Rank tab could name a division the practice card "
+            "had already awarded. That is the same shape as the Platinum "
+            "II/Diamond V split docs/architecture.md records. `score_for` "
+            "stays exported -- the invariant test and the curve's own tests "
+            "grade with it deliberately, and tests are not scanned here.",
+    ),
+    SingleSource(
+        concept="where a rank progress bar's empty is",
+        owners=frozenset({"caps.js"}),
+        tokens=("FILL_ANCHOR",),
+        files=ui_js(),
+        why="Every rank bar starts HALF full and scales the current "
+            "division across the remaining half, except at the ladder floor "
+            "where it starts empty (user, 2026-07-29: 'the intention is to "
+            "anchor the user towards feeling like they ALWAYS are making "
+            "progress'). caps.js::barFill is the door and takes IDENTITY — "
+            "tier, division, fill — so a caller has no ingredients to "
+            "assemble differently. A second file naming the anchor is a "
+            "second surface deciding where empty is, and two bars on one "
+            "screen disagreeing about that is not a subtle bug.\n"
+            "tests/test_ui_rank_bar.py carries the other half, and it is the "
+            "half that actually bites: a bar drawn from a RAW fill names no "
+            "ingredient at all, so this row cannot see it.",
+    ),
+    SingleSource(
         concept="the server's TCP port",
         owners=frozenset({"paths.py"}),
         tokens=("8064", "8065"),
@@ -241,6 +285,36 @@ def test_only_the_owner_may_derive_it(invariant):
     assert not found, (
         f"{invariant.concept} has one source of truth ({', '.join(sorted(invariant.owners))}) "
         f"and these files build their own: {found}\n{invariant.why}")
+
+
+def test_every_ingredient_can_actually_match_code():
+    """A token that never appears in its OWN owner cannot catch anyone.
+
+    Found the hard way on 2026-07-29, adding the `score_for` row: it shipped
+    as `"score_for("`, and `code_only` TOKENIZES and joins with newlines, so a
+    name and its opening paren are never adjacent in the text being scanned.
+    The row read as a guard, went green, and stayed green with the violation
+    planted in `tracking/marelo.py` — a guard nobody has seen fail is green
+    forever, and this one could never have failed at all.
+
+    Mutation-proving a row catches THAT row, and only if someone remembers.
+    This catches the class, on every run, for every row ever added. Tokens
+    must be bare identifiers (`score_for`, `FILL_ANCHOR`, `stage.mode`) or
+    quoted string literals (`'"tierskip"'`) — a paren belongs to nobody."""
+    for invariant in INVARIANTS:
+        owned = [path for path in invariant.files
+                 if path.name in invariant.owners]
+        assert owned, (
+            f"{invariant.concept}: none of {sorted(invariant.owners)} is in "
+            "the scanned file set, so the row exempts a file that is not "
+            "there and scans everything else for ingredients nobody owns")
+        bodies = "\n".join(code_only(path) for path in owned)
+        dead = [token for token in invariant.tokens if token not in bodies]
+        assert not dead, (
+            f"{invariant.concept}: {dead} never appear in "
+            f"{sorted(invariant.owners)} as `code_only` sees them, so no "
+            "other file can be caught naming them either. Use a bare "
+            "identifier or a quoted literal — never a name carrying a paren.")
 
 
 def test_the_guards_can_still_fail():
@@ -383,3 +457,44 @@ def test_the_fragment_guard_can_still_fail():
     scan = lambda text: "h.Fragment" in text
     assert scan("return html`<${h.Fragment}>x<//>`")
     assert not scan("// never write h dot Fragment here")
+
+
+_PBS_SQL = re.compile(r"(?i)(from|into|update)\s+pbs\b")
+
+
+def test_only_the_storage_layer_queries_the_pbs_table():
+    """"Which saved PBs count" is answered in SQL, once, by
+    `storage/db.py::_VISIBLE_PB`: a row whose attempt is HIDDEN does not count,
+    because a pb row carries its own `frames` and grades with it. Both readers
+    (`pbs`, `current_pb`) carry the clause; a query written anywhere else would
+    silently not, which is the bug it was added for (a star graded MARIO 1 off
+    an attempt the practice log no longer showed, 2026-07-29).
+
+    So the door is the TABLE, not a function: no file outside storage/db.py may
+    name `pbs` in SQL at all. That is stricter than "call db.pbs()" and it is
+    the version with teeth — a second query is exactly what cannot be written,
+    rather than something a reviewer has to notice. db.py's own delete/repair
+    statements see every row deliberately (an orphan must be collectable, and a
+    manual hide deletes outright)."""
+    offenders = sorted(path.relative_to(SRC).as_posix()
+                       for path in SRC.rglob("*.py")
+                       if path != SRC / "storage" / "db.py"
+                       and _PBS_SQL.search(code_only(path)))
+    assert not offenders, (
+        f"{offenders} query the pbs table directly and so skip db.py's "
+        "_VISIBLE_PB clause — a PB on a hidden attempt would grade again. "
+        "Read through db.pbs()/db.current_pb() instead.")
+
+
+def test_the_pbs_table_guard_can_still_fail():
+    """Both directions, through the same code_only() the guard uses: real SQL
+    trips it, prose about the table does not. The `pbs_v2` migration table must
+    not trip it either — `\\b` after `pbs` is what makes that true, and it is
+    the one spelling that already exists in the file being excluded."""
+    real = code_only(Path("sample.py"),
+                     'rows = conn.execute("SELECT * FROM pbs ORDER BY id")\n')
+    prose = code_only(Path("sample.py"),
+                      '# never SELECT from pbs outside the storage layer\n')
+    assert _PBS_SQL.search(real)
+    assert not _PBS_SQL.search(prose)
+    assert not _PBS_SQL.search('x = "INSERT INTO pbs_v2 (id) VALUES (1)"')

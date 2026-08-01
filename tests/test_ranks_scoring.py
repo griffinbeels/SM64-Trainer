@@ -1,8 +1,8 @@
 from sm64_events.ranks.classify import rank_for
 from sm64_events.ranks.scoring import (
     SCORE_ANCHORS, best_ladder, defined_tiers, division_for, division_progress,
-    next_tier_target, progression_key, score_for, tier_band, tier_from_score,
-    time_for_score)
+    next_tier_target, progress_for_time, progression_key, score_for, tier_band,
+    tier_from_score, time_for_score)
 
 # centiseconds, hardest -> easiest (the SSL "Nuts Pless" ladder)
 NUTS = {"Mario": 1293, "Grandmaster": 1303, "Master": 1316, "Diamond": 1336,
@@ -172,3 +172,72 @@ def test_time_for_score_inverts_the_iron_tail():
 def test_time_for_score_is_none_for_an_empty_ladder_or_a_zero_score():
     assert time_for_score({}, 50.0) is None
     assert time_for_score(NUTS, 0.0) is None
+
+
+# ---- progress_for_time: the displayed-centisecond boundary ---------------
+#
+# The whole app grades DISPLAYED centiseconds (classify.py's docstring), and a
+# tier cutoff is inclusive: `time_cs <= cutoff` earns it. A DIVISION edge is
+# interpolated, so it lands at a fractional centisecond that time_for_score
+# rounds to report -- which is how a banner came to read "0.00s to rank up"
+# (live report 2026-07-29). These pin the extension of the tier rule to those
+# edges, and the consequence the user actually asked for.
+
+def test_a_time_on_a_division_edge_ranks_up_instead_of_owing_zero():
+    """The reported bug, reproduced on this ladder.
+
+    Master III begins at score 84, which this ladder puts at 1310.6cs. A run
+    displaying 1311 is a rounding hair SLOWER than that edge, so the score
+    curve alone leaves it in Master IV -- owing `1311 - round(1310.6)` = 0.00s
+    to a division it has, in displayed time, already reached."""
+    edge_cs = time_for_score(NUTS, 84.0)
+    assert edge_cs == 1311, "the fixture moved; re-derive the edge before reading on"
+    assert division_progress(score_for(NUTS, edge_cs), defined_tiers(NUTS))["division"] == "IV"
+
+    progress = progress_for_time(NUTS, edge_cs)
+    assert (progress["tier"], progress["division"]) == ("Master", "III")
+    assert progress["fill"] == 0.0                 # freshly into the division
+    assert progress["score"] == 84.0               # snapped WITH the division
+    assert progress["next_gap_cs"] >= 1
+
+
+def test_one_centisecond_slower_than_the_edge_still_owes_a_real_gap():
+    """The other side of the same boundary -- the rule widens by at most half
+    a centisecond and must not swallow a run that genuinely has not got there."""
+    progress = progress_for_time(NUTS, time_for_score(NUTS, 84.0) + 1)
+    assert (progress["tier"], progress["division"]) == ("Master", "IV")
+    assert progress["next_gap_cs"] >= 1
+
+
+def test_the_gap_is_never_zero_anywhere_on_a_ladder():
+    """A gap of 0.00s is not a goal anybody can chase -- and IGT moves a whole
+    frame (~3.33cs) at a time, so it is not even reachable. Swept across the
+    whole ladder rather than at sampled points, since the failing times are
+    exactly the ones nobody would think to pick."""
+    for time_cs in range(1200, 4000):
+        gap = progress_for_time(NUTS, time_cs)["next_gap_cs"]
+        assert gap is None or gap >= 1, f"{time_cs}cs owes {gap}cs"
+
+
+def test_a_maxed_ladder_owes_nothing_at_all():
+    progress = progress_for_time(NUTS, 1)          # faster than Mario, capped
+    assert progress["next_tier"] is None and progress["next_gap_cs"] is None
+
+
+def test_the_returned_division_always_matches_the_returned_score():
+    """`progress_for_time` raises `score` with the division when the boundary
+    rule fires, so the payload can never contradict itself -- and this is the
+    property that keeps two SURFACES agreeing, not just one dict.
+
+    The rank banner shows `progress_for_time`'s own tier/division; the Rank
+    tab's breakdown re-derives a division from the MARELO score
+    (`server/ranks_api.py::_score_scope` -> `division_for(entity["score"])`,
+    fed by `tracking/marelo.py`). Grade the score through the raw curve there
+    and the two name different divisions for the same run inside the boundary
+    window -- the same shape as the Platinum II / Diamond V split
+    docs/architecture.md records. Held structurally by
+    tests/test_single_source.py's `score_for` row; measured here."""
+    for time_cs in range(1200, 4000, 7):
+        progress = progress_for_time(NUTS, time_cs)
+        assert division_for(progress["score"], defined_tiers(NUTS)) == \
+            (progress["tier"], progress["division"]), time_cs

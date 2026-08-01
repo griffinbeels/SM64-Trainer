@@ -381,9 +381,15 @@ def create_ranks_router(service) -> APIRouter:
         ladders = marelo_bridge.entity_ladders(service.ranks, keys)
 
         def scorer(key, frames):
+            # `progress_for_time`, not `score_for`: it carries the ladder's
+            # displayed-centisecond boundary rule, and this chart has to end
+            # on the SAME number the card above it shows (see the comment
+            # below about sharing a source) -- a raw curve score would put
+            # its last point a hair under a division edge the card has
+            # already awarded.
             ladder = ladders.get(key)
-            return None if ladder is None else scoring.score_for(
-                ladder, classify.display_cs(frames))
+            return None if ladder is None else scoring.progress_for_time(
+                ladder, classify.display_cs(frames))["score"]
 
         # Same source as the RATING, mode for mode (tracking/marelo.py): the
         # saved pbs in pb mode, every success in the averages. A chart drawn

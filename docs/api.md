@@ -169,16 +169,16 @@ All endpoints are under `/api`. JSON in, JSON out.
 | `GET /api/icons/file/{name}` | Serve one uploaded user icon (the `user:` stems' img src). |
 | `GET /api/icons/courses` | Course portrait art: `{courses: {stem: filename}}`, globbed from `ui/assets/course_icons/` (mixed `.webp`/`.png` — the client asks for the listing rather than guessing the extension). HMC, SSL, DDD and SL are absent on purpose: those courses aren't entered through a painting, so the game has no portrait for them (the UI falls back to their star-1 icon). |
 | `POST /api/icon` `{course_id, star_id, icon?}` **or** `{kind: "segment", segment_id, icon?}` | Set (or clear, `icon: null`) an entity's quick-select icon override. Kind-dispatched exactly like `/api/strat`; `icon` must be a stem from `GET /api/icons` (400 otherwise). Stored server-side (ui_state KV `icon_overrides`, surfaced on the session view); broadcasts `icons_changed` (broadcast-only, no journal entry). Overrides win over the client's star-icons display mode. |
-| `POST /api/attempts/{id}/clear` `{reason?}` | Tombstone an attempt (triggers re-projection) |
-| `POST /api/attempts/{id}/restore` | Undo a tombstone (triggers re-projection) |
+| `POST /api/attempts/{id}/clear` `{reason?}` | Tombstone an attempt (triggers re-projection). Also **undoes any PB the attempt saved**, both clocks — a pb row carries its own frames and would keep grading a hidden run; the previous save becomes current again, exactly as `/api/pb/undo` leaves it |
+| `POST /api/attempts/{id}/restore` | Undo a tombstone (triggers re-projection). Does NOT restore a PB the tombstone undid — that row is gone; re-save it with `/api/pb` |
 | `POST /api/attempts/{id}/strat` `{strat_tag}` | Reclassify one recorded attempt's strategy (`null` = no strategy); journaled + re-projected, and moves any PB the attempt saved. Older rows edit history only; reclassifying the entity's NEWEST non-cleared attempt also sets the active strategy ("that run was actually X" = "X is what I'm practicing"; `null` never propagates). `POST /api/strat` sets what to practice next directly |
-| `POST /api/pb` `{attempt_id, timer_mode}` | Save a personal best from a success attempt |
+| `POST /api/pb` `{attempt_id, timer_mode}` | Save a personal best from a success attempt. A save only counts while its attempt is **visible**: hide the attempt and the PB stops grading, whichever way it was hidden (`/clear`, or a validity-bounds change auto-ignoring it) |
 | `POST /api/pb/undo` `{attempt_id, timer_mode}` | Undo the attempt's PB save (409 unless it is the **current** PB) — the previous save becomes current again |
 | `POST /api/wipe` `{kind, course_id?, star_id?, segment_id?, scope?}` | Wipe history. `kind`: `"star"` (needs course+star), `"segment"` (needs segment_id), `"all"`. `scope`: `"session"` (default, the active session) or `"lifetime"`. Removes the scoped attempts and the PBs saved from them (lifetime star/segment wipes drop that key's PBs entirely; lifetime `"all"` factory-resets history — all events, sessions and PBs). Markers, strategies, stat menu and segment definitions always survive. |
 | `GET /api/stats/registry` | List all available stat definitions with keys, labels, and default params |
 | `PUT /api/statmenu` `{selections: [{key, params}]}` | Persist the stat chip selection |
 | `PUT /api/markers` `{course_id, star_id, strat_tag?, markers: [{frames, label}]}` **or** `{segment_id, strat_tag?, markers: [{frames, label}]}` | Replace the timeline annotation markers for one star+strategy or segment+strategy (max 30; labels 1–60 chars trimmed; replace-the-list, no per-marker ids). `segment_id` XOR `course_id+star_id` — supplying both → 409. |
-| `PUT /api/stars/{course_id}/{star_id}/time-filter` `{min_frames, max_frames?}` | Override one star's validity bounds (frames, 30 fps; `min_frames: 0` = no floor, `max_frames: null`/omitted = no ceiling). Successes outside a star or segment's bounds are **auto-ignored**: recorded but flagged cleared with an `auto: below X.XXs min` / `auto: above X.XXs max` reason, excluded from stats/PBs/graphs/runs, and still visible in the hidden bucket. Default for every star and segment: min 0.5 s, no max. Triggers a full re-projection — the new bounds apply retroactively. Segments have no equivalent endpoint; they declare overrides as `min_time`/`max_time` guard rows on their definition (`PUT /api/segments/{id}`) instead. |
+| `PUT /api/stars/{course_id}/{star_id}/time-filter` `{min_frames, max_frames?}` | Override one star's validity bounds (frames, 30 fps; `min_frames: 0` = no floor, `max_frames: null`/omitted = no ceiling). Successes outside a star or segment's bounds are **auto-ignored**: recorded but flagged cleared with an `auto: below X.XXs min` / `auto: above X.XXs max` reason, excluded from stats/PBs/graphs/runs, and still visible in the hidden bucket. Default for every star and segment: min 0.5 s, no max. Triggers a full re-projection — the new bounds apply retroactively. Segments have no equivalent endpoint; they declare overrides as `min_time`/`max_time` guard rows on their definition (`PUT /api/segments/{id}`) instead. A PB saved from a run that these bounds later invalidate stops counting **while the run is hidden** and counts again if the bounds are widened — the save is not deleted, because this kind of hiding is a rule that can change (only `/clear` deletes it). |
 | `DELETE /api/stars/{course_id}/{star_id}/time-filter` | Revert a star's validity bounds to the implicit defaults (0.5 s min, no max). Triggers re-projection. |
 | `GET /api/links/{course_id}/{star_id}` | External links for a star (Ukikipedia, etc.) |
 
@@ -243,8 +243,11 @@ operation (bad timer mode, already cleared, non-success outcome, missing clock, 
 
 While the server runs it records the PJ64 window (DWM shared-surface
 capture — modern window capture sees frozen content for PJ64's D3D8, and
-GDI stalls on its window lock) plus game audio (loopback of the endpoint
-hosting PJ64's audio session) into `data/replay_buffer/` (scratch, wiped on
+GDI stalls on its window lock) plus game audio — per-process WASAPI
+loopback of PJ64 alone, so a clip carries the game and nothing else on the
+desktop; `audio_mode` in `/api/replay/status` reads `process` when that is
+live and `system` when it fell back to capturing PJ64's whole output
+endpoint — into `data/replay_buffer/` (scratch, wiped on
 startup). Video encoding runs in an `ffmpeg` subprocess when ffmpeg is on
 PATH — recommended; the in-process fallback encoder stutters under load
 (why: docs/architecture.md → Replay capture). Retention defaults to the

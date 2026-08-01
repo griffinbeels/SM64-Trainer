@@ -29,10 +29,11 @@ stream, which is what makes utc <-> frame mapping exact.
 
 Audio fallback chain: audio_factory is tried first; if its start() fails
 and a fallback_audio_factory was provided, that is tried; otherwise
-recording proceeds video-only. The chain is config wiring, not policy —
-main.py decides the factories (currently: system loopback with PID
-endpoint targeting as PRIMARY, no fallback — per-process tap is a
-false-healthy trap on this machine; see audio.py docstring)."""
+recording proceeds video-only. BOTH take the target window's pid — the
+fallback needs it as much as the primary does, to target the endpoint
+hosting that app's session. The chain is config wiring, not policy —
+main.py decides the factories (currently: per-process tap PRIMARY so only
+the game is recorded, device loopback as the fallback; see audio.py)."""
 import logging
 import shutil
 import threading
@@ -280,7 +281,7 @@ class ReplayRecorder:
             log.exception("primary audio source failed")
             if self._fallback_audio_factory is not None:
                 try:
-                    audio = self._fallback_audio_factory(self._cfg.audio_rate)
+                    audio = self._fallback_audio_factory(win.pid)
                     audio.start(self._on_pcm)
                     audio_mode = audio.mode
                 except Exception:

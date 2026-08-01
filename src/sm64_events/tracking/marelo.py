@@ -81,7 +81,7 @@ def _pb_scores(ladders: dict[str, dict[str, int]], ranks_store,
         ladder = ladders.get(key)
         if ladder is None or row["timer_mode"] != ranks_store.clock_for(key):
             continue
-        score = scoring.score_for(ladder, display_cs(row["frames"]))
+        score = scoring.progress_for_time(ladder, display_cs(row["frames"]))["score"]
         if score is not None and (key not in out or score > out[key]):
             out[key] = score
     return out
@@ -114,7 +114,7 @@ def _average_scores(attempts: list[Attempt], ladders: dict[str, dict[str, int]],
                                 mode_def["order"]) or [None])[0]
         if basis is None:
             continue
-        score = scoring.score_for(ladders[key], display_cs(basis))
+        score = scoring.progress_for_time(ladders[key], display_cs(basis))["score"]
         if score is not None and (key not in out or score > out[key]):
             out[key] = score
     return out

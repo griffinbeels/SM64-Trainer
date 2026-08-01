@@ -452,6 +452,33 @@ def test_attempt_is_current_pb_follows_latest_save_and_clock(tmp_path):
     assert all(a["is_current_pb"] is False for a in sec["attempts"])
 
 
+def test_hiding_an_attempt_undoes_the_pb_it_saved(tmp_path):
+    """Live report 2026-07-29: deleting a PB'd attempt WITHOUT pressing Undo PB
+    first left the star still graded off the hidden row — a pb row carries its
+    own frames and keeps grading — and a cleared row shows no Undo PB button,
+    so the only way back out was restore → Undo PB → delete again. Hiding now
+    undoes the save: the previous one becomes current again (latest remaining
+    row wins), and hiding that too leaves no PB at all. Restoring does NOT
+    resurrect the save — the row is gone, Save as PB is one click."""
+    db, svc = make(tmp_path)
+    seed(svc)
+    a343 = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    a350 = next(a.id for a in db.attempts() if a.igt_frames == 350)
+    asyncio.run(svc.save_pb(a350, "igt"))
+    asyncio.run(svc.save_pb(a343, "igt"))          # a343 is the current save
+    asyncio.run(svc.clear_attempt(a343, reason="accidental"))
+    [sec] = build_session_view(db, svc, clock="igt")["stars"]
+    assert sec["pb"]["igt"]["frames"] == 350 and sec["pb"]["igt"]["attempt_id"] == a350
+    flags = {a["id"]: a["is_current_pb"] for a in sec["attempts"]}
+    assert flags[a343] is False and flags[a350] is True
+    asyncio.run(svc.restore_attempt(a343))
+    [sec] = build_session_view(db, svc, clock="igt")["stars"]
+    assert sec["pb"]["igt"]["attempt_id"] == a350
+    asyncio.run(svc.clear_attempt(a350, reason="accidental"))
+    [sec] = build_session_view(db, svc, clock="igt")["stars"]
+    assert sec["pb"]["igt"] is None
+
+
 # -- section ordering + pinned target (spec §5) ---------------------------------
 
 def test_sections_ordered_newest_activity_first(tmp_path):
@@ -1485,6 +1512,58 @@ def test_rank_mode_average_excludes_cleared_runs(tmp_path):
     assert sec["rank"]["rank"] == "Mario"
     assert sec["rank"]["basis"]["count"] == 1
     assert sec["rank"]["basis"]["frames"] == 343
+
+
+def test_hiding_a_pb_attempt_regrades_off_the_earlier_save(tmp_path):
+    """The reported symptom, in pb mode: the star kept reading its best rank
+    off an attempt hidden from the log. Hiding the Mario run drops back to the
+    earlier save (350f -> Diamond), the way undoing the PB by hand does."""
+    db, svc = make(tmp_path)
+    seed(svc)
+    svc.ranks = _mode_ranks(tmp_path)
+    asyncio.run(svc.set_strat(2, 2, "fast"))
+    db._conn.execute("UPDATE attempts SET strat_tag='fast' WHERE course_id=2")
+    db._conn.commit()
+    a343 = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    a350 = next(a.id for a in db.attempts() if a.igt_frames == 350)
+    asyncio.run(svc.save_pb(a350, "igt"))
+    asyncio.run(svc.save_pb(a343, "igt"))
+    [sec] = build_session_view(db, svc, clock="igt")["stars"]
+    assert sec["rank"]["rank"] == "Mario"
+    # A pb row snapshots its strat_tag, so the surviving save still grades
+    # 'fast' after the reprojection re-derives the attempts' own tags.
+    asyncio.run(svc.clear_attempt(a343, reason="accidental"))
+    [sec] = build_session_view(db, svc, clock="igt")["stars"]
+    assert sec["rank"]["rank"] == "Diamond"
+    assert sec["pb"]["igt"]["attempt_id"] == a350
+
+
+def test_a_time_filter_hiding_the_pb_run_regrades_and_is_reversible(tmp_path):
+    """The sibling of the hidden-PB bug, with no delete involved: tightening a
+    star's validity bounds auto-clears the run that set the PB, and the saved
+    row kept grading it (Mario off an attempt the log no longer shows). Hiding
+    by RULE is reversible, so this is a read filter — widening the bounds again
+    brings the attempt back and its save with it."""
+    db, svc = make(tmp_path)
+    seed(svc)
+    svc.ranks = _mode_ranks(tmp_path)
+    asyncio.run(svc.set_strat(2, 2, "fast"))
+    db._conn.execute("UPDATE attempts SET strat_tag='fast' WHERE course_id=2")
+    db._conn.commit()
+    a343 = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    asyncio.run(svc.save_pb(a343, "igt"))
+    [sec] = build_session_view(db, svc, clock="igt")["stars"]
+    assert sec["rank"]["rank"] == "Mario" and sec["pb"]["igt"]["frames"] == 343
+
+    asyncio.run(svc.set_time_filter(2, 2, 400, None))   # 343f is now too fast
+    [sec] = build_session_view(db, svc, clock="igt")["stars"]
+    assert next(a for a in sec["attempts"] if a["id"] == a343)["cleared"] is True
+    assert sec["pb"]["igt"] is None            # the 350f run has no save of its own
+    assert sec["rank"] == {"rank": None, "reason": "unranked", "mode": "pb"}
+
+    asyncio.run(svc.clear_time_filter(2, 2))            # valid again
+    [sec] = build_session_view(db, svc, clock="igt")["stars"]
+    assert sec["pb"]["igt"]["frames"] == 343 and sec["rank"]["rank"] == "Mario"
 
 
 def test_rank_mode_unranked_when_strat_has_no_valid_runs(tmp_path):

@@ -27,6 +27,8 @@ uv run python tools/verify_star_stop.py              # live gate, ANSWERED 2026-
 uv run python tools/derive_xcam.py                   # live gate, ANSWERED + now the REGRESSION gate: scores what we journal against Usamune (just play; MIDAIR grabs are the ones that measure)
 uv run python tools/dev_cleanup.py                   # kill orphaned dev/harness servers (auto-runs at session start)
 uv run python tools/dedupe_journal.py data/tracker.db  # scan double-journaled events; --fix repairs (server stopped)
+uv run python tools/what_happened.py                 # READ BACK what the human just played, as a timeline
+uv run python tools/what_happened.py --list          # which journal is live: repo / each worktree / installed exe
 uv run pytest tests/test_responsive.py -q            # render every breakpoint; report layout defects (no PJ64 needed)
 uv run python tools/contact_sheet.py .objective-card # one surface at 1500/1200/900/850, in one image -- LOOK at it
 uv run python tools/mark_sheet.py                    # the caveat badge on both surfaces, side by side (the PICK is made: corner badge, 2026-08-01)
@@ -187,6 +189,15 @@ Contract changes land on main first, then dependent work fans out. Merge with
   `tests/test_rule_files.py` holds the ceilings and, more usefully, fails when
   a `paths:` glob matches nothing: a rule that never loads reaches nobody while
   looking perfectly healthy.
+- **Debugging live play starts with `tools/what_happened.py`, never with a
+  hand-written query.** Three journals exist and all three are valid — the repo
+  checkout, every worktree, and the installed exe under `%LOCALAPPDATA%` — and
+  which one a session writes to depends only on which binary was launched and
+  from where. On 2026-07-31 they held events newest at *today*, *Jul 30* and
+  *Jul 28*. Reading the wrong one does not error; it returns days-old events
+  that look entirely plausible, and everything downstream is confident and
+  wrong. The tool picks the freshest, names it, and refuses when the newest
+  event is over 10 minutes old.
 - **Exit-code honesty:** run verification through the Bash tool. Never pipe
   native exes into `Select-Object` or use `2>&1` on them in PS 5.1 (false
   failures).

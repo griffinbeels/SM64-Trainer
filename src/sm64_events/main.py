@@ -26,7 +26,7 @@ from sm64_events.detectors.stage import StageChangeDetector
 from sm64_events.detectors.star_grab import StarGrabDetector
 from sm64_events.detectors.warp import WarpDetector
 from sm64_events.memory.pj64 import Pj64Memory
-from sm64_events.replay.audio import SystemAudioSource
+from sm64_events.replay.audio import ProcessAudioSource, SystemAudioSource
 from sm64_events.replay.config import ReplayConfig, apply_settings_file
 from sm64_events.replay.extract import ClipExtractor
 from sm64_events.replay.recorder import ReplayRecorder
@@ -157,12 +157,13 @@ def build():
     if replay_cfg.enabled:
         from sm64_events.replay.encoder import pick_video_codec
         codec = pick_video_codec()
-        # System loopback is PRIMARY (live-audit 2026-06-11): per-process
-        # loopback (proctap) "succeeds" but delivers zeros on this machine —
-        # it couldn't even hear a beep from its own process, an undetectable
-        # false-healthy state. Device-wide loopback verifiably captures the
-        # default output (Elgato Wave:XLR, native 48 kHz). Tradeoff: other
-        # apps' audio bleeds into replays.
+        # Per-process loopback is PRIMARY: a replay must carry the game and
+        # nothing else — no Discord call, no music (user report 2026-07-30).
+        # Device-wide loopback is the fallback for machines where the
+        # per-process tap can't start; it records everything sharing PJ64's
+        # output endpoint, so it is a degradation, and status()'s audio_mode
+        # is what says which one is live. Both take the pid: the fallback
+        # needs it to target PJ64's OWN endpoint (per-app routing, 2026-06-11).
         # Video ENCODING lives in an ffmpeg.exe subprocess when available:
         # in-process PyAV encoding shared the GIL with capture threads and
         # the audio pump — every remaining replay glitch class traced to
@@ -190,9 +191,10 @@ def build():
             cfg=replay_cfg,
             window_finder=find_window,
             video_factory=lambda win: DwmSurfaceVideoSource(win, fps=replay_cfg.fps),
-            audio_factory=lambda pid: SystemAudioSource(
+            audio_factory=lambda pid: ProcessAudioSource(
+                pid=pid, rate=replay_cfg.audio_rate),
+            fallback_audio_factory=lambda pid: SystemAudioSource(
                 rate=replay_cfg.audio_rate, pid=pid),
-            fallback_audio_factory=None,
             codec=codec,
             video_sink_factory=video_sink_factory)
         replay = ReplayService(

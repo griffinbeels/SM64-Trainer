@@ -20,7 +20,8 @@ from sm64_events.ranks.classify import RANK_NAMES
 __all__ = ["RANK_NAMES", "SCORE_ANCHORS", "TOP_SCORE", "DIVISIONS_PER_TIER",
            "DIVISION_NUMERALS", "defined_tiers", "best_ladder", "score_for",
            "tier_from_score", "tier_band", "division_for", "progression_key",
-           "next_tier_target", "division_progress", "time_for_score"]
+           "next_tier_target", "division_progress", "time_for_score",
+           "progress_for_time"]
 
 # hardest -> easiest; Iron is the implicit floor and carries NO anchor, exactly
 # as it carries no threshold in classify.
@@ -175,6 +176,57 @@ def division_progress(score: float, defined: list[str] | None = None) -> dict:
             "next_tier": None if maxed else next_tier,
             "next_division": None if maxed else next_division,
             "next_at": None if maxed else next_at}
+
+
+def progress_for_time(ladder_cs: dict[str, int], time_cs: int) -> dict:
+    """`division_progress` for a real TIME on a real ladder, plus the
+    centiseconds still owed to the next step -- and THE place the ladder's
+    displayed-centisecond boundary rule is applied.
+
+    Why that rule has to exist here. `division_progress` compares SCORE
+    against an exact band edge, but a division's edge falls at a FRACTIONAL
+    centisecond, and `time_for_score` rounds it to the nearest one to report
+    it. A time within half a centisecond of an edge therefore graded as "not
+    there yet" while the gap it was handed -- `time_cs - round(edge)` -- was
+    exactly 0, and the banner read "0.00s to rank up" (live report
+    2026-07-29, a Waluigi II sitting on the Waluigi I edge). Zero is not a
+    number anybody can chase, and it is not even reachable: IGT advances a
+    whole frame at a time, ~3.33cs.
+
+    So a step is REACHED when the displayed time reaches that step's own
+    displayed cutoff, `<=` -- which is exactly the rule
+    `classify.rank_for` already applies at a TIER cutoff; this extends it to
+    the division edges in between. It can never move a tier on its own: a
+    tier edge IS an anchor, `time_for_score` returns an anchor's cutoff
+    exactly (no rounding), so a time equal to one already scores at or above
+    that anchor and `division_for` has already placed it there.
+
+    The walk is a loop because two adjacent division edges can round to the
+    same centisecond on a tight ladder; it terminates because every pass
+    strictly raises `next_at` and the ladder is finite. `score` is raised
+    with it, so the returned dict stays self-consistent -- a caller that
+    re-derives the division from the score it was handed gets the division it
+    was handed too.
+
+    Returns `division_progress`'s own fields plus `score` and `next_gap_cs`
+    (centiseconds still to save, >= 1 whenever there is a next step at all --
+    which is what makes "0.00s to rank up" unrepresentable rather than merely
+    unlikely). `ladder_cs` must be non-empty, same precondition
+    `score_for`'s callers already carry."""
+    score = score_for(ladder_cs, time_cs)
+    defined = defined_tiers(ladder_cs)
+    progress = division_progress(score, defined)
+    next_gap_cs = None
+    while progress["next_at"] is not None:
+        target_cs = time_for_score(ladder_cs, progress["next_at"])
+        if target_cs is None:
+            break
+        if time_cs > target_cs:
+            next_gap_cs = time_cs - target_cs
+            break
+        score = progress["next_at"]
+        progress = division_progress(score, defined)
+    return {"score": score, **progress, "next_gap_cs": next_gap_cs}
 
 
 def time_for_score(ladder_cs: dict[str, int], target_score: float) -> int | None:
