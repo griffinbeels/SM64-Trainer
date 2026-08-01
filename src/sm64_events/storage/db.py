@@ -346,6 +346,55 @@ MIGRATIONS = [
         'seg:reds->pipe:bitdw', 'seg:reds->pipe:bitfs', 'seg:reds->pipe:bits'
       );
     """,
+    # v18 — untagged-PB backfill (live report 2026-07-31): "Bowser 1 shows PB
+    # 0'26"30, but the rank display clearly shows Capless 5 -- this should
+    # never happen." Root cause: `pbs.strat_tag`/`attempts.strat_tag` are
+    # separate NULL-able columns, and views.py's per-strategy ranking lookup
+    # (`current_pbs_by_strat`) skips a PB with no strat_tag entirely -- the
+    # entity stays unranked even though a strategy-blind PB display (the SAME
+    # kind of lookup, blind to strategy on purpose) shows one. Every one of
+    # the ten legacy segments carried `default_strat=NULL` before this spec
+    # (v13 added the column with no repair, deliberately), so their attempts
+    # recorded no tag from day one. Measured against a sqlite3.Connection.
+    # backup snapshot of this branch's own dev db: 36 of 126 saved PB rows
+    # were untagged, across 17 entities (10 stars, 7 segments) -- every one of
+    # those 7 segments is one of these ten legacy defs.
+    #
+    # Three of those seventeen are UNAMBIGUOUS -- no guess is involved,
+    # because their rank standards define exactly ONE strategy apiece
+    # (cross-checked against the bundled data/rank_standards.seed.json):
+    # MIPS Clip and Bowser 1/2, all "Standard". (A fourth entity in that same
+    # snapshot, a locally-named "BLJs" segment, resolves just as unambiguously
+    # -- but it carries no seed_key, so it has no identity a portable
+    # migration can reach on every install; it is left to the "unattributed"
+    # display fix instead of a guess by name.) The other 13 of the 17
+    # (10 stars, plus BitDW/BitFS/BitS Pipe Entry and Bowser 3) are genuinely
+    # ambiguous (2+ strategies) and stay untagged on purpose -- attributing
+    # one would credit a saved time to a strategy the player may never have
+    # run, which is worse than showing nothing.
+    #
+    # Guarded by seed_key (stable across installs and renames, unlike a raw
+    # segment_id) joined through segment_defs, AND `strat_tag IS NULL`
+    # (idempotent -- a re-run touches nothing, and an already-tagged row, from
+    # this migration or a real save, is never overwritten). Fixes BOTH tables
+    # for the same reason: `pbs.strat_tag` is what current_pbs_by_strat reads
+    # (the reported bug), and `attempts.strat_tag` is what valid_frames/
+    # grading_basis read for average-mode ranking -- leaving the underlying
+    # attempt NULL while its own pbs row now says "Standard" would be the same
+    # fact recorded two different ways in two tables, and would silently keep
+    # excluding these exact runs from every average-mode rank forever.
+    """
+    UPDATE pbs SET strat_tag = 'Standard'
+      WHERE strat_tag IS NULL AND segment_id IN (
+        SELECT id FROM segment_defs
+         WHERE seed_key IN ('seg:mips-clip', 'seg:bowser-1', 'seg:bowser-2')
+      );
+    UPDATE attempts SET strat_tag = 'Standard'
+      WHERE strat_tag IS NULL AND segment_id IN (
+        SELECT id FROM segment_defs
+         WHERE seed_key IN ('seg:mips-clip', 'seg:bowser-1', 'seg:bowser-2')
+      );
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",

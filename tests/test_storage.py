@@ -900,3 +900,152 @@ def test_v17_is_idempotent(tmp_path):
             if r["seed_key"] in _PIPE_FAMILY_SEED_KEYS}
     for key in _PIPE_FAMILY_SEED_KEYS:
         assert rows[key]["seed_dirty"] == 0
+
+
+# -- migration v18: backfill untagged PBs on the 3 unambiguous segments ------
+#
+# Live report 2026-07-31: "Bowser 1 shows PB 0'26"30, but the rank display
+# clearly shows Capless 5 -- this should never happen." Root cause: every
+# legacy segment_def carried default_strat=NULL (v13 added the column with no
+# repair), so their attempts recorded strat_tag=NULL from day one, and
+# views.py's current_pbs_by_strat skips a PB with no strat_tag. Three of the
+# seventeen entities the bug actually hit resolve unambiguously to ONE
+# strategy in the bundled rank standards -- MIPS Clip and Bowser 1/2, all
+# "Standard" -- so backfilling them is not a guess, exactly like giving them a
+# default_strat going forward (tools/corpus_legacy.py). The other fourteen
+# (ten stars plus BitDW/BitFS/BitS Pipe Entry and Bowser 3) stay untagged on
+# purpose: they have real competing strategies, and this migration must never
+# touch them.
+
+def _v17_db_with_untagged_pbs(tmp_path):
+    """A db at v17 already carries all ten legacy segments (v4's INSERT + v12's
+    seed_key backfill), including seg:mips-clip/bowser-1/bowser-2 (the three
+    this migration targets) and seg:bitdw-pipe (unrelated, genuinely
+    ambiguous) -- so this seeds untagged attempts/PBs onto those EXISTING
+    rows rather than inserting new ones under the same seed_key (which would
+    never happen on a real install and would make "the" row with that key
+    ambiguous). A star (course/star, no segment_id) gets the same shape too,
+    proving the segment_id-scoped migration cannot reach a star row even
+    though NULL strat_tag looks identical there."""
+    import sqlite3
+    path = tmp_path / "t.db"
+    conn = sqlite3.connect(str(path))
+    for script in MIGRATIONS[:17]:          # bring the db up to v17
+        conn.executescript(script)
+    seg_ids = {r[1]: r[0] for r in conn.execute(
+        "SELECT id, seed_key FROM segment_defs WHERE seed_key IN"
+        " ('seg:mips-clip', 'seg:bowser-1', 'seg:bowser-2', 'seg:bitdw-pipe')")}
+    assert len(seg_ids) == 4, seg_ids   # sanity: all four pre-exist from v4/v12
+    aid = 1
+    for seed_key in ("seg:mips-clip", "seg:bowser-1", "seg:bowser-2",
+                     "seg:bitdw-pipe"):
+        seg_id = seg_ids[seed_key]
+        conn.execute(
+            "INSERT INTO attempts (id, session_id, segment_id, strat_tag,"
+            " anchor_type, outcome, rta_frames, started_utc, ended_utc)"
+            " VALUES (?,1,?,NULL,'a','success',800,'t','t')", (aid, seg_id))
+        conn.execute(
+            "INSERT INTO pbs (segment_id, strat_tag, timer_mode, frames,"
+            " attempt_id, saved_utc) VALUES (?,NULL,'rta',800,?,'t')",
+            (seg_id, aid))
+        aid += 1
+    # A star PB/attempt, same untagged shape -- must be untouched (no
+    # segment_id at all, so the migration's own subquery cannot match it).
+    conn.execute(
+        "INSERT INTO attempts (id, session_id, course_id, star_id, strat_tag,"
+        " anchor_type, outcome, igt_frames, started_utc, ended_utc)"
+        " VALUES (?,1,2,0,NULL,'a','success',800,'t','t')", (aid,))
+    conn.execute(
+        "INSERT INTO pbs (course_id, star_id, strat_tag, timer_mode, frames,"
+        " attempt_id, saved_utc) VALUES (2,0,NULL,'igt',800,?,'t')", (aid,))
+    conn.execute("PRAGMA user_version = 17")
+    conn.commit()
+    conn.close()
+    return path
+
+
+def test_v18_backfills_pbs_and_attempts_for_the_three_unambiguous_segments(tmp_path):
+    path = _v17_db_with_untagged_pbs(tmp_path)
+    db = Database(path)
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
+    seg_ids = {r["seed_key"]: r["id"] for r in db.segment_defs()
+              if r["seed_key"] in ("seg:mips-clip", "seg:bowser-1", "seg:bowser-2")}
+    for seed_key, seg_id in seg_ids.items():
+        pb = db._conn.execute(
+            "SELECT strat_tag FROM pbs WHERE segment_id=?", (seg_id,)).fetchone()
+        attempt = db._conn.execute(
+            "SELECT strat_tag FROM attempts WHERE segment_id=?", (seg_id,)).fetchone()
+        assert pb["strat_tag"] == "Standard", seed_key
+        assert attempt["strat_tag"] == "Standard", seed_key
+
+
+def test_v18_leaves_ambiguous_and_star_rows_untagged(tmp_path):
+    """BitDW Pipe Entry (real competing strategies) and the seeded star PB
+    (no segment identity at all) must stay exactly as untagged as they
+    started -- this migration only ever reaches the three named seed_keys."""
+    path = _v17_db_with_untagged_pbs(tmp_path)
+    db = Database(path)
+    bitdw_id = next(r["id"] for r in db.segment_defs()
+                    if r["seed_key"] == "seg:bitdw-pipe")
+    pb = db._conn.execute(
+        "SELECT strat_tag FROM pbs WHERE segment_id=?", (bitdw_id,)).fetchone()
+    attempt = db._conn.execute(
+        "SELECT strat_tag FROM attempts WHERE segment_id=?", (bitdw_id,)).fetchone()
+    assert pb["strat_tag"] is None
+    assert attempt["strat_tag"] is None
+    star_pb = db._conn.execute(
+        "SELECT strat_tag FROM pbs WHERE course_id=2 AND star_id=0").fetchone()
+    star_attempt = db._conn.execute(
+        "SELECT strat_tag FROM attempts WHERE course_id=2 AND star_id=0").fetchone()
+    assert star_pb["strat_tag"] is None
+    assert star_attempt["strat_tag"] is None
+
+
+def test_v18_is_idempotent(tmp_path):
+    """Re-running the migration set a second time must not error -- every
+    matching row already carries 'Standard', so the NULL guard makes the
+    second pass a no-op."""
+    path = _v17_db_with_untagged_pbs(tmp_path)
+    Database(path).close()
+    db = Database(path)          # re-open: v18's UPDATEs run again on replay?
+    seg_ids = {r["seed_key"]: r["id"] for r in db.segment_defs()
+              if r["seed_key"] in ("seg:mips-clip", "seg:bowser-1", "seg:bowser-2")}
+    for seed_key, seg_id in seg_ids.items():
+        pb = db._conn.execute(
+            "SELECT strat_tag FROM pbs WHERE segment_id=?", (seg_id,)).fetchone()
+        assert pb["strat_tag"] == "Standard", seed_key
+
+
+def test_v18_never_overwrites_a_real_strat_tag(tmp_path):
+    """A row already carrying a real (non-'Standard') strat_tag by the time
+    v18 runs -- e.g. reconcile stamped default_strat and a later save tagged
+    it with something else entirely -- must survive untouched. Guards on
+    strat_tag IS NULL specifically so a genuine tag always wins."""
+    import sqlite3
+    path = tmp_path / "t.db"
+    conn = sqlite3.connect(str(path))
+    for script in MIGRATIONS[:17]:
+        conn.executescript(script)
+    cur = conn.execute(
+        "INSERT INTO segment_defs (name, enabled, start_triggers,"
+        " end_triggers, waypoints, guards, created_utc, seed_key, seed_dirty)"
+        " VALUES ('MIPS Clip',1,'[]','[]','[]','[]','t','seg:mips-clip',0)")
+    seg_id = cur.lastrowid
+    conn.execute(
+        "INSERT INTO attempts (id, session_id, segment_id, strat_tag,"
+        " anchor_type, outcome, rta_frames, started_utc, ended_utc)"
+        " VALUES (1,1,?,'Blindfolded','a','success',800,'t','t')", (seg_id,))
+    conn.execute(
+        "INSERT INTO pbs (segment_id, strat_tag, timer_mode, frames,"
+        " attempt_id, saved_utc) VALUES (?,'Blindfolded','rta',800,1,'t')",
+        (seg_id,))
+    conn.execute("PRAGMA user_version = 17")
+    conn.commit()
+    conn.close()
+    db = Database(path)
+    pb = db._conn.execute(
+        "SELECT strat_tag FROM pbs WHERE segment_id=?", (seg_id,)).fetchone()
+    attempt = db._conn.execute(
+        "SELECT strat_tag FROM attempts WHERE segment_id=?", (seg_id,)).fetchone()
+    assert pb["strat_tag"] == "Blindfolded"
+    assert attempt["strat_tag"] == "Blindfolded"

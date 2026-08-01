@@ -140,15 +140,26 @@ def test_every_movement_defaults_to_the_standard_strategy():
     ships with "Standard" already picked (spec 2026-07-24-segment-default-strat).
     Stamped in _movement_row, so the 56 rows cannot disagree with each other.
 
-    The ten hand-written legacy rows deliberately carry NO default: several of
-    them (the Bowser fights, LBLJ) have real competing strategies in the rank
-    standards, and forcing one would be a lie. Task 20's 18 unguarded mechanic
-    rows (reds->pipe, 100c->exit) follow the same no-default precedent -- ONE
-    check over everything unguarded covers both groups."""
+    The ten hand-written legacy rows are a MIX (untagged-PB fix, live report
+    2026-07-31): six resolve to exactly one strategy in the bundled rank
+    standards (LBLJ, MIPS Clip, Lakitu Skip, BitS Entry, Bowser 1, Bowser 2)
+    and carry "Standard" for the same no-guess reason a movement does. The
+    other four have real competing strategies (BitDW/BitFS/BitS Pipe Entry;
+    Bowser 3) and carry NO default -- forcing one would be a lie. Task 20's 18
+    unguarded mechanic rows (reds->pipe, 100c->exit) also carry no default,
+    same precedent."""
     seed = build_seed.build()
     movements = [s for s in seed["segments"] if s["guards"]]
     non_movements = [s for s in seed["segments"] if not s["guards"]]
     assert len(movements) == 56 and len(non_movements) == 28
     assert {s["default_strat"] for s in movements} == {"Standard"}
+    unambiguous_legacy = {"seg:lblj", "seg:mips-clip", "seg:lakitu-skip",
+                          "seg:bits-entry", "seg:bowser-1", "seg:bowser-2"}
+    defaulted = {s["seed_key"] for s in non_movements if s.get("default_strat")}
+    assert defaulted == unambiguous_legacy
+    assert {s["default_strat"] for s in non_movements
+            if s["seed_key"] in unambiguous_legacy} == {"Standard"}
+    ambiguous_legacy = {"seg:bitdw-pipe", "seg:bitfs-pipe", "seg:bits-pipe",
+                        "seg:bowser-3"}
     assert [s["seed_key"] for s in non_movements
-            if s.get("default_strat")] == []
+            if s["seed_key"] in ambiguous_legacy and s.get("default_strat")] == []

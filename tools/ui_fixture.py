@@ -86,8 +86,19 @@ def snapshot_db(source: Path, destination: Path) -> Path:
 #
 # Whomp's Fortress, "Fall onto the Caged Island", TJ Owlless -- the same card
 # he sent a screenshot of.
+#
+# FIXTURE_LEVEL corrected 5 -> 24 (untagged-PB fix, live report 2026-07-31):
+# 5 is course 4's raw level id, not course 2's (WF's real one, per
+# tracking/segments.py::_LEVEL_BY_COURSE[2] == 24) -- a mismatch invisible
+# until `seed_practice` gained its own explicit `request_target` call (below),
+# because the ATTEMPTS loop auto-targets the star on its first star_collected
+# event regardless of the player's stage, so `_seed_target`'s later POST always
+# saw `already=True` and skipped the practicable_here check this constant
+# would otherwise have failed every time. Only mattered once something finally
+# asked "is the player standing where they can practice this" BEFORE an
+# attempt had already answered it implicitly.
 FIXTURE_COURSE = 2
-FIXTURE_LEVEL = 5
+FIXTURE_LEVEL = 24
 FIXTURE_STAR = 4
 FIXTURE_STRAT = "TJ Owlless"
 
@@ -112,7 +123,8 @@ FIXTURE_SEGMENT_STRAT = "Pole Glitch"
 
 def seed_practice(service, course_id: int = FIXTURE_COURSE,
                   star_id: int = FIXTURE_STAR,
-                  level: int = FIXTURE_LEVEL, attempts: bool = True) -> None:
+                  level: int = FIXTURE_LEVEL, attempts: bool = True,
+                  strat: str | None = None) -> None:
     """Give the fixture an ACTIVE TARGET and a few attempts.
 
     Without this the Practice page renders only its empty states -- the
@@ -127,6 +139,24 @@ def seed_practice(service, course_id: int = FIXTURE_COURSE,
     the view is built by the same code path the app uses. Same shape as the
     `seed` helper tests/test_api.py has always had -- kept separate rather than
     imported so tools/ and tests/ do not depend on each other's helpers.
+
+    `strat`, when given, sets the ACTIVE TARGET and STRATEGY BEFORE any
+    attempt below is recorded -- required, not cosmetic (untagged-PB fix,
+    live report 2026-07-31). An attempt's strat_tag is stamped from whichever
+    strategy is remembered for the CURRENT target at the moment the attempt
+    CLOSES (tracking/projection.py::MatchContext.strat_tag reads
+    `self.target`/`strat_by_star`, never retroactively) -- so setting the
+    strategy only AFTERWARD, the way `_seed_target` used to do it alone,
+    leaves every one of these attempts permanently untagged regardless. That
+    is real product behaviour, not a fixture quirk: an untagged attempt behind
+    a saved PB is the EXACT shape of the untagged-PB bug this fixture exists
+    to render, and this fixture was reproducing it BY ACCIDENT -- which used
+    to pass unnoticed because the "unranked" sentinel this untagged PB
+    produced happened to render as a real (floored) banner, masking two
+    `test_fixture_reaches_the_real_page.py` checks behind a look-alike state
+    until `views.py`'s pb_untagged fix correctly told the two apart and
+    surfaced "unattributed" instead. Calls `service.request_target` directly
+    (no HTTP round-trip -- this runs before the fixture's `base` URL exists).
     """
     now = datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -144,6 +174,9 @@ def seed_practice(service, course_id: int = FIXTURE_COURSE,
                      "mode": "stars"}))
         if not attempts:
             return
+        if strat:
+            await service.request_target("star", course_id=course_id,
+                                         star_id=star_id, strat_tag=strat)
         for index, frames in enumerate([343, 361, 352]):
             await service.publish(Event(
                 type="practice_reset", frame=1000 + index * 1000,
@@ -514,7 +547,8 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
             course, level = stage or (FIXTURE_COURSE, FIXTURE_LEVEL)
             seed_practice(service, course_id=course, level=level,
                           star_id=(target or (0, FIXTURE_STAR))[1],
-                          attempts=target is None)
+                          attempts=target is None,
+                          strat=FIXTURE_STRAT if target is None else None)
             _seed_target(base, *(target or (FIXTURE_COURSE, FIXTURE_STAR)),
                          with_pb=target is None)
             if bowser_stage is not None:

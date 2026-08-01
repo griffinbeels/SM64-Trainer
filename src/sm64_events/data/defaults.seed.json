@@ -25,7 +25,8 @@
       ],
       "waypoints": [],
       "guards": [],
-      "category": "Tricks"
+      "category": "Tricks",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:mips-clip",
@@ -46,7 +47,8 @@
       ],
       "waypoints": [],
       "guards": [],
-      "category": "Tricks"
+      "category": "Tricks",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:lakitu-skip",
@@ -66,7 +68,8 @@
       ],
       "waypoints": [],
       "guards": [],
-      "category": "Tricks"
+      "category": "Tricks",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:bits-entry",
@@ -87,7 +90,8 @@
       ],
       "waypoints": [],
       "guards": [],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:bitdw-pipe",
@@ -186,7 +190,8 @@
       ],
       "waypoints": [],
       "guards": [],
-      "category": "Bowser Fights"
+      "category": "Bowser Fights",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:bowser-2",
@@ -210,7 +215,8 @@
       ],
       "waypoints": [],
       "guards": [],
-      "category": "Bowser Fights"
+      "category": "Bowser Fights",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:bowser-3",

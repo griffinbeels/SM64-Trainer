@@ -1176,6 +1176,63 @@ def test_section_banner_sentinel_when_standards_but_no_strat(tmp_path):
     assert result5 is None
 
 
+def test_section_banner_unattributed_when_current_pb_has_no_strat_tag(tmp_path):
+    """The untagged-PB bug (live report 2026-07-31: Bowser 1 showed PB
+    0'26"30 beside a Capless 5 floor rank -- "this should never happen").
+    pb_untagged=True means the entity's CURRENT (strategy-blind) PB carries
+    no strat_tag at all, so no strategy could ever have found it -- this
+    takes priority over every other reason and produces a DIFFERENT sentinel,
+    "unattributed", so the UI can tell "no PB yet" apart from "a PB exists but
+    isn't credited to any strategy" and never floors the latter (a floor next
+    to a visible PB is exactly the reported contradiction)."""
+    import json
+    from sm64_events.ranks.standards import RankStandards
+    from sm64_events.tracking.views import _section_banner
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "segment:8": {"clock": "rta", "strategies": {
+            "Standard": {"Mario": 11.0, "Diamond": 12.0}}}}}))
+    ranks = RankStandards(p); ranks.load()
+    # no active strategy at all, PB untagged -> "unattributed", NOT "no_strat"
+    result = _section_banner(ranks, "segment:8", strat=None, basis=None,
+                             mode="pb", pb_untagged=True)
+    assert result == {"rank": None, "reason": "unattributed", "mode": "pb"}
+    # active strategy selected but still nothing gradeable, PB untagged ->
+    # still "unattributed", NOT "unranked" (which the UI floors)
+    result2 = _section_banner(ranks, "segment:8", strat="Standard", basis=None,
+                              mode="pb", pb_untagged=True)
+    assert result2 == {"rank": None, "reason": "unattributed", "mode": "pb"}
+    # pb_untagged defaults to False -- every existing call site (and every
+    # sentinel test above) keeps behaving exactly as before this fix
+    result3 = _section_banner(ranks, "segment:8", strat=None, basis=None, mode="pb")
+    assert result3 == {"rank": None, "reason": "no_strat", "mode": "pb"}
+
+
+def test_segment_pb_shown_but_untagged_reads_unattributed_not_floor(tmp_path):
+    """End-to-end reproduction of the reported bug's SHAPE (Bowser 1 is a
+    seeded segment, LBLJ here stands in for one since it is seeded with the
+    same no-default-strat starting condition): a segment's saved PB with no
+    strat_tag must show "unattributed" through the real session view, not the
+    isolated _section_banner unit -- proving the whole pipeline (attempt ->
+    saved pb -> current_pbs_by_strat miss -> section banner) rather than just
+    the function that happens to compute the sentinel."""
+    import json
+    from sm64_events.ranks.standards import RankStandards
+    db, svc = make(tmp_path)
+    lblj_success(svc, rta=85)          # segment_id=1, no active strat ever set
+    aid = next(a.id for a in db.attempts() if a.segment_id == 1)
+    asyncio.run(svc.save_pb(aid, "rta"))
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "segment:1": {"clock": "rta", "strategies": {
+            "Standard": {"Mario": 0.5, "Diamond": 1.0}}}}}))
+    svc.ranks = RankStandards(p); svc.ranks.load()
+    view = build_session_view(db, svc, clock="igt")
+    sec = seg_section(view, 1)
+    assert sec["pb"]["rta"]["frames"] == 85           # the PB still displays
+    assert sec["rank"] == {"rank": None, "reason": "unattributed", "mode": "pb"}
+
+
 def test_session_view_attaches_ranks(tmp_path):
     db, svc = make(tmp_path)
     seed(svc)                     # existing helper: seeds course 2 star 2 successes

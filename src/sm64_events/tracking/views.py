@@ -690,13 +690,16 @@ def build_entity_strategies(db, service, ek: str) -> dict:
             "allow_blank": allow_blank, "strategies": strategies}
 
 
-def _section_banner(ranks, ek, strat, basis, mode) -> dict | None:
+def _section_banner(ranks, ek, strat, basis, mode, pb_untagged=False) -> dict | None:
     """Rank banner for a section: the grading basis (PB in pb mode, mean of
     valid runs in avg modes — grading_basis) graded under the ACTIVE strat.
 
     Returns None when the entity has NO standards (RankBanner not rendered).
     Otherwise the entity HAS standards; a {"rank": None, "reason": ...}
     sentinel says why it can't be graded so the UI can word it correctly:
+      - "unattributed" : the entity's CURRENT PB (the same strategy-blind row
+                      the display tag shows) carries no strat_tag at all — see
+                      `pb_untagged` below. Checked before every other reason.
       - "no_strat"  : no active strategy selected.
       - "no_ladder" : the active strategy has no rank thresholds defined.
       - "unranked"  : the strategy has a ladder but nothing gradeable — no
@@ -705,6 +708,22 @@ def _section_banner(ranks, ek, strat, basis, mode) -> dict | None:
     Every payload carries "mode"; non-pb modes with a gradeable basis also
     carry "basis" {frames, display, count, window} — what the rank is based
     on (drives the banner's 'avg of N' line).
+
+    `pb_untagged` — the caller's own answer to "does the entity's current,
+    strategy-blind PB (`_current_pbs` / `sec.pb`) carry a strat_tag at all".
+    True is the ONLY thing that can produce "unattributed", and it is checked
+    FIRST, ahead of strat/ladder/basis — a PB with no strat_tag can never be
+    found by `current_pbs_by_strat` regardless of which strategy is active, so
+    "no_strat"/"unranked" would be true but misleading right beside a PB the
+    reader can see (live report 2026-07-31: Bowser 1 showed PB 0'26"30 next to
+    a Capless 5 floor rank — "this should never happen"). Distinct from
+    "unranked" on purpose: "unranked" means a real ladder position with simply
+    no time on it yet, which the UI floors (Capless V, an honest bottom-of-
+    the-ladder claim); "unattributed" means a saved time exists that no
+    strategy can claim, and floor-ing THAT would assert a concrete rank that
+    directly contradicts the PB sitting next to it — so the UI never floors
+    this reason (ui/components/ranks.js's RANK_SENTINEL, gated on
+    reason === "unranked" alone).
 
     The graded shape carries "score", "division", "fill", "next_tier",
     "next_division", "next_gap_cs" (`_graded_progress` — the UI must never
@@ -726,6 +745,8 @@ def _section_banner(ranks, ek, strat, basis, mode) -> dict | None:
     has_standards = bool(ranks.ladders(ek))
     if not has_standards:
         return None
+    if pb_untagged:
+        return {"rank": None, "reason": "unattributed", "mode": mode}
     if not strat:
         return {"rank": None, "reason": "no_strat", "mode": mode}
     ladder = ranks.ladder_cs(ek, strat)
@@ -1183,6 +1204,14 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         star_basis = grading_basis(
             rank_mode, pbs_by_strat.get((course_id, star_id, rank_clock, star_strat)),
             history, star_strat, rank_clock)
+        # The entity's CURRENT (strategy-blind) PB on the ladder's own clock —
+        # the exact row `_current_pbs` keeps and the display tag shows. A PB
+        # here with no strat_tag can never be found by current_pbs_by_strat
+        # regardless of the active strat, which is the untagged-PB bug
+        # (live report 2026-07-31): see _section_banner's pb_untagged param.
+        star_pb_current = pbs.get((course_id, star_id, rank_clock))
+        star_pb_untagged = (star_pb_current is not None
+                            and star_pb_current["strat_tag"] is None)
         star_strategies = _strategies_for(registered, all_attempts, course_id, star_id,
                                           service.ranks, deleted_strats.get(ek, []))
         if family_reject is not None:
@@ -1215,7 +1244,8 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "progress": _progress(in_section, pb_ids, session_meta, igt_of,
                                   service.ranks, clock, rank_clock),
             "rank": _section_banner(
-                service.ranks, ek, star_strat, star_basis, rank_mode),
+                service.ranks, ek, star_strat, star_basis, rank_mode,
+                pb_untagged=star_pb_untagged),
             "entity_rank": entity_rank(
                 service.ranks, ek, star_basis and star_basis["frames"]),
             "one_ladder": ranks_share_ladder(service.ranks, ek, star_strat),
@@ -1279,6 +1309,12 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         seg_basis = grading_basis(
             rank_mode, pbs_by_strat.get(("segment", seg_id, seg_rank_clock, seg_strat)),
             history, seg_strat, seg_rank_clock)
+        # Same untagged-PB check as the star loop above, keyed off the
+        # SEGMENT's own identity (PBs are genuinely this segment's own times,
+        # even when grading_ek borrows a paired star's ladder).
+        seg_pb_current = pbs.get(("segment", seg_id, seg_rank_clock))
+        seg_pb_untagged = (seg_pb_current is not None
+                           and seg_pb_current["strat_tag"] is None)
         # Computed once and reused below (the "course_id" field AND the
         # pipe-pairing display names) rather than re-derived twice — a
         # deleted definition has no place, which reads as "anywhere" and
@@ -1401,7 +1437,8 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "progress": _progress(in_section, pb_ids, session_meta, rta_of,
                                   service.ranks, "rta", seg_rank_clock),
             "rank": _section_banner(
-                service.ranks, grading_ek, seg_strat, seg_basis, rank_mode),
+                service.ranks, grading_ek, seg_strat, seg_basis, rank_mode,
+                pb_untagged=seg_pb_untagged),
             "entity_rank": entity_rank(
                 service.ranks, grading_ek, seg_basis and seg_basis["frames"]),
             "one_ladder": ranks_share_ladder(service.ranks, grading_ek, seg_strat),

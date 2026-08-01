@@ -20,11 +20,22 @@ const MODE_LABEL = Object.fromEntries(RANK_MODE_OPTIONS);
 // Sentinel wording (server sends {rank:null, reason, mode}): a strategy is
 // ranked ONLY by times achieved with it, so "unranked" means no gradeable
 // time on THIS strat yet — the saved PB in pb mode, valid runs in avg modes.
+//
+// "unattributed" (live report 2026-07-31 — "Bowser 1 shows PB 0'26"30, but
+// the rank display clearly shows Capless 5... this should never happen") is
+// a DIFFERENT fact from "unranked": the entity's current PB (the very time
+// the display tag shows) carries no strategy at all, so no strategy could
+// ever claim it — not "you haven't run this strat yet". It says the truth
+// AND implies the remedy (pick a strategy, set a new PB), same wording the
+// user asked for, and it deliberately never floors (see `atFloor` below,
+// which only floors "unranked" — floor-ing an unattributed PB would assert a
+// concrete rank that directly contradicts the PB sitting right beside it).
 const RANK_SENTINEL = {
   unranked: "— unranked (no PB on this strategy yet)",
   unranked_avg: "— unranked (no valid runs on this strategy yet)",
   no_ladder: "— no rank standards for this strategy",
   no_strat: "— pick a strat to see your rank",
+  unattributed: "— PB isn't attributed to a strategy (set a new PB to rank it)",
 };
 
 // What the floor default costs the reader: the sentinel sentence it
