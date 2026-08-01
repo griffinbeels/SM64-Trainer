@@ -3,6 +3,7 @@ import htm from "htm";
 import { RankIcon } from "./rankicon.js";
 import { RANK_FLOOR, capName } from "./caps.js";
 import { fallbackToGenericStar, isGenericArt } from "./entityicons.js";
+import { caveatOf, treatment } from "./marks.js";
 
 const html = htm.bind(h);
 
@@ -63,11 +64,27 @@ const html = htm.bind(h);
  *            unchanged look.
  * onEdit     optional; omit and the ✎ affordance is not rendered at all (the
  *            picker has no per-cell icon override — that lives on the banner)
+ * caveat     optional CAVEAT key (components/marks.js) — "the time behind this
+ *            cell's rank does not mean what the rank implies". Server-derived
+ *            (tracking/views.py), never computed here. This surface is the
+ *            reason the vocabulary exists at all: the practice CARD can say it
+ *            in a sentence and this cell is an icon-only badge with room for
+ *            none, so the treatment is a judgement call rather than a
+ *            derivation — see marks.js's CAVEAT_TREATMENTS and
+ *            tools/mark_sheet.py.
+ * treatmentKey  render a SPECIFIC candidate treatment instead of the active
+ *            one. Only the contact sheet passes it; the app never does.
  */
 export function PracticeCell({ active, iconSrc, fallbackSlot = 0,
                               rank, hasStandards = false, strat, name, sub,
                               title, dimIdle = false,
-                              rankBadge = false, onPick, onEdit }) {
+                              rankBadge = false, onPick, onEdit,
+                              caveat = null, treatmentKey = null }) {
+  const mark = caveatOf(caveat);
+  const marks = treatment(treatmentKey);
+  const caveatSlot = mark ? marks.cellSlot(mark) : null;
+  const caveatOverlay = mark ? marks.cellOverlay(mark) : null;
+  const caveatClass = mark ? marks.cellClass(mark) : "";
   // Unranked but RANKABLE draws the ladder floor rather than a bare "-",
   // so it reads as "bottom of the ladder" instead of "not a thing that
   // ranks" (user, 2026-07-30). Unranked with no standards at all still
@@ -76,9 +93,20 @@ export function PracticeCell({ active, iconSrc, fallbackSlot = 0,
   // grid) deliberately renders NOTHING when unranked, because an in-flow
   // placeholder per grid row is most of what made that grid scroll, and a
   // floor icon on every unpracticed cell would reinstate exactly that.
+  //
+  // A CAVEAT suppresses the floor, and that is the behavioural half of round-4
+  // item 2 rather than a look: flooring a PB no strategy can claim asserts a
+  // concrete rank that directly contradicts the time it sits beside — the live
+  // report ("Bowser 1 shows PB 0'26"30, but the rank display clearly shows
+  // Capless 5... this should never happen") that `_section_banner` already
+  // fixed on the practice card, arriving here one surface later. A treatment
+  // that draws its mark somewhere OTHER than the rank slot has to opt in
+  // (marks.js's `suppressFloor`), because then nothing else would.
+  const floored = !(mark && marks.suppressFloor);
   const rankOrFloor = rank
-    || (hasStandards ? { rank: RANK_FLOOR.tier, division: RANK_FLOOR.division }
-                     : null);
+    || (hasStandards && floored
+          ? { rank: RANK_FLOOR.tier, division: RANK_FLOOR.division }
+          : null);
   const editKey = (keyEvent) => {
     if (keyEvent.key !== "Enter" && keyEvent.key !== " ") return;
     keyEvent.preventDefault(); keyEvent.stopPropagation(); onEdit();
@@ -95,7 +123,7 @@ export function PracticeCell({ active, iconSrc, fallbackSlot = 0,
     ? (strat ? `${capName(rank.rank)} · best on ${strat}` : capName(rank.rank))
     : null;
   return html`<button
-      class="starcell ${active ? "active-star" : ""}"
+      class="starcell ${active ? "active-star" : ""} ${caveatClass}"
       title=${title || name} onclick=${onPick}>
     <span class="starholder">
       <img class="starimg ${isGenericArt(iconSrc) ? "" : "courseicon"} ${dimIdle && !active ? "dim" : ""}"
@@ -103,13 +131,14 @@ export function PracticeCell({ active, iconSrc, fallbackSlot = 0,
            onerror=${(errorEvent) => fallbackToGenericStar(errorEvent, fallbackSlot)}
            alt="" draggable="false" />
     </span>
+    ${caveatOverlay}
     ${rankBadge
       ? (rank ? html`<span class="starrank-badge"><${RankIcon} tier=${rank.rank} division=${rank.division} title=${badgeTitle} size=${16} /></span>` : null)
       : html`<span class="starrank">
-      ${rankOrFloor
+      ${caveatSlot || (rankOrFloor
         ? html`<${RankIcon} tier=${rankOrFloor.rank} division=${rankOrFloor.division}
             size=${16} />`
-        : "–"}</span>`}
+        : "–")}</span>`}
     <span class="starname">${name}</span>
     <span class="starsub">${sub}</span>
     ${onEdit ? html`<span class="editicon" role="button" tabindex="0"

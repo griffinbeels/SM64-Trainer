@@ -29,6 +29,7 @@ uv run python tools/dev_cleanup.py                   # kill orphaned dev/harness
 uv run python tools/dedupe_journal.py data/tracker.db  # scan double-journaled events; --fix repairs (server stopped)
 uv run pytest tests/test_responsive.py -q            # render every breakpoint; report layout defects (no PJ64 needed)
 uv run python tools/contact_sheet.py .objective-card # one surface at 1500/1200/900/850, in one image -- LOOK at it
+uv run python tools/mark_sheet.py                    # every candidate CAVEAT treatment on both surfaces, side by side -- a design PICK is owed on this
 uv run python tools/measure_objective_card.py        # re-measure the fixed card heights against real content
 ```
 

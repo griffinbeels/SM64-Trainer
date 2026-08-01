@@ -196,6 +196,48 @@
      the two never actually coexist today, but placing it opposite removes
      the question rather than relying on that. */
   .starrank-badge { position: absolute; top: 3px; left: 3px; }
+  /* CAVEAT MARKS (components/marks.js) — "the time behind this rank does not
+     mean what the rank implies". Three candidate treatments render here side
+     by side (tools/mark_sheet.py); the picked one keeps its rules and the
+     other two are DELETED, the same way a rank-icon style would be.
+     --caveat is its own hue on purpose: gold already means earned and coral
+     already means failed, and a caveat is neither — the number is real, it
+     just measures something other than what the reader assumes. */
+  .caveat-slot {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 16px; height: 16px; border-radius: 50%;
+    border: 1px solid var(--caveat); color: var(--caveat);
+    background: rgba(224,162,74,.12);
+    font-size: .68rem; font-weight: 700; line-height: 1; cursor: help;
+  }
+  .caveat-badge {
+    position: absolute; top: 3px; left: 3px; z-index: 2;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 15px; height: 15px; border-radius: 50%;
+    border: 1px solid var(--caveat); color: var(--caveat);
+    background: rgba(12,25,40,.92);
+    font-size: .62rem; font-weight: 700; line-height: 1; cursor: help;
+  }
+  /* The picker grid already owns top-left with its rank badge, and passes no
+     onEdit, so the caveat takes the corner the ✎ occupies on the banner. */
+  .entity-grid .caveat-badge { left: auto; right: 3px; }
+  .caveat-inline { color: var(--caveat); font-weight: 700; cursor: help;
+                   margin-left: .3rem; }
+  .caveat-chip {
+    display: inline-flex; align-items: center; gap: .22rem;
+    margin-left: .35rem; padding: .04rem .38rem; border-radius: 999px;
+    border: 1px solid var(--caveat); color: var(--caveat);
+    background: rgba(224,162,74,.1);
+    font-size: .66rem; font-weight: 700; line-height: 1.35;
+    white-space: nowrap; cursor: help;
+  }
+  .caveat-word { color: var(--caveat); font-weight: 700; cursor: help;
+                 margin-left: .35rem; font-size: .82em; }
+  /* The `tinted` treatment's whole mechanism: the VALUE changes colour rather
+     than growing a mark beside it, which is the only one of the three that
+     adds no width to a fixed-height row. */
+  .pbtag.has-caveat { color: var(--caveat); }
+  .starcell.caveat-tinted .starname { color: var(--caveat); }
   /* The clear cell ("(any level)" etc.) emits null, restoring what the native
      <select>'s placeholder option did. Muted, so it reads as an escape hatch
      rather than a choice. */
@@ -568,6 +610,7 @@
     --blue: #68adf2;
     --green: #91e5a2;
     --coral: #ff7b73;
+    --caveat: #e0a24a;
     --sidebar-wide: 206px;
     --sidebar-rail: 76px;
     /* Selector-card slot height. cqw resolves against .practice-page
