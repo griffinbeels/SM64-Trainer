@@ -19,7 +19,7 @@ MOVEMENTS = build_seed.corpus_movements.MOVEMENTS
 
 
 def test_movement_count():
-    assert len(MOVEMENTS) == 55
+    assert len(MOVEMENTS) == 56          # 55 + seg:bowser2->bits (Task 20)
 
 
 def test_seed_keys_are_unique_and_prefixed():

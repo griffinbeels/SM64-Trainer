@@ -711,7 +711,12 @@ function EntityDetail({ t, entity, onClose }) {
   const rows = section
     ? [...section.attempts]
         .filter((attempt) => !attempt.cleared && attempt.outcome === "success")
-        .sort((left, right) => right.id - left.id)
+        // journal_id, not the raw id (spec 2026-07-28-multi-step-segments,
+        // live report) -- a reattributed 100-coin attempt's SEGMENT-
+        // namespace id would otherwise permanently outrank a native
+        // star-namespace one regardless of which actually happened last.
+        // Same fix as practice.js's own "newest first" comparator.
+        .sort((left, right) => right.journal_id - left.journal_id)
         .slice(0, TOP_N_ATTEMPTS)
     : [];
   return html`<div class="entity-detail">

@@ -294,6 +294,37 @@ def test_attempts_roundtrip_preserves_segment_id(tmp_path):
     assert db.attempts()[0].segment_id == 3
 
 
+def test_attempts_order_chronologically_across_both_id_namespaces(tmp_path):
+    """Live report, spec 2026-07-28-multi-step-segments: a reattributed
+    100-coin attempt keeps its SEGMENT-namespace id (jid + 10**10 * def_id,
+    tracking/projection.py caveat 2/11) even though it is now a plain star
+    attempt (segment_id=None) -- a huge number next to a native star
+    attempt's small journal id for the SAME entity. Sorting by the raw `id`
+    column stuck two real successes at the top of the practice log
+    FOREVER while newer resets piled up underneath them (his own report).
+
+    This is the shape no existing test could have covered: one entity
+    (course 2, star 6) with BOTH a reattributed attempt (segment-namespace
+    id, EARLIER in wall-clock/journal terms) and a native one (plain
+    journal id, LATER) — db.attempts() must return them in JOURNAL order,
+    not raw-id order, which for this pair is the OPPOSITE of numeric id
+    order."""
+    db = make_db(tmp_path)
+    # Reattributed: journal id 22218, segment-namespaced as def_id=75 would
+    # produce (75 * 10**10 + 22218) -- EARLIER in time, BIGGER raw id.
+    reattributed = make_attempt(id=75 * 10**10 + 22218, course_id=2, star_id=6,
+                                segment_id=None, rta_frames=2983, igt_frames=2983)
+    # Native: journal id 22272 -- LATER in time, SMALLER raw id.
+    native = make_attempt(id=22272, course_id=2, star_id=6, segment_id=None,
+                          outcome="reset", rta_frames=None, igt_frames=None)
+    db.replace_attempts([reattributed, native])
+    ordered = db.attempts()
+    assert [a.id for a in ordered] == [reattributed.id, native.id], (
+        "db.attempts() must sort by journal_id (strips the segment "
+        "namespace offset), not the raw id column -- raw-id order would "
+        "put these in the OPPOSITE (wrong) sequence")
+
+
 def test_pb_accepts_segment_keying_and_null_course(tmp_path):
     db = make_db(tmp_path)
     db.insert_pb(course_id=None, star_id=None, strat_tag=None,
@@ -677,3 +708,388 @@ def test_v14_matches_the_whole_stored_value_not_a_prefix(tmp_path):
         "segment:5": "user:lakitu2.png"})
     assert overrides == {"segment:4": "user:blj-of-my-own.png",
                          "segment:5": "user:lakitu2.png"}
+
+
+# -- migration v15: match_mode on a segment definition ------------------------
+
+def test_segment_defs_round_trip_match_mode(tmp_path):
+    db = make_db(tmp_path)
+    sid = db.insert_segment_def(
+        name="x", start_triggers=[{"type": "spawned"}],
+        end_triggers=[{"type": "spawned"}], guards=[],
+        created_utc="2026-07-28T00:00:00Z")
+    # A bare insert_segment_def call defaults to strict (fix round, spec
+    # 2026-07-28-multi-step-segments Item 0) — matching the column DEFAULT and
+    # every existing row, so a fresh call at this layer agrees with a
+    # migrated install regardless of when either happened. "Loose" is an
+    # AUTHORING preference for a user-created segment, applied one layer up
+    # (SegmentBody.match_mode / TrackerService.create_segment always passes it
+    # explicitly), never a storage-layer default.
+    assert next(r for r in db.segment_defs() if r["id"] == sid)["match_mode"] \
+        == "strict"
+    db.update_segment_def(sid, match_mode="loose")
+    assert next(r for r in db.segment_defs() if r["id"] == sid)["match_mode"] \
+        == "loose"
+
+
+def test_existing_rows_migrate_to_strict(tmp_path):
+    # v15 must not change how a single already-seeded definition matches:
+    # the corpus converts row by row in Phase 7, never silently here.
+    db = make_db(tmp_path)
+    db._conn.execute("INSERT INTO segment_defs (name, enabled, start_triggers,"
+                     " end_triggers, waypoints, guards, created_utc)"
+                     " VALUES ('legacy',1,'[]','[]','[]','[]','2026-01-01')")
+    db._conn.commit()
+    assert next(r for r in db.segment_defs()
+                if r["name"] == "legacy")["match_mode"] == "strict"
+
+
+# -- migration v16: repair the Bowser pipe family stranded disabled ----------
+
+_PIPE_FAMILY_SEED_KEYS = ("seg:bitdw-pipe", "seg:bitfs-pipe", "seg:bits-pipe",
+                          "seg:reds->pipe:bitdw", "seg:reds->pipe:bitfs",
+                          "seg:reds->pipe:bits")
+
+
+def _v15_db_with_disabled_segments(tmp_path, *, dirty_pipe_family=True):
+    """A db one version behind (v15, post the legacy-seed v12 seed_key
+    backfill so the three pipe-only rows already carry their seed_key), with
+    two of the pipe-family rows and one UNRELATED row left disabled the way
+    the retired Bowser-banner exclusion (912466d) could have stranded them —
+    a plain enabled=0 write that also dirties a seeded row. The reds->pipe
+    siblings never come from a raw migration (they are bundled-seed content,
+    reconcile_defaults's job) so they are inserted by hand here with their
+    seed_key already set, matching what a reconciled real db looks like."""
+    import sqlite3
+    path = tmp_path / "t.db"
+    conn = sqlite3.connect(str(path))
+    for script in MIGRATIONS[:15]:          # bring the db up to v15
+        conn.executescript(script)
+    conn.execute("UPDATE segment_defs SET enabled=0"
+                 + (", seed_dirty=1" if dirty_pipe_family else "")
+                 + " WHERE seed_key='seg:bitdw-pipe'")
+    conn.execute("INSERT INTO segment_defs (name, enabled, start_triggers,"
+                 " end_triggers, waypoints, guards, created_utc, seed_key,"
+                 " seed_dirty) VALUES (?,0,'[]','[]','[]','[]',?,?,?)",
+                 ("BitFS — 8 Red Coins → Pipe", "2026-07-24T00:00:00Z",
+                  "seg:reds->pipe:bitfs", 1 if dirty_pipe_family else 0))
+    # An unrelated segment the user disabled on purpose (LBLJ, seeded and
+    # untouched by the retired mechanism) — must survive the repair.
+    conn.execute("UPDATE segment_defs SET enabled=0, seed_dirty=1"
+                 " WHERE seed_key='seg:lblj'")
+    conn.execute("PRAGMA user_version = 15")
+    conn.commit()
+    conn.close()
+    return path
+
+
+def test_v16_reenables_stranded_pipe_family_rows(tmp_path):
+    """The two rows the retired exclusion left disabled (912466d, live report
+    2026-07-29 — a disabled definition never arms, so both scenarios recorded
+    silently nothing across a full practice session) come back enabled."""
+    path = _v15_db_with_disabled_segments(tmp_path)
+    db = Database(path)
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
+    rows = {r["seed_key"]: r for r in db.segment_defs()
+            if r["seed_key"] in _PIPE_FAMILY_SEED_KEYS}
+    assert rows["seg:bitdw-pipe"]["enabled"] is True
+    assert rows["seg:reds->pipe:bitfs"]["enabled"] is True
+    # v16 ITSELF left seed_dirty exactly as found (that repair was not a user
+    # edit and was not supposed to change what reconcile does with these rows
+    # next startup) -- but through the FULL migration chain to the current
+    # version, v17 (below) now deliberately clears it: leaving it standing is
+    # what froze these same six rows against every LATER corpus change, round
+    # 2 item 5's own bug. A db landing on today's code sees BOTH repairs.
+    assert rows["seg:bitdw-pipe"]["seed_dirty"] == 0
+    assert rows["seg:reds->pipe:bitfs"]["seed_dirty"] == 0
+
+
+def test_v16_leaves_an_unrelated_disabled_segment_disabled(tmp_path):
+    """A user may have disabled something outside the Bowser pipe family on
+    purpose (LBLJ here) — the repair must not silently re-enable their own
+    choice just because it also carries seed_dirty=1."""
+    path = _v15_db_with_disabled_segments(tmp_path)
+    db = Database(path)
+    lblj = next(r for r in db.segment_defs() if r["seed_key"] == "seg:lblj")
+    assert lblj["enabled"] is False
+    assert lblj["seed_dirty"] == 1
+
+
+def test_v16_is_idempotent(tmp_path):
+    """Re-running the migration set (a fresh Database() open against an
+    already-migrated file) must not toggle anything a second time."""
+    path = _v15_db_with_disabled_segments(tmp_path)
+    Database(path).close()
+    db = Database(path)          # re-open: v16's UPDATE runs again on replay?
+    rows = {r["seed_key"]: r for r in db.segment_defs()
+            if r["seed_key"] in _PIPE_FAMILY_SEED_KEYS}
+    assert rows["seg:bitdw-pipe"]["enabled"] is True
+    assert rows["seg:reds->pipe:bitfs"]["enabled"] is True
+
+
+def test_fresh_install_has_no_stranded_rows_to_repair(tmp_path):
+    """A brand-new db never runs an old mutual-exclusion write, so every
+    pipe-family row starts (and stays) enabled — v16 has nothing to do on a
+    fresh install, unlike a migrated one."""
+    db = make_db(tmp_path)
+    pipe_family = [r for r in db.segment_defs()
+                   if r["seed_key"] in _PIPE_FAMILY_SEED_KEYS]
+    # The legacy v4 seed only carries the three pipe-only rows; the
+    # reds->pipe siblings are bundled-seed content that only exists once
+    # reconcile_defaults has run, which is out of scope for the storage layer
+    # alone — assert what IS seeded here stays enabled.
+    assert pipe_family and all(r["enabled"] for r in pipe_family)
+
+
+# -- migration v17: unfreeze the Bowser pipe family's seed_dirty flag --------
+#
+# Round 2, item 5, live report 2026-07-30/31: v16 repaired `enabled` on these
+# six rows but, on explicit instruction, deliberately left seed_dirty=1
+# standing. That instruction was right about not disguising a repair as a
+# user edit and wrong about the consequence -- seed_dirty=1 blocks
+# reconcile_defaults's update branch UNCONDITIONALLY, so these six rows were
+# frozen against every future corpus change, not just v16's own field.
+# seg:bitdw-pipe is the one that actually drifted (match_mode stuck at
+# 'strict' instead of the seed's 'exclusive' -- the shape that lets grabbing
+# the reds star cancel a no-reds attempt, which plain 'strict' cannot do).
+
+def _v16_db_with_frozen_pipe_family(tmp_path):
+    """A db at v16 with all SIX Bowser pipe-family rows carrying seed_dirty=1
+    (as the retired mutual-exclusion toggle could have left any of them) and
+    seg:bitdw-pipe's OWN match_mode stuck at the pre-v15 default 'strict' --
+    reconcile never reached it to bring it to the seed's 'exclusive', exactly
+    the live drift measured against this branch's own dev db (never the live
+    file). The legacy three (seg:*-pipe) already exist from the v4/v12
+    migrations; the reds->pipe siblings are bundled-seed-only content
+    (reconcile_defaults's job), so they are inserted by hand here with their
+    seed_key already set, matching what a reconciled real db looks like."""
+    import sqlite3
+    path = tmp_path / "t.db"
+    conn = sqlite3.connect(str(path))
+    for script in MIGRATIONS[:16]:          # bring the db up to v16
+        conn.executescript(script)
+    for abbrev, level, name in (("bitdw", 17, "BitDW — 8 Red Coins → Pipe"),
+                                 ("bitfs", 19, "BitFS — 8 Red Coins → Pipe"),
+                                 ("bits", 21, "BitS — 8 Red Coins → Pipe")):
+        conn.execute(
+            "INSERT INTO segment_defs (name, enabled, start_triggers,"
+            " end_triggers, waypoints, guards, created_utc, seed_key,"
+            " seed_dirty, match_mode) VALUES (?,1,?,?,'[]','[]',?,?,1,?)",
+            (name, f'[{{"type":"level_enter","to":{level}}}]',
+             f'[{{"type":"warp_entered","level":{level}}}]',
+             "2026-07-24T00:00:00Z", f"seg:reds->pipe:{abbrev}", "strict"))
+    conn.execute("UPDATE segment_defs SET seed_dirty=1, match_mode='strict'"
+                 " WHERE seed_key IN ('seg:bitdw-pipe', 'seg:bitfs-pipe', 'seg:bits-pipe')")
+    conn.execute("PRAGMA user_version = 16")
+    conn.commit()
+    conn.close()
+    return path
+
+
+def test_v17_clears_seed_dirty_on_exactly_the_six_pipe_family_rows(tmp_path):
+    path = _v16_db_with_frozen_pipe_family(tmp_path)
+    db = Database(path)
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
+    rows = {r["seed_key"]: r for r in db.segment_defs()
+            if r["seed_key"] in _PIPE_FAMILY_SEED_KEYS}
+    for key in _PIPE_FAMILY_SEED_KEYS:
+        assert rows[key]["seed_dirty"] == 0, f"{key} still frozen"
+
+
+def test_v17_leaves_an_unrelated_dirtied_segment_alone(tmp_path):
+    """A user may have deliberately edited something outside the Bowser pipe
+    family (LBLJ here) -- clearing ITS seed_dirty would silently discard a
+    real edit at the next reconcile, exactly the risk the flag exists to
+    prevent. Scoped to the six named seed_keys only."""
+    import sqlite3
+    path = _v16_db_with_frozen_pipe_family(tmp_path)
+    conn = sqlite3.connect(str(path))
+    conn.execute("UPDATE segment_defs SET seed_dirty=1 WHERE seed_key='seg:lblj'")
+    conn.commit()
+    conn.close()
+    db = Database(path)
+    lblj = next(r for r in db.segment_defs() if r["seed_key"] == "seg:lblj")
+    assert lblj["seed_dirty"] == 1
+
+
+def test_v17_unfreezes_reconcile_and_repairs_the_drifted_match_mode(tmp_path):
+    """The consequence, not just the flag: once seed_dirty is cleared, the
+    NEXT reconcile_defaults call (every real startup runs one) must bring
+    seg:bitdw-pipe's match_mode to the seed's 'exclusive' -- proving the
+    unfreeze actually reaches the field that was silently wrong, not merely
+    that the flag itself flipped."""
+    from sm64_events.tracking.defaults import reconcile_defaults
+    path = _v16_db_with_frozen_pipe_family(tmp_path)
+    db = Database(path)
+    seed = {"segments": [
+        {"seed_key": "seg:bitdw-pipe", "name": "BitDW Pipe Entry",
+         "start_triggers": [{"type": "level_enter", "to": 17}],
+         "end_triggers": [{"type": "warp_entered", "level": 17}],
+         "match_mode": "exclusive"},
+    ]}
+    problems = reconcile_defaults(db, seed)
+    assert problems == []
+    row = next(r for r in db.segment_defs() if r["seed_key"] == "seg:bitdw-pipe")
+    assert row["match_mode"] == "exclusive"
+
+
+def test_v17_is_idempotent(tmp_path):
+    """Re-running the migration set a second time must not error or toggle
+    anything further -- seed_dirty is already 0, and setting 0 to 0 again is
+    a no-op."""
+    path = _v16_db_with_frozen_pipe_family(tmp_path)
+    Database(path).close()
+    db = Database(path)
+    rows = {r["seed_key"]: r for r in db.segment_defs()
+            if r["seed_key"] in _PIPE_FAMILY_SEED_KEYS}
+    for key in _PIPE_FAMILY_SEED_KEYS:
+        assert rows[key]["seed_dirty"] == 0
+
+
+# -- migration v18: backfill untagged PBs on the 3 unambiguous segments ------
+#
+# Live report 2026-07-31: "Bowser 1 shows PB 0'26"30, but the rank display
+# clearly shows Capless 5 -- this should never happen." Root cause: every
+# legacy segment_def carried default_strat=NULL (v13 added the column with no
+# repair), so their attempts recorded strat_tag=NULL from day one, and
+# views.py's current_pbs_by_strat skips a PB with no strat_tag. Three of the
+# seventeen entities the bug actually hit resolve unambiguously to ONE
+# strategy in the bundled rank standards -- MIPS Clip and Bowser 1/2, all
+# "Standard" -- so backfilling them is not a guess, exactly like giving them a
+# default_strat going forward (tools/corpus_legacy.py). The other fourteen
+# (ten stars plus BitDW/BitFS/BitS Pipe Entry and Bowser 3) stay untagged on
+# purpose: they have real competing strategies, and this migration must never
+# touch them.
+
+def _v17_db_with_untagged_pbs(tmp_path):
+    """A db at v17 already carries all ten legacy segments (v4's INSERT + v12's
+    seed_key backfill), including seg:mips-clip/bowser-1/bowser-2 (the three
+    this migration targets) and seg:bitdw-pipe (unrelated, genuinely
+    ambiguous) -- so this seeds untagged attempts/PBs onto those EXISTING
+    rows rather than inserting new ones under the same seed_key (which would
+    never happen on a real install and would make "the" row with that key
+    ambiguous). A star (course/star, no segment_id) gets the same shape too,
+    proving the segment_id-scoped migration cannot reach a star row even
+    though NULL strat_tag looks identical there."""
+    import sqlite3
+    path = tmp_path / "t.db"
+    conn = sqlite3.connect(str(path))
+    for script in MIGRATIONS[:17]:          # bring the db up to v17
+        conn.executescript(script)
+    seg_ids = {r[1]: r[0] for r in conn.execute(
+        "SELECT id, seed_key FROM segment_defs WHERE seed_key IN"
+        " ('seg:mips-clip', 'seg:bowser-1', 'seg:bowser-2', 'seg:bitdw-pipe')")}
+    assert len(seg_ids) == 4, seg_ids   # sanity: all four pre-exist from v4/v12
+    aid = 1
+    for seed_key in ("seg:mips-clip", "seg:bowser-1", "seg:bowser-2",
+                     "seg:bitdw-pipe"):
+        seg_id = seg_ids[seed_key]
+        conn.execute(
+            "INSERT INTO attempts (id, session_id, segment_id, strat_tag,"
+            " anchor_type, outcome, rta_frames, started_utc, ended_utc)"
+            " VALUES (?,1,?,NULL,'a','success',800,'t','t')", (aid, seg_id))
+        conn.execute(
+            "INSERT INTO pbs (segment_id, strat_tag, timer_mode, frames,"
+            " attempt_id, saved_utc) VALUES (?,NULL,'rta',800,?,'t')",
+            (seg_id, aid))
+        aid += 1
+    # A star PB/attempt, same untagged shape -- must be untouched (no
+    # segment_id at all, so the migration's own subquery cannot match it).
+    conn.execute(
+        "INSERT INTO attempts (id, session_id, course_id, star_id, strat_tag,"
+        " anchor_type, outcome, igt_frames, started_utc, ended_utc)"
+        " VALUES (?,1,2,0,NULL,'a','success',800,'t','t')", (aid,))
+    conn.execute(
+        "INSERT INTO pbs (course_id, star_id, strat_tag, timer_mode, frames,"
+        " attempt_id, saved_utc) VALUES (2,0,NULL,'igt',800,?,'t')", (aid,))
+    conn.execute("PRAGMA user_version = 17")
+    conn.commit()
+    conn.close()
+    return path
+
+
+def test_v18_backfills_pbs_and_attempts_for_the_three_unambiguous_segments(tmp_path):
+    path = _v17_db_with_untagged_pbs(tmp_path)
+    db = Database(path)
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
+    seg_ids = {r["seed_key"]: r["id"] for r in db.segment_defs()
+              if r["seed_key"] in ("seg:mips-clip", "seg:bowser-1", "seg:bowser-2")}
+    for seed_key, seg_id in seg_ids.items():
+        pb = db._conn.execute(
+            "SELECT strat_tag FROM pbs WHERE segment_id=?", (seg_id,)).fetchone()
+        attempt = db._conn.execute(
+            "SELECT strat_tag FROM attempts WHERE segment_id=?", (seg_id,)).fetchone()
+        assert pb["strat_tag"] == "Standard", seed_key
+        assert attempt["strat_tag"] == "Standard", seed_key
+
+
+def test_v18_leaves_ambiguous_and_star_rows_untagged(tmp_path):
+    """BitDW Pipe Entry (real competing strategies) and the seeded star PB
+    (no segment identity at all) must stay exactly as untagged as they
+    started -- this migration only ever reaches the three named seed_keys."""
+    path = _v17_db_with_untagged_pbs(tmp_path)
+    db = Database(path)
+    bitdw_id = next(r["id"] for r in db.segment_defs()
+                    if r["seed_key"] == "seg:bitdw-pipe")
+    pb = db._conn.execute(
+        "SELECT strat_tag FROM pbs WHERE segment_id=?", (bitdw_id,)).fetchone()
+    attempt = db._conn.execute(
+        "SELECT strat_tag FROM attempts WHERE segment_id=?", (bitdw_id,)).fetchone()
+    assert pb["strat_tag"] is None
+    assert attempt["strat_tag"] is None
+    star_pb = db._conn.execute(
+        "SELECT strat_tag FROM pbs WHERE course_id=2 AND star_id=0").fetchone()
+    star_attempt = db._conn.execute(
+        "SELECT strat_tag FROM attempts WHERE course_id=2 AND star_id=0").fetchone()
+    assert star_pb["strat_tag"] is None
+    assert star_attempt["strat_tag"] is None
+
+
+def test_v18_is_idempotent(tmp_path):
+    """Re-running the migration set a second time must not error -- every
+    matching row already carries 'Standard', so the NULL guard makes the
+    second pass a no-op."""
+    path = _v17_db_with_untagged_pbs(tmp_path)
+    Database(path).close()
+    db = Database(path)          # re-open: v18's UPDATEs run again on replay?
+    seg_ids = {r["seed_key"]: r["id"] for r in db.segment_defs()
+              if r["seed_key"] in ("seg:mips-clip", "seg:bowser-1", "seg:bowser-2")}
+    for seed_key, seg_id in seg_ids.items():
+        pb = db._conn.execute(
+            "SELECT strat_tag FROM pbs WHERE segment_id=?", (seg_id,)).fetchone()
+        assert pb["strat_tag"] == "Standard", seed_key
+
+
+def test_v18_never_overwrites_a_real_strat_tag(tmp_path):
+    """A row already carrying a real (non-'Standard') strat_tag by the time
+    v18 runs -- e.g. reconcile stamped default_strat and a later save tagged
+    it with something else entirely -- must survive untouched. Guards on
+    strat_tag IS NULL specifically so a genuine tag always wins."""
+    import sqlite3
+    path = tmp_path / "t.db"
+    conn = sqlite3.connect(str(path))
+    for script in MIGRATIONS[:17]:
+        conn.executescript(script)
+    cur = conn.execute(
+        "INSERT INTO segment_defs (name, enabled, start_triggers,"
+        " end_triggers, waypoints, guards, created_utc, seed_key, seed_dirty)"
+        " VALUES ('MIPS Clip',1,'[]','[]','[]','[]','t','seg:mips-clip',0)")
+    seg_id = cur.lastrowid
+    conn.execute(
+        "INSERT INTO attempts (id, session_id, segment_id, strat_tag,"
+        " anchor_type, outcome, rta_frames, started_utc, ended_utc)"
+        " VALUES (1,1,?,'Blindfolded','a','success',800,'t','t')", (seg_id,))
+    conn.execute(
+        "INSERT INTO pbs (segment_id, strat_tag, timer_mode, frames,"
+        " attempt_id, saved_utc) VALUES (?,'Blindfolded','rta',800,1,'t')",
+        (seg_id,))
+    conn.execute("PRAGMA user_version = 17")
+    conn.commit()
+    conn.close()
+    db = Database(path)
+    pb = db._conn.execute(
+        "SELECT strat_tag FROM pbs WHERE segment_id=?", (seg_id,)).fetchone()
+    attempt = db._conn.execute(
+        "SELECT strat_tag FROM attempts WHERE segment_id=?", (seg_id,)).fetchone()
+    assert pb["strat_tag"] == "Blindfolded"
+    assert attempt["strat_tag"] == "Blindfolded"

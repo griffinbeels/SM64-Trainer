@@ -56,8 +56,13 @@
   .starcell:hover { background: #20242b; }
   .starcell:focus-visible { outline: 2px solid #6fa8ff; outline-offset: 2px; }
   .starcell.active-star { border-color: #e0c36a; background: #211f14; }
-  /* a segment cell whose start condition is met — the timer is running NOW */
-  .starcell.armed { border-color: #3f8a5f; background: #16241c; }
+  /* Round 2 (2026-07-30): a segment cell used to ALSO carry its own
+     `.armed` green highlight for "the timer is running now", which fought
+     this gold one whenever a segment was both armed and targeted -- the
+     user asked to unify the two cell kinds ("the color of the highlight
+     should also be yellow for the segments, not green"), so `.armed` and
+     its glow are deleted rather than reconciled. A cell now has exactly
+     ONE highlight state, active-star, for every kind. */
   /* hover ✎ -> icon picker; revealed on cell hover or keyboard focus */
   /* The ✎ icon-override affordance. ONE rule for both surfaces that offer it
      — the banner's practice cells and the Rank tab's coverage tiles — with
@@ -191,6 +196,35 @@
      the two never actually coexist today, but placing it opposite removes
      the question rather than relying on that. */
   .starrank-badge { position: absolute; top: 3px; left: 3px; }
+  /* CAVEAT MARKS (components/marks.js) — "the time behind this rank does not
+     mean what the rank implies". The CORNER BADGE, picked by the user from
+     tools/mark_sheet.py's three candidates on 2026-08-01; the other two were
+     deleted rather than left behind a flag.
+     --caveat is its own hue on purpose: gold already means earned and coral
+     already means failed, and a caveat is neither — the number is real, it
+     just measures something other than what the reader assumes. */
+  .caveat-badge {
+    position: absolute; top: 3px; left: 3px; z-index: 2;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 15px; height: 15px; border-radius: 50%;
+    border: 1px solid var(--caveat); color: var(--caveat);
+    background: rgba(12,25,40,.92);
+    font-size: .62rem; font-weight: 700; line-height: 1; cursor: help;
+  }
+  /* The picker grid already owns top-left with its rank badge, and passes no
+     onEdit, so the caveat takes the corner the ✎ occupies on the banner. */
+  .entity-grid .caveat-badge { left: auto; right: 3px; }
+  .caveat-chip {
+    display: inline-flex; align-items: center; gap: .22rem;
+    margin-left: .35rem; padding: .04rem .38rem; border-radius: 999px;
+    border: 1px solid var(--caveat); color: var(--caveat);
+    background: rgba(224,162,74,.1);
+    font-size: .66rem; font-weight: 700; line-height: 1.35;
+    white-space: nowrap; cursor: help;
+  }
+  /* The PB VALUE itself stays green. The badge beside it is the whole mark --
+     recolouring the number too would say the same thing twice, and green
+     already means "this is your best", which the caveat does not dispute. */
   /* The clear cell ("(any level)" etc.) emits null, restoring what the native
      <select>'s placeholder option did. Muted, so it reads as an escape hatch
      rather than a choice. */
@@ -251,6 +285,46 @@
   .strat-current { font-size: .68rem; color: var(--gold-soft); }
   .strat-pb { font-size: .7rem; }
   .starsub .strat.none { opacity: .6; }
+  /* Bowser Reds cell (spec 2026-07-28-multi-step-segments, star/pipe toggle):
+     the star/pipe icon buttons + clock + arrows overlay the cell's own art,
+     bottom-centred (mock-up). Not a .starcell BUTTON itself (see
+     stagebanner.js's RedsCell docstring) -- position:relative is scoped to
+     THIS cell's .starholder only, never the shared base rule, since every
+     other cell has exactly one child and needs no positioning context. */
+  .reds-cell .starholder { position: relative; }
+  .reds-toggle {
+    position: absolute; left: 50%; bottom: 6%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: .18rem; z-index: 1;
+  }
+  .reds-toggle-btn {
+    display: flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px; padding: 3px; border-radius: 6px;
+    background: rgba(10,23,38,.85); border: 1px solid var(--border-soft);
+    cursor: pointer;
+    /* ONE declaration for both directions -- a `.is-selected` rule below
+       must never declare its own `transition`, or it would WHOLESALE
+       replace this one while selected and the glow-in/glow-out would snap
+       on one side (ui-core.md's standing CSS trap). */
+    transition: background .18s ease, border-color .18s ease, box-shadow .18s ease;
+  }
+  .reds-toggle-btn img { width: 100%; height: 100%; object-fit: contain;
+                          -webkit-user-select: none; user-select: none; }
+  .reds-toggle-btn:disabled { opacity: .45; cursor: default; }
+  .reds-toggle-btn.is-selected {
+    border-color: #ffd75f; background: rgba(64,50,10,.92);
+    box-shadow: 0 0 6px rgba(255,215,95,.85), 0 0 2px rgba(255,215,95,.9);
+  }
+  .reds-toggle-clock { display: flex; align-items: center; color: var(--muted);
+                        opacity: .8; }
+  .reds-arrows {
+    position: absolute; left: 50%; bottom: -14%; transform: translateX(-50%);
+    display: flex; gap: .85rem; font-size: .62rem; line-height: 1; z-index: 1;
+  }
+  .reds-arrow {
+    color: var(--muted); opacity: .35;
+    transition: opacity .18s ease, color .18s ease;   /* one declaration, both directions */
+  }
+  .reds-arrow.is-lit { opacity: 1; color: #ffd75f; }
   @media (prefers-reduced-motion: no-preference) {
     .starcell.active-star .starholder { animation: starbob 2.4s ease-in-out infinite; }
     @keyframes starbob { 0%, 100% { transform: scale(1.16) translateY(0); }
@@ -523,6 +597,7 @@
     --blue: #68adf2;
     --green: #91e5a2;
     --coral: #ff7b73;
+    --caveat: #e0a24a;
     --sidebar-wide: 206px;
     --sidebar-rail: 76px;
     /* Selector-card slot height. cqw resolves against .practice-page
@@ -564,6 +639,38 @@
        measured off the empty state was 39px short of holding them. Every
        number in this block is only as good as the state the fixture reached;
        re-measure after any change to what the card can contain.
+
+       Re-measured again 2026-07-29 (final review of spec 2026-07-28-multi-
+       step-segments, finding 2) against the state that review flagged as
+       unreached: `.seg-waiting`, the third row an ARMED segment adds below
+       the metrics row (sec.armed_detail non-null). Neither this fixture nor
+       the sweep could reach it before -- `ui_fixture.py`'s `arm_segment=`
+       arms a real segment alongside the star target so both cards exist on
+       one page, matching the max-over-every-card rule above. That round
+       measured 327px as sufficient and said so here -- which then read as a
+       contradiction against the 347px declared two lines down, because the
+       two numbers came from different places: 327 was this branch measuring
+       a ONE-banner armed card, 347 was main's own independent +20 for the
+       widened stacked-wash gap. Both were right; neither said which state it
+       had seen. Hence this paragraph.
+
+       Where it stands 2026-07-29, after the main merge:
+         - the armed segment is now a TWO-banner definition (ui_fixture's
+           FIXTURE_SEGMENT), because a one-strategy entity collapses its two
+           measures into a single banner and the crowded layout stops
+           existing -- the same hole main closed for the star card;
+         - this band is `@container (max-width: 700px)`, and main made 850px
+           the supported minimum. At 850 the pane is ~774px (850 less the
+           76px rail), so **this block is not reached at any supported
+           width** -- it is graceful degradation for a narrower browser, not
+           a shipped layout. `measure_objective_card.py` filters its widths
+           by `PROJECT.min_viewport_width` for exactly that reason: measured
+           below the floor, the two-banner card wants 360px here, and
+           chasing that would grow a fixed-height card for widths nothing
+           claims.
+       So 347px stands, unmeasured against the two-banner card ON PURPOSE.
+       If the supported floor ever drops below ~790px viewport, this number
+       becomes live again and must be re-measured first.
        Re-measure with:
          uv run python tools/measure_objective_card.py  */
     --objective-card-narrow: 347px;
@@ -915,10 +1022,29 @@
     gap: 12px; min-width: 0;
   }
   .objective-card {
-    grid-column: 1 / -1; height: 122px; min-height: 122px; overflow: visible;
-    display: grid; grid-template-rows: auto 1fr; padding-block: 12px;
+    /* Third row is the segment card's "waiting for" line (Task 6, spec
+       2026-07-28-multi-step-segments) -- "auto" and simply collapses to 0
+       when absent (idle segment, or a star, which never renders one), so
+       ONE height budget serves every state without a resize when a segment
+       arms/disarms (OBS-stable slot). Bumped from 122px (+28) for the room;
+       a star card or an unarmed segment just gets a taller, still-centered
+       metrics row instead of an ugly gap -- measured by CDP geometry diff,
+       see task-6-report.md. */
+    grid-column: 1 / -1; height: 150px; min-height: 150px; overflow: visible;
+    display: grid; grid-template-rows: auto 1fr auto; padding-block: 12px;
   }
   .objective-card.active-star { border-color: rgba(240,189,50,.72); }
+  .seg-waiting {
+    display: flex; align-items: baseline; gap: .5rem; min-width: 0;
+    margin-top: .4rem; font-size: .8rem; color: var(--muted);
+  }
+  .seg-waiting-step {
+    flex: none; color: var(--text); font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  .seg-waiting-for {
+    min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  }
   /* Trailing `auto` track added 2026-07-28 for the collapse toggle. Without
      it the button becomes an implicit 5th column at the grid's default size
      and pushes the strategy picker out of the card. */
@@ -1048,6 +1174,20 @@
   }
   .rank-banner:first-child::before { left: -16px; border-radius: 0 0 0 8px; }
   .rank-banner-empty::before { background-image: none; }
+  /* The -12px bottom bleed above (and the stacked band's own :last-child
+     override below) was sized to fade into THE CARD'S OWN bottom padding --
+     safe reasoning while `.objective-metrics` was always the card's last
+     content row. Multi-step segments (this branch) added a THIRD row,
+     `.seg-waiting`, directly below it with no room for a 12px fade to land
+     in, so the wash bled onto real content instead of empty padding --
+     invisible to every instrument until `tools/ui_fixture.py::_arm_segment`
+     could reach an armed segment at all (uilab's decoration probe, which DOES
+     see this class of bug since it derives the pseudo's rect rather than
+     walking the DOM: 243x4px onto div.seg-waiting, 2026-07-29). The fade
+     itself is unchanged for every OTHER state; it only has nothing left to
+     bleed into once there's a real row below it, so it stops at that row's
+     edge instead. */
+  .objective-card:has(.seg-waiting) .rank-banner::before { bottom: 0; }
   .rank-banner {
     min-width: 0; flex: 1 1 0; display: grid; gap: .34rem; align-content: center;
     min-height: 36px;
@@ -2299,10 +2439,24 @@
      inside stable slots instead of reflowing the whole page. */
   .workshop-page { min-width: 0; display: grid; gap: 12px; }
   .workshop-hero {
-    min-height: 82px; display: flex; align-items: center;
-    justify-content: space-between; gap: 1rem;
+    /* flex-wrap + margin-right:auto on the title (below), not
+       justify-content:space-between with a fixed 2-child assumption --
+       segments.js grew a SECOND hero action (Task 13, "Record a segment"
+       beside "New segment") and space-between distributes a 3rd child into
+       the horizontal CENTER of the row rather than grouping it with the
+       other button. The auto-margin trick generalises to any number of
+       trailing action children while rendering byte-identical for the
+       existing single-button case (routes.js's own hero) -- title flush
+       left, the trailing button(s) flush right, same gap. Self-responsive:
+       wraps onto a second line rather than clipping if the hero ever gets
+       too narrow for both buttons, no @container/@media needed. */
+    min-height: 82px; display: flex; align-items: center; flex-wrap: wrap;
+    justify-content: flex-start; gap: 1rem;
   }
-  .workshop-title { min-width: 0; display: flex; align-items: center; gap: .75rem; }
+  .workshop-title {
+    min-width: 0; display: flex; align-items: center; gap: .75rem;
+    margin-right: auto;
+  }
   .workshop-title-icon, .workshop-empty-icon {
     width: 42px; height: 42px; flex: 0 0 auto;
     display: inline-flex; align-items: center; justify-content: center;
@@ -2431,6 +2585,19 @@
   .builder-enabled small, .seghead small, .setting-copy span {
     color: var(--muted); font-size: .7rem; font-weight: 400;
   }
+  /* Match-mode control (spec 2026-07-28-multi-step-segments, final-review
+     finding 4) -- boxed like .builder-enabled above; the description wraps
+     to its own full-width row beneath the label+select one so a long
+     sentence never fights the select for horizontal room. */
+  .builder-matchmode {
+    display: flex; flex-wrap: wrap; align-items: center; gap: .55rem;
+    margin: .65rem 0; padding: .65rem .75rem;
+    border: 1px solid var(--border-soft); border-radius: 7px;
+    background: rgba(8,20,34,.55);
+  }
+  .builder-matchmode .field-label { margin: 0; }
+  .builder-matchmode select { min-width: 0; max-width: 20rem; }
+  .builder-matchmode .meta { flex-basis: 100%; }
   .segment-definition-grid {
     display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: .65rem;
   }
@@ -2458,12 +2625,87 @@
   .segclause input { flex: 0 1 90px; }
   .segclause .clause-remove { flex: 0 0 31px; margin-left: auto; }
   .segment-add-condition { margin-top: .25rem; padding-inline: .25rem; }
+
+  /* Split into two / Merge with another (Task 18, spec 2026-07-28-multi-
+     step-segments) -- boxed panels like .builder-enabled above, one action
+     per box. Grid's default justify-items:stretch would otherwise pull the
+     trailing button full-width, so it alone opts out. */
+  .builder-split, .builder-merge {
+    display: grid; gap: .5rem; margin: .65rem 0; padding: .65rem .75rem;
+    border: 1px solid var(--border-soft); border-radius: 8px;
+    background: rgba(8,20,34,.48);
+  }
+  .builder-split .field-label, .builder-merge .field-label {
+    display: flex; align-items: center; gap: .4rem; margin: 0;
+  }
+  .split-names { display: flex; gap: .5rem; flex-wrap: wrap; }
+  .split-names input { flex: 1 1 160px; min-width: 0; }
+  .merge-body { display: grid; gap: .5rem; }
+  .merge-controls { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+  .merge-controls select { flex: 0 1 160px; }
+  .builder-split > button, .merge-body > button { justify-self: start; }
   .builder-actions {
     min-height: 56px; display: flex; align-items: center; justify-content: flex-end;
     flex-wrap: wrap; gap: .5rem; margin-top: .75rem;
     padding-top: .75rem; border-top: 1px solid var(--border-soft);
   }
   .builder-actions .meta { margin-right: auto; font-size: .72rem; }
+
+  /* Author-time lint findings (Task 16, spec 2026-07-28-multi-step-segments)
+     -- one row per tracking/lint.py finding, beside Save. Errors and warnings
+     share one box (no severity grouping): they're few enough per definition
+     that a second layout tier would be more chrome than content. */
+  .lint-panel {
+    display: grid; gap: .4rem; margin-top: .75rem; padding: .55rem .7rem;
+    border: 1px solid var(--border-soft); border-radius: 8px;
+    background: rgba(8,20,34,.48);
+  }
+  .lint-finding { display: flex; align-items: flex-start; gap: .4rem; font-size: .82rem; }
+  .lint-finding svg { flex: 0 0 auto; margin-top: .15rem; }
+  .lint-error { color: #e79a9a; }
+  .lint-warning { color: #d8b77f; }
+
+  .backtest-panel {
+    display: grid; gap: .5rem; margin-top: .75rem; padding: .65rem .75rem;
+    border: 1px solid var(--border-soft); border-radius: 8px;
+    background: rgba(8,20,34,.48);
+  }
+  .backtest-summary { display: flex; flex-wrap: wrap; gap: .55rem; align-items: baseline; }
+  .backtest-unclosed { display: grid; gap: .25rem; }
+  .backtest-attempts {
+    display: grid; gap: .2rem; max-height: 220px; overflow-y: auto;
+    padding-right: 2px; scrollbar-width: thin;
+  }
+
+  /* "Record a segment" timeline picker (Task 13, spec 2026-07-28-multi-
+     step-segments) -- ui/components/segmenttimeline.js. Self-responsive
+     (flex-wrap + a capped, scrollable row list), like iconpicker.js's
+     .icongrid above: this renders inside a Modal, which is NOT nested in
+     .practice-page (the only element with container-type: inline-size), so
+     there is no @container to gate against here -- and nothing below needs
+     a breakpoint anyway. */
+  .record-steps { display: flex; gap: .5rem; margin-bottom: .75rem; }
+  .record-step {
+    padding: .25rem .65rem; border-radius: 999px; font-size: .78rem;
+    color: var(--muted); background: rgba(255,255,255,.04);
+  }
+  .record-step.on { color: var(--text); background: rgba(255,196,84,.16); }
+  .record-view-toggle {
+    display: flex; align-items: center; gap: .4rem;
+    margin-bottom: .65rem; font-size: .82rem; color: var(--muted);
+  }
+  .record-rows {
+    display: flex; flex-direction: column; gap: 4px;
+    max-height: 45vh; overflow-y: auto; padding-right: 4px;
+  }
+  .record-row {
+    min-width: 0; text-align: left; padding: .5rem .65rem;
+    border: 1px solid var(--border-soft); border-radius: 7px;
+    background: rgba(8,20,34,.48); color: var(--text); cursor: pointer;
+  }
+  .record-row:hover { background: rgba(255,255,255,.06); }
+  .record-picked { display: flex; align-items: center; gap: .5rem; }
+  .record-review { display: flex; flex-direction: column; gap: .5rem; }
 
   .routes-workshop {
     min-width: 0; display: grid;
@@ -3373,7 +3615,10 @@
     .rank-banner-basis { display: none; }
   }
   @container (max-width: 1100px) {
-    .objective-card { height: 190px; min-height: 190px; overflow: hidden; }
+    /* Height is this branch's 216px, not main's 190px: multi-step segments
+       adds the `.seg-waiting` line below, which main's measurement never saw.
+       Everything else here is main's (78f12dd) — see its reasoning below. */
+    .objective-card { height: 216px; min-height: 216px; overflow: hidden; }
     .objective-strategy-fastest { display: none; }
     /* Stacked: the two washes must not touch, let alone overlap.
        ------------------------------------------------------------------
@@ -3425,6 +3670,32 @@
        user was looking straight at the defect. */
     .rank-slot { flex-direction: column; align-items: stretch; gap: 28px; }
     .rank-banner::before { left: -16px; border-radius: 0; }
+    /* Give the NON-LAST banner its bottom bleed back when `.seg-waiting` is
+       present. The base rule up at `.objective-card:has(.seg-waiting)` zeroes
+       every banner's bottom, which is right side by side — there both banners
+       sit directly above `.seg-waiting` and both would bleed onto it. Stacked,
+       only the LAST one faces that row; the others face the 28px gap, which
+       already clears a 12px bleed by 16px.
+       Zeroing them anyway takes the bleed's SECOND job with it: it is also the
+       band's own internal padding below the progress bar (the comment above
+       this block explains why, and it is the rejected alternative that shipped
+       for one round — "the top band ended flush against its own progress bar
+       while the bottom one kept its room"). Note the decoration probe cannot
+       catch this direction: no probe class fails on too LITTLE bleed, which is
+       why this arrived by review rather than by the sweep. `:not(:last-child)`
+       and not `:last-child` — side by side that would name the RIGHT banner
+       and leave the left one bleeding onto the row. */
+    .objective-card:has(.seg-waiting) .rank-banner:not(:last-child)::before {
+      bottom: -12px;
+    }
+    /* Narrow-pane variant of the waiting-for line (Task 6, this branch):
+       the stacked rank banners already claim most of the taller card, so
+       this tightens rather than wraps -- .seg-waiting-for still ellipsises
+       instead of growing a second line. Kept through the main merge; the
+       rank rules above are main's (42404b7), which fixes the stacked-wash
+       overlap by widening the gap past the bleed rather than zeroing the
+       inner edges as this branch had. */
+    .seg-waiting { font-size: .74rem; gap: .35rem; margin-top: .3rem; }
   }
 
   /* The tight band: both the star name and the strategy picker want the row.
@@ -3464,6 +3735,14 @@
     .objective-name h2 { font-size: 1.1rem; }
     .objective-strategy { grid-template-columns: minmax(70px,1fr) auto; }
     .objective-strategy .field-label { display: none; }
+    /* The caveat's WORD gives way here too, leaving the same glyph pill the
+       quick-select cell wears. Measured, not chosen: at a 706px pane the wide
+       metrics row overflowed the card by 23px with "? Unattributed" in it
+       (the responsive sweep's own report, both Bowser stories, 850x1180 and
+       851x1000). The sentence is not lost -- the title is on the chip, not on
+       the word, so it still answers a hover at every width. */
+    .caveat-chip { gap: 0; padding-inline: .3rem; }
+    .caveat-chip-word { display: none; }
   }
 
   /* Objective card, narrow pane.

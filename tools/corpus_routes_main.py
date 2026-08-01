@@ -205,6 +205,34 @@ BOWSER_2 = [segment("seg:bitfs-pipe", "BitFS Pipe Entry"),
 BOWSER_3 = [segment("seg:bits-pipe", "BitS Pipe Entry"),
             segment("seg:bowser-3", "Bowser Battle 3")]
 
+# seg:*-pipe's match_mode became "exclusive" in the 2026-07-29 corpus reshape
+# (corpus_legacy.py) -- it cancels the instant a star or key is grabbed that
+# isn't its own end trigger, which is exactly right for the STANDALONE
+# practice case ("pipe entry without going for the reds") but wrong for a
+# route step that ALSO requires that stage's reds star: `star(16, 0, ...)`
+# closes as its own route step, then the very same event would cancel
+# seg:bitdw-pipe before it ever reaches the pipe -- the segment's own
+# completion, which the route step is waiting on, then never fires, and
+# per the module docstring's rule (steps must close in order or the run
+# stalls PERMANENTLY) the run hangs at that step forever. Proven live
+# (segment armed at course entry, star_collected disarms it silently,
+# warp_entered then does nothing) before this fix landed.
+#
+# Use these instead of BOWSER_1/2/3 at every call site where that course's
+# reds star is ALSO collected on this route -- seg:reds->pipe:* (Task 20,
+# reshaped same day) is STRICT with the star as its own WAYPOINT, so
+# grabbing it is the expected next step, not a cancel. Only swap the PIPE
+# segment; the fight segment is unaffected either way (its own end trigger,
+# key_grabbed, is what the exclusive/strict distinction never touches).
+# Genuine skip routes (no reds star collected for that stage) keep
+# BOWSER_1/2/3 unchanged -- exclusive is exactly what "no-reds" means there.
+BOWSER_1_REDS = [segment("seg:reds->pipe:bitdw", "BitDW — Reds → Pipe"),
+                 segment("seg:bowser-1", "Bowser Battle 1")]
+BOWSER_2_REDS = [segment("seg:reds->pipe:bitfs", "BitFS — Reds → Pipe"),
+                 segment("seg:bowser-2", "Bowser Battle 2")]
+BOWSER_3_REDS = [segment("seg:reds->pipe:bits", "BitS — Reds → Pipe"),
+                 segment("seg:bowser-3", "Bowser Battle 3")]
+
 ROUTES = []
 
 # --- 16 Star ---------------------------------------------------------------
@@ -235,7 +263,7 @@ ROUTES.append(route(
         star(4, 1, "CCM — Li'l Penguin Lost"),
         segment("seg:ccm->bitdw", "→ BitDW"),
         star(16, 0, "BitDW — 8 Red Coins"),
-        *BOWSER_1,
+        *BOWSER_1_REDS,
         segment("seg:bowser1->ssl", "→ SSL"),
         star(8, 0, "SSL — In the Talons of the Big Bird"),
         star(8, 1, "SSL — Shining Atop the Pyramid"),
@@ -297,7 +325,7 @@ ROUTES.append(route(
         *WF_ALL,
         segment("seg:wf->bitdw", "→ BitDW"),
         star(16, 0, "BitDW — 8 Red Coins"),
-        *BOWSER_1,
+        *BOWSER_1_REDS,
         segment("seg:bowser1->ssl", "→ SSL"),
         star(8, 0, "SSL — In the Talons of the Big Bird"),
         star(8, 1, "SSL — Shining Atop the Pyramid"),
@@ -315,7 +343,7 @@ ROUTES.append(route(
         segment("seg:lakitu-skip", "Lakitu Skip"),
         segment("seg:lblj", "LBLJ"),
         star(16, 0, "BitDW — 8 Red Coins"),
-        *BOWSER_1,
+        *BOWSER_1_REDS,
         segment("seg:bowser1->wf", "→ WF"),
         star(2, 5, "WF — Blast Away the Wall (Cannonless)"),
         star(2, 4, "WF — Fall onto the Caged Island (Owlless)"),
@@ -368,7 +396,7 @@ def _seventy(seed_key, name, *, ccm, ssl, sl, ttc, island_hop=False,
         star(21, 0, "Tower of the Wing Cap"),
         segment("seg:totwc->bitdw", "→ BitDW"),
         star(16, 0, "BitDW — 8 Red Coins"),
-        *BOWSER_1,
+        *BOWSER_1_REDS,
     ]
     if island_hop:
         lobby.append(segment("seg:bowser1->ccm", "→ CCM"))
@@ -403,7 +431,7 @@ def _seventy(seed_key, name, *, ccm, ssl, sl, ttc, island_hop=False,
         *DDD_70,
         segment("seg:ddd->bitfs", "→ BitFS"),
         star(17, 0, "BitFS — 8 Red Coins"),
-        *BOWSER_2,
+        *BOWSER_2_REDS,
     ]
     upstairs = [
         segment("seg:bowser2->wdw", "→ WDW"),
@@ -509,7 +537,7 @@ def _one_twenty_body():
         star(9, 0, "DDD — Board Bowser's Sub"),
         segment("seg:ddd->bitfs", "→ BitFS"),
         star(17, 0, "BitFS — 8 Red Coins"),
-        *BOWSER_2,
+        *BOWSER_2_REDS,
         segment("seg:bowser2->ddd", "→ DDD"),
         star(9, 4, "DDD — The Manta Ray's Reward"),
         star(9, 3, "DDD — Through the Jet Stream"),
@@ -532,7 +560,7 @@ def _one_twenty_body():
         *RR_ALL,
         segment("seg:rr->bits", "→ BitS"),
         star(18, 0, "BitS — 8 Red Coins"),
-        *BOWSER_3,
+        *BOWSER_3_REDS,
     ]
 
 
@@ -559,7 +587,7 @@ ROUTES.append(route(
         *_120_CASTLE_STARS,
         segment("seg:pss->bitdw", "→ BitDW"),
         star(16, 0, "BitDW — 8 Red Coins"),
-        *BOWSER_1,
+        *BOWSER_1_REDS,
         segment("seg:bowser1->bob", "→ BoB"),
         *BOB_ALL_TAIL,
         *_one_twenty_body(),
@@ -570,7 +598,7 @@ ROUTES.append(route(
         segment("seg:lakitu-skip", "Lakitu Skip"),
         segment("seg:lblj", "LBLJ"),
         star(16, 0, "BitDW — 8 Red Coins"),
-        *BOWSER_1,
+        *BOWSER_1_REDS,
         segment("seg:bowser1->wf", "→ WF"),
         *WF_ALL,
         *_120_CASTLE_STARS,
@@ -584,6 +612,23 @@ ROUTES.append(route(
 
 # --- 0 / 1 Star ------------------------------------------------------------
 
+# Task 20 (spec 2026-07-28-multi-step-segments) briefly routed this tail
+# straight through the new seg:bowser2->bits, collapsing the named
+# "-> Upstairs" / "Endless Staircase BLJ" splits into one step -- a real
+# regression for 0/1-star runs (the most BLJ-heavy categories in the game):
+# "Endless Staircase BLJ" is a named trick with its own timing, and losing its
+# split here cost exactly the runs that care about it most. It was never
+# necessary: test_the_two_step_bowser2_upstairs_then_bits_entry_survives_the_
+# same_detour (test_defaults_corpus.py) replays the identical real walk --
+# Bowser 2 exit, BitFS re-entry, pause exit to the basement, lobby, upstairs,
+# BLJ into BitS -- through BOTH original segments and proves seg:bowser2->
+# upstairs (loose) already survives the whole detour transparently and closes
+# at Upstairs, at which point seg:bits-entry (legacy, strict, unguarded) arms
+# on that SAME event and closes on the BitS entry. Reverted 2026-07-28 (route
+# regression fix) to restore the two splits. seg:bowser2->bits itself is kept
+# -- proven correct standalone by test_bowser_2_to_bits_survives_the_whole_
+# detour -- but is not referenced by any route today; see the EXEMPT entry in
+# test_no_movement_is_left_unreferenced for why that is acceptable.
 _LOW_STAR_TAIL = [
     *BOWSER_2,
     segment("seg:bowser2->upstairs", "→ Upstairs"),

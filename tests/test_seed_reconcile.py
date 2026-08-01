@@ -161,6 +161,69 @@ def test_real_bundled_seed_does_not_alter_existing_segment_defs(tmp_path):
                               "waypoints", "guards")})
 
 
+# -- Item 0 fix (spec 2026-07-28-multi-step-segments) landed a match_mode
+# column with no seed content behind it yet, so a fresh install used to seed
+# all 65 rows strict regardless of the split the plan actually wanted (55
+# loose + 10 strict, by INTENT rather than insertion mechanism). Task 19 is
+# the later task that puts match_mode on the 55 movements (tools/corpus_vocab
+# .py::movement / build_defaults_seed.py::_movement_row) — this test now pins
+# the split it actually produces, through the same reconcile path proven
+# above.
+
+def test_fresh_install_seeds_the_converted_corpus(tmp_path):
+    """The 56 movements now ship match_mode="loose"; 7 of the ten legacy
+    tricks carry no match_mode key (corpus_legacy.py's _seg() never stamps
+    one on those) and so reconcile still applies the column default,
+    "strict", to them — unchanged by this conversion. The other 3 legacy rows
+    (the Bowser pipe-entry trio) ship explicit match_mode="exclusive" since
+    the 2026-07-29 corpus reshape (spec 2026-07-28-multi-step-segments, live
+    report). Of Task 20's 18 unguarded mechanic rows (reds->pipe, 100c->exit),
+    ALL 18 now ship "strict" — reds->pipe from the first reshape (a
+    single-star course makes the strict cancellation rules safe), 100c->exit
+    from a SECOND reshape the same day (shipped "loose" first, reshaped again
+    on a live report that loose's transparency to level_changed left a
+    segment reading RUNNING after the player left the course — see
+    corpus_movements.py's own comment for the corrected reasoning) — so
+    match_mode no longer splits along the guards=[] boundary at all; it
+    takes all three values (loose/strict/exclusive) independently of it."""
+    db = Database(tmp_path / "t.db")
+    seed = json.loads(bundled_defaults_seed().read_bytes().decode("utf-8"))
+    assert reconcile_defaults(db, seed) == []
+    rows = db.segment_defs()
+    assert len(rows) == 84
+    loose = [r for r in rows if r["match_mode"] == "loose"]
+    strict = [r for r in rows if r["match_mode"] == "strict"]
+    exclusive = [r for r in rows if r["match_mode"] == "exclusive"]
+    assert len(loose) == 56 and len(strict) == 25 and len(exclusive) == 3
+
+
+def test_reconcile_carries_match_mode_on_insert_and_refresh(tmp_path):
+    """Sibling of test_reconcile_carries_default_strat_on_insert_and_refresh:
+    once a later task puts match_mode on a seed row, reconcile must apply it
+    on the fresh INSERT and on every REFRESH of an untouched row — not just
+    the insert, or an already-installed row could never pick up a conversion
+    from strict to loose."""
+    db = Database(tmp_path / "t.db")
+    seeded = json.loads(json.dumps(SEED_V1))
+    seeded["segments"][0]["match_mode"] = "loose"
+    reconcile_defaults(db, seeded)
+    seg = next(s for s in db.segment_defs() if s["seed_key"] == "seg:demo")
+    assert seg["match_mode"] == "loose"
+    # a later seed can convert an untouched row...
+    seed2 = json.loads(json.dumps(seeded)); seed2["seed_version"] = 2
+    seed2["segments"][0]["match_mode"] = "strict"
+    reconcile_defaults(db, seed2)
+    assert next(s for s in db.segment_defs()
+                if s["id"] == seg["id"])["match_mode"] == "strict"
+    # ...but a dirtied row keeps its own
+    db.set_seed_dirty("segment_defs", seg["id"], 1)
+    seed3 = json.loads(json.dumps(seeded)); seed3["seed_version"] = 3
+    seed3["segments"][0]["match_mode"] = "loose"
+    reconcile_defaults(db, seed3)
+    assert next(s for s in db.segment_defs()
+                if s["id"] == seg["id"])["match_mode"] == "strict"
+
+
 def test_reconcile_carries_default_strat_on_insert_and_refresh(tmp_path):
     """The 55 movements gain "Standard" purely through the reconcile — they are
     seeded and untouched, so no repair migration is needed (spec §5)."""

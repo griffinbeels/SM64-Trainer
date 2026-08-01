@@ -378,6 +378,12 @@ def test_new_session_closes_open_attempt_as_abandoned(tmp_path):
 
 
 def test_restart_resumes_from_journal(tmp_path):
+    """History is rebuilt from the journal; the live FOCUS is not.
+
+    This asserted `target == ("star", 2, 2)` until 2026-08-01, i.e. it pinned
+    the bug he reported — reopening the app with the star he practiced last
+    time still selected. What a restart must rebuild is what he EARNED (the
+    attempt, its strategy); what it must not rebuild is where he was pointed."""
     db, svc = make(tmp_path)
     asyncio.run(svc.set_target(8, 2))
     asyncio.run(svc.publish(star(900)))
@@ -385,7 +391,8 @@ def test_restart_resumes_from_journal(tmp_path):
     svc2 = TrackerService(db2, Broadcaster())
     asyncio.run(svc2.start())
     assert svc2.session_id == 2
-    assert svc2.target == ("star", 2, 2)   # state rebuilt from journal
+    assert svc2.target is None
+    assert [a.outcome for a in db2.attempts()] == ["success"]
 
 
 def test_degraded_mode_without_db_still_broadcasts(tmp_path):
@@ -419,6 +426,61 @@ def test_set_target_registers_strategy(tmp_path):
     asyncio.run(svc.set_target(2, 4, strat_tag="owlless"))   # no dup
     assert db.get_state("strategies", {}) == {"2:4": ["owlless", "owl"]}
     assert svc.strat_by_star[(2, 4)] == "owlless"
+
+
+def _create_hundred_coin_segment(svc, course_id, other_star=0, enabled=True):
+    """A minimal stand-in for one of the seeded HUNDRED_COIN_EXITS rows
+    (tools/corpus_movements.py) -- same shape (a single star_grabbed(course,
+    6) start clause) without needing the whole bundled corpus reconciled."""
+    return asyncio.run(svc.create_segment({
+        "name": f"100c {course_id}",
+        "start_triggers": [{"type": "star_grabbed", "course": course_id, "star": 6}],
+        "end_triggers": [{"type": "star_grabbed", "course": course_id,
+                          "star": other_star}],
+        "enabled": enabled}))
+
+
+def test_100_coin_star_pick_commits_as_a_plain_star_target(tmp_path):
+    """spec 2026-07-28-multi-step-segments, 'the 100-coin star IS the
+    segment': star_id 6 no longer redirects to a segment target on pick --
+    it commits exactly like any other star. The retired redirect
+    (`_hundred_coin_redirect`) existed only so the practice card could show
+    the family's real attempts/strat/rank, which lived on the segment; those
+    now attribute directly to this star (tracking/projection.py's
+    seg_closed reattribution, segments.hundred_coin_entity), so a plain
+    star target already shows the same thing with no indirection."""
+    db, svc = make(tmp_path)
+    asyncio.run(svc.request_target("star", course_id=2, star_id=6))
+    assert svc.target == ("star", 2, 6)
+
+
+def test_100_coin_star_pick_stays_plain_even_with_a_matching_segment(tmp_path):
+    """A HUNDRED_COIN_EXIT-shaped def existing (enabled or not, either the
+    old grab-starts shape or the reshaped waypoint one) must not change
+    target-PICKING at all any more -- only attempt ATTRIBUTION reads the
+    def's shape now, and that happens in projection.py, not here."""
+    db, svc = make(tmp_path)
+    _create_hundred_coin_segment(svc, course_id=2)
+    asyncio.run(svc.request_target("star", course_id=2, star_id=6))
+    assert svc.target == ("star", 2, 6)
+
+
+def test_numbered_star_picks_are_plain_stars_too(tmp_path):
+    """Stars 0-5 are untouched by this family end to end, same as before."""
+    db, svc = make(tmp_path)
+    _create_hundred_coin_segment(svc, course_id=2)
+    asyncio.run(svc.request_target("star", course_id=2, star_id=0))
+    assert svc.target == ("star", 2, 0)
+
+
+def test_100_coin_star_pick_strategy_lands_on_the_star(tmp_path):
+    """A strategy passed alongside the pick lands on the star's OWN memory
+    (strat_by_star) -- there is no segment redirect left to carry it to."""
+    db, svc = make(tmp_path)
+    asyncio.run(svc.request_target("star", course_id=2, star_id=6,
+                                   strat_tag="Coin Route A"))
+    assert svc.target == ("star", 2, 6)
+    assert svc.strat_by_star[(2, 6)] == "Coin Route A"
 
 
 def test_death_event_flows_to_death_attempt(tmp_path):
@@ -696,6 +758,255 @@ def test_delete_segment_removes_def_and_reprojects(tmp_path):
     assert any(e.type == "attempts_invalidated" for e in sent)
     with pytest.raises(LookupError):
         asyncio.run(svc.delete_segment(lblj))
+
+
+# -- split_segment / merge_segments (Task 18, spec 2026-07-28-multi-step-
+# segments) ------------------------------------------------------------------
+# tracking/segments.py::split_definition/merge_definitions are pure and
+# already tested directly (tests/test_segments.py, Task 17); these cover the
+# SERVICE plumbing only -- looking an existing def up by id, inserting the
+# result(s) as fresh rows, leaving the original(s) completely untouched, and
+# mapping LookupError/ValueError the same way every other segment command
+# does. Fixtures mirror test_segments.py's own (WF -> SSL / Basement,
+# DDD -> BitFS) so a failure here is known NOT to be a pure-op regression.
+
+def test_split_segment_creates_two_new_rows_and_keeps_the_original(tmp_path):
+    db, svc, sent = make_rec(tmp_path)
+    sid = asyncio.run(svc.create_segment({
+        "name": "WF -> SSL", "match_mode": "loose",
+        "start_triggers": [{"type": "level_exit", "from": 24}],
+        "end_triggers": [{"type": "level_enter", "to": 8}],
+        "waypoints": [[{"type": "area_enter", "level": 6, "area": 3}]]}))
+    before = next(d for d in db.segment_defs() if d["id"] == sid)
+    sent.clear()
+    first_id, second_id = asyncio.run(svc.split_segment(
+        sid, [{"type": "area_enter", "level": 6, "area": 3}],
+        ("WF -> Basement", "Basement -> SSL")))
+    rows = {d["id"]: d for d in db.segment_defs()}
+    assert rows[sid] == before                        # original UNTOUCHED
+    assert rows[first_id]["name"] == "WF -> Basement"
+    assert rows[first_id]["start_triggers"] == before["start_triggers"]
+    assert rows[first_id]["end_triggers"] == [
+        {"type": "area_enter", "level": 6, "area": 3}]
+    assert rows[first_id]["seed_key"] is None
+    assert rows[second_id]["name"] == "Basement -> SSL"
+    assert rows[second_id]["start_triggers"] == [
+        {"type": "area_enter", "level": 6, "area": 3}]
+    assert rows[second_id]["end_triggers"] == before["end_triggers"]
+    assert rows[second_id]["seed_key"] is None
+    assert any(e.type == "attempts_invalidated" for e in sent)
+
+
+def test_a_refused_split_leaves_no_half_behind(tmp_path):
+    """A 409 must write nothing. It wrote one row until 2026-07-29.
+
+    `split_segment` did two sequential `_insert_definition` calls, each
+    validating its own half at insert time, and `db.insert_segment_def`
+    commits unconditionally. `split_definition` vets both halves only for
+    UNFIREABILITY -- it says nothing about `name`, and `SegmentSplitBody`'s
+    names are plain `str` with no `min_length`. So a blank second name got
+    the first half committed, then raised, then surfaced as a clean 409 with
+    an orphaned row left in the db that nothing would ever clean up.
+
+    Both directions, because the bug is asymmetric by construction: a blank
+    FIRST name always failed before anything was written and so was never
+    the case that hurt. Only the second one could orphan.
+    """
+    db, svc, sent = make_rec(tmp_path)
+    sid = asyncio.run(svc.create_segment({
+        "name": "WF -> SSL", "match_mode": "loose",
+        "start_triggers": [{"type": "level_exit", "from": 24}],
+        "end_triggers": [{"type": "level_enter", "to": 8}]}))
+    mid = [{"type": "area_enter", "level": 6, "area": 3}]
+    before = [d["id"] for d in db.segment_defs()]
+
+    for names in (("A", "   "), ("   ", "B"), ("A", "")):
+        with pytest.raises(ValueError, match="name is required"):
+            asyncio.run(svc.split_segment(sid, mid, names))
+        assert [d["id"] for d in db.segment_defs()] == before, (
+            f"names={names!r} left a row behind")
+
+    # and the original is still intact and splittable with real names
+    first_id, second_id = asyncio.run(
+        svc.split_segment(sid, mid, ("WF -> Basement", "Basement -> SSL")))
+    ids = [d["id"] for d in db.segment_defs()]
+    assert sorted(ids) == sorted(before + [first_id, second_id])
+
+
+def test_a_committed_split_row_is_independent_of_the_callers_objects(tmp_path):
+    """Once `split_segment` returns, nothing the caller does to its own live
+    objects can reach the persisted rows.
+
+    **What this does NOT prove, despite an earlier name and docstring that
+    claimed it** (Task 18 review addendum, 2026-07-29): it says nothing about
+    whether `split_definition` aliases the caller's clause dicts or
+    deep-copies them. It passes identically either way -- verified by
+    mutation: replacing `list(d.start_triggers)` with
+    `[dict(c) for c in d.start_triggers]` throughout the pure op, i.e.
+    removing the aliasing outright, leaves this green. The assertion reads
+    `db.segment_defs()`, a fresh SELECT + json.loads of a SQLite TEXT column
+    that `insert_segment_def` wrote synchronously before this test line ever
+    ran, so it sits downstream of a boundary EVERY implementation has already
+    crossed. It was also carrying a "PREMISE" assertion using `==`, which
+    proves value equality and not the shared identity it claimed.
+
+    The aliasing question is settled STATICALLY and cannot be black-box
+    tested: `_insert_definition`'s docstring plus the review's own sweep
+    (zero in-place clause mutations anywhere in `src/`, and the JS editor
+    replaces rather than mutates). An identity assertion would be worse than
+    nothing here -- it would FAIL the day someone deep-copies, punishing the
+    safest implementation.
+
+    Kept because the weaker property is real and cheap to hold: it fails if
+    the write path ever defers serialization (an async or batched insert
+    holding the dict and dumping later), which is the one realistic way a
+    committed row could start tracking a caller's later edits."""
+    db, svc, sent = make_rec(tmp_path)
+    sid = asyncio.run(svc.create_segment({
+        "name": "WF -> SSL", "match_mode": "loose",
+        "start_triggers": [{"type": "level_exit", "from": 24}],
+        "end_triggers": [{"type": "level_enter", "to": 8}]}))
+    current = next(d for d in svc._segment_defs if d.id == sid)
+    first_id, second_id = asyncio.run(svc.split_segment(
+        sid, [{"type": "area_enter", "level": 6, "area": 3}],
+        ("WF -> Basement", "Basement -> SSL")))
+    # Mutate the caller's own resident clause dict in place, after
+    # split_segment has returned and both rows are already committed.
+    current.start_triggers[0]["from"] = 999999
+    # The already-committed rows (both the split half AND the untouched
+    # original) must show the ORIGINAL value -- proving the mutation above
+    # arrived too late to reach either one.
+    rows_after = {d["id"]: d for d in db.segment_defs()}
+    assert rows_after[first_id]["start_triggers"] == [
+        {"type": "level_exit", "from": 24}]
+    assert rows_after[sid]["start_triggers"] == [
+        {"type": "level_exit", "from": 24}]
+
+
+def test_a_committed_merge_row_is_independent_of_the_callers_objects(tmp_path):
+    """Mirror of the split-side test above, with the same honest limits --
+    read its docstring before trusting this one's name. It proves the merged
+    row is durable and independent once `merge_segments` returns; it does not
+    prove anything about whether `merge_definitions` aliases or copies."""
+    db, svc, sent = make_rec(tmp_path)
+    first_id = asyncio.run(svc.create_segment({
+        "name": "WF -> Basement", "match_mode": "loose",
+        "start_triggers": [{"type": "level_exit", "from": 24}],
+        "end_triggers": [{"type": "area_enter", "level": 6, "area": 3}]}))
+    second_id = asyncio.run(svc.create_segment({
+        "name": "Basement -> SSL", "match_mode": "loose",
+        "start_triggers": [{"type": "area_enter", "level": 6, "area": 3}],
+        "end_triggers": [{"type": "level_enter", "to": 8}]}))
+    resident_first = next(d for d in svc._segment_defs if d.id == first_id)
+    new_id = asyncio.run(svc.merge_segments(first_id, second_id, "WF -> SSL"))
+    resident_first.start_triggers[0]["from"] = 999999
+    rows_after = {d["id"]: d for d in db.segment_defs()}
+    assert rows_after[new_id]["start_triggers"] == [
+        {"type": "level_exit", "from": 24}]
+    assert rows_after[first_id]["start_triggers"] == [
+        {"type": "level_exit", "from": 24}]
+
+
+def test_split_segment_writes_default_strat_to_both_new_rows(tmp_path):
+    """split_definition's own docstring says default_strat is inherited onto
+    both halves; this pins that the SERVICE actually WRITES it through
+    _insert_definition rather than silently dropping it the way routing
+    through create_segment's own dict-based path would (see
+    _insert_definition's docstring) -- default_strat is corpus-only and
+    create_segment's dict never carries it, which is exactly why a naive
+    reuse of that path would have been a silent regression here."""
+    db, svc, sent = make_rec(tmp_path)
+    sid = asyncio.run(svc.create_segment({
+        "name": "WF -> SSL", "match_mode": "loose",
+        "start_triggers": [{"type": "level_exit", "from": 24}],
+        "end_triggers": [{"type": "level_enter", "to": 8}]}))
+    db.update_segment_def(sid, default_strat="Standard")  # corpus-only field;
+    # written directly like reconcile_defaults does, bypassing the API
+    svc._segment_defs = svc._load_segment_defs()   # pick up the direct write
+    first_id, second_id = asyncio.run(svc.split_segment(
+        sid, [{"type": "area_enter", "level": 6, "area": 3}],
+        ("WF -> Basement", "Basement -> SSL")))
+    rows = {d["id"]: d for d in db.segment_defs()}
+    assert rows[first_id]["default_strat"] == "Standard"
+    assert rows[second_id]["default_strat"] == "Standard"
+
+
+def test_split_segment_unknown_id_raises(tmp_path):
+    db, svc = make(tmp_path)
+    with pytest.raises(LookupError):
+        asyncio.run(svc.split_segment(
+            999, [{"type": "level_enter", "to": 6}], ("a", "b")))
+
+
+def test_split_segment_propagates_the_pure_ops_unfireable_refusal(tmp_path):
+    # Same collision test_segments.py's pure-op test uses: exiting Hazy Maze
+    # Cave (level 7) lands directly in the castle basement in ONE
+    # level_changed, so arming there and closing on a plain level_enter(to=6)
+    # mid-point would arm and close on the same event.
+    db, svc, sent = make_rec(tmp_path)
+    sid = asyncio.run(svc.create_segment({
+        "name": "x", "match_mode": "loose",
+        "start_triggers": [{"type": "level_exit", "from": 7}],
+        "end_triggers": [{"type": "level_enter", "to": 8}]}))
+    before = len(db.segment_defs())
+    with pytest.raises(ValueError, match="unfireable"):
+        asyncio.run(svc.split_segment(
+            sid, [{"type": "level_enter", "to": 6}],
+            ("first half", "second half")))
+    assert len(db.segment_defs()) == before   # nothing inserted on refusal
+
+
+def test_merge_segments_creates_one_new_row_and_keeps_both_inputs(tmp_path):
+    db, svc, sent = make_rec(tmp_path)
+    first_id = asyncio.run(svc.create_segment({
+        "name": "WF -> Basement", "match_mode": "loose",
+        "start_triggers": [{"type": "level_exit", "from": 24}],
+        "end_triggers": [{"type": "area_enter", "level": 6, "area": 3}]}))
+    second_id = asyncio.run(svc.create_segment({
+        "name": "Basement -> SSL", "match_mode": "loose",
+        "start_triggers": [{"type": "area_enter", "level": 6, "area": 3}],
+        "end_triggers": [{"type": "level_enter", "to": 8}]}))
+    before_first = next(d for d in db.segment_defs() if d["id"] == first_id)
+    before_second = next(d for d in db.segment_defs() if d["id"] == second_id)
+    sent.clear()
+    new_id = asyncio.run(svc.merge_segments(first_id, second_id, "WF -> SSL"))
+    rows = {d["id"]: d for d in db.segment_defs()}
+    assert rows[first_id] == before_first     # both inputs UNTOUCHED
+    assert rows[second_id] == before_second
+    merged = rows[new_id]
+    assert merged["name"] == "WF -> SSL"
+    assert merged["start_triggers"] == before_first["start_triggers"]
+    assert merged["end_triggers"] == before_second["end_triggers"]
+    assert merged["waypoints"] == [before_second["start_triggers"]]
+    assert merged["seed_key"] is None
+    assert any(e.type == "attempts_invalidated" for e in sent)
+
+
+def test_merge_segments_unknown_id_raises(tmp_path):
+    db, svc = make(tmp_path)
+    sid = asyncio.run(svc.create_segment({
+        "name": "a", "start_triggers": [{"type": "level_exit", "from": 24}],
+        "end_triggers": [{"type": "area_enter", "level": 6, "area": 3}]}))
+    with pytest.raises(LookupError):
+        asyncio.run(svc.merge_segments(sid, 999, "nope"))
+    with pytest.raises(LookupError):
+        asyncio.run(svc.merge_segments(999, sid, "nope"))
+
+
+def test_merge_segments_propagates_the_pure_ops_do_not_meet_refusal(tmp_path):
+    db, svc = make(tmp_path)
+    first_id = asyncio.run(svc.create_segment({
+        "name": "WF -> Basement", "match_mode": "loose",
+        "start_triggers": [{"type": "level_exit", "from": 24}],
+        "end_triggers": [{"type": "area_enter", "level": 6, "area": 3}]}))
+    second_id = asyncio.run(svc.create_segment({
+        "name": "DDD -> BitFS", "match_mode": "loose",
+        "start_triggers": [{"type": "area_enter", "level": 26}],
+        "end_triggers": [{"type": "level_enter", "to": 19}]}))
+    before = len(db.segment_defs())
+    with pytest.raises(ValueError, match="do not meet"):
+        asyncio.run(svc.merge_segments(first_id, second_id, "nope"))
+    assert len(db.segment_defs()) == before
 
 
 def test_set_target_segment_round_trip(tmp_path):
@@ -1564,6 +1875,69 @@ def test_set_attempt_strat_reclassifies_segment_attempt_and_registers(tmp_path):
     # newest segment attempt -> the segment's active strategy follows too
     # (star<->segment parity for the newest-attempt rule)
     assert svc.strat_by_segment[lblj] == "no bljs"
+
+
+def test_newest_attempt_id_ignores_the_segment_namespace_offset(tmp_path):
+    """Spec 2026-07-28-multi-step-segments, live report (practice-log
+    ordering): a reattributed 100-coin attempt keeps its SEGMENT-namespace id
+    (arm.jid + SEGMENT_ATTEMPT_OFFSET*def_id, projection.py caveat 2/11) --
+    a huge number that would win a raw max(row.id) over every NATIVE
+    star-namespace attempt for the same entity regardless of which actually
+    happened last. `_newest_attempt_id` must compare by journal_id instead,
+    or reclassifying an OLD reattributed attempt would wrongly promote it to
+    the active strategy while a genuinely newer reset sits unnoticed.
+
+    Builds the mixed shape for real, through the actual reattribution engine
+    (a HUNDRED_COIN_EXIT-shaped def for course 2, mirroring
+    tests/test_projection.py's own `_hc_def`) rather than hand-inserting rows
+    -- this is the one shape no existing test could have covered, since every
+    other set_attempt_strat test seeds attempts from a single namespace."""
+    db = Database(tmp_path / "t.db")
+    db.insert_segment_def(
+        "course 2 100 Coins -> Exit",
+        start_triggers=[{"type": "level_enter", "to": 24},
+                        {"type": "attempt_anchor", "level": 24}],
+        end_triggers=[{"type": "star_grabbed", "course": 2, "star": s}
+                      for s in range(6)],
+        guards=[], waypoints=[[{"type": "star_grabbed", "course": 2, "star": 6}]],
+        created_utc="2026-07-28T00:00:00Z")
+    svc = TrackerService(db, Broadcaster())
+    asyncio.run(svc.start())
+
+    # Arm the 100-coin engine, grab the 100 coins (waypoint advance, silent),
+    # then an exit star -- closes the engine, reattributing a SUCCESS to star
+    # (2, 6) under a SEGMENT-namespace id. This is the OLDER event.
+    asyncio.run(svc.publish(ev("level_changed", 900, {"from": 16, "to": 24})))
+    asyncio.run(svc.publish(star(1000, course=2, star_id=6, igt=1000)))
+    asyncio.run(svc.publish(star(1200, course=2, star_id=3, igt=1200)))
+    hundred = next(a for a in db.attempts()
+                   if a.course_id == 2 and a.star_id == 6 and a.segment_id is None)
+    assert hundred.id >= 10**10, "must be the SEGMENT-namespace reattributed row"
+
+    # A genuinely LATER native reset on the same star entity, via the plain
+    # target/practice_reset path (test_set_target_and_attribution's own
+    # shape) -- a plain int id, chronologically newer but numerically
+    # smaller than the reattributed row above.
+    asyncio.run(svc.set_target(2, 6, strat_tag="Cannonless"))
+    asyncio.run(svc.publish(ev("practice_reset", 1400, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(ev("practice_reset", 1500, {"igt_frames_before": 100})))
+    native_reset = next(a for a in db.attempts()
+                        if a.course_id == 2 and a.star_id == 6 and a.outcome == "reset")
+    assert native_reset.id < 10**10, "must be the plain journal-namespace row"
+    assert native_reset.id < hundred.id          # raw id: reset LOOKS older
+    from sm64_events.tracking.projection import journal_id
+    assert journal_id(hundred.id) < journal_id(native_reset.id)  # actually isn't
+
+    # Reclassifying the OLDER (reattributed) row must NOT move the active
+    # strategy -- the reset that happened after it is still the top of the
+    # log, exactly test_set_attempt_strat_on_older_attempt_keeps_active_strat's
+    # rule, just with one row from each namespace.
+    asyncio.run(svc.set_attempt_strat(hundred.id, "Slide Kick"))
+    assert svc.strat_by_star[(2, 6)] == "Cannonless"
+
+    # Reclassifying the actually-newest row (the native reset) DOES move it.
+    asyncio.run(svc.set_attempt_strat(native_reset.id, "Slide Kick"))
+    assert svc.strat_by_star[(2, 6)] == "Slide Kick"
 
 
 def test_purge_refuses_a_segments_default_strategy(tmp_path):

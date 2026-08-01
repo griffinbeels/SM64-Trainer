@@ -189,14 +189,35 @@ lockstep.
 ## Why there are three timers (history, not derivable from code)
 
 Usamune keeps a SECTION counter (resets on every area warp inside a level),
-a running OVERALL star-time counter, and a final-result store written at
-the grab. The section counter lives in object-pool behavior data and was
-our first IGT source — it validated perfectly on single-area stars (where
-section == overall) and failed on "Inside the Ancient Pyramid" (multi-area).
-The overall counter and result store are static expansion-RAM globals and
-are what events use now. Lesson encoded here: validation scenarios must
-break the degeneracy between candidate interpretations, not just confirm
-values match.
+a running OVERALL star-time counter, and a final-result store. The section
+counter lives in object-pool behavior data and was our first IGT source — it
+validated perfectly on single-area stars (where section == overall) and failed
+on "Inside the Ancient Pyramid" (multi-area). The overall counter and result
+store are static expansion-RAM globals and are what events use now. Lesson
+encoded here: validation scenarios must break the degeneracy between candidate
+interpretations, not just confirm values match.
+
+**Corrected 2026-08-01 — the result store is NOT "written at the grab"; it is
+written whenever the player's `STOP` setting says Usamune's timer stops**, and
+that is a leaderboard-legality rule rather than a display preference. *Grab*
+writes once at the star touch; *Xcam* writes once when Mario lands afterwards;
+*GrabX* writes TWICE, at the touch and again at the landing; *None* never
+writes. Measured 10/10 across three TIMER presets (`tools/verify_star_stop.py`)
+and again automatically against that ground truth (`tools/derive_xcam.py`).
+Two consequences that are not local to one detector:
+
+- **The OVERALL counter is not overall across AREAS.** It restarts at an area warp inside a level, so on a multi-area star it measures the time since entering the subarea. Measured 2026-08-01 over eleven grabs: nine single-area stars agreed with Usamune exactly, and the two taken inside a subarea were 356 and 502 frames low. Only the result store knows the whole star, which is why `detectors/star_grab.py` waits for Usamune's write rather than trusting its own derivation of the moment.
+- **The OVERALL counter never stops** — the manual says so and it held under
+  every setting, running on 40–79 frames past every grab, all the way to the
+  star-select screen. That is what lets us derive the legal x-cam time from
+  Mario's own actions rather than from the player's menu, which is what
+  `detectors/star_grab.py` now does.
+- **A grab-time and an x-cam time are different QUANTITIES**, not the same
+  quantity measured with different precision. They coincide only when Mario
+  grabs the star on the ground. Everything holding a star time from before
+  2026-08-01 holds the grab quantity and cannot be back-derived: the journal
+  keeps no post-grab frames, so the fix is forward-only and old rows can be
+  marked, never repaired.
 
 ## Memory hunting playbook
 
@@ -281,6 +302,8 @@ Composed segments (LBLJ, pipe entries, Bowser fights) as first-class practice ta
 **CURR_AREA address.** `gCurrAreaIndex` has no decomp-derivable static address; it was hunted live 2026-06-12 with `tools/hunt_exact.py` and pinned at `0x8033BACA` (castle: 1=lobby, 2=upstairs, 3=basement — the mapping fell out of the hunt itself). Evidence comment in `memory/addresses.py`.
 
 **Usamune section-timer behavior (live-gated 2026-06-12, five sessions).** The section IGT resets on EVERY load, not just L-resets: level entries, area-door warps, AND non-warp walk-through doors — the last resets AFTER the door animation completes (result written at the idle tick, zeroed the next), so the anchor detector sees it with gameplay actions in both context fields. An L-reset respawns Mario at the level's LAST ENTRANCE (which is why anchor-closure continuation re-arms are position-correct). Usamune MENU actions (warps like 06-01-00, menu resets) also reset IGT — and because the player navigated the pause menu, their anchors carry `paused_frames_before` 13–890 where walked load echoes carry 0–3: **the pause streak is the intent discriminator** (involuntary echo vs deliberate attempt boundary). Consumer-side classification (echo-shape taxonomy, pause gate, echo invisibility, continuation re-arm, `prev_action`/`frames_since_door`) lives in the `tracking/segments.py` docstring and `detectors/anchors.py` — this paragraph records the GAME behavior; those record the rules derived from it.
+
+**A `global_timer` delta is not the IGT, and no constant makes it one (measured 2026-07-31 against the user's own journal).** The two clocks were assumed close enough wherever a segment armed at a reset, which read fine until a live report caught it: BitDW "No Reds" displayed `0'35"90` where Usamune showed `0'35"96` (journal ids 23044→23061, attempt `50000023044`, `rta_frames` 1077 vs Usamune's 1079 — two frames, on a 36-second run with no pause). The instrument for the general case is the one shape where a single attempt records BOTH numbers: an anchor-armed, grab-closed STAR attempt, whose `igt_frames` is what Usamune displayed and whose `rta_frames` is the frame delta over the identical span. Over **626** such attempts, Usamune's display minus the delta was **+1 on 57%, +2 on 21%, −1 on 10%, 0 on 2%**, plus a long negative tail. Two independent causes, and the distribution is exactly their sum: (a) the arm frame is the frame the anchor detector *observed* Usamune's counter drop, and a 60 Hz poll catches a 30 Hz drop either on the zero frame or one frame after it — which is the +1/+2 split, and is why the *same* run can report either number; (b) the delta counts paused frames and Usamune's counter never does — the negative tail. So the fix is never a correction term; it is reading Usamune's own counter AT THE CLOSE, which removes the arm frame from the answer entirely. Consumer-side rules (which closing events carry an IGT, and the `_last_igt_zero_frame == arm.start_frame` precondition for believing one) live in the `tracking/segments.py` docstring — this paragraph records the measurement.
 
 **Textbox/cutscene IGT re-init (live journal 2026-06-14, Lakitu Skip).** Textboxes and the intro cutscene engage a TIME-STOP. A *mid-level* textbox merely FREEZES the section IGT (no drop), so it never produces an anchor at all — which is why textboxes already cannot reset a star/segment timer in normal play. The one exception is a *run start*: on a fresh-file Lakitu Skip the intro cutscene (`ACT_INTRO_CUTSCENE`) ends, control is regained (`spawned kind="intro"` arms the segment), and Usamune *re-initialises* the overall counter to ~0 **one frame later** — the detector reads that 1481→0 drop (journal seq 108–111: spawn @1691, practice_reset @1692, `igt_frames_before` 1481) as a `practice_reset` that closed the just-armed segment with a bogus `0'00"03` (1-frame) row. It lands a frame after the spawn (not co-frame with any transition/arm) with no door/save context, so it slips past every other echo shape. Rule (user, 2026-06-14): **never split timing on a textbox in any level/circumstance.** Mechanism: `anchors.py` tracks `frames_since_dialog` (frames since the last textbox/intro-cutscene action; `DIALOG_ACTIONS` ∪ `ACT_INTRO_CUTSCENE`), and `tracking/segments.py` echo shape (5) suppresses any anchor within ~1 s of one. The star side needs no change: the only dialogue anchor is this castle-grounds intro, which projection already discards as castle movement (`CASTLE_LEVELS`), and mid-level textboxes emit no anchor. `DIALOG_ACTIONS` ids are decomp-quoted, marked VERIFY until the human confirms `mario_action` while a textbox is open.
 
@@ -1052,13 +1075,13 @@ attempt already consumed.
 
 ### Verifying data nobody can eyeball
 
-~700 route steps and 55 definitions were authored against sources, not
+~700 route steps and 56 definitions were authored against sources, not
 observed behaviour, so the gates are behavioural:
 
 - `tests/test_defaults_corpus.py` builds each movement's event stream from an
   **independent** world model — BFS over `addresses.WORLD_EDGES_*`, with the
   definition contributing only its checkpoints — and asserts exactly one
-  success plus silence across all 54 other walks. The walker emits a level
+  success plus silence across all 55 other walks. The walker emits a level
   entry and its establishing `area_changed` on **one frame**, as the real
   detectors do; a frame apart, every arm records `area=None`, the relocation
   rule can never fire, and the whole file passes vacuously.
@@ -1130,7 +1153,7 @@ route may not list.
 
 **Picking a route now tells the SERVER.** Until 2026-07-24 nothing in the UI
 called `POST /api/route/select`, so the journaled active route was permanently
-None — and since all 55 seeded movements carry the `in_active_route` guard,
+None — and since all 56 seeded movements carry the `in_active_route` guard,
 they could only ever arm as a standalone target. The corpus was inert in normal
 practice. `practice.js::pickRoute` writes the selection through; localStorage
 stays the optimistic mirror it was specced as.

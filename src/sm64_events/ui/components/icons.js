@@ -41,6 +41,8 @@ const PATHS = {
   stepBack: "M7 5v14M18 6l-8 6 8 6V6z",
   stepForward: "M17 5v14M6 6l8 6-8 6V6z",
   expand: "M8 3H3v5M16 3h5v5M8 21H3v-5m13 5h5v-5",
+  split: "M12 3v6m0 0-5 5v7m5-12 5 5v7",
+  merge: "M7 3v7l5 5v6m5-18v7l-5 5",
 };
 
 export function Icon({ name, size = 18, className = "" }) {

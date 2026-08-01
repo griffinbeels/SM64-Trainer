@@ -231,10 +231,95 @@ def test_the_active_target_card_asks_the_shared_question():
     body = (UI / "components" / "practice.js").read_text(encoding="utf-8")
     assert re.search(r'import \{[^}]*hasPracticeContext[^}]*practicedHere[^}]*\} '
                      r'from "\.\./stagecontext\.js";', body)
-    assert re.search(r"const starActive = inContext &&", body)
+    # The star card asks `starPracticableHere`, NOT `hasPracticeContext`, and
+    # the difference is a live bug (2026-07-30): the latter's final clause is
+    # "some segment is armed", so an armed castle movement in the Castle Lobby
+    # kept a Whomp's Fortress star rendering as ACTIVE TARGET on the same
+    # screen as the banner's own "No course target available". Still a call
+    # into the shared module — which is what this test is really guarding —
+    # just the narrower of the two questions it offers.
+    assert re.search(r"const starActive = starPracticableHere\(held\)", body)
     assert re.search(r"const pinnedSegs = !inContext \|\|", body)
     # ...and BOTH rules reach every pin the user can see. Armed pins are the
     # one deliberate exemption (a live timer is visible wherever it got to).
     assert re.search(r"isActiveStar\(sec\) && here\(sec\)", body)
-    assert re.search(r"stickyPin && here\(stickyPin\)", body)
-    assert re.search(r"activeSeg && here\(activeSeg\)", body)
+    # Segments get a SECOND exemption stars never do (Task 6, spec
+    # 2026-07-28-multi-step-segments): a section whose own armed_detail is
+    # still non-null overrides the course-match gate, completing "a running
+    # segment is never invisible" (user rule 2026-07-24) on the gate it never
+    # reached -- a loose segment can legitimately be running several courses
+    # away from where it started. An ordinary star has no armed_detail and
+    # keeps the plain predicate checked above; the 100-coin star DOES carry
+    # one (spec 2026-07-28-multi-step-segments, tested in test_views.py), but
+    # that is read on the STAR side of the same "OR" via `activeStar`/`here`
+    # above -- deliberately NOT edited into practicedHere itself, which star
+    # sections also call. A THIRD exemption, isAmbientlyArmed, gates all
+    # three pin candidates -- see the dedicated test below.
+    assert re.search(
+        r"stickyPin && !isAmbientlyArmed\(stickyPin\)\s*"
+        r"&& \(stickyPin\.armed_detail \|\| here\(stickyPin\)\)", body)
+    assert re.search(
+        r"activeSeg && !isAmbientlyArmed\(activeSeg\)\s*"
+        r"&& \(activeSeg\.armed_detail \|\| here\(activeSeg\)\)", body)
+
+
+def test_ambiently_armed_segments_get_a_third_exemption_generalized():
+    """A segment that arms merely by the player being present (course/stage
+    entry) rather than by a deliberate action must not read as "the user
+    chose this" -- `armed_detail` alone is a false positive for exactly that
+    shape, unlike a real multi-step movement genuinely mid-run.
+
+    GENERALIZED (spec 2026-07-28-multi-step-segments) from a category-keyed
+    version (`sec.category === "100 Coin Exit"`, live report 2026-07-30):
+    that family dissolved outright (it no longer has a segment section to
+    gate at all -- views.py excludes it from `segments` entirely), but the
+    IDENTICAL ambient-arm shape is not unique to it -- Bowser's seg:reds->
+    pipe:<abbrev> and the legacy pipe-entry trio share it and still have
+    sections, and neither carries the "100 Coin Exit" category (reds->pipe's
+    own category is "Castle Movement", indistinguishable from an ordinary
+    movement by name alone). `sec.arms_ambiently` (views.py, segments.
+    arms_ambiently) is the server-derived, structural answer -- a flag on
+    the SECTION, not a JS enumeration of categories -- so this gate covers
+    whatever arms ambiently next with no second door to keep in step."""
+    body = (UI / "components" / "practice.js").read_text(encoding="utf-8")
+    assert re.search(r'import \{[^}]*justCompletedSegment[^}]*\} '
+                     r'from "\.\./stagecontext\.js";', body)
+    assert "sec.category" not in body, \
+        "the retired category-string check reappeared -- use sec.arms_ambiently"
+    assert re.search(
+        r"isAmbientlyArmed = \(sec\) => sec != null && sec\.arms_ambiently\s*"
+        r"&& !\(tgt\.kind === \"segment\" && tgt\.segment_id === sec\.segment_id\)\s*"
+        r"&& !justCompletedSegment\(v, freshIds, sec\.segment_id\)", body)
+    # armedPins is filtered too -- the unconditional priority branch
+    # (`armedPins.length ? armedPins : ...`) is what actually surfaced the
+    # bug: an ambiently-arming segment pushes onto frozen.armedOrder and
+    # store.js's segment_armed handler ALSO sticks it as lastPinnedSeg, on
+    # every course/stage entry, with no gate at all before this fix.
+    assert re.search(
+        r"\.filter\(\(sec\) => !isAmbientlyArmed\(sec\)\)", body)
+
+
+def test_just_completed_star_is_fresh_success_only():
+    """justCompletedStar (spec 2026-07-28-multi-step-segments round 2, item
+    2's detection signal for the Bowser Reds row): true only for a star
+    section whose own MOST RECENT attempt (by id, never assumed sorted)
+    landed as a FRESH success -- mirrors justCompletedSegment one level up
+    (a star instead of a segment), driven directly through node rather than
+    only via a source-scan of a caller."""
+    v = {"stars": [{"course_id": 16, "star_id": 0,
+                    "attempts": [{"id": 1, "outcome": "reset"},
+                                 {"id": 2, "outcome": "success"}]}]}
+    script = (
+        f"import {{ justCompletedStar }} from {STAGECONTEXT_JS!r};\n"
+        f"const v = {json.dumps(v)};\n"
+        "console.log(JSON.stringify([\n"
+        "  justCompletedStar(v, new Set([2]), 16, 0),\n"   # latest id IS fresh -> true
+        "  justCompletedStar(v, new Set([1]), 16, 0),\n"   # fresh id isn't the latest -> false
+        "  justCompletedStar(v, new Set(), 16, 0),\n"      # nothing fresh -> false
+        "  justCompletedStar(v, new Set([2]), 16, 5),\n"   # no section for this star -> false
+        "]));")
+    result = subprocess.run(["node", "--input-type=module", "-"],
+                            input=script, capture_output=True, text=True,
+                            timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == [True, False, False, False]

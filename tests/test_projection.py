@@ -1083,6 +1083,47 @@ def test_segment_with_a_location_free_start_trigger_keeps_its_target():
     assert p.target == ("segment", 11)
 
 
+def _ddd_bitfs_loose_reentry():
+    """A LOOSE re-entry movement practiced FROM DDD (level 23, course 9):
+    start_triggers' `level_exit from=23` resolves its origin to node "23"
+    (segments.start_origin), same as the corpus's real DDD -> BitFS
+    movements."""
+    from sm64_events.tracking.segments import SegmentDef
+    return SegmentDef(id=30, name="DDD -> BitFS (loose, re-entry)",
+                      enabled=True,
+                      start_triggers=[{"type": "level_exit", "from": 23}],
+                      end_triggers=[{"type": "level_enter", "to": 19}],
+                      guards=[], match_mode="loose")
+
+
+def test_an_armed_loose_segment_survives_entering_a_foreign_course():
+    # Task 5 (spec 2026-07-28-multi-step-segments), task 0017's second
+    # example: "when we have started a multi-step segment and enter a
+    # course where that multi-step segment is still valid, we should be
+    # able to see that it's still active". The origin-retirement rule just
+    # above is right for an IDLE pin (see the paired test below) and wrong
+    # for an ARM -- a re-entry movement enters a course on purpose, and this
+    # rule was hiding the card exactly while the segment was running.
+    d = _ddd_bitfs_loose_reentry()
+    p = Projector(segments=[d])
+    p.feed(jev(1, "target_set", 0, {"kind": "segment", "segment_id": d.id}))
+    p.feed(jev(2, "level_changed", 500, {"from": 23, "to": 6}))  # exits DDD via the hub: arms
+    assert p.armed_segment_ids() == {d.id}
+    p.feed(jev(3, "level_changed", 600, {"from": 6, "to": 24}))  # into WF -- not DDD's origin
+    assert p.target == ("segment", d.id)
+
+
+def test_an_idle_loose_segment_target_still_retires_on_a_foreign_course():
+    # The 2026-07-27 rule is unchanged for anything not armed: a target that
+    # never ran is exactly the "doing something else now" case it exists for.
+    d = _ddd_bitfs_loose_reentry()
+    p = Projector(segments=[d])
+    p.feed(jev(1, "target_set", 0, {"kind": "segment", "segment_id": d.id}))
+    p.feed(jev(2, "level_changed", 500, {"from": 6, "to": 24}))  # into WF, never armed
+    assert p.armed_segment_ids() == set()
+    assert p.target is None
+
+
 def _sl_hmc_waypoint_segment():
     from sm64_events.tracking.segments import SegmentDef
     return SegmentDef(id=20, name="SL->HMC", enabled=True,
@@ -1176,6 +1217,62 @@ def test_basement_respawn_does_not_arm_lobby_anchored_lblj():
     assert p.armed_segment_ids() == set()
     closed = p.feed(jev(4, "level_changed", 1100, {"from": 6, "to": 17}))
     assert [a for a in closed if a.segment_id == 1] == []
+
+
+# -- armed_arms (Task 4, spec 2026-07-28-multi-step-segments) -----------------
+
+def test_armed_arms_reports_progress_total_and_frames_for_a_waypoint_def():
+    from sm64_events.tracking.segments import SegmentDef
+    d = SegmentDef(id=21, name="WF -> SSL", enabled=True,
+                   start_triggers=[{"type": "level_exit", "from": 24}],
+                   waypoints=[[{"type": "area_enter", "level": 6, "area": 3}]],
+                   end_triggers=[{"type": "level_enter", "to": 8}], guards=[])
+    p = Projector(segments=[d])
+    p.feed(jev(1, "level_changed", 1000, {"from": 24, "to": 6}))
+    arm = p.armed_arms()[21]
+    assert arm["progress"] == 0 and arm["total"] == 1
+    assert arm["start_frame"] == 1000
+    assert arm["deadline_frame"] is None      # strict def: no staleness budget
+    p.feed(jev(2, "area_changed", 1010, {"level": 6, "from": 1, "to": 3}))
+    assert p.armed_arms()[21]["progress"] == 1   # waypoint consumed
+
+
+def test_armed_arms_carries_a_deadline_for_a_loose_def():
+    from sm64_events.tracking import segments as segments_module
+    from sm64_events.tracking.segments import SegmentDef
+    loose = SegmentDef(id=20, name="DDD -> BitFS (loose)", enabled=True,
+                       start_triggers=[{"type": "level_exit", "from": 23}],
+                       end_triggers=[{"type": "level_enter", "to": 19}],
+                       guards=[], match_mode="loose")
+    p = Projector(segments=[loose])
+    p.feed(jev(1, "level_changed", 1000, {"from": 23, "to": 6}))
+    arm = p.armed_arms()[20]
+    assert arm["total"] == 0   # no waypoints
+    # No history yet, so the budget is the floor (never the literal constant
+    # — Task 9 re-measures it; see progress.md and CLAUDE.md's shipped-
+    # default rule).
+    assert arm["deadline_frame"] == 1000 + segments_module.budget_frames(None)
+
+
+def test_armed_arms_is_empty_with_nothing_armed():
+    from sm64_events.tracking.segments import SegmentDef
+    d = SegmentDef(id=1, name="LBLJ", enabled=True, guards=[],
+                   start_triggers=[{"type": "level_enter", "to": 6, "from": 16}],
+                   end_triggers=[{"type": "level_enter", "to": 17}])
+    p = Projector(segments=[d])
+    assert p.armed_arms() == {}
+
+
+def test_armed_arms_drops_an_id_once_it_closes():
+    from sm64_events.tracking.segments import SegmentDef
+    d = SegmentDef(id=1, name="LBLJ", enabled=True, guards=[],
+                   start_triggers=[{"type": "level_enter", "to": 6, "from": 16}],
+                   end_triggers=[{"type": "level_enter", "to": 17}])
+    p = Projector(segments=[d])
+    p.feed(jev(1, "level_changed", 1000, {"from": 16, "to": 6}))
+    assert 1 in p.armed_arms()
+    p.feed(jev(2, "level_changed", 1085, {"from": 6, "to": 17}))
+    assert p.armed_arms() == {}
 
 
 def test_replay_derives_finished_run(tmp_path):
@@ -1423,6 +1520,299 @@ def test_auto_ignored_segment_success_does_not_follow_target():
     assert proj.target is None
 
 
+# -- the 100-coin star IS the segment (spec 2026-07-28-multi-step-segments) --
+# The seg:100c->exit:* family's currently-seeded shape: arms on course entry
+# (level_enter/attempt_anchor), the 100-coin grab is a WAYPOINT, the end is
+# any of the course's other six stars, strict (tools/corpus_movements.py).
+
+def _hc_def(course=2, level=24, match_mode="strict", enabled=True):
+    return SegmentDef(
+        id=100, name=f"course {course} 100 Coins -> Exit", enabled=enabled,
+        start_triggers=[{"type": "level_enter", "to": level},
+                        {"type": "attempt_anchor", "level": level}],
+        end_triggers=[{"type": "star_grabbed", "course": course, "star": s}
+                      for s in range(6)],
+        waypoints=[[{"type": "star_grabbed", "course": course, "star": 6}]],
+        guards=[], match_mode=match_mode)
+
+
+def test_hundred_coin_grab_alone_creates_no_star_attempt():
+    # Enter the course (arms the engine), grab 100 coins (waypoint advance,
+    # silent). No exit star yet -- nothing should be recorded at all: the
+    # grab used to close its own star-6 attempt, and must not any more.
+    attempts = project([
+        jev(1, "level_changed", 900, {"from": 16, "to": 24}),
+        star(2, 1000, course=2, star_id=6, igt=1000),
+    ], segments=[_hc_def()])
+    assert attempts == []
+
+
+def test_hundred_coin_completion_attributes_to_the_star_not_the_segment():
+    # Enter, grab 100 coins, grab the exit star -- the ENGINE's own
+    # completion is what closes the 100-coin star's attempt (measured
+    # shape: STAR course-6 success + the exit star's own success, one run).
+    attempts = project([
+        jev(1, "level_changed", 900, {"from": 16, "to": 24}),
+        star(2, 1000, course=2, star_id=6, igt=1000),
+        star(3, 1200, course=2, star_id=3, igt=1200),
+    ], segments=[_hc_def()])
+    hundred = [a for a in attempts if a.course_id == 2 and a.star_id == 6]
+    exit_star = [a for a in attempts if a.course_id == 2 and a.star_id == 3]
+    assert len(hundred) == 1
+    assert hundred[0].segment_id is None
+    assert hundred[0].outcome == "success"
+    # Live report: a segment's own igt_frames is always None (RTA-only by
+    # design), but the reattributed attempt IS a star now and stars
+    # display/grade on IGT -- without this it renders with no time and
+    # cannot be graded. The closing star_collected event's OWN igt_frames
+    # (the same value the exit star's own attempt gets, since one event
+    # closes both) is the authoritative source, never rta_frames.
+    assert hundred[0].igt_frames == 1200
+    # decision #1: the exit star keeps its OWN attempt too -- a real grab,
+    # never suppressed by this change (only star 6 changes).
+    assert len(exit_star) == 1 and exit_star[0].segment_id is None
+    assert exit_star[0].igt_frames == 1200
+
+
+def test_hundred_coin_strat_tag_comes_from_the_star_not_the_segment():
+    _, proj = replay([
+        jev(1, "strat_set", 0, {"course_id": 2, "star_id": 6,
+                                "strat_tag": "Coin Route A"}),
+        jev(2, "level_changed", 900, {"from": 16, "to": 24}),
+        star(3, 1000, course=2, star_id=6, igt=1000),
+    ], segments=[_hc_def()])
+    closed = proj.feed(star(4, 1200, course=2, star_id=3, igt=1200))
+    hundred = next(a for a in closed if a.course_id == 2 and a.star_id == 6)
+    assert hundred.strat_tag == "Coin Route A"
+
+
+def test_hundred_coin_engine_death_also_attributes_to_the_star():
+    # decision #3: what happens with no exit star. death is a hard fail
+    # WITH a row (_feed_waypoint precedence, unchanged by this change) and
+    # must attribute the same way a success does.
+    attempts = project([
+        jev(1, "level_changed", 900, {"from": 16, "to": 24}),
+        star(2, 1000, course=2, star_id=6, igt=1000),
+        jev(3, "death", 1100, {"cause": "fell", "igt_frames": 1267}),
+    ], segments=[_hc_def()])
+    hundred = [a for a in attempts if a.course_id == 2 and a.star_id == 6]
+    assert len(hundred) == 1
+    assert hundred[0].outcome == "death" and hundred[0].segment_id is None
+    # Live report's other example ("42.23 death"): a death closure carries
+    # igt_frames exactly like a star death does (_close_by_death reads the
+    # same key) -- must be stamped too, not just the success path.
+    assert hundred[0].igt_frames == 1267
+
+
+def test_leaving_without_the_exit_star_records_nothing_confirmed_sane():
+    # decision #3: leaving the course before the exit star is a SILENT
+    # CANCEL under strict/waypoint dispatch (a real-edge level_changed that
+    # isn't the next waypoint) -- no row at all, unchanged by this task and
+    # confirmed here rather than assumed.
+    attempts = project([
+        jev(1, "level_changed", 900, {"from": 16, "to": 24}),
+        star(2, 1000, course=2, star_id=6, igt=1000),
+        jev(3, "level_changed", 1100, {"from": 24, "to": 19}),  # leave for BitFS
+    ], segments=[_hc_def()])
+    assert attempts == []
+
+
+def test_hundred_coin_falls_back_to_a_plain_star_attempt_with_no_engine():
+    # No HUNDRED_COIN_EXIT-shaped def at all (deleted, never seeded) -- the
+    # grab still records a plain star attempt, same fallback philosophy the
+    # retired star->segment TARGET redirect used ("falling back to the
+    # plain star keeps the click meaningful").
+    attempts = project([star(1, 1000, course=2, star_id=6, igt=1000)])
+    assert len(attempts) == 1
+    assert attempts[0].course_id == 2 and attempts[0].star_id == 6
+    assert attempts[0].segment_id is None
+
+
+def test_hundred_coin_falls_back_when_the_engine_is_disabled():
+    attempts = project([star(1, 1000, course=2, star_id=6, igt=1000)],
+                       segments=[_hc_def(enabled=False)])
+    assert len(attempts) == 1
+    assert attempts[0].course_id == 2 and attempts[0].star_id == 6
+
+
+def test_hundred_coin_target_survives_entering_its_own_course():
+    # The star-target model this change relies on: target = ("star", 2, 6)
+    # must not be wiped the instant its OWN engine arms on course entry
+    # (feed()'s "a segment armed retires a star target" rule would
+    # otherwise fire on every single visit).
+    _, proj = replay([
+        jev(1, "target_set", 0, {"kind": "star", "course_id": 2, "star_id": 6}),
+    ], segments=[_hc_def()])
+    assert proj.target == ("star", 2, 6)
+    proj.feed(jev(2, "level_changed", 900, {"from": 16, "to": 24}))
+    assert proj.target == ("star", 2, 6)
+
+
+def test_hundred_coin_arm_still_retires_a_different_courses_star_target():
+    # A target for a different star in a DIFFERENT course is still retired
+    # when some unrelated segment arms (this rule, unchanged for every
+    # other case) -- level 8 (SSL, course 8) vs a course-5 target.
+    other = SegmentDef(id=200, name="unrelated", enabled=True,
+                       start_triggers=[{"type": "level_enter", "to": 8}],
+                       end_triggers=[{"type": "level_enter", "to": 6}],
+                       guards=[])
+    _, proj = replay([
+        jev(1, "target_set", 0, {"kind": "star", "course_id": 5, "star_id": 1}),
+    ], segments=[other])
+    assert proj.target == ("star", 5, 1)
+    proj.feed(jev(2, "level_changed", 900, {"from": 6, "to": 8}))  # arms `other`
+    assert proj.target is None
+
+
+def test_ambient_arm_exemption_generalizes_to_every_star_in_the_course():
+    # THE regression this generalization fixes: not just star 6 -- ANY star
+    # practiced in WF must survive the SAME course's ambient 100-coin engine
+    # arming. Before the generalization this wiped the target on every
+    # single course entry (confirmed live against the real seeded def).
+    _, proj = replay([
+        jev(1, "target_set", 0, {"kind": "star", "course_id": 2, "star_id": 3}),
+    ], segments=[_hc_def()])
+    assert proj.target == ("star", 2, 3)
+    proj.feed(jev(2, "level_changed", 900, {"from": 16, "to": 24}))
+    assert proj.target == ("star", 2, 3)
+
+
+def test_ambient_arm_exemption_covers_the_reds_to_pipe_family_too():
+    # Bowser's seg:reds->pipe:<abbrev> shares the identical ambient shape
+    # (arms on stage entry) and never surfaced this bug only because a
+    # Bowser course has exactly one star to collide with -- a target for
+    # THAT star must still survive its own pipe engine arming.
+    reds_pipe = SegmentDef(
+        id=201, name="BitDW — 8 Red Coins → Pipe", enabled=True,
+        start_triggers=[{"type": "level_enter", "to": 17},
+                        {"type": "attempt_anchor", "level": 17}],
+        end_triggers=[{"type": "warp_entered", "level": 17}],
+        waypoints=[[{"type": "star_grabbed", "course": 16, "star": 0}]],
+        guards=[], match_mode="strict")
+    _, proj = replay([
+        jev(1, "target_set", 0, {"kind": "star", "course_id": 16, "star_id": 0}),
+    ], segments=[reds_pipe])
+    assert proj.target == ("star", 16, 0)
+    proj.feed(jev(2, "level_changed", 900, {"from": 6, "to": 17}))
+    assert proj.target == ("star", 16, 0)
+
+
+def _reds_pipe_segment_def():
+    """The real seg:reds->pipe:<abbrev> shape (matches
+    test_ambient_arm_exemption_covers_the_reds_to_pipe_family_too and
+    tests/test_views.py::_reds_pipe_def): starts on stage entry, waypoints
+    on the course's reds grab, ends on the pipe warp."""
+    from sm64_events.tracking.segments import SegmentDef
+    return SegmentDef(
+        id=201, name="BitDW — 8 Red Coins → Pipe", enabled=True,
+        start_triggers=[{"type": "level_enter", "to": 17},
+                        {"type": "attempt_anchor", "level": 17}],
+        end_triggers=[{"type": "warp_entered", "level": 17}],
+        waypoints=[[{"type": "star_grabbed", "course": 16, "star": 0}]],
+        guards=[], match_mode="strict")
+
+
+def test_grabbing_a_waypoint_star_does_not_steal_an_armed_segments_target():
+    # THE FLASH bug (live report 2026-07-30, round 2): with the Pipe segment
+    # explicitly targeted, grabbing the reds star is merely THIS segment's
+    # own waypoint on the way to the pipe, not a deliberate "practice the
+    # star alone" pick -- practice.js's pinned card was flashing to the
+    # star's own (Star Section) rank standards + practice log for the rest
+    # of the run because the server's target flipped to the star the
+    # instant the grab closed, even though the run never stopped being a
+    # Pipe run. Reproduces the exact live shape: target the segment while
+    # armed, then feed the waypoint grab.
+    p = Projector(segments=[_reds_pipe_segment_def()])
+    p.feed(jev(1, "level_changed", 900, {"from": 6, "to": 17}))   # arms ambiently
+    p.feed(jev(2, "target_set", 950, {"kind": "segment", "segment_id": 201}))
+    assert p.target == ("segment", 201)
+    closed = p.feed(jev(3, "star_collected", 1500,
+                        {"course_id": 16, "star_id": 0, "igt_frames": 500}))
+    # The grab still records its own star attempt -- the Star family's
+    # history must keep existing even while its card is not shown (user's
+    # own words: "the practice log should still exist for star mode in the
+    # history, just that we don't see it").
+    assert [a.segment_id for a in closed] == [None]
+    assert (closed[0].course_id, closed[0].star_id) == (16, 0)
+    assert closed[0].outcome == "success"
+    # ...but the target must stay on the still-running segment, not flash
+    # over to the star it merely stepped through.
+    assert p.target == ("segment", 201)
+    assert 201 in p.armed_segment_ids()          # mid-sequence, not closed
+    closed2 = p.feed(jev(4, "warp_entered", 2200, {"level": 17}))
+    assert [a.segment_id for a in closed2] == [201]
+    assert closed2[0].outcome == "success"
+    assert p.target == ("segment", 201)          # unaffected by the fix
+
+
+def test_grabbing_a_star_still_moves_the_target_with_nothing_pinned_there():
+    # Regression guard the other direction: the fix must not blanket-protect
+    # every armed segment from every grab -- only one that is BOTH the
+    # current explicit target and mid-sequence. With no target set yet (the
+    # ambient arm alone, no explicit pick), the ordinary "last valid grab
+    # moves the target" rule must still apply.
+    p = Projector(segments=[_reds_pipe_segment_def()])
+    p.feed(jev(1, "level_changed", 900, {"from": 6, "to": 17}))   # arms ambiently
+    assert p.target is None
+    p.feed(jev(2, "star_collected", 1500,
+                {"course_id": 16, "star_id": 0, "igt_frames": 500}))
+    assert p.target == ("star", 16, 0)
+
+
+def test_a_grab_that_cancels_a_waypoint_segment_still_leaves_it_targeted():
+    # A DIFFERENT armed, targeted STRICT waypoint segment that does NOT
+    # expect a star grab next is silently CANCELLED by the matcher's own
+    # major-action rule on this very event (segments.py's _feed_waypoint
+    # precedence) -- the restore only ever fires for a segment the grab
+    # genuinely advanced, never one it broke.
+    from sm64_events.tracking.segments import SegmentDef
+    unrelated = SegmentDef(
+        id=55, name="unrelated waypoint movement", enabled=True,
+        start_triggers=[{"type": "level_enter", "to": 6}],
+        waypoints=[[{"type": "level_enter", "to": 10}]],
+        end_triggers=[{"type": "level_enter", "to": 17}],
+        guards=[], match_mode="strict")
+    p = Projector(segments=[unrelated])
+    p.feed(jev(1, "level_changed", 900, {"from": 16, "to": 6}))
+    p.feed(jev(2, "target_set", 950, {"kind": "segment", "segment_id": 55}))
+    assert p.target == ("segment", 55)
+    assert 55 in p.armed_segment_ids()
+    p.feed(jev(3, "star_collected", 1500,
+                {"course_id": 9, "star_id": 2, "igt_frames": 500}))
+    assert 55 not in p.armed_segment_ids()   # cancelled: major-action mismatch
+    # REVERSED 2026-08-01 by his ruling that nothing may overwrite a segment
+    # he picked. The def really is cancelled -- that half was right and is
+    # unchanged -- but the pick survives it: he is still pointed at the thing
+    # he chose, and re-running it is one retry rather than one re-pick.
+    assert p.target == ("segment", 55)
+
+
+def test_a_grab_does_not_move_the_target_off_a_plain_armed_segment():
+    # This test asserted the OPPOSITE until 2026-08-01, and the reasoning it
+    # carried is worth keeping because it was right about the mechanism and
+    # wrong about the remedy: a plain armed def has no notion of "this grab
+    # was my own next step", so "still armed after" could not tell a relevant
+    # grab from an irrelevant one, and caveat 18's restore was scoped to
+    # waypoint defs to avoid guessing. What it called "a far bigger behavior
+    # change than the reported bug asks for" is precisely what the NEXT
+    # report asked for: a course-exit movement lost its target to the star he
+    # grabbed on the way out, and with it its arm and its whole card. The
+    # question was never whether the grab was relevant to the def -- it is
+    # that a click outranks a thing that merely happened.
+    from sm64_events.tracking.segments import SegmentDef
+    plain = SegmentDef(id=77, name="plain movement", enabled=True,
+                       start_triggers=[{"type": "level_enter", "to": 6}],
+                       end_triggers=[{"type": "level_enter", "to": 17}],
+                       guards=[])
+    p = Projector(segments=[plain])
+    p.feed(jev(1, "level_changed", 900, {"from": 16, "to": 6}))
+    p.feed(jev(2, "target_set", 950, {"kind": "segment", "segment_id": 77}))
+    p.feed(jev(3, "star_collected", 1500,
+                {"course_id": 9, "star_id": 2, "igt_frames": 500}))
+    assert 77 in p.armed_segment_ids()      # unaffected: still armed either way
+    assert p.target == ("segment", 77)      # and the pick he made stands
+
+
 def test_star_success_with_no_clock_at_all_is_not_flagged():
     # grab-only attempt (no anchor -> rta None) with no igt_frames in the
     # payload: _auto_ignored's "no clock -> no flag" branch — nothing to
@@ -1609,3 +1999,89 @@ def test_a_null_pick_falls_back_to_the_default_instead_of_unsetting():
     q.feed(jev(0, "strat_set", 0, {"kind": "segment", "segment_id": 42,
                                    "strat_tag": None}))
     assert q.strat_by_segment[42] is None
+
+
+# -- a session boundary clears the live focus (live report 2026-08-01) ---------
+
+def test_a_target_does_not_survive_into_the_next_session():
+    """His report, verbatim: "I was working on a hundred coins. So when I
+    opened this session, a hundred coins was selected as the active target…
+    it reads as a bug if something is selected for a new session."
+
+    The target is replay-derived, so before this it simply outlived every
+    boundary — the journal's last target_set won no matter how many launches
+    ago it was written."""
+    p = Projector()
+    p.feed(jev(1, "target_set", 0, {"course_id": 2, "star_id": 6}))
+    assert p.target == ("star", 2, 6)
+    p.feed(jev(2, "session_started", 0, {"session_id": 9}))
+    assert p.target is None
+
+
+def test_a_suspended_star_does_not_resume_across_a_session_boundary():
+    """The half that would have made the fix look done and fail live. A star
+    the player left its course with is STASHED, not forgotten (caveat 13), and
+    re-entering that course restores it — so clearing only the target would
+    have put 100 Coins back on screen the moment he walked into the course."""
+    p = Projector(segments=[_mips()])
+    p.feed(jev(1, "target_set", 0, {"course_id": 9, "star_id": 6}))
+    p.feed(jev(2, "level_changed", 500, {"from": 16, "to": 6}))     # arm, suspends
+    assert p.target is None
+    p.feed(jev(3, "session_started", 0, {"session_id": 9}))
+    p.feed(jev(4, "level_changed", 5000, {"from": 6, "to": 23}))    # back into DDD
+    assert p.target is None
+
+
+def test_the_abandoned_attempt_still_names_the_star_it_was_run_on():
+    """Close BEFORE clearing, the same discipline the course-change branch
+    keeps: the run that the boundary ends belongs to what he was practicing,
+    not to nothing."""
+    attempts = project([
+        jev(1, "target_set", 0, {"course_id": 2, "star_id": 6}),
+        jev(2, "practice_reset", 1000, {"igt_frames_before": 0,
+                                        "mario_acted": True}),
+        jev(3, "session_started", 0, {"session_id": 9}),
+    ])
+    [a] = attempts
+    assert a.outcome == "abandoned" and (a.course_id, a.star_id) == (2, 6)
+
+
+def test_a_strategy_choice_is_a_preference_and_DOES_survive():
+    """Deliberately not cleared. The target is where he is pointed right now;
+    which strategy he practices a star with is a standing preference, and
+    re-picking it every launch would be the annoyance, not the fix."""
+    p = Projector()
+    p.feed(jev(1, "target_set", 0, {"course_id": 2, "star_id": 6,
+                                    "strat_tag": "Cannonless"}))
+    p.feed(jev(2, "session_started", 0, {"session_id": 9}))
+    assert p.strat_by_star[(2, 6)] == "Cannonless"
+
+
+# -- a deliberate segment pick is not overwritten by an inferred one -----------
+
+def test_a_star_grab_does_not_steal_a_segment_target():
+    """Live report 2026-08-01. He picks a course-exit movement, plays the
+    course, grabs the star he is leaving with — the ordinary thing to do
+    immediately before running that movement — and the grab moves the target
+    onto the star. The movement then cannot arm (every castle movement is
+    guarded to the target or the active route), has no section, and is simply
+    gone from the page.
+
+    The star's own ATTEMPT is still recorded: his earlier ruling on the same
+    rule, "the practice log should still exist for star mode in the history,
+    just that we don't see it". Only the target move is wrong."""
+    p = Projector()
+    p.feed(jev(1, "target_set", 0, {"kind": "segment", "segment_id": 21}))
+    closed = p.feed(star(2, 900, course=2, star_id=0))
+    assert p.target == ("segment", 21)
+    assert [(a.course_id, a.star_id, a.outcome) for a in closed] \
+        == [(2, 0, "success")]
+
+
+def test_a_star_grab_still_moves_a_STAR_target():
+    """The rule that is not being changed: practising star after star follows
+    you around, and that is the whole reason it exists."""
+    p = Projector()
+    p.feed(jev(1, "target_set", 0, {"course_id": 2, "star_id": 3}))
+    p.feed(star(2, 900, course=2, star_id=0))
+    assert p.target == ("star", 2, 0)

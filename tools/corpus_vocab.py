@@ -1,6 +1,6 @@
 """Shared clause + step constructors for the seeded corpus tables.
 
-ONE place that knows the seed JSON shapes, so 55 movement segments and ~50
+ONE place that knows the seed JSON shapes, so 56 movement segments and 48
 routes cannot disagree about them. Ids are the addresses.py id spaces: LEVEL
 ids for triggers, COURSE ids + 0-based star ids for star candidates.
 
@@ -28,6 +28,13 @@ def sub(top: str, name: str) -> str:
 CASTLE_MOVEMENT = "Castle Movement"
 TRICKS = "Tricks"
 BOWSER_FIGHTS = "Bowser Fights"
+# The 100-coin "grab a different star to actually leave" pattern (Task 20,
+# spec 2026-07-28-multi-step-segments) deliberately ENDS on star_grabbed --
+# see mechanic()'s docstring for why that disqualifies it from Castle
+# Movement. Its own category keeps it out of corpus_movements.MOVEMENTS
+# (and therefore out of every test built on "a movement never ends on a
+# star grab").
+HUNDRED_COIN_EXIT = "100 Coin Exit"
 
 ROUTE_SCOPED = [{"type": "in_active_route"}]
 
@@ -39,6 +46,16 @@ ROUTE_SCOPED = [{"type": "in_active_route"}]
 # entities use it). Legacy trick defs deliberately get none: several have real
 # competing strategies. Spec 2026-07-24-segment-default-strat-design.md.
 STANDARD_STRAT = "Standard"
+
+# Every movement ships match_mode="loose" (spec 2026-07-28-multi-step-segments,
+# Task 19): the whole reason the strict matcher's waypoint-cancellation rules
+# forced so many `via=[...]` chains in the first place is gone once nothing
+# in between start and end can silently disarm the def. `movement()`'s own
+# match_mode= parameter overrides this per row -- the case that matters is a
+# recording promoted through tools/corpus_from_db.py, which must carry
+# whatever mode it was recorded and verified with rather than silently
+# reconciling back to this default.
+DEFAULT_MOVEMENT_MATCH_MODE = "loose"
 
 
 # --- trigger clauses -------------------------------------------------------
@@ -175,8 +192,54 @@ def route(seed_key, name, category, steps, start_condition=None):
             "steps": group_visits(steps)}
 
 
-def movement(seed_key, name, start, end, via=()):
+def movement(seed_key, name, start, end, via=(), match_mode=None):
     """A castle-movement segment. `via` is a FLAT list of clauses; each becomes
-    a single-clause waypoint (no corpus movement needs an any-of waypoint)."""
-    return {"seed_key": seed_key, "name": name, "start": start,
-            "via": list(via), "end": end}
+    a single-clause waypoint (no corpus movement needs an any-of waypoint).
+
+    `match_mode=None` (the default) means "use the corpus default" --
+    `_movement_row` (tools/build_defaults_seed.py) stamps
+    DEFAULT_MOVEMENT_MATCH_MODE on every row that doesn't say otherwise. Pass
+    an explicit value to override it for ONE movement; `corpus_from_db.py`
+    prints this argument back out whenever a live def's mode differs from the
+    default, so the override round-trips instead of silently reconciling away."""
+    row = {"seed_key": seed_key, "name": name, "start": start,
+           "via": list(via), "end": end}
+    if match_mode is not None:
+        row["match_mode"] = match_mode
+    return row
+
+
+def mechanic(seed_key, name, start, end, category, match_mode="loose", via=()):
+    """A non-route segment describing an intrinsic game mechanic (Task 20,
+    spec 2026-07-28-multi-step-segments): the "100 coins doesn't end the
+    level, a different star does" pattern and the Bowser-stage "the reds
+    star doesn't end it, the pipe does" pattern. Differences from
+    movement()/`_movement_row`:
+
+    (1) `start`/`end` may each be a genuine any-of LIST of clauses (the
+        100-coin case needs six alternative stars, since the vocabulary has
+        no "any star but this one" clause; the corpus reshape (2026-07-29,
+        same spec) put the whole-course/whole-stage span's arm on the
+        `[level_enter, attempt_anchor]` any-of idiom `_seg()` already uses,
+        so `start` needed the same list-or-single flexibility `end` already
+        had) -- movement() assumes exactly one clause per side, full seed
+        shape here instead of a compact row `_movement_row` expands later.
+    (2) `via` is a FLAT list of clauses, same convention as movement()'s --
+        each becomes a single-clause waypoint. Added 2026-07-29 so the reds-
+        star grab (reds->pipe) and the 100-coin grab (100c->exit) could
+        become the WAYPOINT between stage-entry and the real end, instead of
+        being the start trigger itself -- starting on the grab is what made
+        both families unselectable before the grab and (for reds->pipe) what
+        timed only star->pipe instead of the whole stage (live report
+        2026-07-29). `[[clause] for clause in via]` mirrors `_movement_row`.
+    (3) UNGUARDED (guards=[]), like the ten legacy segments, not route-scoped
+        like the 56 castle movements: there is exactly ONE way to do either
+        (one pipe per Bowser stage, "some other star" for the 100-coin
+        case), so there is no route ambiguity to scope against -- the same
+        reason seg:bowser-1/seg:bitdw-pipe/etc. stay always-armed."""
+    return {"seed_key": seed_key, "name": name, "enabled": True,
+            "start_triggers": start if isinstance(start, list) else [start],
+            "end_triggers": end if isinstance(end, list) else [end],
+            "waypoints": [[clause] for clause in via],
+            "guards": [], "category": category,
+            "match_mode": match_mode}

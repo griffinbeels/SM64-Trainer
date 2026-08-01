@@ -7,6 +7,7 @@ import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
+import { fmtIgt } from "../format.js";
 import { requestTarget } from "../target.js";
 import { Icon } from "./icons.js";
 import { IconPicker } from "./iconpicker.js";
@@ -15,9 +16,10 @@ import { buildTree } from "../group.js";
 import { usePaneCap } from "../viewport.js";
 import { GroupedList, useOpenGroups } from "./grouplist.js";
 import { EntityPicker } from "./entitymodal.js";
-import { courseOptions, levelOptions, parseStarId, starId,
+import { courseOptions, levelOptions, parseStarId, segmentOptions, starId,
          starOptionsFromVocab } from "../entities.js";
 import { entityIconSrc, optionIconSrc } from "./entityicons.js";
+import { SegmentTimeline } from "./segmenttimeline.js";
 
 const html = htm.bind(h);
 
@@ -232,14 +234,74 @@ export function ClauseRow({ clause, types, vocab, tint, onChange, onRemove, t })
 
 // The fields the Builder's save sends — must stay a SUBSET of the server's
 // SegmentBody/SegmentPatch fields (cross-checked by tests/
-// test_segments_editor_ui.py against the pydantic model).
+// test_segments_editor_ui.py against the pydantic model). match_mode joined
+// this list 2026-07-29 (final review of spec 2026-07-28-multi-step-segments,
+// finding 4): the registry, the vocab payload and the write path all existed
+// with no control reading any of it, so every Builder-created segment
+// silently became "loose" (SegmentBody's own default) with no way to see or
+// change it from the editor.
 const SAVE_FIELDS = ["name", "enabled", "start_triggers", "end_triggers",
-                     "guards"];
+                     "guards", "match_mode"];
 
-function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load }) {
+// The full definition shape POST /api/segments/backtest validates against
+// (server/api.py's SegmentBody) -- a SUPERSET of SAVE_FIELDS, deliberately:
+// an existing segment's waypoints already sit in `d` (spread from the GET row
+// this editor opened with) even though this editor has no control for
+// authoring them yet, and leaving them out of the preview would silently
+// backtest against the wrong matcher branch for any seeded movement that
+// carries one -- not a hypothetical, the 56 castle movements are exactly
+// that shape. A brand-new segment has neither key on `d` yet; `JSON.
+// stringify` drops an undefined-valued key on its own, so the server's own
+// defaults (no waypoints, no category) apply instead of a wrong client-side
+// guess. match_mode no longer needs the same treatment -- it is a SAVE_FIELDS
+// member now (the editor control below), so it is always present on `d`
+// under its own value, never a guess.
+const BACKTEST_FIELDS = [...SAVE_FIELDS, "waypoints", "category"];
+
+// One-line verdict for the backtest panel: distinguishes "never even armed"
+// from "armed and never closed" (the diagnostic this feature exists for --
+// a definition that looks right and never fires) from "fired, here's how
+// often" -- three different remedies, so a single fires-count would blur
+// the two zero-fire cases together.
+//
+// The arm count is report.arms, NEVER attempts.length -- attempts are only
+// written when an arm CLOSES (tracking/backtest.py, BacktestReport.arms'
+// docstring), so a def that arms and is silently disarmed every time writes
+// no attempt row at all. attempts.length then reads 0 even after dozens of
+// arms, which used to fall all the way through to the false "Never armed
+// anywhere in your history" below for a def that plainly did arm.
+function backtestSummary(report) {
+  const n = report.attempts.length;
+  if (report.fires > 0)
+    return `${report.fires} fire${report.fires === 1 ? "" : "s"} out of `
+      + `${n} attempt${n === 1 ? "" : "s"} in your history.`;
+  if (report.unclosed.length > 0)
+    return "Never fired — but it DID arm, and never closed. See below.";
+  if (report.arms > 0)
+    // "no completion is recorded", not "never completed successfully": unlike
+    // segmenttimeline.js's recordingSummary (which only ever backtests
+    // replaces: null, a brand-new recording), this Builder backtests a real
+    // `replaces` when editing an existing segment -- so arms>0/fires=0 here
+    // can ALSO mean "it fired, and those attempts were wiped"
+    // (tracking/backtest.py replays journaled data_wiped clears against
+    // `current`), not only "it never completed". Both readings make this
+    // sentence true; only one of them makes "never completed successfully" a
+    // lie.
+    return `Armed ${report.arms} time${report.arms === 1 ? "" : "s"} in your `
+      + "history, but no completion is recorded.";
+  return "Never armed anywhere in your history.";
+}
+
+function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs }) {
+  // match_mode's own default mirrors the server's (SegmentBody.match_mode =
+  // "loose") rather than naming "loose" a second time -- vocab.match_modes
+  // is ordered loose-first specifically so a caller that wants "the default"
+  // can read it positionally (tracking/segments.py::vocab's own comment).
   const blank = { name: "", enabled: true,
     start_triggers: [{ type: "level_enter" }],
-    end_triggers: [{ type: "level_enter" }], guards: [] };
+    end_triggers: [{ type: "level_enter" }], guards: [],
+    match_mode: (vocab.match_modes && vocab.match_modes[0]
+                 && vocab.match_modes[0].key) || "loose" };
   const [d, setD] = useState(initial || blank);
   // Icon override (existing segments only — the override is keyed by id, so
   // a not-yet-saved segment has nowhere to hang one). Read live from the
@@ -257,6 +319,35 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load }) {
   const [origin, setOrigin] = useState(
     detected && detected.source === "override" ? detected.key : "");
   const [err, setErr] = useState(null);
+  // Backtest preview state -- reset for free on every open/switch because
+  // Builder remounts (Segments keys it by editing.id/"new"), so a stale
+  // report from a different segment can never bleed through.
+  const [btBusy, setBtBusy] = useState(false);
+  const [btReport, setBtReport] = useState(null);
+  const [btErr, setBtErr] = useState(null);
+  // Author-time lint (Task 16, spec 2026-07-28-multi-step-segments) --
+  // re-checked automatically on every edit (debounced, unlike the backtest
+  // panel above which is button-triggered) so findings sit beside Save
+  // without a click. `segment_id` is `initial`'s own id, if any, so the
+  // duplicate rule excludes THIS row from its own comparison (server/api.py's
+  // LintBody docstring) -- without it, opening an existing segment and
+  // changing nothing would report it as a duplicate of itself.
+  const [lintFindings, setLintFindings] = useState([]);
+  const [lintErr, setLintErr] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      const definition = Object.fromEntries(
+        BACKTEST_FIELDS.map((field) => [field, d[field]]));
+      send("POST", "/api/segments/lint", {
+        definition, segment_id: initial && initial.id != null ? initial.id : null,
+      }).then((result) => {
+        if (!cancelled) { setLintFindings(result.warnings); setLintErr(null); }
+      }).catch((e) => { if (!cancelled) setLintErr(String(e)); });
+    }, 400);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [d]);
+  const lintHasError = lintFindings.some((f) => f.severity === "error");
   const edit = (k, i, clause) => setD({ ...d,
     [k]: d[k].map((c, j) => (j === i ? clause : c)) });
   const add = (k, types) => setD({ ...d, [k]: [...d[k], { type: types[0].key }] });
@@ -290,6 +381,23 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load }) {
     } catch (e) { setErr(String(e)); return false; }
   }
 
+  // "Try it against my history" -- the whole point is finding out BEFORE
+  // Save, so this sends whatever is CURRENTLY in the form, unsaved
+  // (tracking/backtest.py). `replaces` is the segment being edited, if any,
+  // so the response can diff the candidate against its own real history.
+  async function runBacktest() {
+    setBtBusy(true); setBtErr(null);
+    try {
+      const definition = Object.fromEntries(
+        BACKTEST_FIELDS.map((field) => [field, d[field]]));
+      const report = await send("POST", "/api/segments/backtest", {
+        definition, replaces: initial && initial.id != null ? initial.id : null,
+      });
+      setBtReport(report);
+    } catch (e) { setBtErr(String(e)); setBtReport(null); }
+    finally { setBtBusy(false); }
+  }
+
   async function saveOrigin(nextKey) {
     setOrigin(nextKey);
     try {
@@ -303,6 +411,70 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load }) {
     } catch (e) { setErr(String(e)); }
   }
 
+  // --- Split into two segments (Task 18, spec 2026-07-28-multi-step-
+  // segments) -- offered only for a SAVED segment carrying exactly one
+  // waypoint. That is the one shape split_definition can act on without
+  // asking the author to invent a boundary from nothing: 0 waypoints has no
+  // natural split point, and 2+ is refused server-side anyway (folding
+  // several into one shared `mid` would silently drop the rest --
+  // tracking/segments.py's own docstring). `mid` is the segment's own
+  // waypoint, verbatim -- there is nothing else for the user to author here.
+  const [splitNames, setSplitNames] = useState(["", ""]);
+  const [splitBusy, setSplitBusy] = useState(false);
+  const [splitErr, setSplitErr] = useState(null);
+
+  async function doSplit() {
+    setSplitBusy(true); setSplitErr(null);
+    try {
+      const result = await send(
+        "POST", `/api/segments/${initial.id}/split`, {
+          mid: initial.waypoints[0],
+          first_name: splitNames[0].trim() || `${initial.name} (1 of 2)`,
+          second_name: splitNames[1].trim() || `${initial.name} (2 of 2)`,
+        });
+      // Land on the first new half, the SAME "stay on what you just did"
+      // rule save()'s own onSaved(savedId) follows (live audit 2026-07-25).
+      onSaved(result.first_id);
+    } catch (e) { setSplitErr(String(e)); }
+    finally { setSplitBusy(false); }
+  }
+
+  // --- Merge with another segment (Task 18) -- the inverse gesture: chain
+  // this segment with any OTHER saved one, in either order, into one new
+  // definition. `mergeGroups` reuses the exact same segment picker the
+  // Routes tab's step editor already offers (entities.js::segmentOptions +
+  // EntityPicker) rather than a second hand-rolled select -- same grouping,
+  // same art, one less pattern in the codebase. Domain refusals (the pair
+  // doesn't meet) surface as the server's own 409 message; this control does
+  // not try to predict that client-side.
+  const [mergeWithId, setMergeWithId] = useState(null);
+  const [mergeOrder, setMergeOrder] = useState("after");   // this seg first, or second
+  const [mergeName, setMergeName] = useState("");
+  const [mergeBusy, setMergeBusy] = useState(false);
+  const [mergeErr, setMergeErr] = useState(null);
+  const mergeCandidates = initial && initial.id != null
+    ? (allDefs || []).filter((def) => def.id !== initial.id) : [];
+  const mergeGroups = segmentOptions(mergeCandidates, vocab.origins || []);
+
+  async function doMerge() {
+    if (mergeWithId == null) return;
+    setMergeBusy(true); setMergeErr(null);
+    try {
+      const otherId = Number(mergeWithId);
+      const other = mergeCandidates.find((def) => def.id === otherId);
+      const otherName = other ? other.name : "?";
+      const [firstId, secondId, defaultName] = mergeOrder === "after"
+        ? [initial.id, otherId, `${initial.name} + ${otherName}`]
+        : [otherId, initial.id, `${otherName} + ${initial.name}`];
+      const result = await send("POST", "/api/segments/merge", {
+        first_id: firstId, second_id: secondId,
+        name: mergeName.trim() || defaultName,
+      });
+      onSaved(result.id);
+    } catch (e) { setMergeErr(String(e)); }
+    finally { setMergeBusy(false); }
+  }
+
   // Expose a save handle + live dirty flag so the parent can offer "save your
   // changes?" when the user clicks edit on a DIFFERENT segment (Segments
   // tryEdit). dirty = the form differs from what we opened with (reverting an
@@ -311,6 +483,18 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load }) {
   if (apiRef) apiRef.current = {
     save, dirty: JSON.stringify(d) !== JSON.stringify(initial || blank),
   };
+
+  // Match-mode control (Task 27, spec 2026-07-28-multi-step-segments,
+  // final-review finding 4): vocab.match_modes is the ONLY source for the
+  // label/description text, never a hardcoded copy here (this repo fails
+  // builds over a second door -- tests/test_single_source.py). `blank`
+  // above already seeds a real value, so `d.match_mode` is always set.
+  // `matchModeInfo` may come back undefined for a value vocab no longer
+  // ships -- the CURRENT value stays selectable via the appended option
+  // below rather than rendering blank (a filtered <select> silently losing
+  // its stored value has bitten this app before).
+  const matchModes = vocab.match_modes || [];
+  const matchModeInfo = matchModes.find((mode) => mode.key === d.match_mode);
 
   // One bordered group per side; each alternative clause inside gets its
   // own tinted card (cycling) so "new color = new alternative" reads at a
@@ -372,6 +556,16 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load }) {
           onchange=${(e) => setD({ ...d, enabled: e.target.checked })} />
       <span><b>Available for practice</b><small>Show this segment in target pickers.</small></span>
     </label>
+    <label class="builder-matchmode">
+      <span class="field-label">Matching</span>
+      <select value=${d.match_mode}
+          onchange=${(e) => setD({ ...d, match_mode: e.target.value })}>
+        ${matchModes.map((mode) => html`<option value=${mode.key}>${mode.label}</option>`)}
+        ${!matchModeInfo && d.match_mode
+          ? html`<option value=${d.match_mode}>${d.match_mode}</option>` : null}
+      </select>
+      <span class="meta">${matchModeInfo ? matchModeInfo.description : ""}</span>
+    </label>
     <div class="segment-definition-grid">
       ${section("Start", "Arm when any one of these happens.", "play",
         "start_triggers", vocab.triggers, "seg-start")}
@@ -380,14 +574,99 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load }) {
       ${section("Rules", "Optional checks that keep attempts valid.", "shield",
         "guards", vocab.guards, "seg-guard")}
     </div>
+    ${initial && initial.id != null && (initial.waypoints || []).length === 1 && html`
+      <div class="builder-split">
+        <span class="field-label"><${Icon} name="split" size=${15} /> Split into two segments</span>
+        <p class="meta">This segment already tracks the stop where it splits.
+          Splitting saves two new, independent segments — this one stays
+          exactly as it is.</p>
+        <div class="split-names">
+          <input placeholder="First half name" value=${splitNames[0]}
+              oninput=${(e) => setSplitNames([e.target.value, splitNames[1]])} />
+          <input placeholder="Second half name" value=${splitNames[1]}
+              oninput=${(e) => setSplitNames([splitNames[0], e.target.value])} />
+        </div>
+        ${splitErr && html`<div class="badx">${splitErr}</div>`}
+        <button onclick=${doSplit} disabled=${splitBusy}>
+          <${Icon} name="split" size=${15} />${" "}${splitBusy
+            ? "Splitting…" : "Split into two segments"}
+        </button>
+      </div>`}
+    ${initial && initial.id != null && html`
+      <div class="builder-merge">
+        <span class="field-label"><${Icon} name="merge" size=${15} /> Merge with another segment</span>
+        <p class="meta">Chain this segment with another one that starts where
+          it ends (or ends where it starts) — saved as one new segment; both
+          originals are kept, untouched.</p>
+        ${mergeCandidates.length === 0
+          ? html`<p class="meta">No other segments to merge with yet.</p>`
+          : html`<div class="merge-body">
+              <div class="merge-controls">
+                <select value=${mergeOrder}
+                    onchange=${(e) => setMergeOrder(e.target.value)}>
+                  <option value="after">This segment, then…</option>
+                  <option value="before">…then this segment</option>
+                </select>
+                <${EntityPicker} groups=${mergeGroups} value=${mergeWithId}
+                    depth=${2} title="Choose a segment"
+                    placeholder="— pick a segment —"
+                    iconFor=${(id) => optionIconSrc(t, "segment", id)}
+                    onChange=${(id) => setMergeWithId(id)} />
+              </div>
+              <input placeholder="Merged segment name (optional)"
+                  value=${mergeName} oninput=${(e) => setMergeName(e.target.value)} />
+              ${mergeErr && html`<div class="badx">${mergeErr}</div>`}
+              <button onclick=${doMerge} disabled=${mergeBusy || mergeWithId == null}>
+                <${Icon} name="merge" size=${15} />${" "}${mergeBusy
+                  ? "Merging…" : "Merge into one segment"}
+              </button>
+            </div>`}
+      </div>`}
+    ${lintErr && html`<div class="badx">${lintErr}</div>`}
+    ${lintFindings.length > 0 && html`<div class="lint-panel">
+      ${lintFindings.map((finding, i) => html`<div key=${i}
+          class="lint-finding lint-${finding.severity}">
+        <${Icon} name=${finding.severity === "error" ? "close" : "shield"} size=${14} />
+        ${" "}${finding.message}
+      </div>`)}
+    </div>`}
     ${err && html`<div class="badx">${err}</div>`}
     <div class="builder-actions">
       <span class="meta">Saving automatically recalculates this segment's history.</span>
+      <button onclick=${runBacktest} disabled=${btBusy}>
+        <${Icon} name="play" size=${16} />${" "}${btBusy
+          ? "Testing…" : "Try it against my history"}
+      </button>
       <button onclick=${onCancel}>Cancel</button>
-      <button class="primary-button" onclick=${save}>
+      <button class="primary-button" onclick=${save} disabled=${lintHasError}
+          title=${lintHasError ? "Fix the error above before saving" : ""}>
         <${Icon} name="save" size=${16} /> Save segment
       </button>
     </div>
+    ${btErr && html`<div class="badx backtest-panel">${btErr}</div>`}
+    ${btReport && html`<div class="backtest-panel">
+      <div class="backtest-summary">
+        ${backtestSummary(btReport)}
+        ${btReport.fires > 0 && btReport.pb_after != null
+          ? html` <span class="meta">Fastest: ${fmtIgt(btReport.pb_after)}</span>` : ""}
+        ${initial && initial.id != null ? html` <span class="meta">
+          vs. current definition: +${btReport.gained} / -${btReport.lost} attempts</span>` : ""}
+      </div>
+      ${btReport.unclosed.length > 0 && html`<div class="backtest-unclosed badx">
+        ${btReport.unclosed.map((u, i) => html`<div key=${i}>
+          ⚠ Armed at frame ${u.frame} (step ${u.progress}/${u.total}), ${u.reason}.
+        </div>`)}
+      </div>`}
+      ${btReport.attempts.length > 0 && html`<div class="backtest-attempts">
+        ${btReport.attempts.map((a, i) => html`<div key=${i}
+            class="meta ${a.cleared ? "cleared" : ""}">
+          ${a.outcome === "success" ? "✔" : "✘"}${" "}${a.outcome.replace(/_/g, " ")}
+          ${a.outcome === "success" && a.rta_frames != null
+            ? html` <b>${fmtIgt(a.rta_frames)}</b>` : ""}
+          ${a.cleared && a.cleared_reason ? html` (${a.cleared_reason})` : ""}
+        </div>`)}
+      </div>`}
+    </div>`}
   </div>`;
 }
 
@@ -434,6 +713,7 @@ export function Segments({ t }) {
   const [query, setQuery] = useState("");
   const [vocabData, setVocabData] = useState(null);
   const [editing, setEditing] = useState(null);   // null | "new" | def object
+  const [recording, setRecording] = useState(false);   // the timeline picker
   const editorRef = useRef(null);   // the open Builder's {save, dirty} handle
   const [openGroups, toggleGroup] = useOpenGroups("sm64.segOriginsOpen");
   // Panes cap themselves to the space actually left below them (ui/viewport.js)
@@ -508,10 +788,24 @@ export function Segments({ t }) {
           <p>Define repeatable sections once, then practice and rank them like stars.</p>
         </div>
       </div>
+      <button class="quiet-button" onclick=${() => setRecording(true)}>
+        <${Icon} name="bookmark" size=${16} /> Record a segment
+      </button>
       <button class="primary-button" onclick=${() => setEditing("new")}>
         <${Icon} name="plus" size=${17} /> New segment
       </button>
     </header>
+    ${recording && html`<${SegmentTimeline}
+        onCancel=${() => setRecording(false)}
+        onSaved=${async (savedId) => {
+          // Same "stay on what you just saved" rule the Builder's own
+          // onSaved follows (live audit 2026-07-25): land on the new
+          // segment's own editor rather than the empty state.
+          setRecording(false);
+          const rowsList = await load();
+          setEditing(rowsList.find((row) => row.id === savedId) || null);
+          t.refresh();
+        }} />`}
 
     <div class="segments-workshop" ref=${workshopRef}>
       <aside class="practice-card workshop-card segment-library">
@@ -573,7 +867,7 @@ export function Segments({ t }) {
         ${editing
           ? html`<${Builder} key=${editing === "new" ? "new" : editing.id}
               vocab=${vocabData} apiRef=${editorRef} t=${t} load=${load}
-              initial=${editing === "new" ? null : editing}
+              allDefs=${defs} initial=${editing === "new" ? null : editing}
               onSaved=${async (savedId) => {
                 // Stay on what you just saved (live audit 2026-07-25): closing
                 // the editor threw the user back to the empty state, and after

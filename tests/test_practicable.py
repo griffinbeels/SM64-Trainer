@@ -151,6 +151,21 @@ def test_a_pick_from_the_course_you_are_in_commits(tmp_path):
     assert svc.target == ("star", COURSE_CCM, 5)
 
 
+def test_the_100_coin_star_commits_as_a_plain_star(tmp_path):
+    """Against the REAL bundled corpus, not a hand-built stand-in: picking
+    the 100-coin star as a STAR commits as a PLAIN star target (spec
+    2026-07-28-multi-step-segments, "the 100-coin star IS the segment" --
+    superseding the retired _hundred_coin_redirect, user ruling 2026-07-28).
+    The practicability gate is unaffected either way: it resolves through
+    star_origin(course, star), same as any other star, so standing in WF is
+    sufficient regardless of what the underlying engine does."""
+    db, svc = make(tmp_path)
+    seed_id(db, "WF — 100 Coins → Exit")  # confirms the seeded def exists
+    enter(svc, "stars", COURSE_WF, LEVEL_WF)
+    asyncio.run(svc.request_target("star", course_id=COURSE_WF, star_id=6))
+    assert svc.target == ("star", COURSE_WF, 6)
+
+
 def test_a_movement_is_settable_from_the_course_it_starts_in(tmp_path):
     """The half that would be lost if the rule used the old reader: with
     `start_levels` answering nothing for WF -> SSL, "only what's here" would
@@ -269,3 +284,73 @@ def test_retirement_follows_a_user_origin_override():
     # ...and walking into WF, its derived origin, must retire it
     proj.feed(ev(3, "level_changed", {"from": LEVEL_CCM, "to": LEVEL_WF}))
     assert proj.target is None
+
+
+# ---- a transition-triggered segment, picked where the transition LEFT you ---
+# Live report 2026-08-01, standing in the Castle Lobby having just exited
+# Whomp's Fortress, with "WF -> SSL" offered in the banner and refused on
+# click: "The only time I would select this is when I just got out of Whomps
+# and am in the lobby. I am not presently IN whomps, but rather I am coming
+# *from* whomps. Instead of it being bound on 'you can't select something for
+# a stage you're not in' it's rather 'you can't select something where you
+# didn't satisfy the trigger condition'."
+
+def test_a_segment_already_running_may_be_picked_wherever_it_got_to():
+    """The place rule can NEVER accept this pick, and that is the premise
+    error: the trigger IS leaving the course, so by the time it has fired the
+    player is somewhere else by definition. Satisfying the trigger is the
+    permission; the origin is only how you ask before it fires."""
+    lobby = stage("castle", None, LEVEL_CASTLE, area=1)
+    assert not practicable_here(lobby, "24")                    # from WF: no
+    assert practicable_here(lobby, "24", running=True)           # ...unless running
+
+
+def test_running_does_not_excuse_a_segment_that_has_not_started():
+    lobby = stage("castle", None, LEVEL_CASTLE, area=1)
+    assert not practicable_here(lobby, "24", running=False)
+
+
+def test_standing_at_the_origin_still_permits_it_before_the_trigger_fires():
+    """Both doors, not a replacement: a movement you have not started yet is
+    still picked from the place it starts."""
+    assert practicable_here(stage("stars", 2, 24), "24", running=False)
+
+
+def test_the_movement_you_just_ran_out_of_a_course_can_be_picked_in_the_lobby(tmp_path):
+    """END TO END on the real corpus, his exact live report (2026-08-01).
+
+    He was AFK in the Castle Lobby having just left Whomp's Fortress. The
+    banner offered "WF -> SSL" -- correctly, it was armed and running -- and
+    clicking it came back "you can only practice what you are standing in --
+    that one is in Whomp's Fortress". The banner and the server disagreed
+    about the same segment on the same screen, and the server was the one
+    that was wrong: that IS the only moment the pick makes sense."""
+    db, svc = make(tmp_path)
+    seg = seed_id(db, "WF \u2192 SSL")
+    # A route is what makes the movement armable at all (its in_active_route
+    # guard), and this is the route his own header named on the screenshot.
+    route = next(r["id"] for r in db.routes()
+                 if r["name"].startswith("16 Star — LBLJ"))
+    asyncio.run(svc.select_route(route))
+    enter(svc, "stars", COURSE_WF, LEVEL_WF)
+    asyncio.run(svc.publish(Event(type="level_changed", frame=100, timestamp_utc=T0,
+                                  payload={"from": LEVEL_CASTLE, "to": LEVEL_WF})))
+    asyncio.run(svc.publish(Event(type="level_changed", frame=5000, timestamp_utc=T0,
+                                  payload={"from": LEVEL_WF, "to": LEVEL_CASTLE})))
+    enter(svc, "castle", None, LEVEL_CASTLE, area=1)
+    # Not a precondition to skip past: if this stops being true the scenario
+    # has evaporated and the assertion below would pass vacuously.
+    assert seg in svc.armed_segment_ids
+    asyncio.run(svc.request_target("segment", segment_id=seg))
+    assert svc.target == ("segment", seg)
+
+
+def test_a_segment_that_is_not_running_is_still_refused_from_elsewhere(tmp_path):
+    """The other half, so the door did not simply come off its hinges."""
+    db, svc = make(tmp_path)
+    seg = seed_id(db, "WF \u2192 SSL")
+    enter(svc, "castle", None, LEVEL_CASTLE, area=1)
+    assert seg not in svc.armed_segment_ids
+    with pytest.raises(ValueError, match="standing in"):
+        asyncio.run(svc.request_target("segment", segment_id=seg))
+    assert svc.target is None

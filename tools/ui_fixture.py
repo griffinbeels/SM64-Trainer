@@ -32,12 +32,14 @@ from pathlib import Path
 import uvicorn
 
 from sm64_events.core.events import Event
-from sm64_events.core.paths import bundled_rank_standards, rank_standards_path
+from sm64_events.core.paths import (bundled_defaults_seed, bundled_rank_standards,
+                                    rank_standards_path)
 from sm64_events.ranks.standards import RankStandards
 from sm64_events.server.app import create_app
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.server.poller import Poller
 from sm64_events.storage.db import Database
+from sm64_events.tracking.defaults import reconcile_defaults
 from sm64_events.tracking.service import TrackerService
 
 REPO = Path(__file__).resolve().parents[1]
@@ -84,15 +86,45 @@ def snapshot_db(source: Path, destination: Path) -> Path:
 #
 # Whomp's Fortress, "Fall onto the Caged Island", TJ Owlless -- the same card
 # he sent a screenshot of.
+#
+# FIXTURE_LEVEL corrected 5 -> 24 (untagged-PB fix, live report 2026-07-31):
+# 5 is course 4's raw level id, not course 2's (WF's real one, per
+# tracking/segments.py::_LEVEL_BY_COURSE[2] == 24) -- a mismatch invisible
+# until `seed_practice` gained its own explicit `request_target` call (below),
+# because the ATTEMPTS loop auto-targets the star on its first star_collected
+# event regardless of the player's stage, so `_seed_target`'s later POST always
+# saw `already=True` and skipped the practicable_here check this constant
+# would otherwise have failed every time. Only mattered once something finally
+# asked "is the player standing where they can practice this" BEFORE an
+# attempt had already answered it implicitly.
 FIXTURE_COURSE = 2
-FIXTURE_LEVEL = 5
+FIXTURE_LEVEL = 24
 FIXTURE_STAR = 4
 FIXTURE_STRAT = "TJ Owlless"
+
+# The segment the fixture arms, chosen for the SAME reason as FIXTURE_STAR
+# above and caught by the same review the day after: LBLJ (segment:1) has
+# exactly one bundled strategy, so its strategy ladder IS its best ladder
+# (tracking/views.py::ranks_share_ladder) and the armed-segment card drew
+# ONE combined banner -- the two-banner-plus-`.seg-waiting` layout has never
+# been rendered by any instrument, and a CSS fix scoped to "the non-last
+# banner" (index.html) was therefore INERT: with one banner it is both first
+# and last, so `:not(:last-child)` matches nothing.
+#
+# BitFS Pipe Entry (segment:6) has FOUR bundled strategies -- picked over
+# segment:5's two for the same margin-of-safety reason FIXTURE_STAR picked
+# five over LBLJ's one. `FIXTURE_SEGMENT_STRAT` = "Pole Glitch", deliberately
+# NOT the fastest one ("BLJ" is faster at every tier it defines) -- an active
+# strategy that happened to tie the entity's own best ladder would merge the
+# two banners back into one exactly as LBLJ did.
+FIXTURE_SEGMENT = 6
+FIXTURE_SEGMENT_STRAT = "Pole Glitch"
 
 
 def seed_practice(service, course_id: int = FIXTURE_COURSE,
                   star_id: int = FIXTURE_STAR,
-                  level: int = FIXTURE_LEVEL, attempts: bool = True) -> None:
+                  level: int = FIXTURE_LEVEL, attempts: bool = True,
+                  strat: str | None = None) -> None:
     """Give the fixture an ACTIVE TARGET and a few attempts.
 
     Without this the Practice page renders only its empty states -- the
@@ -107,6 +139,24 @@ def seed_practice(service, course_id: int = FIXTURE_COURSE,
     the view is built by the same code path the app uses. Same shape as the
     `seed` helper tests/test_api.py has always had -- kept separate rather than
     imported so tools/ and tests/ do not depend on each other's helpers.
+
+    `strat`, when given, sets the ACTIVE TARGET and STRATEGY BEFORE any
+    attempt below is recorded -- required, not cosmetic (untagged-PB fix,
+    live report 2026-07-31). An attempt's strat_tag is stamped from whichever
+    strategy is remembered for the CURRENT target at the moment the attempt
+    CLOSES (tracking/projection.py::MatchContext.strat_tag reads
+    `self.target`/`strat_by_star`, never retroactively) -- so setting the
+    strategy only AFTERWARD, the way `_seed_target` used to do it alone,
+    leaves every one of these attempts permanently untagged regardless. That
+    is real product behaviour, not a fixture quirk: an untagged attempt behind
+    a saved PB is the EXACT shape of the untagged-PB bug this fixture exists
+    to render, and this fixture was reproducing it BY ACCIDENT -- which used
+    to pass unnoticed because the "unranked" sentinel this untagged PB
+    produced happened to render as a real (floored) banner, masking two
+    `test_fixture_reaches_the_real_page.py` checks behind a look-alike state
+    until `views.py`'s pb_untagged fix correctly told the two apart and
+    surfaced "unattributed" instead. Calls `service.request_target` directly
+    (no HTTP round-trip -- this runs before the fixture's `base` URL exists).
     """
     now = datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -124,6 +174,9 @@ def seed_practice(service, course_id: int = FIXTURE_COURSE,
                      "mode": "stars"}))
         if not attempts:
             return
+        if strat:
+            await service.request_target("star", course_id=course_id,
+                                         star_id=star_id, strat_tag=strat)
         for index, frames in enumerate([343, 361, 352]):
             await service.publish(Event(
                 type="practice_reset", frame=1000 + index * 1000,
@@ -194,6 +247,171 @@ def _seed_target(base: str, course_id: int = FIXTURE_COURSE,
         post("/api/pb", {"attempt_id": rows[0]["id"], "timer_mode": "igt"})
 
 
+def _arm_segment(base: str, service, segment_id: int = FIXTURE_SEGMENT) -> None:
+    """Arm a real segment definition and leave it ARMED -- the only way to
+    reach `sec.armed_detail` non-null (`.seg-waiting`, Task 6, spec
+    2026-07-28-multi-step-segments), which neither the responsive sweep nor
+    `tools/measure_objective_card.py` could reach before this (final review
+    of that spec, finding 2): both only ever seeded a STAR target, and
+    `.seg-waiting` renders only inside `SegmentSection`.
+
+    Defaults to `FIXTURE_SEGMENT` (BitFS Pipe Entry, segment id 6) -- one of
+    the ten legacy tricks baked directly into the schema MIGRATION itself
+    (storage/db.py's v4 INSERT), so it exists in every fresh `Database` with
+    no defaults-corpus reconcile needed: the fixture never calls
+    `reconcile_defaults` (only `main.py` does, at real startup), so a segment
+    from the 84-def corpus would not exist here at all. See `FIXTURE_SEGMENT`
+    for why THIS one of the ten, specifically -- it is not an arbitrary pick.
+
+    Does not touch the active target. An armed segment gets its own section
+    (`views.py`'s `seen_segs`: armed OR targeted OR has attempts) and
+    therefore its own `.objective-card` in the practice index regardless of
+    whether it is the target -- so this composes with whatever star target
+    `serve_ui` already seeded rather than replacing it. That card starts
+    inside a closed `<details class="practice-index-item">`
+    (`ui/components/practice.js`); `tools/uilab_project.py`'s `_EXPAND_ALL`
+    opens it before measuring.
+
+    Real events through the real matcher, not a hand-built row, matching
+    BitFS Pipe Entry's own shape (storage/db.py's v4 INSERT: start
+    `level_enter(to=19)` OR `attempt_anchor(level=19)`; end
+    `warp_entered(level=19)`): a `level_changed` from 17 (BitDW) to 19 arms
+    it, a `warp_entered(level=19)` closes it as a genuine success (giving it
+    a real PB before the card is measured), then `level_changed` 17->19
+    again, left unclosed. The measured card then carries a real rank AND
+    `armed_detail` together -- the actually-crowded combination, the same
+    reasoning `_seed_target`'s own `with_pb` follows for a star.
+    """
+    import urllib.error
+    import urllib.request
+
+    now = datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
+
+    def post(path: str, payload: dict) -> dict:
+        request = urllib.request.Request(
+            f"{base}{path}", data=json.dumps(payload).encode(), method="POST",
+            headers={"Content-Type": "application/json"})
+        try:
+            return json.loads(urllib.request.urlopen(request, timeout=10).read())
+        except urllib.error.HTTPError as error:
+            raise RuntimeError(
+                f"fixture could not POST {path}: {error.code} "
+                f"{error.read()[:200]!r}") from error
+
+    async def arm_and_close() -> None:
+        await service.publish(Event(type="level_changed", frame=5000,
+                                    timestamp_utc=now,
+                                    payload={"from": 17, "to": 19}))
+        await service.publish(Event(type="warp_entered", frame=5085,
+                                    timestamp_utc=now, payload={"level": 19}))
+
+    async def rearm() -> None:
+        await service.publish(Event(type="level_changed", frame=6000,
+                                    timestamp_utc=now,
+                                    payload={"from": 17, "to": 19}))
+
+    # A strat active BEFORE the closing edge, so the completed attempt's own
+    # strat_tag stamps FIXTURE_SEGMENT_STRAT -- BitFS Pipe Entry carries no
+    # default_strat (only the corpus movements do: views.py caveat 17), and
+    # an unlabelled attempt can't become a PB under a strat the rank banners
+    # are keyed on.
+    post("/api/strat", {"kind": "segment", "segment_id": segment_id,
+                        "strat_tag": FIXTURE_SEGMENT_STRAT})
+    asyncio.run(arm_and_close())
+    # rta_frames == 85 (5085 - 5000), not just outcome == "success": a
+    # from_dev_db=True fixture snapshots the REAL journal, which may already
+    # hold other successful attempts for this segment from actual play -- the
+    # frame delta this function itself just produced is the only value
+    # guaranteed to name the row it just closed rather than some earlier
+    # real one.
+    attempts = json.loads(urllib.request.urlopen(
+        f"{base}/api/session?clock=igt&scope=session", timeout=10).read())
+    rows = [a for sec in attempts.get("segments", [])
+            if sec.get("segment_id") == segment_id
+            for a in sec.get("attempts", [])
+            if a.get("outcome") == "success" and a.get("rta_frames") == 85]
+    if rows:
+        post("/api/pb", {"attempt_id": rows[0]["id"], "timer_mode": "rta"})
+    asyncio.run(rearm())
+
+
+def _publish_bowser_stage(service, course_id: int, level: int) -> None:
+    """Publish a `stage_changed` naming a Bowser-course PIPE stage (BitDW/
+    BitFS/BitS) -- the one `mode` `seed_practice`'s own stage_changed call can
+    never produce, since that call hardcodes `mode="stars"` (see its own
+    comment). Without this, `t.stage.mode` is never anything but "stars" or
+    whatever `seed_practice` was given, and `stagebanner.js::BowserCourseRow`
+    -- three cells since 912466d rewrote it from two -- had never been
+    rendered by any gate, before OR after that rewrite (task-bowser-sweep).
+
+    Additive, like `_arm_segment`: does not touch the star target `_seed_
+    target` sets. `stage_changed` is broadcast-only and retires nothing on
+    its own (detectors/stage.py's own docstring) -- only a JOURNALED
+    `level_changed` retires an active star target on a real course change
+    (projection.py caveat 12), and this publishes no such event. So a page
+    can carry an ordinary star target (Whomp's, say) for the Active Target
+    card while the quick-select banner above it shows a completely different
+    course's Bowser row -- the same "coexist" shape `_arm_segment` already
+    relies on for the armed-segment card.
+    """
+    now = datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
+
+    async def go() -> None:
+        await service.publish(Event(
+            type="stage_changed", frame=5200, timestamp_utc=now,
+            payload={"course_id": course_id, "level": level, "area": 1,
+                     "mode": "bowser_course"}))
+
+    asyncio.run(go())
+
+
+# Two user-authored segments, byte-identical to each other, for the segments-
+# editor Story/tests (uilab_project.py, test_fixture_reaches_the_real_page.py)
+# -- opening either one must show a REAL `duplicate` lint finding (the lint
+# panel renders NOTHING at all when `lintFindings` is empty:
+# `${lintFindings.length > 0 && html...}` in segments.js, so a definition with
+# no finding sweeps an invisible panel), a split panel (needs exactly one
+# waypoint) and a merge panel (needs another segment to offer, which the
+# other of this pair, plus the ten legacy tricks, already supplies).
+#
+# Levels 12/13/14/15 (Jolly Roger Bay / Tiny-Huge Island / Tick Tock Clock /
+# Rainbow Ride) are deliberately INERT: none of `_arm_segment`'s events (16,
+# 6, 17) ever touch them, so neither fixture arms and neither adds an
+# unplanned `.objective-card` to the practice index -- these two exist purely
+# to be opened in the editor, never to be practiced.
+_EDITOR_FIXTURE_DEFINITION = {
+    "start_triggers": [{"type": "level_enter", "to": 13, "from": 12}],
+    "end_triggers": [{"type": "level_enter", "to": 14}],
+    "guards": [], "enabled": True,
+    "waypoints": [[{"type": "level_enter", "to": 15}]],
+    "match_mode": "strict",
+}
+
+
+def _seed_editor_fixtures(base: str) -> None:
+    """POST the two `_EDITOR_FIXTURE_DEFINITION` segments (see its own
+    comment). Read-only for everything else: no target, no arming, nothing
+    published through `service` -- just two ordinary saved definitions the
+    library can list and the editor can open."""
+    import urllib.error
+    import urllib.request
+
+    def post(path: str, payload: dict) -> dict:
+        request = urllib.request.Request(
+            f"{base}{path}", data=json.dumps(payload).encode(), method="POST",
+            headers={"Content-Type": "application/json"})
+        try:
+            return json.loads(urllib.request.urlopen(request, timeout=10).read())
+        except urllib.error.HTTPError as error:
+            raise RuntimeError(
+                f"fixture could not POST {path}: {error.code} "
+                f"{error.read()[:200]!r}") from error
+
+    for suffix in ("A", "B"):
+        post("/api/segments",
+             {"name": f"Editor Fixture {suffix}", **_EDITOR_FIXTURE_DEFINITION})
+
+
 def _free_port() -> int:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
@@ -204,7 +422,11 @@ def _free_port() -> int:
 def serve_ui(db_path: Path | None = None, timeout: float = 30,
               seed: bool = True, from_dev_db: bool = False,
               stage: tuple[int, int] | None = None,
-              target: tuple[int, int] | None = None):
+              target: tuple[int, int] | None = None,
+              arm_segment: int | None = None,
+              seed_editor_fixtures: bool = False,
+              reconcile_full_corpus: bool = False,
+              bowser_stage: tuple[int, int] | None = None):
     """Yield the base URL of an offline instance; stop it on the way out.
 
     DETERMINISTIC BY DEFAULT: an empty database plus `seed_practice`, so two
@@ -223,6 +445,36 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
 
     A fresh clone has no dev database at all, so the default also happens to be
     the only mode that works everywhere.
+
+    `arm_segment` additionally arms a real segment definition (see
+    `_arm_segment`) -- additive, not a replacement for `target`: an armed
+    segment gets its own section regardless of which kind is the active
+    target, so a star target and an armed segment coexist on the same page.
+
+    `seed_editor_fixtures` additionally POSTs two saved, byte-identical
+    segments purpose-built for opening in the Segments editor (see
+    `_seed_editor_fixtures`) -- this branch's authoring surfaces (lint,
+    backtest, split, merge) have never been rendered by any gate, because
+    reaching them needs a definition on disk to open, which no earlier
+    fixture state provided.
+
+    `reconcile_full_corpus` additionally applies the bundled 84-segment
+    default corpus (`tracking/defaults.reconcile_defaults` against `data/
+    defaults.seed.json`) to a FRESH db, the same call `main.py` makes at real
+    startup and this fixture otherwise never makes (see the module docstring
+    on `FIXTURE_SEGMENT` -- "the fixture never calls reconcile_defaults...
+    so a segment from the 84-def corpus would not exist here at all"). Needed
+    for anything that depends on a corpus-only row rather than one of the ten
+    legacy tricks baked into the schema migration itself -- e.g. the Bowser
+    "reds -> pipe" segments (`seg:reds->pipe:*`, Task 20), which coexist with
+    the legacy `seg:*-pipe` trio only once this has run.
+
+    `bowser_stage` additionally publishes a `stage_changed` naming a Bowser
+    course's pipe stage -- `(course_id, level)`, e.g. `(16, 17)` for BitDW --
+    with `mode="bowser_course"` (see `_publish_bowser_stage`). Without it
+    `t.stage.mode` can never be anything but "stars", the mode `seed_practice`
+    hardcodes, and `stagebanner.js::BowserCourseRow` is unreachable by this
+    fixture no matter what `stage`/`target` are given.
     """
     scratch = None
     if db_path is None:
@@ -232,6 +484,17 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
             snapshot_db(DEV_DB, db_path)
 
     database = Database(db_path)
+    if reconcile_full_corpus:
+        # Before the server starts: reconcile is a plain db-level operation
+        # (mirrors main.py's own startup call), and doing it early means every
+        # request the fixture makes afterwards already sees the full corpus.
+        seed_path = bundled_defaults_seed()
+        if seed_path is not None:
+            seed_data = json.loads(seed_path.read_text(encoding="utf-8"))
+            problems = reconcile_defaults(database, seed_data)
+            if problems:
+                raise RuntimeError(
+                    f"fixture's reconcile_defaults skipped rows: {problems}")
     broadcaster = Broadcaster()
     # `ranks=` is NOT optional here, whatever the signature says. Omit it and
     # every rank builder short-circuits to empty -- /api/ranks/standards starts
@@ -266,12 +529,34 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
         # at construction time fails silently, which is the worst version.
         base = f"http://127.0.0.1:{port}"
         if seed:
+            # Segment FIRST, star SECOND: `_arm_segment`'s level_changed
+            # events cross real course boundaries (Grounds -> HMC -> BitDW),
+            # and `_dispatch` retires the ACTIVE STAR TARGET the moment such
+            # an event's course differs from the target's own -- a real
+            # product rule (projection.py caveat 12), not a fixture quirk.
+            # Arming before the star target exists means there is nothing yet
+            # for that rule to retire; nothing published afterwards is a
+            # level_changed event that could retire it either, so the star
+            # target set below survives untouched and coexists with the
+            # still-armed segment. Setting a star target itself only journals
+            # `target_set` -- it does not read or touch segment arm state.
+            if arm_segment is not None:
+                _arm_segment(base, service, segment_id=arm_segment)
+            if seed_editor_fixtures:
+                _seed_editor_fixtures(base)
             course, level = stage or (FIXTURE_COURSE, FIXTURE_LEVEL)
             seed_practice(service, course_id=course, level=level,
                           star_id=(target or (0, FIXTURE_STAR))[1],
-                          attempts=target is None)
+                          attempts=target is None,
+                          strat=FIXTURE_STRAT if target is None else None)
             _seed_target(base, *(target or (FIXTURE_COURSE, FIXTURE_STAR)),
                          with_pb=target is None)
+            if bowser_stage is not None:
+                # AFTER _seed_target, not instead of it: broadcast-only and
+                # retires nothing (see _publish_bowser_stage), so the star
+                # target set above survives untouched underneath a Bowser
+                # quick-select banner from a different course entirely.
+                _publish_bowser_stage(service, *bowser_stage)
         yield base
     finally:
         server.should_exit = True

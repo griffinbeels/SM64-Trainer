@@ -77,10 +77,17 @@ export function useTargetPicker(t) {
     // Layer 1 is a grid of COURSES carrying their portraits; layer 2 is that
     // course's stars AND the segments that begin in it, because both are
     // things you practice and /api/target already takes either (user,
-    // 2026-07-25).
+    // 2026-07-25). A HUNDRED_COIN_EXIT engine is excluded here (spec
+    // 2026-07-28-multi-step-segments, "the 100-coin star IS the segment")
+    // -- picking it would be picking the SAME practiced thing its course's
+    // "100 Coins" star already offers, and its own section no longer exists
+    // to land on (views.py excludes it from `segments`/`segment_targets`
+    // entirely). `is_hundred_coin_engine` is server-stamped
+    // (views.stamp_origins) rather than re-derived here, so this filter
+    // can't drift from projection.py's own attribution rule.
     const courseGroups = courseUnionGroups(
-      v.catalog, t.segments || [], (t.vocab || {}).course_by_level || {},
-      targetRanks,
+      v.catalog, (t.segments || []).filter((s) => !s.is_hundred_coin_engine),
+      (t.vocab || {}).course_by_level || {}, targetRanks,
     ).map((group) => ({
       ...group,
       icon: optionIconSrc(t, "course", group.key.replace("course-", "")),

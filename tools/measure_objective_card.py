@@ -11,6 +11,13 @@ for, both guarded here:
   * measuring the EMPTY card -- without a stage and a target the card renders
     "Nothing to practice here", which is 39px shorter than the real thing. The
     288px that shipped until 2026-07-29 was measured that way.
+  * measuring only a STAR -- spec 2026-07-28-multi-step-segments put a third
+    grid row (`.seg-waiting`) inside this same card, rendered only while a
+    SEGMENT is armed (`sec.armed_detail` non-null). A star can never reach
+    that state, so ARM_SEGMENT below arms a real segment definition
+    alongside the star target (`ui_fixture.py`'s `_arm_segment`) and this
+    script takes the max across BOTH cards, same as it already does across
+    every card on the page.
 
 Uses `serve_ui()`'s own defaults, so it measures exactly the card the layout
 gate measures. Those defaults seed a star with FIVE strategies precisely so
@@ -31,11 +38,39 @@ _MISSING = find_uilab()
 if _MISSING:
     raise SystemExit(_MISSING)
 
-from ui_fixture import serve_ui                       # noqa: E402
+from ui_fixture import FIXTURE_SEGMENT, serve_ui      # noqa: E402
 from uilab.driver import get_driver                   # noqa: E402
+from uilab_project import PROJECT                     # noqa: E402
 
-WIDTHS = (320, 340, 360, 400, 430, 480, 520, 560, 600, 640, 680, 700,
-          720, 740, 759, 761, 790, 820, 900, 1100, 1101, 1400)
+# BitFS Pipe Entry (segment id 6) -- one of the ten legacy tricks the schema
+# migration itself inserts, so it exists even in the dev db snapshot
+# regardless of whatever the defaults corpus currently holds. Not LBLJ
+# (id 1): see `ui_fixture.FIXTURE_SEGMENT`'s own comment -- LBLJ has exactly
+# one bundled strategy, so its ladder IS its best ladder and the card drew a
+# single combined rank banner instead of two. The STAGE/TARGET constants
+# that sat here are gone: main made serve_ui() seed a deterministic
+# practice state of its own, so naming them again would be a second copy.
+ARM_SEGMENT = FIXTURE_SEGMENT
+
+_ALL_WIDTHS = (320, 340, 360, 400, 430, 480, 520, 560, 600, 640, 680, 700,
+               720, 740, 759, 761, 790, 820,
+               # The supported floor and one pixel above it. Added 2026-07-29:
+               # the list jumped 820 -> 900 and so skipped the narrowest width
+               # the app actually claims, which is where a fixed-height card is
+               # likeliest to clip. The sweep's own extra_viewports pin the same
+               # two.
+               850, 851,
+               900, 1100, 1101, 1400)
+
+# Filtered by the project's OWN supported floor, not a literal repeated here.
+# Main made 850px the minimum supported width (uilab_project.min_viewport_width)
+# and dropped everything below it from the sweep; this tool kept measuring
+# 320-790 and, once the fixture armed a TWO-banner segment, duly reported
+# "15 widths clip, declare 360px" for a band the product no longer claims.
+# Acting on that would have grown a fixed-height card by 13px to satisfy
+# widths nothing supports -- and a tool whose failures must be ignored stops
+# being read at all. If the floor moves, this moves with it.
+WIDTHS = tuple(w for w in _ALL_WIDTHS if w >= PROJECT.min_viewport_width)
 
 # `scrollHeight - clientHeight` is exactly the rule uilab's clipping probe
 # applies, and using anything else here means the tool and the gate can
@@ -57,12 +92,45 @@ TALLEST = r"""
 })()
 """
 
+# ARM_SEGMENT's card sits inside a closed `<details class="practice-index-
+# item">` (ui/components/practice.js) -- a closed <details>'s content computes
+# `display: none`, which TALLEST above already skips, so an unopened one would
+# silently drop straight out of the "worst" calculation instead of erroring.
+EXPAND_INDEX = """
+document.querySelectorAll('details.practice-index-item:not([open])')
+  .forEach((d) => { d.open = true; });
+"""
+
 
 def main() -> int:
     shortfalls: list[tuple[int, int, int]] = []
-    with serve_ui() as base, get_driver().launch() as page:
+    with serve_ui(arm_segment=ARM_SEGMENT) as base, \
+            get_driver().launch() as page:
         page.goto(f"{base}/ui/index.html")
         page.wait_for(".objective-card")
+        page.evaluate(EXPAND_INDEX)
+        # This tool's whole claim is "max across BOTH cards", and TALLEST
+        # skips display:none -- so if the armed segment ever stops producing
+        # `armed_detail`, the segment card silently drops out and it prints
+        # "Every card fits" having measured only the star. A constant in
+        # index.html now rests on this run, so a false pass is worse than a
+        # crash. Refuse loudly, the same posture _seed_target's post() takes.
+        # (Delta review, finding 3.)
+        # `return`, not a bare expression: evaluate() wraps its argument as a
+        # function BODY, so a bare one yields None and this check would crash
+        # on int(None) instead of reporting what it measured. (Same trap
+        # tests/test_fixture_reaches_the_real_page.py::count documents — it
+        # caught me twice in one sitting, which is why both now say why.)
+        reached = int(page.evaluate(
+            "return document.querySelectorAll("
+            "'.objective-card .seg-waiting').length"))
+        if reached < 1:
+            raise SystemExit(
+                "the armed-segment card never rendered (.seg-waiting absent) "
+                "-- this run would have measured the STAR card alone and "
+                "reported a clean result for a state it never reached. Check "
+                f"ui_fixture.py's FIXTURE_SEGMENT ({ARM_SEGMENT}) still arms, "
+                "and that EXPAND_INDEX still opens the practice index.")
         for width in WIDTHS:
             page.set_viewport(width, 1000)
             page.wait_ms(420)

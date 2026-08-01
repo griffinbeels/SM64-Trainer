@@ -2,8 +2,26 @@
 
 ONE registry: TRIGGERS/GUARDS drive (a) definition validation at the API
 boundary, (b) the matcher, (c) GET /api/segments/vocab that renders the
-builder GUI. Adding a trigger type = one TriggerType row here (label +
-params + the sentence template the builder renders).
+builder GUI (ui/components/segments.js builds its own editor sentence
+straight from the raw label/template vocab() ships — a second, independent
+renderer, not a gap this module needs to fill), and (d)
+card_waiting_for_sentence's read-only "waiting for" line on an armed practice
+card (spec 2026-07-28-multi-step-segments, Task 6). Adding a trigger type =
+one TriggerType row here (label + card_label + params + the sentence
+template the builder and card_waiting_for_sentence both render from). `label`
+is editor voice ("You enter level {to}") for the builder's own read-only
+preview; `card_label` is the SAME clause read as an imperative step
+("Enter {to}") for the practice card, which supplies its own "Waiting for"
+frame around it — the builder needs a sentence with a hole in it, the card
+needs a phrase with a value in it, and past experience says collapsing them
+into one string reads wrong in one of the two places every time (see
+card_waiting_for_sentence's docstring). This module used to also render an
+editor-voice sentence of its own (`waiting_for_sentence`), until Task 7
+(2026-07-28) found it had no caller left in `src/` — the builder GUI never
+called it (see (c) above) and `card_waiting_for_sentence` had fully
+superseded it for the practice card — and deleted it (YAGNI: a neutral
+clause-text renderer gets re-added WITH a caller if one ever needs it, not
+kept alive by its own tests).
 
 Matcher invariants (spec §Matcher semantics — tests are the contract):
 - closures (success/failure) process BEFORE arming; one event may close an
@@ -30,11 +48,13 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
   showing as ACTIVE SEGMENT ... Running — nothing below disarms a def whose
   player then stays put.  game_reset is exempt (ctx.level is the PRE-reset
   level until the next level_changed).
-- anchor closures are POSITION-GATED (segment swap, live report 2026-06-12).
-  Each _Arm remembers the MatchContext (level, area) where it armed — the
-  segment's start position; a co-frame establishing area_changed pins the
-  area for level_changed arms (ctx.area is stale during the level event —
-  the area detector establishes one event later on the same tick).
+- anchor closures are POSITION-GATED for _feed_strict/_feed_waypoint (segment
+  swap, live report 2026-06-12) — see the LOOSE bullet below for why
+  _feed_loose does NOT inherit the "elsewhere" half of this gate. Each _Arm
+  remembers the MatchContext (level, area) where it armed — the segment's
+  start position; a co-frame establishing area_changed pins the area for
+  level_changed arms (ctx.area is stale during the level event — the area
+  detector establishes one event later on the same tick).
   - Anchor AT the arm position: attempt BOUNDARY, not a state change — a
     real practice_reset/state_loaded closes the current attempt AND re-arms
     the same segment at the anchor frame (practice-loop continuation —
@@ -78,7 +98,14 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
   a refire whose guards FAIL leaves the existing arm untouched (the old
   start_frame keeps running).  PLAYER ACTIONS ONLY: an echo anchor matching
   an attempt_anchor start trigger neither arms nor re-arms (see load-echo
-  rule — echo invisibility)
+  rule — echo invisibility).  For a plain (waypoint-free) def this refire-
+  while-armed is otherwise SILENT (no notices — `fresh` is False, since the
+  def never left `self._armed`) EXCEPT for a plain LOOSE def, which emits the
+  ordinary segment_disarmed+segment_armed pair (live audit 2026-07-29): a
+  loose def survives everything short of death/game_reset/staleness, so it
+  is the one mode where the player can genuinely still be mid-attempt when
+  its own start condition happens again, and the restart needs to be VISIBLE
+  rather than a silent re-timing under them.
 - level_changed matching neither start nor end disarms silently (no row);
   area_changed and session_started never record rows
 - WAYPOINT-BEARING defs (SegmentDef.waypoints non-empty, spec
@@ -87,9 +114,50 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
   docstring for the full precedence): the def's own start-trigger refire is
   suppressed while armed (progress owns re-arming, not the generic re-arm
   path); a real anchor mid-sequence REWINDS progress to 0 and re-arms in
-  place (no row, unlike this chain's reset row); an off-sequence star/key
-  grab or wrong-destination level crossing silently cancels (disarm, no
-  row) instead of the plain silent level_changed disarm above
+  place, recording a reset row exactly like this chain's own (round 2, live
+  report 2026-07-30 — this used to record no row at all, the open VERIFY
+  item _feed_waypoint's own docstring named until the user settled it); an
+  off-sequence star/key grab or wrong-destination level crossing silently
+  cancels (disarm, no row) instead of the plain silent level_changed disarm
+  above
+- LOOSE defs (SegmentDef.match_mode == "loose", spec
+  2026-07-28-multi-step-segments) replace the armed branch AGAIN — regardless
+  of waypoints — with SegmentEngine._feed_loose (see its own docstring for
+  the full precedence): the player says only where a segment starts and
+  where it ends, so a star grab, a key grab, an area change and an off-route
+  level crossing all pass straight through, transparently, where the strict
+  or waypoint chains above would cancel or disarm. A real anchor (practice
+  reset/savestate load) NOT at the arm position is transparent too (fixed
+  live report 2026-07-28) — the strict/waypoint relocation disarm does not
+  apply here, because a loose route is free to cross through positions it
+  didn't start at and often must; only an anchor AT the arm position still
+  means something (a genuine retry: reset row, re-arm in place). That
+  removes every cancel rule that used to bound an arm, so every loose _Arm
+  instead carries a
+  staleness deadline (_Arm.deadline_frame, set at every arm/re-arm site by
+  the one helper _deadline_for) and the deadline is checked FIRST — ahead of
+  even the end trigger and the death/game_reset rows — because an arm that
+  has outlived its budget is presumed abandoned, and a success or failure
+  recorded through it would be a claim about a run the player walked away
+  from. The budget itself (budget_frames) is MIN_BUDGET_FRAMES, or
+  BUDGET_FACTOR times the definition's best success so far if that is
+  larger — a def with history gets a tighter window than a first-timer's.
+- EXCLUSIVE defs (SegmentDef.match_mode == "exclusive", spec
+  2026-07-28-multi-step-segments, third match_mode) share _feed_strict with
+  plain STRICT defs — same method, one extra gated branch, not a new
+  handler: a star or Bowser-key grab that isn't the def's own end trigger
+  silently cancels it (no row), exactly as a waypoint-bearing def's
+  major-action cancel already does. Everything else — relocation, echoes,
+  a real anchor at/off the arm position, death, game_reset, an off-route
+  level crossing — is identical to STRICT. This mode exists for a plain
+  two-endpoint span with no natural intermediate waypoint (e.g. "enter a
+  Bowser pipe without going for its 8-red-coin star"), where inventing a
+  fake waypoint just to reach _feed_waypoint would be a lie in the corpus.
+  A def that combines this mode WITH waypoints still routes to
+  _feed_waypoint like any other non-loose waypoint-bearing def (dispatch
+  precedence is unchanged) — _feed_waypoint already cancels on the same
+  star/key-grab rule as part of its own design, so that combination needs
+  no special case.
 - failure rows only on practice_reset/state_loaded (reset), death,
   game_reset (hard_reset); AFK closures (paused >= 150 frames) discard, and
   so do no-op closures (acted_tracking true, mario_acted false — warp/reset
@@ -98,19 +166,38 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
   SUCCESS discards the attempt (end before arm is a genuine anomaly —
   self-heal, domain rule 4), but failure closures record the row with
   rta_frames=None (game_reset's boot-range frame makes this the ONLY way
-  hard_reset rows exist).  EXCEPTION — grab closes carry Usamune's IGT: a
-  close event with an authoritative igt_frames in its payload (key_grabbed /
-  star_collected) records THAT as the time instead of the wall-frame delta,
-  so a fight segment matches Usamune's display exactly and stays pause-safe
-  (the delta is one display-tick short and counts paused frames; live report
-  2026-06-12, Bowser 3 read 0'46"23 vs Usamune 0'46"26).  The grand star
-  never fires star_collected (detectors/key.py) — key.py stamps the igt via
-  the shared clock (detectors/igt_clock.py).  Valid because every grab-closed
-  segment today arms at the level/area load where Usamune resets IGT, so its
-  igt IS the segment elapsed; a segment armed mid-level and closed on a grab
-  would record Usamune's since-load time, not the since-arm delta (none
-  exists; revisit if one is created).  igt_frames on the Attempt stays None —
-  segments remain RTA-only to the UI/PB layer; only the rta VALUE changes.
+  hard_reset rows exist).  EXCEPTION — a close event carrying Usamune's own
+  IGT records THAT as the time instead of the wall-frame delta, so the
+  segment matches Usamune's display exactly and stays pause-safe (live report
+  2026-06-12, Bowser 3 read 0'46"23 vs Usamune 0'46"26).  The events that
+  carry one are key_grabbed, star_collected and — since 2026-07-31 —
+  warp_entered, each stamped from the shared clock (detectors/igt_clock.py;
+  the grand star never fires star_collected, so key.py stamps it), plus
+  death, whose payload carries the raw counter.
+  WHY THE DELTA IS NOT THE IGT (live report 2026-07-31: BitDW "No Reds"
+  displayed 0'35"90 where Usamune showed 0'35"96, the report that put the
+  igt on warp_entered).  Two independent errors, neither a constant:
+  (a) start_frame is the frame the ANCHOR DETECTOR OBSERVED Usamune's counter
+  drop, which is the zero frame or one frame after it depending on which
+  60 Hz poll caught the 30 Hz drop; (b) the delta counts paused frames and
+  Usamune's counter does not.  Measured over 626 grab-closed, anchor-armed
+  star attempts in the user's own journal — the one shape where the SAME
+  attempt records both numbers — Usamune's display minus the delta was +1 on
+  57%, +2 on 21%, -1 on 10%, 0 on 2%, with a long negative tail wherever the
+  player paused.  So `rta` and `igt` never coincided; they agreed within a
+  frame or two whenever nobody paused, which reads the same until it doesn't.
+  WHEN THE PAYLOAD IGT IS THE SEGMENT'S TIME: only when Usamune's counter was
+  zeroed on the very frame the segment armed AND has not been zeroed since —
+  `SegmentEngine._last_igt_zero_frame == arm.start_frame`, checked in _close
+  rather than assumed.  This used to be an assumption ("every grab-closed
+  segment today arms at the level/area load where Usamune resets IGT... none
+  exists; revisit if one is created"), and it was already false in one place:
+  a def spanning a DOOR (seg:100c->exit:bbh) crosses an IGT reset the matcher
+  deliberately ignores as an echo, and would have banked the since-the-door
+  time as its own.  A def armed mid-level and closed on a grab is the other
+  shape.  Both now fall back to the delta, which at least spans the right two
+  moments.  igt_frames on the Attempt stays None — segments remain RTA-only
+  to the UI/PB layer; only the rta VALUE changes.
 - load-echo rule: Usamune resets IGT on every level/area load, so the
   anchor detector emits a synthetic practice_reset on the same global-timer
   frame as the triggering transition.  Echo classification uses ORDERED shapes
@@ -198,6 +285,7 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
   negative-rta self-heal covers the time-jump consequences.  Acceptable: door
   echoes are constant, this edge is rare.
 """
+import re
 from dataclasses import dataclass, field, replace
 from typing import Callable
 
@@ -236,6 +324,62 @@ _DIALOG_ECHO_WINDOW = 30  # frames; the intro IGT re-init lands +1 frame after
 # reason. The intro spawn is fresh-file-only; no human meaningfully L-resets
 # within a second of a textbox, so an eaten borderline reset (segment stays
 # armed) is cheaper than the false ~1-frame reset on every textbox.
+
+# Staleness budget for a LOOSE arm (spec 2026-07-28-multi-step-segments).
+# Loose matching removes every cancel rule that used to bound an arm, so
+# without a deadline a segment the player abandoned reads "Running" until the
+# next F1 — the exact symptom of the 2026-07-24 live report (WF -> SSL stuck
+# running in an unrelated course), reintroduced by design rather than by bug.
+#
+# MEASURED 2026-07-28 (Task 9, tools/measure_budget.py) against the real
+# journal: 18,656 events, 2026-06-11 -> 2026-07-28, all 67 seeded definitions
+# replayed with match_mode forced "loose" (the mode the budget applies to —
+# the stored definitions keep their own authored mode). 106 timed segment
+# completions (105 with each def's own stored mode; the +1 is just the
+# handful of plain movements this corpus happens to have, not a verdict on
+# the feature — the movements that actually NEED loose matching, e.g. Bowser
+# 2 -> BitS, 100-coin -> exit star, Bowser reds -> pipe, don't exist in the
+# corpus until a later task). Distribution: min 219, median 1188, p95 2733,
+# MAX 4244 frames (141.5 s).
+#
+# MIN_BUDGET_FRAMES = 5400 is the Task 3 starting guess, CONFIRMED rather
+# than replaced: the grid below (min_frames, expired-completion-count at
+# BUDGET_FACTOR in {3,4,6,8}) shows 3600 still clips 3-4 real completions,
+# while 4500 is the first round value to clip zero — bisection puts the
+# exact zero-margin boundary at 4245 (one frame past the observed max). That
+# boundary is only 6% above 4244, i.e. no headroom for ordinary run-to-run
+# variance on the SAME 16 defs that have any history at all, let alone the
+# longer loose-native movements a later task is about to seed. 5400 keeps a
+# 27% margin over the observed max and is the smaller of the two once
+# "margin" is taken seriously, so it survives unchanged:
+#   1800  ->  5-8 expired   2700  ->  3-4 expired   3600  ->  3-4 expired
+#   4500  ->  0 expired     5400  ->  0 expired      7200  ->  0 expired
+#
+# BUDGET_FACTOR = 6 is UNFALSIFIED at the floor we ship, not confirmed the
+# same way as MIN_BUDGET_FRAMES above — say so plainly. Only 16 of 67
+# definitions have even one timed success (11 have five or more); the other
+# 51 have no history, so BUDGET_FACTOR never applies to them at all.
+#
+# Below 4500, the four tested factor values (3/4/6/8) give different expired
+# counts — see the grid above, 3 to 8 expired depending on the pair. At 4500
+# and above, every one of the four gives 0 expired. 6 ships because nothing
+# AT THE SHIPPED FLOOR (5400) contradicts it, not because this journal chose
+# it over 3 or 8 — every tested factor already reads 0 there. Re-run
+# tools/measure_budget.py once the loose-native movements above exist and
+# have their own history; a longer typical completion is what would let the
+# factor discriminate again at the values we ship.
+MIN_BUDGET_FRAMES = 5400   # 3 minutes at 30 fps; the floor for a def with no history
+BUDGET_FACTOR = 6          # multiple of the definition's best success so far
+
+
+def budget_frames(best_success_frames: int | None) -> int:
+    """How long a loose arm may run before it is presumed abandoned. Floored
+    so a definition with no history — or a very fast one — still gets a
+    humane window."""
+    if not best_success_frames:
+        return MIN_BUDGET_FRAMES
+    return max(MIN_BUDGET_FRAMES, BUDGET_FACTOR * best_success_frames)
+
 
 # Segment attempt ids live in a disjoint namespace from star attempt ids
 # (which are raw journal ids): id = arm-event journal id + OFFSET * def_id.
@@ -290,15 +434,53 @@ class SegmentDef:
     # here — the matcher is strategy-blind and stays that way. Defaulted for
     # the same reason waypoints is.
     default_strat: str | None = None
+    # Which armed-branch matcher runs for this definition (spec
+    # 2026-07-28-multi-step-segments). Defaulted to "strict" for the same
+    # reason waypoints and default_strat are: a non-default field would
+    # TypeError every existing SegmentDef(...) construction that omits it, and
+    # "strict" is what every pre-migration row means. New rows are created
+    # "loose" by db.insert_segment_def — an authoring default, not a claim
+    # about existing data.
+    match_mode: str = "strict"
 
 
 @dataclass(frozen=True)
 class TriggerType:
     key: str
     label: str
+    # Card-facing phrasing (spec 2026-07-28-multi-step-segments, Task 6): the
+    # SAME template BY DEFAULT, read as an imperative step ("Enter" / "Exit" /
+    # "Grab the key") instead of editor voice ("You enter level" / "You exit
+    # level" / "You grab a Bowser key / grand star") -- see
+    # card_waiting_for_sentence. A type overrides `card_template` below only
+    # when the editor's own template genuinely reads wrong on a card (fix
+    # round 1, 2026-07-28: star_grabbed's "in {course}, star {star}" produced
+    # "Grab the star in Dire, Dire Docks, star Board Bowser's Sub" -- visibly
+    # a template artifact).
+    card_label: str
     params: dict  # name -> {"kind": "level"|"area"|"course"|"star"|"int", "required": bool}
     template: str  # sentence after the type label: "{to} coming from {from}"
     match: Callable[[dict, object, MatchContext], bool]
+    # None = card rendering reuses `template` verbatim (every type but
+    # star_grabbed today). Set only when the shared template's WORD ORDER or
+    # phrasing is wrong for the imperative card voice -- this is still the
+    # SAME registry doing the SAME job one field further, not a second
+    # renderer: it goes through the identical `_render_clause` tokenizer and
+    # `_resolve_param` lookups, just against a different template string.
+    card_template: str | None = None
+    # Per-param FALLBACK TEXT for the card template only, keyed by param
+    # name -- e.g. {"star": "a star"}. The editor's pruning rule drops a
+    # param's whole literal+placeholder segment when its clause value is
+    # unset (an optional `from` renders nothing rather than "coming from ");
+    # that is right for a connector clause but wrong for star_grabbed's
+    # `star` on a card, where dropping it silently would leave "Grab in
+    # Bowser in the Fire Sea" with no object. A param listed here renders
+    # UNCONDITIONALLY on the card, substituting this text when unset, so
+    # "Grab a star in <course>" is what a course-only clause reads instead of
+    # vanishing the word "star" entirely. Never serialized to vocab() (the
+    # builder's own clause form has no fallback-text concept, only real
+    # dropdown values) -- read only by `_render_clause` in card mode.
+    card_fallbacks: dict = field(default_factory=dict)
 
 
 def _real_edge(ev) -> bool:
@@ -344,7 +526,7 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
     # to_subarea match into _pending, arming once the settled co-frame area
     # matches (SegmentEngine._pending). to_subarea is therefore honoured only on
     # START triggers; on an END trigger the destination subarea is ignored.
-    TriggerType("level_enter", "You enter level",
+    TriggerType("level_enter", "You enter level", "Enter",
                 {"to": {"kind": "level", "required": True,
                         "flow": _DEST_FLOW},
                  "to_subarea": {"kind": "subarea", "required": False,
@@ -361,7 +543,7 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 and (p.get("from") is None or ev.payload["from"] == p["from"])
                 and (p.get("from_subarea") is None
                      or ev.payload.get("from_area") == p["from_subarea"])),
-    TriggerType("level_exit", "You exit level",
+    TriggerType("level_exit", "You exit level", "Exit",
                 {"from": {"kind": "level", "required": True,
                           "flow": _SOURCE_FLOW},
                  "from_subarea": {"kind": "subarea", "required": False,
@@ -391,7 +573,7 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
     # exactly like a genuine lobby walk — from_transient (detectors/area.py)
     # is the discriminator. Legacy events without the key conservatively
     # match (None = unknown -> match, the codebase-wide convention).
-    TriggerType("area_enter", "You enter area",
+    TriggerType("area_enter", "You enter area", "Enter",
                 {"level": {"kind": "level", "required": True,
                            "enum": list(CASTLE_REGION_LEVELS)},
                  "area": {"kind": "subarea", "required": False,
@@ -405,12 +587,13 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 and (p.get("from") is None
                      or (ev.payload["from"] == p["from"]
                          and not ev.payload.get("from_transient", False)))),
-    TriggerType("warp_entered", "You enter a warp/pipe",
+    TriggerType("warp_entered", "You enter a warp/pipe", "Enter the pipe",
                 {"level": {"kind": "level", "required": True}},
                 "in {level}",
                 lambda p, ev, ctx: ev.type == "warp_entered"
                 and ev.payload["level"] == p["level"]),
     TriggerType("key_grabbed", "You grab a Bowser key / grand star",
+                "Grab the key",
                 # key_grabbed claims all three fight-ending grabs: the Bowser
                 # 1/2 keys AND the Bowser 3 grand star (which='grand', level
                 # 34) — the grand star never fires star_collected, so a
@@ -421,7 +604,7 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 lambda p, ev, ctx: ev.type == "key_grabbed"
                 and (p.get("level") is None
                      or ev.payload["level"] == p["level"])),
-    TriggerType("star_grabbed", "You grab a star",
+    TriggerType("star_grabbed", "You grab a star", "Grab",
                 {"course": {"kind": "course", "required": False},
                  "star": {"kind": "star", "required": False}},
                 "in {course}, star {star}",
@@ -429,14 +612,24 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 and (p.get("course") is None
                      or ev.payload["course_id"] == p["course"])
                 and (p.get("star") is None
-                     or ev.payload["star_id"] == p["star"])),
-    TriggerType("spawned", "You spawn into the game",
+                     or ev.payload["star_id"] == p["star"]),
+                # Card template leads with the STAR, editor leads with the
+                # course -- "Grab Board Bowser's Sub in Dire, Dire Docks"
+                # reads right; "Grab in Dire, Dire Docks, star Board
+                # Bowser's Sub" is the template artifact this replaces (fix
+                # round 1, 2026-07-28). `star`'s fallback keeps the object of
+                # the sentence present even when the clause names a course
+                # but no specific star ("Grab a star in <course>").
+                card_template="{star} in {course}",
+                card_fallbacks={"star": "a star"}),
+    TriggerType("spawned", "You spawn into the game", "Spawn",
                 {"level": {"kind": "level", "required": False}},
                 "in {level}",
                 lambda p, ev, ctx: ev.type == "spawned"
                 and (p.get("level") is None
                      or ev.payload["level"] == p["level"])),
     TriggerType("attempt_anchor", "Practice reset / savestate load",
+                "Reset or reload",
                 {"level": {"kind": "level", "required": True},
                  "area": {"kind": "subarea", "required": False,
                           "only_when": _only_castle("level")}},
@@ -456,9 +649,153 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 and ctx.level == p["level"]
                 and (p.get("area") is None or ctx.area == p["area"])),
     TriggerType("reset_game", "The game resets (F1 / console reset)",
+                "Reset the game",
                 {}, "on F1 or console reset",
                 lambda p, ev, ctx: ev.type == "game_reset"),
 ]}
+
+
+def _resolve_param(kind: str, value, clause: dict) -> str:
+    """Display text for one clause param, by the vocabulary's own KIND — the
+    four TRIGGERS params ever carry. `star` also reads the clause's `course`
+    (a star's name is meaningless without one; a course-less star clause
+    falls back to the generic "Star N" addresses.star_name itself uses for
+    an unrecognised course)."""
+    if kind == "level":
+        return LEVEL_NAMES.get(value, f"Level {value}")
+    if kind == "subarea":
+        return CASTLE_AREA_NAMES.get(value, f"Area {value}")
+    if kind == "course":
+        return COURSE_NAMES.get(value, f"Course {value}")
+    if kind == "star":
+        course = clause.get("course")
+        return star_name(course, value) if course is not None \
+            else f"Star {value + 1}"
+    return str(value)
+
+
+_TEMPLATE_TOKENS = re.compile(r"(\{\w+\})")
+
+
+def _render_clause(clause: dict) -> str:
+    """One trigger clause -> plain English for the practice card, through
+    TRIGGERS[type].card_label + .card_template (spec 2026-07-28-multi-step-
+    segments; card_waiting_for_sentence below is the only caller). Until
+    Task 7 (2026-07-28) this also served an editor-voice sibling,
+    waiting_for_sentence, through a pair of (label_attr, template_attr)
+    parameters selecting which fields to read — deleted, along with that
+    function, once it lost its last caller in `src/` (YAGNI: re-add the
+    parameters WITH a second caller if editor voice is ever needed here
+    again, not speculatively). `card_template` is None for every type but
+    star_grabbed today, so `spec.card_template or spec.template` is a
+    genuine no-op there — reusing the editor's template IS the default.
+
+    A param the clause leaves unset drops its own SEGMENT of the template —
+    the literal words that introduce it, together with the placeholder —
+    rather than leaving a dangling connector: a level_enter clause with no
+    `from` renders "You enter level Castle Inside", never "...coming from ".
+    Done by pairing each placeholder with the literal text immediately
+    BEFORE it (that is what "introduces" it, e.g. "coming from {from}");
+    text after the LAST placeholder is unconditional trailing punctuation.
+    A required param (the common case) is always present, so this only ever
+    prunes an OPTIONAL one the author left blank ("any level" etc).
+
+    A param named in `card_fallbacks` (fix round 1, 2026-07-28) is the ONE
+    exception to that pruning: its segment renders unconditionally, using
+    the fallback text in place of a resolved value when the clause leaves
+    it unset. star_grabbed's `star` is the one param that needs this —
+    pruning it would leave a course-only card clause reading "Grab in
+    Bowser in the Fire Sea" with no object.
+
+    A placeholder naming a param outside its own trigger's `params` (an
+    authoring bug in TRIGGERS itself) renders the brace literally instead of
+    raising — test_every_trigger_template_resolves_cleanly is the guard that
+    catches this at test time, on the day such a type is added, rather than
+    a user seeing the brace.
+
+    This tokenizer is deliberately independent of
+    ui/components/segments.js's, which builds its own editor sentence
+    straight from the label/template vocab() ships raw — see
+    card_waiting_for_sentence's docstring for why that is not a second
+    door."""
+    spec = TRIGGERS[clause["type"]]
+    template = spec.card_template or spec.template
+    tokens = _TEMPLATE_TOKENS.split(template)
+    parts: list[str] = []
+    i = 0
+    while i + 1 < len(tokens):
+        literal_before, placeholder = tokens[i], tokens[i + 1]
+        name = placeholder[1:-1]
+        meta = spec.params.get(name)
+        if meta is None:
+            parts.append(literal_before)
+            parts.append(placeholder)
+        else:
+            value = clause.get(name)
+            if value is not None:
+                parts.append(literal_before)
+                parts.append(_resolve_param(meta["kind"], value, clause))
+            elif name in spec.card_fallbacks:
+                parts.append(literal_before)
+                parts.append(spec.card_fallbacks[name])
+        i += 2
+    parts.append(tokens[-1])   # trailing literal after the last placeholder
+    return f"{spec.card_label} {''.join(parts)}".strip()
+
+
+def clause_sentence(clause: dict) -> str:
+    """Public entry point onto `_render_clause`, for callers OUTSIDE
+    `tracking/` (Task 13's synthesize-preview API endpoint, behind the
+    "record what I just did" timeline picker). Same card_label/card_template
+    rendering `card_waiting_for_sentence` uses for an armed segment's
+    "waiting for" line, so a synthesized-but-unsaved clause reads in the
+    IDENTICAL voice a saved one would -- a one-line alias, not a second
+    template walk."""
+    return _render_clause(clause)
+
+
+def card_waiting_for_sentence(d: SegmentDef, progress: int) -> str:
+    """Plain language for what an ARMED definition is waiting for next (spec
+    2026-07-28-multi-step-segments, Task 6): its next unconsumed waypoint
+    (`d.waypoints[progress]`), or its end trigger once every waypoint is
+    consumed (`progress >= len(d.waypoints)`), rendered through
+    TRIGGERS[type].card_label + .card_template as an imperative STEP —
+    "Enter Shifting Sand Land", never editor-voice "You enter level
+    Shifting Sand Land". A clause-set is an ANY-OF list (see `_matches`) —
+    its members join with " or ".
+
+    Editor voice reads wrong under a "Waiting for" label: a second-person
+    clause written to stand alone as a sentence ("You enter level X") reads
+    as "Waiting for You enter level X", because that string was written to
+    stand alone, not to fill a hole in a shorter one. The card supplies its
+    own frame; this only needs to be the imperative step that goes in the
+    hole — a different artifact from a sentence with a hole in it, not a
+    shorter version of one. (This function had an editor-voice twin,
+    waiting_for_sentence, deleted Task 7/2026-07-28 once it lost its last
+    caller — see _render_clause's docstring.)
+
+    Read-only sibling of ui/components/segments.js's ClauseRow, which
+    tokenizes the SAME TRIGGERS[type].template into an editable FORM
+    (dropdowns interleaved with muted words, entangled with
+    setParam/onChange/visible()/allowedIds/vocab.connections). DESIGN
+    QUESTION settled before waiting_for_sentence was first written
+    (progress.md, Task 4): that is a different artifact from a read-only
+    "waiting for X" string, not a second implementation of one thing to
+    unify with. Both consumers read the ONE TRIGGERS registry and the same
+    vocab enums (generated from Python), so neither restates the template —
+    the JS side edits a clause, this side describes one. Do not "helpfully"
+    merge them.
+
+    What IS shared with the editor voice is the template/param-pruning
+    machinery in _render_clause, since that is the same mechanical
+    substitution regardless of voice — `card_template` (fix round 1,
+    2026-07-28) is still that SAME machinery, reading a different template
+    string for the one type (star_grabbed) whose shared template read as a
+    visible artifact on a card ("Grab the star in Dire, Dire Docks, star
+    Board Bowser's Sub")."""
+    clause_set = (d.waypoints[progress] if progress < len(d.waypoints)
+                 else d.end_triggers)
+    return " or ".join(_render_clause(clause) for clause in clause_set)
 
 
 def arm_level(trig: dict) -> int | None:
@@ -619,7 +956,15 @@ def fires_from(trig: dict, level: int) -> bool:
         # single exclusion is what stops a fabricated WF -> CCM warp arming
         # "WF -> CCM" inside CCM, where it could only ever hang armed.
         source = trig.get("from")
-        return level == source if source is not None else level != trig["to"]
+        # `.get("to")`, not `trig["to"]`: this was the last bare subscript in
+        # the function, and it was safe only while every caller fed VALIDATED
+        # definitions. Task 16's lint endpoint is the first that feeds
+        # in-progress editor state, where a just-added clause is bare
+        # `{"type": "level_enter"}` -- and this raised KeyError -> 500 while
+        # the editor rendered the error beside Save. An unknown destination
+        # excludes nothing, so `level != None` is True: fires from anywhere,
+        # which is this module's own unknown-means-yes convention.
+        return level == source if source is not None else level != trig.get("to")
     if kind == "star_grabbed":
         # A star grab happens in its course's level; course 0 (the castle
         # secret stars) and an unscoped clause name no level of their own.
@@ -633,7 +978,7 @@ def fires_from(trig: dict, level: int) -> bool:
 def _exit_landing_is_impossible(start_clause: dict, level: int) -> bool:
     """A course exit lands in the castle — did this one land somewhere else?
 
-    50 of the 51 seeded `level_exit` clauses omit `to`, so the DEFINITION says
+    52 of the 53 seeded `level_exit` clauses omit `to`, so the DEFINITION says
     nothing about where the player ends up and the emulator decides. The world
     is hub-and-spoke: leaving anything but a castle level (6/16/26) puts Mario
     in one, so an arm on such a clause that lands elsewhere is a menu warp and
@@ -708,7 +1053,7 @@ def can_run_from(d, start_clause: dict, level: int | None) -> bool:
 #
 # NB this is NOT arm_level's mapping: a level_exit ARMS at its destination but
 # ORIGINATES at its source. "SSL -> LLL" is filed under SSL because that is
-# what the rule keys on (50 of the 51 seeded exits omit `to`; the one that
+# what the rule keys on (52 of the 53 seeded exits omit `to`; the one that
 # carries it, MIPS Clip, is still filed by its source, which is the point).
 _ORIGIN_PARAMS: dict[str, tuple[str, str | None]] = {
     "level_exit": ("from", "from_subarea"),
@@ -838,6 +1183,86 @@ def segment_origin(segment_id: int, start_triggers: list,
     """
     override = (overrides or {}).get(str(segment_id))
     return override if override else start_origin(start_triggers)
+
+
+def hundred_coin_entity(start_triggers: list,
+                       waypoints: list) -> tuple[int, int] | None:
+    """(course_id, 6) when a definition's own sequence -- start_triggers or
+    any waypoint's clause-set -- includes grabbing a main course's 100-coin
+    star, else None (spec 2026-07-28-multi-step-segments, "the 100-coin star
+    IS the segment"). THE resolver for "which entity does this definition's
+    completed attempt belong to" -- projection.py reattributes a closed
+    HUNDRED_COIN_EXIT-family attempt to this star (course_id/star_id,
+    segment_id cleared) instead of the segment itself, and views.py uses the
+    same answer to keep that family off the segment sections/segment_
+    targets/picker union entirely: the star IS the practiced thing now, the
+    segment is only its timing engine.
+
+    Takes raw trigger LISTS, not a whole SegmentDef -- same convention as its
+    neighbours `start_origin`/`segment_origin` above, and the reason: a raw
+    `/api/segments` row (a dict, not a SegmentDef) needs the same answer for
+    the picker's exclusion (views.stamp_origins), so this must not require
+    constructing a dataclass a caller may not have.
+
+    Same structural clause-search tracking/service.py::_hundred_coin_redirect
+    used for the star->segment TARGET redirect this change retires, run in
+    reverse (segment -> its star, not star -> its segment): identity, not
+    ingredients, and deliberately NOT a category/seed_key lookup -- Task 20's
+    HUNDRED_COIN_EXIT category and seed_key naming are corpus-authoring
+    facts, and a def a user has reshaped, renamed, or built from scratch
+    keeps matching by what it now DOES. Only star_id 6 counts (addresses.py's
+    own "100 Coins is star 6 on every main course" rule) -- stars 0-5 are
+    untouched by this family end to end."""
+    clauses = list(start_triggers)
+    for waypoint in waypoints:
+        clauses.extend(waypoint)
+    for clause in clauses:
+        if clause.get("type") == "star_grabbed" and clause.get("star") == 6:
+            return clause.get("course"), 6
+    return None
+
+
+def arms_ambiently(start_triggers: list) -> bool:
+    """True when a definition arms merely by the player being present in a
+    star-bearing stage -- entering it, or already standing in it via an
+    `attempt_anchor` -- rather than by a deliberate action (leaving
+    somewhere, grabbing a star, a menu reset). THE resolver for "does an
+    armed instance of this def mean intent, or is it an ambient side
+    effect of standing where the player already is" -- the property
+    practice.js's pinned-card gate needs, and the property the retired
+    `isAmbientlyArmed` (live report 2026-07-30) approximated by checking
+    `category === "100 Coin Exit"`, which cannot see the OTHER two families
+    sharing the identical shape (spec 2026-07-28-multi-step-segments): a
+    Bowser stage's `seg:reds->pipe:<abbrev>` and the legacy exclusive
+    `seg:<abbrev>-pipe` pipe-entry trio BOTH arm via the same
+    `[level_enter, attempt_anchor]` idiom into their own course and BOTH
+    exhibit the identical bug (confirmed by rendering: entering BitDW with
+    nothing targeted pins "BitDW -- 8 Red Coins -> Pipe"), yet neither
+    carries the "100 Coin Exit" category -- `seg:reds->pipe:*`'s own
+    category is `Castle Movement`, same as an ordinary movement. Measured
+    against the real bundled corpus rather than assumed: exactly 21 of 84
+    seeded defs match (the 15 100-coin exits + 3 reds->pipe + 3 legacy
+    pipe-entry), and NEITHER LBLJ (arms entering the CASTLE interior, not a
+    course -- `course_for_level` answers None there) NOR any of the 56
+    route-scoped movements (none starts on `level_enter`/`attempt_anchor`
+    at all -- they start on `level_exit`/`star_grabbed`, per
+    `tools/build_defaults_seed.py::_movement_row`) NOR the Bowser fights
+    (arm the same way, but auto-select on entry BY DESIGN -- stagebanner.js's
+    ArenaRow -- so an ambient pin is not a bug there, it is the point) is
+    flagged. The 100-coin family no longer HAS a segment section to gate
+    (views.py excludes it entirely -- its star section needs no such flag),
+    so this predicate is only ever True on a SECTION for the remaining six."""
+    for clause in start_triggers:
+        kind = clause.get("type")
+        if kind == "level_enter":
+            level = clause.get("to")
+        elif kind == "attempt_anchor":
+            level = clause.get("level")
+        else:
+            continue
+        if level is not None and COURSE_BY_LEVEL.get(level) is not None:
+            return True
+    return False
 
 
 def origin_view(node: str | None) -> dict:
@@ -1050,6 +1475,69 @@ GUARDS: dict[str, GuardType] = {g.key: g for g in [
               {}, "", lambda p, ctx: True, phase="arm"),
 ]}
 
+# How forgiving an armed definition is (spec 2026-07-28-multi-step-segments).
+# ONE registry, same role TRIGGERS/GUARDS play: it drives validate_definition,
+# the editor control through vocab(), AND `SegmentEngine.feed`'s armed-branch
+# dispatch — `_feed_strict` / `_feed_waypoint` / `_feed_loose`, selected by
+# this key. A third mode ("exclusive", below) turned out to be one row here
+# plus one GATED BRANCH inside an existing handler, not a new function —
+# `_feed_strict` already ran unconditionally for any non-loose, waypoint-free
+# def, so "exclusive" reaches it through the same `else` in feed()'s dispatch
+# with zero dispatch-table changes; only a def that ALSO carries waypoints
+# needed a look, and `_feed_waypoint` already cancels on a star/key grab as
+# part of its own design, so that combination needed nothing either. A fourth
+# mode may not be this cheap — check whether the shared handler it would ride
+# already does what's needed before writing a new one.
+#
+# This comment said "does not yet change any matching behaviour" until
+# 2026-07-29, describing the one task in the spec where that was true. By then
+# loose matching WAS the branch's headline feature and 74 of 84 seeded
+# definitions shipped with it. Five tasks and two controller commits touched
+# this file after the dispatch landed and none of them corrected the sentence,
+# which is how a future session reads live machinery as inert plumbing and
+# deletes it.
+MATCH_MODES = {
+    "loose": {
+        "key": "loose",
+        "label": "Loose — ends only where I said",
+        "description": ("Stays armed through star grabs, key grabs and level "
+                        "changes until the end trigger fires. Use this for "
+                        "anything that crosses courses or takes several "
+                        "steps."),
+    },
+    "strict": {
+        "key": "strict",
+        "label": "Strict — cancels if I go off-route",
+        # The old text said "use this when a stray star grab means the attempt
+        # is over", which was never true of a plain two-point strict def --
+        # `_feed_strict` has no star/key branch at all, so it stays armed
+        # through one (pinned by test_strict_survives_a_star_grab_that_would_
+        # cancel_an_exclusive_def). It IS true of a strict def carrying
+        # waypoints, which runs `_feed_waypoint` and cancels on a major action.
+        # Harmless prose until 2026-07-29, actively misleading after: it
+        # described Exclusive's whole purpose while sitting on Strict, in a
+        # control the user reads to choose between the two.
+        "description": ("Cancels the moment you go off-route — a level change "
+                        "that is not the next expected step, or leaving the "
+                        "area it armed in. A multi-step segment also cancels "
+                        "on a stray star or key grab; a plain two-point one "
+                        "stays armed through those (pick Exclusive if it "
+                        "should not)."),
+    },
+    "exclusive": {
+        "key": "exclusive",
+        "label": "Exclusive — cancels if I grab a star or key",
+        "description": ("Behaves exactly like Strict, but also cancels the "
+                        "instant I grab a star or Bowser key that isn't this "
+                        "segment's own end trigger — dying or leaving the "
+                        "route still ends the attempt the same way Strict "
+                        "does. Use this for a segment that only counts if "
+                        "grabbing something else along the way means you "
+                        "weren't really doing it — like entering a Bowser "
+                        "pipe without going for its 8-red-coin star."),
+    },
+}
+
 
 def _check_clause(clause: dict, registry: dict, what: str) -> None:
     if not isinstance(clause, dict):
@@ -1139,6 +1627,11 @@ def validate_definition(d: dict) -> None:
         # strategy" everywhere while still suppressing the blank option in
         # the picker, leaving no way to express either.
         raise ValueError("default_strat must be a non-empty string or absent")
+    mode = d.get("match_mode", "strict")
+    if mode not in MATCH_MODES:
+        raise ValueError(
+            f"unknown match_mode {mode!r}; expected one of "
+            f"{sorted(MATCH_MODES)}")
     guards = d.get("guards") or []
     if not isinstance(guards, list):
         raise ValueError("guards must be a list")
@@ -1169,6 +1662,16 @@ def vocab() -> dict:
         "guards": [{"key": g.key, "label": g.label, "params": g.params,
                     "template": g.template, "phase": g.phase}
                    for g in GUARDS.values()],
+        # Ordered for the editor control (spec 2026-07-28-multi-step-segments):
+        # loose first — it is the default and the one we want read first, and
+        # a new definition in the builder seeds match_mode from THIS list's
+        # position 0 (ui/components/segments.js), not from any dict order —
+        # exclusive is appended last, deliberately, rather than inserted
+        # before strict: it's strict PLUS one more cancel rule (a star/key
+        # grab), the most specialized of the three, so it reads last and
+        # position 0 stays loose.
+        "match_modes": [MATCH_MODES["loose"], MATCH_MODES["strict"],
+                        MATCH_MODES["exclusive"]],
         "levels": {str(k): v for k, v in sorted(LEVEL_NAMES.items())},
         "castle_areas": {str(k): v for k, v in CASTLE_AREA_NAMES.items()},
         "courses": {str(k): v for k, v in COURSE_NAMES.items()},
@@ -1199,6 +1702,302 @@ def vocab() -> dict:
     }
 
 
+# --- Split & merge: two pure, non-destructive authoring operations --------
+# (spec 2026-07-28-multi-step-segments, Task 17; user ask: "in the editor,
+# it should really just be broken down into the two splits we would expect
+# here... I guess this is a valid option and way to do it and should be
+# supported (any combination like this)" -- WF -> SSL should be expressible
+# either as one definition or as WF -> Basement + Basement -> SSL.)
+#
+# Both return plain dicts shaped for tracking/service.py's create_segment
+# (a later task wires the API/UI on top of these; nothing here touches a db
+# row or a route). NEITHER mutates its inputs, and NEITHER is destructive:
+# the original passed to split_definition keeps existing, unedited --
+# definitions arm in PARALLEL (SegmentEngine.feed loops every enabled def
+# independently, each with its own _Arm), so a whole movement and its two
+# halves can all be armed on the same play and all record their own
+# attempt. That is the direct answer to "either one split or a series of
+# steps": both, at once, with nothing to migrate and no history orphaned by
+# the edit.
+def split_definition(d: SegmentDef, mid: list[dict],
+                     names: tuple[str, str]) -> tuple[dict, dict]:
+    """Break `d` into two chained definitions meeting at `mid` -- an any-of
+    clause-set the caller supplies as the shared boundary (typically one of
+    `d.waypoints`' own steps, promoted to a full stop; e.g. splitting WF ->
+    SSL at its one waypoint, "enter the Castle Inside basement", produces
+    WF -> Basement and Basement -> SSL).
+
+        first  = d.start_triggers -> mid
+        second = mid              -> d.end_triggers
+
+    Both halves ship `waypoints=[]`: every waypoint-bearing definition
+    shipped today carries exactly ONE waypoint, which IS the split point, so
+    consuming it into the new shared boundary is the whole operation (the
+    seeded corpus is 83 defs with none and 1 with one).
+
+    A def carrying SEVERAL waypoints, split at just one of them, is refused
+    (`ValueError`) rather than served -- generalizing it now would be
+    guessing which side each survivor belongs on, but returning halves with
+    the others quietly missing is silent data loss, and nothing caps the
+    count: `validate_definition` accepts any-length waypoint lists, so a
+    user-authored definition really can reach here. Refusing keeps the YAGNI
+    without making the caller pay for it in lost clauses.
+
+    `match_mode` is INHERITED from `d` for both halves, not forced to
+    "loose": flattening away the split's one waypoint says nothing by
+    itself about how tolerant either half should be of an off-route event --
+    a strict `d` split into two plain 2-endpoint defs just runs
+    SegmentEngine._feed_strict for each half, exactly the handler a plain
+    strict def with no waypoints has always run, so this is a shape
+    degradation, not a silent semantics change the author never asked for.
+
+    Neither half carries a `seed_key` -- there is nothing TO inherit
+    (`SegmentDef` itself has no such field; only the raw db row dict does),
+    which is also the right answer: a definition derived from a seeded one
+    is not that seeded row, and a `seed_key` surviving into it would make
+    `reconcile_defaults` overwrite it at the next startup
+    (tracking/defaults.py).
+
+    guards/default_strat/enabled are inherited unchanged onto both halves --
+    a time guard on the original describes the WHOLE movement's duration and
+    so is now looser than either half strictly needs, but never wrong in a
+    way that could reject a valid completion (a half's rta can only be
+    SHORTER than the whole's), unlike merge_definitions below, where keeping
+    either input's bound verbatim would misrepresent the combined span in
+    the harmful direction (see its own docstring).
+
+    Refuses (`ValueError`) rather than warns when a produced half comes out
+    UNFIREABLE -- reusing `tracking.lint.lint_definition`'s own "unfireable"
+    rule (never reimplementing the world-topology check it owns) rather than
+    lint's advisory RUNTIME posture. A saved definition must keep matching
+    whatever a Usamune warp menu invents forever, which is why a lint
+    finding never blocks a MATCH -- but this runs at author time, before
+    anything is saved, "unfireable" is lint's own "error" severity ("the
+    definition CANNOT work"), and merge_definitions below takes the same
+    posture for a pair that doesn't meet: a pure constructor should not hand
+    back data it already knows is dead on arrival. Checked on BOTH halves,
+    not just the one the live report happened to name -- either side of an
+    arbitrary split point can collide with its own next required step.
+    """
+    from sm64_events.tracking.lint import lint_definition  # cycle-free at
+    # call time -- lint.py imports THIS module at its own top level, so the
+    # reverse import must stay deferred to the function body (same trick
+    # feed() uses for tracking.projection.Attempt, a few hundred lines down).
+
+    if len(d.waypoints or []) > 1:
+        raise ValueError(
+            f"cannot split {d.name!r}: it carries {len(d.waypoints)} "
+            "waypoints, and this operation folds ALL of them into the one "
+            "shared boundary `mid` -- the rest would be dropped silently. "
+            "Nothing caps the count (validate_definition accepts any-length "
+            "waypoint lists), so a user-authored definition reaches here even "
+            "though the seeded corpus is 83 defs with none and 1 with one. "
+            "Refusing beats guessing which side each surviving waypoint "
+            "belongs on; implement that when a real definition needs it.")
+
+    mid_clauses = list(mid)
+    first_name, second_name = names
+    first = {
+        "name": first_name,
+        "enabled": d.enabled,
+        "start_triggers": list(d.start_triggers),
+        "end_triggers": list(mid_clauses),
+        "waypoints": [],
+        "guards": list(d.guards),
+        "default_strat": d.default_strat,
+        "match_mode": d.match_mode,
+        "seed_key": None,
+    }
+    second = {
+        "name": second_name,
+        "enabled": d.enabled,
+        "start_triggers": list(mid_clauses),
+        "end_triggers": list(d.end_triggers),
+        "waypoints": [],
+        "guards": list(d.guards),
+        "default_strat": d.default_strat,
+        "match_mode": d.match_mode,
+        "seed_key": None,
+    }
+    for half in (first, second):
+        probe = SegmentDef(id=-1, name=half["name"], enabled=half["enabled"],
+                           start_triggers=half["start_triggers"],
+                           end_triggers=half["end_triggers"],
+                           guards=half["guards"], waypoints=half["waypoints"],
+                           match_mode=half["match_mode"])
+        unfireable = [f for f in lint_definition(probe, [])
+                     if f["rule"] == "unfireable"]
+        if unfireable:
+            raise ValueError(
+                f"{half['name']!r} would be unfireable: "
+                f"{unfireable[0]['message']}")
+    return first, second
+
+
+def _meeting_levels(triggers: list) -> set[int]:
+    """The concrete arm-position levels a clause-set could land you in,
+    reusing `start_levels`'s own `arm_level` derivation (never a second
+    reading of the same param names) -- empty when every clause's arm
+    position is unknowable (e.g. a course exit that omits `to`, which is
+    most seeded `level_exit` clauses; see arm_level's own docstring). Shared
+    by merge_definitions' "do these two definitions actually meet" check
+    below; it is not itself a matcher concept, so it lives beside the
+    authoring operation that needs it rather than inside SegmentEngine."""
+    return set(start_levels(triggers))
+
+
+def _pinned_subareas(triggers: list, level: int) -> set[int] | None:
+    """The subareas this clause-set pins WITHIN `level`, or None when any
+    clause reaching that level pins no subarea at all.
+
+    None means "unknown", never "none of them" -- one area-less clause
+    landing in the level is enough to make the subarea question unanswerable
+    for the whole set, and an unknown position is permitted everywhere else
+    in this module (can_run_from's own convention). Reuses `start_areas`'
+    derivation clause by clause rather than reading `area`/`to_subarea`
+    again, so a new subarea-bearing trigger type is one edit there."""
+    pinned: set[int] = set()
+    for trig in triggers:
+        if arm_level(trig) != level:
+            continue
+        areas = [area for lv, area in start_areas([trig]) if lv == level]
+        if not areas:
+            return None
+        pinned.update(areas)
+    return pinned or None
+
+
+def _subareas_can_meet(end_triggers: list, start_triggers: list,
+                       level: int) -> bool:
+    """Could a player finishing `end_triggers` be standing where
+    `start_triggers` needs them, given both agree on `level`?
+
+    The castle interior is ONE level (6) holding three subareas on a line
+    (basement 3 <-> lobby 1 <-> upstairs 2), so a level-only answer accepts
+    seams that do not exist: the shipped corpus has three definitions ending
+    in the basement and one starting Upstairs, and merging any of those pairs
+    passed a level-only check while the chain was broken."""
+    ends = _pinned_subareas(end_triggers, level)
+    starts = _pinned_subareas(start_triggers, level)
+    if ends is None or starts is None:
+        return True
+    return bool(ends & starts)
+
+
+def merge_definitions(first: SegmentDef, second: SegmentDef,
+                      name: str) -> dict:
+    """Chain two definitions into one spanning both, with `second`'s start
+    clause-set kept as a WAYPOINT in the middle -- so the merged definition
+    still requires the route to pass through the seam, not merely to begin
+    at `first`'s start and end at `second`'s end (which would match a
+    strictly WIDER set of play than either input did, e.g. a direct A->C
+    warp that never touched B).
+
+        merged.start_triggers = first.start_triggers
+        merged.end_triggers   = second.end_triggers
+        merged.waypoints      = first.waypoints + [second.start_triggers]
+                                + second.waypoints
+
+    Preserving each input's OWN waypoints (not just the new seam) is what
+    keeps this the general inverse of split_definition: merging two
+    definitions that are themselves already multi-step chains produces one
+    definition visiting every one of their steps in order, not just the two
+    that used to be split_definition's mid clause.
+
+    Refuses (`ValueError`, message containing "do not meet") when `first`'s
+    end and `second`'s start describe unrelated places -- reusing
+    `start_levels`/`arm_level`'s own derivation (never a second reading of
+    the same trigger param names) rather than inventing a fresh "where does
+    this clause point" concept. An UNKNOWN arm position on either side
+    (empty result -- most seeded `level_exit` clauses omit `to`) passes,
+    matching the codebase-wide "unknown means yes" convention `can_run_from`
+    already takes for the identical question at runtime; only a CONCRETE,
+    non-overlapping pair is refused, e.g. `first` ending in the Castle
+    Inside basement and `second` starting in the castle courtyard.
+
+    The check runs at SUBAREA resolution too, not level alone. The castle
+    interior is one level (6) holding three subareas on a line (basement 3
+    <-> lobby 1 <-> Upstairs 2), so "same level" is not a seam there -- and
+    the shipped corpus reaches that case by itself: three seeded definitions
+    end at `area_enter(6, 3)` and one starts at `area_enter(6, 2)`, a pair a
+    merge button would happily offer. Refused only when BOTH sides pin a
+    subarea in every shared level and none coincide; one area-less clause
+    reaching that level (`level_enter to=6` pins nothing) makes the question
+    unanswerable and so permits it, same convention as above.
+
+    `match_mode`: inherited when both inputs agree; when they DISAGREE,
+    "loose" -- not "first wins", which would silently apply a stricter
+    handler to the OTHER half's own steps than that half's own author chose,
+    an accident just as real as forgetting the seam. "loose" is the mode
+    built for "anything that crosses courses or takes several steps"
+    (MATCH_MODES' own description) -- exactly the shape a merge always
+    produces, no matter which input contributed which end.
+
+    `default_strat`: inherited when both agree, else `None` -- a merged
+    movement spanning two different practiced techniques has no single
+    obvious default, and `None` ("no default") is already the codebase-wide
+    meaning of "not decided", not a new state.
+
+    `enabled`: both must be enabled, or the merge is not -- a merge should
+    not silently resurrect a definition its author deliberately disabled.
+
+    `guards=[]` -- deliberately dropped, not unioned. A `min_time`/`max_time`
+    guard describes ITS OWN input's duration; concatenating them (or letting
+    "later wins", `time_bounds`'s own rule, pick one) would apply a bound
+    that is now too TIGHT for the combined span (unlike split_definition's
+    inherited guards, which can only end up too LOOSE -- see its docstring
+    for why that direction is harmless and this one is not). The merged
+    whole's actual bounds are a question only the author can answer, not one
+    this pure function should guess at.
+
+    Never carries a `seed_key`, for the same reason as split_definition: a
+    merged definition is a brand-new row, never either input, so it always
+    gets `seed_key=None`.
+    """
+    first_end_levels = _meeting_levels(first.end_triggers)
+    second_start_levels = _meeting_levels(second.start_triggers)
+    if first_end_levels and second_start_levels \
+            and not (first_end_levels & second_start_levels):
+        raise ValueError(
+            f"{first.name!r} and {second.name!r} do not meet: "
+            f"{first.name!r} ends at level(s) {sorted(first_end_levels)}, "
+            f"{second.name!r} starts at level(s) "
+            f"{sorted(second_start_levels)}")
+    shared_levels = first_end_levels & second_start_levels
+    if shared_levels and not any(
+            _subareas_can_meet(first.end_triggers, second.start_triggers,
+                               level)
+            for level in shared_levels):
+        detail = "; ".join(
+            f"level {level}: ends in subarea(s) "
+            f"{sorted(_pinned_subareas(first.end_triggers, level) or [])}, "
+            f"starts in "
+            f"{sorted(_pinned_subareas(second.start_triggers, level) or [])}"
+            for level in sorted(shared_levels))
+        raise ValueError(
+            f"{first.name!r} and {second.name!r} do not meet: they share "
+            f"level(s) {sorted(shared_levels)} but no subarea within them "
+            f"({detail}) -- the castle interior is one level holding "
+            "basement, lobby and Upstairs, so sharing it is not a seam")
+    match_mode = (first.match_mode if first.match_mode == second.match_mode
+                 else "loose")
+    default_strat = (first.default_strat
+                     if first.default_strat == second.default_strat
+                     else None)
+    return {
+        "name": name,
+        "enabled": first.enabled and second.enabled,
+        "start_triggers": list(first.start_triggers),
+        "end_triggers": list(second.end_triggers),
+        "waypoints": (list(first.waypoints) + [list(second.start_triggers)]
+                     + list(second.waypoints)),
+        "guards": [],
+        "default_strat": default_strat,
+        "match_mode": match_mode,
+        "seed_key": None,
+    }
+
+
 @dataclass(frozen=True)
 class _Arm:
     jid: int            # journal id of the arming event -> attempt id
@@ -1222,6 +2021,12 @@ class _Arm:
     # every waypoint is consumed and the def is awaiting its end trigger. 0 for
     # every non-waypoint def (empty d.waypoints never reads this field).
     progress: int = 0
+    # Frame at which a LOOSE arm is presumed abandoned (spec
+    # 2026-07-28-multi-step-segments). None for a strict arm, which is bounded
+    # by its cancel rules instead. Shipped to the view so the UI reads expiry
+    # from the SAME number the matcher does — the engine only notices on the
+    # next event, and a card must not keep saying "Running" until one arrives.
+    deadline_frame: int | None = None
 
 
 def _at_arm_position(arm: _Arm, ctx: MatchContext) -> bool:
@@ -1243,6 +2048,26 @@ def _is_major_action(ev) -> bool:
     only these two shapes are treated as "the player left the route"."""
     return (ev.type in _MAJOR_EVENT_TYPES
             or (ev.type == "level_changed" and _real_edge(ev)))
+
+
+def _zeroes_usamune_igt(ev) -> bool:
+    """Did this event put Usamune's overall IGT counter back to zero?
+
+    Usamune resets it on every level load, every area load, every practice
+    reset / savestate load, and every console reset — which is the whole
+    reason the anchor detector exists and the whole reason the load-echo
+    shapes in this module's docstring exist. `SegmentEngine._last_igt_zero_
+    frame` is that frame, and `_close` compares it against the arm to decide
+    whether a closing event's `igt_frames` measures THIS segment (see there).
+
+    Deliberately blind to whether the anchor was an ECHO: a door crossing is
+    invisible to the matcher because the player did not choose it, but
+    Usamune zeroed its counter all the same, and the counter is what this
+    answers about. `spawned` is absent because it is not itself a reset — the
+    load or anchor that produced it already fired, on its own frame."""
+    if ev.type in _ANCHOR_TYPES or ev.type == "game_reset":
+        return True
+    return ev.type in ("level_changed", "area_changed") and _real_edge(ev)
 
 
 class SegmentEngine:
@@ -1272,9 +2097,39 @@ class SegmentEngine:
         # to the lobby lands in ACT_WARP_DOOR_SPAWN, so the attempt_anchor reset
         # was door-echo-suppressed and LBLJ never re-armed).
         self._last_area_edge_frame: int | None = None
+        # Frame on which Usamune's overall IGT counter was last put back to
+        # zero (_zeroes_usamune_igt). THE precondition for reading a closing
+        # event's own igt_frames as the segment's time — see _close. None
+        # until the first such event, which conservatively means "no segment
+        # may claim an IGT basis yet"; reset at a session boundary, since
+        # global_timer restarts there and a stale frame number could otherwise
+        # collide with a fresh arm's.
+        self._last_igt_zero_frame: int | None = None
+        # Best successful rta per definition, as seen SO FAR in this feed
+        # (spec 2026-07-28-multi-step-segments). Deterministic under replay
+        # (same journal -> same answer) and monotonically improving, which is
+        # what makes budget_frames stable. A MINIMUM, so an implausibly slow
+        # success can never inflate a loose def's budget; only an implausibly
+        # fast one could shrink it, and MIN_BUDGET_FRAMES is the floor for
+        # exactly that (the projector may later auto-clear an out-of-range
+        # success the engine counted here — harmless for the same reason).
+        self._best_success: dict[int, int] = {}
 
     def armed_ids(self) -> set[int]:
         return set(self._armed)
+
+    def armed_items(self) -> dict[int, _Arm]:
+        """Currently-armed defs with their live `_Arm` (spec 2026-07-28-
+        multi-step-segments): a COPY, like armed_ids() — a caller must never
+        be able to mutate engine-private state through it. The projector's
+        armed_arms() is the one consumer, for the view's progress/deadline
+        detail."""
+        return dict(self._armed)
+
+    def definition(self, sid: int) -> SegmentDef | None:
+        """The def for an id, or None (a deleted or never-loaded definition —
+        callers must not assume every armed/pending id still has one)."""
+        return self._def_by_id.get(sid)
 
     def feed(self, ev, ctx: MatchContext):
         """Returns (closed raw Attempts, notices). Closures before arming."""
@@ -1292,6 +2147,16 @@ class SegmentEngine:
         # processing so the echo guard below can test both echo shapes.
         if ev.type in ("level_changed", "area_changed"):
             self._last_transition_frame = ev.frame
+        # Same discipline for Usamune's own clock origin: _close reads this to
+        # decide whether a closing event's igt_frames measures the segment, so
+        # it has to be current for the closures that run below on THIS event.
+        # Every event that both zeroes the IGT and closes an attempt does so
+        # with a payload carrying no igt_frames (a reset/level edge), so
+        # updating first can never let an event validate its own close.
+        if ev.type == "session_started":
+            self._last_igt_zero_frame = None
+        elif _zeroes_usamune_igt(ev):
+            self._last_igt_zero_frame = ev.frame
         if ev.type == "area_changed":
             if _real_edge(ev):
                 self._last_area_edge_frame = ev.frame  # cross-area relocation
@@ -1346,109 +2211,19 @@ class SegmentEngine:
             arm = self._armed.get(d.id)
             start_clause = self._first_match(d.start_triggers, ev, ctx)
             starts = start_clause is not None
-            if arm is not None and d.waypoints:
-                closed.extend(
-                    self._feed_waypoint(Attempt, d, arm, ev, ctx, notices))
-            elif arm is not None:
-                if self._matches(d.end_triggers, ev, ctx):
-                    a = self._close(Attempt, d, arm, ev, "success", None)
-                    if a:
-                        closed.append(a)
-                    self._disarm(d, ev, notices)
-                elif ev.type == "area_changed" \
-                        and not _at_arm_position(arm, ctx):
-                    # RELOCATION via area change (live report 2026-06-13): Mario
-                    # moved to a DIFFERENT castle area than where this segment
-                    # armed (the lobby<->upstairs star door, a basement door, a
-                    # warp), so its start position no longer holds — disarm with
-                    # NO row, exactly as a warp/savestate to another area does.
-                    # Without this a lobby segment stays armed after crossing to
-                    # the upstairs and double-arms with the upstairs segment; the
-                    # co-frame load echo that WOULD relocate it is suppressed
-                    # (anchor_is_echo). A segment armed by THIS tick's level entry
-                    # was re-pinned to ctx.area above, and a same-area door fires
-                    # no area_changed at all (intra-area echo, still armed), so
-                    # neither is touched. Supersedes the 2026-06-12 "stay armed
-                    # through a cross-area door" behaviour.
-                    self._disarm(d, ev, notices)
-                elif ev.type in _ANCHOR_TYPES \
-                        and ev.frame == arm.start_frame:
-                    # Shape (1) — arm-frame echo: the level_changed that armed
-                    # this segment and the synthetic anchor it triggers share
-                    # the same global-timer tick.  Suppressed UNCONDITIONALLY:
-                    # the player may have been paused on the grounds for
-                    # minutes before entering the lobby — a large
-                    # paused_frames_before here is normal and must not
-                    # reclassify this as a real reset.  Per-def (depends on
-                    # the arm), unlike the event-level shapes below.
-                    # (live gate 2026-06-12, seq 40-45)
-                    pass
-                elif ev.type in _ANCHOR_TYPES and anchor_is_echo:
-                    # Shapes (2a)/(2b)/(3) — event-level echoes, classified
-                    # once before the loop (see anchor_is_echo above; full
-                    # taxonomy in the module docstring).  No closure, no row,
-                    # no disarm — and the arm phase below skips echoes too,
-                    # so the _Arm is untouched.
-                    pass
-                elif ev.type in _ANCHOR_TYPES \
-                        and not _at_arm_position(arm, ctx):
-                    # RELOCATION (live report 2026-06-12): a real warp/load
-                    # landed outside this segment's start position — the
-                    # Usamune menu warp to another area is the player MOVING,
-                    # not a failed attempt, so no reset row. The start
-                    # conditions no longer hold → disarm (notice); defs
-                    # anchored at the destination arm in the arm phase below
-                    # (segment swap).
-                    self._disarm(d, ev, notices)
-                elif ev.type in _ANCHOR_TYPES:
-                    # AFK (>= 150 paused frames) and no-op closures (Mario
-                    # never acted since the last anchor — warp/reset spam,
-                    # live feedback 2026-06-12) discard the row; both still
-                    # re-arm below.  acted_tracking-gated: historical events
-                    # without the flag keep recording (mirrors the star-side
-                    # discard in projection._close_by_reset).
-                    afk = ev.payload.get("paused_frames_before", 0) \
-                        >= _AFK_PAUSE_FRAMES
-                    unacted = ev.payload.get("acted_tracking", False) \
-                        and not ev.payload.get("mario_acted", False)
-                    if not afk and not unacted:
-                        a = self._close(Attempt, d, arm, ev, "reset", None)
-                        if a:
-                            closed.append(a)
-                    # Re-arm in place at the anchor frame instead of disarming.
-                    # A Usamune L-reset respawns Mario at the level's last entrance
-                    # — which IS the segment's start position in the practice loop
-                    # (lobby door for LBLJ, HMC exit for MIPS). Timing from this
-                    # anchor is equivalent to a fresh start-trigger arm.
-                    # The segment never stops being armed; no armed/disarmed
-                    # notices are emitted (attempt boundary, not a state change).
-                    # For defs with attempt_anchor start triggers the arm phase
-                    # below will replace this _Arm with identical values
-                    # (fresh=False → no duplicate notice) — idempotent.
-                    # Position carries over (ctx wins, arm fills unknowns) so
-                    # the gate above keeps working across continuations.
-                    self._armed[d.id] = _Arm(
-                        jid=ev.id, start_frame=ev.frame,
-                        started_utc=ev.wall_time_utc,
-                        anchor_type=ev.type,
-                        session_id=ev.session_id,
-                        level=ctx.level if ctx.level is not None else arm.level,
-                        area=ctx.area if ctx.area is not None else arm.area,
-                    )
-                elif ev.type == "death":
-                    a = self._close(Attempt, d, arm, ev, "death",
-                                    ev.payload.get("cause"))
-                    if a:
-                        closed.append(a)
-                    self._disarm(d, ev, notices)
-                elif ev.type == "game_reset":
-                    a = self._close(Attempt, d, arm, ev, "hard_reset", None)
-                    if a:
-                        closed.append(a)
-                    self._disarm(d, ev, notices)
-                elif ev.type in ("level_changed", "session_started") \
-                        and not starts:
-                    self._disarm(d, ev, notices)   # silent: no row
+            if arm is not None:
+                # Armed-branch dispatch (spec 2026-07-28-multi-step-segments).
+                # A loose def owns its own waypoint progression, so it takes
+                # _feed_loose whether or not it carries waypoints; a strict
+                # def splits on waypoints exactly as it did before.
+                if d.match_mode == "loose":
+                    handler = self._feed_loose
+                elif d.waypoints:
+                    handler = self._feed_waypoint
+                else:
+                    handler = self._feed_strict
+                closed.extend(handler(Attempt, d, arm, ev, ctx, notices,
+                                      anchor_is_echo, starts))
             # arm / re-arm — guards re-evaluated every time (spec).
             # Echo anchors are INVISIBLE here too: an involuntary door/load
             # echo matching an attempt_anchor start trigger must neither arm
@@ -1512,15 +2287,46 @@ class SegmentEngine:
                         jid=ev.id, start_frame=ev.frame,
                         started_utc=ev.wall_time_utc, anchor_type=ev.type,
                         session_id=ev.session_id, level=ctx.level,
-                        area=ctx.area, required_area=req)
+                        area=ctx.area, required_area=req,
+                        deadline_frame=self._deadline_for(d, ev))
                 else:
                     fresh = d.id not in self._armed
+                    # A plain LOOSE def's own start trigger can genuinely
+                    # refire while it is still armed and mid-route (live
+                    # audit 2026-07-29: 13 refires in the user's real
+                    # session, restarting Bowser 2/1 movements that had gone
+                    # stale under an earlier abandoned exit). The restart is
+                    # the honest read — the start condition genuinely
+                    # happened again, so the fresh arm times the real
+                    # attempt, and the old in-flight arm's elapsed time was
+                    # never a completed attempt worth a row. But `fresh` is
+                    # False here (d.id was already armed), so this used to be
+                    # completely SILENT — no notice, no trace, same class of
+                    # defect as the anchor-relocation bug this def's docstring
+                    # describes, just structurally adjacent to _feed_loose
+                    # rather than inside it. Surface it with the ordinary
+                    # disarm+arm notice pair instead. `not d.waypoints` is
+                    # belt-and-suspenders here, not load-bearing: the outer
+                    # `not (d.waypoints and d.id in self._armed)` guard above
+                    # already makes `d.waypoints` false whenever `not fresh`
+                    # is true (a waypoint-bearing def that's already armed
+                    # never reaches this branch at all — see the AUTHORING
+                    # CAVEAT in _feed_waypoint's docstring), so this can never
+                    # widen to the waypoint case; it names the invariant for
+                    # a reader who doesn't want to re-derive it.
+                    loose_plain_refire = (not fresh and d.match_mode == "loose"
+                                          and not d.waypoints)
+                    if loose_plain_refire:
+                        self._disarm(d, ev, notices)  # visible: no row for
+                        # the discarded partial, same as every other no-row
+                        # disarm on this branch
                     self._armed[d.id] = _Arm(jid=ev.id, start_frame=ev.frame,
                                              started_utc=ev.wall_time_utc,
                                              anchor_type=ev.type,
                                              session_id=ev.session_id,
-                                             level=ctx.level, area=ctx.area)
-                    if fresh:
+                                             level=ctx.level, area=ctx.area,
+                                             deadline_frame=self._deadline_for(d, ev))
+                    if fresh or loose_plain_refire:
                         notices.append({"event": "segment_armed",
                                         "segment_id": d.id, "name": d.name,
                                         "frame": ev.frame})
@@ -1584,7 +2390,153 @@ class SegmentEngine:
                 and 0 <= ev.payload["frames_since_dialog"]
                 <= _DIALOG_ECHO_WINDOW))
 
-    def _feed_waypoint(self, Attempt, d, arm: _Arm, ev, ctx, notices) -> list:
+    def _feed_strict(self, Attempt, d, arm: _Arm, ev, ctx, notices,
+                     anchor_is_echo: bool, starts: bool) -> list:
+        """Today's armed-branch chain, extracted verbatim from feed() so the
+        armed branch can dispatch on SegmentDef.match_mode (spec
+        2026-07-28-multi-step-segments). Behaviour for a STRICT def is
+        unchanged — the module docstring's closure/anchor/echo invariants all
+        describe THIS method. `anchor_is_echo` is computed once per EVENT in
+        feed() (before the per-def loop) and passed down; `starts` is
+        computed once per (event, definition) INSIDE that loop, from
+        `d.start_triggers`, and passed down too — both for the uniform
+        handler signature the dispatch table (Task 2) calls through, not
+        because both are event-level facts.
+
+        Also handles EXCLUSIVE defs (the third match_mode, same spec, one
+        gated branch below): a plain waypoint-free def reaches this same
+        method through the same `else` in feed()'s dispatch (only "loose"
+        and "carries waypoints" divert elsewhere), so the shared chain above
+        — end/relocation/echo/anchor/death/game_reset/off-route level — is
+        identical for both modes; EXCLUSIVE adds exactly one more way to
+        cancel: a star or Bowser-key grab that isn't the end trigger."""
+        closed = []
+        if self._matches(d.end_triggers, ev, ctx):
+            a = self._close(Attempt, d, arm, ev, "success", None)
+            if a:
+                closed.append(a)
+            self._disarm(d, ev, notices)
+        elif ev.type == "area_changed" \
+                and not _at_arm_position(arm, ctx):
+            # RELOCATION via area change (live report 2026-06-13): Mario
+            # moved to a DIFFERENT castle area than where this segment
+            # armed (the lobby<->upstairs star door, a basement door, a
+            # warp), so its start position no longer holds — disarm with
+            # NO row, exactly as a warp/savestate to another area does.
+            # Without this a lobby segment stays armed after crossing to
+            # the upstairs and double-arms with the upstairs segment; the
+            # co-frame load echo that WOULD relocate it is suppressed
+            # (anchor_is_echo). A segment armed by THIS tick's level entry
+            # was re-pinned to ctx.area above, and a same-area door fires
+            # no area_changed at all (intra-area echo, still armed), so
+            # neither is touched. Supersedes the 2026-06-12 "stay armed
+            # through a cross-area door" behaviour.
+            self._disarm(d, ev, notices)
+        elif ev.type in _ANCHOR_TYPES \
+                and ev.frame == arm.start_frame:
+            # Shape (1) — arm-frame echo: the level_changed that armed
+            # this segment and the synthetic anchor it triggers share
+            # the same global-timer tick.  Suppressed UNCONDITIONALLY:
+            # the player may have been paused on the grounds for
+            # minutes before entering the lobby — a large
+            # paused_frames_before here is normal and must not
+            # reclassify this as a real reset.  Per-def (depends on
+            # the arm), unlike the event-level shapes below.
+            # (live gate 2026-06-12, seq 40-45)
+            pass
+        elif ev.type in _ANCHOR_TYPES and anchor_is_echo:
+            # Shapes (2a)/(2b)/(3) — event-level echoes, classified
+            # once before the loop (see anchor_is_echo above; full
+            # taxonomy in the module docstring).  No closure, no row,
+            # no disarm — and the arm phase below skips echoes too,
+            # so the _Arm is untouched.
+            pass
+        elif ev.type in _ANCHOR_TYPES \
+                and not _at_arm_position(arm, ctx):
+            # RELOCATION (live report 2026-06-12): a real warp/load
+            # landed outside this segment's start position — the
+            # Usamune menu warp to another area is the player MOVING,
+            # not a failed attempt, so no reset row. The start
+            # conditions no longer hold → disarm (notice); defs
+            # anchored at the destination arm in the arm phase below
+            # (segment swap).
+            self._disarm(d, ev, notices)
+        elif ev.type in _ANCHOR_TYPES:
+            # AFK (>= 150 paused frames) and no-op closures (Mario
+            # never acted since the last anchor — warp/reset spam,
+            # live feedback 2026-06-12) discard the row; both still
+            # re-arm below.  acted_tracking-gated: historical events
+            # without the flag keep recording (mirrors the star-side
+            # discard in projection._close_by_reset).
+            afk = ev.payload.get("paused_frames_before", 0) \
+                >= _AFK_PAUSE_FRAMES
+            unacted = ev.payload.get("acted_tracking", False) \
+                and not ev.payload.get("mario_acted", False)
+            if not afk and not unacted:
+                a = self._close(Attempt, d, arm, ev, "reset", None)
+                if a:
+                    closed.append(a)
+            # Re-arm in place at the anchor frame instead of disarming.
+            # A Usamune L-reset respawns Mario at the level's last entrance
+            # — which IS the segment's start position in the practice loop
+            # (lobby door for LBLJ, HMC exit for MIPS). Timing from this
+            # anchor is equivalent to a fresh start-trigger arm.
+            # The segment never stops being armed; no armed/disarmed
+            # notices are emitted (attempt boundary, not a state change).
+            # For defs with attempt_anchor start triggers the arm phase
+            # below will replace this _Arm with identical values
+            # (fresh=False → no duplicate notice) — idempotent.
+            # Position carries over (ctx wins, arm fills unknowns) so
+            # the gate above keeps working across continuations.
+            self._armed[d.id] = _Arm(
+                jid=ev.id, start_frame=ev.frame,
+                started_utc=ev.wall_time_utc,
+                anchor_type=ev.type,
+                session_id=ev.session_id,
+                level=ctx.level if ctx.level is not None else arm.level,
+                area=ctx.area if ctx.area is not None else arm.area,
+            )
+        elif ev.type == "death":
+            a = self._close(Attempt, d, arm, ev, "death",
+                            ev.payload.get("cause"))
+            if a:
+                closed.append(a)
+            self._disarm(d, ev, notices)
+        elif ev.type == "game_reset":
+            a = self._close(Attempt, d, arm, ev, "hard_reset", None)
+            if a:
+                closed.append(a)
+            self._disarm(d, ev, notices)
+        elif d.match_mode == "exclusive" and ev.type in _MAJOR_EVENT_TYPES:
+            # EXCLUSIVE's one addition over Strict (third match_mode, spec
+            # 2026-07-28-multi-step-segments): a star or Bowser-key grab that
+            # isn't this def's own end trigger (already checked at the top of
+            # this chain) means the attempt wasn't exclusively this segment —
+            # cancel silently, no row, same as every other abandon above.
+            # Gated on match_mode so a plain STRICT def is untouched: today it
+            # falls through this whole chain on a star/key grab and stays
+            # armed (no branch here matches ev.type in _MAJOR_EVENT_TYPES) —
+            # see this module's `_feed_waypoint`, which already cancels a
+            # WAYPOINT-bearing def on the same star/key grab; a plain def had
+            # no way to express that until this branch.
+            # `level_changed` real-edge crossings are deliberately NOT
+            # included here (unlike `_is_major_action`, which folds them in
+            # for the waypoint matcher): the elif below already disarms an
+            # off-route level crossing for every mode, including this one,
+            # gated on `not starts` so a refire of this def's OWN start
+            # trigger keeps re-arming instead of cancelling. Reusing
+            # `_is_major_action` here, unconditional on `starts`, would take
+            # that refire exemption away from exclusive-mode defs only —
+            # nothing about "exclusive" needs a level crossing to behave any
+            # differently than Strict already does.
+            self._disarm(d, ev, notices)
+        elif ev.type in ("level_changed", "session_started") \
+                and not starts:
+            self._disarm(d, ev, notices)   # silent: no row
+        return closed
+
+    def _feed_waypoint(self, Attempt, d, arm: _Arm, ev, ctx, notices,
+                       anchor_is_echo, starts) -> list:
         """Ordered-sequence matcher for a waypoint-bearing def (spec
         2026-07-23-default-routes-foundation) — the armed-branch counterpart
         to the plain success/relocation/anchor/death chain above, taken for
@@ -1594,10 +2546,17 @@ class SegmentEngine:
         silently, no row, regardless of progress — an armed segment must not
         survive across sessions) > echo (invisible, exactly like the plain
         chain) > real anchor (rewinds the sequence to its first waypoint and
-        re-arms IN PLACE at the anchor — the practice-retry loop; no row,
-        unlike the plain chain's reset row — precise relocation-vs-
-        continuation nuance is a live-gate VERIFY item, rewind-in-place is
-        the conservative default) > next waypoint (advance `progress`) >
+        re-arms IN PLACE at the anchor — the practice-retry loop — AND
+        records a RESET row for the attempt that ends there, exactly like
+        the plain chain's own anchor-refire reset, subject to the SAME AFK/
+        unacted discard. This used to record no row at all, flagged as a
+        live-gate VERIFY item ("precise relocation-vs-continuation nuance");
+        the user has since settled it (round 2, live report 2026-07-30) — he
+        expects the reset row, since the practice log is how he sees his own
+        retries and a whole class of segment silently omitting them makes it
+        lie about what he did. The rewind-in-place relocation itself was
+        never in question, only the missing row) > next waypoint (advance
+        `progress`) >
         major action (a star/key grab or a real level crossing that ISN'T
         the next waypoint — the player switched tasks or misrouted — silent
         cancel, no row, mirrors the plain chain's silent level_changed
@@ -1618,6 +2577,10 @@ class SegmentEngine:
         route's start trigger should be written at least as specific as
         every waypoint clause it could be confused with, or a misroute can
         silently resume instead of truly cancelling."""
+        _ = (anchor_is_echo, starts)  # uniform dispatch signature (Task 2,
+        # spec 2026-07-28-multi-step-segments) — this matcher derives its
+        # own echo classification (self._anchor_echo) and never disarms on
+        # a bare level_changed/session_started, so it needs neither.
         closed = []
         complete = arm.progress >= len(d.waypoints)
         if complete and self._matches(d.end_triggers, ev, ctx):
@@ -1643,9 +2606,28 @@ class SegmentEngine:
             return closed
         if ev.type in _ANCHOR_TYPES:
             # echo (arm-frame or event-level) is invisible; a real anchor
-            # rewinds the sequence and re-arms in place (retry loop).
+            # rewinds the sequence and re-arms IN PLACE (retry loop) --
+            # recording a RESET row for the attempt that ends here, exactly
+            # like the plain chain's own anchor-refire reset (round 2, live
+            # report 2026-07-30: this branch recorded NO row at all, so the
+            # practice log silently omitted every retry of a waypoint-
+            # bearing segment -- this settles the "live-gate VERIFY item"
+            # this method's own docstring used to name; the rewind-in-place
+            # relocation itself was never in question, only the missing
+            # row). Same AFK/unacted discard the plain chain applies
+            # (mirrors the star-side discard in projection.py's
+            # _close_by_reset) -- a true no-op anchor refire still records
+            # nothing.
             if ev.frame == arm.start_frame or self._anchor_echo(ev):
                 return closed
+            afk = ev.payload.get("paused_frames_before", 0) \
+                >= _AFK_PAUSE_FRAMES
+            unacted = ev.payload.get("acted_tracking", False) \
+                and not ev.payload.get("mario_acted", False)
+            if not afk and not unacted:
+                a = self._close(Attempt, d, arm, ev, "reset", None)
+                if a:
+                    closed.append(a)
             self._armed[d.id] = replace(
                 arm, progress=0, start_frame=ev.frame,
                 started_utc=ev.wall_time_utc, jid=ev.id,
@@ -1661,25 +2643,162 @@ class SegmentEngine:
             return closed
         return closed   # transparent
 
+    def _deadline_for(self, d, ev) -> int | None:
+        """The staleness deadline a freshly-armed (or re-armed) _Arm should
+        carry (spec 2026-07-28-multi-step-segments): None for a strict def,
+        bounded by its cancel rules instead; ev.frame + budget_frames(this
+        def's best success so far) for a loose one.
+
+        ONE call site for every place an _Arm enters self._armed/self._pending
+        for a loose def — the pending->armed promotion inherits whatever this
+        returned through `replace()`, for free, so a future arm site that
+        forgets to call this ships a visibly missing call instead of a silent
+        None (the bug this exists to prevent: the deferred destination-
+        subarea path into self._pending was the one the brief for this task
+        missed, and it is where a large share of the seeded castle movements
+        arm)."""
+        if d.match_mode != "loose":
+            return None
+        return ev.frame + budget_frames(self._best_success.get(d.id))
+
+    def _feed_loose(self, Attempt, d, arm: _Arm, ev, ctx, notices,
+                    anchor_is_echo, starts) -> list:
+        """Armed-branch matcher for a LOOSE definition (spec
+        2026-07-28-multi-step-segments): the player says where a segment
+        starts and where it ends, and nothing in between is described.
+
+        Precedence, first match wins:
+          staleness deadline > end (once every waypoint is consumed) >
+          death > game_reset > session_started > echo anchor (invisible) >
+          real anchor at the arm position (reset row, re-arm in place) >
+          real anchor elsewhere (transparent — arm untouched) >
+          next waypoint (advance) > EVERYTHING ELSE IS TRANSPARENT.
+
+        That last line is (most of) the whole feature: a star grab, a key
+        grab, an area change and an off-route level crossing all pass
+        straight through, where _feed_strict/_feed_waypoint would cancel or
+        disarm.
+
+        The DEADLINE IS CHECKED FIRST, ahead of both the end trigger and the
+        death/reset rows. An arm that has outlived its budget is dead; a
+        success or a failure recorded through it would be a claim about a run
+        the player walked away from.
+
+        A real anchor NOT at the arm position is transparent too (live report
+        2026-07-28, fixed from the `_feed_strict`-inherited relocation disarm
+        this method used to carry): a loose def describes only its start and
+        end, so its route is free to cross through positions it didn't start
+        at, and often MUST — "Bowser 2 -> Upstairs" arms in the basement, and
+        reaching Upstairs requires walking back through the lobby, so the
+        first practice_reset anywhere along the way used to kill the attempt
+        with no row and no notice (the split just vanished mid-run). That is
+        different from _feed_strict/_feed_waypoint, where a route is fully
+        described and an anchor off it genuinely means "the player moved
+        somewhere the described route never goes" — for a loose def there is
+        no described route to have left, so nothing here justifies a silent
+        kill. Only an anchor AT the arm position still means something: the
+        player deliberately returned to the start and pressed reset/reload,
+        which is a genuine retry (reset row, re-arm in place, fresh
+        deadline). Everything that ends a loose attempt is exactly what the
+        module docstring's LOOSE bullet already promises: death, game_reset,
+        session_started, and the staleness deadline — not a relocated
+        anchor."""
+        _ = (anchor_is_echo, starts)   # uniform handler signature (Task 2)
+        closed = []
+        if arm.deadline_frame is not None and ev.frame >= arm.deadline_frame:
+            self._disarm(d, ev, notices)   # silent: no row, stats stay clean
+            return closed
+        complete = arm.progress >= len(d.waypoints)
+        if complete and self._matches(d.end_triggers, ev, ctx):
+            a = self._close(Attempt, d, arm, ev, "success", None)
+            if a:
+                closed.append(a)
+            self._disarm(d, ev, notices)
+            return closed
+        if ev.type == "death":
+            a = self._close(Attempt, d, arm, ev, "death",
+                            ev.payload.get("cause"))
+            if a:
+                closed.append(a)
+            self._disarm(d, ev, notices)
+            return closed
+        if ev.type == "game_reset":
+            a = self._close(Attempt, d, arm, ev, "hard_reset", None)
+            if a:
+                closed.append(a)
+            self._disarm(d, ev, notices)
+            return closed
+        if ev.type == "session_started":
+            self._disarm(d, ev, notices)
+            return closed
+        if ev.type in _ANCHOR_TYPES:
+            if ev.frame == arm.start_frame or self._anchor_echo(ev):
+                return closed          # echo: invisible
+            if not _at_arm_position(arm, ctx):
+                # TRANSPARENT, not a relocation disarm (live report 2026-07-28:
+                # Bowser 2 -> Upstairs vanished mid-run — see this method's
+                # docstring). Unlike a strict/waypoint def, a loose def's own
+                # route is guaranteed to cross positions it didn't start at
+                # (Bowser 2's exit lands in the basement; reaching Upstairs
+                # requires passing back through the lobby), so the FIRST
+                # anchor anywhere along that route used to kill the attempt
+                # with no row and no notice. The arm is left completely
+                # untouched — position, start_frame, deadline — exactly like
+                # every other mid-route event this matcher already lets pass.
+                return closed
+            a = self._close(Attempt, d, arm, ev, "reset", None)
+            if a:
+                closed.append(a)
+            self._armed[d.id] = replace(
+                arm, progress=0, start_frame=ev.frame,
+                started_utc=ev.wall_time_utc, jid=ev.id,
+                anchor_type=ev.type, session_id=ev.session_id,
+                deadline_frame=self._deadline_for(d, ev),
+                level=ctx.level if ctx.level is not None else arm.level,
+                area=ctx.area if ctx.area is not None else arm.area)
+            return closed
+        if not complete and self._matches(d.waypoints[arm.progress], ev, ctx):
+            self._armed[d.id] = replace(arm, progress=arm.progress + 1)
+            return closed
+        return closed   # transparent — the whole feature
+
     def _disarm(self, d, ev, notices) -> None:
         if self._armed.pop(d.id, None) is not None:
             notices.append({"event": "segment_disarmed", "segment_id": d.id,
                             "name": d.name, "frame": ev.frame})
 
     def _close(self, Attempt, d, arm: _Arm, ev, outcome, detail):
-        # A grab close carries Usamune's authoritative IGT — use it verbatim
-        # (pause-safe, display-tick aligned; see the module docstring's
-        # rta_frames clause). Non-grab closes (level/warp/reset/death) have no
-        # igt_frames -> the wall-frame delta with its negative self-heal.
+        # A close event carrying Usamune's own IGT (star/key grab, pipe touch,
+        # death) is used verbatim — pause-safe, display-tick aligned, and free
+        # of the arm-frame alignment error the wall-frame delta carries; see
+        # the module docstring's rta_frames clause. VALID ONLY when Usamune's
+        # counter was zeroed on the very frame this segment armed and has not
+        # been zeroed since, which is exactly what _last_igt_zero_frame ==
+        # arm.start_frame says: otherwise that number counts from a load the
+        # segment does not begin at (a def armed mid-level, or a BBH door
+        # crossed mid-run), and the wall-frame delta — which at least spans
+        # the right two moments — is the honest fallback.
         igt = ev.payload.get("igt_frames")
-        if igt is not None:
-            rta = igt
+        if igt is not None and self._last_igt_zero_frame == arm.start_frame:
+            rta, timed_by = igt, "igt"
         else:
-            rta = ev.frame - arm.start_frame
+            # Which branch ran is itself a fact the display needs (ruling 6):
+            # a delta counts paused frames and starts a frame off, so it runs
+            # ~1-2 frames CHEAP and an identical igt-timed run cannot beat it.
+            # Recorded rather than inferred later, because nothing downstream
+            # can reconstruct which of the two conditions failed.
+            rta, timed_by = ev.frame - arm.start_frame, "delta"
             if rta < 0:
                 if outcome == "success":
                     return None  # genuine anomaly: end before arm (self-heal)
                 rta = None       # backward jump (game_reset boot frame, earlier savestate): row counts, time unknowable
+        if outcome == "success" and rta is not None:
+            # Feeds a loose def's staleness budget (spec 2026-07-28-multi-
+            # step-segments, see _deadline_for/budget_frames): a MINIMUM, so
+            # only ever-faster successes move it, never slower ones.
+            prev = self._best_success.get(d.id)
+            if prev is None or rta < prev:
+                self._best_success[d.id] = rta
         return Attempt(
             id=arm.jid + SEGMENT_ATTEMPT_OFFSET * d.id,
             session_id=arm.session_id, course_id=None, star_id=None,
@@ -1688,4 +2807,5 @@ class SegmentEngine:
             outcome=outcome, outcome_detail=detail,
             igt_frames=None, rta_frames=rta,
             started_utc=arm.started_utc, ended_utc=ev.wall_time_utc,
-            cleared=False, cleared_reason=None, segment_id=d.id)
+            cleared=False, cleared_reason=None, segment_id=d.id,
+            timed_by=timed_by, closed_by=ev.type)

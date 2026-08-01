@@ -19,8 +19,10 @@ from sm64_events.memory.addresses import (COURSE_BY_LEVEL,
                                           LEVEL_CASTLE_INSIDE,
                                           WORLD_EDGES_ONE_WAY,
                                           WORLD_EDGES_TWO_WAY)
+from sm64_events.tracking.lint import lint_definition
 from sm64_events.tracking.segments import (MatchContext, SegmentDef,
-                                           SegmentEngine, validate_definition)
+                                           SegmentEngine, budget_frames,
+                                           validate_definition)
 
 SEED = json.loads(bundled_defaults_seed().read_bytes().decode("utf-8"))
 SEGMENTS = SEED["segments"]
@@ -195,12 +197,19 @@ def run_engine(seed_row, events, level, area):
     """Feed `events` to a one-def engine, tracking level/area exactly as the
     projector does, and return the closed attempts. Guards are dropped: the
     in_active_route arm gate is proven in test_segments.py, and here every
-    movement is assumed to be in the active route."""
+    movement is assumed to be in the active route.
+
+    match_mode is threaded from the seed row itself (Task 19) rather than
+    left at SegmentDef's "strict" default -- since all 56 movements now ship
+    match_mode="loose", this is the line that actually puts the independent
+    world-model walk through the loose matcher instead of quietly continuing
+    to simulate the old strict one."""
     definition = SegmentDef(
         id=1, name=seed_row["name"], enabled=True,
         start_triggers=seed_row["start_triggers"],
         end_triggers=seed_row["end_triggers"],
-        waypoints=seed_row["waypoints"], guards=[])
+        waypoints=seed_row["waypoints"], guards=[],
+        match_mode=seed_row.get("match_mode", "strict"))
     engine = SegmentEngine([definition])
     closed = []
     for ev in events:
@@ -224,7 +233,7 @@ def test_every_seeded_segment_validates():
 
 
 def test_every_movement_is_route_scoped():
-    assert len(MOVEMENTS) == 55
+    assert len(MOVEMENTS) == 56          # 55 + seg:bowser2->bits (Task 20)
     for row in MOVEMENTS:
         assert row["guards"] == [{"type": "in_active_route"}], row["seed_key"]
 
@@ -314,7 +323,8 @@ def test_a_menu_warp_into_a_course_arms_no_movement():
         SegmentDef(id=index, name=row["name"], enabled=True,
                    start_triggers=row["start_triggers"],
                    end_triggers=row["end_triggers"],
-                   waypoints=row["waypoints"], guards=[])
+                   waypoints=row["waypoints"], guards=[],
+                   match_mode=row.get("match_mode", "strict"))
         for index, row in enumerate(MOVEMENTS, start=1)])
     sources = sorted({row["start_triggers"][0]["from"] for row in MOVEMENTS
                       if row["start_triggers"][0]["type"] == "level_exit"})
@@ -336,7 +346,7 @@ def test_a_menu_warp_into_a_course_arms_no_movement():
 
 
 def test_a_movement_only_fires_on_a_walk_that_reaches_its_endpoint():
-    """Negative pass over all 55x54 pairs. A movement may legitimately
+    """Negative pass over all 56x55 pairs. A movement may legitimately
     complete on another's walk when it is a PREFIX of it — walking BBH -> DDD
     really does pass through the basement, so BBH -> Basement completing there
     is correct, not a false positive. What must never happen is completing on
@@ -353,3 +363,385 @@ def test_a_movement_only_fires_on_a_walk_that_reaches_its_endpoint():
                 continue          # the player genuinely passed through it
             assert not fired, (row["seed_key"], "wrongly completed on",
                                other["seed_key"])
+
+
+# --- layer 3: Task 20's four real walks (spec 2026-07-28-multi-step-segments)
+# These four shapes do not fit movement_walk's generic BFS-shortest-path
+# model: two of them (100c->exit, reds->pipe) start or end on a
+# star_grabbed/warp_entered clause clause_node cannot resolve, and all four
+# replay a SPECIFIC real walk from a task report rather than the shortest
+# one. Hand-built via _Walker directly instead of movement_walk.
+
+def _seg(seed_key):
+    return next(s for s in SEGMENTS if s["seed_key"] == seed_key)
+
+
+def test_bowser_1_to_wf_survives_the_bitdw_reentry_detour():
+    """Real walk: "Bowser 1 -> re-enter BitDW -> exit course to Lobby ->
+    WF." Proves the EXISTING seg:bowser1->wf (a plain, waypoint-less loose
+    def, unchanged by Task 20) survives the detour without any shape
+    change -- every intermediate step is transparent to a loose def with no
+    waypoints."""
+    row = _seg("seg:bowser1->wf")
+    origin = (30, None)
+    walker = _Walker(origin)
+    walker.hop(exit_node(30))    # Bowser 1 exit -> lobby
+    walker.hop((17, None))       # re-enter BitDW
+    walker.hop((6, 1))           # pause-exit BitDW -> lobby
+    walker.hop((24, None))       # walk into WF
+    closed = run_engine(row, walker.events, origin[0], origin[1])
+    outcomes = [a.outcome for a in closed]
+    assert outcomes == ["success"], (row["seed_key"], outcomes)
+
+
+def test_bowser_2_to_bits_survives_the_whole_detour():
+    # Task 0017: finish Bowser 2 -> back into BitFS -> pause exit to the
+    # basement -> lobby -> upstairs -> BLJs -> BitS. Every one of those steps
+    # cancels a strict definition; loose passes them all through
+    # transparently -- this is the whole reason Task 19 exists.
+    row = _seg("seg:bowser2->bits")
+    origin = (33, None)
+    walker = _Walker(origin)
+    walker.hop(exit_node(33))    # Bowser 2 exit -> basement
+    walker.hop((19, None))       # re-enter BitFS
+    walker.hop((6, 3))           # pause-exit BitFS -> basement
+    walker.hop((6, 1))           # lobby
+    walker.hop((6, 2))           # upstairs
+    walker.hop((21, None))       # BLJ into BitS
+    closed = run_engine(row, walker.events, origin[0], origin[1])
+    outcomes = [a.outcome for a in closed]
+    assert outcomes == ["success"], (row["seed_key"], outcomes)
+
+
+def test_the_two_step_bowser2_upstairs_then_bits_entry_survives_the_same_detour():
+    """Route regression fix (2026-07-28): Task 20 rewrote the 0/1-star
+    routes' two-step "-> Upstairs" + "Endless Staircase BLJ" tail into a
+    single seg:bowser2->bits movement, so the new movement would have a route
+    referencing it. That silently dropped a named trick split ("Endless
+    Staircase BLJ" has its own timing) from the 0/1-star categories, the most
+    BLJ-heavy runs in the game — and it was never necessary.
+
+    Feeds the IDENTICAL real walk test_bowser_2_to_bits_survives_the_whole_
+    detour uses through the two ORIGINAL segments in one engine instead of
+    the new one: seg:bowser2->upstairs (loose, converted Task 19) survives
+    the whole detour — BitFS re-entry, pause exit to the basement, lobby —
+    transparently, exactly like seg:bowser2->bits does, and closes on
+    reaching Upstairs. seg:bits-entry (legacy, strict, unguarded) then arms
+    on that SAME event ("closures before arming", module docstring) and
+    survives the BLJ with nothing to disarm it, closing on the BitS entry.
+    Both close, so the rewrite bought nothing but the lost split;
+    _LOW_STAR_TAIL was reverted — see its comment in corpus_routes_main.py."""
+    upstairs_row = _seg("seg:bowser2->upstairs")
+    bits_entry_row = _seg("seg:bits-entry")
+    defs = [
+        SegmentDef(id=1, name=upstairs_row["name"], enabled=True,
+                   start_triggers=upstairs_row["start_triggers"],
+                   end_triggers=upstairs_row["end_triggers"],
+                   waypoints=upstairs_row["waypoints"], guards=[],
+                   match_mode=upstairs_row.get("match_mode", "strict")),
+        SegmentDef(id=2, name=bits_entry_row["name"], enabled=True,
+                   start_triggers=bits_entry_row["start_triggers"],
+                   end_triggers=bits_entry_row["end_triggers"],
+                   waypoints=bits_entry_row["waypoints"], guards=[],
+                   match_mode=bits_entry_row.get("match_mode", "strict")),
+    ]
+    engine = SegmentEngine(defs)
+
+    origin = (33, None)
+    walker = _Walker(origin)
+    walker.hop(exit_node(33))    # Bowser 2 exit -> basement
+    walker.hop((19, None))       # re-enter BitFS
+    walker.hop((6, 3))           # pause-exit BitFS -> basement
+    walker.hop((6, 1))           # lobby
+    walker.hop((6, 2))           # upstairs
+    walker.hop((21, None))       # BLJ into BitS
+
+    level, area = origin
+    closed = []
+    for ev in walker.events:
+        prev_level = level
+        if ev.type == "level_changed":
+            level = ev.payload["to"]
+        if ev.type == "area_changed":
+            area = ev.payload["to"]
+        ctx = MatchContext(level=level, prev_level=prev_level, num_stars=0,
+                           area=area)
+        got, _ = engine.feed(ev, ctx)
+        closed.extend(got)
+
+    outcomes = [(a.segment_id, a.outcome) for a in closed]
+    # id 1 = seg:bowser2->upstairs closes first (at Upstairs); id 2 =
+    # seg:bits-entry arms on that same event and closes second (at BitS).
+    assert outcomes == [(1, "success"), (2, "success")], outcomes
+
+
+def test_a_100_coin_star_segment_ends_on_the_star_that_exits_the_level():
+    # Reshaped 2026-07-29 (live report): the segment now arms on STAGE ENTRY,
+    # not the 100-coin grab itself, so it can be offered before the grab and
+    # times the whole course visit. The 100-coin grab is a WAYPOINT; in a
+    # normal stage it does not exit, the segment ends on a DIFFERENT, named
+    # star.
+    row = _seg("seg:100c->exit:wf")
+    stage_entry = [
+        Ev(1, "level_changed", 100, {"from": 6, "to": 24}),
+    ]
+    closed = run_engine(row, stage_entry, 6, None)
+    assert closed == [], "stage entry alone must not exit the level"
+
+    hundred_coins_only = stage_entry + [
+        Ev(2, "star_collected", 150,
+           {"course_id": 2, "star_id": 6, "num_stars": 0}),
+    ]
+    closed = run_engine(row, hundred_coins_only, 6, None)
+    assert closed == [], "the 100-coin grab alone must not exit the level"
+
+    events = hundred_coins_only + [
+        Ev(3, "star_collected", 250,
+           {"course_id": 2, "star_id": 2, "num_stars": 1}),
+    ]
+    closed = run_engine(row, events, 6, None)
+    outcomes = [a.outcome for a in closed]
+    assert outcomes == ["success"], (row["seed_key"], outcomes)
+
+
+def test_hundred_coin_exit_count_and_shape():
+    """Structural guard, mutation-provable: 15 rows (one per main course),
+    each arming on that course's stage entry, waypointing through its
+    100-coin star, and ending on any of its six OTHER stars -- never the
+    100-coin star itself, and never unguarded into some other course's
+    stars."""
+    rows = [s for s in SEGMENTS if s["category"] == "100 Coin Exit"]
+    assert len(rows) == 15
+    seen_courses = set()
+    for row in rows:
+        starts = {t["type"] for t in row["start_triggers"]}
+        assert starts == {"level_enter", "attempt_anchor"}
+        levels = {t.get("to", t.get("level")) for t in row["start_triggers"]}
+        assert len(levels) == 1, "start clauses disagree on which level"
+        assert len(row["waypoints"]) == 1 and len(row["waypoints"][0]) == 1
+        waypoint = row["waypoints"][0][0]
+        assert waypoint["type"] == "star_grabbed" and waypoint["star"] == 6
+        seen_courses.add(waypoint["course"])
+        ends = row["end_triggers"]
+        assert len(ends) == 6
+        assert all(e["type"] == "star_grabbed"
+                   and e["course"] == waypoint["course"]
+                   and e["star"] != 6 for e in ends)
+        assert row["guards"] == []            # no route ambiguity -- always on
+        assert row["match_mode"] == "strict"
+    assert seen_courses == set(range(1, 16))  # every main course, no gaps
+
+
+def test_a_bowser_reds_segment_ends_on_the_pipe_not_the_star():
+    # Reshaped 2026-07-29 (live report): the segment now arms on STAGE ENTRY,
+    # not the reds-star grab itself, so it can be offered before the grab and
+    # times the whole stage (previously it measured only star->pipe -- his
+    # log showed 237/378-frame "successes"). The reference autosplitter's own
+    # default (it waits for pipe entry), and the case its issue tracker shows
+    # it repeatedly getting wrong.
+    row = _seg("seg:reds->pipe:bitdw")
+    stage_entry = [
+        Ev(1, "level_changed", 100, {"from": 16, "to": 17}),
+    ]
+    closed = run_engine(row, stage_entry, 16, None)
+    assert closed == [], "stage entry alone must not finish the level"
+
+    reds_only = stage_entry + [
+        Ev(2, "star_collected", 150,
+           {"course_id": 16, "star_id": 0, "num_stars": 0}),
+    ]
+    closed = run_engine(row, reds_only, 16, None)
+    assert closed == [], "the reds star alone must not finish the level"
+
+    events = reds_only + [
+        Ev(3, "warp_entered", 250, {"level": 17}),
+    ]
+    closed = run_engine(row, events, 16, None)
+    outcomes = [a.outcome for a in closed]
+    assert outcomes == ["success"], (row["seed_key"], outcomes)
+
+
+def test_reds_to_pipe_count_and_shape():
+    rows = [s for s in SEGMENTS if s["seed_key"].startswith("seg:reds->pipe:")]
+    assert len(rows) == 3
+    for row in rows:
+        starts = {t["type"] for t in row["start_triggers"]}
+        assert starts == {"level_enter", "attempt_anchor"}
+        levels = {t.get("to", t.get("level")) for t in row["start_triggers"]}
+        assert len(levels) == 1, "start clauses disagree on which level"
+        assert len(row["waypoints"]) == 1 and len(row["waypoints"][0]) == 1
+        waypoint = row["waypoints"][0][0]
+        assert waypoint["type"] == "star_grabbed" and waypoint["star"] == 0
+        assert row["end_triggers"][0]["type"] == "warp_entered"
+        assert row["guards"] == []
+        assert row["category"] == "Castle Movement"
+        assert row["match_mode"] == "strict"
+
+
+def test_a_slow_hundred_coin_run_no_longer_has_a_staleness_budget():
+    """SUPERSEDES the loose-mode limitation this test used to document
+    (2026-07-29): replaying the user's real 659-event session found the
+    ONLY genuine 100c->exit completion in the whole journal (WF, three
+    practice_resets before ever grabbing the 100-coin star, 185.4s total)
+    silently swallowed by the loose-mode staleness deadline
+    (segments.py::budget_frames -- MIN_BUDGET_FRAMES, measured against
+    castle MOVEMENTS' much shorter completions, not 100-coin hunts).
+
+    The SAME-DAY match_mode fix (loose -> strict, live report: a segment
+    stayed "running" after the player left the course) removes this as a
+    side effect: `_deadline_for` (segments.py) returns None for any
+    non-loose def, so a strict/waypoint dispatch never computes a budget at
+    all. This test now proves the opposite of what it used to: a completion
+    taking far longer than the OLD floor still records success, because
+    there is no floor to exceed any more. `budget_frames(None)` is still the
+    reference point (not a literal frame count) so this stays meaningful if
+    a future def in this family ever reverts to loose."""
+    row = _seg("seg:100c->exit:wf")
+    floor = budget_frames(None)
+    events = [
+        Ev(1, "level_changed", 100, {"from": 6, "to": 24}),
+        Ev(2, "star_collected", 100 + floor + 3000,   # well past the old floor
+           {"course_id": 2, "star_id": 6, "num_stars": 0}),
+        Ev(3, "star_collected", 100 + floor + 6000,
+           {"course_id": 2, "star_id": 2, "num_stars": 1}),
+    ]
+    closed = run_engine(row, events, 6, None)
+    assert [a.outcome for a in closed] == ["success"], (
+        "a strict/waypoint def has no staleness deadline -- this must "
+        "succeed regardless of how long the course visit actually took")
+
+
+def test_leaving_the_course_deactivates_the_hundred_coin_segment():
+    """Live report (2026-07-29), the fix this whole mode change is for: he
+    left DDD for BitFS mid-visit and "DDD -- 100 Coins -> Exit" still read
+    RUNNING -- loose is transparent to level_changed by design, so it never
+    disarmed. Strict routes to _feed_waypoint (segments.py), whose
+    major-action cancel treats a real-edge level_changed that isn't the next
+    waypoint as "the player switched tasks or misrouted" -- exactly
+    "deactivate when I leave the stage". No row, no success: a silent
+    cancel, same as any other abandoned attempt.
+
+    Checks `engine.armed_ids()`, not just the closed-attempts list: a silent
+    cancel and "still armed, nothing has closed YET" both produce an empty
+    `closed` list, so asserting on `closed` alone cannot tell the fixed
+    behaviour apart from the exact bug being fixed here -- the segment must
+    actually leave the armed set."""
+    row = _seg("seg:100c->exit:ddd")
+    d = SegmentDef(id=1, name=row["name"], enabled=True,
+                   start_triggers=row["start_triggers"],
+                   end_triggers=row["end_triggers"],
+                   waypoints=row["waypoints"], guards=[],
+                   match_mode=row["match_mode"])
+    engine = SegmentEngine([d])
+    events = [
+        Ev(1, "level_changed", 100, {"from": 6, "to": 23}),   # enter DDD
+        Ev(2, "level_changed", 150, {"from": 23, "to": 19}),  # leave for BitFS
+    ]
+    level = 6
+    for ev in events:
+        prev_level = level
+        level = ev.payload["to"]
+        ctx = MatchContext(level=level, prev_level=prev_level, num_stars=0, area=None)
+        closed, _ = engine.feed(ev, ctx)
+        assert closed == []
+    assert engine.armed_ids() == set(), (
+        "leaving the course must disarm the segment -- it must not still "
+        "read as running")
+
+
+def test_a_courses_own_subarea_stays_transparent_mid_hundred_coin_run():
+    """The other half of the same fix, checked so the level-change cancel
+    above doesn't overcorrect: a course's OWN subareas (DDD's submarine bay
+    is the live-reported example) must NOT cancel a visit that legitimately
+    crosses them -- `_feed_waypoint` treats `area_changed` as transparent
+    (it is not in `_MAJOR_EVENT_TYPES` and is not a `level_changed`), so
+    moving between subareas of the SAME course changes nothing, and the run
+    can still complete afterward."""
+    row = _seg("seg:100c->exit:ddd")
+    events = [
+        Ev(1, "level_changed", 100, {"from": 6, "to": 23}),      # enter DDD
+        Ev(2, "area_changed", 120, {"level": 23, "from": 1, "to": 2}),  # into the sub
+        Ev(3, "star_collected", 150,
+           {"course_id": 9, "star_id": 6, "num_stars": 0}),      # 100 coins
+        Ev(4, "area_changed", 180, {"level": 23, "from": 2, "to": 1}),  # back out
+        Ev(5, "star_collected", 250,
+           {"course_id": 9, "star_id": 0, "num_stars": 1}),      # exit star
+    ]
+    closed = run_engine(row, events, 6, None)
+    assert [a.outcome for a in closed] == ["success"], (
+        "area_changed within the same course must stay transparent")
+
+
+def test_grabbing_an_ordinary_star_first_cancels_the_hundred_coin_attempt():
+    """The consequence the brief asked to have confirmed rather than
+    assumed: `_feed_waypoint`'s major-action cancel fires on ANY
+    star_collected that isn't the next expected waypoint, so grabbing an
+    ordinary star (not the 100-coin one) before the 100-coin grab ends the
+    attempt -- silently, no row.
+
+    This is CORRECT, not a false positive, checked against actual SM64
+    behaviour rather than assumed: grabbing any star except the 100-coin one
+    triggers the star-grab cutscene and returns Mario to the castle -- the
+    very asymmetry this family exists to express ("you don't exit the stage
+    when you grab a 100 coins star... you must find another star to
+    actually exit the level"). There is no real sequence where an ordinary
+    star is grabbed and the player keeps playing in the same course visit,
+    so cancelling here is not stricter than reality, it is reality arriving
+    slightly before the level_changed that would have cancelled it anyway.
+
+    Checks `armed_ids()`, not just `closed` -- under the OLD "loose" mode
+    this same sequence ALSO produces an empty `closed` list (loose has no
+    major-action cancel branch at all, so it stays transparently armed
+    instead), so `closed == []` alone cannot tell "cancelled" apart from
+    "still running and just hasn't ended yet"."""
+    row = _seg("seg:100c->exit:wf")
+    d = SegmentDef(id=1, name=row["name"], enabled=True,
+                   start_triggers=row["start_triggers"],
+                   end_triggers=row["end_triggers"],
+                   waypoints=row["waypoints"], guards=[],
+                   match_mode=row["match_mode"])
+    engine = SegmentEngine([d])
+    events = [
+        Ev(1, "level_changed", 100, {"from": 6, "to": 24}),
+        Ev(2, "star_collected", 150,
+           {"course_id": 2, "star_id": 2, "num_stars": 0}),  # an ORDINARY star
+    ]
+    level = 6
+    for ev in events:
+        prev_level = level
+        if ev.type == "level_changed":
+            level = ev.payload["to"]
+        ctx = MatchContext(level=level, prev_level=prev_level, num_stars=0, area=None)
+        closed, _ = engine.feed(ev, ctx)
+        assert closed == [], "an ordinary star grab before the 100-coin one must cancel, no row"
+    assert engine.armed_ids() == set(), (
+        "an ordinary star grab must actually cancel the attempt (leave the "
+        "armed set), not merely fail to close it yet")
+
+
+# --- lint gate (Task 15, tracking/lint.py) ----------------------------------
+
+def seeded_definitions() -> list:
+    """Every seeded segment as a real SegmentDef, id-stable within one call
+    (1-based index into SEGMENTS, matching the id scheme every other builder
+    in this file uses) -- the shape tracking/lint.py's lint_definition reads,
+    for the corpus-clean gate below."""
+    return [
+        SegmentDef(id=index, name=row["name"], enabled=row["enabled"],
+                   start_triggers=row["start_triggers"],
+                   end_triggers=row["end_triggers"],
+                   waypoints=row["waypoints"], guards=row["guards"],
+                   match_mode=row.get("match_mode", "strict"))
+        for index, row in enumerate(SEGMENTS, start=1)]
+
+
+def test_no_seeded_definition_trips_a_known_trap():
+    """These four traps (tracking/lint.py's module docstring carries each
+    one's live report) each cost a live report already. The corpus must
+    never regress into one -- error severity only: a warning
+    (start_looser_than_waypoint, duplicate) is advisory, not a broken def,
+    and this is a behavioral gate, not a style one."""
+    defs = seeded_definitions()
+    for d in defs:
+        errors = [w for w in lint_definition(d, defs) if w["severity"] == "error"]
+        assert errors == [], (d.name, errors)

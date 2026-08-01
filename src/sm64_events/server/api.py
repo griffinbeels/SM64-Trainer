@@ -6,10 +6,11 @@ LookupError -> 404 (no such attempt), ValueError -> 409 (exists but not
 saveable: bad mode, non-success, cleared, missing clock, or — for pb/undo —
 not the current PB), RuntimeError -> 503 (database unavailable / degraded
 mode)."""
+import dataclasses
 import re
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -18,7 +19,13 @@ from sm64_events.links import star_links
 from sm64_events.ranks.standards import entity_key
 from sm64_events.stats.registry import (registry_meta, selection_id,
                                         selection_order)
-from sm64_events.tracking.segments import origin_taxonomy, vocab
+from sm64_events.tracking.backtest import backtest
+from sm64_events.tracking.eventlabel import label_event
+from sm64_events.tracking.lint import lint_definition
+from sm64_events.tracking.segments import (SegmentDef, clause_sentence,
+                                           origin_taxonomy,
+                                           validate_definition, vocab)
+from sm64_events.tracking.synthesize import clause_for, suggest_name, synthesize
 from sm64_events.tracking.views import (build_entity_ranks,
                                         build_entity_strategies,
                                         build_route_view, build_run_history,
@@ -205,6 +212,7 @@ class SegmentBody(BaseModel):
     enabled: bool = True
     waypoints: list = []
     category: str | None = None
+    match_mode: str = "loose"
 
 
 class SegmentPatch(BaseModel):
@@ -222,6 +230,64 @@ class SegmentPatch(BaseModel):
     # PATCH (e.g. just flipping `enabled`).
     waypoints: list | None = None
     category: str | None = None
+    # None = untouched, exactly like waypoints above.
+    match_mode: str | None = None
+
+
+class SegmentSplitBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # The shared boundary the two halves meet at -- an any-of clause-set,
+    # same shape as start_triggers/end_triggers (tracking/segments.py::
+    # split_definition's `mid`). Typically the segment's own single waypoint,
+    # promoted to a full stop, but the pure op accepts any clause-set the
+    # caller supplies.
+    mid: list[dict]
+    first_name: str
+    second_name: str
+
+
+class SegmentMergeBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    first_id: int
+    second_id: int
+    name: str
+
+
+class BacktestBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Reuses SegmentBody wholesale rather than a second definition shape --
+    # the whole point is previewing exactly what POST/PUT /api/segments would
+    # accept, before committing to it (tracking/backtest.py). Malformed JSON
+    # (wrong types, a missing required field) never reaches the handler at
+    # all: Pydantic 422s on it here, same as it would on the real save.
+    definition: SegmentBody
+    # The segment definition this candidate would REPLACE, if any -- None for
+    # a brand-new, not-yet-saved definition. When set, the response's
+    # pb_before/pb_after/gained/lost compare the candidate against that
+    # definition's own real history (tracking/backtest.py's CANDIDATE_ID
+    # trap: `current`'s id is real and safe to run under directly).
+    replaces: int | None = None
+
+
+class LintBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Same shape POST /api/segments validates against -- reused wholesale,
+    # like BacktestBody, rather than inventing a second definition shape.
+    definition: SegmentBody
+    # The definition being EDITED, if any -- None for a brand-new,
+    # not-yet-saved definition. lint_definition's `duplicate` rule excludes a
+    # definition from the comparison BY ID (tracking/lint.py), so without this
+    # an in-progress edit that hasn't changed its start/end/waypoints/guards
+    # yet would report itself as a duplicate of its OWN on-disk row on every
+    # keystroke. Unlike backtest's `replaces`, this is never used to fetch
+    # anything (lint_definition's only use of `d.id` is the equality check
+    # above) -- so an id naming no real definition doesn't 404, it just fails
+    # to exclude anything, which is harmless.
+    segment_id: int | None = None
 
 
 class TimeFilterBody(BaseModel):
@@ -270,6 +336,83 @@ def _http(e: Exception) -> HTTPException:
     if isinstance(e, ValueError):
         return HTTPException(409, str(e))
     return HTTPException(503, str(e))  # RuntimeError: degraded mode
+
+
+# GET /api/segments/timeline's default "steps" view membership rule: a type
+# clears the bar if it is ever a SEEDED segment definition's ONLY route in or
+# out -- the definition has no other trigger clause that could record it, so
+# excluding the type would make that definition unrecordable through the
+# default view. "Sole" is a PER-DEFINITION property, not a raw use-count: a
+# type that backs several definitions but always as one of several
+# OR-alternative start/end clauses is not sole for any of them, because the
+# alternative already covers it.
+#
+# Measured directly against all 84 definitions in src/sm64_events/data/
+# defaults.seed.json (2026-07-28; re-derived independently twice after an
+# earlier pass miscounted by reading only each definition's FIRST start/end
+# clause and missing OR-alternatives -- attempt_anchor is never first, so
+# that method undercounted it as 0/1 instead of the 7 real uses below):
+#
+#   trigger type     sole START for     sole END for
+#   area_enter       1 (BitS Entry)     4 (BoB/BBH/SL -> Basement,
+#                                           Bowser 2 -> Upstairs)
+#   attempt_anchor   0                  0  -- all 7 uses (LBLJ, the 3 pipe
+#                                           entries, Bowser 1/2/3) are the
+#                                           SECOND start clause behind a
+#                                           level_enter; every one of those
+#                                           definitions is already reachable
+#                                           by entering the level normally,
+#                                           so attempt_anchor is an F1-retry
+#                                           echo, never the only way in
+#   spawned          1 (Lakitu Skip)    0
+#
+# level_changed/star_collected/warp_entered/key_grabbed (the base four) cover
+# 63/65 starts and 61/65 ends (~95%) on their own and are never excluded
+# regardless of this table -- they are the foundation this rule sits on top
+# of, not a case it decides.
+#
+# area_changed clears the bar (5 sole uses) despite dominating raw volume
+# (1,678 of 18,656 real events, 2026-07-28) and is unconditionally included --
+# every area_changed row is a real castle-region crossing.
+#
+# spawned also clears the bar (Lakitu Skip's only start), but the raw type is
+# 1,164 events, almost all ordinary respawns after a death or reset that no
+# definition needs. Lakitu Skip's clause (`{"type": "spawned", "level": 16}`)
+# does not itself distinguish them, but every spawned event also carries a
+# `kind` the matcher doesn't check (detectors/spawn.py): "intro" (edge out of
+# the file-select cutscene) or "spawn" (an ordinary respawn-in). Measured
+# against the real journal (2026-07-28): of 1,164 spawned events, 28 are
+# kind="intro" and 1,136 are kind="spawn"; of the 27 kind="intro" spawns at
+# level 16 -- exactly what Lakitu Skip's clause matches -- ALL 27 are
+# kind="intro", never an ordinary respawn. So the default view includes a
+# spawned row only when kind == "intro" (`_is_default_timeline_row` below),
+# not the raw type -- narrower than the type-level criterion strictly asks
+# for, but it is what the criterion's own need actually is.
+#
+# attempt_anchor (practice_reset/state_loaded) and game_reset (0 sole uses
+# each) stay excluded, reachable only via `view=all`.
+#
+# Property this rule protects: no seeded definition in defaults.seed.json is
+# unrecordable from the default view. tests/test_api.py derives the
+# sole-route table above straight from the seed file (never hard-codes it)
+# and fails in EITHER direction: a future corpus edit that makes an excluded
+# type sole-route without this file being updated, or this file including a
+# type the corpus doesn't back.
+_TIMELINE_STEP_TYPES = frozenset(
+    {"level_changed", "star_collected", "warp_entered", "key_grabbed",
+     "area_changed"})
+
+
+def _is_default_timeline_row(row) -> bool:
+    """Default (`view=steps`) membership predicate -- see the comment above
+    _TIMELINE_STEP_TYPES for the sole-route criterion this encodes. Every
+    type in _TIMELINE_STEP_TYPES qualifies unconditionally; `spawned` only
+    qualifies when payload `kind == "intro"` (a fresh-file spawn) -- the
+    narrow subset Lakitu Skip's clause actually needs. An ordinary respawn
+    (`kind == "spawn"`) stays out even though the raw type clears the bar."""
+    if row.type in _TIMELINE_STEP_TYPES:
+        return True
+    return row.type == "spawned" and row.payload.get("kind") == "intro"
 
 
 def create_api_router(service) -> APIRouter:
@@ -349,6 +492,57 @@ def create_api_router(service) -> APIRouter:
         order wins — fastapi-patterns)."""
         return vocab()
 
+    @router.get("/segments/timeline")
+    def segments_timeline(limit: int = Query(default=200, ge=1, le=500),
+                          view: str = "steps"):
+        """The recent journal, as rows a human can point at to define a
+        segment from what they just did (`GET /api/segments/timeline`) --
+        the endpoint behind Task 10's `tracking/eventlabel.py::label_event`.
+        Declared BEFORE /segments/{segment_id}, same declaration-order rule
+        as /segments/vocab above (fastapi-patterns).
+
+        Rows are `{id, frame, type, label, wall_time_utc}`, oldest first
+        (newest last) -- ordered by the journal's own auto-increment `id`,
+        NEVER by `frame`. `frame` is the raw game-frame counter and is NOT
+        chronological: it runs backward across every practice reset and
+        session boundary (measured against the real journal, 2026-07-28:
+        469 backward jumps, landing at 0 on the 7 `game_reset`s and 159
+        `session_started`s alone). An `ORDER BY frame` timeline would
+        silently interleave rows across every reset with no error -- `id`
+        is the one field the journal never reorders, so it is the only
+        sort key this endpoint uses; `frame` still rides along as display
+        data.
+
+        `view` picks which of eventlabel.LABELLABLE_TYPES's 9 types show:
+        "steps" (default, see `_TIMELINE_STEP_TYPES`/`_is_default_timeline_
+        row` above for the full sole-route rationale) is level_changed/
+        star_collected/warp_entered/key_grabbed (~95% of what the 84 seeded
+        definitions' start/end clauses actually use) PLUS area_changed (5
+        seeded definitions have no other route in/out) PLUS spawned rows
+        where kind == "intro" (Lakitu Skip's only start, narrowed to the
+        fresh-file-spawn subset it actually needs -- see the comment above
+        _TIMELINE_STEP_TYPES). "all" adds the rest -- practice_reset/
+        state_loaded (the attempt_anchor pair), spawned rows with kind ==
+        "spawn", and game_reset -- no seeded definition needs any of those as
+        its ONLY route in or out. 422 on an unrecognised `view`, matching
+        /api/session's own clock/scope validation. `limit` caps at 500 rows
+        (422 above it) and is applied AFTER filtering, to the most recent
+        rows in the selected view. 503 in degraded mode."""
+        if view not in ("steps", "all"):
+            raise HTTPException(422, "view must be steps or all")
+        if service.db is None:
+            raise HTTPException(503, "database unavailable")
+        rows = []
+        for row in service.db.events():  # ORDER BY id -- oldest first
+            label = label_event(row)
+            if label is None:
+                continue
+            if view == "steps" and not _is_default_timeline_row(row):
+                continue
+            rows.append({"id": row.id, "frame": row.frame, "type": row.type,
+                        "label": label, "wall_time_utc": row.wall_time_utc})
+        return {"rows": rows[-limit:]}
+
     @router.post("/segments")
     async def create_segment(body: SegmentBody):
         try:
@@ -356,6 +550,202 @@ def create_api_router(service) -> APIRouter:
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True, "id": sid}
+
+    @router.post("/segments/backtest")
+    async def backtest_segment(body: BacktestBody):
+        """Replay an UNSAVED candidate definition against the real event
+        journal and report what it would have done -- the whole point is
+        finding out BEFORE saving, rather than live mid-run the way every
+        other SM64 autosplitter works (tracking/backtest.py). Declared
+        BEFORE /segments/{segment_id} -- same declaration-order rule as
+        /segments/vocab above (fastapi-patterns) -- or FastAPI would try to
+        parse 'backtest' as a segment id.
+
+        `definition` validates exactly like POST /segments: a domain-invalid
+        shape (bad trigger type, an empty trigger list, ...) is 409 via the
+        same `validate_definition`/`_http` path every other segment endpoint
+        uses. `replaces` names the segment definition this candidate would
+        replace, if any -- 404 if it names an unknown id. Read-only: no
+        journal entry, no re-projection, no state change of any kind."""
+        if service.db is None:
+            raise HTTPException(503, "database unavailable")
+        definition = body.definition.model_dump()
+        try:
+            validate_definition(definition)
+        except ValueError as e:
+            raise _http(e)
+        # id=0 is a placeholder only -- backtest() ALWAYS stamps its own id
+        # onto the candidate before replaying it (see backtest.py's "THE
+        # TRAP"), so whatever id lands here is discarded either way.
+        candidate = SegmentDef(
+            id=0, name=definition["name"], enabled=definition["enabled"],
+            start_triggers=definition["start_triggers"],
+            end_triggers=definition["end_triggers"],
+            guards=definition["guards"], waypoints=definition["waypoints"],
+            match_mode=definition["match_mode"])
+        current = None
+        if body.replaces is not None:
+            row = next((r for r in service.db.segment_defs()
+                       if r["id"] == body.replaces), None)
+            if row is None:
+                raise HTTPException(404, f"segment {body.replaces} not found")
+            # Same inclusion-list construction TrackerService._load_segment_defs
+            # uses: SegmentDef's own fields, not an exclusion of whatever
+            # extra columns the row happens to carry (seed_key, seed_dirty,
+            # default_strat, created_utc, ...).
+            keys = [f.name for f in dataclasses.fields(SegmentDef)]
+            current = SegmentDef(**{k: row[k] for k in keys})
+        report = backtest(service.db.events(), candidate, current)
+        return dataclasses.asdict(report)
+
+    @router.post("/segments/lint")
+    def lint_segment(body: LintBody):
+        """Author-time findings for a NOT-YET-SAVED definition
+        (`tracking/lint.py`, Task 15/16) -- advisory, checked before Save,
+        never at runtime: a saved definition must keep matching whatever the
+        Usamune warp menu invents forever (`tracking/segments.py`'s own
+        docstring), so a finding here never gates a MATCH, only the editor's
+        Save button. Declared BEFORE /segments/{segment_id} -- same
+        declaration-order rule as /segments/vocab above (fastapi-patterns).
+
+        Unlike POST /segments/backtest, this does NOT run `validate_definition`
+        first and never 409s on a domain-invalid shape (an unknown trigger
+        type, a clause missing a required param): the editor calls this on
+        every edit, including the many in-progress states a form passes
+        through before it is complete (a just-added clause with no level
+        picked yet). Every rule in `lint.py` tolerates that -- an unrecognised
+        type or an unset param reads as "unknown", never a crash (see that
+        module's docstring). **The rules were not the whole story**: two of
+        them call `segments.can_run_from`, and its `fires_from` helper kept a
+        bare `trig["to"]` that raised KeyError -> 500 on an ordinary
+        in-progress form (start clause with its level picked, end clause still
+        the Builder's bare `{"type": "level_enter"}`). Fixed 2026-07-29, with
+        the regression test that actually REACHES it -- the two written when
+        this endpoint shipped both start with `level_exit`, whose `arm_level`
+        is None, so they short-circuit before that rule ever runs. Anything
+        this endpoint calls, not just the four rules, must tolerate partial
+        input. Domain-shape problems still
+        surface at Save time (POST/PUT /api/segments' own `validate_definition`,
+        409) -- that check is unchanged and this endpoint doesn't repeat it.
+
+        `all_defs` is `service.segment_defs` -- the REAL current library,
+        never `[]` (passing `[]` would silently drop the `duplicate` rule
+        with no symptom -- `tracking/lint.py`'s own documented trap).
+        `segment_id` names the definition being edited, if any, so the
+        `duplicate` rule's self-exclusion (by id) excludes the definition's
+        own on-disk row instead of reporting an unmodified edit as a
+        duplicate of itself; omit (or null) for a brand-new definition, where
+        there is no on-disk row yet to exclude. 503 in degraded mode (no
+        definition list to lint against)."""
+        if service.db is None:
+            raise HTTPException(503, "database unavailable")
+        definition = body.definition.model_dump()
+        candidate = SegmentDef(
+            id=body.segment_id if body.segment_id is not None else 0,
+            name=definition["name"], enabled=definition["enabled"],
+            start_triggers=definition["start_triggers"],
+            end_triggers=definition["end_triggers"],
+            guards=definition["guards"], waypoints=definition["waypoints"],
+            match_mode=definition["match_mode"])
+        return {"warnings": lint_definition(candidate, service.segment_defs)}
+
+    @router.get("/segments/synthesize")
+    def synthesize_from_timeline(start_id: int, end_id: int):
+        """Turn two picked `GET /api/segments/timeline` row ids into the
+        (start_clause, end_clause) pair a new segment would be defined by,
+        plus a suggested name and a plain-English sentence for each end --
+        the hinge behind "record what I just did" (`tracking/synthesize.py`,
+        Task 12) wired up for the timeline picker (Task 13). Declared BEFORE
+        /segments/{segment_id} -- same declaration-order rule as
+        /segments/vocab above (fastapi-patterns).
+
+        Looks the two ids up directly in the journal (`service.db.events()`,
+        the SAME source `/segments/timeline` reads) rather than trusting a
+        client-supplied payload -- the picker only ever holds row IDS, never
+        the raw event. 404 when either id names no journal event.
+
+        409 when the pair can't become a segment, naming WHICH problem:
+        picking the SAME event for both ends (it would arm and close on the
+        identical tick -- segments.py's documented COROLLARY), or a row
+        whose type carries no synthesis rule for the role it was picked for
+        (`attempt_anchor`'s `practice_reset`/`state_loaded` source carries no
+        level/course at all -- the matcher resolves that from live
+        MatchContext, never the event, so a bare row can't supply it -- see
+        synthesize.py's module docstring). `synthesize()` itself can't say
+        which of the two failure shapes occurred (both return `None`), so on
+        failure this re-checks with `clause_for` to report the specific one --
+        diagnosis, not a second decision.
+
+        Read-only: no journal entry, no state change of any kind.
+
+        `start_sentence`/`end_sentence` render through `clause_sentence` --
+        the SAME card_label/card_template machinery
+        `card_waiting_for_sentence` uses for an armed segment's "waiting for"
+        line, so a synthesized-but-unsaved clause reads in the identical
+        voice a saved one would, not a second renderer built for this
+        endpoint."""
+        if service.db is None:
+            raise HTTPException(503, "database unavailable")
+        rows_by_id = {row.id: row for row in service.db.events()}
+        start_row, end_row = rows_by_id.get(start_id), rows_by_id.get(end_id)
+        if start_row is None or end_row is None:
+            raise HTTPException(404, "unknown timeline event id")
+        result = synthesize(start_row, end_row)
+        if result is None:
+            if start_row.id == end_row.id:
+                raise HTTPException(409,
+                    "That's the same moment for both start and end — a "
+                    "segment can't arm and finish on the same event. Pick "
+                    "two different moments.")
+            role = "start" if clause_for(start_row, "start") is None else "end"
+            raise HTTPException(409,
+                f"That moment can't be this segment's {role} — it doesn't "
+                "carry enough information to define a trigger from (for "
+                "example, a reset with no recorded place).")
+        start_clause, end_clause = result
+        return {"start_clause": start_clause, "end_clause": end_clause,
+                "start_sentence": clause_sentence(start_clause),
+                "end_sentence": clause_sentence(end_clause),
+                "name": suggest_name(start_clause, end_clause)}
+
+    @router.post("/segments/merge")
+    async def merge_segments(body: SegmentMergeBody):
+        """Chain two EXISTING definitions into one meeting at their shared
+        boundary, kept as a waypoint (`tracking/segments.py::
+        merge_definitions`) -- non-destructive: both inputs survive
+        untouched, and the merged definition is a brand-new, user-created
+        row (`seed_key=None`, so `reconcile_defaults` never touches it).
+        Declared as a literal path BEFORE /segments/{segment_id} -- same
+        declaration-order rule as /segments/vocab above (fastapi-patterns) --
+        so FastAPI never tries to parse 'merge' as a segment id.
+
+        404 for either unknown id. 409 (the pure op's own "do not meet"
+        ValueError) when the pair shares no boundary -- same `_http` path
+        every other segment endpoint uses; a well-formed request that the
+        matcher's own topology rules refuse is a domain refusal, not a
+        malformed body.
+
+        Response also carries `warnings` -- `tracking/lint.py` findings for
+        the merged result, against the real post-merge library. INFORMATIONAL
+        ONLY, never a refusal: `merge_definitions`' own "do not meet" check
+        (above) is the only thing this endpoint blocks on. Measured against
+        the real 84-def corpus before deciding this (Task 16, spec
+        2026-07-28-multi-step-segments): of 6,345 topologically-legal merge
+        pairs, 789 come back with an `unrunnable_arm_position` "error" finding
+        and 6 with `unfireable` -- overwhelmingly a retry-in-place trick
+        (LBLJ, MIPS Clip) merged with an unrelated movement whose concrete arm
+        position genuinely can't reach the combined end by this heuristic.
+        Refusing on that would block a large fraction of merges
+        `merge_definitions` itself already treats as legitimate, so lint
+        stays advisory here rather than a second gate."""
+        try:
+            new_id = await service.merge_segments(
+                body.first_id, body.second_id, body.name)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        merged = next(d for d in service.segment_defs if d.id == new_id)
+        return {"ok": True, "id": new_id,
+                "warnings": lint_definition(merged, service.segment_defs)}
 
     @router.put("/segments/{segment_id}")
     async def update_segment(segment_id: int, body: SegmentPatch):
@@ -391,6 +781,43 @@ def create_api_router(service) -> APIRouter:
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True}
+
+    @router.post("/segments/{segment_id}/split")
+    async def split_segment(segment_id: int, body: SegmentSplitBody):
+        """Break an EXISTING definition into two new ones meeting at `mid`
+        (`tracking/segments.py::split_definition`) -- non-destructive:
+        `segment_id` itself is left completely untouched (definitions arm in
+        parallel, so the whole and both halves can all record on the same
+        play), and both halves are brand-new, user-created rows
+        (`seed_key=None`).
+
+        404 for an unknown `segment_id`. 409 (the pure op's own ValueError)
+        when a produced half would be unfireable, or `segment_id` carries
+        more than one waypoint (folding several into the single shared
+        `mid` would silently drop the rest) -- same `_http` path every other
+        segment endpoint uses.
+
+        Response also carries `warnings` -- `{first: [...], second: [...]}`,
+        `tracking/lint.py` findings for each new half against the real
+        post-split library. INFORMATIONAL ONLY: see `POST /segments/merge`'s
+        own docstring for why lint stays advisory here rather than a second
+        gate (measured against the real corpus before deciding this).
+        `split_definition` already refuses `unfireable` itself (reusing
+        `lint_definition`'s own rule, `tracking/segments.py`), so that
+        finding can never appear in either half's list here -- only
+        `start_looser_than_waypoint`/`unrunnable_arm_position`/`duplicate`
+        are possible in practice."""
+        try:
+            first_id, second_id = await service.split_segment(
+                segment_id, body.mid, (body.first_name, body.second_name))
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        current = {d.id: d for d in service.segment_defs}
+        return {"ok": True, "first_id": first_id, "second_id": second_id,
+                "warnings": {
+                    "first": lint_definition(current[first_id], service.segment_defs),
+                    "second": lint_definition(current[second_id], service.segment_defs),
+                }}
 
     @router.post("/segments/{segment_id}/origin")
     async def set_segment_origin(segment_id: int, body: OriginBody):

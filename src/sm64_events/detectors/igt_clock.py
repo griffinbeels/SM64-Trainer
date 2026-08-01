@@ -11,13 +11,23 @@ Usamune and counts paused frames (live report 2026-06-12: 0'46"23 vs 0'46"26).
 
 Source precedence (see the original rationale in star_grab.py's docstring):
 1. "result"  — USAMUNE_STAR_RESULT, the exact number Usamune displays, used
-   when its write is fresh (changed within a few frames of the touch).
-2. "counter" — USAMUNE_OVERALL back-computed to the touch frame, + the
+   when its write is believed for THIS moment (the two callers below differ
+   only in what makes a write believable).
+2. "counter" — USAMUNE_OVERALL back-computed to the asked-for frame, + the
    one-frame display tick. Pause-safe: the overall counter is Usamune's own
-   IGT, so it never counts paused frames (unlike a wall-frame delta).
+   IGT, so it never counts paused frames (unlike a wall-frame delta). The
+   manual's footnote — "the in-game timer keeps running internally" — is what
+   makes this readable even when Usamune has stopped displaying it, confirmed
+   under every STOP value 2026-08-01.
 3. "reconstructed" — when the overall counter was RESET within a blink of the
-   touch (reset-spamming between attempts), report the clock of the attempt
-   that actually earned the grab, extrapolated to the touch frame.
+   moment (reset-spamming between attempts), report the clock of the attempt
+   that actually earned the grab, extrapolated to that frame.
+
+TWO MOMENTS, one clock. `igt_at` answers "what was on Usamune's timer when
+Mario TOUCHED this", which is the whole event for a pipe (warp.py) and for the
+Bowser-3 grand star (key.py). `igt_at_xcam` answers "what does Usamune STOP
+at", which for a collectable star is a later frame and is the only number a
+leaderboard accepts — see its docstring and detectors/star_grab.py.
 """
 from collections import deque
 
@@ -48,11 +58,55 @@ class IgtClock:
             h.popleft()
 
     def igt_at(self, touch_frame: int, curr: GameSnapshot) -> tuple[int, str]:
+        """Usamune's number at a TOUCH — used by key.py (grand star) and
+        warp.py (pipe), where the touch is the whole event."""
+        return self._reading(touch_frame, curr, self._result_is_fresh)
+
+    def igt_at_xcam(self, xcam_frame: int, curr: GameSnapshot) -> tuple[int, str]:
+        """Usamune's number at the X-CAM moment — the leaderboard-legal time.
+
+        Same arithmetic, one different question of the result store: it is
+        believed only when its write landed AT OR AFTER the x-cam frame.
+        A write BEFORE it is Usamune's grab-time write, and taking that is
+        exactly the bug this exists to fix — under `STOP=GrabX` Usamune writes
+        the store TWICE (manual: "stops the timer on star-grab first, then
+        updates the timer on Xcam"), and the first write sat inside
+        `RESULT_FRESH_FRAMES` of every short fall. Measured 2026-08-01: 9-28
+        frames low across three grabs under GrabX, and the gap was not constant,
+        so no offset could have fixed it.
+
+        On a GROUND grab the two frames coincide, so Usamune's own write is
+        still taken verbatim and that path stays torn-read-free."""
+        return self._reading(xcam_frame, curr, self._result_written_at_or_after)
+
+    def settled_result_at_or_after(self, xcam_frame: int,
+                                   curr: GameSnapshot) -> int | None:
+        """Usamune's OWN written answer for an x-cam, or None if it never
+        wrote one after that moment (`STOP` of Grab or None).
+
+        Worth waiting for rather than deriving, and the reason is not
+        precision: `USAMUNE_OVERALL` is **subarea-local**. It restarts at an
+        area warp inside a level, so on a multi-area star our counter measures
+        the time since entering the subarea and Usamune's store holds the whole
+        star. Live 2026-08-01, his own report — LLL "Hot-Foot-It into the
+        Volcano" read 0'40"63 against Usamune's 0'52"46 (356 frames), and SSL
+        "Inside the Ancient Pyramid" 0'02"43 against 0'19"13 (502 frames), while
+        the nine single-area stars in the same run matched exactly."""
         samples = list(self._history)
         samples.append((curr.global_timer, curr.igt_overall, curr.igt_result))
-        candidate, source = self._primary(touch_frame, curr, samples)
+        if not curr.igt_result:
+            return None
+        if not self._result_written_at_or_after(xcam_frame, samples):
+            return None
+        return curr.igt_result
+
+    def _reading(self, frame: int, curr: GameSnapshot, believe_result
+                 ) -> tuple[int, str]:
+        samples = list(self._history)
+        samples.append((curr.global_timer, curr.igt_overall, curr.igt_result))
+        candidate, source = self._primary(frame, curr, samples, believe_result)
         # Reset-race guard, regardless of source: when the overall counter
-        # was reset within a blink of the touch, even Usamune's own result
+        # was reset within a blink of the moment, even Usamune's own result
         # write holds the post-reset near-zero time — but the grab concluded
         # the attempt that was being played.
         for (g_a, ov_a, _), (_, ov_b, _) in zip(reversed(samples[:-1]),
@@ -60,25 +114,47 @@ class IgtClock:
             if ov_b >= ov_a:
                 continue  # running (or paused); not a reset
             # overall counter was reset in the game-frame gap after g_a
-            if touch_frame <= g_a or candidate < self.RESET_GRACE_FRAMES:
-                prior = max(0, ov_a + (touch_frame - g_a))
+            if frame <= g_a or candidate < self.RESET_GRACE_FRAMES:
+                prior = max(0, ov_a + (frame - g_a))
                 return prior + self.DISPLAY_TICK, "reconstructed"
             break
         return candidate, source
 
-    def _primary(self, touch_frame: int, curr: GameSnapshot,
-                 samples: list[tuple[int, int, int]]) -> tuple[int, str]:
-        if curr.igt_result and self._result_is_fresh(touch_frame, samples):
+    def _primary(self, frame: int, curr: GameSnapshot,
+                 samples: list[tuple[int, int, int]],
+                 believe_result) -> tuple[int, str]:
+        if curr.igt_result and believe_result(frame, samples):
             return curr.igt_result, "result"  # the exact displayed number
-        post = max(0, curr.igt_overall - (curr.global_timer - touch_frame))
+        post = max(0, curr.igt_overall - (curr.global_timer - frame))
         return post + self.DISPLAY_TICK, "counter"
+
+    def _last_result_write_after(self, samples: list[tuple[int, int, int]]
+                                 ) -> int | None:
+        """The last frame KNOWN to precede a change in the result store, or
+        None when it was never observed changing (a stale prior result)."""
+        latest = samples[-1][2]
+        for g, _, res in reversed(samples[:-1]):
+            if res != latest:
+                return g
+        return None
 
     def _result_is_fresh(self, touch_frame: int,
                          samples: list[tuple[int, int, int]]) -> bool:
         """True when the result store changed within a few frames of the
         touch — i.e., it was written for THIS grab, not a previous star."""
-        latest = samples[-1][2]
-        for g, _, res in reversed(samples[:-1]):
-            if res != latest:
-                return g >= touch_frame - self.RESULT_FRESH_FRAMES
-        return False  # never observed changing: may be a stale prior result
+        before = self._last_result_write_after(samples)
+        return before is not None and before >= touch_frame - self.RESULT_FRESH_FRAMES
+
+    def _result_written_at_or_after(self, xcam_frame: int,
+                                    samples: list[tuple[int, int, int]]) -> bool:
+        """True when the write can only have landed on or after `xcam_frame`.
+
+        The write is bracketed: it happened somewhere after the last sample
+        still holding the old value, so `before + 1` is the earliest frame it
+        can have been. Requiring that to reach the x-cam frame is deliberately
+        the conservative half of the bracket — a rejected write costs a fall
+        through to the counter, which is the same number give or take our own
+        one-frame read skew, while a wrongly ACCEPTED one is the grab-time
+        value and is wrong by however long Mario was in the air."""
+        before = self._last_result_write_after(samples)
+        return before is not None and before + 1 >= xcam_frame

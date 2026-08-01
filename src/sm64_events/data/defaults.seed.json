@@ -25,7 +25,8 @@
       ],
       "waypoints": [],
       "guards": [],
-      "category": "Tricks"
+      "category": "Tricks",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:mips-clip",
@@ -46,7 +47,8 @@
       ],
       "waypoints": [],
       "guards": [],
-      "category": "Tricks"
+      "category": "Tricks",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:lakitu-skip",
@@ -66,7 +68,8 @@
       ],
       "waypoints": [],
       "guards": [],
-      "category": "Tricks"
+      "category": "Tricks",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:bits-entry",
@@ -87,7 +90,8 @@
       ],
       "waypoints": [],
       "guards": [],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:bitdw-pipe",
@@ -111,7 +115,8 @@
       ],
       "waypoints": [],
       "guards": [],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "match_mode": "exclusive"
     },
     {
       "seed_key": "seg:bitfs-pipe",
@@ -135,7 +140,8 @@
       ],
       "waypoints": [],
       "guards": [],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "match_mode": "exclusive"
     },
     {
       "seed_key": "seg:bits-pipe",
@@ -159,7 +165,8 @@
       ],
       "waypoints": [],
       "guards": [],
-      "category": "Castle Movement"
+      "category": "Castle Movement",
+      "match_mode": "exclusive"
     },
     {
       "seed_key": "seg:bowser-1",
@@ -183,7 +190,8 @@
       ],
       "waypoints": [],
       "guards": [],
-      "category": "Bowser Fights"
+      "category": "Bowser Fights",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:bowser-2",
@@ -207,7 +215,8 @@
       ],
       "waypoints": [],
       "guards": [],
-      "category": "Bowser Fights"
+      "category": "Bowser Fights",
+      "default_strat": "Standard"
     },
     {
       "seed_key": "seg:bowser-3",
@@ -257,7 +266,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:bob->wf",
@@ -282,7 +292,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:bob->pss",
@@ -307,7 +318,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:bob->ccm",
@@ -332,7 +344,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:bob->basement",
@@ -358,7 +371,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:pss->wf",
@@ -383,7 +397,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:wf->pss",
@@ -408,7 +423,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:wf->ccm",
@@ -433,7 +449,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:wf->sa",
@@ -458,7 +475,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:wf->bitdw",
@@ -483,7 +501,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:wf->ssl",
@@ -501,22 +520,15 @@
           "to": 8
         }
       ],
-      "waypoints": [
-        [
-          {
-            "type": "area_enter",
-            "level": 6,
-            "area": 3
-          }
-        ]
-      ],
+      "waypoints": [],
       "guards": [
         {
           "type": "in_active_route"
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:sa->jrb",
@@ -541,7 +553,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:jrb->pss",
@@ -566,7 +579,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:pss->totwc",
@@ -591,7 +605,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:totwc->pss",
@@ -616,7 +631,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:totwc->bitdw",
@@ -641,7 +657,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:pss->bitdw",
@@ -666,7 +683,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:pss->bob",
@@ -691,7 +709,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:ccm->bitdw",
@@ -716,7 +735,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:ccm->bbh",
@@ -734,21 +754,15 @@
           "to": 4
         }
       ],
-      "waypoints": [
-        [
-          {
-            "type": "level_enter",
-            "to": 26
-          }
-        ]
-      ],
+      "waypoints": [],
       "guards": [
         {
           "type": "in_active_route"
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:bowser1->bob",
@@ -773,7 +787,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:bowser1->wf",
@@ -798,7 +813,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:bowser1->ccm",
@@ -823,7 +839,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:bowser1->ssl",
@@ -841,22 +858,15 @@
           "to": 8
         }
       ],
-      "waypoints": [
-        [
-          {
-            "type": "area_enter",
-            "level": 6,
-            "area": 3
-          }
-        ]
-      ],
+      "waypoints": [],
       "guards": [
         {
           "type": "in_active_route"
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:bowser1->ddd",
@@ -874,22 +884,15 @@
           "to": 23
         }
       ],
-      "waypoints": [
-        [
-          {
-            "type": "area_enter",
-            "level": 6,
-            "area": 3
-          }
-        ]
-      ],
+      "waypoints": [],
       "guards": [
         {
           "type": "in_active_route"
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:bowser1->bitfs",
@@ -907,22 +910,15 @@
           "to": 19
         }
       ],
-      "waypoints": [
-        [
-          {
-            "type": "area_enter",
-            "level": 6,
-            "area": 3
-          }
-        ]
-      ],
+      "waypoints": [],
       "guards": [
         {
           "type": "in_active_route"
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:bbh->basement",
@@ -955,7 +951,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:bbh->ddd",
@@ -973,21 +970,15 @@
           "to": 23
         }
       ],
-      "waypoints": [
-        [
-          {
-            "type": "level_enter",
-            "to": 6
-          }
-        ]
-      ],
+      "waypoints": [],
       "guards": [
         {
           "type": "in_active_route"
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:mips1->ssl",
@@ -1013,7 +1004,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:ssl->lll",
@@ -1038,7 +1030,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:ssl->hmc",
@@ -1063,7 +1056,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:lll->hmc",
@@ -1088,7 +1082,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:lll->ddd",
@@ -1113,7 +1108,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:hmc->lll",
@@ -1138,7 +1134,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:hmc->ddd",
@@ -1163,7 +1160,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:hmc->rr",
@@ -1181,27 +1179,15 @@
           "to": 15
         }
       ],
-      "waypoints": [
-        [
-          {
-            "type": "level_enter",
-            "to": 7
-          }
-        ],
-        [
-          {
-            "type": "level_exit",
-            "from": 7
-          }
-        ]
-      ],
+      "waypoints": [],
       "guards": [
         {
           "type": "in_active_route"
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:mips2->hmc",
@@ -1227,7 +1213,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:mips2->vcutm",
@@ -1246,21 +1233,15 @@
           "to": 18
         }
       ],
-      "waypoints": [
-        [
-          {
-            "type": "level_enter",
-            "to": 16
-          }
-        ]
-      ],
+      "waypoints": [],
       "guards": [
         {
           "type": "in_active_route"
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:vcutm->ccm",
@@ -1278,21 +1259,15 @@
           "to": 5
         }
       ],
-      "waypoints": [
-        [
-          {
-            "type": "level_enter",
-            "to": 6
-          }
-        ]
-      ],
+      "waypoints": [],
       "guards": [
         {
           "type": "in_active_route"
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:ddd->bitfs",
@@ -1317,7 +1292,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:ddd->wdw",
@@ -1335,27 +1311,15 @@
           "to": 11
         }
       ],
-      "waypoints": [
-        [
-          {
-            "type": "level_enter",
-            "to": 19
-          }
-        ],
-        [
-          {
-            "type": "level_exit",
-            "from": 19
-          }
-        ]
-      ],
+      "waypoints": [],
       "guards": [
         {
           "type": "in_active_route"
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:bowser2->ddd",
@@ -1380,7 +1344,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:bowser2->wdw",
@@ -1398,22 +1363,15 @@
           "to": 11
         }
       ],
-      "waypoints": [
-        [
-          {
-            "type": "area_enter",
-            "level": 6,
-            "area": 2
-          }
-        ]
-      ],
+      "waypoints": [],
       "guards": [
         {
           "type": "in_active_route"
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:bowser2->upstairs",
@@ -1432,22 +1390,41 @@
           "area": 2
         }
       ],
-      "waypoints": [
-        [
-          {
-            "type": "area_enter",
-            "level": 6,
-            "area": 1
-          }
-        ]
-      ],
+      "waypoints": [],
       "guards": [
         {
           "type": "in_active_route"
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
+    },
+    {
+      "seed_key": "seg:bowser2->bits",
+      "name": "Bowser 2 → BitS",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "level_exit",
+          "from": 33
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "level_enter",
+          "to": 21
+        }
+      ],
+      "waypoints": [],
+      "guards": [
+        {
+          "type": "in_active_route"
+        }
+      ],
+      "category": "Castle Movement",
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:wdw->thi",
@@ -1472,7 +1449,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:thi->ttm",
@@ -1497,7 +1475,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:ttm->sl",
@@ -1522,7 +1501,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:sl->basement",
@@ -1541,27 +1521,15 @@
           "area": 3
         }
       ],
-      "waypoints": [
-        [
-          {
-            "type": "level_enter",
-            "to": 10
-          }
-        ],
-        [
-          {
-            "type": "level_exit",
-            "from": 10
-          }
-        ]
-      ],
+      "waypoints": [],
       "guards": [
         {
           "type": "in_active_route"
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:sl->rr",
@@ -1586,7 +1554,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:sl->wmotr",
@@ -1611,7 +1580,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:wmotr->ttc",
@@ -1636,7 +1606,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:rr->ttc",
@@ -1661,7 +1632,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:ttc->rr",
@@ -1686,7 +1658,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:rr->bits",
@@ -1711,7 +1684,8 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
     },
     {
       "seed_key": "seg:ttc->bits",
@@ -1736,7 +1710,992 @@
         }
       ],
       "category": "Castle Movement",
-      "default_strat": "Standard"
+      "default_strat": "Standard",
+      "match_mode": "loose"
+    },
+    {
+      "seed_key": "seg:reds->pipe:bitdw",
+      "name": "BitDW — 8 Red Coins → Pipe",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "level_enter",
+          "to": 17
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 17
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "warp_entered",
+          "level": 17
+        }
+      ],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 16,
+            "star": 0
+          }
+        ]
+      ],
+      "guards": [],
+      "category": "Castle Movement",
+      "match_mode": "strict"
+    },
+    {
+      "seed_key": "seg:reds->pipe:bitfs",
+      "name": "BitFS — 8 Red Coins → Pipe",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "level_enter",
+          "to": 19
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 19
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "warp_entered",
+          "level": 19
+        }
+      ],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 17,
+            "star": 0
+          }
+        ]
+      ],
+      "guards": [],
+      "category": "Castle Movement",
+      "match_mode": "strict"
+    },
+    {
+      "seed_key": "seg:reds->pipe:bits",
+      "name": "BitS — 8 Red Coins → Pipe",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "level_enter",
+          "to": 21
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 21
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "warp_entered",
+          "level": 21
+        }
+      ],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 18,
+            "star": 0
+          }
+        ]
+      ],
+      "guards": [],
+      "category": "Castle Movement",
+      "match_mode": "strict"
+    },
+    {
+      "seed_key": "seg:100c->exit:bob",
+      "name": "BoB — 100 Coins → Exit",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "level_enter",
+          "to": 9
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 9
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 1,
+          "star": 0
+        },
+        {
+          "type": "star_grabbed",
+          "course": 1,
+          "star": 1
+        },
+        {
+          "type": "star_grabbed",
+          "course": 1,
+          "star": 2
+        },
+        {
+          "type": "star_grabbed",
+          "course": 1,
+          "star": 3
+        },
+        {
+          "type": "star_grabbed",
+          "course": 1,
+          "star": 4
+        },
+        {
+          "type": "star_grabbed",
+          "course": 1,
+          "star": 5
+        }
+      ],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 1,
+            "star": 6
+          }
+        ]
+      ],
+      "guards": [],
+      "category": "100 Coin Exit",
+      "match_mode": "strict"
+    },
+    {
+      "seed_key": "seg:100c->exit:wf",
+      "name": "WF — 100 Coins → Exit",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "level_enter",
+          "to": 24
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 24
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 2,
+          "star": 0
+        },
+        {
+          "type": "star_grabbed",
+          "course": 2,
+          "star": 1
+        },
+        {
+          "type": "star_grabbed",
+          "course": 2,
+          "star": 2
+        },
+        {
+          "type": "star_grabbed",
+          "course": 2,
+          "star": 3
+        },
+        {
+          "type": "star_grabbed",
+          "course": 2,
+          "star": 4
+        },
+        {
+          "type": "star_grabbed",
+          "course": 2,
+          "star": 5
+        }
+      ],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 2,
+            "star": 6
+          }
+        ]
+      ],
+      "guards": [],
+      "category": "100 Coin Exit",
+      "match_mode": "strict"
+    },
+    {
+      "seed_key": "seg:100c->exit:jrb",
+      "name": "JRB — 100 Coins → Exit",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "level_enter",
+          "to": 12
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 12
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 3,
+          "star": 0
+        },
+        {
+          "type": "star_grabbed",
+          "course": 3,
+          "star": 1
+        },
+        {
+          "type": "star_grabbed",
+          "course": 3,
+          "star": 2
+        },
+        {
+          "type": "star_grabbed",
+          "course": 3,
+          "star": 3
+        },
+        {
+          "type": "star_grabbed",
+          "course": 3,
+          "star": 4
+        },
+        {
+          "type": "star_grabbed",
+          "course": 3,
+          "star": 5
+        }
+      ],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 3,
+            "star": 6
+          }
+        ]
+      ],
+      "guards": [],
+      "category": "100 Coin Exit",
+      "match_mode": "strict"
+    },
+    {
+      "seed_key": "seg:100c->exit:ccm",
+      "name": "CCM — 100 Coins → Exit",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "level_enter",
+          "to": 5
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 5
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 4,
+          "star": 0
+        },
+        {
+          "type": "star_grabbed",
+          "course": 4,
+          "star": 1
+        },
+        {
+          "type": "star_grabbed",
+          "course": 4,
+          "star": 2
+        },
+        {
+          "type": "star_grabbed",
+          "course": 4,
+          "star": 3
+        },
+        {
+          "type": "star_grabbed",
+          "course": 4,
+          "star": 4
+        },
+        {
+          "type": "star_grabbed",
+          "course": 4,
+          "star": 5
+        }
+      ],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 4,
+            "star": 6
+          }
+        ]
+      ],
+      "guards": [],
+      "category": "100 Coin Exit",
+      "match_mode": "strict"
+    },
+    {
+      "seed_key": "seg:100c->exit:bbh",
+      "name": "BBH — 100 Coins → Exit",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "level_enter",
+          "to": 4
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 4
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 5,
+          "star": 0
+        },
+        {
+          "type": "star_grabbed",
+          "course": 5,
+          "star": 1
+        },
+        {
+          "type": "star_grabbed",
+          "course": 5,
+          "star": 2
+        },
+        {
+          "type": "star_grabbed",
+          "course": 5,
+          "star": 3
+        },
+        {
+          "type": "star_grabbed",
+          "course": 5,
+          "star": 4
+        },
+        {
+          "type": "star_grabbed",
+          "course": 5,
+          "star": 5
+        }
+      ],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 5,
+            "star": 6
+          }
+        ]
+      ],
+      "guards": [],
+      "category": "100 Coin Exit",
+      "match_mode": "strict"
+    },
+    {
+      "seed_key": "seg:100c->exit:hmc",
+      "name": "HMC — 100 Coins → Exit",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "level_enter",
+          "to": 7
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 7
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 6,
+          "star": 0
+        },
+        {
+          "type": "star_grabbed",
+          "course": 6,
+          "star": 1
+        },
+        {
+          "type": "star_grabbed",
+          "course": 6,
+          "star": 2
+        },
+        {
+          "type": "star_grabbed",
+          "course": 6,
+          "star": 3
+        },
+        {
+          "type": "star_grabbed",
+          "course": 6,
+          "star": 4
+        },
+        {
+          "type": "star_grabbed",
+          "course": 6,
+          "star": 5
+        }
+      ],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 6,
+            "star": 6
+          }
+        ]
+      ],
+      "guards": [],
+      "category": "100 Coin Exit",
+      "match_mode": "strict"
+    },
+    {
+      "seed_key": "seg:100c->exit:lll",
+      "name": "LLL — 100 Coins → Exit",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "level_enter",
+          "to": 22
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 22
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 7,
+          "star": 0
+        },
+        {
+          "type": "star_grabbed",
+          "course": 7,
+          "star": 1
+        },
+        {
+          "type": "star_grabbed",
+          "course": 7,
+          "star": 2
+        },
+        {
+          "type": "star_grabbed",
+          "course": 7,
+          "star": 3
+        },
+        {
+          "type": "star_grabbed",
+          "course": 7,
+          "star": 4
+        },
+        {
+          "type": "star_grabbed",
+          "course": 7,
+          "star": 5
+        }
+      ],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 7,
+            "star": 6
+          }
+        ]
+      ],
+      "guards": [],
+      "category": "100 Coin Exit",
+      "match_mode": "strict"
+    },
+    {
+      "seed_key": "seg:100c->exit:ssl",
+      "name": "SSL — 100 Coins → Exit",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "level_enter",
+          "to": 8
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 8
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 8,
+          "star": 0
+        },
+        {
+          "type": "star_grabbed",
+          "course": 8,
+          "star": 1
+        },
+        {
+          "type": "star_grabbed",
+          "course": 8,
+          "star": 2
+        },
+        {
+          "type": "star_grabbed",
+          "course": 8,
+          "star": 3
+        },
+        {
+          "type": "star_grabbed",
+          "course": 8,
+          "star": 4
+        },
+        {
+          "type": "star_grabbed",
+          "course": 8,
+          "star": 5
+        }
+      ],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 8,
+            "star": 6
+          }
+        ]
+      ],
+      "guards": [],
+      "category": "100 Coin Exit",
+      "match_mode": "strict"
+    },
+    {
+      "seed_key": "seg:100c->exit:ddd",
+      "name": "DDD — 100 Coins → Exit",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "level_enter",
+          "to": 23
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 23
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 9,
+          "star": 0
+        },
+        {
+          "type": "star_grabbed",
+          "course": 9,
+          "star": 1
+        },
+        {
+          "type": "star_grabbed",
+          "course": 9,
+          "star": 2
+        },
+        {
+          "type": "star_grabbed",
+          "course": 9,
+          "star": 3
+        },
+        {
+          "type": "star_grabbed",
+          "course": 9,
+          "star": 4
+        },
+        {
+          "type": "star_grabbed",
+          "course": 9,
+          "star": 5
+        }
+      ],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 9,
+            "star": 6
+          }
+        ]
+      ],
+      "guards": [],
+      "category": "100 Coin Exit",
+      "match_mode": "strict"
+    },
+    {
+      "seed_key": "seg:100c->exit:sl",
+      "name": "SL — 100 Coins → Exit",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "level_enter",
+          "to": 10
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 10
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 10,
+          "star": 0
+        },
+        {
+          "type": "star_grabbed",
+          "course": 10,
+          "star": 1
+        },
+        {
+          "type": "star_grabbed",
+          "course": 10,
+          "star": 2
+        },
+        {
+          "type": "star_grabbed",
+          "course": 10,
+          "star": 3
+        },
+        {
+          "type": "star_grabbed",
+          "course": 10,
+          "star": 4
+        },
+        {
+          "type": "star_grabbed",
+          "course": 10,
+          "star": 5
+        }
+      ],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 10,
+            "star": 6
+          }
+        ]
+      ],
+      "guards": [],
+      "category": "100 Coin Exit",
+      "match_mode": "strict"
+    },
+    {
+      "seed_key": "seg:100c->exit:wdw",
+      "name": "WDW — 100 Coins → Exit",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "level_enter",
+          "to": 11
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 11
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 11,
+          "star": 0
+        },
+        {
+          "type": "star_grabbed",
+          "course": 11,
+          "star": 1
+        },
+        {
+          "type": "star_grabbed",
+          "course": 11,
+          "star": 2
+        },
+        {
+          "type": "star_grabbed",
+          "course": 11,
+          "star": 3
+        },
+        {
+          "type": "star_grabbed",
+          "course": 11,
+          "star": 4
+        },
+        {
+          "type": "star_grabbed",
+          "course": 11,
+          "star": 5
+        }
+      ],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 11,
+            "star": 6
+          }
+        ]
+      ],
+      "guards": [],
+      "category": "100 Coin Exit",
+      "match_mode": "strict"
+    },
+    {
+      "seed_key": "seg:100c->exit:ttm",
+      "name": "TTM — 100 Coins → Exit",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "level_enter",
+          "to": 36
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 36
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 12,
+          "star": 0
+        },
+        {
+          "type": "star_grabbed",
+          "course": 12,
+          "star": 1
+        },
+        {
+          "type": "star_grabbed",
+          "course": 12,
+          "star": 2
+        },
+        {
+          "type": "star_grabbed",
+          "course": 12,
+          "star": 3
+        },
+        {
+          "type": "star_grabbed",
+          "course": 12,
+          "star": 4
+        },
+        {
+          "type": "star_grabbed",
+          "course": 12,
+          "star": 5
+        }
+      ],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 12,
+            "star": 6
+          }
+        ]
+      ],
+      "guards": [],
+      "category": "100 Coin Exit",
+      "match_mode": "strict"
+    },
+    {
+      "seed_key": "seg:100c->exit:thi",
+      "name": "THI — 100 Coins → Exit",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "level_enter",
+          "to": 13
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 13
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 13,
+          "star": 0
+        },
+        {
+          "type": "star_grabbed",
+          "course": 13,
+          "star": 1
+        },
+        {
+          "type": "star_grabbed",
+          "course": 13,
+          "star": 2
+        },
+        {
+          "type": "star_grabbed",
+          "course": 13,
+          "star": 3
+        },
+        {
+          "type": "star_grabbed",
+          "course": 13,
+          "star": 4
+        },
+        {
+          "type": "star_grabbed",
+          "course": 13,
+          "star": 5
+        }
+      ],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 13,
+            "star": 6
+          }
+        ]
+      ],
+      "guards": [],
+      "category": "100 Coin Exit",
+      "match_mode": "strict"
+    },
+    {
+      "seed_key": "seg:100c->exit:ttc",
+      "name": "TTC — 100 Coins → Exit",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "level_enter",
+          "to": 14
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 14
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 14,
+          "star": 0
+        },
+        {
+          "type": "star_grabbed",
+          "course": 14,
+          "star": 1
+        },
+        {
+          "type": "star_grabbed",
+          "course": 14,
+          "star": 2
+        },
+        {
+          "type": "star_grabbed",
+          "course": 14,
+          "star": 3
+        },
+        {
+          "type": "star_grabbed",
+          "course": 14,
+          "star": 4
+        },
+        {
+          "type": "star_grabbed",
+          "course": 14,
+          "star": 5
+        }
+      ],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 14,
+            "star": 6
+          }
+        ]
+      ],
+      "guards": [],
+      "category": "100 Coin Exit",
+      "match_mode": "strict"
+    },
+    {
+      "seed_key": "seg:100c->exit:rr",
+      "name": "RR — 100 Coins → Exit",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "level_enter",
+          "to": 15
+        },
+        {
+          "type": "attempt_anchor",
+          "level": 15
+        }
+      ],
+      "end_triggers": [
+        {
+          "type": "star_grabbed",
+          "course": 15,
+          "star": 0
+        },
+        {
+          "type": "star_grabbed",
+          "course": 15,
+          "star": 1
+        },
+        {
+          "type": "star_grabbed",
+          "course": 15,
+          "star": 2
+        },
+        {
+          "type": "star_grabbed",
+          "course": 15,
+          "star": 3
+        },
+        {
+          "type": "star_grabbed",
+          "course": 15,
+          "star": 4
+        },
+        {
+          "type": "star_grabbed",
+          "course": 15,
+          "star": 5
+        }
+      ],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 15,
+            "star": 6
+          }
+        ]
+      ],
+      "guards": [],
+      "category": "100 Coin Exit",
+      "match_mode": "strict"
     }
   ],
   "routes": [
@@ -1868,12 +2827,12 @@
           ]
         },
         {
-          "label": "BitDW Pipe Entry",
+          "label": "BitDW — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitdw-pipe"
+              "seed_key": "seg:reds->pipe:bitdw"
             }
           ]
         },
@@ -2500,12 +3459,12 @@
           ]
         },
         {
-          "label": "BitDW Pipe Entry",
+          "label": "BitDW — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitdw-pipe"
+              "seed_key": "seg:reds->pipe:bitdw"
             }
           ]
         },
@@ -2736,12 +3695,12 @@
           ]
         },
         {
-          "label": "BitDW Pipe Entry",
+          "label": "BitDW — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitdw-pipe"
+              "seed_key": "seg:reds->pipe:bitdw"
             }
           ]
         },
@@ -3174,12 +4133,12 @@
           ]
         },
         {
-          "label": "BitDW Pipe Entry",
+          "label": "BitDW — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitdw-pipe"
+              "seed_key": "seg:reds->pipe:bitdw"
             }
           ]
         },
@@ -3432,12 +4391,12 @@
           ]
         },
         {
-          "label": "BitFS Pipe Entry",
+          "label": "BitFS — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitfs-pipe"
+              "seed_key": "seg:reds->pipe:bitfs"
             }
           ]
         },
@@ -3978,12 +4937,12 @@
           ]
         },
         {
-          "label": "BitDW Pipe Entry",
+          "label": "BitDW — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitdw-pipe"
+              "seed_key": "seg:reds->pipe:bitdw"
             }
           ]
         },
@@ -4236,12 +5195,12 @@
           ]
         },
         {
-          "label": "BitFS Pipe Entry",
+          "label": "BitFS — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitfs-pipe"
+              "seed_key": "seg:reds->pipe:bitfs"
             }
           ]
         },
@@ -4782,12 +5741,12 @@
           ]
         },
         {
-          "label": "BitDW Pipe Entry",
+          "label": "BitDW — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitdw-pipe"
+              "seed_key": "seg:reds->pipe:bitdw"
             }
           ]
         },
@@ -5040,12 +5999,12 @@
           ]
         },
         {
-          "label": "BitFS Pipe Entry",
+          "label": "BitFS — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitfs-pipe"
+              "seed_key": "seg:reds->pipe:bitfs"
             }
           ]
         },
@@ -5591,12 +6550,12 @@
           ]
         },
         {
-          "label": "BitDW Pipe Entry",
+          "label": "BitDW — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitdw-pipe"
+              "seed_key": "seg:reds->pipe:bitdw"
             }
           ]
         },
@@ -5828,12 +6787,12 @@
           ]
         },
         {
-          "label": "BitFS Pipe Entry",
+          "label": "BitFS — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitfs-pipe"
+              "seed_key": "seg:reds->pipe:bitfs"
             }
           ]
         },
@@ -6374,12 +7333,12 @@
           ]
         },
         {
-          "label": "BitDW Pipe Entry",
+          "label": "BitDW — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitdw-pipe"
+              "seed_key": "seg:reds->pipe:bitdw"
             }
           ]
         },
@@ -6679,12 +7638,12 @@
           ]
         },
         {
-          "label": "BitFS Pipe Entry",
+          "label": "BitFS — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitfs-pipe"
+              "seed_key": "seg:reds->pipe:bitfs"
             }
           ]
         },
@@ -7240,12 +8199,12 @@
           ]
         },
         {
-          "label": "BitDW Pipe Entry",
+          "label": "BitDW — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitdw-pipe"
+              "seed_key": "seg:reds->pipe:bitdw"
             }
           ]
         },
@@ -7699,12 +8658,12 @@
           ]
         },
         {
-          "label": "BitFS Pipe Entry",
+          "label": "BitFS — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitfs-pipe"
+              "seed_key": "seg:reds->pipe:bitfs"
             }
           ]
         },
@@ -8120,12 +9079,12 @@
           ]
         },
         {
-          "label": "BitS Pipe Entry",
+          "label": "BitS — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bits-pipe"
+              "seed_key": "seg:reds->pipe:bits"
             }
           ]
         },
@@ -8181,12 +9140,12 @@
           ]
         },
         {
-          "label": "BitDW Pipe Entry",
+          "label": "BitDW — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitdw-pipe"
+              "seed_key": "seg:reds->pipe:bitdw"
             }
           ]
         },
@@ -8831,12 +9790,12 @@
           ]
         },
         {
-          "label": "BitFS Pipe Entry",
+          "label": "BitFS — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bitfs-pipe"
+              "seed_key": "seg:reds->pipe:bitfs"
             }
           ]
         },
@@ -9252,12 +10211,12 @@
           ]
         },
         {
-          "label": "BitS Pipe Entry",
+          "label": "BitS — Reds → Pipe",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:bits-pipe"
+              "seed_key": "seg:reds->pipe:bits"
             }
           ]
         },

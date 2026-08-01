@@ -248,6 +248,10 @@ def test_timeline_none_when_only_abandoned(tmp_path):
     # Actually test: section with no qualifying points → None
     asyncio.run(svc.publish(ev("practice_reset", 5000, {"igt_frames_before": 0})))
     asyncio.run(svc.new_session())  # abandons open attempt
+    # A session boundary also clears the target (live report 2026-08-01), so
+    # the pinned section has to be re-established to be examined at all. That
+    # is the behaviour under test here, not the clearing.
+    asyncio.run(svc.set_target(2, 2))
     view = build_session_view(db, svc, clock="igt")
     # target (2,2) section is now always present (pinned active star);
     # nothing in the current session, so its attempt list is empty.
@@ -715,6 +719,50 @@ def test_segment_section_armed_flag_tracks_live_projector(tmp_path):
     assert sec["attempts"][0]["rta_frames"] == 85
 
 
+def test_segment_section_armed_detail_reports_progress_and_waiting_for(tmp_path):
+    # Task 4, spec 2026-07-28-multi-step-segments: the card needs to say
+    # WHAT an armed def is waiting for, not just that it is armed. LBLJ (id
+    # 1, seeded, no waypoints, strict) is the same fixture the plain "armed"
+    # test above uses.
+    #
+    # Task 6 retargeted the stamped sentence from waiting_for_sentence
+    # (editor voice, "You enter level X") to card_waiting_for_sentence
+    # (imperative, "Enter X") -- this value renders under the practice
+    # card's own "Waiting for" label, and the editor's second-person clause
+    # read as broken English there ("Waiting for You enter level X").
+    db, svc = make(tmp_path)
+    asyncio.run(svc.set_target_segment(1))
+    asyncio.run(svc.publish(lvl(1000, 16, 6)))          # arms LBLJ
+    view = build_session_view(db, svc, clock="igt")
+    detail = seg_section(view, 1)["armed_detail"]
+    assert detail["progress"] == 0 and detail["total"] == 0
+    assert detail["start_frame"] == 1000
+    assert detail["deadline_frame"] is None             # strict: no budget
+    assert detail["waiting_for"] == "Enter Bowser in the Dark World"
+    asyncio.run(svc.publish(lvl(1085, 6, 17)))          # closes it
+    view2 = build_session_view(db, svc, clock="igt")
+    assert seg_section(view2, 1)["armed_detail"] is None
+
+
+def test_segment_section_arms_ambiently_flag(tmp_path):
+    # spec 2026-07-28-multi-step-segments: the flag practice.js's pinned-
+    # card gate reads instead of a category string. LBLJ arms entering the
+    # CASTLE interior (no course) -- false. A def shaped like reds->pipe /
+    # the legacy pipe-entry trio (course-entry + attempt_anchor into a real
+    # course) -- true.
+    db, svc = make(tmp_path)
+    pipe_id = asyncio.run(svc.create_segment({
+        "name": "BitDW Pipe Entry stand-in",
+        "start_triggers": [{"type": "level_enter", "to": 17},
+                          {"type": "attempt_anchor", "level": 17}],
+        "end_triggers": [{"type": "warp_entered", "level": 17}]}))
+    asyncio.run(svc.publish(lvl(1000, 16, 6)))          # arms LBLJ (id 1)
+    asyncio.run(svc.publish(lvl(1000, 6, 17)))          # arms the pipe stand-in
+    view = build_session_view(db, svc, clock="igt")
+    assert seg_section(view, 1)["arms_ambiently"] is False
+    assert seg_section(view, pipe_id)["arms_ambiently"] is True
+
+
 def test_segment_sections_order_by_journal_recency_not_raw_id(tmp_path):
     # segment attempt ids carry def_id * 1e10, so a higher def id always
     # raw-sorts above a lower one; recency must compare journal_id(...).
@@ -1157,6 +1205,63 @@ def test_section_banner_sentinel_when_standards_but_no_strat(tmp_path):
                               basis={"frames": 343, "count": 1, "window": None},
                               mode="pb")
     assert result5 is None
+
+
+def test_section_banner_unattributed_when_current_pb_has_no_strat_tag(tmp_path):
+    """The untagged-PB bug (live report 2026-07-31: Bowser 1 showed PB
+    0'26"30 beside a Capless 5 floor rank -- "this should never happen").
+    pb_untagged=True means the entity's CURRENT (strategy-blind) PB carries
+    no strat_tag at all, so no strategy could ever have found it -- this
+    takes priority over every other reason and produces a DIFFERENT sentinel,
+    "unattributed", so the UI can tell "no PB yet" apart from "a PB exists but
+    isn't credited to any strategy" and never floors the latter (a floor next
+    to a visible PB is exactly the reported contradiction)."""
+    import json
+    from sm64_events.ranks.standards import RankStandards
+    from sm64_events.tracking.views import _section_banner
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "segment:8": {"clock": "rta", "strategies": {
+            "Standard": {"Mario": 11.0, "Diamond": 12.0}}}}}))
+    ranks = RankStandards(p); ranks.load()
+    # no active strategy at all, PB untagged -> "unattributed", NOT "no_strat"
+    result = _section_banner(ranks, "segment:8", strat=None, basis=None,
+                             mode="pb", pb_untagged=True)
+    assert result == {"rank": None, "reason": "unattributed", "mode": "pb"}
+    # active strategy selected but still nothing gradeable, PB untagged ->
+    # still "unattributed", NOT "unranked" (which the UI floors)
+    result2 = _section_banner(ranks, "segment:8", strat="Standard", basis=None,
+                              mode="pb", pb_untagged=True)
+    assert result2 == {"rank": None, "reason": "unattributed", "mode": "pb"}
+    # pb_untagged defaults to False -- every existing call site (and every
+    # sentinel test above) keeps behaving exactly as before this fix
+    result3 = _section_banner(ranks, "segment:8", strat=None, basis=None, mode="pb")
+    assert result3 == {"rank": None, "reason": "no_strat", "mode": "pb"}
+
+
+def test_segment_pb_shown_but_untagged_reads_unattributed_not_floor(tmp_path):
+    """End-to-end reproduction of the reported bug's SHAPE (Bowser 1 is a
+    seeded segment, LBLJ here stands in for one since it is seeded with the
+    same no-default-strat starting condition): a segment's saved PB with no
+    strat_tag must show "unattributed" through the real session view, not the
+    isolated _section_banner unit -- proving the whole pipeline (attempt ->
+    saved pb -> current_pbs_by_strat miss -> section banner) rather than just
+    the function that happens to compute the sentinel."""
+    import json
+    from sm64_events.ranks.standards import RankStandards
+    db, svc = make(tmp_path)
+    lblj_success(svc, rta=85)          # segment_id=1, no active strat ever set
+    aid = next(a.id for a in db.attempts() if a.segment_id == 1)
+    asyncio.run(svc.save_pb(aid, "rta"))
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "segment:1": {"clock": "rta", "strategies": {
+            "Standard": {"Mario": 0.5, "Diamond": 1.0}}}}}))
+    svc.ranks = RankStandards(p); svc.ranks.load()
+    view = build_session_view(db, svc, clock="igt")
+    sec = seg_section(view, 1)
+    assert sec["pb"]["rta"]["frames"] == 85           # the PB still displays
+    assert sec["rank"] == {"rank": None, "reason": "unattributed", "mode": "pb"}
 
 
 def test_session_view_attaches_ranks(tmp_path):
@@ -1626,13 +1731,14 @@ def test_reclassified_attempt_regrades_its_medal(tmp_path):
 
 
 def test_the_seeded_corpus_does_not_bloat_the_session_view(tmp_path):
-    """65 seeded segments must NOT become 65 practice cards.
+    """84 seeded segments must NOT become 84 practice cards.
 
     Segment sections are scoped to segments with activity (plus the target and
     anything armed), so shipping the route corpus leaves a fresh install's
     practice page empty. This was implicit while only 10 segments existed;
-    with 55 route-scoped movements added it is load-bearing, and iterating
-    service.segment_defs here instead would flood the page for every user.
+    with 56 route-scoped movements (+18 unguarded mechanic rows, Task 20)
+    added it is load-bearing, and iterating service.segment_defs here
+    instead would flood the page for every user.
     """
     import json
 
@@ -1642,7 +1748,7 @@ def test_the_seeded_corpus_does_not_bloat_the_session_view(tmp_path):
     db, svc = make(tmp_path)
     seed_data = json.loads(bundled_defaults_seed().read_bytes().decode("utf-8"))
     assert reconcile_defaults(db, seed_data) == []
-    assert len(db.segment_defs()) == 65
+    assert len(db.segment_defs()) == 84
 
     view = build_session_view(db, svc, clock="igt")
     assert view["segments"] == []
@@ -1733,6 +1839,62 @@ def test_star_sections_carry_no_default_strategy(tmp_path):
     seed(svc)
     view = build_session_view(db, svc, clock="igt")
     assert "default_strat" not in view["stars"][0]
+
+
+def test_star_sections_carry_no_arm_detail_except_the_100_coin_star(tmp_path):
+    """Deliberate star/segment asymmetry (Task 4, spec 2026-07-28-multi-
+    step-segments): armed_detail describes an armed-branch matcher's
+    waypoint sequence and staleness deadline — an ORDINARY star has no
+    armed-branch matcher, no waypoints, and no deadline to report, so its
+    section carries the key with value None (same shape as default_strat's
+    asymmetry, not a copy of its reasoning: a star can be a practice TARGET
+    without ever being "armed" the way a segment is).
+
+    Star 6 is the ONE documented exception (spec 2026-07-28-multi-step-
+    segments, "the 100-coin star IS the segment") — its HUNDRED_COIN_EXIT
+    engine has a real waypoint sequence, so its own section CAN carry a
+    populated armed_detail; see
+    test_the_100_coin_star_section_carries_its_engines_armed_detail for the
+    positive case."""
+    db, svc = make(tmp_path)
+    seed(svc)
+    view = build_session_view(db, svc, clock="igt")
+    assert view["stars"][0]["star_id"] == 2   # seed()'s star, not star 6
+    assert view["stars"][0]["armed_detail"] is None
+
+
+def test_the_100_coin_star_section_carries_its_engines_armed_detail(tmp_path):
+    """The progress line survives the presentation change and reads as the
+    STAR's own progress (spec 2026-07-28-multi-step-segments, decision #2 —
+    the user's own reason: "i like the idea of knowing for sure the system
+    is aware of me grabbing that first star, proven by it progressing to
+    the next step"). Must visibly ADVANCE on the 100-coin grab, while still
+    in the level, before the exit star — that transition IS the feature."""
+    db, svc = make(tmp_path)
+    asyncio.run(svc.create_segment({
+        "name": "WF 100 Coins -> Exit",
+        "start_triggers": [{"type": "level_enter", "to": 24},
+                          {"type": "attempt_anchor", "level": 24}],
+        "waypoints": [[{"type": "star_grabbed", "course": 2, "star": 6}]],
+        "end_triggers": [{"type": "star_grabbed", "course": 2, "star": s}
+                        for s in range(6)],
+        "match_mode": "strict"}))
+    asyncio.run(svc.publish(ev("level_changed", 900, {"from": 16, "to": 24})))
+    view = build_session_view(db, svc, clock="igt")
+    sec = next(s for s in view["stars"]
+              if s["course_id"] == 2 and s["star_id"] == 6)
+    assert sec["armed_detail"] is not None
+    assert sec["armed_detail"]["progress"] == 0
+    assert sec["armed_detail"]["total"] == 1
+    # grab the 100-coin star -- progress must visibly advance while still
+    # in the level, before the exit star
+    asyncio.run(svc.publish(star(1000, course=2, star_id=6, igt=1000)))
+    view2 = build_session_view(db, svc, clock="igt")
+    sec2 = next(s for s in view2["stars"]
+               if s["course_id"] == 2 and s["star_id"] == 6)
+    assert sec2["armed_detail"]["progress"] == 1
+    # and the segment itself never surfaces as its own section
+    assert view2["segments"] == []
 
 
 def test_catalog_carries_the_same_course_groups_as_vocab():
@@ -2074,3 +2236,311 @@ def test_section_pb_display_stays_on_the_view_clock_after_the_grading_fix(tmp_pa
         sec = build_session_view(db, svc, clock=clock)["stars"][0]
         assert sec["pb"]["igt"]["frames"] == 343
         assert sec["pb"]["rta"]["frames"] == 350
+
+
+# -- Bowser Reds star/pipe toggle (spec 2026-07-28-multi-step-segments) ------
+#
+# star:16:0 practices as two things worth timing (measured,
+# data/rank_standards.seed.json): the reds grab alone (" (Star)" strategies)
+# or the whole reds-then-pipe run (" (Pipe)"), and BOTH ladders live on the
+# star -- the seg:reds->pipe:<abbrev> segment that actually records the Pipe
+# family's attempts has no rank entity of its own. _reds_pipe_segments is the
+# resolver; every grading call site below borrows the star's entity_key
+# through it rather than the segment's own (empty) one.
+
+def _reds_pipe_def(db, course_id=16, level=17):
+    """A seg:reds->pipe:<abbrev>-shaped definition: start on entering the
+    level, waypoint on the course's reds grab, end on the pipe warp -- the
+    exact shape of the real corpus row (measured against
+    data/defaults.seed.json's seg:reds->pipe:bitdw), built directly rather
+    than via reconcile_defaults so these tests stay fast and don't depend on
+    the bundled corpus's other 83 rows."""
+    return db.insert_segment_def(
+        "Reds -> Pipe", [{"type": "level_enter", "to": level}],
+        [{"type": "warp_entered", "level": level}], [],
+        "2026-07-30T00:00:00Z",
+        waypoints=[[{"type": "star_grabbed", "course": course_id, "star": 0}]],
+        seed_key="seg:reds->pipe:bitdw")
+
+
+def _legacy_no_reds_def(db, level=17):
+    """A seg:<abbrev>-pipe-shaped definition -- the legacy EXCLUSIVE 'no
+    reds' pipe-only segment (storage/db.py's own v4 schema INSERT,
+    predating the corpus): start on entering the level, end on the pipe
+    warp, no waypoints (cancelled the moment any star is grabbed in real
+    play -- irrelevant to these tests, which never grab one)."""
+    return db.insert_segment_def(
+        "BitDW Pipe Entry", [{"type": "level_enter", "to": level}],
+        [{"type": "warp_entered", "level": level}], [],
+        "2026-07-30T00:00:00Z", seed_key="seg:bitdw-pipe")
+
+
+def _bowser_ranks(tmp_path, mario_cutoff=45.0):
+    """star:16:0 with ONE paired Star/Pipe strategy, each carrying only a
+    Mario cutoff -- independent of any seeded run's actual time
+    (_run_reds_pipe_sequence's 43.00s star grab beats it, its 70.00s segment
+    run does not), so a test can assert on which FAMILY a grade came from
+    rather than merely that a grade exists."""
+    import json
+    from sm64_events.ranks.standards import RankStandards
+    p = tmp_path / "bowser_rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "star:16:0": {"clock": "igt", "strategies": {
+            "Tsuki (Star)": {"Mario": mario_cutoff},
+            "Salt Flip (Pipe)": {"Mario": mario_cutoff}}}}}))
+    ranks = RankStandards(p); ranks.load()
+    return ranks
+
+
+def _make_with_def(tmp_path, insert):
+    """make()'s shape, but with `insert(db)` run BEFORE svc.start() -- a
+    segment inserted after start is invisible to service.segment_defs, which
+    is populated once at start time (test_active_route_star_keys_dedupe_and_
+    ignore_segments and friends insert before construction for the same
+    reason)."""
+    db = Database(tmp_path / "t.db")
+    db.set_state("stat_menu", REFERENCE_STAT_MENU)
+    seg_id = insert(db)
+    svc = TrackerService(db, Broadcaster())
+    asyncio.run(svc.start())
+    return db, svc, seg_id
+
+
+def _run_reds_pipe_sequence(svc, star_id=0, course_id=16, level=17,
+                            arm_from=26, star_igt=1290, close_frame=3100):
+    """level_enter(to=level) arms the segment; star_collected satisfies its
+    waypoint AND independently closes a star attempt (the SAME grab feeds
+    both, exactly as in-game); warp_entered(level) closes the segment.
+    star_igt=1290 -> 43.00s displayed; a 2100-frame (70.00s) segment run."""
+    asyncio.run(svc.publish(lvl(1000, arm_from, level)))
+    asyncio.run(svc.publish(ev("star_collected", 1300,
+                               {"course_id": course_id, "star_id": star_id,
+                                "igt_frames": star_igt})))
+    asyncio.run(svc.publish(ev("warp_entered", close_frame, {"level": level})))
+
+
+def test_reds_pipe_segments_pairs_by_seed_key_prefix_and_level():
+    """Pure unit test of the resolver (views._reds_pipe_segments): matches a
+    seg:reds->pipe:* row to its course via start_levels/COURSE_BY_LEVEL, and
+    -- mutation-proved -- a row at the SAME level with a DIFFERENT seed_key
+    (the legacy exclusive 'no reds' pipe segment shares this level and must
+    never be mistaken for the reds->pipe one) is not paired."""
+    from sm64_events.tracking.views import _reds_pipe_segments
+
+    reds_pipe_row = {"id": 67, "seed_key": "seg:reds->pipe:bitdw",
+                     "start_triggers": [{"type": "level_enter", "to": 17}]}
+    legacy_pipe_row = {"id": 5, "seed_key": "seg:bitdw-pipe",
+                       "start_triggers": [{"type": "level_enter", "to": 17}]}
+    unrelated_row = {"id": 1, "seed_key": None,
+                     "start_triggers": [{"type": "level_enter", "to": 6}]}
+
+    by_course, grading_ek = _reds_pipe_segments(
+        [reds_pipe_row, legacy_pipe_row, unrelated_row])
+    assert by_course == {16: 67}
+    assert grading_ek == {67: "star:16:0"}
+
+    # Mutation: rename the reds->pipe row's seed_key to look like the legacy
+    # one -- the level-based match alone would still find IT (same level),
+    # proving the prefix check, not the level, is what tells them apart.
+    renamed = {**reds_pipe_row, "seed_key": "seg:bitdw-pipe-v2"}
+    by_course2, grading_ek2 = _reds_pipe_segments([renamed, legacy_pipe_row])
+    assert by_course2 == {} and grading_ek2 == {}
+
+
+def test_pipe_segment_grades_against_the_paired_star_ladder(tmp_path):
+    """The core wiring: seg:reds->pipe:bitdw has no rank entity of its own,
+    yet its section grades a real tier -- borrowed from star:16:0's " (Pipe)"
+    ladder, using the SEGMENT's own (rta) attempt as the basis. The star's
+    OWN section grades independently, off its own (igt) attempt, against the
+    " (Star)" half of the SAME ladder."""
+    db, svc, seg_id = _make_with_def(tmp_path, _reds_pipe_def)
+    svc.ranks = _bowser_ranks(tmp_path)
+    asyncio.run(svc.set_strat(16, 0, "Tsuki (Star)"))
+    asyncio.run(svc.set_strat_segment(seg_id, "Salt Flip (Pipe)"))
+    _run_reds_pipe_sequence(svc)
+
+    session = build_session_view(db, svc, clock="igt")
+    star_attempt = next(a for a in session["stars"][0]["attempts"]
+                        if a["outcome"] == "success")
+    seg_attempt = next(a for a in seg_section(session, seg_id)["attempts"]
+                       if a["outcome"] == "success")
+    asyncio.run(svc.save_pb(star_attempt["id"], "igt"))
+    asyncio.run(svc.save_pb(seg_attempt["id"], "rta"))
+
+    view = build_session_view(db, svc, clock="igt")
+    star_sec = next(s for s in view["stars"] if s["course_id"] == 16)
+    seg_sec = seg_section(view, seg_id)
+
+    # 43.00s beats Tsuki (Star)'s Mario cutoff (45.0s, _bowser_ranks default)
+    assert star_sec["rank"]["rank"] == "Mario"
+    assert star_sec["pipe_segment_id"] == seg_id
+    # 70.00s misses Salt Flip (Pipe)'s Mario cutoff (45.0s, the only tier
+    # this minimal ladder defines) -- Iron, the unbounded floor
+    # (ranks/classify.py), proving this graded a REAL ladder (not merely
+    # "any truthy rank") and that it is the PIPE cutoff, not e.g. silently
+    # reusing the star's own attempt/basis.
+    assert seg_sec["rank"]["rank"] == "Iron"
+    assert seg_sec["entity_rank"] is not None
+    assert seg_sec["pipe_star_entity"] == "star:16:0"
+
+
+def test_pipe_segment_carries_the_paired_stars_own_display_names(tmp_path):
+    """Round 2, item 4 (live report 2026-07-30): the pinned card used to
+    read "Segment · BitDW — 8 Red Coins → Pipe" (the raw corpus name) while
+    the cell that selected it already read "8 Red Coins (Pipe)" — the card
+    needs the star's own course/star names to agree with the cell instead
+    of exposing the segment's own identity. Asserted against the SAME
+    canonical source (memory.addresses.course_name/star_name) rather than a
+    hardcoded string, so a course/star rename can't silently desync this
+    from the star section's own course_name/star_name fields."""
+    from sm64_events.memory.addresses import course_name, star_name
+    db, svc, seg_id = _make_with_def(tmp_path, _reds_pipe_def)
+    _run_reds_pipe_sequence(svc)
+
+    view = build_session_view(db, svc, clock="igt")
+    seg_sec = seg_section(view, seg_id)
+    assert seg_sec["pipe_star_course_name"] == course_name(16)
+    assert seg_sec["pipe_star_name"] == star_name(16, 0)
+
+    # An ordinary segment (no pairing) carries neither — same guard as
+    # pipe_star_entity, so a caller can gate on any of the three together.
+    lblj_success(svc, rta=85)
+    view2 = build_session_view(db, svc, clock="igt")
+    sec2 = seg_section(view2, 1)
+    assert sec2["pipe_star_course_name"] is None
+    assert sec2["pipe_star_name"] is None
+
+
+def test_legacy_no_reds_segments_matched_by_seed_key_suffix():
+    """Pure unit test of the resolver (views._legacy_no_reds_segments):
+    matches the seg:<abbrev>-pipe suffix. Its Bowser sibling
+    (seg:reds->pipe:<abbrev>, sharing the exact same level) is NOT swept in
+    -- not via an extra exclusion clause, but because that seed_key ends in
+    the course abbreviation ("...bitdw"), never literally "-pipe"; the
+    mutation proves this is the actual reason, not a level-based accident:
+    a row at the SAME level but a DIFFERENT seed_key shape is excluded, and
+    a row with the reds->pipe seed_key RENAMED to end in "-pipe" would be
+    (wrongly) swept in, which is exactly why _reds_pipe_segments' own
+    prefix must never change shape without re-checking this resolver too."""
+    from sm64_events.tracking.views import _legacy_no_reds_segments
+
+    legacy_row = {"id": 5, "seed_key": "seg:bitdw-pipe",
+                 "start_triggers": [{"type": "level_enter", "to": 17}]}
+    reds_pipe_row = {"id": 67, "seed_key": "seg:reds->pipe:bitdw",
+                     "start_triggers": [{"type": "level_enter", "to": 17}]}
+    unrelated_row = {"id": 1, "seed_key": None,
+                     "start_triggers": [{"type": "level_enter", "to": 6}]}
+
+    assert _legacy_no_reds_segments(
+        [legacy_row, reds_pipe_row, unrelated_row]) == {5}
+
+
+def test_legacy_no_reds_segment_is_flagged_for_the_pinned_cards_naming(tmp_path):
+    """Round 2, item 4's missing half (live report 2026-07-30): "the pinned
+    card still says 'BitDW Pipe Entry', not 'No Reds'... all three read 'No
+    Reds', on the card as well as the cell." `is_no_reds_pipe` is the flag
+    practice.js reads to swap in that literal; an ordinary segment (no
+    pairing at all) must not carry it. Made "seen" (a section needs to be
+    armed, targeted, or have attempts) by running a genuine no-reds
+    completion -- enter the level, warp out with no star grab in between."""
+    db, svc, seg_id = _make_with_def(tmp_path, _legacy_no_reds_def)
+    asyncio.run(svc.publish(lvl(1000, 26, 17)))
+    asyncio.run(svc.publish(ev("warp_entered", 2000, {"level": 17})))
+    view = build_session_view(db, svc, clock="igt")
+    sec = seg_section(view, seg_id)
+    assert sec["is_no_reds_pipe"] is True
+    assert sec["pipe_star_entity"] is None, \
+        "the legacy no-reds segment must not also claim a star pairing"
+
+    lblj_success(svc, rta=85)
+    view2 = build_session_view(db, svc, clock="igt")
+    sec2 = seg_section(view2, 1)
+    assert sec2["is_no_reds_pipe"] is False
+
+
+def test_star_and_segment_sections_offer_only_their_own_family(tmp_path):
+    """The dropdown/table on each side must never offer the OTHER family's
+    name -- picking a " (Pipe)" strategy for the star's own (grab-only) time
+    would grade a short time against a ladder timed to the pipe."""
+    db, svc, seg_id = _make_with_def(tmp_path, _reds_pipe_def)
+    svc.ranks = _bowser_ranks(tmp_path)
+    # A real attempt each (rather than just setting the target) -- a target
+    # only pins ONE of the two at a time (the star/segment kinds are mutually
+    # exclusive foci), while an attempt keeps a section "seen" regardless of
+    # which is currently pinned, so both sections exist to assert on here.
+    _run_reds_pipe_sequence(svc)
+
+    view = build_session_view(db, svc, clock="igt")
+    star_sec = next(s for s in view["stars"] if s["course_id"] == 16)
+    seg_sec = seg_section(view, seg_id)
+
+    # ranks.strategies(star:16:0) carries BOTH family names regardless of any
+    # attempt or active pick -- the filter is what keeps each side down to
+    # its own half, not "nothing to filter yet".
+    assert star_sec["strategies"] == ["Tsuki (Star)"]
+    assert seg_sec["strategies"] == ["Salt Flip (Pipe)"]
+
+
+def test_a_star_strat_from_the_other_family_is_masked_not_graded(tmp_path):
+    """Pre-toggle data safety: before this feature existed nothing stopped
+    picking a " (Pipe)" name as the star's own active strat. That must now
+    read as unranked (no_strat) rather than grading a grab-only time against
+    a Pipe-timed cutoff -- self-healing on the next pick from the now
+    family-filtered dropdown, no migration."""
+    db, svc, seg_id = _make_with_def(tmp_path, _reds_pipe_def)
+    svc.ranks = _bowser_ranks(tmp_path)
+    asyncio.run(svc.set_target(16, 0, strat_tag="Salt Flip (Pipe)"))
+
+    view = build_session_view(db, svc, clock="igt")
+    star_sec = next(s for s in view["stars"] if s["course_id"] == 16)
+    assert star_sec["last_strat"] is None
+    assert view["last_strat_by_star"].get("16:0") is None
+    assert star_sec["rank"]["reason"] == "no_strat"
+
+
+def test_ordinary_segments_are_unaffected_by_the_reds_pipe_pairing(tmp_path):
+    """Regression guard: the substitution is scoped to seg:reds->pipe:* only
+    -- LBLJ (segment 1, no pairing) must keep grading against its OWN
+    segment:1 entity exactly as before."""
+    import json
+    from sm64_events.ranks.standards import RankStandards
+    db, svc, seg_id = _make_with_def(tmp_path, _reds_pipe_def)
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 1, "entities": {
+        "segment:1": {"clock": "rta", "strategies": {
+            "hyperspeed": {"Mario": 3.0}}}}}))
+    svc.ranks = RankStandards(p); svc.ranks.load()
+    asyncio.run(svc.set_strat_segment(1, "hyperspeed"))
+    lblj_success(svc, rta=85)                   # 2.83s, beats Mario's 3.0s cutoff
+    aid = next(a.id for a in db.attempts() if a.segment_id == 1)
+    asyncio.run(svc.save_pb(aid, "rta"))
+
+    view = build_session_view(db, svc, clock="igt")
+    sec = seg_section(view, 1)
+    assert sec["rank"]["rank"] == "Mario"
+    assert sec["pipe_star_entity"] is None
+    assert sec["strategies"] == ["hyperspeed"]   # no borrowed star names leaked in
+
+
+def test_route_candidate_ranks_the_reds_pipe_segment_against_the_star_ladder(tmp_path):
+    """Every seeded Bowser Reds route step names seg:reds->pipe:<abbrev>,
+    never the bare star (routes already assume Pipe timing throughout) --
+    build_route_view's candidate rank must follow the same star-ladder
+    substitution the session view uses, or a route step showing this
+    segment would always read unranked."""
+    db, svc, seg_id = _make_with_def(tmp_path, _reds_pipe_def)
+    svc.ranks = _bowser_ranks(tmp_path)
+    asyncio.run(svc.set_strat_segment(seg_id, "Salt Flip (Pipe)"))
+    _run_reds_pipe_sequence(svc)
+    seg_attempt = next(a for a in seg_section(
+        build_session_view(db, svc, clock="igt"), seg_id)["attempts"]
+        if a["outcome"] == "success")
+    asyncio.run(svc.save_pb(seg_attempt["id"], "rta"))
+
+    from sm64_events.tracking.views import build_route_view
+    rid = asyncio.run(svc.create_route({"name": "R", "steps": [
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": seg_id}]},
+    ]}))
+    route = build_route_view(db, svc, rid)
+    assert route["steps"][0]["rank"] is not None
+    assert route["steps"][0]["rank"]["rank"] == "Iron"   # see the docstring above

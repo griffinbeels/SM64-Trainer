@@ -302,7 +302,12 @@ export function Routes({ t }) {
   // Segment defs + vocab come from the STORE, not a third private copy: only
   // the store's refetches on segments_changed/origins_changed, so a local copy
   // went stale the moment a definition was edited in another tab (review M8).
-  const segs = t.segments || [];
+  // A HUNDRED_COIN_EXIT engine is excluded from candidacy (spec 2026-07-28-
+  // multi-step-segments): its attempts attribute to the STAR now
+  // (tracking/projection.py), never carrying its own segment_id, so a route
+  // step referencing it directly could never complete -- the 100-coin star
+  // itself is still a normal star-step candidate via ItemPicker's star mode.
+  const segs = (t.segments || []).filter((s) => !s.is_hundred_coin_engine);
   const vocab = t.vocab || null;
   const [openGroups, toggleCategory] = useOpenGroups(OPEN_KEY);
   // Same measured cap as the segments workshop (ui/viewport.js): --pane-cap

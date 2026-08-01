@@ -11,7 +11,7 @@ import threading
 from pathlib import Path
 
 from sm64_events.core.events import Event
-from sm64_events.tracking.projection import Attempt
+from sm64_events.tracking.projection import Attempt, journal_id
 
 MIGRATIONS = [
     # v1
@@ -216,7 +216,7 @@ MIGRATIONS = [
     UPDATE segment_defs SET seed_key='seg:bowser-3'      WHERE name='Bowser 3'        AND seed_key IS NULL;
     """,
     # v13 — a definition's own strategy (spec 2026-07-24-segment-default-strat).
-    # NULL = no default, today's behaviour. The 55 castle movements get
+    # NULL = no default, today's behaviour. The 56 castle movements get
     # 'Standard' through the bundled seed, not from here: they are seeded rows
     # with seed_dirty=0, so reconcile_defaults refreshes them at startup. No
     # repair UPDATE, deliberately — writing through a dirtied row is the one
@@ -245,6 +245,202 @@ MIGRATIONS = [
        SET value = replace(value, '"user:castle_movement.png"', '"castle_movement"')
       WHERE key='icon_overrides';
     """,
+    # v15 — how forgiving this definition's matcher is (spec
+    # 2026-07-28-multi-step-segments). 'strict' is today's behaviour: an
+    # off-sequence star grab or level crossing cancels the arm. 'loose' stays
+    # armed through them until the end trigger fires or the arm's staleness
+    # deadline passes. DEFAULT 'strict' with no repair UPDATE, deliberately:
+    # every existing row keeps matching exactly as it did, and the seeded
+    # corpus converts one movement at a time with the BFS corpus test proving
+    # each conversion safe. insert_segment_def's OWN Python default is ALSO
+    # 'strict' (fix round, spec 2026-07-28-multi-step-segments Item 0) — it
+    # briefly defaulted to 'loose' on the theory that a fresh row is always
+    # someone AUTHORING a new segment, but reconcile_defaults calls this same
+    # function to SEED the 56 castle movements on a fresh install, which is a
+    # shipped default, not authoring. That made a fresh install's movements
+    # come out loose while every migrated install's came out strict (backfilled
+    # by this very ALTER), two behaviours picked by install date. The one
+    # place "loose" IS the right authoring default is the API layer
+    # (SegmentBody.match_mode / TrackerService.create_segment), which always
+    # passes match_mode explicitly and so never falls back to this default.
+    """
+    ALTER TABLE segment_defs ADD COLUMN match_mode TEXT NOT NULL DEFAULT 'strict';
+    """,
+    # v16 — repair for the Bowser pipe family stranded disabled by a retired
+    # UI-side mutual exclusion (live report 2026-07-29, fixed in commit
+    # 912466d "Bowser row practices three things at once, no mutual
+    # exclusion"). The Bowser banner used to enforce "reds OR no-reds" by
+    # PUTting {"enabled": false}/{"enabled": true} at a pipe-entry segment
+    # whenever the reds star or a pipe cell was picked — an ordinary
+    # update_segment PATCH (tracking/service.py), which ALSO flips
+    # seed_dirty=1 on a seeded row (a "user edit", protecting it from
+    # reconcile). Once the corpus reshape (b9c72f3) gave each Bowser level TWO
+    # segment_targets sharing the same start_levels — the legacy pipe-only
+    # segment and its new reds->pipe sibling — segsForLevel's plain
+    # start_levels filter picked up both, so this toggle could disable either
+    # one depending on which cell a session happened to click. 912466d deleted
+    # the client-side toggle, but the write it left behind does not self-heal:
+    # seed_dirty=1 means reconcile_defaults's update branch never reaches
+    # these rows again, so an enabled=0 stranded here sits forever, silently
+    # recording nothing every session (a disabled definition never arms).
+    # Two rows in the live db were found this way: id 5 (seg:bitdw-pipe) and
+    # id 72 (seg:reds->pipe:bitfs), each explaining a Bowser scenario that
+    # logged zero attempts across a full practice session that covered its
+    # five siblings.
+    #
+    # Contrast v13, which shipped no repair: default_strat starts NULL for
+    # every existing row and no client had ever written to it, so an untouched
+    # seeded row (seed_dirty=0) simply picks it up from reconcile at the next
+    # startup — there was nothing stranded to repair. Here the strand IS
+    # seed_dirty=1, which is exactly what blocks the self-heal v13 relied on.
+    #
+    # Guarded to the six seed_keys the retired exclusion ever touched (the
+    # three pipe-only rows plus their reds->pipe siblings) AND enabled=0, so a
+    # segment disabled on purpose — Bowser or otherwise — is untouched.
+    # seed_dirty is deliberately left exactly as it is: this repair is not a
+    # user edit and must not change what reconcile does with these rows at the
+    # next startup.
+    """
+    UPDATE segment_defs SET enabled = 1
+      WHERE enabled = 0 AND seed_key IN (
+        'seg:bitdw-pipe', 'seg:bitfs-pipe', 'seg:bits-pipe',
+        'seg:reds->pipe:bitdw', 'seg:reds->pipe:bitfs', 'seg:reds->pipe:bits'
+      );
+    """,
+    # v17 — v16 repaired `enabled` on the Bowser pipe family but, on explicit
+    # instruction, deliberately left seed_dirty=1 standing (spec 2026-07-28-
+    # multi-step-segments round 2, item 5, live report 2026-07-30/31: "if the
+    # user grabbed the reds star in a bowser level, [the No Reds attempt]
+    # shouldn't be added to the practice log" -- EXCLUSIVE mode's entire job,
+    # yet seg:bitdw-pipe kept recording one anyway). That instruction was
+    # right about not disguising a repair as a user edit, and wrong about the
+    # consequence: seed_dirty=1 blocks reconcile_defaults's update branch
+    # UNCONDITIONALLY (tracking/defaults.py: "if not existing['seed_dirty']"),
+    # so those rows are frozen against every future corpus refresh, not just
+    # v16's own field. Confirmed against a sqlite3.Connection.backup of this
+    # branch's own dev db (never the live file): seg:bitdw-pipe was the ONE
+    # row actually drifted (match_mode 'strict' in the db, 'exclusive' in the
+    # bundled seed -- the shape that lets grabbing the reds star cancel a
+    # no-reds attempt silently, which plain 'strict' cannot do); the other
+    # five of the six already happened to match their seed value on every
+    # field, by the coincidence of when their own retired-toggle write last
+    # fired relative to when match_mode (v15) was introduced -- they were
+    # equally frozen, just not yet visibly wrong.
+    #
+    # This does NOT set match_mode directly (that would repair one field and
+    # leave these six rows frozen against the NEXT corpus change too, exactly
+    # v16's own mistake one field later) -- it clears the flag that is
+    # blocking reconcile, so reconcile's own existing update path (which
+    # already runs at every startup) brings match_mode and anything else
+    # current, then KEEPS it current from here on.
+    #
+    # Scoped to the exact six seed_keys v16 already named (the only rows the
+    # retired mutual-exclusion toggle ever wrote to) -- never a broader
+    # "clear every stale seed_dirty flag" sweep, which would silently discard
+    # a genuine user edit elsewhere and is precisely the risk this flag
+    # exists to prevent.
+    """
+    UPDATE segment_defs SET seed_dirty = 0
+      WHERE seed_key IN (
+        'seg:bitdw-pipe', 'seg:bitfs-pipe', 'seg:bits-pipe',
+        'seg:reds->pipe:bitdw', 'seg:reds->pipe:bitfs', 'seg:reds->pipe:bits'
+      );
+    """,
+    # v18 — untagged-PB backfill (live report 2026-07-31): "Bowser 1 shows PB
+    # 0'26"30, but the rank display clearly shows Capless 5 -- this should
+    # never happen." Root cause: `pbs.strat_tag`/`attempts.strat_tag` are
+    # separate NULL-able columns, and views.py's per-strategy ranking lookup
+    # (`current_pbs_by_strat`) skips a PB with no strat_tag entirely -- the
+    # entity stays unranked even though a strategy-blind PB display (the SAME
+    # kind of lookup, blind to strategy on purpose) shows one. Every one of
+    # the ten legacy segments carried `default_strat=NULL` before this spec
+    # (v13 added the column with no repair, deliberately), so their attempts
+    # recorded no tag from day one. Measured against a sqlite3.Connection.
+    # backup snapshot of this branch's own dev db: 36 of 126 saved PB rows
+    # were untagged, across 17 entities (10 stars, 7 segments) -- every one of
+    # those 7 segments is one of these ten legacy defs.
+    #
+    # Three of those seventeen are UNAMBIGUOUS -- no guess is involved,
+    # because their rank standards define exactly ONE strategy apiece
+    # (cross-checked against the bundled data/rank_standards.seed.json):
+    # MIPS Clip and Bowser 1/2, all "Standard". (A fourth entity in that same
+    # snapshot, a locally-named "BLJs" segment, resolves just as unambiguously
+    # -- but it carries no seed_key, so it has no identity a portable
+    # migration can reach on every install; it is left to the "unattributed"
+    # display fix instead of a guess by name.) The other 13 of the 17
+    # (10 stars, plus BitDW/BitFS/BitS Pipe Entry and Bowser 3) are genuinely
+    # ambiguous (2+ strategies) and stay untagged on purpose -- attributing
+    # one would credit a saved time to a strategy the player may never have
+    # run, which is worse than showing nothing.
+    #
+    # Guarded by seed_key (stable across installs and renames, unlike a raw
+    # segment_id) joined through segment_defs, AND `strat_tag IS NULL`
+    # (idempotent -- a re-run touches nothing, and an already-tagged row, from
+    # this migration or a real save, is never overwritten). Fixes BOTH tables
+    # for the same reason: `pbs.strat_tag` is what current_pbs_by_strat reads
+    # (the reported bug), and `attempts.strat_tag` is what valid_frames/
+    # grading_basis read for average-mode ranking -- leaving the underlying
+    # attempt NULL while its own pbs row now says "Standard" would be the same
+    # fact recorded two different ways in two tables, and would silently keep
+    # excluding these exact runs from every average-mode rank forever.
+    """
+    UPDATE pbs SET strat_tag = 'Standard'
+      WHERE strat_tag IS NULL AND segment_id IN (
+        SELECT id FROM segment_defs
+         WHERE seed_key IN ('seg:mips-clip', 'seg:bowser-1', 'seg:bowser-2')
+      );
+    UPDATE attempts SET strat_tag = 'Standard'
+      WHERE strat_tag IS NULL AND segment_id IN (
+        SELECT id FROM segment_defs
+         WHERE seed_key IN ('seg:mips-clip', 'seg:bowser-1', 'seg:bowser-2')
+      );
+    """,
+    # v19 — how an attempt's time was MEASURED (ruling 6 of round 3). A pipe
+    # PB saved before `warp_entered` carried Usamune's IGT stands on a
+    # wall-frame delta, which counts paused frames and carries the arm-frame
+    # alignment error -- so it sits ~1-2 frames CHEAP and an identical run
+    # cannot beat it. Those rows cannot be backfilled in principle (the raw
+    # counter at those frames was never journaled), so the ruling is that they
+    # stand and are MARKED.
+    #
+    # No repair UPDATE, and that is the point: `Attempt.timed_by` is derived by
+    # `SegmentEngine._close` from the closing event's own payload, and
+    # projection is replay-derived -- so the next reproject stamps every
+    # historical row correctly, on this install and on every other, with no
+    # list of ids to keep true. A hand-listed set was the rejected alternative
+    # and was already wrong when written (ruling 6 names four BitS Pipe Entry
+    # PBs; there are seven, and the pb#138 it names does not exist here).
+    #
+    # DEFAULT 'igt' is the honest value for every pre-existing row up to the
+    # moment the reproject runs: it is what every star, key and pipe-touch time
+    # already is, and the only rows it is wrong for are the segment rows this
+    # column exists to catch -- which the reproject fixes before anything reads
+    # them. A NULL default would have made "not yet reprojected" and "measured
+    # by delta" indistinguishable at exactly the sites that must tell them apart.
+    """
+    ALTER TABLE attempts ADD COLUMN timed_by TEXT NOT NULL DEFAULT 'igt';
+    ALTER TABLE attempts ADD COLUMN closed_by TEXT;
+    """,
+    # v20 — WHICH MOMENT inside the closing event a star's time was taken at
+    # (round-4 items 3/4). Usamune stops its clock at the x-cam; we stopped at
+    # the grab, and the gap is 0-39 frames of Mario falling -- so every star
+    # row recorded before 2026-08-01 holds a quantity no leaderboard accepts
+    # and cannot be re-derived, because the journal keeps no post-grab frames.
+    #
+    # Same shape as v19 and for the same reason: no repair UPDATE, because
+    # `Attempt.timed_at` is stamped by `_build` from the closing event's own
+    # payload and projection is replay-derived, so the next reproject fills
+    # every historical row correctly on every install with no list of ids to
+    # keep true.
+    #
+    # NULL default, unlike v19's 'igt', and the asymmetry is deliberate: NULL
+    # is the honest value for the MAJORITY of rows here (every segment, every
+    # failure, every key/pipe closure), where the question does not arise at
+    # all. v19's column described a property every row genuinely has; this one
+    # describes a choice only a star grab makes.
+    """
+    ALTER TABLE attempts ADD COLUMN timed_at TEXT;
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
@@ -253,7 +449,7 @@ _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
                  "cleared", "cleared_reason",
                  "rollouts_total", "rollouts_dustless",
                  "jumps_total", "jumps_dustless",
-                 "segment_id")
+                 "segment_id", "timed_by", "closed_by", "timed_at")
 
 
 class EventRow:
@@ -384,7 +580,7 @@ class Database:
                 int(a.cleared), a.cleared_reason,
                 a.rollouts_total, a.rollouts_dustless,
                 a.jumps_total, a.jumps_dustless,
-                a.segment_id)
+                a.segment_id, a.timed_by, a.closed_by, a.timed_at)
 
     def replace_attempts(self, attempts: list[Attempt]) -> None:
         with self._lock:
@@ -404,10 +600,27 @@ class Database:
             self._conn.commit()
 
     def attempts(self) -> list[Attempt]:
+        # Chronological by JOURNAL id, not the raw `id` column (spec
+        # 2026-07-28-multi-step-segments, live report): a reattributed
+        # 100-coin attempt keeps its SEGMENT-namespace id (arm.jid +
+        # SEGMENT_ATTEMPT_OFFSET * def_id, caveat 2/11 in projection.py) —
+        # a huge number that sorts permanently above every native
+        # star-namespace attempt for the same entity regardless of when it
+        # actually happened, which is exactly the bug (his practice log:
+        # two reattributed successes stuck at the top forever while newer
+        # resets piled up underneath, ordinal labels climbing under them).
+        # `journal_id()` is the SAME resolver views.py already uses to
+        # order SEGMENT SECTIONS by recency -- applied here to every
+        # attempt, not just section ordering, so every consumer of this
+        # list (grading's `valid_frames`, whose own docstring already
+        # claims "journal-id ordered, so chronological" -- a claim this
+        # makes true rather than merely documented) gets the correct order
+        # for free, with no second sort to remember downstream.
         with self._lock:
-            rows = self._conn.execute("SELECT * FROM attempts ORDER BY id").fetchall()
-            return [Attempt(**{**{k: r[k] for k in _ATTEMPT_COLS},
-                               "cleared": bool(r["cleared"])}) for r in rows]
+            rows = self._conn.execute("SELECT * FROM attempts").fetchall()
+            out = [Attempt(**{**{k: r[k] for k in _ATTEMPT_COLS},
+                              "cleared": bool(r["cleared"])}) for r in rows]
+        return sorted(out, key=lambda a: journal_id(a.id))
 
     # -- segment definitions -------------------------------------------------
     def segment_defs(self) -> list[dict]:
@@ -423,6 +636,7 @@ class Database:
                  "category": r["category"],
                  "seed_key": r["seed_key"], "seed_dirty": r["seed_dirty"],
                  "default_strat": r["default_strat"],
+                 "match_mode": r["match_mode"],
                  "created_utc": r["created_utc"]} for r in rows]
 
     def insert_segment_def(self, name: str, start_triggers: list,
@@ -431,16 +645,18 @@ class Database:
                            waypoints: list | None = None,
                            category: str | None = None,
                            seed_key: str | None = None,
-                           default_strat: str | None = None) -> int:
+                           default_strat: str | None = None,
+                           match_mode: str = "strict") -> int:
         with self._lock:
             cur = self._conn.execute(
                 "INSERT INTO segment_defs (name, enabled, start_triggers,"
                 " end_triggers, waypoints, guards, category, seed_key,"
-                " default_strat, created_utc) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                " default_strat, match_mode, created_utc)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (name, int(enabled), json.dumps(start_triggers),
                  json.dumps(end_triggers), json.dumps(waypoints or []),
                  json.dumps(guards), category, seed_key, default_strat,
-                 created_utc))
+                 match_mode, created_utc))
             self._conn.commit()
             return cur.lastrowid
 
@@ -449,7 +665,8 @@ class Database:
                 "start_triggers": json.dumps, "end_triggers": json.dumps,
                 "waypoints": json.dumps, "guards": json.dumps,
                 "category": lambda v: v, "seed_key": lambda v: v,
-                "default_strat": lambda v: v, "seed_dirty": int}
+                "default_strat": lambda v: v, "seed_dirty": int,
+                "match_mode": lambda v: v}
         if set(fields) - set(cols):
             raise ValueError(f"unknown fields {sorted(set(fields) - set(cols))}")
         sets, vals = [], []

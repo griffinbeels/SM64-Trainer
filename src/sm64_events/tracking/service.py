@@ -28,8 +28,11 @@ from sm64_events.ranks.standards import entity_key
 from sm64_events.storage.db import Database, EventRow
 from sm64_events.tracking import practicable
 from sm64_events.tracking.defaults import resolve_steps
-from sm64_events.tracking.projection import Projector, replay, wipe_matches
-from sm64_events.tracking.segments import (SegmentDef, segment_origin,
+from sm64_events.tracking.projection import (Projector, journal_id, replay,
+                                             wipe_matches)
+from sm64_events.tracking.segments import (SegmentDef, hundred_coin_entity,
+                                           merge_definitions,
+                                           segment_origin, split_definition,
                                            star_origin, validate_definition)
 from sm64_events.tracking import routes as route_logic
 
@@ -302,6 +305,14 @@ class TrackerService:
         refresh self-heal the UI's armed badge after missed notices."""
         return self._projector.armed_segment_ids()
 
+    @property
+    def armed_arms(self) -> dict[int, dict]:
+        """Per-armed-id progress/total/start_frame/deadline_frame (spec
+        2026-07-28-multi-step-segments) -- same self-heal rationale as
+        armed_segment_ids: a plain view refresh reads the projector directly
+        rather than depending on a missed segment_disarmed/armed notice."""
+        return self._projector.armed_arms()
+
     def _require_db(self) -> Database:
         if self.db is None or self.session_id is None:
             raise RuntimeError("database unavailable")
@@ -375,8 +386,34 @@ class TrackerService:
         what is ALREADY the target always succeeds: only its strategy can
         differ, and refusing a strategy edit because the player has since
         walked off would be a second bug wearing the first one's clothes.
+
+        A star pick of (course, 6) -- the 100-coin star -- commits as a
+        PLAIN star target like any other (spec 2026-07-28-multi-step-
+        segments, "the 100-coin star IS the segment"): it no longer redirects
+        to a segment target. The retired `_hundred_coin_redirect` existed so
+        the practice card would show the family's real attempts/strat/rank,
+        which lived on the segment; now that the engine's own completed
+        attempts attribute directly to this star (tracking/projection.py's
+        seg_closed reattribution via segments.hundred_coin_entity), a plain
+        star target already shows the same thing with no indirection. The
+        underlying HUNDRED_COIN_EXIT engine still arms and matches on its own
+        world-state rules regardless of what the target is set to -- arming
+        was always target-independent, and this target ONLY decides what the
+        practice card highlights.
         """
         self._require_db()
+        if kind == "segment" and segment_id is not None:
+            found = next((d for d in self._segment_defs if d.id == segment_id),
+                        None)
+            hc = (hundred_coin_entity(found.start_triggers, found.waypoints)
+                 if found is not None else None)
+            if hc is not None:
+                # This def IS a star now (spec 2026-07-28-multi-step-
+                # segments) -- an explicit segment pick (a route candidate,
+                # a direct API call) must land on the star it represents,
+                # never on the segment itself, which no longer surfaces
+                # anywhere a pick could originate from.
+                kind, course_id, star_id, segment_id = "star", hc[0], hc[1], None
         if kind == "segment":
             if segment_id is None:
                 raise ValueError("segment target needs segment_id")
@@ -388,8 +425,16 @@ class TrackerService:
                 raise ValueError("star target needs course_id and star_id")
             already = self.target == ("star", course_id, star_id)
         node = self.target_node(kind, course_id, star_id, segment_id)
+        # A segment whose start trigger has already fired is UNDER WAY, and
+        # you pick it where it has got you to, not where it began (user
+        # ruling 2026-08-01 — practicable.py carries the reasoning). Read from
+        # the projector, which re-derives the armed set from the journal, so
+        # this asks the same question the banner's own armed cells answer:
+        # what the banner offers and what the server accepts cannot disagree.
+        running = (kind == "segment"
+                   and segment_id in self._projector.armed_segment_ids())
         if not already and not practicable.practicable_here(self._current_stage,
-                                                            node):
+                                                            node, running):
             raise ValueError(
                 "you can only practice what you are standing in — "
                 f"that one is in {node_label(node)}")
@@ -593,17 +638,30 @@ class TrackerService:
 
     @staticmethod
     def _newest_attempt_id(db, attempt) -> int | None:
-        """Max-id non-cleared attempt of `attempt`'s entity — the top row of
+        """Newest non-cleared attempt of `attempt`'s entity — the top row of
         that section's practice log (cleared rows are hidden from it, so a
-        hidden newer row never counts)."""
+        hidden newer row never counts).
+
+        Compares by `journal_id()`, NOT the raw `id` (spec 2026-07-28-multi-
+        step-segments, live report): a reattributed 100-coin attempt keeps
+        its SEGMENT-namespace id (a huge number, projection.py caveat 2/11),
+        which would win a raw `max()` over every native star-namespace
+        attempt for the same entity regardless of which actually happened
+        last -- silently breaking "reclassifying the newest attempt updates
+        the active strategy" for exactly the entities this change created.
+        Returns the WINNING ROW's real `id` (still needed by the caller to
+        compare against `attempt.id`), just chosen by the chronological key."""
         def same_entity(row):
             if attempt.segment_id is not None:
                 return row.segment_id == attempt.segment_id
             return (row.segment_id is None
                     and row.course_id == attempt.course_id
                     and row.star_id == attempt.star_id)
-        return max((row.id for row in db.attempts()
-                    if same_entity(row) and not row.cleared), default=None)
+        candidates = [row for row in db.attempts()
+                     if same_entity(row) and not row.cleared]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda row: journal_id(row.id)).id
 
     async def set_time_filter(self, course_id: int, star_id: int,
                               min_frames: int, max_frames: int | None) -> None:
@@ -638,7 +696,8 @@ class TrackerService:
                                     _iso(_now()),
                                     enabled=d.get("enabled", True),
                                     waypoints=d.get("waypoints", []),
-                                    category=d.get("category"))
+                                    category=d.get("category"),
+                                    match_mode=d.get("match_mode", "loose"))
         await self._segments_changed()
         return sid
 
@@ -654,7 +713,7 @@ class TrackerService:
         db.update_segment_def(segment_id, **{
             k: d[k] for k in ("name", "enabled", "start_triggers",
                               "end_triggers", "waypoints", "guards",
-                              "category") if k in d})
+                              "category", "match_mode") if k in d})
         if current.get("seed_key"):
             # a user edit to a seeded row protects it from reconcile's
             # refresh (tracking/defaults.py) until reset_segment clears the
@@ -704,6 +763,102 @@ class TrackerService:
             guards=srow.get("guards", []), category=srow.get("category"))
         db.set_seed_dirty("segment_defs", segment_id, 0)
         await self._segments_changed()
+
+    def _insert_definition(self, db: Database, d: dict) -> int:
+        """Insert a definition dict produced by `segments.split_definition` /
+        `segments.merge_definitions` -- validated exactly like create_segment,
+        but through `insert_segment_def` DIRECTLY rather than reusing
+        create_segment itself. That is deliberate, not a missed reuse: a
+        split/merge dict can carry a real `default_strat` inherited from an
+        existing definition (both pure ops' own docstrings document this),
+        while create_segment's dict shape is built from SegmentBody, which has
+        no `default_strat` field at all (the API deliberately never lets a
+        user type one in directly -- it is corpus-authored, applied only by
+        `tracking/defaults.py::reconcile_defaults` calling `update_segment_def`
+        directly). Routing a split/merge result through create_segment would
+        silently drop that field the same way an unreachable SegmentBody field
+        would (the exact class of bug test_every_segment_model_field_
+        reaches_its_write_path guards on the API's own path) -- so this is a
+        second, deliberate bypass of the generic create path, mirroring
+        reconcile's own precedent for the identical reason.
+
+        Never passes `seed_key`: neither pure op's output dict carries one
+        (by design -- a derived definition is not the row it came from), and
+        insert_segment_def's own default is None."""
+        validate_definition(d)
+        return db.insert_segment_def(
+            d["name"], d["start_triggers"], d["end_triggers"], d["guards"],
+            _iso(_now()), enabled=d["enabled"], waypoints=d["waypoints"],
+            default_strat=d.get("default_strat"),
+            match_mode=d.get("match_mode", "loose"))
+
+    async def split_segment(self, segment_id: int, mid: list,
+                            names: tuple[str, str]) -> tuple[int, int]:
+        """Break an existing definition into two new ones meeting at `mid`
+        (`segments.split_definition`) -- **non-destructive**: `segment_id`
+        itself is left completely untouched (definitions arm in parallel, so
+        the whole and both halves can all record on the same play), and both
+        halves are inserted as fresh, user-created rows (`seed_key=None`, so
+        `reconcile_defaults` never refreshes or deletes them).
+
+        LookupError (-> 404) for an unknown `segment_id`. The pure op's own
+        ValueError -- an unfireable half, or more waypoints than the fold can
+        preserve -- surfaces unchanged (-> 409 via the same `_http` path
+        every other segment endpoint uses), as does a half that fails
+        `validate_definition`; **no input can leave a half-split behind**,
+        because both halves are validated in full before either is written
+        (see the comment at that call -- this claim was false until
+        2026-07-29 and produced a real orphaned row). A db-level failure
+        BETWEEN the two inserts is not covered: that needs a transaction the
+        storage layer does not expose today."""
+        db = self._require_db()
+        current = next((d for d in self._segment_defs if d.id == segment_id),
+                       None)
+        if current is None:
+            raise LookupError(f"segment {segment_id} not found")
+        first, second = split_definition(current, mid, names)
+        # BOTH halves fully validated before EITHER is written. Not redundant
+        # with _insert_definition's own validate: that one runs per-half at
+        # insert time, and db.insert_segment_def commits unconditionally, so
+        # a second half failing validation left the first COMMITTED and
+        # orphaned while the caller got a clean 409 (live-reproduced with
+        # second_name="   ", which validate_definition rejects as "name is
+        # required" -- SegmentSplitBody's names are plain str with no
+        # min_length, so any non-UI client could send it). Hoisting covers
+        # every validate_definition rule, not just the name that found it.
+        # NOT full atomicity: a db-level failure between the two inserts
+        # would still half-write, which needs a transaction the storage layer
+        # does not currently expose. No INPUT can produce a half-split.
+        validate_definition(first)
+        validate_definition(second)
+        first_id = self._insert_definition(db, first)
+        second_id = self._insert_definition(db, second)
+        await self._segments_changed()
+        return first_id, second_id
+
+    async def merge_segments(self, first_id: int, second_id: int,
+                             name: str) -> int:
+        """Chain two existing definitions into one meeting at their shared
+        boundary, kept as a waypoint (`segments.merge_definitions`) --
+        **non-destructive**: both inputs survive completely untouched, and
+        the merged definition is inserted as a fresh, user-created row
+        (`seed_key=None`).
+
+        LookupError (-> 404) for either unknown id. The pure op's own "do not
+        meet" ValueError surfaces unchanged (-> 409) when the pair shares no
+        boundary; nothing is inserted in that case."""
+        db = self._require_db()
+        first = next((d for d in self._segment_defs if d.id == first_id), None)
+        if first is None:
+            raise LookupError(f"segment {first_id} not found")
+        second = next((d for d in self._segment_defs if d.id == second_id),
+                      None)
+        if second is None:
+            raise LookupError(f"segment {second_id} not found")
+        merged = merge_definitions(first, second, name)
+        new_id = self._insert_definition(db, merged)
+        await self._segments_changed()
+        return new_id
 
     async def _segments_changed(self) -> None:
         """Definitions changed retroactively: reload, then re-derive every

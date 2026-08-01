@@ -1,3 +1,4 @@
+import dataclasses
 import re
 from dataclasses import replace
 
@@ -5,10 +6,16 @@ import pytest
 
 from sm64_events.memory.addresses import COURSE_NAMES, LEVEL_NAMES
 from sm64_events.storage.db import EventRow
+from sm64_events.tracking import segments as segments_module
 from sm64_events.tracking.segments import (SEGMENT_ATTEMPT_OFFSET,
+                                           arms_ambiently,
+                                           card_waiting_for_sentence,
+                                           clause_sentence,
                                            course_groups, level_groups,
                                            GUARDS, TRIGGERS, MatchContext,
-                                           SegmentDef, SegmentEngine,
+                                           hundred_coin_entity,
+                                           merge_definitions, SegmentDef,
+                                           SegmentEngine, split_definition,
                                            origin_taxonomy, origin_view,
                                            start_origin, validate_definition,
                                            vocab)
@@ -81,6 +88,157 @@ def test_vocab_ships_connections_and_flow_annotations():
     assert level_exit["params"]["from"]["flow"]["role"] == "source"
     assert level_exit["params"]["to"]["flow"]["role"] == "dest"
     assert level_exit["params"]["from_subarea"]["flow"]["role"] == "source"
+
+
+# ---------------------------------------------------------------------------
+# card_waiting_for_sentence (Task 6, spec 2026-07-28-multi-step-segments):
+# plain language for what an armed def is waiting for next, read as an
+# imperative step for the practice card's "Waiting for" line. Its editor-
+# voice twin, waiting_for_sentence, and its four dedicated tests here were
+# deleted Task 7 (2026-07-28) once the function lost its last caller in
+# `src/` — see segments.py's card_waiting_for_sentence docstring.
+# ---------------------------------------------------------------------------
+
+WF_TO_SSL_WAYPOINT = SegmentDef(
+    id=21, name="WF -> SSL", enabled=True,
+    start_triggers=[{"type": "level_exit", "from": 24}],
+    waypoints=[[{"type": "area_enter", "level": 6, "area": 3}]],
+    end_triggers=[{"type": "level_enter", "to": 8}], guards=[])
+
+def test_card_waiting_for_sentence_reads_the_next_unconsumed_waypoint():
+    sentence = card_waiting_for_sentence(WF_TO_SSL_WAYPOINT, 0)
+    assert sentence == "Enter Castle Inside Basement"
+
+
+def test_card_waiting_for_sentence_falls_back_to_the_end_trigger_once_consumed():
+    sentence = card_waiting_for_sentence(WF_TO_SSL_WAYPOINT, 1)
+    assert sentence == "Enter Shifting Sand Land"
+
+
+def test_card_waiting_for_sentence_is_not_the_editors_voice():
+    # The bug this function exists for: editor voice shown under a "Waiting
+    # for" label reads as broken English ("Waiting for You enter level
+    # Shifting Sand Land"). The card sentence must never start with the
+    # editor's second-person phrasing.
+    card = card_waiting_for_sentence(WF_TO_SSL_WAYPOINT, 1)
+    assert card == "Enter Shifting Sand Land"
+    assert not card.startswith("You ")
+
+
+def test_every_trigger_template_resolves_cleanly():
+    """Guard for the clause renderer behind card_waiting_for_sentence: every
+    TriggerType's card_template (or template, its fallback -- fix round 1,
+    2026-07-28: card_template may differ from template), filled with every
+    param IT declares, must leave no literal "{token}" behind, and every
+    param name the template mentions must be one this trigger actually has
+    in its own `params` dict. Fails the day a new trigger type's template
+    typos a param name, rather than a user seeing a brace on the practice
+    card. (This used to also probe the editor-voice template through
+    waiting_for_sentence; deleted Task 7, 2026-07-28, alongside that
+    function -- spec.template's own placeholder names are still checked
+    below since it is card_template's fallback and so still load-bearing.)"""
+    kind_samples = {"level": 6, "subarea": 1, "course": 1, "star": 0}
+    for spec in TRIGGERS.values():
+        card_named = set(re.findall(r"\{(\w+)\}", spec.card_template or spec.template))
+        assert card_named <= set(spec.params), \
+            f"{spec.key}: card_template names {card_named - set(spec.params)}, " \
+            "which is not one of its own params"
+        clause = {"type": spec.key}
+        for name, meta in spec.params.items():
+            clause[name] = kind_samples[meta["kind"]]
+        d = SegmentDef(id=1, name="probe", enabled=True, guards=[],
+                       start_triggers=[], end_triggers=[clause])
+        card_sentence = card_waiting_for_sentence(d, 0)
+        assert "{" not in card_sentence and "}" not in card_sentence, \
+            f"{spec.key}: leftover template token in card phrasing {card_sentence!r}"
+        assert spec.card_label in card_sentence
+
+
+def test_every_card_fallback_param_resolves_cleanly_when_unset():
+    """The generic loop above always fills EVERY declared param, so it can
+    never exercise a card_fallbacks entry -- that only fires when a param is
+    LEFT unset. This is the "same probe proving the guard can fail" for
+    card_template's one new mechanism: build a clause omitting exactly the
+    fallback-bearing params (every other declared param still filled), and
+    assert the fallback text appears with no leftover token. Runs for every
+    TriggerType that declares a fallback today (just star_grabbed), so a
+    future type gets the same coverage for free rather than a bespoke test."""
+    kind_samples = {"level": 6, "subarea": 1, "course": 1, "star": 0}
+    fallback_specs = [s for s in TRIGGERS.values() if s.card_fallbacks]
+    assert fallback_specs, "no TriggerType declares card_fallbacks -- update this probe"
+    for spec in fallback_specs:
+        clause = {"type": spec.key}
+        for name, meta in spec.params.items():
+            if name not in spec.card_fallbacks:
+                clause[name] = kind_samples[meta["kind"]]
+        d = SegmentDef(id=1, name="probe", enabled=True, guards=[],
+                       start_triggers=[], end_triggers=[clause])
+        card_sentence = card_waiting_for_sentence(d, 0)
+        assert "{" not in card_sentence and "}" not in card_sentence, \
+            f"{spec.key}: leftover template token with fallback params unset: " \
+            f"{card_sentence!r}"
+        for name, fallback_text in spec.card_fallbacks.items():
+            assert fallback_text in card_sentence, \
+                f"{spec.key}: fallback {fallback_text!r} for {name!r} missing " \
+                f"from {card_sentence!r}"
+
+
+def test_star_grabbed_card_phrase_names_the_star_and_course():
+    # Fix round 1, 2026-07-28: the shared editor template read as a visible
+    # artifact on the card ("Grab the star in Dire, Dire Docks, star Board
+    # Bowser's Sub"). course=9/star=0 is Dire, Dire Docks' "Board Bowser's
+    # Sub" -- the real names, not synthesized for this test.
+    d = SegmentDef(id=1, name="probe", enabled=True, guards=[],
+                   start_triggers=[],
+                   end_triggers=[{"type": "star_grabbed", "course": 9, "star": 0}])
+    assert card_waiting_for_sentence(d, 0) == "Grab Board Bowser's Sub in Dire, Dire Docks"
+
+
+def test_star_grabbed_card_phrase_falls_back_when_the_star_is_unset():
+    # Same course, no specific star: the object of the sentence must not
+    # vanish along with the unset param.
+    d = SegmentDef(id=1, name="probe", enabled=True, guards=[],
+                   start_triggers=[],
+                   end_triggers=[{"type": "star_grabbed", "course": 9}])
+    assert card_waiting_for_sentence(d, 0) == "Grab a star in Dire, Dire Docks"
+
+
+def test_card_fallback_is_per_param_not_a_blanket_rule():
+    # The mechanism must be selective (only params LISTED in card_fallbacks
+    # render unconditionally), not "every unset param on a card renders
+    # something" -- course_grabbed's `course` has no fallback entry, so a
+    # star-only clause still prunes it the ordinary way, exactly like the
+    # editor voice.
+    d = SegmentDef(id=1, name="probe", enabled=True, guards=[],
+                   start_triggers=[],
+                   end_triggers=[{"type": "star_grabbed", "star": 0}])
+    sentence = card_waiting_for_sentence(d, 0)
+    assert sentence == "Grab Star 1"   # no course -> generic star name, no "in"
+    assert "in " not in sentence
+
+
+# ---------------------------------------------------------------------------
+# clause_sentence (Task 13, spec 2026-07-28-multi-step-segments): a public
+# entry point onto _render_clause for callers OUTSIDE tracking/ (the
+# synthesize-preview API endpoint behind the timeline picker). Same
+# card_label/card_template rendering card_waiting_for_sentence uses, so a
+# synthesized-but-unsaved clause reads in the identical voice a saved one
+# would -- one line, no second template walk.
+# ---------------------------------------------------------------------------
+
+def test_clause_sentence_matches_card_waiting_for_sentence_for_the_same_clause():
+    # Pin the two against EACH OTHER, not just against a hardcoded string --
+    # a future divergence (clause_sentence growing its own branch) shows up
+    # here rather than only in a stale literal.
+    clause = {"type": "level_exit", "from": 23}
+    d = SegmentDef(id=1, name="probe", enabled=True, guards=[],
+                   start_triggers=[], end_triggers=[clause])
+    assert clause_sentence(clause) == card_waiting_for_sentence(d, 0)
+
+
+def test_clause_sentence_renders_a_pinned_level_enter():
+    assert clause_sentence({"type": "level_enter", "to": 19}) \
+        == "Enter Bowser in the Fire Sea"
 
 
 def test_start_level_set_classifies_level_bound_defs():
@@ -189,6 +347,34 @@ def test_arm_then_end_is_a_success_with_rta_delta():
     assert a.course_id is None and a.star_id is None
     assert a.id == 10 + SEGMENT_ATTEMPT_OFFSET * 1
     assert a.anchor_type == "level_changed"
+
+
+def test_armed_items_carries_the_live_arm_for_each_armed_id():
+    e = SegmentEngine([LBLJ])
+    lblj_arm(e, frame=1000)
+    items = e.armed_items()
+    assert set(items) == {1}
+    assert items[1].start_frame == 1000
+
+
+def test_armed_items_returns_a_copy_not_the_live_dict():
+    # Same defensive-copy contract as armed_ids() — a caller mutating what
+    # it got back must never reach engine-private state.
+    e = SegmentEngine([LBLJ])
+    lblj_arm(e, frame=1000)
+    items = e.armed_items()
+    items.clear()
+    assert e.armed_ids() == {1}
+
+
+def test_definition_returns_the_loaded_def_by_id():
+    e = SegmentEngine([LBLJ])
+    assert e.definition(1) is LBLJ
+
+
+def test_definition_returns_none_for_an_unknown_id():
+    e = SegmentEngine([LBLJ])
+    assert e.definition(999) is None
 
 
 B3 = SegmentDef(id=10, name="Bowser 3", enabled=True,
@@ -2123,11 +2309,18 @@ def test_waypoint_death_still_fatal():
     assert len(closed) == 1 and closed[0].outcome == "death"
 
 
-def test_waypoint_anchor_rewinds_progress_and_rearms():
+def test_waypoint_anchor_rewinds_progress_and_records_a_reset_row():
     """A real anchor (not an echo) mid-attempt rewinds `progress` to 0 and
-    re-arms IN PLACE at the anchor frame — the practice-retry loop. No row
-    is recorded for the rewind itself; the eventual completion times from
-    the anchor, not the original arm."""
+    re-arms IN PLACE at the anchor frame — the practice-retry loop — AND now
+    records a RESET row for the attempt that ends there, exactly like the
+    plain chain's own anchor-refire reset (round 2, live report 2026-07-30:
+    this branch used to record NO row at all — a documented, deliberate,
+    but explicitly-unverified gap ("precise relocation-vs-continuation
+    nuance is a live-gate VERIFY item") — so the practice log silently
+    omitted every retry of a Pipe-mode Bowser run; the user has since
+    settled it: he expects the row). The eventual completion still times
+    from the anchor, not the original arm — the rewind-in-place relocation
+    itself is unchanged, only the missing row is fixed."""
     e = SegmentEngine([_sl_hmc_def()])
     e.feed(jev(10, "level_changed", 1000, {"from": 10, "to": 16}),
            ctx(level=16, prev_level=10))                        # arm
@@ -2135,7 +2328,9 @@ def test_waypoint_anchor_rewinds_progress_and_rearms():
     closed, _ = e.feed(
         jev(11, "practice_reset", 1300, {"action": 0x0C400201}),
         ctx(level=16))
-    assert closed == [], "waypoint rewind records no row"
+    assert len(closed) == 1
+    assert closed[0].outcome == "reset" and closed[0].segment_id == 99
+    assert closed[0].rta_frames == 300, "timed from the original arm to the rewind"
     assert e.armed_ids() == {99}
     assert e._armed[99].progress == 0
     assert e._armed[99].start_frame == 1300
@@ -2151,6 +2346,33 @@ def test_waypoint_anchor_rewinds_progress_and_rearms():
     assert len(closed) == 1
     assert closed[0].outcome == "success"
     assert closed[0].rta_frames == 300, "timed from the rewind, not the arm"
+
+
+def test_waypoint_afk_anchor_rebases_without_row():
+    """AFK discard (paused_frames_before >= 150) applies to the waypoint
+    matcher's own reset row exactly as it does to the plain chain's
+    (test_afk_anchor_rebases_without_row) -- a long menu pause immediately
+    before the anchor means the player went AFK, not that they retried, so
+    no row even though the rewind-in-place still happens."""
+    e = SegmentEngine([_sl_hmc_def()])
+    e.feed(jev(10, "level_changed", 1000, {"from": 10, "to": 16}),
+           ctx(level=16, prev_level=10))                        # arm
+    closed_afk, _ = e.feed(
+        jev(11, "practice_reset", 1500,
+            {"paused_frames_before": 200, "action": 0x0C400201}),
+        ctx(level=16))
+    assert closed_afk == [], "AFK anchor must not record a row"
+    assert e.armed_ids() == {99}, "segment must stay armed after AFK anchor"
+    assert e._armed[99].progress == 0 and e._armed[99].start_frame == 1500
+    # replay from the AFK anchor -- confirms the rewind itself still happened
+    closed, _ = e.feed(jev(12, "level_changed", 1600, {"from": 16, "to": 10}),
+                       ctx(level=10, prev_level=16))             # waypoint 1
+    closed, _ = e.feed(jev(13, "level_changed", 1700, {"from": 10, "to": 16}),
+                       ctx(level=16, prev_level=10))             # waypoint 2
+    closed, _ = e.feed(jev(14, "level_changed", 1800, {"from": 16, "to": 7}),
+                       ctx(level=7, prev_level=16))              # end
+    assert len(closed) == 1
+    assert closed[0].outcome == "success" and closed[0].rta_frames == 300
 
 
 def test_waypoint_session_started_disarms_silently():
@@ -2277,6 +2499,81 @@ def test_start_origin_is_none_when_the_rules_carry_no_place():
     assert start_origin([{"type": "key_grabbed"}]) is None
     assert start_origin([{"type": "star_grabbed", "course": 0, "star": 0}]) is None
     assert start_origin([]) is None
+
+
+def test_hundred_coin_entity_finds_the_grab_as_a_start_clause():
+    # The pre-reshape shape (the grab itself IS the start trigger).
+    assert hundred_coin_entity(
+        [{"type": "star_grabbed", "course": 2, "star": 6}], []) == (2, 6)
+
+
+def test_hundred_coin_entity_finds_the_grab_as_a_waypoint():
+    # The reshaped, currently-seeded shape (course entry starts it, the
+    # 100-coin grab is a waypoint mid-sequence) -- SPAN-AGNOSTIC on purpose,
+    # same reasoning as the retired _hundred_coin_redirect.
+    start_triggers = [{"type": "level_enter", "to": 24},
+                      {"type": "attempt_anchor", "level": 24}]
+    waypoints = [[{"type": "star_grabbed", "course": 2, "star": 6}]]
+    assert hundred_coin_entity(start_triggers, waypoints) == (2, 6)
+
+
+def test_hundred_coin_entity_ignores_a_different_star():
+    # A def whose sequence grabs an ORDINARY star (not the 100-coin one)
+    # is not part of this family, whatever else it does.
+    assert hundred_coin_entity(
+        [{"type": "star_grabbed", "course": 2, "star": 3}], []) is None
+
+
+def test_hundred_coin_entity_is_none_for_a_plain_movement():
+    assert hundred_coin_entity([{"type": "level_exit", "from": 8}], []) is None
+
+
+def test_hundred_coin_entity_reads_the_course_off_the_matching_clause():
+    # Not a hand-written course table -- the (course, 6) pair comes straight
+    # off whichever clause matched, so a DDD def answers 9, not 2.
+    assert hundred_coin_entity(
+        [{"type": "star_grabbed", "course": 9, "star": 6}], []) == (9, 6)
+
+
+def test_arms_ambiently_is_true_for_a_course_entry_start():
+    assert arms_ambiently([{"type": "level_enter", "to": 24},
+                          {"type": "attempt_anchor", "level": 24}]) is True
+
+
+def test_arms_ambiently_is_true_for_an_anchor_alone():
+    assert arms_ambiently([{"type": "attempt_anchor", "level": 17}]) is True
+
+
+def test_arms_ambiently_is_false_for_the_castle_interior():
+    # LBLJ's own shape -- level 6 has no course (course_for_level -> None),
+    # so entering/anchoring the castle interior is not "a stage".
+    assert arms_ambiently([{"type": "level_enter", "to": 6, "from": 16},
+                          {"type": "attempt_anchor", "level": 6}]) is False
+
+
+def test_arms_ambiently_is_false_for_a_leaving_or_grabbing_start():
+    assert arms_ambiently([{"type": "level_exit", "from": 8}]) is False
+    assert arms_ambiently(
+        [{"type": "star_grabbed", "course": 0, "star": 3}]) is False
+
+
+def test_arms_ambiently_matches_exactly_the_three_families_in_the_real_corpus():
+    # Measured, not assumed: 21 of 84 seeded defs (15 hundred-coin + 3
+    # reds->pipe + 3 legacy pipe-entry), and specifically NOT LBLJ or any
+    # Bowser fight (arms the same way but auto-selects on entry by design --
+    # stagebanner.js's ArenaRow -- so an ambient pin there is not a bug).
+    import json
+    from sm64_events.core.paths import bundled_defaults_seed
+    seed = json.loads(bundled_defaults_seed().read_bytes().decode("utf-8"))
+    flagged = {s["name"] for s in seed["segments"]
+              if arms_ambiently(s["start_triggers"])}
+    assert len(flagged) == 21
+    assert "LBLJ" not in flagged
+    assert "Bowser 1" not in flagged and "Bowser 2" not in flagged \
+        and "Bowser 3" not in flagged
+    assert "BitDW Pipe Entry" in flagged
+    assert "BitDW — 8 Red Coins → Pipe" in flagged
+    assert "WF — 100 Coins → Exit" in flagged
 
 
 def test_origin_view_carries_the_region_and_its_labels():
@@ -2493,3 +2790,777 @@ def test_a_reset_started_segment_arms_despite_the_stale_level():
         end_triggers=[{"type": "level_enter", "to": 9}])])
     e.feed(jev(1, "game_reset", 40, {}), ctx(level=9))   # F1'd inside BoB
     assert e.armed_ids() == {1}
+
+
+# ---------------------------------------------------------------------------
+# Task 1: SegmentDef.match_mode (spec 2026-07-28-multi-step-segments). Pure
+# plumbing — the field, its validation, and the editor vocab. No matching
+# behaviour changes: every def (waypoint-bearing or plain) still runs the
+# armed-branch chain this file already exercises above; a mode's HANDLING is
+# added in a later task.
+# ---------------------------------------------------------------------------
+
+def test_segmentdef_defaults_to_strict_match_mode():
+    # Defaulted for the same reason waypoints is: a non-default field would
+    # TypeError every existing SegmentDef(...) construction that omits it.
+    d = SegmentDef(id=1, name="x", enabled=True,
+                   start_triggers=[{"type": "spawned"}],
+                   end_triggers=[{"type": "spawned"}], guards=[])
+    assert d.match_mode == "strict"
+
+
+def test_validate_accepts_all_match_modes():
+    for mode in ("strict", "loose", "exclusive"):
+        validate_definition({"name": "x", "match_mode": mode,
+                             "start_triggers": [{"type": "spawned"}],
+                             "end_triggers": [{"type": "spawned"}],
+                             "guards": []})  # no raise
+
+
+def test_validate_rejects_an_unknown_match_mode():
+    with pytest.raises(ValueError, match="match_mode"):
+        validate_definition({"name": "x", "match_mode": "sloppy",
+                             "start_triggers": [{"type": "spawned"}],
+                             "end_triggers": [{"type": "spawned"}],
+                             "guards": []})
+
+
+def test_vocab_ships_the_match_modes_for_the_editor():
+    modes = vocab()["match_modes"]
+    # loose stays position 0 -- segments.js seeds a new definition's default
+    # from match_modes[0].key; exclusive (strict plus one more cancel rule)
+    # is the most specialized of the three, so it's appended last.
+    assert [m["key"] for m in modes] == ["loose", "strict", "exclusive"]
+    assert all(m["label"] and m["description"] for m in modes)
+
+
+# ---------------------------------------------------------------------------
+# Task 3: SegmentEngine._feed_loose + the staleness deadline (spec
+# 2026-07-28-multi-step-segments). A loose def stays armed through star
+# grabs, key grabs and level crossings until its end trigger fires or a
+# staleness deadline passes — every test below is one row of _feed_loose's
+# precedence table, so a reviewer can check coverage by reading the names.
+# ---------------------------------------------------------------------------
+
+LOOSE = SegmentDef(
+    id=20, name="DDD -> BitFS (loose)", enabled=True,
+    start_triggers=[{"type": "level_exit", "from": 23}],
+    end_triggers=[{"type": "level_enter", "to": 19}],
+    guards=[], match_mode="loose")
+
+
+def loose_arm(engine, jid=10, frame=1000):
+    return engine.feed(jev(jid, "level_changed", frame, {"from": 23, "to": 6}),
+                       ctx(level=6, prev_level=23))
+
+
+def test_loose_survives_a_star_grab_that_would_cancel_a_strict_def():
+    # The rule that made the 100-coin case unwriteable: a strict waypoint def
+    # is silently cancelled by ANY star grab.
+    e = SegmentEngine([LOOSE])
+    loose_arm(e)
+    closed, _ = e.feed(jev(11, "star_collected", 1200,
+                           {"course_id": 15, "star_id": 1, "igt_frames": 900}),
+                       ctx(level=6))
+    assert closed == []
+    assert 20 in e.armed_ids()
+
+
+def test_loose_survives_an_off_route_level_crossing():
+    e = SegmentEngine([LOOSE])
+    loose_arm(e)
+    e.feed(jev(11, "level_changed", 1200, {"from": 6, "to": 8}),
+           ctx(level=8, prev_level=6))
+    assert 20 in e.armed_ids()
+
+
+def test_loose_closes_a_success_on_its_end_trigger():
+    e = SegmentEngine([LOOSE])
+    loose_arm(e)
+    e.feed(jev(11, "star_collected", 1200,
+               {"course_id": 15, "star_id": 1, "igt_frames": 900}),
+           ctx(level=6))
+    closed, _ = e.feed(jev(12, "level_changed", 1500, {"from": 6, "to": 19}),
+                       ctx(level=19, prev_level=6))
+    [a] = closed
+    assert a.outcome == "success" and a.rta_frames == 500
+
+
+def test_loose_expires_after_its_staleness_budget_with_no_row():
+    e = SegmentEngine([LOOSE])
+    loose_arm(e, frame=1000)
+    stale = 1000 + segments_module.MIN_BUDGET_FRAMES + 1
+    closed, notices = e.feed(jev(11, "area_changed", stale, {"to": 3}),
+                             ctx(level=6, area=3))
+    assert closed == []                       # silent: stats stay clean
+    assert 20 not in e.armed_ids()
+    assert [n["event"] for n in notices] == ["segment_disarmed"]
+
+
+def test_an_expired_arm_cannot_still_record_a_success():
+    # Deadline is checked FIRST. An end trigger arriving an hour after the
+    # player walked away is not a run.
+    e = SegmentEngine([LOOSE])
+    loose_arm(e, frame=1000)
+    stale = 1000 + segments_module.MIN_BUDGET_FRAMES + 1
+    closed, _ = e.feed(jev(11, "level_changed", stale, {"from": 6, "to": 19}),
+                       ctx(level=19, prev_level=6))
+    assert closed == []
+
+
+def test_an_expired_arm_cannot_still_record_a_failure():
+    e = SegmentEngine([LOOSE])
+    loose_arm(e, frame=1000)
+    stale = 1000 + segments_module.MIN_BUDGET_FRAMES + 1
+    closed, _ = e.feed(jev(11, "death", stale, {"cause": "fall"}), ctx(level=6))
+    assert closed == []
+
+
+def test_loose_still_records_a_death_inside_the_budget():
+    e = SegmentEngine([LOOSE])
+    loose_arm(e, frame=1000)
+    closed, _ = e.feed(jev(11, "death", 1200, {"cause": "fall"}), ctx(level=6))
+    [a] = closed
+    assert a.outcome == "death"
+
+
+def test_the_budget_tightens_once_the_segment_has_a_best_time():
+    # A definition with history gets FACTOR x its best, not the floor.
+    assert segments_module.budget_frames(None) \
+        == segments_module.MIN_BUDGET_FRAMES
+    assert segments_module.budget_frames(10 ** 6) \
+        == segments_module.BUDGET_FACTOR * 10 ** 6
+    assert segments_module.budget_frames(1) \
+        == segments_module.MIN_BUDGET_FRAMES     # floor wins for a fast one
+
+
+def test_the_staleness_budget_never_clips_a_realistic_movement():
+    # Assert the RANGE, never the number: the constants are measured
+    # (tools/measure_budget.py, Task 9) and will be re-measured again once
+    # the loose-native corpus grows — a test naming the shipped value turns
+    # a re-measurement into a red build (the shipped-default rule in
+    # CLAUDE.md). The real journal's forced-loose max was 4244 frames
+    # (141.5s); these bounds are wide enough to survive a re-measurement but
+    # tight enough to catch a nonsense value (e.g. a floor under a minute,
+    # or a factor so small a single retry would expire).
+    assert 1800 <= segments_module.MIN_BUDGET_FRAMES <= 18000
+    assert 3 <= segments_module.BUDGET_FACTOR <= 20
+    # 30s is a fast castle movement; six of them is not an attempt.
+    assert segments_module.budget_frames(900) >= 900 * 3
+
+
+def test_a_loose_def_armed_through_the_deferred_subarea_path_carries_a_deadline():
+    # THE GAP this task's brief missed (see task-3-report.md Item 0/1C): a
+    # destination-subarea start trigger (to_subarea) can't be confirmed on
+    # the level edge — the castle interior loads the transient lobby before
+    # the co-frame settle (module docstring's DESTINATION subarea section) —
+    # so the engine holds a fresh _Arm in self._pending until the settled
+    # area matches, then PROMOTES it via replace(). A loose def armed this
+    # way must still carry a deadline: this deferred path is where a large
+    # share of the seeded castle movements arm (any destination inside the
+    # castle interior — basement, lobby, upstairs), and a def armed through
+    # it with deadline_frame=None would never expire.
+    d = SegmentDef(id=1, name="x", enabled=True, guards=[], waypoints=[],
+                   start_triggers=[{"type": "level_exit", "from": 7, "to": 6,
+                                    "to_subarea": 3}],
+                   end_triggers=[{"type": "spawned"}], match_mode="loose")
+    e = SegmentEngine([d])
+    e.feed(jev(10, "level_changed", 1000, {"from": 7, "to": 6, "from_area": 1}),
+           ctx(level=6))
+    assert e.armed_ids() == set(), "deferred: destination not settled yet"
+    e.feed(jev(12, "area_changed", 1000, {"level": 6, "from": 1, "to": 3}),
+           ctx(level=6, area=3))            # real-edge settle into the basement
+    assert e.armed_ids() == {1}
+    assert e._armed[1].deadline_frame == 1000 + segments_module.MIN_BUDGET_FRAMES
+
+
+def test_a_real_anchor_re_arms_the_loose_def_with_a_fresh_deadline():
+    # Item 1C's third _deadline_for call site: "the re-arm inside
+    # _feed_loose". A real practice_reset/state_loaded AT the arm position is
+    # the practice-retry continuation (closes a "reset" row, re-arms in
+    # place) — the fresh arm must get a NEW deadline counted from the anchor
+    # frame, not keep the stale one from the original arm.
+    e = SegmentEngine([LOOSE])
+    loose_arm(e, frame=1000)
+    closed, _ = e.feed(jev(11, "practice_reset", 4000, {}), ctx(level=6))
+    [a] = closed
+    assert a.outcome == "reset"
+    assert e._armed[20].deadline_frame == 4000 + segments_module.MIN_BUDGET_FRAMES
+
+
+def test_a_real_anchor_off_the_arm_position_is_transparent_not_a_relocation_disarm():
+    # Live report 2026-07-28: "Bowser 2 -> Upstairs" (loose, arms in the
+    # basement leaving the Bowser 2 fight) vanished mid-run — no attempt row,
+    # no notice, the split just disappeared once the player reached the
+    # castle lobby on the way to Upstairs. _feed_loose had inherited
+    # _feed_strict's anchor-elsewhere RELOCATION disarm, which is backwards
+    # for a loose def: reaching Upstairs from the basement requires passing
+    # BACK through the lobby, so the described route is guaranteed to cross
+    # positions it didn't arm at, and the first practice_reset anywhere along
+    # the way used to kill the attempt silently.
+    #
+    # Sequence synthesized from the real journal's shape (session 167/168,
+    # ids ~19040-19130) rather than read off data/tracker.db, which is
+    # gitignored and absent from a fresh clone (CLAUDE.md). Level 33 =
+    # Bowser 2 Arena, level 6 = Castle Inside, level 19 = Bowser in the Fire
+    # Sea (BitFS); castle areas 1/2/3 = lobby/Upstairs/basement.
+    bowser2_to_upstairs = SegmentDef(
+        id=40, name="Bowser 2 -> Upstairs", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 33}],
+        end_triggers=[{"type": "area_enter", "level": 6, "area": 2}],
+        guards=[], match_mode="loose")
+    bits_entry = SegmentDef(
+        id=41, name="BitS Entry", enabled=True,
+        start_triggers=[{"type": "area_enter", "level": 6, "area": 2}],
+        end_triggers=[{"type": "level_enter", "to": 19}],
+        guards=[], match_mode="strict")
+    e = SegmentEngine([bowser2_to_upstairs, bits_entry])
+
+    # Exit Bowser 2 -> lands in the castle basement; arms the loose movement.
+    e.feed(jev(1, "level_changed", 1000, {"from": 33, "to": 6}),
+           ctx(level=6, prev_level=33))
+    e.feed(jev(2, "area_changed", 1000, {"level": 6, "from": 1, "to": 3}),
+           ctx(level=6, area=3))
+    assert e.armed_ids() == {40}
+
+    # A reset AT the arm position (still standing in the basement) is a
+    # genuine retry — unaffected by this fix, asserted for contrast.
+    closed, _ = e.feed(jev(3, "practice_reset", 1050, {}), ctx(level=6, area=3))
+    [retry] = closed
+    assert retry.outcome == "reset"
+    assert 40 in e.armed_ids()
+
+    # Off into BitFS -- the loose def survives the off-route level crossing
+    # (already covered elsewhere) and a real anchor taken INSIDE BitFS, far
+    # from the basement arm position.
+    e.feed(jev(4, "level_changed", 1200, {"from": 6, "to": 19}),
+           ctx(level=19, prev_level=6))
+    closed, notices = e.feed(jev(5, "practice_reset", 1300, {}), ctx(level=19))
+    assert closed == [], "an anchor elsewhere must not close a row"
+    assert notices == [], "and must not disarm — the old bug's silent kill"
+    assert 40 in e.armed_ids()
+
+    # Back out toward the castle: through the lobby (area 1) -- THE anchor
+    # that used to silently kill the segment.
+    e.feed(jev(6, "level_changed", 1400, {"from": 19, "to": 6}),
+           ctx(level=6, prev_level=19))
+    e.feed(jev(7, "area_changed", 1400, {"level": 6, "from": 3, "to": 1}),
+           ctx(level=6, area=1))
+    closed, notices = e.feed(jev(8, "practice_reset", 1450, {}),
+                             ctx(level=6, area=1))
+    assert closed == []
+    assert notices == [], "the lobby anchor must stay transparent too"
+    assert 40 in e.armed_ids(), "the segment must still be armed here"
+
+    # Finally reach Upstairs: the loose def closes success, and BitS Entry
+    # (idle strict def, unrelated to this fix) arms on the SAME event.
+    closed, notices = e.feed(jev(9, "area_changed", 1500, {"level": 6, "from": 1, "to": 2}),
+                             ctx(level=6, area=2))
+    [success] = closed
+    assert success.outcome == "success" and success.rta_frames == 450
+    assert e.armed_ids() == {41}
+    assert [n["event"] for n in notices] == ["segment_disarmed", "segment_armed"]
+
+
+def test_a_plain_loose_defs_own_start_trigger_refiring_while_armed_restarts_visibly():
+    # Live audit 2026-07-29 (following up on the finding in the anchor-
+    # relocation report above): replaying the user's real session found 13
+    # refires of a plain loose def's own start trigger while it was still
+    # armed -- e.g. an EARLIER, abandoned Bowser 2 exit had armed the
+    # movement, and a later real exit refired the same start trigger,
+    # restarting it. The restart is the correct arithmetic (the stale arm
+    # hadn't hit its staleness deadline yet) -- what was wrong is that it was
+    # completely SILENT: `fresh` is False (the def never left self._armed),
+    # so no notice fired and the discarded in-flight arm vanished with no
+    # trace. The restart stays; only the silence is fixed.
+    e = SegmentEngine([LOOSE])
+    loose_arm(e, jid=10, frame=1000)
+    # transparent mid-route travel, exactly like any other loose def
+    e.feed(jev(11, "star_collected", 1200,
+               {"course_id": 15, "star_id": 1, "igt_frames": 900}), ctx(level=6))
+    assert 20 in e.armed_ids()
+    # the def's OWN start trigger fires again while still armed
+    closed, notices = e.feed(jev(12, "level_changed", 5000, {"from": 23, "to": 6}),
+                             ctx(level=6, prev_level=23))
+    assert closed == [], "no row for the discarded partial"
+    assert [n["event"] for n in notices] == ["segment_disarmed", "segment_armed"]
+    assert e._armed[20].start_frame == 5000, "restarted from the refire, not the original arm"
+    assert e._armed[20].deadline_frame == 5000 + segments_module.MIN_BUDGET_FRAMES
+
+
+def test_a_waypoint_bearing_defs_refire_while_armed_stays_silent():
+    # The boundary the fix above must not cross: a waypoint-bearing def (loose
+    # or not) owns its own re-arm through _feed_waypoint's/`_feed_loose`'s own
+    # `progress` counter, and the generic re-arm phase must keep skipping it
+    # ENTIRELY while armed -- the pre-existing
+    # `not (d.waypoints and d.id in self._armed)` guard, which this task was
+    # told not to touch. Built LOOSE (not strict) specifically because that
+    # guard reads `d.waypoints`, not match_mode, so a loose def carrying
+    # waypoints is the sharper boundary case -- _feed_loose owns its armed
+    # branch for it exactly as for a plain loose def, but the outer re-arm
+    # phase must still treat "has waypoints" as untouchable while armed.
+    wp_def = SegmentDef(
+        id=45, name="wp", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 23}],
+        end_triggers=[{"type": "level_enter", "to": 19}],
+        waypoints=[[{"type": "area_enter", "level": 6, "area": 3}]],
+        guards=[], match_mode="loose")
+    e = SegmentEngine([wp_def])
+    e.feed(jev(10, "level_changed", 1000, {"from": 23, "to": 6}),
+           ctx(level=6, prev_level=23))
+    assert 45 in e.armed_ids()
+    closed, notices = e.feed(jev(11, "level_changed", 5000, {"from": 23, "to": 6}),
+                             ctx(level=6, prev_level=23))
+    assert closed == []
+    assert notices == [], "still silent -- waypoints own their own re-arm"
+    assert e._armed[45].start_frame == 1000, "untouched by the refire"
+
+
+# ---------------------------------------------------------------------------
+# Third match_mode: "exclusive" (spec 2026-07-28-multi-step-segments). A
+# plain (waypoint-free) def that is otherwise Strict, but silently cancels on
+# a star or Bowser-key grab -- the shape a pipe-entry skip needs ("enter the
+# pipe without going for the 8-red-coin star"), which a plain start/end pair
+# can't express through _feed_waypoint without inventing a fake waypoint.
+# `_feed_strict` runs both modes; these tests cover its one new branch and
+# the contrast against plain Strict that makes the mode meaningful.
+# ---------------------------------------------------------------------------
+
+EXCLUSIVE_PIPE = SegmentDef(
+    id=31, name="BitDW Pipe Entry (exclusive)", enabled=True,
+    start_triggers=[{"type": "level_enter", "to": 17}],
+    end_triggers=[{"type": "warp_entered", "level": 17}],
+    waypoints=[], guards=[], match_mode="exclusive")
+
+STRICT_PIPE = SegmentDef(
+    id=32, name="BitDW Pipe Entry (strict)", enabled=True,
+    start_triggers=[{"type": "level_enter", "to": 17}],
+    end_triggers=[{"type": "warp_entered", "level": 17}],
+    waypoints=[], guards=[], match_mode="strict")
+
+
+def _arm_pipe(engine, jid=10, frame=1000):
+    return engine.feed(jev(jid, "level_changed", frame, {"from": 6, "to": 17}),
+                       ctx(level=17, prev_level=6))
+
+
+def test_exclusive_closes_normally_on_its_end_trigger_with_no_star_grab():
+    e = SegmentEngine([EXCLUSIVE_PIPE])
+    _arm_pipe(e)
+    closed, _ = e.feed(jev(11, "warp_entered", 1200,
+                           {"level": 17, "area": 1, "action": 0x1300}),
+                       ctx(level=17))
+    [a] = closed
+    assert a.outcome == "success" and a.segment_id == 31
+
+
+def test_exclusive_cancels_silently_on_a_star_grab_mid_route():
+    # The whole point: grabbing the 8-red-coin star along the way means the
+    # attempt wasn't a skip run. No ATTEMPT row -- but the segment_disarmed
+    # notice DOES fire, same as every other silent cancel in this file (e.g.
+    # test_waypoint_session_started_disarms_silently above): "silent" means
+    # no row, not no notice at all.
+    e = SegmentEngine([EXCLUSIVE_PIPE])
+    _arm_pipe(e)
+    closed, notices = e.feed(jev(11, "star_collected", 1150,
+                                 {"course_id": 17, "star_id": 6,
+                                  "num_stars": 1}),
+                             ctx(level=17, num_stars=1))
+    assert closed == []
+    assert 31 not in e.armed_ids()
+    assert notices == [{"event": "segment_disarmed", "segment_id": 31,
+                        "name": "BitDW Pipe Entry (exclusive)", "frame": 1150}]
+
+
+def test_exclusive_cancels_silently_on_a_key_grab_mid_route():
+    e = SegmentEngine([EXCLUSIVE_PIPE])
+    _arm_pipe(e)
+    closed, _ = e.feed(jev(11, "key_grabbed", 1150, {"level": 17}),
+                       ctx(level=17))
+    assert closed == []
+    assert 31 not in e.armed_ids()
+
+
+def test_strict_survives_a_star_grab_that_would_cancel_an_exclusive_def():
+    # The contrast that makes "exclusive" meaningful: the identical shape
+    # under plain Strict does NOT cancel on a star grab. _feed_strict has no
+    # branch matching star_collected/key_grabbed at all outside the new
+    # match_mode == "exclusive" gate, so the event falls through the whole
+    # chain untouched and the def stays armed.
+    e = SegmentEngine([STRICT_PIPE])
+    _arm_pipe(e)
+    closed, _ = e.feed(jev(11, "star_collected", 1150,
+                           {"course_id": 17, "star_id": 6, "num_stars": 1}),
+                       ctx(level=17, num_stars=1))
+    assert closed == []
+    assert 32 in e.armed_ids()
+
+
+def test_exclusive_still_disarms_on_an_off_route_level_crossing_like_strict():
+    # EXCLUSIVE's one addition is the star/key-grab branch above -- every
+    # other Strict rule (here: the plain silent disarm on a level_changed
+    # matching neither start nor end) is untouched.
+    e = SegmentEngine([EXCLUSIVE_PIPE])
+    _arm_pipe(e)
+    closed, _ = e.feed(jev(11, "level_changed", 1150, {"from": 17, "to": 6}),
+                       ctx(level=6, prev_level=17))
+    assert closed == []
+    assert 31 not in e.armed_ids()
+
+
+# --- Task 17: split_definition / merge_definitions --------------------------
+# Two pure operations (spec 2026-07-28-multi-step-segments): "WF -> SSL"
+# expressible either as one definition or as "WF -> Basement" +
+# "Basement -> SSL", chained at the shared boundary. Both are
+# non-destructive -- neither mutates its inputs, and split_definition never
+# removes the original (definitions arm in PARALLEL, so the whole and its
+# halves can all record on the same play).
+
+def test_split_produces_two_chained_definitions():
+    wf_ssl = SegmentDef(
+        id=1, name="WF -> SSL", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 24}],
+        end_triggers=[{"type": "level_enter", "to": 8}],
+        waypoints=[[{"type": "area_enter", "level": 6, "area": 3}]],
+        guards=[], match_mode="loose")
+    first, second = split_definition(
+        wf_ssl, mid=[{"type": "area_enter", "level": 6, "area": 3}],
+        names=("WF -> Basement", "Basement -> SSL"))
+    assert first["name"] == "WF -> Basement"
+    assert second["name"] == "Basement -> SSL"
+    assert first["start_triggers"] == wf_ssl.start_triggers
+    assert first["end_triggers"] == [{"type": "area_enter", "level": 6, "area": 3}]
+    assert second["start_triggers"] == [{"type": "area_enter", "level": 6, "area": 3}]
+    assert second["end_triggers"] == wf_ssl.end_triggers
+    assert first["waypoints"] == [] and second["waypoints"] == []
+
+
+def test_split_does_not_touch_the_original():
+    # Non-destructive by design: definitions arm in parallel, so the whole and
+    # its halves can all be armed on one play and all record. Nothing is
+    # orphaned by an edit.
+    wf_ssl = SegmentDef(
+        id=1, name="WF -> SSL", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 24}],
+        end_triggers=[{"type": "level_enter", "to": 8}],
+        waypoints=[[{"type": "area_enter", "level": 6, "area": 3}]],
+        guards=[], match_mode="loose")
+    before = dataclasses.asdict(wf_ssl)
+    split_definition(wf_ssl, mid=[{"type": "area_enter", "level": 6, "area": 3}],
+                     names=("a", "b"))
+    assert dataclasses.asdict(wf_ssl) == before
+
+
+def test_a_split_half_carries_no_seed_key():
+    # A new definition derived from a seeded one is NOT that seeded row;
+    # inheriting seed_key would make reconcile overwrite it at next startup.
+    # (SegmentDef itself carries no seed_key field at all -- only the raw db
+    # row dict does -- so there is nothing to accidentally inherit; this
+    # pins the OUTPUT contract regardless.)
+    wf_ssl = SegmentDef(
+        id=1, name="WF -> SSL", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 24}],
+        end_triggers=[{"type": "level_enter", "to": 8}],
+        waypoints=[[{"type": "area_enter", "level": 6, "area": 3}]],
+        guards=[], match_mode="loose")
+    first, second = split_definition(
+        wf_ssl, mid=[{"type": "area_enter", "level": 6, "area": 3}],
+        names=("a", "b"))
+    assert first["seed_key"] is None and second["seed_key"] is None
+
+
+def test_split_inherits_guards_default_strat_match_mode_and_enabled():
+    # Deliberate design choice (see split_definition's docstring): unlike
+    # merge_definitions, inheriting guards onto a split half is harmless -- a
+    # half's rta can only be SHORTER than the whole's, so a time bound copied
+    # from the whole can only ever be looser than necessary, never wrong in a
+    # way that rejects a valid completion.
+    d = SegmentDef(
+        id=3, name="WF -> SSL", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 24}],
+        end_triggers=[{"type": "level_enter", "to": 8}],
+        waypoints=[[{"type": "area_enter", "level": 6, "area": 3}]],
+        guards=[{"type": "max_time", "frames": 1000}],
+        default_strat="Standard", match_mode="strict")
+    first, second = split_definition(
+        d, mid=[{"type": "area_enter", "level": 6, "area": 3}],
+        names=("WF -> Basement", "Basement -> SSL"))
+    for half in (first, second):
+        assert half["guards"] == [{"type": "max_time", "frames": 1000}]
+        assert half["default_strat"] == "Standard"
+        assert half["match_mode"] == "strict"    # inherited, not forced loose
+        assert half["enabled"] is True
+
+
+def test_split_refuses_when_the_first_half_is_unfireable():
+    # Reuses lint.py's own proven fixture (tests/test_lint.py): exiting Hazy
+    # Maze Cave (level 7) lands directly in the castle basement in ONE
+    # level_changed (world_connections()['7'] == [[6, 3], [28, None]]), so a
+    # def start=level_exit(from=7) / end=level_enter(to=6) arms and closes on
+    # the SAME event and can never legitimately fire. Splitting anything at
+    # exactly that mid point produces a first half shaped like it.
+    d = SegmentDef(
+        id=2, name="HMC -> somewhere", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 7}],
+        end_triggers=[{"type": "level_enter", "to": 8}],
+        guards=[], match_mode="loose")
+    with pytest.raises(ValueError, match="unfireable"):
+        split_definition(d, mid=[{"type": "level_enter", "to": 6}],
+                         names=("first half", "second half"))
+
+
+def test_split_refuses_when_the_second_half_is_unfireable():
+    # The mirror of the case above -- proves BOTH halves get checked, not
+    # just the one the live report happened to name. Here the FIRST half is
+    # harmless (attempt_anchor can't collide with a level_exit mid clause);
+    # the SECOND half reproduces the exact HMC-exit/castle-basement collision.
+    d = SegmentDef(
+        id=4, name="x", enabled=True,
+        start_triggers=[{"type": "attempt_anchor", "level": 26}],
+        end_triggers=[{"type": "level_enter", "to": 6}],
+        guards=[], match_mode="loose")
+    with pytest.raises(ValueError, match="unfireable"):
+        split_definition(d, mid=[{"type": "level_exit", "from": 7}],
+                         names=("first half", "second half"))
+
+
+def test_split_refuses_a_definition_carrying_more_than_one_waypoint():
+    """Silent data loss is the failure mode here, not a wrong answer.
+
+    split_definition folds the original's waypoints into the single shared
+    boundary `mid`. With 0 or 1 that is exact — and every seeded def is one of
+    those (83 with none, 1 with one). But nothing caps the count:
+    validate_definition accepts any-length waypoint lists, so a user-authored
+    definition can carry several, and the halves would come back missing the
+    ones that were not the split point, with nothing raised and nothing said.
+    Refuse instead of guessing which side each survivor belongs on.
+    """
+    d = SegmentDef(
+        id=7, name="three-legged trip", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 9}],
+        end_triggers=[{"type": "level_enter", "to": 8}],
+        waypoints=[[{"type": "area_enter", "level": 6, "area": 1}],
+                   [{"type": "area_enter", "level": 6, "area": 3}]],
+        guards=[], match_mode="loose")
+    with pytest.raises(ValueError, match="waypoints"):
+        split_definition(d, mid=[{"type": "area_enter", "level": 6, "area": 1}],
+                         names=("first half", "second half"))
+
+
+def test_split_still_accepts_the_zero_and_one_waypoint_shapes():
+    """The refusal above must not have swallowed the cases that DO work —
+    a guard that rejects everything passes its own negative test forever."""
+    for waypoints in ([], [[{"type": "area_enter", "level": 6, "area": 1}]]):
+        d = SegmentDef(
+            id=8, name="WF -> SSL", enabled=True,
+            start_triggers=[{"type": "level_exit", "from": 24}],
+            end_triggers=[{"type": "level_enter", "to": 8}],
+            waypoints=waypoints, guards=[], match_mode="loose")
+        first, second = split_definition(
+            d, mid=[{"type": "area_enter", "level": 6, "area": 1}],
+            names=("WF -> Basement", "Basement -> SSL"))
+        assert first["end_triggers"] == second["start_triggers"]
+
+
+def test_merge_spans_both_and_keeps_the_seam_as_a_waypoint():
+    wf_to_basement = SegmentDef(
+        id=101, name="WF -> Basement", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 24}],
+        end_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+        guards=[], match_mode="loose")
+    basement_to_ssl = SegmentDef(
+        id=102, name="Basement -> SSL", enabled=True,
+        start_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+        end_triggers=[{"type": "level_enter", "to": 8}],
+        guards=[], match_mode="loose")
+    merged = merge_definitions(wf_to_basement, basement_to_ssl, "WF -> SSL")
+    assert merged["name"] == "WF -> SSL"
+    assert merged["start_triggers"] == wf_to_basement.start_triggers
+    assert merged["end_triggers"] == basement_to_ssl.end_triggers
+    assert merged["waypoints"] == [basement_to_ssl.start_triggers]
+    assert merged["match_mode"] == "loose"
+    assert merged["seed_key"] is None
+    assert merged["guards"] == []
+
+
+def test_merge_does_not_touch_either_input():
+    wf_to_basement = SegmentDef(
+        id=101, name="WF -> Basement", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 24}],
+        end_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+        guards=[], match_mode="loose")
+    basement_to_ssl = SegmentDef(
+        id=102, name="Basement -> SSL", enabled=True,
+        start_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+        end_triggers=[{"type": "level_enter", "to": 8}],
+        guards=[], match_mode="loose")
+    before_first = dataclasses.asdict(wf_to_basement)
+    before_second = dataclasses.asdict(basement_to_ssl)
+    merge_definitions(wf_to_basement, basement_to_ssl, "WF -> SSL")
+    assert dataclasses.asdict(wf_to_basement) == before_first
+    assert dataclasses.asdict(basement_to_ssl) == before_second
+
+
+def test_merge_preserves_each_inputs_own_waypoints_too():
+    # The general inverse of split_definition: merging two definitions that
+    # are THEMSELVES already multi-step chains must not drop either one's own
+    # internal waypoints -- only the new seam is added, in the middle.
+    a_to_b = SegmentDef(
+        id=1, name="A->B", enabled=True,
+        start_triggers=[{"type": "attempt_anchor", "level": 6, "area": 1}],
+        end_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+        waypoints=[[{"type": "area_enter", "level": 6, "area": 2}]],
+        guards=[], match_mode="loose")
+    b_to_c = SegmentDef(
+        id=2, name="B->C", enabled=True,
+        start_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+        end_triggers=[{"type": "level_enter", "to": 8}],
+        waypoints=[[{"type": "warp_entered", "level": 6}]],
+        guards=[], match_mode="loose")
+    merged = merge_definitions(a_to_b, b_to_c, "A->C")
+    assert merged["waypoints"] == [
+        [{"type": "area_enter", "level": 6, "area": 2}],   # a_to_b's own step
+        [{"type": "area_enter", "level": 6, "area": 3}],   # the new seam
+        [{"type": "warp_entered", "level": 6}],            # b_to_c's own step
+    ]
+
+
+def test_merge_refuses_a_pair_that_does_not_meet():
+    wf_to_basement = SegmentDef(
+        id=101, name="WF -> Basement", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 24}],
+        end_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+        guards=[], match_mode="loose")
+    ddd_to_bitfs = SegmentDef(
+        id=103, name="DDD -> BitFS", enabled=True,
+        start_triggers=[{"type": "area_enter", "level": 26}],
+        end_triggers=[{"type": "level_enter", "to": 19}],
+        guards=[], match_mode="loose")
+    with pytest.raises(ValueError, match="do not meet"):
+        merge_definitions(wf_to_basement, ddd_to_bitfs, "nope")
+
+
+def test_merge_refuses_a_pair_meeting_only_by_level_not_subarea():
+    """The castle interior is ONE level (6) holding three subareas on a line
+    (basement 3 <-> lobby 1 <-> upstairs 2), so a level-only meet check
+    accepts seams that do not exist. This pair is drawn from the shipped
+    corpus's own shape: three seeded definitions end at area_enter(6, 3) and
+    one starts at area_enter(6, 2), so a merge button would offer it.
+    """
+    ends_in_basement = SegmentDef(
+        id=201, name="WF -> Basement", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 24}],
+        end_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+        guards=[], match_mode="loose")
+    starts_upstairs = SegmentDef(
+        id=202, name="Upstairs -> BitS", enabled=True,
+        start_triggers=[{"type": "area_enter", "level": 6, "area": 2}],
+        end_triggers=[{"type": "level_enter", "to": 21}],
+        guards=[], match_mode="loose")
+    with pytest.raises(ValueError, match="do not meet"):
+        merge_definitions(ends_in_basement, starts_upstairs, name="nope")
+
+
+def test_merge_accepts_a_pair_meeting_in_the_same_subarea():
+    """The companion to the refusal above — a subarea check that rejected
+    every castle seam would pass its own negative test forever, and the
+    castle is where nearly every seeded movement meets."""
+    ends_in_basement = SegmentDef(
+        id=203, name="WF -> Basement", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 24}],
+        end_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+        guards=[], match_mode="loose")
+    starts_in_basement = SegmentDef(
+        id=204, name="Basement -> HMC", enabled=True,
+        start_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+        end_triggers=[{"type": "level_enter", "to": 7}],
+        guards=[], match_mode="loose")
+    merged = merge_definitions(ends_in_basement, starts_in_basement,
+                               name="WF -> HMC")
+    assert merged["start_triggers"] == ends_in_basement.start_triggers
+    assert merged["end_triggers"] == starts_in_basement.end_triggers
+
+
+def test_merge_permits_a_seam_whose_subarea_is_unknown_on_one_side():
+    """Unknown means yes, the convention can_run_from already uses at
+    runtime: `level_enter to=6` pins no subarea, so it could land anywhere in
+    the castle and must not be refused against an Upstairs start."""
+    ends_in_castle = SegmentDef(
+        id=205, name="BitDW -> Castle", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 17}],
+        end_triggers=[{"type": "level_enter", "to": 6}],
+        guards=[], match_mode="loose")
+    starts_upstairs = SegmentDef(
+        id=206, name="Upstairs -> BitS", enabled=True,
+        start_triggers=[{"type": "area_enter", "level": 6, "area": 2}],
+        end_triggers=[{"type": "level_enter", "to": 21}],
+        guards=[], match_mode="loose")
+    merged = merge_definitions(ends_in_castle, starts_upstairs, name="ok")
+    assert merged["waypoints"][0] == starts_upstairs.start_triggers
+
+
+def test_merge_permits_an_unknown_arm_position_on_either_side():
+    # "unknown means yes", the SAME convention can_run_from already takes at
+    # runtime for the identical question: most seeded level_exit clauses omit
+    # `to` (arm_level -> None), which must not be misread as "provably
+    # unrelated" -- only a CONCRETE, non-overlapping pair is refused.
+    unpinned_exit = SegmentDef(
+        id=104, name="unpinned exit", enabled=True,
+        start_triggers=[{"type": "attempt_anchor", "level": 6, "area": 1}],
+        end_triggers=[{"type": "level_exit", "from": 24}],  # arm_level: None
+        guards=[], match_mode="loose")
+    ssl_entry = SegmentDef(
+        id=105, name="ssl entry", enabled=True,
+        start_triggers=[{"type": "level_enter", "to": 8}],
+        end_triggers=[{"type": "spawned"}],
+        guards=[], match_mode="loose")
+    merge_definitions(unpinned_exit, ssl_entry, "ok")  # no raise
+
+
+def test_merge_falls_back_to_loose_when_match_modes_disagree():
+    strict_half = SegmentDef(
+        id=106, name="strict half", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 24}],
+        end_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+        guards=[], match_mode="strict")
+    loose_half = SegmentDef(
+        id=107, name="loose half", enabled=True,
+        start_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+        end_triggers=[{"type": "level_enter", "to": 8}],
+        guards=[], match_mode="loose")
+    merged = merge_definitions(strict_half, loose_half, "mixed")
+    assert merged["match_mode"] == "loose"
+    # Agreement is preserved verbatim -- proves the disagreement case above
+    # isn't just "always coerce to loose" but a real fallback.
+    both_strict_second = replace(strict_half, id=109,
+                                 start_triggers=loose_half.start_triggers,
+                                 end_triggers=loose_half.end_triggers)
+    agree = merge_definitions(strict_half, both_strict_second, "agree")
+    assert agree["match_mode"] == "strict"
+
+
+def test_merge_default_strat_agrees_or_falls_back_to_none():
+    a = SegmentDef(id=108, name="a", enabled=True,
+                   start_triggers=[{"type": "level_exit", "from": 24}],
+                   end_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+                   guards=[], match_mode="loose", default_strat="Standard")
+    b_same = SegmentDef(id=109, name="b", enabled=True,
+                        start_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+                        end_triggers=[{"type": "level_enter", "to": 8}],
+                        guards=[], match_mode="loose", default_strat="Standard")
+    b_diff = replace(b_same, default_strat="Alternate")
+    assert merge_definitions(a, b_same, "x")["default_strat"] == "Standard"
+    assert merge_definitions(a, b_diff, "y")["default_strat"] is None
+
+
+def test_merge_requires_both_inputs_enabled():
+    a = SegmentDef(id=110, name="a", enabled=True,
+                   start_triggers=[{"type": "level_exit", "from": 24}],
+                   end_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+                   guards=[], match_mode="loose")
+    b_disabled = SegmentDef(
+        id=111, name="b", enabled=False,
+        start_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+        end_triggers=[{"type": "level_enter", "to": 8}],
+        guards=[], match_mode="loose")
+    assert merge_definitions(a, b_disabled, "z")["enabled"] is False

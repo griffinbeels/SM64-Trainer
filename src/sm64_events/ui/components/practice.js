@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { requestTarget } from "../target.js";
-import { hasPracticeContext, practicedHere } from "../stagecontext.js";
+import { hasPracticeContext, justCompletedSegment,
+        practicedHere, starPracticableHere } from "../stagecontext.js";
 import { ReplayPlayer } from "./replay.js";
 import { StatMenu, DUST_STAT_KEYS } from "./statmenu.js";
 import { Timeline } from "./timeline.js";
@@ -21,6 +22,8 @@ import { FailureCompilation } from "./failcomp.js";
 import { Icon } from "./icons.js";
 import { PageState } from "./states.js";
 import { EmptyState } from "./emptystate.js";
+import { familyLabel } from "../redsfamily.js";
+import { caveatOf, cardBadge } from "./marks.js";
 
 const html = htm.bind(h);
 
@@ -36,13 +39,23 @@ const SORT_OPTIONS = [
 function rowTime(a, clock) {
   return clock === "igt" ? a.igt_frames : a.rta_frames;
 }
+// "newest"/"oldest" sort by journal_id, NOT the raw id (spec 2026-07-28-
+// multi-step-segments, live report): a reattributed 100-coin attempt keeps
+// its SEGMENT-namespace id (a huge number, tracking/projection.py caveat
+// 2/11), which permanently outranks every native star-namespace attempt
+// for the same entity under a plain numeric sort regardless of when it
+// actually happened -- his practice log showed two real successes stuck
+// at the top forever while newer resets piled up underneath them.
+// journal_id (views.py::_attempt_json, the SAME resolver segment-section
+// recency already used) strips the namespace offset back to the
+// chronological journal id both kinds share.
 function comparator(sort, clock) {
-  if (sort === "oldest") return (a, b) => a.id - b.id;
+  if (sort === "oldest") return (a, b) => a.journal_id - b.journal_id;
   if (sort === "fastest")
     return (a, b) => (rowTime(a, clock) ?? Infinity) - (rowTime(b, clock) ?? Infinity);
   if (sort === "slowest")
     return (a, b) => (rowTime(b, clock) ?? -Infinity) - (rowTime(a, clock) ?? -Infinity);
-  return (a, b) => b.id - a.id; // newest (default)
+  return (a, b) => b.journal_id - a.journal_id; // newest (default)
 }
 
 // New-entry blink: attempt ids first seen AFTER the initial view load get
@@ -280,7 +293,11 @@ function useGraphPick(rows, visible, setVisible) {
 // session scope) its row isn't loaded, so clicking first switches to lifetime
 // scope; pick() holds the request until the lifetime view brings the row in.
 // `mode` is just the clock label shown in parens.
-function PbTag({ pb, mode, rows, pick, t }) {
+// `pb.caveat` is a CAVEAT key (components/marks.js) or absent — the server's
+// own answer to "does this saved time mean what the rank beside it implies".
+// Derived in tracking/views.py from `timed_by`/`closed_by`/`timed_at`, so this
+// surface and the quick-select cell can never word the same fact two ways.
+export function PbTag({ pb, mode, rows, pick, t }) {
   if (!pb) return html`<span class="pbtag">no PB yet</span>`;
   function jump() {
     if (!pick) return;
@@ -288,10 +305,11 @@ function PbTag({ pb, mode, rows, pick, t }) {
       t.pickScope("lifetime");
     pick(pb.attempt_id);
   }
+  const mark = caveatOf(pb.caveat);
   return html`<span class="pbtag">PB ${pick
     ? html`<a class="pblink" onclick=${jump}
         title="jump to this PB in the list below">${pb.display}</a>`
-    : pb.display} (${mode})</span>`;
+    : pb.display} (${mode})${mark ? cardBadge(mark) : null}</span>`;
 }
 
 // Validity-bounds chip (spec 2026-07-23): the section's effective min/max
@@ -595,14 +613,27 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
     t.refresh();
   }
 
+  // The STAR half of item 4 (round 2 part 2, live report 2026-07-31): with
+  // Star mode selected on the Reds cell, the pinned card read a bare
+  // "8 Red Coins" -- the Pipe half already reads "8 Red Coins (Pipe)"
+  // (above), and the cell itself always spells out which family is on the
+  // clock, so the star card disagreeing with its own cell is the same bug
+  // one surface later. `sec.pipe_segment_id` is ALREADY the exact
+  // discriminator (views.py: non-null only for a Bowser course's star 0,
+  // the paired reds->pipe segment's escape hatch back to this section) --
+  // no new server field, and familyLabel (../redsfamily.js) is the SAME
+  // module the Pipe half and the cell's own toggle already call, so the
+  // three can never spell the suffix three different ways.
+  const starDisplayName = sec.pipe_segment_id != null
+    ? familyLabel(sec.star_name, false) : sec.star_name;
   return html`<div class="practice-detail-grid ${pinned ? "is-primary" : ""}">
     <section class="practice-card objective-card ${pinned ? "active-star" : ""} ${cardClass(foldTarget)}">
       <div class="objective-heading">
         <${ObjectiveEyebrow} iconName="target" openPicker=${openPicker}
           label=${pinned ? "Active target" : "Star practice"} />
-        <div class="objective-name" title=${`${sec.course_name} · ${sec.star_name}`}>
+        <div class="objective-name" title=${`${sec.course_name} · ${starDisplayName}`}>
           <span class="objective-context">${sec.course_name}</span>
-          <h2>${sec.star_name}</h2>
+          <h2>${starDisplayName}</h2>
         </div>
         <div class="objective-strategy">
           <span class="field-label">Strategy</span>
@@ -631,13 +662,34 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
              asymmetry once the heading icon moved into ObjectiveEyebrow --
              tests/test_ui_section_parity.py went red, correctly: the two
              cards are meant to be siblings, and ONLY_IN_* staying empty is
-             the property worth keeping. A star has nothing to arm, so its
-             word is constant where the segment's varies. */""}
-        <div class="objective-live-state" aria-label="Practice state">
-          <${Icon} name="clock" size=${17} /><span>Ready</span>
+             the property worth keeping. An ordinary star has nothing to arm,
+             so its word stays constant -- except the 100-coin star (spec
+             2026-07-28-multi-step-segments), whose armed_detail is SERVER
+             truth (re-derived every view fetch, same reasoning the segment
+             card's pin logic already trusts it for) rather than the
+             client-pushed armedSegs set a segment_id would key into. */""}
+        <div class="objective-live-state ${sec.armed_detail ? "running" : ""}"
+            aria-label="Practice state">
+          <${Icon} name="clock" size=${17} /><span>${sec.armed_detail ? "Running" : "Ready"}</span>
         </div>
         <${PbTag} pb=${pb} mode=${t.clock} rows=${rows} pick=${pick} t=${t} />
       </div>
+      ${/* Progress + what the 100-coin star's own engine is waiting for next
+           (spec 2026-07-28-multi-step-segments) -- the SAME row
+           SegmentSection renders below, shared markup and shared meaning:
+           null while idle (every star but 100 Coins, always), so this row
+           occupies zero height then. The user's own reason for keeping it:
+           "i like the idea of knowing for sure the system is aware of me
+           grabbing that first star, proven by it progressing to the next
+           step" -- it must survive the presentation change and read as the
+           STAR's own progress, not a segment's. */""}
+      ${sec.armed_detail && html`<div class="seg-waiting">
+        <span class="seg-waiting-step">Step${" "}
+          ${sec.armed_detail.progress + 1}${" "}of${" "}
+          ${sec.armed_detail.total + 1}</span>
+        <span class="seg-waiting-for">Waiting for${" "}
+          ${sec.armed_detail.waiting_for}</span>
+      </div>`}
     </section>
 
     <section class="practice-card analysis-card ${cardClass(foldAnalysis)}">
@@ -708,6 +760,7 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
       <${StandardsPanel} entity=${`star:${sec.course_id}:${sec.star_id}`}
           activeStrat=${sec.last_strat} strategies=${sec.strategies}
           sectionRank=${sec.rank} sectionPb=${sec.pb}
+          family=${sec.pipe_segment_id != null ? "Star" : null}
           onChanged=${t.refresh} defaultOpen=${true} />
       <${FailureCompilation} identity=${{ course_id: sec.course_id, star_id: sec.star_id }}
           defaultOpen=${true} />
@@ -762,14 +815,47 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker 
   }
 
   const pinTag = armed ? "Running" : isTarget ? "Ready" : "Recent";
+  // A Bowser reds->pipe segment is presented in the FAMILY VOICE the cell
+  // that selects it already shows ("8 Red Coins (Pipe)"), not its raw
+  // corpus identity ("BitDW — 8 Red Coins → Pipe") -- round 2, item 4 (live
+  // report 2026-07-30: "Segment · BitDW — 8 Red Coins → Pipe" beside a cell
+  // already reading "8 Red Coins (Pipe)"). Same fix SHAPE as the 100-coin
+  // star's own card (b6640ee, "the card stopped presenting a segment and
+  // presented the star"), applied to NAMING only: this section still IS
+  // the segment (its own attempts/strategies/PB are untouched), only the
+  // heading borrows the star's course + name so the card agrees with the
+  // cell that pinned it. `sec.pipe_star_entity`/`_name`/`_course_name`
+  // travel together (views.py), so null-guarding on any one covers all
+  // three.
+  //
+  // The legacy "no reds" pipe-only segment gets the SAME treatment (round
+  // 2 part 2, live report 2026-07-30: "the pinned card still says 'BitDW
+  // Pipe Entry', not 'No Reds'" -- the earlier fix reached the reds->pipe
+  // family and not this sibling). It has no paired star to borrow a name
+  // FROM, so its display name is the exact literal stagebanner.js's own
+  // row already uses ("No Reds") -- `sec.is_no_reds_pipe` is a bare
+  // boolean, never a second copy of that string server-side. The course
+  // context resolves off the segment's OWN `course_id` (already stamped on
+  // every section, rule 11) through the session's own `catalog.courses` --
+  // no second course-name field for a fact the client already has.
+  const noRedsCourse = sec.is_no_reds_pipe
+    ? ((t.view.catalog || {}).courses || []).find((c) => c.id === sec.course_id)
+    : null;
+  const familyName = sec.pipe_star_entity
+    ? familyLabel(sec.pipe_star_name || "Reds", true)
+    : noRedsCourse ? "No Reds" : null;
+  const familyCourseName = sec.pipe_star_entity
+    ? sec.pipe_star_course_name
+    : noRedsCourse ? noRedsCourse.name : null;
   return html`<div class="practice-detail-grid ${pinned ? "is-primary" : ""}">
     <section class="practice-card objective-card ${pinned ? "active-star" : ""} ${cardClass(foldTarget)}">
       <div class="objective-heading">
         <${ObjectiveEyebrow} iconName="segments" openPicker=${openPicker}
           label=${pinned ? "Active segment" : "Segment practice"} />
-        <div class="objective-name" title=${sec.name}>
-          <span class="objective-context">${sec.broken ? "History only" : "Segment"}</span>
-          <h2>${sec.name}</h2>
+        <div class="objective-name" title=${familyName || sec.name}>
+          <span class="objective-context">${sec.broken ? "History only"
+            : familyName ? familyCourseName : "Segment"}</span>
+          <h2>${familyName || sec.name}</h2>
         </div>
         <div class="objective-strategy">
           <span class="field-label">Strategy</span>
@@ -802,6 +888,22 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker 
         </div>
         <${PbTag} pb=${sec.pb.rta} mode="rta" rows=${rows} pick=${pick} t=${t} />
       </div>
+      ${/* Progress + what a multi-step arm is waiting for next (Task 6,
+           spec 2026-07-28-multi-step-segments). sec.armed_detail is null
+           while idle, so this row occupies zero height then -- .objective-
+           card's third grid row is "auto" sized and simply collapses.
+           waiting_for is already card-facing (card_waiting_for_sentence,
+           tracking/segments.py) -- an imperative step like "Enter Shifting
+           Sand Land", never the builder's editor-voice sentence, which read
+           as broken English under this label ("Waiting for You enter level
+           Shifting Sand Land"). */""}
+      ${sec.armed_detail && html`<div class="seg-waiting">
+        <span class="seg-waiting-step">Step${" "}
+          ${sec.armed_detail.progress + 1}${" "}of${" "}
+          ${sec.armed_detail.total + 1}</span>
+        <span class="seg-waiting-for">Waiting for${" "}
+          ${sec.armed_detail.waiting_for}</span>
+      </div>`}
     </section>
 
     <section class="practice-card analysis-card ${cardClass(foldAnalysis)}">
@@ -869,9 +971,10 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker 
             : "Wipe this segment's data in the current session"}>Clear data</button>
       </div>
       <${StatChipsRow} sec=${sec} t=${t} />
-      <${StandardsPanel} entity=${`segment:${sec.segment_id}`}
+      <${StandardsPanel} entity=${sec.pipe_star_entity || `segment:${sec.segment_id}`}
           activeStrat=${sec.last_strat} strategies=${sec.strategies}
           sectionRank=${sec.rank} sectionPb=${sec.pb}
+          family=${sec.pipe_star_entity ? "Pipe" : null}
           onChanged=${t.refresh} defaultOpen=${true} />
       <${FailureCompilation} identity=${{ segment_id: sec.segment_id }}
           defaultOpen=${true} />
@@ -1124,7 +1227,15 @@ export function Practice({ t, openCompare }) {
   // "Recent" tag rather than "Ready".
   const inContext = hasPracticeContext(held);
   const here = (sec) => practicedHere(sec, held);
-  const starActive = inContext && tgt.kind !== "segment" && tgt.course_id != null;
+  // `starPracticableHere`, NOT `inContext`: the latter's last clause is "some
+  // segment is armed", which is about segments keeping themselves visible. In
+  // the Castle Lobby a castle movement is armed, so `inContext` was true and a
+  // Whomp's Fortress star still rendered as ACTIVE TARGET beside the banner's
+  // own "No course target available" (live report 2026-07-30). The TARGET is
+  // deliberately kept — the castle is transit and walking back in restores the
+  // card — this only stops it claiming to be active where it cannot be run.
+  const starActive = starPracticableHere(held)
+    && tgt.kind !== "segment" && tgt.course_id != null;
   const isActiveStar = (sec) => sec.course_id === tgt.course_id
     && sec.star_id === tgt.star_id;
   const isActiveSeg = (sec) => tgt.kind === "segment"
@@ -1142,21 +1253,58 @@ export function Practice({ t, openCompare }) {
   // segment being practiced (an accidental exit disarms — correct timing
   // semantics — but the section stays put until a different segment arms);
   // before anything has ever armed, the target segment pins.
+  // HUNDRED_COIN_EXIT segments used to arm on entering ANY course with a
+  // 100-coin star and pin a "Segment · WF — 100 Coins → Exit" card the
+  // moment you walked in, with no gate at all (live report 2026-07-30) --
+  // a category-keyed isAmbientlyArmed exemption narrowed that here. Spec
+  // 2026-07-28-multi-step-segments ("the 100-coin star IS the segment")
+  // DISSOLVES that ONE family's problem outright: it never surfaces as a
+  // segment section any more (views.py excludes it from `segments`/
+  // `segment_targets` entirely, and its attempts attribute to the STAR),
+  // so `segs.find(...)` below can never find one to pin for that family.
+  //
+  // But the SAME ambient-arm shape is not unique to it -- Bowser's
+  // seg:reds->pipe:<abbrev> and the legacy exclusive pipe-entry trio arm
+  // the identical way (course/stage entry) and DO still have segment
+  // sections, so they still need the gate; the category string could never
+  // have covered them (seg:reds->pipe:*'s own category is "Castle
+  // Movement", indistinguishable from an ordinary movement). `sec.
+  // arms_ambiently` (views.py, segments.arms_ambiently) is the GENERAL,
+  // server-derived answer -- "does this def's own def arm on mere presence
+  // rather than a deliberate action" -- so this gate now covers whatever
+  // arms ambiently next with no JS-side enumeration to keep in step.
+  const isAmbientlyArmed = (sec) => sec != null && sec.arms_ambiently
+    && !(tgt.kind === "segment" && tgt.segment_id === sec.segment_id)
+    && !justCompletedSegment(v, freshIds, sec.segment_id);
   const armedPins = [...frozen.armedOrder].reverse()
     .map((id) => segs.find((s) => s.segment_id === id))
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter((sec) => !isAmbientlyArmed(sec));
   const stickyPin = frozen.lastPinnedSeg != null
     ? segs.find((s) => s.segment_id === frozen.lastPinnedSeg)
     : undefined;
   // ARMED pins are exempt from BOTH rules — a running timer is visible
   // wherever it has got to (user rule 2026-07-24), which is also why
   // `!inContext` can never drop one: armedPins is empty whenever that fires.
-  // The other two must belong here, and a sticky pin that doesn't falls
-  // through to the target rather than emptying the card over it.
+  // The other two must belong here UNLESS they are themselves still armed
+  // (spec 2026-07-28-multi-step-segments, Task 6): armedPins is built from
+  // `frozen.armedOrder`, a client-side push list that is empty on a fresh
+  // page load even while the server already has a loose segment running
+  // several courses into its sequence, so stickyPin/activeSeg are the paths
+  // that catch it. `sec.armed_detail` is SERVER truth, re-derived from the
+  // journal on every view fetch (views.py's armed_arms) — never
+  // `lastPinnedSeg`/armedSegments, which is what let "ACTIVE SEGMENT LBLJ"
+  // survive two course changes after the server had already retired it
+  // (live report 2026-07-27, the comment above `here`'s own definition).
+  // A pin that has genuinely disarmed carries `armed_detail: null` and falls
+  // straight through to the plain `here()` course check, so that fix stays
+  // intact — this only widens the exemption to a pin that is STILL running.
   const pinnedSegs = !inContext || starActive ? []
     : armedPins.length ? armedPins
-    : stickyPin && here(stickyPin) ? [stickyPin]
-    : activeSeg && here(activeSeg) ? [activeSeg] : [];
+    : stickyPin && !isAmbientlyArmed(stickyPin)
+      && (stickyPin.armed_detail || here(stickyPin)) ? [stickyPin]
+    : activeSeg && !isAmbientlyArmed(activeSeg)
+      && (activeSeg.armed_detail || here(activeSeg)) ? [activeSeg] : [];
   // Only one detail surface owns the fixed Objective / Analysis / Attempts
   // tracks. Additional armed segments remain reachable in the stable index
   // below instead of inserting more full cards above the crop.
@@ -1181,7 +1329,7 @@ export function Practice({ t, openCompare }) {
     .sort(comparator(sort, t.clock));
 
   return html`<div class="practice-page">
-    <${StageBanner} t=${held} />
+    <${StageBanner} t=${held} freshIds=${freshIds} />
 
     ${/* ONE picker for the page, not one per section: only the primary card
          offers the trigger, and mounting a dialog's state inside every card

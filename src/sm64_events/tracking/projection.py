@@ -173,6 +173,23 @@ Caveats (hard-won — keep these current):
     re-derives on every replay. Stars have no equivalent: a default needs a
     seeded definition row and stars have none (CLAUDE.md rule 11 asymmetry,
     recorded in the spec).
+
+18. Grab-steals-the-target exemption (spec 2026-07-28-multi-step-segments
+    round 2, live report 2026-07-30): _close_by_grab’s "last VALID grab
+    moves the practice target" rule normally fires on every star grab,
+    unconditionally. feed() now restores the pre-event target when: it was
+    already a SEGMENT target, that segment was already armed BEFORE this
+    star_collected event, it is STILL armed AFTER the segment engine has
+    processed the very same event without closing it, and the definition
+    carries waypoints under strict/exclusive matching (never loose, which
+    stays armed through any grab by design and so "still armed" carries no
+    information there). This is what stops a Bowser Reds->Pipe run’s own
+    mid-sequence star grab from handing the target to the star for the rest
+    of the run — the star attempt itself still records exactly as before
+    (caveat 6’s memory, caveat 15’s last-star tracking), only the TARGET
+    move is suppressed. See feed()’s own comment for the full reasoning and
+    why a genuinely unrelated grab can never trigger this (the matcher’s
+    own major-action cancel already disarms a def that doesn’t expect it).
 """
 from dataclasses import dataclass, replace
 
@@ -181,8 +198,8 @@ from sm64_events.memory.addresses import CASTLE_LEVELS, course_for_level
 # module-level import cannot cycle (see SegmentEngine.feed).
 from sm64_events.tracking.runs import RunTracker
 from sm64_events.tracking.segments import (
-    SEGMENT_ATTEMPT_OFFSET, MatchContext, SegmentEngine, segment_origin,
-    stage_origin, time_bounds)
+    SEGMENT_ATTEMPT_OFFSET, MatchContext, SegmentEngine, hundred_coin_entity,
+    origin_course, segment_origin, stage_origin, time_bounds)
 
 
 @dataclass(frozen=True)
@@ -208,6 +225,76 @@ class Attempt:
     jumps_total: int = 0         # chained double/triple jumps
     jumps_dustless: int = 0
     segment_id: int | None = None  # set => segment attempt; course/star None
+    timed_by: str = "igt"      # how the recorded time was MEASURED, so a
+                               # display can say why two times are not
+                               # comparable (ruling 6, round 3):
+                               #   "igt"   — Usamune's own IGT clock, via
+                               #             detectors/igt_clock.py. Every star,
+                               #             key and pipe-touch time, and every
+                               #             segment whose closing event carried
+                               #             an igt_frames it was allowed to use.
+                               #   "delta" — a wall-frame delta (close.frame -
+                               #             arm.start_frame), the honest
+                               #             fallback SegmentEngine._close takes
+                               #             when Usamune's number is absent or
+                               #             does not measure this span. Counts
+                               #             paused frames and carries the
+                               #             arm-frame alignment error, so it
+                               #             runs ~1-2 frames CHEAP against an
+                               #             igt-timed run of identical play.
+                               # Derived on every reproject from the journal, so
+                               # it needs no backfill and cannot go stale: a
+                               # historical warp_entered carries no igt_frames in
+                               # its journaled payload and never will, which is
+                               # "backfill is impossible in principle" seen from
+                               # the other side. Default "igt" is correct for
+                               # every producer except that one fallback branch.
+    closed_by: str | None = None   # event TYPE that closed this attempt, or
+                               # None for a producer that does not record one
+                               # (star closures, where the type is implied by
+                               # the outcome). Kept BESIDE timed_by because
+                               # neither answers alone: 570 of 626 segment
+                               # attempts in the 2026-07-31 journal are
+                               # delta-timed, and most are delta FOREVER --
+                               # a movement closing on a level_changed has no
+                               # Usamune number to be given, so its delta is
+                               # simply how that segment is measured and stays
+                               # comparable to the next run of it. The rows
+                               # that are NOT comparable are the ones whose
+                               # closing event type is in
+                               # core.events.IGT_BEARING_EVENT_TYPES, where a
+                               # fresh run WOULD now be igt-timed.
+    timed_at: str | None = None    # WHERE INSIDE the closing event the time was
+                               # taken -- "xcam" | "grab" for a star closed by
+                               # a star_collected, None for everything else
+                               # (a segment, a failure, a key/pipe closure).
+                               # Stars are the one kind with two candidate
+                               # moments and a leaderboard rule about which is
+                               # legal (round-4 items 3/4): Usamune stops at
+                               # the x-cam, we used to stop at the grab, and
+                               # the gap is 0-39 frames of falling.
+                               #
+                               # Read straight off the closing event's own
+                               # payload (`igt_timed_at`, added by the x-cam
+                               # fix), so this re-derives on every reproject
+                               # like `timed_by` does and needs no backfill.
+                               # ABSENCE of that key is meaningful rather than
+                               # unknown: it did not exist before 2026-08-01,
+                               # so every star row recorded earlier is exactly
+                               # the grab quantity -- which is why the default
+                               # for a star_collected closure is "grab" and
+                               # not None. Those ~626 rows cannot be
+                               # re-derived (the journal keeps no post-grab
+                               # frames), so they can only be MARKED.
+                               #
+                               # Bowser 3's grand star is deliberately NOT
+                               # stamped: it closes on key_grabbed, whose
+                               # cutscene action has no fall/dance pair to
+                               # derive an x-cam from, and whether STOP moves
+                               # its number at all is UNMEASURED. Claiming
+                               # "grab" there would assert something nobody
+                               # has run the experiment for; the limitation is
+                               # recorded in docs/api.md instead.
 
 
 ANCHOR_EVENT_TYPES = ("practice_reset", "state_loaded")
@@ -327,6 +414,20 @@ class Projector:
         self._seg_origins = {
             d.id: segment_origin(d.id, d.start_triggers, origin_overrides)
             for d in (segments or [])}
+        # {(course_id, 6)} whose whole course-visit span is timed by an
+        # ENABLED engine (spec 2026-07-28-multi-step-segments, "the 100-coin
+        # star IS the segment"): _close_by_grab reads this to suppress the
+        # plain star-6 attempt it would otherwise record on the grab itself,
+        # since that engine's own completion (at the exit star) is what
+        # closes it instead (see the seg_closed loop in feed()). Filtered to
+        # d.enabled like _seg_origins is NOT — a disabled/deleted def never
+        # arms at all, so it must never suppress anything; the plain star
+        # attempt is the fallback that keeps the grab meaningful, same
+        # philosophy the retired _hundred_coin_redirect used.
+        self._hundred_coin_engines: set[tuple[int, int]] = {
+            hc for d in (segments or []) if d.enabled
+            and (hc := hundred_coin_entity(d.start_triggers, d.waypoints))
+            is not None}
         self.segment_notices: list[dict] = []  # live-broadcast queue, drained by service
         self._runs = RunTracker()
         self.run_notices: list[dict] = []   # live-broadcast queue, drained by service
@@ -381,6 +482,88 @@ class Projector:
         into privates."""
         return self._segments.armed_ids()
 
+    def _armed_loosely(self, segment_id: int) -> bool:
+        """True when `segment_id` is currently armed AND its def is LOOSE-
+        matched (task 5, spec 2026-07-28-multi-step-segments) — the property
+        that exempts a segment target from the origin-retirement rule in
+        _dispatch below.
+
+        Scoped to LOOSE defs only, not "any armed segment" (the brief's
+        version): a STRICT multi-step def that wanders into a level outside
+        its waypoint sequence is SILENTLY CANCELLED by the matcher on this
+        very event (segments.py's `_feed_waypoint` "major action" branch),
+        so exempting it here too would leave a stale target pointing at a
+        def the matcher just disarmed — caught by
+        test_waypoint_level_keeps_a_multi_level_segment_target, which needs
+        exactly that retirement on an unrelated level move mid-sequence.
+        Loose mode's whole point is tolerating such a move without
+        cancelling (it "stays armed through everything but its end and a
+        staleness deadline"), so only loose earns the exemption."""
+        if segment_id not in self.armed_segment_ids():
+            return False
+        d = self._segments.definition(segment_id)
+        return d is not None and d.match_mode == "loose"
+
+    def _clears_star_target(self, segment_id: int) -> bool:
+        """True when `segment_id` just arming should retire the CURRENT star
+        target (feed()'s "a segment armed retires a star target" rule,
+        2026-06-12) — false when arming it is the ambient side effect of
+        standing in the SAME course the target already names, not a
+        different activity starting.
+
+        GENERALIZED (spec 2026-07-28-multi-step-segments) from an earlier,
+        narrower version scoped to "only star 6, only its own
+        HUNDRED_COIN_EXIT engine" — that fix was correct as far as it went
+        but left the regression it was patched against reachable for every
+        OTHER star: the reshape that made `seg:100c->exit:*` arm on mere
+        course ENTRY (b9c72f3/ccf989b) means walking into ANY of the 15 main
+        courses while practicing a DIFFERENT star in that course silently
+        wiped the target — confirmed live (`target_set` star (2,3), feed a
+        level_changed into WF, `proj.target` came back None) — and Bowser's
+        `seg:reds->pipe:*`/legacy pipe-entry trio share the identical arm
+        shape (never surfaced the same bug only because a Bowser course has
+        exactly one star to collide with).
+
+        The real distinguishing question is not "which family is this" but
+        "is the arming def practiced FROM the same course the target star
+        lives in" — `segments.origin_course(segment_origin(...))`, the SAME
+        reader the segment-target half of this rule already uses two
+        branches below, applied here to the star half for the first time.
+        Arming from a DIFFERENT course (or the castle/a hub — origin None)
+        still retires the target unchanged: a movement leaving the target's
+        own course already retires it via the course-change rule in
+        _dispatch (which runs BEFORE this, on the SAME level_changed), so
+        this branch is only ever reached with a star target for course-
+        neutral arms — exactly the ambient case this exists for."""
+        if not (self.target and self.target[0] == "star"):
+            return False
+        d = self._segments.definition(segment_id)
+        if d is None:
+            return True
+        seg_course = origin_course(self._seg_origins.get(segment_id))
+        return seg_course is None or seg_course != self.target[1]
+
+    def armed_arms(self) -> dict[int, dict]:
+        """Per-armed-id detail for the view's "waiting for" card (spec
+        2026-07-28-multi-step-segments): {segment_id: {progress, total,
+        start_frame, deadline_frame}}. `total` is the def's own waypoint
+        count (0 for a plain start/end pair), so the UI can read
+        "progress of total" without a second lookup. `waiting_for` is NOT
+        computed here — that needs card_waiting_for_sentence, a segments.py
+        concern, and views.py already holds the def for its section loop.
+        A def missing from definition() (deleted mid-arm) is skipped rather
+        than raised: this engine's _armed can only ever hold ids from its
+        OWN def list, so the guard is defensive, not a live path."""
+        arms = {}
+        for sid, arm in self._segments.armed_items().items():
+            d = self._segments.definition(sid)
+            if d is None:
+                continue
+            arms[sid] = {"progress": arm.progress, "total": len(d.waypoints),
+                        "start_frame": arm.start_frame,
+                        "deadline_frame": arm.deadline_frame}
+        return arms
+
     def armed_route_id(self):
         return self._runs.armed_route_id()
 
@@ -397,6 +580,13 @@ class Projector:
 
     def feed(self, ev) -> list[Attempt]:
         prev_level = self._level  # _dispatch may move it (level_changed)
+        # Snapshotted BEFORE _dispatch (which runs _close_by_grab for a
+        # star_collected event) so the grab-steals-the-target restore below
+        # can tell "this segment was already my pinned, running focus" from
+        # "I just now grabbed a star with nothing else going on" — see that
+        # restore's own comment for the bug it exists for.
+        target_before = self.target
+        armed_before = self.armed_segment_ids()
         closed = self._dispatch(ev)
         for a in closed:
             if a.segment_id is None and a.course_id is not None:
@@ -433,13 +623,76 @@ class Projector:
                            target_segment=target_seg)
         seg_closed, self.segment_notices = self._segments.feed(ev, ctx)
         for a in seg_closed:
-            # same first-event-id cleared keying as _build (caveat 2/11)
-            a = replace(a,
-                        strat_tag=self._strat_overrides.get(
-                            a.id, self.strat_by_segment.get(a.segment_id)),
-                        cleared=a.id in self._cleared,
-                        cleared_reason=self._cleared.get(a.id))
+            # The 100-coin star IS this segment when its def's own sequence
+            # includes grabbing that course's 100-coin star (spec 2026-07-28-
+            # multi-step-segments, hundred_coin_entity): EVERY outcome —
+            # success, death, hard_reset — attributes to the star entity
+            # (course_id/star_id, segment_id cleared), not the segment. The
+            # segment stops existing as a visible practiced thing at all,
+            # only as the timing engine. Reattribute BEFORE strat/cleared/
+            # auto_ignored so every downstream rule (validity bounds, strat
+            # memory) takes the SAME path an ordinary star_collected closure
+            # would — _auto_ignored dispatches purely on
+            # `segment_id is not None` (caveat 14).
+            seg_def = self._segments.definition(a.segment_id)
+            hc = (hundred_coin_entity(seg_def.start_triggers, seg_def.waypoints)
+                 if seg_def is not None else None)
+            if hc is not None:
+                # A segment's own igt_frames is always None -- segments are
+                # RTA-only by design (views.py: "segments have no igt
+                # clock"). A reattributed attempt IS a star now, and stars
+                # display/grade on IGT (his clock: Usamune IGT) -- without
+                # this it renders with no time at all and cannot be graded
+                # (live report: WF exit-star grab closed BOTH this attempt
+                # and the ordinary star_id 3 one on the SAME event, and only
+                # the star_id 3 row carried the real igt_frames the game
+                # reported). The closing event's own payload is the
+                # authoritative source -- exactly what _close_by_grab/
+                # _close_by_death already read for an ordinary star, never a
+                # value derived from rta_frames (a frame-delta, not the
+                # Usamune IGT this project's own rule requires). Not every
+                # closing event type carries the key (game_reset closures
+                # pass igt_frames=None even on the star side, caveat
+                # unaffected) -- .get() falls through to None exactly as the
+                # star path already does for those.
+                # `timed_by` follows the time it describes, and this row's time
+                # just changed source: a star displays/grades on igt_frames, so
+                # whatever _close decided about the discarded rta_frames says
+                # nothing about it. Reset rather than inherited -- a delta-timed
+                # segment closure that reattributes here would otherwise carry a
+                # "not comparable" mark onto a number that IS Usamune's IGT.
+                # `timed_at` follows the same reasoning as `timed_by` right
+                # above: this row IS a star now and its time came out of the
+                # closing event's payload, so it takes that event's own
+                # answer about WHICH MOMENT -- and None whenever the closure
+                # was not a star grab, where the question does not arise.
+                a = replace(a, course_id=hc[0], star_id=hc[1], segment_id=None,
+                            igt_frames=ev.payload.get("igt_frames"),
+                            timed_by="igt",
+                            timed_at=(ev.payload.get("igt_timed_at", "grab")
+                                      if ev.type == "star_collected" else None))
+                a = replace(a,
+                            strat_tag=self._strat_overrides.get(
+                                a.id, self.strat_by_star.get(hc)),
+                            cleared=a.id in self._cleared,
+                            cleared_reason=self._cleared.get(a.id))
+            else:
+                # same first-event-id cleared keying as _build (caveat 2/11)
+                a = replace(a,
+                            strat_tag=self._strat_overrides.get(
+                                a.id, self.strat_by_segment.get(a.segment_id)),
+                            cleared=a.id in self._cleared,
+                            cleared_reason=self._cleared.get(a.id))
             a = self._auto_ignored(a)
+            if not a.cleared and hc is not None:
+                # last-star memory (caveat 15): the grab-time suppression in
+                # _close_by_grab skips this update for the SAME reason a
+                # star grab records it, so give it here instead — the
+                # physical fact ("this star just closed") must not depend on
+                # which code path recorded it.
+                self._last_star_attempted = hc
+                if a.outcome == "success":
+                    self._last_star_grabbed = hc
             if a.outcome == "success" and not a.cleared:
                 # A segment that COMPLETES by entering a star stage (the
                 # closing event is a level_changed into a course-bearing level)
@@ -448,20 +701,47 @@ class Projector:
                 # onto the just-finished segment (MIPS ends by entering DDD;
                 # LBLJ by entering BITDW — 2026-06-12). Completions that do NOT
                 # enter a stage (a star grab, a mid-course end, an exit to the
-                # hub) still auto-follow onto the segment.
+                # hub) still auto-follow onto the segment — or, for a
+                # reattributed HUNDRED_COIN_EXIT closure, onto the star it now
+                # IS, exactly as a plain star grab auto-follows.
                 entered_stage = (ev.type == "level_changed"
                                  and course_for_level(ev.payload["to"]) is not None)
-                self.target = None if entered_stage else ("segment", a.segment_id)
+                if hc is not None:
+                    self.target = None if entered_stage else ("star", *hc)
+                else:
+                    self.target = None if entered_stage else ("segment", a.segment_id)
                 self._suspended_star = None  # finished a segment: moved on (caveat 13)
             closed.append(a)
+        # Caveat 18's grab-steals-the-target restore USED to sit here, and
+        # is gone because the steal it undid can no longer happen: since
+        # 2026-08-01 `_close_by_grab` simply does not move a SEGMENT
+        # target at all. That restore only ever covered waypoint-bearing
+        # strict/exclusive defs (Bowser's Reds -> Pipe consuming its own
+        # reds star), because for a plain def "still armed after the grab"
+        # carried no information about whether the grab belonged to it —
+        # which is exactly why the narrow version could not save WF -> SSL
+        # or Bowser 1 -> WF. Refusing the steal at the source needs no such
+        # disambiguation: a segment target is a click, a grab is not.
         # A segment going ARMED means a segment run just started, so a star we
         # were practicing is no longer the active focus (active-star and
         # segment are mutually exclusive in the UI — 2026-06-12). Clear ONLY a
         # star target; a segment target (set just above on a success) IS the
         # new focus and must stay. service._track auto-broadcasts
         # target_changed off this in-feed change.
+        #
+        # EXCEPTION, GENERALIZED (spec 2026-07-28-multi-step-segments): a def
+        # that arms ambiently on mere course entry (HUNDRED_COIN_EXIT,
+        # reds->pipe, the legacy pipe-entry trio — segments.arms_ambiently)
+        # is not "a segment run just started" in the sense this rule means,
+        # when it is practiced FROM the SAME course the target star lives in
+        # — it is that course's engine coming alive, not a different
+        # activity. See _clears_star_target's own docstring for why the
+        # comparison is by COURSE, not by family or by exact star, and for
+        # the live regression this closes (any star 0-5 losing its target on
+        # entry to its own course, not just star 6).
         if self.target and self.target[0] == "star" \
                 and any(n["event"] == "segment_armed"
+                        and self._clears_star_target(n["segment_id"])
                         for n in self.segment_notices):
             self._suspended_star = self.target[1:]  # resume on re-entry (caveat 13)
             self.target = None
@@ -489,7 +769,30 @@ class Projector:
         if ev.type == "game_reset":
             return self._close(ev, outcome="hard_reset", igt_frames=None)
         if ev.type == "session_started":
-            return self._close(ev, outcome="abandoned", igt_frames=None)
+            # A session boundary ends the live FOCUS, not just the open
+            # attempt. Live report 2026-08-01: he practiced a 100-coin star,
+            # closed the app, reopened it, and the star was still selected —
+            # "it reads as a bug if something is selected for a new session."
+            # The target is replay-derived, so nothing had ever ended it: the
+            # journal's last target_set won however many launches ago it was
+            # written. Close FIRST, the same discipline the course-change
+            # branch keeps, so the run this boundary ends still attributes to
+            # the star it was run on.
+            #
+            # The suspended star goes too. A star stashed by leaving its
+            # course (caveat 13) is still a selection — it is one course entry
+            # away from being back on screen, which is exactly the symptom he
+            # reported, arriving a few seconds later.
+            #
+            # Deliberately NOT cleared: strat_by_star / strat_by_segment. The
+            # target is where he is pointed right now; which strategy he
+            # practices an entity with is a standing preference, and making
+            # him re-pick it every launch would be a second annoyance wearing
+            # the first one's fix.
+            closed = self._close(ev, outcome="abandoned", igt_frames=None)
+            self.target = None
+            self._suspended_star = None
+            return closed
         if ev.type == "level_changed":
             closed = self._close(ev, outcome="abandoned", igt_frames=None)
             to_level = ev.payload["to"]
@@ -523,7 +826,28 @@ class Projector:
             # segment; the NEXT level move retires it. No resume stash: the
             # matcher re-arms on return (armed pins the UI) and the arena
             # banner re-targets on entry, so nothing is lost.
-            if self.target and self.target[0] == "segment" and to_course is not None:
+            #
+            # A segment that is ARMED and LOOSE-matched is exempt from this
+            # rule (task 5, spec 2026-07-28-multi-step-segments; see
+            # _armed_loosely for why the exemption stops at loose and does
+            # not cover every armed segment): the two lines above were
+            # written for an IDLE pin, where entering a foreign course really
+            # does mean "doing something else now". Under loose matching
+            # that reasoning breaks down while the segment is RUNNING -- a
+            # re-entry movement enters another course on purpose (task
+            # 0017's second example), and this rule was hiding the card
+            # exactly while the segment was mid-sequence. Still runs in
+            # _dispatch, BEFORE feed(), so `_armed_loosely` reads
+            # armed_segment_ids() as of the PREVIOUS event, not this one --
+            # that is correct, not an off-by-one, for a loose def: loose
+            # stays armed through everything but its own end/deadline, so
+            # "was armed last event" and "is armed after this one" agree. A
+            # segment armed earlier is mid-sequence now, which is exactly
+            # the case this exception exists for. The rule is unchanged for
+            # anything not currently armed loosely, which is what it was
+            # written for.
+            if (self.target and self.target[0] == "segment" and to_course is not None
+                    and not self._armed_loosely(self.target[1])):
                 origin = self._seg_origins.get(self.target[1])
                 if origin is not None and origin != stage_origin(to_level):
                     self.target = None
@@ -644,17 +968,54 @@ class Projector:
     def _close_by_grab(self, ev) -> list[Attempt]:
         grabbed = (ev.payload["course_id"], ev.payload["star_id"])
         first = self._open if self._open is not None else ev
+        if grabbed[1] == 6 and grabbed in self._hundred_coin_engines:
+            # The 100-coin star never gets its OWN attempt when an engine is
+            # timing the whole course visit (spec 2026-07-28-multi-step-
+            # segments): its eventual completion (at the exit star) is
+            # reattributed to this same entity in feed()'s seg_closed loop
+            # instead. "Nobody times just the 100 star grab" (user ruling,
+            # the retired star->segment TARGET redirect's own reasoning)
+            # now applies to ATTRIBUTION too, not just target-picking.
+            # _last_star_grabbed/_last_star_attempted still update directly
+            # here (caveat 15: "the grab happened physically" even when no
+            # attempt records it) -- no seeded guard reads star 6 today, but
+            # a future one should see this exactly as it would any other
+            # grab. Falls back to the plain star attempt below when no
+            # engine covers this course (deleted/disabled def), same
+            # fallback _hundred_coin_redirect used, so the click stays
+            # meaningful.
+            self._last_star_attempted = grabbed
+            self._last_star_grabbed = grabbed
+            self._open = None
+            return []
         strat = self.strat_by_star.get(grabbed)
         attempt = self._build(
             first=first, close=ev, outcome="success", outcome_detail=None,
             course_id=grabbed[0], star_id=grabbed[1],
             igt_frames=ev.payload.get("igt_frames"), strat=strat)
         self._open = None
-        if not attempt.cleared:
-            # last VALID grab moves the practice target
+        if not attempt.cleared and not self._segment_targeted():
+            # The last VALID grab moves the practice target — but only when
+            # the target is a star or nothing. A SEGMENT target is a pick he
+            # made with a click; a grab is a thing he did in the game, and
+            # letting the second overwrite the first is how a movement he
+            # deliberately chose disappears (live report 2026-08-01, WF -> SSL
+            # and Bowser 1 -> WF). Grabbing the star you are leaving a course
+            # with is the ORDINARY thing to do immediately before running that
+            # course's exit movement, so this fired at exactly the wrong
+            # moment; and because every castle movement is guarded to the
+            # target or the active route, losing the target also cost it its
+            # arm, its section and its card in one go.
+            #
+            # The star's own attempt is still recorded above — his ruling on
+            # this same rule, 2026-07-30: "the practice log should still exist
+            # for star mode in the history, just that we don't see it".
             self.target = ("star", *grabbed)
             self._suspended_star = None  # committed a new focus (caveat 13)
         return [attempt]
+
+    def _segment_targeted(self) -> bool:
+        return self.target is not None and self.target[0] == "segment"
 
     def _close_by_death(self, ev) -> list[Attempt]:
         if self._unacted_open():
@@ -701,6 +1062,8 @@ class Projector:
     def _build(self, first, close, outcome, outcome_detail, course_id, star_id,
                igt_frames, strat) -> Attempt:
         is_anchored = first.type in ANCHOR_EVENT_TYPES
+        timed_at = (close.payload.get("igt_timed_at", "grab")
+                    if close.type == "star_collected" else None)
         rta = (close.frame - first.frame
                if is_anchored and close.frame >= first.frame else None)
         return self._auto_ignored(Attempt(
@@ -718,7 +1081,8 @@ class Projector:
             rollouts_total=self._rollouts_total,
             rollouts_dustless=self._rollouts_dustless,
             jumps_total=self._jumps_total,
-            jumps_dustless=self._jumps_dustless))
+            jumps_dustless=self._jumps_dustless,
+            timed_at=timed_at))
 
     def _auto_ignored(self, a: Attempt) -> Attempt:
         """Range/validity check (spec 2026-07-23): an out-of-bounds SUCCESS
@@ -766,7 +1130,27 @@ def wipe_matches(a: Attempt, p: dict) -> bool:
 
 
 def replay(events, segments=None, time_filters=None,
-           origin_overrides=None) -> tuple[list[Attempt], Projector]:
+           origin_overrides=None, on_notices=None) -> tuple[list[Attempt], Projector]:
+    """`on_notices`, default None (spec 2026-07-28-multi-step-segments, the
+    backtest arm-count gap): an optional callback invoked with
+    `proj.segment_notices` after every fed event, for a caller that needs
+    more than the final-state snapshot `Projector` exposes.
+
+    `Projector.segment_notices` is OVERWRITTEN every `feed()` call — it is a
+    live-broadcast queue `service.py` drains once per tick, not a log — so a
+    replay caller that wants the full history (e.g. every `segment_armed`
+    across the whole journal, not just the last event's) has no other way to
+    see it after the fact. Rather than have `replay()` itself accumulate
+    (this is the LIVE projection path too — service.py's own re-projection
+    calls it, and widening its return value would ripple into every
+    existing caller) or give the caller a second event loop that duplicates
+    the `data_wiped` retroactive-suppression branch below, this is the one
+    seam: a caller passes a callback, sees every event's notices exactly
+    once, and every existing caller (on_notices=None) is byte-for-byte
+    unaffected. `tracking/backtest.py::_run` is the one consumer so far,
+    counting `segment_armed` notices to distinguish "never armed" from
+    "armed and never closed" — two candidates `unclosed` alone cannot tell
+    apart, since it only reports what's STILL armed at the journal's end."""
     proj = Projector(cleared_ids(events), segments=segments,
                      time_filters=time_filters, touched=touched_ids(events),
                      strat_overrides=strat_overrides(events),
@@ -778,10 +1162,14 @@ def replay(events, segments=None, time_filters=None,
             # drop everything accumulated so far that falls in scope; attempts
             # closed AFTER the wipe accumulate fresh. The event never reaches
             # the projector — an in-flight open attempt deliberately survives
-            # (it closes after the wipe, so it is post-wipe data).
+            # (it closes after the wipe, so it is post-wipe data). Never
+            # reaches proj.feed(), so on_notices is correctly never called
+            # for it either -- there are no notices to report.
             attempts = [a for a in attempts if not wipe_matches(a, ev.payload)]
             continue
         attempts.extend(proj.feed(ev))
+        if on_notices is not None:
+            on_notices(proj.segment_notices)
     return attempts, proj
 
 
