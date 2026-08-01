@@ -69,7 +69,12 @@ from sm64_events.memory.addresses import (ACT_FALL_AFTER_STAR_GRAB,
 from sm64_events.memory.pj64 import Pj64Memory
 
 POLL_HZ = 60
-SETTLE_FRAMES = 240   # 8 s; the longest observed result write was +39
+# How long this probe WATCHES — deliberately far wider than the emit's own
+# settle window, because a write we do not see is a fact we cannot learn. It is
+# how the store's zeroing on level exit (+92, live 2026-08-01) was found at all.
+# What it does NOT do is decide the ground truth: scoring stops at the emit's
+# deadline (see settled_result), or the probe grades us against a cleared store.
+SETTLE_FRAMES = 240   # 8 s; the latest MEANINGFUL result write was +41
 
 # "Mario touches the ground after star-grab" — the dance is what he enters
 # when he gets there. A midair grab goes ACT_FALL_AFTER_STAR_GRAB first and
@@ -86,29 +91,47 @@ JOURNALED = "what we journal"
 
 # --- pure core (tests/test_derive_xcam.py drives these) ---------------------
 
-def settled_result(samples: list[tuple[int, int, int, int]]) -> tuple[int, int] | None:
-    """Usamune's own answer: the value its RESULT store holds at the end of the
-    window, and the frame the last write landed on.
+def settled_result(samples: list[tuple[int, int, int, int]],
+                   deadline_frame: int) -> tuple[int, int] | None:
+    """Usamune's own answer: the last write that landed at or before
+    `deadline_frame`, as (value, frame).
 
     None when no write was seen in the window at all — under `STOP=Grab` the
     write happens before we start watching, and under `STOP=None` there is
     none, so there is no ground truth to score against and this grab must be
-    skipped rather than scored as a perfect match against a stale value."""
-    writes = result_writes(samples)
-    return (samples[-1][RESULT], writes[-1][0]) if writes else None
+    skipped rather than scored as a perfect match against a stale value.
+
+    **The deadline is not a tidiness measure; without it this probe lies.**
+    The observation window is 8 s and the RESULT store does not stay put that
+    long: leaving the course ZEROES it. Live 2026-08-01, his subarea run,
+    WF "Shoot into the Wild Blue" — writes at +1=328, +3=330, then +92=0 as he
+    exited. Reading the store at the end of the window made Usamune's answer
+    0'00"00 and scored the shipped derivation at +327, a failure the gate
+    invented out of a correct journal entry. Scoring stops where
+    `StarGrabDetector.RESULT_SETTLE_FRAMES` stops, so this probe measures the
+    same store the emit reads. Everything after is still PRINTED — the zeroing
+    write is how it was found."""
+    writes = [write for write in result_writes(samples)
+              if write[0] <= deadline_frame]
+    return (writes[-1][1], writes[-1][0]) if writes else None
 
 
 def result_writes(samples: list[tuple[int, int, int, int]]
                   ) -> list[tuple[int, int]]:
     """Every change of the result store in the window, as (frame, value).
 
-    Printed rather than summarised because the COUNT decides how long
-    star_grab.py has to wait. If Usamune writes once, late, the emit can leave
-    as soon as that write lands; if it writes twice — a first value at the
-    x-cam and a corrected one tens of frames later, which is what the two
-    multi-area stars of 2026-08-01 look like from the outside — then only the
-    last one is the star's time and the wait has to outlive it. One report
-    settles that; guessing it wrong is silent and wrong by minutes of play."""
+    Printed rather than summarised because the COUNT decided how long
+    star_grab.py has to wait, and **his subarea run of 2026-08-01 answered it:
+    Usamune never writes once.** Five grabs, 2-3 writes each. The first one or
+    two are ECHOES of our own counter (write value = the counter on that
+    sample + 1, at the grab and again at the dance entry); on a SUBAREA star a
+    third write lands 26-28 frames after the dance entry carrying the
+    whole-star time, and that one is the answer. LLL Elevator Tour:
+    +1=465, +14=479, +41=777 against counters of 464 and 478.
+
+    So the emit CANNOT leave on the first write, and it cannot tell a
+    single-area star (no correction is coming) from a subarea one (it is) at
+    the moment that write lands — which is why the wait is unconditional."""
     out = []
     for prev, curr in zip(samples, samples[1:]):
         if curr[RESULT] != prev[RESULT]:
@@ -250,8 +273,13 @@ def grab_report(index: int, course_name: str, star_name: str,
 
     Returns the text and the per-candidate errors (empty when this grab has no
     ground truth, i.e. nothing to score against)."""
-    truth = settled_result(samples)
     priced = candidates(samples, touch_frame)
+    # The emit's own deadline, anchored where the emit anchors it: the x-cam,
+    # falling back to the touch when no dance was seen (a grab that never
+    # reached one — star_grab.py journals that from the grab frame too).
+    xcam_frame = priced.get("star dance entry", priced["our grab edge"])[0]
+    deadline = xcam_frame + StarGrabDetector.RESULT_SETTLE_FRAMES
+    truth = settled_result(samples, deadline)
     shape = "midair grab" if was_midair(samples) else "GROUND grab"
     lines = [f"\nSTAR #{index} — {star_name} in {course_name}  ({shape})",
              f"  we journal today   {format_igt(journaled_frames):>9}  "
@@ -278,6 +306,15 @@ def grab_report(index: int, course_name: str, star_name: str,
         detail = ", ".join(f"+{frame - touch_frame}={value}"
                            for frame, value in writes)
         lines.append(f"    result store written {len(writes)}x: {detail}")
+    late = [frame for frame, _ in writes if frame > deadline]
+    if late:
+        # Never silent. A dropped write that is not named reads as a store
+        # that held still, which is the opposite of what these mean — leaving
+        # the course zeroes it, and that zero is not an answer to anything.
+        lines.append(
+            f"    ignored {len(late)} write(s) after +"
+            f"{deadline - touch_frame} (past the emit's settle window; "
+            "the store is cleared on level exit)")
     # What we SHIP is a candidate like any other, and since 2026-08-01 it is
     # the interesting one: star_grab.py now derives the x-cam itself, so this
     # row is the regression gate. A CONSTANT +0 here is the whole answer.

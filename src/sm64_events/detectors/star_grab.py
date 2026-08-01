@@ -39,6 +39,15 @@ star, and it is written 0-2 frames after the dance on an ordinary star and
 Usamune's own write says WHAT NUMBER, and the emit waits
 `RESULT_SETTLE_FRAMES` for it.
 
+A second subarea run the same day (five grabs, `tools/derive_xcam.py`) closed
+the one question that could have removed that wait: **Usamune never writes the
+answer once.** Every grab took 2-3 writes, the early ones echoing our own
+counter, and the store is later CLEARED on level exit. Both ends of the wait
+are therefore measured rather than chosen, and the ceiling is a real hazard
+rather than headroom — the evidence sits on `RESULT_SETTLE_BRACKET` and is
+pinned by `tests/test_star_grab.py`. All five of that run's journaled times
+matched Usamune exactly.
+
 Where no write comes — `STOP` of Grab or None, both already illegal — the
 counter derivation stands in, and `igt_source` is `"counter"` rather than
 `"result"`, which is the honest signal that Usamune was not stopping where a
@@ -98,14 +107,35 @@ class StarGrabDetector:
     # only a backstop for a grab that never reaches a dance at all — a
     # savestate load and a level change both cut the wait short on their own.
     XCAM_TIMEOUT_FRAMES = 300
-    # How long to let Usamune's own result write settle after the x-cam. Live
-    # 2026-08-01, eleven grabs: the write landed 0-2 frames after the star-dance
-    # entry on nine of them and 27-28 frames after it on the two multi-area
-    # stars, which are exactly the two our own counter cannot answer. 45 frames
-    # is 1.5 s and clears the widest observed gap by 60 %. Under `STOP` of Grab
-    # or None no write ever comes and this wait is paid in full — both are
-    # settings a leaderboard already rejects.
+    # How long to let Usamune's own result write settle after the x-cam. This
+    # number is BRACKETED at both ends by live measurement, and both ends bite
+    # — see RESULT_SETTLE_BRACKET below for the floor, the ceiling, and the
+    # test that pins them. Under `STOP` of Grab or None no write ever comes and
+    # this wait is paid in full; both are settings a leaderboard already
+    # rejects.
     RESULT_SETTLE_FRAMES = 45
+    # (floor, ceiling), exclusive of neither end by accident:
+    #
+    # FLOOR 28 — Usamune never writes the answer once. Live 2026-08-01, his
+    # subarea run, five grabs, 2-3 writes each. The first writes are ECHOES of
+    # our own counter (value = that sample's counter + 1) at the grab and again
+    # at the dance entry; on a SUBAREA star a further write lands 26-28 frames
+    # after the dance entry carrying the whole-star time, and only that one is
+    # the star's number. SSL Pyramid +6=74 then +32=545; THI Tip Top +9=1362
+    # then +35=1618; LLL Elevator Tour +1=465, +14=479, +41=777; CCM Slip
+    # Slidin' +8=221 then +33=1524. Leaving on the first write would have
+    # journaled the subarea-local number — the exact bug this wait exists for.
+    #
+    # CEILING 90 — the store does not merely settle, it is CLEARED. Same run,
+    # WF "Shoot into the Wild Blue": +1=328, +3=330, then +92=0 as he left the
+    # course. A window generous enough to catch that zero would journal
+    # 0'00"00. So this is not a value to raise "for safety"; there is a wrong
+    # answer waiting on the far side of it.
+    #
+    # A single-area star is corrected by nobody, and at the moment the echo
+    # lands there is no way to tell "no correction is coming" from "not yet" —
+    # which is why the wait is unconditional rather than subarea-only.
+    RESULT_SETTLE_BRACKET = (28, 90)
     # A Usamune reset while a grab is pending destroys the context the number
     # would describe, and the counter falling is how it shows. Distinguished
     # from noise by SIZE, not by direction: a snapshot is twelve separate reads

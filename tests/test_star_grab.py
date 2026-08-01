@@ -479,3 +479,18 @@ def test_a_write_that_lands_before_the_xcam_is_still_refused():
     events = run_pairs(StarGrabDetector(), midair_snaps(10, result=301))
     assert events[0].payload["igt_source"] == "counter"
     assert events[0].payload["igt_frames"] == 311
+
+
+def test_the_settle_window_sits_inside_the_bracket_measured_live():
+    """Both ends of `RESULT_SETTLE_FRAMES` are live measurements, and the
+    CEILING is the one nobody expects — a wait made "generous" walks into a
+    cleared store and journals 0'00"00.
+
+    His subarea run, 2026-08-01: the corrected whole-star write landed 26-28
+    frames after the dance entry (so anything under 28 emits the subarea-local
+    number), and the store was zeroed 90 frames after it on a course exit (so
+    anything from 90 up can read that zero). This is the only guard that can
+    fail when someone tunes the wait by reasoning; the evidence for each end
+    is on RESULT_SETTLE_BRACKET."""
+    floor, ceiling = StarGrabDetector.RESULT_SETTLE_BRACKET
+    assert floor <= StarGrabDetector.RESULT_SETTLE_FRAMES < ceiling

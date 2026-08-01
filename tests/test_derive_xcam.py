@@ -13,6 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
+from sm64_events.detectors.star_grab import StarGrabDetector  # noqa: E402
 from sm64_events.memory.addresses import (ACT_FALL_AFTER_STAR_GRAB,  # noqa: E402
                                           ACT_STAR_DANCE_EXIT)
 from derive_xcam import (ACTION, DANCE_ACTIONS, FRAME, JOURNALED,   # noqa: E402
@@ -23,6 +24,8 @@ from derive_xcam import (ACTION, DANCE_ACTIONS, FRAME, JOURNALED,   # noqa: E402
                          summary, was_midair)
 
 TOUCH = 9000
+# A deadline far past every write, for the cases that are not about it.
+NO_DEADLINE = TOUCH + SETTLE_FRAMES
 ACT_RUNNING = 0x00000440
 
 
@@ -63,13 +66,13 @@ def test_a_result_store_that_never_moved_yields_no_ground_truth():
     Scoring against it would report a flawless match for a comparison that
     never happened."""
     samples = stream(600, 60, dance_at=0, stale_result=452)
-    assert settled_result(samples) is None
+    assert settled_result(samples, NO_DEADLINE) is None
 
 
 def test_a_result_write_inside_the_window_is_the_ground_truth():
     samples = stream(600, 60, dance_at=0, result_at=4, result_value=604,
                      stale_result=452)
-    assert settled_result(samples) == (604, TOUCH + 4)
+    assert settled_result(samples, NO_DEADLINE) == (604, TOUCH + 4)
 
 
 def test_the_last_write_wins_when_usamune_writes_twice():
@@ -80,7 +83,7 @@ def test_the_last_write_wins_when_usamune_writes_twice():
     samples = [(frame, action, overall,
                 601 if 2 <= frame - TOUCH < 20 else result)
                for frame, action, overall, result in samples]
-    assert settled_result(samples) == (620, TOUCH + 20)
+    assert settled_result(samples, NO_DEADLINE) == (620, TOUCH + 20)
 
 
 # --- finding the moment ----------------------------------------------------
@@ -279,7 +282,7 @@ def test_every_result_write_in_the_window_is_reported_not_just_the_last():
                   (TOUCH + 21, ACT_STAR_DANCE_EXIT, 621, 603),
                   (TOUCH + 40, ACT_STAR_DANCE_EXIT, 640, 999)])
     assert result_writes(samples) == [(TOUCH + 20, 603), (TOUCH + 40, 999)]
-    assert settled_result(samples) == (999, TOUCH + 40)  # the LAST one
+    assert settled_result(samples, NO_DEADLINE) == (999, TOUCH + 40)  # the LAST one
 
 
 def test_a_second_write_is_shown_in_the_grab_report():
@@ -289,3 +292,34 @@ def test_a_second_write_is_shown_in_the_grab_report():
     text, _ = grab_report(1, "Lethal Lava Land", "Hot-Foot-It into the Volcano",
                           999, "result", TOUCH, samples)
     assert "written 2x" in text and "+20=603" in text and "+40=999" in text
+
+
+def test_a_store_cleared_on_level_exit_is_not_usamunes_answer():
+    """The probe's own fourth fatal failure, and the only one found by a real
+    run rather than by reading it: leaving the course ZEROES the result store,
+    8 s is long enough to watch him do it, and the last write in the window was
+    being taken as the ground truth.
+
+    Live 2026-08-01, WF "Shoot into the Wild Blue" — writes at +1=328, +3=330,
+    +92=0. The gate printed Usamune's answer as 0'00"00 and scored the shipped
+    derivation at +327 against a journal entry he confirmed was correct. A
+    self-scoring probe that invents failures is worse than no probe, because
+    the next session spends the round chasing one."""
+    samples = (stream(600, 4, dance_at=2, fall_until=2, stale_result=452)
+               + [(TOUCH + 4, ACT_STAR_DANCE_EXIT, 604, 330),
+                  (TOUCH + 92, ACT_STAR_DANCE_EXIT, 692, 0)])
+    deadline = TOUCH + 2 + StarGrabDetector.RESULT_SETTLE_FRAMES
+    assert settled_result(samples, deadline) == (330, TOUCH + 4)
+    assert settled_result(samples, NO_DEADLINE) == (0, TOUCH + 92)  # the bug
+
+
+def test_a_write_past_the_deadline_is_named_rather_than_dropped():
+    """A write we ignore and do not mention reads as a store that held still,
+    which is the opposite of what a zeroing write means."""
+    samples = (stream(600, 4, dance_at=2, fall_until=2, stale_result=452)
+               + [(TOUCH + 4, ACT_STAR_DANCE_EXIT, 604, 330),
+                  (TOUCH + 92, ACT_STAR_DANCE_EXIT, 692, 0)])
+    text, scored = grab_report(1, "Whomp's Fortress", "Shoot into the Wild Blue",
+                               330, "result", TOUCH, samples)
+    assert "ignored 1 write" in text
+    assert scored[JOURNALED] == 0
