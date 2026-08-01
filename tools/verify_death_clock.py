@@ -3,6 +3,14 @@
 
     uv run python tools/verify_death_clock.py
 
+**ANSWERED 2026-08-01 — re-run only to re-check, not to decide.** Eight pause
+readings across three Usamune presets all came back **(a), the raw counter**,
+so `detectors/death.py` is correct as it stands and `IgtClock.DISPLAY_TICK` is
+a star-path calibration rather than a display-wide property. The XCAM half
+(step 3) came back "ours is LOWER, by a VARIABLE amount" and is now pursued by
+`tools/verify_star_stop.py`, which measures WHERE Usamune stops rather than
+asking whether it does.
+
 Behavioural gate, NOT an address gate — `USAMUNE_OVERALL` is already sampled
 every tick and needs no `VERIFY` row, so `tools/verify_addresses.py` is not
 the instrument. Read-only: no database, no server, no recorder lock. Safe to
@@ -142,6 +150,17 @@ DEFAULT_DEATHS = 3
 # "if a PAUSE prompt appears when you did not pause, ignore it" is the part
 # that actually covers this; do not grow this constant instead of that line.
 GRAB_QUIET_FRAMES = 300
+# `SnapshotReader.read()` issues twelve separate ReadProcessMemory calls, and
+# the emulator can advance a game frame between the first (`global_timer`) and
+# the seventh (`igt_overall`). Each END of the tracking window therefore carries
+# its own independent 0-or-1 frame of skew, so their difference is +-1 even
+# while the counter advances perfectly. Live report 2026-08-01, eight deaths
+# across three presets: one window came back 29/29, four at 28/29 — and three
+# at **30**/29. A stalled counter cannot advance MORE than the game frame, so
+# that symmetry is the proof this is our read and not Usamune. Before this
+# tolerance the gate cried PROBLEM on seven of eight healthy deaths, and a
+# warning that fires on nearly every case carries no information.
+READ_SKEW_FRAMES = 1
 
 
 # --- pure core (tests/test_verify_death_clock.py drives these) --------------
@@ -190,11 +209,15 @@ def counter_tracked_cleanly(samples: list[tuple[int, int]]) -> tuple[bool, str]:
         return False, (f"the counter went BACKWARD ({samples[0][1]} -> "
                        f"{samples[-1][1]}) — a load or reset landed inside the "
                        f"window, so this death's time is not a plain reading")
-    if counted != frames:
+    if abs(counted - frames) > READ_SKEW_FRAMES:
         return False, (f"the counter moved {counted} while the game frame "
                        f"moved {frames} — it stalled for {frames - counted} "
                        f"frame(s) (a pause, or Usamune froze it early)")
-    return True, f"advancing 1:1 with the game frame over {frames} frames"
+    detail = f"advancing 1:1 with the game frame over {frames} frames"
+    if counted != frames:
+        detail += (f" (counter moved {counted} — one frame of non-atomic read "
+                   f"skew, see READ_SKEW_FRAMES; not a stall)")
+    return True, detail
 
 
 def death_report(index: int, level: int, cause: str, counter: int,

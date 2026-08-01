@@ -13,8 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 from sm64_events.detectors.igt_clock import IgtClock          # noqa: E402
 from verify_death_clock import (GRAB_QUIET_FRAMES,            # noqa: E402
-                                PAUSE_FRAMES, TIMER_SETTINGS,
-                                candidates,
+                                PAUSE_FRAMES, READ_SKEW_FRAMES,
+                                TIMER_SETTINGS, candidates,
                                 counter_tracked_cleanly,
                                 death_report, is_paused,
                                 pause_is_grab_shadow,
@@ -90,6 +90,36 @@ def test_a_stalled_counter_is_reported_as_a_problem_with_the_frame_count():
     ok, detail = counter_tracked_cleanly(running(9000, 500, 30, stall=7))
     assert not ok
     assert "stalled for 7 frame" in detail
+
+
+def test_one_frame_of_read_skew_is_not_reported_as_a_stall():
+    """A snapshot is twelve separate ReadProcessMemory calls, so global_timer
+    and igt_overall can land one frame apart — independently at EACH end of
+    the window, which puts the difference at +-1 while the counter advances
+    perfectly. Live report 2026-08-01: eight deaths across three presets came
+    back 29/29 once, 28/29 four times and **30/29 three times**. A stalled
+    counter cannot advance MORE than the game frame, so the direction that
+    over-counts is what proves this is our read rather than Usamune's clock —
+    and the strict check called seven of eight healthy deaths a PROBLEM."""
+    behind = running(9000, 500, 30, stall=1)             # counter moved 28 of 29
+    ahead = [(frame, counter + 1)
+             for frame, counter in running(9000, 500, 30)]
+    ahead[0] = (9000, 500)                               # counter moved 30 of 29
+    for samples in (behind, ahead):
+        ok, detail = counter_tracked_cleanly(samples)
+        assert ok, detail
+        assert "1:1" in detail
+        assert "read skew" in detail
+
+
+def test_two_frames_of_drift_is_still_a_problem():
+    """The tolerance is exactly the skew's own size. Any wider and it starts
+    swallowing the brief stall this gate exists to catch, which is the failure
+    the tolerance was introduced to avoid in the other direction."""
+    ok, detail = counter_tracked_cleanly(running(9000, 500, 30, stall=2))
+    assert not ok
+    assert "stalled for 2 frame" in detail
+    assert READ_SKEW_FRAMES == 1
 
 
 def test_a_counter_that_went_backward_is_reported_as_a_load():

@@ -22,7 +22,8 @@ uv sync
 uv run pytest -q                                     # MUST pass before any merge
 uv run python -m sm64_events.main                    # run from repo root (data/ is cwd-relative); canonical — binds the CTRL+C shutdown deadline
 uv run python tools/verify_addresses.py              # live gate (needs PJ64 + ROM)
-uv run python tools/verify_death_clock.py            # live gate: is Usamune's DISPLAY the raw counter or raw+1? (needs PJ64; read-only, safe while recording)
+uv run python tools/verify_death_clock.py            # live gate, ANSWERED 2026-08-01 (raw counter); re-run only to re-check
+uv run python tools/verify_star_stop.py              # live gate, OPEN: where does Usamune stop the clock under YOUR STOP setting? (needs PJ64; read-only, safe while recording)
 uv run python tools/dev_cleanup.py                   # kill orphaned dev/harness servers (auto-runs at session start)
 uv run python tools/dedupe_journal.py data/tracker.db  # scan double-journaled events; --fix repairs (server stopped)
 uv run pytest tests/test_responsive.py -q            # render every breakpoint; report layout defects (no PJ64 needed)
