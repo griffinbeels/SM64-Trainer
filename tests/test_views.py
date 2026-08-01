@@ -248,6 +248,10 @@ def test_timeline_none_when_only_abandoned(tmp_path):
     # Actually test: section with no qualifying points → None
     asyncio.run(svc.publish(ev("practice_reset", 5000, {"igt_frames_before": 0})))
     asyncio.run(svc.new_session())  # abandons open attempt
+    # A session boundary also clears the target (live report 2026-08-01), so
+    # the pinned section has to be re-established to be examined at all. That
+    # is the behaviour under test here, not the clearing.
+    asyncio.run(svc.set_target(2, 2))
     view = build_session_view(db, svc, clock="igt")
     # target (2,2) section is now always present (pinned active star);
     # nothing in the current session, so its attempt list is empty.

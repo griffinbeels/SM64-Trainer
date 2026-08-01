@@ -1991,3 +1991,59 @@ def test_a_null_pick_falls_back_to_the_default_instead_of_unsetting():
     q.feed(jev(0, "strat_set", 0, {"kind": "segment", "segment_id": 42,
                                    "strat_tag": None}))
     assert q.strat_by_segment[42] is None
+
+
+# -- a session boundary clears the live focus (live report 2026-08-01) ---------
+
+def test_a_target_does_not_survive_into_the_next_session():
+    """His report, verbatim: "I was working on a hundred coins. So when I
+    opened this session, a hundred coins was selected as the active target…
+    it reads as a bug if something is selected for a new session."
+
+    The target is replay-derived, so before this it simply outlived every
+    boundary — the journal's last target_set won no matter how many launches
+    ago it was written."""
+    p = Projector()
+    p.feed(jev(1, "target_set", 0, {"course_id": 2, "star_id": 6}))
+    assert p.target == ("star", 2, 6)
+    p.feed(jev(2, "session_started", 0, {"session_id": 9}))
+    assert p.target is None
+
+
+def test_a_suspended_star_does_not_resume_across_a_session_boundary():
+    """The half that would have made the fix look done and fail live. A star
+    the player left its course with is STASHED, not forgotten (caveat 13), and
+    re-entering that course restores it — so clearing only the target would
+    have put 100 Coins back on screen the moment he walked into the course."""
+    p = Projector(segments=[_mips()])
+    p.feed(jev(1, "target_set", 0, {"course_id": 9, "star_id": 6}))
+    p.feed(jev(2, "level_changed", 500, {"from": 16, "to": 6}))     # arm, suspends
+    assert p.target is None
+    p.feed(jev(3, "session_started", 0, {"session_id": 9}))
+    p.feed(jev(4, "level_changed", 5000, {"from": 6, "to": 23}))    # back into DDD
+    assert p.target is None
+
+
+def test_the_abandoned_attempt_still_names_the_star_it_was_run_on():
+    """Close BEFORE clearing, the same discipline the course-change branch
+    keeps: the run that the boundary ends belongs to what he was practicing,
+    not to nothing."""
+    attempts = project([
+        jev(1, "target_set", 0, {"course_id": 2, "star_id": 6}),
+        jev(2, "practice_reset", 1000, {"igt_frames_before": 0,
+                                        "mario_acted": True}),
+        jev(3, "session_started", 0, {"session_id": 9}),
+    ])
+    [a] = attempts
+    assert a.outcome == "abandoned" and (a.course_id, a.star_id) == (2, 6)
+
+
+def test_a_strategy_choice_is_a_preference_and_DOES_survive():
+    """Deliberately not cleared. The target is where he is pointed right now;
+    which strategy he practices a star with is a standing preference, and
+    re-picking it every launch would be the annoyance, not the fix."""
+    p = Projector()
+    p.feed(jev(1, "target_set", 0, {"course_id": 2, "star_id": 6,
+                                    "strat_tag": "Cannonless"}))
+    p.feed(jev(2, "session_started", 0, {"session_id": 9}))
+    assert p.strat_by_star[(2, 6)] == "Cannonless"

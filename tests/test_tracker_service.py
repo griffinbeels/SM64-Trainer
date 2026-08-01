@@ -378,6 +378,12 @@ def test_new_session_closes_open_attempt_as_abandoned(tmp_path):
 
 
 def test_restart_resumes_from_journal(tmp_path):
+    """History is rebuilt from the journal; the live FOCUS is not.
+
+    This asserted `target == ("star", 2, 2)` until 2026-08-01, i.e. it pinned
+    the bug he reported — reopening the app with the star he practiced last
+    time still selected. What a restart must rebuild is what he EARNED (the
+    attempt, its strategy); what it must not rebuild is where he was pointed."""
     db, svc = make(tmp_path)
     asyncio.run(svc.set_target(8, 2))
     asyncio.run(svc.publish(star(900)))
@@ -385,7 +391,8 @@ def test_restart_resumes_from_journal(tmp_path):
     svc2 = TrackerService(db2, Broadcaster())
     asyncio.run(svc2.start())
     assert svc2.session_id == 2
-    assert svc2.target == ("star", 2, 2)   # state rebuilt from journal
+    assert svc2.target is None
+    assert [a.outcome for a in db2.attempts()] == ["success"]
 
 
 def test_degraded_mode_without_db_still_broadcasts(tmp_path):

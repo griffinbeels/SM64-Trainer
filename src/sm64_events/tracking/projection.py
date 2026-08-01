@@ -811,7 +811,30 @@ class Projector:
         if ev.type == "game_reset":
             return self._close(ev, outcome="hard_reset", igt_frames=None)
         if ev.type == "session_started":
-            return self._close(ev, outcome="abandoned", igt_frames=None)
+            # A session boundary ends the live FOCUS, not just the open
+            # attempt. Live report 2026-08-01: he practiced a 100-coin star,
+            # closed the app, reopened it, and the star was still selected —
+            # "it reads as a bug if something is selected for a new session."
+            # The target is replay-derived, so nothing had ever ended it: the
+            # journal's last target_set won however many launches ago it was
+            # written. Close FIRST, the same discipline the course-change
+            # branch keeps, so the run this boundary ends still attributes to
+            # the star it was run on.
+            #
+            # The suspended star goes too. A star stashed by leaving its
+            # course (caveat 13) is still a selection — it is one course entry
+            # away from being back on screen, which is exactly the symptom he
+            # reported, arriving a few seconds later.
+            #
+            # Deliberately NOT cleared: strat_by_star / strat_by_segment. The
+            # target is where he is pointed right now; which strategy he
+            # practices an entity with is a standing preference, and making
+            # him re-pick it every launch would be a second annoyance wearing
+            # the first one's fix.
+            closed = self._close(ev, outcome="abandoned", igt_frames=None)
+            self.target = None
+            self._suspended_star = None
+            return closed
         if ev.type == "level_changed":
             closed = self._close(ev, outcome="abandoned", igt_frames=None)
             to_level = ev.payload["to"]
