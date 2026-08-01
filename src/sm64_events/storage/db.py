@@ -395,6 +395,32 @@ MIGRATIONS = [
          WHERE seed_key IN ('seg:mips-clip', 'seg:bowser-1', 'seg:bowser-2')
       );
     """,
+    # v19 — how an attempt's time was MEASURED (ruling 6 of round 3). A pipe
+    # PB saved before `warp_entered` carried Usamune's IGT stands on a
+    # wall-frame delta, which counts paused frames and carries the arm-frame
+    # alignment error -- so it sits ~1-2 frames CHEAP and an identical run
+    # cannot beat it. Those rows cannot be backfilled in principle (the raw
+    # counter at those frames was never journaled), so the ruling is that they
+    # stand and are MARKED.
+    #
+    # No repair UPDATE, and that is the point: `Attempt.timed_by` is derived by
+    # `SegmentEngine._close` from the closing event's own payload, and
+    # projection is replay-derived -- so the next reproject stamps every
+    # historical row correctly, on this install and on every other, with no
+    # list of ids to keep true. A hand-listed set was the rejected alternative
+    # and was already wrong when written (ruling 6 names four BitS Pipe Entry
+    # PBs; there are seven, and the pb#138 it names does not exist here).
+    #
+    # DEFAULT 'igt' is the honest value for every pre-existing row up to the
+    # moment the reproject runs: it is what every star, key and pipe-touch time
+    # already is, and the only rows it is wrong for are the segment rows this
+    # column exists to catch -- which the reproject fixes before anything reads
+    # them. A NULL default would have made "not yet reprojected" and "measured
+    # by delta" indistinguishable at exactly the sites that must tell them apart.
+    """
+    ALTER TABLE attempts ADD COLUMN timed_by TEXT NOT NULL DEFAULT 'igt';
+    ALTER TABLE attempts ADD COLUMN closed_by TEXT;
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
@@ -403,7 +429,7 @@ _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
                  "cleared", "cleared_reason",
                  "rollouts_total", "rollouts_dustless",
                  "jumps_total", "jumps_dustless",
-                 "segment_id")
+                 "segment_id", "timed_by", "closed_by")
 
 
 class EventRow:
@@ -534,7 +560,7 @@ class Database:
                 int(a.cleared), a.cleared_reason,
                 a.rollouts_total, a.rollouts_dustless,
                 a.jumps_total, a.jumps_dustless,
-                a.segment_id)
+                a.segment_id, a.timed_by, a.closed_by)
 
     def replace_attempts(self, attempts: list[Attempt]) -> None:
         with self._lock:

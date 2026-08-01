@@ -2780,9 +2780,14 @@ class SegmentEngine:
         # the right two moments — is the honest fallback.
         igt = ev.payload.get("igt_frames")
         if igt is not None and self._last_igt_zero_frame == arm.start_frame:
-            rta = igt
+            rta, timed_by = igt, "igt"
         else:
-            rta = ev.frame - arm.start_frame
+            # Which branch ran is itself a fact the display needs (ruling 6):
+            # a delta counts paused frames and starts a frame off, so it runs
+            # ~1-2 frames CHEAP and an identical igt-timed run cannot beat it.
+            # Recorded rather than inferred later, because nothing downstream
+            # can reconstruct which of the two conditions failed.
+            rta, timed_by = ev.frame - arm.start_frame, "delta"
             if rta < 0:
                 if outcome == "success":
                     return None  # genuine anomaly: end before arm (self-heal)
@@ -2802,4 +2807,5 @@ class SegmentEngine:
             outcome=outcome, outcome_detail=detail,
             igt_frames=None, rta_frames=rta,
             started_utc=arm.started_utc, ended_utc=ev.wall_time_utc,
-            cleared=False, cleared_reason=None, segment_id=d.id)
+            cleared=False, cleared_reason=None, segment_id=d.id,
+            timed_by=timed_by, closed_by=ev.type)

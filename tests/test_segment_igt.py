@@ -211,3 +211,90 @@ def test_every_shipped_pipe_segment_gets_the_igt(seed_key):
     attempt = one_success(journal(a_run(level=level)),
                           seeded_pipe_def(seed_key))
     assert attempt.rta_frames == USAMUNE_DISPLAY
+
+
+# -- how the time was measured, recorded on the row (ruling 6, round 3) -------
+#
+# A PB set before warp.py carried Usamune's IGT stands on a wall-frame delta
+# and runs ~1-2 frames CHEAP, so an identical run cannot beat it. Those rows
+# cannot be backfilled (the raw counter at those frames was never journaled),
+# so the ruling is that they stand and are MARKED -- and the mark is DERIVED
+# from the journal on every reproject rather than migrated as a list of ids.
+
+
+def test_a_time_taken_from_usamune_says_so():
+    attempt = one_success(journal(a_run()), seeded_pipe_def())
+    assert attempt.rta_frames == USAMUNE_DISPLAY
+    assert attempt.timed_by == "igt"
+    assert attempt.closed_by == "warp_entered"
+
+
+def test_a_time_that_fell_back_to_the_delta_says_so():
+    """Same shape as the armed-mid-level fallback above, asserting the RECORD
+    of which branch ran rather than the number it produced. Nothing downstream
+    can reconstruct this: both branches write the same rta_frames field."""
+    grab_frame = 1400
+    dance = {f: {"action": ACT_STAR_DANCE_EXIT, "course": 16, "star": 1}
+             for f in range(grab_frame, grab_frame + 40)}
+    dance.update({f: {"course": 16, "star": 1, "result": grab_frame - ZERO_FRAME}
+                  for f in range(grab_frame + 40, PIPE_FRAME + 1)})
+    attempt = one_success(journal(a_run(per_frame=dance)), seeded_pipe_def(
+        start_triggers=[{"type": "star_grabbed", "course": 16, "star": 0}],
+        match_mode="strict"))
+    assert attempt.rta_frames == PIPE_FRAME - grab_frame
+    assert attempt.timed_by == "delta"
+    assert attempt.closed_by == "warp_entered"
+
+
+def test_an_old_journal_entry_is_delta_timed_and_a_new_one_is_not():
+    """THE fact ruling 6 marks, end to end. The only difference between the
+    two runs is whether the journaled `warp_entered` carries `igt_frames` --
+    which is exactly what separates a pipe attempt recorded before 2026-07-31
+    from one recorded after, since a stored payload never gains a key."""
+    rows = journal(a_run())
+    fresh = one_success(rows, seeded_pipe_def())
+
+    old = []
+    for row in rows:      # strip the key the way history simply lacks it
+        payload = dict(row.payload)
+        payload.pop("igt_frames", None)
+        old.append(EventRow(id=row.id, session_id=row.session_id, seq=row.seq,
+                            type=row.type, frame=row.frame,
+                            wall_time_utc=row.wall_time_utc, payload=payload))
+    stale = one_success(old, seeded_pipe_def())
+
+    assert (fresh.timed_by, stale.timed_by) == ("igt", "delta")
+    assert fresh.closed_by == stale.closed_by == "warp_entered"
+    # and the reason it matters: the old row is CHEAPER, so an identical run
+    # timed the new way does not beat it.
+    assert stale.rta_frames < fresh.rta_frames
+
+
+def test_only_a_closing_event_that_could_have_carried_igt_is_comparable():
+    """The discriminator, and the reason `closed_by` is recorded beside
+    `timed_by`. Measured over the 2026-07-31 journal, 570 of 626 segment
+    attempts are delta-timed -- but most are delta FOREVER: a movement closing
+    on a `level_changed` has no Usamune number to be given, so its delta is
+    simply how that segment is measured and stays comparable to the next run
+    of it. Marking every delta row would have marked 18 of 23 saved segment
+    PBs, including every castle movement; this rule marks 10, which is the
+    pipe family plus one older Bowser 3 row that no hand-written list named."""
+    from sm64_events.core.events import IGT_BEARING_EVENT_TYPES
+
+    def is_marked(attempt):
+        return (attempt.timed_by == "delta"
+                and attempt.closed_by in IGT_BEARING_EVENT_TYPES)
+
+    rows = journal(a_run())
+    assert not is_marked(one_success(rows, seeded_pipe_def()))
+
+    old = [EventRow(id=r.id, session_id=r.session_id, seq=r.seq, type=r.type,
+                    frame=r.frame, wall_time_utc=r.wall_time_utc,
+                    payload={k: v for k, v in r.payload.items()
+                             if k != "igt_frames"})
+           for r in rows]
+    assert is_marked(one_success(old, seeded_pipe_def()))
+
+    # A `level_changed` closure is delta for a reason that will never change,
+    # so it is NOT marked however old it is.
+    assert "level_changed" not in IGT_BEARING_EVENT_TYPES

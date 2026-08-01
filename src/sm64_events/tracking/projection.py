@@ -225,6 +225,45 @@ class Attempt:
     jumps_total: int = 0         # chained double/triple jumps
     jumps_dustless: int = 0
     segment_id: int | None = None  # set => segment attempt; course/star None
+    timed_by: str = "igt"      # how the recorded time was MEASURED, so a
+                               # display can say why two times are not
+                               # comparable (ruling 6, round 3):
+                               #   "igt"   — Usamune's own IGT clock, via
+                               #             detectors/igt_clock.py. Every star,
+                               #             key and pipe-touch time, and every
+                               #             segment whose closing event carried
+                               #             an igt_frames it was allowed to use.
+                               #   "delta" — a wall-frame delta (close.frame -
+                               #             arm.start_frame), the honest
+                               #             fallback SegmentEngine._close takes
+                               #             when Usamune's number is absent or
+                               #             does not measure this span. Counts
+                               #             paused frames and carries the
+                               #             arm-frame alignment error, so it
+                               #             runs ~1-2 frames CHEAP against an
+                               #             igt-timed run of identical play.
+                               # Derived on every reproject from the journal, so
+                               # it needs no backfill and cannot go stale: a
+                               # historical warp_entered carries no igt_frames in
+                               # its journaled payload and never will, which is
+                               # "backfill is impossible in principle" seen from
+                               # the other side. Default "igt" is correct for
+                               # every producer except that one fallback branch.
+    closed_by: str | None = None   # event TYPE that closed this attempt, or
+                               # None for a producer that does not record one
+                               # (star closures, where the type is implied by
+                               # the outcome). Kept BESIDE timed_by because
+                               # neither answers alone: 570 of 626 segment
+                               # attempts in the 2026-07-31 journal are
+                               # delta-timed, and most are delta FOREVER --
+                               # a movement closing on a level_changed has no
+                               # Usamune number to be given, so its delta is
+                               # simply how that segment is measured and stays
+                               # comparable to the next run of it. The rows
+                               # that are NOT comparable are the ones whose
+                               # closing event type is in
+                               # core.events.IGT_BEARING_EVENT_TYPES, where a
+                               # fresh run WOULD now be igt-timed.
 
 
 ANCHOR_EVENT_TYPES = ("practice_reset", "state_loaded")
@@ -585,8 +624,15 @@ class Projector:
                 # pass igt_frames=None even on the star side, caveat
                 # unaffected) -- .get() falls through to None exactly as the
                 # star path already does for those.
+                # `timed_by` follows the time it describes, and this row's time
+                # just changed source: a star displays/grades on igt_frames, so
+                # whatever _close decided about the discarded rta_frames says
+                # nothing about it. Reset rather than inherited -- a delta-timed
+                # segment closure that reattributes here would otherwise carry a
+                # "not comparable" mark onto a number that IS Usamune's IGT.
                 a = replace(a, course_id=hc[0], star_id=hc[1], segment_id=None,
-                            igt_frames=ev.payload.get("igt_frames"))
+                            igt_frames=ev.payload.get("igt_frames"),
+                            timed_by="igt")
                 a = replace(a,
                             strat_tag=self._strat_overrides.get(
                                 a.id, self.strat_by_star.get(hc)),
