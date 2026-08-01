@@ -1,6 +1,11 @@
-"""Render every candidate CAVEAT TREATMENT on both surfaces, side by side, in
-one image — so the mark that says "this saved time does not mean what the rank
-beside it implies" is chosen by LOOKING rather than by reasoning.
+"""Render the CAVEAT BADGE on both surfaces, in one image, to LOOK at.
+
+Built as a chooser — three candidate treatments side by side, so the mark that
+says "this saved time does not mean what the rank beside it implies" was picked
+by looking rather than by reasoning. Griffin picked the CORNER BADGE on
+2026-08-01 ("I like the idea of the corner badge") and the other two were
+deleted, so this now draws the one that shipped. Adding a candidate back is
+adding a renderer to `ui/components/marks.js` and a column here.
 
 Three findings converged on the same two surfaces and are deliberately decided
 in one pass, because deciding them separately is how the two surfaces diverge
@@ -97,7 +102,7 @@ HARNESS_HTML = """<!doctype html>
   import htm from "htm";
   import { PracticeCell } from "/ui/components/practicecell.js";
   import { PbTag } from "/ui/components/practice.js";
-  import { CAVEATS, CAVEAT_ORDER, CAVEAT_TREATMENTS } from "/ui/components/marks.js";
+  import { CAVEATS } from "/ui/components/marks.js";
 
   const html = htm.bind(h);
 
@@ -113,17 +118,24 @@ HARNESS_HTML = """<!doctype html>
   const ART = (slot) => `/ui/assets/star_${slot}.png`;
   const RANKED = { rank: "gold", division: "III" };
 
+  // Severity order, worst first -- the order tracking/caveats.py resolves in.
+  // Restated here rather than imported because the SERVER owns it (one badge
+  // draws one thing, so the server picks); this sheet only needs a stable
+  // left-to-right layout, and pinning it to a JS export nothing else reads
+  // would invent a second authority.
+  const ORDER = ["grab_timed", "old_clock", "unattributed"];
+
   // Seven cells, the row the app actually draws. Cell 1 is the ACTIVE target
   // and carries no caveat (the control -- a mark is only legible against the
   // ordinary cell beside it); cells 2-4 carry the three caveats in severity
   // order; cells 5-7 are ordinary graded/ungraded cells so the mark is judged
   // in a real row rather than alone.
-  function starRow(treatmentKey, paneClass) {
+  function starRow(paneClass) {
     const cells = [
       { name: "Chip Off Whomp's Block", sub: "Standard", rank: RANKED, active: true, caveat: null, slot: 1 },
-      { name: "To the Top of the Fortress", sub: "Standard", rank: null, caveat: CAVEAT_ORDER[0], slot: 2 },
-      { name: "Shoot into the Wild Blue", sub: "Cannonless", rank: null, caveat: CAVEAT_ORDER[1], slot: 3 },
-      { name: "Red Coins on the Floating Isle", sub: "Standard", rank: null, caveat: CAVEAT_ORDER[2], slot: 4 },
+      { name: "To the Top of the Fortress", sub: "Standard", rank: null, caveat: ORDER[0], slot: 2 },
+      { name: "Shoot into the Wild Blue", sub: "Cannonless", rank: RANKED, caveat: ORDER[1], slot: 3 },
+      { name: "Red Coins on the Floating Isle", sub: "Standard", rank: null, caveat: ORDER[2], slot: 4 },
       { name: "Fall onto the Caged Island", sub: "Standard", rank: RANKED, caveat: null, slot: 5 },
       { name: "Blast Away the Wall", sub: "Standard", rank: null, caveat: null, slot: 6 },
       { name: "100 Coins", sub: "Standard", rank: null, caveat: null, slot: 6 },
@@ -133,19 +145,19 @@ HARNESS_HTML = """<!doctype html>
           active=${!!cell.active} iconSrc=${ART(cell.slot)} fallbackSlot=${cell.slot}
           rank=${cell.rank} hasStandards=${true} name=${cell.name}
           sub=${html`<span class="strat">${cell.sub}</span>`}
-          dimIdle=${true} caveat=${cell.caveat} treatmentKey=${treatmentKey} />`)}
+          dimIdle=${true} caveat=${cell.caveat} />`)}
     </div></div>`;
   }
 
   // The practice card's own metrics row -- the PB tag is where a mark with
   // room for WORDS lands. One row per caveat, plus the uncaveated control.
-  function cardRows(treatmentKey) {
-    const rows = [null, ...CAVEAT_ORDER];
+  function cardRows() {
+    const rows = [null, ...ORDER];
     return html`<div class="cardrow">
       ${rows.map((key) => html`<div class="metrics-demo">
         <div class="objective-live-state"><span>Ready</span></div>
         <${PbTag} pb=${{ display: "0'26\\"30", caveat: key }} mode="pb"
-            rows=${[]} pick=${null} t=${{}} treatmentKey=${treatmentKey} />
+            rows=${[]} pick=${null} t=${{}} />
         <span class="why">${key ? CAVEATS[key].sentence : "(no caveat — the control)"}</span>
       </div>`)}
     </div>`;
@@ -153,49 +165,52 @@ HARNESS_HTML = """<!doctype html>
 
   const root = document.body;
   const title = document.createElement("h1");
-  title.textContent = "Caveat marks — three treatments, three findings, two surfaces";
+  title.textContent = "The caveat badge — three findings, two surfaces";
   root.appendChild(title);
   const blurb = document.createElement("p");
   blurb.textContent =
-    "Every block below draws the SAME three facts. Only the treatment changes. "
-    + "The quick-select row is at its real 980px pane width, so the 16px marks "
-    + "are the size they ship at; the card row is the practice card's metrics "
-    + "line, where a mark can afford words.";
+    "Three separate findings, one badge, two surfaces with opposite budgets. "
+    + "The quick-select row is at its real pane widths, so the badges are the "
+    + "size they ship at; the card row is the practice card's metrics line, "
+    + "where the badge can also afford the word (dropped below a 793px pane -- "
+    + "see the narrow row, and index.html's own band).";
   root.appendChild(blurb);
   const legend = document.createElement("p");
   legend.className = "legend";
-  legend.textContent = CAVEAT_ORDER
+  legend.textContent = ORDER
     .map((key) => `${CAVEATS[key].glyph}  ${CAVEATS[key].short}`).join("      ");
   root.appendChild(legend);
 
-  for (const [key, entry] of Object.entries(CAVEAT_TREATMENTS)) {
-    const heading = document.createElement("h2");
-    heading.textContent = `${entry.label}   (${key})`;
-    root.appendChild(heading);
-    const why = document.createElement("p");
-    why.textContent = entry.why
-      + (entry.suppressFloor ? "" : "  — NOTE: this one still draws the ladder floor.");
-    root.appendChild(why);
+  const heading = document.createElement("h2");
+  heading.textContent = "Corner badge   (the shipped treatment)";
+  root.appendChild(heading);
+  const why = document.createElement("p");
+  why.textContent =
+    "Your rank and a caveat about the time behind it are two different facts, "
+    + "so they are drawn in two places and neither hides the other. Cell 4 "
+    + "(Red Coins) is unattributed and therefore draws NO floor -- that "
+    + "suppression is the caveat's own property, not the badge's, so cell 3 "
+    + "keeps its real medal beside its old-clock mark.";
+  root.appendChild(why);
 
-    for (const [paneClass, caption] of [["pane", "quick-select cells — 980px pane"],
-                                        ["pane-narrow", "quick-select cells — 740px pane (an 850px window, the supported floor)"]]) {
-      const cellLabel = document.createElement("div");
-      cellLabel.className = "surface-label";
-      cellLabel.textContent = caption;
-      root.appendChild(cellLabel);
-      const cellHost = document.createElement("div");
-      root.appendChild(cellHost);
-      render(starRow(key, paneClass), cellHost);
-    }
-
-    const cardLabel = document.createElement("div");
-    cardLabel.className = "surface-label";
-    cardLabel.textContent = "practice card — metrics row";
-    root.appendChild(cardLabel);
-    const cardHost = document.createElement("div");
-    root.appendChild(cardHost);
-    render(cardRows(key), cardHost);
+  for (const [paneClass, caption] of [["pane", "quick-select cells — 980px pane"],
+                                      ["pane-narrow", "quick-select cells — 740px pane (an 850px window, the supported floor)"]]) {
+    const cellLabel = document.createElement("div");
+    cellLabel.className = "surface-label";
+    cellLabel.textContent = caption;
+    root.appendChild(cellLabel);
+    const cellHost = document.createElement("div");
+    root.appendChild(cellHost);
+    render(starRow(paneClass), cellHost);
   }
+
+  const cardLabel = document.createElement("div");
+  cardLabel.className = "surface-label";
+  cardLabel.textContent = "practice card — metrics row (wide; the word drops below a 793px pane)";
+  root.appendChild(cardLabel);
+  const cardHost = document.createElement("div");
+  root.appendChild(cardHost);
+  render(cardRows(), cardHost);
 
   document.title = `${document.documentElement.scrollWidth}x${document.documentElement.scrollHeight}`;
 </script>
