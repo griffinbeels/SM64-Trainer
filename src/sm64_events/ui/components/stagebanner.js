@@ -51,6 +51,7 @@ import { armedSegments, hasPracticeContext, hasStandardsFor,
 import { requestTarget } from "../target.js";
 import { Icon } from "./icons.js";
 import { PracticeCell } from "./practicecell.js";
+import { caveatOf, cellBadge } from "./marks.js";
 import { iconIdentityForKey, useIconPicking } from "./iconpicker.js";
 import { entityIconSrc, fallbackToGenericStar, genericStarSrc } from "./entityicons.js";
 import { RankIcon } from "./rankicon.js";
@@ -270,6 +271,7 @@ function StandardSegmentCell({ t, s, setPicking, nameOverride, onPicked }) {
     active=${tgt.kind === "segment" && tgt.segment_id === s.segment_id}
     iconSrc=${entityIconSrc(t, segKey(s))}
     rank=${s.rank} hasStandards=${hasStandardsFor(t.view, segKey(s))}
+    caveat=${s.caveat}
     name=${nameOverride || s.name}
     sub=${stratSub(s.strat)}
     onPick=${pick}
@@ -311,6 +313,12 @@ function StarRow({ t, v, stage }) {
   // refreshes the view and swaps the medal automatically — see views.py.
   const rankFor = (i) =>
     (v.rank_by_star || {})[`${stage.course_id}:${i}`];
+  // "this star's saved time does not mean what the medal implies", or
+  // undefined. Server-derived (tracking/caveats.py) and keyed over a WIDER
+  // set than rankFor: the most important caveat is that the PB carries no
+  // strategy at all, which is exactly the case rank_by_star omits.
+  const caveatFor = (i) =>
+    (v.caveat_by_star || {})[`${stage.course_id}:${i}`];
 
   async function pick(i) {
     await requestTarget(t, {
@@ -347,6 +355,7 @@ function StarRow({ t, v, stage }) {
           iconSrc=${entityIconSrc(t, starKey(stage.course_id, i))}
           fallbackSlot=${i}
           rank=${rankFor(i)} hasStandards=${hasStandardsFor(v, starKey(stage.course_id, i))}
+          caveat=${caveatFor(i)}
           name=${name}
           sub=${stratSub(lastStratFor(i))}
           onPick=${() => pick(i)}
@@ -576,11 +585,19 @@ function RedsCell({ t, v, stage, course, redsActive, pipeMode, forcedPipe,
   const starRank = (v.rank_by_star || {})[`${stage.course_id}:0`];
   const pipeRank = pipeSeg ? pipeSeg.rank : null;
   const shownRank = pipeMode ? pipeRank : starRank;
+  // This cell cannot BE a PracticeCell (it nests two toggle buttons and a
+  // <button> may not contain one), so rule 11 has to be honoured by hand here
+  // -- which is the standing risk with this cell and the reason the caveat is
+  // taken from the same two server fields the shared cell reads, per family.
+  const mark = caveatOf(pipeMode
+    ? (pipeSeg ? pipeSeg.caveat : null)
+    : (v.caveat_by_star || {})[`${stage.course_id}:0`]);
   // Unranked but rankable shows the ladder FLOOR rather than "-". Both
   // families live on the STAR entity (the pipe segment has no ladder of its
   // own -- views.py pairs it to the star's ek), so the standards question is
   // asked of the star for either mode.
   const floorRank = !shownRank
+      && !(mark && mark.suppressFloor)
       && hasStandardsFor(v, starKey(stage.course_id, 0))
     ? { rank: RANK_FLOOR.tier, division: RANK_FLOOR.division } : null;
 
@@ -616,6 +633,10 @@ function RedsCell({ t, v, stage, course, redsActive, pipeMode, forcedPipe,
       title=${pipeMode ? "Practice Reds, timed to the pipe"
                        : "Practice Reds, timed to the star grab"}
       onclick=${() => onPickCard()} onkeydown=${cardKey}>
+    ${/* First child, a direct sibling of .starholder -- .caveat-badge is
+         absolutely positioned against .starcell, which this cell also is, so
+         it lands in the same corner it does on every shared cell. */""}
+    ${mark ? cellBadge(mark) : null}
     <span class="starholder">
       <img class="starimg ${redsActive ? "" : "dim"}"
            src=${entityIconSrc(t, starKey(stage.course_id, 0))}

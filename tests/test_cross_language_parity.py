@@ -52,15 +52,22 @@ FORMAT_JS = UI / "format.js"
 RANKS_JS = UI / "components" / "ranks.js"
 STATMENU_JS = UI / "components" / "statmenu.js"
 REDSFAMILY_JS = UI / "redsfamily.js"
+MARKS_JS = UI / "components" / "marks.js"
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None,
                                 reason="node not on PATH")
 
 
 def run_node(script: str):
+    # encoding="utf-8" is load-bearing on Windows, where text=True otherwise
+    # picks the cp1252 locale and cannot even ENCODE the script: the caveat
+    # vocabulary carries a real glyph (U+2260) and every other module here is
+    # one arrow or dash away from the same wall. The failure is a node exit 1
+    # with the traceback pointing at Popen.communicate, which names the pipe
+    # rather than the character -- worth the two words to never diagnose twice.
     result = subprocess.run(["node", "--input-type=module", "-"],
                             input=script, capture_output=True, text=True,
-                            timeout=60)
+                            encoding="utf-8", timeout=60)
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
 
@@ -227,6 +234,44 @@ def test_reds_family_suffix_agrees():
                               f"8 Red Coins{PIPE_FAMILY_SUFFIX}"]
 
 
+# --- 6. the caveat keys (round-4 items 2/4, round-3 ruling 6) --------------
+
+def test_caveat_keys_agree():
+    """`tracking/caveats.py` DECIDES which caveat a saved time carries and
+    sends one key; `ui/components/marks.js` knows how to draw one. Neither can
+    round-trip for the other -- the predicates read Python-side attempt fields,
+    and the wording/glyph/floor rule is a rendering concern -- so the KEY SET is
+    the seam, and a key the server can send that the client cannot draw renders
+    as silently nothing: no badge, no word, no hint that a mark was owed. That
+    is worse than a wrong badge, because the surface looks finished.
+
+    Order is deliberately NOT compared. Python owns severity (one badge draws
+    one thing, so the server picks); the JS object is a lookup and its key order
+    means nothing. Comparing it would pin a fact neither side has."""
+    from sm64_events.tracking.caveats import CAVEAT_SEVERITY
+
+    js = run_node(
+        f"{declaration(MARKS_JS, 'CAVEATS')}\n"
+        "console.log(JSON.stringify({\n"
+        "  keys: Object.keys(CAVEATS),\n"
+        "  incomplete: Object.entries(CAVEATS).filter(([, c]) =>\n"
+        "    !c.glyph || !c.short || !c.sentence\n"
+        "    || typeof c.suppressFloor !== 'boolean').map(([k]) => k),\n"
+        "}));")
+    assert sorted(js["keys"]) == sorted(CAVEAT_SEVERITY), (
+        "the caveat vocabulary disagrees across languages.\n"
+        f"  tracking/caveats.py CAVEAT_SEVERITY: {sorted(CAVEAT_SEVERITY)}\n"
+        f"  ui/components/marks.js CAVEATS:      {sorted(js['keys'])}\n"
+        "A key only Python knows draws nothing at all; a key only JS knows is a "
+        "treatment nothing can ever trigger.")
+    assert not js["incomplete"], (
+        f"CAVEATS entries missing a field: {js['incomplete']}. `suppressFloor` "
+        "must be an explicit boolean -- undefined reads as false, which draws "
+        "the ladder floor under a PB no strategy can claim, i.e. exactly the "
+        "live-reported bug the mark exists to explain, in the one direction "
+        "nobody would look for it.")
+
+
 # --- the guards themselves --------------------------------------------------
 
 def test_the_guards_can_still_fail():
@@ -234,6 +279,7 @@ def test_the_guards_can_still_fail():
     must find real code and must NOT find a commented-out older version."""
     assert "RANK_MODE_OPTIONS" in declaration(RANKS_JS, "RANK_MODE_OPTIONS")
     assert "keyOf" in declaration(STATMENU_JS, "keyOf")
+    assert "unattributed" in declaration(MARKS_JS, "CAVEATS")
 
     commented = UI / "sample.js"          # never read; suffix drives the strip
     text = ("// const keyOf = (s) => s.key + ':OLD';\n"

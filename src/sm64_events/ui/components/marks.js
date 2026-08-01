@@ -42,21 +42,39 @@ const html = htm.bind(h);
 // knows how to draw one: the predicates read `timed_by`/`closed_by`/
 // `igt_timed_at`, which are Python-side facts, and restating them in JS would
 // be the second door rather than the shared one.
+// `suppressFloor` belongs to the CAVEAT, not to how it is drawn, and getting
+// that backwards would have been a real bug rather than a tidiness point.
+// PracticeCell draws the ladder FLOOR when a rankable entity has no rank
+// (user, 2026-07-30 — an unranked-but-rankable thing should read as "bottom of
+// the ladder", not "not a thing that ranks"). Exactly ONE of these three makes
+// that floor a lie:
+//
+//   * `unattributed` — no strategy can ever claim this PB, so the floor asserts
+//     a concrete rank that contradicts the time printed beside it. That IS the
+//     live report ("Bowser 1 shows PB 0'26"30, but the rank display clearly
+//     shows Capless 5... this should never happen").
+//   * `old_clock` / `grab_timed` — the rank is perfectly real; the caveat is
+//     about what the time MEASURES, not about whether it can be graded.
+//     Suppressing the floor here would delete a true rank to explain a
+//     different fact, which is a second bug wearing the first one's fix.
 export const CAVEATS = {
   grab_timed: {
     glyph: "!",
     short: "Grab-timed",
     sentence: "Timed at the star grab, not the x-cam — not a leaderboard-legal time",
+    suppressFloor: false,
   },
   old_clock: {
     glyph: "≠",
     short: "Old clock",
     sentence: "Timed by wall-clock frames, not Usamune's IGT — not comparable to a fresh run",
+    suppressFloor: false,
   },
   unattributed: {
     glyph: "?",
     short: "Unattributed",
     sentence: "Not attributed to a strategy, so no rank can claim it (set a new PB to rank it)",
+    suppressFloor: true,
   },
 };
 
@@ -77,84 +95,32 @@ export function caveatOf(key) {
 }
 
 // ---------------------------------------------------------------------------
-// Candidate TREATMENTS — three ways to draw the same fact, side by side.
+// How a caveat is DRAWN — the corner badge, chosen by Griffin from
+// tools/mark_sheet.py on 2026-08-01 ("I like the idea of the corner badge").
 //
-// Shaped exactly like rankicon.js's ICON_STYLES on purpose: a registry of
-// interchangeable renderers, judged against each other in one contact sheet
-// (tools/mark_sheet.py) rather than one at a time, and narrowed to the picked
-// one by DELETING the others. Every treatment answers all three slots, so a
-// treatment that deliberately draws nothing somewhere returns null rather
-// than being absent — that is what makes the sheet's grid comparable.
+// This was a registry of three candidates until that pick; the losers are
+// DELETED rather than left behind a flag, because three live code paths is how
+// the practice card and the quick-select cell end up on different ones — the
+// exact divergence one shared vocabulary exists to prevent. The sheet still
+// regenerates, and adding a candidate back is adding an entry here.
 //
-//   cellSlot     what replaces the rank medal in `.starrank` (16px, centred)
-//   cellOverlay  what sits over the cell's art, out of flow
-//   cellClass    a class on the cell root, for a treatment that RECOLOURS
-//                something already there instead of adding an element
-//   cardMark     what rides the practice card's PB tag
-//
-// `suppressFloor` is the one behavioural claim a treatment makes rather than a
-// visual one: PracticeCell draws the ladder FLOOR when a rankable entity has
-// no rank, and flooring an unattributed PB asserts a concrete rank that
-// contradicts the PB sitting next to it — the exact live report ("Bowser 1
-// shows PB 0'26"30, but the rank display clearly shows Capless 5... this
-// should never happen") that `_section_banner`'s sentinel already fixed on the
-// card. A treatment that puts its mark IN the rank slot suppresses the floor
-// by construction; one that only decorates has to say so.
-export const CAVEAT_TREATMENTS = {
-  slot: {
-    label: "In the rank slot",
-    why: "The slot asks 'what rank is this'. When the answer is 'can't say', "
-       + "say that instead of drawing a floor — no new geometry, no new element.",
-    suppressFloor: true,
-    cellSlot: (caveat) => html`<span class="caveat-slot" title=${caveat.sentence}
-        aria-label=${caveat.sentence}>${caveat.glyph}</span>`,
-    cellOverlay: () => null,
-    cellClass: () => "",
-    cardMark: (caveat) => html`<span class="caveat-inline" title=${caveat.sentence}
-        aria-label=${caveat.sentence}>${caveat.glyph}</span>`,
-  },
-  badge: {
-    label: "Corner badge",
-    why: "Two different facts (your rank, and a caveat about the time behind it) "
-       + "drawn in two places, so neither hides the other.",
-    suppressFloor: true,
-    cellSlot: () => null,
-    cellOverlay: (caveat) => html`<span class="caveat-badge" title=${caveat.sentence}
-        aria-label=${caveat.sentence}>${caveat.glyph}</span>`,
-    cellClass: () => "",
-    cardMark: (caveat) => html`<span class="caveat-chip" title=${caveat.sentence}
-        aria-label=${caveat.sentence}>${caveat.glyph}${" "}${caveat.short}</span>`,
-  },
-  tinted: {
-    label: "Tinted, no glyph",
-    why: "The mark is a colour shift on the value itself rather than a symbol "
-       + "beside it — nothing is added to a row that has no room to grow.",
-    suppressFloor: false,
-    cellSlot: () => null,
-    cellOverlay: () => null,
-    // The cell's only recolourable text. NOT the art: this repo has a ruling
-    // against expressing state by dimming (the rank ladder's unreached bands,
-    // 2026-07-27 -- "they all basically look black"), and a dimmed star reads
-    // as disabled rather than as qualified.
-    cellClass: () => "caveat-tinted",
-    cardMark: (caveat) => html`<span class="caveat-word" title=${caveat.sentence}
-        aria-label=${caveat.sentence}>${caveat.short}</span>`,
-  },
-};
-
-export const DEFAULT_TREATMENT = "slot";
-
-// The active treatment is a module-level slot for the same reason
-// rankicon.js's icon style is: most of these call sites have no `t` in scope,
-// and the contact sheet needs to render every treatment at once regardless of
-// what is active. Nothing persists it — unlike the icon style this is NOT a
-// user preference, it is a design decision waiting to be narrowed to one.
-let active = DEFAULT_TREATMENT;
-
-export function treatment(key = null) {
-  return CAVEAT_TREATMENTS[key || active] || CAVEAT_TREATMENTS[DEFAULT_TREATMENT];
+// The badge's argument, in his terms: your RANK and a caveat about the time
+// behind it are two different facts, so they are drawn in two places and
+// neither hides the other. On the cell it takes the corner `.starrank-badge`
+// already uses on the picker grid; on the card it can afford the word too.
+export function cellBadge(caveat) {
+  return html`<span class="caveat-badge" title=${caveat.sentence}
+      aria-label=${caveat.sentence}>${caveat.glyph}</span>`;
 }
 
-export function setCaveatTreatment(key) {
-  if (CAVEAT_TREATMENTS[key]) active = key;
+// The card's badge is the cell's badge plus the WORD, which is the whole
+// reason these two surfaces were designed together: the card can afford it and
+// the cell cannot. The word is its own element so a narrow pane can drop it
+// (index.html's 793px band, where the least load-bearing text gives way first)
+// and leave the same glyph pill the cell wears -- the sentence stays reachable
+// either way, because the title rides the CHIP rather than the word.
+export function cardBadge(caveat) {
+  return html`<span class="caveat-chip" title=${caveat.sentence}
+      aria-label=${caveat.sentence}>${caveat.glyph}<span
+      class="caveat-chip-word">${caveat.short}</span></span>`;
 }

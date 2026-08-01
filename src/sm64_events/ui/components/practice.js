@@ -23,7 +23,7 @@ import { Icon } from "./icons.js";
 import { PageState } from "./states.js";
 import { EmptyState } from "./emptystate.js";
 import { familyLabel } from "../redsfamily.js";
-import { caveatOf, treatment } from "./marks.js";
+import { caveatOf, cardBadge } from "./marks.js";
 
 const html = htm.bind(h);
 
@@ -295,10 +295,9 @@ function useGraphPick(rows, visible, setVisible) {
 // `mode` is just the clock label shown in parens.
 // `pb.caveat` is a CAVEAT key (components/marks.js) or absent — the server's
 // own answer to "does this saved time mean what the rank beside it implies".
-// Derived in tracking/views.py from `timed_by`/`closed_by`/`igt_timed_at`, so
-// this surface and the quick-select cell can never word the same fact two
-// ways. `treatmentKey` is the contact sheet's only caller (tools/mark_sheet.py).
-export function PbTag({ pb, mode, rows, pick, t, treatmentKey = null }) {
+// Derived in tracking/views.py from `timed_by`/`closed_by`/`timed_at`, so this
+// surface and the quick-select cell can never word the same fact two ways.
+export function PbTag({ pb, mode, rows, pick, t }) {
   if (!pb) return html`<span class="pbtag">no PB yet</span>`;
   function jump() {
     if (!pick) return;
@@ -307,10 +306,10 @@ export function PbTag({ pb, mode, rows, pick, t, treatmentKey = null }) {
     pick(pb.attempt_id);
   }
   const mark = caveatOf(pb.caveat);
-  return html`<span class="pbtag ${mark ? "has-caveat" : ""}">PB ${pick
+  return html`<span class="pbtag">PB ${pick
     ? html`<a class="pblink" onclick=${jump}
         title="jump to this PB in the list below">${pb.display}</a>`
-    : pb.display} (${mode})${mark ? treatment(treatmentKey).cardMark(mark) : null}</span>`;
+    : pb.display} (${mode})${mark ? cardBadge(mark) : null}</span>`;
 }
 
 // Validity-bounds chip (spec 2026-07-23): the section's effective min/max

@@ -197,19 +197,12 @@
      the question rather than relying on that. */
   .starrank-badge { position: absolute; top: 3px; left: 3px; }
   /* CAVEAT MARKS (components/marks.js) — "the time behind this rank does not
-     mean what the rank implies". Three candidate treatments render here side
-     by side (tools/mark_sheet.py); the picked one keeps its rules and the
-     other two are DELETED, the same way a rank-icon style would be.
+     mean what the rank implies". The CORNER BADGE, picked by the user from
+     tools/mark_sheet.py's three candidates on 2026-08-01; the other two were
+     deleted rather than left behind a flag.
      --caveat is its own hue on purpose: gold already means earned and coral
      already means failed, and a caveat is neither — the number is real, it
      just measures something other than what the reader assumes. */
-  .caveat-slot {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 16px; height: 16px; border-radius: 50%;
-    border: 1px solid var(--caveat); color: var(--caveat);
-    background: rgba(224,162,74,.12);
-    font-size: .68rem; font-weight: 700; line-height: 1; cursor: help;
-  }
   .caveat-badge {
     position: absolute; top: 3px; left: 3px; z-index: 2;
     display: inline-flex; align-items: center; justify-content: center;
@@ -221,8 +214,6 @@
   /* The picker grid already owns top-left with its rank badge, and passes no
      onEdit, so the caveat takes the corner the ✎ occupies on the banner. */
   .entity-grid .caveat-badge { left: auto; right: 3px; }
-  .caveat-inline { color: var(--caveat); font-weight: 700; cursor: help;
-                   margin-left: .3rem; }
   .caveat-chip {
     display: inline-flex; align-items: center; gap: .22rem;
     margin-left: .35rem; padding: .04rem .38rem; border-radius: 999px;
@@ -231,13 +222,9 @@
     font-size: .66rem; font-weight: 700; line-height: 1.35;
     white-space: nowrap; cursor: help;
   }
-  .caveat-word { color: var(--caveat); font-weight: 700; cursor: help;
-                 margin-left: .35rem; font-size: .82em; }
-  /* The `tinted` treatment's whole mechanism: the VALUE changes colour rather
-     than growing a mark beside it, which is the only one of the three that
-     adds no width to a fixed-height row. */
-  .pbtag.has-caveat { color: var(--caveat); }
-  .starcell.caveat-tinted .starname { color: var(--caveat); }
+  /* The PB VALUE itself stays green. The badge beside it is the whole mark --
+     recolouring the number too would say the same thing twice, and green
+     already means "this is your best", which the caveat does not dispute. */
   /* The clear cell ("(any level)" etc.) emits null, restoring what the native
      <select>'s placeholder option did. Muted, so it reads as an escape hatch
      rather than a choice. */
@@ -3748,6 +3735,14 @@
     .objective-name h2 { font-size: 1.1rem; }
     .objective-strategy { grid-template-columns: minmax(70px,1fr) auto; }
     .objective-strategy .field-label { display: none; }
+    /* The caveat's WORD gives way here too, leaving the same glyph pill the
+       quick-select cell wears. Measured, not chosen: at a 706px pane the wide
+       metrics row overflowed the card by 23px with "? Unattributed" in it
+       (the responsive sweep's own report, both Bowser stories, 850x1180 and
+       851x1000). The sentence is not lost -- the title is on the chip, not on
+       the word, so it still answers a hover at every width. */
+    .caveat-chip { gap: 0; padding-inline: .3rem; }
+    .caveat-chip-word { display: none; }
   }
 
   /* Objective card, narrow pane.

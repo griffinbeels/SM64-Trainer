@@ -264,6 +264,37 @@ class Attempt:
                                # closing event type is in
                                # core.events.IGT_BEARING_EVENT_TYPES, where a
                                # fresh run WOULD now be igt-timed.
+    timed_at: str | None = None    # WHERE INSIDE the closing event the time was
+                               # taken -- "xcam" | "grab" for a star closed by
+                               # a star_collected, None for everything else
+                               # (a segment, a failure, a key/pipe closure).
+                               # Stars are the one kind with two candidate
+                               # moments and a leaderboard rule about which is
+                               # legal (round-4 items 3/4): Usamune stops at
+                               # the x-cam, we used to stop at the grab, and
+                               # the gap is 0-39 frames of falling.
+                               #
+                               # Read straight off the closing event's own
+                               # payload (`igt_timed_at`, added by the x-cam
+                               # fix), so this re-derives on every reproject
+                               # like `timed_by` does and needs no backfill.
+                               # ABSENCE of that key is meaningful rather than
+                               # unknown: it did not exist before 2026-08-01,
+                               # so every star row recorded earlier is exactly
+                               # the grab quantity -- which is why the default
+                               # for a star_collected closure is "grab" and
+                               # not None. Those ~626 rows cannot be
+                               # re-derived (the journal keeps no post-grab
+                               # frames), so they can only be MARKED.
+                               #
+                               # Bowser 3's grand star is deliberately NOT
+                               # stamped: it closes on key_grabbed, whose
+                               # cutscene action has no fall/dance pair to
+                               # derive an x-cam from, and whether STOP moves
+                               # its number at all is UNMEASURED. Claiming
+                               # "grab" there would assert something nobody
+                               # has run the experiment for; the limitation is
+                               # recorded in docs/api.md instead.
 
 
 ANCHOR_EVENT_TYPES = ("practice_reset", "state_loaded")
@@ -630,9 +661,16 @@ class Projector:
                 # nothing about it. Reset rather than inherited -- a delta-timed
                 # segment closure that reattributes here would otherwise carry a
                 # "not comparable" mark onto a number that IS Usamune's IGT.
+                # `timed_at` follows the same reasoning as `timed_by` right
+                # above: this row IS a star now and its time came out of the
+                # closing event's payload, so it takes that event's own
+                # answer about WHICH MOMENT -- and None whenever the closure
+                # was not a star grab, where the question does not arise.
                 a = replace(a, course_id=hc[0], star_id=hc[1], segment_id=None,
                             igt_frames=ev.payload.get("igt_frames"),
-                            timed_by="igt")
+                            timed_by="igt",
+                            timed_at=(ev.payload.get("igt_timed_at", "grab")
+                                      if ev.type == "star_collected" else None))
                 a = replace(a,
                             strat_tag=self._strat_overrides.get(
                                 a.id, self.strat_by_star.get(hc)),
@@ -1026,6 +1064,8 @@ class Projector:
     def _build(self, first, close, outcome, outcome_detail, course_id, star_id,
                igt_frames, strat) -> Attempt:
         is_anchored = first.type in ANCHOR_EVENT_TYPES
+        timed_at = (close.payload.get("igt_timed_at", "grab")
+                    if close.type == "star_collected" else None)
         rta = (close.frame - first.frame
                if is_anchored and close.frame >= first.frame else None)
         return self._auto_ignored(Attempt(
@@ -1043,7 +1083,8 @@ class Projector:
             rollouts_total=self._rollouts_total,
             rollouts_dustless=self._rollouts_dustless,
             jumps_total=self._jumps_total,
-            jumps_dustless=self._jumps_dustless))
+            jumps_dustless=self._jumps_dustless,
+            timed_at=timed_at))
 
     def _auto_ignored(self, a: Attempt) -> Attempt:
         """Range/validity check (spec 2026-07-23): an out-of-bounds SUCCESS

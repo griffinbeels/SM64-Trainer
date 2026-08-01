@@ -107,6 +107,31 @@ Other event types, same envelope:
 
 **Session view payload** (`GET /api/session`) top-level fields include `scope` (`"session"` or `"lifetime"`) and `sessions` (array of all sessions, newest-first, each with `id`, `attempts`, `started_utc`, `ended_utc`). Each star section additionally carries a `timeline` object: `{max_frames, max_display, max_is_success, points:[{frames, igt, outcome, attempt_id}]}`. The axis maximum (`max_frames`) is the longest successful attempt (or the longest attempt overall when `max_is_success` is false, i.e. no successes yet). Points follow the requested `scope` (session view plots only that session's attempts; 2026-07-24 — previously always lifetime) and may exceed `max_frames` on the x-axis. Every star AND segment section also carries `time_filter: {min_frames, max_frames, is_default}` — the section's *effective* validity bounds (after the implicit 0.5 s default is filled in), driving the header's `⏱` chip.
 
+**Caveats on a saved time** (`tracking/caveats.py`, added 2026-08-01): three
+surfaces show a PB beside a rank, and a PB can fail to mean what that rank
+implies. One derivation answers it for all of them and the payload carries a
+single key — `null`, or one of `grab_timed` / `old_clock` / `unattributed`,
+worst first (`CAVEAT_SEVERITY`). It appears in three places, all reading the
+entity's strategy-blind CURRENT PB:
+
+- each star/segment section's `pb.<clock>.caveat` — the practice card's PB tag;
+- top-level `caveat_by_star`, `{"<course>:<star>": key}` — the quick-select
+  banner. Keyed over a WIDER set than `rank_by_star`, which lists only stars
+  with an active strategy: the most important caveat is that the PB has no
+  strategy at all, exactly the case that map omits. Absent = no caveat;
+- each `segment_targets[].caveat` — the same, for a segment cell (rule 11).
+
+What each means: `unattributed` — the PB carries no `strat_tag`, so no strategy
+can ever claim it and a rank drawn beside it would be a floor contradicting the
+time itself; this is the ONE key that suppresses the ladder floor client-side.
+`old_clock` — the attempt was timed by a wall-frame delta AND its closing event
+type is one that would carry Usamune's IGT today (both clauses matter: most
+delta-timed rows are delta forever and stay perfectly comparable).
+`grab_timed` — a star timed at the grab rather than the x-cam, i.e. true of
+every star row recorded before 2026-08-01 and of a fresh one whose x-cam wait
+aborted. `ui/components/marks.js` owns the wording and the badge;
+`tests/test_cross_language_parity.py` pins the two key sets equal.
+
 **Timelines:** Each star section renders a strat map — every success, reset, and death plotted at its IGT position along a shared axis. Extending marker kinds requires two changes: one row in `TIMELINE_OUTCOMES` (`tracking/views.py`) to define the outcome key and color, and one row in `MARKERS` (`ui/components/timeline.js`) to define the SVG shape. Everything else (axis, tooltip, projection) is derived automatically from those two registries.
 
 **Progress graph:** Each star section also plots completion time over time (gold = explicitly saved PBs). Nodes are clickable: clicking one reveals that attempt's row in the list below (expanding past the pagination fold if needed), scrolls to it with a brief highlight, and — when the attempt has a saved replay file on disk (`HEAD /api/replay/saved/{id}` succeeds) — auto-opens its replay player as if ▶ had been pressed.
@@ -394,4 +419,5 @@ Deleting the file resets all history.
   dance are safe. Usamune section states are typically safe.
 - Bowser-stage fight-ending grabs all emit `key_grabbed`: Bowser 1/2 keys (star-dance actions in arenas 30/33) and the B3 grand star (`ACT_JUMBO_STAR_CUTSCENE` in arena 34, live-verified 2026-06-12). The grand star never emits `star_collected` — it is not a collectable star.
 - `key_grabbed` and `warp_entered` are timed at the TOUCH, not at an x-cam. For a pipe there is no x-cam; for the grand star, whether Usamune's `STOP` moves the number is unmeasured, and `ACT_JUMBO_STAR_CUTSCENE` has no fall/dance pair to derive one from. So a Bowser-3 time is not known to be leaderboard-legal the way a star time now is.
+- A star attempt records WHICH MOMENT its time came from (`Attempt.timed_at`, `"xcam"` | `"grab"`; `null` for a segment, a failure, or a key/pipe closure). Stamped from the closing event's own `igt_timed_at`, so it re-derives on every reproject; the ABSENCE of that payload key means `"grab"`, since it did not exist before 2026-08-01. Bowser 3's grand star is deliberately left `null` rather than claimed as either — see the limitation above.
 - Star times recorded before 2026-08-01 are grab-frame times, which under `STOP` of Grab or GrabX is a different quantity from the x-cam time and is not leaderboard-legal. They cannot be repaired: the journal keeps no frames after the grab, so the derivation has nothing to run on. Forward-only fix.

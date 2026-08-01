@@ -421,6 +421,26 @@ MIGRATIONS = [
     ALTER TABLE attempts ADD COLUMN timed_by TEXT NOT NULL DEFAULT 'igt';
     ALTER TABLE attempts ADD COLUMN closed_by TEXT;
     """,
+    # v20 — WHICH MOMENT inside the closing event a star's time was taken at
+    # (round-4 items 3/4). Usamune stops its clock at the x-cam; we stopped at
+    # the grab, and the gap is 0-39 frames of Mario falling -- so every star
+    # row recorded before 2026-08-01 holds a quantity no leaderboard accepts
+    # and cannot be re-derived, because the journal keeps no post-grab frames.
+    #
+    # Same shape as v19 and for the same reason: no repair UPDATE, because
+    # `Attempt.timed_at` is stamped by `_build` from the closing event's own
+    # payload and projection is replay-derived, so the next reproject fills
+    # every historical row correctly on every install with no list of ids to
+    # keep true.
+    #
+    # NULL default, unlike v19's 'igt', and the asymmetry is deliberate: NULL
+    # is the honest value for the MAJORITY of rows here (every segment, every
+    # failure, every key/pipe closure), where the question does not arise at
+    # all. v19's column described a property every row genuinely has; this one
+    # describes a choice only a star grab makes.
+    """
+    ALTER TABLE attempts ADD COLUMN timed_at TEXT;
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
@@ -429,7 +449,7 @@ _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
                  "cleared", "cleared_reason",
                  "rollouts_total", "rollouts_dustless",
                  "jumps_total", "jumps_dustless",
-                 "segment_id", "timed_by", "closed_by")
+                 "segment_id", "timed_by", "closed_by", "timed_at")
 
 
 class EventRow:
@@ -560,7 +580,7 @@ class Database:
                 int(a.cleared), a.cleared_reason,
                 a.rollouts_total, a.rollouts_dustless,
                 a.jumps_total, a.jumps_dustless,
-                a.segment_id, a.timed_by, a.closed_by)
+                a.segment_id, a.timed_by, a.closed_by, a.timed_at)
 
     def replace_attempts(self, attempts: list[Attempt]) -> None:
         with self._lock:

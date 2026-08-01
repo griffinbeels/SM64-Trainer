@@ -44,6 +44,7 @@ from sm64_events.stats.registry import (DEFAULT_STAT_MENU, REGISTRY,
                                         selection_order)
 from sm64_events.tracking.projection import DEFAULT_MIN_FRAMES, journal_id
 from sm64_events.tracking.routes import route_stats
+from sm64_events.tracking.caveats import caveat_for
 from sm64_events.tracking.segments import (arm_level, arms_ambiently,
                                             card_waiting_for_sentence,
                                             course_groups, hundred_coin_entity,
@@ -1037,6 +1038,11 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     pbs = _current_pbs(pb_rows)              # strategy-blind, for DISPLAY only
     pbs_by_strat = current_pbs_by_strat(pb_rows)   # per-strategy, for RANKS
     pb_ids = {(r["attempt_id"], r["timer_mode"]) for r in pb_rows}
+    # A PB's saving attempt, for `caveats.caveat_for`. `.get()` everywhere it
+    # is used: a pb row survives its attempt being wiped (db.py keeps the row
+    # for its own `frames`), and an unclaimable PB is still unclaimable with
+    # no attempt behind it.
+    attempt_by_id = {a.id: a for a in all_attempts}
     sessions_list = db.sessions()
     session_meta = {s["id"]: s for s in sessions_list}
     stat_menu = db.get_state("stat_menu", default=DEFAULT_STAT_MENU)
@@ -1172,7 +1178,14 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             # link — the same pickFromGraph path a gold progress-graph dot uses.
             pb_json[mode] = ({"frames": row["frames"],
                               "display": format_igt(row["frames"]),
-                              "attempt_id": row["attempt_id"]}
+                              "attempt_id": row["attempt_id"],
+                              # "this time does not mean what the rank beside
+                              # it implies", or None. ONE derivation
+                              # (tracking/caveats.py) shared with the
+                              # quick-select cell, so the two surfaces cannot
+                              # word the same fact differently.
+                              "caveat": caveat_for(
+                                  row, attempt_by_id.get(row["attempt_id"]))}
                              if row else None)
         # Basis computed ONCE per section and shared by both rank numbers
         # below: the strat rank grades it against the ACTIVE strategy's
@@ -1497,6 +1510,16 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                 grading_basis(
                     rank_mode, pbs_by_strat.get((c, s, "igt", live_strat)),
                     attempts_by_star.get((c, s), []), live_strat, "igt")))},
+        # Parallel to rank_by_star, and keyed over a DIFFERENT set on purpose:
+        # rank_by_star lists stars with an active strategy, while the most
+        # important caveat is precisely "this PB has no strategy at all". So
+        # this is keyed off the strategy-blind current PB — every star that has
+        # one, whether or not it can be graded.
+        "caveat_by_star": {
+            f"{c}:{s}": key
+            for (c, s, mode), row in pbs.items()
+            if c != "segment" and mode == "igt"
+            and (key := caveat_for(row, attempt_by_id.get(row["attempt_id"])))},
         "rank_mode": rank_mode,
         # Entity keys that HAVE a ladder, whether or not this player has a time
         # on them. `rank_by_star`/`segment_targets[].rank` are None in both the
@@ -1540,7 +1563,12 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                  grading_basis(
                      rank_mode,
                      pbs_by_strat.get(("segment", d.id, "rta", seg_strat)),
-                     attempts_by_seg.get(d.id, []), seg_strat, "rta"))}
+                     attempts_by_seg.get(d.id, []), seg_strat, "rta")),
+             # Rule 11: the same mark the star cells get, from the same
+             # derivation, off this segment's own strategy-blind current PB.
+             "caveat": (lambda row: caveat_for(
+                 row, attempt_by_id.get(row["attempt_id"]) if row else None))(
+                     pbs.get(("segment", d.id, "rta")))}
             # EVERY def is included except the HUNDRED_COIN_EXIT family
             # (spec 2026-07-28-multi-step-segments) — a fully location-less
             # start (e.g. reset_game) gets empty start_areas/start_levels,
