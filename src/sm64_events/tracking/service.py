@@ -425,8 +425,16 @@ class TrackerService:
                 raise ValueError("star target needs course_id and star_id")
             already = self.target == ("star", course_id, star_id)
         node = self.target_node(kind, course_id, star_id, segment_id)
+        # A segment whose start trigger has already fired is UNDER WAY, and
+        # you pick it where it has got you to, not where it began (user
+        # ruling 2026-08-01 — practicable.py carries the reasoning). Read from
+        # the projector, which re-derives the armed set from the journal, so
+        # this asks the same question the banner's own armed cells answer:
+        # what the banner offers and what the server accepts cannot disagree.
+        running = (kind == "segment"
+                   and segment_id in self._projector.armed_segment_ids())
         if not already and not practicable.practicable_here(self._current_stage,
-                                                            node):
+                                                            node, running):
             raise ValueError(
                 "you can only practice what you are standing in — "
                 f"that one is in {node_label(node)}")

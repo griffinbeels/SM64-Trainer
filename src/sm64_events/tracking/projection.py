@@ -712,58 +712,16 @@ class Projector:
                     self.target = None if entered_stage else ("segment", a.segment_id)
                 self._suspended_star = None  # finished a segment: moved on (caveat 13)
             closed.append(a)
-        # A star grab that is really a WAYPOINT of the segment already
-        # pinned as the active target must not steal the target away to the
-        # star (round-2 live report, 2026-07-30: with Bowser's Reds "Pipe"
-        # segment (seg:reds->pipe:<abbrev>) explicitly targeted, grabbing
-        # the reds star -- that segment's OWN mid-sequence waypoint, on the
-        # way to the pipe -- flashed the star's own practice card (rank
-        # standards + practice log) over the segment's for the rest of the
-        # run. Root cause: _close_by_grab's "last VALID grab moves the
-        # practice target" rule (caveat: every star grab moves the target,
-        # unconditionally) has no way to know a grab was consumed by an
-        # in-progress segment rather than being a deliberate star pick --
-        # the star attempt it records is CORRECT and must still happen (the
-        # user's own words: "the practice log should still exist for star
-        # mode in the history, just that we don't see it"), only the
-        # target move is wrong here.
-        #
-        # Restore the pinned segment when: it was already the target AND
-        # already armed BEFORE this event (an established, running focus —
-        # not something that merely happens to arm on this same tick), and
-        # it is STILL armed AFTER the segment engine has processed this
-        # very event without closing (i.e. this event ADVANCED it — a
-        # waypoint consumed or an anchor rewind — rather than ending or
-        # cancelling the sequence). A def that does NOT expect this grab is
-        # silently CANCELLED by the matcher's own "major action" rule on
-        # this same event (segments.py's _feed_waypoint precedence), which
-        # drops it out of armed_segment_ids() — so this restore can never
-        # fire for a genuinely unrelated grab; the FSM's own precedence
-        # already does that disambiguation, this doesn't re-derive it.
-        #
-        # Scoped to WAYPOINT defs only (`d.waypoints`, and not `loose` —
-        # loose owns its progression via _feed_loose instead and, by
-        # design, "stays armed through star grabs... until the end trigger
-        # fires" regardless of relevance). A PLAIN strict/exclusive def has
-        # no star/key branch at all (MATCH_MODES's own "strict" doc
-        # comment) and stays armed through ANY grab whether or not it has
-        # anything to do with that def — so for a plain def, "still armed
-        # after" carries no information about whether THIS grab was
-        # actually part of its sequence, and applying the restore there
-        # would blanket-protect every plain armed target from every
-        # unrelated grab forever, a far bigger behavior change than this
-        # bug asks for. Only a waypoint-bearing strict/exclusive def's
-        # "still armed, not closed" reliably means "the matcher's own
-        # major-action rule just confirmed this event was the expected next
-        # step" — that rule is what does the disambiguation, not this one.
-        if (ev.type == "star_collected" and target_before is not None
-                and target_before[0] == "segment"
-                and target_before[1] in armed_before
-                and target_before[1] in self.armed_segment_ids()
-                and not any(a.segment_id == target_before[1] for a in seg_closed)):
-            d = self._segments.definition(target_before[1])
-            if d is not None and d.waypoints and d.match_mode != "loose":
-                self.target = target_before
+        # Caveat 18's grab-steals-the-target restore USED to sit here, and
+        # is gone because the steal it undid can no longer happen: since
+        # 2026-08-01 `_close_by_grab` simply does not move a SEGMENT
+        # target at all. That restore only ever covered waypoint-bearing
+        # strict/exclusive defs (Bowser's Reds -> Pipe consuming its own
+        # reds star), because for a plain def "still armed after the grab"
+        # carried no information about whether the grab belonged to it —
+        # which is exactly why the narrow version could not save WF -> SSL
+        # or Bowser 1 -> WF. Refusing the steal at the source needs no such
+        # disambiguation: a segment target is a click, a grab is not.
         # A segment going ARMED means a segment run just started, so a star we
         # were practicing is no longer the active focus (active-star and
         # segment are mutually exclusive in the UI — 2026-06-12). Clear ONLY a
@@ -1036,11 +994,28 @@ class Projector:
             course_id=grabbed[0], star_id=grabbed[1],
             igt_frames=ev.payload.get("igt_frames"), strat=strat)
         self._open = None
-        if not attempt.cleared:
-            # last VALID grab moves the practice target
+        if not attempt.cleared and not self._segment_targeted():
+            # The last VALID grab moves the practice target — but only when
+            # the target is a star or nothing. A SEGMENT target is a pick he
+            # made with a click; a grab is a thing he did in the game, and
+            # letting the second overwrite the first is how a movement he
+            # deliberately chose disappears (live report 2026-08-01, WF -> SSL
+            # and Bowser 1 -> WF). Grabbing the star you are leaving a course
+            # with is the ORDINARY thing to do immediately before running that
+            # course's exit movement, so this fired at exactly the wrong
+            # moment; and because every castle movement is guarded to the
+            # target or the active route, losing the target also cost it its
+            # arm, its section and its card in one go.
+            #
+            # The star's own attempt is still recorded above — his ruling on
+            # this same rule, 2026-07-30: "the practice log should still exist
+            # for star mode in the history, just that we don't see it".
             self.target = ("star", *grabbed)
             self._suspended_star = None  # committed a new focus (caveat 13)
         return [attempt]
+
+    def _segment_targeted(self) -> bool:
+        return self.target is not None and self.target[0] == "segment"
 
     def _close_by_death(self, ev) -> list[Attempt]:
         if self._unacted_open():

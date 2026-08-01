@@ -1759,7 +1759,7 @@ def test_grabbing_a_star_still_moves_the_target_with_nothing_pinned_there():
     assert p.target == ("star", 16, 0)
 
 
-def test_grabbing_a_star_still_moves_the_target_away_from_an_unrelated_waypoint_segment():
+def test_a_grab_that_cancels_a_waypoint_segment_still_leaves_it_targeted():
     # A DIFFERENT armed, targeted STRICT waypoint segment that does NOT
     # expect a star grab next is silently CANCELLED by the matcher's own
     # major-action rule on this very event (segments.py's _feed_waypoint
@@ -1780,17 +1780,25 @@ def test_grabbing_a_star_still_moves_the_target_away_from_an_unrelated_waypoint_
     p.feed(jev(3, "star_collected", 1500,
                 {"course_id": 9, "star_id": 2, "igt_frames": 500}))
     assert 55 not in p.armed_segment_ids()   # cancelled: major-action mismatch
-    assert p.target == ("star", 9, 2)
+    # REVERSED 2026-08-01 by his ruling that nothing may overwrite a segment
+    # he picked. The def really is cancelled -- that half was right and is
+    # unchanged -- but the pick survives it: he is still pointed at the thing
+    # he chose, and re-running it is one retry rather than one re-pick.
+    assert p.target == ("segment", 55)
 
 
-def test_grabbing_a_star_still_moves_the_target_away_from_a_plain_armed_segment():
-    # A PLAIN (waypoint-free) armed segment has no notion of "this grab was
-    # my own next step" at all -- _feed_strict has no star/key branch and
-    # stays armed through any grab regardless of relevance (MATCH_MODES's
-    # own "strict" doc comment). The restore is scoped to waypoint defs
-    # ONLY for exactly this reason: applying it here too would blanket-
-    # protect every plain armed target from every unrelated grab forever, a
-    # far bigger behavior change than the reported bug asks for.
+def test_a_grab_does_not_move_the_target_off_a_plain_armed_segment():
+    # This test asserted the OPPOSITE until 2026-08-01, and the reasoning it
+    # carried is worth keeping because it was right about the mechanism and
+    # wrong about the remedy: a plain armed def has no notion of "this grab
+    # was my own next step", so "still armed after" could not tell a relevant
+    # grab from an irrelevant one, and caveat 18's restore was scoped to
+    # waypoint defs to avoid guessing. What it called "a far bigger behavior
+    # change than the reported bug asks for" is precisely what the NEXT
+    # report asked for: a course-exit movement lost its target to the star he
+    # grabbed on the way out, and with it its arm and its whole card. The
+    # question was never whether the grab was relevant to the def -- it is
+    # that a click outranks a thing that merely happened.
     from sm64_events.tracking.segments import SegmentDef
     plain = SegmentDef(id=77, name="plain movement", enabled=True,
                        start_triggers=[{"type": "level_enter", "to": 6}],
@@ -1801,8 +1809,8 @@ def test_grabbing_a_star_still_moves_the_target_away_from_a_plain_armed_segment(
     p.feed(jev(2, "target_set", 950, {"kind": "segment", "segment_id": 77}))
     p.feed(jev(3, "star_collected", 1500,
                 {"course_id": 9, "star_id": 2, "igt_frames": 500}))
-    assert 77 in p.armed_segment_ids()   # unaffected: still armed either way
-    assert p.target == ("star", 9, 2)    # target still moves: no waypoint to protect
+    assert 77 in p.armed_segment_ids()      # unaffected: still armed either way
+    assert p.target == ("segment", 77)      # and the pick he made stands
 
 
 def test_star_success_with_no_clock_at_all_is_not_flagged():
@@ -2047,3 +2055,33 @@ def test_a_strategy_choice_is_a_preference_and_DOES_survive():
                                     "strat_tag": "Cannonless"}))
     p.feed(jev(2, "session_started", 0, {"session_id": 9}))
     assert p.strat_by_star[(2, 6)] == "Cannonless"
+
+
+# -- a deliberate segment pick is not overwritten by an inferred one -----------
+
+def test_a_star_grab_does_not_steal_a_segment_target():
+    """Live report 2026-08-01. He picks a course-exit movement, plays the
+    course, grabs the star he is leaving with — the ordinary thing to do
+    immediately before running that movement — and the grab moves the target
+    onto the star. The movement then cannot arm (every castle movement is
+    guarded to the target or the active route), has no section, and is simply
+    gone from the page.
+
+    The star's own ATTEMPT is still recorded: his earlier ruling on the same
+    rule, "the practice log should still exist for star mode in the history,
+    just that we don't see it". Only the target move is wrong."""
+    p = Projector()
+    p.feed(jev(1, "target_set", 0, {"kind": "segment", "segment_id": 21}))
+    closed = p.feed(star(2, 900, course=2, star_id=0))
+    assert p.target == ("segment", 21)
+    assert [(a.course_id, a.star_id, a.outcome) for a in closed] \
+        == [(2, 0, "success")]
+
+
+def test_a_star_grab_still_moves_a_STAR_target():
+    """The rule that is not being changed: practising star after star follows
+    you around, and that is the whole reason it exists."""
+    p = Projector()
+    p.feed(jev(1, "target_set", 0, {"course_id": 2, "star_id": 3}))
+    p.feed(star(2, 900, course=2, star_id=0))
+    assert p.target == ("star", 2, 0)

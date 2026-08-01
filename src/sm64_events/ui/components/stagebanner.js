@@ -705,13 +705,22 @@ function ArenaRow({ t, v, stage }) {
   const fights = segsForLevel(v, stage.level);
   const only = fights.length === 1 ? fights[0] : null;
 
-  // Auto-select the single fight on entry, always overriding the current target
-  // (request: "immediately select it and set it as our active segment"). Keyed
-  // on stage.level + the segment id so it fires once per arena entry, not every
-  // render; the already-targeted guard makes a re-entry a no-op.
+  // Auto-select the single fight on entry (request: "immediately select it
+  // and set it as our active segment"). Keyed on stage.level + the segment id
+  // so it fires once per arena entry, not every render; the already-targeted
+  // guard makes a re-entry a no-op.
+  //
+  // It "always overrode the current target" until 2026-08-01 — the same
+  // ruling that stopped a star grab stealing a segment pick (projection.py's
+  // _close_by_grab). It was the other thief, and a worse one, because it
+  // fires on mere ARRIVAL: picking "Bowser 1 → WF" and then walking into the
+  // arena to run it replaced that pick with the fight, so the movement lost
+  // its target, its arm and its card before he had done anything at all.
+  // A convenience default may fill an empty hand; it may not take something
+  // out of one.
   useEffect(() => {
     if (!only) return;
-    if (tgt.kind === "segment" && tgt.segment_id === only.segment_id) return;
+    if (tgt.kind === "segment") return;
     (async () => {
       if (!only.enabled)
         await send("PUT", `/api/segments/${only.segment_id}`, { enabled: true });
