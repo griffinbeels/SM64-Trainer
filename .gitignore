@@ -27,6 +27,16 @@ internal_notes/
 # reachable in git history; removing THAT needs a history rewrite.
 docs/superpowers/
 
+# Round ledgers written by the iteration-round skill. Same reasoning as
+# docs/superpowers/ above, and more sharply: a ledger's whole value is that it
+# quotes him VERBATIM, so every file under here is by construction the kind of
+# thing that must not be pushed. Listed in the TRACKED .gitignore rather than
+# left to a local file, for the fresh-clone reason spelled out under .tasks/
+# below — the resume-open-round hook globs `.iteration/*/round-*.md` from
+# whatever root a session starts in, so this directory appears in the primary
+# checkout and in every worktree, and each of them needs it ignored.
+.iteration/
+
 # Same reasoning as docs/superpowers/ above: the task tracker's notes quote the
 # author and name his other projects. Listed HERE, in the tracked .gitignore,
 # rather than relying on the self-ignoring `.tasks/.gitignore` (a file
