@@ -358,7 +358,18 @@ def test_every_real_seeded_definition_round_trips_or_is_explicitly_refused():
     machine-local scratch state, not the corpus) -- the invariant checked is
     "segment_row_source never succeeds with the WRONG answer", which holds
     whether the db has 0 rows or 65. Skips cleanly on a fresh clone/CI where
-    the file doesn't exist."""
+    the file doesn't exist.
+
+    It must also tolerate a db that predates a MIGRATION, which is a different
+    thing from one that is absent and cost a red build at merge time
+    (2026-08-01): the primary checkout's db sits at user_version 14 and
+    `match_mode` arrives in v15, so the test passed in the worktree (no db ->
+    skip) and failed the moment it met a real one. A db is migrated only when a
+    server OPENS it, so any checkout whose server has not run since a schema
+    change has an old one — the file being present says nothing about which
+    columns it has. Reading a missing `match_mode` as `"strict"` is not a
+    guess: it is what v15 itself declares (DEFAULT 'strict', no repair UPDATE,
+    because every pre-existing row already matched strictly)."""
     if not DB_PATH.exists():
         pytest.skip("data/tracker.db not present (machine-local, gitignored)")
     uri = DB_PATH.resolve().as_uri() + "?mode=ro"
@@ -373,8 +384,10 @@ def test_every_real_seeded_definition_round_trips_or_is_explicitly_refused():
     ns = corpus_namespace()
     refused, round_tripped = [], []
     for r in rows:
+        columns = set(r.keys())
         defn = {"id": r["id"], "name": r["name"], "seed_key": r["seed_key"],
-                "match_mode": r["match_mode"],
+                "match_mode": (r["match_mode"] if "match_mode" in columns
+                               else "strict"),   # pre-v15 db; see the docstring
                 "start_triggers": json.loads(r["start_triggers"]),
                 "end_triggers": json.loads(r["end_triggers"]),
                 "waypoints": json.loads(r["waypoints"])}
