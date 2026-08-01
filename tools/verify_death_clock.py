@@ -35,6 +35,16 @@ again. Three samples, so one misread cannot decide it.
 settings put a second (real-time) timer on screen as well, say which one you
 read, because they are not the same clock and only the IGT one is comparable.
 
+**If a PAUSE prompt appears when you did not pause, ignore it and tell us.**
+The probe detects a pause by watching Usamune's counter stand still while the
+game frame keeps moving — and with **STOP=GRAB** that is exactly what grabbing
+a star does. The probe suppresses the window right after a grab it saw, but
+that is a courtesy; this sentence is the part that actually covers it, because
+anything else that halts the clock produces the same shape. A reading taken
+during a grab may be comparing against Usamune's RESULT store rather than the
+running counter, which is a different number and would look like a clean
+measurement.
+
 ## Step 2 — die three times, anywhere
 
 The probe watches through the REAL `DeathDetector` this app runs and reports
@@ -121,6 +131,17 @@ PAUSE_FRAMES = 20           # counter frozen this long while global_timer runs
 TRACK_WINDOW = 30           # samples examined behind a death
 DEFAULT_PAUSES = 3
 DEFAULT_DEATHS = 3
+# A star grab under STOP=GRAB halts Usamune's counter while the game frame
+# keeps running — the SAME shape is_paused looks for, and a star dance lasts
+# 60-90 frames, well past PAUSE_FRAMES. So a grab would otherwise print a
+# PAUSE prompt the human never caused, and worse, one whose on-screen number
+# may be Usamune's RESULT store rather than the running counter. Suppressing
+# the window after a grab we SAW is a courtesy, not the guarantee: under
+# STOP=GRAB the freeze can outlast any window, and a cutscene or anything else
+# that halts the clock has no detector here at all. The instruction sheet's
+# "if a PAUSE prompt appears when you did not pause, ignore it" is the part
+# that actually covers this; do not grow this constant instead of that line.
+GRAB_QUIET_FRAMES = 300
 
 
 # --- pure core (tests/test_verify_death_clock.py drives these) --------------
@@ -141,6 +162,17 @@ def is_paused(samples: list[tuple[int, int]]) -> bool:
     if len(window) < 2 or window[-1][0] - window[0][0] < PAUSE_FRAMES - 1:
         return False
     return len({counter for _, counter in window}) == 1
+
+
+def pause_is_grab_shadow(frame: int, last_grab_frame: int | None) -> bool:
+    """Is this apparent pause just a star grab halting the clock?
+
+    True inside GRAB_QUIET_FRAMES of a grab we observed. See that constant for
+    why this is a courtesy rather than the guarantee — the instruction sheet
+    carries the real coverage."""
+    if last_grab_frame is None:
+        return False
+    return 0 <= frame - last_grab_frame <= GRAB_QUIET_FRAMES
 
 
 def counter_tracked_cleanly(samples: list[tuple[int, int]]) -> tuple[bool, str]:
@@ -186,6 +218,8 @@ def pause_prompt(index: int, counter: int) -> str:
     raw, ticked = candidates(counter)
     return "\n".join([
         f"\nPAUSE #{index} — the counter is frozen, so the screen is too.",
+        "  If you did NOT just pause, IGNORE this one and say so — a halted",
+        "  clock looks the same whatever halted it.",
         "  Read the IGT / SECTION timer (the one timing your attempt, not a",
         "  real-time timer if your settings put one on screen too).",
         "  It is now showing ONE of these. Which?",
@@ -267,19 +301,12 @@ def main() -> None:
     prev = None
     pauses = deaths = stars = 0
     reported_pause = False
+    last_grab_frame: int | None = None
     try:
         while True:
             curr = reader.read()
-            if prev is not None and curr.global_timer > prev.global_timer:
-                samples.append((curr.global_timer, curr.igt_overall))
-                samples = samples[-TRACK_WINDOW:]
-                if is_paused(samples):
-                    if not reported_pause:
-                        pauses += 1
-                        reported_pause = True
-                        print(pause_prompt(pauses, curr.igt_overall))
-                else:
-                    reported_pause = False
+            # Detectors FIRST, so a grab on this tick is already known to the
+            # pause check below (a STOP=GRAB freeze starts on the grab frame).
             if prev is not None:
                 for event in death_detector.process(prev, curr):
                     deaths += 1
@@ -291,10 +318,22 @@ def main() -> None:
                 # have journaled.
                 for event in star_detector.process(prev, curr):
                     stars += 1
+                    last_grab_frame = event.frame
                     print(star_report(stars, event.payload["course_name"],
                                       event.payload["star_name"],
                                       event.payload["igt_frames"],
                                       event.payload["igt_source"]))
+            if prev is not None and curr.global_timer > prev.global_timer:
+                samples.append((curr.global_timer, curr.igt_overall))
+                samples = samples[-TRACK_WINDOW:]
+                if is_paused(samples) and not pause_is_grab_shadow(
+                        curr.global_timer, last_grab_frame):
+                    if not reported_pause:
+                        pauses += 1
+                        reported_pause = True
+                        print(pause_prompt(pauses, curr.igt_overall))
+                else:
+                    reported_pause = False
             prev = curr
             time.sleep(1.0 / POLL_HZ)
     except KeyboardInterrupt:

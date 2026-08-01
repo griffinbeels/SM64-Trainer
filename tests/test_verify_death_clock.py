@@ -12,10 +12,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 from sm64_events.detectors.igt_clock import IgtClock          # noqa: E402
-from verify_death_clock import (PAUSE_FRAMES, TIMER_SETTINGS,  # noqa: E402
+from verify_death_clock import (GRAB_QUIET_FRAMES,            # noqa: E402
+                                PAUSE_FRAMES, TIMER_SETTINGS,
                                 candidates,
                                 counter_tracked_cleanly,
                                 death_report, is_paused,
+                                pause_is_grab_shadow,
                                 pause_prompt, settings_prompt,
                                 star_report)
 
@@ -133,6 +135,34 @@ def test_the_pause_prompt_says_which_timer_to_read():
     text = pause_prompt(1, 1077)
     assert "SECTION timer" in text
     assert "real-time" in text
+
+
+def test_a_freeze_just_after_a_star_grab_is_not_offered_as_a_pause():
+    """Under STOP=GRAB, grabbing a star halts Usamune's counter while the game
+    frame keeps running — byte-for-byte the shape is_paused looks for, and a
+    star dance outlasts PAUSE_FRAMES. A prompt there would be one the human
+    never caused, and its on-screen number may be Usamune's RESULT store
+    rather than the running counter: an invalid reading that looks clean."""
+    assert pause_is_grab_shadow(9100, 9000)
+    assert pause_is_grab_shadow(9000, 9000)             # the grab frame itself
+    assert pause_is_grab_shadow(9000 + GRAB_QUIET_FRAMES, 9000)
+
+
+def test_a_freeze_far_from_any_grab_is_a_real_pause():
+    """The other side, so the suppression cannot be satisfied by rejecting
+    everything."""
+    assert not pause_is_grab_shadow(9000 + GRAB_QUIET_FRAMES + 1, 9000)
+    assert not pause_is_grab_shadow(9100, None)         # no grab seen at all
+    assert not pause_is_grab_shadow(8999, 9000)         # before the grab
+
+
+def test_the_pause_prompt_tells_him_to_discard_one_he_did_not_cause():
+    """The suppression window is a courtesy — under STOP=GRAB the freeze can
+    outlast it, and a cutscene has no detector here at all. This line is the
+    part that actually covers the general case, so it is pinned."""
+    text = pause_prompt(1, 1077)
+    assert "did NOT just pause" in text
+    assert "IGNORE" in text
 
 
 def test_the_settings_prompt_asks_for_all_five_timer_switches():
