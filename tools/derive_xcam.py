@@ -93,60 +93,69 @@ def settled_result(samples: list[tuple[int, int, int, int]]) -> tuple[int, int] 
     return None if written_at is None else (final, written_at)
 
 
-def first_frame_in(samples: list[tuple[int, int, int, int]],
-                   actions: frozenset[int]) -> int | None:
-    """The first frame Mario is in any of `actions`, or None."""
+def first_sample_in(samples: list[tuple[int, int, int, int]],
+                    actions: frozenset[int]) -> tuple[int, int, int, int] | None:
+    """The first SAMPLE in which Mario is in any of `actions`.
+
+    Returns the whole tuple on purpose, so a caller reads the counter out of
+    the SAME memory read as the action. Looking the counter back up by frame
+    number is what the first version did, and at a 60 Hz poll over a 30 fps
+    game there are two samples per frame — so that lookup could answer with a
+    different read than the one that saw the transition, and the counter is
+    the number being measured."""
     for sample in samples:
         if sample[ACTION] in actions:
-            return sample[FRAME]
+            return sample
     return None
 
 
-def counter_at(samples: list[tuple[int, int, int, int]],
-               frame: int) -> int | None:
-    """`USAMUNE_OVERALL` on `frame`. None when the frame is outside the window
-    — a candidate we cannot price must not be scored as if we could."""
-    for sample in samples:
-        if sample[FRAME] == frame:
-            return sample[OVERALL]
-    return None
+def was_midair(samples: list[tuple[int, int, int, int]]) -> bool:
+    """Did Mario fall before reaching the ground? A grab taken while standing
+    has its x-cam ON the grab frame — live 2026-08-01, his words: "I just
+    simply ran into the star… grabbing and xcam is identical" — and a backflip
+    into a star puts tens of frames between the two."""
+    return first_sample_in(samples,
+                           frozenset({ACT_FALL_AFTER_STAR_GRAB})) is not None
 
 
 def candidates(samples: list[tuple[int, int, int, int]],
                touch_frame: int) -> dict[str, tuple[int, int]]:
     """Every moment that could plausibly BE the x-cam, as name -> (frame,
-    counter there). Only candidates we can actually price are returned."""
-    found: dict[str, int | None] = {
-        "our grab edge": touch_frame,
-        "star dance entry": first_frame_in(samples, DANCE_ACTIONS),
-    }
-    fell = first_frame_in(samples, frozenset({ACT_FALL_AFTER_STAR_GRAB}))
-    if fell is not None:
-        # A midair grab: the landing is the frame he leaves the fall, which is
-        # the dance entry — kept as its own row so a grab that never fell can
-        # be told apart from one that did.
-        found["landing after a fall"] = first_frame_in(samples, DANCE_ACTIONS)
+    counter read on that same sample)."""
     priced = {}
-    for name, frame in found.items():
-        if frame is None:
-            continue
-        counter = counter_at(samples, frame)
-        if counter is not None:
-            priced[name] = (frame, counter)
+    edge = next((sample for sample in samples if sample[FRAME] == touch_frame),
+                samples[0])
+    priced["our grab edge"] = (edge[FRAME], edge[OVERALL])
+    dance = first_sample_in(samples, DANCE_ACTIONS)
+    if dance is not None:
+        priced["star dance entry"] = (dance[FRAME], dance[OVERALL])
     return priced
 
 
-def errors(scored: list[dict[str, int]]) -> dict[str, tuple[list[int], bool]]:
-    """Per candidate, its per-grab errors and whether they are all equal.
+# Our own measurement noise, not Usamune's. A snapshot is twelve separate
+# ReadProcessMemory calls, so the action and the counter in one sample can
+# straddle a game frame — the same torn read that made the death-clock gate
+# cry PROBLEM on seven of eight healthy deaths (see
+# verify_death_clock.READ_SKEW_FRAMES, live 2026-08-01). A verdict that
+# demanded EXACT agreement reported "nothing fits" for errors of -1, -2, -1,
+# -1, which is a derivation with one noisy sample, not a failed hypothesis.
+SAMPLING_SKEW = 1
+
+
+def errors(scored: list[dict[str, int]]) -> dict[str, tuple[list[int], int | None]]:
+    """Per candidate: its per-grab errors, and the calibration constant they
+    support (None when they do not support one).
 
     A candidate seen on only SOME grabs still gets a verdict from the grabs it
-    appeared on — a midair-only candidate is exactly that shape, and dropping
-    it for being partial would discard the interesting half."""
+    appeared on — dropping partial rows would discard the interesting half."""
     names = {name for grab in scored for name in grab}
     out = {}
     for name in sorted(names):
         values = [grab[name] for grab in scored if name in grab]
-        out[name] = (values, len(set(values)) == 1 and bool(values))
+        spread = max(values) - min(values) if values else 0
+        supported = (max(set(values), key=values.count)
+                     if values and spread <= SAMPLING_SKEW else None)
+        out[name] = (values, supported)
     return out
 
 
@@ -154,23 +163,36 @@ def summary(scored: list[dict[str, int]]) -> str:
     if not scored:
         return ("\nNo scoreable grabs. Every grab needs a RESULT write inside "
                 "the window to score against, which means STOP=XCAM or "
-                "STOP=GRABX — on STOP=GRAB the write lands before we start "
-                "watching and there is nothing to compare to.")
+                "STOP=GRABX — and even then, a star grabbed ON THE GROUND has "
+                "its x-cam on the grab frame, so Usamune writes once, before "
+                "we start watching. Grab some in MIDAIR.")
+    scores = errors(scored)
     lines = [f"\n{'=' * 72}",
              f"SUMMARY — {len(scored)} scoreable grab(s)",
              "  error = candidate's counter MINUS Usamune's settled result.",
-             "  A candidate that is the x-cam moment has the SAME error every "
-             "time.", ""]
-    for name, (values, constant) in errors(scored).items():
-        verdict = (f"CONSTANT {values[0]:+d}" if constant else "VARIES")
-        lines.append(f"  {verdict:<16} {name:<22} errors: "
+             "  A candidate that is the x-cam moment lands on ONE error, give "
+             "or take",
+             f"  {SAMPLING_SKEW} frame of our own read skew (see "
+             f"SAMPLING_SKEW).", ""]
+    for name, (values, supported) in scores.items():
+        exact = supported is not None and len(set(values)) == 1
+        verdict = ("VARIES" if supported is None
+                   else f"CONSTANT {supported:+d}" if exact
+                   else f"CONSTANT {supported:+d} ±{SAMPLING_SKEW}")
+        lines.append(f"  {verdict:<18} {name:<22} errors: "
                      + ", ".join(f"{value:+d}" for value in values))
     lines.append("")
-    if any(constant for _, constant in errors(scored).values()):
-        lines.append("  A CONSTANT row is the derivation, and its number is "
-                     "the calibration.")
+    winners = [(name, supported) for name, (_, supported) in scores.items()
+               if supported is not None]
+    if winners:
+        name, supported = winners[0]
+        lines.append(f"  '{name}' is the x-cam moment, and Usamune's number is "
+                     f"its counter {-supported:+d}.")
+        lines.append("  A ±  verdict means one sample disagreed by a frame; "
+                     "that is OUR read,")
+        lines.append("  not Usamune's clock. More midair grabs shrink it.")
     else:
-        lines.append("  Nothing came back constant. That is a finding: x-cam "
+        lines.append("  Nothing landed on one error. That is a finding: x-cam "
                      "is not one of these")
         lines.append("  action transitions. Report it rather than picking the "
                      "closest.")
@@ -187,16 +209,22 @@ def grab_report(index: int, course_name: str, star_name: str,
     ground truth, i.e. nothing to score against)."""
     truth = settled_result(samples)
     priced = candidates(samples, touch_frame)
-    lines = [f"\nSTAR #{index} — {star_name} in {course_name}",
+    shape = "midair grab" if was_midair(samples) else "GROUND grab"
+    lines = [f"\nSTAR #{index} — {star_name} in {course_name}  ({shape})",
              f"  we journal today   {format_igt(journaled_frames):>9}  "
              f"({journaled_frames}f, source={journaled_source})"]
     if truth is None:
         lines += [
-            "  Usamune wrote no result inside the window, so this grab has no",
-            "  ground truth to score against — skipped. (Expected on "
-            "STOP=GRAB",
-            "  and STOP=None; if you are on XCAM or GRABX, that is itself "
-            "news.)",
+            "  Usamune wrote no result inside the window — nothing to score "
+            "against,",
+            "  so this grab is skipped. Expected on STOP=GRAB and STOP=None, "
+            "and ALSO",
+            "  on a GROUND grab under any setting: x-cam IS the grab frame "
+            "there, so",
+            "  Usamune writes once, before we start watching. Only a MIDAIR "
+            "grab can",
+            "  separate the two moments, and only a separated pair can "
+            "measure anything.",
         ]
         return "\n".join(lines), {}
     truth_frames, truth_at = truth
@@ -219,6 +247,12 @@ class PendingGrab:
         self.samples: list[tuple[int, int, int, int]] = []
 
     def observe(self, snap) -> None:
+        # ONE sample per game frame. The poll runs at 60 Hz over a 30 fps game,
+        # so keeping every read stored two samples per frame — and since the
+        # counter is what we are measuring, a duplicate frame is just a second
+        # chance to record a torn one.
+        if self.samples and snap.global_timer <= self.samples[-1][FRAME]:
+            return
         self.samples.append((snap.global_timer, snap.mario_action,
                              snap.igt_overall, snap.igt_result))
 
