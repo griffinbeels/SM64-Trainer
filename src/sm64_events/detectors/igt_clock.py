@@ -79,6 +79,27 @@ class IgtClock:
         still taken verbatim and that path stays torn-read-free."""
         return self._reading(xcam_frame, curr, self._result_written_at_or_after)
 
+    def settled_result_at_or_after(self, xcam_frame: int,
+                                   curr: GameSnapshot) -> int | None:
+        """Usamune's OWN written answer for an x-cam, or None if it never
+        wrote one after that moment (`STOP` of Grab or None).
+
+        Worth waiting for rather than deriving, and the reason is not
+        precision: `USAMUNE_OVERALL` is **subarea-local**. It restarts at an
+        area warp inside a level, so on a multi-area star our counter measures
+        the time since entering the subarea and Usamune's store holds the whole
+        star. Live 2026-08-01, his own report — LLL "Hot-Foot-It into the
+        Volcano" read 0'40"63 against Usamune's 0'52"46 (356 frames), and SSL
+        "Inside the Ancient Pyramid" 0'02"43 against 0'19"13 (502 frames), while
+        the nine single-area stars in the same run matched exactly."""
+        samples = list(self._history)
+        samples.append((curr.global_timer, curr.igt_overall, curr.igt_result))
+        if not curr.igt_result:
+            return None
+        if not self._result_written_at_or_after(xcam_frame, samples):
+            return None
+        return curr.igt_result
+
     def _reading(self, frame: int, curr: GameSnapshot, believe_result
                  ) -> tuple[int, str]:
         samples = list(self._history)

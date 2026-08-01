@@ -206,6 +206,7 @@ writes. Measured 10/10 across three TIMER presets (`tools/verify_star_stop.py`)
 and again automatically against that ground truth (`tools/derive_xcam.py`).
 Two consequences that are not local to one detector:
 
+- **The OVERALL counter is not overall across AREAS.** It restarts at an area warp inside a level, so on a multi-area star it measures the time since entering the subarea. Measured 2026-08-01 over eleven grabs: nine single-area stars agreed with Usamune exactly, and the two taken inside a subarea were 356 and 502 frames low. Only the result store knows the whole star, which is why `detectors/star_grab.py` waits for Usamune's write rather than trusting its own derivation of the moment.
 - **The OVERALL counter never stops** — the manual says so and it held under
   every setting, running on 40–79 frames past every grab, all the way to the
   star-select screen. That is what lets us derive the legal x-cam time from

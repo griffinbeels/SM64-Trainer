@@ -21,18 +21,34 @@ entry**, and Usamune's number is that frame's overall counter plus
 midair grabs came back within one frame of Usamune at the dance entry, against
 -4, -11, -23 and -39 frames at the grab.
 
-A GROUND grab enters the dance on the grab frame, so nothing is deferred there
-and nothing about it changes. A MIDAIR grab passes through
-`ACT_FALL_AFTER_STAR_GRAB` first, so this detector holds the grab and emits
-when Mario lands — 0.1 s to 1.3 s later in his own play, and the emit lands on
-the frame the star dance starts rather than the frame Mario touched the star.
-Deriving it ourselves means the recorded time is legal whatever his TIMER
-menu says, which is the point: the tool should not depend on the player having
-configured Usamune correctly.
+A GROUND grab enters the dance on the grab frame; a MIDAIR grab passes through
+`ACT_FALL_AFTER_STAR_GRAB` first, so this detector holds the grab and marks the
+x-cam when Mario lands — 0.1 s to 1.3 s later in his own play.
 
-The fallback exists because a grab that never reaches a dance must still be
-journaled: `igt_timed_at` says which of the two moments the number came from,
-so a row can always explain what it is rather than being silently either.
+## Why the emit then waits again
+
+Deriving the moment is not enough, because **`USAMUNE_OVERALL` is
+subarea-local**: it restarts at an area warp inside a level, so on a
+multi-area star our counter measures the time since entering the subarea. Live
+2026-08-01, his own gate run: nine single-area stars matched Usamune exactly
+and the two subarea stars were 356 and 502 frames low — LLL "Hot-Foot-It into
+the Volcano" 0'40"63 against 0'52"46, SSL "Inside the Ancient Pyramid" 0'02"43
+against 0'19"13. Usamune's result store is the only thing that knows the whole
+star, and it is written 0-2 frames after the dance on an ordinary star and
+27-28 frames after it on those two. So the x-cam says WHICH MOMENT and
+Usamune's own write says WHAT NUMBER, and the emit waits
+`RESULT_SETTLE_FRAMES` for it.
+
+Where no write comes — `STOP` of Grab or None, both already illegal — the
+counter derivation stands in, and `igt_source` is `"counter"` rather than
+`"result"`, which is the honest signal that Usamune was not stopping where a
+leaderboard needs it to. That case keeps the subarea error; it cannot be fixed
+from a counter that restarted.
+
+The grab-moment fallback exists because a grab that never reaches a dance must
+still be journaled: `igt_timed_at` says which of the two moments the number
+came from, so a row can always explain what it is rather than being silently
+either.
 
 IGT comes from the shared IgtClock (detectors/igt_clock.py) — result ->
 counter -> reconstructed precedence; its docstring carries the rationale.
@@ -69,6 +85,11 @@ class _PendingGrab:
     grab_frame: int
     grab_igt: int
     grab_igt_source: str
+    # Filled in when Mario lands. The reading is taken THERE and kept, so the
+    # settle wait that follows can never back-compute the counter across it.
+    xcam_frame: int | None = None
+    xcam_igt: int = 0
+    xcam_igt_source: str = ""
 
 
 class StarGrabDetector:
@@ -77,6 +98,14 @@ class StarGrabDetector:
     # only a backstop for a grab that never reaches a dance at all — a
     # savestate load and a level change both cut the wait short on their own.
     XCAM_TIMEOUT_FRAMES = 300
+    # How long to let Usamune's own result write settle after the x-cam. Live
+    # 2026-08-01, eleven grabs: the write landed 0-2 frames after the star-dance
+    # entry on nine of them and 27-28 frames after it on the two multi-area
+    # stars, which are exactly the two our own counter cannot answer. 45 frames
+    # is 1.5 s and clears the widest observed gap by 60 %. Under `STOP` of Grab
+    # or None no write ever comes and this wait is paid in full — both are
+    # settings a leaderboard already rejects.
+    RESULT_SETTLE_FRAMES = 45
     # A Usamune reset while a grab is pending destroys the context the number
     # would describe, and the counter falling is how it shows. Distinguished
     # from noise by SIZE, not by direction: a snapshot is twelve separate reads
@@ -110,11 +139,30 @@ class StarGrabDetector:
         grab = self._identify(prev, curr)
         if grab is None:
             return events
+        if self._pending is not None:
+            # A second grab while one is still settling. Cannot happen in a
+            # star dance long enough to cover RESULT_SETTLE_FRAMES, but the
+            # alternative to closing the first one is dropping it silently.
+            events.append(self._close_now(self._pending, curr))
         if curr.mario_action in STAR_DANCE_ACTIONS:
-            events.append(self._emit(grab, curr, grab.grab_frame, "xcam"))
-        else:
-            self._pending = grab  # midair: x-cam is the landing, still ahead
+            self._mark_xcam(grab, grab.grab_frame, curr)  # ground: x-cam is now
+        self._pending = grab
         return events
+
+    def _close_now(self, grab: _PendingGrab, curr: GameSnapshot) -> Event:
+        """Emit with the best reading already taken — the x-cam one if Mario
+        has landed, the grab one if he has not."""
+        self._pending = None
+        if grab.xcam_frame is None:
+            return self._emit(grab, curr, grab.grab_frame, "grab",
+                              grab.grab_igt, grab.grab_igt_source)
+        return self._emit(grab, curr, grab.xcam_frame, "xcam",
+                          grab.xcam_igt, grab.xcam_igt_source)
+
+    def _mark_xcam(self, grab: _PendingGrab, frame: int,
+                   curr: GameSnapshot) -> None:
+        grab.xcam_frame = frame
+        grab.xcam_igt, grab.xcam_igt_source = self._clock.igt_at_xcam(frame, curr)
 
     def _identify(self, prev: GameSnapshot,
                   curr: GameSnapshot) -> _PendingGrab | None:
@@ -137,36 +185,49 @@ class StarGrabDetector:
         )
 
     def _settle(self, prev: GameSnapshot, curr: GameSnapshot) -> Event | None:
-        """The pending grab's x-cam has arrived, or can no longer arrive."""
+        """Two waits, in order: for Mario to LAND (which moment), then for
+        Usamune to WRITE (which number). Either can end early and badly."""
         grab = self._pending
-        if curr.mario_action in STAR_DANCE_ACTIONS:
-            self._pending = None
-            # Back-computed to the dance's ENTRY frame, so a poll that arrives
-            # late still lands on the right one — but never before the grab it
-            # belongs to, which a stale action timer could otherwise claim.
-            xcam_frame = max(grab.grab_frame,
-                             curr.global_timer - curr.mario_action_timer)
-            return self._emit(grab, curr, xcam_frame, "xcam")
-        abandoned = (curr.global_timer < prev.global_timer     # savestate load
-                     or curr.curr_level != grab.level          # left the level
-                     or prev.igt_overall - curr.igt_overall
-                     > self.IGT_RESET_DROP_FRAMES              # Usamune reset
-                     or curr.global_timer - grab.grab_frame
-                     >= self.XCAM_TIMEOUT_FRAMES)
-        if not abandoned:
+        broken = (curr.global_timer < prev.global_timer        # savestate load
+                  or curr.curr_level != grab.level             # left the level
+                  or prev.igt_overall - curr.igt_overall
+                  > self.IGT_RESET_DROP_FRAMES)                # Usamune reset
+        if grab.xcam_frame is None:
+            if curr.mario_action in STAR_DANCE_ACTIONS:
+                # Back-computed to the dance's ENTRY frame, so a poll that
+                # arrives late still lands on the right one — but never before
+                # the grab it belongs to, which a stale action timer could
+                # otherwise claim.
+                self._mark_xcam(grab, max(grab.grab_frame,
+                                          curr.global_timer
+                                          - curr.mario_action_timer), curr)
+            elif broken or (curr.global_timer - grab.grab_frame
+                            >= self.XCAM_TIMEOUT_FRAMES):
+                self._pending = None
+                return self._emit(grab, curr, grab.grab_frame, "grab",
+                                  grab.grab_igt, grab.grab_igt_source)
+            else:
+                return None
+        if not broken and (curr.global_timer - grab.xcam_frame
+                           < self.RESULT_SETTLE_FRAMES):
             return None
         self._pending = None
-        return self._emit(grab, curr, grab.grab_frame, "grab")
+        usamune = self._clock.settled_result_at_or_after(grab.xcam_frame, curr)
+        if usamune is not None and grab.xcam_igt_source != "reconstructed":
+            # Usamune's own number for this x-cam beats our derivation of it —
+            # not for precision (they agreed to a frame on nine of eleven live
+            # grabs) but because ours is subarea-local; see
+            # IgtClock.settled_result_at_or_after. The reconstructed carve-out
+            # keeps the reset-race guard: a grab that raced a reset has a
+            # near-zero result written for it, which is the case that guard
+            # exists to refuse.
+            return self._emit(grab, curr, grab.xcam_frame, "xcam",
+                              usamune, "result")
+        return self._emit(grab, curr, grab.xcam_frame, "xcam",
+                          grab.xcam_igt, grab.xcam_igt_source)
 
     def _emit(self, grab: _PendingGrab, curr: GameSnapshot, frame: int,
-              timed_at: str) -> Event:
-        if timed_at == "xcam":
-            igt_frames, source = self._clock.igt_at_xcam(frame, curr)
-        else:
-            # The grab-moment reading, taken back at the grab edge rather than
-            # back-computed from here: this snapshot may be hundreds of frames
-            # and a pause away, and the counter does not count paused frames.
-            igt_frames, source = grab.grab_igt, grab.grab_igt_source
+              timed_at: str, igt_frames: int, source: str) -> Event:
         return Event(
             type="star_collected",
             frame=frame,

@@ -1,4 +1,5 @@
 # tests/test_star_grab.py
+from dataclasses import replace
 from datetime import datetime, timezone
 
 from sm64_events.core.snapshot import GameSnapshot
@@ -22,10 +23,22 @@ def snap(**overrides) -> GameSnapshot:
     return GameSnapshot(**defaults)
 
 
-def run_pairs(detector, snaps):
+def drained(snaps):
+    """Usamune's own result write is allowed to settle after the x-cam, so a
+    fixture that stops at the grab emits nothing at all. The tail is a CLONE of
+    the last sample — same action, same result store, counter advanced with the
+    clock — so it can only end that wait, never change the answer."""
+    last = snaps[-1]
+    ahead = StarGrabDetector.RESULT_SETTLE_FRAMES + 1
+    return [*snaps, replace(last, global_timer=last.global_timer + ahead,
+                            igt_overall=last.igt_overall + ahead)]
+
+
+def run_pairs(detector, snaps, settle=True):
     """Feed consecutive snapshot pairs; return all emitted events."""
+    stream = drained(snaps) if settle else snaps
     events = []
-    for prev, curr in zip(snaps, snaps[1:]):
+    for prev, curr in zip(stream, stream[1:]):
         events.extend(detector.process(prev, curr))
     return events
 
@@ -38,7 +51,7 @@ def test_edge_into_star_dance_emits_identified_event():
                 global_timer=1002, num_stars=6,
                 last_completed_course=1, last_completed_star=3,
                 igt_overall=232, igt_result=231)
-    events = StarGrabDetector().process(prev, curr)
+    events = run_pairs(StarGrabDetector(), [prev, curr])
     assert len(events) == 1
     ev = events[0]
     assert ev.type == "star_collected"
@@ -97,7 +110,7 @@ def test_stale_result_falls_back_to_overall_counter():
 def test_counter_path_includes_display_tick_even_from_zero():
     curr = snap(mario_action=A.ACT_STAR_DANCE_EXIT,
                 igt_overall=0, igt_result=0)
-    ev = StarGrabDetector().process(snap(), curr)[0]
+    ev = run_pairs(StarGrabDetector(), [snap(), curr])[0]
     assert ev.payload["igt_frames"] == 1
     assert ev.payload["igt"] == "0'00\"03"
     assert ev.payload["igt_source"] == "counter"
@@ -181,7 +194,7 @@ def test_history_cleared_when_time_jumps_backward():
 def test_already_collected_star_still_fires_with_flag_true():
     prev = snap(num_stars=6)
     curr = snap(mario_action=A.ACT_STAR_DANCE_NO_EXIT, num_stars=6)
-    events = StarGrabDetector().process(prev, curr)
+    events = run_pairs(StarGrabDetector(), [prev, curr])
     assert len(events) == 1
     assert events[0].payload["already_collected"] is True
 
@@ -189,7 +202,8 @@ def test_already_collected_star_still_fires_with_flag_true():
 def test_every_dance_variant_fires_on_the_grab_frame():
     for action in (A.ACT_STAR_DANCE_EXIT, A.ACT_STAR_DANCE_WATER,
                    A.ACT_STAR_DANCE_NO_EXIT):
-        events = StarGrabDetector().process(snap(), snap(mario_action=action))
+        events = run_pairs(StarGrabDetector(),
+                           [snap(), snap(mario_action=action)])
         assert len(events) == 1, hex(action)
         assert events[0].payload["igt_timed_at"] == "xcam", hex(action)
 
@@ -221,11 +235,12 @@ def test_no_event_without_edge():
 
 
 def test_same_star_twice_produces_two_events():
-    d = StarGrabDetector()
-    first = d.process(snap(), snap(mario_action=A.ACT_STAR_DANCE_EXIT))
-    between = d.process(snap(mario_action=A.ACT_STAR_DANCE_EXIT), snap())
-    second = d.process(snap(), snap(mario_action=A.ACT_STAR_DANCE_EXIT))
-    assert len(first) == 1 and between == [] and len(second) == 1
+    detector = StarGrabDetector()
+    first = run_pairs(detector, [snap(), snap(mario_action=A.ACT_STAR_DANCE_EXIT)])
+    second = run_pairs(detector, [snap(global_timer=2000),
+                                  snap(global_timer=2001,
+                                       mario_action=A.ACT_STAR_DANCE_EXIT)])
+    assert len(first) == 1 and len(second) == 1
 
 
 def test_never_collected_sentinel_is_dropped():
@@ -238,7 +253,7 @@ def test_never_collected_sentinel_is_dropped():
 def test_frame_never_negative():
     curr = snap(mario_action=A.ACT_STAR_DANCE_EXIT,
                 global_timer=1, mario_action_timer=5)
-    events = StarGrabDetector().process(snap(), curr)
+    events = run_pairs(StarGrabDetector(), [snap(), curr])
     assert events[0].frame == 0
 
 
@@ -405,3 +420,62 @@ def test_the_xcam_frame_can_never_precede_the_grab_it_belongs_to():
     events = run_pairs(StarGrabDetector(), snaps)
     assert events[0].frame == GRAB_FRAME
     assert events[0].payload["igt_frames"] >= GRAB_COUNTER
+
+
+# --- Usamune's own write wins, because our counter is SUBAREA-LOCAL ---------
+#
+# Live 2026-08-01, his gate run: nine single-area stars matched Usamune exactly
+# and the only two failures were the two he took inside a subarea. LLL
+# "Hot-Foot-It into the Volcano" read 0'40"63 against Usamune's 0'52"46 and SSL
+# "Inside the Ancient Pyramid" 0'02"43 against 0'19"13 — our number was the time
+# since he entered the volcano/pyramid, his was the whole star. `USAMUNE_OVERALL`
+# restarts at an area warp, so deriving the x-cam correctly is not enough: the
+# moment is ours, the number has to be Usamune's whenever it writes one.
+
+
+def subarea_snaps(*, counter_at_grab=68, fall_frames=3, usamune=574,
+                  write_at=30, stale=452):
+    """A multi-area star: the counter is subarea-local, so Usamune's late write
+    is the ONLY source that knows the whole star's time."""
+    snaps = [snap(global_timer=GRAB_FRAME - 1,
+                  igt_overall=counter_at_grab - 1, igt_result=stale)]
+    for offset in range(fall_frames):
+        snaps.append(snap(global_timer=GRAB_FRAME + offset,
+                          igt_overall=counter_at_grab + offset,
+                          igt_result=stale,
+                          mario_action=A.ACT_FALL_AFTER_STAR_GRAB,
+                          mario_action_timer=offset))
+    for offset in range(fall_frames, fall_frames
+                        + StarGrabDetector.RESULT_SETTLE_FRAMES + 2):
+        snaps.append(snap(global_timer=GRAB_FRAME + offset,
+                          igt_overall=counter_at_grab + offset,
+                          igt_result=usamune if offset >= write_at else stale,
+                          mario_action=A.ACT_STAR_DANCE_EXIT,
+                          mario_action_timer=offset - fall_frames))
+    return snaps
+
+
+def test_a_multi_area_star_takes_usamunes_number_not_our_counter():
+    events = run_pairs(StarGrabDetector(), subarea_snaps(), settle=False)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.payload["igt_frames"] == 574        # the whole star
+    assert ev.payload["igt_frames"] != 72         # time inside the pyramid
+    assert ev.payload["igt_source"] == "result"
+    assert ev.payload["igt_timed_at"] == "xcam"
+    assert ev.frame == GRAB_FRAME + 3             # still OUR x-cam moment
+
+
+def test_the_write_is_waited_for_rather_than_missed_by_a_frame():
+    """It lands one frame after the dance on an ordinary star and 27-28 after
+    it on a multi-area one. Emitting at the x-cam saw neither."""
+    barely = subarea_snaps()[:6]  # a few frames past the landing, no write yet
+    assert run_pairs(StarGrabDetector(), barely, settle=False) == []
+
+
+def test_a_write_that_lands_before_the_xcam_is_still_refused():
+    # STOP=Grab writes once, at the touch. Waiting must not turn that into a
+    # believed answer just because the wait gave it time to be noticed.
+    events = run_pairs(StarGrabDetector(), midair_snaps(10, result=301))
+    assert events[0].payload["igt_source"] == "counter"
+    assert events[0].payload["igt_frames"] == 311

@@ -94,12 +94,26 @@ def settled_result(samples: list[tuple[int, int, int, int]]) -> tuple[int, int] 
     write happens before we start watching, and under `STOP=None` there is
     none, so there is no ground truth to score against and this grab must be
     skipped rather than scored as a perfect match against a stale value."""
-    final = samples[-1][RESULT]
-    written_at = None
+    writes = result_writes(samples)
+    return (samples[-1][RESULT], writes[-1][0]) if writes else None
+
+
+def result_writes(samples: list[tuple[int, int, int, int]]
+                  ) -> list[tuple[int, int]]:
+    """Every change of the result store in the window, as (frame, value).
+
+    Printed rather than summarised because the COUNT decides how long
+    star_grab.py has to wait. If Usamune writes once, late, the emit can leave
+    as soon as that write lands; if it writes twice — a first value at the
+    x-cam and a corrected one tens of frames later, which is what the two
+    multi-area stars of 2026-08-01 look like from the outside — then only the
+    last one is the star's time and the wait has to outlive it. One report
+    settles that; guessing it wrong is silent and wrong by minutes of play."""
+    out = []
     for prev, curr in zip(samples, samples[1:]):
         if curr[RESULT] != prev[RESULT]:
-            written_at = curr[FRAME]
-    return None if written_at is None else (final, written_at)
+            out.append((curr[FRAME], curr[RESULT]))
+    return out
 
 
 def first_sample_in(samples: list[tuple[int, int, int, int]],
@@ -259,6 +273,11 @@ def grab_report(index: int, course_name: str, star_name: str,
     truth_frames, truth_at = truth
     lines.append(f"  Usamune's answer   {format_igt(truth_frames):>9}  "
                  f"({truth_frames}f, written +{truth_at - touch_frame})")
+    writes = result_writes(samples)
+    if len(writes) > 1:
+        detail = ", ".join(f"+{frame - touch_frame}={value}"
+                           for frame, value in writes)
+        lines.append(f"    result store written {len(writes)}x: {detail}")
     # What we SHIP is a candidate like any other, and since 2026-08-01 it is
     # the interesting one: star_grab.py now derives the x-cam itself, so this
     # row is the regression gate. A CONSTANT +0 here is the whole answer.

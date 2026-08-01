@@ -18,7 +18,8 @@ from sm64_events.memory.addresses import (ACT_FALL_AFTER_STAR_GRAB,  # noqa: E40
 from derive_xcam import (ACTION, DANCE_ACTIONS, FRAME, JOURNALED,   # noqa: E402
                          OVERALL, RESULT, SAMPLING_SKEW, SETTLE_FRAMES,
                          PendingGrab, candidates, errors,
-                         first_sample_in, grab_report, settled_result,
+                         first_sample_in, grab_report, result_writes,
+                         settled_result,
                          summary, was_midair)
 
 TOUCH = 9000
@@ -268,3 +269,23 @@ def test_a_pending_grab_keeps_the_samples_taken_before_the_event():
     grab = PendingGrab(1, None, TOUCH, before)
     assert grab.samples[0][FRAME] == TOUCH
     assert len(grab.samples) == 10
+
+
+def test_every_result_write_in_the_window_is_reported_not_just_the_last():
+    """How LONG star_grab.py must wait depends on whether Usamune writes once
+    or twice, and the summary's single 'written +N' cannot tell them apart."""
+    samples = (stream(600, 20, dance_at=2, fall_until=2, stale_result=452)
+               + [(TOUCH + 20, ACT_STAR_DANCE_EXIT, 620, 603),
+                  (TOUCH + 21, ACT_STAR_DANCE_EXIT, 621, 603),
+                  (TOUCH + 40, ACT_STAR_DANCE_EXIT, 640, 999)])
+    assert result_writes(samples) == [(TOUCH + 20, 603), (TOUCH + 40, 999)]
+    assert settled_result(samples) == (999, TOUCH + 40)  # the LAST one
+
+
+def test_a_second_write_is_shown_in_the_grab_report():
+    samples = (stream(600, 20, dance_at=2, fall_until=2, stale_result=452)
+               + [(TOUCH + 20, ACT_STAR_DANCE_EXIT, 620, 603),
+                  (TOUCH + 40, ACT_STAR_DANCE_EXIT, 640, 999)])
+    text, _ = grab_report(1, "Lethal Lava Land", "Hot-Foot-It into the Volcano",
+                          999, "result", TOUCH, samples)
+    assert "written 2x" in text and "+20=603" in text and "+40=999" in text

@@ -52,6 +52,7 @@ Every WebSocket message is a versioned envelope:
 - `igt_source`: `result` (Usamune's own stored final time — exact),
   `counter` (running overall counter, back-computed), `reconstructed` (see
   Behavior notes)
+- `igt_source` **on a star** is also the legality signal: `result` means Usamune wrote a time at or after the x-cam, i.e. its `STOP` was GrabX or Xcam; `counter` means it did not, so `STOP` was Grab or None and the row is not leaderboard-legal. `counter` on a multi-area star is additionally the time spent in the SUBAREA, not the whole star — the overall counter restarts at an area warp and nothing can recover the earlier part.
 - `igt_timed_at` *(star_collected only, added 2026-08-01)*: `xcam` — the time
   is the leaderboard-legal one, taken when Mario landed after the grab — or
   `grab`, the fallback for a grab that never reached a star dance (savestate
