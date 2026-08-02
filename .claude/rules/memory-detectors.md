@@ -86,15 +86,21 @@ emit therefore WATCHES `RESULT_SETTLE_FRAMES` (45) past the x-cam and takes the
 write if one lands at or after it — measured at +0..2 on ordinary stars and
 +27..41 on those two. **It no longer WAITS that long, since 2026-08-01** (live
 report: "when I land, there's STILL a ton of delay after that… now the tool
-feels like it's broken and laggy"). The row is PUBLISHED at
-`PUBLISH_WAIT_FRAMES` (12, ~400 ms — every measured write lands +1..+9) and the
-watch runs on; if the answer CHANGES after that, `star_time_corrected` follows
-and the recorded row is rebuilt. **A DEADLINE, never "publish on the first
-write"** — Usamune writes 2-3 times per grab even on an ordinary star (WF Wild
-Blue +1=328 then +3=330), so leaving on the first published a number the
-correction then moved, on screen, on most grabs (live report 2026-08-01: "it
-writes the entry into the system… and then the xcam happens, which overrides
-the original entry… it should be hidden to the user"). And when
+feels like it's broken and laggy"). The row is PUBLISHED the moment Usamune's
+own written answer AGREES with our derivation of the same x-cam (1-3 frames
+typically, 0 on a ground grab), with `PUBLISH_WAIT_FRAMES` (12, ~400 ms) only
+as the backstop; the watch runs on, and if the answer CHANGES after that,
+`star_time_corrected` follows and the row is rebuilt. **Agreement, never "the
+first write"** — Usamune writes 2-3 times per grab even on an ordinary star
+(WF Wild Blue +1=328 then +3=330) and the FIRST of that burst is the grab-time
+value, so leaving on it published a number the correction then moved, on
+screen, on most grabs (live report 2026-08-01: "it writes the entry into the
+system… and then the xcam happens, which overrides the original entry… it
+should be hidden to the user"). `AGREEMENT_FRAMES` is 1 and not 2 for exactly
+that reason: the counter path runs 1-2 frames under Usamune, so a two-frame
+tolerance matches the grab write. Every grab journals `published_after` and
+its `result_writes` burst, inert, so the next round tunes this from ordinary
+play instead of from argument. And when
 `IgtClock.counter_may_be_subarea_local()` says the counter's zero point may be
 an AREA load, the publish waits the FULL window instead: our number there is
 the time since the pyramid door, which is exactly the impossible PB he saw

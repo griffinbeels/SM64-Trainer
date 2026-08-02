@@ -61,6 +61,12 @@ Every WebSocket message is a versioned envelope:
   the number is legal whatever the TIMER menu says
 - `grab_frame` *(star_collected only, added 2026-08-01)*: the frame Mario
   touched the star. Equal to `frame` on a ground grab, earlier on a midair one
+- `published_after` / `result_writes` *(star_collected only, added
+  2026-08-02)*: OBSERVATIONAL, read by nothing. How many frames past the x-cam
+  this row actually went out, and every Usamune result-store write it saw as
+  `[[offset, value], …]`. The row leaves as soon as Usamune's own answer
+  agrees with our derivation of the same moment, so these two say how long
+  that took on each real grab — the evidence for tuning it further
 
 **A star's time may be revised once, shortly after the grab** (2026-08-01).
 `star_collected` is published as soon as Usamune answers — 0-12 frames after

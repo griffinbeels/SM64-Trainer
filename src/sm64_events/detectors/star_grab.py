@@ -53,11 +53,17 @@ it's broken and laggy… we HAVE THE ANSWER RIGHT WHEN THE STAR DANCE HAPPENS".
 He is right that we do, in every case but one, and the one is knowable after
 the fact rather than before it. So the emit is an OPTIMISTIC UPDATE:
 
-* **Publish** at x-cam + `PUBLISH_WAIT_FRAMES` — 12 frames, ~400 ms, against
-  45 before — UNLESS the clock says its own zero point may be an area load
-  (`IgtClock.counter_may_be_subarea_local`), in which case our number would be
-  the time since that load and there is nothing worth publishing early: that
-  grab waits the full `RESULT_SETTLE_FRAMES` and arrives right the first time.
+* **Publish** the moment Usamune's own written answer AGREES with our
+  derivation of the same x-cam (`_ready_to_publish`) — typically 1-3 frames,
+  and 0 on a ground grab, where Usamune has already written by the time Mario
+  is dancing. Agreement is the point: when both sources say the same number
+  there is nothing left to wait for. Failing that, `PUBLISH_WAIT_FRAMES` (12,
+  ~400 ms) is the backstop, and it publishes Usamune's value regardless — the
+  cost of a disagreement is latency, never a wrong row. UNLESS the clock says
+  its own zero point may be an area load
+  (`IgtClock.counter_may_be_subarea_local`), in which case our number is the
+  time since that load, agreement would be meaningless, and the grab waits the
+  full `RESULT_SETTLE_FRAMES` to arrive right the first time.
 * **Keep watching** to x-cam + `RESULT_SETTLE_FRAMES` regardless. If Usamune's
   answer CHANGES after we published, emit `star_time_corrected` carrying the
   final number and the recorded row is revised in place
@@ -65,14 +71,21 @@ the fact rather than before it. So the emit is an OPTIMISTIC UPDATE:
   own payload, so every consumer of the grab sees one number and never learns
   a correction happened).
 
-The deadline is a DEADLINE, not "publish as soon as a write lands" — that was
+Note what the fast door is NOT: "publish as soon as a write lands". That was
 the shape for one afternoon and it flickered, because Usamune writes more than
 once even on an ordinary star (+1=328 then +3=330 on WF "Shoot into the Wild
-Blue"). Publishing the first of a burst meant correcting to the second a
-second later, on screen: "it writes the entry into the system… and then the
-xcam happens, which overrides the original entry… it should be hidden to the
-user" (2026-08-01). Waiting out the burst is what makes an ordinary star one
-row with one number, forever.
+Blue") and the first of that burst is the GRAB-time value. Publishing it meant
+correcting to the second a second later, on screen: "it writes the entry into
+the system… and then the xcam happens, which overrides the original entry… it
+should be hidden to the user" (2026-08-01). Agreement tells the two apart
+where mere existence could not — 328 is two frames from our derivation and 330
+is on it — so the row leaves at the same moment his own HUD stops changing,
+which is the thing he actually asked for: "we should be able to time it
+perfectly."
+
+Every emitted grab carries `published_after` and the `result_writes` burst it
+saw, journaled and read by nothing, because the remaining latency is an
+argument about that burst and ordinary play can settle it.
 
 So the correction is now a BACKSTOP rather than a routine event: it fires only
 when a write lands after the publish window and says something new, which of
@@ -151,6 +164,13 @@ class _PendingGrab:
     # grab is still unpublished. Its presence is what turns this record from
     # "an event nobody has seen yet" into "a row that may still be corrected".
     published: tuple[int, str] | None = None
+    # Observational, journaled with the event and read by nothing: how many
+    # frames past the x-cam the row actually left, and every result-store
+    # write it saw, as (offset, value). This file's whole remaining latency is
+    # an argument about that burst, and an argument is what a measurement
+    # replaces — every ordinary grab now carries its own evidence.
+    published_after: int = 0
+    writes: list[tuple[int, int]] | None = None
 
 
 class StarGrabDetector:
@@ -182,6 +202,11 @@ class StarGrabDetector:
     # 12 frames takes the LAST write of that burst, so an ordinary star is
     # published once and never corrected.
     PUBLISH_WAIT_FRAMES = 12
+    # How far Usamune's own written answer may sit from our derivation of the
+    # same moment and still count as AGREEMENT — the fast door out of the wait
+    # above (_ready_to_publish). One frame, because the counter path measured
+    # 1-2 frames UNDER Usamune, so two would match the grab-time write.
+    AGREEMENT_FRAMES = 1
     # (floor, ceiling), exclusive of neither end by accident:
     #
     # FLOOR 28 — Usamune never writes the answer once. Live 2026-08-01, his
@@ -329,12 +354,14 @@ class StarGrabDetector:
             # backstop, but a row that lands right the first time is what
             # stops an impossible PB flashing on screen (live report
             # 2026-08-01, the SSL pyramid at 0'02"26 and then 0'27"66).
-            deadline = (self.RESULT_SETTLE_FRAMES if grab.xcam_counter_is_partial
-                        else self.PUBLISH_WAIT_FRAMES)
-            if not broken and waited < deadline:
+            if not broken and not self._ready_to_publish(grab, curr, waited):
                 return []
             igt_frames, source = self._answer(grab, curr)
             grab.published = (igt_frames, source)
+            grab.published_after = waited
+            grab.writes = [(write_frame - grab.xcam_frame, value) for
+                           write_frame, value in
+                           self._clock.result_writes_since(grab.xcam_frame, curr)]
             if broken or waited >= self.RESULT_SETTLE_FRAMES:
                 self._pending = None  # nothing left that could correct it
             return [self._emit(grab, curr, grab.xcam_frame, "xcam",
@@ -353,6 +380,34 @@ class StarGrabDetector:
         if final == grab.published:
             return []   # Usamune agreed with what we already showed him
         return [self._correction(grab, curr, *final)]
+
+    def _ready_to_publish(self, grab: _PendingGrab, curr: GameSnapshot,
+                          waited: int) -> bool:
+        """Has Usamune finished answering — or must we stop waiting anyway?
+
+        The fast door is AGREEMENT. We derive the x-cam number ourselves from
+        the counter and Usamune writes its own into the result store, and when
+        those two say the same thing there is nothing left to learn: no later
+        write can move a number both sources already agree on, except the
+        whole-star correction on a subarea star, which is the branch above.
+        That is what makes it safe to leave BEFORE the deadline — publishing
+        on the mere EXISTENCE of a write is what flickered, because the burst
+        includes the grab-time value (WF: +1=328 when the answer was 330).
+
+        Agreement is exact to a frame, and deliberately not two: the counter
+        path ran 1-2 frames under Usamune across the measured grabs, so a
+        two-frame tolerance would match that 328 and publish the number this
+        whole file exists to refuse. When they disagree by more, the deadline
+        publishes Usamune's own value anyway — the cost of a torn read is
+        latency, never a wrong row."""
+        if grab.xcam_counter_is_partial:
+            return waited >= self.RESULT_SETTLE_FRAMES
+        usamune = self._clock.settled_result_at_or_after(grab.xcam_frame, curr)
+        if (usamune is not None
+                and abs(usamune - grab.xcam_igt) <= self.AGREEMENT_FRAMES
+                and grab.xcam_igt_source != "reconstructed"):
+            return True
+        return waited >= self.PUBLISH_WAIT_FRAMES
 
     def _answer(self, grab: _PendingGrab,
                 curr: GameSnapshot) -> tuple[int, str]:
@@ -390,6 +445,8 @@ class StarGrabDetector:
                 "igt_timed_at": timed_at,
                 "grab_frame": grab.grab_frame,
                 "num_stars": grab.num_stars,
+                "published_after": grab.published_after,
+                "result_writes": grab.writes or [],
             },
         )
 

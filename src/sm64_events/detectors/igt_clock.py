@@ -167,6 +167,24 @@ class IgtClock:
             return None
         return curr.igt_result
 
+    def result_writes_since(self, frame: int,
+                            curr: GameSnapshot) -> list[tuple[int, int]]:
+        """Every observed change of Usamune's result store at or after `frame`,
+        as (frame, value) — the write pattern itself rather than its outcome.
+
+        Usamune writes the store more than once per grab and the shape of that
+        burst is what decides how long an emit has to wait, so it is worth
+        having as data rather than as a remembered summary."""
+        samples = list(self._history)
+        samples.append((curr.global_timer, curr.igt_overall, curr.igt_result))
+        writes, previous = [], None
+        for sample_frame, _, result in samples:
+            if previous is not None and result != previous \
+                    and sample_frame >= frame:
+                writes.append((sample_frame, result))
+            previous = result
+        return writes
+
     def _reading(self, frame: int, curr: GameSnapshot, believe_result
                  ) -> tuple[int, str]:
         samples = list(self._history)

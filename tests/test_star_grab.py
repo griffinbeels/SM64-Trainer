@@ -56,7 +56,9 @@ def test_edge_into_star_dance_emits_identified_event():
     ev = events[0]
     assert ev.type == "star_collected"
     assert ev.frame == 1000  # back-computed: 1002 - 2
-    assert ev.payload == {
+    # Subset, not exact equality: `published_after`/`result_writes` are
+    # observational and belong to nobody's contract (see _PendingGrab).
+    assert ev.payload | {
         "course_id": 1,
         "course_name": "Bob-omb Battlefield",
         "star_id": 2,  # game stores 1-based (3); API is 0-based
@@ -69,7 +71,7 @@ def test_edge_into_star_dance_emits_identified_event():
         "igt_timed_at": "xcam",
         "grab_frame": 1000,
         "num_stars": 6,  # curr.num_stars at grab time
-    }
+    } == ev.payload
 
 
 def test_multi_area_star_uses_usamune_result():
@@ -507,17 +509,21 @@ def test_a_star_usamune_agrees_about_is_never_corrected():
     assert row.payload["igt_frames"] == 72
 
 
-def test_a_burst_of_writes_publishes_once_with_the_last_of_them():
-    # Usamune writes 2-3 times per grab, and the early ones are echoes: WF
-    # "Shoot into the Wild Blue" wrote +1=328 then +3=330 (live 2026-08-01).
-    # Leaving on the FIRST one published a number a correction then moved,
-    # which is the flicker he reported. The publish window is what makes the
-    # burst invisible: one row, the last value, no correction.
-    burst = subarea_snaps(usamune=74, write_at=6, first_write=(4, 72))
+def test_the_grab_time_write_does_not_publish_but_the_xcam_one_does():
+    # The real burst, WF "Shoot into the Wild Blue" (live 2026-08-01): +1=328
+    # is the GRAB-time value and +3=330 is the answer. Our own derivation of
+    # the x-cam says 72 here, so the first write disagrees and is waited
+    # through, and the second AGREES — which is the moment nothing more can be
+    # learned, and the moment the row goes out. Leaving on the mere existence
+    # of a write is what published 328 and then corrected it on screen.
+    burst = subarea_snaps(usamune=72, write_at=6, first_write=(4, 70))
     [(published_at, row)] = emitted_at(burst)
     assert row.type == "star_collected"
-    assert row.payload["igt_frames"] == 74
-    assert published_at == XCAM + StarGrabDetector.PUBLISH_WAIT_FRAMES
+    assert row.payload["igt_frames"] == 72
+    assert published_at == XCAM + 3        # the poll that saw the agreement
+    assert published_at < XCAM + StarGrabDetector.PUBLISH_WAIT_FRAMES
+    # ...and the burst is journaled, so the next round tunes this from data
+    assert row.payload["result_writes"] == [(1, 70), (3, 72)]
 
 
 def test_a_reset_after_publishing_corrects_nothing():
