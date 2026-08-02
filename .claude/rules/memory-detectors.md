@@ -82,9 +82,22 @@ Pyramid" 0'02"43 vs 0'19"13) — our number was the time since he entered the
 volcano/pyramid, Usamune's was the whole star. The counter restarts at an area
 warp, so deriving the x-cam correctly is necessary and not sufficient: **the
 x-cam says WHICH MOMENT, Usamune's own result write says WHAT NUMBER.** The
-emit therefore waits `RESULT_SETTLE_FRAMES` (45) past the x-cam and takes the
+emit therefore WATCHES `RESULT_SETTLE_FRAMES` (45) past the x-cam and takes the
 write if one lands at or after it — measured at +0..2 on ordinary stars and
-+27..28 on those two. Where no write comes (`STOP` of Grab or None, both
++27..41 on those two. **It no longer WAITS that long, since 2026-08-01** (live
+report: "when I land, there's STILL a ton of delay after that… now the tool
+feels like it's broken and laggy"). The row is PUBLISHED as soon as Usamune's
+first post-x-cam write lands, or at `PUBLISH_WAIT_FRAMES` (12) if none does —
+the first write was +1..+9 across every measured grab — and the watch runs on;
+if the answer CHANGES inside it, `star_time_corrected` follows and the recorded
+row is rebuilt with the new number. The wait that protected two grabs in eleven
+is now paid by those two alone, about a second after they already appeared. The
+correction is a compensating event like `attempt_cleared`:
+`projection.time_corrections` folds it into the GRAB's own payload (so the star
+attempt, a segment closed by the same grab, and the 100-coin reattribution all
+read one number and none of them knows a correction exists), and
+`service._track` re-projects when one is journaled. Where no write comes
+(`STOP` of Grab or None, both
 already illegal) the counter derivation stands in and `igt_source` reads
 `"counter"` instead of `"result"`, which IS the legality signal on a star row;
 that case keeps the subarea error and cannot be fixed from a counter that

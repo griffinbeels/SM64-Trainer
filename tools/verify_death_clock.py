@@ -340,6 +340,8 @@ def main() -> None:
                 # detector the app runs, so what it prints is what we would
                 # have journaled.
                 for event in star_detector.process(prev, curr):
+                    if event.type != "star_collected":
+                        continue   # a late time correction, not a new grab
                     stars += 1
                     last_grab_frame = event.frame
                     print(star_report(stars, event.payload["course_name"],

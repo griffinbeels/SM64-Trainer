@@ -62,6 +62,17 @@ Every WebSocket message is a versioned envelope:
 - `grab_frame` *(star_collected only, added 2026-08-01)*: the frame Mario
   touched the star. Equal to `frame` on a ground grab, earlier on a midair one
 
+**A star's time may be revised once, shortly after the grab** (2026-08-01).
+`star_collected` is published as soon as Usamune answers — 0-12 frames after
+the x-cam, so the grab is acknowledged while the dance is still playing — and
+Usamune sometimes writes a better answer later. Only a MULTI-AREA star's does:
+the running counter restarts at an area warp, so Usamune's own whole-star
+write, up to 41 frames after the x-cam, is the only source that knows the
+time. When that write changes the answer, a `star_time_corrected` follows and
+the recorded attempt is rebuilt with the new number. A consumer that keeps its
+own copy of a star's time must handle it; one that re-reads `/api/session` on
+`attempts_invalidated` (which a correction always triggers) needs nothing.
+
 **Breaking change (phase 1):** `game_reset` now fires **only** on backward
 timer jumps into the boot range (console reset / ROM reload). Savestate and
 Usamune section-state loads that previously looked like resets now emit
@@ -80,6 +91,7 @@ Other event types, same envelope:
 | `area_changed` | `level, from, to` | Castle area id edge (lobby=1, upstairs=2, basement=3 — areas of level 6). Same establishing/corrective semantics as `level_changed`: emits on server start and after attach gaps (`from` may equal `to`). `CURR_AREA` live-pinned 2026-06-12 (`0x8033BACA`). |
 | `warp_entered` | `level, area, action, igt_frames, igt, igt_source` | Edge into a warp/pipe-entry action on the already-sampled `mario_action`. The community-comparable timing moment for "entered the pipe" segments — the `level_changed` that follows adds constant fade time, so segment end anchors target this event instead. The `igt` trio (added 2026-07-31, live report: BitDW "No Reds" read 0'35"90 where Usamune showed 0'35"96) is Usamune's own clock at the touch, from the shared `detectors/igt_clock.py` exactly as `star_collected`/`key_grabbed` carry it, so a segment ending here records Usamune's number instead of a `global_timer` delta; `igt_source` is always `"counter"` at a pipe (Usamune writes its result store on a star grab only). |
 | `key_grabbed` | `level, which, igt_frames, igt, igt_source` | Mario grabbed a Bowser key or the B3 grand star. `which` is `"bitdw"` (Bowser 1, level 30), `"bitfs"` (Bowser 2, level 33), or `"grand"` (Bowser 3, level 34). The key detector claims all three fight-ending grabs. B3's grand star is NOT a collectable star — live-verified 2026-06-12: it enters `ACT_JUMBO_STAR_CUTSCENE` (0x1909), numStars unchanged, no star-dance action, `gLastCompleted*` untouched — so `star_collected` is unreachable and the grand star is handled here. `igt`/`igt_frames`/`igt_source` are Usamune's IGT for the fight, from the same shared clock as `star_collected` (so a segment ending on this grab matches Usamune's displayed time exactly, not a wall-frame delta — added 2026-06-12). |
+| `star_time_corrected` | `course_id, star_id, grab_frame, igt_frames, igt, igt_source, igt_reconstructed` | Usamune revised the time of the `star_collected` immediately before it (see above): the row it names keeps its frame, its moment and its identity, and only the NUMBER changes. `frame` is that grab's x-cam. Emitted at most once per grab, ~1.5 s after it, and only when the revised answer differs from the published one — in practice only on a multi-area star. Journaled; the projector folds it back into the grab's own payload (`tracking/projection.py::time_corrections`), so a consumer reading attempts rather than raw events sees one number and never this event. |
 | `spawned` | `level, kind` | Mario gained control at a spawn-in. `kind: "intro"` = leaving `ACT_INTRO_CUTSCENE` (file-select spawn on Castle Grounds — Lakitu Skip start anchor, control begins when the cutscene ends); `kind: "spawn"` = edge into a SPAWN_* action (non-intro spawn-ins). |
 | `segment_armed` | `segment_id, name` | A segment definition's start trigger fired — its RTA timer is now running. **Broadcast-only — never journaled.** Consumers should treat as a live hint only; a plain `/api/session` refresh self-heals the armed state from the projector. |
 | `segment_disarmed` | `segment_id, name` | A segment's timer was stopped without recording an attempt (foreign level change, a warp/savestate that landed outside the segment's start position — moving, not practicing — or silent disarm after a success). **Broadcast-only — never journaled.** |

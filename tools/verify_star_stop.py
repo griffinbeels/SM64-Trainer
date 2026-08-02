@@ -227,6 +227,12 @@ def main() -> None:
             curr = reader.read()
             if prev is not None:
                 for event in detector.process(prev, curr):
+                    # star_grab.py also emits star_time_corrected (Usamune
+                    # revising a subarea star's number after we published it);
+                    # this probe is about which MOMENT the screen shows, so a
+                    # revision to the number is not a second grab.
+                    if event.type != "star_collected":
+                        continue
                     grabs += 1
                     pending.append(PendingGrab(grabs, event, event.frame))
             for grab in pending:

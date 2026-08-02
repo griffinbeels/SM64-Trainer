@@ -169,6 +169,17 @@ class TrackerService:
                        type=event.type, frame=event.frame,
                        wall_time_utc=_iso(event.timestamp_utc),
                        payload=event.payload)
+        if event.type == "star_time_corrected":
+            # Usamune revised a time we already showed him (projection.py
+            # caveat 19). The correction is a compensating event like a clear
+            # or a strat reclassification, and like those it is folded in by a
+            # PRE-PASS — which the sequential projector, fed one row at a
+            # time, cannot run. So rebuild rather than patch the one row: one
+            # door, and the live state cannot drift from what a restart would
+            # rebuild. Measured at ~140 ms over his 20k-event journal, paid
+            # once per SUBAREA star, while Mario is locked in a dance.
+            await self._reproject()
+            return
         proj = self._projector
         target_before = proj.target
         closed = proj.feed(row)
