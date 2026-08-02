@@ -3564,3 +3564,62 @@ def test_merge_requires_both_inputs_enabled():
         end_triggers=[{"type": "level_enter", "to": 8}],
         guards=[], match_mode="loose")
     assert merge_definitions(a, b_disabled, "z")["enabled"] is False
+
+
+def test_step_node_reads_the_place_a_clause_leaves_mario_in():
+    from sm64_events.tracking.segments import step_node
+    assert step_node({"type": "level_enter", "to": 8}) == "8"
+    assert step_node({"type": "level_enter", "to": 6,
+                      "to_subarea": 3}) == "6:3"
+    assert step_node({"type": "area_enter", "level": 6, "area": 3}) == "6:3"
+    assert step_node({"type": "level_exit", "from": 22, "to": 6,
+                      "to_subarea": 3}) == "6:3"
+
+
+def test_step_node_answers_none_for_a_clause_that_names_no_place():
+    # None = unconstrained, which is what keeps key grabs, pipe entries, star
+    # grabs and reset_game out of the topological rules entirely.
+    from sm64_events.tracking.segments import step_node
+    assert step_node({"type": "key_grabbed", "level": 30}) is None
+    assert step_node({"type": "warp_entered", "level": 17}) is None
+    assert step_node({"type": "star_grabbed", "course": 2, "star": 0}) is None
+    assert step_node({"type": "reset_game"}) is None
+    # 52 of the 53 seeded level_exit clauses omit `to`: the definition says
+    # nothing about where the player lands, so neither does this.
+    assert step_node({"type": "level_exit", "from": 24}) is None
+
+
+def test_settled_position_skips_the_transient_lobby():
+    # Every castle entry loads the lobby (area 1) for one poll before warping
+    # to the real area, all on the SAME game frame (detectors/level.py). The
+    # engine must judge the LAST position of a frame, or a basement course
+    # exit reads as "SSL -> Lobby", which is not an edge at all.
+    e = SegmentEngine([LBLJ])
+    e.feed(jev(1, "area_changed", 100,
+               {"level": 8, "from": 1, "to": 1, "from_transient": False}),
+           ctx(level=8))
+    e.feed(jev(2, "level_changed", 200, {"from": 8, "to": 6}),
+           ctx(level=6, prev_level=8))
+    e.feed(jev(3, "area_changed", 200,
+               {"level": 6, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=6, area=1))
+    e.feed(jev(4, "area_changed", 200,
+               {"level": 6, "from": 1, "to": 3, "from_transient": True}),
+           ctx(level=6, area=3))
+    assert e._settled_node == "8"          # not judged yet: frame 200 is live
+    e.feed(jev(5, "mario_acted", 205, {}), ctx(level=6, area=3))
+    assert e._settled_node == "6:3"        # the basement, never the lobby
+
+
+def test_a_reset_forgets_where_mario_was():
+    # game_reset carries a boot-range frame and session_started restarts
+    # global_timer, so a remembered node from before either would be compared
+    # against a frame number that means nothing.
+    e = SegmentEngine([LBLJ])
+    e.feed(jev(1, "area_changed", 100,
+               {"level": 8, "from": 1, "to": 1, "from_transient": False}),
+           ctx(level=8))
+    e.feed(jev(2, "mario_acted", 105, {}), ctx(level=8))
+    assert e._settled_node == "8"
+    e.feed(jev(3, "game_reset", 20, {}), ctx(level=8))
+    assert e._settled_node is None and e._pending_move is None

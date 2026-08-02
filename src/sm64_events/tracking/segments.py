@@ -301,6 +301,7 @@ from sm64_events.memory.addresses import (AREA_LOBBY, BOWSER_STAGE_LEVELS,
                                           region_for_node, star_count,
                                           star_name, world_connections,
                                           world_regions)
+from sm64_events.tracking import topology
 
 _ANCHOR_TYPES = ("practice_reset", "state_loaded")  # attempt-anchor events
 
@@ -809,6 +810,35 @@ def arm_level(trig: dict) -> int | None:
         return trig.get("level")
     if kind in ("level_enter", "level_exit"):
         return trig.get("to")   # level_exit: Mario ends up at the DESTINATION
+    return None
+
+
+# The world NODE a clause leaves Mario standing in once it fires (spec
+# 2026-08-01-topological-segment-validity). This is the FOURTH table in this
+# module read as param NAMES rather than through the match lambdas, and each
+# answers a genuinely different question: `arm_level` = which LEVEL a START
+# trigger leaves him in; `_ORIGIN_PARAMS` = where a definition may be picked
+# from; `_PRECONDITION_PARAM` = where a clause must fire FROM; this one = the
+# node a NEXT step lands him on, which is what the hop-distance rule measures.
+#
+# A type with no branch here, or a branch whose param the clause leaves unset,
+# answers None = "this step names no place" — UNCONSTRAINED, the codebase's
+# unknown-means-yes convention. That is what exempts every Bowser fight
+# (key_grabbed), every pipe entry (warp_entered), every star-ending step and
+# every unpinned `level_exit` from the topological rules, rather than a list of
+# special cases somebody would have to maintain.
+#
+# NOTE a `level_enter to=6` step with no `to_subarea` resolves to the bare "6",
+# which is NOT a node in WORLD_EDGES_* (the interior is keyed by subarea), so
+# `topology.hops` answers None and such a step is unconstrained. Deliberate:
+# mapping it to the lobby the way `region_for_node` does would be a claim about
+# where the player ends up that the clause itself does not make.
+def step_node(clause: dict) -> str | None:
+    kind = clause.get("type")
+    if kind in ("level_enter", "level_exit"):
+        return topology.node_for(clause.get("to"), clause.get("to_subarea"))
+    if kind == "area_enter":
+        return topology.node_for(clause.get("level"), clause.get("area"))
     return None
 
 
@@ -2114,6 +2144,23 @@ class SegmentEngine:
         # exactly that (the projector may later auto-clear an out-of-range
         # success the engine counted here — harmless for the same reason).
         self._best_success: dict[int, int] = {}
+        # THE topological rules' view of where Mario is (spec
+        # 2026-08-01-topological-segment-validity). `_settled_node` is the last
+        # node he demonstrably DWELT in; `_pending_move` is (frame, node) — the
+        # candidate this frame proposes, judged only once the frame ADVANCES.
+        #
+        # The defer is not caution, it is required. Every castle entry loads
+        # the lobby for one poll before warping to the real area, all on ONE
+        # game frame (detectors/level.py), so a judgement taken on the raw
+        # event sees "SSL -> Lobby" (not an edge at all — SSL's only neighbour
+        # is the basement) and then "Lobby -> Basement" (a hop AWAY from any
+        # upstairs destination), for a move that never happened. Taking the
+        # LAST candidate of a frame is the same per-frame collapse the design's
+        # own measurement used, so the number that justified this feature and
+        # the code that implements it cannot drift apart. Same one-frame shape
+        # `_pending` above already uses for deferred destination subareas.
+        self._settled_node: str | None = None
+        self._pending_move: tuple[int, str | None] | None = None
 
     def armed_ids(self) -> set[int]:
         return set(self._armed)
@@ -2143,6 +2190,35 @@ class SegmentEngine:
         for did in list(self._pending):
             if self._pending[did].start_frame < ev.frame:
                 del self._pending[did]
+        # Judge the position change an EARLIER frame proposed, then record this
+        # event's own candidate (spec 2026-08-01-topological-segment-validity).
+        # Runs BEFORE the per-def loop so a cancelled def is not also fed this
+        # event, and before the arm phase so arriving somewhere by warp still
+        # arms what lives there — closures before arming, as everywhere else.
+        self._flush_move(ev, notices)
+        if ev.type in ("session_started", "game_reset"):
+            # global_timer restarts at a session boundary and game_reset
+            # carries a boot-range frame, so a remembered node would be
+            # compared against a frame number from a different epoch.
+            self._settled_node = None
+            self._pending_move = None
+        elif ev.type == "area_changed":
+            # area_changed, never level_changed: this payload names the level
+            # AND the settled area outright, where `ctx.area` during a
+            # level_changed is still the OLD level's (the area detector
+            # establishes one event later on the same tick — see below). Every
+            # real level crossing emits a co-frame area_changed, so recording
+            # only here misses nothing.
+            #
+            # `.get`, not `[...]`: an area_changed whose payload omits `level`
+            # resolves to node None = position UNKNOWN, and `_flush_move`
+            # declines to judge an unknown — the unknown-means-yes convention,
+            # reached here rather than by raising. A bare subscript was the
+            # first version and it took the whole engine down on the first
+            # payload that did not carry the key.
+            self._pending_move = (ev.frame,
+                                  topology.node_for(ev.payload.get("level"),
+                                                    ev.payload.get("to")))
         # Track the most recent level/area transition frame BEFORE per-def
         # processing so the echo guard below can test both echo shapes.
         if ev.type in ("level_changed", "area_changed"):
@@ -2761,6 +2837,24 @@ class SegmentEngine:
             self._armed[d.id] = replace(arm, progress=arm.progress + 1)
             return closed
         return closed   # transparent — the whole feature
+
+    def _flush_move(self, ev, notices) -> None:
+        """Judge the position change an EARLIER frame proposed, now that the
+        frame has advanced and any co-frame supersession has landed (spec
+        2026-08-01-topological-segment-validity).
+
+        Advances `_settled_node` to the last node Mario demonstrably dwelt in
+        — not every node an event mentioned, which is what the transient lobby
+        would otherwise make it.
+        """
+        pending = self._pending_move
+        if pending is None or pending[0] >= ev.frame:
+            return
+        frame, node = pending
+        self._pending_move = None
+        previous, self._settled_node = self._settled_node, node
+        if previous is None or node is None or node == previous:
+            return
 
     def _disarm(self, d, ev, notices) -> None:
         if self._armed.pop(d.id, None) is not None:
