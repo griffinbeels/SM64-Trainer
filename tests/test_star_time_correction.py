@@ -187,6 +187,45 @@ def test_the_hundred_coin_row_closed_by_the_same_grab_is_corrected_too():
     assert hundred.igt_frames == THE_WHOLE_STAR == exit_star.igt_frames
 
 
+# --- entering a subarea is not a reset --------------------------------------
+
+def anchor(id, frame, igt_before, area_load=False):
+    return jev(id, "practice_reset", frame,
+               {"igt_frames_before": igt_before, "mario_acted": True,
+                "acted_tracking": True, "area_load": area_load})
+
+
+def test_entering_a_subarea_records_no_attempt_at_all():
+    # His ruling, 2026-08-01: "if we enter a subarea within a stage, we
+    # fundamentally DID NOT RESET. So, showing a reset there is an error."
+    # The 25 seconds spent walking to the pyramid belong to the star.
+    attempts = project([
+        jev(1, "level_changed", 900, {"from": 16, "to": 8}),
+        anchor(2, 1000, 400),                       # a real retry: keeps its row
+        jev(3, "mario_acted", 1010, {}),
+        anchor(4, 1760, 760, area_load=True),       # into the pyramid
+        grab(5, frame=1830),
+        correction(6, frame=1830),
+    ])
+    assert [a.outcome for a in attempts] == ["success"]
+    [success] = attempts
+    assert success.id == 2                          # the run began at the retry
+    assert success.igt_frames == THE_WHOLE_STAR
+    assert success.rta_frames == 830                # 1830 - 1000, the whole run
+
+
+def test_an_area_load_with_nothing_open_still_starts_an_attempt():
+    # Walk into a course and straight into its subarea: the run has to begin
+    # somewhere, and this is the last boundary before the grab.
+    [attempt] = project([
+        jev(1, "level_changed", 900, {"from": 16, "to": 8}),
+        anchor(2, 1000, 400, area_load=True),
+        jev(3, "mario_acted", 1010, {}),
+        grab(4, frame=1830),
+    ])
+    assert attempt.id == 2 and attempt.anchor_type == "practice_reset"
+
+
 # --- live: a correction is what makes the recorded row change ---------------
 
 def test_the_service_reprojects_so_the_stored_row_carries_the_new_time(tmp_path):

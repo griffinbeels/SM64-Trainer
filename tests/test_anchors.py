@@ -632,3 +632,88 @@ def test_save_dialog_sets_save_pending_on_state_loaded():
                        snap(800, igt=120, action=ACT_IDLE))  # backward jump
     assert events[0].type == "state_loaded"
     assert events[0].payload["save_pending"] is True
+
+
+# ---------------------------------------------------------------------------
+# Entering a subarea is not a retry (live report 2026-08-01: "if we enter a
+# subarea within a stage, we fundamentally DID NOT RESET"). Usamune zeroes its
+# overall counter on the load, so it arrives here as an anchor; the DESTINATION
+# area is what separates it from a reset, and the module docstring carries the
+# three readings that do not work and the journal measurement behind this one.
+# ---------------------------------------------------------------------------
+
+def run(detector, snaps):
+    return [ev for prev, curr in zip(snaps, snaps[1:])
+            for ev in detector.process(prev, curr)]
+
+
+def test_walking_into_a_subarea_is_flagged_as_an_area_load():
+    # SSL: 25 s in area 1, then the pyramid. The area byte moves and the
+    # counter zeroes on the SAME game frame, two polls apart.
+    events = run(AnchorDetector(), [
+        snap(1000, igt=760, action=ACT_WALKING, level=8, area=1),
+        snap(1001, igt=761, action=ACT_WALKING, level=8, area=2),
+        snap(1001, igt=0, level=8, area=2)])
+    [anchor] = [e for e in events if e.type == "practice_reset"]
+    assert anchor.payload["area_load"] is True
+    assert anchor.payload["igt_frames_before"] == 761
+
+
+def test_a_reset_whose_reload_settles_back_to_area_one_is_a_real_reset():
+    # The shape that made this look unfixable: an L-reset walks the area byte
+    # 1 -> 2 -> 1 across ~44 frames and Usamune's counter zeroes on the LAST
+    # edge, so a real retry routinely LOOKS like an area change. Measured 424
+    # times in his journal against 11 genuine entries.
+    events = run(AnchorDetector(), [
+        snap(1000, igt=435, action=ACT_WALKING, level=24, area=1),
+        snap(1001, igt=436, action=ACT_WALKING, level=24, area=2),
+        snap(1044, igt=479, action=ACT_WALKING, level=24, area=1),
+        snap(1045, igt=0, level=24, area=1)])
+    [anchor] = [e for e in events if e.type == "practice_reset"]
+    assert anchor.payload["area_load"] is False
+
+
+def test_a_reset_with_no_area_movement_at_all_is_a_real_reset():
+    events = run(AnchorDetector(), [
+        snap(1000, igt=500, action=ACT_WALKING, level=8, area=1),
+        snap(1002, igt=0, level=8, area=1)])
+    [anchor] = [e for e in events if e.type == "practice_reset"]
+    assert anchor.payload["area_load"] is False
+
+
+def test_the_castle_is_excluded_because_its_areas_are_not_subareas():
+    # Lobby / upstairs / basement are areas 1-3 of level 6 and crossing them
+    # is ordinary movement, not going deeper into a course. Castle attempts
+    # are discarded by the projector anyway; the point is that this flag never
+    # rewrites what an anchor MEANS in the hub.
+    events = run(AnchorDetector(), [
+        snap(1000, igt=500, action=ACT_WALKING, level=6, area=1),
+        snap(1001, igt=501, action=ACT_WALKING, level=6, area=3),
+        snap(1001, igt=0, level=6, area=3)])
+    [anchor] = [e for e in events if e.type == "practice_reset"]
+    assert anchor.payload["area_load"] is False
+
+
+def test_entering_a_level_is_not_an_area_load():
+    # The counter zeroes at the door too, but it measures from there — that IS
+    # the start of the run, so the anchor must stay a real boundary.
+    events = run(AnchorDetector(), [
+        snap(1000, igt=500, action=ACT_WALKING, level=16, area=1),
+        snap(1001, igt=0, action=ACT_WALKING, level=8, area=2),
+        snap(1002, igt=1, level=8, area=2)])
+    anchors = [e for e in events if e.type == "practice_reset"]
+    assert all(a.payload["area_load"] is False for a in anchors)
+
+
+def test_the_zero_may_land_a_few_frames_after_the_area_byte_moves():
+    # The window is not tidiness: a 60 Hz poll of a 30 fps game reads the area
+    # byte and the counter on different polls, and the byte is documented to
+    # move a poll after the level byte. Pair them by RECENCY or the pyramid
+    # entry reads as a retry again whenever the two land apart.
+    events = run(AnchorDetector(), [
+        snap(1000, igt=760, action=ACT_WALKING, level=8, area=1),
+        snap(1001, igt=761, action=ACT_WALKING, level=8, area=2),
+        snap(1002, igt=762, action=ACT_WALKING, level=8, area=2),
+        snap(1004, igt=0, level=8, area=2)])
+    [anchor] = [e for e in events if e.type == "practice_reset"]
+    assert anchor.payload["area_load"] is True

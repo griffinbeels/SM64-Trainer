@@ -841,6 +841,23 @@ class Projector:
 
     def _dispatch(self, ev) -> list[Attempt]:
         if ev.type in ANCHOR_EVENT_TYPES:
+            if ev.payload.get("area_load"):
+                # Going DEEPER into the level is not a retry: "if we enter a
+                # subarea within a stage, we fundamentally DID NOT RESET…
+                # showing a reset there is an error" (2026-08-01). Usamune
+                # zeroes its counter on the load exactly as it does on an
+                # L-reset, which is why this arrives as an anchor at all;
+                # detectors/anchors.py::_is_area_load carries the measurement
+                # that tells the two apart. Closes NOTHING, so the run
+                # continues across the door and its rta spans the whole star.
+                # Still OPENS one if nothing is open — walking into a course
+                # and straight into its subarea has to start an attempt
+                # somewhere, and this is the last boundary before the grab.
+                if self._open is None:
+                    self._open = ev
+                    self._open_acted = False
+                    self._open_castle = self._level in CASTLE_LEVELS
+                return []
             closed = self._close_by_reset(ev)
             self._open = ev
             self._open_acted = False

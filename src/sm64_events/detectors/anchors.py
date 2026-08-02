@@ -77,22 +77,42 @@ frames_since_dialog (live journal 2026-06-14, Lakitu Skip): how many game
   backward global_timer jump clears _last_dialog_frame so a stale recency value
   cannot poison anchors after a rewind. Mirrors frames_since_door exactly.
 
-warp_op / frames_since_warp_op (2026-08-01, INERT — journaled so a future
-  session can decide from data, read by nothing yet): the game's own pending
-  warp op (`sDelayedWarpOp`) most recently seen non-zero, and how long ago.
-  The open question it exists to answer: **an in-course AREA load fires a
-  practice_reset exactly as an L-reset does** — Usamune zeroes the overall IGT
-  either way — so entering the SSL pyramid records a reset the player never
-  made (live report 2026-08-01: "I *didn't* reset; I entered the pyramid").
-  Nothing already sampled separates them. Measured across the whole journal:
-  of the anchors that coincide with an in-course area edge, only 6% carry a
-  warp ACTION and 6% a nearby `warp_entered`, while 21% of the ones that are
-  plainly L-resets do — the signal is both insensitive and non-specific, so
-  the obvious fix would have swallowed 424 real resets to suppress 53 false
-  ones. The warp OP is the game's own reason for a transition and is the next
-  candidate; a reset that does not go through the warp system would carry
-  none. Do not act on it until an anchor set with known ground truth says it
-  separates.
+area_load (2026-08-01, live report: "if we enter a subarea within a stage, we
+  fundamentally DID NOT RESET… showing a reset there is an error"): Usamune
+  zeroes the overall IGT on an in-course AREA load exactly as it does on an
+  L-reset, so walking into the SSL pyramid fired an anchor and the projector
+  recorded a 25-second reset the player never made. This flag says the zero
+  came from a load, and `tracking/projection.py` records no attempt for it.
+
+  **The discriminator is the DESTINATION area, and it took three passes of
+  measurement to find, because the obvious readings are all wrong.** Against
+  his whole journal, 477 anchors coincide with an in-course area edge:
+    - a warp ACTION on the anchor covers 6% of them, against 21% of the plain
+      resets — insensitive AND pointing the wrong way. Same for a nearby
+      `warp_entered` (6% vs 4%) and for door recency (0%).
+    - 424 of the 477 move BACK to area 1, and reading those as "L-resets taken
+      inside a subarea" is what made this look unfixable. They are not. 330
+      follow a level entry or another anchor within 150 frames — they are the
+      TAIL of a load, the area byte settling (entering SSL walks it 3 → 2 → 1
+      across 47 frames, firing an anchor at each step). The rest are the
+      reset's own reload: an L-reset in WF walks the byte 1 → 2 → 1 over 44
+      frames and Usamune's counter zeroes on the LAST edge, which is why a
+      real reset so often looks like an area change.
+    - the edges that go DEEPER (destination != area 1) are the real subarea
+      entries, and there are 11 of them in the played-then-transitioned group.
+  A course always starts in area 1 (the castle hubs, where 1/2/3 are lobby/
+  upstairs/basement, are excluded here for that reason), so "the counter
+  zeroed on an edge into an area that is not 1" is the entry and everything
+  else is a reset or its own echo. Recency, not co-frame equality: a 60 Hz
+  poll of a 30 fps game reads the area byte and the counter on different
+  polls of the SAME game frame, so the edge and the zero need a window
+  (AREA_LOAD_WINDOW) rather than an exact match.
+
+warp_op / frames_since_warp_op (2026-08-01, INERT — read by nothing): the
+  game's own pending warp op (`sDelayedWarpOp`) most recently seen non-zero,
+  and how long ago. Kept as evidence for the case `area_load` above does NOT
+  cover: walking back OUT of a subarea zeroes the counter the same way, and
+  is indistinguishable from a reset by destination alone.
 
 Pause streak: consecutive game frames where global_timer advanced but the
   overall IGT did not — game logic stopped, i.e. the Usamune pause menu (or a
@@ -132,14 +152,22 @@ acceptable for attempt tracking, but the payload distinction matters for
 the anchor→outcome clock, so characterize it once on real hardware."""
 from sm64_events.core.events import Event
 from sm64_events.core.snapshot import GameSnapshot
-from sm64_events.memory.addresses import (ACT_INTRO_CUTSCENE, DEATH_ACTIONS,
-                                           DIALOG_ACTIONS, DOOR_ACTIONS,
-                                           PASSIVE_ACTIONS, SAVE_DIALOG_ACTIONS)
+from sm64_events.memory.addresses import (ACT_INTRO_CUTSCENE, CASTLE_LEVELS,
+                                           DEATH_ACTIONS, DIALOG_ACTIONS,
+                                           DOOR_ACTIONS, PASSIVE_ACTIONS,
+                                           SAVE_DIALOG_ACTIONS)
 
 BOOT_TIMER_MAX = 120   # global_timer below ~4 s after a backward jump = console reset; shared by lifecycle.py
 NEAR_ZERO_IGT = 30     # 30 frames = 1 s at 30 fps; <= so exactly 1 s still counts
 IGT_WRAP_CEILING = 65000  # u16 wrap guard: 65535->0 looks like a reset without this
 PAUSE_WARP_MIN_STREAK = 5  # walked load echoes pause 0-3 frames, menu warps 13+
+# How far apart the area edge and the counter zero may be and still be one
+# event. Not zero: a 60 Hz poll of a 30 fps game reads them on different polls
+# of the same game frame, and the area byte is documented to move a poll after
+# the level byte. Mirrors IgtClock.AREA_LOAD_WINDOW, which pairs the same two
+# facts for the same reason.
+AREA_LOAD_WINDOW = 10
+COURSE_START_AREA = 1  # every course spawns Mario here; only the castle differs
 # (live logs 2026-06-12; segments._MENU_PAUSE_FRAMES mirrors the same evidence)
 
 
@@ -153,6 +181,7 @@ class AnchorDetector:
         self._pending_warp: Event | None = None  # pause-warp anchor awaiting position-stable tick
         self._save_menu_seen = False  # save-prompt screen observed this anchor period
         self._last_warp_op: tuple[int, int] | None = None  # (frame, op), inert — see docstring
+        self._last_area_edge: tuple[int, int] | None = None  # (frame, area entered)
 
     def process(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         # Self-heal on backward global_timer jump (domain rule 4): stale door
@@ -197,6 +226,13 @@ class AnchorDetector:
         # read by nothing.
         if curr.pending_warp_op:
             self._last_warp_op = (curr.global_timer, curr.pending_warp_op)
+        # Where the area last moved TO, within this level. A level change is
+        # not an area load — the counter measures from the door, which is the
+        # start of the run — so it clears the pairing rather than setting it.
+        if curr.curr_level != prev.curr_level:
+            self._last_area_edge = None
+        elif curr.curr_area != prev.curr_area:
+            self._last_area_edge = (curr.global_timer, curr.curr_area)
         events = self._classify(prev, curr)
         if events:
             self._pending_warp = None  # one load, one anchor: classified wins
@@ -269,6 +305,18 @@ class AnchorDetector:
             self._pause_streak += curr.global_timer - prev.global_timer
         # equal global_timer: polled faster than one frame — no information
 
+    def _is_area_load(self, curr: GameSnapshot) -> bool:
+        """Did Usamune's counter zero because Mario went DEEPER into the level
+        — into the pyramid, the volcano — rather than because he retried?
+
+        The full derivation, the three readings that do not work, and why the
+        destination area is the one that does, are in the module docstring."""
+        if self._last_area_edge is None or curr.curr_level in CASTLE_LEVELS:
+            return False
+        frame, entered = self._last_area_edge
+        return (entered != COURSE_START_AREA
+                and curr.global_timer - frame <= AREA_LOAD_WINDOW)
+
     def _classify(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         # frames_since_door: how many game frames have elapsed since the most
         # recent tick where a door action was observed.  None if no door has
@@ -291,7 +339,8 @@ class AnchorDetector:
             if self._last_warp_op else None)
         observed = {"warp_op": warp_op,
                     "frames_since_warp_op": frames_since_warp_op,
-                    "area": curr.curr_area, "prev_area": prev.curr_area}
+                    "area": curr.curr_area, "prev_area": prev.curr_area,
+                    "area_load": self._is_area_load(curr)}
         if curr.global_timer < prev.global_timer:
             if curr.global_timer < BOOT_TIMER_MAX:
                 return []  # console reset — GameResetDetector owns this
