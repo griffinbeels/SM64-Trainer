@@ -48,6 +48,35 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
   showing as ACTIVE SEGMENT ... Running — nothing below disarms a def whose
   player then stays put.  game_reset is exempt (ctx.level is the PRE-reset
   level until the next level_changed).
+- TOPOLOGICAL VALIDITY (spec 2026-08-01, live report: WF -> SSL reading ACTIVE
+  SEGMENT inside the Bowser 1 arena, and LLL -> HMC reading ACTIVE SEGMENT
+  inside LLL).  Every settled position change is judged ONE FRAME LATE against
+  the world graph in memory/addresses.py, by SegmentEngine._flush_move:
+    (1) a move that is not an EDGE cancels every armed def (the warp menu or a
+        savestate fabricated it), and
+    (2) a legal move that strictly INCREASES the hop count to a def's next
+        required place cancels that def.
+  Both are SILENT (no row -- a movement that never happened must not bank a
+  failure) and both exempt an arm that began AT OR AFTER the move, so warping
+  somewhere to practise still arms what lives there.  A step naming no place
+  (step_node -> None) is unconstrained, which is what keeps fights, pipe
+  entries and star endings out of rule (2) without a list of special cases; so
+  is a node the def itself names as a step (declared_nodes), which is how a
+  route that deliberately re-enters a place says so.
+  The ONE-FRAME DEFER IS REQUIRED, not cautious: every castle entry loads the
+  lobby for a poll before settling, so judged raw a basement course exit reads
+  as the non-edge "SSL -> Lobby".
+  A topological cancel is the ONLY disarm in this engine the player can undo --
+  see SegmentEngine._cancelled: a real anchor at the position the arm stood in
+  brings it back (redoing a `level_exit from=30` start would mean redoing a
+  whole Bowser fight), a real anchor ELSEWHERE forfeits it for good, and it
+  expires on the same staleness budget a loose arm gets.
+  This deliberately REVERSES can_run_from's refusal to consult that table; the
+  circularity that refusal named is answered by
+  tools/measure_topology_cancels.py, which scores the rules against the
+  JOURNAL -- 82 of 82 successes survive on one, 110 of 112 on the other, and
+  both losses were read back to the raw events and ARE the live report itself,
+  recorded as a time.
 - anchor closures are POSITION-GATED for _feed_strict/_feed_waypoint (segment
   swap, live report 2026-06-12) — see the LOOSE bullet below for why
   _feed_loose does NOT inherit the "elsewhere" half of this gate. Each _Arm
