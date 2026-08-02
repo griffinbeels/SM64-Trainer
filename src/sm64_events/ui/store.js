@@ -1,6 +1,7 @@
 // src/sm64_events/ui/store.js — session state + live WS subscription
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { getJSON, send } from "./api.js";
+import { coalesce } from "./coalesce.js";
 import { getRankIconStyle, setRankIconStyle } from "./components/rankicon.js";
 
 const REFRESH_ON = new Set(["attempt_completed", "attempts_invalidated",
@@ -324,6 +325,22 @@ export function useTracker() {
 
   useEffect(() => { refresh(); }, [clock, scope, refresh]);
 
+  // Every REFRESH_ON event goes through ONE coalescer (coalesce.js): a grab
+  // publishes star_collected and attempt_completed in the same server tick, so
+  // firing per event meant two /api/session + two /api/marelo fetches back to
+  // back, racing each other home. Built once — refresh, refreshMarelo and
+  // setMareloRev are all stable across renders.
+  const requestRefresh = useRef(null);
+  if (requestRefresh.current === null) {
+    requestRefresh.current = coalesce(async () => {
+      // Bumped at the START of the run rather than per event: the Rank tab
+      // keys its own fetches off this counter, so it should reload alongside
+      // this one instead of a round trip behind it.
+      setMareloRev((prevRev) => prevRev + 1);
+      await Promise.all([refresh(), refreshMarelo()]);
+    });
+  }
+
   useEffect(() => {
     let ws, closed = false;
     function connect() {
@@ -347,11 +364,7 @@ export function useTracker() {
       ws.onmessage = (e) => {
         const ev = JSON.parse(e.data);
         setFeed((f) => [ev, ...f].slice(0, 200));
-        if (REFRESH_ON.has(ev.type)) {
-          refresh();
-          refreshMarelo();
-          setMareloRev((prevRev) => prevRev + 1);
-        }
+        if (REFRESH_ON.has(ev.type)) requestRefresh.current();
         if (RUN_REFRESH_ON.has(ev.type)) refreshRun();
         if (ev.type === "segment_armed") {
           const id = ev.payload.segment_id;
