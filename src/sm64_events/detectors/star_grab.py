@@ -54,6 +54,19 @@ counter derivation stands in, and `igt_source` is `"counter"` rather than
 leaderboard needs it to. That case keeps the subarea error; it cannot be fixed
 from a counter that restarted.
 
+## Why this detector runs FIRST in the chain
+
+Both waits mean the event describes a frame already past, and a reset or a
+level change ENDS them early — so it routinely lands on the very tick another
+detector closes or opens an attempt. `main.build_detectors` therefore
+publishes this one before every closer: the held grab takes the attempt it
+belongs to, and the reset that broke its wait finds nothing open, which is
+already how a reset after a settled grab behaves. Without that ordering one
+grab records twice — a reset row AND a success row (live report 2026-08-01,
+his ruling: "we should NOT ever count a reset once we've triggered the star
+grab"). That docstring carries the reasoning and why a sort by frame is not
+the same thing; `tests/test_reset_during_star_grab.py` holds the door.
+
 The grab-moment fallback exists because a grab that never reaches a dance must
 still be journaled: `igt_timed_at` says which of the two moments the number
 came from, so a row can always explain what it is rather than being silently

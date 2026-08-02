@@ -117,7 +117,10 @@ fall/dance pair to derive one from
 **Add a new event type:** tests first (`snap(**overrides)` fixture pattern from
 test_star_grab.py) → `detectors/<name>.py` with `process(prev, curr) ->
 list[Event]` → new memory fields go through addresses.py (+VERIFY) and a
-defaulted GameSnapshot field → wire into `main.py` (resets before grabs) →
+defaulted GameSnapshot field → wire into `main.py` (order rationale lives in
+`build_detectors`' own docstring; the rule that bites is that an event
+describing an EARLIER frame — a held emit — is published before every detector
+that closes an attempt, or one thing records as two) →
 render in the relevant `ui/components/*.js` (e.g. `feed.js`) if user-visible →
 document payload in README → full pytest + live check.
 

@@ -7,12 +7,19 @@ journal id of the attempt's first event: stable across rebuilds.
 
 Caveats (hard-won — keep these current):
 
-1. Same-tick reset-race: when a practice_reset and star_collected land in
-   the same poll tick (anchors run before star_grab), the reset opens a new
-   attempt and the grab closes it with rta near 0 while igt carries the
-   PRIOR attempt's reconstructed time (see star_grab.py docstring) — the
+1. Same-tick reset-race — HISTORICAL journals only, since 2026-08-01: a
+   practice_reset followed by a star_collected in the same poll tick opens a
+   new attempt and closes it on the grab, with rta near 0 while igt carries
+   the PRIOR attempt's reconstructed time (see star_grab.py docstring) — the
    row's two clocks legitimately disagree; consumers must prefer igt for
-   such rows.
+   such rows. Nothing in this projector changed and nothing should: replaying
+   those rows the same way is what keeps old journals stable. What changed is
+   upstream, so no NEW journal can take that shape — the held grab is
+   published before the reset that broke its wait (main.build_detectors'
+   docstring), so it closes the attempt it belongs to and the reset finds
+   nothing open. Read in the other direction, that ordering is what this
+   caveat was always describing: one grab used to record twice, a reset row
+   AND a success row (live report 2026-08-01).
 
 2. Clearing invariant: attempt_cleared/attempt_restored payloads carry
    Attempt.id, which is the journal id of the attempt's FIRST event — for

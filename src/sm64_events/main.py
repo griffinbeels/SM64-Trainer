@@ -67,7 +67,6 @@ def build_detectors() -> list:
 
     Order is load-bearing for attempt state: level changes abandon stale
     attempts BEFORE the same tick's igt-reset anchor opens the next one;
-    resets before grabs (see projection.py docstring on the same-tick race);
     dust tricks before grabs so a same-tick rollout/jump attaches to the
     attempt the grab closes.  New primitives slot between level and anchors:
     area follows level (same establishing discipline); key/spawn are stateless
@@ -78,11 +77,42 @@ def build_detectors() -> list:
     its position is informational for the same reason.
     area_changed reads CURR_AREA (gCurrAreaIndex, live-pinned 2026-06-12);
     castle areas: 1=lobby, 2=upstairs, 3=basement — see addresses.py.
+
+    ## Why star_grab is FIRST (2026-08-01, live report)
+
+    Since the x-cam fix, `star_collected` is never synchronous with the grab:
+    the detector holds the grab and emits it 45+ frames later, or the moment a
+    reset/level change breaks that wait.  So on the tick the player resets out
+    of a star dance, ONE tick carries two events describing two different
+    moments — a grab that already happened, and a reset happening now.  This
+    list is the order they are journaled in, and journaling them the way we
+    LEARNED them rather than the way they HAPPENED gave the reset the open
+    attempt and left the grab to open a second row: one star, a reset row and a
+    success row (live report 2026-08-01, `#2 ✗ reset 0'14"06` sitting under
+    `#3 ✓ 0'13"53` for a single WF grab).  A held event describes the past, so
+    it is published before anything describing the present — then the grab
+    closes the attempt it belongs to and the reset finds nothing open, which is
+    already how a reset AFTER a settled grab behaves.  Same fix, same reason,
+    for `game_reset` and a level change out of the dance.
+
+    This is ordering, not frame arithmetic: sorting a tick's events by `frame`
+    would look equivalent and is not, because `game_reset` restarts
+    gGlobalTimer — its frame is a small post-boot number while the grab it
+    raced carries a large pre-reset one, so a frame sort puts them in exactly
+    the wrong order (a different epoch, not a later moment).
+
+    It does not disturb the dust rule above: a rollout/jump event needs a
+    landing→launch action edge, which Mario cannot produce while he is in a
+    star dance, so a dust event and a settling grab cannot share a tick in the
+    first place — and a rollout on the GRAB tick is now ~45 frames ahead of the
+    emit whatever this order says.  Pinned by
+    tests/test_reset_during_star_grab.py, mutation-proved by moving this
+    detector back to the end.
     """
-    detectors = [GameResetDetector(), LevelChangeDetector(),
+    detectors = [StarGrabDetector(), GameResetDetector(), LevelChangeDetector(),
                  AreaChangeDetector(), StageChangeDetector(), AnchorDetector(),
                  DeathDetector(), DustTrickDetector(), WarpDetector(),
-                 KeyGrabDetector(), SpawnDetector(), StarGrabDetector()]
+                 KeyGrabDetector(), SpawnDetector()]
     return detectors
 
 

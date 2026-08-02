@@ -1,18 +1,23 @@
 # tests/test_composition.py
-"""Composition-root contracts the runtime depends on (see projection.py
-docstring: level_changed must precede anchors; anchors precede grabs)."""
+"""Composition-root contracts the runtime depends on (see build_detectors'
+own docstring: the held grab precedes everything that closes an attempt;
+level_changed precedes anchors)."""
 from pathlib import Path
 
 import sm64_events
+from sm64_events.main import build_detectors
 
 
 def test_detector_order_is_load_bearing():
-    src = (Path(sm64_events.__file__).parent / "main.py").read_text(encoding="utf-8")
-    order = ["GameResetDetector", "LevelChangeDetector", "AnchorDetector",
-             "DeathDetector", "StarGrabDetector"]
-    # Use rindex so import-line occurrences (alphabetical) are skipped in
-    # favour of the last occurrence, which is inside the detectors = [...] list.
-    positions = [src.rindex(name) for name in order]
+    # StarGrabDetector leads because star_collected is HELD and describes a
+    # frame already past — published after a same-tick reset it would leave
+    # the reset holding the attempt the grab belongs to (live report
+    # 2026-08-01; the behaviour itself is pinned by
+    # tests/test_reset_during_star_grab.py, this is only the wiring).
+    order = ["StarGrabDetector", "GameResetDetector", "LevelChangeDetector",
+             "AnchorDetector", "DeathDetector"]
+    wired = [type(detector).__name__ for detector in build_detectors()]
+    positions = [wired.index(name) for name in order]
     assert positions == sorted(positions)
 
 
