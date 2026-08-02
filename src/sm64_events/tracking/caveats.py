@@ -54,10 +54,21 @@ def caveats_for(pb_row, attempt) -> list[str]:
         return []
     found = []
     if attempt is not None:
-        # "grab" is also what a star recorded BEFORE the x-cam fix stamps:
-        # `igt_timed_at` did not exist in the payload then, and its absence is
-        # exactly "this row is the grab quantity" (projection.py).
-        if attempt.timed_at == "grab":
+        # Two different rows wear this one mark, and keeping them apart is
+        # what stopped a refusal from being wrong 669 times (2026-08-02):
+        #   "grab"  — PROVEN: the x-cam never happened and the payload says so.
+        #   None on a STAR — UNKNOWN: recorded before `igt_timed_at` existed,
+        #     so it may be either. Legacy rows overwhelmingly took Usamune's
+        #     own stored number (`igt_source: "result"`, 669 of 670), which is
+        #     the x-cam value under STOP=Xcam and on any ground grab and the
+        #     grab value under GrabX with a real fall — and nothing journaled
+        #     says which.
+        # Both are marked, because a caveat's job is "this may not mean what
+        # the rank implies" and an unverifiable time qualifies. Only the
+        # PROVEN one blocks a save (pb_blocked_by) — the segment guard is what
+        # keeps every segment row, whose timed_at is None by construction, out
+        # of a mark about a moment segments do not have.
+        if attempt.segment_id is None and attempt.timed_at in ("grab", None):
             found.append("grab_timed")
         if (attempt.timed_by == "delta"
                 and attempt.closed_by in IGT_BEARING_EVENT_TYPES):
@@ -73,3 +84,49 @@ def caveat_for(pb_row, attempt) -> str | None:
     """The ONE caveat a surface draws for this PB, worst first, or None."""
     found = caveats_for(pb_row, attempt)
     return next((key for key in CAVEAT_SEVERITY if key in found), None)
+
+
+def pb_blocked_by(attempt) -> str | None:
+    """Why this attempt may NOT be saved as a PB — a caveat key, or None.
+
+    A caveat says a saved time does not mean what the rank beside it implies.
+    This says the same thing one step earlier, about a time that is not saved
+    yet: "these fake PBs (fake because only xcam timing is legal) just
+    shouldn't be allowed" (2026-08-02). A star timed at the GRAB is not an
+    early version of a legal time, it is a different quantity — Usamune stops
+    at the x-cam and a leaderboard accepts nothing else — so the honest thing
+    is to refuse the save rather than record it and mark it afterwards.
+
+    THE predicate for both halves of that: `tracking/service.py::save_pb`
+    raises on it and `views._attempt_json` ships it so the button can be drawn
+    disabled with the reason. Two doors computing "is this saveable" their own
+    way is the divergent-duplication class, and here the drift would be a
+    button that offers what the server refuses.
+
+    Returns a caveat KEY rather than a sentence, so the browser draws it out of
+    the vocabulary it already has (`ui/components/marks.js`) — the same glyph
+    and the same words as the badge on a PB already saved with this problem.
+
+    Not blocked: `old_clock` and `unattributed`. Both are about a time that is
+    real and comparable to something, and refusing to save them would delete a
+    legitimate record to make a point. Only the wrong QUANTITY is blocked.
+
+    Both clocks are refused, not just igt. When the x-cam never happened the
+    run's recorded end IS the grab, so the rta measures to that same illegal
+    moment; letting the same fake time through on the other clock would be the
+    rule with a hole in it.
+
+    Blocked on PROOF, never on a guess. `timed_at == "grab"` means the payload
+    itself says the x-cam never happened; `None` on a star means the row
+    predates the key and its legality is simply unknown (669 of his 670 legacy
+    rows took Usamune's own stored number, which is the legal quantity under
+    STOP=Xcam and on any ground grab). Those are MARKED and still saveable —
+    refusing them would delete a legal record on an assumption nobody
+    measured, and it is most of his history.
+
+    Segments are never blocked: `timed_at` is None for every non-star closure
+    (projection.py), and a segment has no x-cam to be legal about."""
+    if attempt is not None and attempt.segment_id is None \
+            and attempt.timed_at == "grab":
+        return "grab_timed"
+    return None

@@ -27,6 +27,7 @@ from sm64_events.ranks.classify import RANK_MODES
 from sm64_events.ranks.standards import entity_key
 from sm64_events.storage.db import Database, EventRow
 from sm64_events.tracking import practicable
+from sm64_events.tracking.caveats import pb_blocked_by
 from sm64_events.tracking.defaults import resolve_steps
 from sm64_events.tracking.projection import (Projector, journal_id, replay,
                                              wipe_matches)
@@ -1492,6 +1493,14 @@ class TrackerService:
             raise ValueError(f"attempt {attempt_id} is not a saveable success")
         if attempt.segment_id is not None and timer_mode != "rta":
             raise ValueError("segments are RTA-only")
+        blocked = pb_blocked_by(attempt)
+        if blocked is not None:
+            # The door, not the decoration: the button is drawn disabled from
+            # the same predicate, but a PB is reachable by API and a fake one
+            # keeps GRADING once it is in the pbs table (that is what made a
+            # cleared attempt's leftover PB read MARIO 1 for a week).
+            raise ValueError(
+                f"attempt {attempt_id} cannot be saved as a PB ({blocked})")
         frames = attempt.igt_frames if timer_mode == "igt" else attempt.rta_frames
         if frames is None:
             raise ValueError(f"attempt {attempt_id} has no {timer_mode} clock")

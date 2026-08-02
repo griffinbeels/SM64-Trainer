@@ -185,7 +185,15 @@ def seed_practice(service, course_id: int = FIXTURE_COURSE,
                 type="star_collected", frame=1350 + index * 1000,
                 timestamp_utc=now,
                 payload={"course_id": course_id, "star_id": star_id,
-                         "igt_frames": frames}))
+                         "igt_frames": frames,
+                         # An x-cam-timed grab, i.e. the ordinary modern one.
+                         # WITHOUT this key a star replays as the GRAB
+                         # quantity (projection.py: its absence is exactly
+                         # what a pre-2026-08-01 row means), which cannot be
+                         # saved as a PB — and this fixture saves one two
+                         # steps later to reach the state every render gate
+                         # measures.
+                         "igt_timed_at": "xcam"}))
 
     asyncio.run(go())
 

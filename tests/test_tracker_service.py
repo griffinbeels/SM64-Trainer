@@ -19,8 +19,13 @@ def ev(type_, frame, payload=None):
 
 
 def star(frame, course=2, star_id=2, igt=343):
+    # `igt_timed_at` is not decoration here: a star_collected payload WITHOUT
+    # it replays as the grab quantity (projection.py — its absence is exactly
+    # what a pre-2026-08-01 row means), and a grab-timed star cannot be saved
+    # as a PB. This helper stands for an ordinary modern grab, so it says so.
     return ev("star_collected", frame,
-              {"course_id": course, "star_id": star_id, "igt_frames": igt})
+              {"course_id": course, "star_id": star_id, "igt_frames": igt,
+               "igt_timed_at": "xcam"})
 
 
 def make(tmp_path):
@@ -2041,3 +2046,96 @@ def test_a_live_PB_survives_the_orphan_sweep(tmp_path):
     asyncio.run(svc.save_pb(attempt.id, "igt"))
     asyncio.run(svc._reproject())
     assert [row["attempt_id"] for row in db.pbs()] == [attempt.id]
+
+
+# ---------------------------------------------------------------------------
+# A grab-timed star cannot be saved as a PB (2026-08-02): "these fake PBs
+# (fake because only xcam timing is legal) just shouldn't be allowed". The
+# button is drawn disabled from the SAME predicate (views._attempt_json's
+# `pb_blocked_by`), but this is the door — a PB row keeps GRADING once it is
+# in the table, and the API is reachable without the button.
+# ---------------------------------------------------------------------------
+
+def grab_timed_star(frame=1350, igt=343):
+    return ev("star_collected", frame,
+              {"course_id": 2, "star_id": 2, "igt_frames": igt,
+               "igt_timed_at": "grab"})
+
+
+def test_a_grab_timed_star_is_refused_as_a_pb(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(grab_timed_star()))
+    aid = db.attempts()[0].id
+    with pytest.raises(ValueError, match="grab_timed"):
+        asyncio.run(svc.save_pb(aid, "igt"))
+    assert db.pbs() == []
+
+
+def test_the_other_clock_is_refused_too(tmp_path):
+    # When the x-cam never happened the run's recorded END is the grab, so the
+    # rta measures to the same illegal moment — allowing it would be the rule
+    # with a hole in it.
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(grab_timed_star()))
+    aid = db.attempts()[0].id
+    with pytest.raises(ValueError, match="grab_timed"):
+        asyncio.run(svc.save_pb(aid, "rta"))
+
+
+def test_an_xcam_timed_star_still_saves(tmp_path):
+    # The control: the refusal is about the QUANTITY, not about stars.
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(ev("star_collected", 1350,
+                               {"course_id": 2, "star_id": 2,
+                                "igt_frames": 343, "igt_timed_at": "xcam"})))
+    aid = db.attempts()[0].id
+    assert asyncio.run(svc.save_pb(aid, "igt"))["frames"] == 343
+
+
+def test_the_view_and_the_server_agree_about_what_is_saveable(tmp_path):
+    # One predicate, two consumers: a button that offers what save_pb refuses
+    # is the drift this shares a door to prevent.
+    from sm64_events.tracking.views import build_session_view
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(grab_timed_star()))
+    view = build_session_view(db, svc, clock="igt")
+    rows = [r for sec in view["stars"] for r in sec["attempts"]]
+    assert [r["pb_blocked_by"] for r in rows] == ["grab_timed"]
+
+
+def test_a_legacy_star_is_marked_but_still_saveable(tmp_path):
+    """Absence of `igt_timed_at` is UNKNOWN, not proof (measured 2026-08-02).
+
+    669 of his 670 legacy star rows took Usamune's OWN stored number, which is
+    the legal x-cam quantity under STOP=Xcam and on any ground grab and the
+    grab quantity under GrabX with a real fall — and the journal keeps no
+    post-grab frames, so nothing can say which. Refusing them would delete
+    almost his whole history's saveability on an assumption nobody measured.
+    They stay MARKED, because an unverifiable time is what a caveat is for."""
+    from sm64_events.tracking.caveats import caveats_for
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(ev("star_collected", 1350,      # no igt_timed_at
+                               {"course_id": 2, "star_id": 2,
+                                "igt_frames": 343, "igt_source": "result"})))
+    attempt = db.attempts()[0]
+    assert attempt.timed_at is None                    # unknown, not "grab"
+    assert asyncio.run(svc.save_pb(attempt.id, "igt"))["frames"] == 343
+    assert "grab_timed" in caveats_for({"strat_tag": "Owlless"}, attempt)
+
+
+def test_a_segment_is_never_marked_grab_timed(tmp_path):
+    # timed_at is None for every non-star closure, and "unknown" must not
+    # become a mark about a moment segments do not have.
+    from sm64_events.tracking.caveats import caveats_for
+    from sm64_events.tracking.projection import Attempt
+    seg = Attempt(id=1, session_id=1, course_id=None, star_id=None,
+                  strat_tag="Standard", anchor_type="none", anchor_frame=None,
+                  outcome="success", outcome_detail=None, igt_frames=None,
+                  rta_frames=500, started_utc="", ended_utc="", cleared=False,
+                  cleared_reason=None, segment_id=7)
+    assert "grab_timed" not in caveats_for({"strat_tag": "Standard"}, seg)

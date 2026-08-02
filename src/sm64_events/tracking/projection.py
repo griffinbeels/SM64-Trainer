@@ -299,14 +299,31 @@ class Attempt:
                                # payload (`igt_timed_at`, added by the x-cam
                                # fix), so this re-derives on every reproject
                                # like `timed_by` does and needs no backfill.
-                               # ABSENCE of that key is meaningful rather than
-                               # unknown: it did not exist before 2026-08-01,
-                               # so every star row recorded earlier is exactly
-                               # the grab quantity -- which is why the default
-                               # for a star_collected closure is "grab" and
-                               # not None. Those ~626 rows cannot be
-                               # re-derived (the journal keeps no post-grab
-                               # frames), so they can only be MARKED.
+                               # ABSENCE of that key is UNKNOWN -- None -- and
+                               # this said the opposite until 2026-08-02.
+                               # The key did not exist before 2026-08-01, and
+                               # reading its absence as "grab" asserted
+                               # something the journal cannot support: of his
+                               # 766 recorded grabs, 669 are legacy rows whose
+                               # `igt_source` is "result", i.e. they took
+                               # Usamune's OWN stored number. Under STOP=Xcam,
+                               # or on any ground grab, that store holds the
+                               # x-cam value and the row is perfectly legal;
+                               # under GrabX with a real fall it holds the
+                               # grab-time write and the row is not. Nothing
+                               # in the journal says which -- it keeps no
+                               # post-grab frames -- so the row is UNKNOWN,
+                               # and a default that guesses either way is a
+                               # claim rather than a record. It matters
+                               # because behaviour now hangs off this: a
+                               # grab-timed row cannot be saved as a PB
+                               # (tracking/caveats.py::pb_blocked_by), and
+                               # "grab" would have refused 669 saves for a
+                               # reason nobody measured. The caveat MARK still
+                               # covers the unknown rows -- an unverifiable
+                               # time is exactly what a caveat is for -- so
+                               # what he sees is unchanged; only the refusal
+                               # is narrowed to proof.
                                #
                                # Bowser 3's grand star is deliberately NOT
                                # stamped: it closes on key_grabbed, whose
@@ -760,7 +777,7 @@ class Projector:
                 a = replace(a, course_id=hc[0], star_id=hc[1], segment_id=None,
                             igt_frames=ev.payload.get("igt_frames"),
                             timed_by="igt",
-                            timed_at=(ev.payload.get("igt_timed_at", "grab")
+                            timed_at=(ev.payload.get("igt_timed_at")
                                       if ev.type == "star_collected" else None))
                 a = replace(a,
                             strat_tag=self._strat_overrides.get(
@@ -1170,7 +1187,7 @@ class Projector:
     def _build(self, first, close, outcome, outcome_detail, course_id, star_id,
                igt_frames, strat) -> Attempt:
         is_anchored = first.type in ANCHOR_EVENT_TYPES
-        timed_at = (close.payload.get("igt_timed_at", "grab")
+        timed_at = (close.payload.get("igt_timed_at")
                     if close.type == "star_collected" else None)
         rta = (close.frame - first.frame
                if is_anchored and close.frame >= first.frame else None)

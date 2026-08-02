@@ -225,6 +225,17 @@
   /* The PB VALUE itself stays green. The badge beside it is the whole mark --
      recolouring the number too would say the same thing twice, and green
      already means "this is your best", which the caveat does not dispute. */
+  /* Save-as-PB, refused: a grab-timed star is a different QUANTITY, not a
+     slow time, so the button stays in place wearing the reason instead of
+     disappearing (a control that vanishes reads as a bug in the tool, not as
+     a rule about the run). Dimmed rather than recoloured -- the caveat hue is
+     already carrying the message on the chip inside it. */
+  .attempt-actions button.pb-blocked {
+    opacity: .5; cursor: not-allowed; border-style: dashed;
+  }
+  .attempt-actions button.pb-blocked .caveat-chip {
+    cursor: not-allowed; margin-left: .3rem;
+  }
   /* The clear cell ("(any level)" etc.) emits null, restoring what the native
      <select>'s placeholder option did. Muted, so it reads as an escape hatch
      rather than a choice. */
