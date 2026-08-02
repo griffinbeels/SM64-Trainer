@@ -3691,3 +3691,139 @@ def test_a_normal_walk_cancels_nothing():
            ctx(level=6, area=3))
     e.feed(jev(5, "mario_acted", 2005, {}), ctx(level=6, area=3))
     assert e.armed_ids() == {70}
+
+
+# Mirrors the user-created LLL -> HMC, but LOOSE. A STRICT def is already
+# silently disarmed by any level_changed matching neither its start nor its
+# end, so loose is where this rule earns its keep -- and loose is what all 56
+# seeded castle movements are.
+LLL_HMC = SegmentDef(
+    id=71, name="LLL -> HMC", enabled=True,
+    start_triggers=[{"type": "level_exit", "from": 22, "to": 6,
+                     "to_subarea": 3}],
+    end_triggers=[{"type": "level_enter", "to": 7, "from": 6,
+                   "from_subarea": 3}],
+    waypoints=[], guards=[], match_mode="loose")
+
+
+def _exit_lll_into_the_basement(e):
+    e.feed(jev(1, "level_changed", 1000, {"from": 22, "to": 6}),
+           ctx(level=6, prev_level=22))
+    e.feed(jev(2, "area_changed", 1000,
+               {"level": 6, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=6, area=1))
+    e.feed(jev(3, "area_changed", 1000,
+               {"level": 6, "from": 1, "to": 3, "from_transient": True}),
+           ctx(level=6, area=3))
+    e.feed(jev(4, "mario_acted", 1005, {}), ctx(level=6, area=3))
+
+
+def _walk_back_into_lll(e):
+    e.feed(jev(5, "level_changed", 2000, {"from": 6, "to": 22}),
+           ctx(level=22, prev_level=6))
+    e.feed(jev(6, "area_changed", 2000,
+               {"level": 22, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=22, area=1))
+    return e.feed(jev(7, "mario_acted", 2005, {}), ctx(level=22))
+
+
+def test_walking_back_into_the_place_you_left_cancels_the_segment():
+    # Live report 2026-08-01: standing INSIDE LLL, LLL -> HMC read as ACTIVE
+    # SEGMENT, "Waiting for Enter Hazy Maze Cave". Basement -> LLL is a
+    # perfectly legal edge, so Rule 1 waves it through; what kills it is that
+    # HMC went from 1 hop away to 2.
+    e = SegmentEngine([LLL_HMC])
+    _exit_lll_into_the_basement(e)
+    assert e.armed_ids() == {71}
+    closed, _ = _walk_back_into_lll(e)
+    assert e.armed_ids() == set()
+    assert closed == []
+
+
+def test_a_declared_re_entry_is_progress_not_a_wrong_turn():
+    # Griffin's nuance (2026-08-01): sometimes you genuinely enter a stage to
+    # use its exit. A route that really does go back through somewhere
+    # DECLARES it as a step, and a node the definition names is never a wrong
+    # turn.
+    declared = replace(LLL_HMC, id=72,
+                       waypoints=[[{"type": "level_enter", "to": 22}]])
+    e = SegmentEngine([declared])
+    _exit_lll_into_the_basement(e)
+    assert e.armed_ids() == {72}
+    _walk_back_into_lll(e)
+    assert e.armed_ids() == {72}
+
+
+def test_a_route_ending_on_a_grab_is_never_cancelled_for_moving():
+    # A loose multi-step route -- upstairs, into BitS, down the pipe to the
+    # arena, ending on the key grab. Two exemptions carry it, and neither is a
+    # special case: entering BitS is a DECLARED node (its own waypoint), and
+    # once that waypoint is consumed the end trigger names no place at all, so
+    # the arena hop is unconstrained.
+    #
+    # Regression guard rather than a mutation-proved rule: the behaviour it
+    # rests on -- step_node answering None for a placeless clause -- is proved
+    # by test_step_node_answers_none_for_a_clause_that_names_no_place, and the
+    # declared-node half is proved by test_a_declared_re_entry_is_progress...
+    to_bowser_3 = SegmentDef(
+        id=74, name="Upstairs -> Bowser 3", enabled=True,
+        start_triggers=[{"type": "area_enter", "level": 6, "area": 2}],
+        waypoints=[[{"type": "level_enter", "to": 21}]],
+        end_triggers=[{"type": "key_grabbed", "level": 34}],
+        guards=[], match_mode="loose")
+    e = SegmentEngine([to_bowser_3])
+    e.feed(jev(1, "area_changed", 900,
+               {"level": 6, "from": 1, "to": 1, "from_transient": False}),
+           ctx(level=6, area=1))
+    e.feed(jev(2, "mario_acted", 905, {}), ctx(level=6, area=1))
+    e.feed(jev(3, "area_changed", 950,
+               {"level": 6, "from": 1, "to": 2, "from_transient": False}),
+           ctx(level=6, area=2))
+    assert e.armed_ids() == {74}
+    e.feed(jev(4, "mario_acted", 955, {}), ctx(level=6, area=2))
+    # up into BitS: a declared waypoint
+    e.feed(jev(5, "level_changed", 1000, {"from": 6, "to": 21}),
+           ctx(level=21, prev_level=6))
+    e.feed(jev(6, "area_changed", 1000,
+               {"level": 21, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=21, area=1))
+    e.feed(jev(7, "mario_acted", 1005, {}), ctx(level=21))
+    assert e.armed_ids() == {74}
+    # down the pipe into the arena: undeclared, and the end names no place
+    e.feed(jev(8, "level_changed", 2000, {"from": 21, "to": 34}),
+           ctx(level=34, prev_level=21))
+    e.feed(jev(9, "area_changed", 2000,
+               {"level": 34, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=34, area=1))
+    e.feed(jev(10, "mario_acted", 2005, {}), ctx(level=34))
+    assert e.armed_ids() == {74}
+
+
+def test_an_armed_segment_survives_the_transient_lobby_on_a_course_exit():
+    # The case that would break everything: a basement course exit reads
+    # SSL -> lobby -> basement in the raw stream. Judged raw, "SSL -> Lobby"
+    # is not even an edge, and for an UPSTAIRS destination the lobby is closer
+    # than the basement (2 hops vs 3) -- so both rules would fire on a move
+    # that never happened.
+    ssl_to_sl = SegmentDef(
+        id=73, name="SSL -> SL", enabled=True,
+        start_triggers=[{"type": "spawned", "level": 8}],
+        end_triggers=[{"type": "level_enter", "to": 10}],
+        waypoints=[], guards=[], match_mode="loose")
+    e = SegmentEngine([ssl_to_sl])
+    e.feed(jev(1, "area_changed", 900,
+               {"level": 8, "from": 1, "to": 1, "from_transient": False}),
+           ctx(level=8))
+    e.feed(jev(2, "mario_acted", 905, {}), ctx(level=8))
+    e.feed(jev(3, "spawned", 950, {"level": 8, "kind": "spawn"}), ctx(level=8))
+    assert e.armed_ids() == {73}
+    e.feed(jev(4, "level_changed", 1000, {"from": 8, "to": 6}),
+           ctx(level=6, prev_level=8))
+    e.feed(jev(5, "area_changed", 1000,
+               {"level": 6, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=6, area=1))
+    e.feed(jev(6, "area_changed", 1000,
+               {"level": 6, "from": 1, "to": 3, "from_transient": True}),
+           ctx(level=6, area=3))
+    e.feed(jev(7, "mario_acted", 1005, {}), ctx(level=6, area=3))
+    assert e.armed_ids() == {73}

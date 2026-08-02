@@ -842,6 +842,38 @@ def step_node(clause: dict) -> str | None:
     return None
 
 
+def declared_nodes(d) -> frozenset:
+    """Every world node this definition NAMES as a step of its own route — its
+    waypoints and its end triggers (spec 2026-08-01-topological-segment-
+    validity).
+
+    Griffin's nuance, and the whole of Rule 2's exemption: sometimes you
+    genuinely enter a stage in order to use its exit, and a route that really
+    does pass back through somewhere DECLARES it. A node the definition names
+    is therefore never a wrong turn, however the hop count moves.
+
+    Read as a SET rather than by comparing against the arm's live `progress`,
+    which was the first design and is subtly wrong: the waypoint match and the
+    position judgement land on the same game frame but on DIFFERENT events (the
+    `level_changed` advances progress, the co-frame `area_changed` records the
+    move, and the judgement runs a frame later). By then the arm is already
+    measuring against its NEXT step, so a correctly-followed waypoint reads as
+    a move away from what comes after it, and the declared re-entry cancels
+    itself. A set has no such ordering to get wrong.
+
+    Start triggers are deliberately excluded: they say where the route BEGAN,
+    not where it goes, and returning to your own start is exactly the shape
+    (exit LLL, walk back into LLL) this rule exists to catch.
+    """
+    nodes = set()
+    for step in list(d.waypoints) + [d.end_triggers]:
+        for clause in step:
+            node = step_node(clause)
+            if node is not None:
+                nodes.add(node)
+    return frozenset(nodes)
+
+
 def start_areas(start_triggers: list) -> list:
     """[[level, area], …] — the castle SUBAREAS a segment explicitly starts in.
 
@@ -2872,6 +2904,48 @@ class SegmentEngine:
             for d in candidates:
                 self._disarm(d, ev, notices)
             return
+        # Rule 2 — a LEGAL move that takes the player FURTHER from what the
+        # segment needs next. Basement -> LLL is a real edge, so Rule 1 waves
+        # it through; what makes it a wrong turn is that HMC went from 1 hop
+        # away to 2 (live report 2026-08-01). Strict increase only: equal is
+        # sideways and tolerated, so a route with two shortest paths is never
+        # punished for picking either.
+        for d in candidates:
+            if node in declared_nodes(d):
+                continue      # see declared_nodes: the route says it goes here
+            arm = self._armed[d.id]
+            before = self._next_step_hops(d, arm, previous)
+            after = self._next_step_hops(d, arm, node)
+            if before is not None and after is not None and after > before:
+                self._disarm(d, ev, notices)
+
+    def _next_step_hops(self, d, arm: _Arm, node: str | None) -> int | None:
+        """Fewest legal moves from `node` to whatever this definition needs
+        NEXT — its next unconsumed waypoint, or its end trigger once every
+        waypoint is consumed.
+
+        None means UNCONSTRAINED, and it is the answer that keeps whole
+        families of segment out of Rule 2 rather than a list of exemptions
+        somebody has to maintain: a step naming no place (`key_grabbed`,
+        `warp_entered`, `star_grabbed`, `reset_game`, an unpinned
+        `level_exit`) and a place with no directed path both land here.
+
+        A clause-set is an ANY-OF list, so the MINIMUM across its members is
+        the distance — but a single member naming no place makes the whole
+        step unconstrained, since the player may be heading for that one.
+        """
+        step = (d.waypoints[arm.progress] if arm.progress < len(d.waypoints)
+                else d.end_triggers)
+        distances = []
+        for clause in step:
+            target = step_node(clause)
+            if target is None:
+                return None
+            distance = topology.hops(node, target)
+            if distance is None:
+                return None
+            distances.append(distance)
+        return min(distances) if distances else None
 
     def _disarm(self, d, ev, notices) -> None:
         if self._armed.pop(d.id, None) is not None:
