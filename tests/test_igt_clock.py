@@ -102,7 +102,7 @@ def test_the_time_before_the_pyramid_door_is_carried():
     assert c.carried_base() == 480
     grabbed = snap(1577, igt_overall=71, curr_level=8, curr_area=2)
     c.observe(grabbed)
-    assert c.carried_igt_at_xcam(1577, grabbed) == (552, "carried")
+    assert c.carried_igt_at_xcam(1577, grabbed) == (552, "counter")
 
 
 def test_nothing_is_carried_back_into_the_courses_main_area():

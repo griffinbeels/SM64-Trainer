@@ -209,7 +209,7 @@ class IgtClock:
         if self._carry_base is None:
             return None
         post = max(0, curr.igt_overall - (curr.global_timer - xcam_frame))
-        return post + self.DISPLAY_TICK + self._carry_base, "carried"
+        return post + self.DISPLAY_TICK + self._carry_base, "counter"
 
     def igt_at(self, touch_frame: int, curr: GameSnapshot) -> tuple[int, str]:
         """Usamune's number at a TOUCH — used by key.py (grand star) and

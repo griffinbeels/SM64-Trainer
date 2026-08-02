@@ -548,31 +548,32 @@ def through_the_door(snaps):
     return prefix + [replace(s, curr_level=8, curr_area=2) for s in snaps]
 
 
-def test_a_carried_subarea_star_publishes_on_agreement_not_on_the_deadline():
-    # Whole star = 480 before the door + 72 inside it. Usamune echoes the
-    # subarea-local 72 first (disagrees, waited through) and writes the whole
-    # star at +30 (agrees, publishes) -- one row, right number, and 15 frames
-    # earlier than the deadline that used to be the only way out of here.
+def test_a_carried_subarea_star_publishes_at_the_xcam():
+    # Whole star = 480 before the door + 72 inside it, and we can say so at
+    # the x-cam without asking anyone. Usamune's echo of the subarea-local 72
+    # arrives first and its whole-star write 30 frames later; neither is
+    # waited for, and neither moves the row.
     inside = through_the_door(subarea_snaps(usamune=552, write_at=30,
                                             first_write=(1, 72)))
     [(published_at, row)] = emitted_at(inside)
     assert row.payload["igt_frames"] == 552
     assert row.payload["carried_igt"] == 552      # ours, scored against his
-    assert published_at - XCAM == 27      # the write lands 30 past the GRAB
-    assert published_at - XCAM < StarGrabDetector.RESULT_SETTLE_FRAMES
+    assert published_at == XCAM                   # no wait at all
 
 
-def test_a_carry_usamune_contradicts_still_ends_at_the_deadline():
-    # The fail-safe direction, and the whole reason this is allowed to ship
-    # before the carry has been scored on live play: when nothing agrees with
-    # our sum, the deadline publishes Usamune's own number exactly as it does
-    # today. A wrong carry costs latency, never a wrong row.
+def test_a_carry_usamune_contradicts_is_corrected_by_the_watch():
+    # The one failure a carry can still have -- a base captured across missed
+    # polls. Publishing at the x-cam means being wrong on screen for a moment
+    # when that happens, so the watch that catches it is the price of the
+    # speed, not an optional backstop.
     inside = through_the_door(subarea_snaps(usamune=600, write_at=30,
                                             first_write=(1, 72)))
-    [(published_at, row)] = emitted_at(inside)
-    assert row.payload["igt_frames"] == 600       # his, not ours
-    assert row.payload["carried_igt"] == 552
-    assert published_at - XCAM == StarGrabDetector.RESULT_SETTLE_FRAMES
+    (published_at, row), (corrected_at, fix) = emitted_at(inside)
+    assert row.payload["igt_frames"] == 552       # ours, published instantly
+    assert published_at == XCAM
+    assert fix.type == "star_time_corrected"
+    assert fix.payload["igt_frames"] == 600       # his, and his wins
+    assert corrected_at - XCAM == StarGrabDetector.RESULT_SETTLE_FRAMES
 
 
 def test_a_reset_after_publishing_corrects_nothing():

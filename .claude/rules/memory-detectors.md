@@ -120,7 +120,25 @@ measured, not chosen: across 911 level entries the load's last area edge lands
 at **44-47 frames** every time and the earliest genuine warp deeper into a
 level appears at 60. Six of the nine slow grabs in that session were course
 entries and are now fast; the other three were real subarea stars and are
-still deliberately slow. So the correction is a backstop now, not a routine event. The
+still deliberately slow. **Those three are fast now too, and the wait is
+GONE (2026-08-02).** His idea: *"If we cache the time it took for the player
+to enter the subarea, then the xcam time is just the cached
+subarea_entry_time plus the time it took to finish the subarea. Isn't that
+basically what Usamune is doing anyway?"* — and his journal already held the
+proof, because Usamune's write burst contains both halves (LLL Elevator
+`[[2, 388], [27, 686]]` → 298; SSL Pyramid `[[0, 69], [1, 71], [27, 551]]` →
+480). `IgtClock.carried_igt_at_xcam` keeps what the counter reached before the
+warp and adds it back, so the whole star is OURS to state at the x-cam.
+Shipped in two steps on purpose: first publishing on AGREEMENT with Usamune
+(27 frames), then, after his session scored it **4/4 exact, diff 0**, at the
+x-cam itself with no wait at all. Two guards hold it up, both mutation-proved:
+the carry is refused unless the area edge went into a NON-1 area (anchors.py's
+discriminator — a reset's reload lands back in area 1, and carrying a previous
+run's time across a reset is the one failure here that would be silent), and
+`_answer` must recognise Usamune's EARLY write as an echo of our own
+subarea-local counter (`_PendingGrab.subarea_local_igt`) or the instant
+publish ships the impossible PB at speed. The correction watch still runs, so
+the remaining failure — a base captured across missed polls — self-heals. So the correction is a backstop now, not a routine event. The
 correction is a compensating event like `attempt_cleared`:
 `projection.time_corrections` folds it into the GRAB's own payload (so the star
 attempt, a segment closed by the same grab, and the 100-coin reattribution all

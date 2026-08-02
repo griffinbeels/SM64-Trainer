@@ -73,8 +73,9 @@ def walking_to_the_pyramid():
     to zero. From there our own number measures the pyramid, not the star —
     his live report, 2026-08-01: 0'02"26 against Usamune's 0'27"66."""
     load = GRAB_FRAME - INSIDE_THE_PYRAMID + 4   # the counter's zero point
-    walk = [snap(load - 20 + n, 700 + n, action=ACT_IDLE, area=1)
-            for n in range(20)]
+    before_the_door = THE_WHOLE_STAR - INSIDE_THE_PYRAMID   # 502, his own gap
+    walk = [snap(load - 20 + n, before_the_door - 19 + n, action=ACT_IDLE,
+                 area=1) for n in range(20)]
     inside = [snap(load + n, n, action=ACT_IDLE)
               for n in range(GRAB_FRAME - load - 1)]
     return walk + inside
@@ -113,16 +114,18 @@ def test_a_write_that_says_what_we_published_produces_no_correction():
     assert row.type == "star_collected"
 
 
-def test_a_grab_whose_counter_zeroed_at_an_area_load_waits_and_lands_right():
+def test_a_grab_whose_counter_zeroed_at_an_area_load_lands_right_immediately():
     # The live report: our own number would have been 0'02"26 (the pyramid),
-    # flashed as an impossible PB, and then corrected to 0'27"66. When the
-    # clock can see that its zero point is an AREA load, there is nothing to
-    # be gained by publishing that number — so the row waits and arrives
-    # right the first time. One event, no correction, no flash.
+    # flashed as an impossible PB, and then corrected to 0'27"66. The clock
+    # keeps what the counter had reached before the door, so the whole star is
+    # ours to state at the x-cam — 502 + 72 — and Usamune's late write only
+    # confirms it. One event, no correction, no flash, and no wait either.
     walk = walking_to_the_pyramid()
     events = detected(walk + a_subarea_grab())
     assert [e.type for e in events] == ["star_collected"]
     assert events[0].payload["igt_frames"] == THE_WHOLE_STAR
+    assert events[0].payload["carried_igt"] == THE_WHOLE_STAR
+    assert events[0].payload["published_after"] == 0
 
 
 # --- the pairing: a correction belongs to ONE grab --------------------------
