@@ -8,6 +8,7 @@ the project? Start with the [README](../README.md). Developing here? Read
 
 | Endpoint | Description |
 |---|---|
+| `POST /api/uilog` `{surface, ...}` → `{recorded}` | **What the browser just PAINTED**, not an event. `surface` is `selector` (the quick-select row's cells, each `{name, active}`) or `target` (every objective card on the page, in DOM order). The server stamps the wall clock and the live game frame; `tools/what_happened.py` interleaves the result with the journal, which is what makes "the cell vanished BEFORE the level change" a readable fact. Always 200 — a body it does not recognise is dropped with `{"recorded": false}`, because an instrument that can make its subject throw is worse than none. |
 | `POST /api/admin/shutdown` | Graceful shutdown — the desktop "close the other instance" takeover path. `{"shutting_down": true}` |
 | `POST /api/admin/restart` | Full-process relaunch — the one-click "Restart server" button; picks up edited backend code. `{"restarting": true}` |
 

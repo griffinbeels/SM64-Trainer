@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { requestTarget } from "../target.js";
+import { useUiLog } from "../uilog.js";
 import { hasPracticeContext, justCompletedSegment,
         practicedHere, starPracticableHere } from "../stagecontext.js";
 import { ReplayPlayer } from "./replay.js";
@@ -1130,6 +1131,14 @@ function EmptyPractice({ v, t, ui, unassignedRows, freshIds, openCompare,
 }
 
 export function Practice({ t, openCompare }) {
+  // Records what this page actually PAINTS — the selector's cells and every
+  // objective card — so a report about a cell that "was just there a couple
+  // frames ago" is readable afterwards instead of guessable from a
+  // screenshot (../uilog.js, core/uilog.py). ONE observer for the whole page
+  // deliberately: four banner row modes and three card types render here, and
+  // an observer per surface is four things to keep in step with the markup.
+  const pageRef = useRef(null);
+  useUiLog(pageRef);
   const [showUnassignedHidden, setShowUnassignedHidden] = useState(false);
   const stored = localStorage.getItem("sm64.sort");
   const [sort, setSortState] = useState(
@@ -1328,7 +1337,7 @@ export function Practice({ t, openCompare }) {
     .slice()
     .sort(comparator(sort, t.clock));
 
-  return html`<div class="practice-page">
+  return html`<div class="practice-page" ref=${pageRef}>
     <${StageBanner} t=${held} freshIds=${freshIds} />
 
     ${/* ONE picker for the page, not one per section: only the primary card

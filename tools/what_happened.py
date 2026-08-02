@@ -34,6 +34,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "src"))
+
+from sm64_events.core import uilog  # noqa: E402  (after the sys.path insert)
 
 # Newest event older than this and the journal is almost certainly not the
 # session that was just played. Ten minutes is generous for "I stopped playing,
@@ -151,6 +154,45 @@ def timeline(conn: sqlite3.Connection, since: datetime | None, session_only: boo
     ).fetchall()
 
 
+def ui_rows(journal: Path, since: datetime | None) -> list[tuple]:
+    """What the UI DREW, in the same row shape as a journal event so the two
+    interleave into one timeline.
+
+    The log sits beside the journal it belongs to (`data/ui_log.jsonl` next to
+    `data/tracker.db`), which is what makes the tool's whole reason for
+    existing — three journals on this machine and picking the freshest —
+    carry over for free: the UI log of the wrong checkout is never read
+    against the right journal."""
+    path = journal.parent / "ui_log.jsonl"
+    out = []
+    for entry in uilog.read(path):
+        stamp = parse_stamp(entry.get("server_utc"))
+        if since is not None and stamp is not None and stamp < since:
+            continue
+        out.append((entry.get("server_utc"), entry.get("frame") or 0,
+                    f"UI {entry.get('surface')}", uilog.render(entry), stamp))
+    return out
+
+
+def merged(event_rows, ui, since: datetime | None) -> list[tuple]:
+    """Journal events and UI observations on ONE clock, oldest first.
+
+    Sorted by wall time rather than by id, because the two sources have no
+    shared sequence — and wall time is the only thing that can answer the
+    question these logs exist for: did the cell disappear BEFORE or AFTER the
+    event that was supposed to remove it."""
+    rows = [(raw, frame, kind, render_payload(payload), parse_stamp(raw))
+            for raw, frame, kind, payload in event_rows]
+    if rows and since is None:
+        earliest = min((row[4] for row in rows if row[4]), default=None)
+        ui = [row for row in ui
+              if earliest is None or row[4] is None or row[4] >= earliest]
+    rows.extend(ui)
+    far_past = datetime.min.replace(tzinfo=timezone.utc)
+    rows.sort(key=lambda row: row[4] or far_past)
+    return rows
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--minutes", type=int, default=10,
@@ -162,6 +204,8 @@ def main() -> int:
                         help="show every journal and its freshness, then stop")
     parser.add_argument("--allow-stale", action="store_true",
                         help="read the journal even if it looks stale")
+    parser.add_argument("--no-ui", action="store_true",
+                        help="journal events only, without what the UI drew")
     args = parser.parse_args()
 
     now = datetime.now(timezone.utc)
@@ -205,24 +249,35 @@ def main() -> int:
         return 1
 
     since = now - timedelta(minutes=args.minutes)
-    rows = timeline(open_readonly(chosen), since, args.session)
+    events = timeline(open_readonly(chosen), since, args.session)
+    ui = [] if args.no_ui else ui_rows(chosen, None if args.session else since)
+    rows = merged(events, ui, None if args.session else since)
     if not rows:
         window = "that session" if args.session else f"the last {args.minutes} min"
-        print(f"\nNo events in {window}.")
+        print(f"\nNothing in {window}.")
         return 0
 
     scope = "last session" if args.session else f"last {args.minutes} min"
-    print(f"\n--- {len(rows)} events, {scope} ---\n")
+    drawn = len(rows) - len(events)
+    print(f"\n--- {len(events)} events + {drawn} UI observations, {scope} ---\n")
+    if not drawn and not args.no_ui:
+        # An empty UI log is itself a FINDING, and the most useful one this
+        # tool prints: a page only posts observations if it loaded the module
+        # that posts them, so silence here means the open tab is running JS
+        # from before this branch. That is exactly how a fix verified on the
+        # server gets reported as not working (2026-08-02, twice in one hour).
+        print("(NO UI OBSERVATIONS. The page posts these itself, so an empty\n"
+              " log means the browser tab is running OLD JavaScript — reload\n"
+              " it (Ctrl+R) and replay whatever you were testing.)\n")
     previous = None
-    for raw_stamp, frame, kind, payload in rows:
-        stamp = parse_stamp(raw_stamp)
+    for raw_stamp, frame, kind, rendered, stamp in rows:
         gap = ""
         if previous and stamp:
             seconds = (stamp - previous).total_seconds()
             if seconds >= 2:
                 gap = f"   (+{seconds:.0f}s)"
         clock = stamp.strftime("%H:%M:%S") if stamp else "??:??:??"
-        print(f"{clock}  f{frame:<7} {kind:<22} {render_payload(payload)}{gap}")
+        print(f"{clock}  f{frame:<7} {kind:<22} {rendered}{gap}")
         previous = stamp or previous
     return 0
 
