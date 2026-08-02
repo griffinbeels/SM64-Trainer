@@ -3623,3 +3623,71 @@ def test_a_reset_forgets_where_mario_was():
     assert e._settled_node == "8"
     e.feed(jev(3, "game_reset", 20, {}), ctx(level=8))
     assert e._settled_node is None and e._pending_move is None
+
+
+# Mirrors the shipped seed row seg:wf->ssl: loose, no waypoints, exits WF and
+# ends on entering SSL.
+WF_SSL = SegmentDef(id=70, name="WF -> SSL", enabled=True,
+                    start_triggers=[{"type": "level_exit", "from": 24}],
+                    end_triggers=[{"type": "level_enter", "to": 8}],
+                    waypoints=[], guards=[], match_mode="loose")
+
+
+def _exit_wf_into_the_lobby(e):
+    """Arm WF -> SSL the way the real journal does: a level edge into the
+    castle plus its co-frame establishing area_changed, then an event on a
+    later frame so the move is judged."""
+    e.feed(jev(1, "level_changed", 1000, {"from": 24, "to": 6}),
+           ctx(level=6, prev_level=24))
+    e.feed(jev(2, "area_changed", 1000,
+               {"level": 6, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=6, area=1))
+    e.feed(jev(3, "mario_acted", 1005, {}), ctx(level=6, area=1))
+
+
+def test_a_warp_into_an_unreachable_place_cancels_an_armed_segment():
+    # Live report 2026-08-01: standing in the Bowser 1 arena, WF -> SSL read
+    # as ACTIVE SEGMENT. There is no walk from the castle lobby to that arena
+    # -- it is reached only through BitDW's pipe -- so the movement WF -> SSL
+    # was measuring cannot still be under way.
+    e = SegmentEngine([WF_SSL])
+    _exit_wf_into_the_lobby(e)
+    assert e.armed_ids() == {70}
+    e.feed(jev(4, "level_changed", 2000, {"from": 6, "to": 30}),
+           ctx(level=30, prev_level=6))
+    e.feed(jev(5, "area_changed", 2000,
+               {"level": 30, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=30, area=1))
+    closed, notices = e.feed(jev(6, "mario_acted", 2005, {}), ctx(level=30))
+    assert e.armed_ids() == set()
+    assert closed == []          # the movement never happened: no row
+    assert [n["event"] for n in notices] == ["segment_disarmed"]
+
+
+def test_a_segment_armed_at_the_warp_destination_survives_that_warp():
+    # Warping somewhere to practise is the normal loop. The judgement lands a
+    # frame after the move, so without the arm-postdates-move exemption the
+    # warp into an arena would cancel the very fight it just armed.
+    e = SegmentEngine([B3])
+    e.feed(jev(1, "area_changed", 1000,
+               {"level": 8, "from": 1, "to": 1, "from_transient": False}),
+           ctx(level=8))
+    e.feed(jev(2, "mario_acted", 1005, {}), ctx(level=8))
+    e.feed(jev(3, "level_changed", 2000, {"from": 8, "to": 34}),
+           ctx(level=34, prev_level=8))
+    e.feed(jev(4, "area_changed", 2000,
+               {"level": 34, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=34, area=1))
+    assert e.armed_ids() == {10}
+    e.feed(jev(5, "mario_acted", 2005, {}), ctx(level=34))
+    assert e.armed_ids() == {10}
+
+
+def test_a_normal_walk_cancels_nothing():
+    e = SegmentEngine([WF_SSL])
+    _exit_wf_into_the_lobby(e)
+    e.feed(jev(4, "area_changed", 2000,
+               {"level": 6, "from": 1, "to": 3, "from_transient": False}),
+           ctx(level=6, area=3))
+    e.feed(jev(5, "mario_acted", 2005, {}), ctx(level=6, area=3))
+    assert e.armed_ids() == {70}

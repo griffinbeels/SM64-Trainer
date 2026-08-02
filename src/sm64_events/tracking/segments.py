@@ -2855,6 +2855,23 @@ class SegmentEngine:
         previous, self._settled_node = self._settled_node, node
         if previous is None or node is None or node == previous:
             return
+        # An arm that began AT OR AFTER this move cannot have diverged from it
+        # — you did not leave a route you had not started. Without this, the
+        # one-frame defer would let a warp into a Bowser arena cancel the fight
+        # it just armed, and warping somewhere to practise IS the loop.
+        candidates = [d for d in self._defs
+                      if (arm := self._armed.get(d.id)) is not None
+                      and arm.start_frame < frame]
+        if not topology.is_legal_move(previous, node):
+            # The Usamune warp menu (or a savestate) fabricated this edge, so
+            # every movement under way was abandoned rather than run. SILENT:
+            # no attempt row, matching the off-route cancel _feed_waypoint
+            # already takes — a movement that never happened must not bank a
+            # failure. Arming at the DESTINATION is untouched (closures run
+            # before arming), which is what keeps the practice loop working.
+            for d in candidates:
+                self._disarm(d, ev, notices)
+            return
 
     def _disarm(self, d, ev, notices) -> None:
         if self._armed.pop(d.id, None) is not None:
