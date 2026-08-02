@@ -116,9 +116,19 @@ def _layout(edges):
     return positions, bands, band_top + MARGIN
 
 
+def _box_width(key) -> int:
+    """ONE answer, read by both the box drawing and the edge trimming below --
+    an arrowhead has to land just outside the rectangle, and a second guess at
+    how wide that rectangle is would bury it inside on the long labels only."""
+    return max(96, 9 * len(node_label(key)) + 26)
+
+
+ARROW_GAP = 5        # clear air between a box edge and the arrowhead touching it
+
+
 def _node_box(key, x, y, is_hub):
     label = html.escape(node_label(key))
-    width = max(96, 9 * len(label) + 26)
+    width = _box_width(key)
     cls = "hub" if is_hub else "place"
     return (f'<g class="node {cls}"><rect x="{x - width/2:.0f}" y="{y - 15:.0f}" '
             f'width="{width}" height="30" rx="8"/>'
@@ -126,26 +136,43 @@ def _node_box(key, x, y, is_hub):
             f'<title>{label}  ({html.escape(key)})</title></g>')
 
 
-def _edge_path(x1, y1, x2, y2, bow=None):
-    """A gentle curve, bowed away from the vertical, so parallel edges between
-    the same two bands stay individually traceable."""
-    if bow is None:
-        bow = min(120, max(30, abs(y2 - y1) * 0.35))
-    if abs(x2 - x1) < 1:                       # same column: bow sideways
-        return (f"M {x1:.0f} {y1:.0f} C {x1 - bow:.0f} {y1:.0f}, "
-                f"{x1 - bow:.0f} {y2:.0f}, {x2:.0f} {y2:.0f}")
+def _edge_path(a, b, positions, bow=None):
+    """A gentle curve between two boxes, TRIMMED to their edges.
+
+    Both ends leave horizontally (every control point sits at its own
+    endpoint's y), so trimming is a horizontal inset of half the box plus a
+    little air -- which is what lets an arrowhead sit OUTSIDE the rectangle
+    instead of underneath it. Centre-to-centre was the first version and hid
+    every arrowhead inside a node box, so the three one-way edges read as stubs
+    and direction was unreadable, which is the whole point of the marks.
+    """
+    x1, y1 = positions[a]
+    x2, y2 = positions[b]
+    inset_a = _box_width(a) / 2 + ARROW_GAP
+    inset_b = _box_width(b) / 2 + ARROW_GAP
+    if abs(x2 - x1) < 1:                       # same column: both bow leftward
+        if bow is None:
+            bow = min(120, max(30, abs(y2 - y1) * 0.35))
+        return (f"M {x1 - inset_a:.0f} {y1:.0f} C {x1 - bow:.0f} {y1:.0f}, "
+                f"{x2 - bow:.0f} {y2:.0f}, {x2 - inset_b:.0f} {y2:.0f}")
     mid = (x1 + x2) / 2
-    return (f"M {x1:.0f} {y1:.0f} C {mid:.0f} {y1:.0f}, "
-            f"{mid:.0f} {y2:.0f}, {x2:.0f} {y2:.0f}")
+    sx = x1 + inset_a if mid > x1 else x1 - inset_a
+    ex = x2 - inset_b if mid < x2 else x2 + inset_b
+    return (f"M {sx:.0f} {y1:.0f} C {mid:.0f} {y1:.0f}, "
+            f"{mid:.0f} {y2:.0f}, {ex:.0f} {y2:.0f}")
 
 
 def _svg(edges, positions, bands, height):
     width = max(x for x, _ in positions.values()) + 220
     parts = [f'<svg viewBox="0 0 {width:.0f} {height:.0f}" '
              f'width="{width:.0f}" height="{height:.0f}">',
-             '<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" '
-             'markerWidth="7" markerHeight="7" orient="auto-start-reverse">'
-             '<path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>']
+             "<defs>" + "".join(
+                 f'<marker id="arrow-{name}" viewBox="0 0 10 10" refX="9" '
+                 'refY="5" markerWidth="8" markerHeight="8" '
+                 'orient="auto-start-reverse">'
+                 f'<path d="M 0 0 L 10 5 L 0 10 z" fill="{colour}"/></marker>'
+                 for name, colour in (("two", "#6fa8ff"), ("one", "#ffd166"),
+                                      ("spine", "#8ad6c0"))) + "</defs>"]
     for hub, top, band_height in bands:
         parts.append(f'<rect class="band" x="{MARGIN/2:.0f}" y="{top - 8:.0f}" '
                      f'width="{width - MARGIN:.0f}" height="{band_height + 16:.0f}" rx="14"/>')
@@ -156,22 +183,27 @@ def _svg(edges, positions, bands, height):
     for a, b, one_way in edges:
         if a not in positions or b not in positions:
             continue
-        x1, y1 = positions[a]
-        x2, y2 = positions[b]
         # A castle door between two REGIONS joins two boxes in the same column,
         # so each gets its own bow width -- otherwise the five of them overlap
         # into one unreadable bundle down the left edge.
         if a in hub_set and b in hub_set:
             spine += 1
-            path = _edge_path(x1, y1, x2, y2, bow=70 + spine * 34)
-            cls = "edge spine"
+            path = _edge_path(a, b, positions, bow=70 + spine * 34)
+            cls, kind = "edge spine", "spine"
+        elif one_way:
+            path = _edge_path(a, b, positions)
+            cls, kind = "edge oneway", "one"
         else:
-            path = _edge_path(x1, y1, x2, y2)
-            cls = "edge oneway" if one_way else "edge twoway"
-        if one_way:
-            cls += " oneway"
-        marker = ' marker-end="url(#arrow)"' if one_way else ""
-        parts.append(f'<path class="{cls}" d="{path}"{marker}/>')
+            path = _edge_path(a, b, positions)
+            cls, kind = "edge twoway", "two"
+        # EVERY edge is marked, and the HEAD COUNT is the direction: one
+        # arrowhead means the return trip is a different route, two means you
+        # can walk back the way you came. Unmarked-means-two-way needs a legend
+        # to decode; two heads say it on the line itself.
+        marks = f' marker-end="url(#arrow-{kind})"'
+        if not one_way:
+            marks = f' marker-start="url(#arrow-{kind})"' + marks
+        parts.append(f'<path class="{cls}" d="{path}"{marks}/>')
     hub_keys = {node_key(level, area) for level, area in CASTLE_REGION_NODES}
     for key, (x, y) in positions.items():
         parts.append(_node_box(key, x, y, key in hub_keys))
@@ -219,7 +251,7 @@ svg { display:block; }
 .twoway { stroke:#6fa8ff; opacity:.5; }
 .spine { stroke:#8ad6c0; opacity:.9; stroke-width:2.2; }
 .oneway { stroke:#ffd166; opacity:.85; }
-marker path { fill:#ffd166; }
+
 .node rect { fill:#1b2650; stroke:#3a4a86; }
 .node.hub rect { fill:#2a2140; stroke:#ffd166; stroke-width:1.6; }
 .node text { fill:#e8ecff; font-size:12.5px; text-anchor:middle;
@@ -253,8 +285,8 @@ to decide whether a run is still going. <strong>{len(positions)} places,
 wrong or missing, the matcher is wrong in the same place — nothing else in the
 project can catch that, so this page exists to be looked at.</p>
 <div class="legend">
-  <span><span class="swatch"></span>two-way — you can go back the way you came</span>
-  <span><span class="swatch one"></span>one-way — the return trip is a different route</span>
+  <span><span class="swatch"></span>arrowheads at BOTH ends — you can walk back the way you came</span>
+  <span><span class="swatch one"></span>ONE arrowhead — the return trip is a different route</span>
   <span><span class="swatch spineswatch"></span>castle doors between regions</span>
   <span>Gold boxes are the five castle regions, top to bottom in the order the castle opens up.</span>
 </div>
