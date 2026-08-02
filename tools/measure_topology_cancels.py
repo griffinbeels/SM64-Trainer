@@ -28,11 +28,13 @@ What it does:
    are ordinary levels (a definite warp -- the real game has no course-to-course
    edge) or one touches the castle interior.
 
-MEASURED 2026-08-01, both journals, with the rules as shipped:
-  installed exe (17,424 events): 419 settled moves, 225 off-graph (160 of them
+MEASURED 2026-08-02, both journals, with the rules and the world table as
+shipped (re-run after the human's three Bowser-arena corrections; the counts
+moved a little, the verdicts did not):
+  installed exe (17,424 events): 419 settled moves, 221 off-graph (156 of them
     course->course, which the real game cannot do at all). 82 segment
     successes, 82 survivors. CLEAN.
-  repo checkout (20,542 events): 736 settled moves, 340 off-graph (235
+  repo checkout (20,542 events): 739 settled moves, 341 off-graph (235
     course->course). 112 successes, 110 survivors. The two killed were each
     read back against the raw journal and are the live report itself, banked
     as times:

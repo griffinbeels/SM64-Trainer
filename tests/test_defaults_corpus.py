@@ -82,7 +82,12 @@ def exit_node(level: int) -> tuple:
     """Where the player stands after LEAVING `level` — its entrance region.
     Derived from the topology: the castle-interior neighbour if there is one
     (every painting), else the hub it opens onto (BBH -> courtyard, VCUtM ->
-    grounds, CotMC -> HMC). Bowser arenas have only a one-way exit edge."""
+    grounds, CotMC -> HMC).
+
+    Bowser 1 and 2 leave by their one-way KEY-CUTSCENE edge into the castle.
+    Bowser 3 has no such edge at all (2026-08-02 correction: winning ends the
+    game, losing drops you back into Bowser in the Sky), so it falls through to
+    its only neighbour, the course itself."""
     neighbours = GRAPH.get((level, None), [])
     for candidate in neighbours:
         if candidate[0] == LEVEL_CASTLE_INSIDE:
@@ -258,7 +263,10 @@ def test_exit_node_matches_the_castle_layout():
     assert exit_node(18) == (16, None)  # VCUtM -> grounds
     assert exit_node(30) == (6, 1)     # Bowser 1 arena -> lobby
     assert exit_node(33) == (6, 3)     # Bowser 2 arena -> basement
-    assert exit_node(34) == (6, 2)     # Bowser 3 arena -> upstairs
+    # NOT the castle: Bowser 3 has no exit into it. Winning ends the game and
+    # losing drops you back into Bowser in the Sky, so its only neighbour is
+    # the course (human correction 2026-08-02, reading tools/topology_map.py).
+    assert exit_node(34) == (21, None)  # Bowser 3 arena -> Bowser in the Sky
 
 
 def test_path_crosses_the_lobby_between_basement_and_upstairs():

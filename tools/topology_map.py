@@ -40,7 +40,8 @@ from sm64_events.memory.addresses import (CASTLE_REGION_NODES,
 HUB_X = 250          # the region-hub column
 COL_STEP = 300       # horizontal gap per BFS depth out from the hub
 ROW_STEP = 46        # vertical gap between siblings
-BAND_PAD = 40        # blank space between region bands
+BAND_PAD = 62        # blank space between bands -- also the channel a
+                     # multi-column edge arcs through (see _over_path)
 MARGIN = 40
 
 
@@ -77,20 +78,29 @@ def _adjacency(edges):
 
 
 def _layout(edges):
-    """node key -> (x, y). Region bands top to bottom in gameflow order; within
-    a band, BFS depth out from the hub becomes the column, and siblings stack."""
+    """node key -> (x, y), plus each node's band top and column index.
+
+    Region bands top to bottom in gameflow order; within a band, BFS depth out
+    from the hub becomes the column. A node PAST the first column is placed on
+    its PARENT'S ROW rather than in an ordering of its own -- so Cavern of the
+    Metal Cap sits level with Hazy Maze Cave and each Bowser arena level with
+    its own course, turning what were long diagonals crossing three unrelated
+    rows into short horizontal arrows.
+    """
     adjacency = _adjacency(edges)
     regions = world_regions()
     hubs = [node_key(level, area) for level, area in CASTLE_REGION_NODES]
 
     positions: dict[str, tuple] = {}
+    band_of: dict[str, float] = {}
+    column_of: dict[str, int] = {}
     band_top = MARGIN
     bands = []
     for hub in hubs:
-        members = sorted(n for n, r in regions.items() if r == hub and n != hub)
+        members = {n for n, r in regions.items() if r == hub and n != hub}
         # BFS out from the hub, staying inside this region, so CotMC lands one
         # column past HMC and each Bowser arena one past its own course.
-        depth = {hub: 0}
+        depth, parent = {hub: 0}, {}
         queue = deque([hub])
         while queue:
             node = queue.popleft()
@@ -98,22 +108,38 @@ def _layout(edges):
                 if neighbour in depth or regions.get(neighbour) != hub:
                     continue
                 depth[neighbour] = depth[node] + 1
+                parent[neighbour] = node
                 queue.append(neighbour)
-        columns: dict[int, list] = {}
+        by_depth: dict[int, list] = {}
         for member in members:
-            columns.setdefault(depth.get(member, 1), []).append(member)
-        rows = max([len(v) for v in columns.values()] + [1])
-        height = rows * ROW_STEP
+            by_depth.setdefault(depth.get(member, 1), []).append(member)
+        for nodes in by_depth.values():
+            nodes.sort(key=lambda n: node_label(n).lower())
+
+        first = by_depth.get(1, [])
+        height = max(len(first), 1) * ROW_STEP
         positions[hub] = (HUB_X, band_top + height / 2)
-        for level, nodes in columns.items():
-            span = len(nodes) * ROW_STEP
-            for index, node in enumerate(nodes):
-                positions[node] = (HUB_X + COL_STEP * level,
-                                   band_top + (height - span) / 2
-                                   + index * ROW_STEP + ROW_STEP / 2)
+        column_of[hub] = 0
+        for index, node in enumerate(first):
+            positions[node] = (HUB_X + COL_STEP,
+                               band_top + index * ROW_STEP + ROW_STEP / 2)
+            column_of[node] = 1
+        taken: dict[int, set] = {}
+        for level in sorted(d for d in by_depth if d >= 2):
+            for node in by_depth[level]:
+                row = positions.get(parent.get(node, hub), (0, band_top))[1]
+                while row in taken.setdefault(level, set()):
+                    row += ROW_STEP
+                taken[level].add(row)
+                positions[node] = (HUB_X + COL_STEP * level, row)
+                column_of[node] = level
+        bottom = max(positions[n][1] for n in members | {hub}) + ROW_STEP / 2
+        height = bottom - band_top
+        for node in members | {hub}:
+            band_of[node] = band_top
         bands.append((hub, band_top, height))
         band_top += height + BAND_PAD
-    return positions, bands, band_top + MARGIN
+    return positions, bands, band_top + MARGIN, band_of, column_of
 
 
 def _box_width(key) -> int:
@@ -162,7 +188,27 @@ def _edge_path(a, b, positions, bow=None):
             f"{mid:.0f} {y2:.0f}, {ex:.0f} {y2:.0f}")
 
 
-def _svg(edges, positions, bands, height):
+def _over_path(a, b, positions, band_of):
+    """An edge spanning two or more columns, routed OVER the band instead of
+    straight through it.
+
+    Every such edge today is a Bowser arena's winning key-cutscene back to its
+    castle region, and drawn as a straight line it runs the full width of the
+    band -- right across the middle stack of courses, which is what made the
+    right-hand side unreadable (human report 2026-08-02: "I'd also visually
+    appreciate if the arrows weren't overlapping... Maybe the arrows should
+    loop OVER the middle chunk of stages?"). It leaves and lands VERTICALLY, so
+    the arrowhead points down into its destination and never shares an
+    attachment point with the horizontal fan.
+    """
+    x1, y1 = positions[a]
+    x2, y2 = positions[b]
+    peak = band_of[a] - BAND_PAD / 2 - 2
+    return (f"M {x1:.0f} {y1 - 16:.0f} C {x1:.0f} {peak:.0f}, "
+            f"{x2:.0f} {peak:.0f}, {x2:.0f} {y2 - 16:.0f}")
+
+
+def _svg(edges, positions, bands, height, band_of, column_of):
     width = max(x for x, _ in positions.values()) + 220
     parts = [f'<svg viewBox="0 0 {width:.0f} {height:.0f}" '
              f'width="{width:.0f}" height="{height:.0f}">',
@@ -190,6 +236,10 @@ def _svg(edges, positions, bands, height):
             spine += 1
             path = _edge_path(a, b, positions, bow=70 + spine * 34)
             cls, kind = "edge spine", "spine"
+        elif abs(column_of.get(a, 0) - column_of.get(b, 0)) >= 2:
+            path = _over_path(a, b, positions, band_of)
+            cls = "edge oneway" if one_way else "edge twoway"
+            kind = "one" if one_way else "two"
         elif one_way:
             path = _edge_path(a, b, positions)
             cls, kind = "edge oneway", "one"
@@ -271,7 +321,7 @@ th { color:#9fb0d9; font-weight:600; white-space:nowrap; width:1%; }
 
 def render() -> str:
     edges = _edges()
-    positions, bands, height = _layout(edges)
+    positions, bands, height, band_of, column_of = _layout(edges)
     two_way = sum(1 for *_, one in edges if not one)
     one_way = len(edges) - two_way
     return f"""<!doctype html>
@@ -290,7 +340,7 @@ project can catch that, so this page exists to be looked at.</p>
   <span><span class="swatch spineswatch"></span>castle doors between regions</span>
   <span>Gold boxes are the five castle regions, top to bottom in the order the castle opens up.</span>
 </div>
-<div class="scroll">{_svg(edges, positions, bands, height)}</div>
+<div class="scroll">{_svg(edges, positions, bands, height, band_of, column_of)}</div>
 
 <h2>Where you can go from each place</h2>
 <table><tbody>

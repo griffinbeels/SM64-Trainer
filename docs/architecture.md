@@ -1059,7 +1059,7 @@ the region boundary while the next movement *starts* on `star_grabbed` —
 which is why `seg:sl->basement` ends on `area_enter` and `seg:mips2->hmc`
 starts on a grab.
 
-### Over half of real play is not a walk (2026-08-01)
+### Over half of real play is not a walk (2026-08-01, re-measured 08-02)
 
 Measured against both live journals by `tools/measure_topology_cancels.py`,
 collapsing the event stream to the last `(level, area)` observed per
@@ -1067,8 +1067,8 @@ collapsing the event stream to the last `(level, area)` observed per
 
 | journal | settled node moves | not a world edge | of those, course → course |
 |---|---|---|---|
-| repo checkout (20,542 events) | 736 | 340 (46%) | 235 |
-| installed exe (17,424 events) | 419 | 225 (54%) | 160 |
+| repo checkout (20,542 events) | 739 | 341 (46%) | 235 |
+| installed exe (17,424 events) | 419 | 221 (53%) | 156 |
 
 **A course → course transition is impossible in the real game** — every course
 exit lands in the castle — so those are Usamune warp-menu teleports outright.

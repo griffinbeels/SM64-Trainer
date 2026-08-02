@@ -114,13 +114,21 @@ def test_world_connections_match_the_user_topology_spec():
 
 
 def test_world_connections_arena_edges_are_directed():
-    # Arenas are entered ONLY through their course's pipe; their exits dump
-    # Mario back at the course's castle region. The reverse moves don't exist.
+    # An arena is entered ONLY through its course's pipe -- never straight from
+    # the castle. Its WIN is the one-way part: the key cutscene puts Mario back
+    # in the region, and there is no way back in from there.
+    #
+    # The pair itself is TWO-WAY, corrected 2026-08-02 by the human reading
+    # tools/topology_map.py: losing the fight drops you back into the course
+    # you came from. This test asserted the opposite -- "arena never exits into
+    # BitDW" -- and that is the whole reason the map tool exists, since a
+    # missing edge only makes the matcher STRICTER somewhere he never walked
+    # and tools/measure_topology_cancels.py is structurally blind to it.
     conn = A.world_connections()
     assert [30, None] in conn["17"]                        # BitDW pipe -> B1 arena
-    assert [6, 1] in conn["30"]                            # fight exit -> lobby
+    assert [6, 1] in conn["30"]                            # winning key cutscene -> lobby
     assert not any(lvl == 30 for lvl, _ in conn["6:1"])    # lobby can't enter the arena
-    assert not any(lvl == 17 for lvl, _ in conn["30"])     # arena never exits into BitDW
+    assert [17, None] in conn["30"]                        # losing -> back into BitDW
     # BitFS is entered from the BASEMENT, never straight out of DDD. This
     # asserted `[19, None] in conn["23"]` -- a "DDD sub bay -> BitFS" edge --
     # until 2026-07-27, when the real walk was captured twice: `23 -> 6

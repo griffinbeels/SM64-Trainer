@@ -421,6 +421,14 @@ WORLD_EDGES_TWO_WAY = (
     (26, 4),                                                # courtyard <-> BBH
     (16, 18),                                               # grounds <-> VCUtM (moat)
     (7, 28),                                                # HMC pool <-> CotMC
+    # Bowser course <-> its arena. The pipe goes in; LOSING the fight puts you
+    # back at the top of the course you came from, which is the same shape as
+    # any other "the exit returns where you came from" row above. These were
+    # one-way (course -> arena only) until 2026-08-02, when the human read the
+    # map this table now draws and corrected all three -- exactly the class of
+    # error tools/measure_topology_cancels.py is structurally blind to, since a
+    # MISSING edge only makes the rules stricter in a place he never walked.
+    (17, BOWSER_1_ARENA), (19, BOWSER_2_ARENA), (21, BOWSER_3_ARENA),
 )
 
 # One-way edges: moves with a DIFFERENT return path. Arena pipes only run
@@ -438,9 +446,19 @@ WORLD_EDGES_TWO_WAY = (
 # `star_grabbed` start (see tools/corpus_movements.py) -- and that start is
 # what fired the movement while the player was still standing in DDD holding
 # the star they were practising (live report 2026-07-27).
+#
+# The three `course -> arena` rows that used to live here MOVED to the two-way
+# table on 2026-08-02: losing the fight returns you to the course, so the pair
+# is symmetric and only the WIN is one-way.
+#
+# `(34, _UPSTAIRS)` was REMOVED the same day, on the human's correction reading
+# tools/topology_map.py: "Bowser 3 cannot go back to upstairs, because if you
+# win in bowser 3 you beat the game; if you lose in bowser 3, you go back into
+# bowser in the sky." So the Bowser 3 arena has no exit into the castle at all
+# -- its only edge is the two-way pair with BitS. Bowser 1 and 2 keep theirs:
+# their key cutscene really does put Mario back in the castle.
 WORLD_EDGES_ONE_WAY = (
-    (17, 30), (19, 33), (21, 34),                 # Bowser course pipe -> arena
-    (30, _LOBBY), (33, _BASEMENT), (34, _UPSTAIRS),  # fight exit -> castle
+    (30, _LOBBY), (33, _BASEMENT),                # winning key cutscene -> castle
 )
 
 

@@ -148,12 +148,12 @@ a cancelled one. Two bounds, both Griffin's:
 A normal arm pops the memory: the def is live again by its own start condition,
 so the resurrection entry would only be a stale second door.
 
-### Measured 2026-08-01
+### Measured 2026-08-02
 
 | journal | events | settled moves | off-graph | successes kept |
 |---|---|---|---|---|
-| installed exe | 17,424 | 419 | 225 (160 course→course) | **82 / 82** |
-| repo checkout | 20,542 | 736 | 340 (235 course→course) | **110 / 112** |
+| installed exe | 17,424 | 419 | 221 (156 course→course) | **82 / 82** |
+| repo checkout | 20,542 | 739 | 341 (235 course→course) | **110 / 112** |
 
 Both losses were read back against the raw journal and ARE the live report,
 banked as times: `LLL → HMC` (ids 13672–13687) exited LLL, warped BACK INTO LLL,
