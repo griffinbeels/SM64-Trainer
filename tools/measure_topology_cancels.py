@@ -28,30 +28,32 @@ What it does:
    are ordinary levels (a definite warp -- the real game has no course-to-course
    edge) or one touches the castle interior.
 
-FIRST RUN, 2026-08-01, both journals:
+MEASURED 2026-08-01, both journals, with the rules as shipped:
   installed exe (17,424 events): 419 settled moves, 225 off-graph (160 of them
     course->course, which the real game cannot do at all). 82 segment
     successes, 82 survivors. CLEAN.
-  repo checkout (20,542 events): 734 settled moves, 338 off-graph (233
-    course->course). 112 successes, 109 survivors -- 3 killed, examined one by
-    one against the raw journal:
+  repo checkout (20,542 events): 736 settled moves, 340 off-graph (235
+    course->course). 112 successes, 110 survivors. The two killed were each
+    read back against the raw journal and are the live report itself, banked
+    as times:
     - `LLL -> HMC` (attempt 450000013672, 713f). Journal ids 13672-13687: he
       exited LLL, WARPED BACK INTO LLL, then warped LLL -> HMC (22 -> 7, not an
-      edge either). The banked 23.8s spans the whole round trip. This is the
-      live report itself, recorded as a time. Killing it is the feature.
+      edge either). The banked 23.8 s spans the whole round trip.
     - `Bowser 2 -> Upstairs` (attempt 570000018355, 2482f). Journal ids
       18355-18376: exited the arena into the basement, spent 30 s inside BitFS
       (with a target_set of its own), came out and went upstairs. The banked
-      83 s is mostly a detour. Killing it is the feature.
-    - `Bowser 1 -> WF` (attempt 350000017935, 482f). THE JUDGEMENT CALL, not a
-      bug: journal ids 17926-17940 -- armed by an earlier Bowser 1 exit, he
-      warped to BitDW for 7 s, came back to the lobby, pressed reset AT THE ARM
-      POSITION, and ran lobby -> WF in 16 s. `_feed_loose` treats an anchor at
-      the arm position as a genuine retry and re-armed it (jid 17935); the
-      rules cancel on the BitDW hop first, and the def's only start trigger
-      (`level_exit from=30`) cannot fire from a reset, so nothing re-arms it.
-      Whether that 16 s is a real `Bowser 1 -> WF` time is a question about
-      practice, not about topology -- see the spec's open item.
+      83 s is mostly detour.
+
+  A THIRD kill in the first run was NOT a bug and is what produced the
+  resurrection rule (`SegmentEngine._cancelled`). `Bowser 1 -> WF`, attempt
+  350000017935, journal ids 17926-17940: armed by a Bowser 1 exit into the
+  lobby, he warped to BitDW for 7 s, came back to the lobby, pressed reset AT
+  THE ARM POSITION and ran lobby -> WF in 16 s. Redoing that start trigger
+  means redoing the whole fight, so the reset IS how the movement is re-run --
+  Griffin's ruling, with the forfeit half in the same breath: a reset SOMEWHERE
+  ELSE ends it for good ("we've now gone out of order in a way that doesn't
+  make sense for practicing... until I get back to Bowser 1 and trigger it from
+  the beginning again"). It survives now.
 
 Usage:
     uv run python tools/measure_topology_cancels.py [db]

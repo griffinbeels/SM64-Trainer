@@ -2193,6 +2193,25 @@ class SegmentEngine:
         # `_pending` above already uses for deferred destination subareas.
         self._settled_node: str | None = None
         self._pending_move: tuple[int, str | None] | None = None
+        # Definitions the topological rules cancelled, as {def id: (_Arm,
+        # expiry frame)} — the arm as it stood when it was killed, so a real
+        # anchor AT THAT POSITION can bring it back (Griffin's ruling
+        # 2026-08-01, from the measurement in tools/measure_topology_cancels.py).
+        #
+        # The case: armed by a Bowser 1 exit into the lobby, he warped to BitDW
+        # for 7 s, came back to the lobby, pressed reset AT THE ARM POSITION and
+        # ran lobby -> WF in 16 s (journal ids 17926-17940). `_feed_loose`
+        # already treats an anchor at the arm position as a genuine retry, and
+        # that IS how a castle movement is re-run — redoing the `level_exit
+        # from=30` start trigger means redoing the whole fight. Without this the
+        # rules would take that retry loop away.
+        #
+        # EXPIRY is not optional: a cancelled arm has no cancel rules left to
+        # bound it, so without a clock a movement killed hours ago would re-arm
+        # the next time he happened to reset in the same room — the ambient-
+        # arming class of bug. It gets the same measured staleness budget a
+        # loose arm gets (budget_frames), applied to every mode for that reason.
+        self._cancelled: dict[int, tuple] = {}
 
     def armed_ids(self) -> set[int]:
         return set(self._armed)
@@ -2234,6 +2253,7 @@ class SegmentEngine:
             # compared against a frame number from a different epoch.
             self._settled_node = None
             self._pending_move = None
+            self._cancelled.clear()
         elif ev.type == "area_changed":
             # area_changed, never level_changed: this payload names the level
             # AND the settled area outright, where `ctx.area` during a
@@ -2388,6 +2408,10 @@ class SegmentEngine:
                 # resolved when the co-frame area_changed burst is over. The
                 # source subarea (from_subarea) is already in the lambda, so a
                 # plain match here arms immediately as before.
+                # A normal arm supersedes any remembered cancellation:
+                # the def is live again by its own start condition, so the
+                # resurrection memory would only be a stale second door.
+                self._cancelled.pop(d.id, None)
                 req = (start_clause.get("to_subarea")
                        if ev.type == "level_changed" else None)
                 if req is not None:
@@ -2438,6 +2462,51 @@ class SegmentEngine:
                         notices.append({"event": "segment_armed",
                                         "segment_id": d.id, "name": d.name,
                                         "frame": ev.frame})
+            # RESURRECTION (Griffin's ruling 2026-08-01, from the measurement
+            # in tools/measure_topology_cancels.py): a REAL anchor at the
+            # position a topologically-cancelled arm stood in is the retry
+            # loop, not a new event. `_feed_loose` already reads an anchor at
+            # the arm position that way for a LIVE arm; this is the same
+            # reading for one the topological rules killed, and without it a
+            # movement whose start trigger cannot be re-fired without redoing
+            # a whole Bowser fight would simply become unpractisable after any
+            # detour. Runs AFTER the ordinary arm branch and is gated on the
+            # def still being idle, so it can never rebase a live arm.
+            remembered = self._cancelled.get(d.id)
+            if remembered is not None:
+                cancelled_arm, expires = remembered
+                if ev.frame >= expires:
+                    del self._cancelled[d.id]   # see _cancelled: no clock, no bound
+                elif (ev.type in _ANCHOR_TYPES and not anchor_is_echo
+                      and not _at_arm_position(cancelled_arm, ctx)):
+                    # FORFEIT (Griffin, 2026-08-01): a real reset SOMEWHERE
+                    # ELSE ends the retry, permanently — "if... in the middle
+                    # of lobby -> wf, I decided to reset to bitdw, I think
+                    # that's a genuine kill of the segment, because we've now
+                    # gone out of order in a way that doesn't make sense for
+                    # practicing... until I get back to Bowser 1 and trigger
+                    # it from the beginning again". Without this the memory
+                    # would survive the relocation and the NEXT reset back at
+                    # the start would resurrect a run he had abandoned twice
+                    # over. Mirrors _feed_strict's existing reading of an
+                    # anchor away from the arm position as a relocation.
+                    del self._cancelled[d.id]
+                elif (ev.type in _ANCHOR_TYPES and not anchor_is_echo
+                      and d.id not in self._armed
+                      and _at_arm_position(cancelled_arm, ctx)):
+                    del self._cancelled[d.id]
+                    self._armed[d.id] = _Arm(
+                        jid=ev.id, start_frame=ev.frame,
+                        started_utc=ev.wall_time_utc, anchor_type=ev.type,
+                        session_id=ev.session_id,
+                        level=(ctx.level if ctx.level is not None
+                               else cancelled_arm.level),
+                        area=(ctx.area if ctx.area is not None
+                              else cancelled_arm.area),
+                        deadline_frame=self._deadline_for(d, ev))
+                    notices.append({"event": "segment_armed",
+                                    "segment_id": d.id, "name": d.name,
+                                    "frame": ev.frame})
         return closed, notices
 
     def _matches(self, triggers, ev, ctx) -> bool:
@@ -2902,7 +2971,7 @@ class SegmentEngine:
             # failure. Arming at the DESTINATION is untouched (closures run
             # before arming), which is what keeps the practice loop working.
             for d in candidates:
-                self._disarm(d, ev, notices)
+                self._cancel_topologically(d, ev, notices)
             return
         # Rule 2 — a LEGAL move that takes the player FURTHER from what the
         # segment needs next. Basement -> LLL is a real edge, so Rule 1 waves
@@ -2917,7 +2986,18 @@ class SegmentEngine:
             before = self._next_step_hops(d, arm, previous)
             after = self._next_step_hops(d, arm, node)
             if before is not None and after is not None and after > before:
-                self._disarm(d, ev, notices)
+                self._cancel_topologically(d, ev, notices)
+
+    def _cancel_topologically(self, d, ev, notices) -> None:
+        """Disarm for a topological reason, REMEMBERING where the arm stood so
+        a real anchor there can bring it back (see `self._cancelled`). Every
+        other disarm in this engine is final; this one is the only kind the
+        player can undo by returning to the start and pressing reset."""
+        arm = self._armed.get(d.id)
+        if arm is not None:
+            self._cancelled[d.id] = (
+                arm, ev.frame + budget_frames(self._best_success.get(d.id)))
+        self._disarm(d, ev, notices)
 
     def _next_step_hops(self, d, arm: _Arm, node: str | None) -> int | None:
         """Fewest legal moves from `node` to whatever this definition needs

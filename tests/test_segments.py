@@ -3827,3 +3827,87 @@ def test_an_armed_segment_survives_the_transient_lobby_on_a_course_exit():
            ctx(level=6, area=3))
     e.feed(jev(7, "mario_acted", 1005, {}), ctx(level=6, area=3))
     assert e.armed_ids() == {73}
+
+
+# Mirrors seg:bowser-1->wf: loose, exits the Bowser 1 arena (which lands in the
+# lobby), ends on entering WF.
+B1_WF = SegmentDef(id=75, name="Bowser 1 -> WF", enabled=True,
+                   start_triggers=[{"type": "level_exit", "from": 30}],
+                   end_triggers=[{"type": "level_enter", "to": 24}],
+                   waypoints=[], guards=[], match_mode="loose")
+
+
+def _bowser_1_exit_then_detour_to_bitdw(e):
+    """Arm B1 -> WF by exiting the arena into the lobby, then warp to BitDW --
+    a legal edge, but 2 hops from WF where the lobby was 1, so Rule 2 cancels."""
+    e.feed(jev(1, "area_changed", 900,
+               {"level": 30, "from": 1, "to": 1, "from_transient": False}),
+           ctx(level=30))
+    e.feed(jev(2, "mario_acted", 905, {}), ctx(level=30))
+    e.feed(jev(3, "level_changed", 1000, {"from": 30, "to": 6}),
+           ctx(level=6, prev_level=30))
+    e.feed(jev(4, "area_changed", 1000,
+               {"level": 6, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=6, area=1))
+    e.feed(jev(5, "mario_acted", 1005, {}), ctx(level=6, area=1))
+    assert e.armed_ids() == {75}
+    e.feed(jev(6, "level_changed", 2000, {"from": 6, "to": 17}),
+           ctx(level=17, prev_level=6))
+    e.feed(jev(7, "area_changed", 2000,
+               {"level": 17, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=17, area=1))
+    e.feed(jev(8, "mario_acted", 2005, {}), ctx(level=17))
+    assert e.armed_ids() == set()          # cancelled by the detour
+
+
+def _walk_back_to_the_lobby(e):
+    e.feed(jev(9, "level_changed", 3000, {"from": 17, "to": 6}),
+           ctx(level=6, prev_level=17))
+    e.feed(jev(10, "area_changed", 3000,
+               {"level": 6, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=6, area=1))
+    e.feed(jev(11, "mario_acted", 3005, {}), ctx(level=6, area=1))
+
+
+def test_a_reset_at_the_start_position_brings_a_cancelled_segment_back():
+    # Measured case, journal ids 17926-17940 (tools/measure_topology_cancels):
+    # armed by a Bowser 1 exit into the lobby, he warped to BitDW for 7s, came
+    # back to the lobby, pressed reset AT THE ARM POSITION and ran lobby -> WF
+    # in 16s. Redoing the start trigger means redoing the whole fight, so this
+    # reset IS how the movement is re-run.
+    e = SegmentEngine([B1_WF])
+    _bowser_1_exit_then_detour_to_bitdw(e)
+    _walk_back_to_the_lobby(e)
+    _, notices = e.feed(jev(12, "practice_reset", 3100, {}),
+                        ctx(level=6, area=1))
+    assert e.armed_ids() == {75}
+    assert e.armed_items()[75].start_frame == 3100
+    assert [n["event"] for n in notices] == ["segment_armed"]
+
+
+def test_a_reset_somewhere_else_forfeits_the_comeback_for_good():
+    # Griffin 2026-08-01: "if... in the middle of lobby -> wf, I decided to
+    # reset to bitdw, I think that's a genuine kill of the segment, because
+    # we've now gone out of order... until I get back to Bowser 1 and trigger
+    # it from the beginning again."
+    e = SegmentEngine([B1_WF])
+    _bowser_1_exit_then_detour_to_bitdw(e)
+    _walk_back_to_the_lobby(e)
+    e.feed(jev(12, "practice_reset", 3100, {}), ctx(level=17))   # reset to BitDW
+    assert e.armed_ids() == set()
+    # ...and coming back to the lobby and resetting there no longer helps.
+    e.feed(jev(13, "practice_reset", 3200, {}), ctx(level=6, area=1))
+    assert e.armed_ids() == set()
+
+
+def test_the_comeback_expires_with_the_staleness_budget():
+    # A cancelled arm has no cancel rules left to bound it, so without a clock
+    # a movement killed hours ago would re-arm the next time he happened to
+    # reset in the same room.
+    from sm64_events.tracking.segments import MIN_BUDGET_FRAMES
+    e = SegmentEngine([B1_WF])
+    _bowser_1_exit_then_detour_to_bitdw(e)
+    _walk_back_to_the_lobby(e)
+    e.feed(jev(12, "practice_reset", 2005 + MIN_BUDGET_FRAMES + 1, {}),
+           ctx(level=6, area=1))
+    assert e.armed_ids() == set()
