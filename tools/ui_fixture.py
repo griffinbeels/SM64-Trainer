@@ -194,6 +194,18 @@ def seed_practice(service, course_id: int = FIXTURE_COURSE,
                          # steps later to reach the state every render gate
                          # measures.
                          "igt_timed_at": "xcam"}))
+        # ...and ONE grab-timed row, because the practice log's caveat badge
+        # is only drawn on a row whose x-cam provably never happened, and a
+        # fixture made entirely of clean rows measures a log the mark can
+        # never appear in. Seeded LAST so `_seed_target` still saves its PB
+        # off the first success (a grab-timed one is refused).
+        await service.publish(Event(
+            type="practice_reset", frame=4000, timestamp_utc=now,
+            payload={"igt_frames_before": 0}))
+        await service.publish(Event(
+            type="star_collected", frame=4350, timestamp_utc=now,
+            payload={"course_id": course_id, "star_id": star_id,
+                     "igt_frames": 784, "igt_timed_at": "grab"}))
 
     asyncio.run(go())
 

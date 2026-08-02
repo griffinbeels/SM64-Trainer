@@ -236,6 +236,18 @@
   .attempt-actions button.pb-blocked .caveat-chip {
     cursor: not-allowed; margin-left: .3rem;
   }
+  /* The mark beside a practice-log row's TIME keeps the glyph and drops the
+     word at EVERY width, unlike the objective card's chip which only drops it
+     under 793px. Two reasons, and the first is measured: at 1500px the two-
+     column practice index gives this card a ~440px pane, and "! Grab-timed"
+     wrapped the result cell to a second line -- which inside a fixed-height
+     `overflow: hidden` card costs no visible width and clips the rows below
+     it. The second is that the word is already on the row: a blocked
+     Save-as-PB button sits four cells away wearing the same chip in full, so
+     spelling it twice buys nothing. The sentence still answers a hover,
+     because the title rides the CHIP rather than the word. */
+  .attempt-result .caveat-chip { gap: 0; padding-inline: .3rem; }
+  .attempt-result .caveat-chip-word { display: none; }
   /* The clear cell ("(any level)" etc.) emits null, restoring what the native
      <select>'s placeholder option did. Muted, so it reads as an escape hatch
      rather than a choice. */

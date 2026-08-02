@@ -2107,6 +2107,30 @@ def test_the_view_and_the_server_agree_about_what_is_saveable(tmp_path):
     assert [r["pb_blocked_by"] for r in rows] == ["grab_timed"]
 
 
+def test_the_practice_log_row_carries_its_own_mark(tmp_path):
+    """The badge beside the TIME, which is a different key from the one on the
+    save button and outlives it: a row already saved as a PB draws Undo, and a
+    cleared row draws no button at all, but both still print a number that
+    measures the grab rather than the x-cam (2026-08-02)."""
+    from sm64_events.tracking.views import build_session_view
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(grab_timed_star()))
+    grabbed = [r for sec in build_session_view(db, svc, clock="igt")["stars"]
+               for r in sec["attempts"]]
+    assert [r["caveat"] for r in grabbed] == ["grab_timed"]
+
+    # The control, and the alarm-fatigue clause: a legacy row is UNKNOWN, not
+    # proof, and four fifths of his log is legacy.
+    asyncio.run(svc.publish(ev("practice_reset", 2000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(ev("star_collected", 2350,      # no igt_timed_at
+                               {"course_id": 2, "star_id": 2,
+                                "igt_frames": 343, "igt_source": "result"})))
+    legacy = [r for sec in build_session_view(db, svc, clock="igt")["stars"]
+              for r in sec["attempts"] if r["id"] != grabbed[0]["id"]]
+    assert [r["caveat"] for r in legacy] == [None]
+
+
 def test_a_legacy_star_is_marked_but_still_saveable(tmp_path):
     """Absence of `igt_timed_at` is UNKNOWN, not proof (measured 2026-08-02).
 

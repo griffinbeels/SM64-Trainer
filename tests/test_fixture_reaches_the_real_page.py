@@ -122,6 +122,26 @@ def test_both_rank_banners_render(page):
         "rank'.")
 
 
+def test_exactly_the_grab_timed_row_wears_a_caveat_mark(page):
+    """The practice log's own mark, and the fourth instance of this file's
+    lesson: it draws only on a row whose x-cam PROVABLY never happened, so a
+    fixture of clean rows renders a log the badge can never appear in and
+    every sweep over it says nothing (2026-08-02, "if you've been practicing
+    all wrong, you should know").
+
+    Counted, not merely found: ONE of the four seeded successes is grab-timed,
+    and a badge on all four would be the alarm-fatigue failure the server-side
+    predicate is measured to avoid — 3 of his 837 star successes carry proof,
+    670 carry only silence."""
+    marks = count(page, PRIMARY + ".attempt-result .caveat-chip")
+    assert marks == 1, (
+        f"{marks} caveat marks in the practice log, expected 1. If 0, either "
+        "the badge is not drawn (practice.js) or the fixture seeded no "
+        "grab-timed attempt (ui_fixture.py::seed_practice). If 4, the server "
+        "is marking UNKNOWN rows as well as proven ones "
+        "(tracking/caveats.py::attempt_caveat).")
+
+
 def test_neither_banner_is_the_sentinel_variant(page):
     """`.rank-banner-empty` has no medal, no progress bar and no wash — it is a
     different, shorter box, and swept in place of the graded one it under-

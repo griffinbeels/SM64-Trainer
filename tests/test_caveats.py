@@ -10,7 +10,9 @@ from dataclasses import replace
 
 import pytest
 
-from sm64_events.tracking.caveats import CAVEAT_SEVERITY, caveat_for, caveats_for
+from sm64_events.tracking.caveats import (CAVEAT_SEVERITY, attempt_caveat,
+                                          caveat_for, caveats_for,
+                                          pb_blocked_by)
 from sm64_events.tracking.projection import Attempt
 
 BASE = Attempt(
@@ -98,6 +100,45 @@ def test_every_ranked_key_is_reachable_by_some_real_input(key):
     }
     assert key in inputs, f"{key} is ranked but this test names no input for it"
     assert key in caveats_for(*inputs[key])
+
+
+# --- the PRACTICE LOG's own mark, which asks about the ROW, not about a PB ---
+
+def test_a_proven_grab_timed_row_is_marked_in_the_practice_log():
+    """The row he pointed at: reset mid-backflip after the grab, so the x-cam
+    never happened and the payload says so (2026-08-02, attempt 22829 in his
+    own journal)."""
+    assert attempt_caveat(replace(BASE, timed_at="grab")) == "grab_timed"
+
+
+def test_an_unknown_row_is_NOT_marked_in_the_practice_log_though_its_pb_is():
+    """The alarm-fatigue clause, and the one thing that could quietly ruin
+    this feature. Of his 837 star successes, 3 carry `"grab"` and 670 carry
+    `None` — marking the unknowns would put a warning on four fifths of the
+    log. The PB badge still covers them, because that surface asserts a GRADE
+    and an unverifiable time cannot back one."""
+    legacy = replace(BASE, timed_at=None)
+    assert attempt_caveat(legacy) is None
+    assert caveats_for(pb(), legacy) == ["grab_timed"]
+
+
+def test_an_xcam_row_and_a_segment_row_are_never_marked():
+    assert attempt_caveat(replace(BASE, timed_at="xcam")) is None
+    # A segment has no x-cam to be legal about; its timed_at is None by
+    # construction, so this guards the shape rather than a reachable state.
+    assert attempt_caveat(replace(BASE, segment_id=4, course_id=None,
+                                  star_id=None, timed_at="grab")) is None
+    assert attempt_caveat(None) is None
+
+
+@pytest.mark.parametrize("timed_at", ["grab", "xcam", None])
+def test_the_row_mark_and_the_save_refusal_can_never_disagree(timed_at):
+    """Two questions, ONE predicate. A row marked wrong-quantity while its
+    Save-as-PB button still offers the save is the exact drift these share a
+    door to prevent — and drawing the mark from `pb_blocked_by` instead would
+    have tied it to the save rule forever."""
+    row = replace(BASE, timed_at=timed_at)
+    assert (attempt_caveat(row) is None) == (pb_blocked_by(row) is None)
 
 
 def test_no_pb_means_no_caveat():

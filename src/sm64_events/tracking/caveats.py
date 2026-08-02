@@ -86,6 +86,50 @@ def caveat_for(pb_row, attempt) -> str | None:
     return next((key for key in CAVEAT_SEVERITY if key in found), None)
 
 
+def _proven_grab_timed(attempt) -> bool:
+    """The x-cam PROVABLY never happened for this star attempt.
+
+    The one predicate behind both `attempt_caveat` and `pb_blocked_by`, so a
+    row can never be marked wrong-quantity by one and offered as a legal PB by
+    the other. `"grab"` is the payload SAYING the x-cam never arrived (reset,
+    savestate load, level change, IGT reset, or the 300-frame backstop);
+    `None` is a row that predates the key and is simply unknown, which is a
+    different fact and is deliberately not this one. A segment has no x-cam to
+    be legal about and its `timed_at` is None by construction."""
+    return (attempt is not None and attempt.segment_id is None
+            and attempt.timed_at == "grab")
+
+
+def attempt_caveat(attempt) -> str | None:
+    """The ONE caveat the PRACTICE LOG draws on this attempt's own time.
+
+    Not `caveat_for`: that asks about a SAVED PB and its rank, and two of its
+    three keys are about the pb row rather than the attempt (`unattributed`
+    reads `strat_tag` off the pb; `old_clock` is about a saved time being
+    incomparable to a fresh run). This asks the narrower question a row in the
+    log can answer about itself — "is the number printed here the quantity you
+    think you were practising".
+
+    PROVEN only, and that is the whole design (2026-08-02, reversing an
+    earlier ruling): "I want to add an extra (!) indicator to the entry if it
+    was technically a star grab and not a correctly timed xcam entry… If
+    you've been practicing all wrong, you should know." Measured against his
+    own journal the same day, so the alarm-fatigue objection is settled with a
+    number rather than an argument: of 837 star successes, **3 carry `"grab"`
+    and 670 carry `None`**. Marking the unknown rows would put a warning on
+    four fifths of the practice log forever and on nothing he can act on;
+    marking the proven ones marks exactly the run he just threw away. The
+    UNKNOWN rows are still marked where the question is about a rank rather
+    than about a run — `caveats_for` covers them on the PB badge, which is the
+    surface that asserts a grade.
+
+    `old_clock` is deliberately absent rather than forgotten: it is the only
+    other key an attempt could carry on its own, it would land on segment rows
+    (rule 11's other half), and how many is unmeasured. One key here is a
+    stated scope, not a gap — add the second when its own count says it reads."""
+    return "grab_timed" if _proven_grab_timed(attempt) else None
+
+
 def pb_blocked_by(attempt) -> str | None:
     """Why this attempt may NOT be saved as a PB — a caveat key, or None.
 
@@ -126,7 +170,4 @@ def pb_blocked_by(attempt) -> str | None:
 
     Segments are never blocked: `timed_at` is None for every non-star closure
     (projection.py), and a segment has no x-cam to be legal about."""
-    if attempt is not None and attempt.segment_id is None \
-            and attempt.timed_at == "grab":
-        return "grab_timed"
-    return None
+    return "grab_timed" if _proven_grab_timed(attempt) else None
