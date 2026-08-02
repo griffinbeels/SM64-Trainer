@@ -175,3 +175,28 @@ def test_record_stamps_a_supplied_clock(log):
     when = datetime(2026, 8, 2, 21, 42, 19, tzinfo=timezone.utc)
     stored = uilog.record(SELECTOR, frame=7, now=when)
     assert stored["server_utc"] == when.isoformat()
+
+
+def test_a_hanging_post_cannot_wedge_the_channel():
+    """The delivery path can fail silently too, and it did (2026-08-02): the
+    serialised queue had no timeout, so ONE request left hanging — a server
+    restarted mid-flight is the ordinary way to get one — held `inFlight`
+    true for the rest of the page's life. The log stopped dead at 701 records
+    while the page kept working, and its silence then read as "nothing was on
+    screen", which is the exact conclusion this module exists to prevent.
+
+    Source-scan (uilog.js is not import-free), pinning the two properties
+    that matter: the slot is released on a TIMER as well as on the response,
+    and the release is idempotent so the timer firing after a slow-but-fine
+    response cannot double-advance the queue."""
+    from pathlib import Path
+    from source_scan import strip_comments
+    source = strip_comments(
+        (Path(__file__).resolve().parents[1] / "src" / "sm64_events" / "ui"
+         / "uilog.js").read_text(encoding="utf-8"))
+    assert "POST_TIMEOUT_MS" in source and "setTimeout(release" in source, \
+        "a post can hang forever again"
+    assert "if (released) return;" in source, \
+        "release must be idempotent — the timer and the response both call it"
+    assert ".then(release, release)" in source, \
+        "the slot must be released on rejection as well as on success"

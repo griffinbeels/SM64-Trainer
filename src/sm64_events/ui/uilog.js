@@ -81,12 +81,34 @@ export function readTargets(root) {
 const queue = [];
 let inFlight = false;
 
+// A POST THAT NEVER SETTLES MUST NOT WEDGE THE CHANNEL (2026-08-02). The
+// serialised queue had no timeout, so one request left hanging — a server
+// restarted mid-flight is the ordinary way to get one — left `inFlight` true
+// for the rest of the page's life and the log simply stopped, silently, at
+// 23:02. That is the SILENT-INSTRUMENT failure this module's own header calls
+// the worst one it has, arriving through the delivery path instead of the
+// reader. Measured: 701 records, then nothing, while the page kept working.
+//
+// So every post is bounded and the slot is released unconditionally. A
+// dropped observation is an acceptable loss; a dead channel is not, because
+// its silence reads as "nothing was on screen".
+const POST_TIMEOUT_MS = 5000;
+
 function flush() {
   if (inFlight || !queue.length) return;
   inFlight = true;
-  send("POST", "/api/uilog", queue.shift())
+  const body = queue.shift();
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    inFlight = false;
+    flush();
+  };
+  setTimeout(release, POST_TIMEOUT_MS);
+  send("POST", "/api/uilog", body)
     .catch(() => {})            // an instrument may never break its subject
-    .then(() => { inFlight = false; flush(); });
+    .then(release, release);
 }
 
 export function postObservation(body) {
