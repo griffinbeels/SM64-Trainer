@@ -304,3 +304,37 @@ def test_begin_apply_errors_when_no_update(tmp_path):
     http = _fake_http({LATEST: _release_json("v1.0.0", FULL_ASSETS)})
     svc = _svc(tmp_path, http)
     assert svc.begin_apply(lambda: None)["state"] == "error"
+
+
+# --- every shipped request carries a timeout ---
+# A socket that connects and then stalls has no deadline of its own, so it
+# blocks the update worker forever — and a hang can never be retried, which
+# makes this the floor the retry loop stands on. Injected openers (tests, the
+# bootstrap) are exempt; what must not regress is the DEFAULT, since that is
+# the one main.py gets.
+
+import inspect  # noqa: E402
+import urllib.request  # noqa: E402
+
+from sm64_events.core import updater as _updater  # noqa: E402
+from sm64_events.core.updater import UpdateService  # noqa: E402
+
+
+def test_default_opener_passes_a_timeout(monkeypatch):
+    seen = {}
+
+    def fake_urlopen(req, timeout=None):
+        seen["req"], seen["timeout"] = req, timeout
+        return "response"
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    assert _updater.default_opener("REQ") == "response"
+    assert seen["req"] == "REQ"
+    assert seen["timeout"] == _updater.NET_TIMEOUT_S
+    assert 0 < _updater.NET_TIMEOUT_S <= 120
+
+
+def test_the_shipped_default_opener_is_the_one_with_the_timeout():
+    for func in (_updater.check_for_update, UpdateService.__init__):
+        default = inspect.signature(func).parameters["http"].default
+        assert default is _updater.default_opener, func.__qualname__

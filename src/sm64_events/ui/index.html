@@ -3340,6 +3340,8 @@
   .update-installing, .update-error { display: flex; gap: .55rem; align-items: center; }
   .update-installing { display: grid; gap: .15rem; }
   .update-installing span, .update-error span { color: var(--muted); font-size: .72rem; }
+  /* Retrying is a status, not a failure: warm, not alarming. */
+  .update-installing span.update-retrying { color: var(--gold); }
   .update-error {
     min-height: 52px; padding: .6rem .7rem; border: 1px solid #72434b;
     border-radius: 7px; color: var(--coral); background: rgba(99,45,55,.18);

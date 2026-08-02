@@ -1,9 +1,16 @@
 # tests/test_update_cycle.py
 """End-to-end: fake GitHub release (real zip + manifest) -> check -> plan ->
 range-fetch -> journaled apply -> installed tree matches the release.
-The whole pipeline the popup's 'Update now' drives, network-free."""
+The whole pipeline the popup's 'Update now' drives, network-free.
+
+The second half drives the SAME pipeline through a flaky network, which is how
+the one real-world failure looked (a TLS timeout mid-download, live log
+2026-08-01): the worker must retry on its own and only report failure once
+every attempt is spent."""
 import io
 import threading
+import time
+import urllib.error
 from pathlib import Path
 
 from sm64_events.core.update_apply import BACKUP_DIR, read_journal
@@ -106,3 +113,101 @@ def test_full_update_cycle_range_refused_falls_back(tmp_path):
     assert done.wait(timeout=10)
     assert (root / "SM64Trainer.exe").read_bytes() == b"EXE-V2"
     assert not (root / "_internal/old.pyd").exists()
+
+
+# --- retrying a flaky network (the real 2026-08-01 failure) ---
+
+ZIP_URL = "https://dl/full.zip"
+
+
+def _flaky_http(routes, fails):
+    """Range-serving opener whose ZIP requests raise the SAME error the live
+    failure did, until `fails["left"]` is exhausted. `fails` is mutable so a
+    test can end the outage mid-run."""
+    inner = _range_http(routes)
+    calls = {"zip": 0}
+
+    def opener(req):
+        url = req.full_url if hasattr(req, "full_url") else req
+        if url == ZIP_URL:
+            calls["zip"] += 1
+            if fails["left"] > 0:
+                fails["left"] -= 1
+                raise urllib.error.URLError(
+                    TimeoutError("[WinError 10060] connection attempt failed"))
+        return inner(req)
+    return opener, calls
+
+
+def _svc_on_flaky(tmp_path, fails):
+    routes_v1 = _fake_release(tmp_path / "r1", "v1.0.0", V1)
+    routes_v2 = _fake_release(tmp_path / "r2", "v2.0.0", V2)
+    root = _install_v1(tmp_path, routes_v1)
+    http, calls = _flaky_http(routes_v2, fails)
+    svc = UpdateService(current_version="1.0.0", http=http,
+                        exe_path=root / "SM64Trainer.exe",
+                        state_path=tmp_path / "state.json", frozen=True,
+                        retry_delays=(0, 0, 0, 0))   # 5 attempts, no sleeping
+    return svc, root, calls
+
+
+def _wait_for_state(svc, state, timeout=10):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if svc.status()["state"] == state:
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def test_a_transient_network_failure_is_retried_without_telling_the_user(tmp_path):
+    svc, root, calls = _svc_on_flaky(tmp_path, {"left": 2})
+    done = threading.Event()
+    assert svc.begin_apply(done.set)["state"] == "downloading"
+    assert done.wait(timeout=10)
+    st = svc.status()
+    assert st["attempt"] == 3                     # two outages, then through
+    assert calls["zip"] > 2                       # it really re-downloaded
+    assert (root / "SM64Trainer.exe").read_bytes() == b"EXE-V2"
+    # The user was never shown a failure: the state only ever moved forward.
+    assert st["state"] != "error"
+
+
+def test_the_error_state_arrives_only_after_every_attempt_is_spent(tmp_path):
+    svc, _root, calls = _svc_on_flaky(tmp_path, {"left": 99})
+    svc.begin_apply(lambda: None)
+    assert _wait_for_state(svc, "error")
+    st = svc.status()
+    assert calls["zip"] == st["attempts"] == 5     # five tries, then the truth
+    assert st["attempt"] == 5
+
+
+def test_retry_after_a_spent_run_starts_a_fresh_attempt_count(tmp_path):
+    """What the popup's 'Try again' button drives: a second begin_apply from
+    the error state, which must be accepted and must reset the counter."""
+    fails = {"left": 99}
+    svc, root, calls = _svc_on_flaky(tmp_path, fails)
+    svc.begin_apply(lambda: None)
+    assert _wait_for_state(svc, "error")
+    fails["left"] = 0                             # the network comes back
+    done = threading.Event()
+    assert svc.begin_apply(done.set)["state"] == "downloading"
+    assert done.wait(timeout=10)
+    assert (root / "SM64Trainer.exe").read_bytes() == b"EXE-V2"
+    assert svc.status()["attempt"] == 1
+    assert calls["zip"] > 5                       # 5 spent, then a fresh one
+
+
+def test_a_failed_restart_is_never_retried(tmp_path):
+    """The files ARE swapped by then — going round again would re-download and
+    re-apply what is already installed."""
+    svc, root, calls = _svc_on_flaky(tmp_path, {"left": 0})
+
+    def restart_boom():
+        raise RuntimeError("relaunch failed")
+
+    svc.begin_apply(restart_boom)
+    assert _wait_for_state(svc, "error")
+    assert svc.status()["attempt"] == 1           # it stopped after the swap
+    assert calls["zip"] > 0
+    assert (root / "SM64Trainer.exe").read_bytes() == b"EXE-V2"

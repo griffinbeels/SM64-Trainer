@@ -14,6 +14,12 @@ tracks download progress, and persists the 'skipped' version. Everything is
 guarded on is_frozen(): from source it is inert (update_available is always
 False) so a dev tree is never swapped.
 
+The apply worker is RESILIENT rather than one-shot: every request carries a
+timeout (NET_TIMEOUT_S) so a stalled socket fails instead of hanging forever,
+and the whole download+swap is retried APPLY_ATTEMPTS times with backoff before
+the UI is told anything failed — the one observed real-world failure was a
+transient CDN timeout that the next click succeeded through.
+
 A release is only ever offered when ALL FOUR update assets are present
 (SM64Trainer-full.zip + manifest.json + both .sha256 companions) and the
 manifest text verifies against its published digest — no unverified bytes
@@ -50,6 +56,33 @@ DEFAULT_REPO = "griffinbeels/SM64-Trainer"
 GITHUB_API = "https://api.github.com"
 _CHECK_TTL_S = 3600.0
 
+# Neither urlopen nor http.client applies a timeout of its own, so a socket
+# that connects and then stalls blocks the update worker FOREVER — worse than
+# failing, because a hang can never be retried. Applies per blocking socket
+# operation (the connect, and each read), not to the whole transfer.
+NET_TIMEOUT_S = 30.0
+
+# The failure seen in the wild was transient: a TLS handshake timeout to the
+# release CDN mid-download (WinError 10060, live log 2026-08-01), and the very
+# next click went through. So the worker retries the whole download+swap on its
+# own and only reports failure once every attempt is spent. These are the waits
+# BETWEEN attempts, so the attempt count is len(...)+1 by construction and the
+# two can never disagree. Every failure is retriable: the only clearly-permanent
+# one (no disk space) is re-checked at the top of each attempt and costs ~37s of
+# progress bar, which is cheaper than the machinery to classify the rest.
+RETRY_DELAYS_S = (2.0, 5.0, 10.0, 20.0)
+APPLY_ATTEMPTS = len(RETRY_DELAYS_S) + 1
+
+
+def default_opener(req):
+    """The shipped `http`: urlopen WITH a timeout (see NET_TIMEOUT_S). Tests
+    and the bootstrap inject their own opener; this is what ships."""
+    return urllib.request.urlopen(req, timeout=NET_TIMEOUT_S)
+
+
+class _RestartFailed(RuntimeError):
+    """The files ARE swapped and only the relaunch failed — never retried."""
+
 
 @dataclass
 class UpdateInfo:
@@ -68,7 +101,7 @@ class UpdateInfo:
     releases: tuple[ReleaseNotes, ...] = ()
 
 
-def check_for_update(current: str, *, http=urllib.request.urlopen,
+def check_for_update(current: str, *, http=default_opener,
                      repo: str = DEFAULT_REPO,
                      api_base: str = GITHUB_API) -> "UpdateInfo | None":
     """GET the latest release; return UpdateInfo iff it is strictly newer AND
@@ -145,9 +178,10 @@ class UpdateService:
 
     def __init__(self, *, current_version: str, repo: str = DEFAULT_REPO,
                  exe_path: "Path | None" = None,
-                 http=urllib.request.urlopen,
+                 http=default_opener,
                  state_path: "Path | None" = None,
-                 frozen: "bool | None" = None):
+                 frozen: "bool | None" = None,
+                 retry_delays: "tuple[float, ...]" = RETRY_DELAYS_S):
         self.current = current_version
         self.repo = repo
         self._http = http
@@ -157,6 +191,10 @@ class UpdateService:
         self._lock = threading.Lock()
         self._state = "idle"        # idle | downloading | installing | error
         self._progress = 0.0
+        # Injected so a test can drive all five attempts without sleeping.
+        self._retry_delays = tuple(retry_delays)
+        self._attempts = len(self._retry_delays) + 1
+        self._attempt = 1           # 1-based; which attempt is in flight
         self._cache: "UpdateInfo | None" = None
         self._manifest: "Manifest | None" = None
         self._manifest_text: "str | None" = None
@@ -270,6 +308,10 @@ class UpdateService:
             "writable": writable,
             "state": self._state,
             "progress": self._progress,
+            # The popup explains a progress bar that restarts, and names the
+            # count in the failure copy. Silent retries would read as a stall.
+            "attempt": self._attempt,
+            "attempts": self._attempts,
             "download_bytes": self._plan.download_bytes if self._plan else None,
             "releases": [{"version": row.version, "date": row.date,
                           "notes": row.notes}
@@ -290,6 +332,7 @@ class UpdateService:
                 return {"state": "error", "error": "exe folder not writable"}
             self._state = "downloading"
             self._progress = 0.0
+            self._attempt = 1       # also resets after a failed run's "Retry"
         threading.Thread(
             target=self._run_apply,
             args=(info, self._plan, self._manifest_text, on_success),
@@ -297,6 +340,34 @@ class UpdateService:
         return {"state": "downloading"}
 
     def _run_apply(self, info, plan, manifest_text, on_success) -> None:
+        """Attempt the update up to `self._attempts` times, sleeping
+        `self._retry_delays` in between, and only report 'error' once every
+        attempt is spent (see RETRY_DELAYS_S)."""
+        for attempt in range(1, self._attempts + 1):
+            self._attempt = attempt
+            try:
+                self._apply_once(info, plan, manifest_text, on_success)
+                return
+            except _RestartFailed:
+                self._state = "error"
+                return
+            except Exception:
+                if attempt == self._attempts:
+                    log.exception("update apply failed after %d attempts",
+                                  attempt)
+                    self._state = "error"
+                    return
+                delay = self._retry_delays[attempt - 1]
+                log.warning("update attempt %d/%d failed; retrying in %.0fs",
+                            attempt, self._attempts, delay, exc_info=True)
+                self._state = "downloading"
+                self._progress = 0.0
+                time.sleep(delay)
+
+    def _apply_once(self, info, plan, manifest_text, on_success) -> None:
+        """One attempt: stage -> fetch -> verify -> swap -> restart. Raises on
+        any failure so the caller can retry; a failure AFTER the swap becomes
+        _RestartFailed, which must not be retried."""
         root = self._exe.parent
         staging = root / STAGING_DIR
         applied = False
@@ -327,18 +398,19 @@ class UpdateService:
             shutil.rmtree(staging, ignore_errors=True)
             applied = True
             on_success()
-        except Exception:
+        except Exception as err:
+            shutil.rmtree(staging, ignore_errors=True)
             if applied:
                 # Files ARE swapped (apply_plan succeeded) — only the restart
-                # failed. The popup's "your current version is unchanged" is
+                # failed. Retrying would re-download and re-apply what is
+                # already installed, so this one never goes round the loop.
+                # The popup's "your current version is unchanged" is
                 # inaccurate for this corner; the new version simply runs on
                 # the next manual launch (final review, minor 6).
                 log.exception("update applied but the restart failed — the "
                               "new version runs on next launch")
-            else:
-                log.exception("update apply failed")
-            shutil.rmtree(staging, ignore_errors=True)
-            self._state = "error"
+                raise _RestartFailed from err
+            raise
 
     def _set_progress(self, frac: float) -> None:
         self._progress = max(0.0, min(1.0, frac))

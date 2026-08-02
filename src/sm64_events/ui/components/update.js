@@ -99,6 +99,18 @@ export function UpdatePopup({ t }) {
   const onClose = () => { t.setUpdateApplying(false); setDismissed(true); };
   const pct = Math.round((st.progress || 0) * 100);
   const missed = (st.releases || []).length;
+  // The server retries a failed install on its own (updater.RETRY_DELAYS_S),
+  // which restarts the progress bar. An unexplained bar snapping back to 0
+  // reads as a fault, so name the reason — without claiming the UPDATE failed,
+  // which is only true once every attempt is spent. Built as strings, never
+  // interpolated mid-sentence: htm eats the space either side of a `${}`.
+  const attempts = st.attempts || 1;
+  const retrying = (st.attempt || 1) > 1
+    ? `Connection interrupted — retrying (attempt ${st.attempt} of ${attempts}).`
+    : "";
+  const failedAfter = attempts > 1
+    ? `Tried ${attempts} times. Your current version is unchanged.`
+    : "Your current version is unchanged.";
   // Backdrop click / Esc mirror whichever dismiss action is visible: "Later"
   // on the normal offer, "Close" on a failed install, and NOTHING while an
   // install is actively in flight (no button is shown there either — closing
@@ -124,9 +136,12 @@ export function UpdatePopup({ t }) {
         ? html`
           <div class="update-error">
             <${Icon} name="close" size=${18} />
-            <span><b>Update failed</b>Your current version is unchanged.</span>
+            <span><b>Update failed</b>${failedAfter}</span>
           </div>
           <div class="modal-actions">
+            <button class="primary-button" onclick=${() => t.applyUpdate()}>
+              <${Icon} name="updates" size=${16} /> Try again
+            </button>
             <button onclick=${onClose}>Close</button>
             <a class="btnlink" href=${st.html_url}
                target="_blank">Download from GitHub</a>
@@ -135,6 +150,7 @@ export function UpdatePopup({ t }) {
           <div class="update-installing">
             <b>Installing update…</b>
             <span>The app will restart automatically when it is ready.</span>
+            ${retrying ? html`<span class="update-retrying">${retrying}</span>` : ""}
           </div>
           <div class="progress" role="progressbar" aria-label="Update progress"
               aria-valuemin="0" aria-valuemax="100" aria-valuenow=${pct}>
