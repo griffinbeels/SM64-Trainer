@@ -358,3 +358,29 @@ def test_the_segment_he_clicked_leads_the_objective_card():
     assert re.search(r"pickedSeg = segs\.find\(isTargetedSeg\)", body) and \
         re.search(r"\[pickedSeg, \.\.\.armedPins\]", body), \
         "a targeted-but-unarmed segment no longer leads"
+
+
+def test_nothing_picked_and_several_running_claims_no_active_segment():
+    """Live report 2026-08-02: standing Upstairs with `BitS Entry`, `Bowser 2 →
+    WDW` and `Bowser 2 → BitS` all armed and NO cell lit, the card still read
+    "ACTIVE SEGMENT · BitS Entry · Running". *"When I don't have selected in
+    the UI, it should never display an active segment like this, especially
+    since there are multiple options."*
+
+    It bends his own earlier rule — "a RUNNING segment is never invisible"
+    (2026-07-24) — and the reason that rule stopped fitting is worth keeping:
+    it was written when at most ONE thing armed at a time, so "the armed one"
+    and "the one he means" were the same section. Six movements arm off one
+    exit now. So ONE armed pin is still shown (nothing to be ambiguous about);
+    two or more with an empty hand shows none, because picking between them
+    asserts a selection he never made.
+
+    The threshold is `> 1`, not `>= 1`: dropping the single case would make a
+    live timer invisible, which is the bug the 2026-07-24 rule exists for."""
+    body = (UI / "components" / "practice.js").read_text(encoding="utf-8")
+    assert re.search(
+        r"ambiguousPins = !pickedSeg && armedPins\.length > 1", body), \
+        "the empty-hand ambiguity gate is gone or changed shape"
+    assert re.search(
+        r"pinnedSegs = !inContext \|\| starActive \|\| ambiguousPins \? \[\]",
+        body), "the gate is not wired into pinnedSegs"

@@ -1329,7 +1329,24 @@ export function Practice({ t, openCompare }) {
   // when it is NOT armed and something else is. Sorting armedPins alone would
   // only cover the case where his pick happens to be running too.
   const pickedSeg = segs.find(isTargetedSeg);
-  const pinnedSegs = !inContext || starActive ? []
+  // AN EMPTY HAND WITH SEVERAL THINGS RUNNING CLAIMS NOTHING (live report
+  // 2026-08-02): standing Upstairs with `BitS Entry`, `Bowser 2 → WDW` and
+  // `Bowser 2 → BitS` all armed and NO cell lit, the card still announced
+  // "ACTIVE SEGMENT · BitS Entry · Running". *"When I don't have selected in
+  // the UI, it should never display an active segment like this, especially
+  // since there are multiple options."*
+  //
+  // The rule it bends is his own — "a RUNNING segment is never invisible"
+  // (2026-07-24) — and that rule was written when at most one thing armed at
+  // a time, so "the armed one" and "the one he means" were the same section.
+  // Since `_route_allows` stopped treating "no route" as "no filter" they are
+  // not: six movements arm off one exit. ONE armed segment is still shown,
+  // because there is nothing to be ambiguous about and the old rule is right
+  // there; TWO OR MORE with no pick shows none, because choosing between them
+  // would assert a selection he never made — the same "what he clicked wins"
+  // ruling, in the case where he has clicked nothing.
+  const ambiguousPins = !pickedSeg && armedPins.length > 1;
+  const pinnedSegs = !inContext || starActive || ambiguousPins ? []
     : pickedSeg && !armedPins.includes(pickedSeg)
         && (pickedSeg.armed_detail || here(pickedSeg))
       ? [pickedSeg, ...armedPins]
