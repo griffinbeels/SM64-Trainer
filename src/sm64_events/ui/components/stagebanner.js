@@ -394,14 +394,19 @@ function StarRow({ t, v, stage }) {
 // retired mutual-exclusion memory used, and default PIPE (user's mock-up)
 // falls out for free as "anything but an explicit star pick".
 //
-// Route override (user: "you can't just stop at the star grab for reds, you
-// HAVE to do the pipe timing... it should always be using the Pipe timing").
-// Every seeded Bowser Reds route step already names seg:reds->pipe:<abbrev>,
-// never the bare star (tools/corpus_routes_*), so this makes an assumption
-// the corpus already relies on VISIBLE rather than leaving a control the
-// player can move that then silently does not apply: forced-but-offered
-// would read as a real choice, so the star half is disabled with its own
-// title instead.
+// NO ROUTE OVERRIDE -- deleted 2026-08-02, and written down because the thing
+// that was wrong was the PREMISE, not the code. An active route naming this
+// stage's reds used to force Pipe and disable the star half (user, 2026-07-27:
+// "you can't just stop at the star grab for reds, you HAVE to do the pipe
+// timing"), justified here by the claim that every seeded Bowser Reds route
+// step "already names seg:reds->pipe:<abbrev>, never the bare star". That claim
+// was false in all eight instances: tools/corpus_routes_main.py pairs
+// `star(16, 0, "BitDW - 8 Red Coins")` WITH `*BOWSER_1_REDS` every time (and
+// 17/18 likewise), so the bare grab is a graded route step in its own right and
+// the lock hid a half the route itself measures. It read as a plain bug too --
+// 16 Star does reds only in BitDW, so BitDW sat dead beside two freely
+// toggleable siblings (live report 2026-08-02, three screenshots). Pinned by
+// tests/test_stagebanner_bowser_row.py.
 function BowserCourseRow({ t, v, stage, freshIds }) {
   const [fold, toggleFold] = useCollapsed("selector");
   const [setPicking, pickerModal] = useIconPicking(t);
@@ -429,13 +434,9 @@ function BowserCourseRow({ t, v, stage, freshIds }) {
   // next one and read as the memory being broken rather than shared.
   useEffect(() => { setModeState(bowserModeFor(stage.level)); }, [stage.level]);
 
-  const routeStars = routeStarFilter(v, stage.course_id);
-  const routeSegs = routeSegmentFilter(v);
-  const forcedPipe = !!((routeStars && routeStars.has(`${stage.course_id}:0`))
-    || (routeSegs && pipeSeg && routeSegs.has(pipeSeg.segment_id)));
-  // A route always times Reds to the pipe -- you cannot stop at the star grab
-  // (user, 2026-07-27) -- so the remembered choice is overridden, not consulted.
-  const pipeMode = forcedPipe || mode === "pipe";
+  // The remembered choice is the ONLY input -- see the route-lock paragraph in
+  // this function's own docstring for the override that used to sit here.
+  const pipeMode = mode === "pipe";
 
   async function pickStar() {
     setMode("star");
@@ -533,15 +534,13 @@ function BowserCourseRow({ t, v, stage, freshIds }) {
 
   return html`<section class="practice-card selector-card stagebanner ${cardClass(fold)}">
     <div class="shead"><b>${course.name}</b>
-      <span class="meta">${forcedPipe
-        ? "route active — Reds always times to the pipe"
-        : "tap Star or Pipe to pin the reds run"}</span>
+      <span class="meta">tap Star or Pipe to pin the reds run</span>
 
       <${CollapseToggle} collapsed=${fold} toggle=${toggleFold}
         label="the course selector" /></div>
     <div class="starrow segcells">
       <${RedsCell} t=${t} v=${v} stage=${stage} course=${course}
-        redsActive=${redsActive} pipeMode=${pipeMode} forcedPipe=${forcedPipe}
+        redsActive=${redsActive} pipeMode=${pipeMode}
         pipeSeg=${pipeSeg} onPickStar=${pickStar} onPickPipe=${pickPipe}
         onPickCard=${pickCard} setPicking=${setPicking} />
       ${noRedsSeg ? html`<${StandardSegmentCell}
@@ -580,7 +579,7 @@ function redsSwapEntry(rank) {
 // surfaces once each derived their own star-art stem and disagreed.
 // pipe_icon.png is a new, single-purpose glyph with no other consumer, so it
 // is named directly here rather than adding a second door for one call site.
-function RedsCell({ t, v, stage, course, redsActive, pipeMode, forcedPipe,
+function RedsCell({ t, v, stage, course, redsActive, pipeMode,
                    pipeSeg, onPickStar, onPickPipe, onPickCard, setPicking }) {
   const starRank = (v.rank_by_star || {})[`${stage.course_id}:0`];
   const pipeRank = pipeSeg ? pipeSeg.rank : null;
@@ -644,13 +643,10 @@ function RedsCell({ t, v, stage, course, redsActive, pipeMode, forcedPipe,
            alt="" draggable="false" />
       <span class="reds-toggle">
         <button type="button" class="reds-toggle-btn ${!pipeMode ? "is-selected" : ""}"
-            disabled=${forcedPipe}
             aria-pressed=${!pipeMode}
-            title=${forcedPipe
-              ? "This route always times Reds to the pipe"
-              : "Track the star grab alone"}
+            title="Track the star grab alone"
             onclick=${(clickEvent) => { clickEvent.stopPropagation();
-              if (!forcedPipe) onPickStar(); }}>
+              onPickStar(); }}>
           <img src=${genericStarSrc(2)} alt="Star" draggable="false" />
         </button>
         <span class="reds-toggle-clock" aria-hidden="true">
