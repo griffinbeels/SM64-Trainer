@@ -203,9 +203,21 @@ def _over_path(a, b, positions, band_of):
     """
     x1, y1 = positions[a]
     x2, y2 = positions[b]
-    peak = band_of[a] - BAND_PAD / 2 - 2
-    return (f"M {x1:.0f} {y1 - 16:.0f} C {x1:.0f} {peak:.0f}, "
-            f"{x2:.0f} {peak:.0f}, {x2:.0f} {y2 - 16:.0f}")
+    # UP, ACROSS, DOWN with rounded corners -- not a cubic. A cubic only
+    # APPROACHES its control points, so lifting them above the band still let
+    # the curve sag back through the topmost box on its way across (reported
+    # 2026-08-02: "there's still an overlapping line here (behind Bob-omb
+    # Battlefield)"). An explicit horizontal run at `peak` cannot sag: it is at
+    # that y for its whole length, by construction rather than by tuning.
+    peak = band_of[a] - 24            # clear of the band rect, inside BAND_PAD
+    radius = 12
+    turn = -radius if x2 < x1 else radius
+    return (f"M {x1:.0f} {y1 - 16:.0f} "
+            f"L {x1:.0f} {peak + radius:.0f} "
+            f"Q {x1:.0f} {peak:.0f} {x1 + turn:.0f} {peak:.0f} "
+            f"L {x2 - turn:.0f} {peak:.0f} "
+            f"Q {x2:.0f} {peak:.0f} {x2:.0f} {peak + radius:.0f} "
+            f"L {x2:.0f} {y2 - 16:.0f}")
 
 
 def _svg(edges, positions, bands, height, band_of, column_of):
