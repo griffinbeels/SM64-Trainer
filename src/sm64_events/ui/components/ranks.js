@@ -4,6 +4,7 @@
 // here working, and are the only reason this file still exports them.
 export { RANK_NAMES, rankColor } from "./caps.js";
 import { h } from "preact";
+import { useRef } from "preact/hooks";
 import htm from "htm";
 import { useRankClimb } from "../rankclimb.js";
 import { capName, divisionDigit, rankAt } from "./caps.js";
@@ -158,6 +159,18 @@ export function RankBanner({ label, banner, hint = null, identity = null,
   // star"). A lone banner, and the MARELO bar, pass neither and start
   // immediately.
   const climb = useRankClimb(graded, identity, { lane, order, replayKey });
+  // The next-step sentence currently ON SCREEN, and the one before it. A
+  // fade-out has to show the sentence the reader was ALREADY reading: `banner`
+  // has been replaced by the new payload before the climb's first frame runs,
+  // so without keeping its predecessor the number changes at full opacity and
+  // the fade that follows reveals nothing. Measured 2026-08-01 on a climb that
+  // gains no rank -- the suffix swapped at opacity 1.0, then faded.
+  //
+  // Declared above the early return because hooks are, and assigned below it
+  // because that is where the sentence exists. A ref write during render is
+  // fine: it is derived from this render's own props.
+  const sentenceRef = useRef({ key: null, label: null, gap: null });
+  const priorRef = useRef(sentenceRef.current);
   if (!graded || !climb) {
     return html`<div class="rank-banner rank-banner-empty">
       <span class="rank-banner-kicker" title=${hint}>${label}</span>
@@ -190,33 +203,50 @@ export function RankBanner({ label, banner, hint = null, identity = null,
   const climbingNext = rankAt(climb.level + 1);
   const atCeiling = climbingNext.tier === climb.tier
     && climbingNext.division === climb.division;
-  // The time is shown from the moment the closing bar sweep STARTS, not when
-  // the climb ends. The line fades back in across that sweep, and a suffix
-  // appearing part-way through a fade is a content jump inside an animation --
-  // half of what "totally glitchy" was (user, 2026-07-27). By `landing` the
-  // rank shown is already the destination, so the number is true when it
-  // appears.
-  // Whether the line should read the FINAL step rather than the one above
-  // whatever rank is on screen this frame. Two cases, and both were visible
-  // in a frame-by-frame trace of the fade:
+  // ONE RULE FOR THIS LINE: its wording may only change while it is INVISIBLE.
+  // A suffix appearing part-way through a fade is a content jump inside an
+  // animation -- half of what "totally glitchy" was (user, 2026-07-27) -- and
+  // every regression here has been a frame where the rule was broken:
   //
-  //  * `landing` -- the closing sweep is running and the line is fading back
-  //    in. The rank is still ticking underneath it (Waluigi 5 -> 4), so
-  //    deriving the label from the CURRENT rank swapped its text at opacity
-  //    0.485, mid-fade. The fade must reveal one settled sentence, not
-  //    animate a changing one.
-  //  * not climbing AND already showing the destination. That second clause
-  //    is what kills the one-frame flash of the destination's own next step:
-  //    the render between the new payload arriving and the effect starting
-  //    the climb still shows the OLD rank, and without it that frame read
-  //    "CAPLESS 5 -> Waluigi 3 - 0.04s to rank up" at full opacity.
-  const showsDestination = ranked && climb.tier === banner.rank
-    && climb.division === banner.division;
-  const settledText = climb.landing || (!climb.climbing && showsDestination);
-  const next = settledText ? settledNext : (atCeiling ? null : climbingNext);
-  const nextLabel = next ? `${capName(next.tier)} ${divisionDigit(next.division)}` : null;
-  const gap = (settledText && ranked && banner.next_gap_cs != null)
-    ? (banner.next_gap_cs / 100).toFixed(2) : null;
+  //  * mid-climb the rank ticks underneath (Waluigi 5 -> 4), so deriving the
+  //    label from the CURRENT rank swapped its text at opacity 0.485;
+  //  * the render between a new payload landing and the effect starting the
+  //    climb still holds the OLD climb state, and printed "CAPLESS 5 ->
+  //    Waluigi 3 - 0.04s to rank up" for one frame at full opacity;
+  //  * the fade-OUT showed the sentence the NEW payload carries, so the number
+  //    changed at opacity 1.0 and the fade revealed nothing (2026-08-01).
+  //
+  // `climb.line` names which of the four states the hook is in, and this
+  // resolves each to a sentence -- so the rule is answered in one place rather
+  // than by a condition per symptom.
+  const stepLabel = (step) => (step
+    ? `${capName(step.tier)} ${divisionDigit(step.division)}` : null);
+  const settledSentence = {
+    key: `${settledNext && settledNext.tier}/${settledNext && settledNext.division}`
+      + `|${ranked ? banner.next_gap_cs : null}`,
+    label: stepLabel(settledNext),
+    gap: (ranked && banner.next_gap_cs != null)
+      ? (banner.next_gap_cs / 100).toFixed(2) : null,
+  };
+  if (sentenceRef.current.key !== settledSentence.key) {
+    // The first sentence is its own predecessor: a banner that was showing a
+    // sentinel has no earlier line to fade out, and "top rank" is not it.
+    priorRef.current = sentenceRef.current.key == null
+      ? settledSentence : sentenceRef.current;
+    sentenceRef.current = settledSentence;
+  }
+  // "rest" is the hook's word for "nothing is animating", and it is ALSO what
+  // the stale state looks like on the one render between a new payload landing
+  // and the effect starting the climb -- the hook's state is still the old
+  // one there. `atTarget` is what tells those two apart, and without it that
+  // render printed the destination's sentence for one frame at full opacity.
+  const mode = (climb.line === "rest" && !climb.atTarget) ? "leaving" : climb.line;
+  const shown = mode === "climbing"
+    ? { label: atCeiling ? null : stepLabel(climbingNext), gap: null }
+    : mode === "leaving" ? priorRef.current
+    : settledSentence;
+  const nextLabel = shown.label;
+  const gap = shown.gap;
   // `climb.bar` is a DRAWN width, already anchored at the track's midpoint
   // and already carrying the closing sweep's restart from empty
   // (ui/rankclimb.js converts at the plan's boundary; caps.js::barFill owns

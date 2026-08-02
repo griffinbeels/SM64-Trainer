@@ -1,4 +1,4 @@
-// src/sm64_events/ui/mareloturn.js — whose turn it is to celebrate.
+// src/sm64_events/ui/mareloturn.js — whose turn it is to celebrate, wired up.
 //
 // User, 2026-07-29: "Strategy THEN star THEN marelo... While it's in the
 // header waiting it shouldn't change its rank / animate ANY progress until
@@ -20,24 +20,18 @@
 // told `ready` at the same instant. When the turn arrives the card is still
 // showing the before-state, which is exactly what the flight wants to lift.
 //
-// THE TRAP THIS EXISTS TO AVOID, measured 2026-07-29: gating the overlay on
-// `useClimbsRunning()` alone is self-referential and loops forever. The
-// overlay renders a RouteRankCard, that card runs `useRankClimb`, and a
-// running climb is precisely the signal being gated on — so mounting the
-// overlay made the gate true, which unmounted it, which made the gate false,
-// which mounted it again. On screen: the card flashing in and out endlessly.
-// `ready` is therefore LATCHED per celebration: once it is this celebration's
-// turn, nothing the celebration itself does can take the turn away.
+// The DECISION lives in ui/mareloturnstate.js, which is import-free and
+// node-tested — read its header for the two transitions that shipped broken
+// and why a hook is the wrong place to keep them.
 import { useEffect, useRef, useState } from "preact/hooks";
-import { climbsRunning, useClimbsRunning } from "./rankclimb.js";
+import { useClimbsRunning } from "./rankclimb.js";
+import { NO_TURN, advanceTurn, displayed } from "./mareloturnstate.js";
 
 // How long to wait for the entity banners to REGISTER before concluding there
 // are none. The banners and the marelo payload both arrive from the same
 // refresh, and which lands first is not ordered — so "no climb is running" at
-// the instant the celebration arrives means "not yet", not "none". Without
-// this the overlay fired immediately whenever it won that race, which is the
-// original report. Comfortably longer than a render pass, far shorter than
-// any climb.
+// the instant the celebration arrives means "not yet", not "none". Comfortably
+// longer than a render pass, far shorter than any climb.
 const BANNERS_APPEAR_MS = 450;
 
 /**
@@ -48,47 +42,27 @@ const BANNERS_APPEAR_MS = 450;
  * live value and `ready` is true, so nothing about ordinary play changes.
  */
 export function useMareloTurn(marelo) {
-  const celebration = marelo && marelo.celebration;
-  const key = celebration ? celebration.key : null;
   const running = useClimbsRunning();
-
-  // The payload as it was BEFORE this celebration landed — what the header
-  // keeps showing while it waits. Captured on the render the key changes,
-  // never after, so a later poll cannot overwrite the before-state.
-  const heldRef = useRef(marelo);
-  const keyRef = useRef(key);
-  if (keyRef.current !== key) {
-    if (key != null && keyRef.current == null) heldRef.current = marelo;
-    keyRef.current = key;
-  }
-  if (key == null) heldRef.current = marelo;
-
-  const [ready, setReady] = useState(true);
-  const sawClimbsRef = useRef(false);
+  const key = marelo && marelo.celebration ? marelo.celebration.key : null;
+  // STATE, not a ref. The grace window is the only thing that can hand over
+  // the turn when no banner ever appears — every tab but Practice — and a ref
+  // it writes cannot wake the render that reads it. As a ref this left the
+  // header card frozen on the before-state indefinitely.
+  const [graced, setGraced] = useState(false);
+  const stateRef = useRef(NO_TURN);
+  // Advanced during render, because every input is either this render's own
+  // props or a subscription that already re-renders on change — so what the
+  // header draws is a pure function of what is on screen this frame.
+  stateRef.current = advanceTurn(stateRef.current, { marelo, running, graced });
 
   useEffect(() => {
-    if (key == null) { setReady(true); sawClimbsRef.current = false; return undefined; }
-    // A fresh celebration always waits its turn again.
-    setReady(false);
-    sawClimbsRef.current = climbsRunning();
-    // If no banner has appeared by the time this fires, there are none to
-    // wait for and the turn is ours as soon as nothing is running.
-    const timer = setTimeout(() => { sawClimbsRef.current = true; }, BANNERS_APPEAR_MS);
+    setGraced(false);
+    if (key == null) return undefined;
+    const timer = setTimeout(() => setGraced(true), BANNERS_APPEAR_MS);
     return () => clearTimeout(timer);
   }, [key]);
 
-  useEffect(() => {
-    if (key == null) return undefined;
-    if (running) { sawClimbsRef.current = true; return undefined; }
-    if (!sawClimbsRef.current) return undefined;
-    // LATCHED: `setReady(true)` is never undone for this key, so the
-    // overlay's own climb cannot revoke its turn (see the header comment).
-    setReady(true);
-    return undefined;
-  }, [key, running]);
-
-  return {
-    marelo: (key != null && !ready) ? heldRef.current : marelo,
-    ready: key == null ? true : ready,
-  };
+  return { marelo: displayed(stateRef.current, marelo),
+           ready: stateRef.current.ready,
+           unprompted: stateRef.current.unprompted };
 }

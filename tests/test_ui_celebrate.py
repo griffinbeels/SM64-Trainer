@@ -227,25 +227,20 @@ def test_the_scope_overlay_waits_for_the_banner_climbs():
         "the card must read the HELD payload, not the live one")
 
 
-def test_the_turn_is_latched_so_the_overlay_cannot_revoke_it():
-    """The self-referential loop, guarded.
+def test_the_turn_decision_is_not_written_into_the_hook():
+    """The latch and the hold are BEHAVIOUR, and they live in an import-free
+    module so tests/test_ui_marelo_turn.py can drive them frame by frame.
 
-    Gating on `useClimbsRunning()` alone loops forever: the overlay renders a
-    RouteRankCard, that card runs useRankClimb, and a running climb is the very
-    signal being gated on -- so mounting the overlay made the gate true, which
-    unmounted it, which made the gate false again. Measured 2026-07-29 as the
-    card flashing in and out endlessly.
-
-    Once it is a celebration's turn, nothing that celebration itself does may
-    take the turn away."""
+    Both bugs this pair has had were single state transitions, and both shipped
+    past a source scan exactly like this one -- which is why the real assertions
+    are over there and this only keeps the seam open. A hook that grew its own
+    opinion about readiness would be untestable again, silently."""
     turn = strip_comments((UI / "mareloturn.js").read_text(encoding="utf-8"))
-    assert "setReady(false)" in turn and "setReady(true)" in turn
-    # The only place readiness is revoked must be the new-celebration effect,
-    # never the running-climbs one -- otherwise the latch is not a latch.
-    running_effect = turn.split("[key, running]")[0].rsplit("useEffect", 1)[-1]
-    assert "setReady(false)" not in running_effect, (
-        "the running-climbs effect must never revoke the turn; that is the "
-        "loop this test exists for")
+    assert "advanceTurn" in turn and "mareloturnstate.js" in turn, (
+        "the turn's decision belongs in the import-free module, not here")
+    assert "state.ready" not in turn, (
+        "readiness is decided by advanceTurn; a second opinion here is how the "
+        "two consumers start disagreeing about whose turn it is")
 
 
 def test_the_running_signal_is_not_the_hold_signal():

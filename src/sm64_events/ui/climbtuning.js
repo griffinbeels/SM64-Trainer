@@ -42,6 +42,11 @@ export const TUNABLES = {
     min: 0, max: 1500, step: 10, unit: "ms",
     why: "Shortest any bar sweep may be. Below this a few percent of a division reads as a flicker.",
   },
+  revealMinMs: {
+    group: "Pace", label: "Next-step line · minimum fade", value: 700,
+    min: 0, max: 3000, step: 10, unit: "ms",
+    why: "Shortest the \"X.XXs to rank up\" line may take to fade out and back in. It rides the bar's own progress, and a small improvement gives the bar almost nothing to travel — 0.10s off a PB faded in 100ms each way, which reads as a snap.",
+  },
   ladderStepMs: {
     group: "Pace", label: "Ladder step", value: 100,
     min: 60, max: 1500, step: 10, unit: "ms",
