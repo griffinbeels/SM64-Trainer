@@ -201,7 +201,14 @@ Contract changes land on main first, then dependent work fans out. Merge with
   *Jul 28*. Reading the wrong one does not error; it returns days-old events
   that look entirely plausible, and everything downstream is confident and
   wrong. The tool picks the freshest, names it, and refuses when the newest
-  event is over 10 minutes old.
+  event is over 10 minutes old. **"Freshest" answers where play is being
+  recorded NOW, which is a different question from where the row he is
+  REPORTING lives** — the port changes hands between servers, so the run behind
+  a screenshot can sit in a journal that has since gone quiet (2026-08-02: the
+  freshest was a worktree's, 67s old; his reported attempt was the repo's).
+  Hunt a specific reported row by VALUE across all three instead: the displayed
+  time converts at 30fps, so `0'26"13` is `igt_frames` 784, and one read-only
+  query over the three files names the owner in one shot.
 - **Exit-code honesty:** run verification through the Bash tool. Never pipe
   native exes into `Select-Object` or use `2>&1` on them in PS 5.1 (false
   failures).
