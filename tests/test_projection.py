@@ -1320,10 +1320,33 @@ def test_game_reset_resets_star_count_knowledge_for_guards():
 # -- route-scoped arming (spec 2026-07-23-default-routes-foundation) -----------
 
 def test_route_selected_threads_into_matchcontext():
-    # A guarded segment does NOT arm on its trigger before any route_selected
-    # has fired; the SAME arming event, replayed after route_selected names
-    # this def's id, arms it. Proves the Projector actually threads
-    # self._route_segments into the MatchContext it builds for the engine.
+    # Proves the Projector actually threads self._route_segments into the
+    # MatchContext it builds for the engine, by showing a route that does NOT
+    # name this def keeping it unarmed and one that does arming it.
+    #
+    # This used to open with "no route_selected has fired yet -> unarmed",
+    # which stopped being true on 2026-08-02: an EMPTY scope now means no
+    # filter (segments.py::_route_allows carries his ruling). A route that
+    # names OTHER segments is the shape that still proves the threading, and
+    # it is the one that was never covered.
+    from sm64_events.tracking.segments import SegmentDef
+    guarded = SegmentDef(id=42, name="CCM->BitDW", enabled=True,
+                        start_triggers=[{"type": "level_exit", "from": 5}],
+                        end_triggers=[{"type": "level_enter", "to": 17}],
+                        guards=[{"type": "in_active_route"}])
+    p = Projector(segments=[guarded])
+    p.feed(jev(1, "route_selected", 0, {"route_id": 1, "segment_ids": [99]}))
+    p.feed(jev(2, "level_changed", 1000, {"from": 5, "to": 16}))
+    assert 42 not in p.armed_segment_ids()
+    p.feed(jev(3, "route_selected", 0, {"route_id": 2, "segment_ids": [42]}))
+    p.feed(jev(4, "level_changed", 2000, {"from": 5, "to": 16}))
+    assert 42 in p.armed_segment_ids()
+
+
+def test_no_active_route_arms_every_guarded_movement():
+    # The live report itself (2026-08-02): scope chip on "Overall" -> no
+    # route_selected scope -> every castle movement silently unpracticable.
+    # His ruling: "I would expect to see EVERY SINGLE OPTION enabled."
     from sm64_events.tracking.segments import SegmentDef
     guarded = SegmentDef(id=42, name="CCM->BitDW", enabled=True,
                         start_triggers=[{"type": "level_exit", "from": 5}],
@@ -1331,9 +1354,12 @@ def test_route_selected_threads_into_matchcontext():
                         guards=[{"type": "in_active_route"}])
     p = Projector(segments=[guarded])
     p.feed(jev(1, "level_changed", 1000, {"from": 5, "to": 16}))
-    assert 42 not in p.armed_segment_ids()
-    p.feed(jev(2, "route_selected", 0, {"route_id": 1, "segment_ids": [42]}))
-    p.feed(jev(3, "level_changed", 2000, {"from": 5, "to": 16}))
+    assert 42 in p.armed_segment_ids()
+    # ...and clearing a route back to Overall restores that, rather than
+    # leaving the empty member set behind as a filter matching nobody.
+    p.feed(jev(2, "route_selected", 0, {"route_id": 1, "segment_ids": [99]}))
+    p.feed(jev(3, "route_selected", 0, {"route_id": None, "segment_ids": []}))
+    p.feed(jev(4, "level_changed", 2000, {"from": 5, "to": 16}))
     assert 42 in p.armed_segment_ids()
 
 

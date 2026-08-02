@@ -2403,10 +2403,26 @@ def _guarded_move():
                       waypoints=[], guards=[{"type": "in_active_route"}])
 
 
-def test_guarded_def_does_not_arm_without_route():
+def test_guarded_def_arms_with_no_route_because_no_route_means_no_filter():
+    """REVERSED 2026-08-02 by his own ruling. This test asserted the opposite
+    ("does not arm without route") from 2026-07-23 until a live report found
+    what it really cost: with the header scope on Overall there is no active
+    route, so all 56 castle movements were unpracticable and no surface said
+    why. *"if we're in 'Overall' mode, I would expect to see EVERY SINGLE
+    OPTION enabled. That is, I can practice ANYTHING."*"""
     e = SegmentEngine([_guarded_move()])
     e.feed(jev(10, "level_changed", 1000, {"from": 5, "to": 16}),  # exit CCM
            ctx(level=16, prev_level=5, route_segments=None))
+    assert 42 in e.armed_ids()
+
+
+def test_a_selected_route_still_narrows_to_its_own_members():
+    """The other half, and the reason the guard is not simply deleted: picking
+    a route is a deliberate narrowing, so a movement OUTSIDE the active route
+    stays unarmed. Only the EMPTY scope means "no filter"."""
+    e = SegmentEngine([_guarded_move()])
+    e.feed(jev(10, "level_changed", 1000, {"from": 5, "to": 16}),
+           ctx(level=16, prev_level=5, route_segments=frozenset({7, 8})))
     assert 42 not in e.armed_ids()
 
 

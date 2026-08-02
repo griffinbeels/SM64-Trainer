@@ -1683,12 +1683,30 @@ def time_bounds(guards: list) -> tuple[int | None, int | None]:
 def _route_allows(d, ctx) -> bool:
     """in_active_route gate, read declaratively by the arm phase (the
     standard guard check() can't see the def id — see the guard's own
-    comment). Unguarded defs always pass; a guarded def arms only inside the
-    active route's member set or as the standalone segment target."""
+    comment). Unguarded defs always pass; a guarded def arms inside the
+    active route's member set or as the standalone segment target.
+
+    **NO ACTIVE ROUTE MEANS NO RESTRICTION, NOT "NOTHING ARMS"** (Griffin,
+    2026-08-02, live report): *"if we're in 'Overall' mode, I would expect to
+    see EVERY SINGLE OPTION enabled. That is, I can practice ANYTHING. That
+    would be the point... so long as it arms legitimately"*. This gate read an
+    empty scope as "no member set, so nobody is a member" until then, which
+    made all 56 castle movements silently unpracticable whenever the header's
+    scope chip sat on Overall — and nothing on any surface said so, so the
+    feature looked broken rather than off. Picking a route is a deliberate
+    NARROWING and still narrows; picking none is the absence of a filter.
+
+    The consequence is intended, not overlooked: with no route, one
+    `level_exit from=24` arms all seven `WF → X` movements at once. Nothing has
+    to guess between them — `armed_segment_ids` is a set, every wrong one is
+    cancelled by the topological rules or expires on the staleness budget, and
+    whichever end trigger fires is the movement he actually ran."""
     if not any(g.get("type") == "in_active_route" for g in d.guards):
         return True
-    return (d.id in (ctx.route_segments or frozenset())
-            or d.id == ctx.target_segment)
+    scope = ctx.route_segments or frozenset()
+    if not scope:
+        return True
+    return d.id in scope or d.id == ctx.target_segment
 
 
 def validate_definition(d: dict) -> None:

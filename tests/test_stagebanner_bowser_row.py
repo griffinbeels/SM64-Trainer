@@ -386,9 +386,40 @@ def test_returning_to_a_bowser_stage_retargets_the_remembered_family():
     effect = retarget.group(0)
     assert "if (!family) return;" in effect
     assert "if (redsActive) return;" in effect
-    assert "noRedsSeg.segment_id) return;" in effect
     assert "pickPipe();" in effect and "pickStar();" in effect
     assert "pickNoReds();" in effect
+
+
+def test_returning_to_a_bowser_stage_never_steals_a_segment_already_picked():
+    """The third thief, after `_close_by_grab`'s star grab and `ArenaRow`'s
+    arena entry, found the same way and ruled on the same way (live report
+    2026-08-02): he picked `Bowser 1 -> WF` in the lobby and walked into
+    BitDW to run it, and 17 ms after the level change this effect re-targeted
+    the remembered reds family -- journal ids 240 -> 246, `target_set
+    segment_id=32` then `target_set segment_id=67`. *"If I selected a segment
+    that spans multiple courses / areas, it should stay selected."*
+
+    The guard this replaces (`noRedsSeg && tgt.segment_id ===
+    noRedsSeg.segment_id`) only declined for THIS row's own two cells, i.e.
+    exactly the targets that were never the problem. The rule is the one
+    ArenaRow already carries: a convenience default may fill an empty hand;
+    it may not take something out of one.
+
+    Source-scan, like every test in this file (stagebanner.js is not
+    import-free); the rendered behaviour is verified live."""
+    body = _bowser_row_body()
+    retarget = re.search(
+        r"useEffect\(\(\) => \{\s*"
+        r"const family = bowserFamilyFor\(stage\.level\);.*?\n  \}, \[stage\.level\]\);",
+        body, re.S)
+    assert retarget, "the auto-retarget-on-return effect is missing"
+    effect = retarget.group(0)
+    assert 'if (tgt.kind === "segment") return;' in effect, (
+        "the auto-retarget must decline whenever ANY segment is the target, "
+        "not only this row's own cells")
+    # And it must come BEFORE either pick, or the guard is decoration.
+    assert effect.index('if (tgt.kind === "segment") return;') < effect.index(
+        "pickPipe();")
 
 
 def test_bowser_family_memory_has_no_default_unlike_the_star_pipe_submode():

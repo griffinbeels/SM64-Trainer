@@ -513,12 +513,23 @@ function BowserCourseRow({ t, v, stage, freshIds }) {
   // above both fire off the same [stage.level] change, and a `setState`
   // call doesn't update its own variable inside the same commit -- reading
   // bowserModeFor directly sidesteps that ordering question entirely.
+  //
+  // A SEGMENT ALREADY IN HAND IS NEVER TAKEN OUT OF IT (live report
+  // 2026-08-02). This row was the third thief, after _close_by_grab's star
+  // grab and ArenaRow's arena entry, and it was found the same way: he
+  // picked `Bowser 1 → WF` in the lobby, walked into BitDW to run it, and
+  // 17 ms after the level change this effect re-targeted the remembered
+  // reds family (journal ids 240 → 246), so the movement lost its target,
+  // its arm and its card. *"If I selected a segment that spans multiple
+  // courses / areas, it should stay selected."* The old guard only declined
+  // when the target was one of THIS row's own two cells, which is exactly
+  // the case that was never the problem — a convenience default may fill an
+  // empty hand; it may not take something out of one.
   useEffect(() => {
     const family = bowserFamilyFor(stage.level);
     if (!family) return;
     if (redsActive) return;
-    if (noRedsSeg && tgt.kind === "segment"
-        && tgt.segment_id === noRedsSeg.segment_id) return;
+    if (tgt.kind === "segment") return;
     if (family === "reds") {
       if (bowserModeFor(stage.level) === "pipe") pickPipe(); else pickStar();
     } else if (noRedsSeg) {
