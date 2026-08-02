@@ -45,7 +45,11 @@ the sweep stops measuring. Narrower is not a bug worth filing.
 
 **Server port:** `core/paths.py::server_port()` is the single source — `SM64_PORT`
 env override, else **8064 frozen (the exe), 8065 from source (dev)** so a dev
-server and a built exe never collide.
+server and a built exe never collide. **The instance the human is PLAYING on is
+usually neither: `run-test-server.bat` sets `SM64_PORT=8066`.** Probing 8064 and
+8065 and finding both dead reads as "no server is running" when his is right
+there (2026-08-02, and a session before it). Find it, don't guess:
+`netstat -ano | grep LISTEN`, then `GET /health`.
 
 ## Module map — detailed knowledge is path-scoped
 
