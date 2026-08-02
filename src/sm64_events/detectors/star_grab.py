@@ -169,6 +169,12 @@ class _PendingGrab:
     # not happened yet — the one state in which a correction changes a row's
     # LEGALITY and not just its number.
     timed_at: str = "xcam"
+    # Our own whole-star answer for a subarea star, when we had the base to
+    # build one. Journaled beside the published number so a session's play
+    # SCORES the carry against Usamune instead of arguing about it: if the two
+    # always agree, the wait can go entirely and the row can publish at the
+    # x-cam like any other star.
+    carried_igt: int | None = None
     # Observational, journaled with the event and read by nothing: how many
     # frames past the x-cam the row actually left, and every result-store
     # write it saw, as (offset, value). This file's whole remaining latency is
@@ -303,6 +309,21 @@ class StarGrabDetector:
         grab.xcam_frame = frame
         grab.xcam_igt, grab.xcam_igt_source = self._clock.igt_at_xcam(frame, curr)
         grab.xcam_counter_is_partial = self._clock.counter_may_be_subarea_local()
+        carried = self._clock.carried_igt_at_xcam(frame, curr)
+        if grab.xcam_counter_is_partial and carried is not None:
+            # We can answer a subarea star ourselves after all: the counter is
+            # subarea-local, but we kept what it had counted before the warp,
+            # so the sum is the whole star (IgtClock.carried_igt_at_xcam).
+            # That turns the settle WAIT back into the ordinary agreement
+            # door — Usamune's early echo of the subarea-local number
+            # disagrees with this and is waited through, and the whole-star
+            # write agrees and publishes. The DEADLINE deliberately stays the
+            # long one (`_ready_to_publish`): a carry is a prediction until a
+            # session of play has scored it, so if nothing ever agrees with
+            # it, this ends exactly where it ends today — on Usamune's own
+            # number, 45 frames out. A wrong carry costs latency, never a row.
+            grab.carried_igt = carried[0]
+            grab.xcam_igt, grab.xcam_igt_source = carried
 
     def _identify(self, prev: GameSnapshot,
                   curr: GameSnapshot) -> _PendingGrab | None:
@@ -440,14 +461,20 @@ class StarGrabDetector:
         whole file exists to refuse. When they disagree by more, the deadline
         publishes Usamune's own value anyway — the cost of a torn read is
         latency, never a wrong row."""
-        if grab.xcam_counter_is_partial:
+        if grab.xcam_counter_is_partial and grab.carried_igt is None:
             return waited >= self.RESULT_SETTLE_FRAMES
         usamune = self._clock.settled_result_at_or_after(grab.xcam_frame, curr)
         if (usamune is not None
                 and abs(usamune - grab.xcam_igt) <= self.AGREEMENT_FRAMES
                 and grab.xcam_igt_source != "reconstructed"):
             return True
-        return waited >= self.PUBLISH_WAIT_FRAMES
+        # A CARRIED subarea star keeps the long deadline. Its early write is
+        # the subarea-local echo, and leaving on the short backstop would
+        # publish that echo — the impossible PB this file exists to refuse.
+        # The carry buys an early exit through agreement, never a later one.
+        return waited >= (self.RESULT_SETTLE_FRAMES
+                          if grab.xcam_counter_is_partial
+                          else self.PUBLISH_WAIT_FRAMES)
 
     def _answer(self, grab: _PendingGrab,
                 curr: GameSnapshot) -> tuple[int, str]:
@@ -487,6 +514,7 @@ class StarGrabDetector:
                 "num_stars": grab.num_stars,
                 "published_after": grab.published_after,
                 "result_writes": grab.writes or [],
+                "carried_igt": grab.carried_igt,
             },
         )
 

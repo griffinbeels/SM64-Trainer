@@ -526,6 +526,55 @@ def test_the_grab_time_write_does_not_publish_but_the_xcam_one_does():
     assert row.payload["result_writes"] == [(1, 70), (3, 72)]
 
 
+# Carrying the pre-warp counter across the door (his idea, 2026-08-02). It
+# does not remove the wait on its own -- Usamune's early write still echoes
+# the subarea-local number and still has to be waited through -- but it gives
+# us a whole-star answer of our OWN, so the ordinary agreement door applies
+# where a fixed 45-frame deadline used to. `carried_igt` is journaled beside
+# the published number so a session of play scores the two against each other.
+
+WARP_AT = GRAB_FRAME - 95     # the pyramid door, 480 frames into the run
+BEFORE_THE_DOOR = 480
+
+
+def through_the_door(snaps):
+    """Run to the door, warp deeper, then take the star inside the subarea."""
+    prefix = [snap(global_timer=WARP_AT + offset, igt_overall=BEFORE_THE_DOOR,
+                   curr_level=8, curr_area=1) for offset in range(3)]
+    prefix.append(snap(global_timer=WARP_AT + 3, igt_overall=BEFORE_THE_DOOR,
+                       curr_level=8, curr_area=2))
+    prefix.append(snap(global_timer=WARP_AT + 5, igt_overall=0,
+                       curr_level=8, curr_area=2))
+    return prefix + [replace(s, curr_level=8, curr_area=2) for s in snaps]
+
+
+def test_a_carried_subarea_star_publishes_on_agreement_not_on_the_deadline():
+    # Whole star = 480 before the door + 72 inside it. Usamune echoes the
+    # subarea-local 72 first (disagrees, waited through) and writes the whole
+    # star at +30 (agrees, publishes) -- one row, right number, and 15 frames
+    # earlier than the deadline that used to be the only way out of here.
+    inside = through_the_door(subarea_snaps(usamune=552, write_at=30,
+                                            first_write=(1, 72)))
+    [(published_at, row)] = emitted_at(inside)
+    assert row.payload["igt_frames"] == 552
+    assert row.payload["carried_igt"] == 552      # ours, scored against his
+    assert published_at - XCAM == 27      # the write lands 30 past the GRAB
+    assert published_at - XCAM < StarGrabDetector.RESULT_SETTLE_FRAMES
+
+
+def test_a_carry_usamune_contradicts_still_ends_at_the_deadline():
+    # The fail-safe direction, and the whole reason this is allowed to ship
+    # before the carry has been scored on live play: when nothing agrees with
+    # our sum, the deadline publishes Usamune's own number exactly as it does
+    # today. A wrong carry costs latency, never a wrong row.
+    inside = through_the_door(subarea_snaps(usamune=600, write_at=30,
+                                            first_write=(1, 72)))
+    [(published_at, row)] = emitted_at(inside)
+    assert row.payload["igt_frames"] == 600       # his, not ours
+    assert row.payload["carried_igt"] == 552
+    assert published_at - XCAM == StarGrabDetector.RESULT_SETTLE_FRAMES
+
+
 def test_a_reset_after_publishing_corrects_nothing():
     # The row is already his; whatever the store says after a reset describes
     # another context (and on a course exit it is zeroed outright).

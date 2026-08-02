@@ -72,9 +72,15 @@ class IgtClock:
         # history deliberately does not carry.
         self._last: tuple[int, int, int, int] | None = None
         self._area_edge_frame: int | None = None
+        self._area_edge_to: int | None = None
         self._zero_frame: int | None = None
         self._level_edge_frame: int | None = None
         self._subarea_local = False
+        # What the counter had already counted when it zeroed at a warp DEEPER
+        # into the level — the missing half of a subarea star, and None
+        # whenever we cannot prove that is what the zero was.
+        self._carry_base: int | None = None
+        self._pre_zero_overall: int | None = None
 
     def empty(self) -> bool:
         return not self._history
@@ -133,6 +139,7 @@ class IgtClock:
             # the door, which IS the whole star. Clears the pairing so a
             # previous level's area edge cannot reach across.
             self._area_edge_frame = self._zero_frame = None
+            self._area_edge_to = self._carry_base = None
             self._level_edge_frame = snap.global_timer
             self._subarea_local = False
             return
@@ -144,16 +151,65 @@ class IgtClock:
             # the counter can zero on the very frame the area byte moves, and
             # `_zero_frame` has to be recorded either way.
             self._area_edge_frame = snap.global_timer
+            self._area_edge_to = snap.curr_area
             if (self._zero_frame is not None
                     and snap.global_timer - self._zero_frame
                     <= self.AREA_LOAD_WINDOW):
                 self._subarea_local = True   # the edge was seen after the zero
+                self._carry_base = self._carried_at(self._pre_zero_overall)
         if snap.igt_overall < overall and snap.igt_overall <= NEAR_ZERO_IGT:
             self._zero_frame = snap.global_timer
+            self._pre_zero_overall = overall
             self._subarea_local = (
                 self._area_edge_frame is not None
                 and snap.global_timer - self._area_edge_frame
                 <= self.AREA_LOAD_WINDOW)
+            self._carry_base = (self._carried_at(overall)
+                                if self._subarea_local else None)
+
+    def _carried_at(self, pre_zero_overall: int | None) -> int | None:
+        """What to carry across this zero, or None to carry nothing.
+
+        The destination area is the discriminator, and it is anchors.py's,
+        measured there against his whole journal rather than reasoned about
+        here: a course always starts in area 1, so an edge into a NON-1 area
+        is Mario going deeper and the counter's old value is the first half of
+        the star. A reset's own reload walks the byte back to 1, and so does
+        walking out of a subarea on foot — neither is proof of anything, and
+        carrying a base across a RESET would add a previous run's time to this
+        one. Refusing there costs the settle wait we already pay today."""
+        if pre_zero_overall is None or self._area_edge_to == 1:
+            return None
+        return pre_zero_overall
+
+    def carried_base(self) -> int | None:
+        """The time this star had already taken before the counter restarted,
+        or None when we cannot prove the restart was a warp deeper in."""
+        return self._carry_base
+
+    def carried_igt_at_xcam(self, xcam_frame: int,
+                            curr: GameSnapshot) -> tuple[int, str] | None:
+        """OUR OWN whole-star answer for a subarea star, or None.
+
+        His idea, 2026-08-02: *"If we cache the time it took for the player to
+        enter the subarea, then the xcam time is just the cached
+        subarea_entry_time plus the time it took to finish the subarea. Isn't
+        that basically what Usamune is doing anyway?"* — and his own journal
+        says yes, twice over. Usamune writes the subarea-local number first
+        and the whole star later, so the burst carries the difference: LLL
+        Elevator `[[2, 388], [27, 686]]` -> 298, SSL Pyramid
+        `[[0, 69], [1, 71], [27, 551]]` -> 480. That difference IS this base.
+
+        The result STORE is deliberately not consulted: at the x-cam it holds
+        the early echo of our subarea-local counter (the 69 above), which is
+        the one number that must never be published on a star like this.
+        Reading only the counter also keeps this whole-star answer independent
+        of Usamune's, which is what lets `star_grab.py` treat their agreement
+        as proof rather than as a coincidence."""
+        if self._carry_base is None:
+            return None
+        post = max(0, curr.igt_overall - (curr.global_timer - xcam_frame))
+        return post + self.DISPLAY_TICK + self._carry_base, "carried"
 
     def igt_at(self, touch_frame: int, curr: GameSnapshot) -> tuple[int, str]:
         """Usamune's number at a TOUCH — used by key.py (grand star) and

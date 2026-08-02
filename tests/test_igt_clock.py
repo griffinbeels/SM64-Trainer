@@ -89,6 +89,37 @@ def test_warping_deeper_mid_run_is_a_subarea_load():
     assert c.counter_may_be_subarea_local() is True
 
 
+def test_the_time_before_the_pyramid_door_is_carried():
+    # The half of a subarea star the counter throws away. 480 frames to reach
+    # the door, and the counter restarts there -- so the whole star is 480
+    # plus whatever the subarea takes, which is the difference Usamune's own
+    # write burst shows (SSL Pyramid [[0, 69], [1, 71], [27, 551]] -> 480).
+    c = IgtClock()
+    enter_a_course(c)
+    walk(c, range(1500, 1503), curr_level=8, curr_area=1, igt_overall=480)
+    walk(c, [1503], curr_level=8, curr_area=2, igt_overall=480)
+    walk(c, [1505], curr_level=8, curr_area=2, igt_overall=0)
+    assert c.carried_base() == 480
+    grabbed = snap(1577, igt_overall=71, curr_level=8, curr_area=2)
+    c.observe(grabbed)
+    assert c.carried_igt_at_xcam(1577, grabbed) == (552, "carried")
+
+
+def test_nothing_is_carried_back_into_the_courses_main_area():
+    # Walking OUT of a subarea zeroes the counter beside an area edge exactly
+    # as walking in does, and so does a reset's own reload -- both land in
+    # area 1, and carrying a previous run's time across a RESET is the one
+    # failure that would record a wrong number silently.
+    c = IgtClock()
+    enter_a_course(c)
+    walk(c, range(1500, 1503), curr_level=8, curr_area=2, igt_overall=480)
+    walk(c, [1503], curr_level=8, curr_area=1, igt_overall=480)
+    walk(c, [1505], curr_level=8, curr_area=1, igt_overall=0)
+    assert c.counter_may_be_subarea_local() is True   # unchanged: still partial
+    assert c.carried_base() is None                   # but nothing to add
+    assert c.carried_igt_at_xcam(1577, snap(1577, curr_level=8)) is None
+
+
 def test_a_reset_clears_the_subarea_basis():
     # His own probe: enter, reset immediately, grab -- and the grab was fast.
     # An L-reset in the course's main area zeroes the counter with no area
