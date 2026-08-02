@@ -457,8 +457,37 @@ WORLD_EDGES_TWO_WAY = (
 # bowser in the sky." So the Bowser 3 arena has no exit into the castle at all
 # -- its only edge is the two-way pair with BitS. Bowser 1 and 2 keep theirs:
 # their key cutscene really does put Mario back in the castle.
+#
+# `(19, _LOBBY)` -- "BitFS exit -> LOBBY" -- was ADDED 2026-08-02, on his live
+# report plus a measurement of both journals. BitFS is ENTERED from the
+# basement (the two-way row above), but EXITING it does not put you back there:
+# it puts you in the lobby, and that is not a quirk, it is a movement TRICK he
+# routes on. His words: *"The fastest path to getting to upstairs is actually
+# to go Bowser 2 -> Basement -> Re-enter bowser in the fire sea -> Exit to
+# lobby -> Upstairs."*
+#
+# Measured over every `level_changed <bowser level> -> 6` in both journals,
+# taking the SETTLED area (the same per-frame collapse the matcher uses):
+#   BitFS -> Lobby x11, -> Basement x1      <- this row
+#   BitDW -> Lobby x27                      <- already covered by (_LOBBY, 17)
+#   BitS  -> Upstairs x2, -> Lobby x1       <- UNRESOLVED, deliberately not
+#                                              added: three observations cannot
+#                                              tell a trick from a mis-sample,
+#                                              and a wrong edge is invisible to
+#                                              every test (that is why
+#                                              tools/topology_map.py exists)
+# What the missing row COST, which is the whole argument for measuring rather
+# than reasoning about a table: with BitFS reachable only from the basement,
+# BitFS sat 3 hops from Upstairs where the basement sat 2 -- so Rule 2 read the
+# fastest real route as walking away from the destination and silently killed
+# `Bowser 2 -> Upstairs` the instant he entered the pipe. With this row both
+# are 2, equal is sideways, and the rule waves it through.
+#
+# NOT made two-way: a lobby -> BitFS move is the warp menu, and the basement is
+# the real door in.
 WORLD_EDGES_ONE_WAY = (
     (30, _LOBBY), (33, _BASEMENT),                # winning key cutscene -> castle
+    (19, _LOBBY),                                 # BitFS exit -> lobby (the trick)
 )
 
 
@@ -558,27 +587,40 @@ def world_regions() -> dict[str, str]:
     A wrong or missing edge is fixed in ONE row of WORLD_EDGES_* and both this
     and the dropdown filter re-derive.
     """
-    adjacency: dict[str, set[str]] = {}
-
-    def link(from_key: str, to_key: str) -> None:
-        adjacency.setdefault(from_key, set()).add(to_key)
-
-    for node_a, node_b in WORLD_EDGES_TWO_WAY + WORLD_EDGES_ONE_WAY:
-        key_a = node_key(*_world_node(node_a))
-        key_b = node_key(*_world_node(node_b))
-        link(key_a, key_b)
-        link(key_b, key_a)
+    def undirected(edges) -> dict[str, set[str]]:
+        adjacency: dict[str, set[str]] = {}
+        for node_a, node_b in edges:
+            key_a = node_key(*_world_node(node_a))
+            key_b = node_key(*_world_node(node_b))
+            adjacency.setdefault(key_a, set()).add(key_b)
+            adjacency.setdefault(key_b, set()).add(key_a)
+        return adjacency
 
     regions = {node_key(level, area): node_key(level, area)
                for level, area in CASTLE_REGION_NODES}
-    frontier = list(regions)
-    while frontier:
-        current = frontier.pop(0)
-        for neighbour in sorted(adjacency.get(current, ())):
-            if neighbour in regions:
-                continue
-            regions[neighbour] = regions[current]
-            frontier.append(neighbour)
+
+    def walk(adjacency) -> None:
+        frontier = list(regions)
+        while frontier:
+            current = frontier.pop(0)
+            for neighbour in sorted(adjacency.get(current, ())):
+                if neighbour in regions:
+                    continue
+                regions[neighbour] = regions[current]
+                frontier.append(neighbour)
+
+    # TWO-WAY FIRST, one-way only for what is still unclaimed (2026-08-02).
+    # A one-way row is an EXIT, and an exit says where you come OUT, never
+    # where a place belongs. That distinction did not exist while the only
+    # one-way rows were the Bowser key cutscenes — an arena has no other
+    # castle link, so its exit IS its ownership. `(19, _LOBBY)` broke the tie:
+    # BitFS has a real two-way door from the BASEMENT (his spec, 2026-07-23,
+    # "the basement region owns BitFS") and now also exits to the lobby, and
+    # one undirected pass moved it into the lobby region on gameflow order —
+    # renaming its library group and reordering the origin taxonomy, for a
+    # topology fix that had nothing to do with either.
+    walk(undirected(WORLD_EDGES_TWO_WAY))
+    walk(undirected(WORLD_EDGES_ONE_WAY))
     return regions
 
 
