@@ -86,12 +86,19 @@ emit therefore WATCHES `RESULT_SETTLE_FRAMES` (45) past the x-cam and takes the
 write if one lands at or after it — measured at +0..2 on ordinary stars and
 +27..41 on those two. **It no longer WAITS that long, since 2026-08-01** (live
 report: "when I land, there's STILL a ton of delay after that… now the tool
-feels like it's broken and laggy"). The row is PUBLISHED as soon as Usamune's
-first post-x-cam write lands, or at `PUBLISH_WAIT_FRAMES` (12) if none does —
-the first write was +1..+9 across every measured grab — and the watch runs on;
-if the answer CHANGES inside it, `star_time_corrected` follows and the recorded
-row is rebuilt with the new number. The wait that protected two grabs in eleven
-is now paid by those two alone, about a second after they already appeared. The
+feels like it's broken and laggy"). The row is PUBLISHED at
+`PUBLISH_WAIT_FRAMES` (12, ~400 ms — every measured write lands +1..+9) and the
+watch runs on; if the answer CHANGES after that, `star_time_corrected` follows
+and the recorded row is rebuilt. **A DEADLINE, never "publish on the first
+write"** — Usamune writes 2-3 times per grab even on an ordinary star (WF Wild
+Blue +1=328 then +3=330), so leaving on the first published a number the
+correction then moved, on screen, on most grabs (live report 2026-08-01: "it
+writes the entry into the system… and then the xcam happens, which overrides
+the original entry… it should be hidden to the user"). And when
+`IgtClock.counter_may_be_subarea_local()` says the counter's zero point may be
+an AREA load, the publish waits the FULL window instead: our number there is
+the time since the pyramid door, which is exactly the impossible PB he saw
+flash. So the correction is a backstop now, not a routine event. The
 correction is a compensating event like `attempt_cleared`:
 `projection.time_corrections` folds it into the GRAB's own payload (so the star
 attempt, a segment closed by the same grab, and the 100-coin reattribution all

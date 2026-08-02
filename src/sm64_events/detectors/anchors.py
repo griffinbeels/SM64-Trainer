@@ -77,6 +77,23 @@ frames_since_dialog (live journal 2026-06-14, Lakitu Skip): how many game
   backward global_timer jump clears _last_dialog_frame so a stale recency value
   cannot poison anchors after a rewind. Mirrors frames_since_door exactly.
 
+warp_op / frames_since_warp_op (2026-08-01, INERT — journaled so a future
+  session can decide from data, read by nothing yet): the game's own pending
+  warp op (`sDelayedWarpOp`) most recently seen non-zero, and how long ago.
+  The open question it exists to answer: **an in-course AREA load fires a
+  practice_reset exactly as an L-reset does** — Usamune zeroes the overall IGT
+  either way — so entering the SSL pyramid records a reset the player never
+  made (live report 2026-08-01: "I *didn't* reset; I entered the pyramid").
+  Nothing already sampled separates them. Measured across the whole journal:
+  of the anchors that coincide with an in-course area edge, only 6% carry a
+  warp ACTION and 6% a nearby `warp_entered`, while 21% of the ones that are
+  plainly L-resets do — the signal is both insensitive and non-specific, so
+  the obvious fix would have swallowed 424 real resets to suppress 53 false
+  ones. The warp OP is the game's own reason for a transition and is the next
+  candidate; a reset that does not go through the warp system would carry
+  none. Do not act on it until an anchor set with known ground truth says it
+  separates.
+
 Pause streak: consecutive game frames where global_timer advanced but the
   overall IGT did not — game logic stopped, i.e. the Usamune pause menu (or a
   dialog time-stop). Stamped on anchors as paused_frames_before; the tracking
@@ -135,6 +152,7 @@ class AnchorDetector:
         self._last_dialog_frame: int | None = None  # last tick Mario was in a textbox/intro-cutscene action
         self._pending_warp: Event | None = None  # pause-warp anchor awaiting position-stable tick
         self._save_menu_seen = False  # save-prompt screen observed this anchor period
+        self._last_warp_op: tuple[int, int] | None = None  # (frame, op), inert — see docstring
 
     def process(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         # Self-heal on backward global_timer jump (domain rule 4): stale door
@@ -146,6 +164,8 @@ class AnchorDetector:
             self._last_door_frame = None
         if curr.global_timer < (self._last_dialog_frame or 0):
             self._last_dialog_frame = None
+        if self._last_warp_op and curr.global_timer < self._last_warp_op[0]:
+            self._last_warp_op = None   # same self-heal as the two above
         # Track the most recent frame where a door action was observed so that
         # anchors emitted 1-5 frames after the door animation ends can still
         # be classified as echoes via frames_since_door (non-warp door shape).
@@ -171,6 +191,12 @@ class AnchorDetector:
         # reload reset), so it cannot linger onto a later real reset.
         if curr.mario_action in SAVE_DIALOG_ACTIONS:
             self._save_menu_seen = True
+        # The game's own reason for a pending transition, kept the way door and
+        # dialogue recency are kept. INERT: journaled for the open question in
+        # the docstring (an area load is indistinguishable from an L-reset),
+        # read by nothing.
+        if curr.pending_warp_op:
+            self._last_warp_op = (curr.global_timer, curr.pending_warp_op)
         events = self._classify(prev, curr)
         if events:
             self._pending_warp = None  # one load, one anchor: classified wins
@@ -257,6 +283,15 @@ class AnchorDetector:
         frames_since_dialog = (
             (curr.global_timer - self._last_dialog_frame)
             if self._last_dialog_frame is not None else None)
+        # Inert observation, both anchor kinds (docstring): the last pending
+        # warp op and its age. None/None when the game has queued no warp.
+        warp_op = self._last_warp_op[1] if self._last_warp_op else None
+        frames_since_warp_op = (
+            (curr.global_timer - self._last_warp_op[0])
+            if self._last_warp_op else None)
+        observed = {"warp_op": warp_op,
+                    "frames_since_warp_op": frames_since_warp_op,
+                    "area": curr.curr_area, "prev_area": prev.curr_area}
         if curr.global_timer < prev.global_timer:
             if curr.global_timer < BOOT_TIMER_MAX:
                 return []  # console reset — GameResetDetector owns this
@@ -270,7 +305,8 @@ class AnchorDetector:
                                    "prev_action": prev.mario_action,
                                    "save_pending": self._save_menu_seen,
                                    "frames_since_door": frames_since_door,
-                                   "frames_since_dialog": frames_since_dialog})]
+                                   "frames_since_dialog": frames_since_dialog,
+                                   **observed})]
         if (curr.igt_overall < prev.igt_overall
                 and curr.igt_overall <= NEAR_ZERO_IGT
                 and prev.igt_overall < IGT_WRAP_CEILING):
@@ -284,5 +320,6 @@ class AnchorDetector:
                                    "prev_action": prev.mario_action,
                                    "save_pending": self._save_menu_seen,
                                    "frames_since_door": frames_since_door,
-                                   "frames_since_dialog": frames_since_dialog})]
+                                   "frames_since_dialog": frames_since_dialog,
+                                   **observed})]
         return []

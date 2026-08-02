@@ -58,12 +58,26 @@ def correction(id, frame=XCAM_FRAME, course=8, star_id=2,
 
 # --- the detector: two events, one grab -------------------------------------
 
-def snap(frame, counter, action=A.ACT_STAR_DANCE_EXIT, timer=0, result=452):
+def snap(frame, counter, action=A.ACT_STAR_DANCE_EXIT, timer=0, result=452,
+         area=2):
     return GameSnapshot(
         wall_time_utc=T0, global_timer=frame, mario_action=action,
         mario_action_timer=timer, num_stars=6, last_completed_course=8,
         last_completed_star=3, igt_overall=counter, igt_result=result,
-        curr_level=8, curr_area=2)
+        curr_level=8, curr_area=area)
+
+
+def walking_to_the_pyramid():
+    """The 25 seconds before the entry, then the entry itself: area 1 with the
+    counter running on the WHOLE star, then the area load, which drops it back
+    to zero. From there our own number measures the pyramid, not the star —
+    his live report, 2026-08-01: 0'02"26 against Usamune's 0'27"66."""
+    load = GRAB_FRAME - INSIDE_THE_PYRAMID + 4   # the counter's zero point
+    walk = [snap(load - 20 + n, 700 + n, action=ACT_IDLE, area=1)
+            for n in range(20)]
+    inside = [snap(load + n, n, action=ACT_IDLE)
+              for n in range(GRAB_FRAME - load - 1)]
+    return walk + inside
 
 
 def a_subarea_grab(write_at=30, written=THE_WHOLE_STAR):
@@ -97,6 +111,18 @@ def test_the_detector_publishes_early_and_corrects_late():
 def test_a_write_that_says_what_we_published_produces_no_correction():
     [row] = detected(a_subarea_grab(write_at=4, written=INSIDE_THE_PYRAMID))
     assert row.type == "star_collected"
+
+
+def test_a_grab_whose_counter_zeroed_at_an_area_load_waits_and_lands_right():
+    # The live report: our own number would have been 0'02"26 (the pyramid),
+    # flashed as an impossible PB, and then corrected to 0'27"66. When the
+    # clock can see that its zero point is an AREA load, there is nothing to
+    # be gained by publishing that number — so the row waits and arrives
+    # right the first time. One event, no correction, no flash.
+    walk = walking_to_the_pyramid()
+    events = detected(walk + a_subarea_grab())
+    assert [e.type for e in events] == ["star_collected"]
+    assert events[0].payload["igt_frames"] == THE_WHOLE_STAR
 
 
 # --- the pairing: a correction belongs to ONE grab --------------------------

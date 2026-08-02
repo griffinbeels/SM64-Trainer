@@ -27,11 +27,11 @@ def test_igt_drop_to_zero_emits_practice_reset():
     assert len(events) == 1
     ev = events[0]
     assert ev.type == "practice_reset" and ev.frame == 1002
-    assert ev.payload == {"igt_frames_before": 500, "mario_acted": False,
-                          "paused_frames_before": 0, "acted_tracking": True,
-                          "action": ACT_IDLE, "prev_action": ACT_IDLE,
-                          "save_pending": False, "frames_since_door": None,
-                          "frames_since_dialog": None}
+    assert ev.payload | {"igt_frames_before": 500, "mario_acted": False,
+                         "paused_frames_before": 0, "acted_tracking": True,
+                         "action": ACT_IDLE, "prev_action": ACT_IDLE,
+                         "save_pending": False, "frames_since_door": None,
+                         "frames_since_dialog": None} == ev.payload
 
 
 def test_igt_drop_to_small_value_still_practice_reset():
@@ -55,11 +55,11 @@ def test_backward_global_timer_emits_state_loaded():
     assert len(events) == 1
     ev = events[0]
     assert ev.type == "state_loaded" and ev.frame == 3000
-    assert ev.payload == {"igt_frames_restored": 120, "mario_acted": False,
-                          "paused_frames_before": 0, "acted_tracking": True,
-                          "action": ACT_IDLE, "prev_action": ACT_IDLE,
-                          "save_pending": False, "frames_since_door": None,
-                          "frames_since_dialog": None}
+    assert ev.payload | {"igt_frames_restored": 120, "mario_acted": False,
+                         "paused_frames_before": 0, "acted_tracking": True,
+                         "action": ACT_IDLE, "prev_action": ACT_IDLE,
+                         "save_pending": False, "frames_since_door": None,
+                         "frames_since_dialog": None} == ev.payload
 
 
 def test_backward_jump_into_boot_range_is_left_to_game_reset():
@@ -350,15 +350,20 @@ def test_frames_since_door_cleared_on_backward_jump_self_heal():
 
 
 def test_existing_payload_pins_include_frames_since_door():
-    """Full payload pin for practice_reset — new key must be present and None
-    when no door was recently seen (updates existing exact-dict tests)."""
+    """The keys this file OWNS, and their values when nothing recent happened.
+
+    Subset, not exact equality: an exact-dict pin claims the whole payload
+    shape, so any field a later feature adds fails here for no reason — which
+    is what a purely observational field (`warp_op`, 2026-08-01) did. Assert
+    what you mean; the anchor payload is deliberately open to additions."""
     events = AnchorDetector().process(snap(1000, igt=500), snap(1002, igt=0))
-    assert events[0].payload == {
+    owned = {
         "igt_frames_before": 500, "mario_acted": False,
         "paused_frames_before": 0, "acted_tracking": True,
         "action": ACT_IDLE, "prev_action": ACT_IDLE,
         "save_pending": False, "frames_since_door": None,
         "frames_since_dialog": None}
+    assert {k: events[0].payload.get(k) for k in owned} == owned
 
 
 # ---------------------------------------------------------------------------

@@ -434,9 +434,12 @@ def test_the_xcam_frame_can_never_precede_the_grab_it_belongs_to():
 
 
 def subarea_snaps(*, counter_at_grab=68, fall_frames=3, usamune=574,
-                  write_at=30, stale=452):
+                  write_at=30, stale=452, first_write=None):
     """A multi-area star: the counter is subarea-local, so Usamune's late write
-    is the ONLY source that knows the whole star's time."""
+    is the ONLY source that knows the whole star's time.
+
+    `first_write` is an earlier (offset, value) pair — Usamune writes 2-3 times
+    per grab and the early ones echo our own counter."""
     snaps = [snap(global_timer=GRAB_FRAME - 1,
                   igt_overall=counter_at_grab - 1, igt_result=stale)]
     for offset in range(fall_frames):
@@ -447,9 +450,15 @@ def subarea_snaps(*, counter_at_grab=68, fall_frames=3, usamune=574,
                           mario_action_timer=offset))
     for offset in range(fall_frames, fall_frames
                         + StarGrabDetector.RESULT_SETTLE_FRAMES + 2):
+        if offset >= write_at:
+            result = usamune
+        elif first_write is not None and offset >= first_write[0]:
+            result = first_write[1]
+        else:
+            result = stale
         snaps.append(snap(global_timer=GRAB_FRAME + offset,
                           igt_overall=counter_at_grab + offset,
-                          igt_result=usamune if offset >= write_at else stale,
+                          igt_result=result,
                           mario_action=A.ACT_STAR_DANCE_EXIT,
                           mario_action_timer=offset - fall_frames))
     return snaps
@@ -498,12 +507,17 @@ def test_a_star_usamune_agrees_about_is_never_corrected():
     assert row.payload["igt_frames"] == 72
 
 
-def test_usamunes_own_write_publishes_the_row_the_moment_it_lands():
-    # Waiting the full window when the answer is already in would be the old
-    # bug in miniature: PUBLISH_WAIT_FRAMES is a deadline, not a delay.
-    [(published_at, row)] = emitted_at(subarea_snaps(usamune=72, write_at=4))
-    assert published_at == XCAM + 1               # the poll that first saw it
-    assert row.payload["igt_source"] == "result"
+def test_a_burst_of_writes_publishes_once_with_the_last_of_them():
+    # Usamune writes 2-3 times per grab, and the early ones are echoes: WF
+    # "Shoot into the Wild Blue" wrote +1=328 then +3=330 (live 2026-08-01).
+    # Leaving on the FIRST one published a number a correction then moved,
+    # which is the flicker he reported. The publish window is what makes the
+    # burst invisible: one row, the last value, no correction.
+    burst = subarea_snaps(usamune=74, write_at=6, first_write=(4, 72))
+    [(published_at, row)] = emitted_at(burst)
+    assert row.type == "star_collected"
+    assert row.payload["igt_frames"] == 74
+    assert published_at == XCAM + StarGrabDetector.PUBLISH_WAIT_FRAMES
 
 
 def test_a_reset_after_publishing_corrects_nothing():
