@@ -53,7 +53,7 @@ def correction(id, frame=XCAM_FRAME, course=8, star_id=2,
                {"course_id": course, "star_id": star_id,
                 "grab_frame": grab_frame, "igt_frames": igt,
                 "igt": "0'19\"13", "igt_source": "result",
-                "igt_reconstructed": False})
+                "igt_reconstructed": False, "igt_timed_at": "xcam"})
 
 
 # --- the detector: two events, one grab -------------------------------------
@@ -151,6 +151,32 @@ def test_the_attempt_records_the_corrected_time():
     assert attempt.outcome == "success"
     assert attempt.igt_frames == THE_WHOLE_STAR
     assert attempt.timed_at == "xcam"      # the correction moves the NUMBER only
+
+
+def test_a_late_xcam_makes_a_backstopped_row_legal_again():
+    # A pause mid-fall trips the x-cam backstop, so the row is published at
+    # the GRAB — a time no leaderboard accepts, and one tracking/caveats.py
+    # marks as such. Unpausing and landing corrects both halves at once: the
+    # number AND the moment it describes (live report 2026-08-02).
+    backstopped = jev(2, "star_collected", GRAB_FRAME,
+                      {"course_id": 8, "star_id": 2, "igt_frames": 300,
+                       "igt_source": "counter", "grab_frame": GRAB_FRAME,
+                       "igt_timed_at": "grab"})
+    [attempt] = project([
+        jev(1, "practice_reset", 900, {"igt_frames_before": 400,
+                                       "mario_acted": True}),
+        backstopped,
+        correction(3),
+    ])
+    assert attempt.timed_at == "xcam"          # legal again, not just faster
+    assert attempt.igt_frames == THE_WHOLE_STAR
+    # ...and without the correction it stays exactly as honest as it was
+    [uncorrected] = project([
+        jev(1, "practice_reset", 900, {"igt_frames_before": 400,
+                                       "mario_acted": True}),
+        backstopped,
+    ])
+    assert uncorrected.timed_at == "grab"
 
 
 def test_an_uncorrected_grab_is_untouched():

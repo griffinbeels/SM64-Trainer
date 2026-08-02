@@ -384,7 +384,14 @@ def strat_overrides(events) -> dict[int, str | None]:
     return out
 
 
-CORRECTED_TIME_KEYS = ("igt_frames", "igt", "igt_source", "igt_reconstructed")
+# `igt_timed_at` is in the list because a correction can change WHICH MOMENT
+# the row describes, not only its number: a grab published by the x-cam
+# backstop (a pause mid-fall trips it) is marked "grab" and is not a
+# leaderboard-legal time, and the x-cam arriving late is what makes it one
+# again. tracking/caveats.py reads Attempt.timed_at for exactly that, so
+# leaving this out would fold in the right number under a stale mark.
+CORRECTED_TIME_KEYS = ("igt_frames", "igt", "igt_source", "igt_reconstructed",
+                       "igt_timed_at")
 
 
 def time_corrections(events) -> dict[int, dict]:
