@@ -34,6 +34,7 @@ uv run python tools/contact_sheet.py .objective-card # one surface at 1500/1200/
 uv run python tools/mark_sheet.py                    # the caveat badge on both surfaces, side by side (the PICK is made: corner badge, 2026-08-01)
 uv run python tools/measure_objective_card.py        # re-measure the fixed card heights against real content
 uv run python tools/topology_map.py                  # DRAW the world graph the segment matcher judges moves against -- LOOK at it, a wrong edge is invisible to every test
+uv run python tools/why_cancelled.py             # WHY did that movement stop being ACTIVE -- replays the session and names the rule + hop counts per cancel (stamps the frame the MOVE happened on, not the one it was judged on)
 uv run python tools/measure_topology_cancels.py       # score those topological rules against the real journal: how many completed runs would they have destroyed?
 ```
 
