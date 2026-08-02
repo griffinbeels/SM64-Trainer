@@ -22,7 +22,7 @@ paths:
 | Event envelope / wire format | `core/events.py` |
 | Star-grab + IGT logic | `detectors/star_grab.py` — docstrings carry the domain rationale; IGT itself comes from the shared `detectors/igt_clock.py` (result→counter→reconstructed) which ALSO stamps key.py's grand star and warp.py's pipe — every displayed time routes through it, never a frame delta. **A star is timed at the X-CAM, not the grab, and Usamune's own result store — not our counter — is the number.** Both halves were live-measured on 2026-08-01 and neither is re-derivable by reading the code; the evidence, the four `STOP` values, the subarea-local counter, and the bracket on the settle wait are in **`## Star timing`** below. `key.py` is deliberately NOT changed: whether `STOP` moves the grand star's number is unmeasured, and `ACT_JUMBO_STAR_CUTSCENE` has no fall/dance pair to derive one from |
 | game_reset | `detectors/lifecycle.py` |
-| Attempt anchors (practice_reset / state_loaded) | `detectors/anchors.py` — anchors carry mario_acted + paused_frames_before + acted_tracking + save_pending (post-star save-screen latch → segment echo) + frames_since_dialog (textbox/intro-cutscene recency → segment echo shape 5: a run never splits/resets on a textbox); emits the mario_acted event; docstring covers classification (incl. the pause-warp shape: menu warp with IGT already ~0 → anchor from position change + pause streak), pause streak, and VERIFY notes |
+| Attempt anchors (practice_reset / state_loaded) | `detectors/anchors.py` — anchors carry mario_acted + paused_frames_before + acted_tracking + save_pending (post-star save-screen latch → segment echo) + frames_since_dialog (textbox/intro-cutscene recency → segment echo shape 5: a run never splits/resets on a textbox); emits the mario_acted event; docstring covers classification (incl. the pause-warp shape: menu warp with IGT already ~0 → anchor from position change + pause streak), pause streak, and VERIFY notes. **An in-course AREA LOAD fires a `practice_reset` too** — Usamune zeroes the overall IGT on an area warp exactly as it does on an L-reset, and nothing here can tell them apart: measured 2026-08-01 against a read-only backup of the live journal, **496 of 825 in-course area edges carry a co-frame `practice_reset`**. The segment matcher already treats involuntary anchors as echoes (door, save prompt, dialogue); the ATTEMPT projector does not, so entering the pyramid closed the run as a reset and opened a new one. **FIXED 2026-08-01 — the anchor payload's `area_load`, and the discriminator is the DESTINATION area**: a course always starts in area 1, so a zero paired (by recency, not co-frame equality) with an edge into a NON-1 area is Mario going deeper, while a reset's own reload walks the byte 1→2→1 and zeroes on the way BACK. Three readings that look right and are not — warp action (6% of entries vs 21% of resets, backwards), nearby `warp_entered` (6% vs 4%), door recency (0%) — plus the 424 back-to-1 anchors that are load TAILS rather than resets, are all in `anchors.py`'s docstring with their counts. `projection._dispatch` records no attempt for one and opens an attempt only if none is open. Forward-only: a historical anchor has no such key, so `.get()` is falsy and every old row replays unchanged (verified against a backup of the live journal, 3220 rows, zero differences). STILL OPEN: walking back OUT of a subarea zeroes the counter the same way and is indistinguishable from a reset by destination — the inert `warp_op` on every anchor is the evidence for that one |
 | Death detection | `detectors/death.py` — action-set edge + pending-warp pulse for void-outs (pit falls fire BEFORE level_changed; docstring carries why); closes open attempt as outcome "death". **CLOSED 2026-08-01 — measured, and it is CORRECT as it stands. Do not "fix" it.** This is the one time source that does not go through `igt_clock.py`: the payload carries `curr.igt_overall` RAW, while star/key/pipe times all add `DISPLAY_TICK`. The live gate (`uv run python tools/verify_death_clock.py`, behavioural not address — `USAMUNE_OVERALL` is already sampled, so no `VERIFY` row and `verify_addresses.py` is not the instrument) asked the human to pause and read the frozen timer. **Eight readings across three Usamune TIMER presets, unanimously the RAW counter.** So `DISPLAY_TICK` is a star-PATH calibration — it compensates for `_primary` back-computing to a touch frame, not for any offset in Usamune's display — and routing death through the clock would have put every historical death row 3 cs ABOVE what he saw, stars included (projection stamps a star's death attempt from this same payload). The same sitting retired a false alarm in the gate itself: `counter_tracked_cleanly` demanded the counter and the game frame move EXACTLY together and so cried PROBLEM on seven of eight healthy deaths, three of them for the counter moving MORE than the frame — impossible for a stall, and the tell that a 12-call non-atomic snapshot skews ±1 at each window end (`READ_SKEW_FRAMES`). Pure core pinned by `tests/test_verify_death_clock.py`, seven mutations proved |
 | Level-change detection | `detectors/level.py` — stateful: remembers last EMITTED level, journals establishing/corrective events (from may equal to) so projection-side level tracking never runs stale; closes open attempts as abandoned |
 | Dust tricks (dustless rollouts/jumps) | `detectors/dust.py` — TRICKS registry (one row per trick); docstring carries the decomp-verified landing-frame timing model; counts attach to attempts via projection.py |
@@ -82,9 +82,35 @@ Pyramid" 0'02"43 vs 0'19"13) — our number was the time since he entered the
 volcano/pyramid, Usamune's was the whole star. The counter restarts at an area
 warp, so deriving the x-cam correctly is necessary and not sufficient: **the
 x-cam says WHICH MOMENT, Usamune's own result write says WHAT NUMBER.** The
-emit therefore waits `RESULT_SETTLE_FRAMES` (45) past the x-cam and takes the
+emit therefore WATCHES `RESULT_SETTLE_FRAMES` (45) past the x-cam and takes the
 write if one lands at or after it — measured at +0..2 on ordinary stars and
-+27..28 on those two. Where no write comes (`STOP` of Grab or None, both
++27..41 on those two. **It no longer WAITS that long, since 2026-08-01** (live
+report: "when I land, there's STILL a ton of delay after that… now the tool
+feels like it's broken and laggy"). The row is PUBLISHED the moment Usamune's
+own written answer AGREES with our derivation of the same x-cam (1-3 frames
+typically, 0 on a ground grab), with `PUBLISH_WAIT_FRAMES` (12, ~400 ms) only
+as the backstop; the watch runs on, and if the answer CHANGES after that,
+`star_time_corrected` follows and the row is rebuilt. **Agreement, never "the
+first write"** — Usamune writes 2-3 times per grab even on an ordinary star
+(WF Wild Blue +1=328 then +3=330) and the FIRST of that burst is the grab-time
+value, so leaving on it published a number the correction then moved, on
+screen, on most grabs (live report 2026-08-01: "it writes the entry into the
+system… and then the xcam happens, which overrides the original entry… it
+should be hidden to the user"). `AGREEMENT_FRAMES` is 1 and not 2 for exactly
+that reason: the counter path runs 1-2 frames under Usamune, so a two-frame
+tolerance matches the grab write. Every grab journals `published_after` and
+its `result_writes` burst, inert, so the next round tunes this from ordinary
+play instead of from argument. And when
+`IgtClock.counter_may_be_subarea_local()` says the counter's zero point may be
+an AREA load, the publish waits the FULL window instead: our number there is
+the time since the pyramid door, which is exactly the impossible PB he saw
+flash. So the correction is a backstop now, not a routine event. The
+correction is a compensating event like `attempt_cleared`:
+`projection.time_corrections` folds it into the GRAB's own payload (so the star
+attempt, a segment closed by the same grab, and the 100-coin reattribution all
+read one number and none of them knows a correction exists), and
+`service._track` re-projects when one is journaled. Where no write comes
+(`STOP` of Grab or None, both
 already illegal) the counter derivation stands in and `igt_source` reads
 `"counter"` instead of `"result"`, which IS the legality signal on a star row;
 that case keeps the subarea error and cannot be fixed from a counter that

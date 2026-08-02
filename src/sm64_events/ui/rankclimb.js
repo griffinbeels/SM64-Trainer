@@ -22,7 +22,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { barFill, rankPosition, rankAt, rankColor, DIVISIONS_PER_TIER }
   from "./components/caps.js";
-import { climbTimings, barEase } from "./climbcurve.js";
+import { climbTimings, barEase, exchangeFade } from "./climbcurve.js";
 import { buildClimbPlan } from "./climbplan.js";
 import { activeEffects, makeBeat, celebrationTailMs, celebrationsEnabled }
   from "./celebrations.js";
@@ -190,11 +190,24 @@ export function useHeldWhileCelebrating(value) {
 // boundary below for why that distinction lives here rather than at the two
 // call sites. A surface wanting the honest progress figure reads it from the
 // rank it was handed, not from this.
-function renderState(level, bar, beats, atMs, tune, reveal = 1, landing = false) {
+// `line` is what the next-step sentence should READ this frame, and it is the
+// hook's job rather than the banner's because only the hook knows which part
+// of the climb is on screen:
+//
+//   "rest"      nothing is animating (or this banner is still waiting its turn
+//               in the lane) -- the destination's own settled sentence
+//   "leaving"   the line is fading OUT -- the sentence the reader was ALREADY
+//               reading, which is not the one the new payload carries
+//   "climbing"  hidden, mid-ladder -- derived from the rank on screen
+//   "arriving"  the line is fading back IN -- the destination's sentence
+//
+// The companion flag `atTarget` is NOT set here — it is resolved at return
+// time, against the props of the render asking. See the bottom of this file.
+function renderState(level, bar, beats, atMs, tune, reveal = 1, line = "rest") {
   const { tier, division } = rankAt(level);
   const { vars, icon } = activeEffects(beats, atMs, tune);
   return {
-    tier, division, level, bar, reveal, landing,
+    tier, division, level, bar, reveal, line,
     // The registry's tierColor entry overrides this mid-crossing; the rest of
     // the time the surface just wears its own tier's colour. One name, so a
     // caller never has to know whether a celebration is running.
@@ -478,9 +491,24 @@ export function useRankClimb(rank, identity = null,
         if (step.barFrom !== step.barTo) barStep = step;
       }
       let eased = 1;
+      let within = 1;
+      // The line's own clock. It runs on the SAME step and the same start as
+      // the bar -- that tie is what keeps the two from drifting -- but it has
+      // a FLOOR the bar does not, because a bar sweep's length scales with the
+      // distance it travels and the line's legibility does not. Taking 0.10s
+      // off a PB moves the bar about 2% of a division, which is 200ms of
+      // sweep, which is 100ms of fade each way: "the animation was still super
+      // snappy... we need to be consistent about the fade in / fade out"
+      // (user, 2026-08-01, with the two attempts that produced it). Whenever
+      // the step is longer than the floor this is exactly `within`, so every
+      // climb big enough to see is completely unchanged.
+      let revealWithin = 1;
       if (barStep) {
-        const within = barStep.ms > 0
+        within = barStep.ms > 0
           ? Math.max(0, Math.min(1, (elapsed - barStep.at) / barStep.ms)) : 1;
+        const revealMs = Math.max(barStep.ms, tune.revealMinMs || 0);
+        revealWithin = revealMs > 0
+          ? Math.max(0, Math.min(1, (elapsed - barStep.at) / revealMs)) : 1;
         eased = barEase(within);
         bar = barStep.barFrom + (barStep.barTo - barStep.barFrom) * eased;
       } else if (stepIndex >= 0) {
@@ -498,11 +526,41 @@ export function useRankClimb(rank, identity = null,
       // 1, so `1 - eased` is 0. A climb with no approach at all (the bar was
       // already full) has no bar step to read yet, which is the one case that
       // needs saying out loud.
+      //
+      // THE LINE FADES IN EVERY CASE — "even if we don't rank up, the text
+      // should still be fading out / in. All cases" (user, 2026-08-01). Two
+      // states used to cut instead, both measured by frame-sampling rather
+      // than argued about:
+      //
+      //  * WAITING ITS TURN. The second banner in a lane has started its loop
+      //    but not its plan, and reading 0 there hid the line the instant the
+      //    FIRST banner began climbing, then snapped it back to 1 (one frame,
+      //    1.000 -> 0.000 -> ~3s blank -> 0.999) when its own approach opened.
+      //    Nothing has happened to this banner yet, so nothing should move:
+      //    the line stays lit and its own approach fades it out.
+      //  * NO RANK CHANGE AT ALL. That plan is a single `fill` step with no
+      //    approach to fade out across and no arrival to fade back in, so the
+      //    line simply grew its "· 0.15s to rank up" suffix at full opacity.
+      //    The fade lives INSIDE the one step instead, as the same sequential
+      //    exchange every text swap in this app uses — out, swap, in, never a
+      //    crossfade (climbcurve.js::exchangeFade).
+      const revealEased = barEase(revealWithin);
       const arriving = barStep && barStep.kind === "arrive";
-      const reveal = !hasArrive ? 1               // no rank change: never hide it
-        : arriving ? eased                        // fading back in with the bar
-        : (barStep && barStep.kind === "approach") ? 1 - eased
-        : 0;
+      const swapping = barStep && barStep.kind === "fill"
+        ? exchangeFade(revealWithin) : null;
+      const line = stepIndex < 0 ? "rest"         // waiting: nothing has moved
+        : swapping ? (swapping.out > 0 ? "leaving" : "arriving")
+        : arriving ? "arriving"
+        : (barStep && barStep.kind === "approach" && revealEased < 1) ? "leaving"
+        : "climbing";
+      // Only one half of an exchange is ever non-zero, so the sum IS the
+      // opacity.
+      const reveal = line === "rest" ? 1
+        : swapping ? swapping.out + swapping.in   // bar only: out, swap, in
+        : arriving ? revealEased                  // fading back in with the bar
+        : line === "leaving" ? 1 - revealEased
+        : hasArrive ? 0
+        : 1;
       shownRef.current = { level, bar };
 
       const landed = elapsed >= totalMs;
@@ -516,7 +574,7 @@ export function useRankClimb(rank, identity = null,
         }));
       }
 
-      setState(renderState(level, bar, beatsRef.current, at, tune, reveal, !!arriving));
+      setState(renderState(level, bar, beatsRef.current, at, tune, reveal, line));
 
       // Keep ticking past the landing until the slowest effect has finished,
       // or the last flap would freeze mid-beat.
@@ -524,7 +582,12 @@ export function useRankClimb(rank, identity = null,
         ? beatsRef.current[beatsRef.current.length - 1].at
           + tailMs
         : 0;
-      if (!landed || at < tail) {
+      // `revealWithin` is the third thing that can still be moving after the
+      // position has landed, alongside the effect tail. Ending the loop while
+      // the line is mid-fade would hand it straight to the resting state,
+      // which is opacity 1 — a cut, at the exact end of the fade that exists
+      // to prevent one.
+      if (!landed || at < tail || revealWithin < 1) {
         frameRef.current = requestAnimationFrame(tick);
       } else {
         beatsRef.current = [];
@@ -551,5 +614,16 @@ export function useRankClimb(rank, identity = null,
     };
   }, [target, identity, lane, order, replayKey, tuneOverride]);
 
-  return state && { ...state, climbing: frameRef.current != null };
+  // `atTarget` answers "is what you are looking at the rank you just handed
+  // me", and it is resolved HERE rather than inside the loop for one reason:
+  // the render between a new payload landing and the effect starting the climb
+  // still holds the previous frame's state, which was at ITS OWN target. Asked
+  // inside the loop the flag would be a stale true, and the banner would print
+  // the destination for one frame at full opacity -- measured 2026-08-01,
+  // "Capless 4 -> Waluigi 3 -> Capless 4" across two frames. `targetLevel` and
+  // `targetBar` are recomputed from the props on every render, so asking here
+  // compares the state against the payload of the render that is asking.
+  return state && { ...state, climbing: frameRef.current != null,
+    atTarget: state.level === targetLevel
+      && Math.abs(state.bar - targetBar) < 1e-9 };
 }

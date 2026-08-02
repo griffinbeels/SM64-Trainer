@@ -182,6 +182,12 @@ def main() -> None:
             p = ev.payload
             recon = "  [reconstructed: grab raced an IGT reset]" \
                 if p["igt_reconstructed"] else ""
+            if ev.type == "star_time_corrected":
+                # Usamune revised a number we already published (a subarea
+                # star); print it as the revision it is, not as a second grab.
+                print(f"  >> star_time_corrected: igt {p['igt']} "
+                      f"({p['igt_frames']}f, {p['igt_source']}){recon}")
+                continue
             print(f"  >> star_collected: {p['course_name']} / {p['star_name']}"
                   f"  igt {p['igt']} ({p['igt_frames']}f)"
                   f"  frame {ev.frame}{recon}")

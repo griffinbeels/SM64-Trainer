@@ -32,6 +32,10 @@ leaderboard accepts — see its docstring and detectors/star_grab.py.
 from collections import deque
 
 from sm64_events.core.snapshot import GameSnapshot
+# ONE definition of "the counter is back at zero", shared with the detector
+# that turns the same edge into an anchor — two thresholds would mean two
+# opinions about whether a run just restarted.
+from sm64_events.detectors.anchors import NEAR_ZERO_IGT
 
 
 class IgtClock:
@@ -39,13 +43,47 @@ class IgtClock:
     RESET_GRACE_FRAMES = 30    # a grab < 1 s after an IGT reset concluded the PRIOR attempt
     DISPLAY_TICK = 1           # counter path: Usamune's display is one tick ahead
     RESULT_FRESH_FRAMES = 15   # the result write lands within a few frames of the touch
+    # An area load and the counter zero it causes are not simultaneous to a
+    # 60 Hz poll of a 30 fps game: the area byte and the counter are separate
+    # reads in a twelve-read snapshot, and a cross-level warp is documented to
+    # move the area byte a whole poll after the level byte. Ten frames is far
+    # wider than either skew and far narrower than any gap between two real
+    # transitions, and the cost of pairing them WRONGLY is latency, never a
+    # wrong number — see counter_may_be_subarea_local.
+    AREA_LOAD_WINDOW = 10
 
     def __init__(self):
         # (global_timer, igt_overall, igt_result) samples
         self._history: deque[tuple[int, int, int]] = deque()
+        # (frame, level, area, overall) of the previous observation — the
+        # basis tracking below needs the level and area, which the sample
+        # history deliberately does not carry.
+        self._last: tuple[int, int, int, int] | None = None
+        self._area_edge_frame: int | None = None
+        self._zero_frame: int | None = None
+        self._subarea_local = False
 
     def empty(self) -> bool:
         return not self._history
+
+    def counter_may_be_subarea_local(self) -> bool:
+        """Is `USAMUNE_OVERALL`'s zero point an AREA load rather than the start
+        of this run — i.e. does it measure part of the star instead of all of
+        it? (star_grab.py reads this to decide whether it can trust its own
+        derivation enough to publish immediately.)
+
+        MAY, not IS. An L-reset taken inside a subarea also zeroes the counter
+        beside an area change, and no signal in a snapshot separates the two:
+        measured 2026-08-01 across his whole journal, of 477 in-course
+        area-load anchors only 6% carry a warp action and 6% a nearby
+        `warp_entered`, while 21% of the ones that are plainly resets do. So
+        this answers the SAFE half of the question — a false True costs the
+        settle wait on a grab that did not need it (~23% of his grabs, the
+        ones after a subarea reset), and a false False is caught by the
+        correction path. Both failure directions are recoverable, which is the
+        only reason a heuristic is allowed here at all; the ATTEMPT side of
+        the same ambiguity has no such luxury and is deliberately unfixed."""
+        return self._subarea_local
 
     def observe(self, snap: GameSnapshot) -> None:
         h = self._history
@@ -56,6 +94,35 @@ class IgtClock:
         cutoff = snap.global_timer - self.HISTORY_FRAMES
         while h and h[0][0] < cutoff:
             h.popleft()
+        self._track_basis(snap)
+
+    def _track_basis(self, snap: GameSnapshot) -> None:
+        """Remember WHY the counter last zeroed, so a reader can ask whether
+        its zero point is the start of the star or the start of a subarea."""
+        prev, self._last = self._last, (snap.global_timer, snap.curr_level,
+                                        snap.curr_area, snap.igt_overall)
+        if prev is None:
+            return
+        frame, level, area, overall = prev
+        if snap.curr_level != level:
+            # A level entry rebases the counter legitimately: it measures from
+            # the door, which IS the whole star. Clears the pairing so a
+            # previous level's area edge cannot reach across.
+            self._area_edge_frame = self._zero_frame = None
+            self._subarea_local = False
+            return
+        if snap.curr_area != area:
+            self._area_edge_frame = snap.global_timer
+            if (self._zero_frame is not None
+                    and snap.global_timer - self._zero_frame
+                    <= self.AREA_LOAD_WINDOW):
+                self._subarea_local = True   # the edge was seen after the zero
+        if snap.igt_overall < overall and snap.igt_overall <= NEAR_ZERO_IGT:
+            self._zero_frame = snap.global_timer
+            self._subarea_local = (
+                self._area_edge_frame is not None
+                and snap.global_timer - self._area_edge_frame
+                <= self.AREA_LOAD_WINDOW)
 
     def igt_at(self, touch_frame: int, curr: GameSnapshot) -> tuple[int, str]:
         """Usamune's number at a TOUCH — used by key.py (grand star) and
@@ -99,6 +166,24 @@ class IgtClock:
         if not self._result_written_at_or_after(xcam_frame, samples):
             return None
         return curr.igt_result
+
+    def result_writes_since(self, frame: int,
+                            curr: GameSnapshot) -> list[tuple[int, int]]:
+        """Every observed change of Usamune's result store at or after `frame`,
+        as (frame, value) — the write pattern itself rather than its outcome.
+
+        Usamune writes the store more than once per grab and the shape of that
+        burst is what decides how long an emit has to wait, so it is worth
+        having as data rather than as a remembered summary."""
+        samples = list(self._history)
+        samples.append((curr.global_timer, curr.igt_overall, curr.igt_result))
+        writes, previous = [], None
+        for sample_frame, _, result in samples:
+            if previous is not None and result != previous \
+                    and sample_frame >= frame:
+                writes.append((sample_frame, result))
+            previous = result
+        return writes
 
     def _reading(self, frame: int, curr: GameSnapshot, believe_result
                  ) -> tuple[int, str]:

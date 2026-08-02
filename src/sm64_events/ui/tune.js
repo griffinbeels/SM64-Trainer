@@ -50,7 +50,13 @@ function bannerFor(level, fill) {
   return {
     rank: tier, division, fill,
     next_tier: next && next.tier, next_division: next && next.division,
-    next_gap_cs: next ? 4 : null, mode: "best", basis: null,
+    // The gap SHRINKS as the bar fills, the way a real one does. A constant
+    // here made the demo's own next-step line the one thing on the page that
+    // could not change, so the sequential exchange it is supposed to be
+    // showing off -- old number out, new number in -- was invisible in the
+    // demo and only ever seen in the app (2026-08-01).
+    next_gap_cs: next ? Math.max(1, Math.round((1 - fill) * 50)) : null,
+    mode: "best", basis: null,
   };
 }
 
@@ -181,10 +187,12 @@ function Inspector() {
   const [status, setStatus] = useState(null);
 
   useEffect(() => { localStorage.setItem(STORE_KEY, encodeTuning(values)); }, [values]);
-  // The destination can never be at or below the start: a drop is not a climb,
-  // and the hook would simply snap.
+  // The destination can never be BELOW the start: a drop is not a climb, and
+  // the hook would simply snap. Equal is allowed and is a real, common state —
+  // a better time inside the rank you already hold, which moves the bar and
+  // nothing else.
   useEffect(() => {
-    if (destLevel <= startLevel) setDestLevel(Math.min(TOP_LEVEL, startLevel + 1));
+    if (destLevel < startLevel) setDestLevel(Math.min(TOP_LEVEL, startLevel));
   }, [startLevel, destLevel]);
 
   const changed = useMemo(() => changedFromDefault(values), [values]);
@@ -256,7 +264,15 @@ function Inspector() {
       <div class="tune-pickers">
         <${LevelPicker} label="Start" level=${startLevel}
           onChange=${(level) => setStartLevel(Math.min(level, TOP_LEVEL - 1))} />
-        <${LevelPicker} label="Destination" level=${destLevel} min=${startLevel + 1}
+        <!-- The floor is the START rank, not the one above it: a climb that gains
+             no rank at all -- just a better time inside the rank you are
+             already on -- is the most COMMON thing this component does, and
+             for a while it was the one case the demo could not play. It is
+             also the case that shipped a hard cut, because its plan is a
+             single bar step with no approach and no arrival (user,
+             2026-08-01: "the fade is a cut when I don't actually rank up").
+             WYSIWYG means the demo can reach every state the app can. -->
+        <${LevelPicker} label="Destination" level=${destLevel} min=${startLevel}
           onChange=${setDestLevel} />
       </div>
       <div class="tune-pickers" style="margin-top:8px">

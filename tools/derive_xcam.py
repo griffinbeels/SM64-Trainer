@@ -339,6 +339,12 @@ class PendingGrab:
         # under STOP=XCAM are in the past. Watching only forward from the event
         # would see no write at all and silently score nothing.
         self.samples: list[tuple[int, int, int, int]] = list(seed or [])
+        # Usamune's later revision of this grab's number, if one is emitted
+        # (star_grab.py publishes at the x-cam and corrects a subarea star
+        # about a second later). What we SHIP is the corrected value, so that
+        # is what has to be scored — grading the first publish would fail this
+        # gate on exactly the stars the correction exists to get right.
+        self.corrected: tuple[int, str] | None = None
 
     def observe(self, snap) -> None:
         # ONE sample per game frame. The poll runs at 60 Hz over a 30 fps game,
@@ -355,10 +361,13 @@ class PendingGrab:
 
     def finish(self) -> tuple[str, dict[str, int]]:
         payload = self.event.payload
+        shipped, source = payload["igt_frames"], payload["igt_source"]
+        if self.corrected is not None:
+            shipped, source = self.corrected
+            source += " (corrected)"
         return grab_report(self.index, payload["course_name"],
-                           payload["star_name"], payload["igt_frames"],
-                           payload["igt_source"], self.touch_frame,
-                           self.samples)
+                           payload["star_name"], shipped, source,
+                           self.touch_frame, self.samples)
 
 
 def main() -> None:
@@ -391,8 +400,17 @@ def main() -> None:
                                curr.igt_overall, curr.igt_result))
             if prev is not None:
                 for event in detector.process(prev, curr):
-                    grabs += 1
                     touch = event.payload["grab_frame"]
+                    if event.type == "star_time_corrected":
+                        # Not a second grab: Usamune revised the one still
+                        # open. Matched on the touch frame, the same identity
+                        # the projector pairs on.
+                        for grab in pending:
+                            if grab.touch_frame == touch:
+                                grab.corrected = (event.payload["igt_frames"],
+                                                  event.payload["igt_source"])
+                        continue
+                    grabs += 1
                     pending.append(PendingGrab(
                         grabs, event, touch,
                         [s for s in recent if s[FRAME] >= touch]))

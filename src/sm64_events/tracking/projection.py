@@ -197,6 +197,20 @@ Caveats (hard-won — keep these current):
     move is suppressed. See feed()’s own comment for the full reasoning and
     why a genuinely unrelated grab can never trigger this (the matcher’s
     own major-action cancel already disarms a def that doesn’t expect it).
+
+19. Late star times (2026-08-01, live report "the tool feels laggy"): a
+    star_collected is journaled as soon as Usamune answers rather than after
+    its whole settle window, so the row appears while the dance is still
+    playing — and a `star_time_corrected` follows on the rare star (a subarea
+    one) whose later whole-star write changes the number.
+    time_corrections() is the pre-pass, keyed by the GRAB's journal id, and
+    feed() folds the revision into that grab's own payload before dispatch.
+    Everything downstream — the star attempt, a segment closed by the same
+    grab, the 100-coin reattribution — therefore reads one number and never
+    learns a correction happened, and re-projecting is the only thing that
+    has to run for a corrected row to be right (tracking/service.py does
+    exactly that when one is journaled). The event is inert in _dispatch: it
+    opens and closes nothing, like attempt_strat_set.
 """
 from dataclasses import dataclass, replace
 
@@ -370,6 +384,55 @@ def strat_overrides(events) -> dict[int, str | None]:
     return out
 
 
+CORRECTED_TIME_KEYS = ("igt_frames", "igt", "igt_source", "igt_reconstructed")
+
+
+def time_corrections(events) -> dict[int, dict]:
+    """journal id of a star_collected -> the time fields Usamune later revised.
+
+    The third compensating-event pre-pass, beside cleared_ids() and
+    strat_overrides(), and the one that lets a grab be JOURNALED before
+    Usamune has finished answering (detectors/star_grab.py: the row appears
+    within ~400 ms instead of 1.5 s, and only a subarea star's late whole-star
+    write ever changes it). Folding the correction back into the grab's own
+    payload — rather than patching the attempt row — is what keeps every
+    downstream reader unaware that a correction exists at all: the star
+    attempt, a segment closed by that same grab, and the 100-coin
+    reattribution all read `ev.payload["igt_frames"]` and all get the final
+    number, with no second place that has to remember to apply it.
+
+    Paired with the star_collected BEFORE it, because at most one grab is
+    correctable at a time (star_grab.py::_detect ends the watch on the next
+    grab) — and then CHECKED against that grab's identity, so a journal where
+    the pairing is not what the detector meant drops the correction instead of
+    moving another star's time."""
+    out: dict[int, dict] = {}
+    last_grab = None
+    for ev in events:
+        if ev.type == "star_collected":
+            last_grab = ev
+        elif ev.type == "star_time_corrected" and last_grab is not None:
+            if all(ev.payload.get(k) == last_grab.payload.get(k)
+                   for k in ("course_id", "star_id", "grab_frame")):
+                out[last_grab.id] = {k: ev.payload[k]
+                                     for k in CORRECTED_TIME_KEYS
+                                     if k in ev.payload}
+    return out
+
+
+class _CorrectedRow:
+    """One journal row seen with a revised payload. The single seam a time
+    correction needs: everything downstream reads the row exactly as it always
+    has, and reads the corrected number."""
+    __slots__ = ("_row", "payload")
+
+    def __init__(self, row, payload):
+        self._row, self.payload = row, payload
+
+    def __getattr__(self, name):
+        return getattr(self._row, name)
+
+
 class Projector:
     """Sequential pass; feed() returns attempts CLOSED by that event."""
 
@@ -378,12 +441,19 @@ class Projector:
                  time_filters: dict | None = None,
                  touched: set[int] | None = None,
                  strat_overrides: dict[int, str | None] | None = None,
-                 origin_overrides: dict | None = None):
+                 origin_overrides: dict | None = None,
+                 time_corrections: dict[int, dict] | None = None):
         self._cleared = cleared if cleared is not None else {}
         # attempt_id -> reclassified strat (caveat 16); shadows the strat
         # remembered at close time.
         self._strat_overrides = (strat_overrides
                                  if strat_overrides is not None else {})
+        # star_collected journal id -> Usamune's revised time (caveat 19).
+        # Empty while a journal is being fed LIVE, since the correction is
+        # journaled after the grab it revises — the service re-projects on
+        # one, which is where this dict comes from.
+        self._time_corrections = (time_corrections
+                                  if time_corrections is not None else {})
         # ("star", course_id, star_id) | ("segment", segment_id) | None
         self.target: tuple | None = None
         # (course_id, star_id) of the active star most recently retired BY
@@ -586,6 +656,13 @@ class Projector:
         return self._runs.active_run_view()
 
     def feed(self, ev) -> list[Attempt]:
+        # Usamune's late correction, folded into the grab it revises before
+        # anyone reads it (caveat 19). Here rather than at the three payload
+        # readers downstream, so no reader can be the one that forgets.
+        if ev.type == "star_collected":
+            fix = self._time_corrections.get(ev.id)
+            if fix:
+                ev = _CorrectedRow(ev, {**ev.payload, **fix})
         prev_level = self._level  # _dispatch may move it (level_changed)
         # Snapshotted BEFORE _dispatch (which runs _close_by_grab for a
         # star_collected event) so the grab-steals-the-target restore below
@@ -764,6 +841,23 @@ class Projector:
 
     def _dispatch(self, ev) -> list[Attempt]:
         if ev.type in ANCHOR_EVENT_TYPES:
+            if ev.payload.get("area_load"):
+                # Going DEEPER into the level is not a retry: "if we enter a
+                # subarea within a stage, we fundamentally DID NOT RESET…
+                # showing a reset there is an error" (2026-08-01). Usamune
+                # zeroes its counter on the load exactly as it does on an
+                # L-reset, which is why this arrives as an anchor at all;
+                # detectors/anchors.py::_is_area_load carries the measurement
+                # that tells the two apart. Closes NOTHING, so the run
+                # continues across the door and its rta spans the whole star.
+                # Still OPENS one if nothing is open — walking into a course
+                # and straight into its subarea has to start an attempt
+                # somewhere, and this is the last boundary before the grab.
+                if self._open is None:
+                    self._open = ev
+                    self._open_acted = False
+                    self._open_castle = self._level in CASTLE_LEVELS
+                return []
             closed = self._close_by_reset(ev)
             self._open = ev
             self._open_acted = False
@@ -1161,7 +1255,8 @@ def replay(events, segments=None, time_filters=None,
     proj = Projector(cleared_ids(events), segments=segments,
                      time_filters=time_filters, touched=touched_ids(events),
                      strat_overrides=strat_overrides(events),
-                     origin_overrides=origin_overrides)
+                     origin_overrides=origin_overrides,
+                     time_corrections=time_corrections(events))
     attempts: list[Attempt] = []
     for ev in events:
         if ev.type == "data_wiped":

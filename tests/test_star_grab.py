@@ -56,7 +56,9 @@ def test_edge_into_star_dance_emits_identified_event():
     ev = events[0]
     assert ev.type == "star_collected"
     assert ev.frame == 1000  # back-computed: 1002 - 2
-    assert ev.payload == {
+    # Subset, not exact equality: `published_after`/`result_writes` are
+    # observational and belong to nobody's contract (see _PendingGrab).
+    assert ev.payload | {
         "course_id": 1,
         "course_name": "Bob-omb Battlefield",
         "star_id": 2,  # game stores 1-based (3); API is 0-based
@@ -69,7 +71,7 @@ def test_edge_into_star_dance_emits_identified_event():
         "igt_timed_at": "xcam",
         "grab_frame": 1000,
         "num_stars": 6,  # curr.num_stars at grab time
-    }
+    } == ev.payload
 
 
 def test_multi_area_star_uses_usamune_result():
@@ -434,9 +436,12 @@ def test_the_xcam_frame_can_never_precede_the_grab_it_belongs_to():
 
 
 def subarea_snaps(*, counter_at_grab=68, fall_frames=3, usamune=574,
-                  write_at=30, stale=452):
+                  write_at=30, stale=452, first_write=None):
     """A multi-area star: the counter is subarea-local, so Usamune's late write
-    is the ONLY source that knows the whole star's time."""
+    is the ONLY source that knows the whole star's time.
+
+    `first_write` is an earlier (offset, value) pair — Usamune writes 2-3 times
+    per grab and the early ones echo our own counter."""
     snaps = [snap(global_timer=GRAB_FRAME - 1,
                   igt_overall=counter_at_grab - 1, igt_result=stale)]
     for offset in range(fall_frames):
@@ -447,28 +452,94 @@ def subarea_snaps(*, counter_at_grab=68, fall_frames=3, usamune=574,
                           mario_action_timer=offset))
     for offset in range(fall_frames, fall_frames
                         + StarGrabDetector.RESULT_SETTLE_FRAMES + 2):
+        if offset >= write_at:
+            result = usamune
+        elif first_write is not None and offset >= first_write[0]:
+            result = first_write[1]
+        else:
+            result = stale
         snaps.append(snap(global_timer=GRAB_FRAME + offset,
                           igt_overall=counter_at_grab + offset,
-                          igt_result=usamune if offset >= write_at else stale,
+                          igt_result=result,
                           mario_action=A.ACT_STAR_DANCE_EXIT,
                           mario_action_timer=offset - fall_frames))
     return snaps
 
 
-def test_a_multi_area_star_takes_usamunes_number_not_our_counter():
-    events = run_pairs(StarGrabDetector(), subarea_snaps(), settle=False)
-    assert len(events) == 1
-    ev = events[0]
-    assert ev.payload["igt_frames"] == 574        # the whole star
-    assert ev.payload["igt_frames"] != 72         # time inside the pyramid
-    assert ev.payload["igt_source"] == "result"
-    assert ev.payload["igt_timed_at"] == "xcam"
-    assert ev.frame == GRAB_FRAME + 3             # still OUR x-cam moment
+def emitted_at(snaps, detector=None):
+    """(the poll's own frame, the event) — so a test can assert WHEN a row
+    reached the world, which the event's own `frame` field (the x-cam) cannot
+    say."""
+    detector = detector or StarGrabDetector()
+    return [(curr.global_timer, ev)
+            for prev, curr in zip(snaps, snaps[1:])
+            for ev in detector.process(prev, curr)]
 
 
-def test_the_write_is_waited_for_rather_than_missed_by_a_frame():
-    """It lands one frame after the dance on an ordinary star and 27-28 after
-    it on a multi-area one. Emitting at the x-cam saw neither."""
+XCAM = GRAB_FRAME + 3   # subarea_snaps lands three frames after the touch
+
+
+def test_a_multi_area_star_publishes_fast_then_takes_usamunes_number():
+    # The row goes out on our own subarea-local counter and is CORRECTED when
+    # Usamune's whole-star write lands 30 frames later. He sees the grab
+    # acknowledged immediately either way; only this rare star's number moves.
+    (published_at, row), (corrected_at, fix) = emitted_at(subarea_snaps())
+    assert row.type == "star_collected"
+    assert row.frame == XCAM                      # still OUR x-cam moment
+    assert row.payload["igt_frames"] == 72        # time inside the pyramid
+    assert row.payload["igt_timed_at"] == "xcam"
+    assert published_at - XCAM <= StarGrabDetector.PUBLISH_WAIT_FRAMES
+    assert fix.type == "star_time_corrected"
+    assert fix.payload["igt_frames"] == 574       # the whole star
+    assert fix.payload["igt_source"] == "result"
+    assert fix.frame == XCAM                      # names the row it revises
+    assert (fix.payload["course_id"], fix.payload["star_id"],
+            fix.payload["grab_frame"]) == (row.payload["course_id"],
+                                           row.payload["star_id"], GRAB_FRAME)
+    assert corrected_at - XCAM == StarGrabDetector.RESULT_SETTLE_FRAMES
+
+
+def test_a_star_usamune_agrees_about_is_never_corrected():
+    # The ordinary case (nine of his eleven live grabs): the write lands
+    # within a blink and says what we already published. One event, no revision
+    # — a correction on every star would be alarm fatigue with extra steps.
+    agreed = subarea_snaps(usamune=72, write_at=4)
+    [(_, row)] = emitted_at(agreed)
+    assert row.type == "star_collected"
+    assert row.payload["igt_frames"] == 72
+
+
+def test_the_grab_time_write_does_not_publish_but_the_xcam_one_does():
+    # The real burst, WF "Shoot into the Wild Blue" (live 2026-08-01): +1=328
+    # is the GRAB-time value and +3=330 is the answer. Our own derivation of
+    # the x-cam says 72 here, so the first write disagrees and is waited
+    # through, and the second AGREES — which is the moment nothing more can be
+    # learned, and the moment the row goes out. Leaving on the mere existence
+    # of a write is what published 328 and then corrected it on screen.
+    burst = subarea_snaps(usamune=72, write_at=6, first_write=(4, 70))
+    [(published_at, row)] = emitted_at(burst)
+    assert row.type == "star_collected"
+    assert row.payload["igt_frames"] == 72
+    assert published_at == XCAM + 3        # the poll that saw the agreement
+    assert published_at < XCAM + StarGrabDetector.PUBLISH_WAIT_FRAMES
+    # ...and the burst is journaled, so the next round tunes this from data
+    assert row.payload["result_writes"] == [(1, 70), (3, 72)]
+
+
+def test_a_reset_after_publishing_corrects_nothing():
+    # The row is already his; whatever the store says after a reset describes
+    # another context (and on a course exit it is zeroed outright).
+    snaps = subarea_snaps()[:20]                  # published, still watching
+    snaps.append(replace(snaps[-1], global_timer=snaps[-1].global_timer + 1,
+                         igt_overall=0, igt_result=574))
+    types = [ev.type for _, ev in emitted_at(snaps)]
+    assert types == ["star_collected"]
+
+
+def test_the_first_write_is_waited_for_rather_than_missed_by_a_frame():
+    """It lands within nine frames of the dance on every measured grab, so the
+    publish holds that long for it — emitting ON the x-cam took our counter
+    every time and made a correction the rule rather than the exception."""
     barely = subarea_snaps()[:6]  # a few frames past the landing, no write yet
     assert run_pairs(StarGrabDetector(), barely, settle=False) == []
 

@@ -312,7 +312,15 @@ export function RankUpCelebration(props) {
   const turn = useMareloTurn(props.marelo);
 
   if (!props.celebration) return null;
-  if (!celebrationsEnabled()) {
+  // Acked WITHOUT being shown, so the watermark still advances and the same
+  // rank-up cannot come back on the next load either. Two reasons to do that,
+  // and they are the same reason: nobody asked for it right now.
+  //   * celebrations are switched off in the settings drawer;
+  //   * it was already pending when this client arrived -- a rank-up earned
+  //     before the app was closed, or one whose ack never landed. "This should
+  //     NEVER be triggered outside of updating a PB… it feels like a bug
+  //     (because I didn't trigger it)" (user, 2026-08-01).
+  if (!celebrationsEnabled() || turn.unprompted) {
     ackScope(props.scopeId, props.celebration.key, props.onDone);
     return null;
   }
