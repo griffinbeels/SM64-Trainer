@@ -323,3 +323,38 @@ def test_just_completed_star_is_fresh_success_only():
                             timeout=30)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == [True, False, False, False]
+
+
+def test_the_segment_he_clicked_leads_the_objective_card():
+    """Live report 2026-08-02, four screenshots: he tapped `Bowser 2 →
+    Upstairs`, the CELL lit up, and the card below kept reading `Bowser 2 →
+    BitS`. Same for WDW and DDD. *"once we select something, it should always
+    appear in that display below, and continue to be displayed while it's
+    still valid and selected."*
+
+    It became reachable the moment "no active route" stopped meaning "no
+    filter" (`segments.py::_route_allows`): all FOUR `Bowser 2 → X` movements
+    arm on the same event now, `frozen.armedOrder` cannot order things that
+    arrived together, and `armedPins[0]` was whichever landed first. Two
+    surfaces answering one question two ways — the class the single-source
+    rule in CLAUDE.md exists for, arriving as an ORDERING rather than a
+    derivation.
+
+    Both halves are pinned, because sorting armedPins alone only covers a pick
+    that happens to be armed as well:
+      1. within armedPins, the targeted section sorts to the front;
+      2. a targeted section that is NOT armed still leads.
+    Source-scan (practice.js is not import-free); the behaviour is verified by
+    rendering."""
+    body = (UI / "components" / "practice.js").read_text(encoding="utf-8")
+    assert re.search(
+        r"isTargetedSeg = \(sec\) => sec != null && tgt\.kind === \"segment\"\s*"
+        r"&& tgt\.segment_id === sec\.segment_id", body), \
+        "no single reader for 'is this section the target'"
+    assert re.search(
+        r"\.sort\(\(a, b\) => \(isTargetedSeg\(b\) \? 1 : 0\)\s*"
+        r"- \(isTargetedSeg\(a\) \? 1 : 0\)\)", body), \
+        "armedPins no longer promotes the targeted segment"
+    assert re.search(r"pickedSeg = segs\.find\(isTargetedSeg\)", body) and \
+        re.search(r"\[pickedSeg, \.\.\.armedPins\]", body), \
+        "a targeted-but-unarmed segment no longer leads"

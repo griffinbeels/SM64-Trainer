@@ -1285,10 +1285,27 @@ export function Practice({ t, openCompare }) {
   const isAmbientlyArmed = (sec) => sec != null && sec.arms_ambiently
     && !(tgt.kind === "segment" && tgt.segment_id === sec.segment_id)
     && !justCompletedSegment(v, freshIds, sec.segment_id);
+  // WHAT HE CLICKED LEADS. Same ruling as the three target thieves, applied
+  // to the ORDER rather than to the write (live report 2026-08-02): "once we
+  // select something, it should always appear in that display below, and
+  // continue to be displayed while it's still valid and selected."
+  //
+  // This became reachable the moment "no active route" stopped meaning "no
+  // filter" (segments.py::_route_allows): all FOUR `Bowser 2 → X` movements
+  // now arm on the same event, `frozen.armedOrder` has no way to order things
+  // that arrived together, and `armedPins[0]` was whichever landed first —
+  // so tapping Upstairs lit that CELL while the card below kept reading
+  // "Bowser 2 → BitS". Two surfaces, one question, two answers.
+  //
+  // `sort` is stable, so this promotes the target and leaves every other pin
+  // in its existing most-recently-armed order.
+  const isTargetedSeg = (sec) => sec != null && tgt.kind === "segment"
+    && tgt.segment_id === sec.segment_id;
   const armedPins = [...frozen.armedOrder].reverse()
     .map((id) => segs.find((s) => s.segment_id === id))
     .filter(Boolean)
-    .filter((sec) => !isAmbientlyArmed(sec));
+    .filter((sec) => !isAmbientlyArmed(sec))
+    .sort((a, b) => (isTargetedSeg(b) ? 1 : 0) - (isTargetedSeg(a) ? 1 : 0));
   const stickyPin = frozen.lastPinnedSeg != null
     ? segs.find((s) => s.segment_id === frozen.lastPinnedSeg)
     : undefined;
@@ -1308,7 +1325,14 @@ export function Practice({ t, openCompare }) {
   // A pin that has genuinely disarmed carries `armed_detail: null` and falls
   // straight through to the plain `here()` course check, so that fix stays
   // intact — this only widens the exemption to a pin that is STILL running.
+  // The other half of the same ruling: an explicitly picked segment leads even
+  // when it is NOT armed and something else is. Sorting armedPins alone would
+  // only cover the case where his pick happens to be running too.
+  const pickedSeg = segs.find(isTargetedSeg);
   const pinnedSegs = !inContext || starActive ? []
+    : pickedSeg && !armedPins.includes(pickedSeg)
+        && (pickedSeg.armed_detail || here(pickedSeg))
+      ? [pickedSeg, ...armedPins]
     : armedPins.length ? armedPins
     : stickyPin && !isAmbientlyArmed(stickyPin)
       && (stickyPin.armed_detail || here(stickyPin)) ? [stickyPin]
