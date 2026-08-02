@@ -148,11 +148,14 @@ read one number and none of them knows a correction exists), and
 already illegal) the counter derivation stands in and `igt_source` reads
 `"counter"` instead of `"result"`, which IS the legality signal on a star row;
 that case keeps the subarea error and cannot be fixed from a counter that
-restarted. NOT built, and named so it is not re-derived by guess: carrying our
-own base across an area warp would remove the wait and work under illegal
-settings too, but an L-reset zeroes the counter the same way an area warp does
-and telling them apart inside the clock is how a wrong time gets recorded
-silently. **(5) The 45-frame wait is BRACKETED at both ends by his second
+restarted. **Carrying our own base across the warp WAS the fix, and this file
+said it could not be done for a day** — "an L-reset zeroes the counter the same
+way an area warp does and telling them apart inside the clock is how a wrong
+time gets recorded silently". The premise was already false when it was
+written: anchors.py had measured the discriminator (destination area) the day
+before, for the attempt side of the identical ambiguity. A limit asserted from
+one file's own vantage point survives exactly until someone reads the file next
+door. See the carry, below. **(5) The 45-frame wait is BRACKETED at both ends by his second
 subarea run (five grabs, 2026-08-01), and the ceiling is the surprising
 half.** Usamune never writes the answer once — every grab took 2-3 writes, the
 early ones echoing our counter (write = that sample's counter + 1) at the grab
