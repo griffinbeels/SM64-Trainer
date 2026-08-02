@@ -104,7 +104,23 @@ play instead of from argument. And when
 `IgtClock.counter_may_be_subarea_local()` says the counter's zero point may be
 an AREA load, the publish waits the FULL window instead: our number there is
 the time since the pyramid door, which is exactly the impossible PB he saw
-flash. So the correction is a backstop now, not a routine event. The
+flash. **ARRIVING in a course is not that, and read as if it were until
+2026-08-02** — the level byte changes on one frame but the area byte SETTLES
+afterwards (3->2->1), so the load's own area edges land beside the load's own
+counter zero long after the level edge that explains them, and the flag
+re-armed on the way in. Live report, and it is the cleanest bug report in this
+file: *"the FIRST star that I grab after entering a course has an
+exceptionally high amount of delay… BUT THEN ALL THE OTHER STARS ARE ACTUALLY
+PERFECTLY TIMED"*, plus his own probe — enter, reset immediately, grab, and it
+was instant, because an L-reset zeroes the counter with no area edge beside
+it. His journal scored it exactly: `published_after` was **45 frames on the
+first grab after every course entry and 1 frame on every other grab**, binary,
+no middle. `LEVEL_LOAD_TAIL_FRAMES` (60) is the fix and the window is
+measured, not chosen: across 911 level entries the load's last area edge lands
+at **44-47 frames** every time and the earliest genuine warp deeper into a
+level appears at 60. Six of the nine slow grabs in that session were course
+entries and are now fast; the other three were real subarea stars and are
+still deliberately slow. So the correction is a backstop now, not a routine event. The
 correction is a compensating event like `attempt_cleared`:
 `projection.time_corrections` folds it into the GRAB's own payload (so the star
 attempt, a segment closed by the same grab, and the 100-coin reattribution all

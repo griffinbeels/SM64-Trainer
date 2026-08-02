@@ -51,6 +51,18 @@ class IgtClock:
     # transitions, and the cost of pairing them WRONGLY is latency, never a
     # wrong number — see counter_may_be_subarea_local.
     AREA_LOAD_WINDOW = 10
+    # How long a LEVEL load keeps moving the area byte. Arriving in a course
+    # is not a warp deeper into one, but the two are indistinguishable frame
+    # by frame: the level byte changes once and the area byte then SETTLES
+    # (entering SSL walks it 3->2->1 over ~47 frames), so the load's own area
+    # edges land long after the level edge that explains them, and the counter
+    # zeroes beside one of them. Measured across 911 level entries in his
+    # journal: every edge belonging to a load lands within 59 frames — they
+    # cluster hard at 44-49 — and the earliest edge that is a genuine warp
+    # deeper into the level appears at 60. The cutoff sits in that gap, and it
+    # errs the recoverable way: too NARROW costs the settle wait on a grab
+    # that did not need it, too wide would publish a subarea-local number.
+    LEVEL_LOAD_TAIL_FRAMES = 60
 
     def __init__(self):
         # (global_timer, igt_overall, igt_result) samples
@@ -61,6 +73,7 @@ class IgtClock:
         self._last: tuple[int, int, int, int] | None = None
         self._area_edge_frame: int | None = None
         self._zero_frame: int | None = None
+        self._level_edge_frame: int | None = None
         self._subarea_local = False
 
     def empty(self) -> bool:
@@ -96,6 +109,17 @@ class IgtClock:
             h.popleft()
         self._track_basis(snap)
 
+    def _inside_a_level_load(self, frame: int) -> bool:
+        """Is this frame still part of the last level entry's own load?
+
+        The one signal that separates arriving in a course from warping deeper
+        inside it, and it is a hard one rather than a heuristic: a level entry
+        moves the LEVEL byte, and a pyramid door never does. Everything the
+        arrival then does to the area byte belongs to it."""
+        return (self._level_edge_frame is not None
+                and frame - self._level_edge_frame
+                <= self.LEVEL_LOAD_TAIL_FRAMES)
+
     def _track_basis(self, snap: GameSnapshot) -> None:
         """Remember WHY the counter last zeroed, so a reader can ask whether
         its zero point is the start of the star or the start of a subarea."""
@@ -109,9 +133,16 @@ class IgtClock:
             # the door, which IS the whole star. Clears the pairing so a
             # previous level's area edge cannot reach across.
             self._area_edge_frame = self._zero_frame = None
+            self._level_edge_frame = snap.global_timer
             self._subarea_local = False
             return
-        if snap.curr_area != area:
+        if snap.curr_area != area and not self._inside_a_level_load(
+                snap.global_timer):
+            # An edge the level load itself explains is skipped rather than
+            # remembered, so the zero below has nothing to pair with and the
+            # arrival reads as what it is. Deliberately not an early return:
+            # the counter can zero on the very frame the area byte moves, and
+            # `_zero_frame` has to be recorded either way.
             self._area_edge_frame = snap.global_timer
             if (self._zero_frame is not None
                     and snap.global_timer - self._zero_frame
