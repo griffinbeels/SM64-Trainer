@@ -398,6 +398,91 @@ def test_the_practice_log_offers_show_more_past_its_own_page_cap(page):
         "the footer should disappear once every section is shown")
 
 
+def test_a_manual_pick_moves_the_analysis_drawer_between_kinds(page):
+    """The headline gesture of this branch, driven rather than read off
+    source. A prior reviewer proved a single shared call site wrapped in a
+    `!seg &&` guard silently drops a whole surface for one kind while every
+    count-based test in this file stays green — and this branch widened the
+    hole it lives in: EntityAnalysis, EntityDrawer, StatChipsRow and
+    StandardsPanel are now four page-level components riding ONE `sec`
+    conditional apiece instead of two hand-written copies each, so one
+    kind-gated guard around any of the four now silences it for BOTH kinds
+    at once. None of the element-count assertions elsewhere in this file
+    would catch that — they only ever ask "does N of this selector exist",
+    never "did the content actually follow the pick".
+
+    Clicks the real gesture. The armed segment's log card is found by its
+    `.seg-waiting` row, not by name — `ui_fixture.FIXTURE_SEGMENT` is not the
+    active target in this fixture (`Practice()` suppresses its pin while a
+    star target is active), so clicking it is a genuine manual browse pick
+    AWAY from the active entity, exactly `ui/focustarget.js`'s spring-loaded
+    mode. A star card is found by its `.log-card-context` NOT reading the
+    literal "Segment" — `displayName`'s own star/segment branch (entitysection.js),
+    not a hardcoded fixture name, so this keeps working if the seeded star or
+    segment ever changes.
+    """
+    def subject():
+        return page.evaluate(
+            "const el = document.querySelector('.analysis-subject');"
+            "return el ? el.textContent : null")
+
+    def four_surfaces_render():
+        return (count(page, ".analysis-card") >= 1
+                and count(page, ".detail-drawer") >= 1
+                and count(page, ".detail-drawer .stat-chips") >= 1
+                and count(page, ".detail-drawer .stdpanel") >= 1)
+
+    clicked = page.evaluate("""
+        (() => {
+          const card = document.querySelector('.log-card:has(.seg-waiting)');
+          if (!card) return 'no armed-segment log card found';
+          const btn = card.querySelector('.log-card-select');
+          if (!btn) return 'the armed-segment card has no select button';
+          btn.click();
+          return 'clicked';
+        })()
+    """)
+    assert clicked == "clicked", clicked
+    page.wait_ms(400)
+    segment_subject = subject()
+    assert segment_subject, (
+        "no .analysis-subject text after focusing the segment — the pick "
+        "may not have reached ui/focustarget.js's manual snapshot at all")
+    assert four_surfaces_render(), (
+        "the analysis card, the detail drawer, the stat chips or the "
+        "standards panel is missing while a SEGMENT is focused")
+
+    clicked = page.evaluate("""
+        (() => {
+          const cards = Array.from(
+            document.querySelectorAll('.log-card:not(.is-unassigned)'));
+          const starCard = cards.find((c) => {
+            const ctx = c.querySelector('.log-card-context');
+            return ctx && ctx.textContent.trim() !== 'Segment';
+          });
+          if (!starCard) return 'no star log card found';
+          const btn = starCard.querySelector('.log-card-select');
+          if (!btn) return 'the star card has no select button';
+          btn.click();
+          return 'clicked';
+        })()
+    """)
+    assert clicked == "clicked", clicked
+    page.wait_ms(400)
+    star_subject = subject()
+    assert star_subject, (
+        "no .analysis-subject text after focusing a star")
+    assert star_subject != segment_subject, (
+        f"the analysis subject reads {star_subject!r} both before and "
+        "after clicking a different kind of card — the click likely never "
+        "reached focustarget.js's manual pick")
+    assert four_surfaces_render(), (
+        "the analysis card, the detail drawer, the stat chips or the "
+        "standards panel is missing while a STAR is focused — exactly the "
+        "shape a kind-gated `!seg &&` guard around the shared call site "
+        "would produce")
+
+
 # --- this branch's own surfaces (spec 2026-07-28-multi-step-segments) ------
 # Added 2026-07-29: a FOURTH instance of this file's own lesson. Every story
 # above is Practice-page state inherited from main; nothing here had ever put
