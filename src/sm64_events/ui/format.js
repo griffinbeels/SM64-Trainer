@@ -31,10 +31,25 @@ export function fmtIgtShort(frames) {
 // would move a cutoff. It formats from centiseconds directly and wears the
 // same shape, and tests/test_ui_time_format.py pins the two against each
 // other on every frame-exact value so the shapes cannot drift apart.
-export function fmtSeconds(seconds) {
+export function splitSeconds(seconds) {
   const cs = Math.round(seconds * 100);
-  const m = Math.floor(cs / 6000), s = Math.floor((cs % 6000) / 100),
-        c = cs % 100;
+  return { minutes: Math.floor(cs / 6000),
+           seconds: Math.floor((cs % 6000) / 100),
+           centis: cs % 100 };
+}
+
+// The inverse, for the three-box editor. Times are ENTERED the way people say
+// them — "one twenty-one thirty-two", not 81.32 — so the fields are the parts
+// and this is the only place they are put back together (user, 2026-08-03:
+// "our data entry system should match how humans actually communicate their
+// times"). Seconds stay the STORED unit; nothing downstream changes.
+export function joinTime(minutes, seconds, centis) {
+  return ((Number(minutes) || 0) * 60 + (Number(seconds) || 0))
+    + (Number(centis) || 0) / 100;
+}
+
+export function fmtSeconds(seconds) {
+  const { minutes, seconds: secs, centis } = splitSeconds(seconds);
   return dropEmptyMinutes(
-    `${m}'${String(s).padStart(2, "0")}"${String(c).padStart(2, "0")}`);
+    `${minutes}'${String(secs).padStart(2, "0")}"${String(centis).padStart(2, "0")}`);
 }

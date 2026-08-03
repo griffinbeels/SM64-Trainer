@@ -109,3 +109,57 @@ def test_a_published_cutoff_is_never_moved_by_being_displayed():
         total = (int(minutes) * 60 if minutes else 0) + int(secs) + int(cents) / 100
         assert abs(total - seconds) < 1e-9, (seconds, text)
     assert len(values) > 1000, f"only {len(values)} cutoffs checked"
+
+
+# ---- the three-box editor's arithmetic ----
+
+def _node_fields(expression: str):
+    script = (f"import {{ splitSeconds, joinTime, fmtSeconds }} "
+              f"from {FORMAT_JS.as_uri()!r};\n"
+              f"console.log(JSON.stringify({expression}));")
+    out = subprocess.run(["node", "--input-type=module", "-e", script],
+                         capture_output=True, text=True, check=True)
+    return json.loads(out.stdout)
+
+
+def test_the_boxes_round_trip_every_seeded_cutoff():
+    """What is split into three boxes and joined back must be the same time.
+    Run over the whole bundled seed rather than samples: a cutoff that changes
+    by a hundredth because it was EDITED and re-saved is a community standard
+    silently rewritten, and nothing downstream would flag it."""
+    import json as _json
+
+    seed = _json.loads(
+        (REPO / "src" / "sm64_events" / "data" / "rank_standards.seed.json")
+        .read_text(encoding="utf-8"))
+    values = sorted({round(v, 2)
+                     for entity in seed["entities"].values()
+                     for ladder in entity.get("strategies", {}).values()
+                     for v in ladder.values()})
+    back = _node_fields(
+        f"{values}.map((v) => {{ const p = splitSeconds(v);"
+        " return joinTime(p.minutes, p.seconds, p.centis); })")
+    for original, restored in zip(values, back):
+        assert abs(original - restored) < 1e-9, (original, restored)
+
+
+def test_the_boxes_hold_exactly_what_the_cell_prints():
+    """The editor and the display split a time at the same boundaries, because
+    the formatter is written in terms of the same split — so what you see in
+    the cell is what you find in the boxes."""
+    cases = [102.20, 81.32, 23.0, 12.93, 0.07, 60.0, 119.99]
+    parts = _node_fields(f"{cases}.map(splitSeconds)")
+    printed = _node_fields(f"{cases}.map(fmtSeconds)")
+    for value, part, text in zip(cases, parts, printed):
+        expected = (f"{part['seconds']:02d}\"{part['centis']:02d}"
+                    if part["minutes"] == 0
+                    else f"{part['minutes']}'{part['seconds']:02d}"
+                         f"\"{part['centis']:02d}")
+        assert text == expected, (value, part, text)
+
+
+def test_a_blank_minutes_box_is_zero_not_an_error():
+    """Under a minute the field is left empty, which must read as 0 — the
+    common case is typing only seconds and centiseconds."""
+    assert _node_fields('[joinTime("", "23", "00"), joinTime("", "", ""),'
+                        ' joinTime("1", "21", "32")]') == [23, 0, 81.32]

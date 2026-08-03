@@ -154,6 +154,12 @@ def test_the_new_strategy_modal_asks_which_star_the_run_ends_on(hundred_coin_pag
     # the community does not time is the whole point of the control.
     assert len([o for o in options if o]) >= 6, options
     assert any("no community times" in o for o in options), options
+    # The ladder inside the SAME modal takes its times the same way the
+    # standards table does -- one editor, two call sites, so the two authoring
+    # surfaces cannot ask for a time in different units.
+    ladder = hundred_coin_page.evaluate(
+        'document.querySelectorAll(".strategy-rank-row .timefields").length')
+    assert ladder >= 8, f"ladder rows still take raw seconds ({ladder} editors)"
 
 
 def test_the_standards_cells_print_the_usamune_notation(hundred_coin_page):
@@ -177,3 +183,66 @@ def test_the_standards_cells_print_the_usamune_notation(hundred_coin_page):
     for text in times:
         assert re.fullmatch(r"(\d+')?\d{2}\"\d{2}", text), (
             f"{text!r} is not the Usamune notation")
+
+
+def test_editing_a_cutoff_offers_three_boxes_and_saves_what_was_typed(hundred_coin_page):
+    """User, 2026-08-03: "we just have a format with entry boxes like
+    {x}'{y}"{z}... People generally communicate in terms of XX'YY"ZZ when
+    talking about times, not 105 seconds."
+
+    Drives the real thing end to end rather than asserting the markup, because
+    the failure that matters is not "are there three boxes" but "does what I
+    typed come back as the same time" — a broken join writes a wrong community
+    standard and nothing downstream would flag it.
+    """
+    hundred_coin_page.evaluate("""
+      (() => { const b = document.querySelector(".standards-toggle");
+               if (b && b.getAttribute("aria-expanded") !== "true") b.click(); })()
+    """)
+    hundred_coin_page.wait_for(".stdtable", timeout_ms=10000)
+    hundred_coin_page.evaluate("""
+      (() => { const b = Array.from(document.querySelectorAll(".stdtools button"))
+                 .find((x) => x.textContent.includes("Edit"));
+               if (b) b.click(); })()
+    """)
+    hundred_coin_page.wait_for(".stdtable .timefields", timeout_ms=10000)
+
+    shape = hundred_coin_page.evaluate("""
+      (() => { const cell = document.querySelector(".stdtable .timefields");
+               return {boxes: cell.querySelectorAll("input").length,
+                       seps: Array.from(cell.querySelectorAll(".timefield-sep"))
+                               .map((s) => s.textContent)}; })()
+    """)
+    assert shape["boxes"] == 3, shape
+    assert shape["seps"] == ["'", '"'], shape
+
+    # The boxes open holding the cell's own value, split the same way the
+    # display splits it — no re-derivation, and nothing to re-type.
+    assert hundred_coin_page.evaluate("""
+      Array.from(document.querySelectorAll(".stdtable .timefields")[0]
+        .querySelectorAll("input")).map((i) => i.value)
+    """) != ["", "", ""]
+
+    hundred_coin_page.evaluate("""
+      (() => {
+        const boxes = document.querySelectorAll(
+          ".stdtable .timefields")[0].querySelectorAll("input");
+        const set = (el, v) => {
+          el.value = v;
+          el.dispatchEvent(new Event("input", {bubbles: true}));
+          el.dispatchEvent(new Event("blur", {bubbles: true}));
+        };
+        set(boxes[0], "1"); set(boxes[1], "21"); set(boxes[2], "32");
+      })()
+    """)
+    hundred_coin_page.evaluate("""
+      (() => { const b = Array.from(document.querySelectorAll(".stdtools button"))
+                 .find((x) => x.textContent.includes("Done editing"));
+               if (b) b.click(); })()
+    """)
+    hundred_coin_page.wait_for(".stdtable tbody td", timeout_ms=10000)
+    printed = hundred_coin_page.evaluate("""
+      document.querySelectorAll(".stdtable tbody tr")[0]
+        .querySelectorAll("td")[1].textContent.trim()
+    """)
+    assert printed == "1'21\"32", printed

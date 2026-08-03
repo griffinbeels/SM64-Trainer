@@ -10,6 +10,7 @@ import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { fmtIgtShort, fmtSeconds } from "../format.js";
+import { TimeFields } from "./timefields.js";
 import { RANK_NAMES, rankColor } from "./ranks.js";
 import { capName, capGradient } from "./caps.js";
 import { StratModal } from "./stratmodal.js";
@@ -252,8 +253,9 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
               .filter(Boolean).join(" ");
             return html`<td class=${cellClass}>
               ${editing
-                ? html`<span class="stdcell"><input class="stdinp" value=${v ?? ""} placeholder="—"
-                      onchange=${(e) => { const n = parseFloat(e.target.value); if (!isNaN(n)) put(strat, rank, n); }} />
+                ? html`<span class="stdcell"><${TimeFields} seconds=${v} compact
+                      label=${`${capName(rank)} ${strat}`}
+                      onCommit=${(next) => { if (next != null) put(strat, rank, next); }} />
                     <button class="vidbtn" title=${`${userVid(strat, rank) ? "edit" : "add"} ${capName(rank)} example video`}
                       onclick=${() => editVideo(strat, rank)}>${userVid(strat, rank) ? "▶✎" : "▶＋"}</button></span>`
                 : (vid
