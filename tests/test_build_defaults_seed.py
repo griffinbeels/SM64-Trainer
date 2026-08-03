@@ -75,16 +75,20 @@ def test_shipped_seed_reconciles_into_a_fresh_db_cleanly(tmp_path):
     assert broken == []
 
 
-def test_every_movement_defaults_to_loose_match_mode():
-    """Task 19 (spec 2026-07-28-multi-step-segments): every movement ships
-    match_mode="loose" -- stamped in _movement_row, so the 56 rows cannot
-    disagree with each other, and Task 13's recorder (which always posts
-    "loose" for a recorded segment) round-trips into a shipped default that
-    means the same thing rather than reconciling back to "strict"."""
+def test_every_movement_defaults_to_STRICT_match_mode():
+    """REVERSED 2026-08-02. Every movement shipped "loose" from Task 19 (spec
+    ...-multi-step-segments) until Griffin ruled the opposite: *"That is a
+    fixed path, and there are no other options. I want it to be very strict...
+    There are no deviations that are allowed."*
+
+    Loose was right that the old waypoint-cancellation rules were too eager and
+    wrong about what replaces them: a movement's identity IS its route, and
+    only a declaration can say so. Still stamped in `_movement_row`, so the 56
+    rows cannot disagree with each other."""
     seed = build_seed.build()
     movements = [s for s in seed["segments"] if s["guards"]]
     assert len(movements) == 56
-    assert {s["match_mode"] for s in movements} == {"loose"}
+    assert {s["match_mode"] for s in movements} == {"strict"}
 
 
 def test_every_non_movement_defs_match_mode():
