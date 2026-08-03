@@ -1,3 +1,4 @@
+from sm64_events.memory.addresses import world_connections
 from sm64_events.tracking.topology import hops, is_legal_move, node_for
 
 
@@ -87,3 +88,35 @@ def test_a_one_way_EXIT_does_not_claim_a_place_that_has_a_real_door():
     # The arenas still resolve through their one-way exits, which is the case
     # the undirected pass exists for.
     assert regions["30"] == "6:1" and regions["33"] == "6:3"
+
+
+def test_the_world_graph_is_strongly_connected():
+    """Every ordered pair of world nodes is reachable — measured 2026-08-02 at
+    **0 unreachable of 992**, over 32 nodes and 67 edges.
+
+    A CHARACTERIZATION test, not TDD: it passed the moment it was written. Its
+    teeth were proved by deleting a two-way edge and watching it go red.
+
+    This is the measurement that closed Stage 2 of the topological-validity
+    work as a PREMISE ERROR. That stage was scoped as builder-side filtering —
+    "only allow the user to choose topologically valid options from each node
+    in their segment" — and the castle is hub-and-spoke with two-way spokes, so
+    every start/end pair a builder can express is already a valid path. The
+    filter had nothing to reject. What replaced it is the path cursor: a
+    definition DECLARES its ordered stops, because reachability cannot tell a
+    deliberate shortcut from a wrong turn.
+
+    So a failure here is NEWS, not a broken assertion: an edge deletion has
+    partitioned the graph, and that is the moment a reachability check becomes
+    meaningful again.
+    """
+    connections = world_connections()
+    # Sources are node keys; destinations are [level, area] pairs, so they go
+    # through the same resolver the matcher reads positions with.
+    nodes = set(connections) | {node_for(level, area)
+                                for dests in connections.values()
+                                for level, area in dests}
+    unreachable = [(source, target) for source in nodes for target in nodes
+                   if source != target and hops(source, target) is None]
+    assert unreachable == []
+    assert len(nodes) * (len(nodes) - 1) > 0, "the graph lost every node"
