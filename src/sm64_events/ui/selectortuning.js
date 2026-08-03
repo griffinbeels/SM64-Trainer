@@ -36,6 +36,11 @@ export const SELECTOR_TUNABLES = {
     min: 0, max: 1200, step: 10, unit: "ms",
     why: "How long the replacement set takes to come up. Longer than the fade out: leaving is not an event, arriving is.",
   },
+  maxHoldMs: {
+    group: "Exchange", label: "Longest it may stay hidden", value: 900,
+    min: 0, max: 4000, step: 50, unit: "ms",
+    why: "Every answer arriving mid-fade restarts the wait, so the row stays hidden until it has stopped changing — his rule: figure out the result while it is invisible, then show the final one, so the animation only happens once. This is the ceiling on that. Past it the next answer is shown immediately: a window that can be held open forever is a selector that never comes back.",
+  },
 };
 
 export const SELECTOR_DEFAULTS = Object.freeze(Object.fromEntries(

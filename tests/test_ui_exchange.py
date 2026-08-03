@@ -101,6 +101,59 @@ def test_the_beat_is_charged_to_the_fade_out():
     """) == [True, True, True]
 
 
+def test_an_answer_arriving_mid_fade_extends_the_hidden_window():
+    """His rule, verbatim (2026-08-02): "when the selector DISAPPEARS, we need to
+    figure out how we're coalescing. Figure out the result. Then display the
+    final result. Therefore the animation ends up only happening ONCE."
+
+    So each change absorbed while the row is invisible RE-ARMS the wait. Without
+    this, a course swap whose answers land 250 ms apart pays for two animations —
+    which is exactly what "it flashes again" was."""
+    assert run_node("""
+    const t = SELECTOR_DEFAULTS;
+    let s = X.initialState("A");
+    s = X.nextState(s, {type: "incoming", id: "B"});
+    const first = X.phaseMs(X.OUT, t, s.absorbed);
+    s = X.nextState(s, {type: "incoming", id: "C"});
+    const again = X.phaseMs(X.OUT, t, s.absorbed);
+    console.log(JSON.stringify([s.absorbed, first, again, first === again]));
+    """) == [1, 210, 210, True]
+
+
+def test_the_hidden_window_has_a_ceiling():
+    """The bound is not optional: a window something can hold open indefinitely
+    is a selector that never comes back. Past `maxHoldMs` the next answer is
+    adopted immediately."""
+    assert run_node("""
+    const t = SELECTOR_DEFAULTS;
+    const settle = t.outMs + t.gapMs;
+    const cap = Math.ceil(t.maxHoldMs / settle);
+    console.log(JSON.stringify([X.phaseMs(X.OUT, t, cap - 1) > 0,
+                                X.phaseMs(X.OUT, t, cap + 1)]));
+    """) == [True, 0]
+
+
+def test_adopting_an_identity_remounts_what_it_paints():
+    """The double flash, and why the fix cannot be left to callers.
+
+    Live report: "when swapping between courses, it briefly flashes the previous
+    course's stars and then flashes again… it should only trigger ONE animation."
+    Two courses use the SAME row component, so Preact patched it rather than
+    unmounting it; the inner `CellRow` survived and ran its own cell-set exchange
+    while the outer one was still fading the surface in. The keyed Fragment makes
+    surviving impossible, and it is keyed on what is PAINTED (`shownId`), not on
+    what arrived — keying on the arrival would tear the outgoing content down
+    mid-fade, which is the one frame this mechanism exists to hide."""
+    source = code_only(UI / "components" / "cellrow.js")
+    assert "key=${state.shownId}" in source, (
+        "the painted subtree is no longer keyed on the adopted identity, so a "
+        "child that survives an adoption can animate across it — the double "
+        "flash")
+    assert "key=${id}" not in source, (
+        "keyed on the ARRIVING identity: that rebuilds the outgoing content "
+        "mid-fade instead of freezing it")
+
+
 def test_reduced_motion_snaps_with_no_transition():
     assert run_node("""
     const t = SELECTOR_DEFAULTS;

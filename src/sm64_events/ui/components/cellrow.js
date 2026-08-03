@@ -15,7 +15,7 @@
 // exchange.py` fails if a row goes back to rendering its own div — a second door
 // here would look completely correct and quietly reintroduce the flicker in one
 // row while the others stayed smooth.
-import { h } from "preact";
+import { Fragment, h } from "preact";
 import { useEffect, useReducer, useRef } from "preact/hooks";
 import htm from "htm";
 
@@ -92,19 +92,36 @@ function Exchanged({ className, identity: id, children }) {
     dispatch(reduced ? { type: "snap", id } : { type: "incoming", id });
   }, [id, reduced]);
 
+  // `state.absorbed` is a dependency on purpose: a change arriving mid-fade
+  // RE-ARMS this wait, which is how the invisible window stays open until the
+  // answers stop arriving.
   useEffect(() => {
     if (state.phase === IDLE) return;
-    const ms = phaseMs(state.phase, selectorTuning());
+    const ms = phaseMs(state.phase, selectorTuning(), state.absorbed);
     const timer = setTimeout(
       () => dispatch({ type: state.phase === OUT ? "outDone" : "inDone" }),
       ms);
     return () => clearTimeout(timer);
-  }, [state.phase, state.shownId]);
+  }, [state.phase, state.shownId, state.absorbed]);
 
   const { opacity, transitionMs } = rowStyle(state.phase, selectorTuning(),
                                              reduced);
   const shown = settled ? current : held.current;
+  // Keyed on what is being PAINTED, which makes adopting a new identity remount
+  // everything under it — and that is a correctness rule, not a tidy-up.
+  //
+  // Live report 2026-08-02: "when swapping between courses, it briefly flashes
+  // the previous course's stars and then flashes again… there should not be a
+  // flicker… it should only trigger ONE animation." Two courses use the SAME row
+  // component, so Preact patched it instead of unmounting it, the inner
+  // `CellRow` survived, and it ran its own cell-set exchange while this one was
+  // still fading the surface in. Two owners, one event, two flashes. A child
+  // that cannot survive an adoption cannot animate across one.
+  //
+  // Keyed on `state.shownId` and NOT on the incoming id: during the fade the
+  // key must not move, or the outgoing content would be torn down and rebuilt
+  // mid-fade — the very frame this whole mechanism exists to hide.
   return html`<div class=${className}
     style=${`opacity:${opacity};transition:opacity ${transitionMs}ms linear`}
-    >${shown}</div>`;
+    ><${Fragment} key=${state.shownId}>${shown}<//></div>`;
 }

@@ -28,7 +28,7 @@ export const IN = "in";
 export const identityOf = (keys) => keys.join("\u0000");
 
 export const initialState = (id) =>
-  ({ phase: IDLE, shownId: id, pendingId: null });
+  ({ phase: IDLE, shownId: id, pendingId: null, absorbed: 0 });
 
 /** The reducer. Pure, total, and never throws: an unknown event returns the
  *  state unchanged, because the alternative is a row wedged invisible by a
@@ -38,22 +38,30 @@ export function nextState(state, event) {
   if (event.type === "snap")            // reduced motion, or a first render
     return initialState(event.id);
   if (event.type === "incoming") {
-    if (state.phase === OUT)            // absorb: only the DESTINATION moves
-      return event.id === state.shownId
-        ? { phase: OUT, shownId: state.shownId, pendingId: state.shownId }
-        : { ...state, pendingId: event.id };
+    // ABSORB, and RESTART THE WAIT. His rule, verbatim (2026-08-02): "when the
+    // selector DISAPPEARS, we need to figure out how we're coalescing. Figure
+    // out the result. Then display the final result. Therefore the animation
+    // ends up only happening ONCE." So the invisible window stays open while
+    // answers are still arriving — `absorbed` is what the timer re-arms on —
+    // and only the settled answer is ever painted. Bounded in `phaseMs`: a
+    // window that can be held open forever has its own victim.
+    if (state.phase === OUT)
+      return { phase: OUT, shownId: state.shownId, absorbed: state.absorbed + 1,
+               pendingId: event.id === state.shownId ? state.shownId
+                                                     : event.id };
     if (event.id === state.shownId) return state;   // props changed, set did not
-    return { phase: OUT, shownId: state.shownId, pendingId: event.id };
+    return { phase: OUT, shownId: state.shownId, pendingId: event.id,
+             absorbed: 0 };
   }
   if (event.type === "outDone") {
     // Nothing to adopt (every change during the fade cancelled back out to
     // what was already shown) — come straight back up rather than swapping to
     // an identical set, so a self-cancelling burst costs one blink, not two.
     const target = state.pendingId === null ? state.shownId : state.pendingId;
-    return { phase: IN, shownId: target, pendingId: null };
+    return { phase: IN, shownId: target, pendingId: null, absorbed: 0 };
   }
   if (event.type === "inDone")
-    return { phase: IDLE, shownId: state.shownId, pendingId: null };
+    return { phase: IDLE, shownId: state.shownId, pendingId: null, absorbed: 0 };
   return state;
 }
 
@@ -71,9 +79,18 @@ export function rowStyle(phase, tuning, reducedMotion = false) {
 /** How long to wait before the phase after this one. The BEAT is charged to
  *  the out phase, so the row sits empty for `gapMs` with the old cells still
  *  mounted at zero opacity — mounting the new ones early would make the swap
- *  frame the thing he sees. */
-export function phaseMs(phase, tuning) {
-  if (phase === OUT) return tuning.outMs + tuning.gapMs;
+ *  frame the thing he sees.
+ *
+ *  Every absorbed change restarts that wait, so a change still arriving 100 ms
+ *  in extends the invisible window instead of buying a second animation. The
+ *  BOUND is the other half and is not optional: `maxHoldMs` caps the total, and
+ *  past it the next answer is adopted immediately — a window something can hold
+ *  open indefinitely is a selector that never comes back. */
+export function phaseMs(phase, tuning, absorbed = 0) {
+  if (phase === OUT) {
+    const settle = tuning.outMs + tuning.gapMs;
+    return absorbed * settle >= tuning.maxHoldMs ? 0 : settle;
+  }
   if (phase === IN) return tuning.inMs;
   return 0;
 }

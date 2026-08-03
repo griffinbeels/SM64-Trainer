@@ -23,7 +23,7 @@ import { h, render } from "preact";
 import { useEffect, useMemo, useState } from "preact/hooks";
 import htm from "htm";
 
-import { CellRow } from "/ui/components/cellrow.js";
+import { CellRow, SurfaceExchange } from "/ui/components/cellrow.js";
 import { PracticeCell } from "/ui/components/practicecell.js";
 import { genericStarSrc } from "/ui/entities.js";
 import { SELECTOR_TUNABLES, SELECTOR_GROUPS, SELECTOR_DEFAULTS,
@@ -74,6 +74,11 @@ function Inspector() {
     catch (error) { return withSelectorDefaults(null); }
   });
   const [which, setWhich] = useState("course");
+  // The SURFACE identity, separate from the set: the app has both levels
+  // (a whole stage swapping vs. the cells inside one changing), and a page
+  // that only had the inner one could not show the composition where the
+  // double flash lived.
+  const [surface, setSurface] = useState("stage-a");
   const [status, setStatus] = useState(null);
 
   // The ACTIVE slot is what CellRow reads, so it is set here — the wiring
@@ -91,6 +96,14 @@ function Inspector() {
   // The case the whole mechanism exists for: several validations inside one
   // fade window. If any intermediate set is visible here, it is visible in the
   // app — this is the same component reading the same numbers.
+  // A whole stage swapping — the case he reported as a double flash: two
+  // courses use the same row component, so the inner exchange used to survive
+  // the adoption and animate on top of the outer one.
+  function swapStage() {
+    setSurface((prev) => (prev === "stage-a" ? "stage-b" : "stage-a"));
+    setWhich((prev) => (prev === "course" ? "warp" : "course"));
+  }
+
   function burst() {
     setWhich("warp");
     setTimeout(() => setWhich("course"), 40);
@@ -121,6 +134,7 @@ function Inspector() {
       <div class="app-shell">
         <div class="sidebar"></div>
         <div class="practice-page">
+          <${SurfaceExchange} class="selector-exchange" identity=${surface}>
           <section class="practice-card selector-card stagebanner">
             <div class="shead"><b>${which === "course" ? "Whomp's Fortress"
                                                       : "Bowser in the Sky"}</b>
@@ -131,6 +145,7 @@ function Inspector() {
               ${cellsFor(list, list[0].key)}
             <//>
           </section>
+          <//>
         </div>
       </div>
     </div>
@@ -153,6 +168,7 @@ function Inspector() {
         <button class="primary"
           onclick=${() => setWhich(which === "course" ? "warp" : "course")}>
           ⇄ Swap the set</button>
+        <button onclick=${swapStage}>⇄ Swap the stage</button>
         <button onclick=${burst}>Burst ×3</button>
       </div>
 
