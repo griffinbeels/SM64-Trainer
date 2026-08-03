@@ -18,6 +18,7 @@ import { CollapseToggle, cardClass, useCollapsed } from "./collapsible.js";
 import { RankIcon } from "./rankicon.js";
 import { StandardsPanel } from "./standards.js";
 import { StratPicker } from "./stratpicker.js";
+import { StepTrack } from "./steptrack.js";
 import { useTargetPicker } from "./targetpicker.js";
 import { FailureCompilation } from "./failcomp.js";
 import { Icon } from "./icons.js";
@@ -557,59 +558,6 @@ function ObjectiveEyebrow({ iconName, label, openPicker }) {
 // 2026-07-28 (user: "For the stats button, we should move it to be inside
 // the practice log, to the left of the sort filter"), leaving the chips
 // themselves here, unmoved.
-// The step track an ARMED multi-step thing draws below its metrics row — the
-// WHOLE route as short place chips, with the one you are on marked. ONE
-// component for the star card and the segment card (rule 11): this was two
-// byte-identical copies of the markup until 2026-08-03, which is the shape
-// that drifts, and it is a single component precisely because a 100-coin star
-// is the one star that has steps at all.
-//
-// Places rather than sentences, and always ONE LINE, is Griffin's own pick
-// from a two-option contact of the shapes (2026-08-03) — the card is
-// fixed-height, so a track that can grow to four rows would clip whatever sits
-// under it (`.claude/rules/ui-core.md`'s wrapping-inside-a-fixed-height-card
-// trap). The full imperative for the CURRENT step ("Enter Castle Inside Lobby
-// coming from Bowser in the Fire Sea") is not thrown away, it rides the row's
-// own `title` — the qualifier a chip has no room for is one hover away rather
-// than deleted.
-//
-// `steps` is server truth (`views.py::_armed_detail_for` -> `segments.py::
-// card_step_labels`) and `progress` indexes straight into it, so nothing here
-// re-derives what a step IS. Chips paint by comparing an index against that
-// one number; there is no second notion of done-ness to disagree with it.
-function StepTrack({ detail }) {
-  if (!detail) return null;
-  const steps = detail.steps || [];
-  return html`<div class="seg-waiting"
-      title=${detail.waiting_for ? `Waiting for ${detail.waiting_for}` : null}>
-    <span class="seg-waiting-step">Step${" "}
-      ${detail.progress + 1}${" "}of${" "}${detail.total + 1}</span>
-    <ol class="step-track">
-      ${steps.map((label, index) => html`<li key=${index}
-          class=${"step-chip " + (index < detail.progress ? "done"
-            : index === detail.progress ? "now" : "ahead")}>
-        ${/* All three markers always exist and swap by OPACITY, the incoming
-             one delayed past the outgoing one's fade — the sequential text
-             exchange `.claude/rules/ui-core.md` requires, expressed in CSS
-             rather than through climbcurve.js's exchangeFade, which drives a
-             JS-animated pair. Two glyphs at half opacity in one slot read as
-             a rendering fault, and no duration fixes that.
-
-             The not-yet-reached dot earns its place: the slot has to hold its
-             width whatever state the chip is in, or a chip jumps sideways the
-             moment it becomes current, and a reserved-but-empty slot reads at
-             4x as a glyph that failed to load rather than as a step you have
-             not got to. Three states, three marks, nothing unexplained. */""}
-        <span class="step-mark" aria-hidden="true"
-          ><span class="mark-done">✓</span
-          ><span class="mark-now">▸</span
-          ><span class="mark-ahead">·</span></span>
-        <span class="step-name">${label}</span>
-      </li>`)}
-    </ol>
-  </div>`;
-}
-
 function StatChipsRow({ sec, t }) {
   return html`<div class="chips stat-chips">
     ${sec.stats.filter((stat) => t.showDust || !DUST_STAT_KEYS.has(stat.key))
@@ -764,6 +712,11 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
            grabbing that first star, proven by it progressing to the next
            step" -- it must survive the presentation change and read as the
            STAR's own progress, not a segment's. */""}
+      ${/* No door here, and the reason is worth stating rather than
+           leaving as a gap (rule 11): these steps belong to the hidden
+           100-coin ENGINE definition, which views.py excludes from every
+           picker on purpose. Opening it in the editor would offer to edit
+           a definition the user is not allowed to target. */""}
       <${StepTrack} detail=${sec.armed_detail} />
     </section>
 
@@ -852,7 +805,8 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
 // Broken sections (definition deleted, history remains) render but drop the
 // timeline/marker editor and the strat picker — both key off the deleted
 // definition (POST /api/strat 404s for a segment that no longer exists).
-function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) {
+function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker,
+                         openSegment }) {
   const [showHidden, setShowHidden] = useState(false);
   const [visible, setVisible] = useState(10);
   const [foldTarget, toggleTarget] = useCollapsed("objective");
@@ -972,7 +926,9 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker 
            Sand Land", never the builder's editor-voice sentence, which read
            as broken English under this label ("Waiting for You enter level
            Shifting Sand Land"). */""}
-      <${StepTrack} detail=${sec.armed_detail} />
+      <${StepTrack} detail=${sec.armed_detail}
+        onEdit=${openSegment && !sec.broken
+          ? () => openSegment(sec.segment_id) : null} />
     </section>
 
     <section class="practice-card analysis-card ${cardClass(foldAnalysis)}">
@@ -1198,7 +1154,7 @@ function EmptyPractice({ v, t, ui, unassignedRows, freshIds, openCompare,
   </div>`;
 }
 
-export function Practice({ t, openCompare }) {
+export function Practice({ t, openCompare, openSegment }) {
   // Records what this page actually PAINTS — the selector's cells and every
   // objective card — so a report about a cell that "was just there a couple
   // frames ago" is readable afterwards instead of guessable from a
@@ -1460,6 +1416,7 @@ export function Practice({ t, openCompare }) {
           freshIds=${freshIds} openCompare=${openCompare} />`
       : primarySeg
         ? html`<${SegmentSection} key=${`seg:${primarySeg.segment_id}`}
+            openSegment=${openSegment}
             sec=${primarySeg} t=${held} ui=${ui} pinned=${true}
             openPicker=${openTargetPicker}
             freshIds=${freshIds} openCompare=${openCompare} />`
@@ -1497,6 +1454,7 @@ export function Practice({ t, openCompare }) {
               </summary>
               ${sec.kind === "segment"
                 ? html`<${SegmentSection} key=${`seg:${sec.segment_id}`}
+                    openSegment=${openSegment}
                     sec=${sec} t=${held} ui=${ui} pinned=${false}
                     freshIds=${freshIds} openCompare=${openCompare} />`
                 : html`<${StarSection} key=${`${sec.course_id}:${sec.star_id}`}

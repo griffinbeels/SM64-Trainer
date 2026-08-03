@@ -27,7 +27,15 @@ READER = UI / "uilog.js"
 # found in NONE of these is the drift this test exists for.
 RENDERERS = (UI / "components" / "stagebanner.js",
              UI / "components" / "practicecell.js",
-             UI / "components" / "practice.js")
+             UI / "components" / "practice.js",
+             # `.seg-waiting` moved out of practice.js on 2026-08-03 when the
+             # step track became one shared component for the card AND the
+             # segment editor. This guard caught the move immediately, which is
+             # what it is for: a class the reader hunts and nothing renders
+             # empties the UI log SILENTLY, and an empty log is indistinguish-
+             # able from "nothing was on screen" — the one answer it exists to
+             # give.
+             UI / "components" / "steptrack.js")
 
 
 def _reader_source() -> str:

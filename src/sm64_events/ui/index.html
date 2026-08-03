@@ -1070,10 +1070,16 @@
     display: grid; grid-template-rows: auto 1fr auto; padding-block: 12px;
   }
   .objective-card.active-star { border-color: rgba(240,189,50,.72); }
-  .seg-waiting {
+  /* `.step-row` is the LAYOUT (shared by the practice card's armed row and the
+     segment editor's Then picker); `.seg-waiting` is the practice card's own
+     spacing on top of it, and stays a distinct class because index.html keys
+     real rules off `.objective-card:has(.seg-waiting)` — a picker inside a
+     modal wearing that class would be claiming to be the card's armed row. */
+  .step-row {
     display: flex; align-items: baseline; gap: .5rem; min-width: 0;
-    margin-top: .4rem; font-size: .8rem; color: var(--muted);
+    font-size: .8rem; color: var(--muted);
   }
+  .seg-waiting { margin-top: .4rem; }
   .seg-waiting-step {
     flex: none; color: var(--text); font-weight: 700;
     font-variant-numeric: tabular-nums;
@@ -1127,7 +1133,57 @@
      exchangeFade encodes for JS-animated text. */
   .step-chip.done .mark-done,
   .step-chip.now .mark-now,
-  .step-chip.ahead .mark-ahead { opacity: 1; transition-delay: .13s; }
+  .step-chip.ahead .mark-ahead,
+  .step-chip.required .mark-done,
+  .step-chip.skipped .mark-ahead { opacity: 1; transition-delay: .13s; }
+  /* The EDITOR's two states, drawn from the same chip so the row you edit and
+     the row you read while running are visibly one thing. `required` borrows
+     the live step's gold rather than the done tick's grey: in the editor the
+     ticked stop is the assertion being made, not a thing already behind you. */
+  .step-chip.required { color: var(--gold); opacity: 1; font-weight: 700; }
+  .step-chip.skipped { color: var(--muted); opacity: .5; }
+  /* A chip that toggles is a real button; strip the chrome, keep the ring. */
+  .step-toggle, .step-track-door {
+    display: flex; align-items: baseline; gap: .22rem; min-width: 0;
+    background: none; border: 0; padding: 0; margin: 0; cursor: pointer;
+    font: inherit; color: inherit; border-radius: 4px;
+  }
+  .step-track-door { gap: 0; }
+  .step-toggle:focus-visible, .step-track-door:focus-visible {
+    outline: 2px solid var(--gold); outline-offset: 2px;
+  }
+  .step-picker { margin-top: .5rem; }
+  .step-picker-hint { margin: .2rem 0 0; }
+  /* The builder's THEN section. Start and Finish are each one any-of set where
+     order means nothing; here order is the entire content, so a step wears its
+     ordinal and its own move controls and the "any of these" nesting sits one
+     level in. */
+  .then-step {
+    border: 1px solid var(--line); border-radius: 8px;
+    padding: 8px; margin-bottom: 8px;
+  }
+  .then-step-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: .5rem; margin-bottom: 6px;
+  }
+  .then-step-n {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 22px; height: 22px; border-radius: 999px;
+    background: rgba(240,189,50,.16); color: var(--gold);
+    font-weight: 700; font-variant-numeric: tabular-nums; font-size: .78rem;
+  }
+  .then-step-moves { display: flex; gap: 2px; }
+  .then-step-moves .icon-button:disabled { opacity: .35; cursor: default; }
+  /* The seeded-edit notice sits at the point of the edit, not in a library
+     menu — editing a shipped movement opts it out of every future corpus
+     refresh, and that cost was invisible from inside the editor. */
+  .builder-seeded {
+    border: 1px solid var(--line); border-left: 3px solid var(--gold);
+    border-radius: 8px; padding: 8px 10px; margin-bottom: 10px;
+    background: rgba(240,189,50,.06);
+  }
+  .builder-seeded.is-dirty { border-left-color: #e0803a; }
+  .builder-seeded p.meta { margin: .25rem 0 .5rem; }
   /* Trailing `auto` track added 2026-07-28 for the collapse toggle. Without
      it the button becomes an implicit 5th column at the grid's default size
      and pushes the strategy picker out of the card. */

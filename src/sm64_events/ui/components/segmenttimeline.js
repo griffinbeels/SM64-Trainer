@@ -20,6 +20,7 @@ import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { Icon } from "./icons.js";
 import { Modal } from "./modal.js";
+import { StepPicker } from "./steptrack.js";
 
 const html = htm.bind(h);
 
@@ -87,6 +88,11 @@ export function SegmentTimeline({ onSaved, onCancel }) {
   const [lintFindings, setLintFindings] = useState([]);
   const [lintErr, setLintErr] = useState(null);
   const [saveErr, setSaveErr] = useState(null);
+  // Node keys of the walked stops this definition REQUIRES. A Set, not a
+  // list of clauses: the walk is ground truth and the only open question is
+  // which of its stops count, so an invalid step is unreachable rather than
+  // validated away.
+  const [required, setRequired] = useState(new Set());
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -100,6 +106,7 @@ export function SegmentTimeline({ onSaved, onCancel }) {
     setSynth(null); setSynthErr(null);
     setBtReport(null); setBtErr(null);
     setLintFindings([]); setLintErr(null); setSaveErr(null);
+    setRequired(new Set());
   }
 
   function pickStart(row) {
@@ -108,10 +115,30 @@ export function SegmentTimeline({ onSaved, onCancel }) {
     setStep("end");
   }
 
-  async function runBacktest(synthBody) {
-    const definition = { name: synthBody.name, enabled: true,
+  // ONE builder for the definition every one of backtest / lint / save sends,
+  // so the thing tested, the thing linted and the thing written are the same
+  // object. They were three literals and stayed in step by hand; the moment
+  // waypoints entered the picture that stopped being tenable -- a backtest run
+  // against a DIFFERENT match_mode than the save uses reports on a matcher
+  // branch the user will never get (the exact trap the old match_mode comment
+  // here was already working around).
+  //
+  // STRICT the moment a stop is required, LOOSE when none is. That is not a
+  // preference: a declared path only means anything under the strict matcher's
+  // path cursor, and a recording with no declared stops is byte-for-byte the
+  // loose definition this tool has always produced.
+  function definitionFor(synthBody, requiredNodes) {
+    const waypoints = (synthBody.steps || [])
+      .filter((step) => requiredNodes.has(step.node))
+      .map((step) => [step.clause]);
+    return { name: (name.trim() || synthBody.name), enabled: true,
       start_triggers: [synthBody.start_clause],
-      end_triggers: [synthBody.end_clause], guards: [] };
+      end_triggers: [synthBody.end_clause], guards: [], waypoints,
+      match_mode: waypoints.length ? "strict" : "loose" };
+  }
+
+  async function runBacktest(definition) {
+    setBtReport(null); setBtErr(null);
     try {
       const report = await send("POST", "/api/segments/backtest",
         { definition, replaces: null });
@@ -119,20 +146,31 @@ export function SegmentTimeline({ onSaved, onCancel }) {
     } catch (err) { setBtErr(String(err)); }
   }
 
-  // match_mode: "loose" explicitly -- this mirrors exactly what save() below
-  // sends (recorded segments are always loose), not the backtest body's
-  // implicit server-default "loose", so a def whose lint findings would
-  // differ by match_mode (start_looser_than_waypoint is exempt for loose)
-  // is checked under the shape it will actually be saved as.
-  async function runLint(synthBody) {
-    const definition = { name: synthBody.name, enabled: true,
-      start_triggers: [synthBody.start_clause],
-      end_triggers: [synthBody.end_clause], guards: [], match_mode: "loose" };
+  async function runLint(definition) {
+    setLintFindings([]); setLintErr(null);
     try {
       const result = await send("POST", "/api/segments/lint",
         { definition, segment_id: null });
       setLintFindings(result.warnings);
     } catch (err) { setLintErr(String(err)); }
+  }
+
+  function recheck(synthBody, requiredNodes) {
+    const definition = definitionFor(synthBody, requiredNodes);
+    runBacktest(definition);
+    runLint(definition);
+  }
+
+  // Toggling a stop re-tests against his real history immediately. That is the
+  // whole safety net for a strict definition: under the path rule a wrong step
+  // does not record a sloppy time, it SILENTLY VOIDS the run -- so "would this
+  // have fired on the runs I have already done" has to be answerable before
+  // Save, not discovered a week later by a movement that never records.
+  function toggleStep(node) {
+    const next = new Set(required);
+    if (next.has(node)) next.delete(node); else next.add(node);
+    setRequired(next);
+    if (synth) recheck(synth, next);
   }
 
   async function pickEnd(row) {
@@ -142,10 +180,16 @@ export function SegmentTimeline({ onSaved, onCancel }) {
     try {
       const body = await getJSON(
         `/api/segments/synthesize?start_id=${startRow.id}&end_id=${row.id}`);
+      // Everywhere you went starts REQUIRED. You walked the route you meant to
+      // practise, so the common case is that all of it counts; unticking a room
+      // you were only crossing is one click, and the alternative default (none
+      // required) makes the tool silently produce the loose definition it
+      // produced before, which is the outcome this whole pass exists to change.
+      const walked = new Set((body.steps || []).map((step) => step.node));
       setSynth(body);
       setName(body.name);
-      runBacktest(body);
-      runLint(body);
+      setRequired(walked);
+      recheck(body, walked);
     } catch (err) { setSynthErr(String(err)); }
   }
 
@@ -163,11 +207,8 @@ export function SegmentTimeline({ onSaved, onCancel }) {
     if (!synth || !btReport) return;   // see Save's disabled= below
     setSaving(true); setSaveErr(null);
     try {
-      const body = await send("POST", "/api/segments", {
-        name: (name.trim() || synth.name), enabled: true,
-        start_triggers: [synth.start_clause],
-        end_triggers: [synth.end_clause], guards: [], match_mode: "loose",
-      });
+      const body = await send("POST", "/api/segments",
+                              definitionFor(synth, required));
       onSaved(body.id);
     } catch (err) { setSaveErr(String(err)); }
     finally { setSaving(false); }
@@ -231,6 +272,8 @@ export function SegmentTimeline({ onSaved, onCancel }) {
         </label>
         <p class="meta">Starts when: <b>${synth.start_sentence}</b></p>
         <p class="meta">Ends when: <b>${synth.end_sentence}</b></p>
+        <${StepPicker} steps=${synth.steps} required=${required}
+          onToggle=${toggleStep} />
         ${btErr && html`<p class="badx">${btErr}</p>`}
         ${!btReport && !btErr
           && html`<p class="meta">Testing against your history…</p>`}
