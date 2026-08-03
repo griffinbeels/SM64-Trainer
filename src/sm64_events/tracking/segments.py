@@ -2798,6 +2798,50 @@ class SegmentEngine:
                 and 0 <= ev.payload["frames_since_dialog"]
                 <= _DIALOG_ECHO_WINDOW))
 
+    def _arrived_by_a_real_move(self, ev) -> bool:
+        """True when this anchor landed on the same frame as a LEGITIMATE
+        world move — a door, or a PAUSE EXIT — rather than on a reset the
+        player chose.
+
+        `_anchor_echo`'s shape (3) already catches a transition co-frame, but
+        gates it on a SHORT pause, deliberately: a Usamune menu warp is
+        co-frame too and carries `paused_frames_before` 13-890, and a menu
+        warp really is a new attempt boundary. A PAUSE EXIT carries a long
+        pause for the same reason (the pause menu was open), so it fell
+        through that gate — and rewound a multi-step arm to step 1 on the very
+        move that had just advanced it. Live report 2026-08-03: "it briefly
+        flashed step 3 of 3, then it reset", followed by nothing recorded when
+        he reached WF, because a rewound cursor can never reach its end.
+
+        The discriminator is the WORLD GRAPH, which is rule 1's premise read
+        for a second purpose: a menu warp fabricates an edge, a pause exit
+        walks one. Measured over both journals, restricted to co-frame anchors
+        with a long pause: 73 land on real edges (`30->17`, `17->6:1`,
+        `21->6:2`, `7->6:1` — doors and pause exits) and 193 do not
+        (`22->17`, `8->17`, `16->34`, and `17->6:2`, which is the Upstairs
+        menu warp rather than BitDW's own exit into the Lobby). No overlap in
+        kind.
+
+        A hypothesis this replaces, recorded so nobody spends the evening on
+        it again: `frames_since_warp_op` does NOT separate them. It reads 0
+        for an ordinary door and stale for a pause exit, but menu warps sit on
+        both sides of it.
+
+        Deliberately NARROW — it gates only the waypoint matcher's rewind, not
+        `_anchor_echo` itself. Widening the echo would make these anchors
+        invisible to EVERY definition and to attempt boundaries generally,
+        which is a much larger claim about his recorded history than this
+        report supports. That widening is owed, with this measurement attached.
+        """
+        if ev.frame != self._last_transition_frame:
+            return False
+        pending = self._pending_move
+        if pending is None or pending[0] != ev.frame or pending[1] is None:
+            return False
+        return (self._settled_node is not None
+                and self._settled_node != pending[1]
+                and topology.is_legal_move(self._settled_node, pending[1]))
+
     def _feed_strict(self, Attempt, d, arm: _Arm, ev, ctx, notices,
                      anchor_is_echo: bool, starts: bool) -> list:
         """Today's armed-branch chain, extracted verbatim from feed() so the
@@ -3026,7 +3070,8 @@ class SegmentEngine:
             # (mirrors the star-side discard in projection.py's
             # _close_by_reset) -- a true no-op anchor refire still records
             # nothing.
-            if ev.frame == arm.start_frame or self._anchor_echo(ev):
+            if (ev.frame == arm.start_frame or self._anchor_echo(ev)
+                    or self._arrived_by_a_real_move(ev)):
                 return closed
             afk = ev.payload.get("paused_frames_before", 0) \
                 >= _AFK_PAUSE_FRAMES
@@ -3140,7 +3185,8 @@ class SegmentEngine:
             self._disarm(d, ev, notices)
             return closed
         if ev.type in _ANCHOR_TYPES:
-            if ev.frame == arm.start_frame or self._anchor_echo(ev):
+            if (ev.frame == arm.start_frame or self._anchor_echo(ev)
+                    or self._arrived_by_a_real_move(ev)):
                 return closed          # echo: invisible
             if not _at_arm_position(arm, ctx):
                 # TRANSPARENT, not a relocation disarm (live report 2026-07-28:

@@ -4382,3 +4382,113 @@ def test_standing_still_announces_nothing():
     _exit_wf_into_the_lobby(e)
     _, notices = e.feed(jev(30, "mario_acted", 2500, {}), ctx(level=6, area=1))
     assert [n for n in notices if n["event"] == "segment_progress"] == []
+
+
+# ---------------------------------------------------------------------------
+# A PAUSE EXIT is not a retry (live report 2026-08-03).
+# ---------------------------------------------------------------------------
+
+BOWSER1_WF = SegmentDef(
+    id=32, name="Bowser 1 -> WF", enabled=True,
+    start_triggers=[{"type": "level_exit", "from": 30}],
+    end_triggers=[{"type": "level_enter", "to": 24}],
+    waypoints=[[{"type": "level_enter", "to": 17, "from": 6}],
+               [{"type": "level_enter", "to": 6, "to_subarea": 1, "from": 17}]],
+    guards=[], match_mode="strict")
+
+
+def _arm_out_of_bowser_1(e):
+    e.feed(jev(1, "level_changed", 1000, {"from": 30, "to": 6, "from_area": 1}),
+           ctx(level=6, prev_level=30))
+    e.feed(jev(2, "area_changed", 1000,
+               {"level": 6, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=6, area=1))
+    e.feed(jev(3, "mario_acted", 1010, {}), ctx(level=6, area=1))
+
+
+def _enter_bitdw(e, frame=2000):
+    e.feed(jev(10, "level_changed", frame, {"from": 6, "to": 17, "from_area": 1}),
+           ctx(level=17, prev_level=6))
+    e.feed(jev(11, "area_changed", frame,
+               {"level": 17, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=17, area=1))
+
+
+def _pause_exit_to_lobby(e, frame=3000, paused=66):
+    """The real shape, taken from his journal (ids 4975-4977): the level edge,
+    its co-frame area event, then Usamune's own IGT reset on the SAME frame,
+    carrying the pause the exit menu cost."""
+    e.feed(jev(20, "level_changed", frame, {"from": 17, "to": 6, "from_area": 1}),
+           ctx(level=6, prev_level=17))
+    e.feed(jev(21, "area_changed", frame,
+               {"level": 6, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=6, area=1))
+    return e.feed(jev(22, "practice_reset", frame,
+                      {"paused_frames_before": paused, "mario_acted": False,
+                       "acted_tracking": True, "area": 1, "prev_area": 1}),
+                  ctx(level=6, area=1))
+
+
+def test_a_pause_exit_does_not_rewind_the_step_cursor():
+    """Live report: "it briefly flashed step 3 of 3, then it reset", and then
+    nothing recorded on reaching WF — a rewound cursor can never reach its own
+    end, so both symptoms are this one bug.
+
+    Usamune zeroes its IGT on the pause exit's level load, and that anchor
+    carries a LONG pause because the menu was open, so `_anchor_echo`'s
+    transition co-frame shape (pause-gated to keep MENU WARPS as real
+    boundaries) let it through as a player retry."""
+    e = SegmentEngine([BOWSER1_WF])
+    _arm_out_of_bowser_1(e)
+    _enter_bitdw(e)
+    assert e.armed_items()[32].progress == 1
+    _pause_exit_to_lobby(e)
+    assert e.armed_items()[32].progress == 2, "the pause exit IS step 2"
+
+
+def test_the_pause_exit_run_then_records_when_it_reaches_the_end():
+    e = SegmentEngine([BOWSER1_WF])
+    _arm_out_of_bowser_1(e)
+    _enter_bitdw(e)
+    _pause_exit_to_lobby(e)
+    closed, _ = e.feed(jev(30, "level_changed", 4000,
+                           {"from": 6, "to": 24, "from_area": 1}),
+                       ctx(level=24, prev_level=6))
+    assert [a.outcome for a in closed] == ["success"]
+
+
+def test_a_reset_with_no_move_under_it_still_rewinds():
+    """The boundary the fix must not cross: a real L-reset is not co-frame
+    with any transition, so it stays the practice-retry loop it has always
+    been. Mutation proof for the pair above: drop
+    `_arrived_by_a_real_move` from the anchor guard and the two tests above go
+    red while this one stays green."""
+    e = SegmentEngine([BOWSER1_WF])
+    _arm_out_of_bowser_1(e)
+    _enter_bitdw(e)
+    assert e.armed_items()[32].progress == 1
+    e.feed(jev(40, "practice_reset", 2500,
+               {"paused_frames_before": 0, "mario_acted": True,
+                "acted_tracking": True, "area": 1, "prev_area": 1}),
+           ctx(level=17, area=1))
+    assert e.armed_items()[32].progress == 0
+
+
+def test_a_menu_warp_along_a_fabricated_edge_still_rewinds():
+    """The other boundary, and the reason shape (3) was pause-gated in the
+    first place: a Usamune menu warp is co-frame with a transition too. It
+    fabricates an edge, so the world graph tells the two apart — here BitDW to
+    UPSTAIRS, which is not a door."""
+    e = SegmentEngine([BOWSER1_WF])
+    _arm_out_of_bowser_1(e)
+    _enter_bitdw(e)
+    e.feed(jev(50, "level_changed", 3000, {"from": 17, "to": 6, "from_area": 1}),
+           ctx(level=6, prev_level=17))
+    e.feed(jev(51, "area_changed", 3000,
+               {"level": 6, "from": 1, "to": 2, "from_transient": False}),
+           ctx(level=6, area=2))
+    e.feed(jev(52, "practice_reset", 3000,
+               {"paused_frames_before": 200, "mario_acted": False,
+                "acted_tracking": True, "area": 2, "prev_area": 2}),
+           ctx(level=6, area=2))
+    assert e.armed_items()[32].progress == 0
