@@ -318,11 +318,12 @@ export function RankBanner({ label, banner, hint = null, identity = null,
       <!-- "X.XXs to rank up", not a bare "−0.22s" (user, 2026-07-27) -- the
            number is the thing you chase, and a signed delta made the reader
            work out what it was a delta FROM. It FADES with the bar -- out as the
-           bar fills at the start, back in as it fills at the end, off the
-           same eased progress (ui/rankclimb.js), so the two land together.
-           The whole line flips to its settled wording the instant that
-           closing sweep starts, so the fade reveals one finished sentence
-           rather than animating a changing one. -->
+           bar fills at the start, back in as it fills at the end, off the same
+           step and the same curve (ui/rankclimb.js). NOT off the same
+           duration: a sweep's length scales with the distance travelled and
+           legibility does not, so the line's clock has a floor of its own. It
+           fades in EVERY case, including a climb that gains no rank, where the
+           one bar step carries the whole exchange. -->
       <span class="meta rank-banner-next">${nextLabel
         ? html`→ <b>${nextLabel}</b>${gap ? ` · ${gap}s to rank up` : ""}` : "top rank"}</span>
     </div>

@@ -1286,8 +1286,10 @@
     min-width: 0; overflow: hidden; text-overflow: ellipsis;
   }
   /* FADES with the bar (`--climb-reveal`, written per frame by
-     ui/rankclimb.js off the same eased progress the bar uses): out while the
-     bar fills at the start of a climb, back in while it fills at the end.
+     ui/rankclimb.js off the same step and the same curve the bar uses, on a
+     clock with a floor of its own): out while the bar fills at the start of a
+     climb, back in while it fills at the end — and, when no rank is gained at
+     all, out and back in across the single step that moves the bar.
      Defaults to 1, so every banner that is not mid-climb renders exactly as it
      always did.
 

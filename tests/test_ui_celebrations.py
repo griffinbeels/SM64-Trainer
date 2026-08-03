@@ -211,7 +211,10 @@ def test_the_next_step_fade_is_driven_by_the_engine_not_by_a_beat():
     at the start of a climb and back in as it fills at the end.
 
     It must be computed where the BAR is computed (ui/rankclimb.js), off the
-    same step and the same eased progress. It used to be a registry entry fired
+    same step and the same curve — though NOT the same duration, since a
+    sweep's length scales with distance travelled and legibility does not
+    (`revealMinMs`; tests/test_ui_rank_line.py measures the result). It used to
+    be a registry entry fired
     on the settle beat, and a beat fires at a MOMENT: its timing could only ever
     be tuned to line up with the bar, never tied to it, and it did not line up
     — "it looks like the text that appears while we're doing this is totally

@@ -104,6 +104,16 @@ pointer to it).
   `Runtime.consoleAPICalled` and `Runtime.exceptionThrown` as they arrive
   between command replies — dropping those events is how a broken FIXTURE
   looks like a broken feature.
+- **Anything you read in the SAME `evaluate` that dispatched an event is the
+  PRE-render value, and any second control you set in that tick is handed a
+  stale closure.** Preact commits after the tick, so both look like the app
+  ignoring you. Bit twice in one session (2026-08-01) driving the climb
+  inspector's rank pickers: setting the tier and the division together sent the
+  division straight back (its handler still held the tier from the last
+  render), and reading `.tune-showing` right after the dispatch reported the
+  old rank, so a probe asserted on a destination that had already changed.
+  Dispatch, `wait_ms(~120)`, then read in a SEPARATE call — and set dependent
+  controls one per tick.
 - **Start every driven run with a CONTROL interaction on something unrelated
   and known-good** (a nav tab), and assert it changed the DOM. Without it a
   harness fault is indistinguishable from the bug you are hunting: a whole
