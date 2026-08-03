@@ -49,15 +49,24 @@ def _page(url: str):
 
 
 @pytest.fixture(scope="module")
-def hundred_coin_page():
+def hundred_coin_server():
     # The stage must BE Cool, Cool Mountain: you may only practice what you
     # are standing in front of (tracking/practicable.py), so a fixture left on
     # the default WF stage has its POST /api/target refused with a 409.
-    with serve_ui(stage=(CCM, CCM_LEVEL),
-                  target=(CCM, HUNDRED_COIN)) as base:
-        with _page(f"{base}/ui/index.html") as page:
-            page.wait_for(".objective-card", timeout_ms=20000)
-            yield page
+    with serve_ui(stage=(CCM, CCM_LEVEL), target=(CCM, HUNDRED_COIN)) as base:
+        yield base
+
+
+@pytest.fixture
+def hundred_coin_page(hundred_coin_server):
+    """A FRESH page per test. Sharing one across the module made whichever
+    test ran first decide what the others measured — the modal test leaves a
+    dialog open, the table test scrolls and expands a panel — and pytest
+    randomises order inside a module, so it failed about one run in three.
+    Booting the server is the expensive half and stays module-scoped."""
+    with _page(f"{hundred_coin_server}/ui/index.html") as page:
+        page.wait_for(".objective-card", timeout_ms=20000)
+        yield page
 
 
 def test_the_strategy_dropdown_groups_by_exit_star(hundred_coin_page):
@@ -110,3 +119,38 @@ def test_the_standards_table_bands_its_columns_by_variant(hundred_coin_page):
     # The band row spans the strategy columns exactly — one short and every
     # column after it sits under the wrong heading, silently.
     assert sum(span for _, span in bands) == columns - 1, (bands, columns)
+
+
+def test_the_new_strategy_modal_asks_which_star_the_run_ends_on(hundred_coin_page):
+    """Live question, 2026-08-03: "How do people add a new exit star that
+    doesn't already have a strat?" — asked while running this very build, so
+    the control existed and was not FINDABLE. This renders the modal and reads
+    its fields back in DOM ORDER, because the answer he gave is an order:
+    "add strategy -> choose exit star --> add strategy name / rank standards".
+    """
+    hundred_coin_page.evaluate("""
+      (() => {
+        const select = document.querySelector(".objective-strategy select");
+        select.value = "__new";
+        select.dispatchEvent(new Event("change", {bubbles: true}));
+      })()
+    """)
+    hundred_coin_page.wait_for(".modal-body", timeout_ms=10000)
+    fields = hundred_coin_page.evaluate("""
+      Array.from(document.querySelectorAll(".modal-body .field-label"))
+        .map((el) => el.textContent.trim())
+    """)
+    assert fields, "the New strategy modal rendered no labelled fields"
+    assert "Ends on" in fields, (
+        f"no exit-star control on a 100-coin star; fields were {fields}")
+    assert fields.index("Ends on") < fields.index("Strategy name"), (
+        f"the exit star must be asked FIRST — you pick the route, then name "
+        f"the approach to it. Order was {fields}")
+    options = hundred_coin_page.evaluate("""
+      Array.from(document.querySelectorAll(".modal-body .exit-star-field option"))
+        .map((o) => o.textContent.trim())
+    """)
+    # All six endings, not just the rated ones — defining a variant for a star
+    # the community does not time is the whole point of the control.
+    assert len([o for o in options if o]) >= 6, options
+    assert any("no community times" in o for o in options), options

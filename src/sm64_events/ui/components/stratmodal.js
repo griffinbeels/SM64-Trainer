@@ -152,20 +152,16 @@ export function StratModal({ entity, existing, onSaved, onClose }) {
   }
 
   return html`<${Modal} title="New strategy" icon="practice" size="large"
-      description="Name the approach, then add any rank times or example videos you already know."
+      description=${exitOptions.length
+        ? "Pick the star this run ends on, name the approach, then add any rank times you already know."
+        : "Name the approach, then add any rank times or example videos you already know."}
       onClose=${saving ? null : onClose}
       footer=${html`
         <button onclick=${onClose} disabled=${saving}>Cancel</button>
         <button class="primary-button" onclick=${save} disabled=${saving}>
           <${Icon} name="save" size=${16} /> ${saving ? "Saving…" : "Save strategy"}
         </button>`}>
-    <label class="modal-field strategy-name-field">
-      <span class="field-label">Strategy name</span>
-      <input class="stratname" placeholder="e.g. Texture setup" value=${name}
-          ref=${nameRef} autofocus
-          oninput=${(inputEvent) => setName(inputEvent.target.value)} />
-    </label>
-    ${exitOptions.length ? html`<label class="modal-field">
+    ${exitOptions.length ? html`<label class="modal-field exit-star-field">
       <span class="field-label">Ends on</span>
       <select value=${exitStar === null ? "" : String(exitStar)}
           onchange=${(changeEvent) => setExitStar(
@@ -183,6 +179,12 @@ export function StratModal({ entity, existing, onSaved, onClose }) {
         Ending somewhere the community does not rate starts a new variant.
       </span>
     </label>` : null}
+    <label class="modal-field strategy-name-field">
+      <span class="field-label">Strategy name</span>
+      <input class="stratname" placeholder="e.g. Texture setup" value=${name}
+          ref=${nameRef} autofocus
+          oninput=${(inputEvent) => setName(inputEvent.target.value)} />
+    </label>
     <label class="strategy-include-field">
       <input type="checkbox" checked=${included} onchange=${(changeEvent) => {
         setIncluded(changeEvent.target.checked); setIncludeTouched(true);

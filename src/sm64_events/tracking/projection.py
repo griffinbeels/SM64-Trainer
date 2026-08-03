@@ -539,6 +539,13 @@ class Projector:
             hc for d in (segments or []) if d.enabled
             and (hc := hundred_coin_entity(d.start_triggers, d.waypoints))
             is not None}
+        # def id -> the (course, 6) it times, for the SAME enabled engines.
+        # `_close` needs to ask "is one of them armed RIGHT NOW", which the
+        # entity set above cannot answer (see `_hundred_coin_engine_armed`).
+        self._hundred_coin_engine_ids: dict[int, tuple[int, int]] = {
+            d.id: hc for d in (segments or []) if d.enabled
+            and (hc := hundred_coin_entity(d.start_triggers, d.waypoints))
+            is not None}
         self.segment_notices: list[dict] = []  # live-broadcast queue, drained by service
         self._runs = RunTracker()
         self.run_notices: list[dict] = []   # live-broadcast queue, drained by service
@@ -1207,6 +1214,24 @@ class Projector:
             self._open = None
             return []
         star_tgt = self._star_target()
+        if self._engine_records_this_too(star_tgt, outcome):
+            # ONE reset, ONE row. The 100-coin star's engine turns this same
+            # event into its own row and feed()'s seg_closed loop reattributes
+            # it to this very entity, so recording the plain attempt as well
+            # puts the retry in the practice log TWICE (live report
+            # 2026-08-03, WF 100 Coins: "resetting during a 100 coins star
+            # triggers two resets"). Confirmed in his journal — three reset
+            # spans, each carrying a star-namespace row AND a
+            # segment-namespace row with the same journal id, the same span
+            # and the same strategy.
+            #
+            # This is the reset/death half of the suppression `_close_by_grab`
+            # has always applied to the GRAB, and the bug is as old as that
+            # one. It was invisible until 2026-08-03 because the 100-coin star
+            # had no rank standards, so nothing could set a strategy on it, so
+            # BOTH rows were unlabelled and the startup prune ate them.
+            self._open = None
+            return []
         course_id, star_id = star_tgt if star_tgt else (None, None)
         strat = self.strat_by_star.get(star_tgt) if star_tgt else None
         attempt = self._build(
@@ -1215,6 +1240,34 @@ class Projector:
             igt_frames=igt_frames, strat=strat)
         self._open = None
         return [attempt]
+
+    #: Outcomes a 100-coin engine ALSO turns into a row of its own. A foreign
+    #: `level_changed` is deliberately absent: a strict waypoint def cancels
+    #: SILENTLY there (tracking/segments.py's `_feed_waypoint` precedence), so
+    #: the plain `abandoned` attempt is the only record that leaving mid-run
+    #: ever happened, and suppressing it would lose the row rather than
+    #: de-duplicate it.
+    _ENGINE_MIRRORED_OUTCOMES = frozenset({"reset", "hard_reset", "death"})
+
+    def _engine_records_this_too(self, star_tgt, outcome) -> bool:
+        """Would an ARMED 100-coin engine record this same span itself?
+
+        Both clauses do real work. The outcome clause keeps `abandoned`
+        recording (above). The ARMED clause is what keeps the plain attempt as
+        the fallback when no engine is running — a deleted or disabled
+        definition, or one that already cancelled earlier in the visit — the
+        same fallback philosophy `_close_by_grab` uses, so the retry stays
+        visible rather than disappearing with the engine.
+
+        Safe to read the armed set here because `_dispatch` runs BEFORE
+        `self._segments.feed()` in `feed()`: the answer is the state as the
+        event ARRIVED, which is exactly the state that decides whether the
+        engine is about to close a row for it.
+        """
+        if star_tgt is None or outcome not in self._ENGINE_MIRRORED_OUTCOMES:
+            return False
+        return any(self._hundred_coin_engine_ids.get(seg_id) == star_tgt
+                   for seg_id in self._segments.armed_ids())
 
     def _build(self, first, close, outcome, outcome_detail, course_id, star_id,
                igt_frames, strat) -> Attempt:

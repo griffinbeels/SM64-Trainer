@@ -154,7 +154,7 @@ def test_a_user_minted_variant_survives_a_seed_bump(tmp_path):
 
 # ---- end to end, through the real 100-coin engine ----
 
-def _wf_engine_service(tmp_path):
+def _wf_engine_service(tmp_path, engine_enabled=True):
     """A service whose course-2 (WF) 100-coin engine is the real seeded shape,
     with two exit-star variants in its standards. Same def as
     tests/test_tracker_service.py's own 100-coin fixture."""
@@ -165,7 +165,7 @@ def _wf_engine_service(tmp_path):
     from sm64_events.tracking.service import TrackerService
 
     db = Database(tmp_path / "t.db")
-    db.insert_segment_def(
+    engine_id = db.insert_segment_def(
         "course 2 100 Coins -> Exit",
         start_triggers=[{"type": "level_enter", "to": 24},
                         {"type": "attempt_anchor", "level": 24}],
@@ -173,6 +173,11 @@ def _wf_engine_service(tmp_path):
                       for s in range(6)],
         guards=[], waypoints=[[{"type": "star_grabbed", "course": 2, "star": 6}]],
         created_utc="2026-07-28T00:00:00Z")
+    if not engine_enabled:
+        # By id, never a literal: the schema migration already seeds ten
+        # legacy tricks, so this def is 11, not 1 — and disabling the wrong
+        # row leaves the engine armed while the test claims it is off.
+        db.update_segment_def(engine_id, enabled=0)
     path = tmp_path / "standards.json"
     path.write_text("""{"version": 1, "entities": {"star:2:6": {
         "clock": "igt",
@@ -280,3 +285,93 @@ def test_a_variant_label_is_never_itself_a_strategy_name(tmp_path):
     assert classify(store.strategies("star:4:6"),
                     store.exit_variants("star:4:6"), None, 0) \
         == "100c + Slide · Standard"
+
+
+# ---- one reset, one row ----
+
+def _reset(service, frame, igt):
+    """A reset the projector counts: an anchor plus the `mario_acted` EVENT.
+
+    Without the event `_unacted_open` discards the span as reset-spam, and a
+    test asserting "no duplicates" would pass on ZERO rows — which is why
+    every assertion below counts rows rather than checking for their absence.
+    """
+    import asyncio
+
+    from tests.test_tracker_service import ev
+    asyncio.run(service.publish(ev("practice_reset", frame, {
+        "igt_frames_before": igt, "mario_acted": True,
+        "acted_tracking": True, "paused_frames_before": 0})))
+    asyncio.run(service.publish(ev("mario_acted", frame + 10, {})))
+
+
+def test_a_reset_on_a_targeted_100_coin_star_records_ONE_row(tmp_path):
+    """Live report 2026-08-03: "Resetting during a 100 coins star triggers two
+    resets, for some reason." It did — his own journal carried, for each of
+    three reset spans, a star-namespace row AND a segment-namespace row with
+    the same journal id, the same span and the same strategy.
+
+    The engine turns the reset into its own row (which feed() reattributes to
+    this very star), and the plain attempt for the active target recorded the
+    same span again. The GRAB path had always suppressed its half; the reset
+    path never did. Invisible until 100-coin stars got rank standards, because
+    before that nothing could set a strategy on one, so BOTH rows were
+    unlabelled and the startup prune ate them.
+    """
+    import asyncio
+
+    from sm64_events.tracking.projection import journal_id
+    from tests.test_tracker_service import ev
+
+    db, service = _wf_engine_service(tmp_path)
+    asyncio.run(service.publish(ev("level_changed", 900, {"from": 16, "to": 24})))
+    asyncio.run(service.set_target(2, 6, strat_tag="100c + Reds · Standard"))
+    for frame, igt in ((1000, 0), (1400, 400), (1800, 400)):
+        _reset(service, frame, igt)
+
+    rows = [a for a in db.attempts() if a.star_id == 6 and a.outcome == "reset"]
+    assert rows, "no reset recorded at all — the fixture never reached a run"
+    ids = [journal_id(a.id) for a in rows]
+    assert len(ids) == len(set(ids)), (
+        f"one reset span recorded twice: {[(a.id, a.rta_frames) for a in rows]}")
+
+
+def test_the_plain_attempt_still_records_when_no_engine_is_armed(tmp_path):
+    """The fallback that keeps a retry visible: with the engine disabled,
+    nothing is timing the course visit, so the ordinary star attempt is the
+    only record there is — suppressing it would DELETE the row rather than
+    de-duplicate it."""
+    import asyncio
+
+    from tests.test_tracker_service import ev
+
+    db, service = _wf_engine_service(tmp_path, engine_enabled=False)
+    asyncio.run(service.publish(ev("level_changed", 900, {"from": 16, "to": 24})))
+    asyncio.run(service.set_target(2, 6, strat_tag="100c + Reds · Standard"))
+    for frame, igt in ((1000, 0), (1400, 400)):
+        _reset(service, frame, igt)
+    from sm64_events.tracking.segments import SEGMENT_ATTEMPT_OFFSET
+    rows = [a for a in db.attempts() if a.star_id == 6]
+    assert rows and all(a.outcome == "reset" for a in rows), rows
+    # Every one is a PLAIN star attempt: with the engine off there is no
+    # segment-namespace row for these spans to have come from.
+    assert all(a.id < SEGMENT_ATTEMPT_OFFSET for a in rows), [a.id for a in rows]
+
+
+def test_leaving_the_course_still_records_the_abandoned_run(tmp_path):
+    """A foreign level change cancels a strict waypoint def SILENTLY — no
+    engine row — so the plain `abandoned` attempt is the only evidence the run
+    happened. Suppressing on armed-state alone would have eaten it, which is
+    why `_ENGINE_MIRRORED_OUTCOMES` omits `abandoned`."""
+    import asyncio
+
+    from tests.test_tracker_service import ev
+
+    db, service = _wf_engine_service(tmp_path)
+    asyncio.run(service.publish(ev("level_changed", 900, {"from": 16, "to": 24})))
+    asyncio.run(service.set_target(2, 6, strat_tag="100c + Reds · Standard"))
+    _reset(service, 1000, 0)
+    asyncio.run(service.publish(ev("level_changed", 1500, {"from": 24, "to": 16})))
+    assert any(a.star_id == 6 and a.outcome == "abandoned"
+               for a in db.attempts()), [
+        (a.star_id, a.outcome) for a in db.attempts()]
