@@ -3962,3 +3962,85 @@ def test_the_comeback_expires_with_the_staleness_budget():
     e.feed(jev(12, "practice_reset", 2005 + MIN_BUDGET_FRAMES + 1, {}),
            ctx(level=6, area=1))
     assert e.armed_ids() == set()
+
+
+# ---------------------------------------------------------------------------
+# path_nodes -- a definition's steps read as an ORDER (spec
+# 2026-08-02-strict-path-segments). Second reader of the same data
+# declared_nodes reads as a set; see that docstring for why the set was right
+# for ITS job and cannot express repetition or direction.
+# ---------------------------------------------------------------------------
+
+def _pathdef(waypoints, end, **kw):
+    return SegmentDef(id=900, name="path probe", enabled=True,
+                      start_triggers=[{"type": "level_exit", "from": 24}],
+                      end_triggers=end, waypoints=waypoints, guards=[], **kw)
+
+
+def test_path_nodes_reads_waypoints_then_the_end_in_order():
+    d = _pathdef([[{"type": "area_enter", "level": 6, "area": 3}]],
+                 [{"type": "level_enter", "to": 8}])
+    assert segments_module.path_nodes(d) == ("6:3", "8")
+
+
+def test_path_nodes_of_a_waypointless_def_is_just_its_end():
+    # This is what tightens the 39 movements that declare no step today: the
+    # end trigger is itself a declared place, so the FIRST move after arming
+    # is already judged.
+    d = _pathdef([], [{"type": "level_enter", "to": 8}])
+    assert segments_module.path_nodes(d) == ("8",)
+
+
+def test_path_nodes_skips_a_step_that_names_no_place():
+    # Contributions are SKIPPED, not padded with None -- the cursor must never
+    # have to step over a hole.
+    d = _pathdef([[{"type": "star_grabbed", "course": 8, "star": 0}]],
+                 [{"type": "level_enter", "to": 8}])
+    assert segments_module.path_nodes(d) == ("8",)
+
+
+def test_path_nodes_skips_an_any_of_step_whose_members_disagree():
+    # Any-of means "either is fine" and a cursor cannot hold two positions, so
+    # the step declines to constrain -- the unknown-means-yes convention this
+    # engine takes everywhere.
+    d = _pathdef([[{"type": "level_enter", "to": 8},
+                   {"type": "level_enter", "to": 22}]],
+                 [{"type": "level_enter", "to": 10}])
+    assert segments_module.path_nodes(d) == ("10",)
+
+
+def test_path_nodes_holds_a_repeated_place_twice():
+    # THE case declared_nodes structurally cannot express: SSL -> SSL -> LLL.
+    # Named as a difference from the set rather than restated as a literal.
+    once = _pathdef([[{"type": "level_enter", "to": 8}],
+                     [{"type": "area_enter", "level": 6, "area": 3}]],
+                    [{"type": "level_enter", "to": 22}])
+    assert len(set(segments_module.path_nodes(once))) == len(
+        segments_module.path_nodes(once))
+    twice = _pathdef([[{"type": "level_enter", "to": 8}],
+                      [{"type": "level_enter", "to": 8}]],
+                     [{"type": "level_enter", "to": 22}])
+    path = segments_module.path_nodes(twice)
+    assert len(path) == 3
+    assert [i for i, node in enumerate(path) if node == "8"] == [0, 1]
+    assert len(set(path)) < len(path)
+    assert len(segments_module.declared_nodes(twice)) < len(path)
+
+
+def test_path_nodes_of_the_hundred_coin_family_is_empty():
+    # Built from the SHIPPED seed rather than a hand-made lookalike, so this
+    # tracks the corpus instead of a guess about it. An empty path is what
+    # keeps all 15 out of the cursor rule with no exemption list.
+    import json
+
+    from sm64_events.core.paths import bundled_defaults_seed
+    seed = json.loads(bundled_defaults_seed().read_bytes().decode("utf-8"))
+    rows = [r for r in seed["segments"]
+            if hundred_coin_entity(r["start_triggers"], r["waypoints"])]
+    assert rows, "the seed no longer carries a 100-coin family"
+    for row in rows:
+        d = SegmentDef(id=901, name=row["name"], enabled=True,
+                       start_triggers=row["start_triggers"],
+                       end_triggers=row["end_triggers"],
+                       waypoints=row["waypoints"], guards=row["guards"])
+        assert segments_module.path_nodes(d) == ()

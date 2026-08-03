@@ -903,6 +903,43 @@ def declared_nodes(d) -> frozenset:
     return frozenset(nodes)
 
 
+def path_nodes(d) -> tuple:
+    """The world nodes this definition names as steps of its own route, IN
+    ORDER — its waypoints first, then its end trigger (spec
+    2026-08-02-strict-path-segments).
+
+    A TUPLE and not `declared_nodes`'s frozenset, because a set cannot hold a
+    place twice and cannot say which way you were walking. Both are properties
+    Griffin asked for by name: `SSL → SSL → LLL` is two cursor positions that
+    happen to name the same place, and the Lobby is legal walking IN to a
+    `WF → Basement → SSL` and a deviation walking back out of it.
+
+    This is a SECOND READER of the same data, not a replacement — the set is
+    still right for its own job (see `declared_nodes`: the waypoint match and
+    the position judgement land on the same frame via different events, so an
+    index compared against the arm's live `progress` reads a correctly-followed
+    waypoint as a move away from what comes next). The cursor this feeds is
+    advanced only by the SETTLED position, of which there is exactly one per
+    frame, so it has no such race.
+
+    A clause-set contributes ONE node when its members agree and NOTHING when
+    they disagree or name none. An any-of step means "either is fine" and a
+    cursor cannot hold two positions, so it declines to constrain — the same
+    unknown-means-yes convention `step_node` and `topology.hops` already take,
+    and what keeps the 100-coin family and every Bowser fight out of the rule
+    without an exemption list. Contributions are SKIPPED rather than padded
+    with None: the cursor must never have to step over a hole.
+    """
+    path = []
+    for step in list(d.waypoints) + [d.end_triggers]:
+        nodes = {step_node(clause) for clause in step}
+        if len(nodes) == 1:
+            node = nodes.pop()
+            if node is not None:
+                path.append(node)
+    return tuple(path)
+
+
 def start_areas(start_triggers: list) -> list:
     """[[level, area], …] — the castle SUBAREAS a segment explicitly starts in.
 
