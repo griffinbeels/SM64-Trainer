@@ -244,6 +244,13 @@ def test_the_tuning_page_is_reachable_from_the_app_and_from_the_launcher():
         "the settings drawer no longer links to the overall rank-up tuning page"
     assert not re.search(r'href="https?://[^"]*tunemarelo\.html', code), \
         "the tunemarelo.html link must be origin-relative, never a hardcoded host/port"
+    # And the selector exchange's inspector (live report 2026-08-02, the card set
+    # changing on screen). Third page, same guarantee: a capability he cannot
+    # reach from the entry point he actually uses is one that does not exist.
+    assert 'href="/ui/tuneselector.html"' in code, \
+        "the settings drawer no longer links to the selector exchange tuning page"
+    assert not re.search(r'href="https?://[^"]*tuneselector\.html', code), \
+        "the tuneselector.html link must be origin-relative, never a hardcoded host/port"
 
     launcher = (UI.parent.parent.parent / "run-test-server.bat").read_text(
         encoding="utf-8")
@@ -252,6 +259,8 @@ def test_the_tuning_page_is_reachable_from_the_app_and_from_the_launcher():
     assert "%SM64_PORT%/ui/tune.html" in launcher, \
         ("the launcher's URL must interpolate the port it actually chose -- a "
          "literal port there is the exact failure this test exists for")
+    assert "%SM64_PORT%/ui/tuneselector.html" in launcher, \
+        "run-test-server.bat must print the selector exchange page too"
 
 
 def test_the_card_label_is_derived_from_the_rated_scope_not_the_client_slot():

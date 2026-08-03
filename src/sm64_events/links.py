@@ -6,15 +6,14 @@ underscores, punctuation kept — pattern live-confirmed 2026-06-10);
 OVERRIDES holds hand-curated URLs (e.g. Ultimate Star Spreadsheet deep
 links, which need a one-time manual gid/range harvest). Ukikipedia 403s
 bot fetches: links are for the user's browser, never validated here."""
-from sm64_events.memory.addresses import star_name
+from sm64_events.memory.addresses import COURSE_ABBREV, star_name  # noqa: F401
 
 UKIKIPEDIA_RTA = "https://ukikipedia.net/wiki/RTA_Guide/"
 
-COURSE_ABBREV = {
-    1: "BoB", 2: "WF", 3: "JRB", 4: "CCM", 5: "BBH", 6: "HMC", 7: "LLL",
-    8: "SSL", 9: "DDD", 10: "SL", 11: "WDW", 12: "TTM", 13: "THI",
-    14: "TTC", 15: "RR",
-}
+# COURSE_ABBREV moved to memory/addresses.py on 2026-08-03, when the practice
+# card's step track needed the same fifteen strings to label a course chip.
+# Re-exported here because these URL builders read it, and because it is the
+# registry of what the world IS — the same argument node_key/node_label rest on.
 
 # (course_id, star_id) -> {"example": url} — hand-curated additions.
 OVERRIDES: dict[tuple[int, int], dict] = {}

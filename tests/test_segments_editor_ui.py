@@ -250,8 +250,15 @@ def test_backtest_preview_sends_the_full_unsaved_form_not_just_save_fields():
     # when it joined SAVE_FIELDS itself (the new Matching control) — it no
     # longer needs appending here, since BACKTEST_FIELDS spreads SAVE_FIELDS
     # first and therefore always carries it.
+    # `waypoints` MOVED into SAVE_FIELDS on 2026-08-03 (the editor grew a Then
+    # section and can author them now), so what this pins is the PROPERTY --
+    # the preview body carries every field the matcher branches on -- rather
+    # than one spelling of the list.
     assert "BACKTEST_FIELDS" in SEGMENTS_JS_SOURCE
-    assert '[...SAVE_FIELDS, "waypoints", "category"]' in SEGMENTS_JS_SOURCE
+    assert '[...SAVE_FIELDS, "category"]' in SEGMENTS_JS_SOURCE
+    assert '"waypoints"' in SEGMENTS_JS_SOURCE.split("BACKTEST_FIELDS")[0], (
+        "waypoints must reach the backtest body -- it decides which matcher "
+        "branch runs, so a preview without it tests a different definition")
 
 
 def test_the_backtest_button_guard_can_still_fail():
@@ -362,30 +369,55 @@ def test_the_timeline_guards_can_still_fail():
         'const LABELS = { all: "all", steps: "steps" };')
 
 
-def _saves_as_a_loose_segment(source: str) -> bool:
-    """The real save call, comment-immune (source_scan.py) -- a docstring or
-    comment describing "saves as a loose segment" would satisfy a bare
-    substring check just as easily as the real POST body. Pin the ACTUAL
-    call site: the method+path pair and the match_mode literal both present
-    in the same COMMENT-STRIPPED source (the function strips it itself, so
-    a caller can feed it either raw or already-stripped text)."""
+def _saves_through_one_definition_builder(source: str) -> bool:
+    """The real save call, comment-immune (source_scan.py) -- a docstring
+    describing what save() sends would satisfy a bare substring check just as
+    easily as the POST body itself.
+
+    CHANGED 2026-08-03. It used to pin `match_mode: "loose"` at the save site,
+    because a recording was always loose. It no longer is: a recording that
+    declares stops is a PATH and only means anything under the strict matcher.
+    What is pinned now is the property that made the old literal safe in the
+    first place -- backtest, lint and save all build their definition through
+    ONE function, so the thing tested and the thing written cannot differ. A
+    save posting its own object literal is exactly the drift this prevents."""
     stripped = strip_comments(source)
-    return ('"POST", "/api/segments"' in stripped
-            and 'match_mode: "loose"' in stripped)
+    return ('"POST", "/api/segments",' in stripped
+            and "definitionFor(synth, required)" in stripped
+            and "function definitionFor(" in stripped)
 
 
-def test_save_posts_the_recorded_definition_as_a_loose_segment():
-    assert _saves_as_a_loose_segment(SEGMENT_TIMELINE_JS_SOURCE)
+def test_save_posts_the_definition_the_backtest_actually_tested():
+    assert _saves_through_one_definition_builder(SEGMENT_TIMELINE_JS_SOURCE)
 
 
-def test_the_save_loose_guard_can_still_fail():
+def test_the_save_builder_guard_can_still_fail():
     comment_only = (
-        '// save() POSTs the recording to "/api/segments" as a\n'
-        '// match_mode: "loose" definition once the backtest has returned.\n')
-    assert not _saves_as_a_loose_segment(comment_only)
-    real_code = ('await send("POST", "/api/segments", '
-                 '{ ...body, match_mode: "loose" });')
-    assert _saves_as_a_loose_segment(real_code)
+        '// save() POSTs definitionFor(synth, required) to "/api/segments",\n'
+        '// the same object function definitionFor( built for the backtest.\n')
+    assert not _saves_through_one_definition_builder(comment_only)
+    real_code = ('function definitionFor(s, r) { return {}; }\n'
+                 'await send("POST", "/api/segments", '
+                 'definitionFor(synth, required));')
+    assert _saves_through_one_definition_builder(real_code)
+
+
+def _mode_follows_the_declared_stops(source: str) -> bool:
+    return ('match_mode: waypoints.length ? "strict" : "loose"'
+            in strip_comments(source))
+
+
+def test_a_recording_with_stops_is_strict_and_one_without_stays_loose():
+    """The rule, in one expression: a declared path is only enforced by the
+    strict matcher's path cursor, and a recording with no stops is byte-for-
+    byte the loose definition this tool has always produced."""
+    assert _mode_follows_the_declared_stops(SEGMENT_TIMELINE_JS_SOURCE)
+
+
+def test_the_mode_rule_guard_can_still_fail():
+    comment_only = ('// STRICT the moment a stop is required, LOOSE when none\n'
+                    '// is: match_mode: waypoints.length ? "strict" : "loose".\n')
+    assert not _mode_follows_the_declared_stops(comment_only)
 
 
 def _save_button_waits_for_the_backtest(source: str) -> bool:
@@ -659,7 +691,13 @@ def test_editor_save_disable_guard_can_still_fail():
 
 def _lints_alongside_the_recorder_backtest(source: str) -> bool:
     stripped = strip_comments(source)
-    return '"POST", "/api/segments/lint"' in stripped and "runLint(body)" in stripped
+    # `runLint(body)` became `runLint(definition)` behind a shared `recheck`
+    # on 2026-08-03, when toggling a stop had to re-run BOTH checks. What is
+    # pinned is still the pairing -- lint runs wherever the backtest runs --
+    # not the argument's spelling.
+    return ('"POST", "/api/segments/lint"' in stripped
+            and "runBacktest(definition);" in stripped
+            and "runLint(definition);" in stripped)
 
 
 def test_the_recorder_lints_alongside_its_backtest():
@@ -669,10 +707,11 @@ def test_the_recorder_lints_alongside_its_backtest():
 
 
 def test_the_recorder_lint_guard_can_still_fail():
-    comment_only = ('// runLint(body) posts "POST", "/api/segments/lint"\n'
-                    '// right beside runBacktest(body) in pickEnd.\n')
+    comment_only = ('// runLint(definition); posts "/api/segments/lint"\n'
+                    '// right beside runBacktest(definition); in recheck.\n')
     assert not _lints_alongside_the_recorder_backtest(comment_only)
-    real_code = 'runBacktest(body);\nrunLint(body);\nsend("POST", "/api/segments/lint", body)'
+    real_code = ('runBacktest(definition);\nrunLint(definition);\n'
+                 'send("POST", "/api/segments/lint", body)')
     assert _lints_alongside_the_recorder_backtest(real_code)
 
 

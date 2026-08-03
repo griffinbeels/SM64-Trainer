@@ -14,7 +14,18 @@
 import { send } from "./api.js";
 import { releaseCelebrationHold } from "./rankclimb.js";
 
-export async function requestTarget(t, body) {
+// `quiet` is for a write NO GESTURE ASKED FOR — today only the lone-route
+// auto-pick (loneoption.js). It changes two things, and both follow from the
+// same fact rather than from taste:
+//   - no notice on refusal. The server's sentence answers "why did my click
+//     do nothing"; raised at nobody it is a message about an action he never
+//     took, which he reads as a bug in itself (2026-08-01, the replayed
+//     celebration: "it feels like a bug (because I didn't trigger it)").
+//   - no celebration release. Beating the rank-up HOLD is explicitly a
+//     PLAYER's privilege ("if I click on another star to target while ranking
+//     up, it should let me immediately jump"); a convenience pick is not a
+//     click and must not cut a celebration short.
+export async function requestTarget(t, body, { quiet = false } = {}) {
   // A gesture beats the rank-up HOLD (ui/rankclimb.js). While a rank is
   // climbing the practice page is frozen so the GAME cannot move it out from
   // under the celebration -- walking out of the stage the instant you grab
@@ -27,13 +38,13 @@ export async function requestTarget(t, body) {
   // instead of matched on a URL -- and matching the URL in api.js was a second
   // source of truth for "which path moves the target", which
   // tests/test_single_source.py rightly rejects.
-  releaseCelebrationHold();
+  if (!quiet) releaseCelebrationHold();
   try {
     await send("POST", "/api/target", body);
     t.refresh();
     return true;
   } catch (refusal) {
-    t.setNotice(String(refusal.message || refusal));
+    if (!quiet) t.setNotice(String(refusal.message || refusal));
     return false;
   }
 }

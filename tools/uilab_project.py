@@ -355,20 +355,14 @@ PROJECT = Project(
             'overlap 7x2px inside button.starcell',
         '1100x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 230 > clientHeight 228',
-        '1100x1000 [page] clipped :: span.starname':
-            'scrollHeight 29 > clientHeight 27',
         '1100x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
         '1101x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 230 > clientHeight 228',
-        '1101x1000 [page] clipped :: span.starname':
-            'scrollHeight 29 > clientHeight 27',
         '1101x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
         '1180x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 230 > clientHeight 228',
-        '1180x1000 [page] clipped :: span.starname':
-            'scrollHeight 29 > clientHeight 27',
         '1180x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
         '1181x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
@@ -377,38 +371,26 @@ PROJECT = Project(
             'overlap 7x2px inside button.starcell',
         '1250x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 230 > clientHeight 228',
-        '1250x1000 [page] clipped :: span.starname':
-            'scrollHeight 29 > clientHeight 27',
         '1250x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
         '1251x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 230 > clientHeight 228',
-        '1251x1000 [page] clipped :: span.starname':
-            'scrollHeight 29 > clientHeight 27',
         '1251x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
         '1280x720 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 230 > clientHeight 228',
-        '1280x720 [page] clipped :: span.starname':
-            'scrollHeight 29 > clientHeight 27',
         '1280x720 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
         '1400x760 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 230 > clientHeight 228',
-        '1400x760 [page] clipped :: span.starname':
-            'scrollHeight 29 > clientHeight 27',
         '1400x760 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
         '1400x761 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 230 > clientHeight 228',
-        '1400x761 [page] clipped :: span.starname':
-            'scrollHeight 29 > clientHeight 27',
         '1400x761 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
         '1500x900 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 230 > clientHeight 228',
-        '1500x900 [page] clipped :: span.starname':
-            'scrollHeight 29 > clientHeight 27',
         '1500x900 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
         '1920x1080 [page] clipped :: section.practice-card.selector-card.stagebanner':
@@ -417,14 +399,10 @@ PROJECT = Project(
             'overlap 7x2px inside button.starcell',
         '850x1180 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 199 > clientHeight 197',
-        '850x1180 [page] clipped :: span.starname':
-            'scrollHeight 22 > clientHeight 20',
         '850x1180 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
         '851x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 199 > clientHeight 197',
-        '851x1000 [page] clipped :: span.starname':
-            'scrollHeight 22 > clientHeight 20',
         '851x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
         '900x1180 [page] clipped :: section.practice-card.selector-card.stagebanner':
@@ -433,8 +411,6 @@ PROJECT = Project(
             'overlap 7x2px inside button.starcell',
         '912x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 207 > clientHeight 205',
-        '912x1000 [page] clipped :: span.starname':
-            'scrollHeight 24 > clientHeight 22',
         '912x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
         '913x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':

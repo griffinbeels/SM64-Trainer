@@ -1059,6 +1059,40 @@ the region boundary while the next movement *starts* on `star_grabbed` —
 which is why `seg:sl->basement` ends on `area_enter` and `seg:mips2->hmc`
 starts on a grab.
 
+### Over half of real play is not a walk (2026-08-01, re-measured 08-02)
+
+Measured against both live journals by `tools/measure_topology_cancels.py`,
+collapsing the event stream to the last `(level, area)` observed per
+`global_timer` frame:
+
+| journal | settled node moves | not a world edge | of those, course → course |
+|---|---|---|---|
+| repo checkout (20,542 events) | 739 | 341 (46%) | 235 |
+| installed exe (17,424 events) | 419 | 221 (53%) | 156 |
+
+**A course → course transition is impossible in the real game** — every course
+exit lands in the castle — so those are Usamune warp-menu teleports outright.
+The practice loop is mostly warping, which is why the matcher was built
+permissive and why a topological rule has to tolerate arriving somewhere by
+warp while still refusing to let a movement *survive* one.
+
+The other half of the off-graph population is not a warp and not a table gap:
+it is the **transient lobby**. Every castle entry loads the lobby (area 1) for
+one poll before warping to the real area, all on the same game frame
+(`detectors/level.py`, and the `from_transient` flag `detectors/area.py`
+stamps), so the raw stream shows "BitFS → Lobby" ×10 and "SSL → Lobby" ×5 for
+moves that land in the basement. Any rule reading raw position events sees a
+non-edge, and for an upstairs destination it also sees the hop count *fall*
+then *rise*. Judging one frame late and taking the last position of the frame
+is what removes it.
+
+**A first pass keyed nodes on `(level, area)` everywhere and read 97.9% of
+moves as off-graph.** Courses have their own subareas — SSL area 2 is the
+pyramid interior, LLL area 2 the volcano — and `WORLD_EDGES_*` models subareas
+only for the castle interior. That failure is silent and reads exactly like a
+broken world table; `tracking/topology.py::node_for` is the one place that
+rule lives, with a mutation-proved test.
+
 ### Route steps must be in completion-event order
 
 `RunTracker._apply` only ever considers `steps[current]`; an attempt matching

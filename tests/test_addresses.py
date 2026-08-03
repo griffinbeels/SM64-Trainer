@@ -94,11 +94,18 @@ def test_world_connections_reference_only_registered_levels_and_areas():
 
 
 def test_world_connections_match_the_user_topology_spec():
-    # The 2026-07-23 spec, verbatim: exiting a basement course can ONLY land
-    # in the castle basement; each hub region reaches exactly its own stars
-    # plus its stated hub/Bowser exits.
+    # The 2026-07-23 spec: each hub region reaches exactly its own stars plus
+    # its stated hub/Bowser exits.
+    #
+    # Its other half -- "exiting a basement course can ONLY land in the castle
+    # basement" -- was CORRECTED 2026-08-02 by the human testing every course
+    # in the game: pausing offers Exit Course everywhere but the castle's own
+    # areas, and it always lands in the LOBBY. So a basement course has two
+    # ways out, the door it came in by and the pause menu, and the second is
+    # what several shipped movements are built on. See
+    # tests/test_topology.py::test_every_course_can_pause_exit_to_the_lobby.
     conn = A.world_connections()
-    assert conn["22"] == [[6, 3]]          # LLL exits to the basement, nowhere else
+    assert conn["22"] == [[6, 1], [6, 3]]  # LLL: pause exit, and its own door
     basement = {tuple(d) for d in conn["6:3"]}
     assert {(7, None), (22, None), (8, None), (23, None),    # HMC LLL SSL DDD
             (19, None), (16, None)} <= basement              # BitFS + grounds
@@ -114,13 +121,21 @@ def test_world_connections_match_the_user_topology_spec():
 
 
 def test_world_connections_arena_edges_are_directed():
-    # Arenas are entered ONLY through their course's pipe; their exits dump
-    # Mario back at the course's castle region. The reverse moves don't exist.
+    # An arena is entered ONLY through its course's pipe -- never straight from
+    # the castle. Its WIN is the one-way part: the key cutscene puts Mario back
+    # in the region, and there is no way back in from there.
+    #
+    # The pair itself is TWO-WAY, corrected 2026-08-02 by the human reading
+    # tools/topology_map.py: losing the fight drops you back into the course
+    # you came from. This test asserted the opposite -- "arena never exits into
+    # BitDW" -- and that is the whole reason the map tool exists, since a
+    # missing edge only makes the matcher STRICTER somewhere he never walked
+    # and tools/measure_topology_cancels.py is structurally blind to it.
     conn = A.world_connections()
     assert [30, None] in conn["17"]                        # BitDW pipe -> B1 arena
-    assert [6, 1] in conn["30"]                            # fight exit -> lobby
+    assert [6, 1] in conn["30"]                            # winning key cutscene -> lobby
     assert not any(lvl == 30 for lvl, _ in conn["6:1"])    # lobby can't enter the arena
-    assert not any(lvl == 17 for lvl, _ in conn["30"])     # arena never exits into BitDW
+    assert [17, None] in conn["30"]                        # losing -> back into BitDW
     # BitFS is entered from the BASEMENT, never straight out of DDD. This
     # asserted `[19, None] in conn["23"]` -- a "DDD sub bay -> BitFS" edge --
     # until 2026-07-27, when the real walk was captured twice: `23 -> 6
@@ -184,3 +199,28 @@ def test_mips_stars_resolve_to_the_basement():
 def test_node_label_reads_subareas_and_levels():
     assert A.node_label(A.node_key(A.LEVEL_CASTLE_INSIDE, A.AREA_BASEMENT)) == "Basement"
     assert A.node_label(A.node_key(8)) == "Shifting Sand Land"
+
+
+def test_node_short_label_shortens_the_names_that_need_it():
+    assert A.node_short_label(A.node_key(8)) == "SSL"           # main course
+    assert A.node_short_label(A.node_key(19)) == "BitFS"        # Bowser stage
+    assert A.node_short_label(A.node_key(A.BOWSER_2_ARENA)) == "Bowser 2"
+    # A castle subarea is already short and keeps the name it has everywhere
+    # else -- a second spelling for the room you are standing in would read as
+    # two different places.
+    assert A.node_short_label(A.node_key(A.LEVEL_CASTLE_INSIDE,
+                                         A.AREA_BASEMENT)) == "Basement"
+
+
+def test_every_world_node_has_a_short_form():
+    """A step track is route notation, so ONE sentence-length name among a
+    line of codes is what reads as broken -- not the width, which has plenty
+    of headroom (see `node_short_label`). Covers every node in the world
+    graph, so a level added to `WORLD_EDGES_*` without a short form fails here
+    rather than turning up on his card as the odd one out. Mutation-proved by
+    deleting a `_SHORT_LEVEL_NAMES` row.
+    """
+    over = {node: A.node_short_label(node)
+            for node in A.world_connections()
+            if len(A.node_short_label(node)) > 12}
+    assert over == {}

@@ -1152,6 +1152,68 @@ def test_waypoint_level_keeps_a_multi_level_segment_target():
     assert p.target is None
 
 
+def _bowser1_wf_strict_reentry():
+    """The shipped `Bowser 1 -> WF` as of 2026-08-03: exit the arena, re-enter
+    BitDW, pause-exit back to the Lobby, then WF. Its origin is the arena, so
+    every one of its own steps is in a foreign course or the castle."""
+    from sm64_events.tracking.segments import SegmentDef
+    return SegmentDef(
+        id=32, name="Bowser 1 -> WF", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 30}],
+        end_triggers=[{"type": "level_enter", "to": 24}],
+        waypoints=[[{"type": "level_enter", "to": 17, "from": 6}],
+                   [{"type": "level_enter", "to": 6, "to_subarea": 1,
+                     "from": 17}]],
+        guards=[], match_mode="strict")
+
+
+def test_a_strict_segment_keeps_its_target_walking_its_own_declared_route():
+    """Live report 2026-08-03: "I finished bowser 1, selected Bowser 1 -> WF,
+    entered BitDW, and now Bowser 1 -> WF is not selected anymore!"
+
+    His rule, and the whole of this fix: *"If I select a segment, it should be
+    selected until it's no longer possible for it to be armed / it gets
+    invalidated by deviating from the path."* BitDW is step 1 of this
+    movement's own route, so entering it is the opposite of deviating.
+
+    The exemption to the origin-retirement rule used to require `match_mode ==
+    "loose"`, because the rule ran BEFORE the matcher and a stale "was armed"
+    reading is only safe for a mode that stays armed through everything. This
+    branch flipped all 56 movements to strict and took the exemption away from
+    every one of them. Deferring the verdict until after the matcher is what
+    lets it cover strict too -- the matcher's disarm IS the invalidation.
+
+    Mutation proof: restore `and not self._armed_loosely(self.target[1])` on
+    the `_dispatch` condition and this goes red while the two tests below stay
+    green."""
+    d = _bowser1_wf_strict_reentry()
+    p = Projector(segments=[d])
+    p.feed(jev(1, "level_changed", 500, {"from": 30, "to": 6}))    # arena exit: arms
+    p.feed(jev(2, "area_changed", 500,
+               {"level": 6, "from": 1, "to": 1, "from_transient": True}))
+    p.feed(jev(3, "target_set", 600, {"kind": "segment", "segment_id": d.id}))
+    assert p.armed_segment_ids() == {d.id}
+    p.feed(jev(4, "level_changed", 800, {"from": 6, "to": 17}))    # step 1: BitDW
+    assert p.armed_segment_ids() == {d.id}, "the matcher kept it; it is on route"
+    assert p.target == ("segment", d.id), "and so must the pick"
+
+
+def test_a_strict_segment_loses_its_target_the_moment_it_deviates():
+    """The other half, and the reason the old guard existed: a move OFF the
+    declared route cancels the definition on that very event, and the target
+    must go with it rather than pointing at something the matcher just
+    disarmed. Same test the deferred check has to keep passing."""
+    d = _bowser1_wf_strict_reentry()
+    p = Projector(segments=[d])
+    p.feed(jev(1, "level_changed", 500, {"from": 30, "to": 6}))
+    p.feed(jev(2, "area_changed", 500,
+               {"level": 6, "from": 1, "to": 1, "from_transient": True}))
+    p.feed(jev(3, "target_set", 600, {"kind": "segment", "segment_id": d.id}))
+    p.feed(jev(4, "level_changed", 800, {"from": 6, "to": 8}))     # SSL: not step 1
+    assert p.armed_segment_ids() == set()
+    assert p.target is None
+
+
 def test_grab_closing_star_and_segment_orders_star_first_and_target_follows_segment():
     from sm64_events.tracking.segments import SegmentDef
     b3 = SegmentDef(id=10, name="Bowser 3", enabled=True,
@@ -1320,10 +1382,33 @@ def test_game_reset_resets_star_count_knowledge_for_guards():
 # -- route-scoped arming (spec 2026-07-23-default-routes-foundation) -----------
 
 def test_route_selected_threads_into_matchcontext():
-    # A guarded segment does NOT arm on its trigger before any route_selected
-    # has fired; the SAME arming event, replayed after route_selected names
-    # this def's id, arms it. Proves the Projector actually threads
-    # self._route_segments into the MatchContext it builds for the engine.
+    # Proves the Projector actually threads self._route_segments into the
+    # MatchContext it builds for the engine, by showing a route that does NOT
+    # name this def keeping it unarmed and one that does arming it.
+    #
+    # This used to open with "no route_selected has fired yet -> unarmed",
+    # which stopped being true on 2026-08-02: an EMPTY scope now means no
+    # filter (segments.py::_route_allows carries his ruling). A route that
+    # names OTHER segments is the shape that still proves the threading, and
+    # it is the one that was never covered.
+    from sm64_events.tracking.segments import SegmentDef
+    guarded = SegmentDef(id=42, name="CCM->BitDW", enabled=True,
+                        start_triggers=[{"type": "level_exit", "from": 5}],
+                        end_triggers=[{"type": "level_enter", "to": 17}],
+                        guards=[{"type": "in_active_route"}])
+    p = Projector(segments=[guarded])
+    p.feed(jev(1, "route_selected", 0, {"route_id": 1, "segment_ids": [99]}))
+    p.feed(jev(2, "level_changed", 1000, {"from": 5, "to": 16}))
+    assert 42 not in p.armed_segment_ids()
+    p.feed(jev(3, "route_selected", 0, {"route_id": 2, "segment_ids": [42]}))
+    p.feed(jev(4, "level_changed", 2000, {"from": 5, "to": 16}))
+    assert 42 in p.armed_segment_ids()
+
+
+def test_no_active_route_arms_every_guarded_movement():
+    # The live report itself (2026-08-02): scope chip on "Overall" -> no
+    # route_selected scope -> every castle movement silently unpracticable.
+    # His ruling: "I would expect to see EVERY SINGLE OPTION enabled."
     from sm64_events.tracking.segments import SegmentDef
     guarded = SegmentDef(id=42, name="CCM->BitDW", enabled=True,
                         start_triggers=[{"type": "level_exit", "from": 5}],
@@ -1331,9 +1416,12 @@ def test_route_selected_threads_into_matchcontext():
                         guards=[{"type": "in_active_route"}])
     p = Projector(segments=[guarded])
     p.feed(jev(1, "level_changed", 1000, {"from": 5, "to": 16}))
-    assert 42 not in p.armed_segment_ids()
-    p.feed(jev(2, "route_selected", 0, {"route_id": 1, "segment_ids": [42]}))
-    p.feed(jev(3, "level_changed", 2000, {"from": 5, "to": 16}))
+    assert 42 in p.armed_segment_ids()
+    # ...and clearing a route back to Overall restores that, rather than
+    # leaving the empty member set behind as a filter matching nobody.
+    p.feed(jev(2, "route_selected", 0, {"route_id": 1, "segment_ids": [99]}))
+    p.feed(jev(3, "route_selected", 0, {"route_id": None, "segment_ids": []}))
+    p.feed(jev(4, "level_changed", 2000, {"from": 5, "to": 16}))
     assert 42 in p.armed_segment_ids()
 
 

@@ -262,7 +262,13 @@ class TrackerService:
             await self.broadcaster.publish(Event(
                 type=n["event"], frame=n["frame"],
                 timestamp_utc=event.timestamp_utc,
-                payload={"segment_id": n["segment_id"], "name": n["name"]}))
+                # Every key but the two the Event envelope already
+                # carries. armed/disarmed still publish exactly
+                # {segment_id, name}; segment_progress (2026-08-03)
+                # adds progress/total, so the step track's own numbers
+                # ride the notice announcing them.
+                payload={k: v for k, v in n.items()
+                         if k not in ("event", "frame")}))
             if self._projector is not proj:
                 return
         # Run drain: persist any newly finished/aborted runs produced by this
@@ -295,6 +301,32 @@ class TrackerService:
                 type="target_changed", frame=event.frame,
                 timestamp_utc=event.timestamp_utc,
                 payload=self.target_payload()))
+
+    async def settle_frame(self, frame: int) -> None:
+        """The game frame advanced; deliver any topological verdict waiting on
+        it (live report 2026-08-02). Wired from the poller's own clock in
+        main.py, because until this existed the matcher's one-frame defer waited
+        on the next JOURNALED event — and standing still inside a course
+        journals nothing, so a cancel decided the instant he entered Bowser in
+        the Sky reached the screen 27.7 s later.
+
+        Broadcast-only, never journaled: these are the same ephemeral arm/disarm
+        notices `_track` drains, and the projector re-derives them on replay."""
+        if self.db is None:
+            return
+        proj = self._projector
+        for n in proj.settle(frame):
+            await self.broadcaster.publish(Event(
+                type=n["event"], frame=n["frame"], timestamp_utc=_now(),
+                # Every key but the two the Event envelope already
+                # carries. armed/disarmed still publish exactly
+                # {segment_id, name}; segment_progress (2026-08-03)
+                # adds progress/total, so the step track's own numbers
+                # ride the notice announcing them.
+                payload={k: v for k, v in n.items()
+                         if k not in ("event", "frame")}))
+            if self._projector is not proj:
+                return   # a CRUD reproject swapped it; its state is authoritative
 
     def _attempt_completed_event(self, a, close_event: Event) -> Event:
         return Event(type="attempt_completed", frame=close_event.frame,

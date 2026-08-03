@@ -47,15 +47,31 @@ ROUTE_SCOPED = [{"type": "in_active_route"}]
 # competing strategies. Spec 2026-07-24-segment-default-strat-design.md.
 STANDARD_STRAT = "Standard"
 
-# Every movement ships match_mode="loose" (spec 2026-07-28-multi-step-segments,
-# Task 19): the whole reason the strict matcher's waypoint-cancellation rules
-# forced so many `via=[...]` chains in the first place is gone once nothing
-# in between start and end can silently disarm the def. `movement()`'s own
-# match_mode= parameter overrides this per row -- the case that matters is a
-# recording promoted through tools/corpus_from_db.py, which must carry
-# whatever mode it was recorded and verified with rather than silently
-# reconciling back to this default.
-DEFAULT_MOVEMENT_MATCH_MODE = "loose"
+# Every movement shipped match_mode="loose" from 2026-07-28 (spec
+# ...-multi-step-segments, Task 19) until 2026-08-02, when Griffin ruled the
+# opposite: *"That is a fixed path, and there are no other options. I want it
+# to be very strict... In that situation, we're testing a specific path. There
+# are no deviations that are allowed."*
+#
+# Loose was right about the waypoint-cancellation rules being too eager and
+# wrong about what replaces them. A movement's identity IS its route, and
+# nothing but a DECLARATION can express that: entering BitFS during `Bowser 2
+# -> Upstairs` is the same move whether it is the fastest route or a wrong
+# turn, so no measurement separates them. `via=[...]` is that declaration, and
+# under the path cursor (spec 2026-08-02-strict-path-segments) it is REQUIRED
+# rather than merely permitted -- running the movement any other way records
+# nothing, and a runner who wants both times authors two segments.
+#
+# Losing the staleness deadline comes with the flip and is accepted ("removing
+# staleness deadline is reasonable"): `_deadline_for` returns None for anything
+# but loose, so a strict arm persists while the player stands still. Harmless
+# under the path rule, since any wrong move voids it.
+#
+# `movement()`'s own match_mode= parameter overrides this per row -- the case
+# that matters is a recording promoted through tools/corpus_from_db.py, which
+# must carry whatever mode it was recorded and verified with rather than
+# silently reconciling back to this default.
+DEFAULT_MOVEMENT_MATCH_MODE = "strict"
 
 
 # --- trigger clauses -------------------------------------------------------
@@ -67,8 +83,24 @@ def exit_level(level, to=None):
     return clause
 
 
-def enter_level(level, frm=None):
+def enter_level(level, frm=None, to_subarea=None):
+    """`to_subarea` pins WHICH castle area the entry lands in.
+
+    The match lambda ignores it on anything but a start trigger (the castle
+    loads the lobby transiently before warping, so the destination area is
+    only knowable a poll later -- see TRIGGERS in tracking/segments.py). It is
+    still load-bearing on a STEP, because `segments.step_node` reads it and the
+    path cursor compares that node against the SETTLED position. Without it a
+    castle step resolves to the bare node "6", which is not in the world graph
+    at all, so it could never match and would void every run of the movement.
+
+    A castle step reached by WALKING inside the castle is an `enter_area`
+    instead. This one is for arriving from another LEVEL -- the courtyard, the
+    grounds, a course -- where `can_run_from` refuses an `area_enter` next step
+    because it can only ever fire from level 6."""
     clause = {"type": "level_enter", "to": level}
+    if to_subarea is not None:
+        clause["to_subarea"] = to_subarea
     if frm is not None:
         clause["from"] = frm
     return clause

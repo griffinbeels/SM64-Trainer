@@ -9,6 +9,7 @@ from sm64_events.storage.db import EventRow
 from sm64_events.tracking import segments as segments_module
 from sm64_events.tracking.segments import (SEGMENT_ATTEMPT_OFFSET,
                                            arms_ambiently,
+                                           card_step_labels,
                                            card_waiting_for_sentence,
                                            clause_sentence,
                                            course_groups, level_groups,
@@ -77,7 +78,9 @@ def test_vocab_ships_connections_and_flow_annotations():
     # by the destination's predecessors). UI-only — validation stays
     # permissive (the Usamune warp menu can fabricate any edge).
     v = vocab()
-    assert v["connections"]["22"] == [[6, 3]]
+    # LLL reaches the basement by its own door and the lobby by the pause menu
+    # (live-verified 2026-08-02; tests/test_topology.py owns that rule).
+    assert v["connections"]["22"] == [[6, 1], [6, 3]]
     level_enter = next(t for t in v["triggers"] if t["key"] == "level_enter")
     assert level_enter["params"]["to"]["flow"] == {
         "role": "dest", "peer": "from", "peer_subarea": "from_subarea"}
@@ -2403,10 +2406,26 @@ def _guarded_move():
                       waypoints=[], guards=[{"type": "in_active_route"}])
 
 
-def test_guarded_def_does_not_arm_without_route():
+def test_guarded_def_arms_with_no_route_because_no_route_means_no_filter():
+    """REVERSED 2026-08-02 by his own ruling. This test asserted the opposite
+    ("does not arm without route") from 2026-07-23 until a live report found
+    what it really cost: with the header scope on Overall there is no active
+    route, so all 56 castle movements were unpracticable and no surface said
+    why. *"if we're in 'Overall' mode, I would expect to see EVERY SINGLE
+    OPTION enabled. That is, I can practice ANYTHING."*"""
     e = SegmentEngine([_guarded_move()])
     e.feed(jev(10, "level_changed", 1000, {"from": 5, "to": 16}),  # exit CCM
            ctx(level=16, prev_level=5, route_segments=None))
+    assert 42 in e.armed_ids()
+
+
+def test_a_selected_route_still_narrows_to_its_own_members():
+    """The other half, and the reason the guard is not simply deleted: picking
+    a route is a deliberate narrowing, so a movement OUTSIDE the active route
+    stays unarmed. Only the EMPTY scope means "no filter"."""
+    e = SegmentEngine([_guarded_move()])
+    e.feed(jev(10, "level_changed", 1000, {"from": 5, "to": 16}),
+           ctx(level=16, prev_level=5, route_segments=frozenset({7, 8})))
     assert 42 not in e.armed_ids()
 
 
@@ -3564,3 +3583,912 @@ def test_merge_requires_both_inputs_enabled():
         end_triggers=[{"type": "level_enter", "to": 8}],
         guards=[], match_mode="loose")
     assert merge_definitions(a, b_disabled, "z")["enabled"] is False
+
+
+def test_step_node_reads_the_place_a_clause_leaves_mario_in():
+    from sm64_events.tracking.segments import step_node
+    assert step_node({"type": "level_enter", "to": 8}) == "8"
+    assert step_node({"type": "level_enter", "to": 6,
+                      "to_subarea": 3}) == "6:3"
+    assert step_node({"type": "area_enter", "level": 6, "area": 3}) == "6:3"
+    assert step_node({"type": "level_exit", "from": 22, "to": 6,
+                      "to_subarea": 3}) == "6:3"
+
+
+def test_step_node_answers_none_for_a_clause_that_names_no_place():
+    # None = unconstrained, which is what keeps key grabs, pipe entries, star
+    # grabs and reset_game out of the topological rules entirely.
+    from sm64_events.tracking.segments import step_node
+    assert step_node({"type": "key_grabbed", "level": 30}) is None
+    assert step_node({"type": "warp_entered", "level": 17}) is None
+    assert step_node({"type": "star_grabbed", "course": 2, "star": 0}) is None
+    assert step_node({"type": "reset_game"}) is None
+    # 52 of the 53 seeded level_exit clauses omit `to`: the definition says
+    # nothing about where the player lands, so neither does this.
+    assert step_node({"type": "level_exit", "from": 24}) is None
+
+
+def test_settled_position_skips_the_transient_lobby():
+    # Every castle entry loads the lobby (area 1) for one poll before warping
+    # to the real area, all on the SAME game frame (detectors/level.py). The
+    # engine must judge the LAST position of a frame, or a basement course
+    # exit reads as "SSL -> Lobby", which is not an edge at all.
+    e = SegmentEngine([LBLJ])
+    e.feed(jev(1, "area_changed", 100,
+               {"level": 8, "from": 1, "to": 1, "from_transient": False}),
+           ctx(level=8))
+    e.feed(jev(2, "level_changed", 200, {"from": 8, "to": 6}),
+           ctx(level=6, prev_level=8))
+    e.feed(jev(3, "area_changed", 200,
+               {"level": 6, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=6, area=1))
+    e.feed(jev(4, "area_changed", 200,
+               {"level": 6, "from": 1, "to": 3, "from_transient": True}),
+           ctx(level=6, area=3))
+    assert e._settled_node == "8"          # not judged yet: frame 200 is live
+    e.feed(jev(5, "mario_acted", 205, {}), ctx(level=6, area=3))
+    assert e._settled_node == "6:3"        # the basement, never the lobby
+
+
+def test_a_reset_forgets_where_mario_was():
+    # game_reset carries a boot-range frame and session_started restarts
+    # global_timer, so a remembered node from before either would be compared
+    # against a frame number that means nothing.
+    e = SegmentEngine([LBLJ])
+    e.feed(jev(1, "area_changed", 100,
+               {"level": 8, "from": 1, "to": 1, "from_transient": False}),
+           ctx(level=8))
+    e.feed(jev(2, "mario_acted", 105, {}), ctx(level=8))
+    assert e._settled_node == "8"
+    e.feed(jev(3, "game_reset", 20, {}), ctx(level=8))
+    assert e._settled_node is None and e._pending_move is None
+
+
+# Mirrors the shipped seed row seg:wf->ssl: loose, no waypoints, exits WF and
+# ends on entering SSL.
+WF_SSL = SegmentDef(id=70, name="WF -> SSL", enabled=True,
+                    start_triggers=[{"type": "level_exit", "from": 24}],
+                    end_triggers=[{"type": "level_enter", "to": 8}],
+                    waypoints=[], guards=[], match_mode="loose")
+
+
+def _exit_wf_into_the_lobby(e):
+    """Arm WF -> SSL the way the real journal does: a level edge into the
+    castle plus its co-frame establishing area_changed, then an event on a
+    later frame so the move is judged."""
+    e.feed(jev(1, "level_changed", 1000, {"from": 24, "to": 6}),
+           ctx(level=6, prev_level=24))
+    e.feed(jev(2, "area_changed", 1000,
+               {"level": 6, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=6, area=1))
+    e.feed(jev(3, "mario_acted", 1005, {}), ctx(level=6, area=1))
+
+
+def test_a_warp_into_an_unreachable_place_cancels_an_armed_segment():
+    # Live report 2026-08-01: standing in the Bowser 1 arena, WF -> SSL read
+    # as ACTIVE SEGMENT. There is no walk from the castle lobby to that arena
+    # -- it is reached only through BitDW's pipe -- so the movement WF -> SSL
+    # was measuring cannot still be under way.
+    e = SegmentEngine([WF_SSL])
+    _exit_wf_into_the_lobby(e)
+    assert e.armed_ids() == {70}
+    e.feed(jev(4, "level_changed", 2000, {"from": 6, "to": 30}),
+           ctx(level=30, prev_level=6))
+    e.feed(jev(5, "area_changed", 2000,
+               {"level": 30, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=30, area=1))
+    closed, notices = e.feed(jev(6, "mario_acted", 2005, {}), ctx(level=30))
+    assert e.armed_ids() == set()
+    assert closed == []          # the movement never happened: no row
+    assert [n["event"] for n in notices] == ["segment_disarmed"]
+
+
+def test_a_cancel_lands_on_the_clock_with_no_event_to_carry_it():
+    """Live report 2026-08-02: he entered Bowser in the Sky from Upstairs with
+    `Bowser 2 → WDW` armed, and the selector kept offering it while the card
+    called it ACTIVE SEGMENT. The rule was right and the DELIVERY was late —
+    `tools/why_cancelled.py` on his own session dated the verdict **832 frames
+    (27.7 s)** after the move, and the UI log has the chip on screen for 27.9 s.
+    The one-frame defer only advanced when the journal got another event, and
+    standing still inside a course journals nothing.
+
+    So the frame itself must be able to deliver it: `settle(frame)`, fed by the
+    poller's clock. Nothing else changes — same verdict, same silence (no row).
+    """
+    e = SegmentEngine([WF_SSL])
+    _exit_wf_into_the_lobby(e)
+    e.feed(jev(4, "level_changed", 2000, {"from": 6, "to": 30}),
+           ctx(level=30, prev_level=6))
+    e.feed(jev(5, "area_changed", 2000,
+               {"level": 30, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=30, area=1))
+    assert e.armed_ids() == {70}      # frame 2000 is still live: not judged yet
+    notices = e.settle(2001)          # the clock, with no sixth event
+    assert e.armed_ids() == set()
+    assert [n["event"] for n in notices] == ["segment_disarmed"]
+    # And the defer still holds: settling ON the move's own frame judges nothing,
+    # which is what protects the transient lobby.
+    again = SegmentEngine([WF_SSL])
+    _exit_wf_into_the_lobby(again)
+    again.feed(jev(4, "level_changed", 2000, {"from": 6, "to": 30}),
+               ctx(level=30, prev_level=6))
+    again.feed(jev(5, "area_changed", 2000,
+                   {"level": 30, "from": 1, "to": 1, "from_transient": True}),
+               ctx(level=30, area=1))
+    assert again.settle(2000) == [] and again.armed_ids() == {70}
+
+
+def test_a_segment_armed_at_the_warp_destination_survives_that_warp():
+    # Warping somewhere to practise is the normal loop. The judgement lands a
+    # frame after the move, so without the arm-postdates-move exemption the
+    # warp into an arena would cancel the very fight it just armed.
+    e = SegmentEngine([B3])
+    e.feed(jev(1, "area_changed", 1000,
+               {"level": 8, "from": 1, "to": 1, "from_transient": False}),
+           ctx(level=8))
+    e.feed(jev(2, "mario_acted", 1005, {}), ctx(level=8))
+    e.feed(jev(3, "level_changed", 2000, {"from": 8, "to": 34}),
+           ctx(level=34, prev_level=8))
+    e.feed(jev(4, "area_changed", 2000,
+               {"level": 34, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=34, area=1))
+    assert e.armed_ids() == {10}
+    e.feed(jev(5, "mario_acted", 2005, {}), ctx(level=34))
+    assert e.armed_ids() == {10}
+
+
+def test_a_normal_walk_cancels_nothing():
+    e = SegmentEngine([WF_SSL])
+    _exit_wf_into_the_lobby(e)
+    e.feed(jev(4, "area_changed", 2000,
+               {"level": 6, "from": 1, "to": 3, "from_transient": False}),
+           ctx(level=6, area=3))
+    e.feed(jev(5, "mario_acted", 2005, {}), ctx(level=6, area=3))
+    assert e.armed_ids() == {70}
+
+
+# Mirrors the user-created LLL -> HMC, but LOOSE. A STRICT def is already
+# silently disarmed by any level_changed matching neither its start nor its
+# end, so loose is where this rule earns its keep -- and loose is what all 56
+# seeded castle movements are.
+LLL_HMC = SegmentDef(
+    id=71, name="LLL -> HMC", enabled=True,
+    start_triggers=[{"type": "level_exit", "from": 22, "to": 6,
+                     "to_subarea": 3}],
+    end_triggers=[{"type": "level_enter", "to": 7, "from": 6,
+                   "from_subarea": 3}],
+    waypoints=[], guards=[], match_mode="loose")
+
+
+def _exit_lll_into_the_basement(e):
+    e.feed(jev(1, "level_changed", 1000, {"from": 22, "to": 6}),
+           ctx(level=6, prev_level=22))
+    e.feed(jev(2, "area_changed", 1000,
+               {"level": 6, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=6, area=1))
+    e.feed(jev(3, "area_changed", 1000,
+               {"level": 6, "from": 1, "to": 3, "from_transient": True}),
+           ctx(level=6, area=3))
+    e.feed(jev(4, "mario_acted", 1005, {}), ctx(level=6, area=3))
+
+
+def _walk_back_into_lll(e):
+    e.feed(jev(5, "level_changed", 2000, {"from": 6, "to": 22}),
+           ctx(level=22, prev_level=6))
+    e.feed(jev(6, "area_changed", 2000,
+               {"level": 22, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=22, area=1))
+    return e.feed(jev(7, "mario_acted", 2005, {}), ctx(level=22))
+
+
+def test_walking_back_into_the_place_you_left_cancels_the_segment():
+    # Live report 2026-08-01: standing INSIDE LLL, LLL -> HMC read as ACTIVE
+    # SEGMENT, "Waiting for Enter Hazy Maze Cave". Basement -> LLL is a
+    # perfectly legal edge, so Rule 1 waves it through; what kills it is that
+    # HMC went from 1 hop away to 2.
+    e = SegmentEngine([LLL_HMC])
+    _exit_lll_into_the_basement(e)
+    assert e.armed_ids() == {71}
+    closed, _ = _walk_back_into_lll(e)
+    assert e.armed_ids() == set()
+    assert closed == []
+
+
+def test_a_declared_re_entry_is_progress_not_a_wrong_turn():
+    # Griffin's nuance (2026-08-01): sometimes you genuinely enter a stage to
+    # use its exit. A route that really does go back through somewhere
+    # DECLARES it as a step, and a node the definition names is never a wrong
+    # turn.
+    declared = replace(LLL_HMC, id=72,
+                       waypoints=[[{"type": "level_enter", "to": 22}]])
+    e = SegmentEngine([declared])
+    _exit_lll_into_the_basement(e)
+    assert e.armed_ids() == {72}
+    _walk_back_into_lll(e)
+    assert e.armed_ids() == {72}
+
+
+def test_a_route_ending_on_a_grab_is_never_cancelled_for_moving():
+    # A loose multi-step route -- upstairs, into BitS, down the pipe to the
+    # arena, ending on the key grab. Two exemptions carry it, and neither is a
+    # special case: entering BitS is a DECLARED node (its own waypoint), and
+    # once that waypoint is consumed the end trigger names no place at all, so
+    # the arena hop is unconstrained.
+    #
+    # Regression guard rather than a mutation-proved rule: the behaviour it
+    # rests on -- step_node answering None for a placeless clause -- is proved
+    # by test_step_node_answers_none_for_a_clause_that_names_no_place, and the
+    # declared-node half is proved by test_a_declared_re_entry_is_progress...
+    to_bowser_3 = SegmentDef(
+        id=74, name="Upstairs -> Bowser 3", enabled=True,
+        start_triggers=[{"type": "area_enter", "level": 6, "area": 2}],
+        waypoints=[[{"type": "level_enter", "to": 21}]],
+        end_triggers=[{"type": "key_grabbed", "level": 34}],
+        guards=[], match_mode="loose")
+    e = SegmentEngine([to_bowser_3])
+    e.feed(jev(1, "area_changed", 900,
+               {"level": 6, "from": 1, "to": 1, "from_transient": False}),
+           ctx(level=6, area=1))
+    e.feed(jev(2, "mario_acted", 905, {}), ctx(level=6, area=1))
+    e.feed(jev(3, "area_changed", 950,
+               {"level": 6, "from": 1, "to": 2, "from_transient": False}),
+           ctx(level=6, area=2))
+    assert e.armed_ids() == {74}
+    e.feed(jev(4, "mario_acted", 955, {}), ctx(level=6, area=2))
+    # up into BitS: a declared waypoint
+    e.feed(jev(5, "level_changed", 1000, {"from": 6, "to": 21}),
+           ctx(level=21, prev_level=6))
+    e.feed(jev(6, "area_changed", 1000,
+               {"level": 21, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=21, area=1))
+    e.feed(jev(7, "mario_acted", 1005, {}), ctx(level=21))
+    assert e.armed_ids() == {74}
+    # down the pipe into the arena: undeclared, and the end names no place
+    e.feed(jev(8, "level_changed", 2000, {"from": 21, "to": 34}),
+           ctx(level=34, prev_level=21))
+    e.feed(jev(9, "area_changed", 2000,
+               {"level": 34, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=34, area=1))
+    e.feed(jev(10, "mario_acted", 2005, {}), ctx(level=34))
+    assert e.armed_ids() == {74}
+
+
+def test_an_armed_segment_survives_the_transient_lobby_on_a_course_exit():
+    # The case that would break everything: a basement course exit reads
+    # SSL -> lobby -> basement in the raw stream. Judged raw, "SSL -> Lobby"
+    # is not even an edge, and for an UPSTAIRS destination the lobby is closer
+    # than the basement (2 hops vs 3) -- so both rules would fire on a move
+    # that never happened.
+    ssl_to_sl = SegmentDef(
+        id=73, name="SSL -> SL", enabled=True,
+        start_triggers=[{"type": "spawned", "level": 8}],
+        end_triggers=[{"type": "level_enter", "to": 10}],
+        waypoints=[], guards=[], match_mode="loose")
+    e = SegmentEngine([ssl_to_sl])
+    e.feed(jev(1, "area_changed", 900,
+               {"level": 8, "from": 1, "to": 1, "from_transient": False}),
+           ctx(level=8))
+    e.feed(jev(2, "mario_acted", 905, {}), ctx(level=8))
+    e.feed(jev(3, "spawned", 950, {"level": 8, "kind": "spawn"}), ctx(level=8))
+    assert e.armed_ids() == {73}
+    e.feed(jev(4, "level_changed", 1000, {"from": 8, "to": 6}),
+           ctx(level=6, prev_level=8))
+    e.feed(jev(5, "area_changed", 1000,
+               {"level": 6, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=6, area=1))
+    e.feed(jev(6, "area_changed", 1000,
+               {"level": 6, "from": 1, "to": 3, "from_transient": True}),
+           ctx(level=6, area=3))
+    e.feed(jev(7, "mario_acted", 1005, {}), ctx(level=6, area=3))
+    assert e.armed_ids() == {73}
+
+
+# Mirrors seg:bowser-1->wf: loose, exits the Bowser 1 arena (which lands in the
+# lobby), ends on entering WF.
+B1_WF = SegmentDef(id=75, name="Bowser 1 -> WF", enabled=True,
+                   start_triggers=[{"type": "level_exit", "from": 30}],
+                   end_triggers=[{"type": "level_enter", "to": 24}],
+                   waypoints=[], guards=[], match_mode="loose")
+
+
+def _bowser_1_exit_then_detour_to_bitdw(e):
+    """Arm B1 -> WF by exiting the arena into the lobby, then warp to BitDW --
+    a legal edge, but 2 hops from WF where the lobby was 1, so Rule 2 cancels."""
+    e.feed(jev(1, "area_changed", 900,
+               {"level": 30, "from": 1, "to": 1, "from_transient": False}),
+           ctx(level=30))
+    e.feed(jev(2, "mario_acted", 905, {}), ctx(level=30))
+    e.feed(jev(3, "level_changed", 1000, {"from": 30, "to": 6}),
+           ctx(level=6, prev_level=30))
+    e.feed(jev(4, "area_changed", 1000,
+               {"level": 6, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=6, area=1))
+    e.feed(jev(5, "mario_acted", 1005, {}), ctx(level=6, area=1))
+    assert e.armed_ids() == {75}
+    e.feed(jev(6, "level_changed", 2000, {"from": 6, "to": 17}),
+           ctx(level=17, prev_level=6))
+    e.feed(jev(7, "area_changed", 2000,
+               {"level": 17, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=17, area=1))
+    e.feed(jev(8, "mario_acted", 2005, {}), ctx(level=17))
+    assert e.armed_ids() == set()          # cancelled by the detour
+
+
+def _walk_back_to_the_lobby(e):
+    e.feed(jev(9, "level_changed", 3000, {"from": 17, "to": 6}),
+           ctx(level=6, prev_level=17))
+    e.feed(jev(10, "area_changed", 3000,
+               {"level": 6, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=6, area=1))
+    e.feed(jev(11, "mario_acted", 3005, {}), ctx(level=6, area=1))
+
+
+def test_a_reset_at_the_start_position_brings_a_cancelled_segment_back():
+    # Measured case, journal ids 17926-17940 (tools/measure_topology_cancels):
+    # armed by a Bowser 1 exit into the lobby, he warped to BitDW for 7s, came
+    # back to the lobby, pressed reset AT THE ARM POSITION and ran lobby -> WF
+    # in 16s. Redoing the start trigger means redoing the whole fight, so this
+    # reset IS how the movement is re-run.
+    e = SegmentEngine([B1_WF])
+    _bowser_1_exit_then_detour_to_bitdw(e)
+    _walk_back_to_the_lobby(e)
+    _, notices = e.feed(jev(12, "practice_reset", 3100, {}),
+                        ctx(level=6, area=1))
+    assert e.armed_ids() == {75}
+    assert e.armed_items()[75].start_frame == 3100
+    assert [n["event"] for n in notices] == ["segment_armed"]
+
+
+def test_a_reset_somewhere_else_forfeits_the_comeback_for_good():
+    # Griffin 2026-08-01: "if... in the middle of lobby -> wf, I decided to
+    # reset to bitdw, I think that's a genuine kill of the segment, because
+    # we've now gone out of order... until I get back to Bowser 1 and trigger
+    # it from the beginning again."
+    e = SegmentEngine([B1_WF])
+    _bowser_1_exit_then_detour_to_bitdw(e)
+    _walk_back_to_the_lobby(e)
+    e.feed(jev(12, "practice_reset", 3100, {}), ctx(level=17))   # reset to BitDW
+    assert e.armed_ids() == set()
+    # ...and coming back to the lobby and resetting there no longer helps.
+    e.feed(jev(13, "practice_reset", 3200, {}), ctx(level=6, area=1))
+    assert e.armed_ids() == set()
+
+
+def test_the_comeback_expires_with_the_staleness_budget():
+    # A cancelled arm has no cancel rules left to bound it, so without a clock
+    # a movement killed hours ago would re-arm the next time he happened to
+    # reset in the same room.
+    from sm64_events.tracking.segments import MIN_BUDGET_FRAMES
+    e = SegmentEngine([B1_WF])
+    _bowser_1_exit_then_detour_to_bitdw(e)
+    _walk_back_to_the_lobby(e)
+    e.feed(jev(12, "practice_reset", 2005 + MIN_BUDGET_FRAMES + 1, {}),
+           ctx(level=6, area=1))
+    assert e.armed_ids() == set()
+
+
+# ---------------------------------------------------------------------------
+# path_nodes -- a definition's steps read as an ORDER (spec
+# 2026-08-02-strict-path-segments). Second reader of the same data
+# declared_nodes reads as a set; see that docstring for why the set was right
+# for ITS job and cannot express repetition or direction.
+# ---------------------------------------------------------------------------
+
+def _pathdef(waypoints, end, **kw):
+    return SegmentDef(id=900, name="path probe", enabled=True,
+                      start_triggers=[{"type": "level_exit", "from": 24}],
+                      end_triggers=end, waypoints=waypoints, guards=[], **kw)
+
+
+def test_path_nodes_reads_waypoints_then_the_end_in_order():
+    d = _pathdef([[{"type": "area_enter", "level": 6, "area": 3}]],
+                 [{"type": "level_enter", "to": 8}])
+    assert segments_module.path_nodes(d) == ("6:3", "8")
+
+
+def test_path_nodes_of_a_waypointless_def_is_just_its_end():
+    # This is what tightens the 39 movements that declare no step today: the
+    # end trigger is itself a declared place, so the FIRST move after arming
+    # is already judged.
+    d = _pathdef([], [{"type": "level_enter", "to": 8}])
+    assert segments_module.path_nodes(d) == ("8",)
+
+
+def test_path_nodes_skips_a_step_that_names_no_place():
+    # Contributions are SKIPPED, not padded with None -- the cursor must never
+    # have to step over a hole.
+    d = _pathdef([[{"type": "star_grabbed", "course": 8, "star": 0}]],
+                 [{"type": "level_enter", "to": 8}])
+    assert segments_module.path_nodes(d) == ("8",)
+
+
+def test_path_nodes_skips_an_any_of_step_whose_members_disagree():
+    # Any-of means "either is fine" and a cursor cannot hold two positions, so
+    # the step declines to constrain -- the unknown-means-yes convention this
+    # engine takes everywhere.
+    d = _pathdef([[{"type": "level_enter", "to": 8},
+                   {"type": "level_enter", "to": 22}]],
+                 [{"type": "level_enter", "to": 10}])
+    assert segments_module.path_nodes(d) == ("10",)
+
+
+def test_path_nodes_holds_a_repeated_place_twice():
+    # THE case declared_nodes structurally cannot express: SSL -> SSL -> LLL.
+    # Named as a difference from the set rather than restated as a literal.
+    once = _pathdef([[{"type": "level_enter", "to": 8}],
+                     [{"type": "area_enter", "level": 6, "area": 3}]],
+                    [{"type": "level_enter", "to": 22}])
+    assert len(set(segments_module.path_nodes(once))) == len(
+        segments_module.path_nodes(once))
+    twice = _pathdef([[{"type": "level_enter", "to": 8}],
+                      [{"type": "level_enter", "to": 8}]],
+                     [{"type": "level_enter", "to": 22}])
+    path = segments_module.path_nodes(twice)
+    assert len(path) == 3
+    assert [i for i, node in enumerate(path) if node == "8"] == [0, 1]
+    assert len(set(path)) < len(path)
+    assert len(segments_module.declared_nodes(twice)) < len(path)
+
+
+def test_path_nodes_of_the_hundred_coin_family_is_empty():
+    # Built from the SHIPPED seed rather than a hand-made lookalike, so this
+    # tracks the corpus instead of a guess about it. An empty path is what
+    # keeps all 15 out of the cursor rule with no exemption list.
+    import json
+
+    from sm64_events.core.paths import bundled_defaults_seed
+    seed = json.loads(bundled_defaults_seed().read_bytes().decode("utf-8"))
+    rows = [r for r in seed["segments"]
+            if hundred_coin_entity(r["start_triggers"], r["waypoints"])]
+    assert rows, "the seed no longer carries a 100-coin family"
+    for row in rows:
+        d = SegmentDef(id=901, name=row["name"], enabled=True,
+                       start_triggers=row["start_triggers"],
+                       end_triggers=row["end_triggers"],
+                       waypoints=row["waypoints"], guards=row["guards"])
+        assert segments_module.path_nodes(d) == ()
+
+
+# ---------------------------------------------------------------------------
+# The path cursor (spec 2026-08-02-strict-path-segments). A deliberate
+# shortcut and a runner's mistake are observationally equivalent -- entering
+# BitFS during `Bowser 2 -> Upstairs` is the same move whether it is the
+# fastest route or a wrong turn. No measurement separates them; only a
+# DECLARATION does. Rule 2's hop arithmetic stays for `loose` definitions.
+# ---------------------------------------------------------------------------
+
+def _seed_rows():
+    import json
+
+    from sm64_events.core.paths import bundled_defaults_seed
+    return json.loads(
+        bundled_defaults_seed().read_bytes().decode("utf-8"))["segments"]
+
+
+def _seed_def(row, id):
+    return SegmentDef(id=id, name=row["name"], enabled=True,
+                      start_triggers=row["start_triggers"],
+                      end_triggers=row["end_triggers"],
+                      waypoints=row["waypoints"], guards=row["guards"],
+                      match_mode=row.get("match_mode", "strict"))
+
+
+# WF -> SSL as the spec authors it: the Lobby is where the exit PUT him (the
+# cursor's implicit start), so only the Basement is declared.
+WF_SSL_STRICT = replace(WF_SSL, id=80, match_mode="strict",
+                        waypoints=[[{"type": "area_enter",
+                                     "level": 6, "area": 3}]])
+
+
+def _walk(e, jid, frame, node_level, node_area=None, prev_level=None):
+    """One settled position change: the level edge (when there is one), its
+    co-frame establishing area_changed, then an event on a LATER frame so the
+    move is judged -- the shape the real detectors emit.
+
+    Returns everything the three feeds produced, not just the last: an END
+    trigger fires on the move's OWN event while the cursor is judged a frame
+    later, so a walk that both closes one definition and advances another
+    reports both.
+    """
+    closed, notices = [], []
+    events = []
+    if prev_level is not None:
+        events.append((jev(jid, "level_changed", frame,
+                           {"from": prev_level, "to": node_level}),
+                       ctx(level=node_level, prev_level=prev_level)))
+    events.append((jev(jid + 1, "area_changed", frame,
+                       {"level": node_level, "from": 1, "to": node_area or 1,
+                        # transient only when a LEVEL entry put him here;
+                        # walking between two castle areas is a real move, and
+                        # the echo guards read that flag.
+                        "from_transient": prev_level is not None}),
+                   ctx(level=node_level, area=node_area)))
+    events.append((jev(jid + 2, "mario_acted", frame + 5, {}),
+                   ctx(level=node_level, area=node_area)))
+    for ev, context in events:
+        step_closed, step_notices = e.feed(ev, context)
+        closed.extend(step_closed)
+        notices.extend(step_notices)
+    return closed, notices
+
+
+def test_a_strict_movement_advances_its_cursor_through_a_declared_stop():
+    e = SegmentEngine([WF_SSL_STRICT])
+    _exit_wf_into_the_lobby(e)
+    assert e.armed_ids() == {80}
+    _walk(e, 10, 2000, 6, 3)                       # lobby -> basement
+    assert e.armed_items()[80].path_index == 1
+    closed, _ = e.feed(jev(20, "level_changed", 3000, {"from": 6, "to": 8}),
+                       ctx(level=8, prev_level=6))
+    assert [a.outcome for a in closed] == ["success"]
+
+
+def test_a_strict_movement_cancels_on_a_castle_area_that_is_not_its_next_step():
+    # The castle's Lobby / Basement / Upstairs are AREAS, so wandering between
+    # them was invisible to `_feed_waypoint` and only the hop arithmetic this
+    # rule replaces ever caught it.
+    e = SegmentEngine([WF_SSL_STRICT])
+    _exit_wf_into_the_lobby(e)
+    closed, notices = _walk(e, 10, 2000, 6, 2)     # lobby -> UPSTAIRS
+    assert e.armed_ids() == set()
+    assert closed == []                            # never happened: no row
+    assert [n["event"] for n in notices] == ["segment_disarmed"]
+
+
+# Declares the Lobby as a real mid-route stop, which is what makes walking
+# BACK to it a deviation rather than an exempt re-entry: BBH exits to the
+# Courtyard, so the Lobby is somewhere he passes THROUGH.
+#
+# The Lobby step is a subarea-pinned `level_enter`, NOT an `area_enter`:
+# arriving from the Courtyard is a LEVEL edge (26 -> 6), and `can_run_from`
+# rule (A) refuses to arm a definition whose next required step is an
+# `area_enter` in the castle while Mario stands outside it. Both resolve to
+# the same node through `step_node`, which is what the cursor reads.
+BBH_SSL_STRICT = SegmentDef(
+    id=81, name="BBH -> SSL", enabled=True,
+    start_triggers=[{"type": "level_exit", "from": 4}],
+    waypoints=[[{"type": "level_enter", "to": 6, "to_subarea": 1}],
+               [{"type": "area_enter", "level": 6, "area": 3}]],
+    end_triggers=[{"type": "level_enter", "to": 8}],
+    guards=[], match_mode="strict")
+
+
+def test_a_strict_movement_cancels_on_walking_back_the_way_it_came():
+    # Griffin 2026-08-02: "if I am doing WF -> Basement -> SSL, I would never
+    # go from Basement back to Lobby... then I'm trying to practice something
+    # else". A SET answers the same in both directions, and the Lobby is a
+    # declared member here -- so this is the case only a cursor can judge.
+    e = SegmentEngine([BBH_SSL_STRICT])
+    e.feed(jev(1, "level_changed", 1000, {"from": 4, "to": 26}),
+           ctx(level=26, prev_level=4))
+    e.feed(jev(2, "area_changed", 1000,
+               {"level": 26, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=26, area=1))
+    e.feed(jev(3, "mario_acted", 1005, {}), ctx(level=26, area=1))
+    assert e.armed_ids() == {81}
+    _walk(e, 10, 2000, 6, 1, prev_level=26)        # courtyard -> lobby
+    assert e.armed_items()[81].path_index == 1
+    _walk(e, 20, 3000, 6, 3)                       # lobby -> basement
+    assert e.armed_items()[81].path_index == 2
+    closed, _ = _walk(e, 30, 4000, 6, 1)           # BACK to the lobby
+    assert e.armed_ids() == set()
+    assert closed == []
+
+
+def test_a_strict_movement_matches_a_place_it_declares_twice():
+    # Griffin 2026-08-02: "If I, for some reason, want to leave SSL, go back
+    # into SSL, leave SSL, and go to LLL, I should be able to define a path
+    # that specifically matches that order."
+    # Started off a WF exit rather than off the Basement it keeps returning
+    # to: a start trigger that also matches a step of its own route re-arms on
+    # that step and resets the cursor (the authoring caveat in this module's
+    # docstring, and the reason the corpus splits such movements).
+    ssl_ssl_lll = SegmentDef(
+        id=82, name="WF -> SSL -> SSL -> LLL", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 24}],
+        waypoints=[[{"type": "area_enter", "level": 6, "area": 3}],
+                   [{"type": "level_enter", "to": 8}],
+                   [{"type": "level_enter", "to": 6, "to_subarea": 3}],
+                   [{"type": "level_enter", "to": 8}],
+                   [{"type": "level_enter", "to": 6, "to_subarea": 3}]],
+        end_triggers=[{"type": "level_enter", "to": 22}],
+        guards=[], match_mode="strict")
+    assert segments_module.path_nodes(ssl_ssl_lll).count("8") == 2
+    assert segments_module.path_nodes(ssl_ssl_lll).count("6:3") == 3
+    e = SegmentEngine([ssl_ssl_lll])
+    _exit_wf_into_the_lobby(e)
+    assert e.armed_ids() == {82}
+    _walk(e, 10, 2000, 6, 3)                       # lobby -> basement
+    _walk(e, 20, 3000, 8, prev_level=6)            # into SSL
+    _walk(e, 30, 4000, 6, 3, prev_level=8)         # out again
+    _walk(e, 40, 5000, 8, prev_level=6)            # and back in
+    _walk(e, 50, 6000, 6, 3, prev_level=8)         # and out
+    assert e.armed_items()[82].path_index == 5
+    closed, _ = e.feed(jev(60, "level_changed", 7000, {"from": 6, "to": 22}),
+                       ctx(level=22, prev_level=6))
+    assert [a.outcome for a in closed] == ["success"]
+
+
+def test_a_course_interior_area_change_never_moves_the_cursor():
+    # topology.node_for collapses a course's own subareas to the bare level,
+    # so SSL's pyramid and LLL's volcano are invisible to the rule -- which is
+    # what keeps it out of the 100-coin family STRUCTURALLY, not by exemption.
+    ssl_lll = SegmentDef(
+        id=83, name="SSL -> LLL", enabled=True,
+        start_triggers=[{"type": "area_enter", "level": 6, "area": 3}],
+        waypoints=[[{"type": "level_enter", "to": 8}]],
+        end_triggers=[{"type": "level_enter", "to": 22}],
+        guards=[], match_mode="strict")
+    e = SegmentEngine([ssl_lll])
+    e.feed(jev(1, "area_changed", 1000,
+               {"level": 6, "from": 1, "to": 3, "from_transient": False}),
+           ctx(level=6, area=3))
+    e.feed(jev(2, "mario_acted", 1005, {}), ctx(level=6, area=3))
+    _walk(e, 10, 2000, 8, prev_level=6)
+    assert e.armed_items()[83].path_index == 1
+    _walk(e, 20, 3000, 8, 2)                       # into the pyramid
+    assert e.armed_ids() == {83}
+    assert e.armed_items()[83].path_index == 1
+
+
+def test_a_definition_declaring_no_place_is_never_cancelled_by_one():
+    # The shipped 100-coin family: every step is a star grab, so path_nodes is
+    # empty and the cursor has nothing to say from the very first move.
+    row = next(r for r in _seed_rows()
+               if hundred_coin_entity(r["start_triggers"], r["waypoints"])
+               and any(c.get("to") == 22 for c in r["start_triggers"]))
+    d = _seed_def(row, 84)
+    assert segments_module.path_nodes(d) == ()
+    e = SegmentEngine([d])
+    e.feed(jev(1, "level_changed", 1000, {"from": 6, "to": 22}),
+           ctx(level=22, prev_level=6))
+    e.feed(jev(2, "area_changed", 1000,
+               {"level": 22, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=22, area=1))
+    e.feed(jev(3, "mario_acted", 1005, {}), ctx(level=22, area=1))
+    assert e.armed_ids() == {84}
+    _walk(e, 10, 2000, 22, 2)                      # into the volcano
+    _walk(e, 20, 3000, 22, 1)                      # back out
+    assert e.armed_ids() == {84}
+
+
+def test_a_loose_movement_still_takes_the_hop_rule():
+    # THE regression guard on the split. One definition, one walk, two modes:
+    # loose survives moving to the Basement (it got CLOSER to SSL), strict
+    # does not (the Basement is not a step it declared). That difference is
+    # exactly why `seg:wf->ssl` gains a `via` when the corpus flips.
+    loose = SegmentEngine([WF_SSL])                # no waypoints, loose
+    _exit_wf_into_the_lobby(loose)
+    _walk(loose, 10, 2000, 6, 3)
+    assert loose.armed_ids() == {70}
+    strict = SegmentEngine([replace(WF_SSL, id=85, match_mode="strict")])
+    _exit_wf_into_the_lobby(strict)
+    _walk(strict, 10, 2000, 6, 3)
+    assert strict.armed_ids() == set()
+
+
+def test_one_exit_arms_several_movements_and_walking_prunes_them():
+    # Multiple hypothesis tracking, against the SHIPPED corpus: keep every
+    # candidate alive and let the walk eliminate them. Five movements arm on
+    # one Whomp's Fortress exit; four end off the Lobby and die at the
+    # Basement; WF -> SSL is the one left standing.
+    rows = [r for r in _seed_rows()
+            if any(c.get("type") == "level_exit" and c.get("from") == 24
+                   for c in r["start_triggers"])]
+    assert len(rows) == 5
+    defs = [_seed_def(row, 100 + i) for i, row in enumerate(rows)]
+    ssl_id = next(d.id for d in defs if d.end_triggers[0].get("to") == 8)
+    e = SegmentEngine(defs)
+    _exit_wf_into_the_lobby(e)
+    assert len(e.armed_ids()) == 5
+    _walk(e, 10, 2000, 6, 3)                       # lobby -> basement
+    assert e.armed_ids() == {ssl_id}
+    closed, _ = e.feed(jev(20, "level_changed", 3000, {"from": 6, "to": 8}),
+                       ctx(level=8, prev_level=6))
+    assert [a.outcome for a in closed] == ["success"]
+
+
+def test_a_shorter_movement_ending_where_a_longer_one_passes_through_records():
+    # Two definitions off one exit, sharing no state: arriving at the Basement
+    # fires the short one's END and advances the long one's CURSOR. Both bank
+    # a time; neither is arbitrated away. No shipped pair has this shape today,
+    # which is exactly why nothing else guards it.
+    short = SegmentDef(id=86, name="WF -> Basement", enabled=True,
+                       start_triggers=[{"type": "level_exit", "from": 24}],
+                       end_triggers=[{"type": "area_enter",
+                                      "level": 6, "area": 3}],
+                       waypoints=[], guards=[], match_mode="strict")
+    e = SegmentEngine([short, replace(WF_SSL_STRICT, id=87)])
+    _exit_wf_into_the_lobby(e)
+    assert e.armed_ids() == {86, 87}
+    closed, _ = _walk(e, 10, 2000, 6, 3)
+    assert [(a.segment_id, a.outcome) for a in closed] == [(86, "success")]
+    assert e.armed_ids() == {87}
+    assert e.armed_items()[87].path_index == 1
+    closed, _ = e.feed(jev(20, "level_changed", 3000, {"from": 6, "to": 8}),
+                       ctx(level=8, prev_level=6))
+    assert [(a.segment_id, a.outcome) for a in closed] == [(87, "success")]
+
+
+# ---------------------------------------------------------------------------
+# The step TRACK: the whole route on the card, and the notice that gets a
+# cursor move onto the screen (live report 2026-08-02, WF -> SSL).
+# ---------------------------------------------------------------------------
+
+def test_step_labels_are_the_places_the_route_passes_through():
+    assert card_step_labels(WF_SSL_STRICT) == ["Basement", "SSL"]
+
+
+def test_a_definition_with_no_waypoints_is_a_one_step_route():
+    assert card_step_labels(WF_SSL) == ["SSL"]
+
+
+def test_every_step_of_a_four_step_route_is_labelled_in_order():
+    long_way = SegmentDef(
+        id=90, name="Bowser 2 -> BitS", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 33}],
+        end_triggers=[{"type": "level_enter", "to": 21}],
+        waypoints=[[{"type": "level_enter", "to": 19}],
+                   [{"type": "area_enter", "level": 6, "area": 1}],
+                   [{"type": "area_enter", "level": 6, "area": 2}]],
+        guards=[], match_mode="strict")
+    assert card_step_labels(long_way) == ["BitFS", "Lobby", "Upstairs", "BitS"]
+
+
+def test_an_any_of_clause_set_over_one_courses_stars_reads_as_any_star():
+    # The 100-coin exit's shape, and the ONLY multi-member clause set in the
+    # shipped corpus: six star_grabbed alternatives meaning "leave with
+    # anything". Six star names cannot go on a one-line track, and the rule is
+    # written about the clauses (same type, same course) rather than about
+    # that family, so a hand-authored def of the same shape reads the same.
+    hundred = SegmentDef(
+        id=91, name="SSL -- 100 Coins -> Exit", enabled=True,
+        start_triggers=[{"type": "level_enter", "to": 8}],
+        end_triggers=[{"type": "star_grabbed", "course": 8, "star": s}
+                      for s in range(6)],
+        waypoints=[[{"type": "star_grabbed", "course": 8, "star": 6}]],
+        guards=[], match_mode="strict")
+    assert card_step_labels(hundred) == ["100 Coins", "Any star"]
+
+
+def test_a_placeless_step_falls_back_to_the_registrys_own_chip_noun():
+    pipe = SegmentDef(
+        id=92, name="BitDW Pipe Entry", enabled=True,
+        start_triggers=[{"type": "level_enter", "to": 17}],
+        end_triggers=[{"type": "warp_entered", "level": 17}],
+        waypoints=[], guards=[], match_mode="strict")
+    assert card_step_labels(pipe) == ["Pipe"]
+
+
+def test_advancing_a_step_says_so_out_loud():
+    """THE BUG: the cursor moved to step 2 the frame he entered the Basement
+    and the card read step 1 for the next 77 seconds, because a cursor move
+    journals nothing and no broadcast carried it. Mutation proof: drop the
+    `_progress_notices` call at the bottom of `feed` and this goes red while
+    every other segment test stays green -- the engine was always right."""
+    e = SegmentEngine([WF_SSL_STRICT])
+    _exit_wf_into_the_lobby(e)
+    assert e.armed_items()[80].path_index == 0
+    _, notices = _walk(e, 10, 2000, 6, 3)          # lobby -> basement
+    progress = [n for n in notices if n["event"] == "segment_progress"]
+    assert [(n["segment_id"], n["progress"], n["total"]) for n in progress] \
+        == [(80, 1, 1)]
+
+
+def test_standing_still_announces_nothing():
+    # The other half of the mutation: a notice on every event would be a
+    # refetch storm, and "the cursor moved" is the only claim being made.
+    e = SegmentEngine([WF_SSL_STRICT])
+    _exit_wf_into_the_lobby(e)
+    _, notices = e.feed(jev(30, "mario_acted", 2500, {}), ctx(level=6, area=1))
+    assert [n for n in notices if n["event"] == "segment_progress"] == []
+
+
+# ---------------------------------------------------------------------------
+# A PAUSE EXIT is not a retry (live report 2026-08-03).
+# ---------------------------------------------------------------------------
+
+BOWSER1_WF = SegmentDef(
+    id=32, name="Bowser 1 -> WF", enabled=True,
+    start_triggers=[{"type": "level_exit", "from": 30}],
+    end_triggers=[{"type": "level_enter", "to": 24}],
+    waypoints=[[{"type": "level_enter", "to": 17, "from": 6}],
+               [{"type": "level_enter", "to": 6, "to_subarea": 1, "from": 17}]],
+    guards=[], match_mode="strict")
+
+
+def _arm_out_of_bowser_1(e):
+    e.feed(jev(1, "level_changed", 1000, {"from": 30, "to": 6, "from_area": 1}),
+           ctx(level=6, prev_level=30))
+    e.feed(jev(2, "area_changed", 1000,
+               {"level": 6, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=6, area=1))
+    e.feed(jev(3, "mario_acted", 1010, {}), ctx(level=6, area=1))
+
+
+def _enter_bitdw(e, frame=2000):
+    e.feed(jev(10, "level_changed", frame, {"from": 6, "to": 17, "from_area": 1}),
+           ctx(level=17, prev_level=6))
+    e.feed(jev(11, "area_changed", frame,
+               {"level": 17, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=17, area=1))
+
+
+def _pause_exit_to_lobby(e, frame=3000, paused=66):
+    """The real shape, taken from his journal (ids 4975-4977): the level edge,
+    its co-frame area event, then Usamune's own IGT reset on the SAME frame,
+    carrying the pause the exit menu cost."""
+    e.feed(jev(20, "level_changed", frame, {"from": 17, "to": 6, "from_area": 1}),
+           ctx(level=6, prev_level=17))
+    e.feed(jev(21, "area_changed", frame,
+               {"level": 6, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=6, area=1))
+    return e.feed(jev(22, "practice_reset", frame,
+                      {"paused_frames_before": paused, "mario_acted": False,
+                       "acted_tracking": True, "area": 1, "prev_area": 1}),
+                  ctx(level=6, area=1))
+
+
+def test_a_pause_exit_does_not_rewind_the_step_cursor():
+    """Live report: "it briefly flashed step 3 of 3, then it reset", and then
+    nothing recorded on reaching WF — a rewound cursor can never reach its own
+    end, so both symptoms are this one bug.
+
+    Usamune zeroes its IGT on the pause exit's level load, and that anchor
+    carries a LONG pause because the menu was open, so `_anchor_echo`'s
+    transition co-frame shape (pause-gated to keep MENU WARPS as real
+    boundaries) let it through as a player retry."""
+    e = SegmentEngine([BOWSER1_WF])
+    _arm_out_of_bowser_1(e)
+    _enter_bitdw(e)
+    assert e.armed_items()[32].progress == 1
+    _pause_exit_to_lobby(e)
+    assert e.armed_items()[32].progress == 2, "the pause exit IS step 2"
+
+
+def test_the_pause_exit_run_then_records_when_it_reaches_the_end():
+    e = SegmentEngine([BOWSER1_WF])
+    _arm_out_of_bowser_1(e)
+    _enter_bitdw(e)
+    _pause_exit_to_lobby(e)
+    closed, _ = e.feed(jev(30, "level_changed", 4000,
+                           {"from": 6, "to": 24, "from_area": 1}),
+                       ctx(level=24, prev_level=6))
+    assert [a.outcome for a in closed] == ["success"]
+
+
+def test_a_reset_with_no_move_under_it_still_rewinds():
+    """The boundary the fix must not cross: a real L-reset is not co-frame
+    with any transition, so it stays the practice-retry loop it has always
+    been. Mutation proof for the pair above: drop
+    `_arrived_by_a_real_move` from the anchor guard and the two tests above go
+    red while this one stays green."""
+    e = SegmentEngine([BOWSER1_WF])
+    _arm_out_of_bowser_1(e)
+    _enter_bitdw(e)
+    assert e.armed_items()[32].progress == 1
+    e.feed(jev(40, "practice_reset", 2500,
+               {"paused_frames_before": 0, "mario_acted": True,
+                "acted_tracking": True, "area": 1, "prev_area": 1}),
+           ctx(level=17, area=1))
+    assert e.armed_items()[32].progress == 0
+
+
+def test_a_menu_warp_along_a_fabricated_edge_still_rewinds():
+    """The other boundary, and the reason shape (3) was pause-gated in the
+    first place: a Usamune menu warp is co-frame with a transition too. It
+    fabricates an edge, so the world graph tells the two apart — here BitDW to
+    UPSTAIRS, which is not a door."""
+    e = SegmentEngine([BOWSER1_WF])
+    _arm_out_of_bowser_1(e)
+    _enter_bitdw(e)
+    e.feed(jev(50, "level_changed", 3000, {"from": 17, "to": 6, "from_area": 1}),
+           ctx(level=6, prev_level=17))
+    e.feed(jev(51, "area_changed", 3000,
+               {"level": 6, "from": 1, "to": 2, "from_transient": False}),
+           ctx(level=6, area=2))
+    e.feed(jev(52, "practice_reset", 3000,
+               {"paused_frames_before": 200, "mario_acted": False,
+                "acted_tracking": True, "area": 2, "prev_area": 2}),
+           ctx(level=6, area=2))
+    assert e.armed_items()[32].progress == 0

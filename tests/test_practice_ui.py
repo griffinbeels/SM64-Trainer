@@ -55,11 +55,43 @@ def test_the_card_keeps_a_pinned_segment_while_it_is_armed():
     assert pin_guard(src)
 
 
-def test_the_card_renders_what_the_segment_is_waiting_for():
-    src = strip_comments(read("components/practice.js"))
+def test_the_card_renders_the_whole_step_track():
+    """Every step, not only the one you are on, and the full imperative for
+    the current one still reachable on hover (2026-08-03 live report)."""
+    src = strip_comments(read("components/steptrack.js"))
     assert "waiting_for" in src
-    assert "armed_detail.progress" in src
-    assert "armed_detail.total" in src
+    assert "detail.progress" in src
+    assert "detail.total" in src
+    assert "detail.steps" in src
+
+
+def test_the_step_track_markup_exists_in_exactly_one_place():
+    """Rule 11 with teeth: the star card (100 Coins) and the segment card
+    were two byte-identical copies of this markup until 2026-08-03, and the
+    EDITOR would have been a third. A second copy looks perfectly correct and
+    drifts on the next change, so what is pinned is that the row can only be
+    built in one file — the one both the card and the segment editor import.
+    Counted across all of `ui/`, not just practice.js: scoping it to one file
+    is exactly how the second copy gets written somewhere else."""
+    others = [path for path in sorted(UI.rglob("*.js"))
+              if "vendor" not in path.parts and path.name != "steptrack.js"]
+    trespassers = {
+        path.name: token
+        for path in others
+        for token in ("step-chip", "step-track", "step-mark", "step-row")
+        if token in strip_comments(path.read_text(encoding="utf-8"))}
+    assert trespassers == {}, (
+        f"only steptrack.js may build a step row; found {trespassers}")
+    owner = strip_comments(read("components/steptrack.js"))
+    assert owner.count('class="step-mark"') == 1, (
+        "the chip's own marker stack is the thing that must exist once — two "
+        "copies inside the module is the same divergence one level down")
+
+
+def test_both_cards_draw_the_step_track_through_the_ONE_component():
+    src = strip_comments(read("components/practice.js"))
+    assert src.count("<${StepTrack}") == 2
+    assert 'class="seg-waiting"' not in src
 
 
 def test_the_guards_can_still_fail():

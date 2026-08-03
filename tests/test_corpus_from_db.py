@@ -28,6 +28,12 @@ _seed_spec.loader.exec_module(build_defaults_seed)
 
 import corpus_vocab  # noqa: E402  (already on sys.path via corpus_from_db)
 
+# READ, never named: the corpus default was "loose" from 2026-07-28 and is
+# "strict" from 2026-08-02, and a test that pins a shipped default's CONTENTS
+# turns a deliberate change into a red build for unrelated reasons.
+THE_DEFAULT_MODE = corpus_vocab.DEFAULT_MOVEMENT_MATCH_MODE
+THE_OTHER_MODE = "loose" if THE_DEFAULT_MODE != "loose" else "strict"
+
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "tracker.db"
 
 
@@ -55,7 +61,7 @@ def _as_segment_shape(movement_dict: dict) -> dict:
 def test_a_live_definition_prints_as_pasteable_corpus_source():
     src = corpus_from_db.segment_row_source({
         "name": "Bowser 1 → WF", "seed_key": "seg:bowser1->wf",
-        "match_mode": "loose",
+        "match_mode": THE_DEFAULT_MODE,
         "start_triggers": [{"type": "level_exit", "from": 30}],
         "end_triggers": [{"type": "level_enter", "to": 24}],
         "waypoints": [], "guards": [], "category": "Castle Movement"})
@@ -73,7 +79,7 @@ def test_the_printed_source_round_trips_through_the_corpus_builder():
            "end_triggers": [{"type": "level_enter", "to": 8}],
            "waypoints": [[{"type": "area_enter", "level": 6, "area": 3}]],
            "guards": [{"type": "in_active_route"}], "category": "Castle Movement",
-           "match_mode": "strict"}
+           "match_mode": THE_OTHER_MODE}
     ns = corpus_namespace()
     produced = eval(corpus_from_db.segment_row_source(row).rstrip(","), ns)
     expanded = _as_segment_shape(produced)
@@ -82,24 +88,22 @@ def test_the_printed_source_round_trips_through_the_corpus_builder():
     assert expanded["waypoints"] == row["waypoints"]
     assert produced["name"] == row["name"]
     # match_mode DOES round-trip (Task 19, spec 2026-07-28-multi-step-
-    # segments) -- this row's "strict" differs from
-    # corpus_vocab.DEFAULT_MOVEMENT_MATCH_MODE ("loose"), so
+    # segments): this row's mode differs from the corpus default, so
     # segment_row_source prints an explicit match_mode= override and
-    # _movement_row picks it up over the corpus default.
-    assert expanded["match_mode"] == "strict"
+    # _movement_row picks it up over that default.
+    assert expanded["match_mode"] == THE_OTHER_MODE
 
 
 def test_a_match_mode_matching_the_default_is_omitted():
-    """The 55 shipped movements are ALL "loose" -- corpus_vocab
-    .DEFAULT_MOVEMENT_MATCH_MODE -- so printing match_mode= unconditionally
-    would put a redundant argument on every one of them. Only a mode that
-    DIFFERS from the default earns the argument; test_a_live_definition_
-    prints_as_pasteable_corpus_source above already covers this (its row's
-    match_mode is "loose", and the expected source has no match_mode= at
-    all) -- this test names the omission as its own behaviour."""
+    """Every shipped movement carries corpus_vocab
+    .DEFAULT_MOVEMENT_MATCH_MODE, so printing match_mode= unconditionally
+    would put a redundant argument on all 56. Only a mode that DIFFERS from
+    the default earns the argument; test_a_live_definition_prints_as_
+    pasteable_corpus_source above already covers this -- this test names the
+    omission as its own behaviour."""
     src = corpus_from_db.segment_row_source({
         "name": "Bowser 1 → WF", "seed_key": "seg:bowser1->wf",
-        "match_mode": "loose",
+        "match_mode": THE_DEFAULT_MODE,
         "start_triggers": [{"type": "level_exit", "from": 30}],
         "end_triggers": [{"type": "level_enter", "to": 24}],
         "waypoints": []})
@@ -107,32 +111,32 @@ def test_a_match_mode_matching_the_default_is_omitted():
 
 
 def test_a_match_mode_differing_from_the_default_is_printed():
-    """The exact gap Task 13's recorder created: it always posts
-    match_mode: "loose" for a freshly-recorded segment, so a live def
-    demoted back to "strict" (or any future third mode) must print the
-    override or a promotion through this tool would silently lose it and
-    reconcile back to "loose" on the next seed refresh."""
+    """The exact gap Task 13's recorder created: it always posts one fixed
+    mode for a freshly-recorded segment, so a live def carrying any other one
+    must print the override or a promotion through this tool would silently
+    lose it and reconcile back to the corpus default on the next refresh."""
     src = corpus_from_db.segment_row_source({
         "name": "Bowser 1 → WF", "seed_key": "seg:bowser1->wf",
-        "match_mode": "strict",
+        "match_mode": THE_OTHER_MODE,
         "start_triggers": [{"type": "level_exit", "from": 30}],
         "end_triggers": [{"type": "level_enter", "to": 24}],
         "waypoints": []})
     assert src == ('movement("seg:bowser1->wf", "Bowser 1 → WF",\n'
                    '         exit_level(30), enter_level(24),\n'
-                   '         match_mode="strict"),')
+                   f'         match_mode="{THE_OTHER_MODE}"),')
 
 
 def test_via_and_a_differing_match_mode_print_on_the_same_trailing_line():
     row = {"name": "WF → SSL", "seed_key": "seg:wf->ssl",
-           "match_mode": "strict",
+           "match_mode": THE_OTHER_MODE,
            "start_triggers": [{"type": "level_exit", "from": 24}],
            "end_triggers": [{"type": "level_enter", "to": 8}],
            "waypoints": [[{"type": "area_enter", "level": 6, "area": 3}]]}
     src = corpus_from_db.segment_row_source(row)
     assert src == ('movement("seg:wf->ssl", "WF → SSL",\n'
                    '         exit_level(24), enter_level(8),\n'
-                   '         via=[enter_area(BASEMENT)], match_mode="strict"),')
+                   '         via=[enter_area(BASEMENT)], '
+                   f'match_mode="{THE_OTHER_MODE}"),')
 
 
 def test_via_waypoint_prints_a_second_line_with_named_constants():

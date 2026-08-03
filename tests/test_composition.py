@@ -57,6 +57,67 @@ def test_get_app_builds_once(monkeypatch):
     assert calls == [True]
 
 
+def test_build_gives_the_poller_the_trackers_frame_heartbeat(monkeypatch):
+    """The wiring itself, because nothing else can fail if it goes missing.
+
+    A topological cancel is decided at the move and delivered by
+    `TrackerService.settle_frame`; the poller's clock is what calls it (live
+    report 2026-08-02, a verdict 27.7 s late because the journal happened to
+    be quiet). Unwired, every unit below still passes and the symptom comes
+    back live — the same shape as the config knob that only worked when the
+    documented launch command executed it."""
+    from sm64_events.tracking.service import TrackerService
+    main_mod = _stubbed_main(monkeypatch)
+    captured = {}
+    real_poller = main_mod.Poller
+
+    def spy(memory, detectors, sink, **kw):
+        captured.update(kw, sink=sink)
+        return real_poller(memory, detectors, sink, **kw)
+
+    monkeypatch.setattr(main_mod, "Poller", spy)
+    main_mod.build()
+    heartbeat = captured.get("on_frame")
+    assert heartbeat is not None, "the poller was built with no frame hook"
+    assert heartbeat.__self__ is captured["sink"]
+    assert heartbeat.__func__ is TrackerService.settle_frame
+
+
+def _stubbed_main(monkeypatch):
+    """A freshly reloaded `main` with everything build() would really touch
+    stubbed out. Every stub here is load-bearing; the reason is on its line."""
+    # No real file lock, and no ~100 ms NVENC probe.
+    monkeypatch.setattr(
+        "sm64_events.storage.instance_lock.acquire_instance_lock",
+        lambda path: object())
+    monkeypatch.setattr(
+        "sm64_events.replay.encoder.pick_video_codec", lambda: "libx264")
+
+    class _DbStub:
+        # TrackerService loads segment defs and the time_filters KV eagerly;
+        # build() also runs the defaults reconcile, which reads routes() and
+        # inserts every bundled segment against an empty segment_defs().
+        def segment_defs(self):
+            return []
+
+        def get_state(self, key, default):
+            return default
+
+        def routes(self):
+            return []
+
+        def insert_segment_def(self, *args, **kwargs):
+            return 1
+
+    import importlib
+    import sm64_events.main as main_mod
+    importlib.reload(main_mod)
+    # Patched at the name main.py imported it under, so service.py's own
+    # already-imported annotation is unaffected.
+    monkeypatch.setattr(main_mod, "Database", lambda path: _DbStub())
+    return main_mod
+
+
 def test_build_wires_replay_endpoints(monkeypatch, tmp_path):
     # Stub instance lock so build() doesn't acquire a real file lock.
     monkeypatch.setattr(

@@ -108,8 +108,18 @@
   .starcell.active-star .starimg {
     filter: drop-shadow(0 0 6px rgba(255,215,95,.85)) drop-shadow(0 0 2px rgba(255,215,95,.9)); }
   .starimg.dim { opacity: .72; filter: saturate(.85); }
+  /* min-height must cover the CLAMP plus the font's descenders, or the box is
+     shorter than the two lines it promises to show and `overflow: hidden`
+     shaves the bottom off the second one -- live report 2026-08-02 ("'Floating
+     Isle' has the bottom shaved off... it presently reads like a bug"). It was
+     2.1em against 2 x 1.12em of line boxes, so EVERY two-line name lost
+     0.5-2.5px of ink at every width, measured. The cell is fixed-height and its
+     children were already out of free space (the name is a flex item and was
+     being shrunk to exactly this min-height), so the room comes from the
+     selector cell's own bottom padding below -- clearance under the active
+     star's glow is the ROW's 8px, not this. */
   .starname { font-size: clamp(.55rem, 1.31cqw, .8rem); font-weight: 600;
-              line-height: 1.12; min-height: 2.1em;
+              line-height: 1.12; min-height: 2.45em;
               display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
               overflow: hidden; }
   .starcell.active-star .starname { color: #ffd75f; }
@@ -1023,7 +1033,9 @@
   }
   .selector-card .starcell {
     flex: 1 1 0; min-width: 0; height: 100%;
-    justify-content: flex-start; padding: .35rem .15rem .4rem;
+    /* bottom padding pays for .starname's descender room (see its rule): the
+       cell height is a fixed OBS slot, so the space had to come from inside. */
+    justify-content: flex-start; padding: .35rem .15rem .1rem;
   }
   .selector-card .starholder { width: min(82px, 8.4cqw); }
   /* segment rows (bowser/arena/castle): 1-3 cells, each pinned to the width
@@ -1058,10 +1070,16 @@
     display: grid; grid-template-rows: auto 1fr auto; padding-block: 12px;
   }
   .objective-card.active-star { border-color: rgba(240,189,50,.72); }
-  .seg-waiting {
+  /* `.step-row` is the LAYOUT (shared by the practice card's armed row and the
+     segment editor's Then picker); `.seg-waiting` is the practice card's own
+     spacing on top of it, and stays a distinct class because index.html keys
+     real rules off `.objective-card:has(.seg-waiting)` — a picker inside a
+     modal wearing that class would be claiming to be the card's armed row. */
+  .step-row {
     display: flex; align-items: baseline; gap: .5rem; min-width: 0;
-    margin-top: .4rem; font-size: .8rem; color: var(--muted);
+    font-size: .8rem; color: var(--muted);
   }
+  .seg-waiting { margin-top: .4rem; }
   .seg-waiting-step {
     flex: none; color: var(--text); font-weight: 700;
     font-variant-numeric: tabular-nums;
@@ -1069,6 +1087,103 @@
   .seg-waiting-for {
     min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
   }
+  /* The step track: the whole route on ONE line, never two. `.objective-card`
+     is fixed-height, so a track that wrapped would not grow the card -- it
+     would push its own siblings out under `overflow: hidden`, which looks
+     like nothing at all until a row silently disappears. The chips shrink
+     (min-width: 0 + per-chip ellipsis) rather than wrap; the widest label the
+     seeded corpus can produce is 37 characters, measured, so shrinking is the
+     safety net and not the normal case. */
+  .step-track {
+    display: flex; align-items: baseline; min-width: 0; overflow: hidden;
+    margin: 0; padding: 0; list-style: none; gap: .5rem;
+  }
+  .step-chip {
+    display: flex; align-items: baseline; gap: .22rem; min-width: 0;
+    white-space: nowrap;
+    /* ONE transition declaration per element -- a :hover/state block that
+       redeclares `transition` REPLACES this wholesale and the property
+       silently loses its animation exactly while the state is active
+       (`.claude/rules/ui-core.md`). State rules below set values only. */
+    transition: color .26s ease, opacity .26s ease;
+    color: var(--muted); opacity: .58;
+  }
+  .step-chip + .step-chip::before {
+    content: "›"; margin-right: .34rem; color: var(--muted); opacity: .5;
+    flex: none;
+  }
+  .step-chip.done { color: var(--text); opacity: .78; }
+  .step-chip.now { color: var(--gold); opacity: 1; font-weight: 700; }
+  .step-name {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  }
+  /* One marker slot holding BOTH glyphs stacked in the same grid cell, so the
+     slot is exactly as wide as the wider of them and a chip cannot shift
+     sideways when its glyph changes -- the step being marked is the one thing
+     on this row that is supposed to move. A grid stack rather than an absolute
+     pair inside a hand-picked width: absolute children do not size their
+     parent, so any glyph wider than the guess silently overprints the label
+     beside it (seen at 4x on the first render of this row, 2026-08-03). */
+  .step-mark { display: inline-grid; flex: none; }
+  .step-mark > span {
+    grid-area: 1 / 1; opacity: 0; transition: opacity .13s ease;
+  }
+  /* SEQUENTIAL, never a crossfade: the incoming glyph waits out the outgoing
+     one's fade, so no frame paints both. Same law climbcurve.js's
+     exchangeFade encodes for JS-animated text. */
+  .step-chip.done .mark-done,
+  .step-chip.now .mark-now,
+  .step-chip.ahead .mark-ahead,
+  .step-chip.required .mark-done,
+  .step-chip.skipped .mark-ahead { opacity: 1; transition-delay: .13s; }
+  /* The EDITOR's two states, drawn from the same chip so the row you edit and
+     the row you read while running are visibly one thing. `required` borrows
+     the live step's gold rather than the done tick's grey: in the editor the
+     ticked stop is the assertion being made, not a thing already behind you. */
+  .step-chip.required { color: var(--gold); opacity: 1; font-weight: 700; }
+  .step-chip.skipped { color: var(--muted); opacity: .5; }
+  /* A chip that toggles is a real button; strip the chrome, keep the ring. */
+  .step-toggle, .step-track-door {
+    display: flex; align-items: baseline; gap: .22rem; min-width: 0;
+    background: none; border: 0; padding: 0; margin: 0; cursor: pointer;
+    font: inherit; color: inherit; border-radius: 4px;
+  }
+  .step-track-door { gap: 0; }
+  .step-toggle:focus-visible, .step-track-door:focus-visible {
+    outline: 2px solid var(--gold); outline-offset: 2px;
+  }
+  .step-picker { margin-top: .5rem; }
+  .step-picker-hint { margin: .2rem 0 0; }
+  /* The builder's THEN section. Start and Finish are each one any-of set where
+     order means nothing; here order is the entire content, so a step wears its
+     ordinal and its own move controls and the "any of these" nesting sits one
+     level in. */
+  .then-step {
+    border: 1px solid var(--line); border-radius: 8px;
+    padding: 8px; margin-bottom: 8px;
+  }
+  .then-step-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: .5rem; margin-bottom: 6px;
+  }
+  .then-step-n {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 22px; height: 22px; border-radius: 999px;
+    background: rgba(240,189,50,.16); color: var(--gold);
+    font-weight: 700; font-variant-numeric: tabular-nums; font-size: .78rem;
+  }
+  .then-step-moves { display: flex; gap: 2px; }
+  .then-step-moves .icon-button:disabled { opacity: .35; cursor: default; }
+  /* The seeded-edit notice sits at the point of the edit, not in a library
+     menu — editing a shipped movement opts it out of every future corpus
+     refresh, and that cost was invisible from inside the editor. */
+  .builder-seeded {
+    border: 1px solid var(--line); border-left: 3px solid var(--gold);
+    border-radius: 8px; padding: 8px 10px; margin-bottom: 10px;
+    background: rgba(240,189,50,.06);
+  }
+  .builder-seeded.is-dirty { border-left-color: #e0803a; }
+  .builder-seeded p.meta { margin: .25rem 0 .5rem; }
   /* Trailing `auto` track added 2026-07-28 for the collapse toggle. Without
      it the button becomes an implicit 5th column at the grid's default size
      and pushes the strategy picker out of the card. */
@@ -3716,14 +3831,17 @@
     .objective-card:has(.seg-waiting) .rank-banner:not(:last-child)::before {
       bottom: -12px;
     }
-    /* Narrow-pane variant of the waiting-for line (Task 6, this branch):
-       the stacked rank banners already claim most of the taller card, so
-       this tightens rather than wraps -- .seg-waiting-for still ellipsises
-       instead of growing a second line. Kept through the main merge; the
-       rank rules above are main's (42404b7), which fixes the stacked-wash
-       overlap by widening the gap past the bleed rather than zeroing the
-       inner edges as this branch had. */
+    /* Narrow-pane variant of the step row (Task 6, this branch): the stacked
+       rank banners already claim most of the taller card, so this tightens
+       rather than wraps -- the chips ellipsise instead of growing a second
+       line, which inside this fixed-height card would clip a sibling rather
+       than show anything. Kept through the main merge; the rank rules above
+       are main's (42404b7), which fixes the stacked-wash overlap by widening
+       the gap past the bleed rather than zeroing the inner edges as this
+       branch had. */
     .seg-waiting { font-size: .74rem; gap: .35rem; margin-top: .3rem; }
+    .step-track { gap: .34rem; }
+    .step-chip + .step-chip::before { margin-right: .22rem; }
   }
 
   /* The tight band: both the star name and the strategy picker want the row.

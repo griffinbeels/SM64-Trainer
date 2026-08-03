@@ -27,12 +27,15 @@ uv run python tools/verify_star_stop.py              # live gate, ANSWERED 2026-
 uv run python tools/derive_xcam.py                   # live gate, ANSWERED + now the REGRESSION gate: scores what we journal against Usamune (just play; MIDAIR grabs are the ones that measure)
 uv run python tools/dev_cleanup.py                   # kill orphaned dev/harness servers (auto-runs at session start)
 uv run python tools/dedupe_journal.py data/tracker.db  # scan double-journaled events; --fix repairs (server stopped)
-uv run python tools/what_happened.py                 # READ BACK what the human just played, as a timeline
+uv run python tools/what_happened.py                 # READ BACK what the human just played -- journal events AND what the UI DREW, one timeline (--no-ui for events only)
 uv run python tools/what_happened.py --list          # which journal is live: repo / each worktree / installed exe
 uv run pytest tests/test_responsive.py -q            # render every breakpoint; report layout defects (no PJ64 needed)
 uv run python tools/contact_sheet.py .objective-card # one surface at 1500/1200/900/850, in one image -- LOOK at it
 uv run python tools/mark_sheet.py                    # the caveat badge on both surfaces, side by side (the PICK is made: corner badge, 2026-08-01)
 uv run python tools/measure_objective_card.py        # re-measure the fixed card heights against real content
+uv run python tools/topology_map.py                  # DRAW the world graph the segment matcher judges moves against -- LOOK at it, a wrong edge is invisible to every test
+uv run python tools/why_cancelled.py             # WHY did that movement stop being ACTIVE -- replays the session and names the rule + hop counts per cancel (stamps the frame the MOVE happened on, not the one it was judged on)
+uv run python tools/measure_topology_cancels.py       # score those topological rules against the real journal: how many completed runs would they have destroyed?
 ```
 
 **Supported window size: 850px wide minimum, any height** (2026-07-29). One
@@ -193,6 +196,23 @@ Contract changes land on main first, then dependent work fans out. Merge with
   `tests/test_rule_files.py` holds the ceilings and, more usefully, fails when
   a `paths:` glob matches nothing: a rule that never loads reaches nobody while
   looking perfectly healthy.
+- **The journal says what the GAME did; `data/ui_log.jsonl` says what the
+  SCREEN showed.** Two live reports on 2026-08-02 were about a cell appearing
+  and disappearing ("it briefly lingered… and then was removed"; "after opening
+  the usamune menu / pausing, it accidentally got rid of the Bowser 1 → WF
+  segment") and neither was answerable from the journal, because nothing
+  recorded what was drawn. `ui/uilog.js` reads the RENDERED practice page back
+  — the selector's cells and every objective card — and posts a record whenever
+  the painted snapshot changes; `core/uilog.py` stores it beside the journal and
+  `tools/what_happened.py` interleaves the two on one clock. It reads the DOM
+  rather than the store on purpose: a model-based recorder logs what we BELIEVE
+  is on screen, which is the belief under suspicion whenever such a report
+  arrives. **An EMPTY UI log is itself the finding** — the page posts these
+  itself, so silence means the open tab is running JS from before this change,
+  which is exactly how a fix verified on the server gets reported as not
+  working. Never journal these as events: the projector re-derives armed state
+  from the journal on replay, so a derived row written back makes replay
+  non-idempotent (`tracking/service.py` says the same about arm/disarm notices).
 - **Debugging live play starts with `tools/what_happened.py`, never with a
   hand-written query.** Three journals exist and all three are valid — the repo
   checkout, every worktree, and the installed exe under `%LOCALAPPDATA%` — and

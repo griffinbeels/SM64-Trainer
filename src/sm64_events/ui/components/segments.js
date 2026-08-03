@@ -240,8 +240,15 @@ export function ClauseRow({ clause, types, vocab, tint, onChange, onRemove, t })
 // with no control reading any of it, so every Builder-created segment
 // silently became "loose" (SegmentBody's own default) with no way to see or
 // change it from the editor.
+// `waypoints` joined this list on 2026-08-03, when the editor grew a Then
+// section. Until then the field was deliberately absent and the omission was
+// load-bearing: `SegmentPatch.waypoints` defaults to None = untouched, so a
+// save from an editor that could not author them left a seeded movement's own
+// steps intact. Now that they are editable that protection is gone by design,
+// which is exactly why the editor must always send the FULL list — sending a
+// partial one would clear the rest.
 const SAVE_FIELDS = ["name", "enabled", "start_triggers", "end_triggers",
-                     "guards", "match_mode"];
+                     "guards", "match_mode", "waypoints"];
 
 // The full definition shape POST /api/segments/backtest validates against
 // (server/api.py's SegmentBody) -- a SUPERSET of SAVE_FIELDS, deliberately:
@@ -256,7 +263,7 @@ const SAVE_FIELDS = ["name", "enabled", "start_triggers", "end_triggers",
 // guess. match_mode no longer needs the same treatment -- it is a SAVE_FIELDS
 // member now (the editor control below), so it is always present on `d`
 // under its own value, never a guess.
-const BACKTEST_FIELDS = [...SAVE_FIELDS, "waypoints", "category"];
+const BACKTEST_FIELDS = [...SAVE_FIELDS, "category"];
 
 // One-line verdict for the backtest panel: distinguishes "never even armed"
 // from "armed and never closed" (the diagnostic this feature exists for --
@@ -303,6 +310,27 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs }
     match_mode: (vocab.match_modes && vocab.match_modes[0]
                  && vocab.match_modes[0].key) || "loose" };
   const [d, setD] = useState(initial || blank);
+  const [resetting, setResetting] = useState(false);
+  const [resetErr, setResetErr] = useState(null);
+
+  // Editing a SHIPPED movement opts it out of every future corpus refresh --
+  // `seed_dirty` blocks reconcile's update branch unconditionally, which is
+  // how six rows sat frozen against their own seed until migration v17 went
+  // looking for them. The cost was invisible from in here, and the undo was
+  // WORSE than invisible: `POST /api/segments/{id}/reset` has existed the
+  // whole time and no UI ever called it, so "put it back" was a capability
+  // that, by his own rule, did not exist. Both live at the point of the edit
+  // now, not in a library menu nobody opens before typing.
+  async function resetToDefault() {
+    setResetting(true); setResetErr(null);
+    try {
+      await send("POST", `/api/segments/${initial.id}/reset`, {});
+      const rows = await load();
+      const fresh = rows.find((row) => row.id === initial.id);
+      if (fresh) { setD(fresh); onSaved(initial.id); }
+    } catch (err) { setResetErr(String(err)); }
+    finally { setResetting(false); }
+  }
   // Icon override (existing segments only — the override is keyed by id, so
   // a not-yet-saved segment has nowhere to hang one). Read live from the
   // session view so a pick from the banner's ✎ shows here too.
@@ -352,6 +380,36 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs }
     [k]: d[k].map((c, j) => (j === i ? clause : c)) });
   const add = (k, types) => setD({ ...d, [k]: [...d[k], { type: types[0].key }] });
   const drop = (k, i) => setD({ ...d, [k]: d[k].filter((_, j) => j !== i) });
+
+  // `waypoints` is an ORDERED list of any-of clause SETS, so it needs its own
+  // three mutators rather than the flat ones above -- the outer index is the
+  // STEP (order is the whole meaning under the strict path matcher) and the
+  // inner one is an alternative within that step. Every alternative is
+  // preserved on every edit: the shipped corpus holds exactly one clause per
+  // step today, and an editor that quietly kept only the first would delete
+  // information the moment one does not.
+  const steps = () => d.waypoints || [];
+  const setSteps = (next) => setD({ ...d, waypoints: next });
+  const editStep = (stepIndex, clauseIndex, clause) => setSteps(
+    steps().map((set, i) => (i !== stepIndex ? set
+      : set.map((c, j) => (j === clauseIndex ? clause : c)))));
+  const addStepClause = (stepIndex, types) => setSteps(
+    steps().map((set, i) => (i === stepIndex
+      ? [...set, { type: types[0].key }] : set)));
+  const dropStepClause = (stepIndex, clauseIndex) => setSteps(
+    steps().map((set, i) => (i !== stepIndex ? set
+      : set.filter((_, j) => j !== clauseIndex)))
+      .filter((set) => set.length > 0));
+  const addStep = (types) => setSteps([...steps(), [{ type: types[0].key }]]);
+  const dropStep = (stepIndex) => setSteps(
+    steps().filter((_, i) => i !== stepIndex));
+  const moveStep = (stepIndex, delta) => {
+    const next = [...steps()];
+    const target = stepIndex + delta;
+    if (target < 0 || target >= next.length) return;
+    [next[stepIndex], next[target]] = [next[target], next[stepIndex]];
+    setSteps(next);
+  };
 
   async function save() {
     try {
@@ -512,6 +570,59 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs }
     </button>
   </section>`;
 
+  // THEN — the ordered stops between Start and Finish. The builder had no way
+  // to author one until 2026-08-03, which is why `WF → SSL` could only exist
+  // in the shipped corpus and not be made by a user (his own bar, from the
+  // spec: "It needs to be easy for me to have, theoretically, made the WF→SSL
+  // segment on my own as a user"). Its shape is deliberately NOT `section`'s:
+  // Start and Finish are each ONE any-of set where order means nothing, and
+  // here order is the entire content — under the strict path matcher a step
+  // out of sequence voids the run — so every step wears its own number and its
+  // own move controls, and the "any of these" nesting is one level in.
+  const thenSection = () => html`<section class="segsection seg-then">
+    <div class="seghead">
+      <span class="seghead-icon"><${Icon} name="split" size=${17} /></span>
+      <span><b>Then</b><small>Stops the run must pass, in this order. Going
+        anywhere else voids it.</small></span>
+    </div>
+    ${steps().length === 0 && html`<p class="meta">No stops — any route from
+      Start to Finish counts. Easier still: close this and use
+      <b>Record what I just did</b>, which reads the stops off the run you
+      already played.</p>`}
+    ${steps().map((set, stepIndex) => html`<div class="then-step" key=${stepIndex}>
+      <div class="then-step-head">
+        <span class="then-step-n">${stepIndex + 1}</span>
+        <div class="then-step-moves">
+          <button class="icon-button" title="Move this stop earlier"
+              aria-label="Move this stop earlier" disabled=${stepIndex === 0}
+              onclick=${() => moveStep(stepIndex, -1)}>
+            <${Icon} name="stepBack" size=${14} /></button>
+          <button class="icon-button" title="Move this stop later"
+              aria-label="Move this stop later"
+              disabled=${stepIndex === steps().length - 1}
+              onclick=${() => moveStep(stepIndex, 1)}>
+            <${Icon} name="stepForward" size=${14} /></button>
+          <button class="icon-button" title="Remove this stop"
+              aria-label="Remove this stop" onclick=${() => dropStep(stepIndex)}>
+            <${Icon} name="close" size=${14} /></button>
+        </div>
+      </div>
+      ${set.map((clause, clauseIndex) => html`<${ClauseRow} key=${clauseIndex}
+          clause=${clause} types=${vocab.triggers} tint=${clauseIndex % 4}
+          vocab=${vocab} t=${t}
+          onChange=${(cl) => editStep(stepIndex, clauseIndex, cl)}
+          onRemove=${() => dropStepClause(stepIndex, clauseIndex)} />`)}
+      <button class="quiet-button segment-add-condition"
+          onclick=${() => addStepClause(stepIndex, vocab.triggers)}>
+        <${Icon} name="plus" size=${15} /> Add another way to reach this stop
+      </button>
+    </div>`)}
+    <button class="quiet-button segment-add-condition"
+        onclick=${() => addStep(vocab.triggers)}>
+      <${Icon} name="plus" size=${15} /> Add a stop
+    </button>
+  </section>`;
+
   return html`<div class="segbuilder">
     <div class="builder-heading">
       <div>
@@ -526,6 +637,20 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs }
       <input placeholder="e.g. Lobby to BitDW" value=${d.name}
           oninput=${(e) => setD({ ...d, name: e.target.value })} />
     </label>
+    ${initial && initial.seed_key && html`<div
+        class="builder-seeded ${initial.seed_dirty ? "is-dirty" : ""}">
+      <span class="field-label"><${Icon} name="shield" size=${15} />${" "}
+        ${initial.seed_dirty ? "Edited copy of a shipped movement"
+          : "Shipped with the app"}</span>
+      <p class="meta">${initial.seed_dirty
+        ? "This one is yours now — it stops updating when a new version of the app ships a better version of this movement."
+        : "Saving an edit here stops this movement updating when a new version of the app ships a better version of it. Reset puts it back."}</p>
+      ${resetErr && html`<div class="badx">${resetErr}</div>`}
+      <button onclick=${resetToDefault} disabled=${resetting}>
+        <${Icon} name="restart" size=${15} />${" "}${resetting
+          ? "Resetting…" : "Reset to the shipped version"}
+      </button>
+    </div>`}
     ${initial && initial.id != null && html`<div class="builder-icon">
       <span class="field-label">Icon</span>
       <img class="builder-icon-preview" alt="" draggable="false"
@@ -569,6 +694,7 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs }
     <div class="segment-definition-grid">
       ${section("Start", "Arm when any one of these happens.", "play",
         "start_triggers", vocab.triggers, "seg-start")}
+      ${thenSection()}
       ${section("Finish", "Complete when any one of these happens.", "target",
         "end_triggers", vocab.triggers, "seg-end")}
       ${section("Rules", "Optional checks that keep attempts valid.", "shield",
@@ -708,7 +834,7 @@ function originLevels(taxonomy) {
   ];
 }
 
-export function Segments({ t }) {
+export function Segments({ t, intent, clearIntent }) {
   const [defs, setDefs] = useState(null);
   const [query, setQuery] = useState("");
   const [vocabData, setVocabData] = useState(null);
@@ -729,6 +855,17 @@ export function Segments({ t }) {
   };
   useEffect(() => { load();
     getJSON("/api/segments/vocab").then(setVocabData); }, []);
+  // An id handed over by the practice card's step track (app.js::openSegment,
+  // the same intent-plus-tab shape openCompare uses). Waits for `defs`, since
+  // the intent arrives on the same render the tab switches and the library may
+  // not have loaded yet; clears itself so re-opening the tab later does not
+  // silently reopen an editor the user closed.
+  useEffect(() => {
+    if (intent == null || !defs) return;
+    const wanted = defs.find((row) => row.id === intent);
+    if (wanted) setEditing(wanted);
+    clearIntent();
+  }, [intent, defs]);
   if (!defs || !vocabData) return html`<${PageState}
       kind=${t.connected ? "loading" : "offline"}
       title="Preparing the segment workshop" />`;

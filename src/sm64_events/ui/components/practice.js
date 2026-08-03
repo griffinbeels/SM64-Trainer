@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { requestTarget } from "../target.js";
+import { useUiLog } from "../uilog.js";
 import { hasPracticeContext, justCompletedSegment,
         practicedHere, starPracticableHere } from "../stagecontext.js";
 import { ReplayPlayer } from "./replay.js";
@@ -17,6 +18,7 @@ import { CollapseToggle, cardClass, useCollapsed } from "./collapsible.js";
 import { RankIcon } from "./rankicon.js";
 import { StandardsPanel } from "./standards.js";
 import { StratPicker } from "./stratpicker.js";
+import { StepTrack } from "./steptrack.js";
 import { useTargetPicker } from "./targetpicker.js";
 import { FailureCompilation } from "./failcomp.js";
 import { Icon } from "./icons.js";
@@ -710,13 +712,12 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
            grabbing that first star, proven by it progressing to the next
            step" -- it must survive the presentation change and read as the
            STAR's own progress, not a segment's. */""}
-      ${sec.armed_detail && html`<div class="seg-waiting">
-        <span class="seg-waiting-step">Step${" "}
-          ${sec.armed_detail.progress + 1}${" "}of${" "}
-          ${sec.armed_detail.total + 1}</span>
-        <span class="seg-waiting-for">Waiting for${" "}
-          ${sec.armed_detail.waiting_for}</span>
-      </div>`}
+      ${/* No door here, and the reason is worth stating rather than
+           leaving as a gap (rule 11): these steps belong to the hidden
+           100-coin ENGINE definition, which views.py excludes from every
+           picker on purpose. Opening it in the editor would offer to edit
+           a definition the user is not allowed to target. */""}
+      <${StepTrack} detail=${sec.armed_detail} />
     </section>
 
     <section class="practice-card analysis-card ${cardClass(foldAnalysis)}">
@@ -804,7 +805,8 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
 // Broken sections (definition deleted, history remains) render but drop the
 // timeline/marker editor and the strat picker — both key off the deleted
 // definition (POST /api/strat 404s for a segment that no longer exists).
-function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) {
+function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker,
+                         openSegment }) {
   const [showHidden, setShowHidden] = useState(false);
   const [visible, setVisible] = useState(10);
   const [foldTarget, toggleTarget] = useCollapsed("objective");
@@ -924,13 +926,9 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker 
            Sand Land", never the builder's editor-voice sentence, which read
            as broken English under this label ("Waiting for You enter level
            Shifting Sand Land"). */""}
-      ${sec.armed_detail && html`<div class="seg-waiting">
-        <span class="seg-waiting-step">Step${" "}
-          ${sec.armed_detail.progress + 1}${" "}of${" "}
-          ${sec.armed_detail.total + 1}</span>
-        <span class="seg-waiting-for">Waiting for${" "}
-          ${sec.armed_detail.waiting_for}</span>
-      </div>`}
+      <${StepTrack} detail=${sec.armed_detail}
+        onEdit=${openSegment && !sec.broken
+          ? () => openSegment(sec.segment_id) : null} />
     </section>
 
     <section class="practice-card analysis-card ${cardClass(foldAnalysis)}">
@@ -1156,7 +1154,15 @@ function EmptyPractice({ v, t, ui, unassignedRows, freshIds, openCompare,
   </div>`;
 }
 
-export function Practice({ t, openCompare }) {
+export function Practice({ t, openCompare, openSegment }) {
+  // Records what this page actually PAINTS — the selector's cells and every
+  // objective card — so a report about a cell that "was just there a couple
+  // frames ago" is readable afterwards instead of guessable from a
+  // screenshot (../uilog.js, core/uilog.py). ONE observer for the whole page
+  // deliberately: four banner row modes and three card types render here, and
+  // an observer per surface is four things to keep in step with the markup.
+  const pageRef = useRef(null);
+  useUiLog(pageRef);
   const [showUnassignedHidden, setShowUnassignedHidden] = useState(false);
   const stored = localStorage.getItem("sm64.sort");
   const [sort, setSortState] = useState(
@@ -1303,10 +1309,27 @@ export function Practice({ t, openCompare }) {
   const isAmbientlyArmed = (sec) => sec != null && sec.arms_ambiently
     && !(tgt.kind === "segment" && tgt.segment_id === sec.segment_id)
     && !justCompletedSegment(v, freshIds, sec.segment_id);
+  // WHAT HE CLICKED LEADS. Same ruling as the three target thieves, applied
+  // to the ORDER rather than to the write (live report 2026-08-02): "once we
+  // select something, it should always appear in that display below, and
+  // continue to be displayed while it's still valid and selected."
+  //
+  // This became reachable the moment "no active route" stopped meaning "no
+  // filter" (segments.py::_route_allows): all FOUR `Bowser 2 → X` movements
+  // now arm on the same event, `frozen.armedOrder` has no way to order things
+  // that arrived together, and `armedPins[0]` was whichever landed first —
+  // so tapping Upstairs lit that CELL while the card below kept reading
+  // "Bowser 2 → BitS". Two surfaces, one question, two answers.
+  //
+  // `sort` is stable, so this promotes the target and leaves every other pin
+  // in its existing most-recently-armed order.
+  const isTargetedSeg = (sec) => sec != null && tgt.kind === "segment"
+    && tgt.segment_id === sec.segment_id;
   const armedPins = [...frozen.armedOrder].reverse()
     .map((id) => segs.find((s) => s.segment_id === id))
     .filter(Boolean)
-    .filter((sec) => !isAmbientlyArmed(sec));
+    .filter((sec) => !isAmbientlyArmed(sec))
+    .sort((a, b) => (isTargetedSeg(b) ? 1 : 0) - (isTargetedSeg(a) ? 1 : 0));
   const stickyPin = frozen.lastPinnedSeg != null
     ? segs.find((s) => s.segment_id === frozen.lastPinnedSeg)
     : undefined;
@@ -1326,7 +1349,31 @@ export function Practice({ t, openCompare }) {
   // A pin that has genuinely disarmed carries `armed_detail: null` and falls
   // straight through to the plain `here()` course check, so that fix stays
   // intact — this only widens the exemption to a pin that is STILL running.
-  const pinnedSegs = !inContext || starActive ? []
+  // The other half of the same ruling: an explicitly picked segment leads even
+  // when it is NOT armed and something else is. Sorting armedPins alone would
+  // only cover the case where his pick happens to be running too.
+  const pickedSeg = segs.find(isTargetedSeg);
+  // AN EMPTY HAND WITH SEVERAL THINGS RUNNING CLAIMS NOTHING (live report
+  // 2026-08-02): standing Upstairs with `BitS Entry`, `Bowser 2 → WDW` and
+  // `Bowser 2 → BitS` all armed and NO cell lit, the card still announced
+  // "ACTIVE SEGMENT · BitS Entry · Running". *"When I don't have selected in
+  // the UI, it should never display an active segment like this, especially
+  // since there are multiple options."*
+  //
+  // The rule it bends is his own — "a RUNNING segment is never invisible"
+  // (2026-07-24) — and that rule was written when at most one thing armed at
+  // a time, so "the armed one" and "the one he means" were the same section.
+  // Since `_route_allows` stopped treating "no route" as "no filter" they are
+  // not: six movements arm off one exit. ONE armed segment is still shown,
+  // because there is nothing to be ambiguous about and the old rule is right
+  // there; TWO OR MORE with no pick shows none, because choosing between them
+  // would assert a selection he never made — the same "what he clicked wins"
+  // ruling, in the case where he has clicked nothing.
+  const ambiguousPins = !pickedSeg && armedPins.length > 1;
+  const pinnedSegs = !inContext || starActive || ambiguousPins ? []
+    : pickedSeg && !armedPins.includes(pickedSeg)
+        && (pickedSeg.armed_detail || here(pickedSeg))
+      ? [pickedSeg, ...armedPins]
     : armedPins.length ? armedPins
     : stickyPin && !isAmbientlyArmed(stickyPin)
       && (stickyPin.armed_detail || here(stickyPin)) ? [stickyPin]
@@ -1355,7 +1402,7 @@ export function Practice({ t, openCompare }) {
     .slice()
     .sort(comparator(sort, t.clock));
 
-  return html`<div class="practice-page">
+  return html`<div class="practice-page" ref=${pageRef}>
     <${StageBanner} t=${held} freshIds=${freshIds} />
 
     ${/* ONE picker for the page, not one per section: only the primary card
@@ -1369,6 +1416,7 @@ export function Practice({ t, openCompare }) {
           freshIds=${freshIds} openCompare=${openCompare} />`
       : primarySeg
         ? html`<${SegmentSection} key=${`seg:${primarySeg.segment_id}`}
+            openSegment=${openSegment}
             sec=${primarySeg} t=${held} ui=${ui} pinned=${true}
             openPicker=${openTargetPicker}
             freshIds=${freshIds} openCompare=${openCompare} />`
@@ -1406,6 +1454,7 @@ export function Practice({ t, openCompare }) {
               </summary>
               ${sec.kind === "segment"
                 ? html`<${SegmentSection} key=${`seg:${sec.segment_id}`}
+                    openSegment=${openSegment}
                     sec=${sec} t=${held} ui=${ui} pinned=${false}
                     freshIds=${freshIds} openCompare=${openCompare} />`
                 : html`<${StarSection} key=${`${sec.course_id}:${sec.star_id}`}

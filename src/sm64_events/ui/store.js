@@ -4,10 +4,17 @@ import { getJSON, send } from "./api.js";
 import { coalesce } from "./coalesce.js";
 import { getRankIconStyle, setRankIconStyle } from "./components/rankicon.js";
 
+// segment_progress: an armed segment's step cursor moved. It is the ONLY
+// signal that reaches the browser for it -- a cursor move journals nothing of
+// its own, and the position events that cause it (area_changed/level_changed)
+// are deliberately not in this set. Without it the step track sits on a step
+// the player passed until some unrelated event happens to force a fetch: 77
+// seconds, on the live report that produced this (2026-08-02, WF -> SSL).
 const REFRESH_ON = new Set(["attempt_completed", "attempts_invalidated",
   "pb_saved", "pb_undone", "session_started", "target_changed",
   "star_collected", "strat_set", "rank_standards_changed",
   "rank_mode_changed", "icons_changed", "marelo_changed", "route_selected",
+  "segment_progress",
 ]);
 const RUN_REFRESH_ON = new Set(["run_started", "run_progress",
   "run_finished", "run_aborted", "game_reset"]);
@@ -16,6 +23,21 @@ const RUN_REFRESH_ON = new Set(["run_started", "run_progress",
 // pickRoute/flushRouteIntent below (live report 2026-07-28: rapid route
 // switching got permanently stuck).
 const NO_ROUTE_INTENT = Symbol("no-pending-route-intent");
+
+// Returned by `pickRoute` when the pick would abandon an in-flight run. A
+// distinct value rather than `false`, so a caller cannot mistake "blocked" for
+// "wrote nothing because it was already that route".
+export const RUN_ACTIVE = "run-active";
+
+// Would this scope change abandon a run the player is in the middle of?
+// Import-free and total, so tests/test_ui_run_scope.py can drive it directly.
+// Re-picking the route you are ALREADY running is not a change and must not
+// warn — a strategy edit or a stray re-render must never look like an
+// abandonment.
+export function runBlocksScopeChange(run, currentRouteId, nextRouteId) {
+  if (!run || !run.active) return false;
+  return nextRouteId !== currentRouteId;
+}
 
 export function useTracker() {
   const [view, setView] = useState(null);
@@ -94,6 +116,13 @@ export function useTracker() {
   const refreshRun = useCallback(async () => {
     try { setRun(await getJSON("/api/run")); } catch (e) { /* keep last */ }
   }, []);
+  // Ending a run lives HERE rather than in runview.js alone, because the
+  // scope-change confirmation below has to be able to do it too and a second
+  // spelling of "abandon the run" is how the two come apart.
+  const endRun = useCallback(async () => {
+    try { await send("POST", "/api/run/end"); } catch (e) { /* report upstream */ }
+    refreshRun();
+  }, [refreshRun]);
   useEffect(() => { refreshRun(); }, [refreshRun]);
 
   // marelo: the ACTIVE-scope MARELO figure (no ?scope= -> ranks_api
@@ -213,10 +242,25 @@ export function useTracker() {
         flushRouteIntent();   // a newer pick may have queued while this ran
       });
   };
-  const pickRoute = (id) => {
+  // The route IS the rank scope (the header's card is both controls at once —
+   // `.claude/rules/ui-ranks.md`), so changing it mid-run would silently
+  // re-rate a run against a plan it is not following. His ruling, 2026-08-03:
+  // *"we have to stop the run before changing ranking scopes... You're allowed
+  // to change it, just that it will also stop their active run. The dialogue
+  // should warn them."*
+  //
+  // Returns the sentinel `RUN_ACTIVE` instead of asking anything: a store must
+  // not own a dialog, and a `confirm()` here would be unstyleable, untestable
+  // and would block the event loop. The CALLER shows the warning and calls
+  // again with `{confirmed: true}` — which is also how `runview.js` arms a run
+  // without arguing with itself, since starting a run IS the confirmation.
+  const pickRoute = (id, { confirmed = false } = {}) => {
+    if (!confirmed && runBlocksScopeChange(run, activeRouteId, id))
+      return RUN_ACTIVE;
     setRoute(id);
     pendingRouteIntent.current = id;
     flushRouteIntent();
+    return null;
   };
   // flushRouteIntent's own `.catch` above is exactly why the reconcile effect
   // below still needs to exist. localStorage is an optimistic mirror of a
@@ -497,7 +541,7 @@ export function useTracker() {
            refresh, paused: pauseState.paused,
            pauseReason: pauseState.reason, togglePause,
            armedSegs, armedOrder, armedNames, lastPinnedSeg, stage,
-           run, refreshRun,
+           run, refreshRun, endRun,
            marelo, mareloRev, clearMareloCelebration,
            routes, activeRouteId, pickRoute,
            update, updateForced, setUpdateForced, updateApplying,

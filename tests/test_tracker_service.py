@@ -1071,6 +1071,40 @@ def test_segment_attempt_completed_carries_segment_fields(tmp_path):
     assert "segment_disarmed" not in journaled
 
 
+def test_settle_frame_broadcasts_a_cancel_no_event_would_have_delivered(tmp_path):
+    """The wire, not the rule (live report 2026-08-02). The engine decided this
+    cancel at the move; until `settle_frame` existed the notice waited for the
+    next journaled event, so a player standing still inside a course watched a
+    dead movement claim ACTIVE SEGMENT for 27.7 s. Broadcast-only, like every
+    other arm/disarm notice — the projector re-derives them on replay."""
+    db, svc, sent = make_rec(tmp_path)
+    # The shape of the shipped seg:wf->ssl row (this db carries only the legacy
+    # ten; the 56 movements arrive via reconcile at startup). LOOSE on purpose:
+    # a strict def is disarmed by the foreign level change itself, so it could
+    # never show whether the topological verdict got delivered.
+    wf_ssl = asyncio.run(svc.create_segment({
+        "name": "WF → SSL", "match_mode": "loose", "guards": [],
+        "start_triggers": [{"type": "level_exit", "from": 24}],
+        "end_triggers": [{"type": "level_enter", "to": 8}]}))
+    asyncio.run(svc.publish(ev("level_changed", 1000, {"from": 24, "to": 6})))
+    asyncio.run(svc.publish(ev("area_changed", 1000,
+                               {"level": 6, "from": 1, "to": 1})))
+    asyncio.run(svc.publish(ev("mario_acted", 1005)))
+    assert svc.armed_segment_ids == {wf_ssl}
+    # Into the Bowser 1 arena, which no walk from the lobby reaches. No further
+    # event: the clock alone has to deliver the verdict.
+    asyncio.run(svc.publish(ev("level_changed", 2000, {"from": 6, "to": 30})))
+    asyncio.run(svc.publish(ev("area_changed", 2000,
+                               {"level": 30, "from": 1, "to": 1})))
+    assert wf_ssl in svc.armed_segment_ids   # the arena's own fight arms too
+    asyncio.run(svc.settle_frame(2001))
+    assert wf_ssl not in svc.armed_segment_ids
+    gone = [e for e in sent if e.type == "segment_disarmed"
+            and e.payload["segment_id"] == wf_ssl]
+    assert gone and gone[-1].payload["name"] == "WF → SSL"
+    assert "segment_disarmed" not in [e.type for e in db.events()]
+
+
 def test_star_attempt_completed_carries_kind_star(tmp_path):
     db, svc, sent = make_rec(tmp_path)
     asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))

@@ -421,6 +421,14 @@ WORLD_EDGES_TWO_WAY = (
     (26, 4),                                                # courtyard <-> BBH
     (16, 18),                                               # grounds <-> VCUtM (moat)
     (7, 28),                                                # HMC pool <-> CotMC
+    # Bowser course <-> its arena. The pipe goes in; LOSING the fight puts you
+    # back at the top of the course you came from, which is the same shape as
+    # any other "the exit returns where you came from" row above. These were
+    # one-way (course -> arena only) until 2026-08-02, when the human read the
+    # map this table now draws and corrected all three -- exactly the class of
+    # error tools/measure_topology_cancels.py is structurally blind to, since a
+    # MISSING edge only makes the rules stricter in a place he never walked.
+    (17, BOWSER_1_ARENA), (19, BOWSER_2_ARENA), (21, BOWSER_3_ARENA),
 )
 
 # One-way edges: moves with a DIFFERENT return path. Arena pipes only run
@@ -438,10 +446,96 @@ WORLD_EDGES_TWO_WAY = (
 # `star_grabbed` start (see tools/corpus_movements.py) -- and that start is
 # what fired the movement while the player was still standing in DDD holding
 # the star they were practising (live report 2026-07-27).
-WORLD_EDGES_ONE_WAY = (
-    (17, 30), (19, 33), (21, 34),                 # Bowser course pipe -> arena
-    (30, _LOBBY), (33, _BASEMENT), (34, _UPSTAIRS),  # fight exit -> castle
+#
+# The three `course -> arena` rows that used to live here MOVED to the two-way
+# table on 2026-08-02: losing the fight returns you to the course, so the pair
+# is symmetric and only the WIN is one-way.
+#
+# `(34, _UPSTAIRS)` was REMOVED the same day, on the human's correction reading
+# tools/topology_map.py: "Bowser 3 cannot go back to upstairs, because if you
+# win in bowser 3 you beat the game; if you lose in bowser 3, you go back into
+# bowser in the sky." So the Bowser 3 arena has no exit into the castle at all
+# -- its only edge is the two-way pair with BitS. Bowser 1 and 2 keep theirs:
+# their key cutscene really does put Mario back in the castle.
+#
+# `(19, _LOBBY)` -- "BitFS exit -> LOBBY" -- was ADDED 2026-08-02, on his live
+# report plus a measurement of both journals. BitFS is ENTERED from the
+# basement (the two-way row above), but EXITING it does not put you back there:
+# it puts you in the lobby, and that is not a quirk, it is a movement TRICK he
+# routes on. His words: *"The fastest path to getting to upstairs is actually
+# to go Bowser 2 -> Basement -> Re-enter bowser in the fire sea -> Exit to
+# lobby -> Upstairs."*
+#
+# Measured over every `level_changed <bowser level> -> 6` in both journals,
+# taking the SETTLED area (the same per-frame collapse the matcher uses):
+#   BitFS -> Lobby x11, -> Basement x1      <- this row
+#   BitDW -> Lobby x27                      <- already covered by (_LOBBY, 17)
+#   BitS  -> Upstairs x2, -> Lobby x1       <- UNRESOLVED, deliberately not
+#                                              added: three observations cannot
+#                                              tell a trick from a mis-sample,
+#                                              and a wrong edge is invisible to
+#                                              every test (that is why
+#                                              tools/topology_map.py exists)
+# What the missing row COST, which is the whole argument for measuring rather
+# than reasoning about a table: with BitFS reachable only from the basement,
+# BitFS sat 3 hops from Upstairs where the basement sat 2 -- so Rule 2 read the
+# fastest real route as walking away from the destination and silently killed
+# `Bowser 2 -> Upstairs` the instant he entered the pipe. With this row both
+# are 2, equal is sideways, and the rule waves it through.
+#
+# NOT made two-way: a lobby -> BitFS move is the warp menu, and the basement is
+# the real door in.
+# THE PAUSE EXIT, added 2026-08-02 — and `(19, _LOBBY)` above turns out to have
+# been one instance of it rather than a fact about BitFS.
+#
+# LIVE-VERIFIED by the human in every course: *"every single course has an 'Exit
+# Course' button that results in going back to the Lobby. The only exceptions
+# are: Castle Basement, Castle Upstairs, Castle Courtyard, Castle Grounds — for
+# these, if you press pause, there's no option to exit (because we're already in
+# the castle). That's fine. We navigate the castle as normal."* And separately
+# for the arenas: *"for Bowser 1/2/3 there's an Exit Course option, which brings
+# you back to the lobby."*
+#
+# So the rule has NO exceptions beyond the castle's own areas, and
+# `tests/test_topology.py::test_every_course_can_pause_exit_to_the_lobby`
+# states it that way rather than as a list — a hand-written list is what got it
+# wrong before (an earlier draft named 12 and named them wrongly, by reading
+# level ids through COURSE_NAMES, which is keyed by COURSE number).
+#
+# ONE-WAY: you cannot enter a course from the lobby that you have no door for.
+#
+# This is what makes each re-entry movement a TRICK: re-entering a course and
+# pause-exiting is how you reach the Lobby without walking to it — `SL ->
+# Basement` skips Upstairs -> Lobby, `HMC -> RR` skips Basement -> Lobby.
+# Nothing else explains why those movements exist.
+#
+# It is a LIVE defect fix, not only authoring groundwork: loose definitions
+# judge by hop count through this table, so a real pause exit out of any of
+# these was either an impossible move (Rule 1) or read as walking away (Rule 2).
+#
+# The Bowser 3 arena keeps having no WIN or LOSE edge into the castle (see
+# `(34, _UPSTAIRS)`'s removal above) — a pause exit is a third, different
+# mechanism, and the human tested it directly.
+# Their own tuple because they are their own MECHANISM, and consumers need to
+# tell them apart: a course's ordinary exit is the door it came in by, and a
+# walker that took the pause exit instead would route BBH -> Lobby and never
+# see the Courtyard. `(19, _LOBBY)` lives here now — it was added the day
+# before as a fact about BitFS and is one instance of this rule.
+# Levels already carrying a two-way lobby edge (BoB WF JRB CCM PSS SA TotWC
+# BitDW) reach it anyway and need no row.
+WORLD_PAUSE_EXITS = (
+    (4, _LOBBY), (7, _LOBBY), (8, _LOBBY),        # BBH HMC SSL
+    (10, _LOBBY), (11, _LOBBY), (13, _LOBBY),     # SL WDW THI
+    (14, _LOBBY), (15, _LOBBY), (18, _LOBBY),     # TTC RR VCUtM
+    (19, _LOBBY), (21, _LOBBY), (22, _LOBBY),     # BitFS BitS LLL
+    (23, _LOBBY), (28, _LOBBY), (31, _LOBBY),     # DDD CotMC WMOTR
+    (36, _LOBBY),                                 # TTM
+    (BOWSER_2_ARENA, _LOBBY), (BOWSER_3_ARENA, _LOBBY),
 )
+
+WORLD_EDGES_ONE_WAY = (
+    (30, _LOBBY), (33, _BASEMENT),                # winning key cutscene -> castle
+) + WORLD_PAUSE_EXITS
 
 
 def _world_node(spec) -> tuple:
@@ -540,27 +634,40 @@ def world_regions() -> dict[str, str]:
     A wrong or missing edge is fixed in ONE row of WORLD_EDGES_* and both this
     and the dropdown filter re-derive.
     """
-    adjacency: dict[str, set[str]] = {}
-
-    def link(from_key: str, to_key: str) -> None:
-        adjacency.setdefault(from_key, set()).add(to_key)
-
-    for node_a, node_b in WORLD_EDGES_TWO_WAY + WORLD_EDGES_ONE_WAY:
-        key_a = node_key(*_world_node(node_a))
-        key_b = node_key(*_world_node(node_b))
-        link(key_a, key_b)
-        link(key_b, key_a)
+    def undirected(edges) -> dict[str, set[str]]:
+        adjacency: dict[str, set[str]] = {}
+        for node_a, node_b in edges:
+            key_a = node_key(*_world_node(node_a))
+            key_b = node_key(*_world_node(node_b))
+            adjacency.setdefault(key_a, set()).add(key_b)
+            adjacency.setdefault(key_b, set()).add(key_a)
+        return adjacency
 
     regions = {node_key(level, area): node_key(level, area)
                for level, area in CASTLE_REGION_NODES}
-    frontier = list(regions)
-    while frontier:
-        current = frontier.pop(0)
-        for neighbour in sorted(adjacency.get(current, ())):
-            if neighbour in regions:
-                continue
-            regions[neighbour] = regions[current]
-            frontier.append(neighbour)
+
+    def walk(adjacency) -> None:
+        frontier = list(regions)
+        while frontier:
+            current = frontier.pop(0)
+            for neighbour in sorted(adjacency.get(current, ())):
+                if neighbour in regions:
+                    continue
+                regions[neighbour] = regions[current]
+                frontier.append(neighbour)
+
+    # TWO-WAY FIRST, one-way only for what is still unclaimed (2026-08-02).
+    # A one-way row is an EXIT, and an exit says where you come OUT, never
+    # where a place belongs. That distinction did not exist while the only
+    # one-way rows were the Bowser key cutscenes — an arena has no other
+    # castle link, so its exit IS its ownership. `(19, _LOBBY)` broke the tie:
+    # BitFS has a real two-way door from the BASEMENT (his spec, 2026-07-23,
+    # "the basement region owns BitFS") and now also exits to the lobby, and
+    # one undirected pass moved it into the lobby region on gameflow order —
+    # renaming its library group and reordering the origin taxonomy, for a
+    # topology fix that had nothing to do with either.
+    walk(undirected(WORLD_EDGES_TWO_WAY))
+    walk(undirected(WORLD_EDGES_ONE_WAY))
     return regions
 
 
@@ -734,3 +841,55 @@ def course_for_level(level: int | None) -> int | None:
     arenas, and unknown ids (see COURSE_BY_LEVEL). None means "not a course
     stage" — callers must not treat it as a course change."""
     return COURSE_BY_LEVEL.get(level)
+
+
+# The community abbreviation for each main course. Lives HERE rather than in
+# links.py (which held it until 2026-08-03) because two unrelated consumers
+# need the same fifteen strings: that module builds Ukikipedia/xcams URLs from
+# them, and `node_short_label` below writes them on screen. links.py cannot own
+# it — it already imports this module, so the dependency only runs one way.
+COURSE_ABBREV = {
+    1: "BoB", 2: "WF", 3: "JRB", 4: "CCM", 5: "BBH", 6: "HMC", 7: "LLL",
+    8: "SSL", 9: "DDD", 10: "SL", 11: "WDW", 12: "TTM", 13: "THI",
+    14: "TTC", 15: "RR",
+}
+
+# Short forms for the levels COURSE_ABBREV does not reach: the two hubs, the
+# three Bowser fight arenas, and the six secret stages whose full LEVEL_NAMES
+# entry is a sentence. Spelled the way the seeded corpus already spells them in
+# its own segment names ("WF → BitDW", "WF → PSS", "WF → Secret Aquarium"), so
+# a step chip and the segment title above it read as the same route.
+_SHORT_LEVEL_NAMES = {
+    16: "Grounds", 26: "Courtyard",
+    17: "BitDW", 19: "BitFS", 21: "BitS",
+    BOWSER_1_ARENA: "Bowser 1", BOWSER_2_ARENA: "Bowser 2",
+    BOWSER_3_ARENA: "Bowser 3",
+    27: "PSS", 28: "MC", 29: "WC", 18: "VC", 31: "WMotR", 20: "Aquarium",
+}
+
+
+def node_short_label(key: str) -> str:
+    """`node_label` in its short, route-notation form.
+
+    A castle subarea is already short ("Basement"); a main course takes its
+    COURSE_ABBREV; everything else takes `_SHORT_LEVEL_NAMES`, falling back to
+    the full name for a level no table names.
+
+    This is a PRESENTATION choice, and worth stating so nobody re-derives it as
+    a fitting constraint: the practice card's step track has room for the full
+    names (the corpus's longest route needs 386px into 614px at the 850px
+    floor — measured 2026-08-03, not estimated). It is short because the step
+    track is route notation, and a route reads as "BitFS › Lobby › Upstairs ›
+    BitS" beside a card titled "Bowser 2 → BitS". Mixing one sentence-length
+    name into a line of codes is what would look broken, which is why
+    `tests/test_addresses.py` pins every node in the world graph to a short
+    form rather than pinning a width.
+    """
+    level_str, _, area_str = key.partition(":")
+    if area_str:
+        return node_label(key)
+    level = int(level_str)
+    course = COURSE_BY_LEVEL.get(level)
+    if course in COURSE_ABBREV:
+        return COURSE_ABBREV[course]
+    return _SHORT_LEVEL_NAMES.get(level, node_label(key))

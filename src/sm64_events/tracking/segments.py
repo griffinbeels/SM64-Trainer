@@ -48,6 +48,35 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
   showing as ACTIVE SEGMENT ... Running — nothing below disarms a def whose
   player then stays put.  game_reset is exempt (ctx.level is the PRE-reset
   level until the next level_changed).
+- TOPOLOGICAL VALIDITY (spec 2026-08-01, live report: WF -> SSL reading ACTIVE
+  SEGMENT inside the Bowser 1 arena, and LLL -> HMC reading ACTIVE SEGMENT
+  inside LLL).  Every settled position change is judged ONE FRAME LATE against
+  the world graph in memory/addresses.py, by SegmentEngine._flush_move:
+    (1) a move that is not an EDGE cancels every armed def (the warp menu or a
+        savestate fabricated it), and
+    (2) a legal move that strictly INCREASES the hop count to a def's next
+        required place cancels that def.
+  Both are SILENT (no row -- a movement that never happened must not bank a
+  failure) and both exempt an arm that began AT OR AFTER the move, so warping
+  somewhere to practise still arms what lives there.  A step naming no place
+  (step_node -> None) is unconstrained, which is what keeps fights, pipe
+  entries and star endings out of rule (2) without a list of special cases; so
+  is a node the def itself names as a step (declared_nodes), which is how a
+  route that deliberately re-enters a place says so.
+  The ONE-FRAME DEFER IS REQUIRED, not cautious: every castle entry loads the
+  lobby for a poll before settling, so judged raw a basement course exit reads
+  as the non-edge "SSL -> Lobby".
+  A topological cancel is the ONLY disarm in this engine the player can undo --
+  see SegmentEngine._cancelled: a real anchor at the position the arm stood in
+  brings it back (redoing a `level_exit from=30` start would mean redoing a
+  whole Bowser fight), a real anchor ELSEWHERE forfeits it for good, and it
+  expires on the same staleness budget a loose arm gets.
+  This deliberately REVERSES can_run_from's refusal to consult that table; the
+  circularity that refusal named is answered by
+  tools/measure_topology_cancels.py, which scores the rules against the
+  JOURNAL -- 82 of 82 successes survive on one, 110 of 112 on the other, and
+  both losses were read back to the raw events and ARE the live report itself,
+  recorded as a time.
 - anchor closures are POSITION-GATED for _feed_strict/_feed_waypoint (segment
   swap, live report 2026-06-12) — see the LOOSE bullet below for why
   _feed_loose does NOT inherit the "elsewhere" half of this gate. Each _Arm
@@ -298,9 +327,11 @@ from sm64_events.memory.addresses import (AREA_LOBBY, BOWSER_STAGE_LEVELS,
                                           course_for_level,
                                           DOOR_ACTIONS, LEVEL_CASTLE_INSIDE,
                                           LEVEL_NAMES, node_key, node_label,
+                                          node_short_label,
                                           region_for_node, star_count,
                                           star_name, world_connections,
                                           world_regions)
+from sm64_events.tracking import topology
 
 _ANCHOR_TYPES = ("practice_reset", "state_loaded")  # attempt-anchor events
 
@@ -481,6 +512,14 @@ class TriggerType:
     # builder's own clause form has no fallback-text concept, only real
     # dropdown values) -- read only by `_render_clause` in card mode.
     card_fallbacks: dict = field(default_factory=dict)
+    # THIRD voice, and the shortest: a two-or-three-word noun for the practice
+    # card's one-line step track (2026-08-03), where a chip has room for a
+    # place and nothing else. Most types never need it — a clause naming a
+    # world node is labelled by `node_short_label` and never reaches this — so
+    # None means "fall back to card_label", which is why the registry carries
+    # only the three rows whose card voice is a verb phrase ("Enter the pipe")
+    # where the track wants the thing itself ("Pipe").
+    chip_label: str | None = None
 
 
 def _real_edge(ev) -> bool:
@@ -591,7 +630,8 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 {"level": {"kind": "level", "required": True}},
                 "in {level}",
                 lambda p, ev, ctx: ev.type == "warp_entered"
-                and ev.payload["level"] == p["level"]),
+                and ev.payload["level"] == p["level"],
+                chip_label="Pipe"),
     TriggerType("key_grabbed", "You grab a Bowser key / grand star",
                 "Grab the key",
                 # key_grabbed claims all three fight-ending grabs: the Bowser
@@ -603,7 +643,8 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 "in {level}",
                 lambda p, ev, ctx: ev.type == "key_grabbed"
                 and (p.get("level") is None
-                     or ev.payload["level"] == p["level"])),
+                     or ev.payload["level"] == p["level"]),
+                chip_label="Key"),
     TriggerType("star_grabbed", "You grab a star", "Grab",
                 {"course": {"kind": "course", "required": False},
                  "star": {"kind": "star", "required": False}},
@@ -798,6 +839,55 @@ def card_waiting_for_sentence(d: SegmentDef, progress: int) -> str:
     return " or ".join(_render_clause(clause) for clause in clause_set)
 
 
+def _step_chip(clause: dict) -> str:
+    """The shortest honest name for ONE clause: the place it lands on."""
+    node = step_node(clause)
+    if node is not None:
+        return node_short_label(node)
+    kind = clause.get("type")
+    if kind == "star_grabbed" and clause.get("course") is not None:
+        return star_name(clause["course"], clause.get("star", 0))
+    trigger = TRIGGERS.get(kind)
+    if trigger is None:
+        return str(kind)
+    return trigger.chip_label or trigger.card_label
+
+
+def card_step_labels(d: SegmentDef) -> list[str]:
+    """Every step this definition requires, shortest-form, in order —
+    its waypoints then its end trigger, one label each.
+
+    The card draws these as a single line of chips with the arm's own
+    `progress` marking which are done, which is live, and which are still
+    ahead ("✓ Basement › ▶ SSL"). `card_waiting_for_sentence` answers a
+    different question — the FULL imperative for the one step you are on —
+    and both are shipped, because a track with room for a place has no room
+    for "coming from Bowser in the Fire Sea" and a player still needs to be
+    told which door.
+
+    A clause SET is an any-of (see `_matches`), so its members collapse to
+    their distinct labels. The one shape in the shipped corpus that has more
+    than one is the 100-coin exit's end — six `star_grabbed` alternatives in
+    a single course, meaning "leave with anything" — which reads as
+    **Any star** rather than as six names nobody can fit on a line. Stated
+    as a rule about the clauses (same type, same course, more than two), not
+    as a lookup for that family, so a user-authored def of the same shape
+    reads the same way.
+    """
+    labels = []
+    for clause_set in list(d.waypoints) + [d.end_triggers]:
+        distinct = list(dict.fromkeys(_step_chip(c) for c in clause_set))
+        if len(distinct) == 1:
+            labels.append(distinct[0])
+        elif len(clause_set) > 2 \
+                and {c.get("type") for c in clause_set} == {"star_grabbed"} \
+                and len({c.get("course") for c in clause_set}) == 1:
+            labels.append("Any star")
+        else:
+            labels.append(" / ".join(distinct))
+    return labels
+
+
 def arm_level(trig: dict) -> int | None:
     """Level Mario stands in the moment this START trigger arms, or None
     when the trigger carries no (or an unknowable) arm location — reads the
@@ -810,6 +900,104 @@ def arm_level(trig: dict) -> int | None:
     if kind in ("level_enter", "level_exit"):
         return trig.get("to")   # level_exit: Mario ends up at the DESTINATION
     return None
+
+
+# The world NODE a clause leaves Mario standing in once it fires (spec
+# 2026-08-01-topological-segment-validity). This is the FOURTH table in this
+# module read as param NAMES rather than through the match lambdas, and each
+# answers a genuinely different question: `arm_level` = which LEVEL a START
+# trigger leaves him in; `_ORIGIN_PARAMS` = where a definition may be picked
+# from; `_PRECONDITION_PARAM` = where a clause must fire FROM; this one = the
+# node a NEXT step lands him on, which is what the hop-distance rule measures.
+#
+# A type with no branch here, or a branch whose param the clause leaves unset,
+# answers None = "this step names no place" — UNCONSTRAINED, the codebase's
+# unknown-means-yes convention. That is what exempts every Bowser fight
+# (key_grabbed), every pipe entry (warp_entered), every star-ending step and
+# every unpinned `level_exit` from the topological rules, rather than a list of
+# special cases somebody would have to maintain.
+#
+# NOTE a `level_enter to=6` step with no `to_subarea` resolves to the bare "6",
+# which is NOT a node in WORLD_EDGES_* (the interior is keyed by subarea), so
+# `topology.hops` answers None and such a step is unconstrained. Deliberate:
+# mapping it to the lobby the way `region_for_node` does would be a claim about
+# where the player ends up that the clause itself does not make.
+def step_node(clause: dict) -> str | None:
+    kind = clause.get("type")
+    if kind in ("level_enter", "level_exit"):
+        return topology.node_for(clause.get("to"), clause.get("to_subarea"))
+    if kind == "area_enter":
+        return topology.node_for(clause.get("level"), clause.get("area"))
+    return None
+
+
+def declared_nodes(d) -> frozenset:
+    """Every world node this definition NAMES as a step of its own route — its
+    waypoints and its end triggers (spec 2026-08-01-topological-segment-
+    validity).
+
+    Griffin's nuance, and the whole of Rule 2's exemption: sometimes you
+    genuinely enter a stage in order to use its exit, and a route that really
+    does pass back through somewhere DECLARES it. A node the definition names
+    is therefore never a wrong turn, however the hop count moves.
+
+    Read as a SET rather than by comparing against the arm's live `progress`,
+    which was the first design and is subtly wrong: the waypoint match and the
+    position judgement land on the same game frame but on DIFFERENT events (the
+    `level_changed` advances progress, the co-frame `area_changed` records the
+    move, and the judgement runs a frame later). By then the arm is already
+    measuring against its NEXT step, so a correctly-followed waypoint reads as
+    a move away from what comes after it, and the declared re-entry cancels
+    itself. A set has no such ordering to get wrong.
+
+    Start triggers are deliberately excluded: they say where the route BEGAN,
+    not where it goes, and returning to your own start is exactly the shape
+    (exit LLL, walk back into LLL) this rule exists to catch.
+    """
+    nodes = set()
+    for step in list(d.waypoints) + [d.end_triggers]:
+        for clause in step:
+            node = step_node(clause)
+            if node is not None:
+                nodes.add(node)
+    return frozenset(nodes)
+
+
+def path_nodes(d) -> tuple:
+    """The world nodes this definition names as steps of its own route, IN
+    ORDER — its waypoints first, then its end trigger (spec
+    2026-08-02-strict-path-segments).
+
+    A TUPLE and not `declared_nodes`'s frozenset, because a set cannot hold a
+    place twice and cannot say which way you were walking. Both are properties
+    Griffin asked for by name: `SSL → SSL → LLL` is two cursor positions that
+    happen to name the same place, and the Lobby is legal walking IN to a
+    `WF → Basement → SSL` and a deviation walking back out of it.
+
+    This is a SECOND READER of the same data, not a replacement — the set is
+    still right for its own job (see `declared_nodes`: the waypoint match and
+    the position judgement land on the same frame via different events, so an
+    index compared against the arm's live `progress` reads a correctly-followed
+    waypoint as a move away from what comes next). The cursor this feeds is
+    advanced only by the SETTLED position, of which there is exactly one per
+    frame, so it has no such race.
+
+    A clause-set contributes ONE node when its members agree and NOTHING when
+    they disagree or name none. An any-of step means "either is fine" and a
+    cursor cannot hold two positions, so it declines to constrain — the same
+    unknown-means-yes convention `step_node` and `topology.hops` already take,
+    and what keeps the 100-coin family and every Bowser fight out of the rule
+    without an exemption list. Contributions are SKIPPED rather than padded
+    with None: the cursor must never have to step over a hole.
+    """
+    path = []
+    for step in list(d.waypoints) + [d.end_triggers]:
+        nodes = {step_node(clause) for clause in step}
+        if len(nodes) == 1:
+            node = nodes.pop()
+            if node is not None:
+                path.append(node)
+    return tuple(path)
 
 
 def start_areas(start_triggers: list) -> list:
@@ -1592,12 +1780,30 @@ def time_bounds(guards: list) -> tuple[int | None, int | None]:
 def _route_allows(d, ctx) -> bool:
     """in_active_route gate, read declaratively by the arm phase (the
     standard guard check() can't see the def id — see the guard's own
-    comment). Unguarded defs always pass; a guarded def arms only inside the
-    active route's member set or as the standalone segment target."""
+    comment). Unguarded defs always pass; a guarded def arms inside the
+    active route's member set or as the standalone segment target.
+
+    **NO ACTIVE ROUTE MEANS NO RESTRICTION, NOT "NOTHING ARMS"** (Griffin,
+    2026-08-02, live report): *"if we're in 'Overall' mode, I would expect to
+    see EVERY SINGLE OPTION enabled. That is, I can practice ANYTHING. That
+    would be the point... so long as it arms legitimately"*. This gate read an
+    empty scope as "no member set, so nobody is a member" until then, which
+    made all 56 castle movements silently unpracticable whenever the header's
+    scope chip sat on Overall — and nothing on any surface said so, so the
+    feature looked broken rather than off. Picking a route is a deliberate
+    NARROWING and still narrows; picking none is the absence of a filter.
+
+    The consequence is intended, not overlooked: with no route, one
+    `level_exit from=24` arms all seven `WF → X` movements at once. Nothing has
+    to guess between them — `armed_segment_ids` is a set, every wrong one is
+    cancelled by the topological rules or expires on the staleness budget, and
+    whichever end trigger fires is the movement he actually ran."""
     if not any(g.get("type") == "in_active_route" for g in d.guards):
         return True
-    return (d.id in (ctx.route_segments or frozenset())
-            or d.id == ctx.target_segment)
+    scope = ctx.route_segments or frozenset()
+    if not scope:
+        return True
+    return d.id in scope or d.id == ctx.target_segment
 
 
 def validate_definition(d: dict) -> None:
@@ -1999,6 +2205,17 @@ def merge_definitions(first: SegmentDef, second: SegmentDef,
 
 
 @dataclass(frozen=True)
+class _FrameOnly:
+    """The clock with no event attached — what `SegmentEngine.settle` passes to
+    `_flush_move`, whose only read is `.frame`. Deliberately NOT a real Event:
+    nothing journaled this, nothing may broadcast it, and giving it a type and
+    an empty payload keeps it honest if `_flush_move` ever reaches for more."""
+    frame: int
+    type: str = "frame_settled"
+    payload: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class _Arm:
     jid: int            # journal id of the arming event -> attempt id
     start_frame: int
@@ -2021,6 +2238,14 @@ class _Arm:
     # every waypoint is consumed and the def is awaiting its end trigger. 0 for
     # every non-waypoint def (empty d.waypoints never reads this field).
     progress: int = 0
+    # Cursor into `path_nodes(d)` — the next declared PLACE this run still owes
+    # (spec 2026-08-02-strict-path-segments). Distinct from `progress`, which
+    # indexes `d.waypoints` and counts steps of ANY trigger type: a star grab
+    # advances progress and names no place at all. Advanced ONLY by
+    # `_flush_move`, from the settled position, of which there is exactly one
+    # per frame — which is why an index is safe here where `declared_nodes`
+    # needed a set (see its docstring).
+    path_index: int = 0
     # Frame at which a LOOSE arm is presumed abandoned (spec
     # 2026-07-28-multi-step-segments). None for a strict arm, which is bounded
     # by its cancel rules instead. Shipped to the view so the UI reads expiry
@@ -2114,6 +2339,42 @@ class SegmentEngine:
         # exactly that (the projector may later auto-clear an out-of-range
         # success the engine counted here — harmless for the same reason).
         self._best_success: dict[int, int] = {}
+        # THE topological rules' view of where Mario is (spec
+        # 2026-08-01-topological-segment-validity). `_settled_node` is the last
+        # node he demonstrably DWELT in; `_pending_move` is (frame, node) — the
+        # candidate this frame proposes, judged only once the frame ADVANCES.
+        #
+        # The defer is not caution, it is required. Every castle entry loads
+        # the lobby for one poll before warping to the real area, all on ONE
+        # game frame (detectors/level.py), so a judgement taken on the raw
+        # event sees "SSL -> Lobby" (not an edge at all — SSL's only neighbour
+        # is the basement) and then "Lobby -> Basement" (a hop AWAY from any
+        # upstairs destination), for a move that never happened. Taking the
+        # LAST candidate of a frame is the same per-frame collapse the design's
+        # own measurement used, so the number that justified this feature and
+        # the code that implements it cannot drift apart. Same one-frame shape
+        # `_pending` above already uses for deferred destination subareas.
+        self._settled_node: str | None = None
+        self._pending_move: tuple[int, str | None] | None = None
+        # Definitions the topological rules cancelled, as {def id: (_Arm,
+        # expiry frame)} — the arm as it stood when it was killed, so a real
+        # anchor AT THAT POSITION can bring it back (Griffin's ruling
+        # 2026-08-01, from the measurement in tools/measure_topology_cancels.py).
+        #
+        # The case: armed by a Bowser 1 exit into the lobby, he warped to BitDW
+        # for 7 s, came back to the lobby, pressed reset AT THE ARM POSITION and
+        # ran lobby -> WF in 16 s (journal ids 17926-17940). `_feed_loose`
+        # already treats an anchor at the arm position as a genuine retry, and
+        # that IS how a castle movement is re-run — redoing the `level_exit
+        # from=30` start trigger means redoing the whole fight. Without this the
+        # rules would take that retry loop away.
+        #
+        # EXPIRY is not optional: a cancelled arm has no cancel rules left to
+        # bound it, so without a clock a movement killed hours ago would re-arm
+        # the next time he happened to reset in the same room — the ambient-
+        # arming class of bug. It gets the same measured staleness budget a
+        # loose arm gets (budget_frames), applied to every mode for that reason.
+        self._cancelled: dict[int, tuple] = {}
 
     def armed_ids(self) -> set[int]:
         return set(self._armed)
@@ -2131,10 +2392,38 @@ class SegmentEngine:
         callers must not assume every armed/pending id still has one)."""
         return self._def_by_id.get(sid)
 
+    def settle(self, frame: int) -> list[dict]:
+        """Judge a pending position change on the CLOCK, with no event to carry
+        it, and return the notices that came out (live report 2026-08-02).
+
+        `_flush_move` defers a verdict by one frame on purpose, but until this
+        existed a frame only advanced when the journal happened to get another
+        event — so inside a course where nothing is journaled the verdict waited
+        for whatever the player did next. Measured on his own session: entering
+        Bowser in the Sky from Upstairs cancelled `Bowser 2 → WDW` correctly and
+        the screen kept offering it for **832 frames (27.7 s)**, which reads as
+        a missing rule rather than a late one. Earlier sightings were 96, 116
+        and 56 frames.
+
+        A liveness fix, not a correctness one: the verdict is identical either
+        way, and a topological cancel writes no attempt row, so a REPLAY (which
+        has only events, and therefore settles at the next one) reaches the same
+        state. The only difference a replay can see is the resurrection entry's
+        expiry frame, off by however long the wait was.
+        """
+        notices: list[dict] = []
+        self._flush_move(_FrameOnly(frame), notices)
+        return notices
+
     def feed(self, ev, ctx: MatchContext):
         """Returns (closed raw Attempts, notices). Closures before arming."""
         from sm64_events.tracking.projection import Attempt  # cycle-free at call time
         closed, notices = [], []
+        # Where every armed def stood BEFORE this event, so the one place at
+        # the bottom of this method can tell the browser about any step that
+        # moved. See `_progress_notices` for why it is a diff and not an
+        # append at each of the four sites that can move a cursor.
+        progress_before = {sid: arm.progress for sid, arm in self._armed.items()}
         # Drop spent deferred destination-subarea entries (_pending): once an
         # event at a LATER frame arrives, the entry frame's co-frame area_changed
         # burst is over. Arming/retraction already happened LIVE on those co-frame
@@ -2143,6 +2432,36 @@ class SegmentEngine:
         for did in list(self._pending):
             if self._pending[did].start_frame < ev.frame:
                 del self._pending[did]
+        # Judge the position change an EARLIER frame proposed, then record this
+        # event's own candidate (spec 2026-08-01-topological-segment-validity).
+        # Runs BEFORE the per-def loop so a cancelled def is not also fed this
+        # event, and before the arm phase so arriving somewhere by warp still
+        # arms what lives there — closures before arming, as everywhere else.
+        self._flush_move(ev, notices)
+        if ev.type in ("session_started", "game_reset"):
+            # global_timer restarts at a session boundary and game_reset
+            # carries a boot-range frame, so a remembered node would be
+            # compared against a frame number from a different epoch.
+            self._settled_node = None
+            self._pending_move = None
+            self._cancelled.clear()
+        elif ev.type == "area_changed":
+            # area_changed, never level_changed: this payload names the level
+            # AND the settled area outright, where `ctx.area` during a
+            # level_changed is still the OLD level's (the area detector
+            # establishes one event later on the same tick — see below). Every
+            # real level crossing emits a co-frame area_changed, so recording
+            # only here misses nothing.
+            #
+            # `.get`, not `[...]`: an area_changed whose payload omits `level`
+            # resolves to node None = position UNKNOWN, and `_flush_move`
+            # declines to judge an unknown — the unknown-means-yes convention,
+            # reached here rather than by raising. A bare subscript was the
+            # first version and it took the whole engine down on the first
+            # payload that did not carry the key.
+            self._pending_move = (ev.frame,
+                                  topology.node_for(ev.payload.get("level"),
+                                                    ev.payload.get("to")))
         # Track the most recent level/area transition frame BEFORE per-def
         # processing so the echo guard below can test both echo shapes.
         if ev.type in ("level_changed", "area_changed"):
@@ -2280,6 +2599,10 @@ class SegmentEngine:
                 # resolved when the co-frame area_changed burst is over. The
                 # source subarea (from_subarea) is already in the lambda, so a
                 # plain match here arms immediately as before.
+                # A normal arm supersedes any remembered cancellation:
+                # the def is live again by its own start condition, so the
+                # resurrection memory would only be a stale second door.
+                self._cancelled.pop(d.id, None)
                 req = (start_clause.get("to_subarea")
                        if ev.type == "level_changed" else None)
                 if req is not None:
@@ -2330,7 +2653,92 @@ class SegmentEngine:
                         notices.append({"event": "segment_armed",
                                         "segment_id": d.id, "name": d.name,
                                         "frame": ev.frame})
+            # RESURRECTION (Griffin's ruling 2026-08-01, from the measurement
+            # in tools/measure_topology_cancels.py): a REAL anchor at the
+            # position a topologically-cancelled arm stood in is the retry
+            # loop, not a new event. `_feed_loose` already reads an anchor at
+            # the arm position that way for a LIVE arm; this is the same
+            # reading for one the topological rules killed, and without it a
+            # movement whose start trigger cannot be re-fired without redoing
+            # a whole Bowser fight would simply become unpractisable after any
+            # detour. Runs AFTER the ordinary arm branch and is gated on the
+            # def still being idle, so it can never rebase a live arm.
+            remembered = self._cancelled.get(d.id)
+            if remembered is not None:
+                cancelled_arm, expires = remembered
+                if ev.frame >= expires:
+                    del self._cancelled[d.id]   # see _cancelled: no clock, no bound
+                elif (ev.type in _ANCHOR_TYPES and not anchor_is_echo
+                      and not _at_arm_position(cancelled_arm, ctx)):
+                    # FORFEIT (Griffin, 2026-08-01): a real reset SOMEWHERE
+                    # ELSE ends the retry, permanently — "if... in the middle
+                    # of lobby -> wf, I decided to reset to bitdw, I think
+                    # that's a genuine kill of the segment, because we've now
+                    # gone out of order in a way that doesn't make sense for
+                    # practicing... until I get back to Bowser 1 and trigger
+                    # it from the beginning again". Without this the memory
+                    # would survive the relocation and the NEXT reset back at
+                    # the start would resurrect a run he had abandoned twice
+                    # over. Mirrors _feed_strict's existing reading of an
+                    # anchor away from the arm position as a relocation.
+                    del self._cancelled[d.id]
+                elif (ev.type in _ANCHOR_TYPES and not anchor_is_echo
+                      and d.id not in self._armed
+                      and _at_arm_position(cancelled_arm, ctx)):
+                    del self._cancelled[d.id]
+                    self._armed[d.id] = _Arm(
+                        jid=ev.id, start_frame=ev.frame,
+                        started_utc=ev.wall_time_utc, anchor_type=ev.type,
+                        session_id=ev.session_id,
+                        level=(ctx.level if ctx.level is not None
+                               else cancelled_arm.level),
+                        area=(ctx.area if ctx.area is not None
+                              else cancelled_arm.area),
+                        deadline_frame=self._deadline_for(d, ev))
+                    notices.append({"event": "segment_armed",
+                                    "segment_id": d.id, "name": d.name,
+                                    "frame": ev.frame})
+        self._progress_notices(progress_before, ev.frame, notices)
         return closed, notices
+
+    def _progress_notices(self, before: dict, frame: int,
+                          notices: list) -> None:
+        """Say so whenever an armed def's step cursor MOVED.
+
+        THE BUG (live report 2026-08-02): he walked into the Basement, the
+        engine advanced `WF → SSL` to step 2 on that exact frame — proved by
+        replaying his own journal — and the card read "Step 1 of 2 · Waiting
+        for Enter Castle Inside Basement" for the next 77 seconds, until an
+        unrelated event happened to force a view refetch. `armed_detail` is
+        re-derived from this arm on every `/api/session` fetch and is
+        therefore always correct WHEN ASKED; nothing was asking. A cursor
+        move journals no event of its own and `area_changed` is not in the
+        browser's `REFRESH_ON` set, so the one state change the whole
+        multi-step display exists to show was the one change with no way to
+        reach the screen.
+
+        A DIFF rather than an append at each site, deliberately: four
+        branches move a cursor (`_feed_waypoint`'s advance and its anchor
+        rewind to 0, and the same pair in `_feed_loose`), a fifth would be
+        added by the next mode, and a notice missing from one of them looks
+        exactly like this bug again — a card frozen on a step the player has
+        already passed. Comparing the arm before and after cannot be
+        forgotten by a branch that does not know it exists.
+
+        Broadcast-only, never journaled — same rule the arm/disarm notices
+        follow (`tracking/service.py`): the projector re-derives arm state
+        from the journal on replay, so writing a derived row back would make
+        replay non-idempotent.
+        """
+        for sid, arm in self._armed.items():
+            was = before.get(sid)
+            if was is None or was == arm.progress:
+                continue
+            d = self._def_by_id.get(sid)
+            notices.append({"event": "segment_progress", "segment_id": sid,
+                            "name": d.name if d else "", "frame": frame,
+                            "progress": arm.progress,
+                            "total": len(d.waypoints) if d else 0})
 
     def _matches(self, triggers, ev, ctx) -> bool:
         return any(TRIGGERS[t["type"]].match(t, ev, ctx) for t in triggers)
@@ -2389,6 +2797,50 @@ class SegmentEngine:
             or (ev.payload.get("frames_since_dialog") is not None
                 and 0 <= ev.payload["frames_since_dialog"]
                 <= _DIALOG_ECHO_WINDOW))
+
+    def _arrived_by_a_real_move(self, ev) -> bool:
+        """True when this anchor landed on the same frame as a LEGITIMATE
+        world move — a door, or a PAUSE EXIT — rather than on a reset the
+        player chose.
+
+        `_anchor_echo`'s shape (3) already catches a transition co-frame, but
+        gates it on a SHORT pause, deliberately: a Usamune menu warp is
+        co-frame too and carries `paused_frames_before` 13-890, and a menu
+        warp really is a new attempt boundary. A PAUSE EXIT carries a long
+        pause for the same reason (the pause menu was open), so it fell
+        through that gate — and rewound a multi-step arm to step 1 on the very
+        move that had just advanced it. Live report 2026-08-03: "it briefly
+        flashed step 3 of 3, then it reset", followed by nothing recorded when
+        he reached WF, because a rewound cursor can never reach its end.
+
+        The discriminator is the WORLD GRAPH, which is rule 1's premise read
+        for a second purpose: a menu warp fabricates an edge, a pause exit
+        walks one. Measured over both journals, restricted to co-frame anchors
+        with a long pause: 73 land on real edges (`30->17`, `17->6:1`,
+        `21->6:2`, `7->6:1` — doors and pause exits) and 193 do not
+        (`22->17`, `8->17`, `16->34`, and `17->6:2`, which is the Upstairs
+        menu warp rather than BitDW's own exit into the Lobby). No overlap in
+        kind.
+
+        A hypothesis this replaces, recorded so nobody spends the evening on
+        it again: `frames_since_warp_op` does NOT separate them. It reads 0
+        for an ordinary door and stale for a pause exit, but menu warps sit on
+        both sides of it.
+
+        Deliberately NARROW — it gates only the waypoint matcher's rewind, not
+        `_anchor_echo` itself. Widening the echo would make these anchors
+        invisible to EVERY definition and to attempt boundaries generally,
+        which is a much larger claim about his recorded history than this
+        report supports. That widening is owed, with this measurement attached.
+        """
+        if ev.frame != self._last_transition_frame:
+            return False
+        pending = self._pending_move
+        if pending is None or pending[0] != ev.frame or pending[1] is None:
+            return False
+        return (self._settled_node is not None
+                and self._settled_node != pending[1]
+                and topology.is_legal_move(self._settled_node, pending[1]))
 
     def _feed_strict(self, Attempt, d, arm: _Arm, ev, ctx, notices,
                      anchor_is_echo: bool, starts: bool) -> list:
@@ -2618,7 +3070,8 @@ class SegmentEngine:
             # (mirrors the star-side discard in projection.py's
             # _close_by_reset) -- a true no-op anchor refire still records
             # nothing.
-            if ev.frame == arm.start_frame or self._anchor_echo(ev):
+            if (ev.frame == arm.start_frame or self._anchor_echo(ev)
+                    or self._arrived_by_a_real_move(ev)):
                 return closed
             afk = ev.payload.get("paused_frames_before", 0) \
                 >= _AFK_PAUSE_FRAMES
@@ -2732,7 +3185,8 @@ class SegmentEngine:
             self._disarm(d, ev, notices)
             return closed
         if ev.type in _ANCHOR_TYPES:
-            if ev.frame == arm.start_frame or self._anchor_echo(ev):
+            if (ev.frame == arm.start_frame or self._anchor_echo(ev)
+                    or self._arrived_by_a_real_move(ev)):
                 return closed          # echo: invisible
             if not _at_arm_position(arm, ctx):
                 # TRANSPARENT, not a relocation disarm (live report 2026-07-28:
@@ -2761,6 +3215,125 @@ class SegmentEngine:
             self._armed[d.id] = replace(arm, progress=arm.progress + 1)
             return closed
         return closed   # transparent — the whole feature
+
+    def _flush_move(self, ev, notices) -> None:
+        """Judge the position change an EARLIER frame proposed, now that the
+        frame has advanced and any co-frame supersession has landed (spec
+        2026-08-01-topological-segment-validity).
+
+        Advances `_settled_node` to the last node Mario demonstrably dwelt in
+        — not every node an event mentioned, which is what the transient lobby
+        would otherwise make it.
+        """
+        pending = self._pending_move
+        if pending is None or pending[0] >= ev.frame:
+            return
+        frame, node = pending
+        self._pending_move = None
+        previous, self._settled_node = self._settled_node, node
+        if previous is None or node is None or node == previous:
+            return
+        # An arm that began AT OR AFTER this move cannot have diverged from it
+        # — you did not leave a route you had not started. Without this, the
+        # one-frame defer would let a warp into a Bowser arena cancel the fight
+        # it just armed, and warping somewhere to practise IS the loop.
+        candidates = [d for d in self._defs
+                      if (arm := self._armed.get(d.id)) is not None
+                      and arm.start_frame < frame]
+        if not topology.is_legal_move(previous, node):
+            # The Usamune warp menu (or a savestate) fabricated this edge, so
+            # every movement under way was abandoned rather than run. SILENT:
+            # no attempt row, matching the off-route cancel _feed_waypoint
+            # already takes — a movement that never happened must not bank a
+            # failure. Arming at the DESTINATION is untouched (closures run
+            # before arming), which is what keeps the practice loop working.
+            for d in candidates:
+                self._cancel_topologically(d, ev, notices)
+            return
+        # Rule 2 splits on match_mode (spec 2026-08-02-strict-path-segments).
+        #
+        # LOOSE keeps the hop arithmetic below, byte for byte. Anything else
+        # takes the PATH CURSOR, because hop arithmetic cannot express the
+        # thing Griffin actually asked for: a deliberate shortcut and a
+        # runner's mistake are observationally equivalent — entering BitFS
+        # during `Bowser 2 -> Upstairs` is the same move whether it is the
+        # fastest route or a wrong turn, and that leg survives today only
+        # because BitFS happens to sit the same distance from Upstairs as the
+        # Basement does. No measurement separates the two; only a DECLARATION
+        # does. "That is a fixed path, and there are no other options. I want
+        # it to be very strict" (2026-08-02).
+        for d in candidates:
+            arm = self._armed[d.id]
+            if d.match_mode != "loose":
+                path = path_nodes(d)
+                if arm.path_index >= len(path):
+                    # The definition has said everything it is going to say
+                    # about places, so it constrains nothing further. An EMPTY
+                    # path is the same answer from the start, which is what
+                    # keeps the 100-coin family and the reds->pipe defs out of
+                    # this rule with no exemption list — the same "two ways to
+                    # be unconstrained" property _next_step_hops relies on.
+                    continue
+                if node == path[arm.path_index]:
+                    self._armed[d.id] = replace(arm,
+                                                path_index=arm.path_index + 1)
+                else:
+                    # Not the next step: silently void, through the same door
+                    # as every other topological cancel, so a real anchor at
+                    # the arm position can still bring it back.
+                    self._cancel_topologically(d, ev, notices)
+                continue
+            # Rule 2 — a LEGAL move that takes the player FURTHER from what the
+            # segment needs next. Basement -> LLL is a real edge, so Rule 1
+            # waves it through; what makes it a wrong turn is that HMC went
+            # from 1 hop away to 2 (live report 2026-08-01). Strict increase
+            # only: equal is sideways and tolerated, so a route with two
+            # shortest paths is never punished for picking either.
+            if node in declared_nodes(d):
+                continue      # see declared_nodes: the route says it goes here
+            before = self._next_step_hops(d, arm, previous)
+            after = self._next_step_hops(d, arm, node)
+            if before is not None and after is not None and after > before:
+                self._cancel_topologically(d, ev, notices)
+
+    def _cancel_topologically(self, d, ev, notices) -> None:
+        """Disarm for a topological reason, REMEMBERING where the arm stood so
+        a real anchor there can bring it back (see `self._cancelled`). Every
+        other disarm in this engine is final; this one is the only kind the
+        player can undo by returning to the start and pressing reset."""
+        arm = self._armed.get(d.id)
+        if arm is not None:
+            self._cancelled[d.id] = (
+                arm, ev.frame + budget_frames(self._best_success.get(d.id)))
+        self._disarm(d, ev, notices)
+
+    def _next_step_hops(self, d, arm: _Arm, node: str | None) -> int | None:
+        """Fewest legal moves from `node` to whatever this definition needs
+        NEXT — its next unconsumed waypoint, or its end trigger once every
+        waypoint is consumed.
+
+        None means UNCONSTRAINED, and it is the answer that keeps whole
+        families of segment out of Rule 2 rather than a list of exemptions
+        somebody has to maintain: a step naming no place (`key_grabbed`,
+        `warp_entered`, `star_grabbed`, `reset_game`, an unpinned
+        `level_exit`) and a place with no directed path both land here.
+
+        A clause-set is an ANY-OF list, so the MINIMUM across its members is
+        the distance — but a single member naming no place makes the whole
+        step unconstrained, since the player may be heading for that one.
+        """
+        step = (d.waypoints[arm.progress] if arm.progress < len(d.waypoints)
+                else d.end_triggers)
+        distances = []
+        for clause in step:
+            target = step_node(clause)
+            if target is None:
+                return None
+            distance = topology.hops(node, target)
+            if distance is None:
+                return None
+            distances.append(distance)
+        return min(distances) if distances else None
 
     def _disarm(self, d, ev, notices) -> None:
         if self._armed.pop(d.id, None) is not None:

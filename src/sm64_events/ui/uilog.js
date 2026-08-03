@@ -1,0 +1,144 @@
+// src/sm64_events/ui/uilog.js
+// Records what the practice page actually PAINTED, so a live report about a
+// cell that "was just there a couple frames ago" can be read back instead of
+// guessed at from a screenshot. Storage, and why this is not a journaled
+// event, are in core/uilog.py's docstring — read that first.
+//
+// IT READS THE DOM ON PURPOSE. Every other option here logs a MODEL of what
+// we believe is on screen, and the belief is exactly what is in question
+// whenever one of these reports arrives: the two reports that produced this
+// module were both "the UI showed something the state says it should not
+// have". Reading the rendered tree back can only ever agree with the human's
+// eyes. The cost is that a class rename silently empties the log — a SILENT
+// FALLBACK, the worst failure an instrument has — so every selector below is
+// cross-checked against the components' own source by
+// tests/test_ui_log_selectors.py.
+//
+// It also means there are NO changes in the components being observed. That
+// is not incidental: an instrument that requires its subject to cooperate is
+// one more thing to keep in step, and the subject here is four banner row
+// modes and three objective cards.
+import { useEffect, useRef } from "preact/hooks";
+import { send } from "./api.js";
+
+// ---------------------------------------------------------------------------
+// The readers. Pure functions of a root element, so the only thing they can
+// get wrong is a selector — which is the thing the test pins.
+// ---------------------------------------------------------------------------
+
+const text = (el) => (el ? (el.textContent || "").trim() : "");
+
+// A cell's identity as the human sees it: the name under the art, plus
+// whether it is the highlighted one. `.starcell` / `.starname` /
+// `.active-star` are PracticeCell's own classes, and RedsCell's hand-rolled
+// cell (the standing rule-11 exception on that surface) uses the same three,
+// so both are covered by one query rather than by knowing which row rendered.
+export function readSelector(root) {
+  const card = root.querySelector(".stagebanner");
+  if (!card) return null;
+  const head = card.querySelector(".shead");
+  return {
+    surface: "selector",
+    title: text(head && head.querySelector("b")),
+    note: text(head && head.querySelector(".meta")),
+    cells: Array.from(card.querySelectorAll(".starcell")).map((cell) => ({
+      name: text(cell.querySelector(".starname")),
+      active: cell.classList.contains("active-star"),
+    })),
+  };
+}
+
+// EVERY `.objective-card` on the page in ONE record, in DOM order. There can
+// be several at once (an active star plus one or more pinned segments), and
+// the LIST is the observation — a card vanishing is exactly the kind of thing
+// being reported, and one-record-per-card could only express that as an
+// absence, which is not something an append-only log can write down.
+// The shape is uniform across all three card types (StarSection,
+// SegmentSection, EmptyPractice), which is why one reader covers them.
+export function readTargets(root) {
+  return {
+    surface: "target",
+    cards: Array.from(root.querySelectorAll(".objective-card")).map((card) => ({
+      label: text(card.querySelector(".objective-pick")),
+      context: text(card.querySelector(".objective-context")),
+      name: text(card.querySelector(".objective-name h2")),
+      strat: text(card.querySelector(".objective-strategy select")
+                  || card.querySelector(".objective-strategy")),
+      state: text(card.querySelector(".objective-live-state")),
+      step: text(card.querySelector(".seg-waiting")),
+    })),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// One ordered channel, shared by both surfaces.
+// ---------------------------------------------------------------------------
+// Serialised deliberately. Posts are fired from a render effect, so a level
+// load produces a burst; letting them race would scramble the ORDER, and
+// order is the entire question a "it lingered, then went away" report asks.
+// Nothing is dropped or debounced for the same reason — a state that lasted
+// three frames is the evidence, not noise.
+const queue = [];
+let inFlight = false;
+
+// A POST THAT NEVER SETTLES MUST NOT WEDGE THE CHANNEL (2026-08-02). The
+// serialised queue had no timeout, so one request left hanging — a server
+// restarted mid-flight is the ordinary way to get one — left `inFlight` true
+// for the rest of the page's life and the log simply stopped, silently, at
+// 23:02. That is the SILENT-INSTRUMENT failure this module's own header calls
+// the worst one it has, arriving through the delivery path instead of the
+// reader. Measured: 701 records, then nothing, while the page kept working.
+//
+// So every post is bounded and the slot is released unconditionally. A
+// dropped observation is an acceptable loss; a dead channel is not, because
+// its silence reads as "nothing was on screen".
+const POST_TIMEOUT_MS = 5000;
+
+function flush() {
+  if (inFlight || !queue.length) return;
+  inFlight = true;
+  const body = queue.shift();
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    inFlight = false;
+    flush();
+  };
+  setTimeout(release, POST_TIMEOUT_MS);
+  send("POST", "/api/uilog", body)
+    .catch(() => {})            // an instrument may never break its subject
+    .then(release, release);
+}
+
+export function postObservation(body) {
+  // A bounded backlog: if the server is gone the queue must not grow without
+  // limit for the rest of the session.
+  if (queue.length > 200) queue.shift();
+  queue.push({ ...body, client_utc: new Date().toISOString() });
+  flush();
+}
+
+// ---------------------------------------------------------------------------
+// The hook. ONE call site (components/practice.js), which is what keeps this
+// from becoming four observers that each see part of the page.
+// ---------------------------------------------------------------------------
+// No dependency array: it runs after EVERY render and compares the snapshot
+// it just read against the last one it sent, so a change is recorded whatever
+// caused it — a WebSocket event, a click, or a re-render nobody asked for.
+// Deduping on the rendered snapshot rather than on props is the point: two
+// different states that paint identically are not a change the human saw.
+export function useUiLog(rootRef) {
+  const sent = useRef(new Map());
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    [readSelector(root), readTargets(root)].forEach((snap) => {
+      if (!snap) return;
+      const key = JSON.stringify(snap);
+      if (sent.current.get(snap.surface) === key) return;
+      sent.current.set(snap.surface, key);
+      postObservation(snap);
+    });
+  });
+}
