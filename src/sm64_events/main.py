@@ -255,7 +255,10 @@ def build():
         # is providing input so the buffer pauses while idle (activity.py).
         from sm64_events.replay.activity import ActivityTap
         detectors.append(ActivityTap(replay.recorder))
-    poller = Poller(memory, detectors, service)  # service IS the event sink
+    # service IS the event sink; on_frame is its deferred-judgement heartbeat,
+    # so a topological cancel reaches the screen on the next game frame rather
+    # than whenever the next event happens to be journaled.
+    poller = Poller(memory, detectors, service, on_frame=service.settle_frame)
     updater = UpdateService(current_version=__version__)
     updater.startup_maintenance(bootstrap_path=_bootstrap_cleanup_arg())
     return create_app(poller, broadcaster, service=service, replay=replay,

@@ -67,6 +67,27 @@ def test_perf_stats_times_detector_compute_and_resets_max():
     assert p.perf_stats()["tick_ms_max"] == 0.0   # max reset on read
 
 
+def test_the_frame_hook_fires_after_this_tick_s_events():
+    """The tracker's deferred-judgement heartbeat (live report 2026-08-02: a
+    topological cancel reached the screen 27.7 s late because nothing was
+    journaled meanwhile). It carries the LIVE game frame, it fires only on a
+    tick that had a prev pair to dispatch, and it fires AFTER that tick's own
+    events — an event on this frame may record the very move being judged."""
+    b = RecordingBroadcaster()
+    seen = []
+
+    async def on_frame(frame):
+        seen.append((frame, len(b.events)))
+
+    p = Poller(StubMemory(), [EchoDetector()], b, on_frame=on_frame,
+               reader=ScriptedReader([snap(1), snap(2), snap(3)]))
+    asyncio.run(p.tick())            # establishing tick: no pair, no heartbeat
+    assert seen == []
+    asyncio.run(p.tick())
+    asyncio.run(p.tick())
+    assert seen == [(2, 1), (3, 2)]  # live frame, and the tick's event already out
+
+
 def test_pause_skips_everything_and_resume_self_heals():
     """Session pause: run() must touch NOTHING while paused (no attach, no
     reads); resume resets _prev so detectors get a fresh establishing pair

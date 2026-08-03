@@ -106,6 +106,25 @@ or a bug, examined one at a time, never a number to accept.**
   area outright), never `level_changed` (where `ctx.area` is still the old
   level's); read with `.get()`, since a payload without `level` means position
   unknown and unknown declines to judge.
+  **The defer needed a CLOCK, and not having one was worth 27.7 seconds
+  (live report 2026-08-02).** "The frame advanced" was only ever observed
+  through the next JOURNALED event, and standing still inside a course journals
+  nothing — so entering Bowser in the Sky from Upstairs cancelled `Bowser 2 →
+  WDW` correctly and the selector kept offering it, the card kept calling it
+  ACTIVE SEGMENT, for **832 frames** (`tools/why_cancelled.py` on his own
+  session; `data/ui_log.jsonl` has the chip drawn for 27.9 s, the same span).
+  Earlier sightings were 96, 116 and 56 frames and read as noise. `SegmentEngine.
+  settle(frame)` is the delivery half — `Projector.settle` → `TrackerService.
+  settle_frame` → the poller's own `on_frame` hook, wired in `main.py`. Same
+  verdict, same silence (no row), so a REPLAY reaching it at the next event
+  lands in the same state; the only visible difference is the resurrection
+  entry's expiry frame. The notice needs no view refetch to land: `store.js`
+  keeps `armedSegs`/`armedOrder` from the notices themselves, and both the
+  selector's chip (`stagecontext.armedSegments`) and the card's pin read that.
+  The report arrived as "I think each segment just needs to know what conditions
+  break it" — the rule that broke it already existed and already fired. **A
+  verdict delivered late is indistinguishable, from the outside, from a rule
+  that was never written.**
 - **Two ways to be unconstrained, neither a special case.**
   `segments.step_node` answers None for a clause naming no place (`key_grabbed`,
   `warp_entered`, `star_grabbed`, `reset_game`, an unpinned `level_exit`), and

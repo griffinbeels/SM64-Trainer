@@ -3680,6 +3680,41 @@ def test_a_warp_into_an_unreachable_place_cancels_an_armed_segment():
     assert [n["event"] for n in notices] == ["segment_disarmed"]
 
 
+def test_a_cancel_lands_on_the_clock_with_no_event_to_carry_it():
+    """Live report 2026-08-02: he entered Bowser in the Sky from Upstairs with
+    `Bowser 2 → WDW` armed, and the selector kept offering it while the card
+    called it ACTIVE SEGMENT. The rule was right and the DELIVERY was late —
+    `tools/why_cancelled.py` on his own session dated the verdict **832 frames
+    (27.7 s)** after the move, and the UI log has the chip on screen for 27.9 s.
+    The one-frame defer only advanced when the journal got another event, and
+    standing still inside a course journals nothing.
+
+    So the frame itself must be able to deliver it: `settle(frame)`, fed by the
+    poller's clock. Nothing else changes — same verdict, same silence (no row).
+    """
+    e = SegmentEngine([WF_SSL])
+    _exit_wf_into_the_lobby(e)
+    e.feed(jev(4, "level_changed", 2000, {"from": 6, "to": 30}),
+           ctx(level=30, prev_level=6))
+    e.feed(jev(5, "area_changed", 2000,
+               {"level": 30, "from": 1, "to": 1, "from_transient": True}),
+           ctx(level=30, area=1))
+    assert e.armed_ids() == {70}      # frame 2000 is still live: not judged yet
+    notices = e.settle(2001)          # the clock, with no sixth event
+    assert e.armed_ids() == set()
+    assert [n["event"] for n in notices] == ["segment_disarmed"]
+    # And the defer still holds: settling ON the move's own frame judges nothing,
+    # which is what protects the transient lobby.
+    again = SegmentEngine([WF_SSL])
+    _exit_wf_into_the_lobby(again)
+    again.feed(jev(4, "level_changed", 2000, {"from": 6, "to": 30}),
+               ctx(level=30, prev_level=6))
+    again.feed(jev(5, "area_changed", 2000,
+                   {"level": 30, "from": 1, "to": 1, "from_transient": True}),
+               ctx(level=30, area=1))
+    assert again.settle(2000) == [] and again.armed_ids() == {70}
+
+
 def test_a_segment_armed_at_the_warp_destination_survives_that_warp():
     # Warping somewhere to practise is the normal loop. The judgement lands a
     # frame after the move, so without the arm-postdates-move exemption the

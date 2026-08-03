@@ -559,6 +559,15 @@ class Projector:
         into privates."""
         return self._segments.armed_ids()
 
+    def settle(self, frame: int) -> list[dict]:
+        """Let the CLOCK deliver a topological verdict the journal has no event
+        for (`SegmentEngine.settle`), and hand back the notices.
+
+        Returns them rather than filling `self.segment_notices`, which `feed()`
+        OVERWRITES on every event — a tick landing between two events must not
+        be able to drop a notice the service has not drained yet."""
+        return self._segments.settle(frame)
+
     def _armed_loosely(self, segment_id: int) -> bool:
         """True when `segment_id` is currently armed AND its def is LOOSE-
         matched (task 5, spec 2026-07-28-multi-step-segments) — the property

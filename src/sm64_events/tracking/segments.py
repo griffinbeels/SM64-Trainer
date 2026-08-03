@@ -2108,6 +2108,17 @@ def merge_definitions(first: SegmentDef, second: SegmentDef,
 
 
 @dataclass(frozen=True)
+class _FrameOnly:
+    """The clock with no event attached — what `SegmentEngine.settle` passes to
+    `_flush_move`, whose only read is `.frame`. Deliberately NOT a real Event:
+    nothing journaled this, nothing may broadcast it, and giving it a type and
+    an empty payload keeps it honest if `_flush_move` ever reaches for more."""
+    frame: int
+    type: str = "frame_settled"
+    payload: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class _Arm:
     jid: int            # journal id of the arming event -> attempt id
     start_frame: int
@@ -2275,6 +2286,29 @@ class SegmentEngine:
         """The def for an id, or None (a deleted or never-loaded definition —
         callers must not assume every armed/pending id still has one)."""
         return self._def_by_id.get(sid)
+
+    def settle(self, frame: int) -> list[dict]:
+        """Judge a pending position change on the CLOCK, with no event to carry
+        it, and return the notices that came out (live report 2026-08-02).
+
+        `_flush_move` defers a verdict by one frame on purpose, but until this
+        existed a frame only advanced when the journal happened to get another
+        event — so inside a course where nothing is journaled the verdict waited
+        for whatever the player did next. Measured on his own session: entering
+        Bowser in the Sky from Upstairs cancelled `Bowser 2 → WDW` correctly and
+        the screen kept offering it for **832 frames (27.7 s)**, which reads as
+        a missing rule rather than a late one. Earlier sightings were 96, 116
+        and 56 frames.
+
+        A liveness fix, not a correctness one: the verdict is identical either
+        way, and a topological cancel writes no attempt row, so a REPLAY (which
+        has only events, and therefore settles at the next one) reaches the same
+        state. The only difference a replay can see is the resurrection entry's
+        expiry frame, off by however long the wait was.
+        """
+        notices: list[dict] = []
+        self._flush_move(_FrameOnly(frame), notices)
+        return notices
 
     def feed(self, ev, ctx: MatchContext):
         """Returns (closed raw Attempts, notices). Closures before arming."""
