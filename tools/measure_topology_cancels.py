@@ -61,6 +61,7 @@ Usage:
     uv run python tools/measure_topology_cancels.py [db]
 """
 import dataclasses
+import json
 import sqlite3
 import sys
 import tempfile
@@ -91,6 +92,23 @@ def _online_backup(live_path: Path, backup_path: Path) -> None:
 
 
 def _segment_defs_from(db: Database) -> list[SegmentDef]:
+    """The definitions that will SHIP, not the ones the db happens to hold.
+
+    Reconciles the bundled seed into the SNAPSHOT first (never the live file),
+    which is exactly what `main.py` does on every startup: an untouched seeded
+    row refreshes, a row the human edited is left alone. Without this the tool
+    scores whatever corpus the db was last reconciled against, so a corpus
+    change measures as no change at all and reads as a clean result -- which is
+    how the 2026-08-02 strict flip first came back with numbers identical to
+    its own baseline, to the attempt.
+    """
+    from sm64_events.core.paths import bundled_defaults_seed
+    from sm64_events.tracking.defaults import reconcile_defaults
+    seed = json.loads(bundled_defaults_seed().read_bytes().decode("utf-8"))
+    problems = reconcile_defaults(db, seed)
+    if problems:
+        print(f"WARNING: {len(problems)} seed rows would not reconcile: "
+              f"{problems}", file=sys.stderr)
     keys = [f.name for f in dataclasses.fields(SegmentDef)]
     return [SegmentDef(**{k: row[k] for k in keys}) for row in db.segment_defs()]
 
