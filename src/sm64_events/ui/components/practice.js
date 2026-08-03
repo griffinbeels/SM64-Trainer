@@ -7,23 +7,20 @@ import { requestTarget } from "../target.js";
 import { hasPracticeContext, justCompletedSegment,
         practicedHere, starPracticableHere } from "../stagecontext.js";
 import { ReplayPlayer } from "./replay.js";
-import { StatMenu, DUST_STAT_KEYS } from "./statmenu.js";
-import { Timeline } from "./timeline.js";
-import { Progress, hasProgressPoints } from "./progress.js";
+import { StatMenu } from "./statmenu.js";
 import { StageBanner } from "./stagebanner.js";
 import { RankBanner, rankColor } from "./ranks.js";
 import { useHeldWhileCelebrating } from "../rankclimb.js";
 import { CollapseToggle, cardClass, useCollapsed } from "./collapsible.js";
 import { RankIcon } from "./rankicon.js";
-import { StandardsPanel } from "./standards.js";
 import { StratPicker } from "./stratpicker.js";
 import { useTargetPicker } from "./targetpicker.js";
-import { FailureCompilation } from "./failcomp.js";
 import { Icon } from "./icons.js";
 import { PageState } from "./states.js";
 import { EmptyState } from "./emptystate.js";
 import { caveatOf, cardBadge } from "./marks.js";
 import { displayName, entityKey, entityNoun, sectionPb } from "../entitysection.js";
+import { EntityAnalysis, EntityDrawer } from "./entitydetail.js";
 
 const html = htm.bind(h);
 
@@ -339,79 +336,6 @@ export function PbTag({ pb, mode, rows, pick, t }) {
     : pb.display} (${mode})${mark ? cardBadge(mark) : null}</span>`;
 }
 
-// Validity-bounds chip (spec 2026-07-23): the section's effective min/max
-// completion time — successes outside the range are auto-ignored server-side
-// (auto-cleared into the hidden bucket; stats/PBs/graphs/runs skip them).
-// Dimmed while on the implicit 0.5s default. Edited in SECONDS, stored as
-// frames (x30). Stars persist via PUT/DELETE /api/stars/{c}/{s}/time-filter;
-// segments rewrite their def's min_time/max_time guard rows through
-// PUT /api/segments/{id} — both paths reproject, so history reflags
-// immediately. Blank min = the 0.5s default; typed 0 = no minimum; blank
-// max = no max.
-function TimeFilterChip({ sec, t }) {
-  const [open, setOpen] = useState(false);
-  const [minS, setMinS] = useState("");
-  const [maxS, setMaxS] = useState("");
-  const tf = sec.time_filter;
-  if (!tf) return null;
-  const isSeg = sec.segment_id != null;
-  const fmtS = (f) => (f % 30 === 0 ? String(f / 30) : (f / 30).toFixed(2));
-  const label = tf.max_frames != null
-    ? `⏱ ${fmtS(tf.min_frames)}–${fmtS(tf.max_frames)}s`
-    : `⏱ ≥ ${fmtS(tf.min_frames)}s`;
-
-  function openEditor() {
-    setMinS(fmtS(tf.min_frames));
-    setMaxS(tf.max_frames != null ? fmtS(tf.max_frames) : "");
-    setOpen(true);
-  }
-
-  async function putSegGuards(minF, maxF) {
-    // RMW the def's guard list: time rows replaced, other guards untouched
-    const defs = await getJSON("/api/segments");
-    const d = defs.find((x) => x.id === sec.segment_id);
-    if (!d) return;
-    const guards = (d.guards || []).filter(
-      (g) => g.type !== "min_time" && g.type !== "max_time");
-    if (minF != null) guards.push({ type: "min_time", frames: minF });
-    if (maxF != null) guards.push({ type: "max_time", frames: maxF });
-    await send("PUT", `/api/segments/${sec.segment_id}`, { guards });
-  }
-
-  async function save() {
-    const minF = minS === "" ? null : Math.round(Number(minS) * 30);
-    const maxF = maxS === "" ? null : Math.round(Number(maxS) * 30);
-    if (isSeg) await putSegGuards(minF, maxF);
-    // 15 mirrors projection.DEFAULT_MIN_FRAMES (blank min = keep the default)
-    else await send("PUT",
-      `/api/stars/${sec.course_id}/${sec.star_id}/time-filter`,
-      { min_frames: minF == null ? 15 : minF, max_frames: maxF });
-    setOpen(false);
-    t.refresh();
-  }
-
-  async function reset() {
-    if (isSeg) await putSegGuards(null, null);
-    else await send("DELETE",
-      `/api/stars/${sec.course_id}/${sec.star_id}/time-filter`);
-    setOpen(false);
-    t.refresh();
-  }
-
-  if (!open) return html`<button class="meta" style=${tf.is_default ? "opacity:.55" : ""}
-      title="valid-time bounds — successes outside this range are ignored"
-      onclick=${openEditor}>${label}</button>`;
-  return html`<span class="meta">
-    min <input type="number" min="0" step="0.1" style="width:4rem"
-      value=${minS} oninput=${(e) => setMinS(e.target.value)} />s
-    max <input type="number" min="0" step="0.1" style="width:4rem"
-      value=${maxS} placeholder="∞" oninput=${(e) => setMaxS(e.target.value)} />s
-    <button onclick=${save}>save</button>
-    <button onclick=${reset} title="back to the 0.5s default">reset</button>
-    <button onclick=${() => setOpen(false)}>cancel</button>
-  </span>`;
-}
-
 // True when the strategy banner and the entity banner are the SAME MEASURE:
 // the active strategy's ladder grades this time exactly where the entity's
 // best-possible ladder does. Always the case for a star with only ONE
@@ -521,14 +445,6 @@ function AttemptLogEmpty({ hasAttempts }) {
         hint="Every run you finish lands here automatically." />`;
 }
 
-// The trend graph plots SUCCESSFUL attempts only, so it stays empty through a
-// session of resets — the copy has to say "completed" or it reads as broken
-// to someone who has been practising for an hour.
-function TrendEmpty() {
-  return html`<${EmptyState} headline="No completed attempts yet"
-      hint="Finish a run and your times start charting here." />`;
-}
-
 // The objective card's symbol + eyebrow, which on the ACTIVE card double as
 // the target picker's trigger (the header's PRACTICE TARGET card owned that
 // job until 2026-07-26 — see targetpicker.js for why it moved here). Shared
@@ -545,23 +461,6 @@ function ObjectiveEyebrow({ iconName, label, openPicker }) {
       title="Practice a different star, segment, or strategy">
     ${inside}<${Icon} name="chevron" size=${14} />
   </button>`;
-}
-
-// The stat chips. ONE component for both section kinds (rule 11) — the chips
-// loop was pasted into StarSection and SegmentSection identically, and a
-// second copy is how the two drift.
-//
-// The CONTROL that chooses which chips show is a separate component,
-// StatMenuTrigger below — moved into the practice-log card's header on
-// 2026-07-28 (user: "For the stats button, we should move it to be inside
-// the practice log, to the left of the sort filter"), leaving the chips
-// themselves here, unmoved.
-function StatChipsRow({ sec, t }) {
-  return html`<div class="chips stat-chips">
-    ${sec.stats.filter((stat) => t.showDust || !DUST_STAT_KEYS.has(stat.key))
-      .map((stat) => html`
-      <span class="chip" title=${stat.key}>${stat.label} ${stat.display ?? "–"}</span>`)}
-  </div>`;
 }
 
 // The trigger + popover for the stat menu — ONE shared component (rule 11:
@@ -611,7 +510,6 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
   const [showHidden, setShowHidden] = useState(false);
   const [visible, setVisible] = useState(10);
   const [foldTarget, toggleTarget] = useCollapsed("objective");
-  const [foldAnalysis, toggleAnalysis] = useCollapsed("analysis");
   const [foldLog, toggleLog] = useCollapsed("attempts");
   const base = showHidden ? sec.attempts
     : sec.attempts.filter((a) => !a.cleared && a.outcome !== "abandoned");
@@ -623,21 +521,6 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
     .sort(comparator(ui.sort, t.clock));
   const shown = rows.slice(0, visible);
   const { focus, pick, clearFocus } = useGraphPick(rows, visible, setVisible);
-
-  async function wipeData() {
-    const name = `${sec.course_name} · ${sec.star_name}`;
-    const msg = t.scope === "lifetime"
-      ? `Wipe ALL data for ${name} across every session?\n`
-        + "All attempts and PBs for this star are permanently removed "
-        + "(markers and strategies are kept).\nThis cannot be undone."
-      : `Wipe this session's data for ${name}?\n`
-        + "The session's attempts and any PBs saved from them are "
-        + "permanently removed (earlier PBs are kept).\nThis cannot be undone.";
-    if (!window.confirm(msg)) return;
-    await send("POST", "/api/wipe", { kind: "star", course_id: sec.course_id,
-                                      star_id: sec.star_id, scope: t.scope });
-    t.refresh();
-  }
 
   const ek = entityKey(sec);
   const named = displayName(sec, (t.view.catalog || {}).courses || []);
@@ -708,25 +591,7 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
       </div>`}
     </section>
 
-    <section class="practice-card analysis-card ${cardClass(foldAnalysis)}">
-      <div class="card-heading">
-        <div><span class="eyebrow">Analysis</span><h3>Attempt history</h3></div>
-        <${CollapseToggle} collapsed=${foldAnalysis} toggle=${toggleAnalysis}
-          label="the analysis card" />
-      </div>
-      <div class="analysis-block timeline-block">
-        <h4>Attempt timeline <span class="hint" tabindex="0"
-          data-tip="Every attempt in the selected scope, positioned by its completion or reset time">ⓘ</span></h4>
-        <${Timeline} tl=${sec.timeline} sec=${sec} t=${t} />
-      </div>
-      <div class="analysis-block trend-block">
-        <h4>Performance trend <span class="hint" tabindex="0"
-          data-tip="Successful attempts over time — gold dots are saved PBs; click a dot to jump to its row">ⓘ</span></h4>
-        ${hasProgressPoints(sec.progress, t.clock)
-          ? html`<${Progress} prog=${sec.progress} clock=${t.clock} onPick=${pick} />`
-          : html`<${TrendEmpty} />`}
-      </div>
-    </section>
+    <${EntityAnalysis} sec=${sec} t=${t} onPick=${pick} />
 
     <section class="practice-card attempts-card ${cardClass(foldLog)}">
       <div class="card-heading attempts-heading">
@@ -761,26 +626,7 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
       </div>
     </section>
 
-    <details class="practice-card detail-drawer" open>
-      <summary>Stats, standards, and practice options</summary>
-      <div class="detail-tools">
-        <a href=${sec.links.ukikipedia} target="_blank">RTA Guide ↗</a>
-        ${sec.links.example && html`<a href=${sec.links.example} target="_blank">Example ↗</a>`}
-        <${TimeFilterChip} sec=${sec} t=${t} />
-        <button class="danger-text" onclick=${wipeData}
-          title=${t.scope === "lifetime"
-            ? "Wipe this star's data across all sessions"
-            : "Wipe this star's data in the current session"}>Clear data</button>
-      </div>
-      <${StatChipsRow} sec=${sec} t=${t} />
-      <${StandardsPanel} entity=${ek}
-          activeStrat=${sec.last_strat} strategies=${sec.strategies}
-          sectionRank=${sec.rank} sectionPb=${sec.pb}
-          family=${sec.pipe_segment_id != null ? "Star" : null}
-          onChanged=${t.refresh} defaultOpen=${true} />
-      <${FailureCompilation} identity=${{ course_id: sec.course_id, star_id: sec.star_id }}
-          defaultOpen=${true} />
-    </details>
+    <${EntityDrawer} sec=${sec} t=${t} />
   </div>`;
 }
 
@@ -797,7 +643,6 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker 
   const [showHidden, setShowHidden] = useState(false);
   const [visible, setVisible] = useState(10);
   const [foldTarget, toggleTarget] = useCollapsed("objective");
-  const [foldAnalysis, toggleAnalysis] = useCollapsed("analysis");
   const [foldLog, toggleLog] = useCollapsed("attempts");
   // armedSegs is the single live source: WS notices are instant, every view
   // fetch reconciles it so it cannot stay stale — see store.js refresh().
@@ -814,21 +659,6 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker 
     .sort(comparator(ui.sort, "rta"));
   const shown = rows.slice(0, visible);
   const { focus, pick, clearFocus } = useGraphPick(rows, visible, setVisible);
-
-  async function wipeData() {
-    const msg = t.scope === "lifetime"
-      ? `Wipe ALL data for ${sec.name} across every session?\n`
-        + "All attempts and PBs for this segment are permanently removed "
-        + "(the definition and markers are kept).\nThis cannot be undone."
-      : `Wipe this session's data for ${sec.name}?\n`
-        + "The session's attempts and any PBs saved from them are "
-        + "permanently removed (earlier PBs are kept).\nThis cannot be undone.";
-    if (!window.confirm(msg)) return;
-    await send("POST", "/api/wipe", { kind: "segment",
-                                      segment_id: sec.segment_id,
-                                      scope: t.scope });
-    t.refresh();
-  }
 
   const pinTag = armed ? "Running" : isTarget ? "Ready" : "Recent";
   const ek = entityKey(sec);
@@ -891,27 +721,7 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker 
       </div>`}
     </section>
 
-    <section class="practice-card analysis-card ${cardClass(foldAnalysis)}">
-      <div class="card-heading">
-        <div><span class="eyebrow">Analysis</span><h3>Attempt history</h3></div>
-        <${CollapseToggle} collapsed=${foldAnalysis} toggle=${toggleAnalysis}
-          label="the analysis card" />
-      </div>
-      <div class="analysis-block timeline-block">
-        <h4>Attempt timeline <span class="hint" tabindex="0"
-          data-tip="Every attempt in the selected scope, positioned by its completion or reset time">ⓘ</span></h4>
-        ${!sec.broken
-          ? html`<${Timeline} tl=${sec.timeline} sec=${sec} t=${t} />`
-          : html`<div class="stable-empty compact">Timeline unavailable for a deleted definition.</div>`}
-      </div>
-      <div class="analysis-block trend-block">
-        <h4>Performance trend <span class="hint" tabindex="0"
-          data-tip="Successful attempts over time — gold dots are saved PBs; click a dot to jump to its row">ⓘ</span></h4>
-        ${hasProgressPoints(sec.progress, "rta")
-          ? html`<${Progress} prog=${sec.progress} clock="rta" onPick=${pick} />`
-          : html`<${TrendEmpty} />`}
-      </div>
-    </section>
+    <${EntityAnalysis} sec=${sec} t=${t} onPick=${pick} />
 
     <section class="practice-card attempts-card ${cardClass(foldLog)}">
       <div class="card-heading attempts-heading">
@@ -946,24 +756,7 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker 
       </div>
     </section>
 
-    <details class="practice-card detail-drawer" open>
-      <summary>Stats, standards, and practice options</summary>
-      <div class="detail-tools">
-        ${!sec.broken && html`<${TimeFilterChip} sec=${sec} t=${t} />`}
-        <button class="danger-text" onclick=${wipeData}
-          title=${t.scope === "lifetime"
-            ? "Wipe this segment's data across all sessions"
-            : "Wipe this segment's data in the current session"}>Clear data</button>
-      </div>
-      <${StatChipsRow} sec=${sec} t=${t} />
-      <${StandardsPanel} entity=${sec.pipe_star_entity || `segment:${sec.segment_id}`}
-          activeStrat=${sec.last_strat} strategies=${sec.strategies}
-          sectionRank=${sec.rank} sectionPb=${sec.pb}
-          family=${sec.pipe_star_entity ? "Pipe" : null}
-          onChanged=${t.refresh} defaultOpen=${true} />
-      <${FailureCompilation} identity=${{ segment_id: sec.segment_id }}
-          defaultOpen=${true} />
-    </details>
+    <${EntityDrawer} sec=${sec} t=${t} />
   </div>`;
 }
 

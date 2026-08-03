@@ -25,6 +25,7 @@ UI = ROOT / "src" / "sm64_events" / "ui"
 EMPTY_ART = UI / "assets" / "empty"
 EMPTYSTATE_JS = UI / "components" / "emptystate.js"
 PRACTICE_JS = UI / "components" / "practice.js"
+ENTITYDETAIL_JS = UI / "components" / "entitydetail.js"
 TIMELINE_JS = UI / "components" / "timeline.js"
 INDEX_HTML = UI / "index.html"
 
@@ -95,14 +96,28 @@ def test_both_practice_cards_guard_the_trend_graph():
     """Progress returns "" for a section with no plottable points, so the
     caller has to ask the SAME question to put something there instead —
     hence the shared hasProgressPoints. A card that renders <Progress>
-    unconditionally is back to an empty box."""
+    unconditionally is back to an empty box.
+
+    2026-08-03 (practice-log-entity-cards, task 4): the trend graph and its
+    guard moved out of StarSection/SegmentSection into the shared
+    EntityAnalysis (entitydetail.js), which both cards now render instead of
+    building their own analysis block. So this checks both halves: each
+    section renders the shared analysis card, and that shared card still
+    asks hasProgressPoints before falling back to TrendEmpty -- either half
+    slipping (a section stops calling it, or the shared card loses the
+    guard) would be invisible to the other assertion alone."""
     bodies = _sections(PRACTICE_JS.read_text(encoding="utf-8"))
     for name in ("StarSection", "SegmentSection"):
-        assert "hasProgressPoints(sec.progress" in bodies[name], (
-            f"{name} renders the trend graph without asking whether it has "
-            "any points — an empty section shows a blank block again")
-        assert "<${TrendEmpty}" in bodies[name], \
-            f"{name} has no empty state for the performance trend"
+        assert "<${EntityAnalysis}" in bodies[name], \
+            f"{name} does not render the shared analysis card"
+    analysis = strip_comments(ENTITYDETAIL_JS.read_text(encoding="utf-8"))
+    body = re.search(r"^export function EntityAnalysis\(.*?^}", analysis, re.S | re.M)
+    assert body, "EntityAnalysis not found in entitydetail.js — did it get renamed?"
+    assert "hasProgressPoints(sec.progress" in body.group(0), (
+        "EntityAnalysis renders the trend graph without asking whether it "
+        "has any points — an empty section shows a blank block again")
+    assert "<${TrendEmpty}" in body.group(0), \
+        "EntityAnalysis has no empty state for the performance trend"
 
 
 def test_both_practice_cards_have_an_empty_practice_log():

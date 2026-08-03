@@ -22,6 +22,8 @@ from source_scan import strip_comments
 
 PRACTICE_JS = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
                / "ui" / "components" / "practice.js")
+ENTITYDETAIL_JS = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
+                   / "ui" / "components" / "entitydetail.js")
 VIEWS_PY = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
             / "tracking" / "views.py")
 
@@ -35,6 +37,15 @@ def _body(source: str, name: str) -> str:
     """The text of a top-level `function <name>(...) { ... }` declaration."""
     match = re.search(rf"^function {name}\(.*?^}}", source, re.S | re.M)
     assert match, f"{name} not found in practice.js — did it get renamed?"
+    return match.group(0)
+
+
+def _exported_body(source: str, name: str) -> str:
+    """The text of a top-level `export function <name>(...) { ... }`
+    declaration -- entitydetail.js's shared components are exported, unlike
+    practice.js's own section builders."""
+    match = re.search(rf"^export function {name}\(.*?^}}", source, re.S | re.M)
+    assert match, f"{name} not found in entitydetail.js — did it get renamed?"
     return match.group(0)
 
 
@@ -69,11 +80,26 @@ def test_both_cards_offer_a_strategy_picker():
 
 
 def test_both_cards_offer_a_failure_compilation():
-    """Failure compilation must ship on stars AND segments (spec 2026-07-23)."""
+    """Failure compilation must ship on stars AND segments (spec 2026-07-23).
+
+    2026-08-03 (practice-log-entity-cards, task 4): the detail drawer that
+    holds FailureCompilation stopped being two hand-written copies -- both
+    StarSection and SegmentSection now render the SAME shared `EntityDrawer`
+    (entitydetail.js). So the parity this test guards is a structural
+    guarantee now rather than two things that could quietly drift apart:
+    there is only one drawer for either card to call, and only one place
+    FailureCompilation could be rendered from. This asserts both halves of
+    that guarantee -- each section calls the shared drawer, and the drawer
+    itself still renders the control -- rather than either alone, since a
+    section that stopped calling EntityDrawer (or an EntityDrawer that lost
+    the control) would each be invisible to only the other check."""
     source = PRACTICE_JS.read_text(encoding="utf-8")
     for name in ("StarSection", "SegmentSection"):
-        assert "FailureCompilation" in _components(_body(source, name)), \
-            f"{name} is missing the failure-compilation control"
+        assert "EntityDrawer" in _components(_body(source, name)), \
+            f"{name} does not render the shared detail drawer"
+    drawer = _exported_body(ENTITYDETAIL_JS.read_text(encoding="utf-8"), "EntityDrawer")
+    assert "FailureCompilation" in drawer, \
+        "EntityDrawer is missing the failure-compilation control"
 
 
 def test_two_rank_banners_are_rendered_for_both_kinds():
@@ -140,11 +166,21 @@ def test_both_section_kinds_render_the_shared_stat_chips_row():
 
     Shared as ONE component, not pasted twice: adding a control to two copies
     of markup is precisely the shape that drifts, and rule 11 makes an
-    asymmetry between a star and a segment a bug."""
-    code = strip_comments(PRACTICE_JS.read_text(encoding="utf-8"))
-    assert code.count("<${StatChipsRow}") == 2
+    asymmetry between a star and a segment a bug.
+
+    2026-08-03 (practice-log-entity-cards, task 4): StatChipsRow moved out of
+    practice.js into entitydetail.js, rendered from inside the shared
+    EntityDrawer -- which is itself the ONE thing both StarSection and
+    SegmentSection call. "Does every card show the chips" is therefore two
+    questions now: does EntityDrawer reach both cards (2 uses in practice.js),
+    and does EntityDrawer itself still render the row exactly once."""
+    practice = strip_comments(PRACTICE_JS.read_text(encoding="utf-8"))
+    assert practice.count("<${EntityDrawer}") == 2
+    detail = strip_comments(ENTITYDETAIL_JS.read_text(encoding="utf-8"))
+    assert detail.count("<${StatChipsRow}") == 1
     # ...and no card keeps its own hand-rolled copy of the chips loop.
-    assert code.count("DUST_STAT_KEYS.has") == 1
+    assert detail.count("DUST_STAT_KEYS.has") == 1
+    assert "DUST_STAT_KEYS" not in practice
 
 
 def test_every_attempts_tools_row_carries_the_stat_menu_trigger():
@@ -174,3 +210,19 @@ def test_every_attempts_tools_row_carries_the_stat_menu_trigger():
         "exactly one shared trigger")
     # ...and no card keeps its own hand-rolled copy of the trigger button.
     assert code.count("function StatMenuTrigger") == 1
+
+
+def test_the_analysis_card_and_drawer_are_one_component_not_two_copies():
+    """They become page-level surfaces that any entity can feed, so a second
+    hand-written copy is not just duplication -- it is a copy that the page
+    would have no way to point at a browsed entity."""
+    detail = strip_comments((ENTITYDETAIL_JS).read_text(encoding="utf-8"))
+    for name in ("EntityAnalysis", "EntityDrawer", "wipeSection"):
+        assert f"export function {name}" in detail or \
+               f"export async function {name}" in detail, name
+
+    practice = strip_comments(PRACTICE_JS.read_text(encoding="utf-8"))
+    # Neither section may still build an analysis card or a drawer itself.
+    assert "analysis-block" not in practice
+    assert "detail-drawer" not in practice
+    assert practice.count("<${EntityAnalysis}") == practice.count("<${EntityDrawer}")
