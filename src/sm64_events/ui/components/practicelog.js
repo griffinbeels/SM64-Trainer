@@ -88,6 +88,26 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
       && (a.outcome === "reset" || a.outcome === "hard_reset")))
     .slice()
     .sort(comparator(ui.sort, clock));
+  // A pick (the objective card's PbTag jump, or a trend-graph dot in
+  // EntityAnalysis) is resolved at PAGE level -- Practice's own
+  // `useGraphPick`, over whichever entity is FOCUSED -- and that hook has no
+  // visibility into any card's own row pagination; it never did. Feeding it
+  // a page-level `visible`/`setVisible` widened a counter nothing renders
+  // from, which is exactly why a pick past the tenth row silently did
+  // nothing (found only by driving the mounted page past page one). THIS
+  // card owns the one `visible` that actually governs `shown` below, so it
+  // is the one that has to notice a focused pick landing outside its own
+  // current window and widen itself -- the same one-shot-nudge shape
+  // `forceOpen` already uses above, keyed on the same `focus.nonce` so a
+  // repeat pick on an already-widened card still re-checks.
+  useEffect(() => {
+    if (!selected || !focus) return;
+    const idx = rows.findIndex((a) => a.id === focus.id);
+    if (idx === -1) return;               // not this card's attempt
+    setVisible((current) => (idx >= current
+      ? Math.ceil((idx + 1) / 10) * 10
+      : current));
+  }, [selected, focus && focus.nonce]);
   const shown = rows.slice(0, visible);
   const isOpen = open;
   return html`<section class="log-card ${selected ? "is-selected" : ""}
@@ -124,6 +144,25 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
         <${Icon} name="chevron" size=${18} />
       </button>
     </div>
+    ${/* Same markup StarSection/SegmentSection render for their own
+         objective card (practice.js), and the same reason: `armed_detail` is
+         SERVER truth, re-derived from the journal on every view fetch, and
+         it is NOT segment-only -- the 100-coin star carries it too, which is
+         why both sections already draw this identically. Before this task
+         an armed-but-not-active entity still got its own full objective-card
+         (inside the now-deleted practice index) and this row rode along for
+         free; a `LogCard` is the only surface such an entity gets now, so it
+         is the one that has to carry the row, or "is the system aware I'm
+         mid-movement" silently stops being answerable the moment that
+         movement is not also the active target. Occupies zero height when
+         `armed_detail` is null -- true of every ordinary card. */""}
+    ${sec.armed_detail && html`<div class="seg-waiting">
+      <span class="seg-waiting-step">Step${" "}
+        ${sec.armed_detail.progress + 1}${" "}of${" "}
+        ${sec.armed_detail.total + 1}</span>
+      <span class="seg-waiting-for">Waiting for${" "}
+        ${sec.armed_detail.waiting_for}</span>
+    </div>`}
     ${isOpen && html`<div class="log-card-body">
       ${rows.length
         ? html`<${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t}
@@ -220,6 +259,22 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus,
                               clearFocus, focusKey, onSelect }) {
   const [shown, setShown] = useState(CARDS_PER_PAGE);
   const sections = orderedSections(v);
+  // The focused entity (the active target, by default, or a manual browse
+  // pick) is not necessarily among the first CARDS_PER_PAGE cards -- recency
+  // order is by `last_activity`, and the active target is routinely NOT the
+  // most recently touched entity in a well-practiced corpus. Reached only by
+  // driving the mounted page against real data: the objective card's PbTag
+  // jump found its attempt, called `pick`, and `focus` updated correctly,
+  // but the target entity's OWN `.log-card` was never rendered at all --
+  // past "Show 5 more" -- so there was no card for the reveal to land on.
+  // Same one-shot-nudge shape as LogCard's own row-pagination fix: widen
+  // `shown` the moment the focused key sits outside it.
+  useEffect(() => {
+    if (focusKey == null) return;
+    const idx = sections.findIndex((sec) => entityKey(sec) === focusKey);
+    if (idx === -1) return;                // not a classified entity (unassigned)
+    setShown((current) => (idx >= current ? idx + 1 : current));
+  }, [focusKey]);
   const page = sections.slice(0, shown);
   return html`<section class="practice-card log-list-card">
     <div class="card-heading attempts-heading">

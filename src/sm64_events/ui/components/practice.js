@@ -395,9 +395,20 @@ export function Practice({ t, openCompare }) {
   // be protecting. Letting section DATA through is also just correct: the
   // attempt that earned the rank-up should appear in the log while the bar
   // climbs.
+  // `newestAttemptId` rides the SAME freeze as target/stage rather than a
+  // second mechanism beside it: it is one of resolveFocus's three signals
+  // (ui/focustarget.js) and all three have to move together, or a browse
+  // pick can be dropped mid-celebration by a signal none of this hold was
+  // ever meant to let through. Reading it live instead (as `newestJournalId
+  // (v)` further down used to) reproduces exactly: browse a non-active card,
+  // an INCIDENTAL attempt lands elsewhere and starts a climb, the live
+  // newestAttemptId changes on the next render while activeKey/stageKey stay
+  // held, snapshotsAgree fails, and the browse pick drops WHILE the
+  // celebration it should have waited for is still running.
   const frozen = useHeldWhileCelebrating({
     target: (t.view && t.view.target) || null, stage: t.stage,
-    armedOrder: t.armedOrder, lastPinnedSeg: t.lastPinnedSeg });
+    armedOrder: t.armedOrder, lastPinnedSeg: t.lastPinnedSeg,
+    newestAttemptId: newestJournalId(t.view) });
   const v = t.view && { ...t.view, target: frozen.target };
 
   // `held` is `t` with the frozen SELECTION swapped in (and `view` carrying
@@ -538,25 +549,27 @@ export function Practice({ t, openCompare }) {
   // celebration freezing the page freezes the takeover with it — a rank
   // climbing on the card you are browsing finishes before the page moves.
   const [manualFocus, setManualFocus] = useState(null);
-  const [visible, setVisible] = useState(10);
   const live = liveSnapshot({
     activeKey: activeStar ? entityKey(activeStar)
       : primarySeg ? entityKey(primarySeg) : null,
     stageKey: stageKey(frozen.stage),
-    newestAttemptId: newestJournalId(v),
+    // Frozen alongside its siblings (see the useHeldWhileCelebrating call
+    // above) -- NOT re-read live here. A live read let a browse pick drop
+    // mid-celebration the instant an unrelated attempt landed elsewhere,
+    // which is exactly the takeover useHeldWhileCelebrating exists to delay.
+    newestAttemptId: frozen.newestAttemptId,
   });
   const focusKey = resolveFocus(manualFocus, live);
   const focusedSec = v
     ? orderedSections(v).find((sec) => entityKey(sec) === focusKey) || null
     : null;
   const selectFocus = (key) => setManualFocus({ key, at: live });
-  // The rows useGraphPick checks membership against and bumps pagination
-  // over -- the same default filter every log card applies (cleared/
-  // abandoned hidden, resets per the shared toggle). Computed here, at page
-  // level, because the trend graph (EntityAnalysis) and the card a pick
-  // reveals a row in (a LogCard, in the practice log below) are separate
-  // components now; useGraphPick used to live inside the one card that drew
-  // both.
+  // The rows useGraphPick checks membership against -- the same default
+  // filter every log card applies (cleared/abandoned hidden, resets per the
+  // shared toggle). Computed here, at page level, because the trend graph
+  // (EntityAnalysis) and the card a pick reveals a row in (a LogCard, in the
+  // practice log below) are separate components now; useGraphPick used to
+  // live inside the one card that drew both.
   const focusedRows = focusedSec
     ? focusedSec.attempts
         .filter((a) => !a.cleared && a.outcome !== "abandoned")
@@ -565,7 +578,16 @@ export function Practice({ t, openCompare }) {
         .slice()
         .sort(comparator(ui.sort, sectionClock(focusedSec, t.clock)))
     : [];
-  const { focus, pick, clearFocus } = useGraphPick(focusedRows, visible, setVisible);
+  // `visible`/`setVisible` below are NOT the pagination that ends up on
+  // screen -- that lives inside whichever `LogCard` is selected, which is a
+  // different component and cannot be reached from here. Passing a
+  // page-level counter nothing renders from is exactly how this used to fail
+  // silently past the tenth row: `reveal()` bumped an orphaned number,
+  // believed it had widened the view, and the real (per-card) window never
+  // moved. `Infinity`/a no-op make that plain rather than leaving a `10`
+  // that looks load-bearing and is not -- `LogCard` itself now notices a
+  // focused pick outside its own window and widens itself (practicelog.js).
+  const { focus, pick, clearFocus } = useGraphPick(focusedRows, Infinity, () => {});
   // The active card's PB link jumps to a row in the LOG, which may not be
   // the section currently in focus. Clearing the manual pick first is what
   // makes the row reachable: `useGraphPick` already holds a pick whose

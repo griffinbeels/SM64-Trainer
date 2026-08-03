@@ -11,16 +11,20 @@ click. Every one of them is tested for dropping the pick on its own, so
 removing any single comparison goes red.
 """
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
+from source_scan import strip_comments
+
 REPO = Path(__file__).resolve().parent.parent
 UI = REPO / "src" / "sm64_events" / "ui"
 FOCUS_JS = (UI / "focustarget.js").as_uri()
 STAGECONTEXT_JS = (UI / "stagecontext.js").as_uri()
+PRACTICE_JS = UI / "components" / "practice.js"
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None,
                                 reason="node not on PATH")
@@ -95,3 +99,67 @@ def test_the_stage_key_changes_with_level_area_and_course():
     assert stage_key(base) != stage_key({**base, "level": 23})
     assert stage_key(base) != stage_key({**base, "course_id": 14})
     assert stage_key(None) is None
+
+
+def test_the_newest_attempt_id_is_frozen_alongside_its_siblings():
+    """resolveFocus's three signals must all be read from the SAME snapshot
+    moment. `activeKey`/`stageKey` come from practice.js's celebration-frozen
+    state (`frozen.target`/`frozen.stage`, ui/rankclimb.js's
+    useHeldWhileCelebrating) -- `newestAttemptId` used to be read LIVE
+    instead (`newestJournalId(v)`), which drops a browse pick the instant an
+    UNRELATED attempt lands elsewhere and starts a rank climb: activeKey and
+    stageKey stay held, the live newestAttemptId changes, snapshotsAgree
+    fails, and the analysis card jumps away from the entity whose rank is
+    animating -- exactly what the celebration hold exists to prevent.
+
+    practice.js pulls in Preact, so this is a source scan -- like
+    test_ui_celebrations.py's own freeze-wiring checks -- rather than a unit
+    test of the pure function above (which cannot see this: it only ever
+    receives whatever `live` object practice.js hands it, and the bug is in
+    how that object gets built)."""
+    practice = strip_comments(PRACTICE_JS.read_text(encoding="utf-8"))
+    assert re.search(
+        r"useHeldWhileCelebrating\(\{\s*"
+        r"target:[^,]+,\s*stage: t\.stage,\s*"
+        r"armedOrder: t\.armedOrder, lastPinnedSeg: t\.lastPinnedSeg,\s*"
+        r"newestAttemptId: newestJournalId\(t\.view\)\s*\}\)", practice), (
+        "newestAttemptId must be frozen in the SAME useHeldWhileCelebrating "
+        "call as target/stage/armedOrder/lastPinnedSeg -- a second, separate "
+        "freeze (or none at all) lets it disagree with its siblings the "
+        "instant they diverge")
+    assert "newestAttemptId: frozen.newestAttemptId" in practice, (
+        "liveSnapshot's newestAttemptId must read the FROZEN value "
+        "(frozen.newestAttemptId), not a live newestJournalId(v) call")
+    assert not re.search(r"newestAttemptId:\s*newestJournalId\(v\)", practice), (
+        "liveSnapshot must not read newestJournalId(v) directly -- v is the "
+        "live view, not the celebration-frozen snapshot, and that is exactly "
+        "the regression this test exists to catch")
+
+
+def test_the_freeze_wiring_guard_can_still_fail():
+    """Comment-only and a plausible-but-wrong shape must not satisfy the
+    regex above -- the same probe-both-directions rule every source-scan
+    guard in this project follows (tests/source_scan.py)."""
+    comment_only = strip_comments(
+        "// useHeldWhileCelebrating({ target, stage, armedOrder,\n"
+        "// lastPinnedSeg, newestAttemptId: newestJournalId(t.view) })\n"
+        "// newestAttemptId: frozen.newestAttemptId\n")
+    assert not re.search(
+        r"useHeldWhileCelebrating\(\{\s*"
+        r"target:[^,]+,\s*stage: t\.stage,\s*"
+        r"armedOrder: t\.armedOrder, lastPinnedSeg: t\.lastPinnedSeg,\s*"
+        r"newestAttemptId: newestJournalId\(t\.view\)\s*\}\)", comment_only)
+    assert "newestAttemptId: frozen.newestAttemptId" not in comment_only
+
+    # A second, SEPARATE freeze call (not one object, one hook) must not
+    # satisfy it either -- the finding was specifically about a second
+    # mechanism beside the first, not merely "frozen somewhere".
+    two_freezes = ("const frozen = useHeldWhileCelebrating({ target, stage, "
+                   "armedOrder, lastPinnedSeg });\n"
+                   "const frozenId = useHeldWhileCelebrating("
+                   "newestJournalId(t.view));\n")
+    assert not re.search(
+        r"useHeldWhileCelebrating\(\{\s*"
+        r"target:[^,]+,\s*stage: t\.stage,\s*"
+        r"armedOrder: t\.armedOrder, lastPinnedSeg: t\.lastPinnedSeg,\s*"
+        r"newestAttemptId: newestJournalId\(t\.view\)\s*\}\)", two_freezes)

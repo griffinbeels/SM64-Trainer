@@ -82,10 +82,31 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
         rowRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
     });
     setFlash(true);
-    const timer = setTimeout(() => setFlash(false), 1600);
     if (clearFocus) clearFocus(); // one pick = one handling; later remounts must not re-fire
-    return () => clearTimeout(timer);
   }, [focus && focus.nonce]);
+  // The un-flash timer is its OWN effect, keyed on `flash` rather than
+  // folded into the one above -- added for practicelog.js's `LogCard`
+  // (Task 6, Finding 1 round 2). `focus` is now passed conditionally
+  // (`selected ? focus : null`), so `clearFocus()` above (called the MOMENT
+  // this row's own pick lands) sets the shared focus back to null on the
+  // very next render -- which used to tear down THIS SAME effect (its
+  // dependency, `focus && focus.nonce`, had changed) and cancel the pending
+  // `setTimeout` before it ever fired, leaving `flash` stuck at `true`
+  // forever. Splitting the timer onto `flash` itself means neither
+  // `clearFocus()` nor a later browse to a different entity's card (which
+  // sets THIS row's `focus` prop to null the same way) can cancel it early
+  // -- it always turns itself off ~1600ms after switching on, independent
+  // of whatever `focus` does meanwhile. Proved live: two rows read as
+  // flashed at once (an earlier PB-jump row that never turned off, plus a
+  // fresh trend-graph pick on a different, newly-browsed entity) until this
+  // split; no section ever stopped being the one shown before Task 6, so a
+  // row's own `focus` going null while it stayed mounted could not happen
+  // previously.
+  useEffect(() => {
+    if (!flash) return;
+    const timer = setTimeout(() => setFlash(false), 1600);
+    return () => clearTimeout(timer);
+  }, [flash]);
   async function clear() {
     await send("POST", `/api/attempts/${a.id}/clear`, { reason: "accidental" });
     t.refresh();

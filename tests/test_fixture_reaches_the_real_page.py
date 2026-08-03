@@ -25,6 +25,7 @@ becomes an assertion here, and every future one should be added the same day.
 None of these check LAYOUT — that is the sweep's job. They check that the thing
 whose layout is being swept is on the page at all.
 """
+import re
 import sys
 from pathlib import Path
 
@@ -172,29 +173,12 @@ def test_a_log_card_still_draws_two_rank_banners(page):
     `<details>` -- still queryable, just not visible). The index is deleted
     now: "the objective card is the active target, always" (spec section 1),
     and everything else -- armed or not -- is a `LogCard` in the practice log.
-    A `LogCard` carries no `.seg-waiting` and is never `.objective-card`
-    (verified below, and by test_ui_section_parity.py's
-    `test_the_active_cards_shrank_to_the_objective_alone`), so the ORIGINAL
-    two-banner assertion has no home to be RELOCATED to on this specific
-    entity without first making it the active target -- which this file's
-    own charter (see its docstring) is to check REACHED STATE, not to drive
-    one. What IS still true, and still worth guarding, is the underlying
-    concern with the collapse bug: LogCard is now the ONE component either
-    kind renders through (rule 11 made structural), so proving it does not
-    collapse a multi-strategy entity's banners on ANY card is the same
-    proof the old per-kind check gave, without needing to single out this
-    fixture's specific segment.
-
-    KNOWN GAP, owed to Task 7 (fixture+sweep, per this branch's own ledger):
-    with the segment never made the active target, nothing on this page
-    currently exercises `.seg-waiting`+two-banners TOGETHER any more --
-    verified directly (a scripted `POST /api/target` to the segment during
-    investigation of this test DOES render both correctly, confirming the
-    feature itself works; restoring the star target afterward did not
-    settle within a generous wait, which smells like the celebration-hold
-    freezing on the scripted flip rather than a real bug, and chasing that
-    down is its own rabbit hole out of scope here). Re-seeding a story where
-    the armed segment IS the target would close this for real."""
+    So the two-banner assertion moved to whichever `LogCard` this fixture's
+    multi-strategy entities render through -- LogCard is now the ONE
+    component either kind renders through (rule 11 made structural), so
+    proving it does not collapse a multi-strategy entity's banners on ANY
+    card is the same proof the old per-kind check gave, without needing to
+    single out this fixture's specific segment."""
     per_card = page.evaluate(
         "return Array.from(document.querySelectorAll('.log-card'))"
         ".map(c => c.querySelectorAll('.rank-banner').length)")
@@ -206,18 +190,54 @@ def test_a_log_card_still_draws_two_rank_banners(page):
         "showsEntityBanner)")
 
 
-def test_seg_waiting_never_leaks_outside_the_objective_card(page):
-    """`.seg-waiting` is drawn ONLY by the active target's own objective
-    card (StarSection/SegmentSection) -- never by a `LogCard`, which has no
-    equivalent row at all (Task 6: the log's cards are deliberately simpler
-    than the one card that owns "what am I doing right now"). This fixture's
-    armed segment is not the active target (see the test above for why), so
-    today this is 0 == 0 -- vacuous on its own, which is exactly why it is
-    paired with a positive existence check (test_the_active_target_card_is_
-    populated_not_the_empty_state proves `.objective-card` itself is
-    reachable and populated) rather than left as the only guard here."""
-    assert count(page, ".seg-waiting") == count(page, ".objective-card .seg-waiting")
-    assert count(page, ".log-card .seg-waiting") == 0
+def test_the_armed_segments_log_card_shows_its_own_step_progress(page):
+    """Griffin asked for this by name: "i like the idea of knowing for sure
+    the system is aware of me grabbing that first star, proven by it
+    progressing to the next step." `armed_detail` is NOT segment-only (the
+    100-coin star carries it too, which is why StarSection and
+    SegmentSection already draw this identically) -- this fixture only
+    exercises the segment side (`_arm_segment`, coexisting with the active
+    star target rather than replacing it), so this proves the row survived
+    for at least one kind, at its new address.
+
+    Before this task an armed-but-not-active segment still got a full
+    `.objective-card` -- including this row -- inside the now-deleted
+    practice index; a `LogCard` is the only surface such a segment gets now
+    (test_a_log_card_still_draws_two_rank_banners, above), so `LogCard` must
+    carry the identical `armed_detail` row (practicelog.js) or the
+    capability is lost outright, not merely relocated.
+
+    Asserts the rendered TEXT, not just that some markup exists: a
+    kind-gated conditional wrapped around the same literal `sec.armed_detail
+    && html` still leaves that string findable by a source scan (the
+    reviewer's own mutation proof on this branch: wrapping a shared call
+    site in a `!seg &&` guard left every count-based check green), so a
+    behavioural check on the DRAWN content is what actually proves neither
+    kind lost it."""
+    log_card_rows = count(page, ".log-card .seg-waiting")
+    assert log_card_rows == 1, (
+        f"{log_card_rows} `.seg-waiting` row(s) inside a `.log-card`, "
+        "expected 1 (the armed segment, ui_fixture.py::FIXTURE_SEGMENT) -- "
+        "either the segment stopped carrying armed_detail or LogCard "
+        "stopped drawing the row for it")
+    step_text = page.evaluate(
+        "const el = document.querySelector("
+        "'.log-card .seg-waiting .seg-waiting-step');"
+        "return el ? el.textContent : null")
+    waiting_text = page.evaluate(
+        "const el = document.querySelector("
+        "'.log-card .seg-waiting .seg-waiting-for');"
+        "return el ? el.textContent : null")
+    assert step_text and re.search(r"Step\s*\d+\s*of\s*\d+", step_text), (
+        f"seg-waiting-step reads {step_text!r} -- not the expected "
+        '"Step N of M" shape')
+    assert waiting_text and waiting_text.strip().startswith("Waiting for"), (
+        f"seg-waiting-for reads {waiting_text!r}")
+    # The ACTIVE star in this fixture is an ordinary one (no armed_detail),
+    # so its own objective card must show none of this -- a positive count
+    # above paired with this zero is what makes both readable as real
+    # signal rather than one vacuous side of a tautology.
+    assert count(page, ".objective-card .seg-waiting") == 0
 
 
 def test_the_pb_tag_and_strategy_picker_are_present(page):
