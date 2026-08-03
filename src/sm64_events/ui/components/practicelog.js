@@ -280,7 +280,13 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus,
     <div class="card-heading attempts-heading">
       <div><span class="eyebrow">Practice log</span><h3>Recent activity</h3></div>
       <div class="attempts-tools">
-        <span class="meta">${page.length} shown</span>
+        ${/* Not just "shown": `.attempts-tools`'s twin usage (the old
+             per-section attempts table, before Task 6) counted ROWS with
+             this exact wording, beside this exact sort control. This one
+             counts CARDS -- same words, same neighbours, a different noun
+             behind the number -- so the noun goes in the label rather than
+             staying implied. */""}
+        <span class="meta">${page.length} entities shown</span>
         <${StatMenuTrigger} t=${t} />
         <${SortControl} ui=${ui} />
         <${ResetFilterToggle} ui=${ui} />

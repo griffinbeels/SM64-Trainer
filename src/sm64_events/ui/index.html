@@ -979,13 +979,15 @@
      .practice-page it added a row and shifted every card 12px on open. The
      trigger now lives in the practice-log card's header (2026-07-28, moved
      again — "the stats button... inside the practice log, to the left of the
-     sort filter"), and that card is a FIXED-HEIGHT `overflow: hidden` box
-     (.attempts-card) — an `absolute` popover anchored inside it would get cut
-     off the moment its checklist grew past the card's own 458px, the exact
-     trap `.claude/rules/ui-core.md` names for a WRAPPING element. `fixed`
-     instead, with top/right set inline off the trigger's own measured rect
-     (practice.js::StatMenuTrigger) — escapes the card's overflow entirely,
-     since nothing between the trigger and the viewport declares a
+     sort filter"). That card (`.log-list-card`) is variable-height and does
+     NOT clip its overflow (Task 7: the log is the page's one variable-height
+     surface by design, and a rank banner's wing paints outside its own box),
+     unlike `.analysis-card`/`.objective-card` — but `fixed` positioning is
+     still right here regardless of which kind of card hosts the trigger:
+     `absolute` would still track the card's own scroll/growth for no reason
+     the popover needs. `fixed`, with top/right set inline off the trigger's
+     own measured rect (practice.js::StatMenuTrigger) — escapes any ancestor
+     entirely, since nothing between the trigger and the viewport declares a
      transform/filter/perspective/contain that would trap it back inside. */
   .stats-popover { position: fixed; z-index: 30; }
   /* Stats menu: the only popover still on the legacy grey .popover base —
@@ -2234,8 +2236,17 @@
     margin-left: 0; text-align: right; white-space: nowrap;
     font-variant-numeric: tabular-nums; font-weight: 700;
   }
-  .analysis-card, .attempts-card {
-    height: 458px; min-height: 458px; min-width: 0; overflow: hidden;
+  /* +5px over the original 458 (2026-08-03, Task 7): `.analysis-card` is now
+     the ONE page-level analysis card instead of one per section (Task 6),
+     and its available height comes from a different layout than what these
+     numbers were tuned against -- `.trend-block` (below) overflowed its own
+     box by 5px at every width this rule governs (measured: scrollHeight 237
+     vs clientHeight 232). Re-measured, not guessed: `.attempts-card` --
+     the OTHER class this rule used to cover -- is gone; the practice log
+     (`.log-list-card`) is a variable-height surface by design and was never
+     sized by this rule to begin with. */
+  .analysis-card {
+    height: 463px; min-height: 463px; min-width: 0; overflow: hidden;
   }
   .analysis-card { display: flex; flex-direction: column; }
   .card-heading {
@@ -2283,10 +2294,13 @@
      reset visibility in the footer (the old analysis toolbar is gone). */
   .attempts-tools { display: flex; align-items: center; gap: .7rem; }
   /* Three controls ("N shown" / Stats / sort) need more width than the two
-     this row used to have, and the row cannot wrap to absorb the difference
-     -- .attempts-card is a fixed-height overflow:hidden box, ui-core.md's
-     WRAPPING trap, here on the header row rather than a sibling. Gated on
-     @container against .practice-page, never @media, for the reason
+     this row used to have, and the row is kept to one line rather than left
+     to wrap: `.log-list-card` is variable-height and does not clip (Task 7),
+     so a second heading line no longer costs a clip the way it would on a
+     fixed-height `overflow: hidden` card (ui-core.md's WRAPPING trap) --
+     it would just look like a header that grew a spare line for no reason,
+     which is reason enough on its own. Gated on @container against
+     .practice-page, never @media, for the reason
      ui-core.md's responsiveness law states: the sidebar's 1180px step makes
      the pane a card lives in non-monotonic in window width, so no viewport
      threshold can stand in for "this card is too narrow".
@@ -2331,7 +2345,6 @@
   .reset-toggle:hover { color: var(--text); }
   .reset-toggle input { position: absolute; opacity: 0; pointer-events: none; }
   .reset-toggle:has(input:checked) { color: var(--gold-soft); border-color: #8e7330; }
-  .attempts-card { display: flex; flex-direction: column; }
   .attempt-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; scrollbar-width: thin; }
   .attempt-table { margin: 0; font-size: .79rem; font-variant-numeric: tabular-nums; }
   .attempt-table tr { height: 40px; }
@@ -2412,9 +2425,12 @@
      is missing, the action that fills it, and a joke.
 
      `flex: 1 1 auto; min-height: 0` makes it fill what the card has LEFT
-     without growing it -- .analysis-card/.attempts-card are a hard 458px for
-     OBS stability, and a placeholder that pushed past that would shove the
-     layout the moment the first attempt landed. */
+     without growing it -- `.analysis-card`/`.objective-card` are a hard
+     463px/458px for OBS stability, and a placeholder that pushed past that
+     would shove the layout the moment the first attempt landed. The log's
+     own empty rows (`AttemptLogEmpty`, inside `.log-card-body`) reuse this
+     same class harmlessly on a variable-height card -- nothing here competes
+     for the flex slack, so it simply sizes to content. */
   .empty-state {
     flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: .26rem;
@@ -3468,32 +3484,6 @@
     flex-wrap: wrap; gap: .4rem; margin-top: .7rem;
   }
   .popover-actions .meta { margin-right: auto; }
-  .practice-index { display: grid; gap: .65rem; margin-top: .3rem; }
-  .index-heading {
-    display: flex; align-items: end; justify-content: space-between; gap: 1rem;
-    padding: .45rem .2rem 0;
-  }
-  .practice-index-list {
-    overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius);
-    background: rgba(9,22,36,.9);
-  }
-  .practice-index-item { border-bottom: 1px solid var(--border-soft); }
-  .practice-index-item:last-child { border-bottom: 0; }
-  .practice-index-item > summary {
-    min-height: 48px; display: grid;
-    grid-template-columns: 30px minmax(0,1fr) auto 24px;
-    align-items: center; gap: .55rem; padding: .45rem .75rem; cursor: pointer;
-    list-style: none;
-  }
-  .practice-index-item > summary::-webkit-details-marker { display: none; }
-  .practice-index-item > summary:hover { background: rgba(93,137,184,.1); }
-  .index-icon { color: var(--gold-soft); }
-  .index-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-  .index-chevron { color: var(--muted); transition: transform .16s ease; }
-  .practice-index-item[open] .index-chevron { transform: rotate(180deg); }
-  .practice-index-item > .practice-detail-grid {
-    padding: 0 .65rem .65rem; border-top: 1px solid var(--border-soft);
-  }
   .icon-button { width: 34px; min-width: 34px; padding-inline: 0; }
   .primary-button { color: #1b1607; background: var(--gold); border-color: var(--gold-soft); font-weight: 750; }
   .primary-button:hover { background: var(--gold-soft); }
@@ -3925,8 +3915,7 @@
   @container (max-width: 1060px) {
     .practice-detail-grid { grid-template-columns: 1fr; }
     .objective-card, .detail-drawer { grid-column: 1; }
-    .analysis-card, .attempts-card { height: 480px; min-height: 480px; }
-    .practice-index-item > .practice-detail-grid { display: grid; }
+    .analysis-card { height: 480px; min-height: 480px; }
     .segments-workshop { grid-template-columns: minmax(280px,320px) minmax(0,1fr); }
     .routes-workshop { grid-template-columns: minmax(220px,260px) minmax(0,1fr); }
     .segment-definition-grid { grid-template-columns: 1fr; }
@@ -4035,7 +4024,6 @@
        gives it 608px (they do not). The narrow layout was being applied to
        the WIDER card and the wide layout to the narrower one. */
     .analysis-card { height: 520px; min-height: 520px; }
-    .attempts-card { height: 560px; min-height: 560px; }
     .sort-control select { max-width: 108px; font-size: .75rem; }
     /* One line per attempt even in the narrow layout (2026-07-24) — the old
        two-line grid doubled every entry's height. Long result text ellipses
@@ -4057,10 +4045,6 @@
     .save-pb-wide { display: none; }
     .save-pb-narrow { display: inline; }
     .replay-row, .replay-row td { display: block; height: auto; width: 100%; }
-    .index-heading { align-items: start; }
-    .index-heading > .meta { display: none; }
-    .practice-index-item > summary { grid-template-columns: 28px minmax(0,1fr) 22px; }
-    .practice-index-item > summary > .meta { display: none; }
     .settings-actions { grid-template-columns: 1fr; }
   }
 
@@ -4243,15 +4227,129 @@
 
   /* Stacked layouts: practice log above analysis.
      The user's hierarchy is selector -> target -> practice log -> analysis
-     ("all the important information is hidden!!!!"). DOM order is unchanged,
-     so the two-column layout keeps the geometry it is sized for -- the log
-     needs the wider column and analysis the narrower one. */
+     ("all the important information is hidden!!!!"). `.practice-page` is a
+     single-column grid at every width (Task 6 flattened it -- there is no
+     two-column arrangement to preserve any more), so `order` here purely
+     reorders these three cards vertically: DOM puts analysis before the
+     log before the drawer, and this puts the log first. */
   @container (max-width: 1060px) {
-    .attempts-card { order: 1; }
+    .log-list-card { order: 1; }
     .analysis-card { order: 2; }
     .detail-drawer { order: 3; }
   }
 
+  /* ===================================================================
+     Practice log entity cards (Task 7)
+     ===================================================================
+     practicelog.js's `.log-card` -- one row per practiced star or segment,
+     newest activity first -- mounted with no styles at all (Task 6). This
+     is the whole block: the row itself, gated on @container against
+     `.practice-page` like every other component-internal rule here
+     (ui-core.md's responsiveness law), ordered wide -> narrow.
+
+     Two things this card deliberately does NOT inherit, unlike every other
+     `.practice-card` on this page: a fixed height (`.analysis-card`/
+     `.objective-card` are a hard 458-463px so an OBS capture never reflows
+     mid-run -- the log is the page's one variable-height surface BY DESIGN,
+     since how many cards it draws depends on what was practiced) and
+     `overflow: hidden` (a rank banner's wing paints ~9px above its own box
+     -- `.rank-slot`'s own comment, above -- and a container clip cannot
+     tell a wing from a word). Neither rule lives on `.practice-card` or
+     `.log-list-card` itself, so this section is what keeps it that way
+     rather than adding one by accident. */
+  .log-list { display: flex; flex-direction: column; gap: .5rem; margin-top: .2rem; }
+  .log-card {
+    min-width: 0; border: 1px solid var(--border-soft); border-radius: 9px;
+    background: rgba(9,22,36,.55);
+  }
+  .log-card.is-selected { border-color: #5d89b8; background: rgba(20,42,66,.55); }
+  .log-card.is-unassigned { background: rgba(9,22,36,.3); }
+  /* select (art+name) | ranks | PB | fold -- the same four things every
+     other section's own heading carries, one row instead of a whole card. */
+  .log-card-head {
+    min-width: 0; display: grid; min-height: 54px;
+    grid-template-columns: minmax(0,1fr) minmax(0,1.05fr) auto auto;
+    align-items: center; gap: .65rem; padding: .5rem .7rem;
+  }
+  .log-card.is-unassigned .log-card-head { grid-template-columns: minmax(0,1fr) auto; }
+  .log-card-select {
+    min-width: 0; display: flex; align-items: center; gap: .6rem;
+    padding: 0; border: 0; border-radius: 6px; background: none;
+    color: inherit; font: inherit; text-align: left; cursor: pointer;
+  }
+  .log-card-select:focus-visible { outline: 2px solid #78b9ff; outline-offset: 3px; }
+  .log-card-art { flex: 0 0 auto; width: 36px; height: 36px; object-fit: contain; }
+  .log-card-name { min-width: 0; display: flex; flex-direction: column; gap: .05rem; }
+  .log-card-context {
+    color: var(--muted); font-size: .68rem; text-transform: uppercase;
+    letter-spacing: .04em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  }
+  .log-card-name b {
+    font-weight: 700; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  }
+  /* STACKED, not side by side -- unlike `.rank-slot` (the objective card's
+     own two-banner row, above). Measured against the real fixture (two
+     graded banners: "Mario 1 · top rank" / "Luigi 2 → Luigi 1 · 0.03s to
+     rank up"): side by side, this column only ever gets a FRACTION of the
+     head row (it shares the row with the name and the PB tag, where
+     `.rank-slot` gets the whole metrics row to itself), so even at the
+     widest supported pane the second banner ellipsised to "LUI…" -- worse
+     than the objective card's own comparable state at any width it
+     supports. Stacking gives each banner the ranks column's FULL width
+     instead of half of it, which is what actually fits the text; the cost
+     is a taller head row, which this card can afford (it is not fixed-
+     height, above). No overflow clip here either, same reason as
+     `.rank-slot`: a hat's wings paint outside its own box. */
+  .log-card-ranks {
+    min-width: 0; display: flex; flex-direction: column; gap: .3rem;
+    align-self: stretch; justify-content: center;
+  }
+  .log-card-head .pbtag {
+    white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 700;
+  }
+  .log-card-fold {
+    flex: 0 0 auto; width: 30px; height: 30px; display: inline-flex;
+    align-items: center; justify-content: center; padding: 0;
+    border: 1px solid transparent; border-radius: 7px;
+    background: transparent; color: var(--muted); cursor: pointer;
+    transition: transform 160ms ease, background 140ms ease, color 140ms ease;
+  }
+  .log-card-fold:hover { background: #16283e; color: var(--text); }
+  /* Points down when open, right when closed -- same convention as
+     `.card-collapse` (above), a separate mechanism (LogCard's fold is local
+     component state, not the shared useCollapsed class) reusing the same
+     visual language rather than growing its own. */
+  .log-card.is-closed .log-card-fold { transform: rotate(-90deg); }
+  .log-card .seg-waiting { padding: 0 .7rem .55rem; }
+  .log-card-body {
+    padding: .1rem .7rem .6rem; border-top: 1px solid var(--border-soft);
+  }
+  .log-list-footer { display: flex; justify-content: center; margin-top: .3rem; }
+  /* The rank wash (`.rank-banner::before`, near the top of this file) bleeds
+     -8px top / -12px bottom / -16px left assuming it lands in a CARD's own
+     padding -- true for `.objective-card`/`.analysis-card`, whose rank
+     banners sit as the last thing before the card's own edge (or a fixed row
+     re-scoped for it, `.seg-waiting` above). A log card's head is a tight
+     single ROW (select | ranks | PB | fold), so above and beside
+     `.log-card-ranks` are other interactive controls, not empty padding --
+     measured, the wash bled 12px onto the fold button, 8px onto the select
+     button, 5px onto the sibling banner and 3px onto the PB tag at every
+     width (uilab's decoration probe). Zero the bleed rather than re-tune it
+     smaller: this row has no reserved padding for it to fade into, the same
+     reasoning the seg-waiting override (near the top of this file) already
+     uses. Same (0,2,1) specificity as the rules it overrides, so it has to
+     come after them -- true here by construction, this being the end of the
+     file. */
+  .log-card-ranks .rank-banner::before { top: 0; bottom: 0; left: 0; right: 0; }
+  .log-card-ranks .rank-banner:first-child::before { left: 0; border-radius: 0; }
+
+  /* No narrow-pane override below this: stacking the two rank banners
+     (above) was the fix the crowded row actually needed, not a threshold.
+     Measured across the whole supported range (851px down to the 731px pane
+     the 850px floor itself gives -- uilab_project.py's `extra_viewports`),
+     `.log-card-head`'s scrollWidth never exceeds its clientWidth at any of
+     them with two graded banners, a name and a PB tag all present -- a
+     `@container` rule here would gate on a width the app never reaches. */
 
 </style></head>
 <body>

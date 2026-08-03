@@ -40,7 +40,9 @@ if _MISSING:
     pytest.skip(_MISSING, allow_module_level=True)
 
 from uilab.driver import get_driver          # noqa: E402
-from uilab_project import PROJECT, STORIES   # noqa: E402
+from uilab_project import (PROJECT, STORIES,  # noqa: E402
+                           BOWSER_COURSE, BOWSER_LEVEL)
+from ui_fixture import serve_ui, FIXTURE_COURSE, FIXTURE_LEVEL  # noqa: E402
 
 PRIMARY = ".practice-detail-grid.is-primary "
 
@@ -53,6 +55,101 @@ PRIMARY = ".practice-detail-grid.is-primary "
 # one script that reaches each state -- the sweep and these assertions agree
 # on it by construction, not by two authors keeping two copies in step.
 _BY_NAME = {story.name: story for story in STORIES}
+
+
+# --- render gaps closed by Task 7's review, each its own fixture instance --
+# Neither of these reuses the shared `page` fixture below: both need server
+# state (`reconcile_full_corpus`, a synthetic 100-coin engine) that would
+# widen what PROJECT's own sweep measures and re-derive its whole
+# `known_defects` table for no reason this task's job needs -- a genuinely
+# separate scenario earns its own `serve_ui()` instance instead (same
+# reasoning `test_ui_rank_line.py` uses for the tuning inspector).
+#
+# Placed ABOVE the `page` fixture's own first use, on purpose: a second
+# `get_driver().launch()` opened while a PREVIOUS one (here, the module-
+# scoped `page` fixture's own `with` block) is still live in the same thread
+# hits a real, reproducible `asyncio.run() cannot be called from a running
+# event loop` inside `serve_ui`'s own seeding (measured directly -- both
+# tests pass in isolation and fail once collected after any test requesting
+# `page`). Running before `page`'s first request means its `with` block has
+# not opened yet, so there is nothing for either of these to collide with.
+
+def test_the_bowser_reds_pipe_pairing_renders_its_family_naming():
+    """`pipe_star_entity`/`pipe_segment_id` (views.py's `_reds_pipe_segments`)
+    drive the "(Pipe)"/"(Star)" suffixed naming a Bowser Reds star and its
+    paired `seg:reds->pipe:<abbrev>` segment borrow from each other
+    (redsfamily.js::familyLabel) -- and until now no fixture ever loaded the
+    corpus segment this needs (`_reds_pipe_segments` matches by `seed_key`,
+    which only a real reconcile stamps) or armed it, so this naming path had
+    only ever been verified by reading source, never by a render.
+
+    `enter_level=17` arms whatever real definitions key off entering BitDW
+    (both the legacy `seg:bitdw-pipe` and the corpus `seg:reds->pipe:bitdw`,
+    once `reconcile_full_corpus` has loaded it) and leaves them armed --
+    `pipe_star_entity`/`pipe_segment_id` are structural (derived from the
+    segment ROW existing, not from any attempt), so a bare section is
+    enough. `target=(BOWSER_COURSE, 0)` gives the Reds star its own section
+    too, the same way."""
+    with serve_ui(reconcile_full_corpus=True,
+                 stage=(BOWSER_COURSE, BOWSER_LEVEL),
+                 target=(BOWSER_COURSE, 0),
+                 enter_level=BOWSER_LEVEL) as base, \
+            get_driver().launch() as opened:
+        opened.goto(f"{base}/ui/index.html")
+        opened.wait_for(".objective-card")
+        opened.wait_ms(300)
+        names = opened.evaluate(
+            "return Array.from(document.querySelectorAll('.log-card-name'))"
+            ".map(el => el.textContent)")
+        assert any("(Pipe)" in name for name in names), (
+            f"no log card reads \"…(Pipe)\" -- names were {names!r}. Either "
+            "the reds->pipe segment never armed (check ui_fixture.py's "
+            "enter_level) or views.py's pipe_star_entity stopped resolving "
+            "it (tracking-storage.md's _reds_pipe_segments)")
+        assert any("(Star)" in name for name in names), (
+            f"no log card reads \"…(Star)\" -- names were {names!r}. The "
+            "Reds star's own section needs pipe_segment_id set, which "
+            "requires the SAME segment above to have loaded.")
+
+
+def test_the_star_kind_armed_detail_renders():
+    """`armed_detail` (the "Step N of M" progress row `LogCard` shares
+    between kinds) is a documented rule-11 ASYMMETRY: every star but the
+    100-coin one carries none, because an ordinary star is one atomic grab
+    with nothing to be part-way through (test_star_sections_carry_no_arm_
+    detail). `_arm_segment` (ui_fixture.py) exercises the SEGMENT half of
+    that asymmetry; nothing before this exercised the STAR half, so
+    `segments.hundred_coin_entity`'s reattribution path -- and the star-kind
+    `.seg-waiting` row -- had only ever been unit-tested against hand-built
+    dicts (tests/test_ui_entity_section.py), never rendered.
+
+    `arm_hundred_coin` posts a synthetic def matching the pattern
+    `hundred_coin_entity` looks for (a `star_grabbed(star=6, course=…)`
+    WAYPOINT) and arms it, coexisting with the ordinary star target
+    `serve_ui` seeds by default on the same course."""
+    with serve_ui(arm_hundred_coin=(FIXTURE_COURSE, FIXTURE_LEVEL)) as base, \
+            get_driver().launch() as opened:
+        opened.goto(f"{base}/ui/index.html")
+        opened.wait_for(".objective-card")
+        opened.wait_ms(300)
+        rows = opened.count(".log-card .seg-waiting")
+        assert rows == 1, (
+            f"{rows} `.seg-waiting` row(s) inside a `.log-card`, expected 1 "
+            "(the synthetic 100-coin engine) -- either it never armed or "
+            "LogCard stopped drawing armed_detail for a star")
+        step_text = opened.evaluate(
+            "const el = document.querySelector("
+            "'.log-card .seg-waiting .seg-waiting-step');"
+            "return el ? el.textContent : null")
+        assert step_text and re.search(r"Step\s*\d+\s*of\s*\d+", step_text), (
+            f"seg-waiting-step reads {step_text!r} -- not the expected "
+            '"Step N of M" shape')
+        # The ORDINARY star sharing this course (the default target) must
+        # carry none of this -- a positive count above paired with this zero
+        # is what makes both readable as real signal (same pairing
+        # test_the_armed_segments_log_card_shows_its_own_step_progress uses
+        # for the segment side).
+        assert opened.count(".objective-card .seg-waiting") == 0
 
 
 # Two viewports, not one: 1500x1000 (comfortably wide, side-by-side rank
@@ -272,6 +369,33 @@ def test_the_practice_log_and_analysis_cards_are_on_the_page(page):
     assert count(page, ".log-list-card") >= 1
     assert count(page, ".log-card") >= 1
     assert count(page, ".analysis-card") >= 1
+
+
+def test_the_practice_log_renders_more_than_one_card(page):
+    """A one-card log makes every "two cards crowd each other" defect
+    unreachable by the gate, which reports clean on a page nobody is
+    looking at. Three separate defect classes have hidden this way."""
+    assert count(page, ".log-card") > 1
+
+
+def test_the_practice_log_offers_show_more_past_its_own_page_cap(page):
+    """practicelog.js's CARDS_PER_PAGE is 5 -- with too few practiced
+    entities in the fixture, `sections.length > shown` is never true and
+    the "Show 5 more" control (plus a full-length list past it) had never
+    been rendered by any gate (Task 7 review). ui_fixture.py now pads the
+    log to 6 real sections specifically so this renders."""
+    assert count(page, ".log-list-footer") == 1
+    shown_before = int(page.evaluate(
+        "return document.querySelectorAll('.log-card').length"))
+    page.evaluate(
+        "document.querySelector('.log-list-footer button').click()")
+    page.wait_ms(200)
+    shown_after = int(page.evaluate(
+        "return document.querySelectorAll('.log-card').length"))
+    assert shown_after > shown_before, (
+        "clicking \"Show 5 more\" did not reveal any additional card")
+    assert count(page, ".log-list-footer") == 0, (
+        "the footer should disappear once every section is shown")
 
 
 # --- this branch's own surfaces (spec 2026-07-28-multi-step-segments) ------
