@@ -108,8 +108,18 @@
   .starcell.active-star .starimg {
     filter: drop-shadow(0 0 6px rgba(255,215,95,.85)) drop-shadow(0 0 2px rgba(255,215,95,.9)); }
   .starimg.dim { opacity: .72; filter: saturate(.85); }
+  /* min-height must cover the CLAMP plus the font's descenders, or the box is
+     shorter than the two lines it promises to show and `overflow: hidden`
+     shaves the bottom off the second one -- live report 2026-08-02 ("'Floating
+     Isle' has the bottom shaved off... it presently reads like a bug"). It was
+     2.1em against 2 x 1.12em of line boxes, so EVERY two-line name lost
+     0.5-2.5px of ink at every width, measured. The cell is fixed-height and its
+     children were already out of free space (the name is a flex item and was
+     being shrunk to exactly this min-height), so the room comes from the
+     selector cell's own bottom padding below -- clearance under the active
+     star's glow is the ROW's 8px, not this. */
   .starname { font-size: clamp(.55rem, 1.31cqw, .8rem); font-weight: 600;
-              line-height: 1.12; min-height: 2.1em;
+              line-height: 1.12; min-height: 2.45em;
               display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
               overflow: hidden; }
   .starcell.active-star .starname { color: #ffd75f; }
@@ -999,7 +1009,9 @@
   }
   .selector-card .starcell {
     flex: 1 1 0; min-width: 0; height: 100%;
-    justify-content: flex-start; padding: .35rem .15rem .4rem;
+    /* bottom padding pays for .starname's descender room (see its rule): the
+       cell height is a fixed OBS slot, so the space had to come from inside. */
+    justify-content: flex-start; padding: .35rem .15rem .1rem;
   }
   .selector-card .starholder { width: min(82px, 8.4cqw); }
   /* segment rows (bowser/arena/castle): 1-3 cells, each pinned to the width
