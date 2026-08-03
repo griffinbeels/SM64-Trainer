@@ -103,6 +103,32 @@ and a row reshuffling four times in a tenth of a second is the flicker.
   reason that module exists — and is deliberately COARSER than "the cells
   changed": the castle's three areas are three sets of movements, a course's own
   subareas are the same seven stars, so entering SSL's pyramid must not blink.
+- **Adopting an identity REMOUNTS what it paints, and that is correctness.** The
+  painted subtree wears `key=${state.shownId}`, so a child cannot survive an
+  adoption — and a child that cannot survive one cannot animate across it. Live
+  report: *"when swapping between courses, it briefly flashes the previous
+  course's stars and then flashes again."* Two courses use the SAME row
+  component, so Preact patched it rather than unmounting it; the inner `CellRow`
+  lived through the surface swap and ran its own exchange while the outer one
+  faded the surface back in. **Measured: nine frames, peaking at 0.21 opacity, of
+  the previous course's stars, after they had gone.** The claim above it ("a
+  surface swap remounts the inner row") held only when the MODE changed too, and
+  it was a comment rather than a test. Key on `shownId`, never on the arriving id:
+  keying on the arrival tears the outgoing content down mid-fade, the one frame
+  this exists to hide.
+- **Absorption re-arms the wait; the ceiling is `maxHoldMs`.** His rule: *"when
+  the selector DISAPPEARS, we need to figure out how we're coalescing. Figure out
+  the result. Then display the final result."* An answer arriving 250 ms into a
+  210 ms window used to buy a second animation; now each one extends the hidden
+  window, and only the settled answer is painted. The bound is not optional — a
+  window something can hold open indefinitely is a selector that never comes back.
+- **A flash COUNTER cannot see a stale-content flash, and this cost a green gate.**
+  Counting `visible → hidden → visible` read those nine frames as one long dip,
+  because the effective opacity never crossed back above the visible threshold.
+  The property that works is about CONTENT, not the curve: *once a set has left,
+  it may never be seen again* (`tests/test_ui_one_animation_per_change.py`). The
+  discriminator was taken from a printed per-frame trace of a real swap — the
+  first metric was a hypothesis, and it was wrong in the direction that passes.
 - **`CellRow` is the single door**, and `tests/test_ui_exchange.py` fails if any
   row renders `<div class="starrow">` itself: a second door looks completely
   correct and reintroduces the flicker in one row while the others stay smooth.
