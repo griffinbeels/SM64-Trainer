@@ -54,8 +54,56 @@ pointer to it).
 | Dropdown lists (every `<select>` popup) | `ui/index.html` — the popup is drawn by the browser, not the page: Chromium themes it off the SELECT's own computed background, and paints the highlighted row light-blue **choosing dark text for it only when the author has not named an option colour**. So the rule is: set `option { background-color }` (that is what makes the list navy instead of Chromium's grey) and NEVER `option { color }` — the row text colour is the browser's to choose. An author colour there is what made the highlighted row light-on-light, the one unreadable state in the shell (live audit 2026-07-25). Corollary: every select needs an opaque dark background of its own; the two that look transparent do it without going transparent (`.context-select` = opacity 0, `.sort-control select` = the wrapper's own `#101f31`). `html { scrollbar-color }` is named for the same reason — `color-scheme: dark` alone still left Chrome 150 drawing the OS's light scrollbar. Rejected 2026-07-25: `appearance: base-select` (Chrome/WebView2 135+, both at 150 here) styles the list beautifully as real DOM, but without author `<button><selectedcontent>` markup in all 25 call sites the CLOSED control cannot clip or ellipsise its own text — a long value spills across the neighbouring UI, and `overflow: hidden` on the select does not contain it |
 | Empty "nothing here yet" panels | `ui/components/emptystate.js` — the 404-shaped state for the four Practice panels that can legitimately have nothing to draw (attempt timeline, performance trend, practice log, and the whole analysis card with no target). Each was previously an empty box inside a card with a hard 458px height, which reads as a broken render rather than an honest state (live report 2026-07-25, with the reference: "like a 404 message"). Shape is fixed — dimmed cast art, headline naming what is missing, the one action that fills it, a quip — and the CALLER owns the words: `AttemptLogEmpty`/`TrendEmpty` in practice.js keep the copy in one place per surface so the star and segment cards can't drift. "Nothing recorded" and "everything is filtered out" are DIFFERENT states with different remedies (practise vs. the two toggles in the card's own footer), hence `hasAttempts`. `CAST` ↔ `ui/assets/empty/*.png` coverage is pinned both ways by tests/test_ui_empty_states.py; `pickCast` excludes the previous character by NAME, not by stem — two of the six PNGs are Ukiki and two are Toad, and stem-exclusion put ukiki_1 beside ukiki_2, which still reads as the same monkey twice. The pick is per-MOUNT (`useState`'s lazy initializer), never per render: the view refetches on every WebSocket event and re-rolling there flickers a new character through the panel mid-run. The attempt timeline is the one panel with NO art — at 112px it has no room, and a third character on one screen is noise; it gets a one-line `.stable-empty compact` note above the `+ marker` chip, which stays available (markers can be placed before any attempt exists) |
 | Number-animation primitive (plain numbers — a RANK uses the climb, see the row below) | `ui/useTween.js` — `useTween(value, durationMs=700)`: requestAnimationFrame, ease-out-cubic, `prefers-reduced-motion: reduce` snaps instead of animating. THE one tween every numeric surface that can celebrate a rank change routes through — RankBanner's division-fill bars (ranks.js), MareloBar's track+score (marelo.js), and the Rank tab card's rating/Mastery/Coverage (rankpage.js). No component rolls its own requestAnimationFrame loop; `null` passes through with no animation (first-ever value shows immediately, only a later CHANGE tweens) |
+| How a SET of cards changes on screen (the selector's rows) | `ui/exchange.js` (the machine, import-free) + `ui/components/cellrow.js` (`CellRow`, the ONE container every row draws through) + `ui/selectortuning.js` (the numbers) + `/ui/tuneselector.html` (his inspector). **Full detail below: [The card-set exchange](#the-card-set-exchange)** |
 | Shared modal shell | `ui/components/modal.js` — `Modal({title,onClose,footer,children})`; onClose optional (absent = not dismissable) |
 | Update popup | `ui/components/update.js` — modal: version + patch notes (escaped-then-rendered) + GitHub link + exact `download_bytes` + Update/Skip/Later; polls `/api/update/status`. Backdrop/Esc dismiss as "Later" (offer) or "Close" (failed); inert during an active install. Mounted at app root in `app.js` (browser↔GUI parity) |
+
+## The card-set exchange
+
+**Live report 2026-08-02**: *"when we invalidate / add / remove cards from the
+[selector] menu here, it feels more like a bug / error than intentional… we need
+a better mechanism in place here / process for updating the displayed stars +
+segments… internally we're doing some shuffling / heartbeats / validations, but
+the user should never see that: they should see their old options fade away, and
+their new options appear, no intermediate."*
+
+One walk through a door changes the set three or four times inside ~100 ms — the
+level edge, the target retiring, several topological cancels arriving on the
+frame heartbeat, then the view refetch. Every one of those was its own repaint,
+and a row reshuffling four times in a tenth of a second is the flicker.
+
+- **`ui/exchange.js`** is the machine: `nextState` (a total reducer), `rowStyle`,
+  `phaseMs`, `paintsShown`. Import-free, so node drives it directly and the "no
+  intermediate set is ever painted" claim is PROVED
+  (`tests/test_ui_exchange.py`) rather than inferred from frames a screenshot
+  happened to catch.
+- **The load-bearing rule is `paintsShown(id, state)`, and it is not a phase
+  test.** A row paints arriving children only when their identity is the one the
+  machine calls shown. Phrased as "during the fade, paint the held snapshot" it
+  left a one-frame hole that was the whole bug back: a reducer cannot be
+  dispatched during render, so the new set renders once while the phase is still
+  idle. Anchored to `shownId`, no unadopted set has a frame to appear in.
+- **The fade window IS the coalescing window.** While the old set leaves, a
+  further change only moves `pendingId`; the row adopts the newest when the fade
+  lands. So a burst is one exchange, and the repaint count stops depending on how
+  the server sequenced its events. A burst that cancels itself (away and back)
+  comes straight back up instead of swapping to an identical set.
+- **`CellRow` is the single door**, and `tests/test_ui_exchange.py` fails if any
+  row renders `<div class="starrow">` itself: a second door looks completely
+  correct and reintroduces the flicker in one row while the others stay smooth.
+  It flattens htm's ragged children, keeps a KEYLESS cell (the Bowser row's Reds
+  cell) and lets its index speak for it — dropping the unkeyed ones was the first
+  version and it deleted that cell from the row outright.
+- **ONE element carries the opacity** — never a wrapper per cell (it would break
+  every `.starrow > .starcell` child-combinator rule) and no per-cell stagger
+  (*"ALL of cards fade away"*).
+- **The numbers are HIS**: `ui/selectortuning.js` + `/ui/tuneselector.html`, the
+  third surface on the `tuning-demo` pattern, with a Burst ×3 button because the
+  case worth judging is a burst rather than a single swap.
+- `tests/test_ui_row_exchange_plays.py` is the other half and a different claim:
+  it drives a real route pick in a real browser, samples the row every frame, and
+  fails if the card count ever changes while the row is visible. Mutation-proved
+  by pointing one row back at a plain div.
 
 ## UI verification norms
 

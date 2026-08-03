@@ -231,6 +231,11 @@ export function Header({ t, settingsOpen, closeSettings }) {
               overall rank-up tuning page</a> — fly the card out, tune the
             flight and the hold, and save the result straight back into the code.
           </p>
+          <p class="settings-note">
+            <a href="/ui/tuneselector.html" target="_blank" rel="noopener">Open the
+              selector exchange tuning page</a> — swap the row's cards, tune how
+            the old set leaves and the new set arrives, and save it into the code.
+          </p>
           <label class="settings-field">
             <span>Dust-trick counts</span>
             <input type="checkbox" checked=${t.showDust}

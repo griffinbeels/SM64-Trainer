@@ -43,6 +43,7 @@
 import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
+import { CellRow } from "./cellrow.js";
 import { CollapseToggle, cardClass, useCollapsed } from "./collapsible.js";
 import { send } from "../api.js";
 import { armedSegments, hasPracticeContext, hasStandardsFor,
@@ -379,7 +380,7 @@ function StarRow({ t, v, stage }) {
         : "tap a star to practice"}</span>
       <${CollapseToggle} collapsed=${fold} toggle=${toggleFold}
         label="the course selector" /></div>
-    <div class="starrow">
+    <${CellRow} class="starrow">
       ${shown.map(({ name, i }) => {
         return html`<${PracticeCell} dimIdle=${STAR_DIM_IDLE}
           key=${`${stage.course_id}:${i}`}
@@ -395,7 +396,7 @@ function StarRow({ t, v, stage }) {
           onEdit=${() => setPicking(iconIdentityForKey(starKey(stage.course_id, i)))} />`;
       })}
       ${armedExtraCells(t, v, new Set(), setPicking, startsInLevel(stage.level))}
-    </div>
+    <//>
     ${pickerModal}
   </section>`;
 }
@@ -583,7 +584,7 @@ function BowserCourseRow({ t, v, stage, freshIds }) {
 
       <${CollapseToggle} collapsed=${fold} toggle=${toggleFold}
         label="the course selector" /></div>
-    <div class="starrow segcells">
+    <${CellRow} class="starrow segcells">
       <${RedsCell} t=${t} v=${v} stage=${stage} course=${course}
         redsActive=${redsActive} pipeMode=${pipeMode} forcedPipe=${forcedPipe}
         pipeSeg=${pipeSeg} onPickStar=${pickStar} onPickPipe=${pickPipe}
@@ -594,7 +595,7 @@ function BowserCourseRow({ t, v, stage, freshIds }) {
         onPicked=${() => writeBowserFamily(stage.level, "no_reds")} />`
         : null}
       ${armedExtraCells(t, v, shownIds, setPicking)}
-    </div>
+    <//>
     ${pickerModal}
   </section>`;
 }
@@ -782,11 +783,11 @@ function ArenaRow({ t, v, stage }) {
       
       <${CollapseToggle} collapsed=${fold} toggle=${toggleFold}
         label="the course selector" /></div>
-    <div class="starrow segcells">
+    <${CellRow} class="starrow segcells">
       ${fights.map((s) => html`<${StandardSegmentCell}
         key=${`seg:${s.segment_id}`} t=${t} s=${s} setPicking=${setPicking} />`)}
       ${extras}
-    </div>
+    <//>
     ${pickerModal}
   </section>`;
 }
@@ -825,11 +826,11 @@ function SegmentRow({ t, v, stage }) {
       
       <${CollapseToggle} collapsed=${fold} toggle=${toggleFold}
         label="the course selector" /></div>
-    <div class="starrow segcells">
+    <${CellRow} class="starrow segcells">
       ${segs.map((s) => html`<${StandardSegmentCell}
         key=${`seg:${s.segment_id}`} t=${t} s=${s} setPicking=${setPicking} />`)}
       ${extras}
-    </div>
+    <//>
     ${pickerModal}
   </section>`;
 }
@@ -845,10 +846,10 @@ function ArmedOnlyRow({ t, v }) {
       
       <${CollapseToggle} collapsed=${fold} toggle=${toggleFold}
         label="the course selector" /></div>
-    <div class="starrow segcells">
+    <${CellRow} class="starrow segcells">
       ${armedSegments(t, v).map((s) => html`<${StandardSegmentCell}
         key=${`seg:${s.segment_id}`} t=${t} s=${s} setPicking=${setPicking} />`)}
-    </div>
+    <//>
     ${pickerModal}
   </section>`;
 }
