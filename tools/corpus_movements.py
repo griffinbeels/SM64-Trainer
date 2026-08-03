@@ -98,8 +98,35 @@ MOVEMENTS = [
     # --- out of the Bowser 1 arena (its exit lands in the lobby) ----------
     movement("seg:bowser1->bob", "Bowser 1 → BoB",
              exit_level(30), enter_level(9)),
+    # Griffin's own route, and the live report that produced this row
+    # (2026-08-03): he clears Bowser 1, lands in the Lobby, re-enters BitDW
+    # and PAUSE EXITS back to the Lobby, then goes to WF. Same shape as
+    # `Bowser 2 → Upstairs` one arena later, and settled the same way -- "it
+    # IS the route", so running it the direct way records nothing.
+    #
+    # WHY IT HAD TO BE DECLARED. Entering BitDW is a foreign `level_changed`,
+    # which silently disarms a plain STRICT def; under the loose matching
+    # these movements carried until this branch it was invisible, so the
+    # movement survived the detour by accident and he saw it working. The
+    # strict flip made the same detour fatal, and silently: the card simply
+    # stopped being offered mid-route with no row and no notice. A route the
+    # runner really takes has to be in the definition, which is exactly what
+    # the strict path rule is for.
+    #
+    # The BitDW step PINS its source, for the reason the Bowser 2 row below
+    # states: LOSING the Bowser 1 fight is a single `level_changed 30 -> 17`,
+    # which would otherwise satisfy this def's start AND its first step on one
+    # event -- the unfireable trap.
+    #
+    # OWED, and named rather than swept in blind (his call, 2026-08-03: "just
+    # WF for now"): the other five Bowser 1 exits -- BoB, CCM, SSL, DDD, BitFS
+    # -- are the same class if he pause-exits through BitDW on those too. SSL,
+    # DDD and BitFS already declare a Basement step, so their route is stated;
+    # BoB and CCM are plain and would break identically.
     movement("seg:bowser1->wf", "Bowser 1 → WF",
-             exit_level(30), enter_level(24)),
+             exit_level(30), enter_level(24),
+             via=[enter_level(17, frm=6),
+                  enter_level(6, frm=17, to_subarea=LOBBY)]),
     movement("seg:bowser1->ccm", "Bowser 1 → CCM",
              exit_level(30), enter_level(5)),
     movement("seg:bowser1->ssl", "Bowser 1 → SSL",

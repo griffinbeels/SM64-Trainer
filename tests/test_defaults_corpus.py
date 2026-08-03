@@ -405,32 +405,58 @@ def _seg(seed_key):
     return next(s for s in SEGMENTS if s["seed_key"] == seed_key)
 
 
-def test_bowser_1_to_wf_is_VOIDED_by_the_bitdw_reentry_detour():
-    """Walk: "Bowser 1 -> re-enter BitDW -> exit course to Lobby -> WF."
+def test_bowser_1_to_wf_IS_the_bitdw_reentry_detour():
+    """Walk: "Bowser 1 -> re-enter BitDW -> pause-exit to Lobby -> WF."
 
-    THE BELIEF HERE REVERSED 2026-08-02, and it is the clearest single case of
-    what the strict flip means. This test used to assert the detour SURVIVED,
-    because a loose def is transparent to everything between its start and its
-    end. Griffin's ruling: *"That is a fixed path, and there are no other
-    options. I want it to be very strict... There are no deviations that are
-    allowed."*
+    THIS BELIEF HAS NOW REVERSED TWICE, and the pair of reversals is worth
+    keeping whole because the second one is a premise error rather than a
+    change of mind.
 
-    And the detour buys nothing here -- the arena exit already lands in the
-    Lobby, so re-entering BitDW to pause-exit back to the Lobby is a wrong
-    turn, not a trick. The four movements whose route really IS a re-entry
-    (`Bowser 2 -> Upstairs`, `HMC -> RR`, `DDD -> WDW`, `SL -> Basement`)
-    declare it as a step and still record; see their rows in
-    tools/corpus_movements.py.
+    v1 asserted the detour SURVIVED (a loose def is transparent between its
+    start and its end). v2, 2026-08-02, asserted it was VOIDED, on Griffin's
+    strictness ruling -- *"That is a fixed path, and there are no other
+    options... There are no deviations that are allowed"* -- plus a reason
+    that turned out to be false: "the detour buys nothing here, the arena exit
+    already lands in the Lobby, so re-entering BitDW is a wrong turn, not a
+    trick."
 
-    Silent, as every off-route cancel in this engine is: a movement that never
-    happened must not bank a failure either."""
+    v3, 2026-08-03, from live play: it is a trick, and it is HIS route. He
+    watched the card vanish mid-run and reported it -- "It displays when I exit
+    Bowser 1, but when I enter Bowser in the Dark World (to exit to lobby),
+    it's no longer displayed." Asked whether the detour IS the route or merely
+    one of two, he picked IS.
+
+    So the strictness ruling was never wrong; the ROUTE written under it was.
+    That is the whole argument for the Then editor and the recorder shipped the
+    same day: a declared path is only as good as the person declaring it, and
+    he can now fix one himself instead of reporting it.
+
+    The direct route records NOTHING now, deliberately -- same trade the
+    `Bowser 2 -> Upstairs` row makes one arena later, and the test below it
+    pins that half."""
     row = _seg("seg:bowser1->wf")
     origin = (30, None)
     walker = _Walker(origin)
     walker.hop(exit_node(30))    # Bowser 1 exit -> lobby
-    walker.hop((17, None))       # re-enter BitDW -- undeclared, so this voids
-    walker.hop((6, 1))           # pause-exit BitDW -> lobby
-    walker.hop((24, None))       # walk into WF
+    walker.hop((17, None))       # re-enter BitDW -- step 1, declared
+    walker.hop((6, 1))           # pause-exit BitDW -> lobby -- step 2
+    walker.hop((24, None))       # walk into WF -- the end
+    closed = run_engine(row, walker.events, origin[0], origin[1])
+    assert [a.outcome for a in closed] == ["success"], (row["seed_key"], closed)
+
+
+def test_bowser_1_to_wf_records_nothing_run_the_direct_way():
+    """The cost of the ruling above, pinned rather than left implicit: with
+    the BitDW re-entry declared as a required step, walking straight from the
+    Lobby into WF is no longer this movement. Silent, as every off-route
+    cancel in this engine is -- a movement that never happened must not bank a
+    failure either. If he ever wants BOTH to count, that is a second
+    definition beside this one, not a loosening of this one."""
+    row = _seg("seg:bowser1->wf")
+    origin = (30, None)
+    walker = _Walker(origin)
+    walker.hop(exit_node(30))    # Bowser 1 exit -> lobby
+    walker.hop((24, None))       # straight into WF, skipping the declared BitDW
     closed = run_engine(row, walker.events, origin[0], origin[1])
     assert closed == [], (row["seed_key"], closed)
 

@@ -821,7 +821,23 @@
           "to": 24
         }
       ],
-      "waypoints": [],
+      "waypoints": [
+        [
+          {
+            "type": "level_enter",
+            "to": 17,
+            "from": 6
+          }
+        ],
+        [
+          {
+            "type": "level_enter",
+            "to": 6,
+            "to_subarea": 1,
+            "from": 17
+          }
+        ]
+      ],
       "guards": [
         {
           "type": "in_active_route"
