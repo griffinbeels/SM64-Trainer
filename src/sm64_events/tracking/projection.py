@@ -531,6 +531,11 @@ class Projector:
             and (hc := hundred_coin_entity(d.start_triggers, d.waypoints))
             is not None}
         self.segment_notices: list[dict] = []  # live-broadcast queue, drained by service
+        # A segment target the ORIGIN rule wants to retire, held until the
+        # matcher has had this event (see `_dispatch`'s level_changed branch
+        # and the consumer at the bottom of `feed`). Transient within one
+        # event -- reset at the top of every `feed`, so replay is unaffected.
+        self._pending_target_retire: int | None = None
         self._runs = RunTracker()
         self.run_notices: list[dict] = []   # live-broadcast queue, drained by service
         self._num_stars: int | None = None
@@ -592,28 +597,6 @@ class Projector:
         OVERWRITES on every event — a tick landing between two events must not
         be able to drop a notice the service has not drained yet."""
         return self._segments.settle(frame)
-
-    def _armed_loosely(self, segment_id: int) -> bool:
-        """True when `segment_id` is currently armed AND its def is LOOSE-
-        matched (task 5, spec 2026-07-28-multi-step-segments) — the property
-        that exempts a segment target from the origin-retirement rule in
-        _dispatch below.
-
-        Scoped to LOOSE defs only, not "any armed segment" (the brief's
-        version): a STRICT multi-step def that wanders into a level outside
-        its waypoint sequence is SILENTLY CANCELLED by the matcher on this
-        very event (segments.py's `_feed_waypoint` "major action" branch),
-        so exempting it here too would leave a stale target pointing at a
-        def the matcher just disarmed — caught by
-        test_waypoint_level_keeps_a_multi_level_segment_target, which needs
-        exactly that retirement on an unrelated level move mid-sequence.
-        Loose mode's whole point is tolerating such a move without
-        cancelling (it "stays armed through everything but its end and a
-        staleness deadline"), so only loose earns the exemption."""
-        if segment_id not in self.armed_segment_ids():
-            return False
-        d = self._segments.definition(segment_id)
-        return d is not None and d.match_mode == "loose"
 
     def _clears_star_target(self, segment_id: int) -> bool:
         """True when `segment_id` just arming should retire the CURRENT star
@@ -698,6 +681,7 @@ class Projector:
             if fix:
                 ev = _CorrectedRow(ev, {**ev.payload, **fix})
         prev_level = self._level  # _dispatch may move it (level_changed)
+        self._pending_target_retire = None   # transient, one event only
         # Snapshotted BEFORE _dispatch (which runs _close_by_grab for a
         # star_collected event) so the grab-steals-the-target restore below
         # can tell "this segment was already my pinned, running focus" from
@@ -740,6 +724,19 @@ class Projector:
                            route_segments=self._route_segments,
                            target_segment=target_seg)
         seg_closed, self.segment_notices = self._segments.feed(ev, ctx)
+        # The origin rule's verdict, applied now that the matcher has had this
+        # event (see _dispatch's level_changed branch for the whole argument).
+        # Still armed = has not deviated = keeps the pick; disarmed on this
+        # event, or never armed at all, and a foreign course retires it. Same
+        # observable outcome as the old immediate clear for every case that
+        # one got right — including an off-route move mid-sequence, which the
+        # matcher cancels on this very event, so the check below still fires.
+        if (self._pending_target_retire is not None
+                and self.target and self.target[0] == "segment"
+                and self.target[1] == self._pending_target_retire
+                and self._pending_target_retire not in self.armed_segment_ids()):
+            self.target = None
+        self._pending_target_retire = None
         for a in seg_closed:
             # The 100-coin star IS this segment when its def's own sequence
             # includes grabbing that course's 100-coin star (spec 2026-07-28-
@@ -962,30 +959,46 @@ class Projector:
             # matcher re-arms on return (armed pins the UI) and the arena
             # banner re-targets on entry, so nothing is lost.
             #
-            # A segment that is ARMED and LOOSE-matched is exempt from this
-            # rule (task 5, spec 2026-07-28-multi-step-segments; see
-            # _armed_loosely for why the exemption stops at loose and does
-            # not cover every armed segment): the two lines above were
-            # written for an IDLE pin, where entering a foreign course really
-            # does mean "doing something else now". Under loose matching
-            # that reasoning breaks down while the segment is RUNNING -- a
-            # re-entry movement enters another course on purpose (task
-            # 0017's second example), and this rule was hiding the card
-            # exactly while the segment was mid-sequence. Still runs in
-            # _dispatch, BEFORE feed(), so `_armed_loosely` reads
-            # armed_segment_ids() as of the PREVIOUS event, not this one --
-            # that is correct, not an off-by-one, for a loose def: loose
-            # stays armed through everything but its own end/deadline, so
-            # "was armed last event" and "is armed after this one" agree. A
-            # segment armed earlier is mid-sequence now, which is exactly
-            # the case this exception exists for. The rule is unchanged for
-            # anything not currently armed loosely, which is what it was
-            # written for.
-            if (self.target and self.target[0] == "segment" and to_course is not None
-                    and not self._armed_loosely(self.target[1])):
+            # A segment that is still ARMED after this event is exempt, in
+            # EVERY match mode (2026-08-03, live report). The two lines above
+            # were written for an IDLE pin, where entering a foreign course
+            # really does mean "doing something else now"; while the segment
+            # is RUNNING it can mean the opposite, because a re-entry movement
+            # enters another course ON PURPOSE and says so in its own steps.
+            #
+            # His rule, and it is the whole of this: *"If I select a segment,
+            # it should be selected until it's no longer possible for it to be
+            # armed / it gets invalidated by deviating from the path."* Under
+            # the strict path cursor, deviating already cancels the definition
+            # on this very event — so **the matcher's disarm IS the
+            # invalidation**, and it is the only test the target needs.
+            #
+            # THE EXEMPTION USED TO STOP AT LOOSE, via an `_armed_loosely`
+            # helper (deleted with this change, since the deferral subsumes it
+            # entirely -- a redundant condition beside a rule that already
+            # covers it is a second door to keep in step). It was honest about
+            # why it stopped there: this runs BEFORE the matcher, so
+            # `armed_segment_ids()` answers as of the PREVIOUS event — safe
+            # for loose (armed through everything but its own end), wrong for
+            # strict, where exempting on a stale reading would leave a target
+            # pointing at a def the matcher was about to cancel. That is an
+            # ORDERING problem, not a scope one, and this branch turned it
+            # from theory into a live bug: flipping all 56 movements to strict
+            # took the exemption away from every one of them, so picking
+            # `Bowser 1 → WF` and walking into BitDW — step 1 of its own
+            # declared route — retired the pick, and the Bowser row's
+            # remembered-family default then filled the hand it found empty.
+            # (That client guard is correct and never got to run; by the time
+            # it looked, the target was already gone.)
+            #
+            # So the decision is DEFERRED rather than narrowed: record it, and
+            # let the bottom of `feed()` apply it once the matcher has spoken.
+            if (self.target and self.target[0] == "segment"
+                    and to_course is not None
+                    ):
                 origin = self._seg_origins.get(self.target[1])
                 if origin is not None and origin != stage_origin(to_level):
-                    self.target = None
+                    self._pending_target_retire = self.target[1]
             if self.target and self.target[0] == "star":
                 if to_course is not None and to_course != self.target[1]:
                     self._suspended_star = self.target[1:]  # resume on re-entry (caveat 13)
