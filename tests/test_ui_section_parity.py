@@ -24,6 +24,8 @@ PRACTICE_JS = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
                / "ui" / "components" / "practice.js")
 ENTITYDETAIL_JS = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
                    / "ui" / "components" / "entitydetail.js")
+ATTEMPTLOG_JS = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
+                 / "ui" / "components" / "attemptlog.js")
 VIEWS_PY = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
             / "tracking" / "views.py")
 
@@ -197,7 +199,17 @@ def test_every_attempts_tools_row_carries_the_stat_menu_trigger():
     no active target: neither StarSection/SegmentSection's drawer nor
     RouteFocus renders anything then, and EmptyPractice's log card is the only
     surface left -- a trigger missing there would mean the Stats menu again
-    has zero access points on the page, the exact gap this move closes."""
+    has zero access points on the page, the exact gap this move closes.
+
+    2026-08-03 (practice-log-entity-cards, task 5): StatMenuTrigger's own
+    definition moved out of practice.js into attemptlog.js (Step 0 of that
+    task -- the attempt-row machinery and the rank-banner helpers move there
+    so practicelog.js can use them without practice.js closing an import
+    cycle on itself). The USAGE count check below is unaffected -- every
+    `.attempts-tools` row still calls `<${StatMenuTrigger}>` from practice.js,
+    same as before -- but "no hand-rolled second copy" now has to be checked
+    at the new location: practice.js must carry ZERO definitions (it only
+    imports the shared one), and attemptlog.js must carry exactly ONE."""
     code = strip_comments(PRACTICE_JS.read_text(encoding="utf-8"))
     toolbar_rows = code.count('class="attempts-tools"')
     trigger_uses = code.count("<${StatMenuTrigger}")
@@ -208,8 +220,15 @@ def test_every_attempts_tools_row_carries_the_stat_menu_trigger():
         f"{toolbar_rows} '.attempts-tools' row(s) but {trigger_uses} "
         "StatMenuTrigger use(s) -- every practice-log toolbar must carry "
         "exactly one shared trigger")
-    # ...and no card keeps its own hand-rolled copy of the trigger button.
-    assert code.count("function StatMenuTrigger") == 1
+    # ...and no card keeps its own hand-rolled copy of the trigger button --
+    # practice.js only ever IMPORTS it now, attemptlog.js is the one place
+    # it may be DEFINED.
+    assert code.count("function StatMenuTrigger") == 0, (
+        "practice.js defines its own StatMenuTrigger -- it should only "
+        "import the shared one from attemptlog.js")
+    attemptlog = strip_comments(ATTEMPTLOG_JS.read_text(encoding="utf-8"))
+    assert attemptlog.count("function StatMenuTrigger") == 1, (
+        "attemptlog.js must define StatMenuTrigger exactly once")
 
 
 def test_the_analysis_card_and_drawer_are_one_component_not_two_copies():
