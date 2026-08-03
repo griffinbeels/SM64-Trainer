@@ -56,10 +56,33 @@ export const armedSegments = (t, view) =>
 // "ACTIVE SEGMENT" after a Usamune warp into Whomp's Fortress and then Hazy
 // Maze Cave. The server had already retired the TARGET both times — the card
 // was being held up by the pin alone, which is why it read "Recent".
+// TIGHTENED 2026-08-03, and the loosest clause was the bug: standing anywhere
+// with no course of its own — the castle, a hub, an arena — used to return TRUE
+// for everything, so a card could name a thing belonging to a course two rooms
+// away. Live report, standing in Castle Upstairs with only `BitS Entry` in the
+// selector: *"the 'active' card section (right now it says Bowser in the Fire
+// Sea) should never display anything other than any option that's currently
+// displayed in the segment / star selector above… if we leave a bowser stage,
+// we're no longer in the bowser stage, so it shouldn't be displayed as active."*
+//
+// "Transit" is still right about what it was written for — walking through the
+// castle must not drop a CASTLE MOVEMENT, which is how a card stays up while
+// you walk to its start. It was never right about a thing that lives in a
+// course you have left. So a place with no course keeps only things that also
+// have no course; a course keeps its own, as before.
+//
+// The ARMED exemption is unchanged and lives at the call site (`sec
+// .armed_detail || here(sec)` in practice.js): a running movement is visible
+// wherever it got to, and the selector agrees — every row appends
+// `armedExtraCells` for exactly that. So "the card shows only what the selector
+// shows" holds in both directions rather than by coincidence.
 export function practicedHere(section, t) {
-  const standingIn = t.stage && t.stage.course_id;
-  if (standingIn == null) return true;    // castle, hub, arena: transit
-  return section != null && section.course_id === standingIn;
+  if (!t.stage) return true;               // no live stage: unknown, allow
+  const standingIn = t.stage.course_id;
+  if (section == null) return false;
+  if (standingIn == null)                  // castle, hub, arena
+    return section.course_id == null;
+  return section.course_id === standingIn;
 }
 
 // Where the player is standing, as a mode id or null. Exported so that no
