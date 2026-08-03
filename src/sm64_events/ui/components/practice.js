@@ -621,7 +621,8 @@ export function Practice({ t, openCompare }) {
         : html`<${EmptyPractice} openPicker=${openTargetPicker}
             inContext=${inContext} />`}
 
-    <${EntityAnalysis} sec=${focusedSec} t=${held} onPick=${pick} />
+    <${EntityAnalysis} sec=${focusedSec} t=${held} onPick=${pick}
+      manualPick=${manualFocus} />
 
     ${routeView && html`<section class="practice-card route-focus-card">
       ${/* Was the practice toolbar's note. It is real state feedback, not

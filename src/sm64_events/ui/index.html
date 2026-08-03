@@ -4260,6 +4260,16 @@
   .log-card {
     min-width: 0; border: 1px solid var(--border-soft); border-radius: 9px;
     background: rgba(9,22,36,.55);
+    /* ONE `transition` declaration on this element -- `.is-selected` (below)
+       sets ONLY its two target values and declares no `transition` of its
+       own, or it would wholesale-replace this one the instant a card became
+       selected (the standing trap: CSS `transition` is not additive across
+       rules on the same element, so a higher-specificity state rule that
+       declares its own `transition` silently drops whatever this one does
+       not repeat). Griffin's rule: every state change animates, both
+       directions -- `.log-card` had no transition at all before, so
+       `.is-selected` snapped. */
+    transition: border-color 160ms ease, background 160ms ease;
   }
   .log-card.is-selected { border-color: #5d89b8; background: rgba(20,42,66,.55); }
   .log-card.is-unassigned { background: rgba(9,22,36,.3); }
@@ -4275,7 +4285,16 @@
     min-width: 0; display: flex; align-items: center; gap: .6rem;
     padding: 0; border: 0; border-radius: 6px; background: none;
     color: inherit; font: inherit; text-align: left; cursor: pointer;
+    /* Same shape as `.log-card` above: one declaration here, `:hover` sets
+       only the target background. Matches `.log-card-fold`'s own 140ms
+       background transition just below, so the whole head's hover language
+       is one duration. */
+    transition: background 140ms ease;
   }
+  /* Had no hover at all before -- only `:focus-visible` -- so a mouse user
+     got no feedback that this whole row is one clickable target until they
+     actually clicked it. Same treatment `.log-card-fold`'s own hover uses. */
+  .log-card-select:hover { background: #16283e; }
   .log-card-select:focus-visible { outline: 2px solid #78b9ff; outline-offset: 3px; }
   .log-card-art { flex: 0 0 auto; width: 36px; height: 36px; object-fit: contain; }
   .log-card-name { min-width: 0; display: flex; flex-direction: column; gap: .05rem; }

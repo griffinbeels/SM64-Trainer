@@ -12,7 +12,7 @@
 // button, no standards ladder and no failure compilation for an entity
 // nobody has picked).
 import { h } from "preact";
-import { useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { displayName, entityKey, entityNoun, isSegment,
@@ -133,10 +133,31 @@ function subjectLine(sec, t) {
   return displayName(sec, (t.view.catalog || {}).courses || []).name;
 }
 
-export function EntityAnalysis({ sec, t, onPick }) {
+export function EntityAnalysis({ sec, t, onPick, manualPick }) {
   const [fold, toggle] = useCollapsed("analysis");
   const clock = sec ? sectionClock(sec, t.clock) : t.clock;
-  return html`<section class="practice-card analysis-card ${cardClass(fold)}">
+  const cardRef = useRef(null);
+  // Scroll this card into view on a MANUAL pick ONLY -- clicking a practice-
+  // log card (`ui/focustarget.js`'s `manual` snapshot, threaded down here
+  // unchanged as `manualPick`). Never on the AUTOMATIC follow: the focus
+  // reverts to the active entity by itself the moment the world moves (a
+  // reset, a star grab, a warp), with no call to `setManualFocus` at all --
+  // so `manualPick`'s own IDENTITY only ever changes from a genuine click,
+  // and keying the effect on it is what tells the two apart for free, with
+  // no separate nonce to keep in step. Yanking the page while the player is
+  // mid-run, because an incidental attempt landed elsewhere, would be a worse
+  // bug than the one this fixes. `block: "nearest"` (not "center", unlike the
+  // attempt-row reveal this mirrors, attemptlog.js) -- this card sits directly
+  // above the log at every width, so it is at most one screen's worth of
+  // scroll away and "nearest" is the smallest motion that still shows it.
+  useEffect(() => {
+    if (!manualPick) return;
+    requestAnimationFrame(() => {
+      if (cardRef.current)
+        cardRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+  }, [manualPick]);
+  return html`<section ref=${cardRef} class="practice-card analysis-card ${cardClass(fold)}">
     <div class="card-heading">
       <div><span class="eyebrow">Analysis</span><h3>Attempt history</h3>
         ${sec && html`<span class="meta analysis-subject">${subjectLine(sec, t)}</span>`}
