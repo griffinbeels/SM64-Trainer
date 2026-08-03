@@ -347,14 +347,19 @@ def _arm_segment(base: str, service, segment_id: int = FIXTURE_SEGMENT) -> None:
     from the 84-def corpus would not exist here at all. See `FIXTURE_SEGMENT`
     for why THIS one of the ten, specifically -- it is not an arbitrary pick.
 
-    Does not touch the active target. An armed segment gets its own section
-    (`views.py`'s `seen_segs`: armed OR targeted OR has attempts) and
-    therefore its own `.objective-card` in the practice index regardless of
-    whether it is the target -- so this composes with whatever star target
-    `serve_ui` already seeded rather than replacing it. That card starts
-    inside a closed `<details class="practice-index-item">`
-    (`ui/components/practice.js`); `tools/uilab_project.py`'s `_EXPAND_ALL`
-    opens it before measuring.
+    Does not touch the active target -- an armed segment gets its own SECTION
+    regardless (`views.py`'s `seen_segs`: armed OR targeted OR has attempts),
+    so this composes with whatever star target `serve_ui` already seeded
+    rather than replacing it. Getting a section is not the same as getting a
+    CARD, though: spec practice-log-entity-cards (2026-08-03) deleted the
+    practice index that used to give every section its own `.objective-card`,
+    and `Practice()` now suppresses every segment PIN while a star target is
+    active (`pinnedSegs = !inContext || starActive ? [] : ...`) -- so an
+    armed-but-not-targeted segment surfaces only as a `.log-card` in the
+    practice log, never as `.objective-card`. Pass `target_segment=segment_id`
+    to `serve_ui` (below) when the segment itself needs to BE that card --
+    retiring the star target is what puts its own `.seg-waiting` back on the
+    fixed-height card (e.g. `tools/measure_objective_card.py`).
 
     Real events through the real matcher, not a hand-built row, matching
     BitFS Pipe Entry's own shape (storage/db.py's v4 INSERT: start
@@ -417,6 +422,39 @@ def _arm_segment(base: str, service, segment_id: int = FIXTURE_SEGMENT) -> None:
     if rows:
         post("/api/pb", {"attempt_id": rows[0]["id"], "timer_mode": "rta"})
     asyncio.run(rearm())
+
+
+def _target_segment(base: str, segment_id: int) -> None:
+    """Make an already-armed segment the ACTIVE target, retiring whatever
+    star `_seed_target` set.
+
+    Since the practice-log-entity-cards branch (2026-08-03), this is the ONLY
+    way to put a segment's own `.objective-card` on the page at all --
+    `Practice()` suppresses every segment pin while a star target is active,
+    so `_arm_segment` alone (which deliberately never touches the target) can
+    no longer reach that card; the armed segment shows up only as a
+    `.log-card`. Retiring the star is the server's own rule (one active
+    target, mutually exclusive kinds), and because the segment stays ARMED
+    throughout, its section keeps `armed_detail` non-null through the swap --
+    verified against a live fixture (2026-08-03): `POST /api/target` with a
+    segment body returns `ok`, the session view's `target` flips to
+    `kind: "segment"`, and the segment's own section still carries both
+    `armed_detail` (still mid-run) and populated `rank`/`entity_rank` (two
+    banners render, since `one_ladder` is false for a strategy that is not
+    the entity's own best -- see FIXTURE_SEGMENT_STRAT above)."""
+    import urllib.error
+    import urllib.request
+
+    request = urllib.request.Request(
+        f"{base}/api/target",
+        data=json.dumps({"kind": "segment", "segment_id": segment_id}).encode(),
+        method="POST", headers={"Content-Type": "application/json"})
+    try:
+        urllib.request.urlopen(request, timeout=10)
+    except urllib.error.HTTPError as error:
+        raise RuntimeError(
+            f"fixture could not target segment {segment_id}: {error.code} "
+            f"{error.read()[:200]!r}") from error
 
 
 def _publish_bowser_stage(service, course_id: int, level: int) -> None:
@@ -587,6 +625,7 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
               stage: tuple[int, int] | None = None,
               target: tuple[int, int] | None = None,
               arm_segment: int | None = None,
+              target_segment: int | None = None,
               seed_editor_fixtures: bool = False,
               reconcile_full_corpus: bool = False,
               bowser_stage: tuple[int, int] | None = None,
@@ -613,8 +652,19 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
 
     `arm_segment` additionally arms a real segment definition (see
     `_arm_segment`) -- additive, not a replacement for `target`: an armed
-    segment gets its own section regardless of which kind is the active
+    segment gets its own SECTION regardless of which kind is the active
     target, so a star target and an armed segment coexist on the same page.
+    It does NOT get its own `.objective-card` unless it is also the active
+    target (see `target_segment` below) -- `Practice()` suppresses every
+    segment pin while a star target is active, so an armed-but-untargeted
+    segment surfaces only as a `.log-card` in the practice log.
+
+    `target_segment` additionally makes an armed segment the ACTIVE target
+    (see `_target_segment`), retiring whatever star `target`/`_seed_target`
+    set. Pass the SAME id as `arm_segment` to reach the one state that still
+    puts two rank banners AND a `.seg-waiting` row on the SAME
+    `.objective-card` post practice-log-entity-cards (2026-08-03) --
+    `tools/measure_objective_card.py` is the caller this exists for.
 
     `seed_editor_fixtures` additionally POSTs two saved, byte-identical
     segments purpose-built for opening in the Segments editor (see
@@ -739,6 +789,13 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
                           strat=FIXTURE_STRAT if target is None else None)
             _seed_target(base, *(target or (FIXTURE_COURSE, FIXTURE_STAR)),
                          with_pb=target is None)
+            if target_segment is not None:
+                # AFTER _seed_target, not before: retiring the star target
+                # _seed_target just set is the whole point (see
+                # _target_segment's own docstring). Requires the segment to
+                # already be armed (arm_segment), or there is no `armed_
+                # detail` for the resulting card to carry.
+                _target_segment(base, target_segment)
             if bowser_stage is not None:
                 # AFTER _seed_target, not instead of it: broadcast-only and
                 # retires nothing (see _publish_bowser_stage), so the star

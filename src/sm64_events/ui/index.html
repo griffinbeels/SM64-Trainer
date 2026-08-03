@@ -2345,7 +2345,6 @@
   .reset-toggle:hover { color: var(--text); }
   .reset-toggle input { position: absolute; opacity: 0; pointer-events: none; }
   .reset-toggle:has(input:checked) { color: var(--gold-soft); border-color: #8e7330; }
-  .attempt-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; scrollbar-width: thin; }
   .attempt-table { margin: 0; font-size: .79rem; font-variant-numeric: tabular-nums; }
   .attempt-table tr { height: 40px; }
   .attempt-table td { padding: .3rem .36rem; border-bottom: 1px solid var(--border-soft); }
@@ -4337,9 +4336,12 @@
      width (uilab's decoration probe). Zero the bleed rather than re-tune it
      smaller: this row has no reserved padding for it to fade into, the same
      reasoning the seg-waiting override (near the top of this file) already
-     uses. Same (0,2,1) specificity as the rules it overrides, so it has to
-     come after them -- true here by construction, this being the end of the
-     file. */
+     uses. It wins on SPECIFICITY, not source order: the base rule it
+     overrides, `.rank-banner::before`, is a class + pseudo-element (0,1,1);
+     adding the `.log-card-ranks` ancestor here makes this one (0,2,1) --
+     one class higher, so it would win even declared first. Ditto
+     `.log-card-ranks .rank-banner:first-child::before` below it, at (0,3,1)
+     against the (0,2,1) `.rank-banner:first-child::before` it overrides. */
   .log-card-ranks .rank-banner::before { top: 0; bottom: 0; left: 0; right: 0; }
   .log-card-ranks .rank-banner:first-child::before { left: 0; border-radius: 0; }
 

@@ -2,26 +2,38 @@
 
 The card is a hard fixed height on purpose (the user streams it in OBS and a
 card that reflowed mid-run would shift their capture), so the value has to come
-from what the content actually needs. Two ways that has gone wrong, both paid
-for, both guarded here:
+from what the content actually needs. Three ways that has gone wrong, all paid
+for, all guarded here:
 
-  * measuring ONE card -- the Practice page renders an `.objective-card` per
-    index item as well as the active-target one, and the first is usually the
-    shorter. Take the max over all of them.
   * measuring the EMPTY card -- without a stage and a target the card renders
     "Nothing to practice here", which is 39px shorter than the real thing. The
     288px that shipped until 2026-07-29 was measured that way.
   * measuring only a STAR -- spec 2026-07-28-multi-step-segments put a third
-    grid row (`.seg-waiting`) inside this same card, rendered only while a
-    SEGMENT is armed (`sec.armed_detail` non-null). A star can never reach
-    that state, so ARM_SEGMENT below arms a real segment definition
-    alongside the star target (`ui_fixture.py`'s `_arm_segment`) and this
-    script takes the max across BOTH cards, same as it already does across
-    every card on the page.
+    grid row (`.seg-waiting`) inside this same card, rendered only while the
+    card's OWN entity is armed (`sec.armed_detail` non-null). An ordinary star
+    can never reach that state, so ARM_SEGMENT below arms a real segment
+    definition and TARGETS it, so its `.objective-card` carries the row.
+  * assuming a SECOND card exists to take the max over -- true before spec
+    practice-log-entity-cards (2026-08-03), when the Practice page rendered an
+    `.objective-card` per practice-index item as well as the active-target
+    one. That index is gone: `Practice()` now suppresses every segment PIN
+    while a star target is active, so an armed-but-untargeted segment can
+    never again share the page with a second `.objective-card` -- it
+    surfaces only as a `.log-card`, which is not fixed-height and is not this
+    script's concern. There is exactly ONE `.objective-card` on the page at
+    any moment now (whichever section is pinned, or the empty state), so
+    `TALLEST` below still takes a max defensively but is only ever maxing
+    over one element. Reaching "two rank banners AND my own `.seg-waiting`"
+    therefore means the ONE pinned card's entity must carry both at once --
+    ARM_SEGMENT is targeted, not merely armed alongside an unrelated star, so
+    it becomes that one card (`ui_fixture.py`'s `target_segment`, added for
+    exactly this).
 
 Uses `serve_ui()`'s own defaults, so it measures exactly the card the layout
 gate measures. Those defaults seed a star with FIVE strategies precisely so
-BOTH rank banners render -- the tallest thing the card ever holds.
+BOTH rank banners render when nothing else overrides the target -- the
+tallest thing the card ever holds, short of ARM_SEGMENT's own two-banner
+segment below.
 
 Run:  uv run python tools/measure_objective_card.py
 """
@@ -50,6 +62,10 @@ from uilab_project import PROJECT                     # noqa: E402
 # single combined rank banner instead of two. The STAGE/TARGET constants
 # that sat here are gone: main made serve_ui() seed a deterministic
 # practice state of its own, so naming them again would be a second copy.
+# Passed to BOTH `arm_segment` (stay armed) and `target_segment` (become the
+# active target, retiring the star `serve_ui` seeds by default) -- targeting
+# it is what makes it the ONE `.objective-card` the page ever renders now
+# (see the module docstring).
 ARM_SEGMENT = FIXTURE_SEGMENT
 
 _ALL_WIDTHS = (320, 340, 360, 400, 430, 480, 520, 560, 600, 640, 680, 700,
@@ -92,30 +108,21 @@ TALLEST = r"""
 })()
 """
 
-# ARM_SEGMENT's card sits inside a closed `<details class="practice-index-
-# item">` (ui/components/practice.js) -- a closed <details>'s content computes
-# `display: none`, which TALLEST above already skips, so an unopened one would
-# silently drop straight out of the "worst" calculation instead of erroring.
-EXPAND_INDEX = """
-document.querySelectorAll('details.practice-index-item:not([open])')
-  .forEach((d) => { d.open = true; });
-"""
-
 
 def main() -> int:
     shortfalls: list[tuple[int, int, int]] = []
-    with serve_ui(arm_segment=ARM_SEGMENT) as base, \
+    with serve_ui(arm_segment=ARM_SEGMENT, target_segment=ARM_SEGMENT) as base, \
             get_driver().launch() as page:
         page.goto(f"{base}/ui/index.html")
         page.wait_for(".objective-card")
-        page.evaluate(EXPAND_INDEX)
-        # This tool's whole claim is "max across BOTH cards", and TALLEST
-        # skips display:none -- so if the armed segment ever stops producing
-        # `armed_detail`, the segment card silently drops out and it prints
-        # "Every card fits" having measured only the star. A constant in
-        # index.html now rests on this run, so a false pass is worse than a
-        # crash. Refuse loudly, the same posture _seed_target's post() takes.
-        # (Delta review, finding 3.)
+        # This tool's whole claim is "the one `.objective-card` fits its
+        # tallest possible content", and TALLEST skips display:none -- so if
+        # ARM_SEGMENT ever stops producing `armed_detail`, or stops being the
+        # active target, the card silently loses its `.seg-waiting` row and
+        # this prints "Every card fits" having measured a shorter state than
+        # the real one. A constant in index.html rests on this run, so a
+        # false pass is worse than a crash. Refuse loudly, the same posture
+        # _seed_target's post() takes. (Delta review, finding 3.)
         # `return`, not a bare expression: evaluate() wraps its argument as a
         # function BODY, so a bare one yields None and this check would crash
         # on int(None) instead of reporting what it measured. (Same trap
@@ -127,10 +134,13 @@ def main() -> int:
         if reached < 1:
             raise SystemExit(
                 "the armed-segment card never rendered (.seg-waiting absent) "
-                "-- this run would have measured the STAR card alone and "
-                "reported a clean result for a state it never reached. Check "
+                "-- this run would have measured a shorter state and "
+                "reported a clean result for one it never reached. Check "
                 f"ui_fixture.py's FIXTURE_SEGMENT ({ARM_SEGMENT}) still arms, "
-                "and that EXPAND_INDEX still opens the practice index.")
+                "and that target_segment still makes it the active target "
+                "(Practice() drops `.seg-waiting` from an armed-but-"
+                "untargeted segment's card entirely -- there is no longer a "
+                "second `.objective-card` for it to fall back to).")
         for width in WIDTHS:
             page.set_viewport(width, 1000)
             page.wait_ms(420)

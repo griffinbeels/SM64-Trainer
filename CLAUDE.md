@@ -62,7 +62,7 @@ automatically when you touch matching files. Zones:
 | Tracking, storage, stats, routes/runs/segments, defaults corpus | `tracking/`, `storage/`, `stats/`, `data/`, `tools/corpus_*` | `.claude/rules/tracking-storage.md` |
 | Server, REST/WS APIs, wiring, paths, perf probes | `server/`, `main.py`, `core/paths.py`, `core/procmem.py`, `core/perfmon.py` | `.claude/rules/server.md` |
 | UI shell, shared primitives, **verification norms** (loads for all of `ui/`) | `ui/` | `.claude/rules/ui-core.md` |
-| Practice, stage banner, pickers, segments, routes, runs, strategies, graphs | `ui/components/practice*`, `stagebanner.js`, `entity*`, `segments.js`, `routes.js`, `runview.js`, `strat*`, `links.py` | `.claude/rules/ui-practice.md` |
+| Practice, stage banner, pickers, segments, routes, runs, strategies, graphs | `ui/components/practice*`, `ui/components/attemptlog.js`, `ui/entitysection.js`, `ui/focustarget.js`, `stagebanner.js`, `entity*`, `segments.js`, `routes.js`, `runview.js`, `strat*`, `links.py` | `.claude/rules/ui-practice.md` |
 | Rank icons + caps, banners, Rank tab, MARELO pill | `ui/components/caps.js`, `rankicon.js`, `hat.js`, `ranks.js`, `rankpage.js`, `marelo.js`, `standards.js` | `.claude/rules/ui-ranks.md` |
 | Celebrations, the level-up climb, the tuning inspector | `ui/celebrations.js`, `rankclimb.js`, `climb*.js`, `tune*`, `components/celebrate.js`, `server/tuning_api.py` | `.claude/rules/ui-climb.md` |
 | Replay capture/encode/extract, compare, compilation + **their UI** | `replay/`, `compare/`, `core/recorder_lock.py`, `ui/components/replay.js`, `compare.js`, `videosync.js`, `failcomp.js` | `.claude/rules/replay-compare.md` |
@@ -108,10 +108,14 @@ Contract changes land on main first, then dependent work fans out. Merge with
 11. **Star ↔ segment parity.** Stars and segments are two kinds of the SAME
     practiced thing — attempts, PBs, strats, ranks, markers, replays, routes.
     A feature built for one ships for both in the same change, or the
-    asymmetry is written down with its reason. Enforced structurally (shared
-    components `stratpicker.js`/`PbTag`/`TimeFilterChip`/`StandardsPanel`;
-    kind-dispatched endpoints `/api/target`, `/api/strat`, `/api/wipe`) and by
-    `tests/test_ui_section_parity.py`.
+    asymmetry is written down with its reason. Enforced structurally: the
+    practice log renders ONE `LogCard` per entity of either kind
+    (`ui/components/practicelog.js`), and the analysis card + detail drawer
+    are ONE page-level `EntityAnalysis`/`EntityDrawer` pair
+    (`ui/components/entitydetail.js`) rather than a copy per kind — plus the
+    shared `stratpicker.js`/`PbTag`/`TimeFilterChip`/`StandardsPanel` inside
+    them, and kind-dispatched endpoints `/api/target`, `/api/strat`,
+    `/api/wipe`. Pinned by `tests/test_ui_section_parity.py`.
 12. **Route step order is a hard contract** — seeded route steps must be in
     completion-event order or a run stalls permanently and silently (detail in
     `.claude/rules/tracking-storage.md`).
