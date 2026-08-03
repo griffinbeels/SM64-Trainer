@@ -12,3 +12,29 @@ export function fmtIgt(frames) {
         c = Math.floor(((frames % 30) * 100) / 30);
   return `${m}'${String(s).padStart(2, "0")}"${String(c).padStart(2, "0")}`;
 }
+
+// A time under a minute drops its empty minutes field: 23 seconds reads
+// `23"00`, not `0'23"00` (user, 2026-08-03). ONE rule, expressed as a
+// transformation OF fmtIgt rather than as a second formatter, so the two can
+// never disagree about the seconds and centiseconds — which is the half that
+// grading depends on (ranks/classify.py::display_cs).
+function dropEmptyMinutes(text) {
+  return text.startsWith("0'") ? text.slice(2) : text;
+}
+
+export function fmtIgtShort(frames) {
+  return dropEmptyMinutes(fmtIgt(frames));
+}
+
+// A rank standard is stored in SECONDS with centisecond precision, not in
+// frames, so it cannot route through fmtIgt without a rounding trip that
+// would move a cutoff. It formats from centiseconds directly and wears the
+// same shape, and tests/test_ui_time_format.py pins the two against each
+// other on every frame-exact value so the shapes cannot drift apart.
+export function fmtSeconds(seconds) {
+  const cs = Math.round(seconds * 100);
+  const m = Math.floor(cs / 6000), s = Math.floor((cs % 6000) / 100),
+        c = cs % 100;
+  return dropEmptyMinutes(
+    `${m}'${String(s).padStart(2, "0")}"${String(c).padStart(2, "0")}`);
+}

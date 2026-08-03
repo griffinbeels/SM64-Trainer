@@ -154,3 +154,26 @@ def test_the_new_strategy_modal_asks_which_star_the_run_ends_on(hundred_coin_pag
     # the community does not time is the whole point of the control.
     assert len([o for o in options if o]) >= 6, options
     assert any("no community times" in o for o in options), options
+
+
+def test_the_standards_cells_print_the_usamune_notation(hundred_coin_page):
+    """Rendered, not just formatted: the cells read `1'21"32` / `23"00`, never
+    raw seconds (user, 2026-08-03). Lives here because this fixture is the one
+    that reaches a populated standards table; the rule is not 100-coin-specific
+    and `tests/test_ui_time_format.py` owns the notation itself."""
+    import re
+
+    hundred_coin_page.evaluate("""
+      (() => { const b = document.querySelector(".standards-toggle");
+               if (b && b.getAttribute("aria-expanded") !== "true") b.click(); })()
+    """)
+    hundred_coin_page.wait_for(".stdtable", timeout_ms=10000)
+    cells = hundred_coin_page.evaluate("""
+      Array.from(document.querySelectorAll(".stdtable tbody td"))
+        .map((td) => td.textContent.trim()).filter((t) => t && t !== "\u2014")
+    """)
+    times = [c for c in cells if re.fullmatch(r"[\d'\"]+", c)]
+    assert times, f"no time cells found; got {cells[:8]}"
+    for text in times:
+        assert re.fullmatch(r"(\d+')?\d{2}\"\d{2}", text), (
+            f"{text!r} is not the Usamune notation")

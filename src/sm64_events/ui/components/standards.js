@@ -9,7 +9,7 @@ import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
-import { fmtIgt } from "../format.js";
+import { fmtIgtShort, fmtSeconds } from "../format.js";
 import { RANK_NAMES, rankColor } from "./ranks.js";
 import { capName, capGradient } from "./caps.js";
 import { StratModal } from "./stratmodal.js";
@@ -219,7 +219,7 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
           ? html`<a href=${headVid(strat)} target="_blank" rel="noopener" title="fastest-time video">${colHead(strat)}</a>`
           : colHead(strat)}${editing ? html` <button class="candx" title=${isSeeded(strat) ? "clear this strategy's standards" : "delete this strategy"} onclick=${() => delStrat(strat)}>×</button>` : ""}
           ${marker && strat === activeStrat ? html`<span class="std-you-badge"
-              title="your current time and score on this ladder">◀ you · ${fmtIgt(basisFrames)}${entityScore != null ? ` · ${fmtScore(entityScore)}` : ""}</span>` : ""}</th>`)}</tr></thead>
+              title="your current time and score on this ladder">◀ you · ${fmtIgtShort(basisFrames)}${entityScore != null ? ` · ${fmtScore(entityScore)}` : ""}</span>` : ""}</th>`)}</tr></thead>
         <tbody>
         ${RANK_NAMES.filter((r) => r !== "Iron").map((rank) => html`<tr>
           <!-- Large flat surface -> the tier's own gradient where it has
@@ -232,7 +232,12 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
           ${strats.map((strat) => {
             const v = (data.strategies[strat] || {})[rank];
             const vid = cutoffVid(strat, rank);
-            const label = v != null ? v.toFixed(2) : "—";
+            // Every rank standard reads in the Usamune display format the practice
+            // log and every PB already use -- 1'21"32, and 23"00 under a minute
+            // (user, 2026-08-03: "This is important because that matches the
+            // format we actually display in the practice log"). Raw seconds
+            // beside a formatted PB is two vocabularies for one quantity.
+            const label = v != null ? fmtSeconds(v) : "—";
             // "You are here" — a cell highlight would be a lie (your time is
             // essentially never AT a cutoff), so instead the two cutoffs
             // bracketing your interpolated position get their own mark, and
