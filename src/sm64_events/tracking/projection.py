@@ -217,6 +217,7 @@ from dataclasses import dataclass, replace
 from sm64_events.memory.addresses import CASTLE_LEVELS, course_for_level
 # one-way import: segments.py pulls Attempt lazily at call time, so this
 # module-level import cannot cycle (see SegmentEngine.feed).
+from sm64_events.tracking.prune import PRUNE_EVENT
 from sm64_events.tracking.runs import RunTracker
 from sm64_events.tracking.segments import (
     SEGMENT_ATTEMPT_OFFSET, MatchContext, SegmentEngine, hundred_coin_entity,
@@ -1292,6 +1293,21 @@ def replay(events, segments=None, time_filters=None,
             # reaches proj.feed(), so on_notices is correctly never called
             # for it either -- there are no notices to report.
             attempts = [a for a in attempts if not wipe_matches(a, ev.payload)]
+            continue
+        if ev.type == PRUNE_EVENT:
+            # The startup prune of unlabelled attempts (tracking/prune.py),
+            # applied the same retroactive way a wipe is — and for the same
+            # reason it never reaches proj.feed(): an attempt still open when
+            # the prune ran closes afterwards and is post-prune data.
+            #
+            # Carries EXPLICIT ids rather than a rule to re-evaluate, so a
+            # past prune means the same thing forever. The rule reads the
+            # `pbs` table and the saved-clip directory to decide what is
+            # protected; both change under us, so re-deriving here would let
+            # deleting a PB row today silently widen a prune that happened
+            # last week — and there would be no record that it had.
+            pruned = set(ev.payload.get("attempt_ids", ()))
+            attempts = [a for a in attempts if a.id not in pruned]
             continue
         attempts.extend(proj.feed(ev))
         if on_notices is not None:

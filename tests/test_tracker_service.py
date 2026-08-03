@@ -71,14 +71,19 @@ def test_start_creates_session_and_journals_it(tmp_path):
 
 
 def test_events_are_journaled_and_attempts_persisted(tmp_path):
-    db, svc = make(tmp_path)
+    """The derived pair reaches the BROADCAST, never the journal: both
+    restate something already stored, so journaling them was pure noise in a
+    file whose value is being readable (service.py::BROADCAST_ONLY)."""
+    db, svc, sent = make_rec(tmp_path)
     asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
     asyncio.run(svc.publish(star(1350)))
     attempts = db.attempts()
     assert len(attempts) == 1 and attempts[0].outcome == "success"
-    types = [e.type for e in db.events()]
-    assert "attempt_completed" in types          # derived event journaled too
-    assert "target_changed" in types
+    broadcast = [e.type for e in sent]
+    assert "attempt_completed" in broadcast and "target_changed" in broadcast
+    journaled = [e.type for e in db.events()]
+    assert "attempt_completed" not in journaled
+    assert "target_changed" not in journaled
 
 
 def test_attach_db_upgrades_broadcast_only_to_full_tracking(tmp_path):
@@ -318,6 +323,9 @@ def test_wipe_star_spares_segment_data(tmp_path):
 
 def test_wipe_survives_restart(tmp_path):
     db, svc = make(tmp_path)
+    # Labelled so the restart's prune leaves it alone -- what is under test
+    # here is the WIPE surviving a restart, not the prune (tracking/prune.py).
+    asyncio.run(svc.set_target(2, 2, "Cannonless"))
     success(svc, 1000)
     asyncio.run(svc.wipe_data("star", course_id=2, star_id=2, scope="lifetime"))
     success(svc, 5000, igt=350)                   # fresh data after the wipe
@@ -390,6 +398,10 @@ def test_restart_resumes_from_journal(tmp_path):
     time still selected. What a restart must rebuild is what he EARNED (the
     attempt, its strategy); what it must not rebuild is where he was pointed."""
     db, svc = make(tmp_path)
+    # The strategy is load-bearing, not decoration: the startup prune deletes
+    # an attempt that never said what it was practice FOR (tracking/prune.py),
+    # so "survives a restart" now means "was labelled".
+    asyncio.run(svc.set_strat(2, 2, "Cannonless"))   # the star actually grabbed
     asyncio.run(svc.set_target(8, 2))
     asyncio.run(svc.publish(star(900)))
     db2 = Database(tmp_path / "t.db")
@@ -408,13 +420,13 @@ def test_degraded_mode_without_db_still_broadcasts(tmp_path):
 
 
 def test_reproject_emits_target_changed_when_target_reverts(tmp_path):
-    db, svc = make(tmp_path)
+    db, svc, sent = make_rec(tmp_path)
     asyncio.run(svc.set_target(8, 2))
     asyncio.run(svc.publish(star(900)))            # target moves to (2,2)
     grab_id = db.attempts()[0].id
     asyncio.run(svc.clear_attempt(grab_id, reason="accidental"))
     assert svc.target == ("star", 8, 2)
-    tc = [e for e in db.events() if e.type == "target_changed"]
+    tc = [e for e in sent if e.type == "target_changed"]
     assert tc[-1].payload["course_id"] == 8 and tc[-1].payload["star_id"] == 2
 
 
@@ -489,19 +501,21 @@ def test_100_coin_star_pick_strategy_lands_on_the_star(tmp_path):
 
 
 def test_death_event_flows_to_death_attempt(tmp_path):
-    db, svc = make(tmp_path)
+    db, svc, sent = make_rec(tmp_path)
     asyncio.run(svc.publish(ev("practice_reset", 1000,
                                {"igt_frames_before": 0, "mario_acted": True})))
     asyncio.run(svc.publish(ev("death", 1300,
                                {"cause": "drowning", "igt_frames": 290, "level": 9})))
     [a] = db.attempts()
     assert a.outcome == "death" and a.outcome_detail == "drowning"
-    types = [e.type for e in db.events()]
-    assert "attempt_completed" in types
+    assert "attempt_completed" in [e.type for e in sent]
 
 
 def test_pipeline_survives_attempt_persist_failure(tmp_path):
     db, svc = make(tmp_path)
+    # Labelled so the restart's prune leaves it alone; the self-heal is what
+    # is under test (tracking/prune.py).
+    asyncio.run(svc.set_target(2, 2, "Cannonless"))
     original = db.upsert_attempt
     db.upsert_attempt = lambda a: (_ for _ in ()).throw(RuntimeError("disk full"))
     asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
@@ -614,7 +628,7 @@ def test_delete_unknown_session_raises_lookup_error(tmp_path):
 
 
 def test_attempt_completed_carries_rollout_counts(tmp_path):
-    db, svc = make(tmp_path)
+    db, svc, sent = make_rec(tmp_path)
     asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
     asyncio.run(svc.publish(ev("rollout", 1100,
                                {"dustless": True, "frames_late": 0, "level": 24})))
@@ -623,13 +637,13 @@ def test_attempt_completed_carries_rollout_counts(tmp_path):
     asyncio.run(svc.publish(star(1350)))
     a = db.attempts()[0]
     assert a.rollouts_total == 2 and a.rollouts_dustless == 1
-    completed = [e for e in db.events() if e.type == "attempt_completed"]
+    completed = [e for e in sent if e.type == "attempt_completed"]
     assert completed[-1].payload["rollouts_total"] == 2
     assert completed[-1].payload["rollouts_dustless"] == 1
 
 
 def test_attempt_completed_carries_jump_counts(tmp_path):
-    db, svc = make(tmp_path)
+    db, svc, sent = make_rec(tmp_path)
     asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
     asyncio.run(svc.publish(ev("jump", 1100,
                                {"dustless": True, "frames_late": 0,
@@ -638,7 +652,7 @@ def test_attempt_completed_carries_jump_counts(tmp_path):
     asyncio.run(svc.publish(star(1350)))
     a = db.attempts()[0]
     assert a.jumps_total == 1 and a.jumps_dustless == 1
-    completed = [e for e in db.events() if e.type == "attempt_completed"]
+    completed = [e for e in sent if e.type == "attempt_completed"]
     assert completed[-1].payload["jumps_total"] == 1
     assert completed[-1].payload["jumps_dustless"] == 1
 
@@ -1058,10 +1072,10 @@ def test_segment_attempt_completed_carries_segment_fields(tmp_path):
 
 
 def test_star_attempt_completed_carries_kind_star(tmp_path):
-    db, svc = make(tmp_path)
+    db, svc, sent = make_rec(tmp_path)
     asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
     asyncio.run(svc.publish(star(1350)))
-    p = [e for e in db.events() if e.type == "attempt_completed"][-1].payload
+    p = [e for e in sent if e.type == "attempt_completed"][-1].payload
     assert p["kind"] == "star"
     assert p["segment_id"] is None and p["segment_name"] is None
 

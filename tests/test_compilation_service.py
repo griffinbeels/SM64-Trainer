@@ -19,7 +19,7 @@ class FakeReplay:
         self.pre_pad_s = 3.0
         self.post_pad_s = 2.0
 
-    def _saved_attempt_ids(self):
+    def saved_attempt_ids(self):
         return set()
 
     def find_saved(self, attempt_id):

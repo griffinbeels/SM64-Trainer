@@ -30,7 +30,7 @@ from sm64_events.replay.audio import ProcessAudioSource, SystemAudioSource
 from sm64_events.replay.config import ReplayConfig, apply_settings_file
 from sm64_events.replay.extract import ClipExtractor
 from sm64_events.replay.recorder import ReplayRecorder
-from sm64_events.replay.service import ReplayService
+from sm64_events.replay.service import ReplayService, saved_attempt_ids
 from sm64_events.replay.compilation import CompilationBuilder, CompilationService
 from sm64_events.replay.video import DwmSurfaceVideoSource
 from sm64_events.replay.window import find_window
@@ -183,6 +183,11 @@ def build():
     service = TrackerService(db, broadcaster, ranks=ranks)
     # User-set storage limits (UI panel) overlay the code defaults.
     replay_cfg = apply_settings_file(ReplayConfig())
+    # A saved clip's attempt survives the startup prune (tracking/prune.py).
+    # Wired off the CONFIG, not off the ReplayService below, so it still holds
+    # when replay is disabled this run -- the clips he saved are on disk either
+    # way, and their filenames are the only index to them.
+    service.saved_clip_ids = lambda: saved_attempt_ids(replay_cfg.save_root)
     replay = None
     if replay_cfg.enabled:
         from sm64_events.replay.encoder import pick_video_codec
