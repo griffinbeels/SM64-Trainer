@@ -61,7 +61,10 @@ export const CAVEATS = {
   grab_timed: {
     glyph: "!",
     short: "Grab-timed",
-    sentence: "Timed at the star grab, not the x-cam — not a leaderboard-legal time",
+    // His wording, verbatim (2026-08-02). The rule is the second half: "not a
+    // leaderboard-legal time" describes the row, "Only xcam is allowed" says
+    // what would have made it one, which is the thing a reader can act on.
+    sentence: "Timed at star grab, not xcam. Only xcam is allowed.",
     suppressFloor: false,
   },
   old_clock: {

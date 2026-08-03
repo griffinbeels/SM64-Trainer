@@ -159,6 +159,17 @@ function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, sec }) {
   const entity = a.segment_id != null ? `segment:${a.segment_id}`
     : (sec ? `star:${sec.course_id}:${sec.star_id}` : null);
   const strat = a.strat_tag || (sec && sec.last_strat) || null;
+  // The server's answer to "may this be saved as a PB", as a caveat key we
+  // already know how to draw. Never re-derived here: save_pb refuses on the
+  // same predicate, and a button that offers what the server rejects is the
+  // drift this shares one door to prevent.
+  const blockedPb = caveatOf(a.pb_blocked_by);
+  // The mark on the TIME, not on the save button: this row's number is not
+  // the quantity it looks like ("if you've been practicing all wrong, you
+  // should know", 2026-08-02). Same key vocabulary, same badge, one door —
+  // the server decides which rows earn it (tracking/caveats.py's PROVEN-only
+  // rule, measured), this only draws it.
+  const timeMark = caveatOf(a.caveat);
   const row = html`<tr ref=${(el) => { rowRef.current = el; }}
       class="${a.cleared ? "cleared" : ""} ${flash ? "row-flash" : ""} ${isNew ? "row-new" : ""}">
     <td class="meta attempt-index">#${idx + 1}</td>
@@ -169,6 +180,7 @@ function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, sec }) {
       ${a.outcome === "death" && a.outcome_detail
         ? html` <span class="meta">(${a.outcome_detail})</span>` : ""}
       ${a.outcome === "success" && time ? html` <b>${time}</b>` : ""}
+      ${timeMark ? cardBadge(timeMark) : ""}
       ${a.outcome !== "success" && inTime ? html` <span class="meta">${inTime} in</span>` : ""}
       ${t.showDust && a.rollouts_total > 0
         ? html` <span class="meta">· ${a.rollouts_dustless}/${a.rollouts_total} dustless rollouts</span>` : ""}
@@ -196,10 +208,25 @@ function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, sec }) {
         ? (a.is_current_pb
           ? html` <button onclick=${undoPb}
               title="delete this save — the previous PB becomes current again">Undo PB</button>`
-          : html` <button class=${pbBeat ? "pb-glow" : ""} onclick=${savePb}>
-              <${Icon} name="bookmark" size=${14} />
-              <span class="save-pb-wide">Save as PB</span>
-              <span class="save-pb-narrow">Save PB</span></button>`)
+          : blockedPb
+            // Not a slow PB — a different quantity, which no leaderboard
+            // accepts (2026-08-02: "these fake PBs just shouldn't be
+            // allowed"). Shown rather than hidden, and carrying the SAME
+            // badge a PB already saved with this problem wears, so the row
+            // explains itself instead of leaving a button that silently
+            // stopped working. The server refuses it too — this is the
+            // affordance, not the rule (tracking/caveats.py::pb_blocked_by).
+            ? html` <button class="pb-blocked" disabled
+                title=${`Cannot be saved as a PB — ${blockedPb.sentence}`}
+                aria-label=${`Cannot be saved as a PB — ${blockedPb.sentence}`}>
+                <${Icon} name="bookmark" size=${14} />
+                <span class="save-pb-wide">Save as PB</span>
+                <span class="save-pb-narrow">Save PB</span>
+                ${cardBadge(blockedPb)}</button>`
+            : html` <button class=${pbBeat ? "pb-glow" : ""} onclick=${savePb}>
+                <${Icon} name="bookmark" size=${14} />
+                <span class="save-pb-wide">Save as PB</span>
+                <span class="save-pb-narrow">Save PB</span></button>`)
         : ""}
       ${a.cleared
         ? html` <button onclick=${restore}>undo</button>`

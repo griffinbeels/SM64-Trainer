@@ -17,6 +17,7 @@ dies (spec §9)."""
 import dataclasses
 import json
 import logging
+from collections.abc import Callable
 from datetime import datetime, timezone
 
 from sm64_events.core.events import Event
@@ -27,7 +28,9 @@ from sm64_events.ranks.classify import RANK_MODES
 from sm64_events.ranks.standards import entity_key
 from sm64_events.storage.db import Database, EventRow
 from sm64_events.tracking import practicable
+from sm64_events.tracking.caveats import pb_blocked_by
 from sm64_events.tracking.defaults import resolve_steps
+from sm64_events.tracking.prune import PRUNE_EVENT, prunable_ids
 from sm64_events.tracking.projection import (Projector, journal_id, replay,
                                              wipe_matches)
 from sm64_events.tracking.segments import (SegmentDef, hundred_coin_entity,
@@ -39,6 +42,28 @@ from sm64_events.tracking import routes as route_logic
 log = logging.getLogger("sm64.tracker")
 
 RUN_OFFSET_MIN, RUN_OFFSET_MAX = 0, 600000   # 0..10 min, ms
+
+#: Published to the browser, never written to the journal — the same
+#: discipline `stage_changed` and the segment notices already follow, and
+#: for the same reason: each of these restates something already stored, so
+#: a journal row is pure noise in a file whose whole value is being READABLE
+#: as a record of what happened.
+#:
+#: `attempt_completed` restates a row of the attempts table. `target_changed`
+#: is re-derived from `target_set` plus the projection rules on every replay.
+#: `attempts_invalidated` is a bare "refetch now" ping with no payload at all.
+#: Nothing reads any of the three back: not `replay()`, not the segment
+#: timeline endpoint (whose membership rule names five real trigger types),
+#: and `tracking/eventlabel.py` already classes them as derived bookkeeping
+#: "that nobody would ever call the step I took".
+#:
+#: Proven rather than argued: dropping all three from the live journal
+#: replays byte-identical — every one of 3,576 attempts and every run — while
+#: removing 3,884 of 23,063 rows and taking the file from 4.97 MB to 3.42 MB
+#: (2026-08-02). `storage/db.py::purge_event_types` clears the ones already
+#: written; this set stops any more being written.
+BROADCAST_ONLY = frozenset({"attempt_completed", "target_changed",
+                            "attempts_invalidated"})
 
 
 def _now() -> datetime:
@@ -89,6 +114,12 @@ class TrackerService:
         self._current_stage = {"course_id": None, "level": None,
                                "area": None, "mode": None}
         self._persisted_runs: list[int] = []
+        # Zero-arg callable -> attempt ids with a saved replay clip, which the
+        # startup prune must never delete (tracking/prune.py). Injected by
+        # main.py because the clips live on the REPLAY side and the dependency
+        # only runs that way; left None here so the prune still protects saved
+        # PBs when nothing wired it (tests, a db-only harness).
+        self.saved_clip_ids: Callable[[], set[int]] | None = None
 
     def _load_segment_defs(self) -> list[SegmentDef]:
         # inclusion list (the dataclass's own fields), NOT exclusion of
@@ -126,6 +157,14 @@ class TrackerService:
         if self.db is None:
             log.error("tracker running WITHOUT a database (broadcast-only)")
             return
+        # Before the replay, so it runs over the smaller journal: clear the
+        # derived-bookkeeping rows written before BROADCAST_ONLY existed. A
+        # one-off in practice — nothing writes these any more, so every later
+        # startup deletes 0 and skips the VACUUM.
+        purged = self.db.purge_event_types(BROADCAST_ONLY)
+        if purged:
+            log.info("purged %d derived journal row(s) and reclaimed the space",
+                     purged)
         events = self.db.events()
         attempts, self._projector = replay(
             events, segments=self._segment_defs,
@@ -145,6 +184,12 @@ class TrackerService:
         await self.publish(Event(type="session_started", frame=0,
                                  timestamp_utc=_now(),
                                  payload={"session_id": self.session_id}))
+        # AFTER session_started, deliberately: that event is what closes an
+        # attempt left in flight when the last session ended (the cross-session
+        # abandon), and such a row belongs to the session that just ended, so
+        # it is precisely what this prune is for. Deciding before it existed
+        # left one stale row behind on every single restart.
+        await self._prune_unlabelled_attempts()
 
     async def publish(self, event: Event) -> None:
         seq = await self.broadcaster.publish(event)
@@ -154,6 +199,8 @@ class TrackerService:
             # journal row would only add replay/projection noise). Same
             # broadcast-only discipline as the segment notices.
             self._current_stage = dict(event.payload)
+            return
+        if event.type in BROADCAST_ONLY:
             return
         if self.db is None or self.session_id is None:
             return
@@ -180,13 +227,28 @@ class TrackerService:
             # once per SUBAREA star, while Mario is locked in a dance.
             await self._reproject()
             return
+        if event.type == PRUNE_EVENT:
+            # Startup prune of unlabelled attempts (tracking/prune.py). Like a
+            # clear or a correction it is a compensating event folded in by
+            # replay(), which the sequential projector cannot do — so rebuild
+            # through the one door rather than deleting rows here. The
+            # attempts_invalidated that _reproject publishes is what makes an
+            # already-open page drop the rows, and delete_orphaned_pbs runs in
+            # there too (a protected attempt is exactly one it must not find).
+            await self._reproject()
+            return
         proj = self._projector
         target_before = proj.target
         closed = proj.feed(row)
-        # Drain segment notices IMMEDIATELY, BEFORE the attempt loop:
-        # publishing attempt_completed below re-enters _track, whose nested
-        # feed() RESETS projector.segment_notices — draining after the loop
-        # would silently lose armed/disarmed events. Broadcast-only via
+        # Drain segment notices IMMEDIATELY, BEFORE the attempt loop.
+        # Historically this ordering was load-bearing because publishing
+        # attempt_completed below RE-ENTERED _track, and the nested feed()
+        # reset projector.segment_notices — draining after the loop silently
+        # lost armed/disarmed events. attempt_completed is BROADCAST_ONLY
+        # since 2026-08-02, so publish() returns before _track and the
+        # re-entry is gone; the ordering stays because it is the correct one
+        # either way, and because any future journaled event published from
+        # this loop would bring the hazard straight back. Broadcast-only via
         # broadcaster.publish (NOT self.publish): notices are ephemeral UI
         # state and must never be journaled.
         #
@@ -1463,6 +1525,48 @@ class TrackerService:
             out.append(ns)
         return out
 
+    async def _prune_unlabelled_attempts(self) -> int:
+        """Delete the attempts a PREVIOUS session left with nothing to say
+        what they were practice for, and return how many went.
+
+        The rule and the reasoning are `tracking/prune.py`; this is the shell
+        around it — gather what is protected, journal the verdict, let
+        _reproject apply it.
+
+        The session filter is the whole of "only at startup": the rows he is
+        making right now are the ones he still remembers, so only a row whose
+        own session has ended is a candidate. It reads `session_id` off the
+        ATTEMPT rather than trusting the list to be pre-session — a
+        cross-session abandon closes during this very startup and still
+        belongs to the session that ended.
+
+        FAILS CLOSED on a saved-clip scan that raises: an unreadable save
+        directory means the protected set is UNKNOWN, and deleting on an
+        unknown protected set is exactly the case that costs him a clip he
+        cannot get back. Skipping the prune costs a cluttered log for one
+        session, which the next start retries.
+        """
+        db = self._require_db()
+        protected = db.pb_attempt_ids()
+        if self.saved_clip_ids is not None:
+            try:
+                protected |= self.saved_clip_ids()
+            except OSError:
+                log.exception("saved-clip scan failed; skipping the attempt "
+                              "prune rather than risk orphaning a clip")
+                return 0
+        stale = [a for a in db.attempts() if a.session_id != self.session_id]
+        doomed = prunable_ids(stale, protected)
+        if not doomed:
+            return 0
+        log.info("pruning %d unlabelled attempt(s) left by previous sessions "
+                 "(%d attempt(s) protected by a saved PB or clip)",
+                 len(doomed), len(protected))
+        await self.publish(Event(type=PRUNE_EVENT, frame=0,
+                                 timestamp_utc=_now(),
+                                 payload={"attempt_ids": doomed}))
+        return len(doomed)
+
     async def _reproject(self) -> None:
         db = self._require_db()
         before = self._projector.target
@@ -1512,6 +1616,14 @@ class TrackerService:
             raise ValueError(f"attempt {attempt_id} is not a saveable success")
         if attempt.segment_id is not None and timer_mode != "rta":
             raise ValueError("segments are RTA-only")
+        blocked = pb_blocked_by(attempt)
+        if blocked is not None:
+            # The door, not the decoration: the button is drawn disabled from
+            # the same predicate, but a PB is reachable by API and a fake one
+            # keeps GRADING once it is in the pbs table (that is what made a
+            # cleared attempt's leftover PB read MARIO 1 for a week).
+            raise ValueError(
+                f"attempt {attempt_id} cannot be saved as a PB ({blocked})")
         frames = attempt.igt_frames if timer_mode == "igt" else attempt.rta_frames
         if frames is None:
             raise ValueError(f"attempt {attempt_id} has no {timer_mode} clock")

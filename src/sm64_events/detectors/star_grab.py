@@ -59,11 +59,16 @@ the fact rather than before it. So the emit is an OPTIMISTIC UPDATE:
   is dancing. Agreement is the point: when both sources say the same number
   there is nothing left to wait for. Failing that, `PUBLISH_WAIT_FRAMES` (12,
   ~400 ms) is the backstop, and it publishes Usamune's value regardless — the
-  cost of a disagreement is latency, never a wrong row. UNLESS the clock says
-  its own zero point may be an area load
-  (`IgtClock.counter_may_be_subarea_local`), in which case our number is the
-  time since that load, agreement would be meaningless, and the grab waits the
-  full `RESULT_SETTLE_FRAMES` to arrive right the first time.
+  cost of a disagreement is latency, never a wrong row. A subarea star used to
+  be the exception — our number there is the time since the area load, so
+  agreement was meaningless and the grab waited the full
+  `RESULT_SETTLE_FRAMES`. It no longer is: `IgtClock` keeps what the counter
+  had reached BEFORE the warp (`carried_igt_at_xcam`), so the sum is the whole
+  star and we can state it at the x-cam with nobody's help. Scored on his
+  2026-08-02 session, 4/4 exact against Usamune's own whole-star write. The
+  one thing that must not be taken there is Usamune's EARLY write, which
+  echoes our subarea-local counter — `_answer` recognises it by that value and
+  keeps ours.
 * **Keep watching** to x-cam + `RESULT_SETTLE_FRAMES` regardless. If Usamune's
   answer CHANGES after we published, emit `star_time_corrected` carrying the
   final number and the recorded row is revised in place
@@ -164,6 +169,22 @@ class _PendingGrab:
     # grab is still unpublished. Its presence is what turns this record from
     # "an event nobody has seen yet" into "a row that may still be corrected".
     published: tuple[int, str] | None = None
+    # WHICH MOMENT the published row describes. "xcam" for every ordinary
+    # grab; "grab" only while the backstop has published a row whose x-cam has
+    # not happened yet — the one state in which a correction changes a row's
+    # LEGALITY and not just its number.
+    timed_at: str = "xcam"
+    # Our own whole-star answer for a subarea star, when we had the base to
+    # build one. Journaled beside the published number so a session's play
+    # SCORES the carry against Usamune instead of arguing about it: if the two
+    # always agree, the wait can go entirely and the row can publish at the
+    # x-cam like any other star.
+    carried_igt: int | None = None
+    # The SUBAREA-LOCAL half of that sum — what our counter said on its own.
+    # Usamune echoes this exact number early in its write burst, so it is how
+    # `_answer` tells that echo apart from the whole-star answer it is
+    # waiting for. Without it, publishing at the x-cam publishes the echo.
+    subarea_local_igt: int | None = None
     # Observational, journaled with the event and read by nothing: how many
     # frames past the x-cam the row actually left, and every result-store
     # write it saw, as (offset, value). This file's whole remaining latency is
@@ -298,6 +319,22 @@ class StarGrabDetector:
         grab.xcam_frame = frame
         grab.xcam_igt, grab.xcam_igt_source = self._clock.igt_at_xcam(frame, curr)
         grab.xcam_counter_is_partial = self._clock.counter_may_be_subarea_local()
+        carried = self._clock.carried_igt_at_xcam(frame, curr)
+        if grab.xcam_counter_is_partial and carried is not None:
+            # We can answer a subarea star ourselves after all: the counter is
+            # subarea-local, but we kept what it had counted before the warp,
+            # so the sum is the whole star (IgtClock.carried_igt_at_xcam).
+            # That turns the settle WAIT back into the ordinary agreement
+            # door — Usamune's early echo of the subarea-local number
+            # disagrees with this and is waited through, and the whole-star
+            # write agrees and publishes. The DEADLINE deliberately stays the
+            # long one (`_ready_to_publish`): a carry is a prediction until a
+            # session of play has scored it, so if nothing ever agrees with
+            # it, this ends exactly where it ends today — on Usamune's own
+            # number, 45 frames out. A wrong carry costs latency, never a row.
+            grab.carried_igt = carried[0]
+            grab.subarea_local_igt = grab.xcam_igt
+            grab.xcam_igt, grab.xcam_igt_source = carried
 
     def _identify(self, prev: GameSnapshot,
                   curr: GameSnapshot) -> _PendingGrab | None:
@@ -337,14 +374,49 @@ class StarGrabDetector:
                 self._mark_xcam(grab, max(grab.grab_frame,
                                           curr.global_timer
                                           - curr.mario_action_timer), curr)
-            elif broken or (curr.global_timer - grab.grab_frame
-                            >= self.XCAM_TIMEOUT_FRAMES):
+            elif broken:
+                # A reset or a level change destroys the context an x-cam
+                # would describe: none is coming, so the grab moment is the
+                # final answer (or, if the backstop already published it,
+                # there is nothing left to say).
                 self._pending = None
+                if grab.published is not None:
+                    return []
                 return [self._emit(grab, curr, grab.grab_frame, "grab",
                                    grab.grab_igt, grab.grab_igt_source)]
+            elif grab.published is not None:
+                return []   # backstopped at the grab; the x-cam may still come
+            elif (curr.global_timer - grab.grab_frame
+                  >= self.XCAM_TIMEOUT_FRAMES):
+                # The backstop, and it is a BACKSTOP now rather than an
+                # ending: a Usamune PAUSE freezes game logic while
+                # gGlobalTimer runs on (anchors.py's pause streak measures the
+                # same thing), so ten seconds in the menu mid-fall trips this
+                # even though the player is about to land perfectly normally.
+                # Publish the grab moment so the row is never lost, and KEEP
+                # WATCHING: if Mario reaches the dance after all, the x-cam
+                # overwrites this with the leaderboard-legal time and the row
+                # stops being marked `grab` (live report 2026-08-02).
+                grab.published = (grab.grab_igt, grab.grab_igt_source)
+                grab.timed_at = "grab"
+                return [self._emit(grab, curr, grab.grab_frame, "grab",
+                                   *grab.published)]
             else:
                 return []
         waited = curr.global_timer - grab.xcam_frame
+        if grab.published is not None and grab.timed_at == "grab":
+            # Published by the backstop above and the x-cam has now arrived.
+            # Same decision as a first publish — when is Usamune's number
+            # final? — but it lands as a CORRECTION, because the row already
+            # exists and only its time and its legality change.
+            if not broken and not self._ready_to_publish(grab, curr, waited):
+                return []
+            igt_frames, source = self._answer(grab, curr)
+            grab.published, grab.timed_at = (igt_frames, source), "xcam"
+            grab.published_after = waited
+            if broken or waited >= self.RESULT_SETTLE_FRAMES:
+                self._pending = None
+            return [self._correction(grab, curr, igt_frames, source)]
         if grab.published is None:
             # Publishing early means publishing OUR derivation, and on a
             # subarea star that is the time since the area loaded — the one
@@ -377,7 +449,12 @@ class StarGrabDetector:
             return []
         self._pending = None
         final = self._answer(grab, curr)
-        if final == grab.published:
+        if final[0] == grab.published[0]:
+            # The NUMBER, not the pair. A correction exists to move a time on
+            # screen; a carried star whose number Usamune then confirms has
+            # only changed which source we would name for it, and emitting a
+            # revision that revises nothing is how a rare event stops meaning
+            # anything.
             return []   # Usamune agreed with what we already showed him
         return [self._correction(grab, curr, *final)]
 
@@ -400,14 +477,30 @@ class StarGrabDetector:
         whole file exists to refuse. When they disagree by more, the deadline
         publishes Usamune's own value anyway — the cost of a torn read is
         latency, never a wrong row."""
-        if grab.xcam_counter_is_partial:
+        if grab.xcam_counter_is_partial and grab.carried_igt is None:
             return waited >= self.RESULT_SETTLE_FRAMES
+        if grab.carried_igt is not None:
+            # SCORED and then trusted, which is the only reason this is not a
+            # guess: over his 2026-08-02 session every carried subarea star
+            # matched Usamune's own whole-star write EXACTLY (4/4, diff 0),
+            # having published on agreement 27 frames after the x-cam. There
+            # is nothing left for those 27 frames to teach us, so a subarea
+            # star now leaves at the x-cam like every other star. The watch
+            # runs on regardless, so the one failure this could have — a base
+            # captured across missed polls — still corrects itself.
+            return True
         usamune = self._clock.settled_result_at_or_after(grab.xcam_frame, curr)
         if (usamune is not None
                 and abs(usamune - grab.xcam_igt) <= self.AGREEMENT_FRAMES
                 and grab.xcam_igt_source != "reconstructed"):
             return True
-        return waited >= self.PUBLISH_WAIT_FRAMES
+        # A CARRIED subarea star keeps the long deadline. Its early write is
+        # the subarea-local echo, and leaving on the short backstop would
+        # publish that echo — the impossible PB this file exists to refuse.
+        # The carry buys an early exit through agreement, never a later one.
+        return waited >= (self.RESULT_SETTLE_FRAMES
+                          if grab.xcam_counter_is_partial
+                          else self.PUBLISH_WAIT_FRAMES)
 
     def _answer(self, grab: _PendingGrab,
                 curr: GameSnapshot) -> tuple[int, str]:
@@ -416,6 +509,16 @@ class StarGrabDetector:
         disagree about anything except when they were asked."""
         usamune = self._clock.settled_result_at_or_after(grab.xcam_frame, curr)
         if usamune is not None and grab.xcam_igt_source != "reconstructed":
+            if (grab.subarea_local_igt is not None
+                    and abs(usamune - grab.subarea_local_igt)
+                    <= self.AGREEMENT_FRAMES):
+                # That write is Usamune ECHOING our subarea-local counter, not
+                # answering the star. On a carried grab it is the number we
+                # already know is half the truth, and it lands before the
+                # whole-star write every time (SSL: 69, 71, then 551), so
+                # preferring "Usamune's own value" here would publish the
+                # impossible PB at speed instead of at leisure.
+                return grab.carried_igt, "counter"
             # Usamune's own number for this x-cam beats our derivation of it —
             # not for precision (they agreed to a frame on nine of eleven live
             # grabs) but because ours is subarea-local; see
@@ -447,20 +550,28 @@ class StarGrabDetector:
                 "num_stars": grab.num_stars,
                 "published_after": grab.published_after,
                 "result_writes": grab.writes or [],
+                "carried_igt": grab.carried_igt,
             },
         )
 
     def _correction(self, grab: _PendingGrab, curr: GameSnapshot,
                     igt_frames: int, source: str) -> Event:
-        """Usamune changed its answer after we published the row.
+        """The published row's answer changed. Two causes, and they differ in
+        what they cost the player:
 
-        Only the whole-star write on a subarea star does this. The payload
-        carries the grab's identity as well as the number, so the projector
-        can refuse a correction that does not belong to the star_collected it
+        * a subarea star's whole-star write, which moves the NUMBER;
+        * an x-cam that arrived after the backstop already published the grab
+          moment, which moves the number AND the row's legality — `igt_timed_at`
+          goes from "grab" to "xcam", so a time a leaderboard would reject
+          becomes one it accepts. That is why the moment travels in the
+          payload rather than being assumed: a correction is the only thing
+          that can make a recorded row legal again.
+
+        The payload carries the grab's identity as well, so the projector can
+        refuse a correction that does not belong to the star_collected it
         would otherwise be paired with — one grab is correctable at a time
         (see _detect), and this makes that a checked fact rather than a
-        promise. `frame` is the x-cam, the same frame the row it revises
-        carries."""
+        promise. `frame` is the x-cam."""
         return Event(
             type="star_time_corrected",
             frame=grab.xcam_frame,
@@ -473,5 +584,6 @@ class StarGrabDetector:
                 "igt": format_igt(igt_frames),
                 "igt_source": source,
                 "igt_reconstructed": source == "reconstructed",
+                "igt_timed_at": "xcam",
             },
         )

@@ -24,6 +24,26 @@ _CLIP_NAME = "clip_attempt_{id}.mp4"
 _CLIP_RE = re.compile(r"clip_attempt_\d+\.mp4")
 
 
+def saved_attempt_ids(root: Path) -> set[int]:
+    """One walk of a save tree -> the attempt ids that have a saved clip.
+
+    The FILENAME is the index (`attempt_<id>_...`, see ReplayService's class
+    docstring), so nothing but the directory is needed to answer this. Bulk
+    form of `find_saved` for `available_attempt_ids` — avoids a glob per
+    attempt — and module-level so `main.py` can hand it to the tracker's
+    startup prune, which must protect a saved clip's attempt from deletion
+    (tracking/prune.py) whether or not replay is enabled this run.
+    """
+    if not root.exists():
+        return set()
+    ids: set[int] = set()
+    for path in root.rglob("attempt_*.mp4"):
+        match = re.match(r"attempt_(\d+)_", path.name)
+        if match:
+            ids.add(int(match.group(1)))
+    return ids
+
+
 def _parse_utc(s: str) -> datetime:
     return datetime.fromisoformat(s.replace("Z", "+00:00"))
 
@@ -164,19 +184,9 @@ class ReplayService:
         matches = sorted(root.rglob(f"attempt_{attempt_id:04d}_*.mp4"))
         return matches[0] if matches else None
 
-    def _saved_attempt_ids(self) -> set[int]:
-        """One walk of the save tree -> the set of attempt ids that have a
-        saved clip (the filename carries the id: attempt_<id>_...). Bulk form
-        of find_saved for available_attempt_ids — avoids a glob per attempt."""
-        root = self.cfg.save_root
-        if not root.exists():
-            return set()
-        ids: set[int] = set()
-        for p in root.rglob("attempt_*.mp4"):
-            m = re.match(r"attempt_(\d+)_", p.name)
-            if m:
-                ids.add(int(m.group(1)))
-        return ids
+    def saved_attempt_ids(self) -> set[int]:
+        """This service's own save tree -> `saved_attempt_ids(root)`."""
+        return saved_attempt_ids(self.cfg.save_root)
 
     def available_attempt_ids(self) -> list[int]:
         """Attempt ids whose replay is obtainable RIGHT NOW: a saved clip on
@@ -192,7 +202,7 @@ class ReplayService:
         so it counts as unavailable."""
         if self.tracker.db is None:
             return []
-        saved_ids = self._saved_attempt_ids()
+        saved_ids = self.saved_attempt_ids()
         cov = self.recorder.ring.coverage("video")
         buf_start, buf_end = cov if cov else (None, None)
         out: list[int] = []

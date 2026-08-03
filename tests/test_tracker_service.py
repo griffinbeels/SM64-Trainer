@@ -19,8 +19,13 @@ def ev(type_, frame, payload=None):
 
 
 def star(frame, course=2, star_id=2, igt=343):
+    # `igt_timed_at` is not decoration here: a star_collected payload WITHOUT
+    # it replays as the grab quantity (projection.py — its absence is exactly
+    # what a pre-2026-08-01 row means), and a grab-timed star cannot be saved
+    # as a PB. This helper stands for an ordinary modern grab, so it says so.
     return ev("star_collected", frame,
-              {"course_id": course, "star_id": star_id, "igt_frames": igt})
+              {"course_id": course, "star_id": star_id, "igt_frames": igt,
+               "igt_timed_at": "xcam"})
 
 
 def make(tmp_path):
@@ -66,14 +71,19 @@ def test_start_creates_session_and_journals_it(tmp_path):
 
 
 def test_events_are_journaled_and_attempts_persisted(tmp_path):
-    db, svc = make(tmp_path)
+    """The derived pair reaches the BROADCAST, never the journal: both
+    restate something already stored, so journaling them was pure noise in a
+    file whose value is being readable (service.py::BROADCAST_ONLY)."""
+    db, svc, sent = make_rec(tmp_path)
     asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
     asyncio.run(svc.publish(star(1350)))
     attempts = db.attempts()
     assert len(attempts) == 1 and attempts[0].outcome == "success"
-    types = [e.type for e in db.events()]
-    assert "attempt_completed" in types          # derived event journaled too
-    assert "target_changed" in types
+    broadcast = [e.type for e in sent]
+    assert "attempt_completed" in broadcast and "target_changed" in broadcast
+    journaled = [e.type for e in db.events()]
+    assert "attempt_completed" not in journaled
+    assert "target_changed" not in journaled
 
 
 def test_attach_db_upgrades_broadcast_only_to_full_tracking(tmp_path):
@@ -313,6 +323,9 @@ def test_wipe_star_spares_segment_data(tmp_path):
 
 def test_wipe_survives_restart(tmp_path):
     db, svc = make(tmp_path)
+    # Labelled so the restart's prune leaves it alone -- what is under test
+    # here is the WIPE surviving a restart, not the prune (tracking/prune.py).
+    asyncio.run(svc.set_target(2, 2, "Cannonless"))
     success(svc, 1000)
     asyncio.run(svc.wipe_data("star", course_id=2, star_id=2, scope="lifetime"))
     success(svc, 5000, igt=350)                   # fresh data after the wipe
@@ -385,6 +398,10 @@ def test_restart_resumes_from_journal(tmp_path):
     time still selected. What a restart must rebuild is what he EARNED (the
     attempt, its strategy); what it must not rebuild is where he was pointed."""
     db, svc = make(tmp_path)
+    # The strategy is load-bearing, not decoration: the startup prune deletes
+    # an attempt that never said what it was practice FOR (tracking/prune.py),
+    # so "survives a restart" now means "was labelled".
+    asyncio.run(svc.set_strat(2, 2, "Cannonless"))   # the star actually grabbed
     asyncio.run(svc.set_target(8, 2))
     asyncio.run(svc.publish(star(900)))
     db2 = Database(tmp_path / "t.db")
@@ -403,13 +420,13 @@ def test_degraded_mode_without_db_still_broadcasts(tmp_path):
 
 
 def test_reproject_emits_target_changed_when_target_reverts(tmp_path):
-    db, svc = make(tmp_path)
+    db, svc, sent = make_rec(tmp_path)
     asyncio.run(svc.set_target(8, 2))
     asyncio.run(svc.publish(star(900)))            # target moves to (2,2)
     grab_id = db.attempts()[0].id
     asyncio.run(svc.clear_attempt(grab_id, reason="accidental"))
     assert svc.target == ("star", 8, 2)
-    tc = [e for e in db.events() if e.type == "target_changed"]
+    tc = [e for e in sent if e.type == "target_changed"]
     assert tc[-1].payload["course_id"] == 8 and tc[-1].payload["star_id"] == 2
 
 
@@ -484,19 +501,21 @@ def test_100_coin_star_pick_strategy_lands_on_the_star(tmp_path):
 
 
 def test_death_event_flows_to_death_attempt(tmp_path):
-    db, svc = make(tmp_path)
+    db, svc, sent = make_rec(tmp_path)
     asyncio.run(svc.publish(ev("practice_reset", 1000,
                                {"igt_frames_before": 0, "mario_acted": True})))
     asyncio.run(svc.publish(ev("death", 1300,
                                {"cause": "drowning", "igt_frames": 290, "level": 9})))
     [a] = db.attempts()
     assert a.outcome == "death" and a.outcome_detail == "drowning"
-    types = [e.type for e in db.events()]
-    assert "attempt_completed" in types
+    assert "attempt_completed" in [e.type for e in sent]
 
 
 def test_pipeline_survives_attempt_persist_failure(tmp_path):
     db, svc = make(tmp_path)
+    # Labelled so the restart's prune leaves it alone; the self-heal is what
+    # is under test (tracking/prune.py).
+    asyncio.run(svc.set_target(2, 2, "Cannonless"))
     original = db.upsert_attempt
     db.upsert_attempt = lambda a: (_ for _ in ()).throw(RuntimeError("disk full"))
     asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
@@ -609,7 +628,7 @@ def test_delete_unknown_session_raises_lookup_error(tmp_path):
 
 
 def test_attempt_completed_carries_rollout_counts(tmp_path):
-    db, svc = make(tmp_path)
+    db, svc, sent = make_rec(tmp_path)
     asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
     asyncio.run(svc.publish(ev("rollout", 1100,
                                {"dustless": True, "frames_late": 0, "level": 24})))
@@ -618,13 +637,13 @@ def test_attempt_completed_carries_rollout_counts(tmp_path):
     asyncio.run(svc.publish(star(1350)))
     a = db.attempts()[0]
     assert a.rollouts_total == 2 and a.rollouts_dustless == 1
-    completed = [e for e in db.events() if e.type == "attempt_completed"]
+    completed = [e for e in sent if e.type == "attempt_completed"]
     assert completed[-1].payload["rollouts_total"] == 2
     assert completed[-1].payload["rollouts_dustless"] == 1
 
 
 def test_attempt_completed_carries_jump_counts(tmp_path):
-    db, svc = make(tmp_path)
+    db, svc, sent = make_rec(tmp_path)
     asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
     asyncio.run(svc.publish(ev("jump", 1100,
                                {"dustless": True, "frames_late": 0,
@@ -633,7 +652,7 @@ def test_attempt_completed_carries_jump_counts(tmp_path):
     asyncio.run(svc.publish(star(1350)))
     a = db.attempts()[0]
     assert a.jumps_total == 1 and a.jumps_dustless == 1
-    completed = [e for e in db.events() if e.type == "attempt_completed"]
+    completed = [e for e in sent if e.type == "attempt_completed"]
     assert completed[-1].payload["jumps_total"] == 1
     assert completed[-1].payload["jumps_dustless"] == 1
 
@@ -1087,10 +1106,10 @@ def test_settle_frame_broadcasts_a_cancel_no_event_would_have_delivered(tmp_path
 
 
 def test_star_attempt_completed_carries_kind_star(tmp_path):
-    db, svc = make(tmp_path)
+    db, svc, sent = make_rec(tmp_path)
     asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
     asyncio.run(svc.publish(star(1350)))
-    p = [e for e in db.events() if e.type == "attempt_completed"][-1].payload
+    p = [e for e in sent if e.type == "attempt_completed"][-1].payload
     assert p["kind"] == "star"
     assert p["segment_id"] is None and p["segment_name"] is None
 
@@ -2075,3 +2094,120 @@ def test_a_live_PB_survives_the_orphan_sweep(tmp_path):
     asyncio.run(svc.save_pb(attempt.id, "igt"))
     asyncio.run(svc._reproject())
     assert [row["attempt_id"] for row in db.pbs()] == [attempt.id]
+
+
+# ---------------------------------------------------------------------------
+# A grab-timed star cannot be saved as a PB (2026-08-02): "these fake PBs
+# (fake because only xcam timing is legal) just shouldn't be allowed". The
+# button is drawn disabled from the SAME predicate (views._attempt_json's
+# `pb_blocked_by`), but this is the door — a PB row keeps GRADING once it is
+# in the table, and the API is reachable without the button.
+# ---------------------------------------------------------------------------
+
+def grab_timed_star(frame=1350, igt=343):
+    return ev("star_collected", frame,
+              {"course_id": 2, "star_id": 2, "igt_frames": igt,
+               "igt_timed_at": "grab"})
+
+
+def test_a_grab_timed_star_is_refused_as_a_pb(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(grab_timed_star()))
+    aid = db.attempts()[0].id
+    with pytest.raises(ValueError, match="grab_timed"):
+        asyncio.run(svc.save_pb(aid, "igt"))
+    assert db.pbs() == []
+
+
+def test_the_other_clock_is_refused_too(tmp_path):
+    # When the x-cam never happened the run's recorded END is the grab, so the
+    # rta measures to the same illegal moment — allowing it would be the rule
+    # with a hole in it.
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(grab_timed_star()))
+    aid = db.attempts()[0].id
+    with pytest.raises(ValueError, match="grab_timed"):
+        asyncio.run(svc.save_pb(aid, "rta"))
+
+
+def test_an_xcam_timed_star_still_saves(tmp_path):
+    # The control: the refusal is about the QUANTITY, not about stars.
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(ev("star_collected", 1350,
+                               {"course_id": 2, "star_id": 2,
+                                "igt_frames": 343, "igt_timed_at": "xcam"})))
+    aid = db.attempts()[0].id
+    assert asyncio.run(svc.save_pb(aid, "igt"))["frames"] == 343
+
+
+def test_the_view_and_the_server_agree_about_what_is_saveable(tmp_path):
+    # One predicate, two consumers: a button that offers what save_pb refuses
+    # is the drift this shares a door to prevent.
+    from sm64_events.tracking.views import build_session_view
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(grab_timed_star()))
+    view = build_session_view(db, svc, clock="igt")
+    rows = [r for sec in view["stars"] for r in sec["attempts"]]
+    assert [r["pb_blocked_by"] for r in rows] == ["grab_timed"]
+
+
+def test_the_practice_log_row_carries_its_own_mark(tmp_path):
+    """The badge beside the TIME, which is a different key from the one on the
+    save button and outlives it: a row already saved as a PB draws Undo, and a
+    cleared row draws no button at all, but both still print a number that
+    measures the grab rather than the x-cam (2026-08-02)."""
+    from sm64_events.tracking.views import build_session_view
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(grab_timed_star()))
+    grabbed = [r for sec in build_session_view(db, svc, clock="igt")["stars"]
+               for r in sec["attempts"]]
+    assert [r["caveat"] for r in grabbed] == ["grab_timed"]
+
+    # The control, and the alarm-fatigue clause: a legacy row is UNKNOWN, not
+    # proof, and four fifths of his log is legacy.
+    asyncio.run(svc.publish(ev("practice_reset", 2000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(ev("star_collected", 2350,      # no igt_timed_at
+                               {"course_id": 2, "star_id": 2,
+                                "igt_frames": 343, "igt_source": "result"})))
+    legacy = [r for sec in build_session_view(db, svc, clock="igt")["stars"]
+              for r in sec["attempts"] if r["id"] != grabbed[0]["id"]]
+    assert [r["caveat"] for r in legacy] == [None]
+
+
+def test_a_legacy_star_is_marked_but_still_saveable(tmp_path):
+    """Absence of `igt_timed_at` is UNKNOWN, not proof (measured 2026-08-02).
+
+    669 of his 670 legacy star rows took Usamune's OWN stored number, which is
+    the legal x-cam quantity under STOP=Xcam and on any ground grab and the
+    grab quantity under GrabX with a real fall — and the journal keeps no
+    post-grab frames, so nothing can say which. Refusing them would delete
+    almost his whole history's saveability on an assumption nobody measured.
+    They stay MARKED, because an unverifiable time is what a caveat is for."""
+    from sm64_events.tracking.caveats import caveats_for
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(ev("star_collected", 1350,      # no igt_timed_at
+                               {"course_id": 2, "star_id": 2,
+                                "igt_frames": 343, "igt_source": "result"})))
+    attempt = db.attempts()[0]
+    assert attempt.timed_at is None                    # unknown, not "grab"
+    assert asyncio.run(svc.save_pb(attempt.id, "igt"))["frames"] == 343
+    assert "grab_timed" in caveats_for({"strat_tag": "Owlless"}, attempt)
+
+
+def test_a_segment_is_never_marked_grab_timed(tmp_path):
+    # timed_at is None for every non-star closure, and "unknown" must not
+    # become a mark about a moment segments do not have.
+    from sm64_events.tracking.caveats import caveats_for
+    from sm64_events.tracking.projection import Attempt
+    seg = Attempt(id=1, session_id=1, course_id=None, star_id=None,
+                  strat_tag="Standard", anchor_type="none", anchor_frame=None,
+                  outcome="success", outcome_detail=None, igt_frames=None,
+                  rta_frames=500, started_utc="", ended_utc="", cleared=False,
+                  cleared_reason=None, segment_id=7)
+    assert "grab_timed" not in caveats_for({"strat_tag": "Standard"}, seg)

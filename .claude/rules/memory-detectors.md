@@ -104,7 +104,41 @@ play instead of from argument. And when
 `IgtClock.counter_may_be_subarea_local()` says the counter's zero point may be
 an AREA load, the publish waits the FULL window instead: our number there is
 the time since the pyramid door, which is exactly the impossible PB he saw
-flash. So the correction is a backstop now, not a routine event. The
+flash. **ARRIVING in a course is not that, and read as if it were until
+2026-08-02** — the level byte changes on one frame but the area byte SETTLES
+afterwards (3->2->1), so the load's own area edges land beside the load's own
+counter zero long after the level edge that explains them, and the flag
+re-armed on the way in. Live report, and it is the cleanest bug report in this
+file: *"the FIRST star that I grab after entering a course has an
+exceptionally high amount of delay… BUT THEN ALL THE OTHER STARS ARE ACTUALLY
+PERFECTLY TIMED"*, plus his own probe — enter, reset immediately, grab, and it
+was instant, because an L-reset zeroes the counter with no area edge beside
+it. His journal scored it exactly: `published_after` was **45 frames on the
+first grab after every course entry and 1 frame on every other grab**, binary,
+no middle. `LEVEL_LOAD_TAIL_FRAMES` (60) is the fix and the window is
+measured, not chosen: across 911 level entries the load's last area edge lands
+at **44-47 frames** every time and the earliest genuine warp deeper into a
+level appears at 60. Six of the nine slow grabs in that session were course
+entries and are now fast; the other three were real subarea stars and are
+still deliberately slow. **Those three are fast now too, and the wait is
+GONE (2026-08-02).** His idea: *"If we cache the time it took for the player
+to enter the subarea, then the xcam time is just the cached
+subarea_entry_time plus the time it took to finish the subarea. Isn't that
+basically what Usamune is doing anyway?"* — and his journal already held the
+proof, because Usamune's write burst contains both halves (LLL Elevator
+`[[2, 388], [27, 686]]` → 298; SSL Pyramid `[[0, 69], [1, 71], [27, 551]]` →
+480). `IgtClock.carried_igt_at_xcam` keeps what the counter reached before the
+warp and adds it back, so the whole star is OURS to state at the x-cam.
+Shipped in two steps on purpose: first publishing on AGREEMENT with Usamune
+(27 frames), then, after his session scored it **4/4 exact, diff 0**, at the
+x-cam itself with no wait at all. Two guards hold it up, both mutation-proved:
+the carry is refused unless the area edge went into a NON-1 area (anchors.py's
+discriminator — a reset's reload lands back in area 1, and carrying a previous
+run's time across a reset is the one failure here that would be silent), and
+`_answer` must recognise Usamune's EARLY write as an echo of our own
+subarea-local counter (`_PendingGrab.subarea_local_igt`) or the instant
+publish ships the impossible PB at speed. The correction watch still runs, so
+the remaining failure — a base captured across missed polls — self-heals. So the correction is a backstop now, not a routine event. The
 correction is a compensating event like `attempt_cleared`:
 `projection.time_corrections` folds it into the GRAB's own payload (so the star
 attempt, a segment closed by the same grab, and the 100-coin reattribution all
@@ -114,11 +148,14 @@ read one number and none of them knows a correction exists), and
 already illegal) the counter derivation stands in and `igt_source` reads
 `"counter"` instead of `"result"`, which IS the legality signal on a star row;
 that case keeps the subarea error and cannot be fixed from a counter that
-restarted. NOT built, and named so it is not re-derived by guess: carrying our
-own base across an area warp would remove the wait and work under illegal
-settings too, but an L-reset zeroes the counter the same way an area warp does
-and telling them apart inside the clock is how a wrong time gets recorded
-silently. **(5) The 45-frame wait is BRACKETED at both ends by his second
+restarted. **Carrying our own base across the warp WAS the fix, and this file
+said it could not be done for a day** — "an L-reset zeroes the counter the same
+way an area warp does and telling them apart inside the clock is how a wrong
+time gets recorded silently". The premise was already false when it was
+written: anchors.py had measured the discriminator (destination area) the day
+before, for the attempt side of the identical ambiguity. A limit asserted from
+one file's own vantage point survives exactly until someone reads the file next
+door. See the carry, below. **(5) The 45-frame wait is BRACKETED at both ends by his second
 subarea run (five grabs, 2026-08-01), and the ceiling is the surprising
 half.** Usamune never writes the answer once — every grab took 2-3 writes, the
 early ones echoing our counter (write = that sample's counter + 1) at the grab

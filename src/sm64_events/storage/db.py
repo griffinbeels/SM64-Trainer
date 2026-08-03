@@ -977,6 +977,59 @@ class Database:
             self._conn.execute("DELETE FROM pbs WHERE id=?", (pb_id,))
             self._conn.commit()
 
+    def purge_event_types(self, types) -> int:
+        """Delete every journal row of the given types and RECLAIM the file
+        space, returning how many went.
+
+        For event types that are pure derived bookkeeping — the browser
+        listens to them live and nothing ever reads them back out of the
+        journal (`tracking/service.py::BROADCAST_ONLY`). Measured against the
+        live journal 2026-08-02: 3,884 of 23,063 rows, 4.97 MB -> 3.42 MB,
+        with every attempt and every run replaying byte-identical.
+
+        VACUUM is the point, not a flourish: SQLite frees the pages into its
+        own freelist on DELETE and the file on disk does not shrink, so
+        without it this reclaims nothing a user could see. It cannot run
+        inside a transaction, hence the explicit commit first, and it is
+        skipped entirely when nothing was deleted — after the writer stops
+        journaling these types that is every startup but the first.
+
+        The checkpoint is the second half of the same fact and was found by
+        watching the size NOT move: this db runs in WAL mode, so VACUUM's
+        rebuilt pages land in the -wal sidecar and `tracker.db` keeps its old
+        size until something checkpoints. TRUNCATE folds the WAL back in and
+        resets it, so the shrink is visible immediately rather than whenever
+        the next automatic checkpoint happens to fire.
+        """
+        types = tuple(types)
+        if not types:
+            return 0
+        placeholders = ",".join("?" * len(types))
+        with self._lock:
+            cursor = self._conn.execute(
+                f"DELETE FROM events WHERE type IN ({placeholders})", types)
+            deleted = cursor.rowcount
+            self._conn.commit()
+            if deleted:
+                self._conn.execute("VACUUM")
+                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        return deleted
+
+    def pb_attempt_ids(self) -> set[int]:
+        """Every attempt a saved pb row points at.
+
+        Deliberately NOT filtered by `_VISIBLE_PB`: that clause answers
+        "which saved times may GRADE", and this answers "which attempts may
+        never be deleted from under a save" (tracking/prune.py). A pb row on
+        a hidden attempt still exists and is still his, and
+        `delete_orphaned_pbs` below would collect it just the same.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT DISTINCT attempt_id FROM pbs"
+                " WHERE attempt_id IS NOT NULL").fetchall()
+        return {row[0] for row in rows}
+
     def delete_orphaned_pbs(self) -> int:
         """Drop pb rows whose saving attempt no longer exists, and return how
         many went.

@@ -139,18 +139,44 @@ def test_bowser_row_pipe_pick_only_ever_enables_never_disables():
     assert "enabled: false" not in pick_pipe.group(0)
 
 
-def test_reds_cell_toggle_buttons_never_disable_the_star():
-    """The star half of the toggle is disabled (an HTML `disabled` attribute)
-    inside a route, never hidden and never made to silently no-op -- and
-    RedsCell itself must not carry a second segment-enable write of its own
-    (that belongs to BowserCourseRow's onPickPipe, passed in as a prop, so
-    there is exactly one place that ever does it)."""
+def test_reds_cell_never_disables_the_star_half():
+    """The ROUTE LOCK is gone (2026-08-02, live report: "I cannot click on the
+    star icon for Reds here in bowser in the dark world"). It disabled the star
+    half whenever the active route named that stage's reds, on the stated
+    premise that "every seeded Bowser Reds route step already names
+    seg:reds->pipe:<abbrev>, never the bare star". That premise was false in
+    every instance: all eight reds routes in tools/corpus_routes_main.py pair
+    `star(16, 0, "BitDW - 8 Red Coins")` (and 17/18 for BitFS/BitS) WITH
+    `*BOWSER_n_REDS`, so the bare grab is a graded route step of its own and
+    the lock hid a half the route itself measures. It also read as broken from
+    the outside, because a route that skips reds in BitFS/BitS leaves those two
+    stages freely toggleable beside a dead BitDW.
+
+    RedsCell must also not carry a segment-enable write of its own -- that
+    belongs to BowserCourseRow's onPickPipe, passed in as a prop, so there is
+    exactly one place that ever does it."""
     body = _reds_cell_body()
-    assert "disabled=" in body, \
-        "RedsCell no longer disables the star toggle inside a route"
+    assert "disabled" not in body, \
+        "RedsCell disables part of the star/pipe toggle again -- the route " \
+        "lock was deleted because routes grade the bare star grab too"
     assert "send(" not in body, \
         "RedsCell should not itself write segment state -- that belongs to " \
         "BowserCourseRow's onPickPipe, passed down as a prop"
+
+
+def test_bowser_row_reds_toggle_ignores_the_active_route():
+    """The other half of the same deletion: nothing in BowserCourseRow may
+    consult the active route to decide which family the toggle shows. The
+    remembered per-level choice (`bowserModeFor`) is the only input, so the
+    row cannot start disagreeing with the cell about why a half is unavailable.
+
+    Note `routeStarFilter`/`routeSegmentFilter` themselves stay -- StarRow and
+    SegmentRow use them to NARROW what a route offers, which is a different
+    (and still wanted) job."""
+    body = _bowser_row_body()
+    for symbol in ("routeStarFilter", "routeSegmentFilter", "forcedPipe"):
+        assert symbol not in body, \
+            f"BowserCourseRow consults the active route again ({symbol})"
 
 
 def test_bowser_row_subtitle_no_longer_implies_a_choice():

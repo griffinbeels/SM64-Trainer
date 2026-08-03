@@ -526,6 +526,56 @@ def test_the_grab_time_write_does_not_publish_but_the_xcam_one_does():
     assert row.payload["result_writes"] == [(1, 70), (3, 72)]
 
 
+# Carrying the pre-warp counter across the door (his idea, 2026-08-02). It
+# does not remove the wait on its own -- Usamune's early write still echoes
+# the subarea-local number and still has to be waited through -- but it gives
+# us a whole-star answer of our OWN, so the ordinary agreement door applies
+# where a fixed 45-frame deadline used to. `carried_igt` is journaled beside
+# the published number so a session of play scores the two against each other.
+
+WARP_AT = GRAB_FRAME - 95     # the pyramid door, 480 frames into the run
+BEFORE_THE_DOOR = 480
+
+
+def through_the_door(snaps):
+    """Run to the door, warp deeper, then take the star inside the subarea."""
+    prefix = [snap(global_timer=WARP_AT + offset, igt_overall=BEFORE_THE_DOOR,
+                   curr_level=8, curr_area=1) for offset in range(3)]
+    prefix.append(snap(global_timer=WARP_AT + 3, igt_overall=BEFORE_THE_DOOR,
+                       curr_level=8, curr_area=2))
+    prefix.append(snap(global_timer=WARP_AT + 5, igt_overall=0,
+                       curr_level=8, curr_area=2))
+    return prefix + [replace(s, curr_level=8, curr_area=2) for s in snaps]
+
+
+def test_a_carried_subarea_star_publishes_at_the_xcam():
+    # Whole star = 480 before the door + 72 inside it, and we can say so at
+    # the x-cam without asking anyone. Usamune's echo of the subarea-local 72
+    # arrives first and its whole-star write 30 frames later; neither is
+    # waited for, and neither moves the row.
+    inside = through_the_door(subarea_snaps(usamune=552, write_at=30,
+                                            first_write=(1, 72)))
+    [(published_at, row)] = emitted_at(inside)
+    assert row.payload["igt_frames"] == 552
+    assert row.payload["carried_igt"] == 552      # ours, scored against his
+    assert published_at == XCAM                   # no wait at all
+
+
+def test_a_carry_usamune_contradicts_is_corrected_by_the_watch():
+    # The one failure a carry can still have -- a base captured across missed
+    # polls. Publishing at the x-cam means being wrong on screen for a moment
+    # when that happens, so the watch that catches it is the price of the
+    # speed, not an optional backstop.
+    inside = through_the_door(subarea_snaps(usamune=600, write_at=30,
+                                            first_write=(1, 72)))
+    (published_at, row), (corrected_at, fix) = emitted_at(inside)
+    assert row.payload["igt_frames"] == 552       # ours, published instantly
+    assert published_at == XCAM
+    assert fix.type == "star_time_corrected"
+    assert fix.payload["igt_frames"] == 600       # his, and his wins
+    assert corrected_at - XCAM == StarGrabDetector.RESULT_SETTLE_FRAMES
+
+
 def test_a_reset_after_publishing_corrects_nothing():
     # The row is already his; whatever the store says after a reset describes
     # another context (and on a course exit it is zeroed outright).
@@ -565,3 +615,64 @@ def test_the_settle_window_sits_inside_the_bracket_measured_live():
     is on RESULT_SETTLE_BRACKET."""
     floor, ceiling = StarGrabDetector.RESULT_SETTLE_BRACKET
     assert floor <= StarGrabDetector.RESULT_SETTLE_FRAMES < ceiling
+
+
+# --- a pause mid-fall must not cost the grab its legality -------------------
+#
+# Live report 2026-08-02: "if you PAUSE during star grab, wait a while, it
+# eventually times out. If the player UNPAUSES and then continues the run to
+# the xcam, we should overwrite the entry with the actual xcam time and make
+# it legal again." The Usamune pause menu freezes game logic while
+# gGlobalTimer runs on (anchors.py measures the same thing as a pause streak),
+# so ten seconds in the menu trips XCAM_TIMEOUT_FRAMES mid-fall — and the row
+# that backstop publishes is timed at the GRAB, which no leaderboard accepts.
+
+def paused_mid_fall(pause_frames=StarGrabDetector.XCAM_TIMEOUT_FRAMES + 5,
+                    land=True):
+    """Grab, fall, PAUSE (timer runs, IGT frozen, action held), then land."""
+    snaps = midair_snaps(3)[:-1]
+    paused_from = GRAB_FRAME + 3
+    snaps += [snap(global_timer=paused_from + n, igt_overall=GRAB_COUNTER + 3,
+                   mario_action=A.ACT_FALL_AFTER_STAR_GRAB,
+                   mario_action_timer=3 + n)
+              for n in range(pause_frames)]
+    if land:
+        landed = paused_from + pause_frames
+        snaps += [snap(global_timer=landed + n,
+                       igt_overall=GRAB_COUNTER + 4 + n,
+                       mario_action=A.ACT_STAR_DANCE_EXIT, mario_action_timer=n)
+                  for n in range(StarGrabDetector.RESULT_SETTLE_FRAMES + 2)]
+    return snaps
+
+
+def test_a_pause_mid_fall_backstops_at_the_grab_then_the_xcam_corrects_it():
+    row, fix = run_pairs(StarGrabDetector(), paused_mid_fall(), settle=False)
+    # The backstop fires: the row exists, and it is honest about being the
+    # illegal moment rather than silently claiming the x-cam.
+    assert row.type == "star_collected"
+    assert row.payload["igt_timed_at"] == "grab"
+    assert row.payload["igt_frames"] == GRAB_COUNTER + 1
+    # He unpauses and lands: the same grab, now timed where Usamune stops.
+    assert fix.type == "star_time_corrected"
+    assert fix.payload["igt_timed_at"] == "xcam"
+    assert fix.payload["igt_frames"] > row.payload["igt_frames"]
+    assert fix.payload["grab_frame"] == GRAB_FRAME     # pairs with that row
+
+
+def test_a_grab_that_still_never_lands_keeps_its_one_backstopped_row():
+    # The backstop is a backstop, not a promise of a second event: no dance,
+    # no correction, and never two rows for one star.
+    events = run_pairs(StarGrabDetector(), paused_mid_fall(land=False),
+                       settle=False)
+    assert [e.type for e in events] == ["star_collected"]
+    assert events[0].payload["igt_timed_at"] == "grab"
+
+
+def test_a_reset_after_the_backstop_corrects_nothing():
+    # Pausing, timing out, then resetting: the x-cam never happened and never
+    # will, so the grab-timed row stands. One row, one mark.
+    snaps = paused_mid_fall(land=False)
+    snaps.append(replace(snaps[-1], global_timer=snaps[-1].global_timer + 1,
+                         igt_overall=0))
+    events = run_pairs(StarGrabDetector(), snaps, settle=False)
+    assert [e.type for e in events] == ["star_collected"]

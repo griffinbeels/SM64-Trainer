@@ -2523,9 +2523,11 @@ def test_ordinary_segments_are_unaffected_by_the_reds_pipe_pairing(tmp_path):
 
 
 def test_route_candidate_ranks_the_reds_pipe_segment_against_the_star_ladder(tmp_path):
-    """Every seeded Bowser Reds route step names seg:reds->pipe:<abbrev>,
-    never the bare star (routes already assume Pipe timing throughout) --
-    build_route_view's candidate rank must follow the same star-ladder
+    """Every seeded Bowser Reds route step names seg:reds->pipe:<abbrev> --
+    ALONGSIDE the bare star, not instead of it (the "never the bare star" this
+    docstring used to claim was false in all eight instances, and the UI lock
+    built on it was deleted 2026-08-02; see stagebanner.js's BowserCourseRow).
+    Either way build_route_view's candidate rank must follow the same star-ladder
     substitution the session view uses, or a route step showing this
     segment would always read unranked."""
     db, svc, seg_id = _make_with_def(tmp_path, _reds_pipe_def)

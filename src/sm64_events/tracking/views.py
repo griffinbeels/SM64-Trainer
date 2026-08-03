@@ -44,7 +44,8 @@ from sm64_events.stats.registry import (DEFAULT_STAT_MENU, REGISTRY,
                                         selection_order)
 from sm64_events.tracking.projection import DEFAULT_MIN_FRAMES, journal_id
 from sm64_events.tracking.routes import route_stats
-from sm64_events.tracking.caveats import caveat_for
+from sm64_events.tracking.caveats import (attempt_caveat, caveat_for,
+                                          pb_blocked_by)
 from sm64_events.tracking.segments import (arm_level, arms_ambiently,
                                             card_waiting_for_sentence,
                                             course_groups, hundred_coin_entity,
@@ -181,6 +182,22 @@ def _attempt_json(a, pbs, clock, ranks=None, rank_clock=None, rank_ek=None):
             # this attempt owns the CURRENT pb row on this clock — drives
             # the Save-as-PB / Undo-PB button swap (undo deletes that row)
             "is_current_pb": bool(pb) and pb["attempt_id"] == a.id,
+            # Why this row may NOT be saved as a PB (a caveats.py KEY, or
+            # None) — the same predicate save_pb refuses on, so the button
+            # cannot offer what the server would reject. A key rather than a
+            # sentence: the browser already owns the wording for each one
+            # (ui/components/marks.js), and shipping prose here would be a
+            # second vocabulary for the same fact.
+            "pb_blocked_by": pb_blocked_by(a),
+            # "the number printed on this row is not the quantity you think
+            # you were practising", as a caveats.py KEY or None — the mark the
+            # practice log draws beside the time itself. Separate from
+            # `pb_blocked_by` because it answers a different question and
+            # survives where that one is not drawn: a row already saved as a
+            # PB shows Undo instead of a blocked button, and a cleared row
+            # shows no button at all, but both still carry a time that
+            # measures the wrong moment.
+            "caveat": attempt_caveat(a),
             "cleared_reason": a.cleared_reason,
             "started_utc": a.started_utc, "ended_utc": a.ended_utc,
             "rollouts_total": a.rollouts_total,
