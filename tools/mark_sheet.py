@@ -101,7 +101,7 @@ HARNESS_HTML = """<!doctype html>
   import { h, render } from "preact";
   import htm from "htm";
   import { PracticeCell } from "/ui/components/practicecell.js";
-  import { PbTag } from "/ui/components/practice.js";
+  import { PbTag } from "/ui/components/attemptlog.js";
   import { CAVEATS } from "/ui/components/marks.js";
 
   const html = htm.bind(h);
