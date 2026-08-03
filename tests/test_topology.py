@@ -1,4 +1,7 @@
-from sm64_events.memory.addresses import world_connections
+from sm64_events.memory.addresses import (AREA_LOBBY,
+                                          CASTLE_REGION_LEVELS,
+                                          LEVEL_CASTLE_INSIDE,
+                                          node_key, world_connections)
 from sm64_events.tracking.topology import hops, is_legal_move, node_for
 
 
@@ -120,3 +123,39 @@ def test_the_world_graph_is_strongly_connected():
                    if source != target and hops(source, target) is None]
     assert unreachable == []
     assert len(nodes) * (len(nodes) - 1) > 0, "the graph lost every node"
+
+
+def test_every_course_can_pause_exit_to_the_lobby():
+    """Pausing anywhere but the castle's own areas offers Exit Course, and it
+    always lands in the Castle Lobby.
+
+    **LIVE-VERIFIED by Griffin in every course, 2026-08-02** — a game fact, so
+    the evidence travels with it: *"every single course has an 'Exit Course'
+    button that results in going back to the Lobby. The only exceptions are:
+    Castle Basement, Castle Upstairs, Castle Courtyard, Castle Grounds — for
+    these, if you press pause, there's no option to exit (because we're already
+    in the castle)."* And separately, for the fight arenas: *"for Bowser 1/2/3
+    there's an Exit Course option, which brings you back to the lobby."*
+
+    Stated as the RULE rather than as a list of level names, because a list is
+    what got this wrong before: an earlier draft named 12 courses and named
+    them wrongly, by reading level ids through `COURSE_NAMES`, which is keyed
+    by COURSE number and not by level.
+
+    Why it matters beyond authoring: the hop arithmetic loose definitions still
+    use reads distances through this table, so a real pause exit out of any of
+    these was either an impossible move (Rule 1) or read as walking away from
+    the destination (Rule 2). `(19, _LOBBY)` was patched in on its own the day
+    before as a fact about BitFS; it was one instance of this rule.
+    """
+    connections = world_connections()
+    nodes = set(connections) | {node_key(level, area)
+                                for dests in connections.values()
+                                for level, area in dests}
+    outside = [key for key in nodes
+               if int(key.partition(":")[0]) not in CASTLE_REGION_LEVELS]
+    assert len(outside) > 20, "the world lost most of its courses"
+    missing = sorted(key for key in outside
+                     if [LEVEL_CASTLE_INSIDE, AREA_LOBBY]
+                     not in connections.get(key, []))
+    assert missing == []

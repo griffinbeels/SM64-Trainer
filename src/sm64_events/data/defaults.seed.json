@@ -941,7 +941,8 @@
         [
           {
             "type": "level_enter",
-            "to": 6
+            "to": 6,
+            "from": 26
           }
         ]
       ],

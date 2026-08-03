@@ -77,7 +77,9 @@ def test_vocab_ships_connections_and_flow_annotations():
     # by the destination's predecessors). UI-only — validation stays
     # permissive (the Usamune warp menu can fabricate any edge).
     v = vocab()
-    assert v["connections"]["22"] == [[6, 3]]
+    # LLL reaches the basement by its own door and the lobby by the pause menu
+    # (live-verified 2026-08-02; tests/test_topology.py owns that rule).
+    assert v["connections"]["22"] == [[6, 1], [6, 3]]
     level_enter = next(t for t in v["triggers"] if t["key"] == "level_enter")
     assert level_enter["params"]["to"]["flow"] == {
         "role": "dest", "peer": "from", "peer_subarea": "from_subarea"}

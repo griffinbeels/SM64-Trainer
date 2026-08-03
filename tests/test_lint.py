@@ -189,3 +189,25 @@ def test_a_clean_definition_produces_no_warnings():
                    end_triggers=[{"type": "level_enter", "to": 8}],
                    guards=[])
     assert lint_definition(d, []) == []
+
+
+def test_a_next_step_that_pins_a_different_SOURCE_cannot_be_the_same_event():
+    # Once every course gained a pause exit into the castle (2026-08-02), BBH's
+    # own `level_changed 4 -> 6` satisfies both an unpinned `level_exit from=4`
+    # and a bare `level_enter to=6` -- a real trap, and the rule is right to
+    # flag it. Pinning the waypoint's SOURCE is what separates the two again:
+    # one event cannot come from the Courtyard and from BBH at once, and both
+    # match lambdas read the same `ev.payload["from"]`.
+    colliding = SegmentDef(id=1, name="x", enabled=True,
+                           start_triggers=[{"type": "level_exit", "from": 4}],
+                           end_triggers=[{"type": "level_enter", "to": 6}],
+                           guards=[])
+    assert any(w["rule"] == "unfireable"
+               for w in lint_definition(colliding, []))
+    pinned = SegmentDef(id=1, name="x", enabled=True,
+                        start_triggers=[{"type": "level_exit", "from": 4}],
+                        end_triggers=[{"type": "level_enter", "to": 6,
+                                       "from": 26}],
+                        guards=[])
+    findings = lint_definition(pinned, [])
+    assert not any(w["rule"] == "unfireable" for w in findings), findings

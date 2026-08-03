@@ -94,11 +94,18 @@ def test_world_connections_reference_only_registered_levels_and_areas():
 
 
 def test_world_connections_match_the_user_topology_spec():
-    # The 2026-07-23 spec, verbatim: exiting a basement course can ONLY land
-    # in the castle basement; each hub region reaches exactly its own stars
-    # plus its stated hub/Bowser exits.
+    # The 2026-07-23 spec: each hub region reaches exactly its own stars plus
+    # its stated hub/Bowser exits.
+    #
+    # Its other half -- "exiting a basement course can ONLY land in the castle
+    # basement" -- was CORRECTED 2026-08-02 by the human testing every course
+    # in the game: pausing offers Exit Course everywhere but the castle's own
+    # areas, and it always lands in the LOBBY. So a basement course has two
+    # ways out, the door it came in by and the pause menu, and the second is
+    # what several shipped movements are built on. See
+    # tests/test_topology.py::test_every_course_can_pause_exit_to_the_lobby.
     conn = A.world_connections()
-    assert conn["22"] == [[6, 3]]          # LLL exits to the basement, nowhere else
+    assert conn["22"] == [[6, 1], [6, 3]]  # LLL: pause exit, and its own door
     basement = {tuple(d) for d in conn["6:3"]}
     assert {(7, None), (22, None), (8, None), (23, None),    # HMC LLL SSL DDD
             (19, None), (16, None)} <= basement              # BitFS + grounds

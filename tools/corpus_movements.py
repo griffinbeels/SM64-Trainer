@@ -113,10 +113,19 @@ MOVEMENTS = [
     # of match_mode, and area_enter(level=6, area=BASEMENT)'s precondition
     # only fires from level 6. BBH's exit lands at level 26 (the courtyard),
     # so a plain end trigger is simply unfireable from the arm position; the
-    # waypoint's level_enter(6) has no `from`, so it fires from anywhere but
-    # its own destination and gets the arm past the courtyard.
+    # waypoint's level_enter(6) fires from anywhere but its own destination
+    # and gets the arm past the courtyard.
+    #
+    # It PINS the courtyard as its source since 2026-08-02, when every course
+    # gained its pause exit into the castle. Without that, a single
+    # `level_changed 4 -> 6` -- BBH's own pause exit -- satisfies both this
+    # def's start AND its first waypoint, and closures run before arming: the
+    # def would arm in the lobby still owing a waypoint that can now only fire
+    # if he leaves the castle and comes back. `tracking/lint.py`'s `unfireable`
+    # rule names that trap and was what caught it.
     movement("seg:bbh->basement", "BBH → Basement",
-             exit_level(4), enter_area(BASEMENT), via=[enter_level(6)]),
+             exit_level(4), enter_area(BASEMENT),
+             via=[enter_level(6, frm=26)]),
     movement("seg:bbh->ddd", "BBH → DDD",
              exit_level(4), enter_level(23)),
     # --- basement ---------------------------------------------------------

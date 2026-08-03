@@ -485,10 +485,57 @@ WORLD_EDGES_TWO_WAY = (
 #
 # NOT made two-way: a lobby -> BitFS move is the warp menu, and the basement is
 # the real door in.
+# THE PAUSE EXIT, added 2026-08-02 — and `(19, _LOBBY)` above turns out to have
+# been one instance of it rather than a fact about BitFS.
+#
+# LIVE-VERIFIED by the human in every course: *"every single course has an 'Exit
+# Course' button that results in going back to the Lobby. The only exceptions
+# are: Castle Basement, Castle Upstairs, Castle Courtyard, Castle Grounds — for
+# these, if you press pause, there's no option to exit (because we're already in
+# the castle). That's fine. We navigate the castle as normal."* And separately
+# for the arenas: *"for Bowser 1/2/3 there's an Exit Course option, which brings
+# you back to the lobby."*
+#
+# So the rule has NO exceptions beyond the castle's own areas, and
+# `tests/test_topology.py::test_every_course_can_pause_exit_to_the_lobby`
+# states it that way rather than as a list — a hand-written list is what got it
+# wrong before (an earlier draft named 12 and named them wrongly, by reading
+# level ids through COURSE_NAMES, which is keyed by COURSE number).
+#
+# ONE-WAY: you cannot enter a course from the lobby that you have no door for.
+#
+# This is what makes each re-entry movement a TRICK: re-entering a course and
+# pause-exiting is how you reach the Lobby without walking to it — `SL ->
+# Basement` skips Upstairs -> Lobby, `HMC -> RR` skips Basement -> Lobby.
+# Nothing else explains why those movements exist.
+#
+# It is a LIVE defect fix, not only authoring groundwork: loose definitions
+# judge by hop count through this table, so a real pause exit out of any of
+# these was either an impossible move (Rule 1) or read as walking away (Rule 2).
+#
+# The Bowser 3 arena keeps having no WIN or LOSE edge into the castle (see
+# `(34, _UPSTAIRS)`'s removal above) — a pause exit is a third, different
+# mechanism, and the human tested it directly.
+# Their own tuple because they are their own MECHANISM, and consumers need to
+# tell them apart: a course's ordinary exit is the door it came in by, and a
+# walker that took the pause exit instead would route BBH -> Lobby and never
+# see the Courtyard. `(19, _LOBBY)` lives here now — it was added the day
+# before as a fact about BitFS and is one instance of this rule.
+# Levels already carrying a two-way lobby edge (BoB WF JRB CCM PSS SA TotWC
+# BitDW) reach it anyway and need no row.
+WORLD_PAUSE_EXITS = (
+    (4, _LOBBY), (7, _LOBBY), (8, _LOBBY),        # BBH HMC SSL
+    (10, _LOBBY), (11, _LOBBY), (13, _LOBBY),     # SL WDW THI
+    (14, _LOBBY), (15, _LOBBY), (18, _LOBBY),     # TTC RR VCUtM
+    (19, _LOBBY), (21, _LOBBY), (22, _LOBBY),     # BitFS BitS LLL
+    (23, _LOBBY), (28, _LOBBY), (31, _LOBBY),     # DDD CotMC WMOTR
+    (36, _LOBBY),                                 # TTM
+    (BOWSER_2_ARENA, _LOBBY), (BOWSER_3_ARENA, _LOBBY),
+)
+
 WORLD_EDGES_ONE_WAY = (
     (30, _LOBBY), (33, _BASEMENT),                # winning key cutscene -> castle
-    (19, _LOBBY),                                 # BitFS exit -> lobby (the trick)
-)
+) + WORLD_PAUSE_EXITS
 
 
 def _world_node(spec) -> tuple:
