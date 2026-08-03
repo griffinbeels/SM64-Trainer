@@ -254,19 +254,28 @@ STORIES = [
     Story(name="page", at="", setup=_EXPAND_ALL),
     Story(name="active-target", at=".objective-card",
           skip_if="!document.querySelector('.objective-card')"),
-    # `--objective-card-narrow` was measured against a STAR card and never
-    # re-measured after this branch (2026-07-28-multi-step-segments) put a
-    # `.seg-waiting` line inside the same fixed-height, overflow:hidden card
-    # -- and neither this sweep nor tools/measure_objective_card.py could
-    # even REACH a state with that line rendered (final review, finding 2):
-    # `serve_ui`'s fixture always targeted a star, and `.seg-waiting` renders
-    # only while `sec.armed_detail` is non-null. `serve` below arms a real
-    # segment definition alongside the existing star target (ui_fixture.py's
-    # `_arm_segment`) so this card exists on the SAME page the other stories
-    # already measure. It sits inside a closed `<details>` in the practice
-    # index until `_EXPAND_ALL` (above, already run by the "page" story
-    # earlier in this viewport's pass) opens it.
-    Story(name="armed-segment", at=".objective-card:has(.seg-waiting)",
+    # Re-pointed 2026-08-03 (final whole-branch review, spec practice-log-
+    # entity-cards): `.seg-waiting` moved off `.objective-card` entirely once
+    # the practice index was deleted (Task 6) -- an armed-but-untargeted
+    # segment now surfaces ONLY as a `.log-card` in the practice log
+    # (`ui_fixture.py::_arm_segment`'s own docstring), never as
+    # `.objective-card`, since `Practice()` suppresses every segment pin while
+    # a star target is active and `serve` below never targets the armed
+    # segment. The old `at=".objective-card:has(.seg-waiting)"` therefore
+    # matched nothing here; `skip_if` only ever checked for a bare
+    # `.seg-waiting`, which DOES exist (inside the log card), so the story
+    # never skipped and uilab's `_probe` returned "scope selector matched
+    # nothing" on every single run since Task 6 landed -- silently discarded
+    # by `continue` in uilab's own sweep loop (fixed at the root in
+    # uilab/sweep.py, which now raises instead). CONFIRMED contributing zero
+    # defects at every viewport for that whole stretch (final review).
+    #
+    # Re-pointed at the log card itself, which is where the crowded
+    # combination this story exists to protect (two stacked rank banners plus
+    # the waiting-for row) actually renders now -- the same `sec.armed_detail`
+    # + `rank`/`entity_rank` data `_arm_segment` seeds, just drawn by
+    # `LogCard` instead of `StarSection`/`SegmentSection`.
+    Story(name="armed-segment", at=".log-card:has(.seg-waiting)",
           skip_if="!document.querySelector('.seg-waiting')"),
     # Renamed 2026-08-03 (Task 7): `.attempts-card` died with StarSection/
     # SegmentSection's own attempts table (Task 6) -- the practice log is
