@@ -2178,6 +2178,14 @@ class _Arm:
     # every waypoint is consumed and the def is awaiting its end trigger. 0 for
     # every non-waypoint def (empty d.waypoints never reads this field).
     progress: int = 0
+    # Cursor into `path_nodes(d)` — the next declared PLACE this run still owes
+    # (spec 2026-08-02-strict-path-segments). Distinct from `progress`, which
+    # indexes `d.waypoints` and counts steps of ANY trigger type: a star grab
+    # advances progress and names no place at all. Advanced ONLY by
+    # `_flush_move`, from the settled position, of which there is exactly one
+    # per frame — which is why an index is safe here where `declared_nodes`
+    # needed a set (see its docstring).
+    path_index: int = 0
     # Frame at which a LOOSE arm is presumed abandoned (spec
     # 2026-07-28-multi-step-segments). None for a strict arm, which is bounded
     # by its cancel rules instead. Shipped to the view so the UI reads expiry
@@ -3091,16 +3099,47 @@ class SegmentEngine:
             for d in candidates:
                 self._cancel_topologically(d, ev, notices)
             return
-        # Rule 2 — a LEGAL move that takes the player FURTHER from what the
-        # segment needs next. Basement -> LLL is a real edge, so Rule 1 waves
-        # it through; what makes it a wrong turn is that HMC went from 1 hop
-        # away to 2 (live report 2026-08-01). Strict increase only: equal is
-        # sideways and tolerated, so a route with two shortest paths is never
-        # punished for picking either.
+        # Rule 2 splits on match_mode (spec 2026-08-02-strict-path-segments).
+        #
+        # LOOSE keeps the hop arithmetic below, byte for byte. Anything else
+        # takes the PATH CURSOR, because hop arithmetic cannot express the
+        # thing Griffin actually asked for: a deliberate shortcut and a
+        # runner's mistake are observationally equivalent — entering BitFS
+        # during `Bowser 2 -> Upstairs` is the same move whether it is the
+        # fastest route or a wrong turn, and that leg survives today only
+        # because BitFS happens to sit the same distance from Upstairs as the
+        # Basement does. No measurement separates the two; only a DECLARATION
+        # does. "That is a fixed path, and there are no other options. I want
+        # it to be very strict" (2026-08-02).
         for d in candidates:
+            arm = self._armed[d.id]
+            if d.match_mode != "loose":
+                path = path_nodes(d)
+                if arm.path_index >= len(path):
+                    # The definition has said everything it is going to say
+                    # about places, so it constrains nothing further. An EMPTY
+                    # path is the same answer from the start, which is what
+                    # keeps the 100-coin family and the reds->pipe defs out of
+                    # this rule with no exemption list — the same "two ways to
+                    # be unconstrained" property _next_step_hops relies on.
+                    continue
+                if node == path[arm.path_index]:
+                    self._armed[d.id] = replace(arm,
+                                                path_index=arm.path_index + 1)
+                else:
+                    # Not the next step: silently void, through the same door
+                    # as every other topological cancel, so a real anchor at
+                    # the arm position can still bring it back.
+                    self._cancel_topologically(d, ev, notices)
+                continue
+            # Rule 2 — a LEGAL move that takes the player FURTHER from what the
+            # segment needs next. Basement -> LLL is a real edge, so Rule 1
+            # waves it through; what makes it a wrong turn is that HMC went
+            # from 1 hop away to 2 (live report 2026-08-01). Strict increase
+            # only: equal is sideways and tolerated, so a route with two
+            # shortest paths is never punished for picking either.
             if node in declared_nodes(d):
                 continue      # see declared_nodes: the route says it goes here
-            arm = self._armed[d.id]
             before = self._next_step_hops(d, arm, previous)
             after = self._next_step_hops(d, arm, node)
             if before is not None and after is not None and after > before:
