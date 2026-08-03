@@ -51,6 +51,14 @@ def test_entity_keys_match_what_every_other_surface_builds():
     assert call("entityKey", SEGMENT) == "segment:12"
 
 
+def test_entity_noun_names_the_kind_a_stub_could_not_fake():
+    """A stub returning a constant would pass every other call in this file
+    -- this is the one test that forces `entityNoun` to actually branch on
+    `isSegment` rather than always answering the same word."""
+    assert call("entityNoun", STAR) == "Star"
+    assert call("entityNoun", SEGMENT) == "Segment"
+
+
 def test_a_segment_is_measured_on_rta_whatever_clock_the_view_is_on():
     """Segments are RTA-only by design -- igt is null everywhere on them."""
     assert call("sectionClock", SEGMENT, "igt") == "rta"

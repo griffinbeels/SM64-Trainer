@@ -22,8 +22,8 @@ import { FailureCompilation } from "./failcomp.js";
 import { Icon } from "./icons.js";
 import { PageState } from "./states.js";
 import { EmptyState } from "./emptystate.js";
-import { familyLabel } from "../redsfamily.js";
 import { caveatOf, cardBadge } from "./marks.js";
+import { displayName, entityKey, entityNoun, sectionPb } from "../entitysection.js";
 
 const html = htm.bind(h);
 
@@ -613,7 +613,6 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
   const [foldTarget, toggleTarget] = useCollapsed("objective");
   const [foldAnalysis, toggleAnalysis] = useCollapsed("analysis");
   const [foldLog, toggleLog] = useCollapsed("attempts");
-  const pb = sec.pb[t.clock];
   const base = showHidden ? sec.attempts
     : sec.attempts.filter((a) => !a.cleared && a.outcome !== "abandoned");
   const hidden = sec.attempts.filter((a) => a.cleared || a.outcome === "abandoned");
@@ -640,31 +639,21 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
     t.refresh();
   }
 
-  // The STAR half of item 4 (round 2 part 2, live report 2026-07-31): with
-  // Star mode selected on the Reds cell, the pinned card read a bare
-  // "8 Red Coins" -- the Pipe half already reads "8 Red Coins (Pipe)"
-  // (above), and the cell itself always spells out which family is on the
-  // clock, so the star card disagreeing with its own cell is the same bug
-  // one surface later. `sec.pipe_segment_id` is ALREADY the exact
-  // discriminator (views.py: non-null only for a Bowser course's star 0,
-  // the paired reds->pipe segment's escape hatch back to this section) --
-  // no new server field, and familyLabel (../redsfamily.js) is the SAME
-  // module the Pipe half and the cell's own toggle already call, so the
-  // three can never spell the suffix three different ways.
-  const starDisplayName = sec.pipe_segment_id != null
-    ? familyLabel(sec.star_name, false) : sec.star_name;
+  const ek = entityKey(sec);
+  const named = displayName(sec, (t.view.catalog || {}).courses || []);
+  const pb = sectionPb(sec, t.clock);
   return html`<div class="practice-detail-grid ${pinned ? "is-primary" : ""}">
     <section class="practice-card objective-card ${pinned ? "active-star" : ""} ${cardClass(foldTarget)}">
       <div class="objective-heading">
         <${ObjectiveEyebrow} iconName="target" openPicker=${openPicker}
           label=${pinned ? "Active target" : "Star practice"} />
-        <div class="objective-name" title=${`${sec.course_name} · ${starDisplayName}`}>
-          <span class="objective-context">${sec.course_name}</span>
-          <h2>${starDisplayName}</h2>
+        <div class="objective-name" title=${`${sec.course_name} · ${named.name}`}>
+          <span class="objective-context">${named.context}</span>
+          <h2>${named.name}</h2>
         </div>
         <div class="objective-strategy">
           <span class="field-label">Strategy</span>
-          <${StratPicker} entity=${`star:${sec.course_id}:${sec.star_id}`}
+          <${StratPicker} entity=${ek}
               identity=${{ course_id: sec.course_id, star_id: sec.star_id }}
               strategies=${sec.strategies} active=${sec.last_strat}
               onChanged=${t.refresh} />
@@ -675,14 +664,14 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
       </div>
       <div class="objective-metrics">
           <div class="rank-slot">
-            <${RankBanner} label=${bannerLabel(sec, "Star")}
-                hint=${bannerHint(sec, "Star")} banner=${sec.rank}
-                atFloor=${ranksAreAtFloor(sec)} lane=${`star:${sec.course_id}:${sec.star_id}`} order=${0}
+            <${RankBanner} label=${bannerLabel(sec, entityNoun(sec))}
+                hint=${bannerHint(sec, entityNoun(sec))} banner=${sec.rank}
+                atFloor=${ranksAreAtFloor(sec)} lane=${ek} order=${0}
                 replayKey=${sec.last_strat || ""}
-                identity=${rankIdentity(`star:${sec.course_id}:${sec.star_id}`, "strategy", sec, t)} />
-            ${showsEntityBanner(sec) && html`<${RankBanner} label="Star" banner=${sec.entity_rank}
-                atFloor=${ranksAreAtFloor(sec)} lane=${`star:${sec.course_id}:${sec.star_id}`} order=${1}
-                identity=${rankIdentity(`star:${sec.course_id}:${sec.star_id}`, "entity", sec, t)} />`}
+                identity=${rankIdentity(ek, "strategy", sec, t)} />
+            ${showsEntityBanner(sec) && html`<${RankBanner} label=${entityNoun(sec)} banner=${sec.entity_rank}
+                atFloor=${ranksAreAtFloor(sec)} lane=${ek} order=${1}
+                identity=${rankIdentity(ek, "entity", sec, t)} />`}
           </div>
         ${/* Same clock + word the segment card's live state uses. It was a
              bare "○" glyph until 2026-07-26, which only became visible as an
@@ -784,7 +773,7 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
             : "Wipe this star's data in the current session"}>Clear data</button>
       </div>
       <${StatChipsRow} sec=${sec} t=${t} />
-      <${StandardsPanel} entity=${`star:${sec.course_id}:${sec.star_id}`}
+      <${StandardsPanel} entity=${ek}
           activeStrat=${sec.last_strat} strategies=${sec.strategies}
           sectionRank=${sec.rank} sectionPb=${sec.pb}
           family=${sec.pipe_segment_id != null ? "Star" : null}
@@ -842,47 +831,16 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker 
   }
 
   const pinTag = armed ? "Running" : isTarget ? "Ready" : "Recent";
-  // A Bowser reds->pipe segment is presented in the FAMILY VOICE the cell
-  // that selects it already shows ("8 Red Coins (Pipe)"), not its raw
-  // corpus identity ("BitDW — 8 Red Coins → Pipe") -- round 2, item 4 (live
-  // report 2026-07-30: "Segment · BitDW — 8 Red Coins → Pipe" beside a cell
-  // already reading "8 Red Coins (Pipe)"). Same fix SHAPE as the 100-coin
-  // star's own card (b6640ee, "the card stopped presenting a segment and
-  // presented the star"), applied to NAMING only: this section still IS
-  // the segment (its own attempts/strategies/PB are untouched), only the
-  // heading borrows the star's course + name so the card agrees with the
-  // cell that pinned it. `sec.pipe_star_entity`/`_name`/`_course_name`
-  // travel together (views.py), so null-guarding on any one covers all
-  // three.
-  //
-  // The legacy "no reds" pipe-only segment gets the SAME treatment (round
-  // 2 part 2, live report 2026-07-30: "the pinned card still says 'BitDW
-  // Pipe Entry', not 'No Reds'" -- the earlier fix reached the reds->pipe
-  // family and not this sibling). It has no paired star to borrow a name
-  // FROM, so its display name is the exact literal stagebanner.js's own
-  // row already uses ("No Reds") -- `sec.is_no_reds_pipe` is a bare
-  // boolean, never a second copy of that string server-side. The course
-  // context resolves off the segment's OWN `course_id` (already stamped on
-  // every section, rule 11) through the session's own `catalog.courses` --
-  // no second course-name field for a fact the client already has.
-  const noRedsCourse = sec.is_no_reds_pipe
-    ? ((t.view.catalog || {}).courses || []).find((c) => c.id === sec.course_id)
-    : null;
-  const familyName = sec.pipe_star_entity
-    ? familyLabel(sec.pipe_star_name || "Reds", true)
-    : noRedsCourse ? "No Reds" : null;
-  const familyCourseName = sec.pipe_star_entity
-    ? sec.pipe_star_course_name
-    : noRedsCourse ? noRedsCourse.name : null;
+  const ek = entityKey(sec);
+  const named = displayName(sec, (t.view.catalog || {}).courses || []);
   return html`<div class="practice-detail-grid ${pinned ? "is-primary" : ""}">
     <section class="practice-card objective-card ${pinned ? "active-star" : ""} ${cardClass(foldTarget)}">
       <div class="objective-heading">
         <${ObjectiveEyebrow} iconName="segments" openPicker=${openPicker}
           label=${pinned ? "Active segment" : "Segment practice"} />
-        <div class="objective-name" title=${familyName || sec.name}>
-          <span class="objective-context">${sec.broken ? "History only"
-            : familyName ? familyCourseName : "Segment"}</span>
-          <h2>${familyName || sec.name}</h2>
+        <div class="objective-name" title=${named.name}>
+          <span class="objective-context">${named.context}</span>
+          <h2>${named.name}</h2>
         </div>
         <div class="objective-strategy">
           <span class="field-label">Strategy</span>
@@ -900,20 +858,20 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker 
       </div>
       <div class="objective-metrics">
           <div class="rank-slot">
-            <${RankBanner} label=${bannerLabel(sec, "Segment")}
-                hint=${bannerHint(sec, "Segment")} banner=${sec.rank}
-                atFloor=${ranksAreAtFloor(sec)} lane=${`segment:${sec.segment_id}`} order=${0}
+            <${RankBanner} label=${bannerLabel(sec, entityNoun(sec))}
+                hint=${bannerHint(sec, entityNoun(sec))} banner=${sec.rank}
+                atFloor=${ranksAreAtFloor(sec)} lane=${ek} order=${0}
                 replayKey=${sec.last_strat || ""}
-                identity=${rankIdentity(`segment:${sec.segment_id}`, "strategy", sec, t)} />
-            ${showsEntityBanner(sec) && html`<${RankBanner} label="Segment" banner=${sec.entity_rank}
-                atFloor=${ranksAreAtFloor(sec)} lane=${`segment:${sec.segment_id}`} order=${1}
-                identity=${rankIdentity(`segment:${sec.segment_id}`, "entity", sec, t)} />`}
+                identity=${rankIdentity(ek, "strategy", sec, t)} />
+            ${showsEntityBanner(sec) && html`<${RankBanner} label=${entityNoun(sec)} banner=${sec.entity_rank}
+                atFloor=${ranksAreAtFloor(sec)} lane=${ek} order=${1}
+                identity=${rankIdentity(ek, "entity", sec, t)} />`}
           </div>
         <div class="objective-live-state ${armed ? "running" : ""}"
             aria-label=${`Segment state: ${pinTag}`}>
           <${Icon} name="clock" size=${17} /><span>${pinTag}</span>
         </div>
-        <${PbTag} pb=${sec.pb.rta} mode="rta" rows=${rows} pick=${pick} t=${t} />
+        <${PbTag} pb=${sectionPb(sec, t.clock)} mode="rta" rows=${rows} pick=${pick} t=${t} />
       </div>
       ${/* Progress + what a multi-step arm is waiting for next (Task 6,
            spec 2026-07-28-multi-step-segments). sec.armed_detail is null
