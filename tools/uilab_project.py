@@ -727,5 +727,40 @@ BOWSER_PROJECT = dataclasses.replace(
             'overlap 7x2px inside button.starcell',
         '913x1000 [bowser-row] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
+
+        # 900x1000/901x1000/1019x1000/1020x1000: PROJECT's own new rows
+        # (final review, item 1 -- `.log-card-head`'s `@container (max-width:
+        # 900px)` reflow adds 900 as a css threshold, auto-deriving these
+        # four VIEWPORT points for every project that shares this stylesheet,
+        # BOWSER_PROJECT included) reached the SAME long-owed stagebanner/
+        # starcell defect class here too, at a genuinely different magnitude:
+        # this row's own 2-cell BowserCourseRow compresses further than the
+        # 7-cell StarRow does at these widths, so the wing-spill overlap is
+        # 26x2px here, not 7x2px. Measured directly against this project's
+        # own sweep output, not copied from PROJECT's rows.
+        '900x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 206 > clientHeight 204',
+        '900x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '900x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '901x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 206 > clientHeight 204',
+        '901x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '901x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1019x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 222 > clientHeight 220',
+        '1019x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1019x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1020x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 222 > clientHeight 220',
+        '1020x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1020x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
     },
 )
