@@ -54,8 +54,17 @@ SHELL_SELECTORS = (
 # column by tests/test_objective_name_fits.py, which is what actually holds the
 # floor. Both, because they fail differently: this one catches a layout change
 # on any page state, that one catches a name nobody thought about.
+#
+# `.log-card-name b` and `.rank-banner-name` joined this list 2026-08-03
+# (final whole-branch review, item 1) -- the practice log's own entity name
+# and rank name, which ellipsised on `.log-card-head` below an 858-866px
+# container (index.html's own measured comment, above the `@container
+# (max-width: 900px)` reflow). Same pairing as the objective card: this row
+# catches a layout regression on any seeded page state, and
+# tests/test_log_card_name_fits.py catches a real name nobody thought about.
 NEVER_TRUNCATE = (".rank-banner-kicker", ".context-label", ".nav-item span",
-                  ".field-label", ".objective-name h2")
+                  ".field-label", ".objective-name h2", ".log-card-name b",
+                  ".rank-banner-name")
 
 # States worth measuring. The Practice page renders EMPTY-state placeholders
 # whenever no target is selected, and a database snapshot taken while nobody is
@@ -361,8 +370,19 @@ PROJECT = Project(
     # and 794, below the supported floor, where they are dropped entirely. A
     # container threshold is therefore never self-probing here; whenever you
     # add one below ~1180, add its window equivalent to this list.
+    #
+    # 1019/1020 are the same shape for `.log-card-head`'s own `@container
+    # (max-width: 900px)` reflow (final review, item 1): measured on the
+    # shipping shell, the pane runs the SAME 119px narrower than the window
+    # in this range (900 -> container 781, 1019 -> container 900, 1020 ->
+    # container 901 -- confirmed directly, `.log-card-head`'s own
+    # `gridTemplateColumns` switches from the 2-column reflow to the 4-column
+    # wide template between these two exact window widths), so the derived
+    # matrix's own 900/901 VIEWPORT points land at a ~781px container deep
+    # inside the narrow layout and never exercise the actual crossover.
     extra_viewports=((850, 1180), (851, 1000), (900, 1180), (912, 1000),
-                     (913, 1000), (1500, 900), (1280, 720)),
+                     (913, 1000), (1019, 1000), (1020, 1000),
+                     (1500, 900), (1280, 720)),
     # OWED, not exempted. These became VISIBLE on 2026-07-28 when the
     # fixture finally rendered a populated practice page -- a stage, an
     # active target, a strategy and a PB. Everything on the star row and
@@ -465,6 +485,36 @@ PROJECT = Project(
         '913x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 208 > clientHeight 206',
         '913x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        # 900x1000/901x1000/1019x1000/1020x1000: the SAME long-owed stage-
+        # banner-card shortfall + star-cell overlap class as every row above
+        # (both pre-existing, both unrelated to the practice log), newly
+        # REACHED at these four exact points only because `.log-card-head`'s
+        # own `@container (max-width: 900px)` (item 1, final review) added
+        # 900 as a css threshold value -- `_candidate_matrix` auto-derives a
+        # probe point at that literal VIEWPORT width whenever any stylesheet
+        # rule declares it, and 1019/1020 are this same threshold's window-
+        # equivalent pair (see `extra_viewports`, above). Not a new defect;
+        # a new coordinate on an old one.
+        '900x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 206 > clientHeight 204',
+        '900x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '901x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 206 > clientHeight 204',
+        '901x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1019x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 222 > clientHeight 220',
+        '1019x1000 [page] clipped :: span.starname':
+            'scrollHeight 27 > clientHeight 25',
+        '1019x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1020x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 222 > clientHeight 220',
+        '1020x1000 [page] clipped :: span.starname':
+            'scrollHeight 27 > clientHeight 25',
+        '1020x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
     },
 )

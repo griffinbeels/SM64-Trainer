@@ -4345,13 +4345,61 @@
   .log-card-ranks .rank-banner::before { top: 0; bottom: 0; left: 0; right: 0; }
   .log-card-ranks .rank-banner:first-child::before { left: 0; border-radius: 0; }
 
-  /* No narrow-pane override below this: stacking the two rank banners
-     (above) was the fix the crowded row actually needed, not a threshold.
-     Measured across the whole supported range (851px down to the 731px pane
-     the 850px floor itself gives -- uilab_project.py's `extra_viewports`),
-     `.log-card-head`'s scrollWidth never exceeds its clientWidth at any of
-     them with two graded banners, a name and a PB tag all present -- a
-     `@container` rule here would gate on a width the app never reaches. */
+  /* CORRECTED 2026-08-03 (final whole-branch review, item 1) -- this comment
+     used to claim `.log-card-head`'s scrollWidth never exceeds its
+     clientWidth at any supported width, and concluded a `@container` rule
+     here would gate on a width the app never reaches. That measurement
+     could not have found the defect it was checking for: both rank-banner
+     children (`.rank-banner-name`/`.rank-banner-next`, above) ellipsise
+     THEMSELVES (`text-overflow: ellipsis`), which is exactly what keeps a
+     PARENT's scrollWidth from ever exceeding its clientWidth -- the
+     overflow is clipped by the CHILD before the parent's own box would have
+     to grow. A row whose children truncate correctly measures as "not
+     overflowing" by that test every time, so the row was never actually
+     free of truncation; the test used could not have detected it.
+
+     Measured directly against the two elements that DO truncate (headless,
+     the two-banner star fixture, `scrollWidth - clientWidth` swept every 1px
+     of window width from 1050px down to 850px): `.rank-banner-next` is the
+     first to fail, at an 866px CONTAINER (985px window) and every narrower
+     container down to the 731px floor; `.rank-banner-name` follows one step
+     later, at an 858px container (977px window). `.log-card-name b` survives
+     the ONE star this fixture seeds by a single pixel at the 731px floor,
+     but the wider corpus does not (`tests/test_log_card_name_fits.py`) --
+     same cause, since it shares this one crowded row with the ranks column
+     and the PB tag.
+
+     The fix is not a smaller font or a narrower kicker, the levers
+     `.objective-card` used at its own tight band -- it is giving the ranks
+     column and the PB tag their OWN full-width rows, the way
+     `.log-card-ranks` already stacks its two banners internally instead of
+     sharing a row. This card is deliberately not fixed-height (unlike
+     `.objective-card`/`.analysis-card`, above) specifically so it can afford
+     a taller head at a narrow pane instead of losing text.
+
+     900px picked with margin above the measured 866/858px failures, a round
+     number rather than the exact pixel. Its window-equivalent probe pair
+     (1019/1020px, `extra_viewports` in uilab_project.py) straddles the
+     threshold the same way 912/913 already straddle the objective card's own
+     793px container threshold -- the derived matrix otherwise probes 900/901
+     as VIEWPORT pixels, which lands at a ~781px container deep inside the
+     narrow layout and never exercises the actual crossover. */
+  @container (max-width: 900px) {
+    /* Excludes `.log-card.is-unassigned`: that card has no ranks and no PB
+       tag to give a row to, and keeps its own plain 2-column template
+       (above) untouched. `grid-area` on a card that has no matching named
+       area (the unassigned case) behaves as `auto` per spec -- a documented
+       no-op, not a special case to guard against here. */
+    .log-card:not(.is-unassigned) .log-card-head {
+      grid-template-columns: minmax(0,1fr) auto;
+      grid-template-areas: "select fold" "ranks ranks" "pb pb";
+      row-gap: .45rem;
+    }
+    .log-card-select { grid-area: select; }
+    .log-card-fold { grid-area: fold; }
+    .log-card-ranks { grid-area: ranks; }
+    .log-card-head .pbtag { grid-area: pb; justify-self: end; }
+  }
 
 </style></head>
 <body>
