@@ -26,6 +26,8 @@ ENTITYDETAIL_JS = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
                    / "ui" / "components" / "entitydetail.js")
 ATTEMPTLOG_JS = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
                  / "ui" / "components" / "attemptlog.js")
+PRACTICELOG_JS = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
+                  / "ui" / "components" / "practicelog.js")
 VIEWS_PY = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
             / "tracking" / "views.py")
 
@@ -81,24 +83,32 @@ def test_both_cards_offer_a_strategy_picker():
             f"{name} lost its strategy picker"
 
 
-def test_both_cards_offer_a_failure_compilation():
+def test_the_page_level_drawer_still_offers_a_failure_compilation():
     """Failure compilation must ship on stars AND segments (spec 2026-07-23).
 
     2026-08-03 (practice-log-entity-cards, task 4): the detail drawer that
     holds FailureCompilation stopped being two hand-written copies -- both
-    StarSection and SegmentSection now render the SAME shared `EntityDrawer`
-    (entitydetail.js). So the parity this test guards is a structural
-    guarantee now rather than two things that could quietly drift apart:
-    there is only one drawer for either card to call, and only one place
-    FailureCompilation could be rendered from. This asserts both halves of
-    that guarantee -- each section calls the shared drawer, and the drawer
-    itself still renders the control -- rather than either alone, since a
-    section that stopped calling EntityDrawer (or an EntityDrawer that lost
-    the control) would each be invisible to only the other check."""
-    source = PRACTICE_JS.read_text(encoding="utf-8")
-    for name in ("StarSection", "SegmentSection"):
-        assert "EntityDrawer" in _components(_body(source, name)), \
-            f"{name} does not render the shared detail drawer"
+    StarSection and SegmentSection rendered the SAME shared `EntityDrawer`
+    (entitydetail.js), so the parity this test guarded was a structural
+    guarantee rather than two things that could quietly drift apart.
+
+    2026-08-03 (task 6): it went one step further -- EntityDrawer stopped
+    being called once PER SECTION and became ONE page-level call in
+    `Practice`, following whichever entity is in FOCUS (which may be neither
+    the star nor the segment card currently active; ui/focustarget.js).
+    There is no longer a second call site for a section to individually
+    stop calling it, so the property worth asserting is that the one call
+    exists and follows the focused entity, plus the unchanged half: the
+    shared drawer itself still renders the control."""
+    practice = strip_comments(PRACTICE_JS.read_text(encoding="utf-8"))
+    assert practice.count("<${EntityDrawer}") == 1, (
+        "Practice must render the shared drawer exactly once, at page level "
+        "-- a second call site would be the two-copies shape this test "
+        "exists to prevent, arriving one level up")
+    assert "sec=${focusedSec}" in practice, (
+        "the drawer must follow the FOCUSED entity (ui/focustarget.js), not "
+        "just the active target -- a browsed entity's Clear-data/standards/"
+        "failure-compilation would otherwise be unreachable")
     drawer = _exported_body(ENTITYDETAIL_JS.read_text(encoding="utf-8"), "EntityDrawer")
     assert "FailureCompilation" in drawer, \
         "EntityDrawer is missing the failure-compilation control"
@@ -172,12 +182,17 @@ def test_both_section_kinds_render_the_shared_stat_chips_row():
 
     2026-08-03 (practice-log-entity-cards, task 4): StatChipsRow moved out of
     practice.js into entitydetail.js, rendered from inside the shared
-    EntityDrawer -- which is itself the ONE thing both StarSection and
-    SegmentSection call. "Does every card show the chips" is therefore two
-    questions now: does EntityDrawer reach both cards (2 uses in practice.js),
-    and does EntityDrawer itself still render the row exactly once."""
+    EntityDrawer -- which was itself the ONE thing both StarSection and
+    SegmentSection called. "Does every card show the chips" was therefore two
+    questions: does EntityDrawer reach both cards (2 uses in practice.js),
+    and does EntityDrawer itself still render the row exactly once.
+
+    2026-08-03 (task 6): EntityDrawer stopped being called per-section and
+    became ONE page-level call following the focused entity, so the first
+    question collapses to "does the one call still exist" -- there is no
+    second call site left to reach two cards from."""
     practice = strip_comments(PRACTICE_JS.read_text(encoding="utf-8"))
-    assert practice.count("<${EntityDrawer}") == 2
+    assert practice.count("<${EntityDrawer}") == 1
     detail = strip_comments(ENTITYDETAIL_JS.read_text(encoding="utf-8"))
     assert detail.count("<${StatChipsRow}") == 1
     # ...and no card keeps its own hand-rolled copy of the chips loop.
@@ -185,45 +200,58 @@ def test_both_section_kinds_render_the_shared_stat_chips_row():
     assert "DUST_STAT_KEYS" not in practice
 
 
-def test_every_attempts_tools_row_carries_the_stat_menu_trigger():
+def test_the_practice_logs_one_toolbar_carries_the_stat_menu_trigger():
     """The Stats TRIGGER moved out of the chips row and into the practice-log
     card's header, left of the sort control (user, 2026-07-28: "For the stats
     button, we should move it to be inside the practice log, to the left of
-    the sort filter"). It must appear in every `.attempts-tools` row --
-    StarSection, SegmentSection, AND EmptyPractice's "Unassigned attempts"
+    the sort filter"). Until task 6 it appeared in every `.attempts-tools` row
+    -- StarSection, SegmentSection, AND EmptyPractice's "Unassigned attempts"
     card -- from ONE shared component, never pasted: a 1:1 count between the
     toolbar row and the trigger is what a future practice-log card silently
     missing it, or a hand-rolled second copy, would both break.
 
-    This is also what makes the trigger reachable when route focus is on with
-    no active target: neither StarSection/SegmentSection's drawer nor
-    RouteFocus renders anything then, and EmptyPractice's log card is the only
-    surface left -- a trigger missing there would mean the Stats menu again
-    has zero access points on the page, the exact gap this move closes.
+    2026-08-03 (practice-log-entity-cards, task 6): the practice log itself
+    moved out of practice.js whole -- `PracticeLog` (practicelog.js) renders
+    ONE heading for the entire log, not one per entity card, which is what
+    makes `test_ui_practice_log.py`'s `orderedSections` the single source of
+    the list order rather than three sections each carrying their own
+    toolbar. So the 1:1 count this test guarded moved location and also
+    became a STRICTER guarantee: there is exactly one `.attempts-tools` row on
+    the whole page now, one `StatMenuTrigger` use, and practice.js itself
+    carries neither -- the log (and its one toolbar) left practice.js
+    entirely, rather than one of three copies losing the trigger.
 
-    2026-08-03 (practice-log-entity-cards, task 5): StatMenuTrigger's own
-    definition moved out of practice.js into attemptlog.js (Step 0 of that
-    task -- the attempt-row machinery and the rank-banner helpers move there
-    so practicelog.js can use them without practice.js closing an import
-    cycle on itself). The USAGE count check below is unaffected -- every
-    `.attempts-tools` row still calls `<${StatMenuTrigger}>` from practice.js,
-    same as before -- but "no hand-rolled second copy" now has to be checked
-    at the new location: practice.js must carry ZERO definitions (it only
-    imports the shared one), and attemptlog.js must carry exactly ONE."""
-    code = strip_comments(PRACTICE_JS.read_text(encoding="utf-8"))
-    toolbar_rows = code.count('class="attempts-tools"')
-    trigger_uses = code.count("<${StatMenuTrigger}")
-    assert toolbar_rows >= 3, (
-        f"expected at least 3 practice-log toolbar rows (star/segment/"
-        f"unassigned), found {toolbar_rows} -- did one get renamed?")
-    assert trigger_uses == toolbar_rows, (
-        f"{toolbar_rows} '.attempts-tools' row(s) but {trigger_uses} "
-        "StatMenuTrigger use(s) -- every practice-log toolbar must carry "
-        "exactly one shared trigger")
-    # ...and no card keeps its own hand-rolled copy of the trigger button --
-    # practice.js only ever IMPORTS it now, attemptlog.js is the one place
-    # it may be DEFINED.
-    assert code.count("function StatMenuTrigger") == 0, (
+    2026-08-03 (task 5): StatMenuTrigger's own DEFINITION moved out of
+    practice.js into attemptlog.js (Step 0 of that task -- the attempt-row
+    machinery and the rank-banner helpers move there so practicelog.js can use
+    them without practice.js closing an import cycle on itself). That half is
+    unaffected by task 6 and re-probed here at its same two addresses:
+    practicelog.js must carry ZERO definitions (it only imports the shared
+    one), and attemptlog.js must carry exactly ONE."""
+    log_source = strip_comments(PRACTICELOG_JS.read_text(encoding="utf-8"))
+    toolbar_rows = log_source.count('class="attempts-tools"')
+    trigger_uses = log_source.count("<${StatMenuTrigger}")
+    assert toolbar_rows == 1, (
+        f"expected exactly 1 practice-log toolbar row in practicelog.js, "
+        f"found {toolbar_rows} -- did PracticeLog's heading get renamed or "
+        "duplicated per card?")
+    assert trigger_uses == 1, (
+        f"expected exactly 1 StatMenuTrigger use in practicelog.js, found "
+        f"{trigger_uses}")
+    assert log_source.count("function StatMenuTrigger") == 0, (
+        "practicelog.js defines its own StatMenuTrigger -- it should only "
+        "import the shared one from attemptlog.js")
+    # ...and practice.js itself carries neither the row nor the trigger any
+    # more -- the whole log, toolbar included, moved out in task 6.
+    practice = strip_comments(PRACTICE_JS.read_text(encoding="utf-8"))
+    assert 'class="attempts-tools"' not in practice, (
+        "practice.js still has a practice-log toolbar row of its own -- the "
+        "log is a page-level surface (practicelog.js) now, not a per-section "
+        "card")
+    assert "<${StatMenuTrigger}" not in practice, (
+        "practice.js still calls StatMenuTrigger directly -- that call moved "
+        "to practicelog.js with the rest of the log")
+    assert practice.count("function StatMenuTrigger") == 0, (
         "practice.js defines its own StatMenuTrigger -- it should only "
         "import the shared one from attemptlog.js")
     attemptlog = strip_comments(ATTEMPTLOG_JS.read_text(encoding="utf-8"))
@@ -245,3 +273,38 @@ def test_the_analysis_card_and_drawer_are_one_component_not_two_copies():
     assert "analysis-block" not in practice
     assert "detail-drawer" not in practice
     assert practice.count("<${EntityAnalysis}") == practice.count("<${EntityDrawer}")
+
+
+def test_the_practice_index_is_gone_and_the_log_replaced_it():
+    """The index listed the same set of entities in catalog order. Keeping
+    both would put every entity on the page twice."""
+    practice = strip_comments(PRACTICE_JS.read_text(encoding="utf-8"))
+    assert "practice-index" not in practice
+
+
+def test_the_active_cards_shrank_to_the_objective_alone():
+    """StarSection and SegmentSection used to carry the analysis card, the
+    attempts log and the drawer inline; task 6 leaves them holding only the
+    objective card. A behavioural check rather than a component-name scan --
+    the structural warning this branch has repeated at every step: a source
+    count that matches a shared component's call site cannot see a kind-gated
+    conditional wrapped around it (a reviewer proved this on task 4's own
+    StatChipsRow, silently dropped for segments with every count-based guard
+    still green). So this asserts on the SHAPE of what remains -- exactly one
+    `<section class="practice-card ...">` per card, wrapped in exactly one
+    `.practice-detail-grid` -- rather than counting a component name that
+    could be reintroduced behind a per-kind guard with every count unchanged."""
+    source = strip_comments(PRACTICE_JS.read_text(encoding="utf-8"))
+    for name in ("StarSection", "SegmentSection"):
+        body = _body(source, name)
+        assert body.count('class="practice-detail-grid') == 1, (
+            f"{name} must wrap exactly one grid")
+        assert body.count("practice-card") == 1, (
+            f"{name} renders more than one practice-card -- the analysis "
+            "card, attempts log or drawer regrew inside it")
+        assert "attempts-card" not in body, (
+            f"{name} still builds its own attempts-log card")
+        assert "EntityAnalysis" not in body and "EntityDrawer" not in body, (
+            f"{name} still calls the shared analysis card or drawer itself "
+            "-- both are page-level surfaces now, following the FOCUSED "
+            "entity rather than whichever section is active")

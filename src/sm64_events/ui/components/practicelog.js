@@ -16,7 +16,7 @@
 // ONE card serves both kinds. That is rule 11 becoming structural rather
 // than an agreement between two hand-written sections that a test compares.
 import { h } from "preact";
-import { useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { displayName, entityKey, entityNoun, sectionClock, sectionPb }
   from "../entitysection.js";
@@ -57,6 +57,26 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
   const [open, setOpen] = useState(true);
   const [showHidden, setShowHidden] = useState(false);
   const [visible, setVisible] = useState(10);
+  // `forceOpen` exists for exactly one moment (Task 6 brief, Step 1): "so a
+  // pick on a COLLAPSED card has a scroll target to find" -- it must win
+  // just long enough to make the row exist, never permanently. Folding
+  // `isOpen = open || forceOpen` (as written when this card first landed)
+  // makes `forceOpen` a standing override for as long as the card stays
+  // SELECTED, which is most of a browsing session -- the fold chevron
+  // renders, answers `onclick`, flips `open`, and `isOpen` never moves,
+  // because `forceOpen` is still true. Caught by this task's own Step 8
+  // render check (browser only -- no source-scan or unit test can see a
+  // control that is clickable and inert). The fix keeps `forceOpen` as a
+  // one-shot NUDGE instead of a continuous OR: syncing `open` to true the
+  // moment this card becomes the selected one, or the moment a NEW graph
+  // pick lands while it already is one (`focus.nonce` changes on every
+  // reveal, even a repeat pick on the same still-selected card) -- either
+  // way exactly the instant a scroll target might not exist yet. Once
+  // synced, `open` is the only thing `isOpen` reads, so the fold button
+  // keeps working for the rest of the time this card is selected.
+  useEffect(() => {
+    if (forceOpen) setOpen(true);
+  }, [forceOpen, focus && focus.nonce]);
   const ek = entityKey(sec);
   const clock = sectionClock(sec, t.clock);
   const named = displayName(sec, (t.view.catalog || {}).courses || []);
@@ -69,7 +89,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
     .slice()
     .sort(comparator(ui.sort, clock));
   const shown = rows.slice(0, visible);
-  const isOpen = open || forceOpen;
+  const isOpen = open;
   return html`<section class="log-card ${selected ? "is-selected" : ""}
       ${isOpen ? "" : "is-closed"}">
     ${/* The HEADING selects; the chevron opens. Two gestures, two targets,

@@ -26,6 +26,7 @@ EMPTY_ART = UI / "assets" / "empty"
 EMPTYSTATE_JS = UI / "components" / "emptystate.js"
 PRACTICE_JS = UI / "components" / "practice.js"
 ENTITYDETAIL_JS = UI / "components" / "entitydetail.js"
+PRACTICELOG_JS = UI / "components" / "practicelog.js"
 TIMELINE_JS = UI / "components" / "timeline.js"
 INDEX_HTML = UI / "index.html"
 
@@ -92,7 +93,7 @@ def _sections(source: str) -> dict[str, str]:
     return bodies
 
 
-def test_both_practice_cards_guard_the_trend_graph():
+def test_the_page_level_analysis_card_guards_the_trend_graph():
     """Progress returns "" for a section with no plottable points, so the
     caller has to ask the SAME question to put something there instead —
     hence the shared hasProgressPoints. A card that renders <Progress>
@@ -100,16 +101,28 @@ def test_both_practice_cards_guard_the_trend_graph():
 
     2026-08-03 (practice-log-entity-cards, task 4): the trend graph and its
     guard moved out of StarSection/SegmentSection into the shared
-    EntityAnalysis (entitydetail.js), which both cards now render instead of
-    building their own analysis block. So this checks both halves: each
-    section renders the shared analysis card, and that shared card still
-    asks hasProgressPoints before falling back to TrendEmpty -- either half
-    slipping (a section stops calling it, or the shared card loses the
-    guard) would be invisible to the other assertion alone."""
-    bodies = _sections(PRACTICE_JS.read_text(encoding="utf-8"))
-    for name in ("StarSection", "SegmentSection"):
-        assert "<${EntityAnalysis}" in bodies[name], \
-            f"{name} does not render the shared analysis card"
+    EntityAnalysis (entitydetail.js), which both cards rendered instead of
+    building their own analysis block. That made this a two-halves check:
+    each section renders the shared analysis card, and that shared card
+    still asks hasProgressPoints before falling back to TrendEmpty.
+
+    2026-08-03 (task 6): the first half changed shape. EntityAnalysis is no
+    longer called once PER SECTION -- it is ONE page-level call in
+    `Practice`, following whichever entity is in FOCUS (ui/focustarget.js),
+    which is why StarSection/SegmentSection no longer name it at all (see
+    tests/test_ui_section_parity.py::test_the_active_cards_shrank_to_the_
+    objective_alone). So "does the card reach the page" is now "does the
+    ONE call exist", not "does each section call it" -- there is no second
+    call site left for either kind to individually drop it from. The second
+    half -- does the shared card itself still guard an empty trend -- is
+    unchanged and re-probed at the same address."""
+    practice = strip_comments(PRACTICE_JS.read_text(encoding="utf-8"))
+    assert practice.count("<${EntityAnalysis}") == 1, (
+        "Practice must render the shared analysis card exactly once, at "
+        "page level")
+    assert "sec=${focusedSec}" in practice, (
+        "the analysis card must follow the FOCUSED entity, not just the "
+        "active target -- browsing a log card would otherwise show nothing")
     analysis = strip_comments(ENTITYDETAIL_JS.read_text(encoding="utf-8"))
     body = re.search(r"^export function EntityAnalysis\(.*?^}", analysis, re.S | re.M)
     assert body, "EntityAnalysis not found in entitydetail.js — did it get renamed?"
@@ -120,24 +133,62 @@ def test_both_practice_cards_guard_the_trend_graph():
         "EntityAnalysis has no empty state for the performance trend"
 
 
-def test_both_practice_cards_have_an_empty_practice_log():
-    bodies = _sections(PRACTICE_JS.read_text(encoding="utf-8"))
-    for name in ("StarSection", "SegmentSection"):
-        assert "<${AttemptLogEmpty}" in bodies[name], \
-            f"{name} has no empty state for the practice log"
-        assert "hasAttempts=${sec.attempts.length > 0}" in bodies[name], (
-            f"{name} must tell AttemptLogEmpty whether attempts EXIST: "
-            '"nothing recorded" and "everything is filtered out" are '
-            "different states with different remedies")
+def test_the_shared_log_card_has_an_empty_state():
+    """Star/segment parity for an empty practice log used to be a per-section
+    check (StarSection and SegmentSection each rendering AttemptLogEmpty
+    inside their own attempts-card) -- the exact shape rule 11 exists to
+    police, since either copy could silently drop the guard.
+
+    2026-08-03 (practice-log-entity-cards, task 6): both cards' own attempts
+    log is gone. `LogCard` (practicelog.js) is now the ONE component both
+    star and segment history render through, so the parity risk is
+    structural rather than a per-kind check -- there is only one card body
+    for either kind to diverge from. This asserts the shared card still
+    guards an empty log, at its new (and only) address."""
+    log_source = strip_comments(PRACTICELOG_JS.read_text(encoding="utf-8"))
+    body = re.search(r"^export function LogCard\(.*?^\}", log_source, re.S | re.M)
+    assert body, "LogCard not found in practicelog.js — did it get renamed?"
+    assert "<${AttemptLogEmpty}" in body.group(0), \
+        "LogCard has no empty state for the practice log"
+    assert "hasAttempts=${sec.attempts.length > 0}" in body.group(0), (
+        "LogCard must tell AttemptLogEmpty whether attempts EXIST: "
+        '"nothing recorded" and "everything is filtered out" are '
+        "different states with different remedies")
+    # ...and neither StarSection nor SegmentSection kept a hand-rolled copy.
+    practice = strip_comments(PRACTICE_JS.read_text(encoding="utf-8"))
+    assert "AttemptLogEmpty" not in practice, (
+        "practice.js still references AttemptLogEmpty -- the practice log "
+        "(and its empty state) is a page-level surface (practicelog.js) now")
 
 
-def test_the_no_target_screen_explains_both_of_its_empty_cards():
+def test_the_no_target_screen_explains_its_remaining_empty_card():
     """EmptyPractice is the screen the user actually asked about — nothing
-    selected, so both cards are empty at once."""
+    selected. Until task 6 it filled BOTH an empty analysis card and an
+    empty unassigned-attempts log at once, each with its own EmptyState.
+
+    2026-08-03 (task 6): both of those moved OUT of EmptyPractice. The
+    analysis half is the PAGE-LEVEL EntityAnalysis, which explains a null
+    focus on every empty screen now, not just this one (see the analysis-card
+    test above); the unassigned log is practicelog.js's own UnassignedLogCard,
+    which explains an empty log through AttemptLogEmpty exactly like every
+    other log card (see the LogCard test above). EmptyPractice keeps only the
+    objective-empty card, whose own copy ("Nothing to practice here" /
+    "Waiting for a target") already explains it without a component -- so the
+    property worth asserting here is that nothing was silently dropped: each
+    half explains itself at its NEW address, and EmptyPractice itself needs
+    none of its own any more."""
     body = _sections(PRACTICE_JS.read_text(encoding="utf-8"))["EmptyPractice"]
-    assert body.count("<${EmptyState}") == 2, (
-        "EmptyPractice must fill BOTH its analysis card and its unassigned "
-        "log with an empty state; one of the two is back to a blank box")
+    assert "<${EmptyState}" not in body, (
+        "EmptyPractice should render only the empty objective card now -- "
+        "its analysis and log halves both moved to page-level/shared "
+        "surfaces in task 6")
+    log_source = strip_comments(PRACTICELOG_JS.read_text(encoding="utf-8"))
+    unassigned = re.search(r"^function UnassignedLogCard\(.*?^\}", log_source,
+                            re.S | re.M)
+    assert unassigned, "UnassignedLogCard not found in practicelog.js"
+    assert "<${AttemptLogEmpty}" in unassigned.group(0), (
+        "the unassigned bucket must explain an empty log the same way "
+        "every other log card does")
 
 
 def test_the_timeline_says_something_when_it_has_no_strip():

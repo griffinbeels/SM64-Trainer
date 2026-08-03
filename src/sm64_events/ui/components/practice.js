@@ -5,7 +5,7 @@ import htm from "htm";
 import { getJSON } from "../api.js";
 import { requestTarget } from "../target.js";
 import { hasPracticeContext, justCompletedSegment,
-        practicedHere, starPracticableHere } from "../stagecontext.js";
+        practicedHere, starPracticableHere, stageKey } from "../stagecontext.js";
 import { StageBanner } from "./stagebanner.js";
 import { RankBanner, rankColor } from "./ranks.js";
 import { useHeldWhileCelebrating } from "../rankclimb.js";
@@ -15,13 +15,14 @@ import { StratPicker } from "./stratpicker.js";
 import { useTargetPicker } from "./targetpicker.js";
 import { Icon } from "./icons.js";
 import { PageState } from "./states.js";
-import { EmptyState } from "./emptystate.js";
-import { displayName, entityKey, entityNoun, sectionPb } from "../entitysection.js";
+import { displayName, entityKey, entityNoun, sectionClock, sectionPb }
+  from "../entitysection.js";
 import { EntityAnalysis, EntityDrawer } from "./entitydetail.js";
-import { AttemptTable, AttemptLogEmpty, HideToggle, SortControl,
-         ResetFilterToggle, StatMenuTrigger, comparator, useGraphPick, PbTag,
+import { comparator, useGraphPick, PbTag,
          bannerLabel, bannerHint, ranksAreAtFloor, showsEntityBanner,
          rankIdentity, SORT_OPTIONS } from "./attemptlog.js";
+import { liveSnapshot, resolveFocus, newestJournalId } from "../focustarget.js";
+import { orderedSections, PracticeLog } from "./practicelog.js";
 
 const html = htm.bind(h);
 
@@ -81,8 +82,7 @@ function StrategyFastestHint({ sec }) {
 // job until 2026-07-26 — see targetpicker.js for why it moved here). Shared
 // by the star card, the segment card and the no-target card so all three open
 // the same dialog from the same place; `openPicker` absent renders exactly the
-// two plain spans that were there before, which is what every card in the
-// practice index still gets.
+// two plain spans that were there before.
 function ObjectiveEyebrow({ iconName, label, openPicker }) {
   const inside = html`<span class="objective-symbol">
       <${Icon} name=${iconName} size=${20} /></span>
@@ -94,22 +94,15 @@ function ObjectiveEyebrow({ iconName, label, openPicker }) {
   </button>`;
 }
 
-function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) {
-  const [showHidden, setShowHidden] = useState(false);
-  const [visible, setVisible] = useState(10);
+// The objective card alone -- everything else this card used to carry
+// (analysis, attempts log, drawer) is a page-level surface now (Task 6),
+// following whichever entity the practice log has in FOCUS rather than
+// whichever one is ACTIVE. `rows`/`pick` are handed straight to PbTag and
+// used for nothing else: the graph-pick that reveals a row in the log now
+// lives in `Practice`, over the FOCUSED section's rows, because the active
+// card's own PB may not belong to the section currently in focus.
+function StarSection({ sec, t, pinned, openPicker, rows, pick }) {
   const [foldTarget, toggleTarget] = useCollapsed("objective");
-  const [foldLog, toggleLog] = useCollapsed("attempts");
-  const base = showHidden ? sec.attempts
-    : sec.attempts.filter((a) => !a.cleared && a.outcome !== "abandoned");
-  const hidden = sec.attempts.filter((a) => a.cleared || a.outcome === "abandoned");
-  const rows = base
-    .filter((a) => !(ui.hideResets
-      && (a.outcome === "reset" || a.outcome === "hard_reset")))
-    .slice()
-    .sort(comparator(ui.sort, t.clock));
-  const shown = rows.slice(0, visible);
-  const { focus, pick, clearFocus } = useGraphPick(rows, visible, setVisible);
-
   const ek = entityKey(sec);
   const named = displayName(sec, (t.view.catalog || {}).courses || []);
   const pb = sectionPb(sec, t.clock);
@@ -178,43 +171,6 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
           ${sec.armed_detail.waiting_for}</span>
       </div>`}
     </section>
-
-    <${EntityAnalysis} sec=${sec} t=${t} onPick=${pick} />
-
-    <section class="practice-card attempts-card ${cardClass(foldLog)}">
-      <div class="card-heading attempts-heading">
-        <div><span class="eyebrow">Practice log</span><h3>Recent attempts</h3></div>
-        <div class="attempts-tools">
-          <${CollapseToggle} collapsed=${foldLog} toggle=${toggleLog}
-            label="the practice log" />
-          <span class="meta">${rows.length} shown</span>
-          <${StatMenuTrigger} t=${t} />
-          <${SortControl} ui=${ui} />
-        </div>
-      </div>
-      ${rows.length
-        ? html`<div class="attempt-scroll">
-            <${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t}
-              focus=${focus} clearFocus=${clearFocus} freshIds=${freshIds}
-              openCompare=${openCompare} sec=${sec} />
-          </div>`
-        : html`<${AttemptLogEmpty} hasAttempts=${sec.attempts.length > 0} />`}
-      <div class="attempt-footer">
-        <div class="attempt-pagination">
-          ${rows.length > visible && html`<button class="quiet-button"
-              onclick=${() => setVisible(visible + 10)}>Show 10 more</button>`}
-          ${visible > 10 && html`<button class="quiet-button"
-              onclick=${() => setVisible(Math.max(10, visible - 10))}>Show fewer</button>`}
-        </div>
-        <div class="attempt-footer-tools">
-          <${ResetFilterToggle} ui=${ui} />
-          <${HideToggle} hidden=${hidden} showHidden=${showHidden}
-              setShowHidden=${setShowHidden} />
-        </div>
-      </div>
-    </section>
-
-    <${EntityDrawer} sec=${sec} t=${t} />
   </div>`;
 }
 
@@ -227,27 +183,13 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
 // Broken sections (definition deleted, history remains) render but drop the
 // timeline/marker editor and the strat picker — both key off the deleted
 // definition (POST /api/strat 404s for a segment that no longer exists).
-function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) {
-  const [showHidden, setShowHidden] = useState(false);
-  const [visible, setVisible] = useState(10);
+function SegmentSection({ sec, t, pinned, openPicker, rows, pick }) {
   const [foldTarget, toggleTarget] = useCollapsed("objective");
-  const [foldLog, toggleLog] = useCollapsed("attempts");
   // armedSegs is the single live source: WS notices are instant, every view
   // fetch reconciles it so it cannot stay stale — see store.js refresh().
   const armed = t.armedSegs.has(sec.segment_id);
   const tgt = (t.view && t.view.target) || {};
   const isTarget = tgt.kind === "segment" && tgt.segment_id === sec.segment_id;
-  const base = showHidden ? sec.attempts
-    : sec.attempts.filter((a) => !a.cleared && a.outcome !== "abandoned");
-  const hidden = sec.attempts.filter((a) => a.cleared || a.outcome === "abandoned");
-  const rows = base
-    .filter((a) => !(ui.hideResets
-      && (a.outcome === "reset" || a.outcome === "hard_reset")))
-    .slice()
-    .sort(comparator(ui.sort, "rta"));
-  const shown = rows.slice(0, visible);
-  const { focus, pick, clearFocus } = useGraphPick(rows, visible, setVisible);
-
   const pinTag = armed ? "Running" : isTarget ? "Ready" : "Recent";
   const ek = entityKey(sec);
   const named = displayName(sec, (t.view.catalog || {}).courses || []);
@@ -308,43 +250,6 @@ function SegmentSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker 
           ${sec.armed_detail.waiting_for}</span>
       </div>`}
     </section>
-
-    <${EntityAnalysis} sec=${sec} t=${t} onPick=${pick} />
-
-    <section class="practice-card attempts-card ${cardClass(foldLog)}">
-      <div class="card-heading attempts-heading">
-        <div><span class="eyebrow">Practice log</span><h3>Recent attempts</h3></div>
-        <div class="attempts-tools">
-          <${CollapseToggle} collapsed=${foldLog} toggle=${toggleLog}
-            label="the practice log" />
-          <span class="meta">${rows.length} shown</span>
-          <${StatMenuTrigger} t=${t} />
-          <${SortControl} ui=${ui} />
-        </div>
-      </div>
-      ${rows.length
-        ? html`<div class="attempt-scroll">
-            <${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t}
-              focus=${focus} clearFocus=${clearFocus} freshIds=${freshIds}
-              openCompare=${openCompare} sec=${sec} />
-          </div>`
-        : html`<${AttemptLogEmpty} hasAttempts=${sec.attempts.length > 0} />`}
-      <div class="attempt-footer">
-        <div class="attempt-pagination">
-          ${rows.length > visible && html`<button class="quiet-button"
-              onclick=${() => setVisible(visible + 10)}>Show 10 more</button>`}
-          ${visible > 10 && html`<button class="quiet-button"
-              onclick=${() => setVisible(Math.max(10, visible - 10))}>Show fewer</button>`}
-        </div>
-        <div class="attempt-footer-tools">
-          <${ResetFilterToggle} ui=${ui} />
-          <${HideToggle} hidden=${hidden} showHidden=${showHidden}
-              setShowHidden=${setShowHidden} />
-        </div>
-      </div>
-    </section>
-
-    <${EntityDrawer} sec=${sec} t=${t} />
   </div>`;
 }
 
@@ -410,9 +315,12 @@ function RouteFocus({ rv, t, ui, freshIds, openCompare }) {
   </div>`;
 }
 
-function EmptyPractice({ v, t, ui, unassignedRows, freshIds, openCompare,
-                         hidden, showHidden, setShowHidden, openPicker,
-                         inContext }) {
+// The empty objective card alone -- the analysis half of "nothing selected"
+// is the page-level EntityAnalysis's own empty state (it renders whenever
+// `focusedSec` is null, which is exactly this state), and the unassigned
+// attempts that used to fill a log card here are the practice log's own
+// last card now (PracticeLog filters that bucket itself).
+function EmptyPractice({ openPicker, inContext }) {
   // Two states, two remedies, and the caller owns the words (the emptystate
   // rule): standing in a course with nothing chosen, the fix is choosing. On
   // the game's main screen or a hub there is nothing here TO choose, and
@@ -434,49 +342,10 @@ function EmptyPractice({ v, t, ui, unassignedRows, freshIds, openCompare,
         <span class="pbtag">PB —</span>
       </div>
     </section>
-    <section class="practice-card analysis-card">
-      <div class="card-heading">
-        <div><span class="eyebrow">Analysis</span><h3>Attempt history</h3></div>
-      </div>
-      <${EmptyState} headline="Nothing selected to practice"
-          hint=${inContext
-            ? "Pick a star or segment above — its timeline, trend and log all "
-              + "fill in here. The session keeps recording either way."
-            : "Move into a course and its stars and segments appear above — "
-              + "you practice what you are standing in. The session keeps "
-              + "recording either way."} />
-    </section>
-    <section class="practice-card attempts-card">
-      <div class="card-heading attempts-heading">
-        <div><span class="eyebrow">Practice log</span><h3>Unassigned attempts</h3></div>
-        <div class="attempts-tools">
-          <span class="meta">${unassignedRows.length} shown</span>
-          <${StatMenuTrigger} t=${t} />
-          <${SortControl} ui=${ui} />
-        </div>
-      </div>
-      ${unassignedRows.length
-        ? html`<div class="attempt-scroll">
-            <${AttemptTable} attempts=${v.unassigned} rows=${unassignedRows}
-              t=${t} freshIds=${freshIds} openCompare=${openCompare} />
-          </div>`
-        : html`<${EmptyState} headline="Nothing waiting for a target"
-            hint=${"Runs you finish without a target picked collect here "
-                 + "until you assign them."} />`}
-      <div class="attempt-footer">
-        <div class="attempt-pagination"></div>
-        <div class="attempt-footer-tools">
-          <${ResetFilterToggle} ui=${ui} />
-          <${HideToggle} hidden=${hidden} showHidden=${showHidden}
-              setShowHidden=${setShowHidden} />
-        </div>
-      </div>
-    </section>
   </div>`;
 }
 
 export function Practice({ t, openCompare }) {
-  const [showUnassignedHidden, setShowUnassignedHidden] = useState(false);
   const stored = localStorage.getItem("sm64.sort");
   const [sort, setSortState] = useState(
     SORT_OPTIONS.some(([k]) => k === stored) ? stored : "newest");
@@ -530,21 +399,25 @@ export function Practice({ t, openCompare }) {
     target: (t.view && t.view.target) || null, stage: t.stage,
     armedOrder: t.armedOrder, lastPinnedSeg: t.lastPinnedSeg });
   const v = t.view && { ...t.view, target: frozen.target };
-  if (!v) return html`<${PageState} kind=${t.connected ? "loading" : "offline"}
-      title=${t.connected ? "Preparing your practice view" : "Waiting for the trainer"}
-      message=${t.connected
-        ? "Loading your target, attempts, and current stage…"
-        : "The app will reconnect automatically when the local server is available."} />`;
 
   // `held` is `t` with the frozen SELECTION swapped in (and `view` carrying
   // the held target): every action and all section data still come from the
   // live store, and only which-stage-am-I-looking-at waits for the
   // celebration. `target` lives on the view, not on `t`, so it is spread
   // through `v` rather than listed here.
+  //
+  // This block (through `primarySeg` below) used to sit after an early
+  // "still loading" return. It moved above that return in Task 6: the focus
+  // resolver's `useGraphPick` call further down is a HOOK and must run on
+  // every render regardless of whether `v` exists yet, so everything it
+  // depends on has to tolerate `v` being null during the very first render,
+  // before any view has loaded. `tgt`/`segs` are the only two lines that
+  // needed a guard for that; everything after them already short-circuits
+  // to empty/undefined whenever `tgt`/`segs` are empty.
   const held = { ...t, view: v, stage: frozen.stage,
                  armedOrder: frozen.armedOrder, lastPinnedSeg: frozen.lastPinnedSeg };
-  const tgt = v.target || {};
-  const segs = v.segments || [];
+  const tgt = (v && v.target) || {};
+  const segs = (v && v.segments) || [];
   // Active star and active segment are mutually exclusive — a single practice
   // focus. The server keeps ONE target and retires the star target the moment
   // a segment arms OR Mario enters a different course (projection.py), so a
@@ -561,7 +434,7 @@ export function Practice({ t, openCompare }) {
   // an ACTIVE TARGET eyebrow (live report 2026-07-27). Same predicate the
   // banner uses, asked of `held` so a celebration freezes both together, and
   // suppressing it here rather than inside the cards is what puts the target's
-  // own section back in the practice index below instead of hiding it twice.
+  // own section back in the practice log below instead of hiding it twice.
   //
   // ...and a pin must also BELONG to the course under your feet, which is a
   // SECOND rule (`practicedHere`) and not the same as having a context at
@@ -651,88 +524,98 @@ export function Practice({ t, openCompare }) {
       && (stickyPin.armed_detail || here(stickyPin)) ? [stickyPin]
     : activeSeg && !isAmbientlyArmed(activeSeg)
       && (activeSeg.armed_detail || here(activeSeg)) ? [activeSeg] : [];
-  // Only one detail surface owns the fixed Objective / Analysis / Attempts
-  // tracks. Additional armed segments remain reachable in the stable index
+  // Only one detail surface owns the fixed Objective / Analysis / Log
+  // tracks. Additional armed segments remain reachable in the practice log
   // below instead of inserting more full cards above the crop.
   const primarySeg = pinnedSegs[0];
-  const restStars = v.stars.filter((sec) => sec !== activeStar);
-  const restSegs = segs.filter((sec) => sec !== primarySeg);
-  // Deliberately stable at a fixed view: live attempts must not reshuffle this
-  // index underneath an OBS crop or a player's pointer. The active objective
-  // above carries recency; this list follows the server's catalog order.
-  const restSections = [...restStars, ...restSegs];
 
-  const unassignedVisible = v.unassigned.filter(
-    (a) => !a.cleared && a.outcome !== "abandoned");
-  const unassignedHidden = v.unassigned.filter(
-    (a) => a.cleared || a.outcome === "abandoned");
-  // The unassigned log honors the same sort/reset controls as the section
-  // logs — they render in its card too.
-  const unassignedRows = (showUnassignedHidden ? v.unassigned : unassignedVisible)
-    .filter((a) => !(hideResets
-      && (a.outcome === "reset" || a.outcome === "hard_reset")))
-    .slice()
-    .sort(comparator(sort, t.clock));
+  // Whose history the analysis card and detail drawer are drawing --
+  // ui/focustarget.js's spring-loaded browse mode (Task 6, "the second we
+  // start playing again in LLL (via a reset / star grab), or through
+  // warping / basically anything that would trigger changing the
+  // star/segment selector, that new area or star or segment should take
+  // ownership of that card"). Read off `frozen`, never `t` directly, so a
+  // celebration freezing the page freezes the takeover with it — a rank
+  // climbing on the card you are browsing finishes before the page moves.
+  const [manualFocus, setManualFocus] = useState(null);
+  const [visible, setVisible] = useState(10);
+  const live = liveSnapshot({
+    activeKey: activeStar ? entityKey(activeStar)
+      : primarySeg ? entityKey(primarySeg) : null,
+    stageKey: stageKey(frozen.stage),
+    newestAttemptId: newestJournalId(v),
+  });
+  const focusKey = resolveFocus(manualFocus, live);
+  const focusedSec = v
+    ? orderedSections(v).find((sec) => entityKey(sec) === focusKey) || null
+    : null;
+  const selectFocus = (key) => setManualFocus({ key, at: live });
+  // The rows useGraphPick checks membership against and bumps pagination
+  // over -- the same default filter every log card applies (cleared/
+  // abandoned hidden, resets per the shared toggle). Computed here, at page
+  // level, because the trend graph (EntityAnalysis) and the card a pick
+  // reveals a row in (a LogCard, in the practice log below) are separate
+  // components now; useGraphPick used to live inside the one card that drew
+  // both.
+  const focusedRows = focusedSec
+    ? focusedSec.attempts
+        .filter((a) => !a.cleared && a.outcome !== "abandoned")
+        .filter((a) => !(ui.hideResets
+          && (a.outcome === "reset" || a.outcome === "hard_reset")))
+        .slice()
+        .sort(comparator(ui.sort, sectionClock(focusedSec, t.clock)))
+    : [];
+  const { focus, pick, clearFocus } = useGraphPick(focusedRows, visible, setVisible);
+  // The active card's PB link jumps to a row in the LOG, which may not be
+  // the section currently in focus. Clearing the manual pick first is what
+  // makes the row reachable: `useGraphPick` already holds a pick whose
+  // attempt is not in `rows` yet and reveals it when a later render brings
+  // it in -- the same path the out-of-scope lifetime PB uses.
+  const pickFromActive = (attemptId) => { setManualFocus(null); pick(attemptId); };
+
+  if (!v) return html`<${PageState} kind=${t.connected ? "loading" : "offline"}
+      title=${t.connected ? "Preparing your practice view" : "Waiting for the trainer"}
+      message=${t.connected
+        ? "Loading your target, attempts, and current stage…"
+        : "The app will reconnect automatically when the local server is available."} />`;
 
   return html`<div class="practice-page">
     <${StageBanner} t=${held} freshIds=${freshIds} />
 
     ${/* ONE picker for the page, not one per section: only the primary card
-         offers the trigger, and mounting a dialog's state inside every card
-         in the practice index would pay for ~30 copies of a fetch effect
-         that never runs. */""}
+         offers the trigger. Log cards (below) have no target-picker trigger
+         of their own -- browsing a card's history is not the same gesture as
+         picking a new target. */""}
     ${activeStar
       ? html`<${StarSection} key=${`${activeStar.course_id}:${activeStar.star_id}`}
-          sec=${activeStar} t=${held} ui=${ui} pinned=${true}
+          sec=${activeStar} t=${held} pinned=${true}
           openPicker=${openTargetPicker}
-          freshIds=${freshIds} openCompare=${openCompare} />`
+          rows=${focusedRows} pick=${pickFromActive} />`
       : primarySeg
         ? html`<${SegmentSection} key=${`seg:${primarySeg.segment_id}`}
-            sec=${primarySeg} t=${held} ui=${ui} pinned=${true}
+            sec=${primarySeg} t=${held} pinned=${true}
             openPicker=${openTargetPicker}
-            freshIds=${freshIds} openCompare=${openCompare} />`
-        : html`<${EmptyPractice} v=${v} t=${held} ui=${ui}
-            unassignedRows=${unassignedRows} freshIds=${freshIds}
-            openCompare=${openCompare} hidden=${unassignedHidden}
-            showHidden=${showUnassignedHidden} openPicker=${openTargetPicker}
-            inContext=${inContext}
-            setShowHidden=${setShowUnassignedHidden} />`}
+            rows=${focusedRows} pick=${pickFromActive} />`
+        : html`<${EmptyPractice} openPicker=${openTargetPicker}
+            inContext=${inContext} />`}
 
-    ${routeView
-      ? html`<section class="practice-card route-focus-card">
-          ${/* Was the practice toolbar's note. It is real state feedback, not
-               guidance for a control, so it moves to the surface it is about
-               rather than being deleted with the toolbar. */
-            null}
-          <p class="toolbar-note">Route focus is on · history still records</p>
-          <${RouteFocus} rv=${routeView} t=${held} ui=${ui}
-            freshIds=${freshIds} openCompare=${openCompare} />
-        </section>`
-      : restSections.length > 0 && html`<section class="practice-index">
-          <div class="index-heading">
-            <div><span class="eyebrow">Practice index</span><h3>Stars and segments</h3></div>
-            <span class="meta">Stable catalog order · open any item for its history</span>
-          </div>
-          <div class="practice-index-list">
-            ${restSections.map((sec) => html`<details class="practice-index-item">
-              <summary>
-                <span class="index-icon"><${Icon}
-                  name=${sec.kind === "segment" ? "segments" : "practice"} size=${18} /></span>
-                <span class="index-name">${sec.kind === "segment"
-                  ? sec.name : `${sec.course_name} · ${sec.star_name}`}</span>
-                <span class="meta">${sec.attempts.length} attempts</span>
-                <span class="index-chevron"><${Icon} name="chevron" size=${16} /></span>
-              </summary>
-              ${sec.kind === "segment"
-                ? html`<${SegmentSection} key=${`seg:${sec.segment_id}`}
-                    sec=${sec} t=${held} ui=${ui} pinned=${false}
-                    freshIds=${freshIds} openCompare=${openCompare} />`
-                : html`<${StarSection} key=${`${sec.course_id}:${sec.star_id}`}
-                    sec=${sec} t=${held} ui=${ui} pinned=${false}
-                    freshIds=${freshIds} openCompare=${openCompare} />`}
-            </details>`)}
-          </div>
-        </section>`}
+    <${EntityAnalysis} sec=${focusedSec} t=${held} onPick=${pick} />
+
+    ${routeView && html`<section class="practice-card route-focus-card">
+      ${/* Was the practice toolbar's note. It is real state feedback, not
+           guidance for a control, so it moved to the surface it is about
+           rather than being deleted with the toolbar. */
+        null}
+      <p class="toolbar-note">Route focus is on · history still records</p>
+      <${RouteFocus} rv=${routeView} t=${held} ui=${ui}
+        freshIds=${freshIds} openCompare=${openCompare} />
+    </section>`}
+
+    <${PracticeLog} v=${v} t=${held} ui=${ui} freshIds=${freshIds}
+      openCompare=${openCompare} focus=${focus} clearFocus=${clearFocus}
+      focusKey=${focusKey} onSelect=${selectFocus} />
+
+    <${EntityDrawer} sec=${focusedSec} t=${held} />
 
     ${targetPickerDialog}
   </div>`;

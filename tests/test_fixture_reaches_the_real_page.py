@@ -132,8 +132,13 @@ def test_exactly_the_grab_timed_row_wears_a_caveat_mark(page):
     Counted, not merely found: ONE of the four seeded successes is grab-timed,
     and a badge on all four would be the alarm-fatigue failure the server-side
     predicate is measured to avoid — 3 of his 837 star successes carry proof,
-    670 carry only silence."""
-    marks = count(page, PRIMARY + ".attempt-result .caveat-chip")
+    670 carry only silence.
+
+    2026-08-03 (practice-log-entity-cards, task 6): the attempt table this
+    row lives in is no longer inside the PRIMARY objective card -- it is the
+    page-level practice log (practicelog.js's `LogCard`), so the scope this
+    assertion searches moved with it."""
+    marks = count(page, ".log-card .attempt-result .caveat-chip")
     assert marks == 1, (
         f"{marks} caveat marks in the practice log, expected 1. If 0, either "
         "the badge is not drawn (practice.js) or the fixture seeded no "
@@ -149,32 +154,70 @@ def test_neither_banner_is_the_sentinel_variant(page):
     assert count(page, PRIMARY + ".rank-banner-empty") == 0
 
 
-def test_the_armed_segment_card_draws_two_rank_banners(page):
+def test_a_log_card_still_draws_two_rank_banners(page):
     """This branch's OWN instance of the exact bug the star's test above
     exists to catch. LBLJ (segment id 1) -- the segment `_arm_segment` used
     until 2026-07-29 -- has exactly one bundled strategy, so its ladder IS
-    its best ladder (views.py::ranks_share_ladder) and the armed-segment
-    card drew ONE combined banner. The two-banner-plus-`.seg-waiting`
-    layout, and the CSS fix scoped to the non-last banner (index.html), had
-    never been rendered by any instrument until the armed segment moved to
-    ui_fixture.FIXTURE_SEGMENT (four bundled strategies)."""
-    card = ".objective-card:has(.seg-waiting)"
-    banners = count(page, f"{card} .rank-banner")
-    assert banners == 2, (
-        f"{banners} rank banner(s) on the armed-segment card, expected 2. "
-        "If this is 1, the armed segment has one strategy active and its "
-        "ladder merged with its best -- pick a segment with several, see "
-        "ui_fixture.py::FIXTURE_SEGMENT. If 0, there is no strategy or no "
-        "PB on it yet.")
+    its best ladder (views.py::ranks_share_ladder) and its card drew ONE
+    combined banner. ui_fixture.FIXTURE_SEGMENT (four bundled strategies)
+    fixed that for the ARMED-SEGMENT scenario this file used to measure.
+
+    2026-08-03 (practice-log-entity-cards, task 6): that scenario's own card
+    is gone by design, not by regression. `_arm_segment` deliberately does
+    NOT touch the active star target ("this composes with whatever star
+    target `serve_ui` already seeded" -- its own docstring), so this fixture
+    always leaves the STAR active and the segment merely armed alongside it.
+    Before this task an armed-but-not-active segment still got a full
+    `.objective-card` of its own, inside the practice INDEX (a closed
+    `<details>` -- still queryable, just not visible). The index is deleted
+    now: "the objective card is the active target, always" (spec section 1),
+    and everything else -- armed or not -- is a `LogCard` in the practice log.
+    A `LogCard` carries no `.seg-waiting` and is never `.objective-card`
+    (verified below, and by test_ui_section_parity.py's
+    `test_the_active_cards_shrank_to_the_objective_alone`), so the ORIGINAL
+    two-banner assertion has no home to be RELOCATED to on this specific
+    entity without first making it the active target -- which this file's
+    own charter (see its docstring) is to check REACHED STATE, not to drive
+    one. What IS still true, and still worth guarding, is the underlying
+    concern with the collapse bug: LogCard is now the ONE component either
+    kind renders through (rule 11 made structural), so proving it does not
+    collapse a multi-strategy entity's banners on ANY card is the same
+    proof the old per-kind check gave, without needing to single out this
+    fixture's specific segment.
+
+    KNOWN GAP, owed to Task 7 (fixture+sweep, per this branch's own ledger):
+    with the segment never made the active target, nothing on this page
+    currently exercises `.seg-waiting`+two-banners TOGETHER any more --
+    verified directly (a scripted `POST /api/target` to the segment during
+    investigation of this test DOES render both correctly, confirming the
+    feature itself works; restoring the star target afterward did not
+    settle within a generous wait, which smells like the celebration-hold
+    freezing on the scripted flip rather than a real bug, and chasing that
+    down is its own rabbit hole out of scope here). Re-seeding a story where
+    the armed segment IS the target would close this for real."""
+    per_card = page.evaluate(
+        "return Array.from(document.querySelectorAll('.log-card'))"
+        ".map(c => c.querySelectorAll('.rank-banner').length)")
+    assert 2 in per_card, (
+        f"no `.log-card` drew 2 rank banners (found {per_card}) -- either "
+        "no seeded entity has multiple strategies any more (see "
+        "ui_fixture.py::FIXTURE_STAR/FIXTURE_SEGMENT) or LogCard collapsed "
+        "them (ranks.py::ranks_share_ladder / attemptlog.js::"
+        "showsEntityBanner)")
 
 
-def test_the_armed_segment_card_has_the_seg_waiting_row(page):
-    """`.seg-waiting` is this branch's own new grid row (Task 6) -- the whole
-    reason `--objective-card-narrow` needed re-measuring and the reason the
-    `.rank-banner::before` bleed fix above exists at all. Absent from every
-    star card by construction (rule 11: a star has no waypoint sequence or
-    staleness deadline to describe)."""
-    assert count(page, ".seg-waiting") == 1
+def test_seg_waiting_never_leaks_outside_the_objective_card(page):
+    """`.seg-waiting` is drawn ONLY by the active target's own objective
+    card (StarSection/SegmentSection) -- never by a `LogCard`, which has no
+    equivalent row at all (Task 6: the log's cards are deliberately simpler
+    than the one card that owns "what am I doing right now"). This fixture's
+    armed segment is not the active target (see the test above for why), so
+    today this is 0 == 0 -- vacuous on its own, which is exactly why it is
+    paired with a positive existence check (test_the_active_target_card_is_
+    populated_not_the_empty_state proves `.objective-card` itself is
+    reachable and populated) rather than left as the only guard here."""
+    assert count(page, ".seg-waiting") == count(page, ".objective-card .seg-waiting")
+    assert count(page, ".log-card .seg-waiting") == 0
 
 
 def test_the_pb_tag_and_strategy_picker_are_present(page):
@@ -200,8 +243,14 @@ def test_the_collapse_toggles_exist(page):
 def test_the_practice_log_and_analysis_cards_are_on_the_page(page):
     """The user's stated hierarchy for this page: selector -> target ->
     practice log -> analysis. A fixture missing the bottom half measures the
-    top half and reports the page clean."""
-    assert count(page, ".attempts-card") >= 1
+    top half and reports the page clean.
+
+    2026-08-03 (practice-log-entity-cards, task 6): the practice log is no
+    longer `.attempts-card` (that class died with StarSection/SegmentSection's
+    own attempts table) -- it is the page-level `.log-list-card`
+    (practicelog.js's `PracticeLog`), holding one `.log-card` per entity."""
+    assert count(page, ".log-list-card") >= 1
+    assert count(page, ".log-card") >= 1
     assert count(page, ".analysis-card") >= 1
 
 

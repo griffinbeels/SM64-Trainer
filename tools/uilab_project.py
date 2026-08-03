@@ -441,6 +441,327 @@ PROJECT = Project(
             'scrollHeight 208 > clientHeight 206',
         '913x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
+        # 2026-08-03 (practice-log-entity-cards, task 6): the practice log
+        # mounted for the first time -- one `.log-card` per entity -- with NO
+        # stylesheet of its own; Task 7 ("CSS+fixture+sweep", this branch's
+        # own ledger) owns index.html's CSS for it. `.rank-banner::before`'s
+        # colour wash was scoped and measured against `.attempts-card`'s and
+        # `.objective-card`'s geometry -- the only two containers a rank
+        # banner had ever rendered inside before this task. A `.log-card` is
+        # a third, differently-shaped container the wash was never measured
+        # against, so it bleeds sideways onto the card's own fold/select
+        # buttons, a sibling banner, and the PB tag beside them, at every
+        # width and in both the expanded and collapsed stories. No structural
+        # bug behind this -- LogCard renders the identical, correct
+        # `RankBanner` component every other surface uses; the wash purely
+        # needs its own rule scoped to `.log-card`.
+        '1060x1000 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1060x1000 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '1060x1000 [page-collapsed] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 907x5px of a box it does not own',
+        '1060x1000 [page-collapsed] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '1060x1000 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1060x1000 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '1060x1000 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 907x5px of a box it does not own',
+        '1060x1000 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '1061x1000 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1061x1000 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '1061x1000 [page-collapsed] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 908x5px of a box it does not own',
+        '1061x1000 [page-collapsed] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '1061x1000 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1061x1000 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '1061x1000 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 908x5px of a box it does not own',
+        '1061x1000 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '1100x1000 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1100x1000 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '1100x1000 [page-collapsed] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 947x5px of a box it does not own',
+        '1100x1000 [page-collapsed] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '1100x1000 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1100x1000 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '1100x1000 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 947x5px of a box it does not own',
+        '1100x1000 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '1101x1000 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1101x1000 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '1101x1000 [page-collapsed] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 948x5px of a box it does not own',
+        '1101x1000 [page-collapsed] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '1101x1000 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1101x1000 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '1101x1000 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 948x5px of a box it does not own',
+        '1101x1000 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '1180x1000 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1180x1000 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '1180x1000 [page-collapsed] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 1027x5px of a box it does not own',
+        '1180x1000 [page-collapsed] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '1180x1000 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1180x1000 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '1180x1000 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 1027x5px of a box it does not own',
+        '1180x1000 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '1181x1000 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1181x1000 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '1181x1000 [page-collapsed] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 898x5px of a box it does not own',
+        '1181x1000 [page-collapsed] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '1181x1000 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1181x1000 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '1181x1000 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 898x5px of a box it does not own',
+        '1181x1000 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '1250x1000 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1250x1000 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '1250x1000 [page-collapsed] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 967x5px of a box it does not own',
+        '1250x1000 [page-collapsed] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '1250x1000 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1250x1000 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '1250x1000 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 967x5px of a box it does not own',
+        '1250x1000 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '1251x1000 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1251x1000 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '1251x1000 [page-collapsed] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 968x5px of a box it does not own',
+        '1251x1000 [page-collapsed] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '1251x1000 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1251x1000 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '1251x1000 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 968x5px of a box it does not own',
+        '1251x1000 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '1280x720 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1280x720 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '1280x720 [page-collapsed] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 997x5px of a box it does not own',
+        '1280x720 [page-collapsed] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '1280x720 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1280x720 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '1280x720 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 997x5px of a box it does not own',
+        '1280x720 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '1400x760 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1400x760 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '1400x760 [page-collapsed] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 1117x5px of a box it does not own',
+        '1400x760 [page-collapsed] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '1400x760 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1400x760 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '1400x760 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 1117x5px of a box it does not own',
+        '1400x760 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '1400x761 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1400x761 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '1400x761 [page-collapsed] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 1117x5px of a box it does not own',
+        '1400x761 [page-collapsed] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '1400x761 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1400x761 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '1400x761 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 1117x5px of a box it does not own',
+        '1400x761 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '1500x900 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1500x900 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '1500x900 [page-collapsed] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 1217x5px of a box it does not own',
+        '1500x900 [page-collapsed] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '1500x900 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1500x900 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '1500x900 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 1217x5px of a box it does not own',
+        '1500x900 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '1920x1080 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1920x1080 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '1920x1080 [page-collapsed] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 1438x5px of a box it does not own',
+        '1920x1080 [page-collapsed] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '1920x1080 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1920x1080 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '1920x1080 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 1438x5px of a box it does not own',
+        '1920x1080 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '850x1180 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '850x1180 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '850x1180 [page-collapsed] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 697x5px of a box it does not own',
+        '850x1180 [page-collapsed] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '850x1180 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '850x1180 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '850x1180 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 697x5px of a box it does not own',
+        '850x1180 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '851x1000 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '851x1000 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '851x1000 [page-collapsed] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 698x5px of a box it does not own',
+        '851x1000 [page-collapsed] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '851x1000 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '851x1000 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '851x1000 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 698x5px of a box it does not own',
+        '851x1000 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '900x1180 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '900x1180 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '900x1180 [page-collapsed] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 747x5px of a box it does not own',
+        '900x1180 [page-collapsed] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '900x1180 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '900x1180 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '900x1180 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 747x5px of a box it does not own',
+        '900x1180 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '912x1000 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '912x1000 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '912x1000 [page-collapsed] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 759x5px of a box it does not own',
+        '912x1000 [page-collapsed] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '912x1000 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '912x1000 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '912x1000 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 759x5px of a box it does not own',
+        '912x1000 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '913x1000 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '913x1000 [page-collapsed] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '913x1000 [page-collapsed] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 760x5px of a box it does not own',
+        '913x1000 [page-collapsed] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        '913x1000 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '913x1000 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 347x8px of a box it does not own',
+        '913x1000 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 760x5px of a box it does not own',
+        '913x1000 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 109x3px of a box it does not own',
+        # 2026-08-03 (practice-log-entity-cards, task 6): the page-level
+        # analysis card (`EntityAnalysis`, entitydetail.js) is now the ONE
+        # analysis surface on the page instead of one per active section, so
+        # its available height comes from a different layout than the
+        # `.attempts-card`-neighbouring version this card's fixed heights
+        # were tuned against. The trend block overflows its own box by 5px
+        # at these widths -- Task 7 re-tunes the fixed-height rules for the
+        # new page shape (same class of fix as `measure_objective_card.py`'s
+        # own re-measurement after the `.seg-waiting` row landed).
+        '1180x1000 [page] clipped :: div.analysis-block.trend-block':
+            'scrollHeight 237 > clientHeight 232',
+        '1400x760 [page] clipped :: div.analysis-block.trend-block':
+            'scrollHeight 237 > clientHeight 232',
+        '1400x761 [page] clipped :: div.analysis-block.trend-block':
+            'scrollHeight 237 > clientHeight 232',
+        '1500x900 [page] clipped :: div.analysis-block.trend-block':
+            'scrollHeight 237 > clientHeight 232',
+        '1920x1080 [page] clipped :: div.analysis-block.trend-block':
+            'scrollHeight 237 > clientHeight 232',
     },
 )
 
@@ -652,5 +973,153 @@ BOWSER_PROJECT = dataclasses.replace(
             'overlap 7x2px inside button.starcell',
         '913x1000 [bowser-row] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
+        # 2026-08-03 (practice-log-entity-cards, task 6): same root cause as
+        # PROJECT's own new entries above -- `.rank-banner::before`'s wash
+        # bleeding onto an unstyled `.log-card`'s fold/select buttons, its
+        # sibling banner, and the PB tag. Task 7 owns the CSS.
+        '1060x1000 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1060x1000 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 452x8px of a box it does not own',
+        '1060x1000 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 907x5px of a box it does not own',
+        '1060x1000 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 108x3px of a box it does not own',
+        '1061x1000 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1061x1000 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 452x8px of a box it does not own',
+        '1061x1000 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 908x5px of a box it does not own',
+        '1061x1000 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 108x3px of a box it does not own',
+        '1100x1000 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1100x1000 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 452x8px of a box it does not own',
+        '1100x1000 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 947x5px of a box it does not own',
+        '1100x1000 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 108x3px of a box it does not own',
+        '1101x1000 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1101x1000 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 452x8px of a box it does not own',
+        '1101x1000 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 948x5px of a box it does not own',
+        '1101x1000 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 108x3px of a box it does not own',
+        '1180x1000 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1180x1000 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 452x8px of a box it does not own',
+        '1180x1000 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 1027x5px of a box it does not own',
+        '1180x1000 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 108x3px of a box it does not own',
+        '1181x1000 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1181x1000 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 452x8px of a box it does not own',
+        '1181x1000 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 898x5px of a box it does not own',
+        '1181x1000 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 108x3px of a box it does not own',
+        '1250x1000 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1250x1000 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 452x8px of a box it does not own',
+        '1250x1000 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 967x5px of a box it does not own',
+        '1250x1000 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 108x3px of a box it does not own',
+        '1251x1000 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1251x1000 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 452x8px of a box it does not own',
+        '1251x1000 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 968x5px of a box it does not own',
+        '1251x1000 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 108x3px of a box it does not own',
+        '1280x720 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1280x720 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 452x8px of a box it does not own',
+        '1280x720 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 997x5px of a box it does not own',
+        '1280x720 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 108x3px of a box it does not own',
+        '1400x760 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1400x760 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 452x8px of a box it does not own',
+        '1400x760 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 1117x5px of a box it does not own',
+        '1400x760 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 108x3px of a box it does not own',
+        '1400x761 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1400x761 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 452x8px of a box it does not own',
+        '1400x761 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 1117x5px of a box it does not own',
+        '1400x761 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 108x3px of a box it does not own',
+        '1500x900 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1500x900 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 452x8px of a box it does not own',
+        '1500x900 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 1217x5px of a box it does not own',
+        '1500x900 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 108x3px of a box it does not own',
+        '1920x1080 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '1920x1080 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 452x8px of a box it does not own',
+        '1920x1080 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 1438x5px of a box it does not own',
+        '1920x1080 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 108x3px of a box it does not own',
+        '850x1180 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '850x1180 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 452x8px of a box it does not own',
+        '850x1180 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 697x5px of a box it does not own',
+        '850x1180 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 108x3px of a box it does not own',
+        '851x1000 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '851x1000 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 452x8px of a box it does not own',
+        '851x1000 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 698x5px of a box it does not own',
+        '851x1000 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 108x3px of a box it does not own',
+        '900x1180 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '900x1180 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 452x8px of a box it does not own',
+        '900x1180 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 747x5px of a box it does not own',
+        '900x1180 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 108x3px of a box it does not own',
+        '912x1000 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '912x1000 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 452x8px of a box it does not own',
+        '912x1000 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 759x5px of a box it does not own',
+        '912x1000 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 108x3px of a box it does not own',
+        '913x1000 [page] decoration :: div.rank-banner::before over button.log-card-fold':
+            'decoration covers 41x12px of a box it does not own',
+        '913x1000 [page] decoration :: div.rank-banner::before over button.log-card-select':
+            'decoration covers 452x8px of a box it does not own',
+        '913x1000 [page] decoration :: div.rank-banner::before over div.rank-banner':
+            'decoration covers 760x5px of a box it does not own',
+        '913x1000 [page] decoration :: div.rank-banner::before over span.pbtag':
+            'decoration covers 108x3px of a box it does not own',
     },
 )
