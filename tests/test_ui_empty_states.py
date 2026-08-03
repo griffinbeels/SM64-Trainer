@@ -201,9 +201,11 @@ def test_the_timeline_says_something_when_it_has_no_strip():
 
 
 def test_the_empty_state_cannot_grow_its_card():
-    """.analysis-card/.attempts-card are a hard 458px for OBS stability. An
-    empty state sized by its content would push past that and move the whole
-    layout the moment the first attempt landed."""
+    """.analysis-card is a hard 463px for OBS stability (.attempts-card, its
+    former fixed-height sibling, is gone with StarSection/SegmentSection's own
+    attempts table — Task 6/7, spec practice-log-entity-cards). An empty state
+    sized by its content would push past that and move the whole layout the
+    moment the first attempt landed."""
     css = strip_comments(INDEX_HTML.read_text(encoding="utf-8"))
     rule = re.search(r"\.empty-state \{(.*?)\}", css, re.S)
     assert rule, ".empty-state rule not found in index.html"

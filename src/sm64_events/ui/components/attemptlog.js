@@ -299,12 +299,17 @@ export function useGraphPick(rows, visible, setVisible) {
   return { focus, pick, clearFocus: () => setFocus(null) };
 }
 
-// PB tag: always a clickable jump to the PB's attempt row — same reveal path as
-// its gold progress-graph dot (scroll, flash, open saved replay). When the PB
-// is out of the current scope (a lifetime PB from an earlier session, viewed in
-// session scope) its row isn't loaded, so clicking first switches to lifetime
-// scope; pick() holds the request until the lifetime view brings the row in.
-// `mode` is just the clock label shown in parens.
+// PB tag: a clickable jump to the PB's attempt row WHEN the caller passes a
+// `pick` — same reveal path as its gold progress-graph dot (scroll, flash,
+// open saved replay). The objective card passes its own `pick`; a log card
+// (practicelog.js) passes `pick=null` on purpose, so its tag renders as plain
+// text there — the card's own trend graph is the working entry point into
+// that same list, and a second clickable jump into a table already on screen
+// would be redundant rather than broken. When the PB is out of the current
+// scope (a lifetime PB from an earlier session, viewed in session scope) its
+// row isn't loaded, so clicking first switches to lifetime scope; pick()
+// holds the request until the lifetime view brings the row in. `mode` is
+// just the clock label shown in parens.
 // `pb.caveat` is a CAVEAT key (components/marks.js) or absent — the server's
 // own answer to "does this saved time mean what the rank beside it implies".
 // Derived in tracking/views.py from `timed_by`/`closed_by`/`timed_at`, so this
@@ -418,23 +423,26 @@ export function AttemptLogEmpty({ hasAttempts }) {
 }
 
 // The trigger + popover for the stat menu — ONE shared component (rule 11:
-// a control pasted into both cards is exactly the shape that drifts), placed
-// in the practice-log card's header, left of the sort control, in BOTH
-// StarSection and SegmentSection.
+// a control pasted into both cards is exactly the shape that drifts). Since
+// Task 5 (spec practice-log-entity-cards, 2026-08-03) it is called from
+// exactly ONE place — practicelog.js's `PracticeLog` heading, left of the
+// sort control — not from StarSection and SegmentSection, which no longer
+// render an attempts table of their own at all.
 //
-// `.attempts-card` is a fixed-height `overflow: hidden` box (`.claude/rules/
-// ui-core.md`: "an element that WRAPS inside a fixed-height card costs
-// nothing visible and clips its sibling" — the same trap here would clip the
-// popover itself rather than a sibling). A `position: absolute` popover
-// anchored inside that card would be cut off the instant it grew past the
-// card's own 458px, which the stat-menu checklist easily does. Fixed
-// positioning, anchored off the trigger's own measured rect, escapes that
-// clip entirely — nothing between the trigger and the viewport declares a
-// transform/filter/perspective/contain that would trap a `position: fixed`
-// descendant back inside an ancestor's overflow (verified against
-// index.html: none of `.attempts-card`, `.practice-detail-grid`,
-// `.practice-page`, `.view-pane`, `.workspace`, `.app-main`, `.app-shell`
-// declare one).
+// It used to sit in `.attempts-card`, a fixed-height `overflow: hidden` box
+// (`.claude/rules/ui-core.md`: "an element that WRAPS inside a fixed-height
+// card costs nothing visible and clips its sibling" — the same trap here
+// would clip the popover itself rather than a sibling). A `position:
+// absolute` popover anchored inside that card would have been cut off the
+// instant it grew past the card's own 458px, which the stat-menu checklist
+// easily does. `.attempts-card` is gone with StarSection/SegmentSection's own
+// attempts table; its replacement (`.log-list-card`) is variable-height and
+// does not clip. Fixed positioning, anchored off the trigger's own measured
+// rect, is kept as-is rather than revisited — converting back to a
+// `position: relative` ancestor would need auditing the whole card for no
+// behavioural gain, since nothing between the trigger and the viewport
+// declares a transform/filter/perspective/contain that would trap a
+// `position: fixed` descendant back inside an ancestor's overflow anyway.
 export function StatMenuTrigger({ t }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [anchor, setAnchor] = useState(null);
